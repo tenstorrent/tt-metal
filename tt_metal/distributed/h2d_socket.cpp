@@ -243,10 +243,8 @@ void H2DSocket::write_socket_metadata(
     md.h2d.pcie_xy_enc = bytes_acked_info.pcie_xy_enc;
 
     if (is_l2cpu_) {
-        // L2CPU has no MeshBuffer-backed config buffer; the caller pre-
-        // reserved a fixed LIM address (config_buffer_address_) and the
-        // device side has no fast-dispatch path either. Push the wire
-        // struct over PCIe directly to that address on the L2CPU tile.
+        // L2CPU has no MeshBuffer-backed config and no fast-dispatch path; write the
+        // struct directly to the caller-provided LIM address.
         const auto& cluster = MetalContext::instance().get_cluster();
         const uint32_t device_id = mesh_device->get_device(recv_core_.device_coord)->id();
         cluster.write_core(&md, sizeof(md), tt_cxy_pair(device_id, recv_core_.core_coord), config_buffer_address_);
@@ -287,18 +285,9 @@ void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device
     const CoreType recv_umd_core_type = (recv_core_type_ == RecvCoreType::Dram) ? CoreType::DRAM : CoreType::TENSIX;
 
     if (is_l2cpu_) {
-        // recv_core_.core_coord is the TRANSLATED L2CPU NOC coord that the
-        // L2CPU H2DSocket constructor's @param recv_l2cpu contract requires
-        // the caller to supply. Skip the Tensix-worker logical->virtual
-        // translation; for L2CPU, TRANSLATED == NOC0 on Blackhole so the
-        // value is usable as-is.
-        //
-        // L2CPU uses a static 2 MiB TLB anchored at the LIM base
-        // (0x08000000) -- registered in tlb_config.cpp. Anchoring at LIM
-        // base (rather than 0 like Tensix/ETH) is required because LIM
-        // addresses are around 0x08130000+, far outside any 2 MiB window
-        // anchored at 0. A 4 GiB TLB would also work but BH only has 8
-        // of those and DRAM uses all of them.
+        // recv_core_.core_coord is already a TRANSLATED L2CPU NOC coord, so no
+        // logical->virtual translation is applied. The window is the static TLB
+        // configure_static_tlbs() anchors at the LIM base.
         TT_FATAL(mesh_device, "L2CPU H2D sockets require a mesh_device for TLB setup.");
         recv_device_id = mesh_device->get_device(recv_core_.device_coord)->id();
         recv_virtual_core = recv_core_.core_coord;
@@ -324,14 +313,9 @@ void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device
     const uint64_t l1_offset = dram_l1_noc_offset_;
 
     if (is_l2cpu_ && !cluster.is_mock_or_emulated()) {
-        // The L2CPU TLB is anchored at LIM base 0x08000000, so absolute
-        // device_addr values must be converted to window-relative offsets
-        // before write_block (which calls validate(offset, size) against
-        // the 2 MiB window size). Tensix/ETH TLBs are anchored at 0 so
-        // their lambda passes device_addr through unchanged.
-        //
-        // Mock/emule have no TLB manager, so they skip this and fall through
-        // to the cluster.write_core() writer installed below.
+        // The L2CPU window is anchored at the LIM base, so absolute addresses are
+        // converted to window-relative offsets before write_block(). Mock/emule
+        // have no TLB manager and fall through to the write_core() writer below.
         const uint64_t l2cpu_tlb_base = receiver_core_tlb_->get_base_address();
         pcie_writer = [this, l2cpu_tlb_base](void* data, uint32_t num_bytes, uint64_t device_addr) {
             receiver_core_tlb_->write_block(device_addr - l2cpu_tlb_base, data, num_bytes);
@@ -576,11 +560,8 @@ H2DSocket::H2DSocket(
     // surface later as TlbWindow::validate() throwing "Out of bounds access" on
     // the first wrapping write -- catch it here instead.
     //
-    // DEVICE_PULL doesn't hit the L2CPU TLB for data (the host writes payloads
-    // into pinned RAM with memcpy and the X280 firmware pulls from PCIe via
-    // socket_pull_payload), so the data ring can be any size; data_fifo_address
-    // is just a LIM-resident logical anchor for ring offset arithmetic on the
-    // firmware side.
+    // DEVICE_PULL keeps the ring in pinned host memory, so it is not bounded by
+    // the TLB window and data_fifo_address is only a base for ring offsets.
     if (h2d_mode_ == H2DMode::HOST_PUSH) {
         const uint64_t fifo_end = static_cast<uint64_t>(data_fifo_address) + static_cast<uint64_t>(fifo_size_);
         TT_FATAL(
@@ -622,18 +603,14 @@ H2DSocket::H2DSocket(
 
     // Pinned host RAM layout mirrors the Tensix paths: HOST_PUSH only
     // needs the 4 B bytes_acked counter (data lives in LIM), DEVICE_PULL
-    // additionally needs the entire data FIFO co-located with bytes_acked
-    // so the X280 can pull from a single contiguous PCIe range.
+    // additionally needs the data FIFO co-located with bytes_acked so the device
+    // can pull from a single contiguous PCIe range.
     std::string shm_name = generate_shm_name(h2d_mode_ == H2DMode::DEVICE_PULL ? "h2d-l2cpu-pull" : "h2d-l2cpu-push");
     PinnedBufferInfo bytes_acked_info{};
     PinnedBufferInfo data_info{};
     if (h2d_mode_ == H2DMode::DEVICE_PULL) {
-        // Same pinned-buffer layout the Tensix DEVICE_PULL path uses:
-        // [data ring | bytes_acked] contiguous in a single PinnedMemory,
-        // with bytes_acked sitting at offset fifo_size_ from the data
-        // base. The X280 firmware's create_h2d_socket_receiver_device_pull
-        // reads h2d.data_addr_* and h2d.bytes_acked_addr_* out of the
-        // receiver_socket_md and uses both.
+        // Same layout as the Tensix DEVICE_PULL path: [data ring | bytes_acked]
+        // contiguous in one PinnedMemory, bytes_acked at offset fifo_size_.
         data_info = init_host_data_buffer(mesh_device_ptr, recv_device_range_set, pcie_alignment, shm_name);
         bytes_acked_info = data_info;
         auto bytes_acked_addr = (static_cast<uint64_t>(data_info.addr_hi) << 32 | data_info.addr_lo) + fifo_size_;
@@ -644,19 +621,15 @@ H2DSocket::H2DSocket(
             bytes_acked_info.pcie_xy_enc == data_info.pcie_xy_enc,
             "L2CPU DEVICE_PULL: bytes_acked and data pinned memory must be mapped to the same PCIe core.");
     } else {
-        // HOST_PUSH (default; socket_echo + Phase 2 migration cmd ring):
-        // same bytes_acked-only allocation Phase 1 used. data_info stays
-        // zeroed because the data lives in LIM at aligned_data_buf_start_
-        // and the X280 firmware reads it via plain LIM loads.
+        // HOST_PUSH allocates only bytes_acked; data_info stays zeroed because
+        // the ring lives in LIM at aligned_data_buf_start_.
         bytes_acked_info = init_bytes_acked_buffer(mesh_device_ptr, recv_device_range_set, pcie_alignment, shm_name);
         bytes_acked_ptr_ = host_buffer_.get();
     }
     write_socket_metadata(mesh_device_ptr, bytes_acked_info, data_info);
     init_receiver_tlb(mesh_device_ptr);
 
-    // Stamp the connector-state struct so a future cross-process attach
-    // path (not exposed for L2CPU in Phase 1, but harmless to populate)
-    // sees a well-formed header instead of zeros.
+    // Stamp the connector-state header so it is well-formed rather than zeroed.
     connector_state_ =
         reinterpret_cast<HDSocketConnectorState*>(static_cast<uint8_t*>(shm_->ptr()) + connector_state_offset_);
     connector_state_->version = kHDSocketConnectorStateVersion;
@@ -895,11 +868,9 @@ H2DMode H2DSocket::get_h2d_mode() const { return h2d_mode_; }
 
 HDSocketDescriptor H2DSocket::populate_descriptor() const {
     TT_FATAL(is_owner_, "Only the owner process can populate a socket descriptor.");
-    // Descriptor export is not supported for L2CPU H2D sockets in Phase 1: the descriptor
-    // schema doesn't record L2CPU-specific fields (LIM config / data addresses, is_l2cpu_)
-    // so a connector process couldn't rebuild the device side correctly. Enforced here
-    // rather than in export_descriptor() so the H2DSocketService aggregation path is
-    // covered too.
+    // The descriptor schema has no fields for the L2CPU LIM addresses, so a connector
+    // could not rebuild the device side. Checked here rather than in export_descriptor()
+    // so the H2DSocketService aggregation path is covered too.
     TT_FATAL(!is_l2cpu_, "Descriptor export is not supported for L2CPU H2D sockets.");
     TT_FATAL(shm_ && shm_->is_open(), "Cannot populate descriptor: shared memory is not initialized.");
 

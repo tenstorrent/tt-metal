@@ -460,24 +460,11 @@ TEST_F(HDSocketFixture, H2DSocketLoopbackMultiThreadedStress) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// L2CPU (X280) socket support.
-//
-// These cover the host-side plumbing only: the DRAM bank table binding, the
-// L2CPU static-TLB registration, and the L2CPU constructors' argument
-// validation. They deliberately do NOT construct a working L2CPU socket.
-//
-// Completing construction writes the socket_md wire struct into LIM, and that
-// is a sub-64B partial-line write. On a cache line whose ECC has never been
-// initialised such a write faults, and priming LIM ECC requires running code
-// on the L2CPU itself (a cache-way walk that commits a WayEnable and leaves
-// the part needing an ASIC reset). That is out of scope for a gtest, so the
-// end-to-end wire contract is covered by the out-of-tree X280 firmware tests
-// instead. Everything here is reachable without ever touching LIM.
-//
-// A single device is enough for all of this, so these use a 1x1 fixture rather
-// than the 1x2 HDSocketFixture the transfer tests need.
-// ---------------------------------------------------------------------------
+// L2CPU socket support: the DRAM bank table, the L2CPU static-TLB registration, and
+// the L2CPU constructors' argument validation. These do not complete construction of
+// an L2CPU socket, which would write to LIM; a partial-line write to LIM whose ECC has
+// not been initialised can fault, and initialising it requires running code on the
+// L2CPU itself. A single device is sufficient throughout.
 using L2CpuSocketFixture = MeshDevice1x1Fixture;
 
 namespace {
@@ -493,11 +480,8 @@ bool is_blackhole() { return MetalContext::instance().hal().get_arch() == tt::AR
 
 }  // namespace
 
-// get_dram_bank_table() mirrors RiscFirmwareInitializer::
-// generate_device_bank_to_noc_tables for NOC=0 so an X280 can route DRAM the
-// way a Tensix kernel does. Assert it against the same sources BRISC is
-// programmed from -- if the allocator or soc descriptor changes shape, this
-// catches the divergence rather than letting the X280 route to a stale bank.
+// Assert the bank table against the same allocator and soc-descriptor sources that
+// RiscFirmwareInitializer programs BRISC from.
 TEST_F(L2CpuSocketFixture, DramBankTableMatchesAllocatorAndSocDescriptor) {
     auto* device = mesh_device_->get_device(MeshCoordinate(0, 0));
     const ChipId device_id = device->id();
@@ -519,11 +503,9 @@ TEST_F(L2CpuSocketFixture, DramBankTableMatchesAllocatorAndSocDescriptor) {
             << "bank " << bank_id << " base_addr must equal the allocator's bank offset";
         EXPECT_EQ(entry.bank_size, soc_desc.dram_view_size) << "bank " << bank_id;
 
-        // On virtualized-DRAM SKUs the binding reports the TRANSLATED coord
-        // verbatim, so it must equal the soc descriptor's DRAM view for this
-        // bank exactly. Other architectures route through hal.noc_coordinate(),
-        // so the strict form is only asserted where the identity is known to
-        // hold -- and the X280 consumer is Blackhole-only regardless.
+        // On virtualized-DRAM architectures the table reports the TRANSLATED coord
+        // verbatim, so it must equal the soc descriptor's DRAM view exactly. Other
+        // architectures route through hal.noc_coordinate().
         const CoreCoord preferred =
             soc_desc.get_preferred_worker_core_for_dram_view(static_cast<int>(bank_id), /*noc=*/0);
         if (is_blackhole()) {
@@ -535,11 +517,8 @@ TEST_F(L2CpuSocketFixture, DramBankTableMatchesAllocatorAndSocDescriptor) {
     }
 }
 
-// Every L2CPU tile must get a static TLB window anchored at the LIM base.
-// Anchoring matters: LIM lives at 0x08000000+, so a window at 0 (what
-// Tensix/ETH use, because their L1 is at [0, 2 MiB)) would cover no usable LIM
-// address, and the socket writers subtract this base to form window-relative
-// offsets. Without the registration get_tlb_window() throws outright.
+// Every L2CPU tile must have a static TLB window anchored at the LIM base; without
+// the registration get_tlb_window() throws.
 TEST_F(L2CpuSocketFixture, L2CpuStaticTlbsAnchoredAtLimBase) {
     if (!is_blackhole()) {
         GTEST_SKIP() << "L2CPU tiles only exist on Blackhole";
@@ -568,10 +547,9 @@ TEST_F(L2CpuSocketFixture, L2CpuStaticTlbsAnchoredAtLimBase) {
     }
 }
 
-// The L2CPU constructors take caller-reserved LIM addresses because L2CPUs have
-// no allocator in tt-metal, which makes their argument validation the only
-// guard against a silently mis-placed socket. All of these throw before any
-// pinned memory is allocated or any LIM byte is written.
+// The L2CPU constructors take caller-reserved LIM addresses, so argument validation is
+// the only guard against a mis-placed socket. All of these throw before any pinned
+// memory is allocated or any LIM byte is written.
 TEST_F(L2CpuSocketFixture, L2CpuSocketRejectsInvalidLimAddresses) {
     if (!is_blackhole()) {
         GTEST_SKIP() << "L2CPU sockets are Blackhole-only";
@@ -603,13 +581,8 @@ TEST_F(L2CpuSocketFixture, L2CpuSocketRejectsInvalidLimAddresses) {
     EXPECT_ANY_THROW(H2DSocket(*mesh_device_, l2cpu, /*fifo_size=*/0, config_addr, data_addr, H2DMode::HOST_PUSH));
     EXPECT_ANY_THROW(H2DSocket(*mesh_device_, l2cpu, pcie_alignment + 1, config_addr, data_addr, H2DMode::HOST_PUSH));
 
-    // HOST_PUSH keeps the data ring in LIM and reaches it through the single
-    // 2 MiB static TLB window, so a ring that runs past 0x08200000 must be
-    // rejected here rather than surfacing as an out-of-bounds TLB access on
-    // the first wrapping write. DEVICE_PULL has no such limit (its ring lives
-    // in pinned host memory), so the same size must not be rejected for it on
-    // window grounds -- but we cannot construct that socket here without
-    // writing to LIM, so only the HOST_PUSH rejection is asserted.
+    // In HOST_PUSH the ring lives in LIM and is reached through the static TLB window,
+    // so a ring running past the window end must be rejected at construction.
     EXPECT_ANY_THROW(H2DSocket(
         *mesh_device_,
         l2cpu,

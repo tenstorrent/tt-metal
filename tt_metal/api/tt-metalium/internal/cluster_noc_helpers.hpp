@@ -24,20 +24,12 @@ namespace tt::tt_metal::internal {
  */
 
 /**
- * Thin shims over @c Cluster::write_core / @c Cluster::read_core /
- * @c Cluster::write_core_immediate / @c Cluster::read_reg.
+ * Wrappers over @c Cluster::write_core / @c read_core / @c write_core_immediate /
+ * @c read_reg, declared here so callers can issue raw NOC access without including
+ * the internal @c Cluster and @c MetalContext headers.
  *
- * Why a separate translation unit? @c Cluster lives in @c tt_metal/llrt/ and
- * @c MetalContext lives in @c tt_metal/impl/, both of which are internal
- * tt-metal headers (not part of the @c tt-metalium/ public surface). The
- * ttnn-nanobind layer (@c ttnn/cpp/ttnn-nanobind/cluster.cpp) wants to
- * expose Python bindings for raw NOC reads/writes without pulling in those
- * internal headers; this header is the public-API gateway.
- *
- * All four helpers are one-line wrappers. They take TRANSLATED NOC
- * coordinates and a logical chip id; bytes are passed through verbatim.
- * Thread safety: callers must serialise host-side writes to a given
- * (device_id, x, y) tile.
+ * All take TRANSLATED NOC coordinates and a logical chip id. Callers must serialise
+ * host-side writes to a given (device_id, x, y) tile.
  */
 
 /**
@@ -83,15 +75,11 @@ void noc_write_immediate(
 std::uint32_t noc_read_reg_u32(std::uint32_t device_id, std::uint32_t x, std::uint32_t y, std::uint64_t addr);
 
 /**
- * @brief One entry of the DRAM bank table used by tt-blaze's Tensix
- *        migration kernel and mirrored by the X280 migration worker.
+ * @brief One entry of the per-bank DRAM NOC routing table.
  *
- * Each entry maps a logical @c bank_id to the NOC coordinate of the DRAM
- * controller that backs it plus the per-bank base address that goes into
- * the BRISC's @c bank_to_dram_offset[] table. Coordinates are TRANSLATED
- * on virtualized-DRAM SKUs (Blackhole) and raw NOC0 on the rest -- i.e.
- * the same value @c RiscFirmwareInitializer programs into
- * @c dram_bank_to_noc_xy[NOC0] for @c device_id.
+ * Maps a logical @c bank_id to the NOC coordinate of the DRAM controller backing it
+ * and the per-bank base address. Coordinates are TRANSLATED on virtualized-DRAM
+ * architectures and NOC0 elsewhere.
  */
 struct DramBankInfo {
     std::uint32_t bank_id;
@@ -102,20 +90,14 @@ struct DramBankInfo {
 };
 
 /**
- * @brief Snapshot of BRISC's @c dram_bank_to_noc_xy[NOC0] +
- *        @c bank_to_dram_offset[] for an opened device.
+ * @brief Returns the per-bank DRAM NOC routing table for an opened device.
  *
- * Reproduces the table that @c RiscFirmwareInitializer::
- * @c generate_device_bank_to_noc_tables would multicast into Tensix L1 at
- * boot, so an X280 (or any other host-driven kernel) can populate its own
- * NOC translation table from Python and route DRAM transactions to any of
- * the @c NUM_DRAM_BANKS banks the way a Tensix kernel would.
+ * Mirrors the @c dram_bank_to_noc_xy[NOC0] + @c bank_to_dram_offset[] tables that
+ * @c RiscFirmwareInitializer::generate_device_bank_to_noc_tables programs at boot.
  *
- * Requires the device to be opened first (e.g. via @c
- * ttnn.open_mesh_device); otherwise this throws.
- *
- * @param device_id Logical chip id (matches @c IDevice::id()).
- * @return @c NUM_DRAM_BANKS entries indexed by @c bank_id.
+ * @param device_id Logical chip id (matches @c IDevice::id()). The device must
+ *                  already be open, otherwise this throws.
+ * @return One entry per DRAM bank, indexed by @c bank_id.
  */
 std::vector<DramBankInfo> get_dram_bank_table(std::uint32_t device_id);
 

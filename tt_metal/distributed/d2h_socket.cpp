@@ -221,11 +221,8 @@ void D2HSocket::write_socket_metadata(
     config_data[host_addr_offset + 2] = data_info.pcie_xy_enc;
 
     if (is_l2cpu_) {
-        // L2CPU has no MeshBuffer-backed config and no fast-dispatch /
-        // WriteToDeviceL1 path. Push the wire blob over PCIe directly to
-        // the caller-provided LIM address on the L2CPU tile. sender_core_
-        // .core_coord here is the L2CPU's TRANSLATED NOC coord (the L2CPU
-        // constructor stamps it that way).
+        // L2CPU has no MeshBuffer-backed config and no fast-dispatch path; write the
+        // blob directly to the caller-provided LIM address.
         const auto& cluster = MetalContext::instance().get_cluster();
         const uint32_t device_id = mesh_device->get_device(sender_core_.device_coord)->id();
         cluster.write_core(
@@ -263,17 +260,9 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, 
     // installed writer is harmless there.
 
     if (is_l2cpu_) {
-        // sender_core_.core_coord is the TRANSLATED L2CPU NOC coord that the
-        // L2CPU D2HSocket constructor's @param sender_l2cpu contract requires
-        // the caller to supply. On Blackhole, TRANSLATED == NOC0 for L2CPU
-        // so it is usable directly.
-        //
-        // L2CPU uses a static 2 MiB TLB anchored at the LIM base
-        // (0x08000000) -- registered in tlb_config.cpp. Anchoring at LIM
-        // base (rather than 0 like Tensix/ETH) is required because LIM
-        // addresses are around 0x08130000+, far outside any 2 MiB window
-        // anchored at 0. A 4 GiB TLB would also work but BH only has 8
-        // of those and DRAM uses all of them.
+        // sender_core_.core_coord is already a TRANSLATED L2CPU NOC coord, so no
+        // logical->virtual translation is applied. The window is the static TLB
+        // configure_static_tlbs() anchors at the LIM base.
         TT_FATAL(mesh_device, "L2CPU D2H sockets require a mesh_device for TLB setup.");
         sender_device_id = mesh_device->get_device(sender_core_.device_coord)->id();
         sender_virtual_core = sender_core_.core_coord;
@@ -300,14 +289,9 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, 
 
     auto arch = MetalContext::instance().hal().get_arch();
     if (is_l2cpu_ && !cluster.is_mock_or_emulated()) {
-        // The L2CPU TLB is anchored at LIM base 0x08000000, so absolute
-        // device_addr values must be converted to window-relative offsets
-        // before write_block (which calls validate(offset, size) against
-        // the 2 MiB window size). Tensix/ETH TLBs are anchored at 0 so
-        // their lambda passes device_addr through unchanged.
-        //
-        // Mock/emule have no TLB manager, so they fall through to the
-        // cluster.write_core() path below like every other core type.
+        // The L2CPU window is anchored at the LIM base, so absolute addresses are
+        // converted to window-relative offsets before write_block(). Mock/emule
+        // have no TLB manager and fall through to the write_core() path below.
         const uint64_t l2cpu_tlb_base = sender_core_tlb_->get_base_address();
         pcie_writer_ = [this, l2cpu_tlb_base](void* data, uint32_t num_bytes, uint64_t device_addr) {
             sender_core_tlb_->write_block(device_addr - l2cpu_tlb_base, data, num_bytes);
@@ -756,10 +740,9 @@ std::string D2HSocket::export_descriptor(const std::string& socket_id) {
 
 HDSocketDescriptor D2HSocket::populate_descriptor() const {
     TT_FATAL(is_owner_, "Only the owner process can populate a socket descriptor.");
-    // Descriptor export is not supported for L2CPU D2H sockets in Phase 1: the descriptor
-    // schema doesn't record L2CPU-specific fields (LIM config address, is_l2cpu_) so a
-    // connector process couldn't rebuild the device side correctly. Enforced here rather
-    // than in export_descriptor() so the D2HSocketService aggregation path is covered too.
+    // The descriptor schema has no fields for the L2CPU LIM address, so a connector
+    // could not rebuild the device side. Checked here rather than in export_descriptor()
+    // so the D2HSocketService aggregation path is covered too.
     TT_FATAL(!is_l2cpu_, "Descriptor export is not supported for L2CPU D2H sockets.");
     TT_FATAL(shm_ && shm_->is_open(), "Cannot populate descriptor: shared memory is not initialized.");
 

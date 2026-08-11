@@ -16,10 +16,8 @@
 #include "tt_metal/llrt/metal_soc_descriptor.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 
-// One-line shims over Cluster::write_core / read_core / write_core_immediate /
-// read_reg. The only reason these live in their own TU is to keep
-// MetalContext (impl/) and tt_cluster (llrt/) out of the ttnn-nanobind
-// include path. See cluster_noc_helpers.hpp for the rationale.
+// Kept in a separate TU so callers do not need MetalContext (impl/) or
+// tt_cluster (llrt/) on their include path.
 
 namespace tt::tt_metal::internal {
 
@@ -54,18 +52,12 @@ std::uint32_t noc_read_reg_u32(std::uint32_t device_id, std::uint32_t x, std::ui
     return value;
 }
 
-// Mirrors RiscFirmwareInitializer::generate_device_bank_to_noc_tables
-// (impl/device/firmware/risc_firmware_initializer.cpp lines 476-512) for
-// NOC=0 only -- the tt-blaze Tensix migration kernel and the X280
-// migration worker both index the table with NOC_INDEX=0. On Blackhole the
-// DRAM rows are virtualized, so the table holds TRANSLATED coords as-is;
-// on Wormhole / Grayskull the conversion is the identity for NOC=0 anyway.
+// Mirrors RiscFirmwareInitializer::generate_device_bank_to_noc_tables for NOC=0.
+// On virtualized-DRAM architectures the table holds TRANSLATED coords as-is;
+// elsewhere the NOC=0 conversion is the identity.
 //
-// DRAM uses one-bank-per-channel (AllocatorImpl::init_one_bank_per_channel,
-// impl/allocator/allocator.cpp lines 52-57: bank_id == channel), so we can
-// pass bank_id directly into get_preferred_worker_core_for_dram_view() and
-// skip the AllocatorImpl::get_dram_channel_from_bank_id() round trip
-// (which isn't exposed on the public Allocator class).
+// DRAM is allocated one bank per channel (bank_id == channel), so bank_id is passed
+// straight to get_preferred_worker_core_for_dram_view().
 std::vector<DramBankInfo> get_dram_bank_table(std::uint32_t device_id) {
     auto& mctx = MetalContext::instance();
     auto& dm = mctx.device_manager();

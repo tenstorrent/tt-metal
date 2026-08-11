@@ -15,18 +15,11 @@ struct metal_SocDescriptor;
 
 namespace ll_api {
 
-// L2CPU (X280) LIM aperture covered by the per-tile static TLB that
-// configure_static_tlbs() programs on Blackhole.
-//
-// Unlike Tensix/ETH -- whose windows are anchored at NOC address 0 because their
-// L1 lives in [0, 2 MiB) -- LIM starts at 0x08000000, so a window anchored at 0
-// would cover no usable LIM address. The window is therefore anchored at the LIM
-// base, and callers writing through it must convert absolute LIM addresses to
-// window-relative offsets (device_addr - tlb->get_base_address()).
-//
-// Anything addressing LIM through that window -- the H2D/D2H socket config
-// buffers and the HOST_PUSH data FIFO -- must lie entirely within
-// [kL2cpuLimBase, kL2cpuLimTlbEnd).
+// LIM aperture covered by the per-tile L2CPU static TLB that
+// configure_static_tlbs() programs on Blackhole. The window is anchored at the
+// LIM base rather than 0, so callers writing through it must convert absolute
+// LIM addresses to window-relative offsets. Anything addressed through that
+// window must lie entirely within [kL2cpuLimBase, kL2cpuLimTlbEnd).
 inline constexpr uint64_t kL2cpuLimBase = 0x08000000ULL;
 inline constexpr uint64_t kL2cpuLimTlbSize = 2ULL * 1024 * 1024;
 inline constexpr uint64_t kL2cpuLimTlbEnd = kL2cpuLimBase + kL2cpuLimTlbSize;
