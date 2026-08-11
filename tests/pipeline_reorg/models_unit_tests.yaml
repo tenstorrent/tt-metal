@@ -1265,3 +1265,16 @@
       tier: 3
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: shield
+
+- name: vLLM decode reload contract host tests
+  # No device and no vLLM package, but ttnn must import: the generator modules under
+  # test pull it in at module scope. They pin the decode input-update contract that
+  # every vLLM-facing generator implements, so they belong to no single model.
+  cmd: pytest --timeout 300 models/common/tests/test_decode_update_contract.py
+  model: decode-reload-contract
+  skus:
+    wh_n150:
+      timeout: 5
+      tier: 1
+  owner_id: U09LTAPEU2U # Viktor Pus
+  team: models

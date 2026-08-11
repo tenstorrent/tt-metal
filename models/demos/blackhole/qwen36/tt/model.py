@@ -37,8 +37,12 @@ class Qwen36Model:
             self.tt_ccl = None
         self.configuration = args  # Generator reads model.configuration.max_seq_len
         self.sampling_dp = 1
-        # Rope is host-recomputed each step (not advanced on-device) → force the trace to refresh decode inputs (else stale rope).
-        self._tt_vllm_always_refresh_decode_trace_inputs = True
+        # Rope is host-recomputed each step, so every traced decode needs its inputs
+        # restaged; sampling also does not alias the decode token input, so nothing
+        # writes the next token back on device. Neither is inferred from this flag by
+        # the caller: what keeps vLLM from asking for a partial reload is the adapter
+        # leaving ``supports_async_decode`` off. The flag makes the ask an error.
+        self._tt_supports_decode_token_feedback = False
         # Reuses the vocab-sharded lm_head as the sampler's shard: needs divisible vocab; 64K = top-k limit.
         self._supports_on_device_sampling = (
             self.num_devices > 1

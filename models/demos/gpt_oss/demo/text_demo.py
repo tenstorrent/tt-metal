@@ -686,9 +686,6 @@ def test_gpt_oss_demo(
 
         # Clear KV caches for repeat batches (like tt-transformers)
         if batch_idx != 0:
-            # Fix for ND hangs with multiple repeat batches
-            generator.prev_page_table = None
-
             for i in range(len(model)):
                 for layer in model[i].layers:
                     k_cache, v_cache = layer.self_attn.layer_past
@@ -863,6 +860,7 @@ def test_gpt_oss_demo(
             # Decode forward — on-device sampling when available, host-side
             # greedy argmax otherwise (1×1 Blackhole, etc.)
             if on_device_sampling_supported:
+                reload_decode_inputs = iteration == 0 or not enable_decode_trace
                 out_tok, _ = generator.decode_forward(
                     out_tok,
                     current_pos,
@@ -870,6 +868,10 @@ def test_gpt_oss_demo(
                     page_table=page_table,
                     kv_cache=tt_kv_cache,
                     sampling_params=device_sampling_params,
+                    reload_inputs=reload_decode_inputs,
+                    reload_page_table=False,
+                    reload_sampling_params=True,
+                    reset_sampling_state=iteration == 0,
                 )
             else:
                 # decode_forward returns (logits, log_probs) when sampling_params=None.

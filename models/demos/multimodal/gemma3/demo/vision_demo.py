@@ -419,6 +419,10 @@ def test_multimodal_demo_text(
                             position_id,
                             enable_trace=enable_trace,
                             sampling_params=device_sampling_params,
+                            reload_inputs=gen_idx == 0 or not enable_trace,
+                            reload_page_table=False,
+                            reload_sampling_params=True,
+                            reset_sampling_state=gen_idx == 0,
                         )
                         next_tokens = tok.long().reshape(-1)[:max_batch_size]
                     else:

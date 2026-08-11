@@ -30,8 +30,11 @@ In order to add vLLM support to a new Tenstorrent model, the following requireme
       ```
     - `decode_forward` (**text-only models**): returns the decode outputs on host if `read_from_device=True` (default True) otherwise on device. The `tokens` argument has shape `(max_batch_size, 1)` and has been zero-padded along the batch dim to the max batch size (along with `start_pos` with shape `(max_batch_size)` and `page_table` with shape `(max_batch_size, max_num_blocks)`). For fully-DP or DP-attention models, each DP group's batch is padded and the batches are concatenated. The decode inputs are intentionally padded to `max_batch_size` and `max_num_blocks` since the default behaviour in vLLM is to use `enable_trace=True` and TT-NN tracing requires constant input shapes. Similar to `prefill_forward`, the `sampling_params` argument is a dataclass with sampling attributes such as `temperature`, `top_p`, `top_k` (note: the current default in vLLM is to not pass in this argument and instead sample on host, unless sampling on device is enabled explicitly). This function is used by `TTModelRunner::execute_with_model_input` in [plugins/vllm-tt-plugin/src/vllm_tt_plugin/model_runner.py](https://github.com/tenstorrent/vllm/blob/dev/plugins/vllm-tt-plugin/src/vllm_tt_plugin/model_runner.py).
       ```python
-      decode_forward(tokens : torch.Tensor, start_pos : torch.Tensor, page_table : torch.Tensor, kv_cache : list, enable_trace : bool, read_from_device : bool, sampling_params : TTSamplingParams)
+      decode_forward(tokens : torch.Tensor, start_pos : torch.Tensor, page_table : torch.Tensor = None, kv_cache : list = None, enable_trace : bool = True, read_from_device : bool = True, sampling_params : TTSamplingParams = None, prompt_tokens : torch.Tensor = None, output_tokens : torch.Tensor = None, slot_remap : torch.Tensor = None, defer_device_sampling : bool = False, *, reload_inputs : bool = True, reload_page_table : bool = False, reload_sampling_params : bool = False, reset_sampling_state : bool = False, **kwargs)
       ```
+      The order above is the real one on the model-tier generators; Galaxy's adds its own sharding flags before `prompt_tokens`, so pass everything past `read_from_device` by keyword. vLLM may also send `page_tables_per_layer` (hybrid-attention models) and omits `slot_remap` entirely when the mapping is `None`, so absorb unrecognised keywords with `**kwargs` rather than declaring a closed signature.
+
+      The four keyword-only arguments are the decode input-update contract: vLLM owns reload policy and the generator executes the commands exactly, adding no page-table comparisons, sampling-mode inference, or forced reloads of its own. vLLM sends all four explicitly on every contract decode; an adapter that declares a default may only use the host-authoritative one (`reload_inputs=True`, the other three `False`), which is what a direct caller such as a demo or warmup helper gets when it omits them. `reload_inputs` and `reload_page_table` are not independent switches, so branch on `decode_input_staging(...)` rather than on the pair: an adapter whose page-table copy hangs off `reload_page_table` alone never refreshes it on vLLM's every-transition shape and the device then addresses the previous batch's KV blocks with no error. An adapter should also reject the pre-contract `reset_batch` keyword by name (`reject_legacy_reload_signal`), since a vLLM old enough to send it omits the four commands and its layout changes would otherwise be reinterpreted as a full reload. `reload_inputs` restages every forward trace input and subsumes `reload_page_table`, which copies the page table alone while preserving device-produced token/position state. `reload_sampling_params` uploads sampling configuration; `reset_sampling_state` rebuilds per-slot penalty history and seeds. `slot_remap[i] = j` means new slot `i` takes the continuing request's state from old slot `j`, and must be applied to every persistent slot-indexed state the forward reads (sampler seeds/RNG, recurrent state, RoPE deltas) exactly once. An adapter that cannot execute part of the contract rejects those combinations loudly instead of degrading silently. See [models/common/decode_contract.py](../../models/common/decode_contract.py) for the command semantics and [models/common/sampling/README.md](../../models/common/sampling/README.md) for the sampling-side ordering rules.
     - `warmup_model_prefill`: wrapper function that calls the model specific prefill warmup function that compiles the model and captures the traces (for prefill). The `kv_cache`, `enable_trace` and `sampling_params` are passed from vLLM. The `enable_trace` [True/False] argument determines whether tracing in prefill will be used or not. The `sampling_params` [List] argument is a list of all types of samplings that a model can perform. The `sampling_params` list argument contains `TTSamplingParams` objects, and always contains at the end of the list a `None` value which resembles host sampling.
       ```python
       warmup_model_prefill(kv_cache : list, enable_trace : bool, sampling_params : list)
@@ -48,6 +51,41 @@ In order to add vLLM support to a new Tenstorrent model, the following requireme
       output asynchronously. `supports_sample_on_device` allows the
       `sample_on_device_mode` TT config option. Example:
       `model_capabilities={"supports_prefix_caching": True, "supports_async_decode": True, "supports_sample_on_device": True}`
+    - `decode_input_update_contract`: Class integer, separate from
+      `model_capabilities`, that negotiates the decode input-update contract
+      version with the vLLM plugin. Version `1` means `decode_forward` accepts and
+      executes the four reload commands above; a missing or `0` marker keeps the
+      adapter on the legacy `reset_batch` call shape, where vLLM preserves its
+      historical reload behavior and warns that correctness is not guaranteed.
+      Declare it on the generator that implements the commands, not on each leaf
+      adapter, so a subclass cannot silently drop to the legacy path. Every
+      subclass therefore inherits the declaration, which also makes gathered-DP
+      decode overlap eligible for each of them that advertises
+      `supports_async_decode`; audit existing subclasses before moving a marker
+      up. A subclass that overrides `decode_forward` no longer inherits the
+      implementation the marker attests to; re-declaring the marker does not make
+      it conformant, so either the override executes every command or the subclass
+      declares version `0`.
+
+      | Version | Meaning |
+      | --- | --- |
+      | missing or `0` | Legacy `reset_batch` call shape; vLLM preserves the adapter's historical reload behavior, logs that correctness is not guaranteed, and never sends the four commands or offers gathered-DP decode overlap. |
+      | `1` | `decode_forward` accepts and executes the four reload commands and applies `slot_remap` in both sampling modes. |
+
+      Later versions must remain backward-compatible supersets of version 1.
+      There is no handshake in the other direction: an adapter cannot read the
+      plugin's version, and a version-1 plugin sends exactly the four commands
+      above. Any command a later version adds must therefore be keyword-only with
+      a default that reproduces version-1 behavior, or a version-2 adapter breaks
+      against a version-1 plugin. Making a new command required is a breaking
+      interface and needs a distinct negotiation key.
+
+      The normative requirement list is owned by the paired vLLM document,
+      [plugins/vllm-tt-plugin/docs/decode-reload-contract.md](https://github.com/tenstorrent/vllm/blob/dev/plugins/vllm-tt-plugin/docs/decode-reload-contract.md),
+      which separates the obligations of any version-1 adapter from the extra ones
+      needed to advertise `supports_async_decode`. The tt-metal-specific ordering
+      rules, and the list of deliberate version-0 holdouts, are in
+      [models/common/sampling/README.md](../../models/common/sampling/README.md).
 3. **(Multi-modal models only)** Currently, we only support image+text input modalities. An example generation class is `Gemma3ForConditionalGeneration` in [models/tt_transformers/tt/generator_vllm.py](https://github.com/tenstorrent/tt-metal/blob/main/models/tt_transformers/tt/generator_vllm.py). For more info on multi-modal models see also [vLLM Docs - Multi-Modal Support](https://docs.vllm.ai/en/latest/contributing/model/multimodal.html)). These models have the same interface requirements as the text-only models, as well as the following:
    - `prefill_forward` (**image+text models**): same as text-only models with an additional kwarg (`pixel_values`) for the image inputs.
 

@@ -114,10 +114,16 @@ class TT_Qwen2_5_VLProcessingInfo(Qwen2_5_VLProcessingInfo):
     dummy_inputs=Qwen2_5_VLDummyInputsBuilder,
 )
 class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
+    decode_input_update_contract = 1
+
     # Class-level capabilities
+    # supports_async_decode=False: async decode assumes the sampled token and the
+    # advanced position stay resident in the traced decode inputs, but this model
+    # samples eagerly outside the trace (_tt_supports_decode_token_feedback=False), so
+    # every step needs its inputs restaged from host.
     model_capabilities = {
         "supports_prefix_caching": False,
-        "supports_async_decode": True,
+        "supports_async_decode": False,
     }
 
     def __init__(self, *args, **kwargs):
@@ -305,7 +311,17 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         rope_deltas_list: list = kwargs.pop(
             "rope_deltas_all_users", None
         )  # [INFO] update the cos/sin matrices for the current users in the batch
+        slot_remap = kwargs.pop("slot_remap", None)
         if rope_deltas_list is not None:
+            # This is an authoritative list in the new compacted layout, so a
+            # further remap would apply the move twice.
             super().update_rope_deltas(rope_deltas_list)
+        elif slot_remap is not None:
+            # With no new request, vLLM may only provide the old->new layout
+            # mapping. RoPE deltas are persistent per-slot model state and must
+            # move before decode uses them, including during host sampling.
+            super().remap_rope_deltas(slot_remap)
 
-        return super().decode_forward(*args, **kwargs)
+        # RoPE deltas are one of two per-slot consumers; forward the remap so the
+        # wrapped generator's sampler state moves with it.
+        return super().decode_forward(*args, slot_remap=slot_remap, **kwargs)

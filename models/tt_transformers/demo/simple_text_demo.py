@@ -1178,7 +1178,6 @@ def test_demo_text(
                     k_cache, v_cache = layer.attention.layer_past
                     k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
                     v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
-            generator.prev_page_table = None
 
         input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(global_batch_size, -1)
         # Use device sampling for all cases when supported (prefill + decode)
@@ -1300,17 +1299,30 @@ def test_demo_text(
             if token_accuracy:
                 out_tok[0] = token_acc.collect_predicted_tokens(out_tok[0].item())
 
-            # Run decode forward
+            # Run decode forward. This demo is the canonical worked example of the
+            # decode input-update contract (models/common/decode_contract.py): host
+            # inputs are authoritative on the first step, whenever tracing is off, and
+            # on every step of host sampling; a traced device-sampling step after that
+            # keeps token and position device-resident.
+            reload_decode_inputs = iteration == 0 or not enable_trace or device_sampling_params is None
             logits, log_probs = generator.decode_forward(
                 out_tok,
                 current_pos,
                 enable_trace=enable_trace,
                 page_table=page_table,
                 kv_cache=tt_kv_cache,
-                reset_batch=(iteration == 0),
                 sampling_params=device_sampling_params,
                 prompt_tokens=input_tokens_prefill_pt,
                 output_tokens=out_tok,
+                reload_inputs=reload_decode_inputs,
+                # The demo's page table is allocated once for the whole run, so the
+                # page-table-only refresh is never needed here and every demo passes
+                # False. A vLLM-served adapter must still implement it: vLLM allocates
+                # KV blocks as sequences grow and sends this command on its own, on
+                # steps where token and position must stay device-resident.
+                reload_page_table=False,
+                reload_sampling_params=device_sampling_params is not None,
+                reset_sampling_state=device_sampling_params is not None and iteration == 0,
             )
 
             # Get the next token

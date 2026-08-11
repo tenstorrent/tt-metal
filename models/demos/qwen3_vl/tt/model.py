@@ -465,11 +465,15 @@ class Transformer(TTTransformer):
     # multi-all-gather sampling pipeline, which is what corrupts at batch-32, rather than
     # the simple single-gather argmax path.
     #
-    # Fix: route greedy decode through the force-argmax path (enabled in __init__ below),
-    # and re-stage the decode trace inputs from host every step + run the sampling op
-    # eagerly so the all-gather re-acquires a fresh multi_device_global_semaphore each
-    # step instead of reusing a stale one frozen into a captured trace.
-    _tt_vllm_always_refresh_decode_trace_inputs = True
+    # Fix: route greedy decode through the force-argmax path (enabled in
+    # __init__ below), re-stage the decode trace inputs from host every step, and run
+    # sampling eagerly so the all-gather re-acquires a fresh
+    # multi_device_global_semaphore each step instead of reusing one frozen into a
+    # captured trace. The decode token input also cannot alias the sampling output, so
+    # nothing writes the next token back on device either. The flag below turns a
+    # request for a partial reload into an error; what keeps vLLM from making one is
+    # the adapter leaving ``supports_async_decode`` off.
+    _tt_supports_decode_token_feedback = False
     _tt_disable_sampling_trace = True
 
     def __init__(

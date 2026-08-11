@@ -10,12 +10,15 @@ import torch
 from tqdm import tqdm
 
 import ttnn
+from models.common.decode_contract import require_full_input_reload
 from models.demos.t3000.llama2_70b.reference.llama.llama.model import ModelArgs as ReferenceModelArgs
 from models.demos.t3000.llama2_70b.tt.llama_common import check_mesh_device, load_llama_state_dict, setup_llama_env
 from models.demos.t3000.llama2_70b.tt.llama_generation import TtLlamaModelForGeneration
 
 
 class TtLlamaForCausalLM(TtLlamaModelForGeneration):
+    decode_input_update_contract = 1
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -70,6 +73,32 @@ class TtLlamaForCausalLM(TtLlamaModelForGeneration):
 
     def prefill_forward(self, tokens: torch.Tensor, page_table, kv_cache, prompt_lens):
         return super().prefill_forward(tokens, 0, page_table, kv_cache, prompt_lens)
+
+    def decode_forward(
+        self,
+        *args,
+        reload_inputs: bool,
+        reload_page_table: bool,
+        reload_sampling_params: bool,
+        reset_sampling_state: bool,
+        slot_remap=None,
+        **kwargs,
+    ):
+        # Rejecting these is safe only while this adapter advertises neither
+        # supports_async_decode nor supports_sample_on_device, which is what stops vLLM
+        # from ever planning a partial reload or a sampling update for it.
+        require_full_input_reload(
+            "T3000 Llama",
+            reload_inputs=reload_inputs,
+            reload_page_table=reload_page_table,
+            reload_sampling_params=reload_sampling_params,
+            reset_sampling_state=reset_sampling_state,
+        )
+        # This host-only adapter has no persistent model state keyed by vLLM's
+        # condensed batch slots. Contract v1 still delivers the layout remap on
+        # every decode so stateful adapters can consume it; accepting and
+        # ignoring it here is therefore intentional.
+        return super().decode_forward(*args, **kwargs)
 
     def allocate_kv_cache(self, kv_cache_shape, dtype, num_layers):
         cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)

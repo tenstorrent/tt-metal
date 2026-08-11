@@ -7,6 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.decode_contract import per_layer_page_tables_need_upload
 from models.demos.gemma4.tt.common import create_tt_model
 from models.demos.gemma4.tt.generator import ChunkedPrefillPageTableGuardMixin
 from models.demos.gemma4.tt.generator_trace import (
@@ -693,7 +694,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         page_tables_per_layer = self._build_per_layer_page_tables(page_tables_per_layer, kwargs.get("page_table"))
         page_tables_per_layer = self._pad_sliding_page_tables_for_bounded(page_tables_per_layer, kwargs.get("kv_cache"))
         per_submesh = self._chunk_page_tables_per_dp(page_tables_per_layer)
-        if per_submesh is not None:
+        if per_submesh is not None and per_layer_page_tables_need_upload(kwargs):
             for m, pt_for_submesh in zip(self.model, per_submesh):
                 m.update_persistent_per_layer_page_tables(pt_for_submesh)
         with self._route_per_layer_page_tables(per_submesh):
