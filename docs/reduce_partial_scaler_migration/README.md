@@ -55,11 +55,12 @@ phase and leaves the exp/sum phase masked.
 the 2-D mask limit below, and the accumulate-then-reduce limit above, which step 10 shows is the larger
 group (every moreh norm / layer-norm-style reduce folds its tiles into one accumulator before reducing).
 
-On the 2-D side:
-Eight kernels mask *both* axes (`generate_mask_h_w`) feeding a `REDUCE_SCALAR`-shaped reduce.
-`ReducePartialScaler` rejects that by design: it selects one scaler tile along one axis, and a single
-row/col tile cannot encode a 2-D corner mask. Closing that gap is a new helper feature (2-D partial
-support), not a migration. Those eight are documented and deliberately left alone.
+On the 2-D side: the "eight kernels masking both axes" are really three distinct compute kernels plus
+`moreh_bias_backward_hw` (`moreh_group_norm_backward` reuses the layer-norm-backward input-grad kernels),
+and three of the four are blocked by the accumulation limit anyway. The one that is not needs a corner
+mask that a single scaler tile cannot supply, because `REDUCE_SCALAR` applies that tile twice — once
+indexed by column, once by row. [step-12](step-12-phase5-2d-partial-scaler.md) works this through and
+recommends **not** building the 2-D partial-scaler feature.
 
 ## Steps
 
@@ -76,3 +77,4 @@ support), not a migration. Those eight are documented and deliberately left alon
 | 9 | `moreh_softmax_{h,w}_large` — max phase only (exp/sum phase blocked by step 8) | [step-9-moreh-softmax-large-max-phase.md](step-9-moreh-softmax-large-max-phase.md) |
 | 10 | remaining single-axis mask kernels: `moreh_bias_backward_h` migrated, the rest blocked | [step-10-phase3-single-axis-inventory.md](step-10-phase3-single-axis-inventory.md) |
 | 11 | `moreh_{sum,mean}_w` (matmul scaler) and the generic MIN kernels | [step-11-phase4-analyses.md](step-11-phase4-analyses.md) — **blocked, no code change** |
+| 12 | the 2-D partial scaler feature: retired, one consumer and no mechanism | [step-12-phase5-2d-partial-scaler.md](step-12-phase5-2d-partial-scaler.md) — **not recommended, no code change** |
