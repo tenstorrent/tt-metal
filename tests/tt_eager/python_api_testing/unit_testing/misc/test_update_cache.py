@@ -132,19 +132,16 @@ class TestUpdateCache:
         cache = torch.randn(cache_shape).bfloat16().float()
         cachett = ttnn.Tensor(cache, cache_dtype).to(ttnn.TILE_LAYOUT).to(device)
         x = torch.randn(input_shape).bfloat16().float()
-        # Pad input batch to a multiple of 32 for tilize; place real users at [batch_offset, ...).
+        # pad dim0 of x to 32 if batch size is less than 32, make 0-batch_offset elements 0, batch_offset-batch_offset+num_users elements non-zero, and rest 0
         x_new = x.clone()
-        pad_users = ((num_users + 31) // 32) * 32
-        if batch_offset > 0:
+        if num_users < 32:
             x_new = torch.cat((torch.zeros(batch_offset, num_heads, 1, head_dim), x_new), dim=0)
-        pad_after = pad_users - x_new.shape[0]
-        if pad_after > 0:
-            x_new = torch.cat((x_new, torch.zeros(pad_after, num_heads, 1, head_dim)), dim=0)
-        assert x_new.shape[0] == pad_users, f"Expected x.shape[0] to be {pad_users}, got {x_new.shape[0]}"
+            x_new = torch.cat((x_new, torch.zeros(32 - num_users - batch_offset, num_heads, 1, head_dim)), dim=0)
+            assert x_new.shape[0] == 32, f"Expected x.shape[0] to be 32, got {x_new.shape[0]}"
         xt = ttnn.Tensor(x_new.permute(2, 1, 0, 3), input_dtype).to(ttnn.TILE_LAYOUT)
         if in_sharded:
             compute_grid_size = device.compute_with_storage_grid_size()
-            num_cores = min(pad_users // 32 * num_heads, compute_grid_size.x * compute_grid_size.y)
+            num_cores = min(max(num_users, 32) // 32 * num_heads, compute_grid_size.x * compute_grid_size.y)
             shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, True)
             input_shard_spec = ttnn.ShardSpec(
                 shard_grid,
