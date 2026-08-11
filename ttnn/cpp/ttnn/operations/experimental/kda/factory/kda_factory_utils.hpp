@@ -8,6 +8,7 @@
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -38,6 +39,9 @@ void check_same_device(
 void check_interleaved(const Tensor& tensor, std::string_view operation_name, std::string_view tensor_name);
 void check_output_interleaved(const tt::tt_metal::MemoryConfig& memory_config, std::string_view operation_name);
 void check_compute_config(const DeviceComputeKernelConfig& config, std::string_view operation_name);
+
+tt::tt_metal::ComputeConfigDescriptor kda_compute_cfg(
+    tt::ARCH arch, const DeviceComputeKernelConfig& config, bool honor_caller_config = true);
 
 struct KdaPrepWorkDist {
     std::vector<tt::tt_metal::CoreCoord> cores;
