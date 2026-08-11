@@ -69,6 +69,7 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
     subblock_w,
     mm_core_grid,
     num_iters=1,
+    ops_per_trace=1,
     enable_trace=False,
     cluster_axis=1,
     num_workers_per_link=None,
@@ -101,9 +102,14 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
     worker_sub_device_id = ttnn.SubDeviceId(0)
     mesh_device.set_sub_device_stall_group([worker_sub_device_id])
 
-    # RS needs 3 semaphores per iteration
-    ccl_semaphore_handles = [create_global_semaphores(mesh_device, all_cores, 0) for _ in range(num_iters)]
-    barrier_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, all_cores, 0) for _ in range(num_iters)]
+    # Under trace only input sets 0..ops_per_trace-1 are ever consumed — num_iters is
+    # purely the replay count. Eager consumes one set per iteration. Building the
+    # unused trace sets costs ~450 MB of host golden per set at trunk shapes.
+    num_input_sets = max(ops_per_trace, 1) if enable_trace else num_iters
+
+    # RS needs 3 semaphores per input set
+    ccl_semaphore_handles = [create_global_semaphores(mesh_device, all_cores, 0) for _ in range(num_input_sets)]
+    barrier_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, all_cores, 0) for _ in range(num_input_sets)]
 
     ##### Input setup #####
     # Input (activations): replicated on all devices (same activations on every device)
@@ -155,7 +161,7 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
-    for i in range(num_iters):
+    for i in range(num_input_sets):
         torch_input = torch.randn(input_shape, dtype=torch.float32)
         torch_weight_global = torch.randn(weight_shape_global, dtype=torch.float32)
 
@@ -317,9 +323,17 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
         ttnn.synchronize_device(mesh_device)
         logger.info("Done compiling op")
 
-        # Capture trace
+        # Capture trace. ops_per_trace > 1 enqueues additional back-to-back instances
+        # (distinct semaphore trios and inputs, mirroring the trunk pool rotation)
+        # with no sync between them, so a later instance's matmul cores start while
+        # an earlier instance's RS cores are still draining — the production
+        # adjacency the single-op replay loop (device-synced per replay) never has.
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        traced_ops = []
+        for k in range(ops_per_trace - 1, 0, -1):
+            traced_ops.append((k, *run_op(k)))
         tt_mm_out, tt_rs_out = run_op(0)
+        traced_ops.append((0, tt_mm_out, tt_rs_out))
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(mesh_device)
         logger.info("Done capturing trace")
@@ -348,9 +362,20 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
     # Setup concat mesh to use 1D mesh concatenation.
     concat_mesh_shape = list(mesh_device.shape)
     concat_mesh_shape[1 - cluster_axis] = 1  # Set replicated mesh axis to 1 to prevent concatenation
-    for i in range(num_iters):
-        golden_idx = i if not enable_trace else 0
-
+    # Under trace, every replay writes the same output buffers in place, so one
+    # verification per captured instance covers the final replay; re-reading per
+    # replay adds ~40s of host readback per iteration at trunk shapes. With
+    # ops_per_trace > 1 every captured instance is a potential race victim —
+    # verify each against the golden of the input set it consumed.
+    if enable_trace and ops_per_trace > 1:
+        tt_mm_out_tensor_list = [op[1] for op in traced_ops]
+        tt_rs_out_tensor_list = [op[2] for op in traced_ops]
+        verify_pairs = [(pos, op[0]) for pos, op in enumerate(traced_ops)]
+    elif enable_trace:
+        verify_pairs = [(0, 0)]
+    else:
+        verify_pairs = [(i, i) for i in range(num_iters)]
+    for i, golden_idx in verify_pairs:
         # Check MM output (each device has different output since weights differ)
         # Setup concatenation dimension per axis
         concat_dims = [0, 0]

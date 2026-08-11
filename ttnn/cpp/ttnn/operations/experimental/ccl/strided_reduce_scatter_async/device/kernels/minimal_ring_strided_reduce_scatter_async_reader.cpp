@@ -182,7 +182,11 @@ void kernel_main() {
     const uint32_t effective_worker_id = worker_id + (direction ? num_workers : 0);
     const uint32_t effective_advance_by_tiles = 2 * num_workers;
 
-    // Snapshot the semaphore's value at startup
+    // The semaphore cell is a running credit counter: the neighbor's writer
+    // atomically increments it, and each launch atomically decrements exactly
+    // what it consumed on exit. So at launch entry the cell holds only credits
+    // addressed to this launch (possibly arrived early), and wait targets
+    // count up from 0.
     uint32_t out_ready_sem_target = 0;
 
     for (uint32_t b = 0; b < batch_size; b++) {
@@ -374,14 +378,26 @@ void kernel_main() {
             }
         }
         // No per-batch reset: a local reset races the writer's monotonic fabric atomic-inc
-        // (lost signal). Target grows across batches; reset once at kernel exit. See #50793.
+        // (lost signal). Target grows across batches; consumed credits are atomically
+        // decremented once at kernel exit. See #50793.
 
 #ifdef FUSE_MM_OP_SIGNALER
+        // Reset (not decrement) is safe for this cell only: it is a program-local
+        // semaphore re-initialized at program load, and its producer — this program's
+        // matmul cores — is same-device and program-ordered, so no cross-launch or
+        // cross-chip credit can be in flight here. The global cells below get the
+        // decrement treatment because fabric peers CAN run a launch ahead.
         mm_op_ready_sem.set(0);
         mm_sem_target = 0;
 #endif
     }
 
-    // Explicit cleanup: guarantee the semaphore is 0 when this kernel exits
-    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
+    // Consume this launch's credits with an atomic decrement, never a reset:
+    // under trace replay the neighbor can run a full program ahead, so its
+    // next launch's increments may already be in this cell — a write of 0
+    // would wipe them and the next launch would wait forever. The decrement
+    // leaves early credits intact and the cell reads 0 at quiescence.
+    // Decrement = increment with 32-bit wraparound (no atomic-decrement primitive).
+    noc_semaphore_inc(get_noc_addr(out_ready_sem), (uint32_t)(-(int32_t)out_ready_sem_target));
+    noc_obj.async_atomic_barrier();
 }
