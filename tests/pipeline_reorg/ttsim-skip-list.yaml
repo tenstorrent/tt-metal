@@ -34,11 +34,6 @@ wormhole_b0:
   # https://github.com/tenstorrent/tt-metal/issues/41530
   - tests/ttnn/unit_tests/operations/reduce/test_reduction.py
 
-  # Unproven on ttsim, not known broken: untilize's tt-dm-codegen kernels have only ever run on
-  # hardware. repeat's forced-codegen test in the same sanity group is not skipped, so codegen
-  # itself works here -- drop this line once untilize's kernels have been confirmed under ttsim.
-  - tests/ttnn/unit_tests/operations/data_movement/test_untilize.py::test_untilize_codegen
-
 blackhole:
   # Job-level timeouts
   - tests/ttnn/unit_tests/operations/conv/test_conv2d.py
@@ -70,8 +65,3 @@ blackhole:
   # Numeric mismatches, not root caused
   # https://github.com/tenstorrent/tt-metal/issues/41530
   - tests/ttnn/unit_tests/operations/reduce/test_reduction.py
-
-  # Unproven on ttsim, not known broken: untilize's tt-dm-codegen kernels have only ever run on
-  # hardware. repeat's forced-codegen test in the same sanity group is not skipped, so codegen
-  # itself works here -- drop this line once untilize's kernels have been confirmed under ttsim.
-  - tests/ttnn/unit_tests/operations/data_movement/test_untilize.py::test_untilize_codegen
