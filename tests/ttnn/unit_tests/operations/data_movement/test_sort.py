@@ -786,3 +786,25 @@ def test_block_sharded(layout, device):
     ), f"values mismatch max_diff={(out - ref_vals.float()).abs().max():.4f}"
     gathered = torch.gather(t, -1, ttnn.to_torch(i).to(torch.int64))
     assert torch.allclose(gathered.float(), ref_vals.float(), rtol=1e-2, atol=1e-2), "index gather mismatch"
+
+
+@pytest.mark.parametrize("width", [32, 64, 128])
+@pytest.mark.parametrize("descending", [False, True])
+def test_sort_stable_tie_order(width, descending, device):
+    """
+    Duplicate-heavy regression: with stable=True, equal values must keep their
+    original relative order, so the returned indices must match torch's stable
+    sort exactly. Exercises the directional tie-break in the LLK for both
+    sort directions (tt-llk#1340 / tt-metal stable-sort wiring).
+    """
+    input = torch.randint(0, 4, (1, 1, 32, width), dtype=torch.float32)
+    torch_sort_values, torch_sort_indices = torch.sort(input, dim=-1, descending=descending, stable=True)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.float32, layout=ttnn.Layout.TILE, device=device)
+    ttnn_sort_values, ttnn_sort_indices = ttnn.sort(ttnn_input, dim=-1, descending=descending, stable=True)
+
+    assert_equal(torch_sort_values, ttnn.to_torch(ttnn_sort_values, dtype=torch.float32))
+    assert_equal(
+        torch_sort_indices.to(torch.int64),
+        ttnn.to_torch(ttnn_sort_indices, dtype=torch.uint32).to(torch.int64),
+    )
