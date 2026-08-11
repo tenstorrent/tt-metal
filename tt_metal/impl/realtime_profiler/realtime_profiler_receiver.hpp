@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -69,14 +70,30 @@ public:
     uint64_t num_unmappable_records() const { return num_unmappable_records_.load(std::memory_order_relaxed); }
     uint32_t read_ring_full_wait_count();
     size_t num_active_devices() const { return devices_.size(); }
+    // Largest gap between consecutive clock probes on any device since the previous call; reading
+    // clears it. Gaps beyond kDvfsMinTransitionSpacing cost chords their certificate.
+    uint64_t take_peak_probe_gap_ns();
+    uint64_t num_chords_finalized() const;
+    uint64_t num_chords_certified() const;
+    // Records published with a fallback-tier bound (uncertified chord or history envelope). Never
+    // dropped; tests bound this to a tiny fraction of published records.
+    uint64_t num_records_on_uncertified_chords() const;
+    // Worst per-drain phase times since the previous call; reading clears them. Read/resync/publish.
+    std::array<uint64_t, 3> take_peak_phase_ns() {
+        return {
+            peak_read_ns_.exchange(0, std::memory_order_relaxed),
+            peak_resync_ns_.exchange(0, std::memory_order_relaxed),
+            peak_publish_ns_.exchange(0, std::memory_order_relaxed)};
+    }
 
 private:
     RealtimeProfilerReceiver(ContextId context_id, std::vector<RealtimeProfilerDevice> devices);
 
     void note_fifo_depth(uint32_t available);
-    // Decodes `pages` and publishes them, placed against the probe history. `batch` is the caller's scratch, reused so
-    // this never allocates.
-    void publish_pages(
+    // Publishes the device's held-back records, then decodes `pages`, publishing records whose chord bounds are final
+    // and holding the rest back for the next probe. `batch` is the caller's scratch, reused so this never allocates.
+    // Returns the number of records published.
+    size_t publish_pages(
         RealtimeProfilerDevice& dev_state, std::span<const uint32_t> pages, std::vector<ProgramRealtimeRecord>& batch);
 
     // Receiver thread body.
@@ -84,9 +101,13 @@ private:
     uint64_t run_loop(std::vector<uint32_t>& page_buf);
     uint64_t drain_on_shutdown(std::vector<uint32_t>& page_buf);
     uint32_t drain_all_devices(std::chrono::steady_clock::time_point now, std::vector<uint32_t>& page_buf);
-    // Reads, does a sync probe, then publishes.
+    // Reads, services overdue probes, then publishes.
     // Returns number of pages read.
     uint32_t drain_device_pages(RealtimeProfilerDevice& dev_state, std::vector<uint32_t>& page_buf);
+    // Probes any device whose probe is overdue. Interleaved between drain phases so probe cadence
+    // tracks the floor regardless of publish latency: certification depends on adjacent probe-gap
+    // pairs staying under kDvfsMinTransitionSpacing.
+    void probe_overdue_devices();
 
     const DataCollector* data_collector_ = nullptr;
     RealtimeProfilerService* realtime_profiler_service_ = nullptr;
@@ -104,6 +125,11 @@ private:
     std::optional<std::chrono::nanoseconds> sync_error_window_max_;
     std::atomic<uint64_t> num_published_records_{0};  // records published to the ring
     std::atomic<uint64_t> num_published_batches_{0};  // batches published to the ring
+    std::atomic<uint64_t> peak_read_ns_{0};
+    std::atomic<uint64_t> peak_resync_ns_{0};
+    std::atomic<uint64_t> peak_publish_ns_{0};
+
+    static void note_phase_peak(std::atomic<uint64_t>& peak, std::chrono::steady_clock::duration d);
     std::atomic<uint64_t> num_inverted_timestamp_records_{0};
     std::atomic<uint64_t> num_unmappable_records_{0};
 

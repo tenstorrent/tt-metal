@@ -49,9 +49,17 @@ static_assert(
 
 constexpr uint32_t kMaxSocketPagesPerRead = 1024;
 
-// One probe after each drain batch. A finished record sits behind at most (host FIFO + device ring) pages, so it sees
-// at most that many / kMaxSocketPagesPerRead probes before decode; history must cover those so map_record can still
-// bracket the end.
+// Acks are batched because notifying the sender is a PCIe write that, on Wormhole, goes through
+// the dynamic-TLB UMD path — an interprocess chip mutex plus a TLB reconfigure per call, the only
+// operation on the receiver hot path that can block on other processes. Deferring acks costs the
+// device at most this much apparent FIFO headroom (1/8th of the shallowest FIFO), in exchange for
+// ~4x fewer mutex crossings at saturation and ~20x fewer at typical load.
+constexpr uint32_t kAckBatchPages = 4096;
+
+// Probes accrue on the kDeviceClockSyncInterval cadence, so the retained history spans
+// capacity * interval (~2.5 s) of wall time. A finished record sits behind at most
+// (host FIFO + device ring) pages of drain backlog — tens of milliseconds at any plausible
+// production rate — so its chords are still retained when it is decoded.
 static_assert(
     DeviceClockSync::kProbeHistoryCapacity >=
         (RealtimeProfilerRuntimeSizes::fifo_pages + RT_PROFILER_RING_CAPACITY) / kMaxSocketPagesPerRead,
@@ -80,7 +88,7 @@ uint32_t RealtimeProfilerReceiver::read_ring_full_wait_count() {
     return peak;
 }
 
-void RealtimeProfilerReceiver::publish_pages(
+size_t RealtimeProfilerReceiver::publish_pages(
     RealtimeProfilerDevice& dev_state, std::span<const uint32_t> pages, std::vector<ProgramRealtimeRecord>& batch) {
     TTZoneScopedDN(RT_PROFILER, "PublishBatch");
     const size_t num_pages = pages.size() / RealtimeProfilerRuntimeSizes::page_words;
@@ -88,6 +96,35 @@ void RealtimeProfilerReceiver::publish_pages(
     uint64_t inverted = 0;
     uint64_t unmappable = 0;
     batch.clear();
+
+    const uint64_t finalized = dev_state.clock_sync->finalized_device_timestamp();
+    const auto map_into_batch = [&](uint32_t runtime_id, uint64_t start_timestamp, uint64_t end_timestamp) {
+        const auto mapping = dev_state.clock_sync->map_record(start_timestamp, end_timestamp);
+        if (!mapping.has_value()) {
+            ++unmappable;
+            return;
+        }
+        batch.push_back(ProgramRealtimeRecord{
+            .runtime_id = runtime_id,
+            .chip_id = dev_state.chip_id,
+            .start_timestamp = start_timestamp,
+            .end_timestamp = end_timestamp,
+            .frequency = mapping->frequency,
+            .clock_sync = {.device_cycle_offset = mapping->device_cycle_offset, .error = mapping->error},
+            .kernel_sources = data_collector_->GetKernelSourcesForRuntimeId(static_cast<uint16_t>(runtime_id)),
+        });
+        sync_error_window_max_ =
+            sync_error_window_max_.has_value() ? std::max(*sync_error_window_max_, mapping->error) : mapping->error;
+    };
+
+    // Held-back records first: they predate anything decoded below. The probe taken just before
+    // this call covers every one of them, so the finalized prefix is normally the whole vector.
+    auto pending_split = dev_state.pending_records.begin();
+    for (; pending_split != dev_state.pending_records.end() && pending_split->end_timestamp <= finalized;
+         ++pending_split) {
+        map_into_batch(pending_split->runtime_id, pending_split->start_timestamp, pending_split->end_timestamp);
+    }
+    dev_state.pending_records.erase(dev_state.pending_records.begin(), pending_split);
 
     for (size_t page = 0; page < num_pages; ++page) {
         const uint32_t* rp = pages.data() + page * RealtimeProfilerRuntimeSizes::page_words;
@@ -97,22 +134,13 @@ void RealtimeProfilerReceiver::publish_pages(
             ++inverted;
             continue;
         }
-        const auto mapping = dev_state.clock_sync->map_record(start_timestamp, end_timestamp);
-        if (!mapping.has_value()) {
-            ++unmappable;
+        if (end_timestamp > finalized) {
+            TT_ASSERT(dev_state.pending_records.size() < dev_state.pending_records.capacity());
+            dev_state.pending_records.push_back(PendingRealtimeRecord{
+                .start_timestamp = start_timestamp, .end_timestamp = end_timestamp, .runtime_id = rp[2]});
             continue;
         }
-        batch.push_back(ProgramRealtimeRecord{
-            .runtime_id = rp[2],
-            .chip_id = dev_state.chip_id,
-            .start_timestamp = start_timestamp,
-            .end_timestamp = end_timestamp,
-            .frequency = mapping->frequency,
-            .clock_sync = {.device_cycle_offset = mapping->device_cycle_offset, .error = mapping->error},
-            .kernel_sources = data_collector_->GetKernelSourcesForRuntimeId(static_cast<uint16_t>(rp[2])),
-        });
-        sync_error_window_max_ =
-            sync_error_window_max_.has_value() ? std::max(*sync_error_window_max_, mapping->error) : mapping->error;
+        map_into_batch(rp[2], start_timestamp, end_timestamp);
     }
 
     if (inverted != 0) {
@@ -143,11 +171,12 @@ void RealtimeProfilerReceiver::publish_pages(
         }
     }
     if (batch.empty()) {
-        return;
+        return 0;
     }
     num_published_records_.fetch_add(batch.size(), std::memory_order_relaxed);
     num_published_batches_.fetch_add(1, std::memory_order_relaxed);
     ring_.writer().publish_batch(std::span<const ProgramRealtimeRecord>(batch));
+    return batch.size();
 }
 
 std::unique_ptr<RealtimeProfilerReceiver> RealtimeProfilerReceiver::create(
@@ -167,8 +196,12 @@ RealtimeProfilerReceiver::RealtimeProfilerReceiver(ContextId context_id, std::ve
     realtime_profiler_service_(&realtime_profiler_service()),
     devices_(std::move(devices)),
     ring_(std::min(kMaxRingCapacity, max_batch_records() * kRingHeadroomBatches)) {
-    publish_batch_.resize(kMaxSocketPagesPerRead);
+    // A batch can carry a full drain of fresh records plus a full drain of held-back ones.
+    publish_batch_.resize(2 * kMaxSocketPagesPerRead);
     publish_batch_.clear();
+    for (RealtimeProfilerDevice& dev_state : devices_) {
+        dev_state.pending_records.reserve(kMaxSocketPagesPerRead);
+    }
     realtime_profiler_service_->attach_producer(*this);
 
     try {
@@ -198,6 +231,47 @@ void RealtimeProfilerReceiver::note_fifo_depth(uint32_t available) {
     fifo_pages_window_max_ = std::max(fifo_pages_window_max_, available);
 }
 
+uint64_t RealtimeProfilerReceiver::take_peak_probe_gap_ns() {
+    int64_t peak = 0;
+    for (auto& dev_state : devices_) {
+        peak = std::max(peak, dev_state.clock_sync->take_peak_probe_gap().count());
+    }
+    return static_cast<uint64_t>(peak);
+}
+
+uint64_t RealtimeProfilerReceiver::num_chords_finalized() const {
+    uint64_t total = 0;
+    for (const auto& dev_state : devices_) {
+        total += dev_state.clock_sync->num_finalized_chords();
+    }
+    return total;
+}
+
+uint64_t RealtimeProfilerReceiver::num_chords_certified() const {
+    uint64_t total = 0;
+    for (const auto& dev_state : devices_) {
+        total += dev_state.clock_sync->num_certified_chords();
+    }
+    return total;
+}
+
+uint64_t RealtimeProfilerReceiver::num_records_on_uncertified_chords() const {
+    uint64_t total = 0;
+    for (const auto& dev_state : devices_) {
+        total += dev_state.clock_sync->num_records_on_uncertified_chords();
+    }
+    return total;
+}
+
+void RealtimeProfilerReceiver::probe_overdue_devices() {
+    const auto now = std::chrono::steady_clock::now();
+    for (auto& dev_state : devices_) {
+        if (dev_state.clock_sync->due_for_probe(now)) {
+            dev_state.clock_sync->resync();
+        }
+    }
+}
+
 uint32_t RealtimeProfilerReceiver::drain_device_pages(
     RealtimeProfilerDevice& dev_state, std::vector<uint32_t>& page_buf) {
     const uint32_t available = dev_state.socket->pages_available();
@@ -214,19 +288,42 @@ uint32_t RealtimeProfilerReceiver::drain_device_pages(
         return 0;
     }
     const uint32_t num_pages_to_read = std::min(available, kMaxSocketPagesPerRead);
+    const auto read_start = std::chrono::steady_clock::now();
     {
         TTZoneScopedDN(RT_PROFILER, "SocketRead");
         TTZoneValueD(RT_PROFILER, num_pages_to_read);
-        dev_state.socket->read(page_buf.data(), num_pages_to_read);
+        dev_state.socket->read(page_buf.data(), num_pages_to_read, /*notify_sender=*/false);
     }
+    dev_state.unacked_pages += num_pages_to_read;
+    if (dev_state.unacked_pages >= kAckBatchPages) {
+        dev_state.socket->notify_sender();
+        dev_state.unacked_pages = 0;
+    }
+    const auto after_read = std::chrono::steady_clock::now();
 
-    dev_state.clock_sync->resync();
+    // Probes run strictly on the kDeviceClockSyncInterval cadence, never per drain: back-to-back
+    // drains would mint microseconds-wide chords whose noisy secants poison the rate brackets of
+    // neighboring chords.
+    probe_overdue_devices();
+    const auto after_resync = std::chrono::steady_clock::now();
 
     publish_pages(
         dev_state,
         std::span(page_buf).first(num_pages_to_read * RealtimeProfilerRuntimeSizes::page_words),
         publish_batch_);
+    const auto after_publish = std::chrono::steady_clock::now();
+
+    note_phase_peak(peak_read_ns_, after_read - read_start);
+    note_phase_peak(peak_resync_ns_, after_resync - after_read);
+    note_phase_peak(peak_publish_ns_, after_publish - after_resync);
     return num_pages_to_read;
+}
+
+void RealtimeProfilerReceiver::note_phase_peak(std::atomic<uint64_t>& peak, std::chrono::steady_clock::duration d) {
+    const auto ns = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(d).count());
+    if (ns > peak.load(std::memory_order_relaxed)) {
+        peak.store(ns, std::memory_order_relaxed);
+    }
 }
 
 uint64_t RealtimeProfilerReceiver::run_loop(std::vector<uint32_t>& page_buf) {
@@ -260,7 +357,17 @@ uint64_t RealtimeProfilerReceiver::run_loop(std::vector<uint32_t>& page_buf) {
             backoff = std::chrono::microseconds{1};
             continue;
         }
-        std::this_thread::sleep_for(backoff);
+        // Cap the sleep at the earliest probe deadline: certification needs adjacent probe gaps to
+        // stay comfortably under kDvfsMinTransitionSpacing, so floor probes must not inherit
+        // backoff jitter.
+        auto sleep_duration = std::chrono::duration_cast<std::chrono::steady_clock::duration>(backoff);
+        const auto after_drain = std::chrono::steady_clock::now();
+        for (const auto& dev_state : devices_) {
+            sleep_duration = std::min(sleep_duration, dev_state.clock_sync->next_probe_due() - after_drain);
+        }
+        if (sleep_duration > std::chrono::steady_clock::duration::zero()) {
+            std::this_thread::sleep_for(sleep_duration);
+        }
         backoff += std::max(backoff / 4, std::chrono::microseconds{1});
         backoff = std::min(backoff, kReceiverMaxBackoff);
     }
@@ -270,19 +377,35 @@ uint64_t RealtimeProfilerReceiver::run_loop(std::vector<uint32_t>& page_buf) {
 uint32_t RealtimeProfilerReceiver::drain_all_devices(
     std::chrono::steady_clock::time_point now, std::vector<uint32_t>& page_buf) {
     uint32_t num_pages = 0;
+    bool published_on_idle = false;
     for (auto& dev_state : devices_) {
         try {
             const uint32_t drained = drain_device_pages(dev_state, page_buf);
             num_pages += drained;
             if (drained != 0) {
+                probe_overdue_devices();
                 now = std::chrono::steady_clock::now();
-            } else if (dev_state.clock_sync->due_for_probe(now)) {
-                TTZoneScopedDN(RT_PROFILER, "IdleSyncProbe");
-                TTZoneValueD(RT_PROFILER, dev_state.chip_id);
-                dev_state.clock_sync->resync();
-                // an idle device may be idle because a program is running on it; this is what keeps a start that will
-                // outlive the ring mappable.
-                dev_state.peek_running_program_start();
+            } else {
+                if (dev_state.clock_sync->due_for_probe(now)) {
+                    TTZoneScopedDN(RT_PROFILER, "IdleSyncProbe");
+                    TTZoneValueD(RT_PROFILER, dev_state.chip_id);
+                    dev_state.clock_sync->resync();
+                }
+                // Flush and peek on their own cadences: probes may be serviced by the overdue
+                // interleave during other devices' drains, so neither can key off due_for_probe.
+                if (!dev_state.pending_records.empty()) {
+                    published_on_idle |= publish_pages(dev_state, {}, publish_batch_) != 0;
+                }
+                if (dev_state.unacked_pages != 0) {
+                    dev_state.socket->notify_sender();
+                    dev_state.unacked_pages = 0;
+                }
+                if (now >= dev_state.next_peek_at) {
+                    dev_state.next_peek_at = now + kDeviceClockSyncInterval;
+                    // an idle device may be idle because a program is running on it; this is what
+                    // keeps a start that will outlive the ring mappable.
+                    dev_state.peek_running_program_start();
+                }
             }
         } catch (const std::exception& e) {
             log_warning(
@@ -292,7 +415,7 @@ uint32_t RealtimeProfilerReceiver::drain_all_devices(
                 e.what());
         }
     }
-    if (num_pages != 0) {
+    if (num_pages != 0 || published_on_idle) {
         realtime_profiler_service_->wake_consumers();
     }
     return num_pages;
@@ -328,6 +451,13 @@ uint64_t RealtimeProfilerReceiver::drain_on_shutdown(std::vector<uint32_t>& page
                 "[Real-time profiler] Device {} still had {} page(s) unread when the shutdown drain gave up.",
                 dev_state.chip_id,
                 left);
+        }
+        if (!dev_state.pending_records.empty()) {
+            log_warning(
+                tt::LogMetal,
+                "[Real-time profiler] Device {} still had {} record(s) held back when the shutdown drain gave up.",
+                dev_state.chip_id,
+                dev_state.pending_records.size());
         }
     }
     return num_pages_drained;

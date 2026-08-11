@@ -2,16 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Sync-accuracy coverage for the real-time (RT) profiler: the published sync-error distribution, and the mapping's
-// residual against an independent read of the device clock.
+// Sync-accuracy coverage for the real-time (RT) profiler: the published sync-error distribution, the mapping's
+// residual against an independent read of the device clock, and host-only synthetic coverage of ClockSyncMapping's
+// error bound under adversarial clock-rate transitions.
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <iterator>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 #include <utility>
@@ -346,6 +349,165 @@ TEST(RealtimeProfilerSync, RecordMappingMatchesAnIndependentClockRead) {
     EXPECT_TRUE(mesh_device->close());
 }
 
+// The pre-streaming init sync distilled: a ~1 s dense sweep of bracketed wall-clock register reads,
+// least-squares fitted. The fit is an independent estimator of the same clock, so the published
+// smoothed frequency must agree with its slope to a few ppm on a quiet chip.
+TEST(RealtimeProfilerSync, FrequencyMatchesAnIndependentLinearFit) {
+    auto mesh_device = open_profiler_unit_mesh();
+    if (mesh_device == nullptr) {
+        GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
+    }
+
+    constexpr uint32_t kFitRuntimeIdBase = 9301;
+    constexpr uint32_t kFitSamples = 600;
+    constexpr uint32_t kFitPrograms = 12;
+    constexpr auto kFitSampleSpacing = 1500us;
+
+    std::vector<ProgramRealtimeRecord> records;
+    std::atomic<size_t> delivered = 0;
+    const auto handle = RegisterProgramRealtimeProfilerCallback([&](const ProgramRealtimeRecordBatch& batch) {
+        records.insert(records.end(), batch.records.begin(), batch.records.end());
+        delivered.fetch_add(batch.records.size());
+    });
+
+    IDevice* device = mesh_device->get_devices().front();
+    auto& context = MetalContext::instance();
+    const uint32_t clock_addr_lo = context.hal().get_tensix_wall_clock_reg_addr_lo();
+    const uint32_t clock_addr_hi = context.hal().get_tensix_wall_clock_reg_addr_hi();
+    auto& cluster = context.get_cluster();
+    const CoreCoord clock_vcore = device->virtual_core_from_logical_core(CoreCoord{0, 0}, CoreType::WORKER);
+    const tt_cxy_pair clock_dest(device->id(), clock_vcore);
+    const auto host_now_ns = [] { return std::chrono::steady_clock::now().time_since_epoch().count(); };
+
+    struct FitSample {
+        int64_t host_ns;
+        uint64_t cycles;
+        int64_t half_bracket_ns;
+    };
+    // AICLK must sit at its busy point throughout: any gap in dispatch traffic lets DVFS step the
+    // clock, and each step honestly resets the frequency window, leaving nearby records with a
+    // young window's wider rate. Filler programs pin it busy through the window's ~1 s maturation
+    // and the sweep; only records enqueued in the final stretch are compared.
+    constexpr uint32_t kFitFillerRuntimeId = 9300;
+    constexpr uint32_t kComparedSpan = 300;
+    uint64_t enqueued = 0;
+    const auto enqueue_filler = [&] {
+        enqueue_sync_program(mesh_device, kFitFillerRuntimeId, all_cores(mesh_device));
+        ++enqueued;
+    };
+    for (int i = 0; i < 625; ++i) {
+        enqueue_filler();
+        std::this_thread::sleep_for(2ms);
+    }
+    std::vector<FitSample> samples;
+    samples.reserve(kFitSamples);
+    for (uint32_t i = 0; i < kFitSamples; ++i) {
+        const uint32_t compared_stride = kComparedSpan / kFitPrograms;
+        if (i >= kFitSamples - kComparedSpan && (i - (kFitSamples - kComparedSpan)) % compared_stride == 0) {
+            enqueue_sync_program(
+                mesh_device,
+                kFitRuntimeIdBase + (i - (kFitSamples - kComparedSpan)) / compared_stride,
+                all_cores(mesh_device));
+            ++enqueued;
+        } else {
+            enqueue_filler();
+        }
+        uint32_t lo = 0;
+        uint32_t lo_again = 0;
+        uint32_t hi = 0;
+        const int64_t before = host_now_ns();
+        cluster.read_reg(&lo, clock_dest, clock_addr_lo);
+        const int64_t after = host_now_ns();
+        // The lo read latches hi; the second lo read discards the rare wrap that would tear the pair.
+        cluster.read_reg(&hi, clock_dest, clock_addr_hi);
+        cluster.read_reg(&lo_again, clock_dest, clock_addr_lo);
+        if (lo_again >= lo) {
+            samples.push_back(
+                FitSample{(before + after) / 2, (static_cast<uint64_t>(hi) << 32) | lo, (after - before) / 2});
+        }
+        std::this_thread::sleep_for(kFitSampleSpacing);
+    }
+    quiesce_and_wait_for(mesh_device, [&] { return delivered.load() >= enqueued; });
+    UnregisterProgramRealtimeProfilerCallback(handle);
+
+    // Keep the narrowest-bracket half, then centered least squares for the slope (cycles per host ns).
+    std::sort(samples.begin(), samples.end(), [](const FitSample& a, const FitSample& b) {
+        return a.half_bracket_ns < b.half_bracket_ns;
+    });
+    samples.resize(samples.size() / 2);
+    ASSERT_GT(samples.size(), 100u);
+    const double x0 = static_cast<double>(samples.front().host_ns);
+    const double y0 = static_cast<double>(samples.front().cycles);
+    double mean_x = 0.0;
+    double mean_y = 0.0;
+    for (const FitSample& sample : samples) {
+        mean_x += static_cast<double>(sample.host_ns) - x0;
+        mean_y += static_cast<double>(sample.cycles) - y0;
+    }
+    mean_x /= static_cast<double>(samples.size());
+    mean_y /= static_cast<double>(samples.size());
+    double sxx = 0.0;
+    double sxy = 0.0;
+    for (const FitSample& sample : samples) {
+        const double dx = (static_cast<double>(sample.host_ns) - x0) - mean_x;
+        const double dy = (static_cast<double>(sample.cycles) - y0) - mean_y;
+        sxx += dx * dx;
+        sxy += dx * dy;
+    }
+    const double fit_frequency = sxy / sxx;
+    ASSERT_GT(fit_frequency, 0.0);
+    double rss = 0.0;
+    for (const FitSample& sample : samples) {
+        const double dx = (static_cast<double>(sample.host_ns) - x0) - mean_x;
+        const double dy = (static_cast<double>(sample.cycles) - y0) - mean_y;
+        const double residual = dy - fit_frequency * dx;
+        rss += residual * residual;
+    }
+    const double residual_rms_ns = std::sqrt(rss / static_cast<double>(samples.size())) / fit_frequency;
+    if (residual_rms_ns > 2'000.0) {
+        GTEST_SKIP() << "clock stepped mid-sweep (residual RMS " << residual_rms_ns
+                     << " ns); a single linear fit is not a valid reference";
+    }
+
+    std::vector<double> ppm_deviations;
+    double max_placement_delta_ns = 0.0;
+    for (const auto& record : records) {
+        if (record.runtime_id < kFitRuntimeIdBase || record.runtime_id >= kFitRuntimeIdBase + kFitPrograms ||
+            !(record.frequency > 0.0)) {
+            continue;
+        }
+        ppm_deviations.push_back(std::abs(record.frequency - fit_frequency) / fit_frequency * 1e6);
+        const double host_by_record =
+            (static_cast<double>(record.start_timestamp) - static_cast<double>(record.clock_sync.device_cycle_offset)) /
+            record.frequency;
+        const double host_by_fit =
+            x0 + mean_x + ((static_cast<double>(record.start_timestamp) - y0) - mean_y) / fit_frequency;
+        max_placement_delta_ns = std::max(max_placement_delta_ns, std::abs(host_by_record - host_by_fit));
+    }
+    ASSERT_EQ(ppm_deviations.size(), kFitPrograms);
+    std::sort(ppm_deviations.begin(), ppm_deviations.end());
+    const double median_ppm = ppm_deviations[ppm_deviations.size() / 2];
+    log_info(
+        tt::LogTest,
+        "[RT profiler sync] independent fit: {:.9f} GHz over {} reads (residual RMS {:.0f}ns); published-vs-fit "
+        "median {:.2f} ppm, max {:.2f} ppm across {} records, placement delta max {:.0f}ns",
+        fit_frequency,
+        samples.size(),
+        residual_rms_ns,
+        median_ppm,
+        ppm_deviations.back(),
+        ppm_deviations.size(),
+        max_placement_delta_ns);
+    // Median, not max: a probe-gap blip legally resets the frequency window, and records near the
+    // reset ride the young window's wider rate (their reconstruction stays covered via the
+    // smoothing-skew error term). Mature-window records must match the fit at the ppm scale.
+    EXPECT_LT(median_ppm, 2.0) << "published frequency disagrees with an independent linear fit";
+    // The placement delta also carries any constant offset between the profiler core's and this
+    // worker's wall clocks, so it gets a loose sanity bound rather than a tight one.
+    EXPECT_LT(max_placement_delta_ns, 50'000.0);
+    EXPECT_TRUE(mesh_device->close());
+}
+
 TEST(RealtimeProfilerSync, LongProgramIsDeliveredIntact) {
     auto mesh_device = open_profiler_unit_mesh();
     if (mesh_device == nullptr) {
@@ -407,6 +569,199 @@ void kernel_main() {
         std::chrono::duration<double>{it->duration()}.count(),
         std::chrono::duration<double, std::micro>{it->clock_sync.error}.count());
     EXPECT_TRUE(mesh_device->close());
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Host-only coverage of ClockSyncMapping's error bound: a synthetic device clock with adversarial rate
+// transitions feeds probes to the mapping, and every mapped record must land within the published error of the
+// simulated truth. Hardware cannot exercise these paths — AICLK cannot be stepped at a chosen position inside a
+// chosen probe gap — so this is the only deterministic coverage of the DVFS reasoning. No device needed.
+
+constexpr double kSpacingNs = std::chrono::duration<double, std::nano>(kDeviceClockSyncInterval).count();
+constexpr double kProbeErrorNs = 500.0;
+// Typical WH platform range, cycles/ns; any range containing the simulated rates is valid.
+constexpr ClockSyncMapping::FrequencyPrior kTestPrior{.min_frequency = 0.5, .max_frequency = 1.35};
+
+// Piecewise-constant-rate clock; the tests space transitions per the DVFS cadence except where
+// they deliberately exercise the uncertified fallback.
+class SyntheticDeviceClock {
+public:
+    explicit SyntheticDeviceClock(double rate) : segments_{{0.0, 0.0, rate}} {}
+
+    void set_rate_at(double host_ns, double rate) { segments_.push_back({host_ns, device_at(host_ns), rate}); }
+
+    double device_at(double host_ns) const {
+        const Segment& segment = *std::prev(std::upper_bound(
+            segments_.begin(), segments_.end(), host_ns, [](double t, const Segment& s) { return t < s.host_start; }));
+        return segment.device_start + (host_ns - segment.host_start) * segment.rate;
+    }
+
+    double host_at(double device) const {
+        const Segment& segment = *std::prev(std::upper_bound(
+            segments_.begin(), segments_.end(), device, [](double d, const Segment& s) { return d < s.device_start; }));
+        return segment.host_start + (device - segment.device_start) / segment.rate;
+    }
+
+private:
+    struct Segment {
+        double host_start;
+        double device_start;
+        double rate;
+    };
+    std::vector<Segment> segments_;
+};
+
+struct SyntheticProbeFeed {
+    ClockSyncMapping& mapping;
+    const SyntheticDeviceClock& clock;
+    uint64_t lcg_state = 0x243F6A8885A308D3ull;  // deterministic, unstructured host noise
+
+    // Anchors carry real host noise, uniform within the claimed read error.
+    void feed(double from_host_ns, double to_host_ns, double spacing_ns = kSpacingNs) {
+        for (double t = from_host_ns; t <= to_host_ns; t += spacing_ns) {
+            lcg_state = lcg_state * 6364136223846793005ull + 1442695040888963407ull;
+            const double unit = static_cast<double>(lcg_state >> 11) / static_cast<double>(1ull << 53);
+            const double noise = (unit - 0.5) * kProbeErrorNs;
+            mapping.add_probe(ClockSyncMapping::Anchor{
+                .host_timestamp =
+                    std::chrono::steady_clock::time_point(std::chrono::nanoseconds(std::llround(t + noise))),
+                .device_timestamp = static_cast<uint64_t>(std::llround(clock.device_at(t))),
+                .error = std::chrono::nanoseconds(std::llround(kProbeErrorNs)),
+            });
+        }
+    }
+};
+
+// Maps [start_host_ns, end_host_ns] and asserts both mapped endpoints land within the published error of the
+// simulated truth (plus a few ns of integer-rounding slop).
+ClockSyncMapping::RecordMapping map_and_expect_covered(
+    ClockSyncMapping& mapping,
+    const SyntheticDeviceClock& clock,
+    double start_host_ns,
+    double end_host_ns,
+    const std::string& what) {
+    const auto start = static_cast<uint64_t>(std::llround(clock.device_at(start_host_ns)));
+    const auto end = static_cast<uint64_t>(std::llround(clock.device_at(end_host_ns)));
+    const auto record = mapping.map_record(start, end);
+    EXPECT_TRUE(record.has_value()) << what << ": record was unmappable";
+    if (!record.has_value()) {
+        return {};
+    }
+    constexpr double kRoundingSlopNs = 4.0;
+    const double claim_ns = static_cast<double>(record->error.count()) + kRoundingSlopNs;
+    const auto mapped_host = [&](uint64_t device_timestamp) {
+        return (static_cast<double>(device_timestamp) - static_cast<double>(record->device_cycle_offset)) /
+               record->frequency;
+    };
+    EXPECT_LE(std::abs(mapped_host(start) - clock.host_at(static_cast<double>(start))), claim_ns)
+        << what << ": start misplaced beyond the published error";
+    EXPECT_LE(std::abs(mapped_host(end) - clock.host_at(static_cast<double>(end))), claim_ns)
+        << what << ": end misplaced beyond the published error";
+    return *record;
+}
+
+TEST(RealtimeProfilerSync, MappingQuietClockIsTightAndCovered) {
+    SyntheticDeviceClock clock(1.0);
+    ClockSyncMapping mapping(kTestPrior);
+    SyntheticProbeFeed feed{mapping, clock};
+    feed.feed(0.0, 20.0 * kSpacingNs);
+
+    EXPECT_GT(mapping.finalized_device_timestamp(), 0u);
+    for (int k = 3; k < 18; ++k) {
+        const auto record = map_and_expect_covered(
+            mapping, clock, k * kSpacingNs + 60e3, k * kSpacingNs + 240e3, "quiet chord " + std::to_string(k));
+        EXPECT_LT(record.error, 3us) << "quiet-clock bound should stay near read noise";
+    }
+}
+
+TEST(RealtimeProfilerSync, MappingCoversAStepLateInAChord) {
+    // The failure mode of witness-style estimates: a step at 90% of a chord, where a mid-probe
+    // departure test under-reports the worst-case in-chord misplacement by ~2x.
+    SyntheticDeviceClock clock(0.5);
+    const double step_at = 5.0 * kSpacingNs + 0.9 * kSpacingNs;
+    clock.set_rate_at(step_at, 1.35);
+
+    ClockSyncMapping mapping(kTestPrior);
+    SyntheticProbeFeed feed{mapping, clock};
+    feed.feed(0.0, 12.0 * kSpacingNs);
+
+    map_and_expect_covered(mapping, clock, 5.0 * kSpacingNs + 50e3, 5.0 * kSpacingNs + 150e3, "before the step");
+    map_and_expect_covered(mapping, clock, step_at - 5e3, step_at + 5e3, "straddling the step");
+    const auto at_step =
+        map_and_expect_covered(mapping, clock, 5.0 * kSpacingNs + 200e3, step_at + 2e3, "ending at the step");
+    EXPECT_GT(at_step.error, 5us) << "a certified chord holding a 2.7x step must own up to a large bound";
+    EXPECT_LT(at_step.error, 200us);
+}
+
+TEST(RealtimeProfilerSync, MappingSurvivesTheTwoStepCancellation) {
+    // Two transitions 1.15 ms apart (legal at the DVFS cadence) around one probe, with rates chosen
+    // so a mid-probe departure witness measures ~zero. At 500 us probe spacing the certificate
+    // windows exceed the transition spacing, so the mapping must fall back rather than trust
+    // neighbors — the published error stays honest instead of collapsing to read noise.
+    SyntheticDeviceClock clock(1.35);
+    clock.set_rate_at(2'100e3, 0.5);
+    clock.set_rate_at(3'250e3, 0.67);
+
+    ClockSyncMapping mapping(kTestPrior);
+    SyntheticProbeFeed feed{mapping, clock};
+    feed.feed(0.0, 5'000e3, /*spacing_ns=*/500e3);
+
+    map_and_expect_covered(mapping, clock, 2'050e3, 2'150e3, "first step");
+    const auto second = map_and_expect_covered(mapping, clock, 3'240e3, 3'260e3, "second step");
+    EXPECT_GT(second.error, 20us) << "uncertified chord with a step must not publish a read-noise-sized error";
+}
+
+TEST(RealtimeProfilerSync, MappingCoversAReceiverStall) {
+    // A probe gap far beyond the DVFS cadence, with two transitions inside it. The certificate
+    // fails and the bound degrades to the observed-envelope fallback — large and honest, provided
+    // the in-gap rates were visited while probes still flowed (the tier's stated assumption; the
+    // pre-gap excursions below satisfy it).
+    SyntheticDeviceClock clock(0.5);
+    clock.set_rate_at(1'000e3, 1.35);
+    clock.set_rate_at(2'000e3, 0.8);
+    clock.set_rate_at(3'400e3, 1.35);
+    clock.set_rate_at(4'600e3, 0.5);
+
+    for (const bool with_prior : {true, false}) {
+        ClockSyncMapping mapping(with_prior ? std::optional(kTestPrior) : std::nullopt);
+        SyntheticProbeFeed feed{mapping, clock};
+        feed.feed(0.0, 3'000e3);
+        feed.feed(5'400e3, 6'600e3);
+
+        const std::string label = with_prior ? "stall with prior" : "stall without prior";
+        map_and_expect_covered(mapping, clock, 3'350e3, 3'450e3, label + ", first step");
+        map_and_expect_covered(mapping, clock, 4'550e3, 4'650e3, label + ", second step");
+        map_and_expect_covered(mapping, clock, 3'100e3, 5'100e3, label + ", spanning both");
+    }
+}
+
+TEST(RealtimeProfilerSync, MappingFrequencyTracksATransition) {
+    SyntheticDeviceClock clock(1.0);
+    const double step_at = 100.0 * kSpacingNs + 150e3;
+    clock.set_rate_at(step_at, 1.2);
+
+    ClockSyncMapping mapping(kTestPrior);
+    SyntheticProbeFeed feed{mapping, clock};
+    feed.feed(0.0, 200.0 * kSpacingNs);
+
+    const auto before =
+        map_and_expect_covered(mapping, clock, 60.0 * kSpacingNs + 60e3, 60.0 * kSpacingNs + 240e3, "before step");
+    EXPECT_NEAR(before.frequency, 1.0, 1.0 * 500e-6);
+
+    // The step chord itself can only be known to its bracket; sanity, not precision.
+    const auto at_step = map_and_expect_covered(mapping, clock, step_at - 40e3, step_at + 40e3, "at step");
+    EXPECT_GT(at_step.frequency, 0.95);
+    EXPECT_LT(at_step.frequency, 1.25);
+
+    // A few chords later the window has restarted on the new rate and is already sub-0.5%...
+    const auto soon_after = map_and_expect_covered(
+        mapping, clock, 106.0 * kSpacingNs + 60e3, 106.0 * kSpacingNs + 240e3, "soon after step");
+    EXPECT_NEAR(soon_after.frequency, 1.2, 1.2 * 5e-3);
+
+    // ...and tens-of-ppm again once the window has regrown.
+    const auto later =
+        map_and_expect_covered(mapping, clock, 195.0 * kSpacingNs + 60e3, 195.0 * kSpacingNs + 240e3, "well after");
+    EXPECT_NEAR(later.frequency, 1.2, 1.2 * 300e-6);
 }
 
 }  // namespace

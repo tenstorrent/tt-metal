@@ -277,6 +277,14 @@ public:
     void read(void* data, uint32_t num_pages, bool notify_sender = true);
 
     /**
+     * @brief Updates `bytes_acked` on the device to cover every page read so far.
+     *
+     * The explicit half of batched acknowledgement: after reads with `notify_sender = false`,
+     * call this to signal the accumulated freed buffer space in one PCIe write.
+     */
+    void notify_sender();
+
+    /**
      * @brief Blocks until all sent data has been acknowledged.
      *
      * Waits until `bytes_acked` equals `bytes_sent`, indicating the host has
@@ -358,7 +366,6 @@ private:
 
     void wait_for_bytes(uint32_t num_bytes);
     void pop_bytes(uint32_t num_bytes);
-    void notify_sender();
 
     // Shared host-side init: pins host memory (or hugepage fallback), writes socket metadata
     // into `config_buffer_address_`, and configures the sender-side TLB. The caller must

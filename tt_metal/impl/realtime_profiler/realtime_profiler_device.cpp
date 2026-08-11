@@ -359,8 +359,10 @@ void RealtimeProfilerDevice::peek_running_program_start() {
     if (newest_bank_start() != candidate) {
         return;
     }
-    last_peek_device_timestamp = candidate;
-    clock_sync->pin_start(candidate);
+    // pin_start declines until the chord around the start is finalized; keep offering until it takes.
+    if (clock_sync->pin_start(candidate)) {
+        last_peek_device_timestamp = candidate;
+    }
 }
 
 std::vector<RealtimeProfilerDevice> initialize_realtime_profiler_devices(

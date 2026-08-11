@@ -220,6 +220,7 @@ def compute_math_utilization(
     core_count,
     is_causal=False,
     arch="blackhole",
+    duration_cycles=None,
 ):
     """
     Compute math utilization as a percentage (0-100).
@@ -234,11 +235,15 @@ def compute_math_utilization(
         core_count: Number of compute cores used.
         is_causal: Whether causal masking is used.
         arch: Architecture name ("blackhole" or "wormhole_b0").
+        duration_cycles: Measured duration in device clock cycles. When given, it is used
+            directly instead of duration_ns x nominal clock, which makes the metric
+            per-cycle math efficiency — independent of DVFS throttling and of how the
+            profiler's clock sync converts cycles to wall time.
     """
     constants = ARCH_CONSTANTS[arch]
     mm_flops = compute_sdpa_flops(local_seqlen, total_seqlen, d_q, d_v, num_heads_per_device, is_causal)
 
-    cycles = duration_ns * constants["clock_ghz"]
+    cycles = duration_cycles if duration_cycles is not None else duration_ns * constants["clock_ghz"]
     theoretical_flops = core_count * cycles * constants["mm_flops_per_cycle_per_core"]
     return (mm_flops / theoretical_flops) * 100 if theoretical_flops > 0 else 0
 

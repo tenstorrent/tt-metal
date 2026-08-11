@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -34,11 +35,18 @@ struct RealtimeProfilerCoreL1Addrs {
 // Real-time profiler runtime constants. On-device L1 layout sizes are reused from
 // realtime_profiler_ring_buffer.hpp so host and device share a single source of truth.
 struct RealtimeProfilerRuntimeSizes {
-    static constexpr uint32_t fifo_pages = 32768;                  // host D2H FIFO depth, in pages
+    static constexpr uint32_t fifo_pages = 32768 * 2;              // host D2H FIFO depth, in pages
     static constexpr uint32_t page_size = RT_PROFILER_ENTRY_SIZE;  // host page size == ring entry size
     static constexpr uint32_t page_words = page_size / sizeof(uint32_t);
     static constexpr uint32_t fifo_size = fifo_pages * page_size;  // pinned-host FIFO, in bytes (2 MiB)
     static constexpr uint32_t core_l1_size = sizeof(RealtimeProfilerCoreL1);
+};
+
+// A decoded record waiting for the chord around its end timestamp to be finalized (one more probe).
+struct PendingRealtimeRecord {
+    uint64_t start_timestamp = 0;
+    uint64_t end_timestamp = 0;
+    uint32_t runtime_id = 0;
 };
 
 // One profiler-enabled chip, fully brought up: eligibility passed, clock register mapped, D2H socket created,
@@ -51,11 +59,18 @@ struct RealtimeProfilerDevice {
     std::unique_ptr<Program> realtime_profiler_program;
     RealtimeProfilerCoreL1Addrs core_l1;
     std::unique_ptr<DeviceClockSync> clock_sync;
+    // Capacity reserved once by the receiver; a probe precedes every publish, so the flush covers
+    // the whole vector each time, occupancy never exceeds one drain batch, and the vector never
+    // reallocates. Ends are monotone (dispatch_s stamps serially).
+    std::vector<PendingRealtimeRecord> pending_records;
+    // Pages consumed but not yet acked to the device (see the receiver's kAckBatchPages).
+    uint32_t unacked_pages = 0;
     bool fifo_capacity_warned = false;
 
     volatile uint32_t* peek_start_a = nullptr;
     volatile uint32_t* peek_start_b = nullptr;
     uint64_t last_peek_device_timestamp = 0;
+    std::chrono::steady_clock::time_point next_peek_at{};
 
     void configure_program_start_peek(
         ContextId context_id, CoreCoord dispatch_s_virtual, uint32_t start_a_addr, uint32_t start_b_addr);
