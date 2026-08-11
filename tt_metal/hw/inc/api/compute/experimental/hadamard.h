@@ -64,7 +64,7 @@ namespace ckernel {
  * The `normalize` template flag controls whether a post-MM2 SFPU pass
  * multiplies dst rows 0..7 by 1/sqrt(128). Default true; set false for
  * callers that apply their own normalization externally. Not supported
- * for normalize=true.
+ * for fp32 dest.
  *
  * | Argument         | Description                                                            | Type     | Valid Range            | Required              |
  * |------------------|------------------------------------------------------------------------|----------|------------------------|-----------------------|
