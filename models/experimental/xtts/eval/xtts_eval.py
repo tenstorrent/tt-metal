@@ -35,6 +35,16 @@ _UTMOS = None
 _ECAPA2 = None
 
 WHISPER_MODEL_ID = "openai/whisper-large-v3"
+# Pinned for the same reason as reference.xtts_gpt_block.HF_REVISION: an unpinned download follows
+# the default branch, so an upstream re-upload would move the recorded metrics with no warning.
+WHISPER_REVISION = "06f233fe06e710322aca913c1bc4249a0d71fce1"
+ECAPA2_REPO_ID = "Jenthe/ECAPA2"
+ECAPA2_REVISION = "207cb6d137c671a12ba820ebec3b719549b06c0f"
+# ``torch.hub`` takes a tag or branch, not a commit, so this pins the TAG that upstream's default
+# branch currently points at (v1.2.0 == ed25eac, the commit the unpinned call was already resolving
+# to). Unlike the three HF pins this one is not exercised here — UTMOS needs ``torchaudio``, which
+# is absent from python_env, so the metric skips before the download runs.
+UTMOS_HUB_REPO = "tarepan/SpeechMOS:v1.2.0"
 UTMOS_SR = 16000
 ECAPA2_SR = 16000
 WHISPER_SR = 16000
@@ -64,7 +74,7 @@ def compute_cer(wav, sr, reference_text, model_id=WHISPER_MODEL_ID, language="en
     from transformers import pipeline
 
     if model_id not in _WHISPER:
-        _WHISPER[model_id] = pipeline("automatic-speech-recognition", model=model_id)
+        _WHISPER[model_id] = pipeline("automatic-speech-recognition", model=model_id, revision=WHISPER_REVISION)
     asr = _WHISPER[model_id]
 
     wav16 = _resample(_as_mono_f32(wav), int(sr), WHISPER_SR)
@@ -82,7 +92,7 @@ def compute_utmos(wav, sr):
     """Naturalness MOS (1-5) of ``wav`` via the UTMOS22-strong predictor."""
     global _UTMOS
     if _UTMOS is None:
-        _UTMOS = torch.hub.load("tarepan/SpeechMOS", "utmos22_strong", trust_repo=True)
+        _UTMOS = torch.hub.load(UTMOS_HUB_REPO, "utmos22_strong", trust_repo=True)
         _UTMOS.eval()
     w = torch.from_numpy(_as_mono_f32(wav)).unsqueeze(0)  # UTMOS resamples internally
     with torch.no_grad():
@@ -94,7 +104,7 @@ def _ecapa2_embed(wav, sr) -> torch.Tensor:
     if _ECAPA2 is None:
         from huggingface_hub import hf_hub_download
 
-        path = hf_hub_download(repo_id="Jenthe/ECAPA2", filename="ecapa2.pt")
+        path = hf_hub_download(repo_id=ECAPA2_REPO_ID, filename="ecapa2.pt", revision=ECAPA2_REVISION)
         _ECAPA2 = torch.jit.load(path, map_location="cpu")
         _ECAPA2.eval()
     wav16 = _resample(_as_mono_f32(wav), int(sr), ECAPA2_SR)

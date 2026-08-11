@@ -29,6 +29,10 @@ from transformers.models.gpt2.modeling_gpt2 import GPT2Block
 
 HF_REPO_ID = "coqui/XTTS-v2"
 CHECKPOINT_FILE = "model.pth"
+# Pinned so the PCC/perf numbers in README.md stay reproducible: unpinned downloads follow the
+# repo's default branch, and an upstream re-upload would move them silently. Every download from
+# HF_REPO_ID (checkpoint, vocab.json, samples/*.wav) passes this.
+HF_REVISION = "6c2b0d75eae4b7047358e3b6bd9325f857d43f77"
 
 # GPT-2 backbone hyper-parameters, read from coqui/XTTS-v2 config.json
 # (model_args.gpt_layers / gpt_n_model_channels / gpt_n_heads).
@@ -101,7 +105,7 @@ def load_xtts_state_dict():
     from huggingface_hub import hf_hub_download
 
     _install_tts_stub()
-    checkpoint_path = hf_hub_download(repo_id=HF_REPO_ID, filename=CHECKPOINT_FILE)
+    checkpoint_path = hf_hub_download(repo_id=HF_REPO_ID, filename=CHECKPOINT_FILE, revision=HF_REVISION)
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     state_dict = checkpoint["model"] if isinstance(checkpoint, dict) and "model" in checkpoint else checkpoint
     tensors = {k: v for k, v in state_dict.items() if torch.is_tensor(v)}

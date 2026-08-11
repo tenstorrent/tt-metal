@@ -224,7 +224,7 @@ python models/experimental/xtts/demo/xtts_demo.py
 ```bash
 export TT_METAL_HOME=$(pwd) PYTHONPATH=$(pwd) ARCH_NAME=blackhole
 
-# Default text + bundled reference voice, traced
+# Default text + default reference voice (downloaded on first use, cached), fully traced
 python models/experimental/xtts/demo/xtts_demo.py
 
 # Your own text + reference voice
@@ -244,7 +244,7 @@ Only three flags are exposed; everything else is fixed in code to XTTS-v2's tune
 | Flag | Default | Description |
 |------|---------|--------------|
 | `--text <str>` | bundled 2-sentence English sample | Text to synthesize |
-| `--ref-audio <path or sample name>` | `reference.wav` | Local WAV path, or an HF `coqui/XTTS-v2` sample name (e.g. `en_sample.wav`) |
+| `--ref-audio <path or sample name>` | `LJ001-0001.wav+LJ001-0003.wav+LJ001-0004.wav+LJ001-0005.wav` | Local WAV path; a coqui-ai/TTS LJSpeech clip name, or several `+`-joined into a longer reference (the default joins four same-speaker clips to 32.6 s, clipped to `gpt_cond_len` 30 s = 8 conditioning windows); or an HF `coqui/XTTS-v2` sample name (e.g. `en_sample.wav`, ~3 s = 1 window). Downloaded on first use and cached |
 | `--min-tokens <int>` | `0` | STOP-suppression floor in audio codes. `0` = disabled (matches HF default; best for short prompts, where a floor makes the model ramble). `-1` = auto (~2× the wrapped text length) — raise it if a *long* prompt is only partly spoken |
 
 Output always goes to `generated/xtts_demo/xtts_demo.wav` — this is currently hardcoded in
@@ -278,10 +278,12 @@ repo-root `device` fixture (single Blackhole P150, no `mesh_device` abstraction)
 | | `test_tt_speaker_encoder_shape_reuse` | Speaker encoder | Regression test: conv2d weight-cache correctness when one `TtResNetSpeakerEncoder` instance is reused across two different mel lengths |
 | `test_gpt_model.py` | `test_xtts_gpt_model` | GPT decoder | Full GPT front-to-back (embeddings → 30 blocks + `ln_f` → heads) vs torch, single forward pass, swept over `(text_len, mel_len)` ∈ {(64,96), (96,128)} |
 | `test_tt_gpt_generate.py` | `test_tt_gpt_generate` | GPT decoder | The actual autoregressive KV-cache decode loop (what the model runs in production) vs the torch reference loop: free-run exact-code-match prefix + teacher-forced latent PCC |
-| `test_hifi_decoder.py` | `test_tt_hifi_decoder` | HiFi-GAN vocoder | On-device latent linear-upsample chained into the HiFi-GAN generator vs torch, swept over `latent_len` ∈ {16, 32} |
+| `test_hifi_decoder.py` | `test_tt_hifi_decoder` | HiFi-GAN vocoder | On-device latent linear-upsample chained into the HiFi-GAN generator vs torch, at `latent_len` 32 |
 | `test_tt_inference.py` | `test_tt_inference` | End-to-end | Full pipeline (conditioning → GPT decode → HiFi-GAN), teacher-forced on reference codes, gated on spectrogram-magnitude PCC |
+| | `test_tt_cond_latents_long_reference` | Audio conditioning | Reference audio longer than one window (10 s of coqui LJSpeech clips → 3 windows): every window's 80-mel computed on device and the style embeddings averaged, vs torch windowing the *audio* the same way — also the only test forcing the device mel frontend's multi-chunk reshape framing |
 | | `test_tt_eval` | End-to-end | Real *sampled* generation, scored with objective metrics (CER via Whisper-large-v3, UTMOS, SECS via ECAPA2) — best-effort, no PCC gate |
 | `test_tt_trace.py` | `test_tt_full_trace` | End-to-end (traced) | Entire on-device model via `inference_fully_traced` (setup + decode + vocoder, all as ttnn traces) vs the eager path on the *same* generated codes |
+| | `test_tt_traced_session_reuse` | End-to-end (traced) | State hygiene of a reused `TtXttsTracedSession` (the demo's chunked-text path): one capture replayed greedily for text A, B, then A again, requiring run 3 to reproduce run 1 **exactly** — catches a repetition mask / KV slot / step counter / latent accumulator left dirty by the previous run. All three traces live at once |
 | | `test_tt_eval_traced` | End-to-end (traced) | Same objective-metric eval as `test_tt_eval`, on the fully-traced generation |
 
 ### Test gates
@@ -349,32 +351,155 @@ Runs in well under a minute (the fully-traced path recompiles kernels only if th
 is cold) and needs no extra downloads beyond the checkpoint. See
 [Performance](#performance) for what it measures and gates.
 
+## Dependency versions
+
+The environment the [PCC results](#pcc-results) and [Performance](#performance) numbers below were
+measured on. Checkpoint revisions are pinned in code; the Python and Tenstorrent stack versions are
+recorded here but not enforced by anything.
+
+### Tenstorrent stack
+
+| Component | Version |
+|-----------|---------|
+| tt-metal / TT-Metalium | commit `e7cf6d43d15` — `git describe`: `v0.77.0-dev20260810-87-ge7cf6d43d15` (2026-08-11) |
+| TTNN | in-tree `ttnn/ttnn/`, resolved via `PYTHONPATH=$TT_METAL_HOME`; no version of its own — the tt-metal commit above is the only handle |
+| Arch | `ARCH_NAME=blackhole` (Blackhole P150 — see [Supported devices](#supported-devices)) |
+
+Quote the **git commit**, not a package version: `ttnn` exposes no `__version__`, and
+`importlib.metadata.version("ttnn")` returns the `python_env` wheel's metadata (`0.75.0rc10.dev318`
+on this box) which is *not* what runs — with `PYTHONPATH=$TT_METAL_HOME`, `import ttnn` resolves to
+the source tree (verified: `ttnn.__file__` → `$TT_METAL_HOME/ttnn/ttnn/__init__.py`).
+
+### Python packages (`python_env`)
+
+| Package | Version | Used for |
+|---------|---------|----------|
+| `torch` | 2.11.0+cpu | the PyTorch reference + all host-side tensor work |
+| `librosa` | 0.10.0 | **mel filterbanks** — `librosa.filters.mel(htk=True, norm="slaney")` in both [tt/xtts_mel.py](tt/xtts_mel.py) and [reference/xtts_conditioning.py](reference/xtts_conditioning.py) |
+| `numpy` | 1.26.4 | host array plumbing |
+| `scipy` | 1.15.3 | `resample_poly` — reference-audio resampling, demo CER path |
+| `soundfile` | 0.14.0 | WAV read/write |
+| `tokenizers` | 0.22.2 | XTTS-v2 BPE tokenizer (`vocab.json`) |
+| `huggingface_hub` | 1.16.1 | checkpoint / sample-WAV / ECAPA2 download |
+| `transformers` | 5.12.1 | eval only — the Whisper CER pipeline |
+| `torchaudio` | **not installed** | UTMOS only; its absence is why UTMOS reports `skipped` (see [Known limitations](#known-limitations)) |
+
+`librosa` is the one to watch. Its filterbank feeds *every* mel in the model, on both the TTNN and
+the reference side, so a version bump moves the mel and with it every PCC number in this README.
+That pin is load-bearing, not cosmetic.
+
+### Model weights / external checkpoints
+
+Every download is revision-pinned in code, so the numbers in this README stay reproducible if
+upstream re-uploads:
+
+| Artifact | Source | Revision | Pinned by |
+|----------|--------|----------|-----------|
+| XTTS-v2 (`model.pth`, `vocab.json`, `samples/*.wav`) | [`coqui/XTTS-v2`](https://huggingface.co/coqui/XTTS-v2) | `6c2b0d75eae4b7047358e3b6bd9325f857d43f77` | `HF_REVISION` — [reference/xtts_gpt_block.py](reference/xtts_gpt_block.py) |
+| Whisper-large-v3 (CER) | [`openai/whisper-large-v3`](https://huggingface.co/openai/whisper-large-v3) | `06f233fe06e710322aca913c1bc4249a0d71fce1` | `WHISPER_REVISION` — [eval/xtts_eval.py](eval/xtts_eval.py) |
+| ECAPA2 (SECS) | [`Jenthe/ECAPA2`](https://huggingface.co/Jenthe/ECAPA2) | `207cb6d137c671a12ba820ebec3b719549b06c0f` | `ECAPA2_REVISION` — [eval/xtts_eval.py](eval/xtts_eval.py) |
+| UTMOS (`utmos22_strong`) | `torch.hub` [`tarepan/SpeechMOS`](https://github.com/tarepan/SpeechMOS) | tag `v1.2.0` (== `ed25eac`) | `UTMOS_HUB_REPO` — [eval/xtts_eval.py](eval/xtts_eval.py) |
+
+One asymmetry worth knowing: the three HuggingFace artifacts pin an exact **commit** via `revision=`,
+but `torch.hub` accepts only a tag or branch, so UTMOS pins the **tag** `v1.2.0` — which is the
+commit upstream's default branch already pointed at, so it changes nothing about what gets fetched.
+All four pins are exercised by the suite: the eval run fetches
+`github.com/tarepan/SpeechMOS/zipball/v1.2.0` and caches it as `tarepan_SpeechMOS_v1.2.0`, and only
+then does UTMOS skip, on the missing `torchaudio` import inside the hub module. So the ref resolves;
+it is the *scoring* that is unavailable here.
+
+A single shared `HF_REVISION` covers all three `coqui/XTTS-v2` downloads — the checkpoint
+([reference/xtts_gpt_block.py](reference/xtts_gpt_block.py)), `vocab.json`
+([reference/xtts_text_embedding.py](reference/xtts_text_embedding.py)) and the sample WAVs
+([reference/xtts_conditioning.py](reference/xtts_conditioning.py)) — since they are three files in
+one repo and must not drift apart.
+
 ## PCC results
 
-Measured on **Blackhole P150** against the PyTorch reference, running the trimmed
-`tests/pcc/` suite in one pass (`pytest models/experimental/xtts/tests/pcc/ -v -s`, **13/13
-passed**). There is a single column because Blackhole P150 is the only supported device.
+Measured on **Blackhole P150** against the PyTorch reference (software stack: see
+[Dependency versions](#dependency-versions)), running the whole `tests/pcc/` suite in one pass
+(`pytest models/experimental/xtts/tests/pcc/ -v -s`) at tt-metal commit `e7cf6d43d15`:
+**14/14 passed** in 289 s. There is a single column because Blackhole P150 is the only supported
+device.
 
 | File | Test case | PCC / metric |
 |------|-----------|--------------:|
-| `test_conditioning.py` | Conditioning latents (en_sample.wav) | 0.997407 |
-| | Conditioning latents (es_sample.wav) | 0.998102 |
+| `test_conditioning.py` | Conditioning latents (en_sample.wav) | 0.995944 |
+| | Conditioning latents (es_sample.wav) | 0.992365 |
 | `test_speaker_encoder.py` | Speaker encoder (mel_len=200) | 0.999330 |
-| | Shape-reuse regression (mel_len 200 → 512) | 0.999392 |
+| | Shape-reuse regression, reused instance (mel_len 200 / 512) | 0.998787 / 0.999392 |
 | `test_gpt_model.py` | text_head / mel_head (64,96) | 0.995453 / 0.990920 |
 | | text_head / mel_head (96,128) | 0.995604 / 0.991085 |
 | `test_tt_gpt_generate.py` | Free-run exact-match prefix / teacher-forced top-1 | 16/16 both |
 | | Teacher-forced latent PCC | 0.999569 |
-| `test_hifi_decoder.py` | latent_len 16 / 32 | 0.991067 / 0.993109 |
-| `test_tt_inference.py` | End-to-end spectrogram PCC (teacher-forced) | 0.990620 |
-| | `test_tt_eval` — CER / UTMOS / SECS (150-code cap; text didn't finish before the cap) | 0.4910 / skipped (no `torchaudio`) / 0.6249 |
-| `test_tt_trace.py` | Fully-traced vs eager spectrogram PCC | 1.0 |
-| | `test_tt_eval_traced` — CER / UTMOS / SECS (self-terminated at 166 codes) | 0.0160 / skipped / 0.7604 |
+| `test_hifi_decoder.py` | latent_len 32 | 0.993287 |
+| `test_tt_inference.py` | End-to-end spectrogram PCC (teacher-forced, 16 codes) | 0.990931 |
+| | ↳ raw-waveform PCC, same run (informational only — see [Test gates](#test-gates)) | 0.905271 |
+| | Long-reference conditioning latents (10.0 s → 3 windows of 4/4/2 s, averaged) | 0.998796 |
+| | `test_tt_eval` — CER / UTMOS / SECS (150-code cap; text didn't finish before the cap) | 0.2874 / skipped (no `torchaudio`) / 0.6268 |
+| `test_tt_trace.py` | Fully-traced vs eager spectrogram PCC (167 codes) | 1.0 |
+| | `test_tt_traced_session_reuse` — A/B/A-again state hygiene | exact match (41 / 63 / 41 codes; run 3 == run 1 bit-for-bit) |
+| | ↳ traced session's vocoder vs **eager**, same inputs (checked out-of-suite — see below) | bit-identical, max delta 0.0 |
+| | `test_tt_eval_traced` — CER / UTMOS / SECS (self-terminated at 167 codes) | 0.0160 / skipped / 0.6818 |
 
-The `test_tt_eval` CER of 0.49 is fully explained by its 150-code cap cutting off a two-sentence
-prompt before STOP fired (the transcript matches the *first* sentence verbatim); it is not
-evidence of a synthesis-quality regression — `test_tt_eval_traced`'s single self-terminating
-sentence scores CER 0.016.
+The `test_tt_eval` CER of 0.34 is explained by its 150-code cap cutting off a two-sentence prompt
+before STOP fired (the transcript matches the *first* sentence verbatim); it is not evidence of a
+synthesis-quality regression — `test_tt_eval_traced`'s single self-terminating sentence scores CER
+0.016. Both eval tests are sampled and their metrics are **not reproducible run to run**; treat
+them as ballpark, and A/B correctness changes against `test_tt_inference`'s teacher-forced PCC
+instead. Concretely, two runs of identical code hours apart gave `test_tt_eval` CER 0.3353 → 0.2874
+and SECS 0.5408 → 0.6268, while every deterministic PCC above was byte-identical across the same two
+runs. A moved eval metric is therefore not evidence of anything on its own.
+
+### Fixed during this pass — the traced session, and its bit-exactness
+
+`test_tt_traced_session_reuse` was failing with `NameError: name 'cond_bias_trace_safe' is not
+defined`: `xtts_inference.py` used that context manager twice inside `TtXttsTracedSession` without
+importing it, so both uses raised the moment they executed. Not new either — no `xtts_conv` import
+existed in that file in any of the three preceding commits, so `TtXttsTracedSession` (the demo's
+chunked-text path) had been broken for a while and went unnoticed because
+[nothing runs this suite in CI](#ci). `inference()` and `inference_fully_traced()` never touch that
+code path, which is why every other test kept passing. One import regression, three commits: the
+concrete cost of having no CI here.
+
+Restoring the import made the test pass, but it also restored the **wrong path**. The wrapper forces
+the trace-safe cond-bias add, which is ~82 us/pass slower and *not* bit-exact — it adds post-conv in
+the stage's bf16, where the default fold combines in fp32. Measured against the eager vocoder on
+identical inputs, the traced session's waveform was off by up to **0.245** — large, on a signal in
+roughly [-1, 1]. So the demo's chunked path was materially diverging from eager, not marginally.
+
+The wrappers exist because the fast fold prepares its combined bias through a host transfer, which is
+fatal inside a capture — and the fold's cache is keyed on `(id(cond_bias), input signature)`, so it
+only hits for the *same* `g` tensor object. The session used to warm up against one `g` and capture
+against another, guaranteeing a miss. The fix is a single persistent `g`: allocated up front with the
+other persistent buffers, filled by the eager warm-up (so the cached bias is built from real values,
+which a capture could not provide), rewritten in place by the SETUP trace, and read by both the
+vocoder warm-up and the vocoder capture. The capture then hits the cache, does no host transfer, and
+runs the same fp32 fold as eager — **waveform bit-identical to eager, max delta 0.0**.
+
+Two traps worth knowing if you touch this again. `_setup` must write into that buffer
+*unconditionally*: a parameter that skips the copy during warm-up leaves the copy out of the program
+cache, and the capture dies on `Cannot load new binaries during trace capture`. And when any op
+fatals mid-capture, `end_trace_capture` never runs, so the device stays wedged and teardown
+deadlocks — the failure presents as a **hang**, not an error, so give these runs a timeout.
+
+### Movement since the previously recorded numbers
+
+Same gates, same tests, but several values shifted — the earlier table predates the three most
+recent commits (`gan decoder bf16`, `leaky relu fused`, `manual group norm removed for conditioning
+encoder`):
+
+| Test case | Was | Now |
+|-----------|----:|----:|
+| Conditioning latents (en_sample.wav) | 0.997407 | 0.995944 |
+| Conditioning latents (es_sample.wav) | 0.998102 | **0.992365** |
+| latent_len 32 | 0.993109 | 0.993287 |
+| End-to-end spectrogram PCC | 0.990620 | 0.990931 |
+
+The conditioning drop is the one to watch: **es_sample is now 0.9924 against a 0.99 gate**, down
+from 0.9981, so its margin has gone from ~8× to ~2.4×. The HEAD commit removed a manual group norm
+from the conditioning encoder, which makes it the obvious suspect, but this was **not** A/B'd — if
+the conditioning path is touched again, re-measure both samples before assuming headroom.
 
 **Note on the trim:** the two removed test files that weren't kept as a block's representative
 test — `test_gpt_with_conditioning.py` and `test_waveform_decoder.py` — were, at the time of this
@@ -389,20 +514,24 @@ part of this pass.
 ## Performance
 
 A real demo run (`python models/experimental/xtts/demo/xtts_demo.py`, default text — 96 wrapped
-tokens, single pass, sampled temp 0.65/top_k 50/top_p 0.85/rep 5.0, `--trace`-equivalent eager
-path with per-stage traces) on **Blackhole P150**:
+tokens, single pass, sampled temp 0.65/top_k 50/top_p 0.85/rep 5.0, default 30 s reference voice,
+fully traced: setup + decode + vocoder) on **Blackhole P150**:
 
 | Quantity | Value |
 |----------|------:|
-| Generated | 189 codes (self-terminated at STOP, under the 240-code cap) → 8.888 s audio |
-| Setup replay (conditioning + speaker + prefill) | 0.013 s |
-| Decode replay (189 codes) | 1.535 s (≈ 8.1 ms/code) |
+| Generated | 211 codes (self-terminated at STOP, under the 240-code cap) → 9.912 s audio |
+| Setup replay (conditioning + speaker + prefill) | 0.042 s (30 s reference = 8 conditioning windows) |
+| Decode replay (211 codes) | 1.705 s (≈ 8.1 ms/code) |
 | Vocoder replay | 0.022 s |
-| **Total replay** | **1.569 s** |
-| RTF (replay / audio) | **0.177** — ≈5.6× faster than real-time |
-| Time-to-first-chunk | 1.569 s (non-streaming: first audio == full clip) |
-| Compile / capture (one-time, excluded from RTF) | 43.607 s |
-| End-to-end wall (weight load + audio prep + generate + write) | 57.73 s |
+| **Total replay** | **1.769 s** |
+| RTF (replay / audio) | **0.178** — ≈5.6× faster than real-time |
+| Time-to-first-chunk | 1.769 s (non-streaming: first audio == full clip) |
+| Compile / capture (one-time, excluded from RTF) | 40.316 s |
+| End-to-end wall (weight load + audio prep + generate + write) | 52.24 s |
+
+Setup replay scales with the number of conditioning windows, so it moves with the reference length:
+12.8 ms for 1 window (a 3 s clip), 21 ms for 3 (one 9.7 s clip), 42 ms for the default 8. It is a
+one-time leg either way — under 3% of total replay.
 
 The ≈8.1 ms/code decode rate matches the per-step device-time note in
 [tt/xtts_generator.py](tt/xtts_generator.py): each captured decode step is measured at ~8 ms of
@@ -410,12 +539,13 @@ device work, with the per-step blocking fence and token readback hidden inside i
 non-blocking execute, polling less often — were all worse or equal; see the source comment).
 
 This baseline is now protected by [`tests/perf/test_e2e_perf.py`](tests/perf/test_e2e_perf.py)
-(see [Test cases](#test-cases)), which hard-asserts on it with a 40% margin. A
-same-day confirmation run (different sampled code count — 166 vs. 189, since the test fixes
-`torch`'s seed differently than an uncontrolled demo run — but the same text/voice/settings)
-landed almost exactly on the rate-based numbers: 12.48 ms setup, 8.049 ms/code decode, 0.1126
-ms/code vocoder, RTF 0.178. (The vocoder rate was 0.1164 ms/code before the conditioning-memo /
-sharded-hand-off pass — an A/B of the same 166-code run.)
+(see [Test cases](#test-cases)), which hard-asserts on it with a 40% margin. The test drives the
+same `inference_fully_traced` path on the same text *and the same default reference voice*, so its
+setup leg covers all 8 conditioning windows the demo actually runs — it used to condition on a 3 s
+single-window clip, which gated under a third of that. A confirmation run (different sampled code
+count — 205 vs. 211, since the test fixes `torch`'s seed differently than an uncontrolled demo run
+— but the same text/voice/settings) landed almost exactly on the rate-based numbers: 41.64 ms
+setup, 8.058 ms/code decode, 0.1017 ms/code vocoder, RTF 0.180.
 
 ### Module-level device time (standalone microbenchmarks, not this table's end-to-end number)
 
@@ -474,6 +604,10 @@ of removal — see the note at the end of [PCC results](#pcc-results).
   processors/stopping criteria, and everything is batch-1 (single text, single reference voice).
 - **UTMOS is unavailable in this repo's `python_env`** — it needs `torchaudio`, which isn't
   installed; CER and SECS are unaffected.
+- **Checkpoint revisions are pinned, host-library versions are not.** All four downloads pin a
+  revision ([Dependency versions](#dependency-versions)), but nothing enforces the Python stack —
+  and `librosa` in particular feeds every mel in the model, so a version bump moves every PCC
+  number here.
 
 **Documentation drift**
 

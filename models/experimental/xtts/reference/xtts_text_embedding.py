@@ -21,7 +21,7 @@ import functools
 import torch
 from torch import nn
 
-from models.experimental.xtts.reference.xtts_gpt_block import HF_REPO_ID, HIDDEN_SIZE, MAX_TEXT_POS
+from models.experimental.xtts.reference.xtts_gpt_block import HF_REPO_ID, HF_REVISION, HIDDEN_SIZE, MAX_TEXT_POS
 from models.experimental.xtts.reference.xtts_gpt_model import NUM_TEXT_TOKENS
 
 VOCAB_FILE = "vocab.json"  # XTTS-v2 BPE tokenizer, alongside model.pth in the HF repo
@@ -38,7 +38,7 @@ def _load_tokenizer():
     from huggingface_hub import hf_hub_download
     from tokenizers import Tokenizer
 
-    return Tokenizer.from_file(hf_hub_download(repo_id=HF_REPO_ID, filename=VOCAB_FILE))
+    return Tokenizer.from_file(hf_hub_download(repo_id=HF_REPO_ID, filename=VOCAB_FILE, revision=HF_REVISION))
 
 
 def preprocess_text(text, lang="en"):

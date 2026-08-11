@@ -344,7 +344,11 @@ def main():
     )
     ap.add_argument(
         "--ref-audio",
-        default="422-122949-0013.wav",
+        # DOWNLOADABLE by default (cached under torch.hub), so the demo runs on a fresh checkout with
+        # no local audio: four single-speaker coqui-ai/TTS LJSpeech clips joined to 32.6 s, clipped to
+        # gpt_cond_len (30 s) = 8 conditioning windows. Same default as the device demo, so the two
+        # are A/B-comparable. The single HF samples (en_sample.wav) are ~3 s, i.e. ONE window.
+        default="LJ001-0001.wav+LJ001-0003.wav+LJ001-0004.wav+LJ001-0005.wav",
         help="voice to clone: local WAV path, coqui-ai/TTS test clip name (LJ001-0001.wav, or "
         "'LJ001-0001.wav+LJ001-0003.wav+...' to concatenate clips into a longer reference), "
         "or HF sample name (en_sample.wav).",

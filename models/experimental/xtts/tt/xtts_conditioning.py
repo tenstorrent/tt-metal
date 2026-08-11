@@ -139,14 +139,16 @@ from models.experimental.xtts.reference.xtts_gpt_block import HIDDEN_SIZE
 from models.experimental.xtts.reference.xtts_conditioning import (
     NUM_ATTN_HEADS,
     NUM_LATENTS,
+    PERCEIVER_DEPTH,
+    PERCEIVER_HEAD_DIM,
+    PERCEIVER_HEADS,
 )
 
+# What the reference's ``normalization()`` rule returns at HIDDEN_SIZE channels (its 32/16/8
+# ladder is channel-dependent; every group norm in this path is 1024-wide).
 GROUP_NORM_GROUPS = 32
 GROUP_NORM_EPS = 1e-5
 ENC_HEAD_DIM = HIDDEN_SIZE // NUM_ATTN_HEADS  # 64
-PERCEIVER_HEADS = 8
-PERCEIVER_HEAD_DIM = 64
-PERCEIVER_DEPTH = 2
 PERCEIVER_INNER = PERCEIVER_HEADS * PERCEIVER_HEAD_DIM  # 512
 
 L1 = ttnn.L1_MEMORY_CONFIG
@@ -370,7 +372,11 @@ class TtXttsConditioning(LightweightModule):
         # on [1, 32, 2752], twice a pass. Put GELU in the program config's ``fused_activation`` instead
         # and the standalone op disappears. Nt=86 with Mt=1 — was hard-coded 13x7=91 (large BH only);
         # on P150 (11x10) that TT_FATALs, so pick the smallest device-fitting grid covering Nt.
-        _ff_nt = 2752 // 32  # 86 output tiles
+        # ``ff.0`` fuses the GEGLU value and gate halves, so one half's width is half that weight's
+        # rows; Nt is it padded up to whole tiles. Read from the checkpoint rather than spelled out,
+        # so it tracks the reference's ``int(dim * mult * 2 / 3)`` instead of restating its result.
+        _ff_inner = state_dict[p + "layers.0.1.0.weight"].shape[0] // 2  # 2730
+        _ff_nt = -(-_ff_inner // 32)  # 86 output tiles ([1, 32, 2752] padded)
         _ff_gx, _ff_gy = _1d_grid_covering(_ff_nt, self.device.compute_with_storage_grid_size())
         self._ff_gate_mm = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(_ff_gx, _ff_gy),
