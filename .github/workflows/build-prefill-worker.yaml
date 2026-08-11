@@ -39,7 +39,8 @@ jobs:
 
           VERSION="$INPUT_VERSION"
           if [ -z "$VERSION" ]; then
-            VERSION="dev-${GITHUB_REF_NAME//\//-}"
+            BRANCH_SLUG=$(printf '%s' "$GITHUB_REF_NAME" | sed -E 's/[^A-Za-z0-9_.-]+/-/g; s/^[.-]+//; s/[.-]+$//')
+            VERSION="dev-${BRANCH_SLUG:0:124}"
           fi
 
           REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-ubuntu-22.04-release-models-amd64
