@@ -12,7 +12,7 @@ from models.common.utility_functions import skip_for_blackhole
 
 @pytest.mark.parametrize("head_dim", [64])
 @pytest.mark.parametrize("max_seq_len", [4096])
-@pytest.mark.parametrize("num_users", [8, 16, 32, 64])
+@pytest.mark.parametrize("num_users", [8, 16, 32, 34, 64])
 @pytest.mark.parametrize("num_heads", [1, 2, 8])
 @pytest.mark.parametrize("in_sharded", [True, False])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
@@ -119,8 +119,9 @@ class TestUpdateCache:
         input_dtype,
         cache_dtype,
         device,
+        expect_error,
     ):
-        if num_users > 32 or (num_users + batch_offset) > 32:
+        if batch_offset != 0 and (num_users >= 32 or (num_users + batch_offset) > 32):
             pytest.skip("Batch offset is only used when num_users < 32 and batch_offset + num_users <= 32")
         if cache_dtype != ttnn.bfloat16:
             pytest.skip(
@@ -131,16 +132,19 @@ class TestUpdateCache:
         cache = torch.randn(cache_shape).bfloat16().float()
         cachett = ttnn.Tensor(cache, cache_dtype).to(ttnn.TILE_LAYOUT).to(device)
         x = torch.randn(input_shape).bfloat16().float()
-        # pad dim0 of x to 32 if batch size is less than 32, make 0-batch_offset elements 0, batch_offset-batch_offset+num_users elements non-zero, and rest 0
+        # Pad input batch to a multiple of 32 for tilize; place real users at [batch_offset, ...).
         x_new = x.clone()
-        if num_users < 32:
+        pad_users = ((num_users + 31) // 32) * 32
+        if batch_offset > 0:
             x_new = torch.cat((torch.zeros(batch_offset, num_heads, 1, head_dim), x_new), dim=0)
-            x_new = torch.cat((x_new, torch.zeros(32 - num_users - batch_offset, num_heads, 1, head_dim)), dim=0)
-            assert x_new.shape[0] == 32, f"Expected x.shape[0] to be 32, got {x_new.shape[0]}"
+        pad_after = pad_users - x_new.shape[0]
+        if pad_after > 0:
+            x_new = torch.cat((x_new, torch.zeros(pad_after, num_heads, 1, head_dim)), dim=0)
+        assert x_new.shape[0] == pad_users, f"Expected x.shape[0] to be {pad_users}, got {x_new.shape[0]}"
         xt = ttnn.Tensor(x_new.permute(2, 1, 0, 3), input_dtype).to(ttnn.TILE_LAYOUT)
         if in_sharded:
             compute_grid_size = device.compute_with_storage_grid_size()
-            num_cores = min(max(num_users, 32) // 32 * num_heads, compute_grid_size.x * compute_grid_size.y)
+            num_cores = min(pad_users // 32 * num_heads, compute_grid_size.x * compute_grid_size.y)
             shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, True)
             input_shard_spec = ttnn.ShardSpec(
                 shard_grid,
@@ -156,6 +160,11 @@ class TestUpdateCache:
             xt = xt.to(device, input_mem_config)
         else:
             xt = xt.to(device)
+
+        if num_users > 32 and num_users % 32 != 0:
+            with expect_error(RuntimeError, "at most 32 or a multiple of 32"):
+                ttnn.update_cache(cachett, xt, cache_idx, batch_offset=batch_offset)
+            return
 
         cachett = ttnn.update_cache(cachett, xt, cache_idx, batch_offset=batch_offset)
         cache[0:num_users, 0:num_heads, cache_idx : cache_idx + x.shape[-2], 0 : x.shape[-1]] = x
@@ -174,30 +183,6 @@ class TestUpdateCache:
         logger.info(output_cache)
         logger.info(output_update)
         assert eq_cache and eq_update
-
-
-@pytest.mark.parametrize("num_users", [33, 34, 40])
-@pytest.mark.parametrize("num_heads", [1])
-def test_update_cache_decode_rejects_non_tile_batch(num_users, num_heads, device, expect_error):
-    """Reject Bcache > 32 that is not a multiple of TILE_HEIGHT (see #52671).
-
-    Without short last-group support, update_cache would silently wrap and
-    corrupt earlier cache users. Prefer a hard error over silent corruption.
-    """
-    head_dim = 64
-    max_seq_len = 128
-    cache_idx = 0
-    pad_users = ((num_users + 31) // 32) * 32
-
-    cache = torch.zeros([num_users, num_heads, max_seq_len, head_dim]).bfloat16().float()
-    cachett = ttnn.Tensor(cache, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
-    x = torch.randn([num_users, num_heads, 1, head_dim]).bfloat16().float()
-    if pad_users > num_users:
-        x = torch.cat((x, torch.zeros(pad_users - num_users, num_heads, 1, head_dim)), dim=0)
-    xt = ttnn.Tensor(x.permute(2, 1, 0, 3), ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
-
-    with expect_error(RuntimeError, "at most 32 or a multiple of 32"):
-        ttnn.update_cache(cachett, xt, cache_idx, batch_offset=0)
 
 
 @skip_for_blackhole("Mismatching on BH, see #12349")
