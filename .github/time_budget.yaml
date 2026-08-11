@@ -335,6 +335,8 @@ models:
     bh_quietbox_2: 195
     bh_galaxy: 78
     bh_sc1: 140
+    # Consumed by WAN 2.2 multihost
+    # quad e2e: T2V(40) + I2V(80) = 120 in models_e2e_tests.yaml.
     bh_sc4: 120
   e2e_tier2:
     wh_llmbox_perf: 266
@@ -363,6 +365,9 @@ models:
     bh_quietbox_2: 260
     bh_galaxy: 75
     bh_sc1: 75
+    # Renamed from bh_sc4-mgd (SKU consolidation). Consumed by WAN 2.2
+    # transformer-block multihost quad unit (timeout 40 + headroom) in
+    # models_unit_tests.yaml.
     bh_sc4: 50
   unit_tier2:
     wh_llmbox: 114
