@@ -51,6 +51,11 @@ def test_assert_bit_identical_rejects_bit_mismatch(expect_error) -> None:
         assert_bit_identical(expected, actual)
 
 
+def test_assert_bit_identical_rejects_signed_zero_mismatch(expect_error) -> None:
+    with expect_error(AssertionError, "bit patterns differ"):
+        assert_bit_identical(torch.tensor([0.0]), torch.tensor([-0.0]))
+
+
 def test_assert_accurate_returns_measured_pcc() -> None:
     expected = torch.arange(8.0)
     actual = expected + torch.linspace(0.0, 1e-4, 8)

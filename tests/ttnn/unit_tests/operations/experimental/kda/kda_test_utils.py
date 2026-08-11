@@ -83,3 +83,7 @@ def assert_equal(expected: torch.Tensor, actual: torch.Tensor, *, name: str = "e
 def assert_bit_identical(expected: torch.Tensor, actual: torch.Tensor, *, name: str = "determinism") -> None:
     """Require finite tensors with identical metadata and bit patterns."""
     assert_equal(expected, actual, name=name)
+    expected_bytes = expected.detach().contiguous().reshape(-1).view(torch.uint8)
+    actual_bytes = actual.detach().contiguous().reshape(-1).view(torch.uint8)
+    if not torch.equal(expected_bytes, actual_bytes):
+        raise AssertionError(f"{name} bit patterns differ")
