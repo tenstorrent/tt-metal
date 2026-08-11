@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, Dict, FrozenSet, List, Optional, Tuple, Union
 
-from .format_config import DataFormat
+from .format_config import MX_FORMAT_MAX_NORMAL, DataFormat
 from .llk_params import MathOperation
 from .stimuli_generator import DistributionKind, StimuliSpec
 
@@ -58,11 +58,17 @@ class OperandSpecs:
 # Largest finite magnitude each format can hold. Only formats with a narrower
 # exponent field than bfloat16 need an entry; every other format shares
 # bfloat16's ceiling and is therefore never the binding constraint.
+#
+# The MX rows come from MX_FORMAT_MAX_NORMAL rather than being restated here: the two
+# fp8 encodings are easy to transpose by hand, and a transposed pair silently *widens*
+# a domain instead of failing. MxFp8R is E5M2 (ceiling 57344, the wide one) and MxFp8P
+# is E4M3 (ceiling 448, the narrow one) -- which is the polarity the builders below
+# already assume, e.g. _square_spec caps MxFp8P at +-20 and groups MxFp8R with Float16.
 _FORMAT_MAX_MAGNITUDE: Dict[DataFormat, float] = {
-    DataFormat.MxFp4: 6.0,  # e2m1
-    DataFormat.MxFp8R: 448.0,  # e4m3
+    **MX_FORMAT_MAX_NORMAL,  # MxFp4 (e2m1) 6, MxFp8P (e4m3) 448, MxFp8R (e5m2) 57344
     DataFormat.Float16: 65504.0,  # e5m10
-    DataFormat.MxFp8P: 57344.0,  # e5m2
+    # Plain E4M3 with no per-block scale to lift it, so the same 448 ceiling as MxFp8P.
+    DataFormat.Fp8_e4m3: 448.0,
 }
 
 _BF16_MAX_MAGNITUDE = 3.3895314e38
@@ -572,10 +578,12 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Round: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
     ),
-    # floor/ceil/trunc/frac: defined for all reals, but floor and ceil only differ
-    # from trunc on the negative side, so the domain has to span both signs to tell
-    # the three apart at all. Same range as round for the same reason: enough integer
-    # knees inside the interval that the random sweep lands near several of them.
+    # floor/ceil/trunc/frac: defined for all reals, but each of floor and ceil differs
+    # from trunc on one side only -- floor on the negative side (floor(-1.5) = -2 vs
+    # trunc's -1), ceil on the positive side (ceil(1.5) = 2 vs trunc's 1) -- so the
+    # domain has to span both signs to tell the three apart at all. Same range as round
+    # for the same reason: enough integer knees inside the interval that the random
+    # sweep lands near several of them.
     MathOperation.Floor: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
     ),
