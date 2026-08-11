@@ -24,7 +24,7 @@ import sys
 
 FREQ = 1.35e9
 CSV = sys.argv[1] if len(sys.argv) > 1 else "generated/profiler/.logs/profile_log_device.csv"
-METRICS = ["agmm_wait_own", "agmm_wait_ring", "agmm_wait_in0", "agmm_wait_in1"]
+METRICS = ["agmm_send", "agmm_wait_own", "agmm_wait_ring", "agmm_wait_in0", "agmm_wait_in1"]
 
 
 def main():

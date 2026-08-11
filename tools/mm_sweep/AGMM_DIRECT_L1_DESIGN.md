@@ -322,11 +322,90 @@ bounds its entire cost at <=3.2 us (75.24 measured vs a 72.8 us DRAM roofline), 
 overlaps compute. An earlier version of this section had it as item 2 on the theory that the fabric was
 queueing behind it; that was inferred from byte counts, contradicted by the floor, and is withdrawn.
 
+> **WITHDRAWN, 2026-08-11.** The paragraph above is wrong, and the way it is wrong is worth keeping. It
+> bounds the ring's cost by comparing the floor to the DRAM roofline -- but the floor measurement it cites
+> (`nogather`) *contains* the on-chip ring, because no ablation up to that point touched it: `nogather` and
+> `nopayload` only ever cleared FABRIC sends. So "75.24 is close to 72.8" was never evidence about the ring;
+> it was evidence that the ring plus compute together sit near roofline, which is a different claim.
+> The `noring` ablation added below measures it directly and it is **10.3 us**, not <=3.2. Withdrawing an
+> inference is not the same as measuring the thing: this section did the first and reported the second.
+
 Arithmetic worth keeping in view: floor 76.0 + the 25.7 us exposed fabric cost = 101.7, still above the
 86.9 us gate. **So per-wave rings alone does not reach the gate** -- it targets the 19.0 us, and 101.7 is
 what is left when that is gone. Reaching 86.9 for this shape needs the fabric's 25.7 us to come down too,
 and the deferred-drain experiment above says that will not come from rescheduling it; it needs either fewer
 bytes on the NoC or less competition from the on-chip ring.
+
+## Measured decomposition with `noring` (2026-08-11, medium/tp4/ring, num_links=2)
+
+`noring` drops the on-chip bank-ring relays and the waits on them, leaving the fabric path alone. Composing
+it with `nogather` gives, for the first time, a floor with **no gather traffic of any kind**:
+
+| run | us | what the delta buys |
+|---|---|---|
+| `nogather,noring` | **73.75** | compute + in1 only. DRAM roofline is 72.8, so this is ~99% of peak |
+| `nogather` | **84.06** | + on-chip bank ring: **+10.3** |
+| `nowait` | **104.15** | + fabric traffic, zero dependency stalls: **+20.1** |
+| full | **117.79** | + actually waiting for arrivals: **+13.6** |
+| `noring` | 124.50 | fabric with no ring -- *slower than full* |
+
+Three things follow, and they redirect the work:
+
+1. **Compute is done.** 73.75 against a 72.8 roofline leaves nothing on the table. Every remaining
+   microsecond is gather cost. Stop tuning the matmul.
+2. **Most of the gap is interference, not scheduling.** `nowait` has no dependency stalls by construction,
+   yet still costs 30 us over the floor. Only the last 13.6 us is reschedulable. This is why loop-order and
+   ordering work keeps returning ~2-3 us: it is all aimed at the smallest of the three terms.
+3. **`noring` being SLOWER than full is the tell.** Removing the ring removes the pacing, so all 80 cores hit
+   the muxes at once and the fabric congests. The ring is not only a cost; it is currently the thing
+   staggering fabric access.
+
+Per-core durations (`agmm_core_durations.py`) say the mux cores are never the makespan (25-53 us across all
+four runs) and that every matmul core slows down *together* -- median 67.6 -> 77.2 -> 90.1 -> 108.9. That is
+contention for a shared resource, not a critical path through any one core.
+
+### What was tried against this and did not work
+
+Each of these was measured, not reasoned about, and each is a real result about the op:
+
+- **K-outer compute loop** (`TT_AGMM_K_OUTER`). The default nest is N-outer/K-inner and waits on cb0 only for
+  the first N sub-block, so only 1/N_bpc of compute can overlap the gather. Making K outermost does exactly
+  what it should -- compute's gather starvation falls 46.8 -> 30.4 us -- but the no-gather floor RISES 73.8 ->
+  88.2, because every sub-block's Pk=10 chain reduction then lands after the last matmul instead of pipelining
+  behind the next sub-block's matmul. Net: 117.2 -> 118.0, a wash. Kept, env-gated, as a group size (below).
+- **Group form of the same idea**: k-outer over the first `g` sub-blocks only, n-outer for the rest, so the
+  group's reduction tail overlaps the remaining matmuls. Best at g=5: **114.4 vs 117.2**. Real but small.
+- **Widening the sub-block instead** (`nsb=10`, so N_bpc==1 and K is effectively outermost with no kernel
+  change): **153 us**. A sub-block that wide wrecks the dst-register subblocking. This is why the group form
+  exists at all -- it keeps the narrow, efficient sub-block AND gets some overlap.
+- **Deeper cb1** so in1 keeps streaming through gather stalls: 116.3 -> 112.8 at depth 16-32. ~3.5 us, and it
+  does not compose with k-outer (the two are chasing the same stall).
+- **Balanced bidirectional** (`TT_AGMM_DIRECT_L1_BALANCED=1`), which cuts max fabric distance 3 -> 2 in a
+  4-device ring: **119.3 vs 117.2** full, 101.3 vs 104.2 under `nowait`. ~2-3 us. Fabric *volume* is not the
+  binding constraint, which also disposes of "fewer bytes on the NoC" as the fix for item 2 above.
+
+The common thread: every one of these targets scheduling or byte count, and the measurement says the cost is
+interference from how the on-chip ring moves the bytes.
+
+### The remaining structural lever: multicast instead of the bank ring
+
+All 8 cores of a bank ring end up with the SAME k-slice -- the replication is necessary (they split in1's N,
+and in1 is 10x in0, so replicating in0 is the cheap direction). The *mechanism* is not: 7 sequential unicast
+hops per chunk, which both costs 10.3 us of NoC bandwidth and amplifies every fabric arrival by up to 7 hops
+before the far side of the ring can consume it (`agmm_wait_ring` median 40.5 us).
+
+A NoC multicast delivers the same bytes to all 7 peers in one transfer and one hop. `place_mesh` already puts
+a ring's 8 cores at `(x=0..7, y=p)` -- a contiguous row, which is directly multicast-addressable.
+
+One design consequence worth stating up front: multicast requires every receiver to use the SAME destination
+address, so the per-core availability order (each core consuming its own chunk first) has to become one order
+shared by the whole ring. That is not a loss. Per-core order exists only because a ring delivers a chunk to
+different cores at different times; under multicast a chunk becomes available to all 8 cores simultaneously,
+so the shared order IS the availability order.
+
+Readiness cannot stay a single monotone counter under multicast. Chunks at equal fabric distance can land in
+either order, and a counter would let a core past a slot that is not filled yet; it needs a per-slot flag
+(regular semaphores, which are zeroed at program launch, rather than a scratch CB, which is not).
 
 ## Scope limits of the implementation
 

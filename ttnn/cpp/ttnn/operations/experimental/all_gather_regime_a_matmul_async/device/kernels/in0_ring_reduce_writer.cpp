@@ -340,6 +340,7 @@ void kernel_main() {
     // "waiting" term by CAUSE and by CORE: fabric arrival (own chunk) vs on-chip propagation (ring receive).
     // 32-bit low word of the wall clock is what the profiler itself reads; it wraps every ~3.2 s at 1.35 GHz,
     // far longer than any single wait, and unsigned subtraction handles a wrap correctly anyway.
+    uint32_t agmm_send = 0;
     uint32_t agmm_wait_own = 0, agmm_wait_ring = 0;
     auto agmm_clk = []() -> uint32_t {
         volatile tt_reg_ptr uint32_t* p = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
@@ -853,6 +854,11 @@ void kernel_main() {
     //  * The own-chunk wait AND the fabric relay land here (dl1_own_pending), at the step that first needs that
     //    chunk, instead of in the prologue -- a core stuck in the prologue forwards nothing and starves every
     //    core behind it.
+#if defined(ABLATE_NORING)
+#define NORING_SENTINEL(x) (kRingNoForward)
+#else
+#define NORING_SENTINEL(x) (x)
+#endif
     for (uint32_t step = 0; step < G; ++step) {
         // Our own chunk: wait for it if it comes over the fabric, then IMMEDIATELY relay it onward. Runs at the
         // first ring step that needs this chunk, and exactly once (dl1_own_pending guards it), so the mux still
@@ -891,6 +897,9 @@ void kernel_main() {
             const uint32_t dl1_recv_sem_addr = dl1_recv_sem;
             std::size_t fa = dl1_mux_fa;
             (void)dl1_dist;
+#if defined(AGMM_PROFILE)
+            const uint32_t t0_send = agmm_clk();
+#endif
             if (dl1_send_fwd || dl1_send_bwd) {
                 // Packet headers from the per-RISC PacketHeaderPool (12 on Blackhole), allocated ONCE: one
                 // per in-flight payload (the header stays live until the send drains) plus a separate one
@@ -970,6 +979,9 @@ void kernel_main() {
                     sender.close();
                 }
             }
+#if defined(AGMM_PROFILE)
+            agmm_send += agmm_clk() - t0_send;
+#endif
         };
         // Number of received chunks needed before slot `sl` is filled: every slot below it except our own.
         auto recv_needed = [&](uint32_t sl) { return (ring_own_slot <= sl) ? sl : (sl + 1u); };
@@ -977,6 +989,7 @@ void kernel_main() {
         if (step == ring_own_slot) {
             ensure_own();
         } else {
+#if !defined(ABLATE_NORING)
 #if defined(AGMM_PROFILE)
             const uint32_t tr0 = agmm_clk();
 #endif
@@ -984,10 +997,13 @@ void kernel_main() {
 #if defined(AGMM_PROFILE)
             agmm_wait_ring += agmm_clk() - tr0;
 #endif
+#endif
         }
         // Relay that same chunk onward. src_slot == step by construction; the sentinel marks the single step
         // whose chunk is the successor's own, which it already has.
-        const uint32_t fwd_src_slot = get_arg_val<uint32_t>(kRingFwdBase + 2u * step);
+        // ABLATE_NORING: no relay write and no readiness inc. Consumers read whatever is already in the slot
+        // (garbage for every chunk this core did not own) -- timing only, PCC is meaningless under it.
+        const uint32_t fwd_src_slot = NORING_SENTINEL(get_arg_val<uint32_t>(kRingFwdBase + 2u * step));
         if (fwd_src_slot != kRingNoForward) {
             const uint32_t fwd_dst_slot = get_arg_val<uint32_t>(kRingFwdBase + 2u * step + 1u);
             const uint64_t dst = get_noc_addr(fwd_next_x, fwd_next_y, base0 + fwd_dst_slot * shard_bytes);
@@ -1099,6 +1115,7 @@ void kernel_main() {
     noc_async_write_barrier();  // all ring forwards landed
 #if defined(AGMM_PROFILE)
     // One value per site per core. Read back per (device, core, RISC) from the profiler CSV's data column.
+    DeviceTimestampedData("agmm_send", agmm_send);
     DeviceTimestampedData("agmm_wait_own", agmm_wait_own);
     DeviceTimestampedData("agmm_wait_ring", agmm_wait_ring);
 #endif

@@ -44,6 +44,8 @@ TOPO = sys.argv[6]
 # test_all_gather_regime_a_matmul_async.py). Keep the two in step: measuring one link count while the tests
 # cover another is how ">64 mux channels" got reported as a scope limit when it was a 1-link artefact.
 LINKS = int(sys.argv[7]) if len(sys.argv) > 7 else 2
+# Optional pinned config "Pk,Ns,Sm,kb,nsb" as argv[9]; "auto" (default) lets the picker choose.
+CFG = sys.argv[9] if len(sys.argv) > 9 else "auto"
 NBLOCKS = int(sys.argv[8]) if len(sys.argv) > 8 else 2
 
 
@@ -118,7 +120,12 @@ def main():
         os.remove(CSV_PATH)
     except OSError:
         pass
+    cfg = None
+    if CFG != "auto":
+        pk, ns, sm, kbt, nsb = (int(x) for x in CFG.split(","))
+        cfg = ttnn.RegimeAMatmulConfig(k_slices=pk, n_slices=ns, m_slices=sm, k_block_tiles=kbt, n_subblock_tiles=nsb)
     res = {
+        "cfg": CFG,
         "variant": VARIANT,
         "M": M,
         "K": K,
@@ -147,7 +154,7 @@ def main():
             in1 = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=mesh, memory_config=wc)
             for blk in range(NBLOCKS):
                 for _ in range(WARMUP):
-                    ttnn.experimental.regime_a_matmul(in0, in1, config=None)
+                    ttnn.experimental.regime_a_matmul(in0, in1, config=cfg)
                     labels.append(f"b{blk}_w")
                 for _ in range(TIMED):
                     ttnn.experimental.regime_a_matmul(in0, in1, config=None)
@@ -247,7 +254,7 @@ def main():
                 num_links=LINKS,
                 topology=topology,
                 cluster_axis=cluster_axis,
-                config=None,
+                config=cfg,
             )
 
         for blk in range(NBLOCKS):

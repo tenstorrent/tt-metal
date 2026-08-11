@@ -1124,6 +1124,97 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
     const uint32_t Pk = cfg.k_slices ? cfg.k_slices : 1u;
     const uint32_t Sm = cfg.m_slices ? cfg.m_slices : 1u;
     const uint32_t kb = cfg.k_block_tiles ? cfg.k_block_tiles : 1u;
+
+    // ---- in1 CB DEPTH OVERRIDE (TT_AGMM_CB1_DEPTH=N) ----
+    // This shape is in1-DRAM-bound: 26.2 MB of in1 over 8 banks is ~3.2 MB/bank, ~67 us at the measured
+    // 387 GB/s, and the no-fabric floor (75.2 us) sits just above the 72.8 us DRAM roofline. So the op's
+    // wall time is essentially "how long DRAM is kept busy".
+    //
+    // cb1 is only kCb1Depth == 4 BLOCKS deep. When compute blocks waiting for the gather, cb1 fills, the in1
+    // reader stalls on cb_reserve_back, and DRAM GOES IDLE -- every microsecond of gather stall is a
+    // microsecond of lost DRAM throughput, which on a DRAM-bound op adds straight to the total. A deeper cb1
+    // lets in1 stream ahead THROUGH the stall, so the bandwidth is still being spent while we wait.
+    //
+    // plan.hpp's "depth 4 measured best, deeper was rejected" was measured on the SINGLE-CHIP path, which has
+    // no gather stall to hide and where the extra L1 buys nothing. That result does not transfer here, which
+    // is why this is an AGMM-local override rather than a change to the shared constant.
+    if (const char* d = std::getenv("TT_AGMM_CB1_DEPTH")) {
+        const uint32_t depth = std::max(1, std::atoi(d));
+        const uint32_t old_tiles = P.cb.cb1_tiles;
+        const uint32_t new_tiles = depth * kb * geo.N_sub;
+        const int64_t delta = (static_cast<int64_t>(new_tiles) - old_tiles) * plan::kTileBytesBf16;
+        const int64_t l1 = static_cast<int64_t>(P.cb.l1_bytes) + delta;
+        TT_FATAL(
+            l1 <= static_cast<int64_t>(plan::kL1BudgetBytes),
+            "TT_AGMM_CB1_DEPTH={} needs {} L1 bytes/core, over the {} budget (cb1 {} -> {} tiles)",
+            depth,
+            l1,
+            static_cast<uint32_t>(plan::kL1BudgetBytes),
+            old_tiles,
+            new_tiles);
+        P.cb.cb1_tiles = new_tiles;
+        P.cb.l1_bytes = static_cast<uint32_t>(l1);
+        if (std::getenv("TT_REGIME_A_LOG_CFG") != nullptr) {
+            log_info(tt::LogOp, "regime_a_cb1_depth {} -> {} tiles, L1/core {} B", depth, new_tiles, P.cb.l1_bytes);
+        }
+    }
+    // ---- K-OUTER COMPUTE LOOP (TT_AGMM_K_OUTER=1) ----
+    // THE OVERLAP FIX. The compute kernel's default loop nest is N-outer / K-inner, and it waits on cb0 only
+    // for the FIRST N sub-block (`m_block_iter == 0 && n_block_iter == 0`) -- later sub-blocks reuse the
+    // now-resident k-slice with no waits. That means only 1/N_bpc of the compute can ever be interleaved with
+    // the gather; the other (N_bpc-1)/N_bpc runs strictly AFTER it, so the op costs T_gather + T_compute no
+    // matter how good the gather schedule is. Measured on medium/tp4/ring: gather ~40 us + compute ~75 us
+    // ~= the 112-116 us we see, against a ~75 us DRAM roofline.
+    //
+    // Swapping to K-outer makes every k-block's arrival unblock 1/K_num_blocks of the WHOLE output, so all of
+    // the compute overlaps the gather and the op becomes max(T_gather, T_compute) + one chunk of latency.
+    //
+    // The cost is L1: N_bpc fp32 accumulators must be live at once instead of one, so cb3 grows by N_bpc.
+    // Nothing else changes -- Phase B (the reduction/fusion/output stage) walks the accumulators in FIFO
+    // order, so its seven helpers keep their existing no-offset addressing. See kernels/compute.cpp.
+    //
+    // NOT simply a config choice: making N_sub full-width (nsb=0/10, so N_bpc==1) gets the same overlap for
+    // free, but measured 153 us -- a sub-block that wide wrecks the dst-register subblocking. K-outer keeps
+    // the narrow, efficient sub-block AND gets the overlap.
+    // TT_AGMM_K_OUTER=<g>: g is the SIZE OF THE K-OUTER GROUP in N sub-blocks, not a boolean. Only the first
+    // g sub-blocks are accumulated k-outer; the rest stay n-outer. That split is deliberate. Measured on
+    // medium/tp4/ring, g == N_bpc (all 10) cuts compute's gather starvation from 46.8 to 30.4 us but raises the
+    // no-gather FLOOR from 73.8 to 88.2, because every sub-block's Pk=10 chain reduction then lands after the
+    // last matmul instead of pipelining behind the next sub-block's. Leaving (N_bpc - g) sub-blocks n-outer
+    // keeps matmul work in hand to cover the group's reduction tail.
+    const char* ko_env = std::getenv("TT_AGMM_K_OUTER");
+    const uint32_t k_outer_g = ko_env ? std::min<uint32_t>(std::max(0, std::atoi(ko_env)), geo.N_bpc) : 0u;
+    const bool k_outer = k_outer_g > 0u;
+    if (k_outer) {
+        const uint32_t old_tiles = P.cb.cb3_tiles;
+        // g accumulators live at once during Phase A; the n-outer remainder needs only one, and by the time it
+        // runs Phase B has popped the group. So the peak is max(g, 1) == g regions.
+        const uint32_t new_tiles = old_tiles * k_outer_g;
+        const int64_t delta = (static_cast<int64_t>(new_tiles) - old_tiles) * plan::kTileBytesFp32;
+        const int64_t l1 = static_cast<int64_t>(P.cb.l1_bytes) + delta;
+        TT_FATAL(
+            l1 <= static_cast<int64_t>(plan::kL1BudgetBytes),
+            "TT_AGMM_K_OUTER={} needs {} L1 bytes/core, over the {} budget (cb3 {} -> {} tiles, N_bpc {}). Use "
+            "a smaller group, a wider n_subblock_tiles, or leave K_OUTER off.",
+            k_outer_g,
+            l1,
+            static_cast<uint32_t>(plan::kL1BudgetBytes),
+            old_tiles,
+            new_tiles,
+            geo.N_bpc);
+        P.cb.cb3_tiles = new_tiles;
+        P.cb.l1_bytes = static_cast<uint32_t>(l1);
+        if (std::getenv("TT_REGIME_A_LOG_CFG") != nullptr) {
+            log_info(
+                tt::LogOp,
+                "regime_a_k_outer g={} cb3 {} -> {} tiles, L1/core {} B",
+                k_outer_g,
+                old_tiles,
+                new_tiles,
+                P.cb.l1_bytes);
+        }
+    }
+
     // `use_reduce` doubles as the reduction-CB DEPTH: 0 when Pk==1 (no chain), else the number of cb7 slots.
     // The kernel takes its slot modulus from this same value, so the CB size and the remote write offset can
     // never disagree - the failure mode that produced a PCC 0.38 bug in earlier reduction work.
@@ -1171,12 +1262,21 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
     // credits still cross the fabric, and consumers still wait on them, so the protocol, the client count,
     // the hop structure and the arrival dependency are all held fixed while only the bytes go away.
     // `nogather` cannot express any of this -- it deletes the muxes and the dependency structure too.
+    // `noring` drops the ON-CHIP bank-ring forwarding (the 32 KB core->core relays and the waits on them),
+    // leaving the fabric path alone. That ring is invisible to every other ablation -- nogather/nopayload only
+    // touch fabric -- yet it moves 7x the gathered bytes (each of the 8 cores in a bank ring ends up with the
+    // SAME k-slice), so it is its own bandwidth AND latency term. Compose it with nogather to get the true
+    // compute+in1 floor with no gather traffic of any kind.
+    const bool ab_noring = ablate.find("noring") != std::string::npos;
     const bool ab_nogather = ablate.find("nogather") != std::string::npos;
     const bool ab_nopayload = ablate.find("nopayload") != std::string::npos;
     // nogather implies nowait: with nothing sent, a consumer that still waited would hang.
     const bool ab_nowait = ab_nogather || ablate.find("nowait") != std::string::npos;
     if (ab_nogather) {
         wdefs["ABLATE_NOGATHER"] = "1";
+    }
+    if (ab_noring) {
+        wdefs["ABLATE_NORING"] = "1";
     }
     if (ab_nopayload) {
         wdefs["ABLATE_NOPAYLOAD"] = "1";
@@ -1185,8 +1285,8 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
         wdefs["ABLATE_NOWAIT"] = "1";
     }
     TT_FATAL(
-        ablate.empty() || ab_nogather || ab_nopayload || ab_nowait,
-        "TT_AGMM_ABLATE='{}' matched no known ablation (nogather, nopayload, nowait; comma-separate to "
+        ablate.empty() || ab_nogather || ab_nopayload || ab_nowait || ab_noring,
+        "TT_AGMM_ABLATE='{}' matched no known ablation (nogather, nopayload, nowait, noring; comma-separate to "
         "combine). Refusing rather than silently measuring the unablated program as if it were ablated.",
         ablate);
     // Fused fabric all-gather. A PREPROCESSOR define, not just a compile-time arg: the prologue declares a
@@ -1227,6 +1327,9 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
     }
     // extra COMPUTE defines beyond fusion; currently only the reduction strategy (RSCATTER).
     std::map<std::string, std::string> cdefs_extra;
+    if (k_outer) {
+        cdefs_extra["AGMM_K_OUTER"] = std::to_string(k_outer_g);
+    }
     // PER-CORE STALL ATTRIBUTION (TT_AGMM_PROFILE_STEPS=1). Adds DeviceTimestampedData emissions that count
     // cycles spent BLOCKED at each wait site, so the whole-op "waiting" term can be split by cause and by core
     // instead of inferred from medians. Off by default: it costs a clock read per wait and consumes device
@@ -1826,6 +1929,9 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
     //   g1 (noc==1): reader RISCV_1/NOC1, writer RISCV_0/NOC0
     // in1 reader takes no compile defines.
     std::map<std::string, std::string> rdefs;
+    if (k_outer) {
+        rdefs["AGMM_K_OUTER"] = std::to_string(k_outer_g);  // in1 block order must match compute's consume order
+    }
     if (fused_gather.enabled) {
         // The in1 reader has to walk the SAME global-K order as the in0 side; the spec is explicit about
         // that. Give it the define so it parses the K-stripe args below.

@@ -510,7 +510,11 @@ void matmul_blocks(
     const uint32_t subblock_h,
     const uint32_t subblock_w,
     const uint32_t in0_base = 0,
-    const uint32_t in1_base = 0) {
+    const uint32_t in1_base = 0,
+    // Tile offset of THIS sub-block's accumulator inside out_cb. Zero on the default N-outer path (one
+    // accumulator at a time). Under AGMM_K_OUTER all N_bpc accumulators are live in one reservation, and
+    // sub-block n packs into region n -- see the K-outer loop below.
+    const uint32_t out_base = 0) {
     uint32_t in0_index_offset = in0_base;
 
     for (uint32_t M_start = 0; M_start < M_block_tiles; M_start += subblock_h) {
@@ -544,7 +548,7 @@ void matmul_blocks(
                 uint32_t h_tile_id = M_start + h;
                 for (uint32_t w = 0; w < subblock_w; w++) {
                     uint32_t w_tile_id = N_start + w;
-                    uint32_t out_tile_id = h_tile_id * full_N_block_tiles + w_tile_id;
+                    uint32_t out_tile_id = out_base + h_tile_id * full_N_block_tiles + w_tile_id;
                     pack_tile<true>(write_dst_index, out_cb, out_tile_id);
                     write_dst_index++;
                     dst_index++;
@@ -628,6 +632,18 @@ void kernel_main() {
     compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb, in1_cb, intermediate_cb);
     matmul_init(in0_cb, in1_cb);
 
+    // KO_G: how many of the N sub-blocks are accumulated K-OUTER (see AGMM_K_OUTER in the program factory).
+    // 0 == the historical N-outer loop for every sub-block. KO_G > 0 puts the first KO_G sub-blocks in one
+    // k-outer group so that each arriving gather chunk unblocks KO_G/N_bpc of the compute instead of 1/N_bpc;
+    // the remaining sub-blocks stay N-outer, which is what keeps their matmuls available to overlap the
+    // group's chain-reduction tail. KO_G == N_blocks_per_core maximises gather overlap but exposes that tail.
+#if defined(AGMM_K_OUTER)
+    constexpr uint32_t KO_G =
+        (AGMM_K_OUTER < N_blocks_per_core) ? static_cast<uint32_t>(AGMM_K_OUTER) : N_blocks_per_core;
+#else
+    constexpr uint32_t KO_G = 0;
+#endif
+
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
     constexpr uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
@@ -655,33 +671,116 @@ void kernel_main() {
         current_M_block_tiles = m_tile_end - m_tile;
         current_subblock_h = std::min(current_M_block_tiles, subblock_h);
 
+#if defined(AGMM_K_OUTER)
+        // ---- PHASE A: K OUTER over the first KO_G sub-blocks. ----
+        // Accumulate EVERY N sub-block against k-block `k_block` before moving on to k_block+1, so the arrival
+        // of one gathered chunk unblocks 1/K_num_blocks of the WHOLE output instead of 1/K_num_blocks of just
+        // the first sub-block. That is what lets all of the compute overlap the gather; see the rationale on
+        // TT_AGMM_K_OUTER in the program factory.
+        //
+        // All N_bpc fp32 accumulators are live at once inside ONE reservation of intermediate_cb, with
+        // sub-block n owning tiles [n*out_block_num_tiles, (n+1)*out_block_num_tiles). Nothing is pushed until
+        // the phase ends, so the CB write pointer -- and therefore every out_base offset -- is stable
+        // throughout. The single push at the end makes those accumulators appear as N_bpc consecutive FIFO
+        // entries, which is exactly what Phase B's per-n output stage below already consumes one at a time
+        // with cb_wait_front/cb_pop_front(out_block_num_tiles). That is why Phase B needed no changes.
+        cb_reserve_back(intermediate_cb, KO_G * out_block_num_tiles);
+        reconfig_data_format(in1_cb, in0_cb);
+        pack_reconfig_data_format(intermediate_cb);
+        uint32_t cfg_subblock_w = 0xFFFFFFFFu;  // sub-block width matmul_block_init is currently configured for
+        for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
+            // Progressive cumulative wait, same CB contract as the N-outer path: cb0 is filled once and not
+            // popped until the very end, so the waited-for counts must be strictly increasing.
+            if (m_block_iter == 0) {
+#if defined(AGMM_PROFILE)
+                const uint32_t t0_in0 = agmm_clk();
+#endif
+                cb_wait_front(in0_cb, (k_block + 1) * in0_block_num_tiles);
+#if defined(AGMM_PROFILE)
+                agmm_wait_in0 += agmm_clk() - t0_in0;
+#endif
+            }
+            for (uint32_t n_block_iter = 0; n_block_iter < KO_G; n_block_iter++) {
+                const uint32_t n_tile_a = N_start_tile + n_block_iter * N_block_tiles;
+                const uint32_t n_tile_a_end = std::min(n_tile_a + N_block_tiles, N_end_tile);
+                current_N_block_tiles = n_tile_a_end - n_tile_a;
+                current_subblock_w = std::min(current_N_block_tiles, subblock_w);
+                // Re-init only when the width actually changes -- at most the N tail sub-block differs -- so
+                // the common case costs ONE init for the whole phase instead of K_num_blocks*N_bpc of them.
+                // matmul_block_init reconfigures the packer, which clears the L1-accumulate bit, so re-assert
+                // it for the current k: accumulate is off only while k_block == 0 (the seeding pass).
+                if (current_subblock_w != cfg_subblock_w) {
+                    matmul_block_init(
+                        in0_cb,
+                        in1_cb,
+                        false /*transpose*/,
+                        current_subblock_w /*ct_dim*/,
+                        current_subblock_h /*rt_dim*/,
+                        K_block_tiles /*kt_dim*/);
+                    cfg_subblock_w = current_subblock_w;
+                    PACK((llk_pack_reconfig_l1_acc(k_block == 0 ? 0 : 1)));
+                }
+#if defined(AGMM_PROFILE)
+                const uint32_t t0_in1a = agmm_clk();
+#endif
+                cb_wait_front(in1_cb, in1_block_num_tiles);
+#if defined(AGMM_PROFILE)
+                agmm_wait_in1 += agmm_clk() - t0_in1a;
+#endif
+                matmul_blocks(
+                    in0_cb,
+                    in1_cb,
+                    intermediate_cb,
+                    current_M_block_tiles,
+                    current_N_block_tiles,
+                    N_block_tiles,
+                    K_block_tiles,
+                    current_subblock_h,
+                    current_subblock_w,
+                    k_block * in0_block_num_tiles,        // block-major offset into the resident k-slice
+                    0 /*in1_base*/,                       //
+                    n_block_iter * out_block_num_tiles);  // this sub-block's own accumulator
+                cb_pop_front(in1_cb, in1_block_num_tiles);
+            }
+            if (k_block == 0) {
+                PACK((llk_pack_reconfig_l1_acc(1)));
+            }
+        }
+        cb_push_back(intermediate_cb, KO_G * out_block_num_tiles);
+        PACK((llk_pack_reconfig_l1_acc(0)));
+#endif  // AGMM_K_OUTER phase A
+
+        // Default path: the matmul for sub-block n, then its output stage. Under AGMM_K_OUTER the matmul has
+        // already happened in Phase A above and this loop is PHASE B -- the output stage only.
         for (uint32_t n_block_iter = 0; n_block_iter < N_blocks_per_core; n_block_iter++) {
             uint32_t n_tile = N_start_tile + n_block_iter * N_block_tiles;
             uint32_t n_tile_end = std::min(n_tile + N_block_tiles, N_end_tile);
             current_N_block_tiles = n_tile_end - n_tile;
             current_subblock_w = std::min(current_N_block_tiles, subblock_w);
 
-            matmul_block_init(
-                in0_cb,
-                in1_cb,
-                false /*transpose*/,
-                current_subblock_w /*ct_dim*/,
-                current_subblock_h /*rt_dim*/,
-                K_block_tiles /*kt_dim*/);
-            reconfig_data_format(in1_cb, in0_cb);
-            pack_reconfig_data_format(intermediate_cb);
-            // Accumulation buffer
-            cb_reserve_back(intermediate_cb, out_block_num_tiles);
-            for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
-                // Progressive cumulative wait: begin matmul k_block as soon as the writer's incremental per-step
-                // ring pushes make CUMULATIVE (k_block+1) in0 blocks available. Only the FIRST resident traversal
-                // waits (M_blocks_per_core==1, first N-sub-block); once the slice is complete it stays resident
-                // and later N-sub-blocks reuse it with no further waits. Repeated cb_wait_front WITHOUT an
-                // intervening pop requires cumulative counts (CB API contract) — satisfied since
-                // (k_block+1)*in0_block_num_tiles is strictly increasing and CB0 is popped only once, after all
-                // reuse (below). The writer pushes W blocks at a time, so a wait for a mid-batch boundary is
-                // simply satisfied when that W-batch lands.
-                if (m_block_iter == 0 && n_block_iter == 0) {
+            // Sub-blocks below KO_G were already accumulated by Phase A; this is their output stage only.
+            if (n_block_iter >= KO_G) {
+                matmul_block_init(
+                    in0_cb,
+                    in1_cb,
+                    false /*transpose*/,
+                    current_subblock_w /*ct_dim*/,
+                    current_subblock_h /*rt_dim*/,
+                    K_block_tiles /*kt_dim*/);
+                reconfig_data_format(in1_cb, in0_cb);
+                pack_reconfig_data_format(intermediate_cb);
+                // Accumulation buffer
+                cb_reserve_back(intermediate_cb, out_block_num_tiles);
+                for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
+                    // Progressive cumulative wait: begin matmul k_block as soon as the writer's incremental per-step
+                    // ring pushes make CUMULATIVE (k_block+1) in0 blocks available. Only the FIRST resident traversal
+                    // waits (M_blocks_per_core==1, first N-sub-block); once the slice is complete it stays resident
+                    // and later N-sub-blocks reuse it with no further waits. Repeated cb_wait_front WITHOUT an
+                    // intervening pop requires cumulative counts (CB API contract) — satisfied since
+                    // (k_block+1)*in0_block_num_tiles is strictly increasing and CB0 is popped only once, after all
+                    // reuse (below). The writer pushes W blocks at a time, so a wait for a mid-batch boundary is
+                    // simply satisfied when that W-batch lands.
+                    if (KO_G == 0 && m_block_iter == 0 && n_block_iter == 0) {
 #if defined(AGMM_PROFILE)
                     const uint32_t t0_in0 = agmm_clk();
 #endif
@@ -689,7 +788,7 @@ void kernel_main() {
 #if defined(AGMM_PROFILE)
                     agmm_wait_in0 += agmm_clk() - t0_in0;
 #endif
-                }
+                    }
 #if defined(AGMM_PROFILE)
                 const uint32_t t0_in1 = agmm_clk();
 #endif
@@ -714,10 +813,11 @@ void kernel_main() {
                 if (k_block == 0) {
                     PACK((llk_pack_reconfig_l1_acc(1)));
                 }
-            }
+                }
 
             cb_push_back(intermediate_cb, out_block_num_tiles);
             PACK((llk_pack_reconfig_l1_acc(0)));
+            }  // n_block_iter >= KO_G
 
 #ifdef RSCATTER
             // ---- Ring REDUCE-SCATTER. intermediate_cb (FP32, resident) is my matmul partial for the whole

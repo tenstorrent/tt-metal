@@ -186,26 +186,48 @@ void kernel_main() {
         }
     };
 
-    for (uint32_t nb = 0; nb < N_bpc; ++nb) {
+    // ---- Deliver one (kblk, nb) in1 block. The ORDER of the two loops below is the whole contract with
+    // compute: cb1 is a plain FIFO, so the reader must emit blocks in exactly the order compute pops them. ----
+    auto deliver = [&](uint32_t kblk, uint32_t nb) {
         const uint32_t ncol_base = nb * N_block;  // owned-column offset of this subblock
         // valid N columns within this subblock (0 => whole subblock is beyond the owned N range)
-        [[maybe_unused]] const uint32_t vcols =
+        const uint32_t vcols =
             (ncol_base < valid_n) ? (((valid_n - ncol_base) < N_block) ? (valid_n - ncol_base) : N_block) : 0u;
+        cb_reserve_back(in1_cb, in1_blk);
+        const uint32_t w1 = get_write_ptr(in1_cb);
+        // Serial policy: issue this block's reads (untagged), then wait for ALL of them before the
+        // block is forwarded/pushed. Exactly one block is in flight.
+        issue_block_reads(kblk, ncol_base, vcols, w1);
+        if (vcols > 0u) {
+            noc_async_read_barrier();
+        }
+        mfwd(get_write_ptr(in1_cb));  // forward the fixed-size block
+        cb_push_back(in1_cb, in1_blk);
+    };
+
+#if defined(AGMM_K_OUTER)
+    constexpr uint32_t KO_G = (AGMM_K_OUTER < N_bpc) ? static_cast<uint32_t>(AGMM_K_OUTER) : N_bpc;
+#else
+    constexpr uint32_t KO_G = 0;
+#endif
+    // Sub-blocks [0, KO_G) are compute's k-outer group, so they must arrive K-major; the rest stay N-major.
+    // Side benefit for DRAM in the group: at a fixed k the N sub-blocks are ADJACENT columns of the same shard
+    // row, so consecutive reads walk forward through the bank rather than striding by a whole shard row.
+    for (uint32_t step = 0; step < G && KO_G > 0u; ++step) {
+        // Shard read order MUST match the in0 cb0 order. Ring: block `step` = shard (rp-step).
+        const uint32_t s = get_arg_val<uint32_t>(kR1ConsumeBase + step);
+        for (uint32_t wb = 0; wb < W; ++wb) {
+            const uint32_t kblk = s * W + wb;
+            for (uint32_t nb = 0; nb < KO_G; ++nb) {
+                deliver(kblk, nb);
+            }
+        }
+    }
+    for (uint32_t nb = KO_G; nb < N_bpc; ++nb) {
         for (uint32_t step = 0; step < G; ++step) {
-            // Shard read order MUST match the in0 cb0 order. Ring: block `step` = shard (rp-step).
             const uint32_t s = get_arg_val<uint32_t>(kR1ConsumeBase + step);
             for (uint32_t wb = 0; wb < W; ++wb) {
-                const uint32_t kblk = s * W + wb;
-                cb_reserve_back(in1_cb, in1_blk);
-                const uint32_t w1 = get_write_ptr(in1_cb);
-                // Serial policy: issue this block's reads (untagged), then wait for ALL of them before the
-                // block is forwarded/pushed. Exactly one block is in flight.
-                issue_block_reads(kblk, ncol_base, vcols, w1);
-                if (vcols > 0u) {
-                    noc_async_read_barrier();
-                }
-                mfwd(get_write_ptr(in1_cb));  // forward the fixed-size block
-                cb_push_back(in1_cb, in1_blk);
+                deliver(s * W + wb, nb);
             }
         }
     }
