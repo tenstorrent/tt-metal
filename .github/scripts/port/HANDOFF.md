@@ -58,7 +58,7 @@ Three things follow, and each has bitten or would have:
 - **The push must be made with a PAT.** GitHub deliberately refuses to start workflow runs from
   pushes made with `GITHUB_TOKEN`, so that runs cannot trigger runs. Here the push *is* the trigger,
   so that suppression would mean nothing happens at all -- the launcher would wait five minutes and
-  report that no run appeared. This, not scope, is why `PORT_PUSH_TOKEN` exists.
+  report that no run appeared. This, not scope, is why a PAT is involved at all.
 - **Parameters ride in the commit message, as JSON.** A push carries no inputs. The message is the
   only free-form channel that arrives in the event payload -- so the `resolve` job reads it with no
   checkout, in seconds -- and that leaves nothing in the tree. A params *file* would be seen by
@@ -75,18 +75,35 @@ GitHub UI. To start one by hand, push a scratch ref whose commit message is the 
     git commit-tree HEAD^{tree} -p HEAD -m '{"mode":"build","op":"untilize"}' \
       | xargs -I{} git push origin {}:refs/heads/port-op-scratch/manual-$RANDOM
 
-### Before the next run, one thing must exist
+### The push credential, and why it is the sharpest edge here
 
-**A `PORT_PUSH_TOKEN` repository secret**: a fine-grained PAT on `tenstorrent/tt-metal` with
-`contents: write` (push the scratch ref) and `actions: read` (read back the run, its artifacts and
-its logs). The pre-step fails loudly if it is missing. As of writing, `gh secret list` shows only
-`CODEGEN_REPO_TOKEN`, so this has not been done.
+The launcher takes `PORT_PUSH_TOKEN` if it exists and falls back to `CODEGEN_REPO_TOKEN`, which is
+what is actually configured today: a classic PAT with `repo`, already SSO-authorised for the org,
+already used by the measure job to check out the generator. Nothing needs provisioning to run.
 
-It has to be a PAT for the trigger reason above. Note that this rules out the otherwise attractive
-fallback: gh-aw's strict mode rejects *any* write permission on the agent job, and turning it off
-with `strict: false` would let `github.token` push -- a token that expires with the run and cannot
-touch `.github/workflows/**`, both real advantages over a PAT -- but its pushes would not start the
-measurement, so it is not an option here whatever the permissions say.
+It has to be *a* PAT for the trigger reason above, and that rules out the otherwise attractive
+alternative: gh-aw's strict mode rejects any write permission on the agent job, and `strict: false`
+would let `github.token` push -- a token that expires with the run and cannot touch
+`.github/workflows/**`, both real advantages -- but its pushes would not start the measurement.
+
+`CODEGEN_REPO_TOKEN` is far broader than the job needs. `repo` reaches every repository its owner
+can, where the launcher only ever pushes one branch to this one and reads runs back. Two things
+follow, and the second is the one that is easy to miss:
+
+- **Provision `PORT_PUSH_TOKEN` when convenient** and the fallback stops being used with no code
+  change. Fine-grained, `tenstorrent/tt-metal` only, `contents: write` plus `actions: read`.
+- **The exposure that matters is not the push, it is the trigger.** The workflow that runs is the
+  copy in the pushed commit. An agent edit to `port-measure.yaml` would therefore not be a proposal
+  -- it would be the next thing to execute, on CIv2, with `CODEGEN_REPO_TOKEN` in scope. The same
+  argument covers `gate.py`, which decides whether the port is any good and also travels in the
+  scratch commit. A narrow token makes most of this GitHub's problem, since it refuses pushes
+  touching `.github/workflows/**` without an explicit workflow scope; a classic `repo` PAT may
+  carry that scope, so `dispatch.py` refuses to push any snapshot touching `.github/` at all,
+  whatever the credential. `gate.py`'s write-path check covers the same ground from the other side,
+  but only at verify time -- which is after the modified workflow would already have run.
+
+The token still never enters the agent's sandbox, by the pre-step route described further down;
+that part is unchanged and is what makes any of this defensible.
 
 Two consequences of the split worth internalising:
 
@@ -208,14 +225,13 @@ environment. `$HOME/.port-dispatch/token` is outside `${RUNNER_TEMP}/gh-aw`, `$G
 
 Verified by compiling a scratch workflow both ways and reading the lock file, not by reasoning about
 the docs. If gh-aw's generator changes, re-run that check before trusting this. The compiled
-`port-op.lock.yml` should mention `PORT_PUSH_TOKEN` in exactly three places -- the pre-step, gh-aw's
+`port-op.lock.yml` should name the push credential in exactly three places -- the pre-step, gh-aw's
 own log-redaction step, and the cleanup post-step -- and nowhere near the agent step or the handler
 files. That grep is the check.
 
 ## What is *not* verified
 
-**No dispatch has ever left the ground.** The token above was outstanding when this was written, so
-nothing that needs GitHub or a card has run even once.
+**No full cycle has ever run.** Nothing that needs a card has executed even once.
 
 What *is* checked, beyond `selftest.py`: both workflow files pass `actionlint`. The token boundary
 was established by compiling and reading the lock file. The whole parameter round trip -- the JSON
