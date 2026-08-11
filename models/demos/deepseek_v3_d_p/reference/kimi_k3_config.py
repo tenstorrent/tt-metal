@@ -30,6 +30,9 @@ included, is plain bf16. Only the MoE routed experts are quantized.
 """
 
 import types
+from typing import Any
+
+from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 
 
 class KimiK3Config:
@@ -93,11 +96,25 @@ class KimiK3Config:
                                52, 56, 60, 64, 68, 72, 76, 80, 84, 88, 92, 93]
     # fmt: on
 
-    # KDA (linear attention) sizing, recorded for completeness; no TT implementation exists yet.
+    # KDA (linear attention) sizing.
     KDA_NUM_HEADS = 96
     KDA_HEAD_DIM = 128
     KDA_SHORT_CONV_KERNEL_SIZE = 4
     KDA_GATE_LOWER_BOUND = -5.0
+    KDA_USE_FULL_RANK_GATE = True
+
+    # TT KDA layer implementation constants (models/demos/deepseek_v3_d_p/tt/kda).
+    # 0-indexed model layer used by the KDA layer tests; layer 0 is the dense layer, so the first
+    # KDA layer is 1 (FULL_ATTN_LAYERS_1BASED starts at 4, so layers 1-3 are KDA).
+    FIRST_KDA_LAYER = 1
+    # Chunks composed per summary group by the chunk-recurrence scan.
+    KDA_SUMMARY_GROUP_CHUNKS = 20
+    # Output-projection matmul block width, in tiles.
+    KDA_OUTPUT_PROJECTION_OUT_BLOCK_W = 4
+
+    # Checkpoint the real-weight tests are pinned to.
+    HF_REPO_ID = "moonshotai/Kimi-K3"
+    HF_REVISION = "9f62e4e9fffbd0a83ddd60e1c209d828994b3569"
 
     # AttnRes (attention-side, out of scope here; recorded so the delta is not lost)
     ATTN_RES_BLOCK_SIZE = 12
@@ -207,3 +224,25 @@ def kimi_k3_hf_config(max_seq: int = 8192):
         activation_situ_beta=KimiK3Config.ACTIVATION_SITU_BETA,
         activation_situ_linear_beta=KimiK3Config.ACTIVATION_SITU_LINEAR_BETA,
     )
+
+
+def kimi_k3_model_config() -> dict[str, Any]:
+    """Return the HF JSON-shaped fields consumed by :class:`KDAConfig`."""
+    return {
+        "hidden_size": KimiK3Config.EMB_SIZE,
+        "num_hidden_layers": KimiK3Config.NUM_LAYERS,
+        "num_attention_heads": KimiK3Config.NUM_ATTENTION_HEADS,
+        "rms_norm_eps": KimiK3Config.RMS_NORM_EPS,
+        "linear_attn_config": {
+            "num_heads": KimiK3Config.KDA_NUM_HEADS,
+            "head_dim": KimiK3Config.KDA_HEAD_DIM,
+            "short_conv_kernel_size": KimiK3Config.KDA_SHORT_CONV_KERNEL_SIZE,
+            "use_full_rank_gate": KimiK3Config.KDA_USE_FULL_RANK_GATE,
+            "gate_lower_bound": KimiK3Config.KDA_GATE_LOWER_BOUND,
+        },
+    }
+
+
+def kimi_k3_kda_config() -> KDAConfig:
+    """Build the TT KDA configuration from the pinned Kimi-K3 constants."""
+    return KDAConfig.from_model_config(kimi_k3_model_config())
