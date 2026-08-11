@@ -66,13 +66,10 @@ on:
         required: false
         type: string
         default: '["tt-ubuntu-2204-N150-viommu-stable"]'
-      arch:
-        required: false
-        type: choice
-        default: wormhole_b0
-        options:
-          - wormhole_b0
-          - blackhole
+      # `arch` would belong here beside `runner-label`, and it is hardcoded to wormhole_b0 in the
+      # device job instead only because `workflow_dispatch` caps at ten inputs and this is the
+      # eleventh. Nothing is lost yet: the porting pipeline is N150-only, so the two would always
+      # have moved together. Whoever adds a second arch should take that slot from something else.
       nonce:
         description: "Echoed into the run name so the launcher can find this run; the dispatch API returns no run id"
         required: false
@@ -117,7 +114,7 @@ jobs:
     container:
       image: ${{ contains(inputs.runner-label, 'tt-ubuntu-2204') && needs.check-harbor.outputs.harbor-prefix || '' }}${{ needs.build-artifact.outputs.dev-docker-image || 'docker-image-unresolved' }}
       env:
-        ARCH_NAME: ${{ inputs.arch }}
+        ARCH_NAME: wormhole_b0
         LOGURU_LEVEL: INFO
         TT_METAL_HOME: /work
         LD_LIBRARY_PATH: /work/build/lib
