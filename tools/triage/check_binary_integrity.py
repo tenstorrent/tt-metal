@@ -26,6 +26,15 @@ script_config = ScriptConfig(
     depends=["run_checks", "dispatcher_data", "elfs_cache"],
 )
 
+# The kernel half of this check reads <kernel>.elf.xip.elf, which tt_memory.cpp
+# writes on every kernel binary LOAD. That dump is ~514 KB per kernel (~1.4 GB on
+# a large golden run) and is disabled by TT_METAL_DISABLE_XIP_DUMP for throughput
+# runs, so the file legitimately will not exist. Absence is then EXPECTED, not a
+# failure — without this, every RISC on every core reports a spurious
+# "Kernel ELF file ... does not exist" and buries the real hang signal.
+# The firmware half of the check is unaffected and still runs.
+XIP_DUMP_DISABLED = os.environ.get("TT_METAL_DISABLE_XIP_DUMP", "0") not in ("0", "", "false", "False")
+
 
 def check_binary_integrity(risc_location: RiscLocation, dispatcher_data: DispatcherData, elfs_cache: ElfsCache):
     location = risc_location.location
@@ -67,7 +76,7 @@ def check_binary_integrity(risc_location: RiscLocation, dispatcher_data: Dispatc
                 )
 
     # Check kernel ELF binary state on the device
-    if dispatcher_core_data.kernel_xip_path is not None:
+    if dispatcher_core_data.kernel_xip_path is not None and not XIP_DUMP_DISABLED:
         log_check_risc(
             risc_name,
             location,
