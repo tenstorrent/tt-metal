@@ -271,7 +271,7 @@ bool role_split() {
 // the TLB window budget the way the 12 MiB host FIFO is, so make it large enough that a host hiccup cannot
 // reach the producers: 64 MiB is ~6,300 frames, roughly 115 busy sweeps of slack against the host FIFO's 21.
 //
-// This now sizes the HAL's DRAM PROFILER region too (perf_debug_dram_region_program_count above), so it is
+// This now sizes the HAL's DRAM PROFILER region too (perf_debug_dram_region_bytes_per_risc above), so it is
 // read before any device is opened. Lowering it lowers DRAM held per bank one-for-one; 12 MiB is enough for a
 // 5,000-zone/RISC capture and 64 MiB buys ~16-17k zones/RISC of runway (FINDINGS §N+39).
 uint32_t role_ring_mb() {
@@ -357,18 +357,17 @@ uint32_t nstage_cap(uint32_t computed) {
 //
 // The HAL sizes its per-bank DRAM PROFILER region as
 // `per_risc_bytes * MaxProcessorsPerCoreType * CEIL_NUM_CORES_PER_DRAM_CHANNEL` (5 * 20 = 100 on Blackhole and
-// Wormhole), and per_risc_bytes is `48 * program_support_count`, so the count yielding R bytes per bank is
-// R / 4800: 14,000 -> 672,000 B/risc -> ~64.1 MiB per bank, the sizing measured in FINDINGS §N+39.
+// Wormhole), so the per-risc figure that yields R bytes per bank is R / 100.
 //
-// Deliberately a COUNT and not a byte target: those multipliers live in the arch HALs and are not visible
-// here. If an arch differs, the region simply comes out a different size and the ring adapts to whatever the
-// HAL actually reserved (frames = region_bytes / slot_bytes). Nothing downstream assumes it got 64 MiB.
-uint32_t perf_debug_dram_region_program_count() {
+// Nothing downstream assumes this landed on exactly ROLE_RING_MB: those multipliers live in the arch HALs and
+// are not visible here, so if an arch differs the region comes out a different size and the ring adapts to
+// whatever was actually reserved (frames = region_bytes / slot_bytes).
+uint32_t perf_debug_dram_region_bytes_per_risc() {
     if (!role_split()) {
         return 0;
     }
     const uint64_t want_bytes = static_cast<uint64_t>(role_ring_mb()) * 1024ull * 1024ull;
-    return static_cast<uint32_t>((want_bytes + 4799) / 4800);
+    return static_cast<uint32_t>((want_bytes + 99) / 100);
 }
 
 // Per-read page cap, overridable at runtime for tuning: TT_METAL_PERF_DEBUG_MAX_PAGES (0 = uncapped, take
@@ -1053,7 +1052,7 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
     // What this replaces: an interleaved MeshBuffer with page_size == ring_bytes. That reservation was
     // LOCK-STEP -- the allocator holds the same offset in every bank -- so a 64 MiB ring cost 447 MiB to
     // address 127 MiB, on top of the ~32 MiB HAL region we were leaving idle. Reusing the region makes the
-    // ring's size and the region's size ONE knob (perf_debug_dram_region_program_count), and the ring becomes
+    // ring's size and the region's size ONE knob (perf_debug_dram_region_bytes_per_risc), and the ring becomes
     // available in every bank at a single address rather than only in banks we allocated pages for.
     //
     // Frames are still whole: capacity truncates to a multiple of the 165-page frame, so a FRAME never
