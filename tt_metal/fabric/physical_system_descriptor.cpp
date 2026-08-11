@@ -6,6 +6,7 @@
 #include <yaml-cpp/yaml.h>
 #include <algorithm>
 #include <set>
+#include <unordered_set>
 #include <fstream>
 #include <climits>
 
@@ -258,6 +259,7 @@ std::vector<AsicID> PhysicalSystemDescriptor::get_asic_neighbors(AsicID asic_id)
     for (const auto& [host, asic_group] : system_graph_.asic_connectivity_graph) {
         if (asic_group.contains(asic_id)) {
             std::vector<AsicID> neighbors;
+            neighbors.reserve(asic_group.at(asic_id).size());
             for (const auto& edge : asic_group.at(asic_id)) {
                 neighbors.push_back(edge.first);
             }
@@ -278,6 +280,42 @@ std::vector<EthConnection> PhysicalSystemDescriptor::get_eth_connections(AsicID 
         }
     }
     return {};
+}
+
+PortType PhysicalSystemDescriptor::get_port_type(AsicID src_asic, AsicID dst_asic, uint8_t src_chan) const {
+    for (const auto& eth_conn : get_eth_connections(src_asic, dst_asic)) {
+        if (eth_conn.src_chan == src_chan) {
+            return eth_conn.port_type;
+        }
+    }
+    TT_THROW("No port type found for connection from ASIC {} to ASIC {} on channel {}", src_asic, dst_asic, src_chan);
+}
+
+std::vector<PortType> PhysicalSystemDescriptor::get_available_port_types(AsicID src_asic) const {
+    std::unordered_set<PortType> port_types;
+    for (const auto& [host, asic_group] : system_graph_.asic_connectivity_graph) {
+        if (!asic_group.contains(src_asic)) {
+            continue;
+        }
+        for (const auto& [dst_asic, eth_connections] : asic_group.at(src_asic)) {
+            for (const auto& eth_conn : eth_connections) {
+                port_types.insert(eth_conn.port_type);
+            }
+        }
+        break;
+    }
+    std::vector<PortType> result(port_types.begin(), port_types.end());
+    std::sort(result.begin(), result.end());
+    return result;
+}
+
+bool PhysicalSystemDescriptor::has_port_type(AsicID src_asic, AsicID dst_asic, PortType port_type) const {
+    for (const auto& eth_conn : get_eth_connections(src_asic, dst_asic)) {
+        if (eth_conn.port_type == port_type) {
+            return true;
+        }
+    }
+    return false;
 }
 
 const AsicTopology& PhysicalSystemDescriptor::get_asic_topology(const std::string& hostname) const {
@@ -304,6 +342,7 @@ ChipId PhysicalSystemDescriptor::get_umd_unique_id(AsicID asic_id) const {
 std::vector<AsicID> PhysicalSystemDescriptor::get_asics_connected_to_host(const std::string& hostname) const {
     std::vector<AsicID> asics;
     if (system_graph_.asic_connectivity_graph.contains(hostname)) {
+        asics.reserve(system_graph_.asic_connectivity_graph.at(hostname).size());
         for (const auto& [asic_id, _] : system_graph_.asic_connectivity_graph.at(hostname)) {
             asics.push_back(asic_id);
         }
@@ -339,6 +378,7 @@ std::vector<std::string> PhysicalSystemDescriptor::get_host_neighbors(const std:
     TT_FATAL(
         system_graph_.host_connectivity_graph.contains(hostname), "No Host connectivity found for host {}", hostname);
     std::vector<std::string> neighbors;
+    neighbors.reserve(system_graph_.host_connectivity_graph.at(hostname).size());
     for (const auto& edge : system_graph_.host_connectivity_graph.at(hostname)) {
         neighbors.push_back(edge.first);
     }
@@ -401,16 +441,21 @@ std::vector<std::string> PhysicalSystemDescriptor::get_all_hostnames() const {
     for (const auto& [host, _] : system_graph_.asic_connectivity_graph) {
         hostnames.push_back(host);
     }
+    // Sort hostnames to ensure deterministic topology-solver behavior across machines.
+    // Without sorting, unordered_map iteration order (hash of hostname strings) differs
+    // between machines, causing different mesh-ID assignments in mock mode.
+    std::sort(hostnames.begin(), hostnames.end());
     return hostnames;
 }
 
 std::string PhysicalSystemDescriptor::my_host_name() const {
     if (!local_hostname_.empty()) {
-        // Discovery has set local_hostname_ and local_rank_
-        if (all_hostnames_unique_) {
-            return local_hostname_;
+        // Discovery has set local_hostname_ and local_rank_. When multiple MPI ranks share the same
+        // discovery hostname (mock descriptor basename or colliding OS hostname), suffix with rank.
+        if (!all_hostnames_unique_) {
+            return local_hostname_ + "_" + std::to_string(local_rank_);
         }
-        return local_hostname_ + "_" + std::to_string(local_rank_);
+        return local_hostname_;
     }
     // Fallback for file-based PSD (no discovery) - assume hostnames are unique
     return get_host_name();

@@ -7,6 +7,7 @@ import pytest
 import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tests.ttnn.nightly.unit_tests.operations.reduction.utility_functions import ttnn_max, TTNN_REDUCTION_WRAPPERS
 
 
 @pytest.mark.parametrize("N", [8, 16])
@@ -55,7 +56,7 @@ def test_sharded_reduce_h(N, in_sharded, out_sharded, dtype, device, function_le
             ttnn.ShardOrientation.COL_MAJOR,
         )
 
-    yt = ttnn.max(xt, 2, memory_config=out_mem_config)
+    yt = ttnn_max(xt, 2, memory_config=out_mem_config)
 
     if out_sharded:
         yt = ttnn.sharded_to_interleaved(
@@ -134,7 +135,7 @@ def test_nd_sharded_reduce_h_no_output_shard_spec(op, device, function_level_def
         ttnn.ShardOrientation.COL_MAJOR,
     )
 
-    ttnn_op = getattr(ttnn, op)
+    ttnn_op = TTNN_REDUCTION_WRAPPERS[op]
     torch_op_name = {"max": "amax", "min": "amin"}.get(op, op)
     torch_op = getattr(torch, torch_op_name)
 

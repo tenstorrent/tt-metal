@@ -55,7 +55,8 @@ def draw_broken_cores(broken_cores: set[RiscLocation]) -> str:
             riscs_string += "x" if RiscLocation(location, None, risc_name) in broken_cores else "-"
         return riscs_string
 
-    return next(iter(broken_cores)).location.device.render(axis_coordinate="noc0", cell_renderer=location_render)
+    rendered = next(iter(broken_cores)).location.device.render(axis_coordinate="noc0", cell_renderer=location_render)
+    return str(rendered)
 
 
 def broken_core_serializer(broken_cores: set[RiscLocation] | str) -> str:
@@ -110,7 +111,7 @@ def verify_halted_cores(run_checks: RunChecks) -> None:
         risc_debug = location.noc_block.get_risc_debug(risc_name)
         if not risc_debug.is_halted():
             log_warning_risc(
-                risc_name, location, "Was halted by triage but is no longer halted — core was broken during triage."
+                risc_name, location, "Was halted by triage but is no longer halted - core was broken during triage."
             )
             session.add_broken_core(location, risc_name)
         return None

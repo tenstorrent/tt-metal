@@ -70,13 +70,13 @@ void kernel_main() {
                 DeviceZoneScopedN("RISCV0");
                 for (uint32_t i = 0; i < num_of_transactions; i++) {
                     uint32_t vc = i % num_virtual_channels;
-                    noc.async_write(
+                    noc.async_write<NocOptions::CUSTOM_VC>(
                         unicast_ep,
                         unicast_ep,
                         bytes_per_transaction,
                         {.addr = src_addr},
                         {.noc_x = dest_x, .noc_y = dest_y, .addr = dst_addr},
-                        vc);
+                        NocOptVals{.vc = vc});
                 }
                 noc.async_write_barrier();
             }
@@ -123,8 +123,7 @@ void kernel_main() {
                             unicast_ep,
                             bytes_per_transaction,
                             {.addr = src_addr},
-                            {.noc_x = dest_x, .noc_y = dest_y, .addr = dst_addr},
-                            0);
+                            {.noc_x = dest_x, .noc_y = dest_y, .addr = dst_addr});
                     }
                 }
             }
@@ -156,13 +155,12 @@ void kernel_main() {
             mcast_end_y = tmp;
         }
 
-        constexpr NocOptions mcast_mode =
-            loopback ? NocOptions::MCAST_INCL_SRC : NocOptions::DEFAULT;
+        constexpr NocOptions mcast_opts = loopback ? NocOptions::MCAST_INCL_SRC : NocOptions::DEFAULT;
 
         {
             DeviceZoneScopedN("RISCV0");
             for (uint32_t i = 0; i < num_of_transactions; i++) {
-                noc.async_write_multicast<mcast_mode>(
+                noc.async_write_multicast<mcast_opts>(
                     unicast_ep,
                     multicast_ep,
                     bytes_per_transaction,
@@ -202,14 +200,13 @@ void kernel_main() {
             mcast_end_y = tmp;
         }
 
-        constexpr NocOptions mcast_mode =
-            loopback ? NocOptions::MCAST_INCL_SRC : NocOptions::DEFAULT;
+        constexpr NocOptions mcast_opts = loopback ? NocOptions::MCAST_INCL_SRC : NocOptions::DEFAULT;
 
         {
             DeviceZoneScopedN("RISCV0");
             // All but the last packet: linked=true to reserve the VC path
             for (uint32_t i = 0; i < num_of_transactions - 1; i++) {
-                noc.async_write_multicast<mcast_mode>(
+                noc.async_write_multicast<mcast_opts>(
                     unicast_ep,
                     multicast_ep,
                     bytes_per_transaction,
@@ -223,7 +220,7 @@ void kernel_main() {
                     true);  // linked
             }
             // Last packet: unlinked to release the VC
-            noc.async_write_multicast<mcast_mode>(
+            noc.async_write_multicast<mcast_opts>(
                 unicast_ep,
                 multicast_ep,
                 bytes_per_transaction,

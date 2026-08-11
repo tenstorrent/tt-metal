@@ -6,7 +6,8 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "sfpu/ckernel_sfpu_recip.h"
+#include "ckernel_sfpu_recip.h"
+#include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_rounding_ops.h"
 
 namespace ckernel {
@@ -20,13 +21,13 @@ inline void calculate_rdiv(const uint value) {
         sfpi::vFloat in = sfpi::dst_reg[0];
         sfpi::vFloat recip;
         if constexpr (APPROXIMATION_MODE) {
-            recip = _sfpu_reciprocal_<0>(in);
+            recip = sfpu_reciprocal_iter<0>(in);
         } else {
             if constexpr (is_fp32_dest_acc_en) {
-                recip = _sfpu_reciprocal_<2>(in);
+                recip = sfpu_reciprocal_iter<2>(in);
             } else {
-                recip = _sfpu_reciprocal_<1>(in);
-                recip = sfpi::convert<sfpi::vFloat16b>(recip, sfpi::RoundMode::NearestEven);
+                recip = sfpu_reciprocal_iter<1>(in);
+                recip = sfpi::convert<sfpi::vFloat16b>(recip, sfpi::RoundMode::Nearest);
             }
         }
         sfpi::vFloat result = recip * val;
@@ -43,7 +44,8 @@ inline void calculate_rdiv(const uint value) {
 
 template <bool APPROXIMATION_MODE>
 void rdiv_init() {
-    _init_sfpu_reciprocal_<APPROXIMATION_MODE>();
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    sfpu_reciprocal_init<APPROXIMATION_MODE>();
 }
 
 }  // namespace sfpu

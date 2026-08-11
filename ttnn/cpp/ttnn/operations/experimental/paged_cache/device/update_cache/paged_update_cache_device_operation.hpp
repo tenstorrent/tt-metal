@@ -6,17 +6,22 @@
 
 #include <optional>
 #include <variant>
+#include <vector>
+
+#include <tt_stl/reflection.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "paged_update_cache_device_operation_types.hpp"
 #include "paged_update_cache_program_factory.hpp"
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
+#include "ttnn/distributed/types.hpp"
 
 namespace ttnn::experimental::prim {
 
 struct PagedUpdateCacheDeviceOperation {
     using operation_attributes_t = PagedUpdateCacheParams;
     using tensor_args_t = PagedUpdateCacheInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<PagedUpdateCacheProgramFactory, PagedUpdateCacheMeshWorkloadFactory>;
 
@@ -34,6 +39,16 @@ struct PagedUpdateCacheDeviceOperation {
 
     static ttsl::hash::hash_t compute_program_hash(
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
+
+    // Cache-hit in-place patch of all per-dispatch state: buffer addresses (runtime args + the input-shard
+    // CB) and the cache-write offsets derived from update_idxs, which the program hash excludes so decode
+    // steps differing only in position cache-hit. No descriptor rebuild — see the .cpp.
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 }  // namespace ttnn::experimental::prim

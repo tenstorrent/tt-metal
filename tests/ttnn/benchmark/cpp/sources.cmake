@@ -2,6 +2,8 @@
 # Module owners should update this file when adding/removing/renaming source files
 
 set(BENCHMARK_SRCS
+    "benchmark_d2h_stream_service.cpp"
+    "benchmark_h2d_stream_service.cpp"
     "host_tilizer_untilizer/tilizer_untilizer.cpp"
     "host_bfp_tilizer/bench_bfp_pack.cpp"
     "padding/pad_rm.cpp"

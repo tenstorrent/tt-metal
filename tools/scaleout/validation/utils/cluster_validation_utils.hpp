@@ -86,6 +86,12 @@ void log_link_retrain_summary(
     uint32_t total_retrain_iterations,
     const std::filesystem::path& output_path);
 
+void log_unretrainable_channels(
+    const tt_metal::AsicTopology& missing_topology,
+    const PhysicalSystemDescriptor& physical_system_descriptor,
+    uint32_t total_retrain_iterations,
+    const std::filesystem::path& output_path);
+
 tt_metal::AsicTopology build_reset_topology(
     const std::string& reset_host,
     uint32_t reset_tray_id,

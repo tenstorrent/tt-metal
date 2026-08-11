@@ -22,9 +22,6 @@
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/compressed_custom_mm.h"
 using namespace ckernel;
-#ifdef TRISC_PACK
-#include "llk_math_eltwise_unary_sfpu_silu.h"
-#endif
 #endif
 
 namespace deepseek_b1_ops {
@@ -174,7 +171,7 @@ struct MatmulExpertCompressedSRAM {
                 reinterpret_cast<const volatile uint32_t*>(CTArgs::sram_base_addrs_l1_addr);
             const volatile uint32_t* fmt_base = reinterpret_cast<const volatile uint32_t*>(fmt_l1_addr_base);
 
-            reconfig_data_format<false, true>(cb_in1, cb_in0);
+            reconfig_data_format<SrcOrder::Reverse, true>(cb_in0, cb_in1);
             pack_reconfig_data_format<true>(cb_out);
             // cb_in0 metadata always advances by the full num_active_experts ×
             // num_tiles_k pages per iter (producer pads if data is compact). This

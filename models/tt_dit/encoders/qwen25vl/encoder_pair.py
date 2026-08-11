@@ -63,17 +63,26 @@ class Qwen25VlTokenizerEncoderPair:
         if use_torch:
             return torch_model
 
+        # transformers 5.x moved the text hyperparameters from the top-level
+        # Qwen2_5_VLConfig into a nested `text_config`, and normalized the rope kwargs
+        # (rope_theta, mrope_section, rope_scaling) into a single `rope_parameters` dict
+        # (the old top-level `rope_theta` / `rope_scaling` attributes are consumed). Read
+        # `rope_parameters` first, falling back to `rope_scaling` for <5.x configs.
+        text_config = getattr(torch_model.config, "text_config", torch_model.config)
+        rope_params = getattr(text_config, "rope_parameters", None) or getattr(text_config, "rope_scaling", None) or {}
+        rope_theta = getattr(text_config, "rope_theta", None) or rope_params.get("rope_theta")
+
         model = Qwen25VlTextEncoder(
-            vocab_size=torch_model.config.vocab_size,
-            hidden_size=torch_model.config.hidden_size,
-            intermediate_size=torch_model.config.intermediate_size,
-            hidden_act=torch_model.config.hidden_act,
-            num_hidden_layers=torch_model.config.num_hidden_layers,
-            num_attention_heads=torch_model.config.num_attention_heads,
-            num_key_value_heads=torch_model.config.num_key_value_heads,
-            rms_norm_eps=torch_model.config.rms_norm_eps,
-            rope_theta=torch_model.config.rope_theta,
-            mrope_section=torch_model.config.rope_scaling["mrope_section"],
+            vocab_size=text_config.vocab_size,
+            hidden_size=text_config.hidden_size,
+            intermediate_size=text_config.intermediate_size,
+            hidden_act=text_config.hidden_act,
+            num_hidden_layers=text_config.num_hidden_layers,
+            num_attention_heads=text_config.num_attention_heads,
+            num_key_value_heads=text_config.num_key_value_heads,
+            rms_norm_eps=text_config.rms_norm_eps,
+            rope_theta=rope_theta,
+            mrope_section=rope_params["mrope_section"],
             device=self._device,
             ccl_manager=self._ccl_manager,
             parallel_config=self._parallel_config,
@@ -99,6 +108,7 @@ class Qwen25VlTokenizerEncoderPair:
             subfolder=subfolder if subfolder is not None else "",
             parallel_config=self._parallel_config,
             mesh_shape=tuple(self._device.shape),
+            mesh_device=self._device,
             is_fsdp=self._is_fsdp,
         )
 
@@ -120,6 +130,7 @@ class Qwen25VlTokenizerEncoderPair:
             subfolder=self._encoder_subfolder if self._encoder_subfolder is not None else "",
             parallel_config=self._parallel_config,
             mesh_shape=tuple(self._device.shape),
+            mesh_device=self._device,
             is_fsdp=self._is_fsdp,
         )
 

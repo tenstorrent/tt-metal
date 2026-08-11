@@ -55,7 +55,10 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
     const uint32_t tile_height = a.tensor_spec().tile().get_height();
     const uint32_t tile_width = a.tensor_spec().tile().get_width();
 
-    TT_FATAL(a.dtype() == DataType::BFLOAT16, "Input tensor must be BFLOAT16, got: {}", a.dtype());
+    TT_FATAL(
+        a.dtype() == DataType::BFLOAT16 || a.dtype() == DataType::FLOAT32,
+        "Input tensor must be BFLOAT16 or FLOAT32, got: {}",
+        a.dtype());
     TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to groupnorm need to be on device!");
     TT_FATAL(a.buffer() != nullptr, "Operands to groupnorm need to be allocated in buffers on device!");
     TT_FATAL(a.padded_shape()[3] % args.num_groups == 0, "channel must be divisible by num_groups!");
@@ -67,7 +70,31 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
         a.padded_shape()[2],
         tile_height);
 
+    // ROW_MAJOR (interleaved) input/output is only supported on the legacy (non-Welford) group_norm path.
+    if (args.use_welford && !a.is_sharded()) {
+        const Layout output_layout =
+            std::visit([](const auto& config) -> Layout { return config.output_layout; }, args.program_config);
+        TT_FATAL(
+            a.layout() == Layout::TILE && output_layout == Layout::TILE,
+            "group_norm: ROW_MAJOR interleaved input/output is not supported on the Welford path yet. "
+            "Use TILE layout for both input and output, or use the legacy (non-Welford) path "
+            "(use_welford=false).");
+    }
+
     if (a.is_sharded()) {
+        const auto& shard_spec = a.shard_spec().value();
+        const auto bbox = shard_spec.grid.bounding_box();
+        const auto bbox_grid = ttnn::operations::normalization::core_grid_from_shard_bounding_box(bbox);
+        const uint32_t bbox_num_cores = bbox_grid.x * bbox_grid.y;
+        TT_FATAL(
+            shard_spec.grid.num_cores() == bbox_num_cores,
+            "Sharded groupnorm does not support non-rectangular core grids. "
+            "The shard spec grid has {} cores but its bounding box spans {} cores ({} x {}).",
+            shard_spec.grid.num_cores(),
+            bbox_num_cores,
+            bbox_grid.x,
+            bbox_grid.y);
+
         const auto program_grid =
             std::visit([](const auto& config) { return config.compute_with_storage_grid_size; }, args.program_config);
         ttnn::operations::normalization::detail::validate_sharded_input(
@@ -102,8 +129,8 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(
                 gamma.value().buffer() != nullptr, "Operands to groupnorm need to be allocated in buffers on device!");
             TT_FATAL(
-                gamma.value().dtype() == DataType::BFLOAT16,
-                "Gamma tensor must be BFLOAT16, got: {}",
+                gamma.value().dtype() == DataType::BFLOAT16 || gamma.value().dtype() == DataType::FLOAT32,
+                "Gamma tensor must be BFLOAT16 or FLOAT32, got: {}",
                 gamma.value().dtype());
         }
         if (beta.has_value()) {
@@ -112,6 +139,12 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
                 "Gamma and beta must have the same layout, got gamma: {} vs beta: {}",
                 gamma.value().layout(),
                 beta.value().layout());
+            TT_FATAL(
+                gamma.value().dtype() == beta.value().dtype(),
+                "Gamma and beta must have the same dtype (the program factories use a single gamma/beta "
+                "CB format for both), got gamma: {} vs beta: {}",
+                gamma.value().dtype(),
+                beta.value().dtype());
         }
     }
 
@@ -144,8 +177,8 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(
                 beta.value().buffer() != nullptr, "Operands to groupnorm need to be allocated in buffers on device!");
             TT_FATAL(
-                beta.value().dtype() == DataType::BFLOAT16,
-                "Beta tensor must be BFLOAT16, got: {}",
+                beta.value().dtype() == DataType::BFLOAT16 || beta.value().dtype() == DataType::FLOAT32,
+                "Beta tensor must be BFLOAT16 or FLOAT32, got: {}",
                 beta.value().dtype());
         }
     }
@@ -155,6 +188,12 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
             input_mask.value().layout() == Layout::TILE,
             "Input mask must have TILE layout, got: {}",
             input_mask.value().layout());
+        TT_FATAL(
+            input_mask.value().storage_type() == StorageType::DEVICE,
+            "Input mask must be on device, got storage type: {}",
+            input_mask.value().storage_type());
+        TT_FATAL(input_mask.value().buffer() != nullptr, "Input mask must be allocated in buffers on device!");
+        TT_FATAL(a.device() == input_mask.value().device(), "Input and input mask tensors must be on same device");
         TT_FATAL(
             input_mask.value().padded_shape()[1] == args.num_groups,
             "Input mask dim1 must match number of groups, got: {} vs {}",
@@ -179,8 +218,16 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
     if (negative_mask.has_value()) {
         TT_FATAL(
             negative_mask.value().layout() == Layout::TILE,
-            "Negative musk must be in TILE layout, but layout is {}",
+            "Negative mask must have TILE layout, got: {}",
             negative_mask.value().layout());
+        TT_FATAL(
+            negative_mask.value().storage_type() == StorageType::DEVICE,
+            "Negative mask must be on device, got storage type: {}",
+            negative_mask.value().storage_type());
+        TT_FATAL(
+            negative_mask.value().buffer() != nullptr, "Negative mask must be allocated in buffers on device!");
+        TT_FATAL(
+            a.device() == negative_mask.value().device(), "Input and negative mask tensors must be on same device");
         TT_FATAL(
             negative_mask.value().padded_shape()[1] == args.num_groups,
             "Negative mask padded shape[1] must be equal to num_groups, but is {} and num_groups is {}",
@@ -247,7 +294,7 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-TensorSpec GroupNormDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec GroupNormDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
 
@@ -263,7 +310,7 @@ TensorSpec GroupNormDeviceOperation::compute_output_specs(
             }
 
             auto mem_config = args.output_mem_config;
-            return TensorSpec(
+            return tt::tt_metal::TensorSpec(
                 input_tensor.logical_shape(),
                 TensorLayout::fromPaddedShape(
                     program_config.out_data_format,
@@ -307,6 +354,15 @@ Tensor group_norm(
     std::optional<Tensor> input_mask,
     std::optional<Tensor> negative_mask,
     std::optional<Tensor> reciprocals) {
+    if (negative_mask.has_value()) {
+        TT_FATAL(
+            negative_mask.value().storage_type() == StorageType::DEVICE,
+            "Negative mask must be on device, got storage type: {}",
+            negative_mask.value().storage_type());
+        TT_FATAL(
+            negative_mask.value().buffer() != nullptr, "Negative mask must be allocated in buffers on device!");
+        TT_FATAL(input.device() == negative_mask.value().device(), "Input and negative mask tensors must be on same device");
+    }
     using OperationType = GroupNormDeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{
         .eps = eps,

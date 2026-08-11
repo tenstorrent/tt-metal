@@ -106,6 +106,26 @@ HalCoreInfoType create_active_eth_mem_map(bool enable_2_erisc_mode) {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_FORCE)] = MEM_RETRAIN_FORCE_ADDR;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::CORR_CW)] = MEM_CORR_CW_ADDR;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::UNCORR_CW)] = MEM_UNCORR_CW_ADDR;
+    // TX/RX queue counters live in boot_results.eth_live_status (see eth_fw_api.h). They have no
+    // fixed MEM_*_ADDR macro, so derive their addresses from the struct layout.
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::TXQ0_RESEND_CNT)] =
+        MEM_SYSENG_BOOT_RESULTS_BASE + offsetof(boot_results_t, eth_live_status) +
+        offsetof(eth_live_status_t, txq0_resend_cnt);
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::TXQ1_RESEND_CNT)] =
+        MEM_SYSENG_BOOT_RESULTS_BASE + offsetof(boot_results_t, eth_live_status) +
+        offsetof(eth_live_status_t, txq1_resend_cnt);
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::TXQ2_RESEND_CNT)] =
+        MEM_SYSENG_BOOT_RESULTS_BASE + offsetof(boot_results_t, eth_live_status) +
+        offsetof(eth_live_status_t, txq2_resend_cnt);
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::RXQ0_PKT_DROP)] =
+        MEM_SYSENG_BOOT_RESULTS_BASE + offsetof(boot_results_t, eth_live_status) +
+        offsetof(eth_live_status_t, rxq0_pkt_drop);
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::RXQ1_PKT_DROP)] =
+        MEM_SYSENG_BOOT_RESULTS_BASE + offsetof(boot_results_t, eth_live_status) +
+        offsetof(eth_live_status_t, rxq1_pkt_drop);
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::RXQ2_PKT_DROP)] =
+        MEM_SYSENG_BOOT_RESULTS_BASE + offsetof(boot_results_t, eth_live_status) +
+        offsetof(eth_live_status_t, rxq2_pkt_drop);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_TELEMETRY)] = MEM_AERISC_FABRIC_TELEMETRY_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ROUTING_TABLE)] = MEM_AERISC_ROUTING_TABLE_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ROUTER_STATE)] = MEM_AERISC_FABRIC_ROUTER_STATE_BASE;

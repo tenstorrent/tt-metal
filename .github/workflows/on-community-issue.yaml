@@ -4,7 +4,7 @@ on:
     types: [opened]
 jobs:
   gh-slack-bridge:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     permissions:
       issues: write
       pull-requests: write
@@ -53,12 +53,12 @@ jobs:
           LABELS: community
       - name: Send Notification
         if: ${{ steps.is_organization_member.outputs.is_member == 'false' }}
-        uses: slackapi/slack-github-action@v1.26.0
+        uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c # v3.0.3
         with:
+          webhook: ${{ secrets.SLACK_CHANNEL_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
           payload: |
             {
               "text": "A new ${{ env.EVENT_TYPE }} has been created by a non-org member `${{ env.USERNAME }}`: ${{ env.EVENT_URL }}",
               "channel": "C07AZJ5DLL8"
             }
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_CHANNEL_WEBHOOK_URL }}

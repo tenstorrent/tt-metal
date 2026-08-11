@@ -34,7 +34,7 @@ def extract_table_data(result: Any, verbose_level: int = 0) -> TableData | None:
     Convert a dataclass or list-of-dataclasses to a `TableData`.
 
     Returns `None` for results that aren't a dataclass or non-empty list of
-    dataclasses — those are emitted as plain strings by serializers.
+    dataclasses - those are emitted as plain strings by serializers.
     """
     if not (
         is_dataclass(result)
@@ -129,7 +129,7 @@ class Sink(ABC):
 
 class ConsoleSink(Sink):
     """`Sink` backed by a Rich console. Supports plain lines and Rich
-    renderables (tables, panels) — the latter is needed by `RichSerializer`."""
+    renderables (tables, panels) - the latter is needed by `RichSerializer`."""
 
     def __init__(self, console: Any):
         self._console = console
@@ -217,7 +217,7 @@ class RichSerializer(OutputSerializer):
             utils.INFO(f"  {result}")
             return
 
-        table = Table()
+        table = Table(box=_table_box())
         for col in table_data.columns:
             table.add_column(col, justify="left")
         for row in table_data.rows:
@@ -226,6 +226,13 @@ class RichSerializer(OutputSerializer):
 
     def close(self) -> None:
         self._sink.close()
+
+
+def _table_box():
+    # Uses simple chars for tables (| - +) instead of multi-byte chars that are Rich's default.
+    from rich import box
+
+    return box.ASCII if os.environ.get("TT_TRIAGE_SIMPLE_TABLE") == "1" else box.HEAVY_HEAD
 
 
 def _one_line(s: str) -> str:
@@ -237,7 +244,7 @@ def _strip_rich_markup(s: str) -> str:
 
     Some script messages contain bracketed text that looks like markup but
     isn't (e.g. `[!] core`, `[0x...]`, coordinate strings like `[1-1 (0,0)]`).
-    Rich raises `MarkupError` on those — fall back to the original string in
+    Rich raises `MarkupError` on those - fall back to the original string in
     that case so we never crash on otherwise valid triage output.
     """
     from rich.errors import MarkupError

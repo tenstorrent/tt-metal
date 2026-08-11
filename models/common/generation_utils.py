@@ -11,7 +11,6 @@ from transformers.generation.logits_process import (  # ForceTokensLogitsProcess
     ExponentialDecayLengthPenalty,
     ForcedBOSTokenLogitsProcessor,
     ForcedEOSTokenLogitsProcessor,
-    HammingDiversityLogitsProcessor,
     InfNanRemoveLogitsProcessor,
     LogitNormalization,
     LogitsProcessorList,
@@ -24,6 +23,15 @@ from transformers.generation.logits_process import (  # ForceTokensLogitsProcess
     SuppressTokensAtBeginLogitsProcessor,
     SuppressTokensLogitsProcessor,
 )
+
+# HammingDiversityLogitsProcessor (diverse beam search) was removed in
+# transformers 5.x with no replacement. Import it optionally so this module
+# still loads; it's only used when diversity_penalty > 0, which TT generation
+# paths don't exercise.
+try:
+    from transformers.generation.logits_process import HammingDiversityLogitsProcessor
+except ImportError:  # transformers >= 5.x
+    HammingDiversityLogitsProcessor = None
 
 
 def _merge_criteria_processor_list(
@@ -65,6 +73,11 @@ def _get_logits_processor(
     # the following idea is largely copied from this PR: https://github.com/huggingface/transformers/pull/5420/files
     # all samplers can be found in `generation_utils_samplers.py`
     if generation_config.diversity_penalty is not None and generation_config.diversity_penalty > 0.0:
+        if HammingDiversityLogitsProcessor is None:
+            raise NotImplementedError(
+                "diversity_penalty > 0 (diverse beam search) requires HammingDiversityLogitsProcessor, "
+                "which was removed in transformers 5.x."
+            )
         processors.append(
             HammingDiversityLogitsProcessor(
                 diversity_penalty=generation_config.diversity_penalty,

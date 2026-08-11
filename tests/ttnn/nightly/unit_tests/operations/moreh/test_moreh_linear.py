@@ -478,8 +478,8 @@ def test_moreh_bias_backward_fp32(shapes, device):
     torch_output.backward(torch_output_grad.float())
     ## test for equivalance
     rtol = atol = 0.1
-    tt_bias_grad_fp32_cpu = tt_bias_grad_fp32.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(bias_shape).to_torch()
-    tt_bias_grad_cpu = tt_bias_grad.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(bias_shape).to_torch()
+    tt_bias_grad_fp32_cpu = ttnn.to_torch(tt_bias_grad_fp32)
+    tt_bias_grad_cpu = ttnn.to_torch(tt_bias_grad)
     passing, output_pcc = comp_allclose_and_pcc(
         torch_bias_fp32.grad, tt_bias_grad_fp32_cpu, pcc=0.98, rtol=rtol, atol=atol
     )

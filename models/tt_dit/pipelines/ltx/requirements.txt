@@ -1,0 +1,14 @@
+# LTX (audio/video) pipeline — supplemental requirements.
+#
+# Install on top of the dev env, after ./create_venv.sh:
+#
+#     source python_env/bin/activate
+#     uv pip install --no-deps -r models/tt_dit/pipelines/ltx/requirements.txt
+#
+# --no-deps keeps the dev env's stable safetensors: diffusers 0.38.0 declares
+# safetensors>=0.8.0rc0 but never version-gates it at import and uses only stable
+# API, so the prerelease bump is unnecessary. Its other deps are already satisfied
+# by the dev env, and av has none.
+
+diffusers==0.38.0
+av==17.0.1

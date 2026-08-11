@@ -55,13 +55,19 @@ constexpr uint32_t CMDBUF_RD_REQ_VC = 1;
 /* Read response virtual channel - used by both command buffers */
 constexpr uint32_t CMDBUF_RD_RESP_VC = 12;
 /* Write request virtual channel - used by both command buffers */
-constexpr uint32_t CMDBUF_WR_REQ_VC = 2;
+constexpr uint32_t CMDBUF_WR_REQ_VC = 1;
 /* Write response virtual channel - used by both command buffers */
 constexpr uint32_t CMDBUF_WR_RESP_VC = 13;
 /* Multicast request virtual channel - used by both command buffers */
 constexpr uint32_t CMDBUF_MCAST_REQ_VC = 8;
 /* Multicast response virtual channel - used by both command buffers */
 constexpr uint32_t CMDBUF_MCAST_RESP_VC = 14;
+/* First of the 8 iDMA backend request virtual channels (CMDBUF_FIRST_IDMA_VC..+7).
+ * Kept independent of CMDBUF_WR_REQ_VC so that moving the unicast write VC cannot
+ * walk the iDMA VC-autoincrement range into the multicast request VCs. */
+constexpr uint32_t CMDBUF_FIRST_IDMA_VC = 0;
+/* Number of iDMA backend engines the cmdbuf round-robins packets across */
+constexpr uint32_t CMDBUF_NUM_IDMA_VCS = 8;
 
 #define DEFINE_CMD_BUFS(buf_name, cmdbuf)                                                                              \
                                                                                                                        \
@@ -235,6 +241,29 @@ constexpr uint32_t CMDBUF_MCAST_RESP_VC = 14;
         misc.f.wrapping_en = wrapping_en;                                                                              \
                                                                                                                        \
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET, misc.val);                         \
+    }                                                                                                                  \
+                                                                                                                       \
+    /*                                                                                                                 \
+     * @def set_axi_opt_1_cmdbuf_0                                                                                     \
+     * @def set_axi_opt_1_cmdbuf_1                                                                                     \
+     *                                                                                                                 \
+     * @brief Programs the AXI_OPT_1 cmdbuf register. All fields not exposed as parameters                             \
+     *        are written at their TT_ROCC_CMD_BUF_AXI_OPT_1_REG_DEFAULT values.                                       \
+     *                                                                                                                 \
+     * @param src_protocol AXI source protocol selector                                                                \
+     * @param decouple_aw  Decouple AXI AW from W channel                                                              \
+     *                                                                                                                 \
+     * @note This macro creates 2 inline functions, 1 per each cmd buffer                                              \
+     */                                                                                                                \
+    inline __attribute__((always_inline)) void set_axi_opt_1_##buf_name(                                               \
+        uint8_t src_protocol,                                                                                          \
+        uint8_t decouple_aw) {                                                                                         \
+        TT_ROCC_CMD_BUF_AXI_OPT_1_reg_u axi_opt_1;                                                                     \
+        axi_opt_1.val = TT_ROCC_CMD_BUF_AXI_OPT_1_REG_DEFAULT;                                                         \
+        axi_opt_1.f.src_protocol = src_protocol;                                                                       \
+        axi_opt_1.f.decouple_aw = decouple_aw;                                                                         \
+                                                                                                                       \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_AXI_OPT_1_REG_OFFSET, axi_opt_1.val);               \
     }                                                                                                                  \
                                                                                                                        \
     /*                                                                                                                 \

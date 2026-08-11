@@ -589,13 +589,13 @@ void forward_link_metrics_to_controller(std::vector<EthernetLinkMetrics>& link_m
         serialized_link_metrics = tt::scaleout::validation::serialize_link_metrics_to_bytes(link_metrics);
         serialized_link_metrics_size = serialized_link_metrics.size();
         distributed_context.send(
-            tt::stl::Span<std::byte>(
+            ttsl::Span<std::byte>(
                 reinterpret_cast<std::byte*>(&serialized_link_metrics_size), sizeof(serialized_link_metrics_size)),
             tt::tt_metal::distributed::multihost::Rank{CONTROLLER_RANK},
             tt::tt_metal::distributed::multihost::Tag{0});
         distributed_context.send(
-            tt::stl::as_writable_bytes(
-                tt::stl::Span<uint8_t>(serialized_link_metrics.data(), serialized_link_metrics.size())),
+            ttsl::as_writable_bytes(
+                ttsl::Span<uint8_t>(serialized_link_metrics.data(), serialized_link_metrics.size())),
             tt::tt_metal::distributed::multihost::Rank{CONTROLLER_RANK},
             tt::tt_metal::distributed::multihost::Tag{0});
     } else {
@@ -604,14 +604,14 @@ void forward_link_metrics_to_controller(std::vector<EthernetLinkMetrics>& link_m
                 continue;
             }
             distributed_context.recv(
-                tt::stl::Span<std::byte>(
+                ttsl::Span<std::byte>(
                     reinterpret_cast<std::byte*>(&serialized_link_metrics_size), sizeof(serialized_link_metrics_size)),
                 tt::tt_metal::distributed::multihost::Rank{peer_rank},
                 tt::tt_metal::distributed::multihost::Tag{0});
             serialized_link_metrics.resize(serialized_link_metrics_size);
             distributed_context.recv(
-                tt::stl::as_writable_bytes(
-                    tt::stl::Span<uint8_t>(serialized_link_metrics.data(), serialized_link_metrics.size())),
+                ttsl::as_writable_bytes(
+                    ttsl::Span<uint8_t>(serialized_link_metrics.data(), serialized_link_metrics.size())),
                 tt::tt_metal::distributed::multihost::Rank{peer_rank},
                 tt::tt_metal::distributed::multihost::Tag{0});
             std::vector<EthernetLinkMetrics> remote_link_metrics =
@@ -1238,8 +1238,8 @@ LinkMetricsResult send_traffic_and_validate_links(
             // Check if any rank experienced a hang/timeout
             bool any_rank_hung = false;
             distributed_context.all_reduce(
-                tt::stl::Span<bool>(&did_hang_locally, 1),
-                tt::stl::Span<bool>(&any_rank_hung, 1),
+                ttsl::Span<bool>(&did_hang_locally, 1),
+                ttsl::Span<bool>(&any_rank_hung, 1),
                 tt::tt_metal::distributed::multihost::ReduceOp::LOR);
 
             if (any_rank_hung) {
@@ -1270,13 +1270,13 @@ void forward_link_reset_metadata_from_controller(
             auto serialized_exit_nodes_size = serialized_exit_nodes.size();
 
             distributed_context.send(
-                tt::stl::Span<std::byte>(
+                ttsl::Span<std::byte>(
                     reinterpret_cast<std::byte*>(&serialized_exit_nodes_size), sizeof(serialized_exit_nodes_size)),
                 tt::tt_metal::distributed::multihost::Rank{static_cast<int>(rank)},
                 tt::tt_metal::distributed::multihost::Tag{0});
             distributed_context.send(
-                tt::stl::as_writable_bytes(
-                    tt::stl::Span<uint8_t>(serialized_exit_nodes.data(), serialized_exit_nodes.size())),
+                ttsl::as_writable_bytes(
+                    ttsl::Span<uint8_t>(serialized_exit_nodes.data(), serialized_exit_nodes.size())),
                 tt::tt_metal::distributed::multihost::Rank{static_cast<int>(rank)},
                 tt::tt_metal::distributed::multihost::Tag{0});
         }
@@ -1284,14 +1284,14 @@ void forward_link_reset_metadata_from_controller(
     } else {
         std::size_t serialized_exit_nodes_size = 0;
         distributed_context.recv(
-            tt::stl::Span<std::byte>(
+            ttsl::Span<std::byte>(
                 reinterpret_cast<std::byte*>(&serialized_exit_nodes_size), sizeof(serialized_exit_nodes_size)),
             tt::tt_metal::distributed::multihost::Rank{CONTROLLER_RANK},
             tt::tt_metal::distributed::multihost::Tag{0});
         std::vector<uint8_t> serialized_exit_nodes(serialized_exit_nodes_size);
         distributed_context.recv(
-            tt::stl::as_writable_bytes(
-                tt::stl::Span<uint8_t>(serialized_exit_nodes.data(), serialized_exit_nodes.size())),
+            ttsl::as_writable_bytes(
+                ttsl::Span<uint8_t>(serialized_exit_nodes.data(), serialized_exit_nodes.size())),
             tt::tt_metal::distributed::multihost::Rank{CONTROLLER_RANK},
             tt::tt_metal::distributed::multihost::Tag{0});
         exit_nodes_to_reset =
@@ -1410,6 +1410,68 @@ void log_link_retrain_summary(
     }
     csv_file.close();
     log_output_rank0("Link retrain report written to: " + csv_path.string());
+}
+
+void log_unretrainable_channels(
+    const tt::tt_metal::AsicTopology& missing_topology,
+    const PhysicalSystemDescriptor& physical_system_descriptor,
+    uint32_t total_retrain_iterations,
+    const std::filesystem::path& output_path) {
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+
+    if (*distributed_context.rank() != 0) {
+        return;
+    }
+
+    auto channels = collect_retrained_link_identifiers(missing_topology, physical_system_descriptor);
+    if (channels.empty()) {
+        return;
+    }
+
+    std::sort(channels.begin(), channels.end(), [](const auto& lhs, const auto& rhs) {
+        return std::tie(lhs.host, *lhs.tray_id, *lhs.asic_location, lhs.channel) <
+               std::tie(rhs.host, *rhs.tray_id, *rhs.asic_location, rhs.channel);
+    });
+
+    auto format_unique_id = [](const auto& asic_id) {
+        std::stringstream ss;
+        ss << "0x" << std::hex << std::setfill('0') << std::setw(10) << *asic_id;
+        return ss.str();
+    };
+
+    // Best-effort filesystem; the caller is about to throw, so any failure here only loses
+    // diagnostic output, never propagates.
+    std::error_code ec;
+    std::filesystem::create_directories(output_path, ec);
+    if (ec) {
+        log_output_rank0(
+            "[WARN] Could not create output directory for unretrainable channels: " + output_path.string() + " (" +
+            ec.message() + ")");
+        return;
+    }
+
+    const std::filesystem::path yaml_path = output_path / "unretrainable_channels.yaml";
+    std::ofstream yaml_file(yaml_path);
+    if (!yaml_file.is_open()) {
+        log_output_rank0("[WARN] Could not open unretrainable channels file for writing: " + yaml_path.string());
+        return;
+    }
+
+    yaml_file << "# Channels that failed to retrain after " << total_retrain_iterations << " attempts.\n";
+    yaml_file << "# Each entry is one channel endpoint; both ends of an unretrainable cable\n";
+    yaml_file << "# typically appear as separate entries.\n";
+    yaml_file << "total_retrain_iterations: " << total_retrain_iterations << "\n";
+    yaml_file << "unretrainable_channels:\n";
+    for (const auto& channel_id : channels) {
+        yaml_file << "  - host: " << channel_id.host << "\n";
+        yaml_file << "    tray_id: " << *channel_id.tray_id << "\n";
+        yaml_file << "    asic_location: " << *channel_id.asic_location << "\n";
+        yaml_file << "    channel: " << static_cast<int>(channel_id.channel) << "\n";
+        yaml_file << "    asic_unique_id: " << format_unique_id(channel_id.asic_id) << "\n";
+    }
+    yaml_file.close();
+    log_output_rank0(
+        "Unretrainable channels (" + std::to_string(channels.size()) + " endpoints) written to: " + yaml_path.string());
 }
 
 void reset_local_ethernet_links(

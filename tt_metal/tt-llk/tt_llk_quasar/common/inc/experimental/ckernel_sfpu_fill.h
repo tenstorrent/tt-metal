@@ -8,6 +8,7 @@
 #include "ckernel_ops.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_sfpu_common.h" // _sfpu_sfpmem_type_<FMT>()
 #include "sfpi_constants.h"
 
 namespace ckernel
@@ -40,10 +41,8 @@ inline void _calculate_fill_(const float value)
 }
 
 // Broadcast an integer constant to all elements of Dest using an explicit SFPMEM store mode.
-// FMT → sfpmem mode:
-//   Int32        → sfpmem::INT32  (32-bit sign-magnitude, loads both halves)
-//   Int16        → sfpmem::UINT16 (16-bit; INT16 = Quasar hw code 9)
-//   Int8 / UInt8 → sfpmem::UINT8  (8-bit)
+// The DataFormat → sfpmem mode is chosen by the canonical _sfpu_sfpmem_type_<FMT>() selector
+// (Int32→INT32, Int16→INT16, Int8→INT8, UInt8→UINT8).
 // Note: Always use SFPLOADI_MOD0_LOWER to place the value at LReg bits [15:0].
 // SFPLOADI_MOD0_USHORT (mode 2) shifts the value 10 bits left inside the LReg,
 // causing for example SFPMEM::UINT16 reading [15:0] to produce value<<10 instead of value.
@@ -54,9 +53,7 @@ inline void _calculate_fill_int_(const std::uint32_t value)
         FMT == DataFormat::Int32 || FMT == DataFormat::Int16 || FMT == DataFormat::Int8 || FMT == DataFormat::UInt8,
         "_calculate_fill_int_ only supports Int32, Int16, Int8, and UInt8 formats");
 
-    constexpr std::uint32_t SFPMEM_MODE = (FMT == DataFormat::Int32)   ? p_sfpu::sfpmem::INT32
-                                          : (FMT == DataFormat::Int16) ? p_sfpu::sfpmem::UINT16
-                                                                       : p_sfpu::sfpmem::UINT8;
+    constexpr std::uint32_t SFPMEM_MODE = _sfpu_sfpmem_type_<FMT>();
 
     if constexpr (FMT == DataFormat::Int32)
     {

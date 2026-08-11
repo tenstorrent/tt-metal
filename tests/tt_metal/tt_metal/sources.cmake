@@ -7,6 +7,7 @@ set(UNIT_TESTS_LEGACY_SRC
     test_bfp8_conversion.cpp
     test_bfp_host_tilizer.cpp
     test_bmm.cpp
+    test_compile_failure_drain.cpp
     test_compile_program.cpp
     test_compile_sets_kernel_binaries.cpp
     test_core_range_set.cpp
@@ -27,12 +28,15 @@ set(UNIT_TESTS_LEGACY_SRC
     test_multiple_programs.cpp
     test_pack_relu.cpp
     test_quasar_compute_kernels.cpp
+    test_quasar_events.cpp
+    test_quasar_mesh_buffers.cpp
+    test_quasar_mesh_workloads.cpp
     test_quasar_semaphores.cpp
+    test_quasar_trace.cpp
     test_sdpa_reduce_c.cpp
     test_single_dm_l1_write.cpp
     test_stress_noc_mcast.cpp
     test_transpose_hc.cpp
-    test_untilize_eltwise_binary.cpp
     test_unaligned_read_write_core.cpp
     test_riscv_atomics.cpp
     test_globals_tls.cpp

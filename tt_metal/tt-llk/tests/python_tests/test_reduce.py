@@ -3,7 +3,6 @@
 
 import math
 
-import pytest
 import torch
 from helpers.format_config import DataFormat, is_dest_acc_needed
 from helpers.golden_generators import ReduceGolden, get_golden_generator
@@ -47,8 +46,39 @@ mathop_mapping = {
 }
 
 
+def _fidelities_for_format(formats):
+    """LoFi fails for Float16_b/Float32 inputs — exclude at parametrize time."""
+    if formats.input_format in [DataFormat.Float16_b, DataFormat.Float32]:
+        return [MathFidelity.HiFi2, MathFidelity.HiFi3, MathFidelity.HiFi4]
+    return [
+        MathFidelity.LoFi,
+        MathFidelity.HiFi2,
+        MathFidelity.HiFi3,
+        MathFidelity.HiFi4,
+    ]
+
+
+def _reduce_to_one_for_format(formats):
+    """Bfp8_b accumulates error easily with reduce_to_one (#45143) — exclude at parametrize time."""
+    if (
+        formats.input_format == DataFormat.Bfp8_b
+        or formats.output_format == DataFormat.Bfp8_b
+    ):
+        return [False]
+    return [False, True]
+
+
 @parametrize(
-    tile_dimensions=[[1, 32], [2, 32], [4, 32], [8, 32], [16, 32], [32, 32], [32, 16]],
+    tile_dimensions=[
+        [1, 32],
+        [2, 32],
+        [4, 32],
+        [8, 32],
+        [16, 16],
+        [16, 32],
+        [32, 32],
+        [32, 16],
+    ],
     formats=input_output_formats(
         [
             DataFormat.Float32,
@@ -56,38 +86,19 @@ mathop_mapping = {
             DataFormat.Bfp8_b,
         ]
     ),
-    is_reduce_to_one=[False, True],
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
     pool_type=[ReducePool.Max, ReducePool.Average, ReducePool.Sum],
-    math_fidelity=[
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ],
+    math_fidelity=_fidelities_for_format,
+    is_reduce_to_one=_reduce_to_one_for_format,
 )
 def test_reduce(
     formats,
     reduce_dim,
     pool_type,
-    is_reduce_to_one,
     math_fidelity,
+    is_reduce_to_one,
     tile_dimensions,
 ):
-
-    if (formats.input_format in [DataFormat.Float16_b, DataFormat.Float32]) and (
-        math_fidelity == MathFidelity.LoFi
-    ):
-        pytest.skip("LoFi fails in these cases for reduce")
-
-    if (
-        formats.input_format == DataFormat.Bfp8_b
-        or formats.output_format == DataFormat.Bfp8_b
-    ) and is_reduce_to_one:
-        pytest.skip(
-            "Bfp8_b reduce accumulates error easily. Issue in tt-metal repo: #45143"
-        )
-
     tile_shape = construct_tile_shape(tile_dimensions)
 
     if is_reduce_to_one:
@@ -235,7 +246,6 @@ def test_reduce(
 
 
 @parametrize(
-    tile_dimensions=[[32, 32]],
     formats=[
         fmt
         for fmt in input_output_formats(
@@ -249,7 +259,6 @@ def test_reduce(
         if fmt.input_format == DataFormat.Bfp4_b
         or fmt.output_format == DataFormat.Bfp4_b
     ],
-    is_reduce_to_one=[False, True],
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
     pool_type=[ReducePool.Max, ReducePool.Average, ReducePool.Sum],
     math_fidelity=[
@@ -258,13 +267,15 @@ def test_reduce(
         MathFidelity.HiFi3,
         MathFidelity.HiFi4,
     ],
+    is_reduce_to_one=[False, True],
+    tile_dimensions=[[32, 32]],
 )
 def test_reduce_bfp4_b(
     formats,
     reduce_dim,
     pool_type,
-    is_reduce_to_one,
     math_fidelity,
+    is_reduce_to_one,
     tile_dimensions,
 ):
 

@@ -37,13 +37,13 @@ void ConvertToCHWDeviceOperation::validate_on_program_cache_miss(
         "Output tensor must be width sharded");
 }
 
-TensorSpec ConvertToCHWDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec ConvertToCHWDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& shape = tensor_args.logical_shape();
     const auto B = shape[0];
     const auto HW = shape[2];
     const auto C = shape[3];
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         Shape({B, 1, C, HW}),
         tt::tt_metal::TensorLayout(
             args.dtype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR), args.memory_config));
@@ -52,16 +52,6 @@ TensorSpec ConvertToCHWDeviceOperation::compute_output_specs(
 Tensor ConvertToCHWDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.device());
-}
-
-ttsl::hash::hash_t ConvertToCHWDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args;
-    const auto& input_shape = input_tensor.padded_shape();
-    operation::Hash hash = operation::hash_operation<ConvertToCHWDeviceOperation>(
-        args, input_tensor.dtype(), input_tensor.memory_config(), input_shape.volume());
-
-    return hash;
 }
 
 }  // namespace ttnn::experimental::prim

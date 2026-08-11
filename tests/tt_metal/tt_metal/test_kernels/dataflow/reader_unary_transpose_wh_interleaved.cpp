@@ -28,27 +28,9 @@ void kernel_main() {
     DataflowBuffer dfb1(dfb::out_scaler);
     dfb1.reserve_back(1);
     constexpr uint32_t scaler = get_arg(args::scaler);
-    constexpr uint32_t num_zeros_reads = 2048 / MEM_ZEROS_SIZE;
-    UnicastEndpoint mem_zero_endpoint;
 
-    // Fill tile with zeros by reading from local core's MEM_ZEROS region.
-    // On Gen1 the local NOC coordinates must be supplied explicitly: a default-constructed
-    // endpoint reads from (0,0), which on Blackhole is a DRAM bank, and the stricter 64-byte
-    // DRAM alignment check fails because MEM_ZEROS_BASE (0x32e0) is only 32-byte aligned.
-    // Quasar's default endpoint already targets the local core, so no override is needed.
-    for (uint32_t i = 0; i < num_zeros_reads; ++i) {
-        noc.async_read(
-            mem_zero_endpoint,
-            dfb1,
-            MEM_ZEROS_SIZE,
-#ifdef ARCH_QUASAR
-            {.addr = MEM_ZEROS_BASE},
-#else
-            {.noc_x = my_x[noc_index], .noc_y = my_y[noc_index], .addr = MEM_ZEROS_BASE},
-#endif
-            {.offset_bytes = i * MEM_ZEROS_SIZE});
-    }
-    noc.async_read_barrier();
+    noc.async_write_zeros(dfb1, 2048);
+    noc.write_zeros_l1_barrier();
 
     // On Quasar, dfb.get_write_ptr() returns a cacheable-alias L1 address; the noncacheable
     // alias (required for NOC-port writes to be visible) is reached by adding
@@ -75,7 +57,7 @@ void kernel_main() {
     uint32_t i_tile_N = 0;  // first tile in current batch
     uint32_t i_tile = 0;
 
-    const auto s = TensorAccessor(ta::src_tensor);
+    const auto s = TensorAccessor(tensor::src_tensor);
 
     // this reader will read a NHW tensor in NWH order
     for (uint32_t n = 0; n < N; n++) {

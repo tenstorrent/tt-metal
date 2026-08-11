@@ -3,11 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/compute/compute_kernel_api.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/transpose.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/tilize.h"
+#include "api/compute/pack_untilize.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 #include "sort_common.hpp"
 
@@ -68,22 +73,37 @@ Calculation of each row:
  */
 void kernel_main() {
     // Runtime args
-    const uint32_t core_loop_count = get_arg_val<uint32_t>(0);
+    const uint32_t core_loop_count = get_arg(args::core_loop_count);
 
     // Compile time args
-    constexpr uint32_t input_tensor_cb_index = get_compile_time_arg_val(0);
-    constexpr uint32_t index_tensor_cb_index = get_compile_time_arg_val(1);
-    constexpr uint32_t input_tensor_transposed_cb_index = get_compile_time_arg_val(2);
-    constexpr uint32_t index_tensor_transposed_cb_index = get_compile_time_arg_val(3);
-    constexpr uint32_t value_tensor_cb_index = get_compile_time_arg_val(4);
-    constexpr uint32_t index_tensor_output_cb_index = get_compile_time_arg_val(5);
-    constexpr uint32_t Wt = get_compile_time_arg_val(6);
-    constexpr bool descending = get_compile_time_arg_val(7);
+    constexpr uint32_t Wt = get_arg(args::Wt);
+    constexpr bool descending = get_arg(args::descending);
     constexpr bool stable =
-        get_compile_time_arg_val(8);  // TODO: In the future change LLK to have the option or add additional step with
-                                      // checking values and indexes after the sorting
-                                      // Issue: https://github.com/tenstorrent/tt-metal/issues/20625
-    constexpr uint32_t synchronization_cb_index = get_compile_time_arg_val(9);
+        get_arg(args::stable);  // TODO: In the future change LLK to have the option or add additional step with
+                                // checking values and indexes after the sorting
+                                // Issue: https://github.com/tenstorrent/tt-metal/issues/20625
+
+    DataflowBuffer input_tensor_dfb(dfb::input_tensor);
+    DataflowBuffer index_tensor_dfb(dfb::index_tensor);
+    DataflowBuffer input_tensor_transposed_dfb(dfb::input_tensor_transposed);
+    DataflowBuffer index_tensor_transposed_dfb(dfb::index_tensor_transposed);
+    DataflowBuffer synchronization_dfb(dfb::synchronization);
+#ifndef IS_ROW_MAJOR
+    DataflowBuffer value_tensor_dfb(dfb::value_tensor);
+    DataflowBuffer index_tensor_output_dfb(dfb::index_tensor_output);
+#else
+    DataflowBuffer rm_input_dfb(dfb::rm_input);
+    DataflowBuffer rm_value_output_dfb(dfb::rm_value_output);
+    DataflowBuffer rm_index_output_dfb(dfb::rm_index_output);
+    // PACK-only DFB that holds the un-transposed sorted index tiles between the
+    // sort phase and the index pack_untilize_block. Using a separate buffer here
+    // (rather than reusing index_tensor, which is BRISC-pushed by the
+    // writer) avoids a mixed-producer counter race: BRISC uses += into the L1
+    // receive counter, while PACK overwrites it with PACK's own local counter,
+    // so PACK's pushes silently clobber BRISC's pushes and wait_front spins
+    // forever.
+    DataflowBuffer rm_post_sort_index_dfb(dfb::rm_post_sort_index);
+#endif
 
     constexpr uint32_t one_tile = 1;
 
@@ -92,25 +112,83 @@ void kernel_main() {
     constexpr uint32_t input_dest_end = 1;
     constexpr uint32_t index_dest_end = 3;
 
+    // For TILE path: one-time initialisation before the loop.
+    // For ROW_MAJOR: tilize/untilize are interleaved with sort each iteration.
+    //
+    // ROW_MAJOR requires compute_kernel_hw_startup to be called once before any
+    // other compute API. This initialises the MATH-PACK DST semaphore (via
+    // llk_math_pack_sync_init + llk_pack_dest_init) so that tilize_block's
+    // internal llk_math_wait_for_dest_available() does not spin forever.
+    // Without this call the kernel deadlocks on the first tilize_block invocation.
+#ifdef IS_ROW_MAJOR
+    compute_kernel_hw_startup(dfb::rm_input, dfb::index_tensor, dfb::input_tensor);
+#else
+    compute_kernel_hw_startup(dfb::input_tensor, dfb::input_tensor_transposed);
     ckernel::topk_tile_init();
-    transpose_wh_init(input_tensor_cb_index, input_tensor_transposed_cb_index);
+    transpose_init(dfb::input_tensor);
+#endif
 
     for (uint32_t core_loop = 0; core_loop < core_loop_count; core_loop++) {
         const bool ascending = !descending;
 
+        // ------------------------------------------------------------------
+        // ROW_MAJOR: tilize one tile-row of RM data → Wt TILE-format tiles,
+        // then reinitialise for sort.
+        //
+        // tilize_block uses out-of-order pack (llk_pack<true>) which writes
+        // tiles to the buffer WITHOUT signalling them internally. The
+        // explicit reserve_back / push_back pair is therefore required:
+        //   • reserve_back: guarantees write slots are free before the
+        //     out-of-order pack writes to them.
+        //   • push_back:    signals the tiles as ready so that the
+        //     subsequent sort_Wt_tiles_row_to_bitonic_sequence (which calls
+        //     wait_front) does not deadlock.
+        // ------------------------------------------------------------------
+#ifdef IS_ROW_MAJOR
+        {
+            constexpr uint32_t TILE_H = 32;  // TILE_HEIGHT (tt::constants not available in device kernels)
+            tilize_init(dfb::rm_input, Wt, dfb::input_tensor);
+            rm_input_dfb.wait_front(TILE_H);
+            input_tensor_dfb.reserve_back(Wt);
+            tilize_block(dfb::rm_input, Wt, dfb::input_tensor);
+            input_tensor_dfb.push_back(Wt);
+            rm_input_dfb.pop_front(TILE_H);
+            tilize_uninit(dfb::rm_input, dfb::input_tensor);
+
+            // Re-initialise compute hardware for the sort phase.
+            //
+            // tilize_uninit does not reset the PACK side on WormholeB0 (the
+            // Blackhole-only llk_pack_init path is skipped), so the packer is
+            // still configured for the out-of-order tilize writes it just
+            // performed. This compute_kernel_hw_startup re-arms the MATH-PACK DST
+            // semaphore (llk_math_pack_sync_init + llk_pack_dest_init) and resets
+            // PACK to normal mode so that pack_tile / pack_reconfig_data_format
+            // inside sort_Wt_tiles_row_to_bitonic_sequence work correctly. This is
+            // a deliberate mid-kernel re-init that preserves the pre-cleanup
+            // binary_op_init_common behaviour (same pattern as
+            // layernorm_large_tensor.cpp's TILIZE_IN path). NOTE: compute_kernel_hw_startup
+            // is documented call-once; correcting this re-init pattern is out of scope
+            // for the init-cleanup rename and left to the sort kernel owners.
+            // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+            compute_kernel_hw_startup(dfb::input_tensor, dfb::index_tensor, dfb::input_tensor_transposed);
+            ckernel::topk_tile_init();
+            transpose_init(dfb::input_tensor);
+        }
+#endif
+
         sort_Wt_tiles_row_to_bitonic_sequence(
-            input_tensor_cb_index,
-            index_tensor_cb_index,
-            input_tensor_transposed_cb_index,
-            index_tensor_transposed_cb_index,
+            input_tensor_dfb,
+            index_tensor_dfb,
+            input_tensor_transposed_dfb,
+            index_tensor_transposed_dfb,
             Wt,
             /*switch_dir=*/true,
             ascending,
             /*end_phase(log2(K))=*/5);
 
         // Wait for bitonic sequence of Wt tiles
-        cb_wait_front(input_tensor_transposed_cb_index, Wt);
-        cb_wait_front(index_tensor_transposed_cb_index, Wt);
+        input_tensor_transposed_dfb.wait_front(Wt);
+        index_tensor_transposed_dfb.wait_front(Wt);
 
         // Sort and merge step of bitonic merge sort
         uint32_t stages = 0;
@@ -118,8 +196,8 @@ void kernel_main() {
             stages++;
         }
 
-        cb_reserve_back(synchronization_cb_index, one_tile);
-        cb_push_back(synchronization_cb_index, one_tile);
+        synchronization_dfb.reserve_back(one_tile);
+        synchronization_dfb.push_back(one_tile);
 
         for (uint32_t stage = 2; stage <= stages; stage++) {
             const uint32_t m_iter = stage - 1;
@@ -138,19 +216,17 @@ void kernel_main() {
 
                         tile_regs_acquire();
 
-                        cb_wait_front(synchronization_cb_index, one_tile);
-                        cb_pop_front(synchronization_cb_index, one_tile);
-                        cb_reserve_back(synchronization_cb_index, one_tile);
+                        synchronization_dfb.wait_front(one_tile);
+                        synchronization_dfb.pop_front(one_tile);
+                        synchronization_dfb.reserve_back(one_tile);
 
-                        copy_tile_to_dst_init_short_with_dt(
-                            input_tensor_transposed_cb_index, index_tensor_transposed_cb_index);
-                        copy_tile(index_tensor_transposed_cb_index, left_tile_id, index_dest_start);
-                        copy_tile(index_tensor_transposed_cb_index, right_tile_id, index_dest_end);
+                        copy_tile_to_dst_init_short_with_dt(dfb::input_tensor_transposed, dfb::index_tensor_transposed);
+                        copy_tile(dfb::index_tensor_transposed, left_tile_id, index_dest_start);
+                        copy_tile(dfb::index_tensor_transposed, right_tile_id, index_dest_end);
 
-                        copy_tile_to_dst_init_short_with_dt(
-                            index_tensor_transposed_cb_index, input_tensor_transposed_cb_index);
-                        copy_tile(input_tensor_transposed_cb_index, left_tile_id, input_dest_start);
-                        copy_tile(input_tensor_transposed_cb_index, right_tile_id, input_dest_end);
+                        copy_tile_to_dst_init_short_with_dt(dfb::index_tensor_transposed, dfb::input_tensor_transposed);
+                        copy_tile(dfb::input_tensor_transposed, left_tile_id, input_dest_start);
+                        copy_tile(dfb::input_tensor_transposed, right_tile_id, input_dest_end);
 
                         uint32_t tile_input_low = input_dest_start;
                         uint32_t tile_input_high = input_dest_end;
@@ -163,9 +239,9 @@ void kernel_main() {
                         } else {
                             ckernel::topk_merge(/*idst=*/0, m_iter, /*k=*/64);
 
-                            // topk_merge puts smallest values in DEST[0] and largest in DEST[1]
-                            // We swap their indices when using descending order
                             if (dir) {
+                                // topk_merge puts smallest values in DEST[0] and largest in DEST[1]
+                                // We swap their indices when using descending order
                                 tile_input_low = input_dest_end;
                                 tile_input_high = input_dest_start;
                                 tile_index_low = index_dest_end;
@@ -173,18 +249,21 @@ void kernel_main() {
                             }
                         }
 
+                        // UInt16-in-32b-DEST: mode-9 packer fixup before packing values (#50215).
+                        prepare_uint16_fp32_dest_value_tiles_for_pack(tile_input_low, tile_input_high);
+
                         tile_regs_commit();
                         tile_regs_wait();
 
-                        pack_reconfig_data_format(input_tensor_transposed_cb_index);
-                        pack_tile<true>(tile_input_low, input_tensor_transposed_cb_index, left_tile_id);
-                        pack_tile<true>(tile_input_high, input_tensor_transposed_cb_index, right_tile_id);
+                        pack_reconfig_data_format(dfb::input_tensor_transposed);
+                        pack_tile<true>(tile_input_low, dfb::input_tensor_transposed, left_tile_id);
+                        pack_tile<true>(tile_input_high, dfb::input_tensor_transposed, right_tile_id);
 
-                        pack_reconfig_data_format(index_tensor_transposed_cb_index);
-                        pack_tile<true>(tile_index_low, index_tensor_transposed_cb_index, left_tile_id);
-                        pack_tile<true>(tile_index_high, index_tensor_transposed_cb_index, right_tile_id);
+                        pack_reconfig_data_format(dfb::index_tensor_transposed);
+                        pack_tile<true>(tile_index_low, dfb::index_tensor_transposed, left_tile_id);
+                        pack_tile<true>(tile_index_high, dfb::index_tensor_transposed, right_tile_id);
 
-                        cb_push_back(synchronization_cb_index, one_tile);
+                        synchronization_dfb.push_back(one_tile);
 
                         tile_regs_release();
                     }
@@ -192,22 +271,76 @@ void kernel_main() {
             }
         }
 
-        cb_wait_front(synchronization_cb_index, one_tile);
-        cb_pop_front(synchronization_cb_index, one_tile);
+        synchronization_dfb.wait_front(one_tile);
+        synchronization_dfb.pop_front(one_tile);
 
-        cb_reserve_back(input_tensor_transposed_cb_index, Wt);
-        cb_reserve_back(index_tensor_transposed_cb_index, Wt);
+        input_tensor_transposed_dfb.reserve_back(Wt);
+        index_tensor_transposed_dfb.reserve_back(Wt);
 
-        cb_pop_front(input_tensor_transposed_cb_index, Wt);
-        cb_pop_front(index_tensor_transposed_cb_index, Wt);
+        input_tensor_transposed_dfb.pop_front(Wt);
+        index_tensor_transposed_dfb.pop_front(Wt);
 
-        cb_push_back(input_tensor_transposed_cb_index, Wt);
-        cb_push_back(index_tensor_transposed_cb_index, Wt);
+        input_tensor_transposed_dfb.push_back(Wt);
+        index_tensor_transposed_dfb.push_back(Wt);
 
-        // Values tensor
-        transpose_and_pack(input_tensor_transposed_cb_index, value_tensor_cb_index, Wt);
+        // TILE path: transpose-and-pack to 2-tile streaming buffers so the reader
+        // and writer can stream tiles one-by-one to DRAM (existing behaviour).
+        //
+        // ROW_MAJOR path: transpose-and-pack to the now-empty Wt-tile buffers
+        // (input_tensor for values, rm_post_sort_index for indices), then untilize
+        // the full row back to RM pages.
+#ifndef IS_ROW_MAJOR
+        // Values tensor → 2-tile streaming buffer (writer drains to DRAM)
+        transpose_and_pack(
+            input_tensor_transposed_dfb, value_tensor_dfb, Wt, /*prepare_uint16_value_for_pack=*/true);
+        // Index tensor → 2-tile streaming buffer (reader drains to DRAM)
+        transpose_and_pack(index_tensor_transposed_dfb, index_tensor_output_dfb, Wt);
+#else
+        {
+            constexpr uint32_t TILE_H = 32;
 
-        // Indexes tensor
-        transpose_and_pack(index_tensor_transposed_cb_index, index_tensor_output_cb_index, Wt);
+            constexpr uint32_t MAX_DEST_TILES = DST_ACCUM_MODE ? 4 : 8;
+            // Wt is always a power-of-two (pre_sort_transform_tensor pads the last dim to the
+            // next power-of-two ≥ 2×TILE_WIDTH before dispatching). MAX_DEST_TILES is also a
+            // power-of-two (4 or 8), so Wt % SUB_BLOCK_DIM == 0 is always satisfied.
+            constexpr uint32_t SUB_BLOCK_DIM = (Wt < MAX_DEST_TILES) ? Wt : MAX_DEST_TILES;
+            constexpr uint32_t NUM_SUB_BLOCKS = Wt / SUB_BLOCK_DIM;
+            static_assert(Wt % SUB_BLOCK_DIM == 0, "Wt must be divisible by SUB_BLOCK_DIM");
+
+            // Un-transpose sorted value tiles → input_tensor (Wt tiles).
+            transpose_and_pack(
+                input_tensor_transposed_dfb, input_tensor_dfb, Wt, /*prepare_uint16_value_for_pack=*/true);
+
+            // Un-transpose sorted index tiles → rm_post_sort_index (Wt tiles).
+            transpose_and_pack(index_tensor_transposed_dfb, rm_post_sort_index_dfb, Wt);
+
+            // Untilize values: Wt tiles → TILE_HEIGHT RM pages in rm_value_output_dfb.
+            // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+            compute_kernel_hw_startup(dfb::input_tensor, dfb::index_tensor, dfb::rm_value_output);
+            pack_untilize_init<SUB_BLOCK_DIM, Wt>(dfb::input_tensor, dfb::rm_value_output);
+            input_tensor_dfb.wait_front(Wt);
+            rm_value_output_dfb.reserve_back(TILE_H);
+            for (uint32_t b = 0; b < NUM_SUB_BLOCKS; ++b) {
+                pack_untilize_block<SUB_BLOCK_DIM, Wt>(dfb::input_tensor, 1, dfb::rm_value_output, b);
+                input_tensor_dfb.pop_front(SUB_BLOCK_DIM);
+            }
+            rm_value_output_dfb.push_back(TILE_H);
+            pack_untilize_uninit(dfb::rm_value_output);
+
+            // Untilize indices: same chunked pack_untilize pattern but operating on the PACK-only
+            // rm_post_sort_index_dfb
+            // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+            compute_kernel_hw_startup(dfb::rm_post_sort_index, dfb::input_tensor, dfb::rm_index_output);
+            pack_untilize_init<SUB_BLOCK_DIM, Wt>(dfb::rm_post_sort_index, dfb::rm_index_output);
+            rm_post_sort_index_dfb.wait_front(Wt);
+            rm_index_output_dfb.reserve_back(TILE_H);
+            for (uint32_t b = 0; b < NUM_SUB_BLOCKS; ++b) {
+                pack_untilize_block<SUB_BLOCK_DIM, Wt>(dfb::rm_post_sort_index, 1, dfb::rm_index_output, b);
+                rm_post_sort_index_dfb.pop_front(SUB_BLOCK_DIM);
+            }
+            rm_index_output_dfb.push_back(TILE_H);
+            pack_untilize_uninit(dfb::rm_index_output);
+        }
+#endif
     }  // Ht loop
 }

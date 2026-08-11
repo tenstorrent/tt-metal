@@ -18,17 +18,21 @@
 
 namespace ttnn::experimental::prim {
 
-// Mode selector for the moe_compute op. `Full` runs the production pipeline
-// (matmul + fused selective_reduce_combine). `ComputeOnly` bypasses the combine path:
-// no combine cores allocated, no fabric setup, no global semaphores; op emits 5 tensors
-// instead of 6 (matmul_output is the final output).
-enum class MoEComputePath : uint8_t { Full = 0, ComputeOnly = 1 };
+// Mode selector for the moe_compute op.
+// - `FullCcl` runs the production multi-device pipeline (matmul + fused
+//   selective_reduce_combine over fabric). Requires cluster_axis and CCL options.
+// - `FullLocal` runs a single-device fused pipeline (matmul + local combine) with no
+//   CCL/fabric. Used on a 1x1 mesh with cluster_axis=None. Returns 6 tensors like FullCcl.
+// - `ComputeOnly` bypasses the combine path: no combine cores allocated, no fabric setup,
+//   no global semaphores; op emits 5 tensors instead of 6 (matmul_output is the final output).
+enum class MoEComputePath : uint8_t { FullCcl = 0, FullLocal = 2, ComputeOnly = 1 };
 
 struct MoEComputeParams {
     // MoE compute attributes
     uint32_t layer_id = 0;
     uint32_t output_height_shard_dim = 0;
     uint32_t intermediate_size = 0;
+    std::optional<uint32_t> num_shared_experts_per_device;
     bool has_bias = false;
 
     // Number of token-parallel and data-parallel cores. These govern matmul output shard layout
@@ -36,13 +40,14 @@ struct MoEComputeParams {
     uint32_t num_token_parallel_cores = 0;
     uint32_t num_data_parallel_cores = 0;
 
-    MoEComputePath path = MoEComputePath::Full;
+    MoEComputePath path = MoEComputePath::FullCcl;
 
-    // Ring size in matmul cores. On WH this is always 12 (DRAM banks). On BH it is 8, 12,
-    // or 16 (resolved from the bh_ring_size op kwarg, default 12 — the smallest BH ring
-    // that satisfies every shipped model's output_width_shard_dim divisibility check).
-    // Stored in attributes() so the program cache distinguishes different ring sizes
-    // within the same session.
+    // Ring size in matmul cores. On WH this is always 12 (DRAM banks), so keep the
+    // field initializer at the WH-neutral default. On BH, invoke() resolves this to
+    // the live DRAM-bank count (7 or 8) from the bh_ring_size op kwarg.
+    // num_data_parallel_cores is auto-derived ring-aware (largest d | hidden_tiles
+    // with d<=4 and ring_n % d == 0). Stored in attributes() so the program cache
+    // distinguishes different ring sizes within the same session.
     uint32_t bh_ring_size = 12;
 
     // nullopt if path == MoEComputePath::ComputeOnly
@@ -60,9 +65,11 @@ struct MoEComputeParams {
     auto attributes() const {
         using ttsl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
+        attrs.reserve(11);
         attrs.emplace_back("layer_id", layer_id);
         attrs.emplace_back("output_height_shard_dim", output_height_shard_dim);
         attrs.emplace_back("intermediate_size", intermediate_size);
+        attrs.emplace_back("num_shared_experts_per_device", num_shared_experts_per_device);
         attrs.emplace_back("has_bias", has_bias);
         attrs.emplace_back("num_token_parallel_cores", num_token_parallel_cores);
         attrs.emplace_back("num_data_parallel_cores", num_data_parallel_cores);

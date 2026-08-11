@@ -3,7 +3,7 @@ include(sources.cmake)
 add_library(ttnn_op_ccl ${LIB_TYPE})
 add_library(TTNN::Ops::CCL ALIAS ttnn_op_ccl)
 
-tt_reuse_precompile_headers(ttnn_op_ccl TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_ccl TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_ccl)
 
 set_target_properties(
@@ -15,13 +15,17 @@ set_target_properties(
 # Globbing non-build files is acceptable for now because devs don't generate packages.
 file(
     GLOB_RECURSE kernels
-    broadcast/device/kernels/*
-    common/kernels/*
-    kernel_common/*
-    kernels/*
-    all_to_all_combine/device/kernels/*
-    all_to_all_dispatch/device/kernels/*
-    reduce_to_root/device/kernels/*
+    all_gather/device/kernels/*.cpp
+    all_gather/device/kernels/*.hpp
+    broadcast/device/kernels/*.cpp
+    common/kernels/*.cpp
+    common/kernels/*.hpp
+    kernel_common/*.hpp
+    kernels/*.cpp
+    kernels/*.hpp
+    all_to_all_combine/device/kernels/*.cpp
+    all_to_all_dispatch/device/kernels/*.cpp
+    reduce_to_root/device/kernels/*.cpp
 )
 target_sources(
     ttnn_op_ccl
@@ -73,6 +77,9 @@ target_sources(
             all_gather/all_gather.hpp
             all_gather/all_gather_nanobind.hpp
             all_gather/device/all_gather_device_operation.hpp
+            all_gather/device/all_gather_device_operation_types.hpp
+            all_gather/device/all_gather_multicast_factory.hpp
+            all_gather/device/all_gather_unicast_factory.hpp
             # all_reduce/
             all_reduce/all_reduce.hpp
             all_reduce/all_reduce_nanobind.hpp
@@ -122,3 +129,19 @@ install(
 )
 
 install(TARGETS ttnn_op_ccl LIBRARY COMPONENT tar)
+
+# Python bindings for this op are registered directly on the shared `ttnn`
+# Python module target here, rather than in the centrally-owned
+# ttnn/sources.cmake — the target itself is necessarily shared (nanobind
+# builds one Python extension module), but which file lists a given op's own
+# registration source doesn't need to be. `ttnn` only exists when
+# WITH_PYTHON_BINDINGS is on, hence the guard.
+#
+# The actual file list (TTNN_OP_CCL_NANOBIND_SRCS) lives in sources.cmake,
+# not here: this file carries metalium-developers-infra as a required
+# co-owner (so infra can land sweeping build-system changes), and routine
+# add/remove/rename of a nanobind source shouldn't need to go through infra.
+# This wiring line itself is build logic and is expected to change rarely.
+if(TARGET ttnn)
+    target_sources(ttnn PRIVATE ${TTNN_OP_CCL_NANOBIND_SRCS})
+endif()

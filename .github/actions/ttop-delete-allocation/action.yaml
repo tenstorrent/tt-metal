@@ -9,11 +9,24 @@ inputs:
     description: 'Target namespace for the allocation'
     required: false
     default: 'ttop-ci'
+  timeoutSeconds:
+    description: 'Max seconds to keep retrying the delete before failing.'
+    required: false
+    default: '300'
+  retries:
+    description: 'Number of retries minting the OIDC in one attempt before giving up'
+    required: false
+    default: '3'
 
 runs:
   using: 'composite'
   steps:
     - name: Delete Allocation
       shell: bash
-      run: |
-        kubectl -n ${{ inputs.namespace }} delete allocation/${{ inputs.allocationName }}
+      env:
+        NAMESPACE: ${{ inputs.namespace }}
+        RESOURCE: allocation/${{ inputs.allocationName }}
+        MODE: delete
+        OVERALL_TIMEOUT: ${{ inputs.timeoutSeconds }}
+        RETRIES: ${{ inputs.retries }}
+      run: "$GITHUB_ACTION_PATH/../ttop-await-resource/await.sh"

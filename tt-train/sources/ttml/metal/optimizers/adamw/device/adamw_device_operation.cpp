@@ -18,7 +18,7 @@ void AdamWDeviceOperation::validate_on_program_cache_miss(
                            const tt::tt_metal::Layout required_layout,
                            const tt::tt_metal::DataType required_dtype) {
         TT_FATAL(
-            tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
+            tensor.storage_type() == ttnn::StorageType::DEVICE,
             "AdamW optimizer requires '{}' to be on DEVICE. Got storage type: '{}'",
             name,
             enchantum::to_string(tensor.storage_type()));
@@ -46,7 +46,7 @@ void AdamWDeviceOperation::validate_on_program_cache_miss(
             enchantum::to_string(tensor.dtype()));
 
         TT_FATAL(
-            tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED,
+            tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
             "Tensor '{}' must use INTERLEAVED memory layout, but got '{}'",
             name,
             enchantum::to_string(tensor.memory_config().memory_layout()));
@@ -130,7 +130,8 @@ ttml::metal::optimizers::adamw::device::AdamWDeviceOperation::tensor_return_valu
     float epsilon,
     float weight_decay,
     bool amsgrad,
-    ttml::metal::StochasticRounding stochastic_rounding) {
+    ttml::metal::StochasticRounding stochastic_rounding,
+    std::optional<uint32_t> stochastic_rounding_seed) {
     using OperationType = ttml::metal::optimizers::adamw::device::AdamWDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
@@ -143,6 +144,7 @@ ttml::metal::optimizers::adamw::device::AdamWDeviceOperation::tensor_return_valu
         .weight_decay = weight_decay,
         .amsgrad = amsgrad,
         .stochastic_rounding = stochastic_rounding,
+        .stochastic_rounding_seed = stochastic_rounding_seed,
     };
     auto tensor_args = OperationType::tensor_args_t{
         .param = param,

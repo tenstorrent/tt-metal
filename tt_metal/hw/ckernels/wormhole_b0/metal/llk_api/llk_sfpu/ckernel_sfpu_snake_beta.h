@@ -5,9 +5,10 @@
 #pragma once
 
 #include "ckernel.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
-#include "sfpu/ckernel_sfpu_recip.h"
+#include "ckernel_sfpu_recip.h"
 
 namespace ckernel::sfpu {
 
@@ -48,8 +49,8 @@ inline void calculate_snake_beta(uint dst_index_x, uint dst_index_alpha, uint ds
         // a = (ax/π - round(ax/π)) * π, single-stage reduction; vConstFloatPrgm0/1/2 are
         // reserved for the reciprocal estimate so convert<vSMag16> is used instead.
         sfpi::vFloat ax_over_pi = ax * one_over_pi;
-        sfpi::vSMag16 k = sfpi::convert<sfpi::vSMag16>(ax_over_pi, sfpi::RoundMode::NearestEven);
-        sfpi::vFloat k_f = sfpi::convert<sfpi::vFloat>(k, sfpi::RoundMode::NearestEven);
+        sfpi::vSMag16 k = sfpi::convert<sfpi::vSMag16>(ax_over_pi, sfpi::RoundMode::Nearest);
+        sfpi::vFloat k_f = sfpi::convert<sfpi::vFloat>(k, sfpi::RoundMode::Nearest);
         sfpi::vFloat a = (ax_over_pi - k_f) * pi_f;
 
         // sin(a) = a + a·s·poly(s), s = a².  PolynomialEvaluator::eval expands to a Horner chain.
@@ -63,11 +64,11 @@ inline void calculate_snake_beta(uint dst_index_x, uint dst_index_alpha, uint ds
         }
 
         sfpi::vFloat sin2_ax = r * r;
-        sfpi::vFloat inv_beta = _sfpu_reciprocal_<RECIP_ITER>(beta);
+        sfpi::vFloat inv_beta = sfpu_reciprocal_iter<RECIP_ITER>(beta);
         sfpi::vFloat result = x + sin2_ax * inv_beta;
 
         if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         }
 
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
@@ -77,7 +78,13 @@ inline void calculate_snake_beta(uint dst_index_x, uint dst_index_alpha, uint ds
 
 template <bool APPROXIMATE>
 inline void snake_beta_init() {
-    _init_sfpu_reciprocal_<APPROXIMATE>();
+    // Common SFPU init inlined (SFPU config register + ADDR_MOD_7 + counter reset), then the op-specific
+    // reciprocal setup below -- one self-contained init, matching exp_init. snake_beta uses only
+    // ADDR_MOD_7 (no op-specific ADDR_MOD_6).
+    sfpu::_init_sfpu_config_reg();
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    sfpu_reciprocal_init<APPROXIMATE>();
 }
 
 }  // namespace ckernel::sfpu

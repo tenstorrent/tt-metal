@@ -46,7 +46,7 @@ from models.tt_dit.pipelines.motif.pipeline_motif import MotifPipeline, MotifPip
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D, "l1_small_size": 32768, "trace_region_size": 50000000}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 50000000}],
     indirect=True,
 )
 def test_motif_pipeline_performance(

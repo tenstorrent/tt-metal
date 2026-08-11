@@ -27,8 +27,8 @@ void kernel_main() {
     const uint32_t entry_size_a = dfb_a.get_entry_size();
     const uint32_t entry_size_b = dfb_b.get_entry_size();
 
-    const auto dst_a = TensorAccessor(ta::dst_a);
-    const auto dst_b = TensorAccessor(ta::dst_b);
+    const auto dst_a = TensorAccessor(tensor::dst_a);
+    const auto dst_b = TensorAccessor(tensor::dst_b);
 
     for (uint32_t tile = 0; tile < num_entries_per_consumer_a; tile++) {
         const uint32_t page_id = chunk_offset_a + tile * num_consumers + consumer_idx;

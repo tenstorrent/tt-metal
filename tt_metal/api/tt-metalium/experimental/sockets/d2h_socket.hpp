@@ -17,6 +17,7 @@ namespace tt::tt_metal::distributed {
 
 class NamedShm;
 class PCIeCoreWriter;
+struct HDSocketDescriptor;
 struct HDSocketConnectorState;
 
 /**
@@ -62,6 +63,15 @@ struct HDSocketConnectorState;
 class D2HSocket {
 public:
     /**
+     * @brief Process scope of the socket's host FIFO: sharable across processes, or private to this one.
+     *
+     * CrossProcess backs the FIFO with a named POSIX shared-memory object (/dev/shm) that this socket can export
+     * via export_descriptor() for another process to connect() and read zero-copy. InProcess backs it with a
+     * process-private anonymous mmap that cannot be exported.
+     */
+    enum class ProcessScope { CrossProcess, InProcess };
+
+    /**
      * @brief Constructs a D2HSocket for streaming data from a device core to host.
      *
      * Allocates pinned host memory for the data FIFO and bytes_sent signaling.
@@ -71,10 +81,16 @@ public:
      * @param mesh_device The mesh device containing the sender core.
      * @param sender_core The source core coordinate (device + core) that sends data.
      * @param fifo_size Size of the circular FIFO buffer in bytes. Must be PCIe-aligned.
+     * @param scope CrossProcess (FIFO sharable across processes) or InProcess (process-private); defaults to
+     * CrossProcess.
      *
      * @throws TT_FATAL if pinned memory allocation fails or addresses are invalid.
      */
-    D2HSocket(const std::shared_ptr<MeshDevice>& mesh_device, const MeshCoreCoord& sender_core, uint32_t fifo_size);
+    D2HSocket(
+        const std::shared_ptr<MeshDevice>& mesh_device,
+        const MeshCoreCoord& sender_core,
+        uint32_t fifo_size,
+        ProcessScope scope = ProcessScope::CrossProcess);
 
     /**
      * @brief Identifies an L1 region on the sender core that the caller has already
@@ -112,7 +128,8 @@ public:
         const std::shared_ptr<MeshDevice>& mesh_device,
         const MeshCoreCoord& sender_core,
         uint32_t fifo_size,
-        ExternalConfigBuffer external_config);
+        ExternalConfigBuffer external_config,
+        ProcessScope scope = ProcessScope::CrossProcess);
 
     /**
      * @brief Connects to an existing D2HSocket from another process.
@@ -128,6 +145,22 @@ public:
      */
     static std::unique_ptr<D2HSocket> connect(
         const std::string& socket_id, std::optional<uint32_t> timeout_ms = std::nullopt);
+
+    /**
+     * @brief Attaches to an existing D2HSocket from an in-memory descriptor.
+     *
+     * Used by D2HStreamService::connect to attach every per-coord socket from
+     * the embedded service descriptor without a separate file read per socket.
+     */
+    static std::unique_ptr<D2HSocket> connect_from_descriptor(const HDSocketDescriptor& desc);
+
+    /**
+     * @brief Populates an HDSocketDescriptor from the owner-side socket state.
+     *
+     * Used by D2HStreamService::export_descriptor to embed socket descriptors
+     * inline in the service descriptor.
+     */
+    HDSocketDescriptor populate_descriptor() const;
 
     /**
      * @brief Exports a descriptor file for cross-process socket attachment.
@@ -159,6 +192,13 @@ public:
      * @return The page size in bytes, or 0 if not yet set.
      */
     uint32_t get_page_size() const { return page_size_; }
+
+    /**
+     * @brief Returns the current size of the FIFO in bytes.
+     *
+     * @return The current size of the FIFO in bytes.
+     */
+    uint32_t get_fifo_curr_size() const { return fifo_curr_size_; }
 
     /**
      * @brief Returns the L1 address of the socket configuration buffer on the device.
@@ -193,11 +233,12 @@ public:
      * without blocking. Useful for poll-based readers that need to check
      * a shutdown flag between iterations.
      *
-     * @return true if at least one page can be read immediately.
+     * @param num_bytes_to_check Optional number of bytes to check. If not provided, the default page size is used.
+     * @return true if at least the requested number of bytes can be read immediately.
      *
      * @throws TT_FATAL if page_size has not been set.
      */
-    bool has_data();
+    bool has_data(std::optional<uint32_t> num_bytes_to_check = std::nullopt);
 
     /**
      * @brief Reads data pages from the socket FIFO.
@@ -325,6 +366,7 @@ private:
     uint32_t* bytes_sent_ptr_ = nullptr;
     std::function<void(void*, uint32_t, uint64_t)> pcie_writer_ = nullptr;
     std::unique_ptr<NamedShm> shm_;
+    ProcessScope process_scope_ = ProcessScope::CrossProcess;
     std::unique_ptr<PCIeCoreWriter> pcie_writer_instance_;
     MeshDevice* mesh_device_ = nullptr;
     bool is_owner_ = true;
@@ -337,6 +379,8 @@ private:
     bool using_hugepage_ = false;
     uint32_t* hugepage_data_host_ptr_ = nullptr;
     volatile uint32_t* hugepage_bytes_sent_host_ptr_ = nullptr;
+
+    std::optional<DeviceAddr> svc_config_l1_addr_;
 };
 
 }  // namespace tt::tt_metal::distributed

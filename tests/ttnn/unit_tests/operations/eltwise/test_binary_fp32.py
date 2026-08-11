@@ -87,8 +87,8 @@ def test_mul_fp32(device, ttnn_function):
 # Torch num/ 0 = inf and 0/0  nan; TT num/ 0 = inf and 0/0=nan; in fp32  tile
 # Torch num/ 0 = inf and 0/0  nan; TT num/ 0 = inf and 0/0=0; in chained (mul * recip) div op
 def test_div_fp32(device, ttnn_function):
-    x_torch = torch.tensor([[1.00030171126, -3, 16, -5, 14, -12, 0, 0, 1, 15]], dtype=torch.float32)
-    y_torch = torch.tensor([[2, 3, -4, -5, 0, 0, 0, 1, 0, 10]], dtype=torch.float32)
+    x_torch = torch.tensor([[1.00030171126, -3, 16, -5, 14, -12, 0, 0, 1, 15, 0.0, float("inf")]], dtype=torch.float32)
+    y_torch = torch.tensor([[2, 3, -4, -5, 0, 0, 0, 1, 0, 10, 0.0, float("inf")]], dtype=torch.float32)
     # torch out in ttnn TorchTensor([[ 0.500150859355927, -1.000000000000000, -4.000000000000000,  1.000000000000000,                inf,               -inf,                nan,  0.000000000000000,                inf,
     #            1.500000000000000]])
     # tt out in torch TorchTensor([[ 0.500150859355927, -1.000000000000000, -4.000000000000000,  1.000000000000000,                inf,               -inf,                nan,  0.000000000000000,                inf,
@@ -100,7 +100,7 @@ def test_div_fp32(device, ttnn_function):
     z_tt_div = ttnn_function(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_div)
 
-    assert_allclose(z_torch, tt_out, atol=1e-10, rtol=1e-6)
+    assert_with_ulp(z_torch, tt_out, ulp_threshold=0, allow_nonfinite=True)
 
 
 @pytest.mark.parametrize(
@@ -432,4 +432,4 @@ def test_binary_div_edge_case_ttnn(fast_and_approximate_mode, rounding_mode, dev
         golden_tensor = torch.where(
             torch.isnan(golden_tensor), torch.tensor(float("inf"), dtype=golden_tensor.dtype), golden_tensor
         )
-    assert torch.allclose(golden_tensor, output_tensor, equal_nan=True)
+    assert_with_ulp(golden_tensor, output_tensor, 0, allow_nonfinite=True)

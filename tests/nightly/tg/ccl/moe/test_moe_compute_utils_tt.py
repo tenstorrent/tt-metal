@@ -17,6 +17,11 @@ import pytest
 import torch
 import ttnn
 
+# Force torch CPU ops to use all cores. bf16 matmul on CPU is single-thread on
+# some torch builds even with OMP_NUM_THREADS set; this is the runtime knob that
+# keeps host-side golden compute fast. See test_moe_compute_6U.py for context.
+torch.set_num_threads(os.cpu_count() or 1)
+
 from ttnn.experimental.moe_compute_utils import (
     add_shared_expert_weights as torch_add_shared_expert_weights,
     get_weight_core_shard_maps,
@@ -39,7 +44,7 @@ def is_mesh_graph_descriptor_set(expected_path):
     return os.environ.get("TT_MESH_GRAPH_DESC_PATH") == expected_path
 
 
-MESH_PARAMS = [
+_MESH_PARAM_8x4 = [
     pytest.param(
         (8, 4),
         (8, 4),
@@ -49,6 +54,9 @@ MESH_PARAMS = [
         ),
         id="8x4",
     ),
+]
+
+_MESH_PARAM_1x16 = [
     pytest.param(
         (1, 16),
         (1, 16),
@@ -59,6 +67,8 @@ MESH_PARAMS = [
         id="1x16",
     ),
 ]
+
+MESH_PARAMS = _MESH_PARAM_8x4 + _MESH_PARAM_1x16
 
 # (hidden_size, intermediate_size) — DeepSeek matches the production layout; the
 # small config catches edge cases in the shard formulas (Nt = num_cores, etc.).
@@ -442,8 +452,10 @@ def _build_shared_test_setup(num_layers, num_devices, hidden_size, N, E_total):
     )
 
 
+# Note, only test this on linear meshes as the C++ version now includes TP sharding across the replicate axis and has
+# thus diverged from the OG python.
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
-@pytest.mark.parametrize("mesh_shape, mesh_device", MESH_PARAMS, indirect=["mesh_device"])
+@pytest.mark.parametrize("mesh_shape, mesh_device", _MESH_PARAM_1x16, indirect=["mesh_device"])
 @pytest.mark.parametrize("hidden_size, N", DIM_PARAMS)
 @pytest.mark.parametrize("num_layers, experts_per_device", [(1, 2)])
 @torch.no_grad()
@@ -451,6 +463,7 @@ def test_add_shared_expert_weights_parity(mesh_device, mesh_shape, hidden_size, 
     torch.manual_seed(2003)
     num_devices = mesh_shape[0] * mesh_shape[1]
     E_total = experts_per_device * num_devices
+    cluster_axis = 1
 
     routed_w0 = torch.randn(num_layers, E_total, hidden_size, N, dtype=torch.bfloat16)
     routed_w1 = torch.randn(num_layers, E_total, hidden_size, N, dtype=torch.bfloat16)
@@ -491,6 +504,7 @@ def test_add_shared_expert_weights_parity(mesh_device, mesh_shape, hidden_size, 
         tt_shared_w0,
         tt_shared_w1,
         tt_shared_w2,
+        cluster_axis=cluster_axis,
     )
     ttnn.synchronize_device(mesh_device)
 

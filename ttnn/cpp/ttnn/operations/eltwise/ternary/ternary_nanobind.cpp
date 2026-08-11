@@ -47,7 +47,7 @@ void bind_ternary_where(nb::module_& mod, const std::string& description) {
 
                * - Dtypes
                  - Layouts
-               * - BFLOAT16, BFLOAT8_B, FLOAT32, INT32
+               * - BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, INT32, UINT32 (range: [0, 4294967295])
                  - TILE
 
             bfloat8_b/bfloat4_b supports only on TILE_LAYOUT

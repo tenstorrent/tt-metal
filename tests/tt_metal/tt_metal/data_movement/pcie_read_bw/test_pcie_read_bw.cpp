@@ -68,24 +68,25 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const PCIeRe
     uint64_t pcie_offset = PCIE_OFFSET_BYTES;
     uint64_t pcie_l1_local_addr = dev_pcie_base + pcie_offset;
 
-    // Compile-time arguments for kernels
     uint32_t clock_freq_mhz = device->get_clock_rate_mhz();
-    vector<uint32_t> compile_args = {
-        (uint32_t)test_config.num_of_transactions,
-        (uint32_t)bytes_per_transaction,
-        (uint32_t)test_config.test_id,
-        (uint32_t)packed_subordinate_core_coordinates,
-        (uint32_t)pcie_l1_local_addr,
-        (uint32_t)l1_base_address,
-        clock_freq_mhz};
 
     std::string kernel_path = "tests/tt_metal/tt_metal/data_movement/pcie_read_bw/kernels/pcie_read_bw.cpp";
+
     CreateKernel(
         program,
         kernel_path,
         test_config.master_core_coord,
         DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0, .noc = test_config.noc_id, .compile_args = compile_args});
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = test_config.noc_id,
+            .named_compile_args = {
+                {"num_transactions", test_config.num_of_transactions},
+                {"bytes_per_tx", bytes_per_transaction},
+                {"test_id", test_config.test_id},
+                {"sub_coords", packed_subordinate_core_coordinates},
+                {"pcie_l1_addr", (uint32_t)pcie_l1_local_addr},
+                {"l1_addr", l1_base_address},
+                {"clock_freq_mhz", clock_freq_mhz}}});
 
     log_info(
         LogTest, "Running PCIe Read BW Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);

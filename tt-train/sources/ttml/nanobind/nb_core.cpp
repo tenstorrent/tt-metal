@@ -101,7 +101,7 @@ void py_module(nb::module_& m) {
 
     m.def(
         "zeros_like",
-        [](const tt::tt_metal::Tensor& tensor) -> tt::tt_metal::Tensor {
+        [](const ttnn::Tensor& tensor) -> ttnn::Tensor {
             return ttnn::moreh_full_like(tensor, 0.F, tensor.dtype(), tensor.layout(), tensor.memory_config());
         },
         nb::arg("tensor"),
@@ -109,7 +109,7 @@ void py_module(nb::module_& m) {
 
     m.def(
         "ones_like",
-        [](const tt::tt_metal::Tensor& tensor) -> tt::tt_metal::Tensor {
+        [](const ttnn::Tensor& tensor) -> ttnn::Tensor {
             return ttnn::moreh_full_like(tensor, 1.F, tensor.dtype(), tensor.layout(), tensor.memory_config());
         },
         nb::arg("tensor"),
@@ -148,6 +148,12 @@ void py_module(nb::module_& m) {
             nb::arg("device"),
             nb::arg("dim"),
             nb::arg("cluster_axis") = nb::none());
+
+        py_distributed.def(
+            "replicate_tensor_to_mesh_mapper",
+            static_cast<std::unique_ptr<ttnn::distributed::TensorToMesh> (*)(ttnn::distributed::MeshDevice&)>(
+                &ttnn::distributed::replicate_tensor_to_mesh_mapper),
+            nb::arg("device"));
 
         // Returns std::unique_ptr<MeshToTensor> - composer for combining distributed tensors
         py_distributed.def(
@@ -194,20 +200,20 @@ void py_module(nb::module_& m) {
             nb::arg("tensor"),
             nb::arg("dim"),
             nb::arg("cluster_axis") = nb::none(),
-            "Raw all_gather without autograd tracking. Returns a new tt::tt_metal::Tensor.");
+            "Raw all_gather without autograd tracking. Returns a new ttnn::Tensor.");
         py_distributed.def(
             "reduce_scatter",
             &ttml::ttnn_fixed::distributed::reduce_scatter,
             nb::arg("tensor"),
             nb::arg("dim"),
             nb::arg("cluster_axis") = nb::none(),
-            "Raw reduce_scatter without autograd tracking. Returns a new tt::tt_metal::Tensor.");
+            "Raw reduce_scatter without autograd tracking. Returns a new ttnn::Tensor.");
         py_distributed.def(
             "all_reduce",
             &ttml::ttnn_fixed::distributed::all_reduce,
             nb::arg("tensor"),
             nb::arg("cluster_axis") = nb::none(),
-            "Raw all_reduce without autograd tracking. Returns a new tt::tt_metal::Tensor.");
+            "Raw all_reduce without autograd tracking. Returns a new ttnn::Tensor.");
 
         // Bind DistributedContext methods
         using DistributedContext = tt::tt_metal::distributed::multihost::DistributedContext;
@@ -427,7 +433,7 @@ void py_module(nb::module_& m) {
                 name: The name to store the trace under (default: "END_TRACE")
 
             Note:
-                If capture is not active, this function prints a warning.
+                If capture is not active, this function does nothing.
                 Not thread safe.
             )doc");
 
@@ -466,7 +472,8 @@ void py_module(nb::module_& m) {
                 DRAMUsage object with peak, total_allocations, and total_deallocations fields
 
             Raises:
-                RuntimeError: If the named trace doesn't exist
+                RuntimeError: If the named trace doesn't exist, or if more than one
+                    segment shares the name (use get_dram_usage_all() for duplicates)
 
             Note:
                 Not thread safe.
@@ -499,7 +506,8 @@ void py_module(nb::module_& m) {
                 L1UsagePerCore object with peak_cb, peak_l1, and peak_total fields
 
             Raises:
-                RuntimeError: If the named trace doesn't exist
+                RuntimeError: If the named trace doesn't exist, or if more than one
+                    segment shares the name (use get_l1_usage_all() for duplicates)
 
             Note:
                 Not thread safe.

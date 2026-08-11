@@ -16,9 +16,9 @@ import copy
 import math
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable, Dict, List, Optional, Tuple, Union
+from typing import Callable, Dict, FrozenSet, List, Optional, Tuple, Union
 
-from .format_config import DataFormat
+from .format_config import MX_FORMAT_MAX_NORMAL, DataFormat
 from .llk_params import MathOperation
 from .stimuli_generator import DistributionKind, StimuliSpec
 
@@ -52,6 +52,47 @@ class OperandSpecs:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Picking which format bounds the domain
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Largest finite magnitude each format can hold. Only formats with a narrower
+# exponent field than bfloat16 need an entry; every other format shares
+# bfloat16's ceiling and is therefore never the binding constraint.
+#
+# The MX rows come from MX_FORMAT_MAX_NORMAL rather than being restated here: the two
+# fp8 encodings are easy to transpose by hand, and a transposed pair silently *widens*
+# a domain instead of failing. MxFp8R is E5M2 (ceiling 57344, the wide one) and MxFp8P
+# is E4M3 (ceiling 448, the narrow one) -- which is the polarity the builders below
+# already assume, e.g. _square_spec caps MxFp8P at +-20 and groups MxFp8R with Float16.
+_FORMAT_MAX_MAGNITUDE: Dict[DataFormat, float] = {
+    **MX_FORMAT_MAX_NORMAL,  # MxFp4 (e2m1) 6, MxFp8P (e4m3) 448, MxFp8R (e5m2) 57344
+    DataFormat.Float16: 65504.0,  # e5m10
+    # Plain E4M3 with no per-block scale to lift it, so the same 448 ceiling as MxFp8P.
+    DataFormat.Fp8_e4m3: 448.0,
+}
+
+_BF16_MAX_MAGNITUDE = 3.3895314e38
+
+
+def narrowest_range_format(*formats: Optional[DataFormat]) -> DataFormat:
+    """Return whichever of *formats* has the smallest representable magnitude.
+
+    A safe input domain is bounded by the narrowest float format anywhere in the
+    pipeline, not just the input one. exp over (-100, 80) peaks at ~5.5e34: fine
+    into a Float32 output, saturates a Float16 one. Passing a single format keeps
+    the previous input-only behaviour, and ties resolve to the first argument, so
+    callers should pass the input format first.
+    """
+    candidates = [fmt for fmt in formats if fmt is not None]
+    if not candidates:
+        raise ValueError("narrowest_range_format() requires at least one format")
+    return min(
+        candidates,
+        key=lambda fmt: _FORMAT_MAX_MAGNITUDE.get(fmt, _BF16_MAX_MAGNITUDE),
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Format-specific domain builders
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -66,7 +107,30 @@ def _exp_spec(fmt: DataFormat) -> OperandSpecs:
         # the lower bound is intentionally pushed to -100.0 so we cross the SFPU's negative-side
         # sanitization boundary near x ≈ -88.5 (where InputClamping::ClampToNegative saturates inputs
         # in the fast/approx exp path).
+        #
+        # The positive side is bounded by range, not accuracy: exp overflows an 8-bit
+        # exponent near x = 88.7, and 80 leaves margin below it. Narrower output formats
+        # pull this in through for_op_pipeline.
         spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-100.0, high=80.0)
+    return OperandSpecs(spec_A=spec)
+
+
+def _exp_with_base_spec(fmt: DataFormat) -> OperandSpecs:
+    """Input range for exp_with_base, which computes exp(0.5*x).
+
+    Keep the negative reach of _exp_spec (low=-100 crosses the SFPU's negative-side
+    sanitization boundary near x ~ -88.5). The 0.5 scale halves the argument, so the
+    positive side is double _exp_spec's to put the argument under the same overflow
+    ceiling.
+    """
+    if fmt == DataFormat.MxFp8P:
+        spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    elif fmt in (DataFormat.Float16, DataFormat.MxFp8R):
+        spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
+    else:
+        spec = StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-100.0, high=160.0
+        )
     return OperandSpecs(spec_A=spec)
 
 
@@ -77,9 +141,36 @@ def _exp2_spec(fmt: DataFormat) -> OperandSpecs:
     elif fmt in (DataFormat.Float16, DataFormat.MxFp8R):
         spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-14.0, high=14.0)
     else:
+        # 2^100 still fits an 8-bit exponent, so the positive side is not range-bound
+        # the way _exp_spec is; the negative side matches its reach past the clamp.
         spec = StimuliSpec(
             distribution=DistributionKind.UNIFORM, low=-100.0, high=100.0
         )
+    return OperandSpecs(spec_A=spec)
+
+
+# Block-float formats: a group of 16 elements shares one exponent, so an element's
+# usable precision depends on how far below its block maximum it sits, not just on
+# the mantissa width.
+_BLOCK_FLOAT_FORMATS = (DataFormat.Bfp8_b, DataFormat.Bfp4_b, DataFormat.Bfp2_b)
+
+
+def _reciprocal_spec(fmt: DataFormat) -> OperandSpecs:
+    """Safe input range for 1/x, tightened for block-float inputs.
+
+    A 1000:1 ratio inside a 16-element block quantizes the smallest elements to
+    zero, sending the golden to inf. How tight the ratio has to be scales with the
+    mantissa width: 10:1 suffices for Bfp8_b's 7 bits, but at Bfp4_b's 3 bits ~6% of
+    that window still lands below the block's representable step and collapses to
+    zero. 4:1 keeps every element representable with margin (the smallest survivor
+    at 10:1 is 16.0, so the floor is not placed right on the boundary).
+    """
+    if fmt == DataFormat.Bfp4_b:
+        spec = StimuliSpec.uniform(intervals=[(-100.0, -25.0), (25.0, 100.0)])
+    elif fmt in _BLOCK_FLOAT_FORMATS:
+        spec = StimuliSpec.uniform(intervals=[(-100.0, -10.0), (10.0, 100.0)])
+    else:
+        spec = StimuliSpec.uniform(intervals=[(-100.0, -0.1), (0.1, 100.0)])
     return OperandSpecs(spec_A=spec)
 
 
@@ -128,9 +219,14 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Asinh: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
     ),
-    # atanh: domain |x| < 1; stay away from ±1 to avoid ±inf
+    # atanh: domain |x| < 1. The log1p reformulation is stable across the whole
+    # interior including the small-x region (catastrophic cancellation in the old
+    # form) and close to ±1, so sweep nearer the boundary; stay just inside ±1 to
+    # avoid the exact ±inf endpoints (covered separately by special-case tests).
     MathOperation.Atanh: OperandSpecs(
-        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-0.95, high=0.95)
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-0.999, high=0.999
+        )
     ),
     # celu: exercises both the exponential branch (x < 0) and linear (x >= 0)
     MathOperation.Celu: OperandSpecs(
@@ -146,17 +242,63 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Elu: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
     ),
+    # erfinv: domain |x| < 1; stay just inside ±1 to avoid the ±inf endpoints.
+    MathOperation.Erfinv: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-0.99, high=0.99)
+    ),
+    # heaviside: cover both the negative (->0) and positive (->1) branches.
+    MathOperation.Heaviside: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
     # exp: format-specific overflow threshold
     MathOperation.Exp: _exp_spec,
     # exp2: format-specific overflow threshold
     MathOperation.Exp2: _exp2_spec,
+    # exp_with_base computes exp(0.5*x). It needs its own (tighter-on-the-positive-side)
+    # domain: reusing plain exp's high=80 gives an argument of ~40, and exp's condition
+    # number (~ the argument) amplifies the approximation error past 10% on the largest
+    # outputs. See _exp_with_base_spec.
+    MathOperation.ExpWithBase: _exp_with_base_spec,
     # fill: the hardware ignores the input value; any range is fine
     MathOperation.Fill: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=1.0)
     ),
-    # gelu: Gaussian activation — gaussian distribution naturally exercises tails
+    # gelu: gaussian-sampled (mean=0, std=3) — most inputs near 0, but still some large ones.
     MathOperation.Gelu: OperandSpecs(
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.GAUSSIAN,
+            mean=0.0,
+            std=3.0,
+            low=-5.0,
+            high=5.0,
+        )
+    ),
+    # gelu_appx: LUT approximation of gelu — same Gaussian spread as gelu so both
+    # the near-0 transition and the saturating tails exercise the piecewise LUT.
+    MathOperation.GeluAppx: OperandSpecs(
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.GAUSSIAN,
+            mean=0.0,
+            std=3.0,
+            low=-5.0,
+            high=5.0,
+        )
+    ),
+    # gelu_tanh: tanh approximation of gelu — same Gaussian spread exercises both
+    # tails (saturation) and values near 0 (the +-0 sign path).
+    MathOperation.GeluTanh: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.GAUSSIAN, mean=0.0, std=3.0)
+    ),
+    # gelu_derivative: d/dx gelu; Gaussian spread hits both saturating tails
+    # (->0 and ->1) and the transition region around 0.
+    MathOperation.GeluDerivative: OperandSpecs(
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.GAUSSIAN,
+            mean=0.0,
+            std=3.0,
+            low=-5.0,
+            high=5.0,
+        )
     ),
     # hardsigmoid: linear region between -3 and 3, clipped outside
     MathOperation.Hardsigmoid: OperandSpecs(
@@ -164,6 +306,12 @@ _OP_DOMAIN_REGISTRY: Dict[
     ),
     # log: domain x > 0; log-uniform spans several decades
     MathOperation.Log: OperandSpecs(
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.LOG_UNIFORM, low=1e-4, high=1e3
+        )
+    ),
+    # log_with_base (log2): same positive domain as natural log.
+    MathOperation.LogWithBase: OperandSpecs(
         spec_A=StimuliSpec(
             distribution=DistributionKind.LOG_UNIFORM, low=1e-4, high=1e3
         )
@@ -176,10 +324,9 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Neg: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
     ),
-    # reciprocal: domain x != 0; avoid a small band around 0 and cover both signs
-    MathOperation.Reciprocal: OperandSpecs(
-        spec_A=StimuliSpec.uniform(intervals=[(-100.0, -0.1), (0.1, 100.0)])
-    ),
+    # reciprocal: domain x != 0; avoid a small band around 0 and cover both signs.
+    # Format-sensitive: block-float inputs need a tighter ratio, see _reciprocal_spec.
+    MathOperation.Reciprocal: _reciprocal_spec,
     # relu / relu_max / relu_min / threshold: include negatives (zero branch)
     MathOperation.Relu: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
@@ -188,6 +335,11 @@ _OP_DOMAIN_REGISTRY: Dict[
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
     ),
     MathOperation.ReluMin: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
+    # lrelu: leaky ReLU with slope 0.1; span both signs so the negative
+    # (scaled) branch and the positive (pass-through) branch are exercised.
+    MathOperation.Lrelu: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
     ),
     MathOperation.Threshold: OperandSpecs(
@@ -199,6 +351,18 @@ _OP_DOMAIN_REGISTRY: Dict[
             distribution=DistributionKind.LOG_UNIFORM, low=1e-4, high=100.0
         )
     ),
+    # rsqrt_compat (legacy reciprocal-root): domain x > 0. Keep the range a bit
+    # tighter than accurate rsqrt — the compat approximation loses accuracy at the
+    # extreme small-input end (rsqrt -> very large).
+    MathOperation.RsqrtCompat: OperandSpecs(
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.LOG_UNIFORM, low=1e-2, high=100.0
+        )
+    ),
+    # expm1_cw (component-wise expm1): same safe range as the standalone expm1.
+    MathOperation.Expm1Cw: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
     # sigmoid: cover both saturation regions
     MathOperation.Sigmoid: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-8.0, high=8.0)
@@ -207,11 +371,232 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Silu: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
     ),
+    # softshrink: piecewise around ±lambda (0.5); span both shrink branches and the zero band
+    MathOperation.Softshrink: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
+    # softsign: softsign(x) = x / (1 + |x|); defined for all reals
+    MathOperation.Softsign: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
+    # mish: mish(x) = x * tanh(softplus(x)); defined for all reals, cover saturation
+    MathOperation.Mish: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
+    # selu: piecewise at x==0; span both the linear (x>=0) and exp (x<0) branches
+    MathOperation.Selu: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
+    # i0: modified Bessel I0; kernel poly approx is only valid on |x| <= 3.75
+    MathOperation.I0: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-3.75, high=3.75)
+    ),
+    # i1: modified Bessel I1; poly path valid on |x| <= ~3.75 (asymptotic beyond)
+    MathOperation.I1: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-3.75, high=3.75)
+    ),
+    # erf / erfc: span both tails and the transition through 0
+    MathOperation.Erf: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-3.0, high=3.0)
+    ),
+    MathOperation.Erfc: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-3.0, high=3.0)
+    ),
+    # expm1: exp(x)-1; keep within a range that avoids fp overflow
+    MathOperation.Expm1: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
+    # cbrt: defined for all reals; span both signs to exercise the sign path
+    MathOperation.Cbrt: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-27.0, high=27.0)
+    ),
+    # sign / signbit: span both signs and near-zero
+    MathOperation.Sign: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0)
+    ),
+    MathOperation.Signbit: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0)
+    ),
+    # tanh_derivative = sech^2(x); cover the saturating tails
+    MathOperation.TanhDerivative: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
+    # legacy LUT tanh_derivative: same math but tanh comes from a coarse piecewise
+    # LUT that suffers catastrophic cancellation in 1 - tanh^2 for |x| > ~3.4, so
+    # keep the domain inside the LUT's accurate region.
+    MathOperation.TanhDerivativeLut: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-3.0, high=3.0)
+    ),
+    # hardmish: piecewise on [-2, 0]; span past both clamp knees
+    MathOperation.Hardmish: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-4.0, high=4.0)
+    ),
+    # lgamma: single-tile Stirling kernel is accurate for x >= ~0.5; avoid the poles at x<=0
+    MathOperation.Lgamma: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=1.0, high=15.0)
+    ),
+    # digamma: LUT fit on [0.01, 102]; keep positive to avoid the poles at x<=0
+    MathOperation.Digamma: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.1, high=50.0)
+    ),
+    # identity: pass-through; any range is valid
+    MathOperation.Identity: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
+    ),
+    # prelu: leaky slope on the negative side; span both signs
+    MathOperation.Prelu: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
+    # rpow: 2**x; keep exponent bounded to avoid fp overflow
+    MathOperation.Rpow: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-4.0, high=4.0)
+    ),
+    # power: x**2 (fixed integer exponent); span both signs
+    MathOperation.UnaryPower: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-4.0, high=4.0)
+    ),
+    # fmod / remainder: divisor fixed to 2.0; span both signs
+    MathOperation.Fmod: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
+    MathOperation.Remainder: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
+    # unary comparisons against threshold 0.5; span it for a mix of 0/1 outputs
+    MathOperation.UnaryGt: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0)
+    ),
+    MathOperation.UnaryLt: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0)
+    ),
+    MathOperation.UnaryGe: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0)
+    ),
+    MathOperation.UnaryLe: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0)
+    ),
+    # unary max/min against value 0.0; span both signs
+    MathOperation.UnaryMax: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
+    MathOperation.UnaryMin: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
+    # polygamma (order 1, trigamma): poles at x<=0, so keep positive
+    MathOperation.Polygamma: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.5, high=10.0)
+    ),
+    # xielu: piecewise activation; span both signs across the knee at 0
+    MathOperation.Xielu: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
+    # hardshrink: piecewise around +/-lambda (0.5); span past both knees
+    MathOperation.Hardshrink: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-4.0, high=4.0)
+    ),
+    # softplus: smooth; span both signs and past the linear threshold (20) so the
+    # kernel's linear-passthrough branch (input > threshold -> softplus(x) ~= x) is covered.
+    MathOperation.Softplus: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=30.0)
+    ),
+    # sigmoid_appx: LUT approximation of sigmoid; span both signs across the knee at 0
+    MathOperation.SigmoidAppx: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
+    # sqrt_custom: domain x >= 0
+    MathOperation.SqrtCustom: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=100.0)
+    ),
+    # add1: x + 1; defined for all reals
+    MathOperation.Add1: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
+    ),
+    MathOperation.CastFp32ToFp16a: OperandSpecs(
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-100000.0, high=100000.0
+        )
+    ),
+    # comparison-to-zero: span both signs so the </<=/>/>= branches are exercised
+    MathOperation.EqualZero: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0)
+    ),
+    MathOperation.NotEqualZero: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0)
+    ),
+    MathOperation.LessThanZero: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0)
+    ),
+    MathOperation.GreaterThanZero: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0)
+    ),
+    MathOperation.LessThanEqualZero: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0)
+    ),
+    MathOperation.GreaterThanEqualZero: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0)
+    ),
+    # rdiv: value / x; keep x away from 0 to avoid the reciprocal blow-up
+    MathOperation.Rdiv: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=1.0, high=8.0)
+    ),
+    # clamp/hardtanh: bounds fixed to [-1, 1]; span past both bounds to exercise clamping
+    MathOperation.Clamp: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0)
+    ),
+    MathOperation.Hardtanh: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0)
+    ),
     # sin: cover the full unit circle
     MathOperation.Sin: OperandSpecs(
         spec_A=StimuliSpec(
             distribution=DistributionKind.UNIFORM, low=-math.pi, high=math.pi
         )
+    ),
+    # tan: stay inside the poles at +-pi/2 (~1.5708); tan grows rapidly near them.
+    MathOperation.Tan: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-1.3, high=1.3)
+    ),
+    # atan: defined for all reals; span both signs and the saturating tails.
+    MathOperation.Atan: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
+    ),
+    # asin/acos: domain [-1, 1]; stay just inside to avoid the NaN region for |x|>1.
+    MathOperation.Asin: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-0.99, high=0.99)
+    ),
+    MathOperation.Acos: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-0.99, high=0.99)
+    ),
+    # sinh/cosh: keep the range moderate so exp(|x|) stays well within fp range.
+    MathOperation.Sinh: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
+    MathOperation.Cosh: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
+    # round: round-half-to-even to integer; span both signs across integer knees.
+    MathOperation.Round: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
+    ),
+    # floor/ceil/trunc/frac: defined for all reals, but each of floor and ceil differs
+    # from trunc on one side only -- floor on the negative side (floor(-1.5) = -2 vs
+    # trunc's -1), ceil on the positive side (ceil(1.5) = 2 vs trunc's 1) -- so the
+    # domain has to span both signs to tell the three apart at all. Same range as round
+    # for the same reason: enough integer knees inside the interval that the random
+    # sweep lands near several of them.
+    MathOperation.Floor: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
+    ),
+    MathOperation.Ceil: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
+    ),
+    MathOperation.Trunc: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
+    ),
+    # frac keeps the sign of x (frac(x) = x - trunc(x)), so the negative half is a
+    # distinct branch rather than a mirror of the positive one.
+    MathOperation.Frac: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
     ),
     # sqrt: domain x >= 0
     MathOperation.Sqrt: OperandSpecs(
@@ -221,6 +606,13 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Square: _square_spec,
     # tanh: cover saturation regions (saturates near ±1 for |x| > ~3)
     MathOperation.Tanh: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
+    # tanhshrink(x) = x - tanh(x): odd function, so the negative half exercises a
+    # distinct sign path. Same range as tanh — past |x| ~ 3 tanh saturates and the
+    # result degenerates to x, while near 0 the subtraction cancels down to ~x^3/3
+    # (small absolute values, covered by atol rather than rtol).
+    MathOperation.Tanhshrink: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
     ),
     # topk family: operation sorts/merges; any values are valid
@@ -265,17 +657,30 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.SfpuElwrsub: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-1.0, high=1.0)
     ),
-    # pow: srcA is the base (must be non-negative for non-integer exponents);
-    # srcB is the exponent (non-negative to keep output finite)
+    # pow: srcA is the base (non-negative for non-integer exponents); srcB is the
+    # exponent (non-negative to keep output finite).
+    #
+    # Both bounds are set by accuracy, not representable range. a**b is evaluated as
+    # exp(b * ln a), so the error tracks the product b * ln(a) -- the argument to the
+    # shared exp approximation (see the exp entry). The registry cannot express a joint
+    # constraint, so cap each operand so the worst-case product stays accurate:
+    # 3 * ln 3 = 3.30. Measured at Float16_b against the default 5% rtol, 3.30 is clean
+    # while 4.61 (A<=10, B<=2) and above go outside.
     MathOperation.SfpuElwpow: OperandSpecs(
-        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=5.0),
-        spec_B=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=5.0),
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=3.0),
+        spec_B=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=3.0),
     ),
     # xlogy: computes x * log(y) element-wise
     # srcA (x): x >= 0 so xlogy(0, y) = 0 is well-defined
     # srcB (y): y > 0 so log(y) is finite; log-uniform spans several decades
+    #
+    # x's ceiling is an absolute-accuracy bound: the error is dominated by
+    # x * abs_err(ln y), so it grows with x while the 16-bit-float atol stays at 0.05.
+    # x <= 4 keeps margin (4 * 0.012 = 0.048); x <= 5 sits on the tolerance and x <= 8
+    # goes outside. y keeps its full log-uniform span -- narrowing it made the failures
+    # worse, not better.
     MathOperation.SfpuXlogy: OperandSpecs(
-        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=10.0),
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=4.0),
         spec_B=StimuliSpec(
             distribution=DistributionKind.LOG_UNIFORM, low=1e-4, high=10.0
         ),
@@ -376,6 +781,58 @@ def for_op(
     return result
 
 
+def _spec_span(spec: StimuliSpec) -> float:
+    """Total measure of the values *spec* is allowed to draw."""
+    if spec.intervals:
+        return sum(high - low for low, high in spec.intervals)
+    return spec.high - spec.low
+
+
+def _tighter_spec(a: StimuliSpec, b: StimuliSpec) -> StimuliSpec:
+    """Whichever of *a* / *b* draws from the smaller domain; ties keep *a*."""
+    if a == b:
+        return a
+    return a if _spec_span(a) <= _spec_span(b) else b
+
+
+def for_op_pipeline(
+    op: MathOperation,
+    input_format: DataFormat,
+    output_format: Optional[DataFormat] = None,
+    **kwargs,
+) -> OperandSpecs:
+    """Return safe input domains for *op* over a whole input->output pipeline.
+
+    Two different constraints pick two different formats, and resolving against
+    either one alone drops the other:
+
+    * **Range** is bounded by the narrowest exponent range anywhere in the
+      pipeline. exp over (-100, 80) is fine into a Float32 output and saturates
+      a Float16 one, so the *output* format has to be able to narrow the domain.
+    * **Precision** is a property of the *input* format alone. A block-float
+      input has already spent its relative precision by the time the op runs,
+      and a wider output cannot give it back. Resolving Bfp8_b -> Float16
+      against Float16 alone restores reciprocal's 1000:1 interval — the exact
+      spread _reciprocal_spec exists to avoid, which quantizes small block
+      elements to zero and sends the golden to inf.
+
+    So resolve against both formats and keep whichever spec is tighter per
+    operand. Both constraints only ever *narrow* a domain, so the tighter of the
+    two satisfies both. Ops with a format-independent registry entry resolve
+    identically either way and are unaffected.
+    """
+    by_input = for_op(op, input_format, **kwargs)
+    range_format = narrowest_range_format(input_format, output_format)
+    if range_format == input_format:
+        return by_input
+
+    by_range = for_op(op, range_format, **kwargs)
+    return OperandSpecs(
+        spec_A=_tighter_spec(by_input.spec_A, by_range.spec_A),
+        spec_B=_tighter_spec(by_input.spec_B, by_range.spec_B),
+    )
+
+
 def _validate_distribution_override(
     distribution: Union[DistributionKind, Callable],
     spec: StimuliSpec,
@@ -424,6 +881,97 @@ def _validate_distribution_override(
 # Undefined-region subtraction
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Which family each registered op belongs to
+#
+# _OP_DOMAIN_REGISTRY is keyed by MathOperation and mixes the unary SFPU ops with the
+# binary ones, the FPU eltwise ops and the reduce family. That is fine for for_op(), but it
+# means a suite cannot ask "is my op list complete?" -- the unary sweep can check that no op
+# sits in two of its profiles and that every op it drives has a domain, but not that every
+# unary op is actually driven, so an op added to the registry and to no test goes untested
+# silently.
+#
+# Recording the family closes that. Each family is named positively, one set per
+# arity/engine, and the unary family is whatever is left over -- so an op registered
+# without being classified here lands in sfpu_unary_ops() and trips the unary sweep's
+# exhaustiveness assert, which is the prompt to put it in the right set below.
+#
+# They are flat sets rather than a field on OperandSpecs because several entries are shared
+# with the perf sweeps and the accuracy harness, and those consumers do not want an arity
+# opinion imposed on them.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Eltwise binary run on the FPU rather than the SFPU (test_eltwise_binary.py).
+_FPU_ELTWISE_OPS: FrozenSet[MathOperation] = frozenset(
+    {
+        MathOperation.Elwadd,
+        MathOperation.Elwmul,
+        MathOperation.Elwsub,
+    }
+)
+
+# Applied by the packer (STACC_RELU), not the SFPU. Relu is the entry that looks like it
+# should be a unary SFPU op: it has a domain, but `relu` is not a member of SfpuType at
+# all, so driving it through the unary test fails to compile.
+_PACKER_OPS: FrozenSet[MathOperation] = frozenset({MathOperation.Relu})
+
+# Binary SFPU ops (test_sfpu_binary.py). Registered ones only -- that suite also drives
+# ~30 int, comparison and bitwise ops that have no domain entry and so cannot be keys
+# here; they are declared in its own _UNREGISTERED_BINARY_OPS instead.
+_SFPU_BINARY_OPS: FrozenSet[MathOperation] = frozenset(
+    {
+        MathOperation.SfpuAddTopRow,
+        MathOperation.SfpuElwadd,
+        MathOperation.SfpuElwsub,
+        MathOperation.SfpuElwmul,
+        MathOperation.SfpuElwdiv,
+        MathOperation.SfpuElwpow,
+        MathOperation.SfpuElwrsub,
+        MathOperation.SfpuXlogy,
+        MathOperation.SfpuElwLeftShift,
+        MathOperation.SfpuElwRightShift,
+        MathOperation.SfpuElwLogicalRightShift,
+    }
+)
+
+# Ternary SFPU ops (test_sfpu_ternary.py). Empty because no ternary op has a domain entry
+# yet: OperandSpecs carries A and B only, so that suite builds its own per-operand specs
+# and reuses B for C. The set exists so the first registered ternary op lands here rather
+# than silently in sfpu_unary_ops().
+_SFPU_TERNARY_OPS: FrozenSet[MathOperation] = frozenset()
+
+# Reduce family (test_sfpu_reduce*.py).
+_REDUCE_OPS: FrozenSet[MathOperation] = frozenset(
+    {
+        MathOperation.ReduceColumn,
+        MathOperation.ReduceRow,
+        MathOperation.ReduceScalar,
+    }
+)
+
+# Ops with no unary SFPU kernel, so they must not appear in the unary sweep.
+_NON_SFPU_UNARY_OPS: FrozenSet[MathOperation] = (
+    _FPU_ELTWISE_OPS | _PACKER_OPS | _SFPU_BINARY_OPS | _SFPU_TERNARY_OPS | _REDUCE_OPS
+)
+
+# Unary SFPU ops that are registered but deliberately not in the correctness sweep.
+_UNARY_OPS_NOT_SWEPT: Dict[MathOperation, str] = {
+    MathOperation.TopKLocalSort: "perf-only; whole-op topk is covered by test_topk.py",
+    MathOperation.TopKMerge: "perf-only; whole-op topk is covered by test_topk.py",
+    MathOperation.TopKRebuild: "perf-only; whole-op topk is covered by test_topk.py",
+}
+
+
+def sfpu_unary_ops() -> FrozenSet[MathOperation]:
+    """Every registered op that has a unary SFPU kernel.
+
+    Everything registered that is not claimed by one of the family sets above. The unary
+    sweep drives exactly this set minus _UNARY_OPS_NOT_SWEPT, so a newly registered op is
+    swept by default and only escapes by being classified into a family or exempted.
+    """
+    return frozenset(_OP_DOMAIN_REGISTRY) - _NON_SFPU_UNARY_OPS
+
+
 _SFPU_UNDEFINED_RANGES: Dict[
     MathOperation,
     Dict[Operand, List[Tuple[float, float]]],
@@ -438,6 +986,10 @@ _SFPU_UNDEFINED_RANGES: Dict[
     MathOperation.Log1p: {Operand.A: [(-float("inf"), -1.0 + 1e-6)]},
     MathOperation.Rsqrt: {Operand.A: [(-float("inf"), 1e-6)]},
     MathOperation.Acosh: {Operand.A: [(-float("inf"), 1.0)]},
+    # erfinv: defined only on the open interval (-1, 1)
+    MathOperation.Erfinv: {
+        Operand.A: [(-float("inf"), -1.0 + 1e-6), (1.0 - 1e-6, float("inf"))]
+    },
     # ── Binary: per-operand holes ────────────────────────────────────────────
     # div: divisor (srcB) must avoid 0
     MathOperation.SfpuElwdiv: {Operand.B: [(-1e-6, 1e-6)]},

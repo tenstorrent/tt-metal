@@ -8,7 +8,6 @@
 
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
 
 #include <tt_stl/optional_reference.hpp>
 
@@ -21,10 +20,11 @@ namespace tt::tt_metal {
 
 // Implementation details for MeshTensor
 class MeshTensorImpl;
-struct DeviceStorage;
+class TensorTopology;
 
 namespace distributed {
 class MeshDevice;
+class MeshBuffer;
 }
 
 /**
@@ -57,13 +57,14 @@ public:
     MeshTensor() = delete;
 
     /**
-     * Allocate a MeshTensor on the given device with the given spec and topology.
+     * Allocate a MeshTensor on the given device with the given spec.
      */
-    static MeshTensor allocate_on_device(
-        distributed::MeshDevice& mesh_device, const TensorSpec& spec, const TensorTopology& topology);
+    static MeshTensor allocate_on_device(distributed::MeshDevice& mesh_device, TensorSpec spec);
 
-    // Internal Constructor for transition.
-    explicit MeshTensor(std::shared_ptr<distributed::MeshBuffer> mesh_buffer, TensorSpec spec, TensorTopology topology);
+    /**
+     * Construct a MeshTensor that takes ownership of an already-allocated MeshBuffer.
+     */
+    static MeshTensor from_buffer(distributed::MeshBuffer mesh_buffer, TensorSpec spec);
 
     /**
      * Release ownership of the underlying device memory.
@@ -123,11 +124,6 @@ public:
     const TensorSpec& tensor_spec() const;
 
     /**
-     * Multi-device topology configuration - tracks how tensor is distributed across mesh devices
-     */
-    const TensorTopology& tensor_topology() const;
-
-    /**
      * Returns true if this MeshTensor was left in a moved-from state.
      *
      * A MeshTensor becomes valueless when it is the source of a move construction or move assignment.
@@ -165,11 +161,6 @@ public:
     Strides strides() const;
 
     /**
-     * Update the topology of the MeshTensor post construction.
-     */
-    void update_tensor_topology(TensorTopology tensor_topology);
-
-    /**
      * Access to the implementation.
      *
      * pre-condition: The MeshTensor must not be in a default constructed state.
@@ -178,24 +169,14 @@ public:
     const MeshTensorImpl& impl() const;
 
 private:
-    // TODO(#43693): Remove once DeviceStorage no longer keeps a shared_ptr<MeshBuffer>
-    // in its DeallocatedTombStone state.
-    // DeviceStorage is the sole caller — it uses mesh_buffer_invariant_breaking() to
-    // populate the tombstone when a tensor is deallocated, so the device pointer
-    // remains accessible on aliased tensors (e.g. after a zero-copy reshape).
-    // This breaks MeshTensor's core invariant: that it is the sole owner of the
-    // underlying MeshBuffer. Shared ownership leaks out, allowing the MeshBuffer to
-    // outlive the MeshTensor.
-    friend struct DeviceStorage;
+    friend MeshTensor allocate_mesh_tensor_on_device_with_topology(
+        distributed::MeshDevice& mesh_device, TensorSpec spec, TensorTopology topology);
+    friend MeshTensor mesh_tensor_from_buffer_with_topology(
+        distributed::MeshBuffer mesh_buffer, TensorSpec spec, TensorTopology topology);
 
-    /**
-     * Returns shared ownership of the underlying MeshBuffer.
-     *
-     * WARNING: Breaks MeshTensor's sole-ownership invariant. The caller becomes a
-     * shared owner of the MeshBuffer, which can outlive the MeshTensor.
-     * Only accessible to DeviceStorage. See #43693 for removal plan.
-     */
-    std::shared_ptr<distributed::MeshBuffer> mesh_buffer_invariant_breaking() const;
+    // Internal constructor for transition. Use the from_buffer factory or allocate_on_device
+    // to build a MeshTensor.
+    explicit MeshTensor(std::shared_ptr<distributed::MeshBuffer> mesh_buffer, TensorSpec spec, TensorTopology topology);
 
     // impl_ could be a nullptr if MeshTensor is in a moved-from state.
     // Avoid using impl_ pointer directly, use the impl() accessor instead.

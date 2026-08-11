@@ -21,12 +21,12 @@
 
 #if defined(ARCH_WORMHOLE) or defined(ARCH_BLACKHOLE)
 void generate_alu_config(ckernel::unpacker::alu_config_t& config) {
-    config.ALU_ROUNDING_MODE_Fpu_srnd_en = 1;
+    config.ALU_ROUNDING_MODE_Fpu_srnd_en = 0;
     config.ALU_ROUNDING_MODE_Gasket_srnd_en = 0;
-    config.ALU_ROUNDING_MODE_Packer_srnd_en = 1;
-    config.ALU_ROUNDING_MODE_Padding = 15;
+    config.ALU_ROUNDING_MODE_Packer_srnd_en = 0;
+    config.ALU_ROUNDING_MODE_Padding = 0;
     config.ALU_ROUNDING_MODE_GS_LF = 0;
-    config.ALU_ROUNDING_MODE_Bfp8_HF = 1;
+    config.ALU_ROUNDING_MODE_Bfp8_HF = 0;
     config.ALU_FORMAT_SPEC_REG0_SrcAUnsigned = 1;
     config.ALU_FORMAT_SPEC_REG0_SrcBUnsigned = 0;
     config.ALU_FORMAT_SPEC_REG0_SrcA = 0;
@@ -94,21 +94,32 @@ void generate_pack_config(ckernel::packer::pack_config_t& config) {
     config.l1_dest_addr = 16;
     config.uncompress = 0;
     config.add_l1_dest_addr_offset = 1;
+#ifdef ARCH_WORMHOLE
+    config.addr_cnt_context = 2;
+#elif defined(ARCH_BLACKHOLE)
     config.reserved_0 = 0;
+#endif
     config.out_data_format = 5;
     config.in_data_format = 5;
     config.src_if_sel = 1;
     config.l1_src_addr = 8;
-#if defined(ARCH_WORMHOLE) or defined(ARCH_GRAYSKULL)
+#ifdef ARCH_WORMHOLE
+    config.dis_shared_exp_assembler = 1;
+    config.force_pack_per_max_xy_plane = 1;
+    config.enable_out_fifo = 1;
+    config.sub_l1_tile_header_size = 1;
+    // REG8 banks have a different word-2 layout than REG1 (no all_pack_* fields,
+    // add_tile_header_size at bit 17 per cfg_defines.h), so REG1-layout bits 18-23
+    // read back 0 there; keep these mirror-compatible across all 4 banks
+    config.all_pack_disable_zero_compress = 1;
+    config.all_pack_disable_zero_compress_ovrd = 0;
+    config.add_tile_header_size = 0;
     config.reserved_1 = 0;
-    config.pack_per_xy_plane = 0;
     config.downsample_mask = 12;
     config.downsample_shift_count = 4;
     config.read_mode = 0;
     config.exp_threshold_en = 1;
-#ifdef ARCH_WORMHOLE
     config.pack_l1_acc_disable_pack_zero_flag = 2;
-#endif
     config.reserved_2 = 0;
     config.exp_threshold = 12;
 #endif
@@ -244,22 +255,18 @@ void kernel_main() {
             std::array<ckernel::unpacker::unpack_tile_descriptor_t, ckernel::unpacker::NUM_UNPACKERS>
                 tile_descriptor_vec;
             UNPACK(tile_descriptor_vec = ckernel::unpacker::read_unpack_tile_descriptor();)
-            write_unpack_tile_descriptor(cfg, THCON_SEC0_REG0_TileDescriptor_ADDR32, 4, tile_descriptor);
-            write_unpack_tile_descriptor(cfg, THCON_SEC1_REG0_TileDescriptor_ADDR32, 4, tile_descriptor);
+            write_unpack_tile_descriptor(cfg, THCON_SEC0_REG0_TileDescriptor_ADDR32, 2, tile_descriptor);
+            write_unpack_tile_descriptor(cfg, THCON_SEC1_REG0_TileDescriptor_ADDR32, 2, tile_descriptor);
 
             dprint_tensix_unpack_tile_descriptor();
 
             tile_descriptor.f = tile_descriptor_vec[0];
-            write_unpack_tile_descriptor(cfg, THCON_SEC0_REG0_TileDescriptor_ADDR32, 4, tile_descriptor);
+            write_unpack_tile_descriptor(cfg, THCON_SEC0_REG0_TileDescriptor_ADDR32, 2, tile_descriptor);
             tile_descriptor.f = tile_descriptor_vec[1];
-            write_unpack_tile_descriptor(cfg, THCON_SEC1_REG0_TileDescriptor_ADDR32, 4, tile_descriptor);
+            write_unpack_tile_descriptor(cfg, THCON_SEC1_REG0_TileDescriptor_ADDR32, 2, tile_descriptor);
             break;
         case UNPACK_CONFIG: uint num_of_words_unpack_config;
-#ifdef ARCH_GRAYSKULL
-            num_of_words_unpack_config = 3;
-#else
-            num_of_words_unpack_config = 4;
-#endif
+            num_of_words_unpack_config = 2;
             ckernel::unpacker::unpack_config_u unpack_config;
             generate_unpack_config(unpack_config.f);
             std::array<ckernel::unpacker::unpack_config_t, ckernel::unpacker::NUM_UNPACKERS> unpack_config_vec;

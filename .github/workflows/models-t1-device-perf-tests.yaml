@@ -1,6 +1,9 @@
 name: "(Tier 1) Models Device Perf Tests"
 
 on:
+  schedule:
+    # Once a day at 07:00 UTC — all models, all SKUs
+    - cron: "0 7 * * *"
   workflow_dispatch:
     inputs:
       model:
@@ -11,6 +14,7 @@ on:
         options:
           - all
           - llama3.1-8b
+          - sdxl
       sku:
         description: "Select SKU to test"
         required: false
@@ -58,8 +62,10 @@ permissions:
   contents: write
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   resolve-skus:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       enabled-skus: ${{ steps.resolve.outputs.enabled-skus }}
     steps:
@@ -76,18 +82,21 @@ jobs:
             echo "enabled-skus=$SKU_NAME" >> $GITHUB_OUTPUT
           fi
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       tracy: true
-      build-wheel: true
+      build-inplace-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
   models-device-perf-tests:
-    needs: [build-artifact, resolve-skus]
+    needs: [check-harbor, build-artifact, resolve-skus]
     secrets: inherit
     uses: ./.github/workflows/models-device-perf-tests-impl.yaml
     with:

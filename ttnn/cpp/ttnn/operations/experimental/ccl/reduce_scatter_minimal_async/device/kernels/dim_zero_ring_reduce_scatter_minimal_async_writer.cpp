@@ -3,7 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_mux_v2_sender.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
@@ -16,6 +20,7 @@
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include <cstdint>
 #include <utility>
+#include "api/tensor/noc_traits.h"
 
 using address_t = uint32_t;
 using ttnn::ccl::Topology;
@@ -36,17 +41,9 @@ constexpr uint32_t output_num_pages = get_named_compile_time_arg_val("output_num
 constexpr uint32_t batch_num_pages = get_named_compile_time_arg_val("batch_num_pages");
 constexpr uint32_t slice_B = get_named_compile_time_arg_val("slice_B");
 
-#ifdef USE_WORKER_MUX
-constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(0);
-constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(1);
-constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(2);
-constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(3);
-constexpr uint32_t num_mux_clients = get_compile_time_arg_val(4);
-
-constexpr uint32_t num_ct_args = 5;
-#else
+// The V2 fabric mux client (FabricMuxV2Sender) is built entirely from runtime args, so there are no
+// worker-side mux compile-time args in either the mux or the direct-fabric path.
 constexpr uint32_t num_ct_args = 0;
-#endif
 
 constexpr ccl_routing_utils::line_unicast_route_info_t forward_unicast_route_info =
     ccl_routing_utils::get_line_unicast_route_info_from_args<num_ct_args>();
@@ -71,6 +68,8 @@ void kernel_main() {
     address_t output_address = get_arg_val<address_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t opposite_core_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t opposite_core_y = get_arg_val<uint32_t>(arg_idx++);
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
     size_t batch_ready_sem = get_arg_val<uint32_t>(arg_idx++);
     bool use_barrier_sem = get_arg_val<uint32_t>(arg_idx++);
@@ -81,23 +80,11 @@ void kernel_main() {
     const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
 
 #ifdef USE_WORKER_MUX
-    const bool mux_connection_valid = get_arg_val<uint32_t>(arg_idx++) == 1;
-    const bool is_termination_master = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t fabric_mux_x = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t fabric_mux_y = get_arg_val<uint32_t>(arg_idx++);
-    const size_t fabric_mux_channel_base_address = get_arg_val<uint32_t>(arg_idx++);
-    const size_t fabric_mux_connection_info_address = get_arg_val<uint32_t>(arg_idx++);
-    const size_t fabric_mux_connection_handshake_address = get_arg_val<uint32_t>(arg_idx++);
-    const size_t fabric_mux_flow_control_address = get_arg_val<uint32_t>(arg_idx++);
-    const size_t fabric_mux_buffer_index_address = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t fabric_mux_channel_id = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t termination_sync_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-    uint32_t local_fabric_mux_status_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-    uint32_t local_flow_control_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-    uint32_t local_teardown_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-    uint32_t local_buffer_index_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-    uint32_t termination_master_noc_x = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t termination_master_noc_y = get_arg_val<uint32_t>(arg_idx++);
+    // The V2 mux client args are the last runtime args; FabricMuxV2Sender::build_from_args consumes
+    // exactly what FabricMuxV2Config::append_client_connection_rt_args serialized on the host.
+    size_t mux_arg_idx = arg_idx;
+    auto mux_sender = tt::tt_fabric::FabricMuxV2Sender<>::build_from_args(mux_arg_idx);
+    arg_idx = mux_arg_idx;
 #endif
 
     const auto& unicast_route_info = (direction == 1) ? forward_unicast_route_info : backward_unicast_route_info;
@@ -112,26 +99,11 @@ void kernel_main() {
     constexpr auto output_tensor_args = TensorAccessorArgs<intermediate_tensor_args.next_compile_time_args_offset()>();
     auto output_addrgen = TensorAccessor(output_tensor_args, output_address);
 
-#ifdef USE_WORKER_MUX
-    auto mux_connection_handle = tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
-        fabric_mux_x,
-        fabric_mux_y,
-        fabric_mux_channel_id,
-        fabric_mux_num_buffers_per_channel,
-        fabric_mux_channel_buffer_size_bytes,
-        fabric_mux_channel_base_address,
-        fabric_mux_connection_info_address,
-        fabric_mux_connection_handshake_address,
-        fabric_mux_flow_control_address,
-        fabric_mux_buffer_index_address,
-        local_flow_control_address,
-        local_teardown_address,
-        local_buffer_index_address);
+    Noc noc_obj;
+    CircularBuffer cb_compute_output(cb_compute_output_id);
+    CircularBuffer cb_reader_output(cb_reader_output_id);
 
-    // need to wait for fabric mux to be ready to accept connections
-    tt::tt_fabric::wait_for_fabric_endpoint_ready(
-        fabric_mux_x, fabric_mux_y, fabric_mux_status_address, local_fabric_mux_status_address);
-#else
+#ifndef USE_WORKER_MUX
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
 #endif
@@ -146,8 +118,9 @@ void kernel_main() {
     ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_seminc, unicast_route_info);
 
 #ifdef USE_WORKER_MUX
-    tt::tt_fabric::fabric_client_connect(mux_connection_handle);
-    auto* fabric_connection_ptr = &mux_connection_handle;
+    // Blocking open: waits for the mux to be READY, then requests the connection.
+    mux_sender.open();
+    auto* fabric_connection_ptr = &mux_sender;
 #else
     if (fabric_connection.is_logically_connected()) {
         fabric_connection.open();
@@ -165,16 +138,23 @@ void kernel_main() {
             0,                           // ignore
             static_cast<uint32_t>(1)});  // increment 1
     if (use_barrier_sem) {
-        // multicast to entire ring of workers going in the same direction
-        uint64_t barrier_sem_noc_addr_in_pkt =
-            safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, barrier_sem, 0);
-        ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_mcastseminc, multicast_route_info);
-        fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-            fabric_connection_ptr,
-            pkt_hdr_mcastseminc,
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
+        // Use neighbor unicast instead of multicast to support reshaped 'logical linear' mesh devices
+        ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_seminc, unicast_route_info);
+        fabric_unicast_noc_unicast_atomic_inc_set_state<
+            UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+            pkt_hdr_seminc,
+            static_cast<uint8_t>(unicast_route_info.distance_in_hops),
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                0,                           // ignore
+                static_cast<uint32_t>(1)});  // increment 1
 
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), ring_size - 1);
+        uint64_t opposite_barrier_sem_noc_addr = safe_get_noc_addr(opposite_core_x, opposite_core_y, barrier_sem, 0);
+        fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+            fabric_connection_ptr,
+            pkt_hdr_seminc,
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{opposite_barrier_sem_noc_addr, 0});
+
+        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 1);
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
     }
 
@@ -198,8 +178,8 @@ void kernel_main() {
 
     int slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
     for (uint32_t i = 0; i < ring_size; ++i) {
-        // If not the last slice, write what's on cb_output_id forward
-        uint32_t cb_output_id = i > 0 ? cb_compute_output_id : cb_reader_output_id;
+        // If not the last slice, write what's on cb_output forward
+        CircularBuffer& cb_output = i > 0 ? cb_compute_output : cb_reader_output;
 
         uint32_t actual_slice_idx;
         if (direction) {
@@ -232,8 +212,8 @@ void kernel_main() {
                         tiles_to_read_in_current_direction = std::min(tiles_remaining_to_read, tile_granularity);
                     }
 
-                    cb_wait_front(cb_output_id, tile_granularity);
-                    size_t l1_read_addr = get_read_ptr(cb_output_id);
+                    cb_output.wait_front(tile_granularity);
+                    size_t l1_read_addr = cb_output.get_read_ptr();
                     while (tiles_read_in_current_direction < tiles_to_read_in_current_direction) {
                         uint32_t tiles_remaining_to_read_in_current_direction =
                             tiles_to_read_in_current_direction - tiles_read_in_current_direction;
@@ -275,9 +255,9 @@ void kernel_main() {
                                 break;
                             }
                         }
-                        noc_async_writes_flushed();
+                        noc_obj.async_writes_flushed();
                     }
-                    cb_pop_front(cb_output_id, tile_granularity);
+                    cb_output.pop_front(tile_granularity);
 
                     // Skip the tiles going the other direction
                     tiles_remaining_to_read = tiles_to_read - tiles_read;
@@ -314,7 +294,7 @@ void kernel_main() {
                     pkt_hdr_seminc,
                     tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
             }
-            noc_async_writes_flushed();
+            noc_obj.async_writes_flushed();
         } else {
             // Otherwise, on the last slice, write it to output buffer
             uint32_t output_tile_id_start = 0;
@@ -335,18 +315,22 @@ void kernel_main() {
                         tiles_to_read_in_current_direction = std::min(tiles_remaining_to_read, tile_granularity);
                     }
 
-                    cb_wait_front(cb_output_id, tile_granularity);
-                    size_t l1_read_addr = get_read_ptr(cb_output_id);
+                    cb_output.wait_front(tile_granularity);
+                    size_t l1_read_offset = 0;
                     for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
                         uint32_t output_tile_id = output_tile_id_start + tiles_read;
-                        uint64_t local_noc_addr = output_addrgen.get_noc_addr(output_tile_id);
-                        noc_async_write(l1_read_addr, local_noc_addr, page_size);
-                        l1_read_addr += page_size;
+                        noc_obj.async_write(
+                            cb_output,
+                            output_addrgen,
+                            page_size,
+                            {.offset_bytes = l1_read_offset},
+                            {.page_id = output_tile_id});
+                        l1_read_offset += page_size;
                         tiles_read++;
                     }
 
-                    noc_async_write_barrier();
-                    cb_pop_front(cb_output_id, tile_granularity);
+                    noc_obj.async_write_barrier();
+                    cb_output.pop_front(tile_granularity);
 
                     // Skip the tiles going the other direction
                     tiles_remaining_to_read = tiles_to_read - tiles_read;
@@ -372,38 +356,31 @@ void kernel_main() {
         }
     }
 
-    uint64_t batch_ready_sem_noc_addr_in_pkt =
-        safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, batch_ready_sem, 0);
-    fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+    // Use neighbor unicast instead of multicast to support reshaped 'logical linear' mesh devices
+    uint64_t opposite_batch_ready_sem_noc_addr =
+        safe_get_noc_addr(opposite_core_x, opposite_core_y, batch_ready_sem, 0);
+    fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
         fabric_connection_ptr,
-        pkt_hdr_mcastseminc,
-        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{batch_ready_sem_noc_addr_in_pkt, 0});
-    noc_async_writes_flushed();
+        pkt_hdr_seminc,
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{opposite_batch_ready_sem_noc_addr, 0});
+    noc_obj.async_writes_flushed();
 
     // Reset the global semaphore
-    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), ring_size - 1);
+    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 1);
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 0);
 
-    noc_async_write_barrier();
-    noc_async_atomic_barrier();
+    noc_obj.async_write_barrier();
+    noc_obj.async_atomic_barrier();
 
 #ifdef USE_WORKER_MUX
-    tt::tt_fabric::fabric_client_disconnect(mux_connection_handle);
-    if (is_termination_master) {
-        auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
-        noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
-        tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
-    } else {
-        uint64_t dest_addr =
-            safe_get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_address, 0);
-        noc_semaphore_inc(dest_addr, 1);
-        noc_async_atomic_barrier();
-    }
+    // Close this client's connection. The V2 mux auto-terminates once all of its clients have closed,
+    // so no termination-master coordination or explicit terminate signal is needed.
+    mux_sender.close();
 #else
     if (fabric_connection.is_logically_connected()) {
         fabric_connection.close();
     }
 #endif
 
-    noc_async_write_barrier();
+    noc_obj.async_write_barrier();
 }

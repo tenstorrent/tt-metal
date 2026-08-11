@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/dataflow/circular_buffer.h"
 
@@ -25,7 +26,8 @@ void kernel_main() {
 
     // we are looking at block
     // out = in0[r x k]*in1[k x c]
-    mm_init(in0_cb, in1_cb, out_cb);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb, in1_cb, out_cb);
+    matmul_init(in0_cb, in1_cb);
     tile_regs_acquire();
 
     uint32_t out_tile_index = 0;

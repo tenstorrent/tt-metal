@@ -4,123 +4,519 @@
 
 #include "ttnn/operations/data_movement/indexed_fill/device/indexed_fill_program_factory.hpp"
 
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <algorithm>
+
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/tile.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/work_split.hpp>
 
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/data_movement/indexed_fill/device/indexed_fill_utils.hpp"
+
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim {
 
-ProgramDescriptor IndexedFillProgramFactory::create_descriptor(
-    const IndexedFillParams& /*operation_attributes*/, const IndexedFillInputs& tensor_args, Tensor& output) {
+namespace {
+
+// Kernel mode encoding passed as the `mode` compile-time arg (see indexed_fill_reader.cpp header).
+constexpr uint32_t MODE_GENERIC = 0;
+constexpr uint32_t MODE_NATIVE = 1;
+constexpr uint32_t MODE_SHARD_LOCAL_INTERLEAVED_B = 2;
+constexpr uint32_t MODE_SHARD_LOCAL_SHARDED_B = 3;
+
+// Metal 2.0 spec resource names. Prefixed to stay distinct under unity builds
+const KernelSpecName IF_READER{"if_reader"};
+const KernelSpecName IF_WRITER{"if_writer"};
+const DFBSpecName IF_DATA_DFB{"if_data"};
+const DFBSpecName IF_BATCH_DFB{"if_batch"};
+const TensorParamName IF_BATCH_IDS{"if_batch_ids"};
+const TensorParamName IF_INPUT_A{"if_input_a"};
+const TensorParamName IF_INPUT_B{"if_input_b"};
+const TensorParamName IF_OUTPUT{"if_output"};
+
+// Geometry shared by every path; mirrors the page/stride layout the kernels expect.
+struct IndexedFillGeometry {
+    uint32_t outer_count;
+    uint32_t inner_count;
+    uint32_t S_dim;
+    uint32_t outer_stride_a;  // doubles as output stride: output shape == input_a shape
+    uint32_t outer_stride_b;
+    uint32_t shard_ppb;
+    uint32_t total_batches_per_core;
+};
+
+IndexedFillGeometry compute_geometry(
+    const Tensor& input_a, int64_t dim, uint32_t b, uint32_t B, bool is_tile, bool is_shard_local) {
+    const int64_t rank = static_cast<int64_t>(input_a.padded_shape().rank());
+    const int64_t page_boundary = is_tile ? rank - 2 : rank - 1;
+
+    uint32_t outer_count = 1;
+    for (int64_t i = 0; i < dim; ++i) {
+        outer_count *= input_a.padded_shape()[i];
+    }
+
+    uint32_t inner_count = 1;
+    for (int64_t i = dim + 1; i < page_boundary; ++i) {
+        inner_count *= input_a.padded_shape()[i];
+    }
+    if (is_tile) {
+        inner_count *= (input_a.padded_shape()[rank - 2] / tt::constants::TILE_HEIGHT) *
+                       (input_a.padded_shape()[rank - 1] / tt::constants::TILE_WIDTH);
+    }
+
+    const uint32_t S_dim = input_a.padded_shape()[dim];
+
+    uint32_t shard_ppb = 0;
+    uint32_t total_batches_per_core = 0;
+    if (is_shard_local) {
+        const auto& shard_spec = *input_a.memory_config().shard_spec();
+        const uint32_t shard_width = shard_spec.shape[1];
+        // Rank-4 assumed ([B, H, W, D]); enforced by validate_on_program_cache_miss.
+        const uint32_t H_N = input_a.padded_shape()[1] * input_a.padded_shape()[2];
+        if (is_tile) {
+            shard_ppb = (H_N / tt::constants::TILE_HEIGHT) * (shard_width / tt::constants::TILE_WIDTH);
+        } else {
+            shard_ppb = H_N;
+        }
+        using tt::tt_metal::TensorMemoryLayout;
+        if (input_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+            total_batches_per_core = B;
+        } else {
+            total_batches_per_core = B / shard_spec.grid.bounding_box().grid_size().y;
+        }
+    }
+
+    const uint32_t outer_stride_a = S_dim * inner_count;
+    return {
+        .outer_count = outer_count,
+        .inner_count = inner_count,
+        .S_dim = S_dim,
+        .outer_stride_a = outer_stride_a,
+        .outer_stride_b = b * inner_count,
+        .shard_ppb = shard_ppb,
+        .total_batches_per_core = total_batches_per_core,
+    };
+}
+
+// Column-offset args for the shard-local INTERLEAVED-B reader path.
+struct ShardColOffsets {
+    uint32_t b_full_ppb;
+    uint32_t shard_tile_w;
+    uint32_t full_tile_w;
+    uint32_t col_page_offset;
+    uint32_t col_byte_offset;
+};
+
+ShardColOffsets compute_shard_col_offsets(
+    const Tensor& input_a, const tt::tt_metal::ShardSpec& shard_spec, uint32_t cx, bool is_tile) {
+    // Rank-4 assumed ([B, H, W, D]); enforced by validate_on_program_cache_miss.
+    const uint32_t b_full_ppb =
+        is_tile ? (input_a.padded_shape()[1] * input_a.padded_shape()[2] / tt::constants::TILE_HEIGHT) *
+                      (input_a.padded_shape()[-1] / tt::constants::TILE_WIDTH)
+                : input_a.padded_shape()[1] * input_a.padded_shape()[2];
+    const uint32_t shard_tile_w = is_tile ? (shard_spec.shape[1] / tt::constants::TILE_WIDTH) : 1u;
+    const uint32_t full_tile_w = is_tile ? (input_a.padded_shape()[-1] / tt::constants::TILE_WIDTH) : 1u;
+    return {
+        .b_full_ppb = b_full_ppb,
+        .shard_tile_w = shard_tile_w,
+        .full_tile_w = full_tile_w,
+        .col_page_offset = is_tile ? cx * shard_tile_w : 0u,
+        .col_byte_offset = !is_tile ? cx * shard_spec.shape[1] * input_a.element_size() : 0u,
+    };
+}
+
+}  // namespace
+
+ttnn::device_operation::ProgramArtifacts IndexedFillProgramFactory::create_program_artifacts(
+    const IndexedFillParams& operation_attributes, const IndexedFillInputs& tensor_args, Tensor& output) {
     const auto& batch_ids = tensor_args.batch_id;
     const auto& input_a = tensor_args.input_tensor_a;
     const auto& input_b = tensor_args.input_tensor_b;
 
-    IDevice* device = input_a.device();
+    const int64_t dim = operation_attributes.dim;
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    auto set_of_core_ranges = num_cores_to_corerangeset(num_cores_x * num_cores_y, compute_with_storage_grid_size);
-    CoreRangeSet all_cores(set_of_core_ranges);
-
-    uint32_t B = input_a.padded_shape()[0];
-    uint32_t b = input_b.padded_shape()[0];
+    const uint32_t B = input_a.padded_shape()[0];
+    // `b` = number of replacement slices = size of target dimension in input_b.
+    const uint32_t b = static_cast<uint32_t>(input_b.padded_shape()[dim]);
 
     TT_ASSERT(batch_ids.padded_shape()[-1] == b);
 
-    // parallelize across batch
-    constexpr uint32_t cb_index = 0;
-    constexpr uint32_t batch_cb_index = 1;
+    // Worker grid: set by get_indexed_fill_worker_grid (always non-empty).
+    const CoreRangeSet all_cores = operation_attributes.worker_grid;
+    auto cores = corerange_to_cores(all_cores, std::nullopt, /*row_wise=*/true);
+    const uint32_t num_cores_total = static_cast<uint32_t>(cores.size());
 
-    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input_a.dtype());
+    tt::DataFormat dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_a.dtype());
 
-    uint32_t page_size = input_a.padded_shape()[-1] * input_a.element_size();
-    uint32_t rounded_page_size = round_up_to_mul32(page_size);
-    uint32_t batch_page_size = round_up_to_mul32(b * sizeof(uint32_t));
+    const bool is_tile = input_a.layout() == Layout::TILE;
 
-    ProgramDescriptor desc;
-
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = 2 * rounded_page_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(cb_index),
-            .data_format = cb_data_format,
-            .page_size = rounded_page_size,
-        }}},
-    });
-
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = 2 * batch_page_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(batch_cb_index),
-            .data_format = cb_data_format,
-            .page_size = batch_page_size,
-        }}},
-    });
-
-    Buffer* batch_ids_buffer = batch_ids.buffer();
     Buffer* input_a_buffer = input_a.buffer();
     Buffer* input_b_buffer = input_b.buffer();
     Buffer* output_buffer = output.buffer();
 
-    // Reader compile-time args + tensor accessor args for batch_ids, input_a, input_b
-    std::vector<uint32_t> reader_compile_time_args = {cb_index, batch_cb_index, page_size};
-    TensorAccessorArgs(*input_a_buffer).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*input_b_buffer).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*batch_ids_buffer).append_to(reader_compile_time_args);
+    // -----------------------------------------------------------------------------------
+    // Path selection
+    // -----------------------------------------------------------------------------------
+    // Native HEIGHT_SHARDED and shard-local WIDTH/BLOCK_SHARDED paths are designed around
+    // dim=0 (one shard per batch). For dim != 0 the shard grid does not align with the
+    // target dimension, so always use the generic 2D-stride path instead.
+    const bool is_native = (dim == 0) && ttnn::operations::data_movement::indexed_fill::is_native_indexed_fill_sharding(
+                                             input_a.tensor_spec(),
+                                             input_b.tensor_spec(),
+                                             batch_ids.tensor_spec(),
+                                             operation_attributes.output_mem_config);
 
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/indexed_fill/device/kernels/dataflow/indexed_fill_reader.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.config = ReaderConfigDescriptor{};
+    const bool is_shard_local =
+        (dim == 0) && !is_native &&
+        ttnn::operations::data_movement::indexed_fill::is_shard_local_indexed_fill(
+            input_a.tensor_spec(), input_b.tensor_spec(), operation_attributes.output_mem_config);
 
-    std::vector<uint32_t> writer_compile_time_args = {cb_index, page_size};
-    TensorAccessorArgs(*output_buffer).append_to(writer_compile_time_args);
+    const bool b_same_sharded =
+        is_shard_local && input_b.is_sharded() && input_b.memory_config().shard_spec().has_value() &&
+        input_b.memory_config().shard_spec()->grid == input_a.memory_config().shard_spec()->grid;
 
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source = "ttnn/cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_cores;
-    writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.config = WriterConfigDescriptor{};
+    uint32_t kernel_mode = MODE_GENERIC;
+    if (is_native) {
+        kernel_mode = MODE_NATIVE;
+    } else if (is_shard_local) {
+        kernel_mode = b_same_sharded ? MODE_SHARD_LOCAL_SHARDED_B : MODE_SHARD_LOCAL_INTERLEAVED_B;
+    }
 
-    auto cores = grid_to_cores(num_cores_x * num_cores_y, num_cores_x, num_cores_y, false);
+    // -----------------------------------------------------------------------------------
+    // Page geometry
+    //
+    // Full-tensor geometry (native / generic paths):
+    //   page_size  = one full row (ROW_MAJOR) or one tile (TILE)
+    //   inner_count = pages per (outer, slice) pair (== pages per batch for dim=0)
+    //
+    // Shard-local geometry (shard_local path):
+    //   shard_page_size = shard_width * elem_size (ROW_MAJOR) or tile_size (TILE)
+    //   shard_ppb       = pages per batch within this shard
+    //   total_batches   = B (WIDTH) or B/n_y (BLOCK) per core
+    // -----------------------------------------------------------------------------------
+    const auto geo = compute_geometry(input_a, dim, b, B, is_tile, is_shard_local);
+    const uint32_t outer_count = geo.outer_count;
+    const uint32_t inner_count = geo.inner_count;
+    const uint32_t S_dim = geo.S_dim;
+    const uint32_t outer_stride_a = geo.outer_stride_a;
+    const uint32_t outer_stride_b = geo.outer_stride_b;
+    const uint32_t shard_ppb = geo.shard_ppb;
+    const uint32_t total_batches_per_core = geo.total_batches_per_core;
 
-    uint32_t batch_size_in_sticks = input_a.padded_shape()[1] * input_a.padded_shape()[2];
+    uint32_t page_size = 0;
+    if (is_tile) {
+        page_size = tt::tile_size(dfb_data_format);
+    } else {
+        page_size = input_a.padded_shape()[-1] * input_a.element_size();
+    }
+    const uint32_t rounded_page_size = is_tile ? page_size : round_up_to_mul32(page_size);
 
-    for (uint32_t i = 0; i < cores.size(); ++i) {
-        const CoreCoord& core = cores[i];
-        if (i < B) {
-            // Active core: real work + Buffer* bindings for fast cache-hit patching.
-            reader_desc.emplace_runtime_args(
-                core, {batch_ids_buffer, b, input_a_buffer, input_b_buffer, batch_size_in_sticks, i});
-            writer_desc.emplace_runtime_args(
-                core, {output_buffer, page_size, batch_size_in_sticks, i * batch_size_in_sticks});
-        } else {
-            // Idle core: short-circuits because local_b/local_batch_size_in_sticks are 0.
-            // Pass plain 0u for buffer slots so we don't register a BufferBinding here —
-            // those bindings would force the framework to do a GetRuntimeArgs lookup on
-            // every cache hit for cores that never read/write the buffer.  The kernel
-            // ignores the address when its work count is 0.
-            reader_desc.emplace_runtime_args(core, {0u, 0u, 0u, 0u, 0u, i});
-            writer_desc.emplace_runtime_args(core, {0u, page_size, 0u, 0u});
+    uint32_t shard_page_size = 0;
+    if (is_shard_local) {
+        const auto& shard_spec = *input_a.memory_config().shard_spec();
+        const uint32_t shard_width = shard_spec.shape[1];
+        shard_page_size = is_tile ? tt::tile_size(dfb_data_format) : shard_width * input_a.element_size();
+    }
+
+    // Generic interleaved path: the DFB stages whole interleaved pages copied verbatim from
+    // input to output. A NOC DRAM access always moves a full alignment-sized chunk, so the DFB
+    // slot AND the per-page transfer must be sized to the buffer's *aligned* page size, not a
+    // hardcoded 32B multiple. Wormhole DRAM alignment is 32B (== round_up_to_mul32), so the old
+    // sizing happened to be correct there; Blackhole DRAM alignment is 64B, so a 32B DFB slot is
+    // overrun by the 64B NOC read and adjacent staged pages are clobbered (wrong output, PCC ~0.5).
+    // This bites when the last-dim row is smaller than the DRAM alignment, e.g. the permute
+    // fallback for dim==rank-1 ROW_MAJOR, which feeds the dim=0 primitive a tiny (4-elem = 8B) row.
+    // input_a / input_b / output share the page (last) dim on this path, so a single aligned size
+    // applies; std::max keeps it correct even if alignments ever differ.
+    const uint32_t generic_aligned_page_size = is_tile ? rounded_page_size
+                                                        : static_cast<uint32_t>(std::max({input_a_buffer->aligned_page_size(),
+                                                                                          input_b_buffer->aligned_page_size(),
+                                                                                          output_buffer->aligned_page_size()}));
+
+    // Use shard geometry for the shard_local path, full aligned pages for the generic path.
+    const uint32_t kernel_page_size =
+        is_shard_local ? shard_page_size : (is_native ? page_size : generic_aligned_page_size);
+    const uint32_t kernel_rounded_page_size = is_shard_local ? round_up_to_mul32(shard_page_size)
+                                              : is_native     ? rounded_page_size
+                                                              : generic_aligned_page_size;
+    const uint32_t batch_size_in_pages = is_shard_local ? shard_ppb : inner_count;
+    const uint32_t total_pages_in_shard = total_batches_per_core * shard_ppb;
+    const uint32_t batch_page_size = round_up_to_mul32(b * sizeof(uint32_t));
+
+    // -----------------------------------------------------------------------------------
+    // Program spec
+    // -----------------------------------------------------------------------------------
+    ProgramSpec spec;
+    spec.name = "indexed_fill";
+
+    // Typed tensor bindings replace the four Buffer* address RTAs. All four are declared in
+    // every path; each has at least one user (reader/writer accessor, or the data DFB's
+    // borrowed_from for the output in the native / shard-local paths).
+    spec.tensor_parameters = {
+        TensorParameter{.unique_id = IF_BATCH_IDS, .spec = batch_ids.tensor_spec()},
+        TensorParameter{.unique_id = IF_INPUT_A, .spec = input_a.tensor_spec()},
+        TensorParameter{.unique_id = IF_INPUT_B, .spec = input_b.tensor_spec()},
+        TensorParameter{.unique_id = IF_OUTPUT, .spec = output.tensor_spec()},
+    };
+
+    // -----------------------------------------------------------------------------------
+    // Data DFB (reader PRODUCER, writer CONSUMER).
+    //
+    // Native / shard-local path: borrowed onto the output buffer so reader writes land
+    // directly in the output's per-core SRAM shard, and the writer becomes a tiny wait/pop
+    // stub. The borrowed_from binding re-points the DFB at the (possibly moved) output
+    // buffer on every cache hit, resolving the backing address from the output TensorArgument.
+    //
+    // Fallback path: local DFB with the original double-buffered (2-page) capacity.
+    // -----------------------------------------------------------------------------------
+    const uint32_t data_dfb_num_entries = is_native ? batch_size_in_pages : is_shard_local ? total_pages_in_shard : 2u;
+    DataflowBufferSpec data_dfb{
+        .unique_id = IF_DATA_DFB,
+        .entry_size = kernel_rounded_page_size,
+        .num_entries = data_dfb_num_entries,
+        .data_format_metadata = dfb_data_format,
+    };
+    if (is_native || is_shard_local) {
+        data_dfb.borrowed_from = IF_OUTPUT;
+    }
+    spec.dataflow_buffers.push_back(data_dfb);
+
+    // Batch DFB: staging buffer for the `b` uint32 batch ids. Touched only by the reader,
+    // which fills it (reserve_back / push_back) and reads the staged indices straight back
+    // through a raw SRAM pointer (get_write_ptr) rather than a FIFO consume. It is therefore a
+    // single-ended buffer, so bind the reader as both PRODUCER and CONSUMER (self-loop). The
+    // data format is inert here (the buffer is filled/read by raw byte access at a byte page
+    // size), so the value set for it is cosmetic.
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = IF_BATCH_DFB,
+        .entry_size = batch_page_size,
+        .num_entries = 2,
+        .data_format_metadata = dfb_data_format,
+    });
+
+    const auto arch = input_a.device()->arch();
+
+    // ---- Reader: single unified kernel; path selected via the `mode` compile-time arg.
+    // The one source serves all four modes through `if constexpr (mode)`. Because the named
+    // `args::` tokens are emitted per-kernel from the schema, and name lookup still runs on the
+    // discarded `if constexpr` branches, every runtime-arg name any branch reads must be declared
+    // here for every path (the union below); the host sets 0 for the names a given path omits.
+    KernelSpec reader{
+        .unique_id = IF_READER,
+        .source = "ttnn/cpp/ttnn/operations/data_movement/indexed_fill/device/kernels/dataflow/indexed_fill_reader.cpp",
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = IF_DATA_DFB, .accessor_name = "in0", .endpoint_type = DFBEndpointType::PRODUCER},
+                DFBBinding{
+                    .dfb_spec_name = IF_BATCH_DFB,
+                    .accessor_name = "batch",
+                    .endpoint_type = DFBEndpointType::PRODUCER},
+                DFBBinding{
+                    .dfb_spec_name = IF_BATCH_DFB,
+                    .accessor_name = "batch",
+                    .endpoint_type = DFBEndpointType::CONSUMER},
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{.tensor_parameter_name = IF_BATCH_IDS, .accessor_name = "batch_ids"},
+                TensorBinding{.tensor_parameter_name = IF_INPUT_A, .accessor_name = "input_a"},
+                TensorBinding{.tensor_parameter_name = IF_INPUT_B, .accessor_name = "input_b"},
+            },
+        .compile_time_args = {{"page_size", kernel_page_size}, {"mode", kernel_mode}},
+        .runtime_arg_schema =
+            {.runtime_arg_names =
+                 {// Read in every path:
+                  "batch_id_size",
+                  "batch_size_in_pages",
+                  "my_batch_id",
+                  // Generic path only:
+                  "outer_count",
+                  "outer_stride_a",
+                  "outer_stride_b",
+                  "num_slices",
+                  // Shard-local path only:
+                  "batch_offset_a",
+                  "total_local_batches",
+                  "b_full_ppb",
+                  "shard_tile_w",
+                  "full_tile_w",
+                  "col_page_offset",
+                  "col_byte_offset"}},
+        .hw_config = ttnn::create_reader_datamovement_config(arch),
+    };
+
+    // ---- Writer: path-dependent source and bindings.
+    KernelSpec writer{
+        .unique_id = IF_WRITER,
+        .hw_config = ttnn::create_writer_datamovement_config(arch),
+    };
+    if (is_native || is_shard_local) {
+        // Data DFB is borrowed onto the output buffer: the writer just synchronises on the DFB.
+        writer.source =
+            "ttnn/cpp/ttnn/operations/data_movement/indexed_fill/device/kernels/dataflow/indexed_fill_writer.cpp";
+        writer.dfb_bindings = {DFBBinding{
+            .dfb_spec_name = IF_DATA_DFB, .accessor_name = "in0", .endpoint_type = DFBEndpointType::CONSUMER}};
+        writer.runtime_arg_schema = {.runtime_arg_names = {"batch_size_in_pages"}};
+    } else {
+        // Generic path: scatter-write via the strided writer kernel.
+        writer.source =
+            "ttnn/cpp/ttnn/operations/data_movement/indexed_fill/device/kernels/dataflow/"
+            "indexed_fill_writer_strided.cpp";
+        writer.dfb_bindings = {DFBBinding{
+            .dfb_spec_name = IF_DATA_DFB, .accessor_name = "in0", .endpoint_type = DFBEndpointType::CONSUMER}};
+        writer.tensor_bindings = {TensorBinding{.tensor_parameter_name = IF_OUTPUT, .accessor_name = "output"}};
+        writer.runtime_arg_schema = {
+            .runtime_arg_names = {
+                "page_size", "outer_count", "inner_count", "outer_stride", "slice_start", "num_slices"}};
+    }
+
+    spec.kernels.push_back(reader);
+    spec.kernels.push_back(writer);
+    spec.work_units = {WorkUnitSpec{.name = "main", .kernels = {IF_READER, IF_WRITER}, .target_nodes = all_cores}};
+
+    // -----------------------------------------------------------------------------------
+    // Per-core runtime arguments.
+    // Work-splitting for the generic path: distribute S_dim slices across num_cores_total cores
+    // using ceiling-division. Cores [0, extra) receive slices_per_core + 1 slices; others receive
+    // slices_per_core. When S_dim < num_cores_total, cores with index >= S_dim are idle.
+    // -----------------------------------------------------------------------------------
+    ProgramRunArgs run_args;
+    KernelRunArgs reader_run{.kernel = IF_READER};
+    KernelRunArgs writer_run{.kernel = IF_WRITER};
+
+    const uint32_t slices_per_core = (num_cores_total > 0) ? S_dim / num_cores_total : 0;
+    const uint32_t extra_slices = (num_cores_total > 0) ? S_dim % num_cores_total : 0;
+
+    const uint32_t shard_n_x = is_shard_local ? all_cores.bounding_box().grid_size().x : 0;
+
+    // Precompute per-column offsets for the shard-local path: only shard_n_x unique cx values
+    // exist, but the loop runs over all n_x * n_y cores. Avoids redundant recomputation for
+    // every core in the same column.
+    std::vector<ShardColOffsets> col_offsets;
+    if (is_shard_local && shard_n_x > 0) {
+        const auto& shard_spec_pre = *input_a.memory_config().shard_spec();
+        col_offsets.resize(shard_n_x);
+        for (uint32_t cx = 0; cx < shard_n_x; ++cx) {
+            col_offsets[cx] = compute_shard_col_offsets(input_a, shard_spec_pre, cx, is_tile);
         }
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
+    for (uint32_t i = 0; i < num_cores_total; ++i) {
+        const CoreCoord& core = cores[i];
 
-    return desc;
+        if (is_native) {
+            const bool active = i < B;
+            const uint32_t local_b = active ? b : 0;
+            const uint32_t local_batch_size = active ? batch_size_in_pages : 0;
+
+            AddRuntimeArgsForNode(
+                reader_run.runtime_arg_values,
+                core,
+                {{"batch_id_size", local_b},
+                 {"batch_size_in_pages", local_batch_size},
+                 {"my_batch_id", i},
+                 {"outer_count", 0u},
+                 {"outer_stride_a", 0u},
+                 {"outer_stride_b", 0u},
+                 {"num_slices", 0u},
+                 {"batch_offset_a", 0u},  // unused in native mode
+                 {"total_local_batches", 0u},
+                 {"b_full_ppb", 0u},
+                 {"shard_tile_w", 0u},
+                 {"full_tile_w", 0u},
+                 {"col_page_offset", 0u},
+                 {"col_byte_offset", 0u}});
+            AddRuntimeArgsForNode(writer_run.runtime_arg_values, core, {{"batch_size_in_pages", local_batch_size}});
+
+        } else if (is_shard_local) {
+            // Shard row/col for BLOCK_SHARDED: indices within the shard grid bounding box.
+            const uint32_t shard_row = (shard_n_x > 0) ? (i / shard_n_x) : 0;
+            const uint32_t cx = (shard_n_x > 0) ? (i % shard_n_x) : 0;
+            const uint32_t batch_offset_a = shard_row * total_batches_per_core;
+
+            // Column-offset state for the INTERLEAVED_B read path (precomputed above).
+            const auto& col = col_offsets[cx];
+
+            AddRuntimeArgsForNode(
+                reader_run.runtime_arg_values,
+                core,
+                {{"batch_id_size", b},
+                 {"batch_size_in_pages", shard_ppb},  // batch_size_in_pages == shard_ppb for this path
+                 {"my_batch_id", 0u},                 // unused in shard_local mode
+                 {"outer_count", 0u},
+                 {"outer_stride_a", 0u},
+                 {"outer_stride_b", 0u},
+                 {"num_slices", 0u},
+                 {"batch_offset_a", batch_offset_a},
+                 {"total_local_batches", total_batches_per_core},
+                 {"b_full_ppb", col.b_full_ppb},
+                 {"shard_tile_w", col.shard_tile_w},
+                 {"full_tile_w", col.full_tile_w},
+                 {"col_page_offset", col.col_page_offset},
+                 {"col_byte_offset", col.col_byte_offset}});
+            AddRuntimeArgsForNode(writer_run.runtime_arg_values, core, {{"batch_size_in_pages", total_pages_in_shard}});
+
+        } else {
+            // Generic 2D-stride path: each core handles a contiguous range of slices.
+            uint32_t slice_start = 0;
+            uint32_t num_slices = 0;
+            if (i < extra_slices) {
+                slice_start = i * (slices_per_core + 1);
+                num_slices = slices_per_core + 1;
+            } else if (slices_per_core > 0) {
+                slice_start = extra_slices * (slices_per_core + 1) + (i - extra_slices) * slices_per_core;
+                num_slices = slices_per_core;
+            } else {
+                // S_dim < num_cores_total: core i >= S_dim is idle.
+                slice_start = S_dim;
+                num_slices = 0;
+            }
+
+            AddRuntimeArgsForNode(
+                reader_run.runtime_arg_values,
+                core,
+                {{"batch_id_size", b},  // kernel exits early when num_slices == 0
+                 {"batch_size_in_pages", inner_count},
+                 {"my_batch_id", slice_start},  // reader reads slice_start via my_batch_id
+                 {"outer_count", outer_count},
+                 {"outer_stride_a", outer_stride_a},
+                 {"outer_stride_b", outer_stride_b},
+                 {"num_slices", num_slices},
+                 {"batch_offset_a", 0u},
+                 {"total_local_batches", 0u},
+                 {"b_full_ppb", 0u},
+                 {"shard_tile_w", 0u},
+                 {"full_tile_w", 0u},
+                 {"col_page_offset", 0u},
+                 {"col_byte_offset", 0u}});
+            AddRuntimeArgsForNode(
+                writer_run.runtime_arg_values,
+                core,
+                {{"page_size", kernel_page_size},
+                 {"outer_count", outer_count},
+                 {"inner_count", inner_count},
+                 {"outer_stride", outer_stride_a},  // outer stride in output
+                 {"slice_start", slice_start},
+                 {"num_slices", num_slices}});
+        }
+    }
+
+    run_args.kernel_run_args.push_back(std::move(reader_run));
+    run_args.kernel_run_args.push_back(std::move(writer_run));
+
+    // Tensor arguments: reference the same MeshTensors the parameters were declared from.
+    run_args.tensor_args.emplace(IF_BATCH_IDS, TensorArgument{batch_ids.mesh_tensor()});
+    run_args.tensor_args.emplace(IF_INPUT_A, TensorArgument{input_a.mesh_tensor()});
+    run_args.tensor_args.emplace(IF_INPUT_B, TensorArgument{input_b.mesh_tensor()});
+    run_args.tensor_args.emplace(IF_OUTPUT, TensorArgument{output.mesh_tensor()});
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::prim

@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/pack.h"
 #ifdef ARCH_QUASAR
@@ -47,7 +48,8 @@ void kernel_main() {
     const uint32_t partials_id = get_buffer_id(cb_partials);
 
     // out = in0[r x k]*in1[k x c]
-    mm_init(in0_id, in1_id, partials_id);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(in0_id, in1_id, partials_id);
+    matmul_init(in0_id, in1_id);
 
     for (uint32_t block_id = 0; block_id < num_blocks; block_id++) {
         tile_regs_acquire();
@@ -59,7 +61,7 @@ void kernel_main() {
                 copy_tile(partials_id, i, i);
             }
             cb_partials.pop_front(out_block_num_tiles);
-            mm_init_short(in0_id, in1_id);
+            matmul_init(in0_id, in1_id);
         }
 #endif
 

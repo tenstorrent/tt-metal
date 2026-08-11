@@ -2,17 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os, threading, torch, ttnn
+import os, torch, ttnn
 
 
 def main():
-    records, lock = [], threading.Lock()
+    records = []
 
-    def collect(r):
-        with lock:
+    def collect_records(batch):
+        for r in batch.records:
             records.append(
                 {
-                    "pid": r.program_id,
+                    "runtime_id": r.runtime_id,
                     "start": r.start_timestamp,
                     "end": r.end_timestamp,
                     "freq": r.frequency,
@@ -25,7 +25,7 @@ def main():
         l1_small_size=24576,
         dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.WORKER),
     )
-    h = ttnn.device.RegisterProgramRealtimeProfilerCallback(collect)
+    h = ttnn.device.RegisterProgramRealtimeProfilerCallback(collect_records)
     try:
         torch.manual_seed(0)
         a = ttnn.to_layout(
@@ -54,8 +54,7 @@ def main():
         ttnn.close_mesh_device(dev)
         ttnn.device.UnregisterProgramRealtimeProfilerCallback(h)
 
-    with lock:
-        snap = list(records)
+    snap = list(records)
 
     csv_path = os.path.join("generated", "profiler", ".logs", "profile_log_device.csv")
     metal_home = os.environ.get("TT_METAL_HOME", "")
@@ -98,25 +97,28 @@ def main():
     for ct, count in sorted(cmd_counts.items(), key=lambda x: -x[1]):
         print(f"  {ct}: {count}")
 
-    # RT profiler summary - show ALL records including pid=0
+    # RT profiler summary - show ALL records including runtime_id=0.
     print(f"\n=== RT Profiler: ALL {len(snap)} records ===")
     for i, r in enumerate(snap):
         dur_us = (r["end"] - r["start"]) / r["freq"] / 1000 if r["freq"] > 0 else 0
-        short_tag = " *** SHORT ***" if (r["pid"] != 0 and r["freq"] > 0 and dur_us < 10) else ""
-        print(f"  RT[{i:3d}] pid={r['pid']:5d} dur_us={dur_us:12.3f} start={r['start']} end={r['end']}{short_tag}")
+        short_tag = " *** SHORT ***" if (r["runtime_id"] != 0 and r["freq"] > 0 and dur_us < 10) else ""
+        print(
+            f"  RT[{i:3d}] runtime_id={r['runtime_id']:5d} dur_us={dur_us:12.3f} "
+            f"start={r['start']} end={r['end']}{short_tag}"
+        )
 
-    valid = [r for r in snap if r["pid"] != 0 and r["freq"] > 0]
+    valid = [r for r in snap if r["runtime_id"] != 0 and r["freq"] > 0]
     short_count = sum(
-        1 for r in snap if r["pid"] != 0 and r["freq"] > 0 and (r["end"] - r["start"]) / r["freq"] / 1000 < 10
+        1 for r in snap if r["runtime_id"] != 0 and r["freq"] > 0 and (r["end"] - r["start"]) / r["freq"] / 1000 < 10
     )
-    print(f"\nTotal: {len(snap)}, valid (pid!=0): {len(valid)}, SHORT (<10us): {short_count}")
+    print(f"\nTotal: {len(snap)}, valid (runtime_id!=0): {len(valid)}, SHORT (<10us): {short_count}")
 
     # Sequential cross-reference: match RT records to GO_SIGNAL zones only
     if dp_zones:
         go_zones = [(i, ts, ct) for i, (ts, ct) in enumerate(dp_zones) if ct == "CQ_DISPATCH_CMD_SEND_GO_SIGNAL"]
         non_go_zones = [(i, ts, ct) for i, (ts, ct) in enumerate(dp_zones) if ct != "CQ_DISPATCH_CMD_SEND_GO_SIGNAL"]
 
-        print(f"\n=== Non-GO zones (should be filtered from RT, pid=0) ===")
+        print(f"\n=== Non-GO zones (should be filtered from RT, runtime_id=0) ===")
         for dp_idx, ts, ct in non_go_zones:
             print(f"  DP[{dp_idx:3d}] {ct}")
 
@@ -131,8 +133,8 @@ def main():
             if i < len(snap):
                 r = snap[i]
                 dur_us = (r["end"] - r["start"]) / r["freq"] / 1000 if r["freq"] > 0 else 0
-                rt_str = f"pid={r['pid']:5d} dur_us={dur_us:.3f}"
-                short_tag = " *** SHORT ***" if (r["pid"] != 0 and r["freq"] > 0 and dur_us < 10) else ""
+                rt_str = f"runtime_id={r['runtime_id']:5d} dur_us={dur_us:.3f}"
+                short_tag = " *** SHORT ***" if (r["runtime_id"] != 0 and r["freq"] > 0 and dur_us < 10) else ""
             else:
                 rt_str = "---"
                 short_tag = ""

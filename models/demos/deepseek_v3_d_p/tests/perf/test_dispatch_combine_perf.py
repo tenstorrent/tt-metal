@@ -3,421 +3,228 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Device performance tests for DeepSeek V3 MoE dispatch and combine operations.
+Device performance tests for DeepSeekv3/KimiK2.6/GLM5.2 MoE dispatch and combine operations.
 
-Measures device kernel duration for dispatch and combine separately on 8-chip
-linear and ring topologies (2 links, 7K payload). Each perf case spawns a
-worker pytest at a parametrize id whose config ends in `perf_no_pcc`; those
-workers skip PCC validation and run the op under test with the same
-production-format inputs it would see in the end-to-end MoE pipeline.
-`run_model_device_perf_test_with_merge` merges the per-device rows
-in the Tracy CSV into per-op totals; `op_filter` isolates the combine op
-when the worker also emits a preceding dispatch.
+Runs test_prefill_dispatch_combine.py::test_ttnn_dispatch_combine[perf_captured_<model>_chunk]
+(<model> in {dsv3, kimi26, glm52}) on an LB 8x1 mesh. It replays the hottest (layer, col) pairs from a real prefill
+capture. The operation sequence is the same as the production workflow.
+Tests that were ran in order to capture the routing data:
 
-TODO: `run_model_device_perf_test_with_merge` and `merge_device_rows` are
-duplicated here pending a follow-up PR that moves them into
-`models/perf/device_perf_utils.py`.
+The captures hold Galaxy-global expert IDs; the loader (`load_captured_routing`)
+shifts a column's own experts down to [0, experts_per_col) and sends the rest to
+sentinel (num_routed_experts-1), so the LB single-col combine kernel (first_expert_id=0) interprets
+them correctly, then slices the gate outputs to [0:1] for LB's single dispatch
+group. The per-model kernel config lives in the worker's parametrize entries.
 """
 
-import math
-from collections import defaultdict
-
-import pandas as pd
 import pytest
-from loguru import logger
-from tracy.process_model_log import get_latest_ops_log_filename
 
-from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
+from models.demos.deepseek_v3_d_p.utils.perf_utils import run_model_device_perf_test_per_op
+
+_REAL_INDICES_TOPOS = [("linear", 2), ("ring", 2)]
+
+# Picks come from the production 11x5120 chunked-prefill run (code_debug), for DSv3 and KimiK2.6.
+# One chunk per case: 5120 tokens over the 8-chip dispatch group => seq_len_per_chip 640.
+
+# Column send volume (in-col picks × token bytes) drives device time; ranked by
+# analyze_routing_send.py. Each model gets its 2 hottest columns + 2 at uniform.
+_DS_CHUNK_PICKS = [
+    (19, 2),  # 37.2%
+    (29, 0),  # 37.0%
+    (4, 2),  # 25.0%
+    (56, 3),  # 25.0%
+]
+_KIMI_CHUNK_PICKS = [
+    (45, 2),  # 38.6%
+    (48, 0),  # 38.1%
+    (30, 3),  # 25.0%
+    (32, 1),  # 25.0%
+]
+_GLM52_CHUNK_PICKS = [
+    (3, 0),  # 47.3%
+    (8, 0),  # 38.5%
+    (14, 2),  # 25.0%
+    (10, 0),  # 25.0%
+]
+# Key is (topo, nlinks, layer, col). Baselines are single tracy runs on LB 8x1
+# (run-to-run spread measured at ~0.5%, well inside the margins below).
+_DISPATCH_DS_CHUNK_EXPECTED_NS: dict[tuple[str, int, int, int], int] = {
+    ("linear", 2, 19, 2): 1_436_892,
+    ("linear", 2, 29, 0): 1_611_611,
+    ("linear", 2, 4, 2): 828_157,
+    ("linear", 2, 56, 3): 1_121_669,
+    ("ring", 2, 19, 2): 872_934,
+    ("ring", 2, 29, 0): 837_074,
+    ("ring", 2, 4, 2): 552_136,
+    ("ring", 2, 56, 3): 634_804,
+}
+_COMBINE_DS_CHUNK_EXPECTED_NS: dict[tuple[str, int, int, int], int] = {
+    ("linear", 2, 19, 2): 1_716_614,
+    ("linear", 2, 29, 0): 1_690_610,
+    ("linear", 2, 4, 2): 1_012_207,
+    ("linear", 2, 56, 3): 1_179_193,
+    ("ring", 2, 19, 2): 1_433_990,
+    ("ring", 2, 29, 0): 1_372_652,
+    ("ring", 2, 4, 2): 749_534,
+    ("ring", 2, 56, 3): 905_037,
+}
+_DISPATCH_KIMI_CHUNK_EXPECTED_NS: dict[tuple[str, int, int, int], int] = {
+    ("linear", 2, 45, 2): 1_236_188,
+    ("linear", 2, 48, 0): 1_459_057,
+    ("linear", 2, 30, 3): 788_904,
+    ("linear", 2, 32, 1): 797_993,
+    ("ring", 2, 45, 2): 878_836,
+    ("ring", 2, 48, 0): 806_776,
+    ("ring", 2, 30, 3): 553_826,
+    ("ring", 2, 32, 1): 555_157,
+}
+_COMBINE_KIMI_CHUNK_EXPECTED_NS: dict[tuple[str, int, int, int], int] = {
+    ("linear", 2, 45, 2): 1_558_296,
+    ("linear", 2, 48, 0): 1_642_857,
+    ("linear", 2, 30, 3): 1_068_094,
+    ("linear", 2, 32, 1): 1_123_141,
+    ("ring", 2, 45, 2): 1_267_431,
+    ("ring", 2, 48, 0): 1_291_803,
+    ("ring", 2, 30, 3): 870_001,
+    ("ring", 2, 32, 1): 848_981,
+}
+
+_DISPATCH_GLM52_CHUNK_EXPECTED_NS: dict[tuple[str, int, int, int], int] = {
+    ("linear", 2, 3, 0): 1_859_463,
+    ("linear", 2, 8, 0): 1_331_674,
+    ("linear", 2, 14, 2): 766_664,
+    ("linear", 2, 10, 0): 819_157,
+    ("ring", 2, 3, 0): 1_247_679,
+    ("ring", 2, 8, 0): 815_378,
+    ("ring", 2, 14, 2): 493_043,
+    ("ring", 2, 10, 0): 473_592,
+}
+_COMBINE_GLM52_CHUNK_EXPECTED_NS: dict[tuple[str, int, int, int], int] = {
+    ("linear", 2, 3, 0): 2_071_561,
+    ("linear", 2, 8, 0): 1_543_287,
+    ("linear", 2, 14, 2): 898_859,
+    ("linear", 2, 10, 0): 977_011,
+    ("ring", 2, 3, 0): 1_576_451,
+    ("ring", 2, 8, 0): 1_218_739,
+    ("ring", 2, 14, 2): 692_124,
+    ("ring", 2, 10, 0): 806_988,
+}
+
+# model -> (picks, dispatch baselines, combine baselines).
+_MODELS = {
+    "dsv3": (_DS_CHUNK_PICKS, _DISPATCH_DS_CHUNK_EXPECTED_NS, _COMBINE_DS_CHUNK_EXPECTED_NS),
+    "kimi26": (_KIMI_CHUNK_PICKS, _DISPATCH_KIMI_CHUNK_EXPECTED_NS, _COMBINE_KIMI_CHUNK_EXPECTED_NS),
+    "glm52": (_GLM52_CHUNK_PICKS, _DISPATCH_GLM52_CHUNK_EXPECTED_NS, _COMBINE_GLM52_CHUNK_EXPECTED_NS),
+}
 
 
-def merge_device_rows(df):
-    """
-    Merge multi-device operation rows into single rows.
-
-    For collective operations (AllGather, ReduceScatter, AllReduce, Matmul_RS):
-      Uses AVERAGE duration across devices (synchronized operations)
-
-    For non-collective operations:
-      Uses MAX duration across devices (critical path bottleneck)
-
-    Args:
-        df: pandas DataFrame with profiler data. The DEVICE KERNEL DURATION
-            column may arrive as object dtype if Tracy wrote non-numeric
-            placeholders; it is coerced to float here so downstream NaN
-            handling works regardless.
-
-    Returns:
-        DataFrame with merged rows.
-
-    Raises:
-        pytest.fail: if any device's op sequence diverges from the others,
-            since the merged totals would otherwise silently compare
-            apples-to-oranges.
-    """
-    duration_col = "DEVICE KERNEL DURATION [ns]"
-    df = df.copy()
-    df[duration_col] = pd.to_numeric(df[duration_col], errors="coerce")
-
-    block_by_device = defaultdict(list)
-
-    for _, row in df.iterrows():
-        op_name = row["OP CODE"]
-        op_type = row["OP TYPE"]
-        if op_type == "tt_dnn_device":
-            device_id = int(row["DEVICE ID"])
-            block_by_device[device_id].append((op_name, row.to_dict()))
-
-    device_ids = sorted(block_by_device.keys())
-    merged_blocks = []
-
-    while device_ids and max(len(block_by_device[device_id]) for device_id in device_ids) > 0:
-        blocks = []
-        op_name = None
-
-        for device_id in device_ids:
-            if len(block_by_device[device_id]) > 0:
-                current_op_name, current_block = block_by_device[device_id].pop(0)
-                if op_name is None:
-                    op_name = current_op_name
-                elif op_name != current_op_name:
-                    pytest.fail(
-                        f"Mismatched ops across devices at merge index: "
-                        f"device {device_id} has {current_op_name!r}, expected {op_name!r}"
-                    )
-                blocks.append((device_id, current_block))
-            else:
-                pytest.fail(f"Device {device_id} is missing an op during merge (truncated trace?)")
-
-        if not blocks:
-            continue
-
-        is_collective = (
-            "AllGather" in op_name or "ReduceScatter" in op_name or "AllReduce" in op_name or "Matmul_RS" in op_name
-        )
-
-        if is_collective:
-            device_kernel_durations = [
-                d[duration_col] for _, d in blocks if duration_col in d and not math.isnan(d[duration_col])
-            ]
-            average_duration = (
-                sum(device_kernel_durations) / len(device_kernel_durations) if device_kernel_durations else float("nan")
-            )
-            base_block = blocks[0][1].copy()
-            base_block[duration_col] = average_duration
-            merged_blocks.append(base_block)
-        else:
-            max_duration_block = max(blocks, key=lambda x: x[1].get(duration_col, 0))
-            merged_blocks.append(max_duration_block[1])
-
-    return pd.DataFrame(merged_blocks)
-
-
-def run_model_device_perf_test_with_merge(
-    command: str,
-    expected_device_perf_ns_per_iteration: float,
-    subdir: str,
-    model_name: str,
-    num_iterations: int = 1,
-    batch_size: int = 1,
-    margin: float = 0.015,
-    comments: str = "",
-    op_filter: str = "",
+def _perf_param_per_op(
+    op,
+    worker_file,
+    worker_test,
+    topo,
+    nlinks,
+    expected_per_op: dict,
+    margin: float = 0.03,
+    captured_layer: int | None = None,
+    captured_col: int | None = None,
+    model: str = "",
+    worker_filter_extras: str | None = "",
+    worker_dir: str = "models/demos/deepseek_v3_d_p/tests/perf",
 ):
+    """Build one pytest.param tuple for a per-op perf test.
+
+    Each entry spawns one worker subprocess that runs dispatch+combine end-to-end
+    on device. The result tuple carries an `expected_per_op` dict
+    (op_code_substring → expected_ns) so dispatch and combine are asserted
+    independently via `run_model_device_perf_test_per_op`.
+
+    `worker_dir` is the path to the directory containing `worker_file`; defaults
+    to the pcc test dir. Override to `tests/perf` for workers that only run the
+    perf path and shouldn't be collected by the PCC pipeline.
     """
-    Run device performance test with multi-device row merging.
-
-    Extends `run_model_device_perf_test` with multi-chip row merging:
-    CCL ops are averaged across devices, non-CCL ops use the
-    slowest device's duration (critical path).
-
-    `op_filter`, if set, restricts the measurement to rows whose OP CODE
-    contains the given substring — useful when the worker pytest runs more
-    than one op and only one of them is under test.
-
-    Only `num_iterations=1` is supported today. `run_device_perf` can run
-    multiple iterations and average them, but this helper rereads only the
-    latest ops CSV and rewrites the averaged metric from that single file —
-    mixing that with a multi-iteration average would produce inconsistent
-    numbers. Extending to N>1 requires merging across per-iteration CSVs.
-    """
-    if num_iterations != 1:
-        pytest.fail(
-            f"run_model_device_perf_test_with_merge currently supports num_iterations=1 only "
-            f"(got {num_iterations}); per-iteration CSV merging is not implemented."
-        )
-
-    cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
-    inference_time_key = "AVG DEVICE KERNEL DURATION [ns]"
-
-    post_processed_results = run_device_perf(
-        command, subdir=subdir, num_iterations=num_iterations, cols=cols, batch_size=batch_size
-    )
-
-    filename = get_latest_ops_log_filename(subdir)
-    df = pd.read_csv(filename)
-
-    total_rows = len(df)
-    device_rows_before_filter = len(df[df["OP TYPE"] == "tt_dnn_device"])
-
-    logger.info(f"CSV total rows: {total_rows}")
-    logger.info(f"Device operation rows: {device_rows_before_filter}")
-
-    df = df[df["OP TYPE"] == "tt_dnn_device"]
-
-    if op_filter:
-        df = df[df["OP CODE"].str.contains(op_filter, na=False)]
-        if df.empty:
-            pytest.fail(f"op_filter={op_filter!r} matched no rows in {filename}")
-        logger.info(f"Rows after op_filter={op_filter!r}: {len(df)}")
-
-    logger.info(f"Device rows before merge: {len(df)}")
-    df_merged = merge_device_rows(df)
-    logger.info(f"Device rows after merge: {len(df_merged)}")
-
-    if not df_merged.empty:
-        merged_kernel_durations = df_merged["DEVICE KERNEL DURATION [ns]"].dropna().tolist()
-        if merged_kernel_durations:
-            merged_sum_ns = sum(merged_kernel_durations)
-            logger.info(f"Merged operations count: {len(merged_kernel_durations)}")
-            logger.info(f"Merged sum (ns): {merged_sum_ns} ({merged_sum_ns / 1000:.1f} μs)")
-            logger.info(
-                f"Original post_processed_results[{inference_time_key}]: "
-                f"{post_processed_results.get(inference_time_key, 'N/A')}"
-            )
-            post_processed_results[inference_time_key] = merged_sum_ns
-
-    expected_perf_cols = {inference_time_key: expected_device_perf_ns_per_iteration}
-    expected_results = check_device_perf(
-        post_processed_results, margin=margin, expected_perf_cols=expected_perf_cols, assert_on_fail=True
-    )
-
-    prep_device_perf_report(
-        model_name=model_name,
-        batch_size=batch_size,
-        post_processed_results=post_processed_results,
-        expected_results=expected_results,
-        comments=comments,
-    )
-
-
-def _perf_param(
-    op, worker_file, worker_test, topo, nlinks, expected_ns, op_filter, margin=0.1, layout="tile", dtype_filter=""
-):
-    """Build one pytest.param tuple for the perf tests."""
     worker_id = f"{topo}-8-{nlinks}link"
     model_name = f"deepseek_v3_{op}_{topo}_8_{nlinks}link"
-    if layout != "tile":
-        model_name += f"_{layout}"
-    k_filter = f"perf_no_pcc and {worker_id} and random and {layout}"
-    if dtype_filter:
-        k_filter += f" and {dtype_filter}"
+    use_captured = captured_layer is not None and captured_col is not None
+    parametrize_id = f"perf_captured_{model}_chunk" if use_captured else "perf_no_pcc"
+    k_filter = f"{parametrize_id} and {worker_id}"
+    if worker_filter_extras:
+        k_filter += f" and {worker_filter_extras}"
+    if use_captured:
+        model_name += f"_{model}_l{captured_layer:02d}_col{captured_col}"
+        # TT_DS_USE_CAPTURED_INDICES is not forwarded: the worker reads the same var and inherits it.
+        extra_env = {"TT_DS_CAPTURED_LAYER": str(captured_layer), "TT_DS_CAPTURED_COL": str(captured_col)}
+    else:
+        extra_env = {}
+    command = f"pytest {worker_dir}/{worker_file}::{worker_test} -k '{k_filter}'"
     return (
-        f"pytest models/demos/deepseek_v3_d_p/tests/pcc/{worker_file}::{worker_test} " f"-k '{k_filter}'",
-        expected_ns,
+        command,
+        expected_per_op,
         f"deepseek_v3_{op}",
         model_name,
-        1,  # num_iterations
-        1,  # batch_size
         margin,
         f"{topo}-8-{nlinks}link",
-        op_filter,
+        extra_env,
     )
 
 
-# Baselines measured on BH LoudBox (bh-rb-01), seq_len=3200, emb=7168, experts=64, top-k=2.
-# Dispatch worker emits only DispatchDeviceOperation -> op_filter is empty.
-# Combine worker runs real dispatch + combine -> op_filter="CombineDeviceOperation".
-
-# CI set (BH LoudBox pipeline): keep small.
-_DISPATCH_PERF_PARAMS = [
-    _perf_param(
-        "dispatch",
-        "test_prefill_dispatch.py",
-        "test_ttnn_dispatch",
-        "linear",
-        2,
-        4_108_262,
-        "",
-        dtype_filter="bf16_out",
-    ),
-    _perf_param(
-        "dispatch", "test_prefill_dispatch.py", "test_ttnn_dispatch", "ring", 2, 3_683_084, "", dtype_filter="bf16_out"
-    ),
-]
-_COMBINE_PERF_PARAMS = [
-    _perf_param(
-        "combine", "test_prefill_combine.py", "test_ttnn_combine", "linear", 2, 3_538_087, "CombineDeviceOperation"
-    ),
-    _perf_param(
-        "combine", "test_prefill_combine.py", "test_ttnn_combine", "ring", 2, 2_290_921, "CombineDeviceOperation"
-    ),
-]
-
-# Full matrix (heavy local/manual run): all 8-chip topo x num_links combos.
-# Payload is auto-selected by get_max_payload_size() (7k on WH, 14k on BH).
-# Baselines below are from BH (14k payload).
-_DISPATCH_PERF_PARAMS_FULL = [
-    _perf_param(
-        "dispatch",
-        "test_prefill_dispatch.py",
-        "test_ttnn_dispatch",
+_DISPATCH_COMBINE_PERF_PARAMS = [
+    _perf_param_per_op(
+        "dispatch_combine",
+        "test_prefill_dispatch_combine.py",
+        "test_ttnn_dispatch_combine",
         topo,
         nlinks,
-        expected,
-        "",
-        dtype_filter="bf16_out",
+        expected_per_op={
+            "DispatchDeviceOperation": dispatch_ns[(topo, nlinks, layer, col)],
+            "CombineDeviceOperation": combine_ns[(topo, nlinks, layer, col)],
+        },
+        margin=0.045 if topo == "ring" else 0.03,
+        captured_layer=layer,
+        captured_col=col,
+        model=model,
+        worker_dir="models/demos/deepseek_v3_d_p/tests/perf",
     )
-    for topo, nlinks, expected in [
-        ("linear", 1, 6_564_151),
-        ("linear", 2, 3_907_070),
-        ("ring", 1, 5_392_448),
-        ("ring", 2, 3_690_830),
-    ]
-]
-_COMBINE_PERF_PARAMS_FULL = [
-    _perf_param(
-        "combine", "test_prefill_combine.py", "test_ttnn_combine", topo, nlinks, expected, "CombineDeviceOperation"
-    )
-    for topo, nlinks, expected in [
-        ("linear", 1, 4_893_014),
-        ("linear", 2, 3_552_410),
-        ("ring", 1, 2_837_530),
-        ("ring", 2, 2_298_073),
-    ]
-] + [
-    _perf_param(
-        "combine",
-        "test_prefill_combine.py",
-        "test_ttnn_combine",
-        "linear",
-        1,
-        6_055_667,
-        "CombineDeviceOperation",
-        layout="row_major",
-    ),
+    for model, (picks, dispatch_ns, combine_ns) in _MODELS.items()
+    for topo, nlinks in _REAL_INDICES_TOPOS
+    for layer, col in picks
+    if (topo, nlinks, layer, col) in dispatch_ns and (topo, nlinks, layer, col) in combine_ns
 ]
 
 
 def _ids_for(params):
-    # model_name (4th tuple element) like deepseek_v3_dispatch_linear_8_2link_7k -> linear-8-2link-7k
     ids = []
     for p in params:
         mn = p[3]
-        mn = mn.removeprefix("deepseek_v3_dispatch_").removeprefix("deepseek_v3_combine_")
+        mn = mn.removeprefix("deepseek_v3_dispatch_combine_")
         ids.append(mn.replace("_", "-"))
     return ids
 
 
-_PARAMS_HEADER = (
-    "command, expected_device_perf_ns_per_iteration, subdir, model_name, "
-    "num_iterations, batch_size, margin, comments, op_filter"
+_PARAMS_HEADER = "command, expected_per_op, subdir, model_name, margin, comments, extra_env"
+
+
+@pytest.mark.parametrize(
+    _PARAMS_HEADER,
+    _DISPATCH_COMBINE_PERF_PARAMS,
+    ids=_ids_for(_DISPATCH_COMBINE_PERF_PARAMS),
 )
-
-
-# --- CI (BH LoudBox pipeline) -------------------------------------------------
-
-
-@pytest.mark.parametrize(_PARAMS_HEADER, _DISPATCH_PERF_PARAMS, ids=_ids_for(_DISPATCH_PERF_PARAMS))
 @pytest.mark.models_device_performance_bare_metal
-def test_device_perf_dispatch(
+def test_device_perf_dispatch_combine(
     command,
-    expected_device_perf_ns_per_iteration,
+    expected_per_op,
     subdir,
     model_name,
-    num_iterations,
-    batch_size,
     margin,
     comments,
-    op_filter,
+    extra_env,
 ):
-    run_model_device_perf_test_with_merge(
+    run_model_device_perf_test_per_op(
         command=command,
-        expected_device_perf_ns_per_iteration=expected_device_perf_ns_per_iteration,
+        expected_per_op=expected_per_op,
         subdir=subdir,
         model_name=model_name,
-        num_iterations=num_iterations,
-        batch_size=batch_size,
         margin=margin,
         comments=comments,
-        op_filter=op_filter,
-    )
-
-
-@pytest.mark.parametrize(_PARAMS_HEADER, _COMBINE_PERF_PARAMS, ids=_ids_for(_COMBINE_PERF_PARAMS))
-@pytest.mark.models_device_performance_bare_metal
-def test_device_perf_combine(
-    command,
-    expected_device_perf_ns_per_iteration,
-    subdir,
-    model_name,
-    num_iterations,
-    batch_size,
-    margin,
-    comments,
-    op_filter,
-):
-    run_model_device_perf_test_with_merge(
-        command=command,
-        expected_device_perf_ns_per_iteration=expected_device_perf_ns_per_iteration,
-        subdir=subdir,
-        model_name=model_name,
-        num_iterations=num_iterations,
-        batch_size=batch_size,
-        margin=margin,
-        comments=comments,
-        op_filter=op_filter,
-    )
-
-
-# --- Full matrix (manual/local) ----------------------------------------------
-# Not marked models_device_performance_bare_metal so they do not run in CI by default.
-
-
-@pytest.mark.parametrize(_PARAMS_HEADER, _DISPATCH_PERF_PARAMS_FULL, ids=_ids_for(_DISPATCH_PERF_PARAMS_FULL))
-def test_device_perf_dispatch_full(
-    command,
-    expected_device_perf_ns_per_iteration,
-    subdir,
-    model_name,
-    num_iterations,
-    batch_size,
-    margin,
-    comments,
-    op_filter,
-):
-    run_model_device_perf_test_with_merge(
-        command=command,
-        expected_device_perf_ns_per_iteration=expected_device_perf_ns_per_iteration,
-        subdir=subdir,
-        model_name=model_name,
-        num_iterations=num_iterations,
-        batch_size=batch_size,
-        margin=margin,
-        comments=comments,
-        op_filter=op_filter,
-    )
-
-
-@pytest.mark.parametrize(_PARAMS_HEADER, _COMBINE_PERF_PARAMS_FULL, ids=_ids_for(_COMBINE_PERF_PARAMS_FULL))
-def test_device_perf_combine_full(
-    command,
-    expected_device_perf_ns_per_iteration,
-    subdir,
-    model_name,
-    num_iterations,
-    batch_size,
-    margin,
-    comments,
-    op_filter,
-):
-    run_model_device_perf_test_with_merge(
-        command=command,
-        expected_device_perf_ns_per_iteration=expected_device_perf_ns_per_iteration,
-        subdir=subdir,
-        model_name=model_name,
-        num_iterations=num_iterations,
-        batch_size=batch_size,
-        margin=margin,
-        comments=comments,
-        op_filter=op_filter,
+        extra_env=extra_env,
     )

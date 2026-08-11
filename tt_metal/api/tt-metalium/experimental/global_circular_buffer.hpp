@@ -42,30 +42,37 @@ enum class SenderCoreType : uint8_t {
 // sets across senders must be disjoint and must not collide with the resolved DRAM-sender
 // physical NOC coords.
 //
+// `support_multi_receiver_shards=true` declares that a bank's shard may be consumed by
+// more than one receiver — the legacy interleaved DRAM layout, where a single read pulls data for
+// every receiver on the bank. Because the receivers share that data, the bank must be driven by a
+// single sender core (the free non-endpoint subchannel on NOC0).
+//
+// The default, false, promises the opposite: each receiver owns a disjoint, contiguous shard (the
+// receiver-contiguous layout). With no shared data between receivers, a bank holding two or more
+// receivers can then be driven by two DRISC sender cores (the free subchannel plus the bank's
+// NOC1-endpoint subchannel, both on NOC0), splitting the bank's receivers ceil/floor across them
+// to roughly double per-bank bandwidth. A single-receiver bank cannot split one receiver across
+// two senders, so it falls back to a single sender with its secondary core left parked —
+// single- and dual-sender banks may therefore coexist in one GCB. The Tensor prefetcher always
+// provisions both cores and routes PREFETCH requests only to this GCB's mapped sender subset.
+//
 // MeshDevice-only: the arena that backs this GCB's pages_sent allocation lives on
 // MeshDeviceImpl, so a bare IDevice cannot construct one.
-GlobalCircularBuffer CreateGlobalCircularBufferWithDramSenders(
+GlobalCircularBuffer CreateGlobalCircularBufferForTensorPrefetcher(
     distributed::MeshDevice& mesh_device,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     uint32_t size,
-    BufferType buffer_type = BufferType::L1);
+    BufferType buffer_type = BufferType::L1,
+    bool support_multi_receiver_shards = false);
 
-// Read-only accessors for the DRAM-sender state inside a GlobalCircularBuffer. For
-// GCBs created via the worker-sender path these return SenderCoreType::Worker / 0 /
-// empty respectively.
+// Sender domain of a GlobalCircularBuffer. Returns SenderCoreType::Worker for GCBs created
+// via the worker-sender path, SenderCoreType::Dram for those from
+// CreateGlobalCircularBufferForTensorPrefetcher.
 SenderCoreType sender_core_type(const GlobalCircularBuffer& gcb);
 
-// DRISC unreserved-L1 base where the sender's per-receiver pages_sent/acked counters
-// live. Zero for worker-sender GCBs.
-DeviceAddr pages_sent_drisc_l1_base(const GlobalCircularBuffer& gcb);
-
-// Worker-L1 offset (inside the receiver's config buffer page) where the receiver's
-// local pages_sent counter lives. Zero for worker-sender GCBs.
-DeviceAddr pages_sent_worker_l1_base(const GlobalCircularBuffer& gcb);
-
-// Physical worker NOC XY for each sender's receivers. The DRISC kernel uses these as
-// runtime args. Empty for worker-sender GCBs.
-const std::vector<std::vector<CoreCoord>>& receiver_coords_per_sender(const GlobalCircularBuffer& gcb);
+// The impl-internal DRAM-sender L1-layout accessors (pages_sent / sender-state / receiver
+// coords / slab indices) are consumed only inside tt_metal/ and live in
+// tt_metal/impl/buffers/global_circular_buffer_dram_sender_internal.hpp.
 
 }  // namespace experimental
 }  // namespace tt::tt_metal

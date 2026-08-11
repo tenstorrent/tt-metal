@@ -1,0 +1,179 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Test helpers for the unified chunked-prefill MLA test (test_mla.py::test_mla_chunked_prefill):
+GPU-trace discovery/loading, multi-user iteration partitioning, and the CPU torch MLA reference.
+
+Kept out of tt/mla/utils.py on purpose: these pull the reference model + safetensors, which should
+not enter the production model import path.
+"""
+
+import hashlib
+import os
+import time
+from pathlib import Path
+
+import torch
+from loguru import logger
+from safetensors.torch import load_file
+from transformers.cache_utils import DynamicCache
+
+from models.common.utility_functions import hf_cache_layer_kv
+from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
+
+# On-disk cache for the CPU torch MLA reference. The reference is quadratic in sequence length and
+# host-bound: measured on a 16-core EPYC (AVX-512, no AMX) it is ~4.4 s at 3840 tokens but ~7 min at
+# the 56320-token production depth, and it was recomputed on every single run. run_model already
+# caches its single-shot reference (test_mla.py, variant.mla_ref_cache_env); this is the chunked
+# equivalent, so depth verification and config bisects cost device time only after the first pass.
+_REF_CACHE_ENV = "MLA_CHUNKED_REF_CACHE"
+_REF_CACHE_DEFAULT = "/tmp/mla_chunked_ref_cache"
+
+
+def _hash_tensor(h, name: str, t: torch.Tensor) -> None:
+    h.update(name.encode())
+    h.update(f"{tuple(t.shape)}{t.dtype}".encode())
+    h.update(t.detach().contiguous().view(torch.uint8).numpy().tobytes())
+
+
+def _ref_cache_key(config, weights, hidden_2d) -> str:
+    """Content hash of everything that changes the reference output: weights, INPUT, and the config
+    fields that alter the math.
+
+    All three are load-bearing, not belt-and-braces:
+      * weights -- the random_weights fixture is seeded, so two configs can yield identically-shaped
+        tensors; a dtype/config change that moves the reference must invalidate the entry.
+      * hidden_2d -- the chunked driver seeds hidden per user (``torch.manual_seed(42 + u)``), so in a
+        multi-user run two users can share the same total_len while having different inputs. Keying on
+        length alone would hand user 1 user 0's reference and silently corrupt its PCC.
+      * config -- num_attention_heads changes the absorbed-Q head split even at identical weight
+        shapes; the NoPE / output-gate flags and rope_scaling change the math outright.
+
+    Hashing the full tensors costs ~2 s at the 56320-token production shape, against a ~7 min
+    reference. Content-addressing also makes the key collision-free across variants, so one shared
+    cache dir is safe.
+    """
+    h = hashlib.sha1()
+    for field in ("num_attention_heads", "rms_norm_eps", "mla_use_nope", "mla_use_output_gate", "rope_scaling"):
+        h.update(f"{field}={getattr(config, field, None)!r}".encode())
+    _hash_tensor(h, "hidden", hidden_2d)
+    for name in sorted(weights):
+        _hash_tensor(h, name, weights[name])
+    return h.hexdigest()[:16]
+
+
+def discover_traces(root, num_users, variant_name=None):
+    """Immediate subdirs of `root`, one per user (cycled if fewer than num_users). Assert mla_io/ + kv_cache/.
+
+    `root` may hold both kimi and deepseek traces as sibling subdirs (e.g. kimi_*_sdpa_mla next to
+    deepseek_*_sdpa_mla). When `variant_name` is given, select by whether the dir name contains 'kimi':
+    a kimi variant keeps the kimi_* dirs, any other variant keeps the rest.
+
+    NOTE the filter is a substring test and so cannot separate two variants of the same family: every
+    kimi_* variant selects the same dirs. It is therefore only safe for variants that actually have
+    recorded traces. Callers must reject the others *before* getting here -- test_mla.py's
+    _run_chunked_prefill asserts on ``variant.supports_pretrained``, since a trace is recorded from a
+    real checkpoint and a variant without one (kimi_k3, sparse_mla) would otherwise be handed
+    Kimi-K2.6's traces and silently compared across architectures.
+    """
+    dirs = sorted(d for d in Path(root).iterdir() if d.is_dir())
+    assert dirs, f"no trace subdirs under {root}"
+    if variant_name is not None:
+        want_kimi = "kimi" in variant_name.lower()
+        dirs = [d for d in dirs if ("kimi" in d.name.lower()) == want_kimi]
+        assert dirs, f"no {'kimi' if want_kimi else 'non-kimi'} trace subdirs under {root} (variant={variant_name})"
+    for d in dirs:
+        assert (d / "mla_io").is_dir(), f"trace dir {d} is missing mla_io/"
+        assert (d / "kv_cache").is_dir(), f"trace dir {d} is missing kv_cache/"
+    return [dirs[u % len(dirs)] for u in range(num_users)]
+
+
+def single_trace(path, num_users):
+    """Use `path` directly as ONE trace dir (the leaf holding mla_io/ + kv_cache/), shared across all
+    users. For MLA_CHUNKED_TRACE_PATH, which points at a specific trace rather than the root of many."""
+    d = Path(path)
+    assert (d / "mla_io").is_dir(), f"trace dir {d} is missing mla_io/"
+    assert (d / "kv_cache").is_dir(), f"trace dir {d} is missing kv_cache/"
+    return [d for _ in range(num_users)]
+
+
+def load_trace(d):
+    """Return (mla_input [S,H], mla_output [S,H], kv_post [S,kvpe]) for layer 0, all bf16."""
+    mi = load_file(d / "mla_io" / "mla_input_layer_0.safetensors")["mla_input_layer_0"]
+    mo = load_file(d / "mla_io" / "mla_output_layer_0.safetensors")["mla_output_layer_0"]
+    kv = load_file(d / "kv_cache" / "layer_0.safetensors")["kv_post_transform_layer_0"]
+    return mi.to(torch.bfloat16), mo.to(torch.bfloat16), kv.to(torch.bfloat16)
+
+
+def partition_iters(iters_isl, num_users):
+    """Split iters_isl into num_users contiguous groups; the LAST user takes the remainder."""
+    assert len(iters_isl) >= num_users, f"need >= {num_users} iters to split across {num_users} users"
+    base = len(iters_isl) // num_users
+    groups, idx = [], 0
+    for u in range(num_users):
+        n = base if u < num_users - 1 else len(iters_isl) - base * (num_users - 1)
+        groups.append(list(iters_isl[idx : idx + n]))
+        idx += n
+    return groups
+
+
+def cpu_mla_reference(config, weights, hidden_2d):
+    """torch MLA forward over [S, H] hidden. Returns (output [S, H], kvpe [S, kvpe]) bf16 -- kvpe is
+    the reference KV cache (Meta-style rope), for comparing the device cache directly. Host-attn logs.
+
+    Disk-cached on a content hash of (weights, seq_len, math-affecting config fields) -- see
+    _ref_cache_key. A cache miss behaves exactly as before, so this is transparent to the
+    deepseek_v3 / kimi_k2_6 chunked tests that share this helper. Writes are suppressed under CI
+    (mirroring run_model's reference cache) so CI runners don't accumulate multi-GB of .pt files;
+    reads stay enabled either way.
+    """
+    seq_len = hidden_2d.shape[0]
+    cache_dir = Path(os.environ.get(_REF_CACHE_ENV, _REF_CACHE_DEFAULT))
+    cache_path = cache_dir / f"chunked_ref_seq{seq_len}_{_ref_cache_key(config, weights, hidden_2d)}.pt"
+    if cache_path.exists():
+        try:
+            blob = torch.load(cache_path)
+            logger.info(f"CPU MLA reference: cache HIT {cache_path} (skipping the host-attention phase)")
+            return blob["out"], blob["kvpe"]
+        except Exception as e:  # corrupt/partial file -> fall through and recompute
+            logger.warning(f"CPU MLA reference: cache at {cache_path} unreadable ({e}); recomputing")
+
+    mla_ref = (
+        create_mla_reference(
+            config=config,
+            state_dict={"model.layers.0.self_attn." + k: v for k, v in weights.items()},
+            layer_idx=0,
+            module_path="model.layers.0.self_attn",
+        )
+        .eval()
+        .to(torch.bfloat16)
+    )
+    pos = torch.arange(hidden_2d.shape[0], dtype=torch.long).unsqueeze(0)
+    logger.warning(
+        f"===== HOST ATTENTION START: torch MLA reference over {hidden_2d.shape[0]} tokens "
+        f"(CPU chunked-flash, {config.num_attention_heads} heads) -- slow CPU phase ====="
+    )
+    t0 = time.perf_counter()
+    ref_cache = DynamicCache()
+    with torch.no_grad():
+        out, _, ref_cache = mla_ref(
+            hidden_states=hidden_2d.unsqueeze(0), position_ids=pos, past_key_value=ref_cache, use_cache=True
+        )
+    logger.warning(f"===== HOST ATTENTION END: torch reference done in {time.perf_counter() - t0:.1f}s =====")
+    kvpe = hf_cache_layer_kv(ref_cache, 0)[0][0, 0]  # [S, kvpe], latent k_nope + roped k_pe (Meta basis)
+    out_bf16, kvpe_bf16 = out[0].to(torch.bfloat16), kvpe.to(torch.bfloat16)
+
+    if os.environ.get("CI") == "true" or os.environ.get("TT_GH_CI_INFRA"):
+        logger.debug("CPU MLA reference: CI env, not writing the reference cache")
+    else:
+        try:
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            # Write-then-rename so a killed run can't leave a half-written file that later reads trust.
+            tmp = cache_path.with_suffix(".pt.tmp")
+            torch.save({"out": out_bf16, "kvpe": kvpe_bf16}, tmp)
+            tmp.replace(cache_path)
+            logger.info(f"CPU MLA reference: cached to {cache_path}")
+        except Exception as e:
+            logger.warning(f"CPU MLA reference: could not write cache to {cache_path} ({e})")
+
+    return out_bf16, kvpe_bf16

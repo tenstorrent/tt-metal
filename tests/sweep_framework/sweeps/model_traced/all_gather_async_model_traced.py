@@ -97,6 +97,30 @@ def _parse_mesh_shape(mesh_device_shape):
     return None
 
 
+def _full_galaxy_mesh_for(mesh_shape, num_devices):
+    """Full galaxy mesh to open when ``mesh_shape`` is a 2D SUBMESH of the host.
+
+    Opening MeshShape(submesh) directly on a galaxy fails fabric router sync on the
+    submesh's boundary ethernet links, so we open the full galaxy and carve the
+    submesh out of its (healthy) fabric. Returns the full mesh shape, or None when
+    ``mesh_shape`` already spans the whole host (open it directly) or is 1D (the
+    submesh carving only helps the 2D-fabric case).
+    """
+    if not mesh_shape or len(mesh_shape) != 2:
+        return None
+    r, c = int(mesh_shape[0]), int(mesh_shape[1])
+    if r <= 1 or c <= 1:  # 1D mesh: opened directly
+        return None
+    if r * c >= num_devices:  # already the full host mesh
+        return None
+    # Candidate full-galaxy orientations that can contain this submesh.
+    candidates = {32: [(8, 4), (4, 8)], 16: [(8, 2), (2, 8), (4, 4)]}.get(num_devices, [])
+    for fr, fc in candidates:
+        if fr >= r and fc >= c and fr * fc == num_devices:
+            return (fr, fc)
+    return None
+
+
 def _parse_shard_dims_from_placement(tensor_placement):
     """Extract (dim0, dim1) for ShardTensor2dMesh from a traced tensor_placement dict.
 
@@ -383,16 +407,11 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
             if len(input_shape) == 0:
                 return True, "Empty input shape"
 
-        # Skip 4x4 meshes for now: on this Galaxy the 4x4 submesh (physical
-        # devices 16-31) stalls fabric router sync on Device 19 ethernet
-        # channels e0-8..e0-11 (boundary links to the excluded half), so fabric
-        # bring-up times out before any op runs. The full-mesh 4x8/8x4 shapes
-        # are unaffected. Tracked separately (hardware/submesh fabric).
-        _tp = test_vector.get("input_a_tensor_placement") or test_vector.get("input_tensor_tensor_placement")
-        _mesh_shape = _parse_mesh_shape(_tp.get("mesh_device_shape")) if isinstance(_tp, dict) else None
-        if _mesh_shape == (4, 4):
-            return True, "Skipped 4x4: fabric router sync timeout on this Galaxy (Device 19 ETH ch e0-8..e0-11)"
-
+        # NB: 4x4 (and other sub-galaxy) meshes are NOT skipped. Opening
+        # MeshShape(4,4) directly on the galaxy fails fabric router sync on the
+        # submesh's boundary ethernet links; instead the runner opens the full
+        # galaxy mesh and carves the submesh via create_submesh (see
+        # _full_galaxy_mesh_for + device_context), which brings fabric up healthy.
         return False, None
 
     # Original validation for generality/lead_model suites
@@ -507,6 +526,13 @@ def run(
     # Traced subdevice_id arrives as a dict (deserializer doesn't recognize its
     # serialized form); coerce to a real ttnn.SubDeviceId so the op call binds.
     subdevice_id = _coerce_subdevice_id(subdevice_id)
+    # Integer index the model ran on. When >= 1 the model used a multi-sub-device
+    # (e.g. prefetcher+worker) layout; we reproduce that index below so the traced
+    # subdevice_id matches instead of being clamped to the default sub-device.
+    _traced_sd_index = None
+    if subdevice_id is not None:
+        _sd_m = re.search(r"(\d+)", str(subdevice_id))
+        _traced_sd_index = int(_sd_m.group(1)) if _sd_m else None
 
     # Some traced overloads name the gathered tensor `input_tensor` instead of
     # `input`, so the loader emits the input_tensor_* kwarg family rather than
@@ -697,8 +723,27 @@ def run(
         if _dispatch_axis is not None:
             _device_params = {"dispatch_core_axis": _dispatch_axis}
 
+    # If the target mesh is a 2D submesh of the host galaxy, open the full galaxy
+    # mesh and carve the submesh (direct MeshShape(submesh) opens fail fabric sync).
+    _full_mesh_shape = _full_galaxy_mesh_for(mesh_shape, NUM_DEVICES)
+
+    # model_traced normally opens/closes the device per vector (disable_cache).
+    # But device-perf is gathered AFTER run() returns, so a per-vector close leaves
+    # nothing for the profiler read. When the profiler is on (the runner only
+    # enables it for the safe FABRIC_1D CCL case), keep the device in ccl_common's
+    # persistent cache so it stays open for gather_single_test_perf; the no-perf
+    # path is unchanged. (FABRIC_2D never reaches here with the profiler on -- the
+    # runner gates it off to avoid the idle-erisc dispatch-kernel overflow.)
+    _profiler_on = os.environ.get("TT_METAL_DEVICE_PROFILER") == "1"
+    _disable_cache = is_model_traced and not _profiler_on
+
     try:
-        with device_context(mesh_shape, fabric_config, _device_params) as (device, device_err):
+        with device_context(
+            mesh_shape, fabric_config, _device_params, full_mesh_shape=_full_mesh_shape, disable_cache=_disable_cache
+        ) as (
+            device,
+            device_err,
+        ):
             assert tuple(device.shape) == mesh_shape
 
             if device_err is not None:
@@ -748,12 +793,48 @@ def run(
                     device,
                 )
 
-            # Setup SubDevice and semaphores (match test_minimal_all_gather_async.py pattern)
+            # Setup SubDevice and semaphores (match test_all_gather.py pattern)
             compute_grid_size = device.compute_with_storage_grid_size()
-            ccl_sub_device_crs = ttnn.CoreRangeSet(
+            full_grid_crs = ttnn.CoreRangeSet(
                 {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
             )
+            # By default the gather runs on the single default sub-device (index 0).
+            # When the model ran on a higher worker-sub-device index (its
+            # prefetcher+worker layout), reproduce that index so the traced
+            # subdevice_id matches: load (index+1) sub-devices with the worker —
+            # carrying the gather + semaphores — at the traced index and tiny
+            # single-core placeholders below it. Best-effort: any failure falls back
+            # to the default single sub-device.
+            _ccl_sub_device_manager = None
             worker_sub_device_id = ttnn.SubDeviceId(0)
+            ccl_sub_device_crs = full_grid_crs
+            if _traced_sd_index and _traced_sd_index >= 1:
+                try:
+                    gx, gy = compute_grid_size.x, compute_grid_size.y
+                    n = _traced_sd_index
+                    if gx > n:  # need n placeholder cores in row 0, worker takes the rest
+                        placeholder_subs = [
+                            ttnn.SubDevice(
+                                [ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(i, 0), ttnn.CoreCoord(i, 0))})]
+                            )
+                            for i in range(n)
+                        ]
+                        worker_ranges = {ttnn.CoreRange(ttnn.CoreCoord(n, 0), ttnn.CoreCoord(gx - 1, 0))}
+                        if gy > 1:
+                            worker_ranges.add(ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(gx - 1, gy - 1)))
+                        worker_crs = ttnn.CoreRangeSet(worker_ranges)
+                        _ccl_sub_device_manager = device.create_sub_device_manager(
+                            placeholder_subs + [ttnn.SubDevice([worker_crs])], 0
+                        )
+                        device.load_sub_device_manager(_ccl_sub_device_manager)
+                        worker_sub_device_id = ttnn.SubDeviceId(n)
+                        ccl_sub_device_crs = worker_crs
+                except Exception:
+                    # Fall back to the default single sub-device; subdevice_id will
+                    # then differ from the trace, but the gather still runs correctly.
+                    _ccl_sub_device_manager = None
+                    worker_sub_device_id = ttnn.SubDeviceId(0)
+                    ccl_sub_device_crs = full_grid_crs
             sub_device_stall_group = [worker_sub_device_id]
 
             device.set_sub_device_stall_group(sub_device_stall_group)
@@ -797,6 +878,16 @@ def run(
                     and persistent_output_buffer_was_provided
                 )
 
+                # Some variants (DeepSeek/llama "optimal CCL") pass the output
+                # buffer under the kwarg ``persistent_output_tensor`` instead of
+                # ``persistent_output_buffer``; reconstruct it the same way.
+                pot_shape_kw = kwargs.get("persistent_output_tensor_shape", _ABSENT)
+                pot_dtype_kw = kwargs.get("persistent_output_tensor_dtype", _ABSENT)
+                pot_layout_kw = kwargs.get("persistent_output_tensor_layout", _ABSENT)
+                pot_mem_config_kw = kwargs.get("persistent_output_tensor_memory_config", _ABSENT)
+                pot_placement_kw = kwargs.get("persistent_output_tensor_tensor_placement", _ABSENT)
+                pot_tensor_was_traced = pot_shape_kw not in (_ABSENT, None)
+
             for i in range(num_iters):
                 # Initialize before the try: if signal.signal() itself raises
                 # (e.g. not running in the main thread), the cleanup/except paths
@@ -834,6 +925,11 @@ def run(
                         if _was_traced(use_broadcast) and use_broadcast is not None:
                             op_kwargs["use_broadcast"] = bool(use_broadcast)
 
+                        # Pass the "optimal CCL for llama" flag when the model did.
+                        _uocl = kwargs.get("use_optimal_ccl_for_llama", _ABSENT)
+                        if _was_traced(_uocl) and _uocl is not None:
+                            op_kwargs["use_optimal_ccl_for_llama"] = bool(_uocl)
+
                         if pob_tensor_was_traced:
                             pob_tensor = _build_persistent_output_buffer(
                                 per_device_shape=_parse_shape_str(pob_shape_kw),
@@ -848,6 +944,18 @@ def run(
                         elif pob_explicit_none:
                             # Master had `persistent_output_buffer=None` explicitly.
                             op_kwargs["persistent_output_buffer"] = None
+
+                        # Output buffer passed under the alternate kwarg name.
+                        if pot_tensor_was_traced:
+                            op_kwargs["persistent_output_tensor"] = _build_persistent_output_buffer(
+                                per_device_shape=_parse_shape_str(pot_shape_kw),
+                                dtype_str=pot_dtype_kw,
+                                layout_str=pot_layout_kw,
+                                mem_config_dict=pot_mem_config_kw,
+                                tensor_placement=pot_placement_kw if isinstance(pot_placement_kw, dict) else None,
+                                device=device,
+                                mesh_shape=mesh_shape,
+                            )
 
                         if subdevice_id is not None or "subdevice_id" not in absent_keys:
                             # The model may have used a multi-sub-device layout
@@ -929,8 +1037,16 @@ def run(
             device_tensors = ttnn.get_device_tensors(tt_out_tensor)
             tt_output_tensor = ttnn.to_torch(device_tensors[0])
 
-            # Trim tile padding to match expected shape
-            tt_output_tensor = tt_output_tensor[tuple(slice(0, s) for s in torch_reference.shape)]
+            # Compare on the region the op actually produced. The naive reference is
+            # input * cluster_size along the gather dim; when the model supplied a
+            # persistent_output_tensor whose layout packs fewer elements (e.g.
+            # optimal-CCL for llama gathers a smaller/non-uniform extent), the op's
+            # output buffer — not the naive reference — defines the valid extent.
+            # Trim both tensors to the shared (elementwise-min) shape before comparing.
+            common_shape = [min(a, b) for a, b in zip(tt_output_tensor.shape, torch_reference.shape)]
+            slices = tuple(slice(0, s) for s in common_shape)
+            tt_output_tensor = tt_output_tensor[slices]
+            torch_reference = torch_reference[slices]
 
             if input_dtype == ttnn.bfloat16:
                 eq, output = comp_equal(tt_output_tensor, torch_reference)
@@ -943,3 +1059,16 @@ def run(
             os.environ["TT_METAL_OPERATION_TIMEOUT_SECONDS"] = _prev_op_timeout
         else:
             os.environ.pop("TT_METAL_OPERATION_TIMEOUT_SECONDS", None)
+        # Clear any custom worker sub-device manager so it does not leak into the
+        # next vector. In main-proc mode the device stays open across vectors, so a
+        # carved worker grid created here (for a traced multi-sub-device layout)
+        # would shrink the cores available to a later num_links>=2 gather and make
+        # it fail "Not enough cores ... for the requested number of links N".
+        # Validated on a 32-chip galaxy: all_gather module 136 pass/11 fail without
+        # this -> 147 pass/0 fail with it.
+        try:
+            if locals().get("_ccl_sub_device_manager") is not None:
+                device.clear_loaded_sub_device_manager()
+                device.remove_sub_device_manager(_ccl_sub_device_manager)
+        except Exception:
+            pass

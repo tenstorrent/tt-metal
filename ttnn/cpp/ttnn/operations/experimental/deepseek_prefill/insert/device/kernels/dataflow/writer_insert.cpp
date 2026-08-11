@@ -21,6 +21,8 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include "api/debug/assert.h"
 
 constexpr uint32_t TILE_HEIGHT = 32;
@@ -40,6 +42,13 @@ void kernel_main() {
     constexpr uint32_t cb_start_scratch = get_compile_time_arg_val(1);
     constexpr uint32_t cb_counts_scratch = get_compile_time_arg_val(2);
     constexpr uint32_t cb_global_expert_idx_scratch = get_compile_time_arg_val(3);
+
+    Noc noc;
+    CircularBuffer cb_tile_buf(cb_tile);
+    CircularBuffer cb_start_scratch_buf(cb_start_scratch);
+    CircularBuffer cb_counts_scratch_buf(cb_counts_scratch);
+    CircularBuffer cb_global_expert_idx_scratch_buf(cb_global_expert_idx_scratch);
+    const uint32_t cb_tile_bytes = cb_tile_buf.get_tile_size();
     // Index into global_expert_idx_table. The actual global_expert_id is looked
     // up at runtime via global_expert_idx_table[local_expert_id].
     constexpr uint32_t local_expert_id = get_compile_time_arg_val(4);
@@ -64,18 +73,32 @@ void kernel_main() {
     const auto global_expert_idx_accessor = TensorAccessor(global_expert_idx_args, global_expert_idx_table_addr);
 
     // Fetch start, counts, and global_expert_idx_table (small, 1 page each) into L1 scratch.
-    const uint32_t start_l1 = get_write_ptr(cb_start_scratch);
-    const uint32_t counts_l1 = get_write_ptr(cb_counts_scratch);
-    const uint32_t global_expert_idx_l1 = get_write_ptr(cb_global_expert_idx_scratch);
-    noc_async_read_page(0, start_accessor, start_l1);
-    noc_async_read_page(0, counts_accessor, counts_l1);
-    noc_async_read_page(0, global_expert_idx_accessor, global_expert_idx_l1);
-    noc_async_read_barrier();
+    noc.async_read(
+        start_accessor,
+        cb_start_scratch_buf,
+        start_accessor.get_aligned_page_size(),
+        {.page_id = 0},
+        {.offset_bytes = 0});
+    noc.async_read(
+        counts_accessor,
+        cb_counts_scratch_buf,
+        counts_accessor.get_aligned_page_size(),
+        {.page_id = 0},
+        {.offset_bytes = 0});
+    noc.async_read(
+        global_expert_idx_accessor,
+        cb_global_expert_idx_scratch_buf,
+        global_expert_idx_accessor.get_aligned_page_size(),
+        {.page_id = 0},
+        {.offset_bytes = 0});
+    noc.async_read_barrier();
 
-    const volatile tt_l1_ptr uint32_t* start_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(start_l1);
-    const volatile tt_l1_ptr uint32_t* counts_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counts_l1);
+    const volatile tt_l1_ptr uint32_t* start_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_start_scratch_buf.get_write_ptr());
+    const volatile tt_l1_ptr uint32_t* counts_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_counts_scratch_buf.get_write_ptr());
     const volatile tt_l1_ptr uint32_t* global_expert_idx_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_expert_idx_l1);
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_global_expert_idx_scratch_buf.get_write_ptr());
     // Look up the runtime global_expert_id from the table at local_expert_id.
     const uint32_t global_expert_id = global_expert_idx_ptr[local_expert_id];
     const uint32_t start_value = start_ptr[global_expert_id];
@@ -100,21 +123,22 @@ void kernel_main() {
     const uint32_t my_num_tiles = my_rows * tiles_per_row;
     const uint32_t my_dst_start = start_tile_idx + my_row_start * tiles_per_row;
 
-    const uint32_t tile_bytes = get_tile_size(cb_tile);
-
     uint32_t offset = 0;
     while (offset < my_num_tiles) {
         const uint32_t remaining = my_num_tiles - offset;
         const uint32_t batch = remaining < WRITE_BATCH ? remaining : WRITE_BATCH;
 
-        cb_wait_front(cb_tile, batch);
-        uint32_t l1_read_addr = get_read_ptr(cb_tile);
+        cb_tile_buf.wait_front(batch);
         for (uint32_t i = 0; i < batch; ++i) {
-            noc_async_write_page(my_dst_start + offset + i, global_accessor, l1_read_addr);
-            l1_read_addr += tile_bytes;
+            noc.async_write(
+                cb_tile_buf,
+                global_accessor,
+                cb_tile_bytes,
+                {.offset_bytes = i * cb_tile_bytes},
+                {.page_id = my_dst_start + offset + i});
         }
-        noc_async_write_barrier();
-        cb_pop_front(cb_tile, batch);
+        noc.async_write_barrier();
+        cb_tile_buf.pop_front(batch);
 
         offset += batch;
     }

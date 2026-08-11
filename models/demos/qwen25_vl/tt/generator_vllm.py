@@ -21,7 +21,12 @@ from vllm.multimodal import MULTIMODAL_REGISTRY
 
 import ttnn
 from models.common.utility_functions import is_wormhole_b0
-from models.demos.qwen25_vl.tt.common import merge_vision_tokens, multimodal_rope_from_hf, preprocess_inputs_prefill
+from models.demos.qwen25_vl.tt.common import (
+    get_hf_visual,
+    merge_vision_tokens,
+    multimodal_rope_from_hf,
+    preprocess_inputs_prefill,
+)
 from models.demos.qwen25_vl.tt.generator import Generator as QwenVLGenerator
 from models.demos.qwen25_vl.tt.model import DropInVisionTransformer, Transformer
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
@@ -179,7 +184,7 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             optimizations=DecodersPrecision.performance(config.vision_config.depth, ref_model_name),
         )
         vision_model_args.hf_config.vision_config.depth = config.vision_config.depth
-        visual_model = DropInVisionTransformer(reference_model.visual, vision_model_args)
+        visual_model = DropInVisionTransformer(get_hf_visual(reference_model), vision_model_args)
 
         return cls(
             model,

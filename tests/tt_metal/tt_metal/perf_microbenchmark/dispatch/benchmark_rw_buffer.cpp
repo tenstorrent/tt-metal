@@ -135,13 +135,13 @@ static void BM_write_pinned_memory(benchmark::State& state, const std::shared_pt
         "Source vector alignment {} must be divisible by PCIE read alignment {}",
         device_read_align,
         hal.get_read_alignment(HalMemType::HOST));
-    auto src_storage = std::make_shared<std::vector<uint8_t, tt::stl::aligned_allocator<uint8_t, device_read_align>>>(
+    auto src_storage = std::make_shared<std::vector<uint8_t, ttsl::aligned_allocator<uint8_t, device_read_align>>>(
         static_cast<std::size_t>(transfer_size));
     void* aligned_ptr = reinterpret_cast<void*>(src_storage->data());
 
     // Create HostBuffer on top of aligned memory
     HostBuffer host_buffer(
-        tt::stl::Span<std::uint8_t>(src_storage->data(), static_cast<std::size_t>(transfer_size)),
+        ttsl::Span<std::uint8_t>(src_storage->data(), static_cast<std::size_t>(transfer_size)),
         MemoryPin(src_storage));
 
     // Pin the aligned host memory region for the shard
@@ -301,13 +301,13 @@ static void BM_write_pinned_memory_sharded(benchmark::State& state, const std::s
         device_read_align,
         hal.get_read_alignment(HalMemType::HOST));
 
-    auto src_storage = std::make_shared<std::vector<uint8_t, tt::stl::aligned_allocator<uint8_t, device_read_align>>>(
+    auto src_storage = std::make_shared<std::vector<uint8_t, ttsl::aligned_allocator<uint8_t, device_read_align>>>(
         static_cast<std::size_t>(actual_buf_size));
     void* aligned_ptr = reinterpret_cast<void*>(src_storage->data());
 
     // Create HostBuffer on top of aligned memory
     HostBuffer host_buffer(
-        tt::stl::Span<std::uint8_t>(src_storage->data(), static_cast<std::size_t>(actual_buf_size)),
+        ttsl::Span<std::uint8_t>(src_storage->data(), static_cast<std::size_t>(actual_buf_size)),
         MemoryPin(src_storage));
 
     // Pin the aligned host memory region
@@ -386,7 +386,7 @@ static void BM_read_pinned_memory(benchmark::State& state, const std::shared_ptr
 
     // Create HostBuffer on top of aligned memory
     HostBuffer host_buffer(
-        tt::stl::Span<std::uint8_t>(dst_storage->data(), static_cast<std::size_t>(transfer_size)),
+        ttsl::Span<std::uint8_t>(dst_storage->data(), static_cast<std::size_t>(transfer_size)),
         MemoryPin(dst_storage));
 
     // Pin the aligned host memory region for the shard

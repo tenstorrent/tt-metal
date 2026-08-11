@@ -13,6 +13,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/tt_align.hpp>
 
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
@@ -74,7 +76,7 @@ uint32_t get_preferred_noc(
 
 MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_program_and_create_override_variables(
     tt_metal::Program& program,
-    const tt::tt_metal::Tensor& a,
+    const ttnn::Tensor& a,
     tt_metal::IDevice* device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
@@ -99,6 +101,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     std::optional<UnaryWithParam> fused_activation,
     const MeshTensor& in0_tensor,
     const MeshTensor& in1_tensor,
+    const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     ttsl::optional_reference<const MeshTensor> bias_tensor,
     const MeshTensor& out_tensor,
     const tt::tt_metal::Tile& in0_tile,
@@ -118,6 +121,9 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     bool row_broadcast_bias = true,
     CoreCoord sub_device_start_core = {0, 0}) {
     using tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids;
+
+    const bool use_global_cb = global_cb.has_value();
+    const bool in1_is_locally_sharded = in1_is_sharded && !use_global_cb;
 
     // currently only support transpose of the full tile
     bool in0_transpose_tile = in0_tile.get_transpose_of_faces() && in0_tile.get_transpose_within_face();
@@ -155,7 +161,25 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     if (B * num_blocks > 1) {
         in0_CB_tiles *= operations::matmul::utilities::MCAST_INPUT_BUFFERING_DEPTH;
     }
-    uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
+    // Tiles whose size is not a multiple of the DRAM alignment (e.g. bfp8 32x16 = 544B on
+    // Blackhole's 64B alignment) are padded to it in DRAM. The interleaved reader copies tiles at
+    // the padded stride, so the in0/in1/bias CBs must hold pages at the aligned stride and the
+    // reader/unpacker walk tiles at the same stride. No-op when already aligned (all bf16 tiles,
+    // 32-wide bfp8, Wormhole). Replaces the staging-CB workaround. Sharded CBs are backed by the
+    // tensor buffer and keep their natural page size.
+    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    uint32_t in0_aligned_tile_size =
+        in0_is_sharded ? in0_single_tile_size : tt::align(in0_single_tile_size, dram_alignment);
+    uint32_t in1_aligned_tile_size = (in1_is_locally_sharded || use_global_cb)
+                                         ? in1_single_tile_size
+                                         : tt::align(in1_single_tile_size, dram_alignment);
+    // Bias CB pages must be padded to the DRAM alignment so the reader's L1 write stride
+    // matches the DRAM page stride (e.g. 64B on Blackhole for a 32B (1,16) bf16 bias tile).
+    // Mirrors in0/in1 above. Sharded bias is backed by the L1 tensor buffer and keeps its
+    // natural page size. No-op on Wormhole and for tiles already >= dram_alignment.
+    uint32_t bias_aligned_tile_size =
+        bias_is_sharded ? bias_single_tile_size : tt::align(bias_single_tile_size, dram_alignment);
+    uint32_t in0_CB_size = in0_CB_tiles * in0_aligned_tile_size;
 
     uint32_t in2_block_tiles = 0;
     uint32_t in0_shard_width_in_tiles = 0;
@@ -173,12 +197,12 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     if (B * num_blocks > 1) {
         in1_CB_tiles *= operations::matmul::utilities::MCAST_INPUT_BUFFERING_DEPTH;
     }
-    if (in1_is_sharded) {
+    if (in1_is_locally_sharded) {
         uint32_t in1_shard_height_in_tiles = in1_tensor.shard_spec()->shape[0] / in1_tile.get_height();
         in1_CB_tiles = per_core_N * in1_shard_height_in_tiles;
     }
 
-    uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
+    uint32_t in1_CB_size = in1_CB_tiles * in1_aligned_tile_size;
 
     uint32_t out_block_tiles = out_block_h * out_block_w;
     uint32_t out_shard_tiles = per_core_M * per_core_N;
@@ -192,7 +216,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
 
     uint32_t in3_block_tiles = out_block_w;
     uint32_t in3_CB_tiles = in3_block_tiles;  // No double buffer
-    uint32_t in3_CB_size = in3_CB_tiles * bias_single_tile_size;
+    uint32_t in3_CB_size = in3_CB_tiles * bias_aligned_tile_size;
 
     CoreCoord start_core = sub_device_start_core;
     uint32_t start_core_x = start_core.x;
@@ -237,6 +261,13 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
 
     CoreRangeSet all_cores_with_work =
         num_cores_to_corerangeset_in_subcoregrids(start_core, num_cores_with_work, matmul_core_rect, row_major);
+    if (use_global_cb) {
+        TT_FATAL(
+            global_cb->receiver_cores() == all_cores_with_work,
+            "mcast_in0 global_cb receivers {} must exactly match output worker cores {}",
+            global_cb->receiver_cores(),
+            all_cores_with_work);
+    }
     CoreRange in0_mcast_receiver_cores_bounding_box = all_cores_with_work.bounding_box();
     uint32_t in0_mcast_receiver_num_cores = in0_mcast_receiver_cores_bounding_box.size();  // always mcast to full grid
     uint32_t in0_mcast_receiver_num_dests = std::min(
@@ -512,8 +543,11 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device->arch(), num_cores, mm_kernel_defines, throttle_level);
 
-    if (in1_is_sharded) {
+    if (in1_is_locally_sharded) {
         mm_kernel_in1_sender_writer_defines["IN1_SHARDED"] = "1";
+    }
+    if (use_global_cb) {
+        mm_kernel_in1_sender_writer_defines["ENABLE_GLOBAL_CB"] = "1";
     }
 
     if (bias_is_sharded) {
@@ -554,18 +588,6 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
 
     Note: This workaround should only be used for this specific alignment issue case.
     */
-    bool in0_needs_intermediate_cb_read = false;
-    bool in1_needs_intermediate_cb_read = false;
-    if (device->arch() == tt::ARCH::BLACKHOLE) {
-        in0_needs_intermediate_cb_read = ((in0_single_tile_size % 64) != 0);
-        if (in0_needs_intermediate_cb_read) {
-            mm_kernel_in0_sender_writer_defines["INTERMEDIATE_CB_READ"] = "1";
-        }
-        in1_needs_intermediate_cb_read = ((in1_single_tile_size % 64) != 0);
-        if (in1_needs_intermediate_cb_read) {
-            mm_kernel_in1_sender_writer_defines["INTERMEDIATE_CB_READ"] = "1";
-        }
-    }
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
     tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
@@ -598,7 +620,6 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
                 {"cb_in0_sharded", tt::CBIndex::c_2},
                 {"cb_l1_array", tt::CBIndex::c_6},
                 {"cb_sparsity", tt::CBIndex::c_6},
-                {"cb_in0_intermediate", tt::CBIndex::c_8},
             }});
 
     tt::tt_metal::KernelHandle mm_kernel_in0_mcast_cores_without_work_and_in_receiver_grid_id = 0;
@@ -673,7 +694,6 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
                 {"cb_bias", tt::CBIndex::c_3},
                 {"cb_out", tt::CBIndex::c_4},
                 {"cb_sparsity", tt::CBIndex::c_7},
-                {"cb_in1_intermediate", tt::CBIndex::c_9},
             }});
 
     // Compute kernel compile time args
@@ -714,14 +734,13 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         compute_kernel_args.push_back(row_broadcast_bias ? 1u : 0u);
     }
 
+    constexpr auto cb_intermed0 = tt::CBIndex::c_5;
     std::unordered_map<std::string, uint32_t> compute_named_compile_args = {
         {"cb_in0", tt::CBIndex::c_0},
         {"cb_in1", tt::CBIndex::c_1},
         {"cb_bias", tt::CBIndex::c_3},
         {"cb_out", tt::CBIndex::c_4},
-        {"cb_intermed0", tt::CBIndex::c_5},
-        {"cb_in0_intermediate", tt::CBIndex::c_8},
-        {"cb_in1_intermediate", tt::CBIndex::c_9},
+        {"cb_intermed0", cb_intermed0},
         {"cb_in0_transposed", tt::CBIndex::c_10},
         {"bias_ntiles", in1_per_core_w},
     };
@@ -736,6 +755,32 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         compute_named_compile_args["activation_param2"] = params.param2;
     }
 
+    // The fused bias add reads the partials CB as an FPU operand (SrcA), so UnpackToDestFp32 cannot be
+    // set on cb_intermed0 directly when bias is present. In that case the cross-block reload instead
+    // copies through cb_intermed0_alias, a second buffer index over the same SRAM carrying
+    // UnpackToDestFp32, while the bias add keeps reading cb_intermed0 via SrcA. The alias index is
+    // handed to the compute kernel through the MM_PARTIALS_RELOAD_ALIAS_CB define, which selects the
+    // alias reload path there. Without bias the reload reads cb_intermed0 and the flag is set on it.
+    constexpr auto cb_intermed0_alias = tt::CBIndex::c_7;
+    const bool bias_reload_alias =
+        fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32 && bias_tensor.has_value();
+    if (bias_reload_alias) {
+        mm_kernel_defines["MM_PARTIALS_RELOAD_ALIAS_CB"] = std::to_string(static_cast<uint32_t>(cb_intermed0_alias));
+    }
+    // When accumulating in fp32 (fp32_dest_acc_en) with the K reduction split across blocks,
+    // the intermediate partials CB (cb_intermed0) holds Float32 and is reloaded into DEST
+    // between blocks by copy_block_matmul_partials. Unless the reload's CB view is marked
+    // UnpackToDestFp32, that reload is routed through SrcA and rounded to TF32 (10 mantissa bits),
+    // so the fp32 partial loses precision on every block boundary. The flag is set on the alias
+    // when bias forces a separate SrcA view of cb_intermed0 (see above), else on cb_intermed0 itself.
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32) {
+        const uint32_t cb_to_mark =
+            bias_reload_alias ? static_cast<uint32_t>(cb_intermed0_alias) : static_cast<uint32_t>(cb_intermed0);
+        unpack_to_dest_mode[cb_to_mark] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+
     // Create compute kernel
     // bool fp32_dest_acc_en = false;
     // Gelu currently has better accuracy when run in approx mode
@@ -747,6 +792,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args,
             .defines = mm_kernel_defines,
@@ -756,7 +802,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     tt_metal::CircularBufferConfig src0_cb_config =
         tt_metal::CircularBufferConfig(in0_CB_size, {{src0_cb_index, in0_data_format}})
-            .set_page_size(src0_cb_index, in0_single_tile_size)
+            .set_page_size(src0_cb_index, in0_aligned_tile_size)
             .set_tile_dims(src0_cb_index, in0_tile);
     tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
     log_debug(
@@ -768,23 +814,42 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         in0_CB_size);
 
     uint32_t src1_cb_index = tt::CBIndex::c_1;
-    tt_metal::CircularBufferConfig src1_cb_config =
-        tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
-            .set_page_size(src1_cb_index, in1_single_tile_size)
-            .set_tile_dims(src1_cb_index, in1_tile);
-
-    if (in1_is_sharded) {
-        src1_cb_config = src1_cb_config.set_globally_allocated_address(in1_tensor);
+    tt::tt_metal::CBHandle cb_src1 = 0;
+    if (use_global_cb) {
+        const uint32_t remote_cb_index = tt::CBIndex::c_31;
+        const uint32_t in1_block_size_bytes = in1_block_tiles * in1_single_tile_size;
+        TT_FATAL(
+            global_cb->size() % in1_block_size_bytes == 0,
+            "mcast_in0 global_cb size {} must be a multiple of in1 K-block size {}",
+            global_cb->size(),
+            in1_block_size_bytes);
+        tt_metal::CircularBufferConfig remote_cb_config(global_cb->size());
+        remote_cb_config.remote_index(remote_cb_index)
+            .set_page_size(in1_block_size_bytes)
+            .set_data_format(in1_data_format);
+        remote_cb_config.index(src1_cb_index)
+            .set_page_size(in1_single_tile_size)
+            .set_data_format(in1_data_format)
+            .set_tile_dims(in1_tile);
+        cb_src1 =
+            tt_metal::experimental::CreateCircularBuffer(program, all_cores_with_work, remote_cb_config, *global_cb);
+    } else {
+        tt_metal::CircularBufferConfig src1_cb_config =
+            tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
+                .set_page_size(src1_cb_index, in1_aligned_tile_size)
+                .set_tile_dims(src1_cb_index, in1_tile);
+        if (in1_is_locally_sharded) {
+            src1_cb_config = src1_cb_config.set_globally_allocated_address(in1_tensor);
+        }
+        cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
     }
-
-    auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
     log_debug(
         LogOp,
         "CB {} :: PS = {}, NP = {}, TOTAL = {}",
         src1_cb_index,
         in1_single_tile_size,
-        in1_CB_size / in1_single_tile_size,
-        in1_CB_size);
+        use_global_cb ? global_cb->size() / in1_single_tile_size : in1_CB_size / in1_single_tile_size,
+        use_global_cb ? global_cb->size() : in1_CB_size);
 
     uint32_t src2_cb_index = tt::CBIndex::c_2;
     tt::tt_metal::CBHandle cb_src2 = 0;
@@ -831,9 +896,18 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         std::map<uint8_t, tt::DataFormat> interm0_cb_data_format_spec{
             {interm0_cb_index, interm0_data_format},
         };
+        // Alias over the same SRAM, marked UnpackToDestFp32, for the bias reload (see above).
+        if (bias_reload_alias) {
+            interm0_cb_data_format_spec[static_cast<uint8_t>(cb_intermed0_alias)] = interm0_data_format;
+        }
         interm0_cb_config = tt_metal::CircularBufferConfig(interm0_CB_size, interm0_cb_data_format_spec)
                                 .set_page_size(interm0_cb_index, interm0_single_tile_size)
                                 .set_tile_dims(interm0_cb_index, output_tile);
+        if (bias_reload_alias) {
+            interm0_cb_config =
+                interm0_cb_config.set_page_size(static_cast<uint8_t>(cb_intermed0_alias), interm0_single_tile_size)
+                    .set_tile_dims(static_cast<uint8_t>(cb_intermed0_alias), output_tile);
+        }
 
         tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), interm0_cb_config);
         log_debug(
@@ -847,11 +921,20 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         // share buffer
         std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec{
             {output_cb_index, output_data_format}, {interm0_cb_index, interm0_data_format}};
+        // Alias over the same SRAM, marked UnpackToDestFp32, for the bias reload (see above).
+        if (bias_reload_alias) {
+            output_cb_data_format_spec[static_cast<uint8_t>(cb_intermed0_alias)] = interm0_data_format;
+        }
         output_cb_config = tt_metal::CircularBufferConfig(out_CB_size, output_cb_data_format_spec)
                                .set_page_size(output_cb_index, output_single_tile_size)
                                .set_page_size(interm0_cb_index, interm0_single_tile_size)
                                .set_tile_dims(output_cb_index, output_tile)
                                .set_tile_dims(interm0_cb_index, output_tile);
+        if (bias_reload_alias) {
+            output_cb_config =
+                output_cb_config.set_page_size(static_cast<uint8_t>(cb_intermed0_alias), interm0_single_tile_size)
+                    .set_tile_dims(static_cast<uint8_t>(cb_intermed0_alias), output_tile);
+        }
     }
 
     if (output_is_sharded) {
@@ -871,7 +954,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         uint32_t src3_cb_index = tt::CBIndex::c_3;
         tt_metal::CircularBufferConfig cb_src3_config =
             tt_metal::CircularBufferConfig(in3_CB_size, {{src3_cb_index, bias_data_format}})
-                .set_page_size(src3_cb_index, bias_single_tile_size)
+                .set_page_size(src3_cb_index, bias_aligned_tile_size)
                 .set_tile_dims(src3_cb_index, bias_tile);
 
         if (bias_is_sharded) {
@@ -883,35 +966,19 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
             LogOp,
             "CB {} :: PS = {}, NP = {}, TOTAL = {}",
             src3_cb_index,
-            bias_single_tile_size,
-            in3_CB_size / bias_single_tile_size,
+            bias_aligned_tile_size,
+            in3_CB_size / bias_aligned_tile_size,
             in3_CB_size);
     }
 
     // Intermediate CB read
-    if (in1_needs_intermediate_cb_read) {
-        uint32_t in1_intermediate_cb_index = tt::CBIndex::c_9;
-        tt_metal::CircularBufferConfig cb_in1_intermediate_config =
-            tt_metal::CircularBufferConfig(in1_single_tile_size, {{in1_intermediate_cb_index, in1_data_format}})
-                .set_page_size(in1_intermediate_cb_index, in1_single_tile_size)
-                .set_tile_dims(in1_intermediate_cb_index, in1_tile);
-        tt_metal::CreateCircularBuffer(program, all_cores, cb_in1_intermediate_config);
-    }
-    if (in0_needs_intermediate_cb_read) {
-        uint32_t in0_intermediate_cb_index = tt::CBIndex::c_8;
-        tt_metal::CircularBufferConfig cb_in0_intermediate_config =
-            tt_metal::CircularBufferConfig(in0_single_tile_size, {{in0_intermediate_cb_index, in0_data_format}})
-                .set_page_size(in0_intermediate_cb_index, in0_single_tile_size)
-                .set_tile_dims(in0_intermediate_cb_index, in0_tile);
-        tt_metal::CreateCircularBuffer(program, all_cores, cb_in0_intermediate_config);
-    }
 
     // Transpose CB for input0
     if (in0_transpose_tile) {
         const uint32_t in0_transpose_cb_index = tt::CBIndex::c_10;
         auto in0_transpose_cb_config =
             tt_metal::CircularBufferConfig(in0_CB_size, {{in0_transpose_cb_index, in0_data_format}})
-                .set_page_size(in0_transpose_cb_index, in0_single_tile_size)
+                .set_page_size(in0_transpose_cb_index, in0_aligned_tile_size)
                 .set_tile_dims(in0_transpose_cb_index, in0_tile);
         tt_metal::CreateCircularBuffer(program, all_cores, in0_transpose_cb_config);
     }
@@ -1076,7 +1143,9 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
                 mm_in1_sender_writer_args.push_back(0);
             }
 
-            mm_in1_sender_writer_args.push_back(bias_tensor.has_value() ? (std::uint32_t)bias_tensor->address() : 0);
+            // Bias base address; patched on program-cache hit by override_mcast_in0_program_parameters (idx 18).
+            mm_in1_sender_writer_args.push_back(
+                bias_tensor.has_value() ? (std::uint32_t)bias_tensor->address() : 0);  // smuggled-rta-ok
             mm_in1_sender_writer_args.push_back(
                 bias_tensor.has_value() ? (std::uint32_t)per_core_N * output_idx_x : 0);  // in3_tensor_start_tile_id
             if (!output_is_sharded) {
@@ -1108,7 +1177,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
 
 MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_program_and_create_override_variables(
     tt_metal::Program& program,
-    const tt::tt_metal::Tensor& a,
+    const ttnn::Tensor& a,
     tt_metal::IDevice* device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
@@ -1196,7 +1265,22 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     } else if (in0_B * num_blocks > 1) {
         in0_CB_tiles = in0_CB_tiles * 2;  // double buffer
     }
-    uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
+    // Tiles whose size is not a multiple of the DRAM alignment (e.g. bfp8 32x16 = 544B on
+    // Blackhole's 64B alignment) are padded to it in DRAM. The interleaved reader copies tiles at
+    // the padded stride, so the in0/in1/bias CBs must hold pages at the aligned stride and the
+    // reader/unpacker walk tiles at the same stride. No-op when already aligned (all bf16 tiles,
+    // 32-wide bfp8, Wormhole). Replaces the staging-CB workaround. Sharded CBs are backed by the
+    // tensor buffer and keep their natural page size.
+    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    uint32_t in0_aligned_tile_size =
+        in0_is_sharded ? in0_single_tile_size : tt::align(in0_single_tile_size, dram_alignment);
+    uint32_t in1_aligned_tile_size = tt::align(in1_single_tile_size, dram_alignment);
+    // Bias CB pages must be padded to the DRAM alignment so the reader's L1 write stride
+    // matches the DRAM page stride (e.g. 64B on Blackhole for a 32B (1,16) bf16 bias tile).
+    // Mirrors in0/in1 above and the dram_sharded factory. No-op on Wormhole and for
+    // tiles already >= dram_alignment.
+    uint32_t bias_aligned_tile_size = tt::align(bias_single_tile_size, dram_alignment);
+    uint32_t in0_CB_size = in0_CB_tiles * in0_aligned_tile_size;
 
     const auto& a_shape_logical = operations::matmul::utilities::get_matmul_tensor_logical_shape(a, transpose_a);
     // When transpose_a is true, the K dimension maps to the row dimension of the raw tile,
@@ -1235,7 +1319,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         in1_CB_tiles = in1_CB_tiles * 2;  // double buffer
     }
 
-    uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
+    uint32_t in1_CB_size = in1_CB_tiles * in1_aligned_tile_size;
 
     uint32_t out_block_tiles = out_block_h * out_block_w;
     uint32_t out_shard_tiles = per_core_M * per_core_N;
@@ -1249,7 +1333,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
 
     uint32_t in3_block_tiles = out_block_w;
     uint32_t in3_CB_tiles = in3_block_tiles;  // No double buffer
-    uint32_t in3_CB_size = in3_CB_tiles * bias_single_tile_size;
+    uint32_t in3_CB_size = in3_CB_tiles * bias_aligned_tile_size;
 
     CoreCoord start_core = sub_device_start_core;
 
@@ -1513,18 +1597,6 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
 
     Note: This workaround should only be used for this specific alignment issue case.
     */
-    bool in0_needs_intermediate_cb_read = false;
-    bool in1_needs_intermediate_cb_read = false;
-    if (device->arch() == tt::ARCH::BLACKHOLE) {
-        in0_needs_intermediate_cb_read = ((in0_single_tile_size % 64) != 0);
-        if (in0_needs_intermediate_cb_read) {
-            mm_kernel_in0_sender_defines["INTERMEDIATE_CB_READ"] = "1";
-        }
-        in1_needs_intermediate_cb_read = ((in1_single_tile_size % 64) != 0);
-        if (in1_needs_intermediate_cb_read) {
-            mm_kernel_in1_sender_writer_defines["INTERMEDIATE_CB_READ"] = "1";
-        }
-    }
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
     tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
@@ -1543,7 +1615,6 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
                 {"cb_in0", tt::CBIndex::c_0},
                 {"cb_in0_sharded", tt::CBIndex::c_2},
                 {"cb_sparsity", tt::CBIndex::c_6},
-                {"cb_in0_intermediate", tt::CBIndex::c_8},
             }});
 
     auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
@@ -1560,7 +1631,6 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
                 {"cb_bias", tt::CBIndex::c_3},
                 {"cb_out", tt::CBIndex::c_4},
                 {"cb_sparsity", tt::CBIndex::c_7},
-                {"cb_in1_intermediate", tt::CBIndex::c_9},
             }});
 
     tt::tt_metal::KernelHandle mm_kernel_in1_receiver_writer_id = 0;
@@ -1629,8 +1699,6 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         {"cb_bias", tt::CBIndex::c_3},
         {"cb_out", tt::CBIndex::c_4},
         {"cb_intermed0", tt::CBIndex::c_5},
-        {"cb_in0_intermediate", tt::CBIndex::c_8},
-        {"cb_in1_intermediate", tt::CBIndex::c_9},
         {"cb_in0_transposed", tt::CBIndex::c_10},
         {"bias_ntiles", in1_per_core_w},
     };
@@ -1646,6 +1714,33 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         compute_named_compile_args["activation_param2"] = params.param2;
     }
 
+    // The fused bias add reads the partials CB as an FPU operand (SrcA), so UnpackToDestFp32 cannot be
+    // set on cb_intermed0 directly when bias is present. In that case the cross-block reload instead
+    // copies through cb_intermed0_alias, a second buffer index over the same SRAM carrying
+    // UnpackToDestFp32, while the bias add keeps reading cb_intermed0 via SrcA. The alias index is
+    // handed to the compute kernel through the MM_PARTIALS_RELOAD_ALIAS_CB define, which selects the
+    // alias reload path there. Without bias the reload reads cb_intermed0 and the flag is set on it.
+    constexpr auto cb_intermed0 = tt::CBIndex::c_5;
+    constexpr auto cb_intermed0_alias = tt::CBIndex::c_7;
+    const bool bias_reload_alias =
+        fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32 && bias_tensor.has_value();
+    if (bias_reload_alias) {
+        mm_kernel_defines["MM_PARTIALS_RELOAD_ALIAS_CB"] = std::to_string(static_cast<uint32_t>(cb_intermed0_alias));
+    }
+    // When accumulating in fp32 (fp32_dest_acc_en) with the K reduction split across blocks, the
+    // intermediate partials CB (cb_intermed0) holds Float32 and is reloaded into DEST between blocks
+    // by copy_block_matmul_partials. Unless the reload's CB view is marked UnpackToDestFp32, that
+    // reload is routed through SrcA and rounded to TF32 (10 mantissa bits), so the fp32 partial loses
+    // precision on every block boundary. The flag is set on the alias when bias forces a separate SrcA
+    // view of cb_intermed0 (see above), else on cb_intermed0 itself.
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32) {
+        const uint32_t cb_to_mark =
+            bias_reload_alias ? static_cast<uint32_t>(cb_intermed0_alias) : static_cast<uint32_t>(cb_intermed0);
+        unpack_to_dest_mode[cb_to_mark] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+
     // Create compute kernel
     // bool fp32_dest_acc_en = false;
     // Gelu currently has better accuracy when run in approx mode
@@ -1657,6 +1752,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args,
             .defines = mm_kernel_defines,
@@ -1666,7 +1762,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     tt_metal::CircularBufferConfig src0_cb_config =
         tt_metal::CircularBufferConfig(in0_CB_size, {{src0_cb_index, in0_data_format}})
-            .set_page_size(src0_cb_index, in0_single_tile_size)
+            .set_page_size(src0_cb_index, in0_aligned_tile_size)
             .set_tile_dims(src0_cb_index, in0_tile);
     if (in0_is_sharded and not extract_shard_sub_blocks) {
         src0_cb_config = src0_cb_config.set_globally_allocated_address(in0_tensor);
@@ -1701,7 +1797,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     uint32_t src1_cb_index = tt::CBIndex::c_1;
     tt_metal::CircularBufferConfig src1_cb_config =
         tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
-            .set_page_size(src1_cb_index, in1_single_tile_size)
+            .set_page_size(src1_cb_index, in1_aligned_tile_size)
             .set_tile_dims(src1_cb_index, in1_tile);
     tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
     log_debug(
@@ -1732,9 +1828,18 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         std::map<uint8_t, tt::DataFormat> interm0_cb_data_format_spec{
             {interm0_cb_index, interm0_data_format},
         };
+        // Alias over the same SRAM, marked UnpackToDestFp32, for the bias reload (see above).
+        if (bias_reload_alias) {
+            interm0_cb_data_format_spec[static_cast<uint8_t>(cb_intermed0_alias)] = interm0_data_format;
+        }
         interm0_cb_config = tt_metal::CircularBufferConfig(interm0_CB_size, interm0_cb_data_format_spec)
                                 .set_page_size(interm0_cb_index, interm0_single_tile_size)
                                 .set_tile_dims(interm0_cb_index, output_tile);
+        if (bias_reload_alias) {
+            interm0_cb_config =
+                interm0_cb_config.set_page_size(static_cast<uint8_t>(cb_intermed0_alias), interm0_single_tile_size)
+                    .set_tile_dims(static_cast<uint8_t>(cb_intermed0_alias), output_tile);
+        }
 
         tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), interm0_cb_config);
         log_debug(
@@ -1748,11 +1853,20 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         // share buffer
         std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec{
             {output_cb_index, output_data_format}, {interm0_cb_index, interm0_data_format}};
+        // Alias over the same SRAM, marked UnpackToDestFp32, for the bias reload (see above).
+        if (bias_reload_alias) {
+            output_cb_data_format_spec[static_cast<uint8_t>(cb_intermed0_alias)] = interm0_data_format;
+        }
         output_cb_config = tt_metal::CircularBufferConfig(out_CB_size, output_cb_data_format_spec)
                                .set_page_size(output_cb_index, output_single_tile_size)
                                .set_page_size(interm0_cb_index, interm0_single_tile_size)
                                .set_tile_dims(output_cb_index, output_tile)
                                .set_tile_dims(interm0_cb_index, output_tile);
+        if (bias_reload_alias) {
+            output_cb_config =
+                output_cb_config.set_page_size(static_cast<uint8_t>(cb_intermed0_alias), interm0_single_tile_size)
+                    .set_tile_dims(static_cast<uint8_t>(cb_intermed0_alias), output_tile);
+        }
     }
 
     if (output_is_sharded) {
@@ -1771,41 +1885,25 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         uint32_t src3_cb_index = tt::CBIndex::c_3;
         tt_metal::CircularBufferConfig cb_src3_config =
             tt_metal::CircularBufferConfig(in3_CB_size, {{src3_cb_index, bias_data_format}})
-                .set_page_size(src3_cb_index, bias_single_tile_size)
+                .set_page_size(src3_cb_index, bias_aligned_tile_size)
                 .set_tile_dims(src3_cb_index, bias_tile);
         tt_metal::CreateCircularBuffer(program, all_cores, cb_src3_config);
         log_debug(
             LogOp,
             "CB {} :: PS = {}, NP = {}, TOTAL = {}",
             src3_cb_index,
-            bias_single_tile_size,
-            in3_CB_size / bias_single_tile_size,
+            bias_aligned_tile_size,
+            in3_CB_size / bias_aligned_tile_size,
             in3_CB_size);
     }
 
     // Intermediate CB read
-    if (in1_needs_intermediate_cb_read) {
-        uint32_t in1_intermediate_cb_index = tt::CBIndex::c_9;
-        tt_metal::CircularBufferConfig cb_in1_intermediate_config =
-            tt_metal::CircularBufferConfig(in1_single_tile_size, {{in1_intermediate_cb_index, in1_data_format}})
-                .set_page_size(in1_intermediate_cb_index, in1_single_tile_size)
-                .set_tile_dims(in1_intermediate_cb_index, in1_tile);
-        tt_metal::CreateCircularBuffer(program, all_cores, cb_in1_intermediate_config);
-    }
-    if (in0_needs_intermediate_cb_read) {
-        uint32_t in0_intermediate_cb_index = tt::CBIndex::c_8;
-        tt_metal::CircularBufferConfig cb_in0_intermediate_config =
-            tt_metal::CircularBufferConfig(in0_single_tile_size, {{in0_intermediate_cb_index, in0_data_format}})
-                .set_page_size(in0_intermediate_cb_index, in0_single_tile_size)
-                .set_tile_dims(in0_intermediate_cb_index, in0_tile);
-        tt_metal::CreateCircularBuffer(program, all_cores, cb_in0_intermediate_config);
-    }
 
     if (in0_transpose_tile) {
         const uint32_t in0_transpose_cb_index = tt::CBIndex::c_10;
         auto in0_transpose_cb_config =
             tt_metal::CircularBufferConfig(in0_CB_size, {{in0_transpose_cb_index, in0_data_format}})
-                .set_page_size(in0_transpose_cb_index, in0_single_tile_size)
+                .set_page_size(in0_transpose_cb_index, in0_aligned_tile_size)
                 .set_tile_dims(in0_transpose_cb_index, in0_tile);
         tt_metal::CreateCircularBuffer(program, all_cores, in0_transpose_cb_config);
     }
@@ -1867,7 +1965,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
                 (std::uint32_t)0};
 
             if (bias_tensor.has_value()) {
-                mm_in1_sender_writer_args.push_back((std::uint32_t)bias_tensor->address());
+                // Bias base address; patched on program-cache hit by override_mcast_in1_program_parameters (idx 18).
+                mm_in1_sender_writer_args.push_back((std::uint32_t)bias_tensor->address());  // smuggled-rta-ok
                 mm_in1_sender_writer_args.push_back(
                     (std::uint32_t)per_core_N * output_idx_x);  // in3_tensor_start_tile_id
             } else {
@@ -1967,8 +2066,8 @@ enum class CORE_TYPE : uint32_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 }
 
 MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0_program_and_create_override_variables(
     tt_metal::Program& program,
-    const tt::tt_metal::Tensor& a,
-    const std::vector<tt::tt_metal::Tensor>& b_tensors,
+    const ttnn::Tensor& a,
+    const std::vector<ttnn::Tensor>& b_tensors,
     tt_metal::IDevice* device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
@@ -2002,6 +2101,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     bool untilize_out,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     uint32_t num_global_cb_receivers,
+    bool stream_in1,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<CoreRangeSet> restricted_cores,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler) {
@@ -2018,6 +2118,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     CoreRangeSet non_idle_cores = all_worker_cores.merge(hop_cores);
     CoreRangeSet all_cores = non_idle_cores;
     std::vector<CoreRange> non_idle_cores_vec;
+    non_idle_cores_vec.reserve(non_idle_cores.ranges().size());
     auto subdevice_cores = device->worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX,
         sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
@@ -2086,6 +2187,14 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
 
     if (in1_is_dram_sharded || in1_is_dram_interleaved) {
         in1_CB_tiles = 2 * in0_shard_width_in_tiles * per_core_N;  // Double buffered
+    } else if (use_global_cb) {
+        // in1 is fed via the remote GCB CB (created from global_cb->size() below), so this
+        // local in1_CB_size is dead. Skip reading the weight's legacy shard_spec — a
+        // receiver-contiguous weight is allocated with an NdShardSpec (no legacy shard_spec),
+        // and the per-receiver block geometry is fully described by per_core_N / the GCB page.
+        in1_shard_height_in_tiles = in0_block_w;
+        in1_shard_width_in_tiles = per_core_N;
+        in1_CB_tiles = in1_shard_height_in_tiles * in1_shard_width_in_tiles;
     } else {
         in1_shard_height_in_tiles = in1_tensor.shard_spec()->shape[0] / in1_tile.get_height();
         in1_shard_width_in_tiles = in1_tensor.shard_spec()->shape[1] / in1_tile.get_width() / num_global_cb_receivers;
@@ -2108,7 +2217,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     /* in2 */
     uint32_t in2_single_tile_size = in0_single_tile_size;
     uint32_t in2_CB_tiles = (ring_size - 1) * in0_CB_tiles;  // All shards except local
-    uint32_t in2_CB_size = in2_CB_tiles * in2_single_tile_size;
+    uint32_t in2_CB_size = std::max(in2_CB_tiles, 1u) * in2_single_tile_size;
 
     /* out */
     uint32_t out_block_tiles = per_core_M * per_core_N;
@@ -2176,11 +2285,22 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             .set_tile_dims(src2_cb_index, in0_tile);
     tt_metal::CreateCircularBuffer(program, all_cores, src2_cb_config);
 
+    // Streaming pipelines one block ahead (lookahead 1), so up to this many blocks are in flight at
+    // once: the GCB must hold this many blocks/receiver (checked below) and the reader's cumulative
+    // remote_cb_wait_front peaks at this count. Bumping it would also require generalizing the
+    // reader's one-behind ack loop. (The reader recycles GCB slots off the in1 CB's engine-accurate
+    // consumer ack, so streaming needs no separate compute-done credit CB.)
+    constexpr uint32_t kStreamingInFlightBlocks = 2;
+
     uint32_t sync_cb_index = base_cb_index + 3;
-    uint32_t sync_cb_size_bytes = 16;
+    // Compute->reader release signal: one 16 B page (one credit). Only the batched global-CB path
+    // uses it (signals once per layer); streaming recycles GCB slots off the in1 CB's own consumer
+    // ack and needs no credit here.
+    constexpr uint32_t sync_cb_page_bytes = 16;
+    uint32_t sync_cb_size_bytes = sync_cb_page_bytes;
     tt_metal::CircularBufferConfig sync_cb_config =
         tt_metal::CircularBufferConfig(sync_cb_size_bytes, {{sync_cb_index, DataFormat::UInt16}})
-            .set_page_size(sync_cb_index, sync_cb_size_bytes);
+            .set_page_size(sync_cb_index, sync_cb_page_bytes);
     tt_metal::CreateCircularBuffer(program, all_cores, sync_cb_config);
 
     uint32_t sync_cb2_index = base_cb_index + 4;
@@ -2197,8 +2317,11 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     tt_metal::CircularBufferConfig output_cb_config =
         tt_metal::CircularBufferConfig(0, {{output_cb_index, output_data_format}});
     std::vector<tt::tt_metal::CBHandle> cb_outputs;
+    cb_outputs.reserve(out_buffers.size());
     std::vector<tt::tt_metal::CBHandle> output_cb_indices;
+    output_cb_indices.reserve(out_buffers.size());
     std::vector<tt::tt_metal::CBHandle> interm_cb_indices;
+    interm_cb_indices.reserve(out_buffers.size());
 
     if ((interm0_data_format != output_data_format) || (untilize_out && (in1_num_subblocks > 1))) {
         // interm0
@@ -2338,6 +2461,24 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     if (use_global_cb) {
         mm_in1_kernel_defines["ENABLE_GLOBAL_CB"] = "1";
         mm_kernel_defines["ENABLE_GLOBAL_CB"] = "1";
+        if (stream_in1) {
+            // Consume in1 blocks in ring-rotated FIFO order as they arrive (matching a
+            // streaming prefetcher) instead of waiting for the whole tensor. The reader pipelines
+            // one block ahead, so two blocks are in flight at once; the GCB must hold at least 2
+            // blocks/receiver or the reader deadlocks waiting for the prefetcher to deliver a
+            // block whose slot only frees after a later ack.
+            const uint32_t resident_blocks = global_cb->size() / (in1_block_num_tiles * in1_single_tile_size);
+            TT_FATAL(
+                resident_blocks >= kStreamingInFlightBlocks,
+                "stream_in1 pipelines {} in1 blocks per receiver in flight, so the global circular buffer must "
+                "hold at least that many blocks/receiver, but it holds only {}; increase the GCB window.",
+                kStreamingInFlightBlocks,
+                resident_blocks);
+            mm_in1_kernel_defines["STREAMING_IN1"] = "1";
+            mm_kernel_defines["STREAMING_IN1"] = "1";
+        }
+    } else {
+        TT_FATAL(!stream_in1, "stream_in1 requires a DRAM-sender global circular buffer (use_global_cb)");
     }
 
     if (fused_activation.has_value()) {
@@ -2407,6 +2548,15 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
                 {"cb_sync2", sync_cb2_index},
                 {"cb_remote", remote_cb_index}}});
 
+    // fp32 K-partials (interm0_cb_index) are reloaded into DEST between blocks via
+    // copy_block_matmul_partials; mark the CB UnpackToDestFp32 so the reload goes directly to
+    // DEST instead of through SrcA (which would truncate the fp32 partial to TF32).
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32) {
+        unpack_to_dest_mode[interm0_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+
     auto mm_kernel = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation_gathered.cpp",
@@ -2415,6 +2565,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .dst_full_sync_en = dst_full_sync_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args,
             .defines = mm_kernel_defines,
@@ -2490,6 +2641,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
 
             std::vector<std::pair<uint32_t, uint32_t>> first_col_anchors;   // (y, bank_id)
             std::vector<std::pair<uint32_t, uint32_t>> second_col_anchors;  // (y, bank_id)
+            first_col_anchors.reserve(banks_in_first_col);
+            second_col_anchors.reserve(num_banks - banks_in_first_col);
 
             for (uint32_t bank = 0; bank < num_banks; ++bank) {
                 const auto& core = optimal_dram_workers[bank];
@@ -2538,6 +2691,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
 
     uint32_t bank_id = 0;
     std::vector<uint32_t> bank_ids;
+    bank_ids.reserve(num_cores);
     for (uint32_t i = 0; i < num_cores; ++i) {
         bool send_to_hop_core = i == 0 && use_hop_cores;
         const auto& core = worker_cores_vec[i];
@@ -2696,10 +2850,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
 
     return MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t{
         {mm_kernel_in1_sender_writer_id},
-        shared_cbs,
+        std::move(shared_cbs),
         false,
         CoreCoord{0, 0},
-        worker_cores_vec,
+        std::move(worker_cores_vec),
         0,
         ttnn::prim::Matmul1DType::GATHER_IN0};
 }
@@ -2785,6 +2939,7 @@ inline void override_mcast_in1_program_parameters(
 static void override_mcast_in0_program_parameters(
     tt_metal::Program& program,
     const MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t& override_variables,
+    const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     const ttnn::prim::MatmulInputs& tensor_args,
     const std::vector<ttnn::Tensor>& output_tensors) {
     const auto& input_tensors = tensor_args.input_tensors;
@@ -2825,7 +2980,13 @@ static void override_mcast_in0_program_parameters(
     }
 
     if (src1_sharded) {
-        UpdateDynamicCircularBufferAddress(program, override_variables.cbs.at(0), src_b_tensor);
+        // cbs[0] is cb_src1. For the receiver-contiguous GCB path it is a GlobalCircularBuffer whose
+        // address is owned by the GCB (not tensor-backed), so the tensor overload of
+        // UpdateDynamicCircularBufferAddress would TT_FATAL on a program-cache hit. Skip it there,
+        // mirroring the gather_in0 override.
+        if (!global_cb.has_value()) {
+            UpdateDynamicCircularBufferAddress(program, override_variables.cbs.at(0), src_b_tensor);
+        }
     }
 
     if (bias_tensor.has_value() && bias_tensor.value().is_sharded()) {
@@ -2906,7 +3067,8 @@ void override_program_parameters(
     const std::vector<ttnn::Tensor>& tensor_return_value) {
     switch (override_variables.type) {
         case ttnn::prim::Matmul1DType::MCAST_IN0:
-            override_mcast_in0_program_parameters(program, override_variables, tensor_args, tensor_return_value);
+            override_mcast_in0_program_parameters(
+                program, override_variables, global_cb, tensor_args, tensor_return_value);
             break;
         case ttnn::prim::Matmul1DType::GATHER_IN0: {
             override_gather_in0_program_parameters(
@@ -2920,7 +3082,7 @@ void override_program_parameters(
 }
 
 static ProgramDescriptor create_program_mcast_in0_descriptor(
-    const tt::tt_metal::Tensor& a,
+    const ttnn::Tensor& a,
     tt_metal::IDevice* device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
@@ -2985,6 +3147,24 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
     uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
     uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
     uint32_t bias_single_tile_size = bias_tile.get_tile_size(bias_data_format);
+
+    // Tiles whose size is not a multiple of the DRAM alignment (e.g. bfp8 32x16 = 544B on
+    // Blackhole's 64B alignment) are padded to it in DRAM. The interleaved reader copies tiles at
+    // the padded stride, so the in0/in1/bias CBs must hold pages at the aligned stride and the
+    // reader/unpacker walk tiles at the same stride. No-op when already aligned (all bf16 tiles,
+    // 32-wide bfp8, Wormhole). Replaces the staging-CB workaround. Sharded CBs are backed by the
+    // tensor buffer and keep their natural page size.
+    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    uint32_t in0_aligned_tile_size =
+        in0_is_sharded ? in0_single_tile_size : tt::align(in0_single_tile_size, dram_alignment);
+    uint32_t in1_aligned_tile_size =
+        in1_is_sharded ? in1_single_tile_size : tt::align(in1_single_tile_size, dram_alignment);
+    // Bias CB pages must be padded to the DRAM alignment so the reader's L1 write stride
+    // matches the DRAM page stride (e.g. 64B on Blackhole for a 32B (1,16) bf16 bias tile).
+    // Mirrors in0/in1 above. Sharded bias is backed by the L1 tensor buffer and keeps its
+    // natural page size. No-op on Wormhole and for tiles already >= dram_alignment.
+    uint32_t bias_aligned_tile_size =
+        bias_is_sharded ? bias_single_tile_size : tt::align(bias_single_tile_size, dram_alignment);
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
@@ -3002,7 +3182,7 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
     if (in0_B * num_blocks > 1) {
         in0_CB_tiles *= operations::matmul::utilities::MCAST_INPUT_BUFFERING_DEPTH;
     }
-    uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
+    uint32_t in0_CB_size = in0_CB_tiles * in0_aligned_tile_size;
 
     uint32_t in2_block_tiles = 0;
     uint32_t in0_shard_width_in_tiles = 0;
@@ -3025,7 +3205,7 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
         in1_CB_tiles = per_core_N * in1_shard_height_in_tiles;
     }
 
-    uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
+    uint32_t in1_CB_size = in1_CB_tiles * in1_aligned_tile_size;
 
     uint32_t out_block_tiles = out_block_h * out_block_w;
     uint32_t out_shard_tiles = per_core_M * per_core_N;
@@ -3039,7 +3219,7 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
 
     uint32_t in3_block_tiles = out_block_w;
     uint32_t in3_CB_tiles = in3_block_tiles;  // No double buffer
-    uint32_t in3_CB_size = in3_CB_tiles * bias_single_tile_size;
+    uint32_t in3_CB_size = in3_CB_tiles * bias_aligned_tile_size;
 
     CoreCoord start_core = sub_device_start_core;
     uint32_t start_core_x = start_core.x;
@@ -3378,18 +3558,6 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
     mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
 
     // Intermediate CB read
-    bool in0_needs_intermediate_cb_read = false;
-    bool in1_needs_intermediate_cb_read = false;
-    if (device->arch() == tt::ARCH::BLACKHOLE) {
-        in0_needs_intermediate_cb_read = ((in0_single_tile_size % 64) != 0);
-        if (in0_needs_intermediate_cb_read) {
-            mm_kernel_in0_sender_writer_defines["INTERMEDIATE_CB_READ"] = "1";
-        }
-        in1_needs_intermediate_cb_read = ((in1_single_tile_size % 64) != 0);
-        if (in1_needs_intermediate_cb_read) {
-            mm_kernel_in1_sender_writer_defines["INTERMEDIATE_CB_READ"] = "1";
-        }
-    }
 
     // Helper to convert std::map defines to KernelDescriptor::Defines (vector of pairs)
     auto map_to_defines = [](const std::map<std::string, std::string>& m) -> KernelDescriptor::Defines {
@@ -3433,14 +3601,12 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
             {"cb_in0_sharded", tt::CBIndex::c_2},
             {"cb_l1_array", tt::CBIndex::c_6},
             {"cb_sparsity", tt::CBIndex::c_6},
-            {"cb_in0_intermediate", tt::CBIndex::c_8},
         };
     } else {
         in0_sender_kernel_desc.named_compile_time_args = {
             {"cb_in0", tt::CBIndex::c_0},
             {"cb_in0_sharded", tt::CBIndex::c_2},
             {"cb_sparsity", tt::CBIndex::c_6},
-            {"cb_in0_intermediate", tt::CBIndex::c_8},
         };
     }
     in0_sender_kernel_desc.config =
@@ -3514,7 +3680,6 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
         {"cb_bias", tt::CBIndex::c_3},
         {"cb_out", tt::CBIndex::c_4},
         {"cb_sparsity", tt::CBIndex::c_7},
-        {"cb_in1_intermediate", tt::CBIndex::c_9},
     };
     in1_sender_writer_kernel_desc.config =
         DataMovementConfigDescriptor{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc};
@@ -3561,6 +3726,19 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
     compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_kernel_desc.core_ranges = all_cores_with_work;
     compute_kernel_desc.compile_time_args = compute_kernel_args;
+    constexpr auto cb_intermed0 = tt::CBIndex::c_5;
+    // The fused bias add reads the partials CB as an FPU operand (SrcA), so UnpackToDestFp32 cannot be
+    // set on cb_intermed0 directly when bias is present. In that case the cross-block reload instead
+    // copies through cb_intermed0_alias, a second buffer index over the same SRAM carrying
+    // UnpackToDestFp32, while the bias add keeps reading cb_intermed0 via SrcA. The alias index is
+    // handed to the compute kernel through the MM_PARTIALS_RELOAD_ALIAS_CB define, which selects the
+    // alias reload path there. Without bias the reload reads cb_intermed0 and the flag is set on it.
+    constexpr auto cb_intermed0_alias = tt::CBIndex::c_7;
+    const bool bias_reload_alias =
+        fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32 && bias_tensor.has_value();
+    if (bias_reload_alias) {
+        mm_kernel_defines["MM_PARTIALS_RELOAD_ALIAS_CB"] = std::to_string(static_cast<uint32_t>(cb_intermed0_alias));
+    }
     compute_kernel_desc.defines = map_to_defines(mm_kernel_defines);
     {
         KernelDescriptor::NamedCompileTimeArgs named_compile_args = {
@@ -3568,9 +3746,7 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
             {"cb_in1", tt::CBIndex::c_1},
             {"cb_bias", tt::CBIndex::c_3},
             {"cb_out", tt::CBIndex::c_4},
-            {"cb_intermed0", tt::CBIndex::c_5},
-            {"cb_in0_intermediate", tt::CBIndex::c_8},
-            {"cb_in1_intermediate", tt::CBIndex::c_9},
+            {"cb_intermed0", cb_intermed0},
             {"cb_in0_transposed", tt::CBIndex::c_10},
             {"bias_ntiles", in1_per_core_w},
         };
@@ -3584,8 +3760,24 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
         }
         compute_kernel_desc.named_compile_time_args = std::move(named_compile_args);
     }
+    // When accumulating in fp32 with the K reduction split across blocks, the intermediate
+    // partials CB holds Float32 and is reloaded into DEST between blocks by copy_block_matmul_partials.
+    // Unless the reload's CB view is marked UnpackToDestFp32, that reload is routed through SrcA and
+    // rounded to TF32 (10 mantissa bits), so the fp32 partial loses precision on every block boundary
+    // and accuracy degrades as the number of K-blocks grows. The flag is set on the alias when bias
+    // forces a separate SrcA view of cb_intermed0 (see above), else on cb_intermed0 itself.
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32) {
+        const uint32_t cb_to_mark =
+            bias_reload_alias ? static_cast<uint32_t>(cb_intermed0_alias) : static_cast<uint32_t>(cb_intermed0);
+        unpack_to_dest_mode[cb_to_mark] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
     compute_kernel_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode};
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
+        .math_approx_mode = math_approx_mode};
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Build CBDescriptors
@@ -3605,7 +3797,7 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
         cb_desc.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = tt::CBIndex::c_0,
             .data_format = in0_data_format,
-            .page_size = in0_single_tile_size,
+            .page_size = in0_aligned_tile_size,
             .tile = in0_tile_desc});
         desc.cbs.push_back(std::move(cb_desc));
     }
@@ -3618,7 +3810,7 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
         cb_desc.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = tt::CBIndex::c_1,
             .data_format = in1_data_format,
-            .page_size = in1_single_tile_size,
+            .page_size = in1_aligned_tile_size,
             .tile = in1_tile_desc});
         if (in1_is_sharded) {
             cb_desc.tensor = &in1_tensor;
@@ -3681,6 +3873,14 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
                 .data_format = interm0_data_format,
                 .page_size = interm0_single_tile_size,
                 .tile = output_tile_desc});
+            // Alias over the same SRAM, marked UnpackToDestFp32, for the bias reload (see above).
+            if (bias_reload_alias) {
+                cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+                    .buffer_index = cb_intermed0_alias,
+                    .data_format = interm0_data_format,
+                    .page_size = interm0_single_tile_size,
+                    .tile = output_tile_desc});
+            }
             desc.cbs.push_back(std::move(cb_desc));
         }
     } else {
@@ -3698,6 +3898,14 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
             .data_format = interm0_data_format,
             .page_size = interm0_single_tile_size,
             .tile = output_tile_desc});
+        // Alias over the same SRAM, marked UnpackToDestFp32, for the bias reload (see above).
+        if (bias_reload_alias) {
+            cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+                .buffer_index = cb_intermed0_alias,
+                .data_format = interm0_data_format,
+                .page_size = interm0_single_tile_size,
+                .tile = output_tile_desc});
+        }
         if (output_is_sharded) {
             cb_desc.tensor = &out_tensor;
         }
@@ -3712,7 +3920,7 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
         cb_desc.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = tt::CBIndex::c_3,
             .data_format = bias_data_format,
-            .page_size = bias_single_tile_size,
+            .page_size = bias_aligned_tile_size,
             .tile = bias_tile_desc});
         if (bias_is_sharded) {
             cb_desc.tensor = &*bias_tensor;
@@ -3721,28 +3929,6 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
     }
 
     // Intermediate CB read
-    if (in1_needs_intermediate_cb_read) {
-        CBDescriptor cb_desc;
-        cb_desc.total_size = in1_single_tile_size;
-        cb_desc.core_ranges = all_cores;
-        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
-            .buffer_index = tt::CBIndex::c_9,
-            .data_format = in1_data_format,
-            .page_size = in1_single_tile_size,
-            .tile = in1_tile_desc});
-        desc.cbs.push_back(std::move(cb_desc));
-    }
-    if (in0_needs_intermediate_cb_read) {
-        CBDescriptor cb_desc;
-        cb_desc.total_size = in0_single_tile_size;
-        cb_desc.core_ranges = all_cores;
-        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
-            .buffer_index = tt::CBIndex::c_8,
-            .data_format = in0_data_format,
-            .page_size = in0_single_tile_size,
-            .tile = in0_tile_desc});
-        desc.cbs.push_back(std::move(cb_desc));
-    }
 
     // Transpose CB for input0
     if (in0_transpose_tile) {
@@ -3752,7 +3938,7 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
         cb_desc.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = tt::CBIndex::c_10,
             .data_format = in0_data_format,
-            .page_size = in0_single_tile_size,
+            .page_size = in0_aligned_tile_size,
             .tile = in0_tile_desc});
         desc.cbs.push_back(std::move(cb_desc));
     }
@@ -3916,7 +4102,9 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
                 mm_in1_sender_writer_args.push_back(0);
             }
 
-            mm_in1_sender_writer_args.push_back(bias_tensor.has_value() ? (std::uint32_t)bias_tensor->address() : 0);
+            // Bias base address placeholder; rebound to a tensor binding via in1_sender_variant[18] below.
+            mm_in1_sender_writer_args.push_back(
+                bias_tensor.has_value() ? (std::uint32_t)bias_tensor->address() : 0);  // smuggled-rta-ok
             mm_in1_sender_writer_args.push_back(
                 bias_tensor.has_value() ? (std::uint32_t)per_core_N * output_idx_x : 0);  // in3_tensor_start_tile_id
             if (!output_is_sharded) {
@@ -3964,7 +4152,7 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
 }
 
 static ProgramDescriptor create_program_mcast_in1_descriptor(
-    const tt::tt_metal::Tensor& a,
+    const ttnn::Tensor& a,
     tt_metal::IDevice* device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
@@ -4026,6 +4214,22 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
     uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
     uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
     uint32_t bias_single_tile_size = bias_tile.get_tile_size(bias_data_format);
+
+    // Tiles whose size is not a multiple of the DRAM alignment (e.g. bfp8 32x16 = 544B on
+    // Blackhole's 64B alignment) are padded to it in DRAM. The interleaved reader copies tiles at
+    // the padded stride, so the in0/in1/bias CBs must hold pages at the aligned stride and the
+    // reader/unpacker walk tiles at the same stride. No-op when already aligned (all bf16 tiles,
+    // 32-wide bfp8, Wormhole). Replaces the staging-CB workaround. Sharded CBs are backed by the
+    // tensor buffer and keep their natural page size.
+    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    uint32_t in0_aligned_tile_size =
+        in0_is_sharded ? in0_single_tile_size : tt::align(in0_single_tile_size, dram_alignment);
+    uint32_t in1_aligned_tile_size = tt::align(in1_single_tile_size, dram_alignment);
+    // Bias CB pages must be padded to the DRAM alignment so the reader's L1 write stride
+    // matches the DRAM page stride (e.g. 64B on Blackhole for a 32B (1,16) bf16 bias tile).
+    // Mirrors in0/in1 above and the dram_sharded factory. No-op on Wormhole and for
+    // tiles already >= dram_alignment.
+    uint32_t bias_aligned_tile_size = tt::align(bias_single_tile_size, dram_alignment);
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
@@ -4048,7 +4252,7 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
     } else if (in0_B * num_blocks > 1) {
         in0_CB_tiles = in0_CB_tiles * 2;  // double buffer
     }
-    uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
+    uint32_t in0_CB_size = in0_CB_tiles * in0_aligned_tile_size;
 
     const auto& a_shape_logical = operations::matmul::utilities::get_matmul_tensor_logical_shape(a, transpose_a);
     const auto in0_last_ktile_w = transpose_a ? 0 : a_shape_logical[-1] % in0_tile.get_width();
@@ -4065,7 +4269,9 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
     if (in0_is_sharded) {
         in0_shard_height_in_tiles = in0_tensor.shard_spec()->shape[0] / in0_tile.get_height();
         in0_shard_width_in_tiles = in0_tensor.shard_spec()->shape[1] / in0_tile.get_width();
-        if (in0_shard_width_in_tiles / in0_block_w > 1) {
+        // Do a real per-block copy (not point cb_in0 at L1) when K needs splitting, or when there's more
+        // than 1 row-block AND col-block: a row-block's data is needed twice, but advancing lands on the wrong one.
+        if (in0_shard_width_in_tiles / in0_block_w > 1 || (in0_num_blocks_y > 1 && in1_num_blocks_x > 1)) {
             extract_shard_sub_blocks = true;
         }
     }
@@ -4077,7 +4283,7 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
     if (in1_B * num_blocks > 1) {
         in1_CB_tiles = in1_CB_tiles * 2;  // double buffer
     }
-    uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
+    uint32_t in1_CB_size = in1_CB_tiles * in1_aligned_tile_size;
 
     uint32_t out_block_tiles = out_block_h * out_block_w;
     uint32_t out_shard_tiles = per_core_M * per_core_N;
@@ -4091,7 +4297,7 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
 
     uint32_t in3_block_tiles = out_block_w;
     uint32_t in3_CB_tiles = in3_block_tiles;  // No double buffer
-    uint32_t in3_CB_size = in3_CB_tiles * bias_single_tile_size;
+    uint32_t in3_CB_size = in3_CB_tiles * bias_aligned_tile_size;
 
     CoreCoord start_core = sub_device_start_core;
 
@@ -4338,18 +4544,6 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
     }
 
     // Intermediate CB read
-    bool in0_needs_intermediate_cb_read = false;
-    bool in1_needs_intermediate_cb_read = false;
-    if (device->arch() == tt::ARCH::BLACKHOLE) {
-        in0_needs_intermediate_cb_read = ((in0_single_tile_size % 64) != 0);
-        if (in0_needs_intermediate_cb_read) {
-            mm_kernel_in0_sender_defines["INTERMEDIATE_CB_READ"] = "1";
-        }
-        in1_needs_intermediate_cb_read = ((in1_single_tile_size % 64) != 0);
-        if (in1_needs_intermediate_cb_read) {
-            mm_kernel_in1_sender_writer_defines["INTERMEDIATE_CB_READ"] = "1";
-        }
-    }
 
     // Helper to convert std::map defines to KernelDescriptor::Defines (vector of pairs)
     auto map_to_defines = [](const std::map<std::string, std::string>& m) -> KernelDescriptor::Defines {
@@ -4384,7 +4578,6 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
         {"cb_in0", tt::CBIndex::c_0},
         {"cb_in0_sharded", tt::CBIndex::c_2},
         {"cb_sparsity", tt::CBIndex::c_6},
-        {"cb_in0_intermediate", tt::CBIndex::c_8},
     };
     in0_sender_kernel_desc.config =
         DataMovementConfigDescriptor{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc};
@@ -4400,7 +4593,6 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
         {"cb_bias", tt::CBIndex::c_3},
         {"cb_out", tt::CBIndex::c_4},
         {"cb_sparsity", tt::CBIndex::c_7},
-        {"cb_in1_intermediate", tt::CBIndex::c_9},
     };
     in1_sender_writer_kernel_desc.config =
         DataMovementConfigDescriptor{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc};
@@ -4467,6 +4659,17 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
     compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_kernel_desc.core_ranges = all_cores;
     compute_kernel_desc.compile_time_args = compute_kernel_args;
+    constexpr auto cb_intermed0 = tt::CBIndex::c_5;
+    // See create_program_mcast_in0_descriptor: the fused bias add reads the partials CB via SrcA, so
+    // when bias is present the reload copies through cb_intermed0_alias (an UnpackToDestFp32 view of
+    // the same SRAM) while the bias add keeps reading cb_intermed0. The alias index reaches the compute
+    // kernel via the MM_PARTIALS_RELOAD_ALIAS_CB define, which selects the alias reload path there.
+    constexpr auto cb_intermed0_alias = tt::CBIndex::c_7;
+    const bool bias_reload_alias =
+        fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32 && bias_tensor.has_value();
+    if (bias_reload_alias) {
+        mm_kernel_defines["MM_PARTIALS_RELOAD_ALIAS_CB"] = std::to_string(static_cast<uint32_t>(cb_intermed0_alias));
+    }
     compute_kernel_desc.defines = map_to_defines(mm_kernel_defines);
     {
         KernelDescriptor::NamedCompileTimeArgs named_compile_args = {
@@ -4474,9 +4677,7 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
             {"cb_in1", tt::CBIndex::c_1},
             {"cb_bias", tt::CBIndex::c_3},
             {"cb_out", tt::CBIndex::c_4},
-            {"cb_intermed0", tt::CBIndex::c_5},
-            {"cb_in0_intermediate", tt::CBIndex::c_8},
-            {"cb_in1_intermediate", tt::CBIndex::c_9},
+            {"cb_intermed0", cb_intermed0},
             {"cb_in0_transposed", tt::CBIndex::c_10},
             {"bias_ntiles", in1_per_core_w},
         };
@@ -4490,8 +4691,24 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
         }
         compute_kernel_desc.named_compile_time_args = std::move(named_compile_args);
     }
+    // When accumulating in fp32 with the K reduction split across blocks, the intermediate
+    // partials CB holds Float32 and is reloaded into DEST between blocks by copy_block_matmul_partials.
+    // Unless the reload's CB view is marked UnpackToDestFp32, that reload is routed through SrcA and
+    // rounded to TF32 (10 mantissa bits), so the fp32 partial loses precision on every block boundary
+    // and accuracy degrades as the number of K-blocks grows. The flag is set on the alias when bias
+    // forces a separate SrcA view of cb_intermed0 (see above), else on cb_intermed0 itself.
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32) {
+        const uint32_t cb_to_mark =
+            bias_reload_alias ? static_cast<uint32_t>(cb_intermed0_alias) : static_cast<uint32_t>(cb_intermed0);
+        unpack_to_dest_mode[cb_to_mark] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
     compute_kernel_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode};
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
+        .math_approx_mode = math_approx_mode};
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Build CBDescriptors
@@ -4511,7 +4728,7 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
         cb_desc.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = tt::CBIndex::c_0,
             .data_format = in0_data_format,
-            .page_size = in0_single_tile_size,
+            .page_size = in0_aligned_tile_size,
             .tile = in0_tile_desc});
         if (in0_is_sharded && !extract_shard_sub_blocks) {
             cb_desc.tensor = &in0_tensor;
@@ -4541,7 +4758,7 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
         cb_desc.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = tt::CBIndex::c_1,
             .data_format = in1_data_format,
-            .page_size = in1_single_tile_size,
+            .page_size = in1_aligned_tile_size,
             .tile = in1_tile_desc});
         desc.cbs.push_back(std::move(cb_desc));
     }
@@ -4575,6 +4792,14 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
                 .data_format = interm0_data_format,
                 .page_size = interm0_single_tile_size,
                 .tile = output_tile_desc});
+            // Alias over the same SRAM, marked UnpackToDestFp32, for the bias reload (see above).
+            if (bias_reload_alias) {
+                cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+                    .buffer_index = cb_intermed0_alias,
+                    .data_format = interm0_data_format,
+                    .page_size = interm0_single_tile_size,
+                    .tile = output_tile_desc});
+            }
             desc.cbs.push_back(std::move(cb_desc));
         }
     } else {
@@ -4592,6 +4817,14 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
             .data_format = interm0_data_format,
             .page_size = interm0_single_tile_size,
             .tile = output_tile_desc});
+        // Alias over the same SRAM, marked UnpackToDestFp32, for the bias reload (see above).
+        if (bias_reload_alias) {
+            cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+                .buffer_index = cb_intermed0_alias,
+                .data_format = interm0_data_format,
+                .page_size = interm0_single_tile_size,
+                .tile = output_tile_desc});
+        }
         if (output_is_sharded) {
             cb_desc.tensor = &out_tensor;
         }
@@ -4606,34 +4839,12 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
         cb_desc.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = tt::CBIndex::c_3,
             .data_format = bias_data_format,
-            .page_size = bias_single_tile_size,
+            .page_size = bias_aligned_tile_size,
             .tile = bias_tile_desc});
         desc.cbs.push_back(std::move(cb_desc));
     }
 
     // Intermediate CB read
-    if (in1_needs_intermediate_cb_read) {
-        CBDescriptor cb_desc;
-        cb_desc.total_size = in1_single_tile_size;
-        cb_desc.core_ranges = all_cores;
-        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
-            .buffer_index = tt::CBIndex::c_9,
-            .data_format = in1_data_format,
-            .page_size = in1_single_tile_size,
-            .tile = in1_tile_desc});
-        desc.cbs.push_back(std::move(cb_desc));
-    }
-    if (in0_needs_intermediate_cb_read) {
-        CBDescriptor cb_desc;
-        cb_desc.total_size = in0_single_tile_size;
-        cb_desc.core_ranges = all_cores;
-        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
-            .buffer_index = tt::CBIndex::c_8,
-            .data_format = in0_data_format,
-            .page_size = in0_single_tile_size,
-            .tile = in0_tile_desc});
-        desc.cbs.push_back(std::move(cb_desc));
-    }
 
     if (in0_transpose_tile) {
         CBDescriptor cb_desc;
@@ -4642,7 +4853,7 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
         cb_desc.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = tt::CBIndex::c_10,
             .data_format = in0_data_format,
-            .page_size = in0_single_tile_size,
+            .page_size = in0_aligned_tile_size,
             .tile = in0_tile_desc});
         desc.cbs.push_back(std::move(cb_desc));
     }
@@ -4860,6 +5071,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     uint32_t num_global_cb_receivers,
+    bool stream_in1,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     uint32_t start_cb_index,
     std::optional<CoreRangeSet> restricted_cores) {
@@ -4876,10 +5088,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
     auto output_tile = tt::tt_metal::Tile({in0_tile.get_height(), in1_tile.get_width()});
 
     // CB dataformats
-    tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());          // in0
+    tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());  // in0
     const MeshTensor& in1_tensor = b.mesh_tensor();
     tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(in1_tensor.dtype());  // in1
-    tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());  // output
+    tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());   // output
 
     ttsl::optional_reference<const MeshTensor> bias_mesh_tensor;
     tt::DataFormat bias_data_format = tt::DataFormat::Bfp8_b;  // bias; doesn't matter if bias=nullptr
@@ -5033,6 +5245,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
             untilize_out,
             global_cb,
             num_global_cb_receivers,
+            stream_in1,
             sub_device_id,
             std::move(restricted_cores),
             fused_op_signaler);
@@ -5095,6 +5308,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
             fused_activation,
             in0_tensor,
             in1_tensor,
+            global_cb,
             bias_mesh_tensor,
             output,
             in0_tile,
@@ -5262,7 +5476,9 @@ ProgramDescriptor MatmulMultiCoreReuseMcast1DProgramFactory::create_descriptor(
     }
     auto grid_size = program_config.allowed_worker_cores.value().bounding_box().grid_size();
 
-    CoreCoord sub_device_start_core = {0, 0};
+    // When a sub-device is present use its bounding-box start; otherwise fall
+    // back to allowed_worker_cores start so non-(0,0) placements work correctly.
+    CoreCoord sub_device_start_core = program_config.allowed_worker_cores.value().bounding_box().start_coord;
     if (operation_attributes.sub_device_id.has_value()) {
         auto sd_worker_cores = device->worker_cores(
             tt::tt_metal::HalProgrammableCoreType::TENSIX, operation_attributes.sub_device_id.value());
@@ -5435,6 +5651,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
         fused_op_signaler,
         global_cb,
         config.num_global_cb_receivers,
+        config.stream_in1,
         sub_device_id,
         start_cb_index,
         std::move(restricted_cores));
@@ -5499,6 +5716,7 @@ MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory::create_mesh_workload(
                 empty_signaler,
                 attributes.global_cb,
                 pc.num_global_cb_receivers,
+                pc.stream_in1,
                 attributes.sub_device_id,
                 tt::CBIndex::c_0,
                 std::nullopt);

@@ -8,6 +8,18 @@ num_routed_experts: 384
 num_shared_experts: 1
 has_bias: false
 
+# gate (routing front-end): n_group 1 = generalized op (ungrouped) / 8 = deepseek op (grouped top-8).
+# deepseek-v4: ungrouped top-6 with the sqrtsoftplus score = sqrt(softplus(logit)) (applied externally
+# via ttnn.sqrt(ttnn.softplus(.)), no in-kernel op) + score_correction_bias for selection, linear
+# renormalization, scaled by 2.5. 384 experts → the op's 512-combine path (pad 384→512, two 256-blocks →
+# global top-6), same combine path as kimi_k25.
+n_group: 1
+score_func: sqrtsoftplus
+routed_scaling_factor: 2.5
+# noaux_tc score-correction bias (e_score_correction_bias): added to the sqrtsoftplus scores for SELECTION
+# only (output weights stay unbiased). Explicit per-model flag (not inferred from score_func).
+score_correction_bias: true
+
 compute:
   intermediate_size: 3072
   activation_type: SILU

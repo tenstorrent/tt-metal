@@ -22,6 +22,10 @@
  */
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/core_local_mem.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
@@ -36,6 +40,7 @@
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include <cstdint>
 #include "strided_ring_reduce_scatter_common.hpp"
+#include "api/tensor/noc_traits.h"
 
 using address_t = uint32_t;
 using namespace tt::tt_fabric::linear::experimental;
@@ -95,6 +100,10 @@ void kernel_main() {
     // ARGS
     ///////////////////////////////////////////////////
 
+    Noc noc_obj;
+    CircularBuffer cb_compute_output(cb_compute_output_id);
+    CircularBuffer cb_reader_output(cb_reader_output_id);
+
     uint32_t arg_idx = 0;
     const address_t intermediate_address = get_arg_val<address_t>(arg_idx++);
     const address_t output_address = get_arg_val<address_t>(arg_idx++);
@@ -117,7 +126,8 @@ void kernel_main() {
     const size_t fabric_mux_flow_control_address = get_arg_val<uint32_t>(arg_idx++);
     const size_t fabric_mux_buffer_index_address = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t fabric_mux_channel_id = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t termination_sync_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    const uint32_t termination_sync_id = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t termination_sync_address = get_semaphore(termination_sync_id);
     const uint32_t local_fabric_mux_status_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
     const uint32_t local_flow_control_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
     const uint32_t local_teardown_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
@@ -270,6 +280,11 @@ void kernel_main() {
                     const uint32_t effective_chunk_width_in_tiles =
                         get_effective_chunk_width_in_tiles(chunk_idx, chunk_width_in_tiles, N_full_block_wt);
                     const uint32_t effective_subchunk_size = current_mm_block_ht * effective_chunk_width_in_tiles;
+                    // Hoist the (run-invariant) divisions out of the per-tile advance.
+                    const auto steps_worker = decompose_tile_advance(
+                        effective_worker_id, effective_subchunk_size, effective_chunk_width_in_tiles);
+                    const auto steps_advance = decompose_tile_advance(
+                        effective_advance_by_tiles, effective_subchunk_size, effective_chunk_width_in_tiles);
                     int32_t slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
 
                     // Ring reduce-scatter loop for this chunk.
@@ -278,7 +293,7 @@ void kernel_main() {
                     // i=R-1: consume output_cb, write final reduced tiles to local output.
                     for (uint32_t i = 0; i < ring_size; i++) {
                         const uint32_t actual_slice_idx = wrap_slice_idx(slice_idx, direction, ring_size);
-                        const uint32_t cb_output_id = i > 0 ? cb_compute_output_id : cb_reader_output_id;
+                        CircularBuffer& cb_output = i > 0 ? cb_compute_output : cb_reader_output;
 
                         const auto [mm_N_full_blocks_per_slice, cols_before_actual_slice] =
                             get_slice_N_block_info(actual_slice_idx, slice_Wt, N_full_block_wt);
@@ -292,8 +307,7 @@ void kernel_main() {
                                 tile_row_in_mm_M_unit_block,
                                 chunk_col_in_tiles,
                                 mm_core_idx,
-                                effective_worker_id,
-                                effective_subchunk_size,
+                                steps_worker,
                                 effective_chunk_width_in_tiles,
                                 current_mm_block_ht);
                             uint32_t tiles_to_read = how_many_tiles_to_read_formula(
@@ -309,8 +323,8 @@ void kernel_main() {
                                 const uint32_t tiles_to_read_in_this_step = std::min(tiles_to_read, tile_granularity);
                                 tiles_to_read -= tiles_to_read_in_this_step;
 
-                                cb_wait_front(cb_output_id, tile_granularity);
-                                size_t l1_read_addr = get_read_ptr(cb_output_id);
+                                cb_output.wait_front(tile_granularity);
+                                size_t l1_read_addr = cb_output.get_read_ptr();
 
                                 uint32_t tiles_remaining_in_step = tiles_to_read_in_this_step;
                                 while (tiles_remaining_in_step > 0) {
@@ -363,8 +377,7 @@ void kernel_main() {
                                             tile_row_in_mm_M_unit_block,
                                             chunk_col_in_tiles,
                                             mm_core_idx,
-                                            effective_advance_by_tiles,
-                                            effective_subchunk_size,
+                                            steps_advance,
                                             effective_chunk_width_in_tiles,
                                             current_mm_block_ht);
                                     }
@@ -409,6 +422,7 @@ void kernel_main() {
                                                     page_size * num_in_bounds_tiles);
                                             } else {
                                                 // Non-contiguous or single tile: individual unicast writes.
+                                                // All iterations reuse pkt_unicast_hdr
                                                 for (uint32_t t = 0; t < num_in_bounds_tiles; t++) {
                                                     fabric_unicast_noc_unicast_write_with_state<
                                                         UnicastWriteUpdateMask::DstAddr>(
@@ -416,22 +430,27 @@ void kernel_main() {
                                                         pkt_unicast_hdr,
                                                         valid_l1_addrs[t],
                                                         NocUnicastCommandHeader{noc_addrs[t]});
+                                                    noc_async_writes_flushed();
                                                 }
                                             }
                                         }
-                                        noc_async_writes_flushed();
+                                        noc_obj.async_writes_flushed();
                                     } else {
                                         // Write the tile to the output buffer on this device.
                                         if (num_in_bounds_tiles > 0) {
                                             const uint32_t output_tile_id = output_tile_id_start + slice_tile_idx_first;
-                                            const uint64_t local_noc_addr = output_addrgen.get_noc_addr(output_tile_id);
-                                            noc_async_write(valid_l1_addrs[0], local_noc_addr, page_size);
+                                            noc_obj.async_write(
+                                                CoreLocalMem<uint8_t>(valid_l1_addrs[0]),
+                                                output_addrgen,
+                                                page_size,
+                                                {},
+                                                {.page_id = output_tile_id});
                                         }
                                     }
                                     l1_read_addr += page_size * tiles_to_put_in_current_packet;
                                 }
-                                noc_async_write_barrier();
-                                cb_pop_front(cb_output_id, tile_granularity);
+                                noc_obj.async_write_barrier();
+                                cb_output.pop_front(tile_granularity);
                             }
                         }
 
@@ -444,9 +463,9 @@ void kernel_main() {
                                 &mux_connection_handle,
                                 pkt_hdr_seminc,
                                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
-                            noc_async_writes_flushed();
+                            noc_obj.async_writes_flushed();
                         } else {
-                            noc_async_write_barrier();
+                            noc_obj.async_write_barrier();
                         }
 
                         // Move to the next slice
@@ -463,28 +482,28 @@ void kernel_main() {
                 &mux_connection_handle,
                 pkt_hdr_mcastseminc,
                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader{batch_ready_sem_noc_addr_in_pkt, 0});
-            noc_async_writes_flushed();
+            noc_obj.async_writes_flushed();
 
             noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), ring_size - 1);
             noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 0);
         }
 
-        noc_async_write_barrier();
-        noc_async_atomic_barrier();
+        noc_obj.async_write_barrier();
+        noc_obj.async_atomic_barrier();
 
         tt::tt_fabric::fabric_client_disconnect(mux_connection_handle);
 
         if (is_termination_master) {
-            auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
-            noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
+            Semaphore<> termination_sync(termination_sync_id);
+            termination_sync.wait(num_mux_clients - 1);
             tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
         } else {
             const uint64_t dest_addr =
                 safe_get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_address, 0);
             noc_semaphore_inc(dest_addr, 1);
-            noc_async_atomic_barrier();
+            noc_obj.async_atomic_barrier();
         }
     }
 
-    noc_async_write_barrier();
+    noc_obj.async_write_barrier();
 }

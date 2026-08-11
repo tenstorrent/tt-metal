@@ -36,12 +36,11 @@ tracy::TTDeviceMarker make_marker(
     marker.core_y = kRealtimeProfilerCore_Y;
     marker.risc = tracy::RiscType::BRISC;
     marker.timestamp = timestamp;
-    marker.runtime_host_id = record.program_id;
-    marker.marker_name = fmt::format("Program_{}", record.program_id);
+    marker.runtime_host_id = record.runtime_id;
+    marker.marker_name = fmt::format("Program_{}", record.runtime_id);
     marker.marker_type = type;
     marker.file = file_str;
     marker.line = 0;
-    marker.color = tracy::Color::LightBlue;
     return marker;
 }
 #endif
@@ -72,17 +71,25 @@ std::string FormatTopCounts(const std::unordered_map<Key, uint64_t>& counts) {
 }  // namespace
 
 RealtimeProfilerTracyHandler::RealtimeProfilerTracyHandler() {
-    callback_handle_ = tt::RegisterProgramRealtimeProfilerCallback(
-        [this](const tt::ProgramRealtimeRecord& record) { HandleRecord(record); });
+#if defined(TRACY_ENABLE)
+    callback_handle_ = tt::RegisterProgramRealtimeProfilerCallback([this](const tt::ProgramRealtimeRecordBatch& batch) {
+        if (!tracy::GetProfiler().IsConnected()) {
+            return;
+        }
+        for (const auto& record : batch.records) {
+            HandleRecord(record);
+        }
+    });
+#endif
 }
 
 RealtimeProfilerTracyHandler::~RealtimeProfilerTracyHandler() {
+#if defined(TRACY_ENABLE)
     tt::UnregisterProgramRealtimeProfilerCallback(callback_handle_);
 
     std::lock_guard<std::mutex> lock(mutex_);
     MaybeEmitSkippedZoneSummaryLocked();
 
-#if defined(TRACY_ENABLE)
     for (auto& entry : tracy_contexts_) {
         TracyTTDestroy(entry.second);
     }
@@ -140,9 +147,9 @@ void RealtimeProfilerTracyHandler::RecordSkippedZoneWithEndBeforeStart(
         stats.last_summary_time = std::chrono::steady_clock::now();
         log_warning(
             tt::LogMetal,
-            "[Real-time profiler] Skipping zone with end < start: program_id={}, chip_id={}, "
+            "[Real-time profiler] Skipping zone with end < start: runtime_id={}, chip_id={}, "
             "start_timestamp={}, end_timestamp={} (delta={})",
-            record.program_id,
+            record.runtime_id,
             record.chip_id,
             record.start_timestamp,
             record.end_timestamp,
@@ -151,7 +158,7 @@ void RealtimeProfilerTracyHandler::RecordSkippedZoneWithEndBeforeStart(
     }
 
     stats.suppressed_since_last_summary++;
-    stats.count_by_program_id[record.program_id]++;
+    stats.count_by_runtime_id[record.runtime_id]++;
     stats.count_by_chip_id[record.chip_id]++;
     const auto now = std::chrono::steady_clock::now();
     if (now - stats.last_summary_time >= SkippedEndBeforeStartStats::kSummaryInterval) {
@@ -173,11 +180,11 @@ void RealtimeProfilerTracyHandler::MaybeEmitSkippedZoneSummaryLocked() {
         "[Real-time profiler] Skipped {} additional zones with end < start ({} total); programs: {}; chips: {}",
         stats.suppressed_since_last_summary,
         stats.total_skipped,
-        FormatTopCounts(stats.count_by_program_id),
+        FormatTopCounts(stats.count_by_runtime_id),
         FormatTopCounts(stats.count_by_chip_id));
 
     stats.suppressed_since_last_summary = 0;
-    stats.count_by_program_id.clear();
+    stats.count_by_runtime_id.clear();
     stats.count_by_chip_id.clear();
     stats.last_summary_time = std::chrono::steady_clock::now();
 }
@@ -193,8 +200,8 @@ void RealtimeProfilerTracyHandler::HandleRecord(const tt::ProgramRealtimeRecord&
             log_debug(
                 tt::LogMetal,
                 "[Real-time profiler] Skipping startup zone with end < start: "
-                "program_id={}, delta={}",
-                record.program_id,
+                "runtime_id={}, delta={}",
+                record.runtime_id,
                 delta);
         } else {
             RecordSkippedZoneWithEndBeforeStart(record, delta);
@@ -203,15 +210,18 @@ void RealtimeProfilerTracyHandler::HandleRecord(const tt::ProgramRealtimeRecord&
     }
 
 #if defined(TRACY_ENABLE)
-    if (!tracy::GetProfiler().IsConnected()) {
-        return;
-    }
     TracyTTCtx ctx = GetContext(record.chip_id);
     if (!ctx) {
         return;
     }
 
-    std::string file_str = record.program_id > 0 ? tt::GetKernelSourcesForRuntimeId(record.program_id) : "";
+    std::string file_str;
+    for (size_t i = 0; i < record.kernel_sources.size(); i++) {
+        if (i > 0) {
+            file_str += ",\n";
+        }
+        file_str += record.kernel_sources[i];
+    }
     if (file_str.empty()) {
         file_str = "realtime_profiler";
     }
@@ -219,6 +229,7 @@ void RealtimeProfilerTracyHandler::HandleRecord(const tt::ProgramRealtimeRecord&
     auto start = make_marker(record, record.start_timestamp, tracy::TTDeviceMarkerType::ZONE_START, file_str);
     auto end = make_marker(record, record.end_timestamp, tracy::TTDeviceMarkerType::ZONE_END, file_str);
 
+    std::lock_guard<std::mutex> lock(mutex_);
     TracyTTPushStartMarker(ctx, start);
     TracyTTPushEndMarker(ctx, end);
 #endif
@@ -259,6 +270,7 @@ void RealtimeProfilerTracyHandler::PushSyncCheckMarker(
     end_marker.timestamp = end_timestamp;
     end_marker.marker_type = tracy::TTDeviceMarkerType::ZONE_END;
 
+    std::lock_guard<std::mutex> lock(mutex_);
     TracyTTPushStartMarker(ctx, start_marker);
     TracyTTPushEndMarker(ctx, end_marker);
 #endif
@@ -277,6 +289,7 @@ void RealtimeProfilerTracyHandler::CalibrateDevice(
     if (!ctx) {
         return;
     }
+    std::lock_guard<std::mutex> lock(mutex_);
     TracyTTContextCalibrate(ctx, host_time, static_cast<double>(device_timestamp), frequency);
 #endif
 }

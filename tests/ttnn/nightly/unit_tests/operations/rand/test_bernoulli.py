@@ -116,6 +116,51 @@ def test_bernoulli_callback(shape, seed, in_dtype, out_dtype, device):
     assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
+def test_bernoulli_seed_distinguishes_cache_entries(device):
+    """Regression guard for bernoulli's seed static/dynamic contract.
+
+    `seed` is excluded from compute_program_hash (so calls differing only in seed cache-hit) but
+    must be re-applied to the cached program on every dispatch. Pins both halves:
+      * different seed must NOT grow the cache  -> guards against re-adding seed to the hash.
+      * different seed must change the output    -> guards against the frozen-runtime-arg bug on
+        the fast path.
+    """
+    shape = [1, 1, 32, 64]
+    cpu_input = torch.full(shape, 0.5, dtype=torch.float32)
+    npu_input = ttnn.from_torch(cpu_input, device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+
+    device.enable_program_cache()
+    device.clear_program_cache()
+
+    out_a = ttnn.to_torch(ttnn.bernoulli(npu_input, 1234, dtype=ttnn.float32)).float()
+    entries_a = device.num_program_cache_entries()
+
+    ttnn.bernoulli(npu_input, 1234, dtype=ttnn.float32)
+    entries_b = device.num_program_cache_entries()
+
+    out_c = ttnn.to_torch(ttnn.bernoulli(npu_input, 5678, dtype=ttnn.float32)).float()
+    entries_c = device.num_program_cache_entries()
+
+    assert entries_b == entries_a, "same seed must reuse the cached program"
+    assert entries_c == entries_a, "a different seed must NOT add a cache entry -- seed is dynamic, not hashed"
+    assert not torch.equal(out_a, out_c), "a different seed must change the output (seed re-patched on the fast path)"
+
+    device.disable_and_clear_program_cache()
+
+
+def test_bernoulli_decorrelates_neighboring_core_seeds(device):
+    """Neighboring host seeds must not collapse to the same per-core RNG stream."""
+    shape = (64, 32)  # Two tiles are split across two cores.
+    cpu_input = torch.full(shape, 0.5, dtype=torch.float32)
+    npu_input = ttnn.from_torch(cpu_input, device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+
+    output = ttnn.to_torch(ttnn.bernoulli(npu_input, seed=0xFFFFFFFE, dtype=ttnn.float32)).reshape(2, 32, 32)
+
+    # The host assigns 0xFFFFFFFE and 0xFFFFFFFF to these cores. rand_init remaps
+    # the all-ones LFSR lock state, so a missing core salt makes both streams equal.
+    assert not torch.equal(output[0], output[1]), "neighboring cores emitted duplicate Bernoulli streams"
+
+
 @pytest.mark.parametrize(
     "shape",
     [[512, 512], [5, 8, 70, 40]],

@@ -94,20 +94,42 @@ class MLP1DConfig:
     prefill_w1_w3_prg_config: Callable[[int], ttnn.MatmulMultiCoreReuseMultiCastProgramConfig] | None = None
     prefill_w2_prg_config: Callable[[int], ttnn.MatmulMultiCoreReuseMultiCastProgramConfig] | None = None
 
+    # Optional: use ttnn.experimental.minimal_matmul (instead of ttnn.linear) for the W2 down-proj
+    # prefill matmul above seq_len > 128 — matches TTTv1 (mlp.py L275-281), ~2.5x faster on the large
+    # folded-batch down-proj. Default OFF so untouched models / decode stay byte-identical; the caller
+    # opts in. FF1/FF3 stay on ttnn.linear (TTTv1 does too). The factory yields a ttnn.MinimalMatmulConfig
+    # keyed on the folded seq_len (sibling to prefill_w2_prg_config).
+    prefill_w2_minimal_matmul: bool = False
+    prefill_w2_minimal_matmul_config: Callable[[int], "ttnn.MinimalMatmulConfig"] | None = None
+
     w1_w3_dtype: ttnn.DataType | None = None
     w2_dtype: ttnn.DataType | None = None
     activation_dtype: ttnn.DataType | None = None
     ff1_3_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
     ff2_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
+    # Optional decode-only overrides (DRAM-sharded decode matmuls). When None, match ff1_3 / ff2.
+    decode_ff1_3_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
+    decode_ff2_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
+    # If True, move W1 decode output to DRAM before W3 linear so W3 CB validation does not overlap W1 L1.
+    decode_spill_w1_to_dram_before_w3: bool = False
 
     linear_dtype: ttnn.DataType | None = None
     mul_dtype: ttnn.DataType | None = None
     prefill_len_cutoff: int | None = None
 
+    def use_minimal_w2_matmul(self, seq_len: int) -> bool:
+        """Whether the W2 down-proj prefill matmul should use minimal_matmul.
+
+        Mirrors TTTv1 (mlp.py:275) — minimal_matmul only above ``seq_len > 128`` and only when the
+        per-model opt-in is set. ``seq_len`` is the folded ``B*S`` length.
+        """
+        return bool(self.prefill_w2_minimal_matmul) and seq_len > 128
+
     def is_resolved(self) -> bool:
         """Check if all fields except optional ones are resolved."""
-        # activation_dtype is optional override for linear_dtype and mul_dtype
-        optional = {"activation_dtype"}
+        # activation_dtype is optional override for linear_dtype and mul_dtype.
+        # prefill_w2_minimal_matmul_config is only materialized when the minimal-matmul opt-in is set.
+        optional = {"activation_dtype", "prefill_w2_minimal_matmul_config"}
         # topology: None for single_device (CCL not needed)
         if self.mesh_device and self.mesh_device.get_num_devices() == 1:
             optional.add("topology")
@@ -207,16 +229,21 @@ class MLP1D(LightweightModule):
             self.w1,
             dtype=cfg.linear_dtype,
             core_grid=None,
-            compute_kernel_config=cfg.ff1_3_compute_kernel_cfg,
+            compute_kernel_config=cfg.decode_ff1_3_compute_kernel_cfg,
             program_config=cfg.decode_w1_w3_prg_config,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
         )
+        if cfg.decode_spill_w1_to_dram_before_w3:
+            w1_dram = ttnn.to_memory_config(w1_out, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(w1_out)
+            w1_out = w1_dram
+
         w3_out = ttnn.linear(
             x,
             self.w3,
             dtype=cfg.linear_dtype,
             core_grid=None,
-            compute_kernel_config=cfg.ff1_3_compute_kernel_cfg,
+            compute_kernel_config=cfg.decode_ff1_3_compute_kernel_cfg,
             program_config=cfg.decode_w1_w3_prg_config,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
         )
@@ -225,12 +252,13 @@ class MLP1D(LightweightModule):
         # --- STAGE 2: No CCL for non-TG ---
 
         # --- STAGE 3: Activation + Multiply ---
+        mul_out_memcfg = ttnn.DRAM_MEMORY_CONFIG if cfg.decode_spill_w1_to_dram_before_w3 else w1_out.memory_config()
         w2_in = ttnn.mul(
             w1_out,
             w3_out,
             input_tensor_a_activations=[cfg.mlp_activation_type],
             dtype=cfg.mul_dtype,
-            memory_config=w1_out.memory_config(),
+            memory_config=mul_out_memcfg,
         )
 
         # --- STAGE 3.5: Reshard for w2 ---
@@ -245,7 +273,7 @@ class MLP1D(LightweightModule):
         w2_out = ttnn.linear(
             w2_in,
             self.w2,
-            compute_kernel_config=cfg.ff2_compute_kernel_cfg,
+            compute_kernel_config=cfg.decode_ff2_compute_kernel_cfg,
             dtype=cfg.linear_dtype,
             program_config=cfg.decode_w2_prg_config,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
@@ -329,15 +357,26 @@ class MLP1D(LightweightModule):
         # --- STAGE 4: No all_gather for non-TG ---
 
         # --- STAGE 5: W2 Linear ---
-        w2_out = ttnn.linear(
-            w2_in,
-            self.w2,
-            compute_kernel_config=cfg.ff2_compute_kernel_cfg,
-            dtype=cfg.linear_dtype,
-            program_config=pc_w2,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            core_grid=None,
-        )
+        # Above seq_len > 128 the folded-batch down-proj is large; minimal_matmul is ~2.5x faster than
+        # ttnn.linear there (TTTv1 parity). Opt-in via prefill_w2_minimal_matmul; output shape is
+        # identical to the ttnn.linear path. FF1/FF3 stay on ttnn.linear (matches TTTv1).
+        if cfg.use_minimal_w2_matmul(seq_len):
+            w2_out = ttnn.experimental.minimal_matmul(
+                w2_in,
+                self.w2,
+                compute_kernel_config=cfg.ff2_compute_kernel_cfg,
+                config=cfg.prefill_w2_minimal_matmul_config(seq_len),
+            )
+        else:
+            w2_out = ttnn.linear(
+                w2_in,
+                self.w2,
+                compute_kernel_config=cfg.ff2_compute_kernel_cfg,
+                dtype=cfg.linear_dtype,
+                program_config=pc_w2,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                core_grid=None,
+            )
         ttnn.deallocate(w2_in)
 
         # --- STAGE 6: Final All-Reduce (prefill: sharded=False) ---
@@ -586,6 +625,9 @@ class MLP1D(LightweightModule):
             activation_dtype=activation_dtype,
             ff1_3_compute_kernel_cfg=ff1_3_compute_kernel_cfg,
             ff2_compute_kernel_cfg=ff2_compute_kernel_cfg,
+            decode_ff1_3_compute_kernel_cfg=ff1_3_compute_kernel_cfg,
+            decode_ff2_compute_kernel_cfg=ff2_compute_kernel_cfg,
+            decode_spill_w1_to_dram_before_w3=False,
             # Use prefill_len_cutoff from args to match original MLP behavior
             prefill_len_cutoff=args.prefill_len_cutoff,
         )
@@ -822,6 +864,13 @@ def _resolve_mlp1d_config(config: MLP1DConfig) -> MLP1DConfig:
     if config.ff2_compute_kernel_cfg is None:
         to_set["ff2_compute_kernel_cfg"] = _compute_kernel_config_hifi2_fp16()
 
+    ff13_resolved = config.ff1_3_compute_kernel_cfg or to_set.get("ff1_3_compute_kernel_cfg")
+    ff2_resolved = config.ff2_compute_kernel_cfg or to_set.get("ff2_compute_kernel_cfg")
+    if config.decode_ff1_3_compute_kernel_cfg is None:
+        to_set["decode_ff1_3_compute_kernel_cfg"] = ff13_resolved
+    if config.decode_ff2_compute_kernel_cfg is None:
+        to_set["decode_ff2_compute_kernel_cfg"] = ff2_resolved
+
     # --- Phase 3: Decode program configs ---
     # Note: Use padded_hidden_dim to match auto-padding in LazyWeight
 
@@ -916,6 +965,23 @@ def _resolve_mlp1d_config(config: MLP1DConfig) -> MLP1DConfig:
             )
 
         to_set["prefill_w2_prg_config"] = lambda seq_len: w2_prg_config(seq_len)
+
+    # minimal_matmul config for W2 (only materialized when the opt-in is set). Block sizes mirror TTTv1
+    # (mlp.py via model_config.py:1329-1334: 8/8/8 blocks); the compute grid is the W2 prefill grid
+    # (find_prefill_grid over padded_hidden_dim), equivalent to TTTv1's mlp2_grid(seq_len).
+    if config.prefill_w2_minimal_matmul and config.prefill_w2_minimal_matmul_config is None:
+        minimal_w2_grid = _find_prefill_grid(8, padded_hidden_dim // tile_size)
+
+        @lru_cache
+        def w2_minimal_matmul_config(seq_len: int):
+            return ttnn.MinimalMatmulConfig(
+                M_block_size=8,
+                K_block_size=8,
+                N_block_size=8,
+                compute_with_storage_grid_size=ttnn.CoreCoord(minimal_w2_grid[0], minimal_w2_grid[1]),
+            )
+
+        to_set["prefill_w2_minimal_matmul_config"] = lambda seq_len: w2_minimal_matmul_config(seq_len)
 
     # --- Phase 5: Weight memory configs ---
 

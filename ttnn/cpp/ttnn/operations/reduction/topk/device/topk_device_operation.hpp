@@ -8,6 +8,8 @@
 
 #include "ttnn/operations/reduction/topk/device/topk_device_operation_types.hpp"
 
+#include "ttnn/metal_v2_artifacts.hpp"
+
 #include <tt-metalium/program_descriptors.hpp>
 
 #include <optional>
@@ -18,11 +20,11 @@ namespace ttnn::prim {
 struct TopKDeviceOperation {
     using operation_attributes_t = TopkParams;
     using tensor_args_t = TopkInputs;
-    using spec_return_value_t = std::tuple<TensorSpec, TensorSpec>;
+    using spec_return_value_t = std::tuple<tt::tt_metal::TensorSpec, tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::tuple<Tensor, Tensor>;
 
     struct TopKSingleCoreProgramFactory {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
@@ -52,6 +54,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> topk(
     int8_t dim,
     bool largest,
     bool sorted,
+    bool stable,
     const tt::tt_metal::MemoryConfig& memory_config,
     const tt::tt_metal::CoreRangeSet& sub_core_grids,
     const std::optional<Tensor>& indices_tensor = std::nullopt,

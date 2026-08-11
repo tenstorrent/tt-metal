@@ -27,7 +27,7 @@ uint32_t get_num_pages(const ttnn::Tensor& t) { return (uint32_t)t.buffer()->num
 uint32_t get_page_size(const ttnn::Tensor& t) { return (uint32_t)t.buffer()->page_size(); }
 uint32_t get_aligned_page_size(const ttnn::Tensor& t) { return (uint32_t)t.buffer()->aligned_page_size(); }
 
-std::string serialize_physical_core_coords(const std::vector<CoreCoord>& cores, tt::tt_metal::IDevice* device) {
+std::string serialize_physical_core_coords(const std::vector<tt::tt_metal::CoreCoord>& cores, tt::tt_metal::IDevice* device) {
     std::vector<uint32_t> flat_physical_core_coords;
     flat_physical_core_coords.reserve(2 * cores.size());
 
@@ -368,6 +368,7 @@ MoEGPTMeshWorkloadFactory::create_at(
     }
 
     std::vector<uint32_t> runtime_args;
+    runtime_args.reserve(13);
     runtime_args.push_back(0);
     runtime_args.push_back(0);
     for (uint32_t i = 0; i < 4; ++i) {
@@ -384,6 +385,7 @@ MoEGPTMeshWorkloadFactory::create_at(
     runtime_args.push_back(output_base_l1_addr);   // [12] output_base_l1_addr
 
     std::vector<uint32_t> vchannels;
+    vchannels.reserve(dram_bank2core_coords.size());
     uint32_t dram_bank = 0;
     for (auto core : dram_bank2core_coords) {
         uint32_t vchannel = dram_bank & 0x3;

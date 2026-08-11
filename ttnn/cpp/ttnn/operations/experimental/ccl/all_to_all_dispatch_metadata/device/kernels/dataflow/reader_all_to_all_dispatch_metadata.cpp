@@ -4,8 +4,13 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/core_local_mem.h"
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "api/tensor/noc_traits.h"
 
 using namespace ttnn::operations::ccl::common;
 using tt::data_movement::common::tt_memmove;
@@ -15,41 +20,43 @@ void kernel_main() {
     constexpr uint32_t indices_tensor_cb_id = get_compile_time_arg_val(1);
     constexpr uint32_t mapping_tensor_cb_id = get_compile_time_arg_val(2);
 
-    constexpr uint32_t input_pages = get_compile_time_arg_val(5);
-    constexpr uint32_t indices_pages = get_compile_time_arg_val(6);
-    constexpr uint32_t mapping_pages = get_compile_time_arg_val(7);
+    [[maybe_unused]] constexpr uint32_t input_pages = get_compile_time_arg_val(5);
+    [[maybe_unused]] constexpr uint32_t indices_pages = get_compile_time_arg_val(6);
+    [[maybe_unused]] constexpr uint32_t mapping_pages = get_compile_time_arg_val(7);
 
     constexpr uint32_t input_page_size = get_compile_time_arg_val(10);
     constexpr uint32_t indices_page_size = get_compile_time_arg_val(11);
     constexpr uint32_t mapping_page_size = get_compile_time_arg_val(12);
     constexpr uint32_t metadata_page_size = get_compile_time_arg_val(14);
 
-    constexpr uint32_t num_devices = get_compile_time_arg_val(15);
-    constexpr uint32_t selected_experts_k = get_compile_time_arg_val(18);
+    [[maybe_unused]] constexpr uint32_t num_devices = get_compile_time_arg_val(15);
+    [[maybe_unused]] constexpr uint32_t selected_experts_k = get_compile_time_arg_val(18);
     constexpr uint32_t num_shared_experts = get_compile_time_arg_val(20);
 
     constexpr uint32_t tokens_per_device = get_compile_time_arg_val(21);
 
-    constexpr uint32_t src_mesh_id = get_compile_time_arg_val(24);
-    constexpr uint32_t src_chip_id = get_compile_time_arg_val(25);
+    constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(23);
 
-    constexpr uint32_t mesh_rows = get_compile_time_arg_val(26);
-    constexpr uint32_t mesh_cols = get_compile_time_arg_val(27);  // ew_dim
+    [[maybe_unused]] constexpr uint32_t src_mesh_id = get_compile_time_arg_val(24);
+    [[maybe_unused]] constexpr uint32_t src_chip_id = get_compile_time_arg_val(25);
 
-    constexpr uint32_t aligned_indices_page_size = get_compile_time_arg_val(29);
-    constexpr uint32_t aligned_mapping_page_size = get_compile_time_arg_val(30);
+    [[maybe_unused]] constexpr uint32_t mesh_rows = get_compile_time_arg_val(26);
+    [[maybe_unused]] constexpr uint32_t mesh_cols = get_compile_time_arg_val(27);  // ew_dim
+
+    [[maybe_unused]] constexpr uint32_t aligned_indices_page_size = get_compile_time_arg_val(29);
+    [[maybe_unused]] constexpr uint32_t aligned_mapping_page_size = get_compile_time_arg_val(30);
     constexpr uint32_t aligned_metadata_page_size = get_compile_time_arg_val(32);
 
     constexpr uint32_t metadata_buffer_id = get_compile_time_arg_val(35);
 
-    constexpr bool write_page_by_page = get_compile_time_arg_val(36);
+    [[maybe_unused]] constexpr bool write_page_by_page = get_compile_time_arg_val(36);
     constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(37);
 
     constexpr uint32_t dispatch_devices = get_compile_time_arg_val(38);
 
     // scores tensor compile time args
     constexpr uint32_t scores_tensor_cb_id = get_compile_time_arg_val(39);
-    constexpr uint32_t scores_pages = get_compile_time_arg_val(40);
+    [[maybe_unused]] constexpr uint32_t scores_pages = get_compile_time_arg_val(40);
     constexpr uint32_t scores_page_size = get_compile_time_arg_val(41);
     constexpr uint32_t aligned_output_scores_page_size = get_compile_time_arg_val(44);
 
@@ -65,7 +72,7 @@ void kernel_main() {
     uint32_t indices_tensor_address = get_arg_val<uint32_t>(rt_ags++);
     uint32_t scores_tensor_address = get_arg_val<uint32_t>(rt_ags++);
     uint32_t mapping_tensor_address = get_arg_val<uint32_t>(rt_ags++);
-    uint32_t output_tensor_address = get_arg_val<uint32_t>(rt_ags++);
+    [[maybe_unused]] uint32_t output_tensor_address = get_arg_val<uint32_t>(rt_ags++);
     uint32_t metadata_tensor_address = get_arg_val<uint32_t>(rt_ags++);
     [[maybe_unused]] uint32_t scores_out_tensor_address = get_arg_val<uint32_t>(rt_ags++);
 
@@ -85,11 +92,21 @@ void kernel_main() {
     constexpr uint32_t shared_expert_data_size_bytes = num_shared_experts * sizeof(uint16_t);
     constexpr uint16_t bf16_one = 0x3f80;
 
+    Noc noc;
+
     const auto input_addr_gen = TensorAccessor(input_args, input_tensor_address, input_page_size);
     const auto indices_addr_gen = TensorAccessor(indices_args, indices_tensor_address, indices_page_size);
     const auto scores_addr_gen = TensorAccessor(scores_args, scores_tensor_address, scores_page_size);
     const auto mapping_addr_gen = TensorAccessor(mapping_args, mapping_tensor_address, mapping_page_size);
-    const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address, metadata_page_size);
+    [[maybe_unused]] const auto metadata_addr_gen =
+        TensorAccessor(metadata_args, metadata_tensor_address, metadata_page_size);
+
+    Noc noc_obj;
+    CircularBuffer cb_input(input_tensor_cb_id);
+    CircularBuffer cb_indices(indices_tensor_cb_id);
+    CircularBuffer cb_scores(scores_tensor_cb_id);
+    CircularBuffer cb_mapping(mapping_tensor_cb_id);
+    CircularBuffer cb_metadata(metadata_buffer_id);
 
     if (token_start_idx == token_end_idx) {
         return;
@@ -99,38 +116,38 @@ void kernel_main() {
     // Each page is one device's view of the mapping. Read only the source device's page.
     // Page index = linearized_mesh_coord (source device index)
     constexpr uint32_t mapping_pages_to_read = 1;
-    cb_reserve_back(mapping_tensor_cb_id, mapping_pages_to_read);
-    uint32_t base_mapping_addr = get_write_ptr(mapping_tensor_cb_id);
-    noc_async_read_page(linearized_mesh_coord, mapping_addr_gen, base_mapping_addr);
+    cb_mapping.reserve_back(mapping_pages_to_read);
+    uint32_t base_mapping_addr = cb_mapping.get_write_ptr();
+    noc_obj.async_read(mapping_addr_gen, cb_mapping, mapping_page_size, {.page_id = linearized_mesh_coord}, {});
 
     ASSERT(indices_pages == input_pages);
     ASSERT(scores_pages == indices_pages);
     // read the input tokens, selected experts, and scores for each token
-    uint32_t base_indices_addr = get_write_ptr(indices_tensor_cb_id);
-    uint32_t base_scores_addr = get_write_ptr(scores_tensor_cb_id);
-    noc_async_read_barrier();
-    cb_push_back(mapping_tensor_cb_id, mapping_pages_to_read);
+    uint32_t base_indices_addr = cb_indices.get_write_ptr();
+    uint32_t base_scores_addr = cb_scores.get_write_ptr();
+    noc_obj.async_read_barrier();
+    cb_mapping.push_back(mapping_pages_to_read);
 
     for (uint32_t i = token_start_idx; i < token_end_idx; i++) {
-        cb_reserve_back(indices_tensor_cb_id, 1);
-        cb_reserve_back(input_tensor_cb_id, 1);
+        cb_indices.reserve_back(1);
+        cb_input.reserve_back(1);
 
         // All workers read indices (needed for routing decisions)
-        uint32_t l1_write_addr = get_write_ptr(indices_tensor_cb_id);
-        noc_async_read_page(i, indices_addr_gen, l1_write_addr);
+        uint32_t l1_write_addr = cb_indices.get_write_ptr();
+        noc_obj.async_read(indices_addr_gen, cb_indices, indices_page_size, {.page_id = i}, {});
 
         // manually fill in shared expert IDs to the metadata
         if constexpr (num_shared_experts > 0) {
             const uint32_t shared_expert_id_l1_addr = l1_write_addr + indices_page_size;
             tt_memmove<false, true, true, shared_expert_data_size_bytes>(
-                shared_expert_id_l1_addr, shared_expert_ids_addr, shared_expert_data_size_bytes);
+                noc, shared_expert_id_l1_addr, shared_expert_ids_addr, shared_expert_data_size_bytes);
         }
 
         // Only primary worker reads scores (only primary sends metadata)
         if (is_primary_payload_worker) {
-            cb_reserve_back(scores_tensor_cb_id, 1);
-            l1_write_addr = get_write_ptr(scores_tensor_cb_id);
-            noc_async_read_page(i, scores_addr_gen, l1_write_addr);
+            cb_scores.reserve_back(1);
+            l1_write_addr = cb_scores.get_write_ptr();
+            noc_obj.async_read(scores_addr_gen, cb_scores, scores_page_size, {.page_id = i}, {});
 
             if constexpr (num_shared_experts > 0) {
                 auto* l1_scores_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr);
@@ -143,38 +160,41 @@ void kernel_main() {
         // Read input token (or portion of it in payload split mode)
         // In non-split mode: payload_offset=0, payload_size=input_page_size (reads full page)
         // In split mode: reads only this worker's portion
-        uint64_t input_page_noc_addr = input_addr_gen.get_noc_addr(i);
-        l1_write_addr = get_write_ptr(input_tensor_cb_id);
-        noc_async_read(input_page_noc_addr + payload_offset, l1_write_addr, payload_size);
+        noc_obj.async_read(input_addr_gen, cb_input, payload_size, {.page_id = i, .offset_bytes = payload_offset}, {});
 
-        noc_async_read_barrier();
-        cb_push_back(indices_tensor_cb_id, 1);
+        noc_obj.async_read_barrier();
+        cb_indices.push_back(1);
         if (is_primary_payload_worker) {
-            cb_push_back(scores_tensor_cb_id, 1);
+            cb_scores.push_back(1);
         }
-        cb_push_back(input_tensor_cb_id, 1);
+        cb_input.push_back(1);
     }
 
     // Only primary worker copies indices and scores to metadata buffer (only primary sends metadata)
     if (is_primary_payload_worker) {
-        cb_reserve_back(metadata_buffer_id, tokens_per_device);
-        const uint32_t metadata_buffer_addr = get_write_ptr(metadata_buffer_id);
+        cb_metadata.reserve_back(tokens_per_device);
+        const uint32_t metadata_buffer_addr = cb_metadata.get_write_ptr();
+        // Device 2.0 migration: legacy primitive retained: local-L1 self-read via get_noc_addr(local_l1_addr)
         noc_async_read(
             get_noc_addr(base_indices_addr),
             metadata_buffer_addr,
             (token_end_idx - token_start_idx) * aligned_metadata_page_size);
+        // Device 2.0 migration: legacy primitive retained: local-L1 self-read via get_noc_addr(local_l1_addr)
         noc_async_read(
             get_noc_addr(base_scores_addr),
-            get_write_ptr(metadata_buffer_id) + (token_end_idx - token_start_idx) * aligned_metadata_page_size,
+            cb_metadata.get_write_ptr() + (token_end_idx - token_start_idx) * aligned_metadata_page_size,
             (token_end_idx - token_start_idx) * aligned_output_scores_page_size);
 
-        noc_async_read_barrier();
-        cb_push_back(metadata_buffer_id, tokens_per_device);
+        noc_obj.async_read_barrier();
+        cb_metadata.push_back(tokens_per_device);
 
         // Wait for all other devices to finish dispatching their input tokens and metadata.
         // The writer now writes metadata directly to the sharded output tensor on the drain sync tilizer core,
         // so we no longer need to copy from the intermediate buffer to the final output here.
-        noc_semaphore_wait((uint32_t*)global_semaphore_address, dispatch_devices);
+        constexpr uint32_t expected_dispatch_device_inc =
+            (topology == tt::tt_fabric::Topology::Linear) ? (dispatch_devices - 1) : dispatch_devices;
+        // Device 2.0 migration: legacy primitive retained: global_semaphore_address is a GlobalSemaphore address.
+        noc_semaphore_wait((uint32_t*)global_semaphore_address, expected_dispatch_device_inc);
         noc_semaphore_set((uint32_t*)global_semaphore_address, 0);
     }
 }

@@ -139,13 +139,10 @@ def test_reduce_scatter_bf16_precision(
     # Step 2: all_gather on reduce_scatter output
     ag_semaphore_handles = create_global_semaphores(mesh_device, ccl_sub_device_crs, 0, count=2)
 
-    all_reduce_output = ttnn.experimental.all_gather_async(
+    all_reduce_output = ttnn.all_gather(
         rs_output,
         dim=dim,
-        multi_device_global_semaphore=ag_semaphore_handles,
-        num_links=num_links,
         memory_config=mem_config,
-        topology=ttnn.Topology.Linear,
         subdevice_id=worker_sub_device_id,
     )
     ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
@@ -178,13 +175,10 @@ def test_reduce_scatter_bf16_precision(
         ),
     )
 
-    ag_output = ttnn.experimental.all_gather_async(
+    ag_output = ttnn.all_gather(
         input_ag,
         dim=dim,
-        multi_device_global_semaphore=ag2_semaphore_handles,
-        num_links=num_links,
         memory_config=mem_config,
-        topology=ttnn.Topology.Linear,
         subdevice_id=worker_sub_device_id,
     )
     ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)

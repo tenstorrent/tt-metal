@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
@@ -13,6 +15,8 @@
 #define MAX_TREE_REDUCTION_ROUNDS 6
 
 void kernel_main() {
+    Noc noc;
+
     constexpr uint32_t B = get_compile_time_arg_val(0);     // batch size
     constexpr uint32_t PNHt = get_compile_time_arg_val(1);  // padded number of heads in tiles
     constexpr uint32_t St = get_compile_time_arg_val(2);    // full sequence length of kv cache in tiles
@@ -24,8 +28,9 @@ void kernel_main() {
     constexpr uint32_t scale_val = get_compile_time_arg_val(8);
     constexpr uint32_t num_cores_per_batch = get_compile_time_arg_val(9);           // num cores per batch
     constexpr uint32_t num_cores = get_compile_time_arg_val(10);                    // num running cores in total
-    uint32_t reducer_semaphore_addr = get_semaphore(get_compile_time_arg_val(11));  // semaphore for reducer
-    uint32_t output_semaphore_addr = get_semaphore(get_compile_time_arg_val(12));   // semaphore for sender
+    constexpr uint32_t reducer_semaphore_id = get_compile_time_arg_val(11);         // semaphore ID for reducer
+    uint32_t reducer_semaphore_addr = get_semaphore(reducer_semaphore_id);          // semaphore for reducer
+    constexpr uint32_t output_semaphore_id = get_compile_time_arg_val(12);          // semaphore ID for sender
     constexpr bool is_out_sharded = get_compile_time_arg_val(13);
     constexpr uint32_t k_chunk_size = get_compile_time_arg_val(14);
     constexpr uint32_t num_q_heads = get_compile_time_arg_val(15);
@@ -118,11 +123,12 @@ void kernel_main() {
         if (cur_pos_arg != UINT32_MAX) {
             cur_pos = cur_pos_arg;
         } else {
-            cb_wait_front(cb_cur_pos, 1);
-            uint32_t index_cb_ptr = get_read_ptr(cb_cur_pos);
+            CircularBuffer cb_index(cb_cur_pos);
+            cb_index.wait_front(1);
+            uint32_t index_cb_ptr = cb_index.get_read_ptr();
             volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_ptr);
             cur_pos = index_ptr[(uint32_t)(cur_batch / q_heads_parallel_factor)];
-            cb_pop_front(cb_cur_pos, 1);
+            cb_index.pop_front(1);
         }
 
         if (cur_pos == UINT32_MAX) {
@@ -191,9 +197,6 @@ void kernel_main() {
     uint32_t reduce_core_noc_x = all_reducer_noc_x[reduce_core_index];
     uint32_t reduce_core_noc_y = all_reducer_noc_y[reduce_core_index];
 
-    const uint64_t in0_sender_semaphore_noc_addr =
-        get_noc_addr(reduce_core_noc_x, reduce_core_noc_y, reducer_semaphore_addr);
-
     constexpr uint32_t out_chunk_tiles = PNHt * vDHt;
     uint32_t num_cores_to_wait = num_cores_per_head - 1;
     if (num_cores_per_head > k_num_chunks) {
@@ -207,10 +210,9 @@ void kernel_main() {
         cb_identity_scale_in,
         ckernel::PoolType::MAX,
         ckernel::ReduceDim::REDUCE_ROW,
-        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
-        /*compute_uses_reduce_tile=*/true>();
+        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
     dataflow_kernel_lib::prepare_zero_tile<cb_zero_in>();
-    generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
+    generate_bcast_col_scalar(CircularBuffer(cb_col_identity), identity_scalar_packed);
 
     // Generate sliding window mask only if we have local data and need it
     if (has_local_data && k_chunk_start == window_start_chunk && window_start_unaligned > 0) {
@@ -249,7 +251,7 @@ void kernel_main() {
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<tile_bytes, num_cores>();
     uint32_t barrier_count = 0;
 
-    noc_async_write_barrier();  // #19201 BH hang workaround
+    noc.async_write_barrier();  // #19201 BH hang workaround
 
     for (uint32_t cur_head = cur_head_group * num_heads_per_core;
          cur_head < cur_head_group * num_heads_per_core + num_heads_per_core;
@@ -284,29 +286,52 @@ void kernel_main() {
 
                     // Calculate offset based on round (child writes at round offset)
                     uint32_t block_offset = round * (out_chunk_tiles + 2 * PNHt) * tile_bytes_intermed;
-                    uint64_t intermed_l1_read_addr = get_noc_addr(get_read_ptr(cb_intermed_out)) + block_offset;
+                    CircularBuffer cb_intermed(cb_intermed_out);
+                    const uint8_t noc_id = noc.get_noc_id();
+                    const uint32_t my_noc_x = my_x[noc_id];
+                    const uint32_t my_noc_y = my_y[noc_id];
+                    uint32_t intermed_l1_read_addr = cb_intermed.get_read_ptr() + block_offset;
+                    UnicastEndpoint intermed_src;
 
                     // Reserve space in CBs and read data
                     // Order: l, m, o (same as sender writes)
-                    cb_reserve_back(cb_l_in, PNHt);
-                    uint32_t l_write_ptr = get_write_ptr(cb_l_in);
-                    noc_async_read(intermed_l1_read_addr, l_write_ptr, ml_read_size);
+                    CircularBuffer cb_l(cb_l_in);
+                    cb_l.reserve_back(PNHt);
+                    uint32_t l_write_ptr = cb_l.get_write_ptr();
+                    noc.async_read(
+                        intermed_src,
+                        CoreLocalMem<uint32_t>(l_write_ptr),
+                        ml_read_size,
+                        {.noc_x = my_noc_x, .noc_y = my_noc_y, .addr = intermed_l1_read_addr},
+                        {});
                     intermed_l1_read_addr += ml_read_size;
-                    noc_async_read_barrier();
-                    cb_push_back(cb_l_in, PNHt);
+                    noc.async_read_barrier();
+                    cb_l.push_back(PNHt);
 
-                    cb_reserve_back(cb_m_in, PNHt);
-                    uint32_t m_write_ptr = get_write_ptr(cb_m_in);
-                    noc_async_read(intermed_l1_read_addr, m_write_ptr, ml_read_size);
+                    CircularBuffer cb_m(cb_m_in);
+                    cb_m.reserve_back(PNHt);
+                    uint32_t m_write_ptr = cb_m.get_write_ptr();
+                    noc.async_read(
+                        intermed_src,
+                        CoreLocalMem<uint32_t>(m_write_ptr),
+                        ml_read_size,
+                        {.noc_x = my_noc_x, .noc_y = my_noc_y, .addr = intermed_l1_read_addr},
+                        {});
                     intermed_l1_read_addr += ml_read_size;
-                    noc_async_read_barrier();
-                    cb_push_back(cb_m_in, PNHt);
+                    noc.async_read_barrier();
+                    cb_m.push_back(PNHt);
 
-                    cb_reserve_back(cb_out_o, out_chunk_tiles);
-                    uint32_t o_write_ptr = get_write_ptr(cb_out_o);
-                    noc_async_read(intermed_l1_read_addr, o_write_ptr, o_read_size);
-                    noc_async_read_barrier();
-                    cb_push_back(cb_out_o, out_chunk_tiles);
+                    CircularBuffer cb_o(cb_out_o);
+                    cb_o.reserve_back(out_chunk_tiles);
+                    uint32_t o_write_ptr = cb_o.get_write_ptr();
+                    noc.async_read(
+                        intermed_src,
+                        CoreLocalMem<uint32_t>(o_write_ptr),
+                        o_read_size,
+                        {.noc_x = my_noc_x, .noc_y = my_noc_y, .addr = intermed_l1_read_addr},
+                        {});
+                    noc.async_read_barrier();
+                    cb_o.push_back(out_chunk_tiles);
                 }
             }
         }
@@ -315,9 +340,13 @@ void kernel_main() {
         // We have data (checked at function start), so send it
         if (!is_tree_root && should_send_to_parent) {
             // Wait for compute to finish writing to cb_out_worker, cb_out_m, cb_out_l
-            cb_wait_front(cb_out_worker, out_chunk_tiles);
-            cb_wait_front(cb_out_m, PNHt);
-            cb_wait_front(cb_out_l, PNHt);
+            CircularBuffer cb_out_w(cb_out_worker);
+            CircularBuffer cb_out_m_buf(cb_out_m);
+            CircularBuffer cb_out_l_buf(cb_out_l);
+            CircularBuffer cb_intermed(cb_intermed_out);
+            cb_out_w.wait_front(out_chunk_tiles);
+            cb_out_m_buf.wait_front(PNHt);
+            cb_out_l_buf.wait_front(PNHt);
 
             constexpr uint32_t tile_bytes = get_tile_size(cb_out_worker);
             uint32_t block_offset = send_at_round * (out_chunk_tiles + 2 * PNHt) * tile_bytes;
@@ -327,24 +356,40 @@ void kernel_main() {
             // Get parent's NOC address
             uint32_t parent_noc_x = reduction_group_core_xs[parent_core_in_group];
             uint32_t parent_noc_y = reduction_group_core_ys[parent_core_in_group];
-            uint64_t output_write_addr =
-                get_noc_addr(parent_noc_x, parent_noc_y, get_write_ptr(cb_intermed_out)) + block_offset;
+            uint32_t output_write_addr = cb_intermed.get_write_ptr() + block_offset;
+            UnicastEndpoint output_dst;
 
             // Send l, m, o to parent (same order as original worker_compute)
-            noc_async_write(get_read_ptr(cb_out_l), output_write_addr, ml_write_size);
+            noc.async_write(
+                CoreLocalMem<uint32_t>(cb_out_l_buf.get_read_ptr()),
+                output_dst,
+                ml_write_size,
+                {},
+                {.noc_x = parent_noc_x, .noc_y = parent_noc_y, .addr = output_write_addr});
             output_write_addr += ml_write_size;
-            noc_async_write(get_read_ptr(cb_out_m), output_write_addr, ml_write_size);
+            noc.async_write(
+                CoreLocalMem<uint32_t>(cb_out_m_buf.get_read_ptr()),
+                output_dst,
+                ml_write_size,
+                {},
+                {.noc_x = parent_noc_x, .noc_y = parent_noc_y, .addr = output_write_addr});
             output_write_addr += ml_write_size;
-            noc_async_write(get_read_ptr(cb_out_worker), output_write_addr, o_write_size);
-            noc_async_write_barrier();
-            uint64_t parent_semaphore_noc_addr = get_noc_addr(parent_noc_x, parent_noc_y, reducer_semaphore_addr);
-            noc_semaphore_inc(parent_semaphore_noc_addr, step_semaphore_inc[send_at_round]);
+            noc.async_write(
+                CoreLocalMem<uint32_t>(cb_out_w.get_read_ptr()),
+                output_dst,
+                o_write_size,
+                {},
+                {.noc_x = parent_noc_x, .noc_y = parent_noc_y, .addr = output_write_addr});
+            noc.async_write_barrier();
+            // Reducer semaphore lives at the same L1 offset on every core, so Semaphore<>::up()
+            // (which encodes the dst NoC addr from local_l1_addr_) is the correct fit here.
+            Semaphore<>(reducer_semaphore_id).up(noc, parent_noc_x, parent_noc_y, step_semaphore_inc[send_at_round]);
 
             // pop front
-            cb_pop_front(cb_out_worker, out_chunk_tiles);
-            cb_pop_front(cb_out_m, PNHt);
-            cb_pop_front(cb_out_l, PNHt);
-            noc_async_atomic_barrier();
+            cb_out_w.pop_front(out_chunk_tiles);
+            cb_out_m_buf.pop_front(PNHt);
+            cb_out_l_buf.pop_front(PNHt);
+            noc.async_atomic_barrier();
             // Senders can return, dont need to participate
             return;
         }
@@ -356,10 +401,11 @@ void kernel_main() {
         // ROOT CORE REMAINING WRITER WORK
         // Offset for current batch
         uint32_t out_tile_id = cur_batch * out_chunk_tiles;
+        CircularBuffer cb_out_buf(cb_out);
         if constexpr (num_kv_heads > 1 || !is_out_sharded) {
-            cb_wait_front(cb_out, out_chunk_tiles);
+            cb_out_buf.wait_front(out_chunk_tiles);
         }
-        noc_async_writes_flushed();
+        noc.async_writes_flushed();
 
         if constexpr (num_kv_heads > 1) {
             // if gqa, we will need to write partial outputs for each head
@@ -376,58 +422,63 @@ void kernel_main() {
                 // read from reducer cores
                 constexpr uint32_t num_reducers_per_output = num_reducer_cores / num_output_cores;
                 constexpr uint32_t num_reducers_to_wait = num_reducers_per_output - 1;
-                volatile tt_l1_ptr uint32_t* output_self_semaphore_addr_ptr =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(output_semaphore_addr);
-                noc_semaphore_wait(output_self_semaphore_addr_ptr, num_reducers_to_wait);
+                Semaphore<>(output_semaphore_id).wait(num_reducers_to_wait);
 
                 uint32_t reduce_core_read_index_start = (cur_batch * num_cores_per_batch) / num_cores_per_head;
 
+                UnicastEndpoint out_src;
+                const uint32_t peer_l1_base = cb_out_buf.get_read_ptr();
                 for (uint32_t reduce_core_read_index = reduce_core_read_index_start + 1;
                      reduce_core_read_index < reduce_core_read_index_start + num_reducers_per_output;
                      reduce_core_read_index++) {
                     uint32_t reduce_core_read_noc_x = all_reducer_noc_x[reduce_core_read_index];
                     uint32_t reduce_core_read_noc_y = all_reducer_noc_y[reduce_core_read_index];
 
-                    uint64_t out_reader_base_noc_addr =
-                        get_noc_addr(reduce_core_read_noc_x, reduce_core_read_noc_y, get_read_ptr(cb_out));
-
                     for (uint32_t tile = 0; tile < out_chunk_tiles; ++tile) {
-                        uint32_t l1_write_addr = get_write_ptr(cb_out) + tile * tile_bytes;
-                        uint32_t out_reader_noc_addr = out_reader_base_noc_addr;
+                        uint32_t l1_write_addr = cb_out_buf.get_write_ptr() + tile * tile_bytes;
+                        uint32_t peer_tile_base = peer_l1_base + tile * tile_bytes;
                         // write partial output for each head
                         for (uint32_t head = 0; head < num_heads_to_write; ++head) {
                             uint32_t starting_row = cur_head * num_heads_to_write + head;
                             uint32_t in_tile_offset_by_starting_head =
                                 starting_row < 16 ? starting_row * SUBTILE_LINE_BYTES
                                                   : (starting_row - 16) * SUBTILE_LINE_BYTES + 512 * ELEMENT_SIZE;
-                            uint32_t out_reader_noc_addr_head = out_reader_noc_addr + in_tile_offset_by_starting_head;
+                            uint32_t peer_addr_head = peer_tile_base + in_tile_offset_by_starting_head;
                             uint32_t l1_write_addr_head = l1_write_addr + in_tile_offset_by_starting_head;
 
-                            // Write first phase
-                            noc_async_read(out_reader_noc_addr_head, l1_write_addr_head, SUBTILE_LINE_BYTES);
+                            // First phase
+                            noc.async_read(
+                                out_src,
+                                CoreLocalMem<uint32_t>(l1_write_addr_head),
+                                SUBTILE_LINE_BYTES,
+                                {.noc_x = reduce_core_read_noc_x,
+                                 .noc_y = reduce_core_read_noc_y,
+                                 .addr = peer_addr_head},
+                                {});
 
-                            // Write second phase
-                            noc_async_read(
-                                out_reader_noc_addr_head + 256 * ELEMENT_SIZE,
-                                l1_write_addr_head + 256 * ELEMENT_SIZE,
-                                SUBTILE_LINE_BYTES);
+                            // Second phase
+                            noc.async_read(
+                                out_src,
+                                CoreLocalMem<uint32_t>(l1_write_addr_head + 256 * ELEMENT_SIZE),
+                                SUBTILE_LINE_BYTES,
+                                {.noc_x = reduce_core_read_noc_x,
+                                 .noc_y = reduce_core_read_noc_y,
+                                 .addr = peer_addr_head + 256 * ELEMENT_SIZE},
+                                {});
 
                             if (++barrier_count == barrier_threshold) {
-                                noc_async_read_barrier();
+                                noc.async_read_barrier();
                                 barrier_count = 0;
                             }
                         }
-                        out_reader_noc_addr += tile_bytes;
                     }
                 }
-                noc_async_read_barrier();
+                noc.async_read_barrier();
             } else {
                 // tell output core that its output is ready
                 uint32_t output_core_noc_x = all_output_noc_x[cur_batch];
                 uint32_t output_core_noc_y = all_output_noc_y[cur_batch];
-                const uint64_t output_core_semaphore_noc_addr =
-                    get_noc_addr(output_core_noc_x, output_core_noc_y, output_semaphore_addr);
-                noc_semaphore_inc(output_core_semaphore_noc_addr, 1);
+                Semaphore<>(output_semaphore_id).up(noc, output_core_noc_x, output_core_noc_y, 1);
             }
         } else {
             // MQA (Multi Query Attention):  we don't need to gather outputs for other heads so we can just write entire
@@ -438,8 +489,8 @@ void kernel_main() {
             }
         }
         if constexpr (num_kv_heads > 1 || !is_out_sharded) {
-            noc_async_write_barrier();
-            cb_pop_front(cb_out, out_chunk_tiles);
+            noc.async_write_barrier();
+            cb_out_buf.pop_front(out_chunk_tiles);
         }
     }
 }

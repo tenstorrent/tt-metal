@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #include "api/compute/common.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "api/dataflow/circular_buffer.h"
 
 // DeepSeek Top32 headers — Blackhole only; no WH B0 port exists yet.
@@ -19,8 +19,9 @@
 
 #if defined(TRISC_MATH)
 #if defined(ARCH_BLACKHOLE)
-#include "../../../../../models/demos/deepseek_v3_b1/kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_deepseek_top32_rm.h"
+#include "../../../../../models/demos/deepseek_v3_b1/kernel_includes/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_deepseek_top32_rm.h"
 #include "../../../../../models/demos/deepseek_v3_b1/kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_math_top32_rm_api.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #else
 #error "top32_rm_dev_compute_v2: unsupported architecture (Blackhole only)"
 #endif
@@ -76,39 +77,66 @@ void kernel_main() {
 
     // step 1
     reconfig_data_format_srca(cb_in0);
-    transpose_wh_init_short(cb_in0);
-    transpose_wh_tile(cb_in0, 0, value_offset_tiles);
+    transpose_init(cb_in0);
+    transpose_tile(cb_in0, 0, value_offset_tiles);
 
     reconfig_data_format_srca(cb_in1);
-    transpose_wh_init_short(cb_in1);
-    transpose_wh_tile(cb_in1, 0, index_offset_tiles);
+    transpose_init(cb_in1);
+    transpose_tile(cb_in1, 0, index_offset_tiles);
 
     // step 2
     const uint32_t decreasing = 0;
     const uint32_t increasing = 1;
-    MATH((llk_math_deepseek_top32_rm_init<false>()));
-    MATH((llk_math_deepseek_top32_of_1024_rm_pre_sorted_prep<false, DST_ACCUM_MODE, decreasing>(value_offset_tiles)));
+    MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(sfpu::_top32_rm_init_)));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        _bitonic_top32_of_1024_rm_pre_sorted_prep_,
+        (false, DST_ACCUM_MODE, decreasing),
+        value_offset_tiles,
+        VectorMode::RC_custom,
+        value_offset_tiles));
 
     // loop for number of remaining chunks:
     for (uint32_t i = 1; i < num_chunks; i++) {
         // step 3
         reconfig_data_format_srca(cb_in0);
-        transpose_wh_init_short(cb_in0);
-        transpose_wh_tile(cb_in0, i, value_offset_tiles + 1);
+        transpose_init(cb_in0);
+        transpose_tile(cb_in0, i, value_offset_tiles + 1);
 
         reconfig_data_format_srca(cb_in1);
-        transpose_wh_init_short(cb_in1);
-        transpose_wh_tile(cb_in1, i, index_offset_tiles + 1);
+        transpose_init(cb_in1);
+        transpose_tile(cb_in1, i, index_offset_tiles + 1);
 
         // step 4
-        MATH((llk_math_deepseek_top32_of_1024_rm_pre_sorted_prep<false, DST_ACCUM_MODE, increasing>(
-            value_offset_tiles + 1)));
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _bitonic_top32_of_1024_rm_pre_sorted_prep_,
+            (false, DST_ACCUM_MODE, increasing),
+            value_offset_tiles + 1,
+            VectorMode::RC_custom,
+            value_offset_tiles + 1));
 
         // step 5
-        MATH((llk_math_deepseek_top32_of_1024_rm_pre_sorted_combine<false, DST_ACCUM_MODE>(value_offset_tiles)));
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _bitonic_top32_of_1024_rm_pre_sorted_combine_,
+            (false, DST_ACCUM_MODE),
+            value_offset_tiles,
+            VectorMode::RC_custom,
+            value_offset_tiles));
     }
     // step 6
-    MATH((llk_math_deepseek_top32_of_1024_rm_pre_sorted_final<false, DST_ACCUM_MODE>(value_offset_tiles)));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        _bitonic_top32_of_1024_rm_pre_sorted_final_,
+        (false, DST_ACCUM_MODE),
+        value_offset_tiles,
+        VectorMode::RC_custom,
+        value_offset_tiles));
 
     uint32_t num_faces = 4;
     // loop for number of remaining values:
@@ -135,16 +163,51 @@ void kernel_main() {
         MATH((llk_math_top32_rm(cb_in1, index_offset_tiles + 1, num_faces)));
 
         // step 8
-        MATH((llk_math_deepseek_top32_rm_rebuild<false, DST_ACCUM_MODE>(
-            value_offset_tiles + 1, decreasing, /*skip_second*/ false)));
-        MATH((llk_math_deepseek_top32_rm_merge<false, DST_ACCUM_MODE>(value_offset_tiles + 1, /*across_tiles*/ false)));
-        MATH((llk_math_deepseek_top32_rm_rebuild<false, DST_ACCUM_MODE>(
-            value_offset_tiles + 1, increasing, /*skip_second*/ true)));
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _bitonic_top32_rebuild_,
+            (false, DST_ACCUM_MODE),
+            value_offset_tiles + 1,
+            VectorMode::RC_custom,
+            decreasing,
+            false /*skip_second*/));
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _bitonic_top32_merge_,
+            (false, DST_ACCUM_MODE, false /*idir*/),
+            value_offset_tiles + 1,
+            VectorMode::RC_custom,
+            false /*across_tiles*/));
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _bitonic_top32_rebuild_,
+            (false, DST_ACCUM_MODE),
+            value_offset_tiles + 1,
+            VectorMode::RC_custom,
+            increasing,
+            true /*skip_second*/));
 
         // step 9
-        MATH((llk_math_deepseek_top32_rm_merge<false, DST_ACCUM_MODE>(value_offset_tiles, /*across_tiles*/ true)));
-        MATH((llk_math_deepseek_top32_rm_rebuild<false, DST_ACCUM_MODE>(
-            value_offset_tiles, decreasing, /*skip_second*/ true)));
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _bitonic_top32_merge_,
+            (false, DST_ACCUM_MODE, false /*idir*/),
+            value_offset_tiles,
+            VectorMode::RC_custom,
+            true /*across_tiles*/));
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _bitonic_top32_rebuild_,
+            (false, DST_ACCUM_MODE),
+            value_offset_tiles,
+            VectorMode::RC_custom,
+            decreasing,
+            true /*skip_second*/));
     }
 
     // tensix_sync();

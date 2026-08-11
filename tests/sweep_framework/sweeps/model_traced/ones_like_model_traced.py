@@ -49,10 +49,10 @@ def mesh_device_fixture():
 
 
 def run(
-    input_a_shape,
-    input_a_dtype,
-    input_a_layout,
-    input_a_memory_config,
+    input_a_shape=None,
+    input_a_dtype=None,
+    input_a_layout=None,
+    input_a_memory_config=None,
     output_memory_config=None,
     storage_type="StorageType::DEVICE",
     *,
@@ -61,9 +61,27 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
-    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
+    # ones_like's traced input arg is named `tensor`, so the loader emits the
+    # tensor_* kwarg family rather than input_a_*. Alias them so these configs
+    # run instead of crashing with "run() missing required positional arguments".
+    if input_a_shape is None:
+        input_a_shape = kwargs.get("tensor_shape")
+        if input_a_dtype is None:
+            input_a_dtype = kwargs.get("tensor_dtype")
+        if input_a_layout is None:
+            input_a_layout = kwargs.get("tensor_layout")
+        if input_a_memory_config is None:
+            input_a_memory_config = kwargs.get("tensor_memory_config")
+
+    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None) or kwargs.get(
+        "tensor_tensor_placement", None
+    )
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(
+        kwargs,
+        exclude={"tensor_shape", "tensor_dtype", "tensor_layout", "tensor_memory_config", "tensor_tensor_placement"},
+        output_memory_config=output_memory_config,
+    )
 
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 

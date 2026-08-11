@@ -15,12 +15,48 @@ from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
+    dispatch_axis_for_grid,
     get_mesh_composer,
     get_model_traced_mesh_shape,
     mesh_tensor_to_torch,
     reconcile_golden_to_actual,
+    shard_grid_bounds,
 )
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args
+
+# Device opened per-vector (see _ensure_vector_device): the input shard grids
+# straddle both dispatch axes — some need x=7 (ROW), others y=9 (COL) — so a
+# single per-suite axis can't place every shard. Pick the axis each vector's
+# input shard grid needs.
+_CUR_DEVICE = None
+_CUR_AXIS = "__uninit__"
+_CUR_SHAPE = None
+
+
+def _close_vector_device():
+    global _CUR_DEVICE, _CUR_AXIS, _CUR_SHAPE
+    if _CUR_DEVICE is not None:
+        try:
+            ttnn.close_mesh_device(_CUR_DEVICE)
+        except Exception:
+            # best-effort teardown; a close failure must not mask the test result
+            pass
+    _CUR_DEVICE = None
+    _CUR_AXIS = "__uninit__"
+    _CUR_SHAPE = None
+
+
+def _ensure_vector_device(axis):
+    global _CUR_DEVICE, _CUR_AXIS, _CUR_SHAPE
+    shape = get_model_traced_mesh_shape()
+    if _CUR_DEVICE is None or axis != _CUR_AXIS or shape != _CUR_SHAPE:
+        _close_vector_device()
+        _CUR_DEVICE = create_mesh_device(shape, dispatch_core_axis=axis)
+        _CUR_AXIS = axis
+        _CUR_SHAPE = shape
+    return _CUR_DEVICE
+
+
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 
@@ -51,11 +87,9 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    mesh_shape = get_model_traced_mesh_shape()
-    device = create_mesh_device(mesh_shape)
-    device_name = ttnn.get_arch_name()
-    yield (device, device_name)
-    ttnn.close_mesh_device(device)
+    # Device opened per-vector in run() (see _ensure_vector_device).
+    yield (None, "wormhole_b0")
+    _close_vector_device()
 
 
 def run(
@@ -70,6 +104,12 @@ def run(
     **kwargs,
 ) -> list:
     torch.manual_seed(0)
+
+    # Open this vector's device with the dispatch axis its input shard grid
+    # needs (read the raw dict before parsing). A grid touching x=7 needs ROW;
+    # y=9 needs COL — a single per-suite axis can't place both.
+    _ax = dispatch_axis_for_grid(*shard_grid_bounds(input_a_memory_config))
+    device = _ensure_vector_device(_ax)
 
     # Parse input_a_memory_config if it's a dict (from vector data)
     if isinstance(input_a_memory_config, dict):
@@ -121,6 +161,23 @@ def run(
     # Remove output_memory_config / memory_config / output_dtype from op_kwargs since we pass positionally
     op_kwargs.pop("output_memory_config", None)
     op_kwargs.pop("memory_config", None)
+
+    # Some configs pass the output config as the `memory_config` kwarg (arg1 is
+    # None/absent) rather than positionally. Reproduce that call form so the
+    # recorded memory_config kwarg matches the master trace (else it's a
+    # memory_config extra_key diff).
+    _mc_kwarg = kwargs.get("memory_config")
+    _no_positional_arg1 = traced_output_mem_config is None or traced_output_mem_config == "__ABSENT__"
+    if _no_positional_arg1 and _mc_kwarg is not None and _mc_kwarg != "__ABSENT__":
+        if isinstance(_mc_kwarg, dict):
+            from tests.sweep_framework.master_config_loader_v2 import dict_to_memory_config as _d2mc
+
+            _parsed_mc = _d2mc(_mc_kwarg)
+        else:
+            _parsed_mc = _mc_kwarg  # already a ttnn.MemoryConfig (V2 loader parsed it)
+        if _parsed_mc is not None and getattr(_parsed_mc, "memory_layout", None) == ttnn.TensorMemoryLayout.INTERLEAVED:
+            op_kwargs["memory_config"] = _parsed_mc
+            s2i_output_config = None  # pass via memory_config kwarg, not positionally
     op_kwargs.pop("output_dtype", None)
 
     # Handle input_a_shape - ensure it's always a tuple
@@ -172,48 +229,15 @@ def run(
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-        shard_ok = True
+        # Reproduce the master's sharded arg0: attempt interleaved_to_sharded
+        # with the traced sharded memory_config. Only fall back to the DRAM-
+        # interleaved tensor if the device genuinely can't place the shard (the
+        # op still accepts an interleaved input). The previous pre-check
+        # heuristic rejected valid configs and recorded a DRAM arg0 — a
+        # memory_config diff vs the master trace.
         try:
-            shard_spec = input_a_memory_config.shard_spec
-            if shard_spec is not None:
-                grid = device.compute_with_storage_grid_size()
-                num_cores = grid.x * grid.y
-                shard_shape = shard_spec.shape
-                total_rows = 1
-                for d in shape[:-1]:
-                    total_rows *= d
-                num_shards = (total_rows + shard_shape[0] - 1) // shard_shape[0]
-                if num_shards > num_cores:
-                    shard_ok = False
-                shard_grid = shard_spec.grid
-                core_ranges = shard_grid.ranges() if hasattr(shard_grid, "ranges") else []
-                for cr in core_ranges:
-                    if cr.start.x >= grid.x or cr.start.y >= grid.y or cr.end.x >= grid.x or cr.end.y >= grid.y:
-                        shard_ok = False
-                        break
-                if shard_ok:
-                    total_shard_cores = 0
-                    for cr in core_ranges:
-                        total_shard_cores += (cr.end.x - cr.start.x + 1) * (cr.end.y - cr.start.y + 1)
-                    if total_shard_cores > num_cores:
-                        shard_ok = False
+            input_tensor = ttnn.interleaved_to_sharded(input_tensor_interleaved, input_a_memory_config)
         except Exception:
-            shard_ok = False
-
-        if shard_ok:
-            # Convert to sharded using the traced config
-            try:
-                input_tensor = ttnn.interleaved_to_sharded(input_tensor_interleaved, input_a_memory_config)
-            except (RuntimeError, ValueError) as e:
-                error_msg = str(e)
-                if "No core coordinate found" in error_msg or "core coordinate" in error_msg.lower():
-                    raise ValueError(
-                        f"Invalid core coordinates in sharding config: {error_msg}. "
-                        f"This traced config uses cores that don't exist on this device."
-                    )
-                raise
-        else:
-            # Shard spec exceeds device cores — use interleaved tensor as-is
             input_tensor = input_tensor_interleaved
     else:
         # Input is interleaved - use the traced config directly (op supports this)

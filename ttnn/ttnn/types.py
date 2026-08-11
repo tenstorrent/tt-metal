@@ -9,6 +9,7 @@ import ttnn
 
 DataType = ttnn._ttnn.tensor.DataType
 uint8 = DataType.UINT8
+int8 = DataType.INT8
 uint16 = DataType.UINT16
 int32 = DataType.INT32
 uint32 = DataType.UINT32
@@ -115,6 +116,7 @@ merge_program_descriptors = ttnn._ttnn.program_descriptor.merge_program_descript
 cb_descriptor_from_sharded_tensor = ttnn._ttnn.program_descriptor.cb_descriptor_from_sharded_tensor
 get_cb_address = ttnn._ttnn.program_descriptor.get_cb_address
 UnpackToDestMode = ttnn._ttnn.program_descriptor.UnpackToDestMode
+FaceGeometry = ttnn._ttnn.program_descriptor.FaceGeometry
 compute_program_descriptor_hash = ttnn._ttnn.operations.generic.compute_program_descriptor_hash
 
 TensorAccessorArgs = ttnn._ttnn.tensor_accessor_args.TensorAccessorArgs

@@ -12,9 +12,10 @@
 #include "ckernel_ops.h"
 // clang-format off: sfpi_inline must be defined before ckernel_sfpu_polyval.h
 #include "sfpi.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 // clang-format on
-#include "sfpu/ckernel_sfpu_recip.h"
+#include "ckernel_sfpu_recip.h"
 #include "lltt.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 
@@ -36,7 +37,7 @@ sfpi_inline sfpi::vInt _float_to_int32_for_exp_21f_(sfpi::vFloat val) {
     sfpi::vInt exp = sfpi::exexp(val);
     sfpi::vInt man =
         sfpi::exman(val, sfpi::MantissaMode::ImplicitOne);  // get mantissa with implicit bit (man in [1; 2])
-    man = sfpi::reinterpret<sfpi::vInt>(sfpi::shft(sfpi::reinterpret<sfpi::vUInt>(man), exp));
+    man = sfpi::shft(man, exp, sfpi::ShiftMode::Logical);
     return man;
 }
 
@@ -58,15 +59,13 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_unsafe_(sfpi::vFloat val) {
     constexpr float ONE_LN2 = 1.4426950216293334961f;
     sfpi::vFloat xlog2 = (val * ONE_LN2 + 127.f);
 
-    sfpi::vInt z = _float_to_int32_for_exp_21f_(xlog2);
+    sfpi::vFloat z = sfpi::as<sfpi::vFloat>(_float_to_int32_for_exp_21f_(xlog2));
 
-    sfpi::vInt exponential_part = sfpi::exexp(
-        sfpi::reinterpret<sfpi::vFloat>(z),
-        sfpi::ExponentMode::NoDebias);  // Extract exponent ( = 2**(integer part of val/ln2))
-    sfpi::vInt fractional_part =
-        sfpi::exman(sfpi::reinterpret<sfpi::vFloat>(z));  // Extract mantissa ( = leftover part, in [0; 1])
+    sfpi::vInt exponential_part =
+        sfpi::exexp(z, sfpi::ExponentMode::Biased);    // Extract exponent ( = 2**(integer part of val/ln2))
+    sfpi::vMag fractional_part = sfpi::exman(z);       // Extract mantissa ( = leftover part, in [0; 1])
 
-    sfpi::vFloat frac = sfpi::int32_to_float(fractional_part, sfpi::RoundMode::NearestEven);
+    sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(fractional_part, sfpi::RoundMode::Nearest);
 
     // To refine approximation of 2**(x_f), we use an approximation of 2**x on [0; 2^23]
     // This uses a 2nd degree polynomial adjustment of the fractional part
@@ -79,8 +78,8 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_unsafe_(sfpi::vFloat val) {
         // LRegs work on float32 data. If DST is bfloat16 then SFPSTORE will truncate it.
         // This can reduce accuracy: for instance, 9**2 = 80.8 gets round to 80.5
         // rather than 81 (which would have been correct).
-        // To avoid this issue, we explicitly convert to bfloat16 using round-to-nearest-even.
-        y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::NearestEven);
+        // To avoid this issue, we explicitly convert to bfloat16 using round-to-nearest.
+        y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
     }
 
     return y;
@@ -122,20 +121,15 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val) {
     // (when input < -88.5) and +inf (when input > 88.5)
     // To avoid this, we clamp xlog2 to [0, 255]
     // (thresholds values are rounded to bf16, as it does not change result but only requires one SFPLOADI vs. two)
-    sfpi::vFloat threshold_low = 0.f;
-    sfpi::vFloat threshold_high = sfpi::vFloat(255.f);
-    sfpi::vec_min_max(threshold_low, xlog2);
-    sfpi::vec_min_max(xlog2, threshold_high);
+    xlog2 = sfpi::clamp(xlog2, 0.0f, 255.0f);
 
-    sfpi::vInt z = _float_to_int32_for_exp_21f_(xlog2);
+    sfpi::vFloat z = sfpi::as<sfpi::vFloat>(_float_to_int32_for_exp_21f_(xlog2));
 
-    sfpi::vInt exponential_part = exexp(
-        sfpi::reinterpret<sfpi::vFloat>(z),
-        sfpi::ExponentMode::NoDebias);  // Extract exponent ( = 2**(integer part of val/ln2))
-    sfpi::vInt fractional_part =
-        sfpi::exman(sfpi::reinterpret<sfpi::vFloat>(z));  // Extract mantissa ( = leftover part, in [0; 1])
+    sfpi::vInt exponential_part =
+        exexp(z, sfpi::ExponentMode::Biased);     // Extract exponent ( = 2**(integer part of val/ln2))
+    sfpi::vMag fractional_part = sfpi::exman(z);  // Extract mantissa ( = leftover part, in [0; 1])
 
-    sfpi::vFloat frac = sfpi::int32_to_float(fractional_part, sfpi::RoundMode::NearestEven);
+    sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(fractional_part, sfpi::RoundMode::Nearest);
 
     // To refine approximation of 2**(x_f), we use an approximation of 2**x on [0; 2^23]
     // This uses a 2nd degree polynomial adjustment of the fractional part
@@ -148,8 +142,8 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val) {
         // LRegs work on float32 data. If DST is bfloat16 then SFPSTORE will truncate it.
         // This can reduce accuracy: for instance, 9**2 = 80.8 gets round to 80.5
         // rather than 81 (which would have been correct).
-        // To avoid this issue, we explicitly convert to bfloat16 using round-to-nearest-even.
-        y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::NearestEven);
+        // To avoid this issue, we explicitly convert to bfloat16 using round-to-nearest.
+        y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
     }
 
     return y;
@@ -245,7 +239,7 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     // the integer-part-as-float-encoding which feeds SETEXP later.
     TTI_SFPEXMAN(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPEXMAN_MOD1_PAD9);
 
-    // frac = int32_to_float(fractional_part, RoundMode::NearestEven)
+    // frac = convert<vFloat>(fractional_part, RoundMode::Nearest)
     constexpr unsigned SFPCAST_MOD1_SM32_TO_FP32_RNE = 0;
     TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, SFPCAST_MOD1_SM32_TO_FP32_RNE);
 
@@ -276,7 +270,7 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     TTI_SFPSETEXP(0, p_sfpu::LREG1, p_sfpu::LREG0, SFPSETEXP_MOD1_ARG_EXPONENT);
 
     if constexpr (!is_fp32_dest_acc_en) {
-        // Round float32 -> bfloat16 using round-to-nearest-even before
+        // Round float32 -> bfloat16 using round-to-nearest before
         // SFPSTORE truncates. Avoids ULP loss on values like 9*9 = 80.8.
         TTI_SFP_STOCH_RND(
             sfpi::SFPSTOCHRND_RND_EVEN,
@@ -303,15 +297,15 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
 // Utility function to round a float to a 32-bit integer while also calculating the
 // integer part of the rounded value
 sfpi_inline sfpi::vFloat _sfpu_round_to_nearest_int32_(sfpi::vFloat z, sfpi::vInt& k_int) {
-    // From Hacker's Delight: round-to-nearest-even method
+    // From Hacker's Delight: round-to-nearest method
     // float -> int32 (round to nearest even): n = (x + float(c231)) - int32(c231)
-    // round-to-nearest-even: n = (x + float(c231)) - float(c231)
+    // round-to-nearest: n = (x + float(c231)) - float(c231)
     // where c231 = 0x4B400000 (2^23 + 2^22)
     const sfpi::vFloat c231 = Converter::as_float(0x4B400000U);  // 2^23 + 2^22
 
     sfpi::vFloat tmp = z + c231;
     sfpi::vFloat k = tmp - c231;
-    k_int = sfpi::reinterpret<sfpi::vInt>(tmp) - sfpi::reinterpret<sfpi::vInt>(c231);
+    k_int = sfpi::as<sfpi::vInt>(tmp) - sfpi::as<sfpi::vInt>(c231);
 
     return k;
 }
@@ -350,41 +344,39 @@ template <bool unsafe = false>
 sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
     sfpi::vInt i, e;
     sfpi::vFloat f, r, j, y;
+    sfpi::vSMag16 sm;
 
     // j = round(a / ln2)
     // interleaved with first coefficient of polynomial
     j = 1.442695f * a;
     r = 1.37805939e-3f;
-    i = sfpi::float_to_int16(j, sfpi::RoundMode::NearestEven);
-    j = sfpi::int32_to_float(i, sfpi::RoundMode::NearestEven);
+    sm = sfpi::convert<sfpi::vSMag16>(j, sfpi::RoundMode::Nearest);
+    j = sfpi::convert<sfpi::vFloat>(sm, sfpi::RoundMode::Nearest);
 
     // f = a - i*j (two-part cody-waite)
     f = j * -6.93145752e-1f + a;
     f = j * -1.42860677e-6f + f;
 
     // approximate r = exp(f) on [-ln2/2, ln2/2]
-    // interleaved with conversion of i from sign-mag to two's complement
+    // interleaved with conversion of i from sign-mag to two's complement via abs and copysgn
     r = r * f + 8.37312452e-3f;  // 0x1.125edcp-7
     r = r * f + 4.16695364e-2f;  // 0x1.555b5ap-5
     r = r * f + 1.66664720e-1f;  // 0x1.555450p-3
     r = r * f + 4.99999851e-1f;  // 0x1.fffff6p-2
-    i = sfpi::abs(i);
+    i = sfpi::abs(sfpi::as<sfpi::vInt>(sm));
     y = r * f + 1.0f;
-    i = sfpi::reinterpret<sfpi::vInt>(sfpi::copysgn(sfpi::reinterpret<sfpi::vFloat>(i), j));
+    i = sfpi::as<sfpi::vInt>(sfpi::copysgn(sfpi::as<sfpi::vFloat>(i), j));
     r = y * f + 1.0f;
 
     if constexpr (unsafe) {
         // y = 2**i * r
-        e = sfpi::exexp(r, sfpi::ExponentMode::NoDebias);
-        e += i;
+        e = sfpi::exexp(r, sfpi::ExponentMode::Biased) + i;
         y = sfpi::setexp(r, e);
     } else {
         // overflow: y = infinity or NaN
         y *= std::numeric_limits<float>::infinity();
 
-        e = sfpi::exexp(r, sfpi::ExponentMode::NoDebias);
-        e += i;
-
+        e = sfpi::exexp(r, sfpi::ExponentMode::Biased) + i;
         // if e < 255
         v_block {
             sfpi::vInt e_lt_255 = __builtin_rvtt_sfpiadd_i(e.get(), -255, sfpi::SFPIADD_MOD1_CC_LT0);
@@ -431,8 +423,8 @@ sfpi_inline sfpi::vFloat _sfpu_exp_(sfpi::vFloat val) {
     v_endif;
 
     // Run series in Horner form
-    sfpi::vFloat tmp = val * sfpi::vConst0p8373 + sfpi::sFloat16b(0.863281f);
-    val = val * tmp + sfpi::vConst1;
+    sfpi::vFloat tmp = val * 0.8373f + sfpi::sFloat16b(0.863281f);
+    val = val * tmp + 1.0f;
 
     v_if(exp >= 0) {
         val = val * val;
@@ -462,18 +454,18 @@ sfpi_inline sfpi::vFloat _calculate_exponential_body_(sfpi::vFloat in) {
 
         // Clear exp bits
         sfpi::vInt c23_73 = p_exp::C23_73;
-        sfpi::vInt tmp = sfpi::reinterpret<sfpi::vInt>(conv) - c23_73;
+        sfpi::vInt tmp = sfpi::as<sfpi::vInt>(conv) - c23_73;
 
         // Add bias
         tmp += SP_BIAS;
 
         // SHL to move integer bits to exponent
-        out = sfpi::reinterpret<sfpi::vFloat>(tmp << (10 - FRAC_BITS));
+        out = sfpi::as<sfpi::vFloat>(tmp << (10 - FRAC_BITS));
     } else {
         // Force sign to 0 (make number positive)
         out = _sfpu_exp_(sfpi::setsgn(in, 0));
 
-        v_if(in < 0) { out = _sfpu_reciprocal_<2>(out); }
+        v_if(in < 0) { out = sfpu_reciprocal_iter<2>(out); }
         v_endif;
     }
 
@@ -734,6 +726,12 @@ template <
     bool CLAMP_NEGATIVE = true,
     bool is_fp32_dest_acc_en = false>
 void exp_init() {
+    // Common SFPU init inlined (SFPU config register + ADDR_MOD_7 + counter reset), then the op-specific
+    // exp setup below -- one self-contained init, no separate shared-common-init call. Same functionality as
+    // _llk_math_eltwise_unary_sfpu_init_<exponential>() (exp uses only ADDR_MOD_7, no op-specific ADDR_MOD_6).
+    sfpu::_init_sfpu_config_reg();
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
+    math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (APPROXIMATION_MODE && CLAMP_NEGATIVE) {
         // Algorithm is adapted from:
         //      A Fast, Compact Approximation of the Exponential Function
@@ -1074,7 +1072,7 @@ void exp_init() {
             // fp32 scalar path (_sfpu_exp_fp32_accurate_) — uses the scalar
             // reciprocal LLK for negative inputs, so its constants must be
             // primed here.
-            _init_sfpu_reciprocal_<false>();
+            sfpu_reciprocal_init<false>();
         }
     }
 }

@@ -13,8 +13,10 @@
 #include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/scratchpad_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/experimental/metal2_host_api/utility/group.hpp>
 
 namespace tt::tt_metal::experimental {
 
@@ -28,6 +30,7 @@ namespace tt::tt_metal::experimental {
 //  - program-scope resources
 //      o dataflow buffers
 //      o semaphores
+//      o scratchpads
 //  - user-managed resources (parameters)
 //      o tensor parameters
 //
@@ -44,12 +47,6 @@ namespace tt::tt_metal::experimental {
 //
 // ============================================================================
 
-// A name identifying a ProgramSpec within a MeshWorkload.
-using ProgramSpecName = std::string;
-
-// A name identifying a WorkUnitSpec within a ProgramSpec.
-using WorkUnitSpecName = std::string;
-
 //------------------------------------------------
 // WorkUnitSpec
 //------------------------------------------------
@@ -62,10 +59,10 @@ using WorkUnitSpecName = std::string;
 //
 struct WorkUnitSpec {
     // Human-readable name (debug/messaging only; no uniqueness invariant).
-    WorkUnitSpecName name;
+    std::string name;
 
     // The kernels that run on this WorkUnitSpec's nodes.
-    std::vector<KernelSpecName> kernels;
+    Group<KernelSpecName> kernels;
 
     // The set of nodes configured by this WorkUnitSpec.
     Nodes target_nodes;
@@ -78,23 +75,27 @@ struct WorkUnitSpec {
 // A ProgramSpec describes a complete Program (its immutable properties).
 struct ProgramSpec {
     // Human-readable name (debug/messaging only; no uniqueness invariant).
-    ProgramSpecName name;
+    std::string name;
 
-    // Kernels, DFBs (local + remote), and semaphores that make up the Program
-    std::vector<KernelSpec> kernels;
-    std::vector<DataflowBufferSpec> dataflow_buffers;
-    std::vector<RemoteDataflowBufferSpec> remote_dataflow_buffers;
-    std::vector<SemaphoreSpec> semaphores;
+    // Kernels that make up the Program
+    Group<KernelSpec> kernels;
+
+    // Program-scope resources (allocated for the Program's execution lifetime)
+    // DFBs (local + cross-node), and semaphores
+    Group<DataflowBufferSpec> dataflow_buffers;
+    Group<CrossNodeDataflowBufferSpec> cross_node_dataflow_buffers;
+    Group<SemaphoreSpec> semaphores;
+    Group<ScratchpadSpec> scratchpads;
 
     // Tensor parameter declarations
     // Provides ids and layout specs for tensors the Program's kernels will operate on
     // (The actual MeshTensors are supplied via ProgramRunArgs.)
-    std::vector<TensorParameter> tensor_parameters;
+    Group<TensorParameter> tensor_parameters;
 
     // WorkUnit specifications:
     // A valid ProgramSpec has at least one WorkUnitSpec.
     // Each kernel must be referenced by at least one WorkUnitSpec.
-    std::vector<WorkUnitSpec> work_units;
+    Group<WorkUnitSpec> work_units;
 };
 
 }  // namespace tt::tt_metal::experimental

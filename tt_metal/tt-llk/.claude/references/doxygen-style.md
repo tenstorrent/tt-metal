@@ -30,8 +30,7 @@ Use a Javadoc-style block comment immediately above the definition:
  *
  * @tparam ...
  * @param ...
- * @pre ...
- * @post ...
+ * @note ...
  */
 ```
 
@@ -47,9 +46,7 @@ Use a Javadoc-style block comment immediately above the definition:
 | `@param` | Every runtime parameter | Describe meaning/units, not the type (the signature has the type). |
 | `@tparam` | Every template parameter | List valid values for enums, e.g. `values = <NONE/COL/ROW/SCALAR>`. |
 | `@ref` | Cross-references | Link to the related function/type the reader needs next — see *Cross-thread referencing*. |
-| `@pre` | Mostly on **execute** functions | State what must run first — typically the matching `_init_`. The most valuable tag for our init/execute split. |
-| `@post` | Mostly on **execute**/teardown functions | State what must run after — typically the matching `_uninit_`, to keep init/uninit symmetry. |
-| `@note` | Sparingly | A genuinely surprising side effect (e.g. "writes LREG7") or non-obvious constraint. Prefer this over `@remark`. |
+| `@note` | The init/execute/uninit contract, cross-thread pairings, and surprising side effects | State what the caller must run first (typically the matching `_init_`) and after (typically the matching `_uninit_`), plus any genuinely surprising side effect (e.g. "writes LREG7") or non-obvious constraint. Prefer this over `@remark`. See *The init / execute / uninit contract*. |
 
 ## Tags to avoid
 
@@ -62,13 +59,15 @@ These tend to bloat without informing:
 | `@author` / `@date` / `@version` | Git already tracks this, and it goes stale. | `git blame` / history. |
 | `@todo` | Tends to rot in-tree. | A GitHub issue. |
 | `@remark` | Ambiguous vs `@note`. | `@note`. |
+| `@pre` / `@post` | In standard Doxygen semantics these designate conditions *guaranteed* to hold before/after the call. Our init/uninit contract is an **imperative** the caller must satisfy ("you must call `_init_` first / `_uninit_` after"), not a guarantee — so using `@pre`/`@post` for it overloads their meaning and risks being misread (by humans and AI alike). We don't support real pre/post-conditions, so we don't use these tags at all. | `@note`, phrased imperatively. |
 
 ## The init / execute / uninit contract
 
 This is where docstrings earn their keep. LLK functions come in `_init_` / execute /
 `_uninit_` families, and every register touched in `_init_` must be restored in
-`_uninit_`. Encode that contract with `@pre`/`@post`/`@ref` so a caller can't get the
-ordering wrong:
+`_uninit_`. Encode that contract in a `@note` (with `@ref` links) so a caller can't get
+the ordering wrong. State both halves — the `_init_` that must run before and the
+`_uninit_` that must run after — as an **imperative**, in a single note:
 
 ```cpp
 /**
@@ -81,10 +80,16 @@ ordering wrong:
  * @tparam binary_reuse_dest: Reuse dest as source, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
  * @param tensor_shape: Tile dimensions of the operands.
  * @param dst_index: Tile index into the destination register.
- * @pre @ref _llk_math_eltwise_binary_init_ must be called with matching template args.
- * @post Call @ref _llk_math_eltwise_binary_uninit_ to restore modified state.
+ * @note Call @ref _llk_math_eltwise_binary_init_ with matching template args before this
+ *       function, and @ref _llk_math_eltwise_binary_uninit_ after it to restore modified state.
  */
 ```
+
+Why `@note` and not `@pre`/`@post`: in standard Doxygen, `@pre`/`@post` are conditions
+*guaranteed* to hold around the call. Ours is the opposite — an imperative the *caller*
+must satisfy. Phrasing it as a `@note` ("call X before this and Y after") says exactly
+that without overloading tag semantics. Write it loosely and plainly; the goal is that a
+reader (or AI) can't misread it as an automatic guarantee.
 
 ## Cross-thread referencing
 
@@ -103,8 +108,8 @@ signature which unpack init feeds it. Spell it out:
  *
  * @tparam type: Reduction op, values = <SUM/AVG/MAX>
  * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
- * @pre On the unpack thread, pair with @ref _llk_unpack_reduce_init_ (single operand)
- *      or @ref _llk_unpack_AB_reduce_init_ (with scaler operand).
+ * @note On the unpack thread, pair with @ref _llk_unpack_reduce_init_ (single operand)
+ *       or @ref _llk_unpack_AB_reduce_init_ (with scaler operand).
  * @ref _llk_math_reduce_  is the matching execute call on this thread.
  */
 ```
@@ -142,7 +147,7 @@ format**, not `@param`/`@tparam` tags:
 what renders cleanly in the public docs, and consistency across that surface matters.
 What *does* carry over is the *thinking*: state the init/execute/uninit contract and
 the cross-thread/cross-call pairing in the prose (e.g. "must be followed by a call to
-`reduce_tile`"), just expressed in sentences rather than `@pre`/`@post`/`@ref`.
+`reduce_tile`"), just expressed in sentences rather than `@note`/`@ref` tags.
 
 ### Standardizing the table
 
@@ -168,8 +173,9 @@ to spend effort:
 
 - `@brief` on everything public.
 - `@param`/`@tparam` for everything the caller passes.
-- `@pre`/`@post`/`@ref` to encode the init/execute/uninit ordering contract, and to
-  pair up the per-thread halves of an op when the pairing isn't obvious.
-- Reach for the body paragraph or `@note` only when the *why* isn't obvious.
+- `@note` (with `@ref`) to encode the init/execute/uninit ordering contract as an
+  imperative, and to pair up the per-thread halves of an op when the pairing isn't obvious.
+- Never use `@pre`/`@post` — phrase the contract as an imperative `@note` instead.
+- Reach for the body paragraph or extra `@note` lines only when the *why* isn't obvious.
 - Compute API: keep the published prose+table format; carry the contract in prose.
 - Everything else: leave it out.

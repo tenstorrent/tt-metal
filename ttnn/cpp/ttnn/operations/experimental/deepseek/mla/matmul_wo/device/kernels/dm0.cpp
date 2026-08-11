@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 #include "matmul_wo_ring_common.h"
 
 // Triple buffering constants
@@ -42,14 +43,16 @@ void kernel_main() {
     const auto out_addr = get_arg_val<uint32_t>(argidx++);
 
     // CBs
-    constexpr auto cb_r2c_w = tt::CBIndex::c_0;
-    constexpr auto cb_s2c_in = tt::CBIndex::c_1;
-    constexpr auto cb_c2w_out = tt::CBIndex::c_2;
+    constexpr auto cb_r2c_w_id = tt::CBIndex::c_0;
+    constexpr auto cb_s2c_in_id = tt::CBIndex::c_1;
+    constexpr auto cb_c2w_out_id = tt::CBIndex::c_2;
+
+    CircularBuffer cb_r2c_w(cb_r2c_w_id);
 
     // Tile sizes
-    constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in);
-    constexpr uint32_t w_tile_size = get_tile_size(cb_r2c_w);
-    constexpr uint32_t out_tile_size = get_tile_size(cb_c2w_out);
+    constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in_id);
+    constexpr uint32_t w_tile_size = get_tile_size(cb_r2c_w_id);
+    constexpr uint32_t out_tile_size = get_tile_size(cb_c2w_out_id);
 
     // Constants for the kernel
     constexpr uint32_t num_w_tiles_w = matmul_wo_ring::NUM_W_TILES_W;
@@ -89,7 +92,7 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // CB addresses
     //-------------------------------------------------------------------------
-    const uint32_t w_cb_base_addr = get_write_ptr(cb_r2c_w);
+    const uint32_t w_cb_base_addr = cb_r2c_w.get_write_ptr();
 
     // Precompute slot addresses (avoid multiply in hot loop)
     // Each slot holds 2 transactions (28 tiles)
@@ -116,7 +119,7 @@ void kernel_main() {
     bool txns_in_flight = false;
 
     // We reserve one to kick start the pipeline, and then it is steady state
-    cb_reserve_back(cb_r2c_w, w_tiles_per_block);
+    cb_r2c_w.reserve_back(w_tiles_per_block);
 
     //-------------------------------------------------------------------------
     // Pipelined reading of W0/W1
@@ -137,25 +140,25 @@ void kernel_main() {
         // Only when we first start the pipeline, we don't have any txns in flight
         if (txns_in_flight) {
             noc_async_read_barrier_with_trid(trid_to_wait);
-            cb_push_back(cb_r2c_w, w_tiles_per_block);
+            cb_r2c_w.push_back(w_tiles_per_block);
 
             ADVANCE_TRID(trid_to_wait);
 
             // Reserve for next block
             // Reserve back is not incremental, so to reserve one more, we need to reserve 2
             // This accounts for the one we already have reserved (for in-flight read)
-            cb_reserve_back(cb_r2c_w, w_tiles_per_block * 2);
+            cb_r2c_w.reserve_back(w_tiles_per_block * 2);
         }
         txns_in_flight = true;
     }
 
     // Drain the pipeline - the last txn in flight
     noc_async_read_barrier_with_trid(trid_to_wait);
-    cb_push_back(cb_r2c_w, w_tiles_per_block);
+    cb_r2c_w.push_back(w_tiles_per_block);
 
     // We have one extra slot reserved, which we won't use.
     // For CB hygiene, we can push it back.
-    cb_push_back(cb_r2c_w, w_tiles_per_block);
+    cb_r2c_w.push_back(w_tiles_per_block);
 }
 
 #undef ADVANCE_TRID
