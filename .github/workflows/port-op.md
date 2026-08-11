@@ -59,12 +59,11 @@ on:
 
 # Unchanged, and that is the point. The launcher has to push a scratch ref -- the working tree
 # cannot travel inline, since the `pad` port alone was 118 KB -- but that authority does not come
-# from this job's token. It comes from `PORT_PUSH_TOKEN`, a PAT carrying `contents: write` to push
-# and `actions: read` to collect the results, so the agent job stays read-only and gh-aw's strict
-# mode, which rejects *any* write permission here, stays on.
+# from this job's token. It comes from a PAT placed by the pre-step below, so the agent job stays
+# read-only and gh-aw's strict mode, which rejects *any* write permission here, stays on.
 #
-# The PAT is also load-bearing in a way a broader `GITHUB_TOKEN` would not fix: GitHub does not let
-# pushes made with `GITHUB_TOKEN` start workflow runs, and the push is what starts the measurement.
+# A PAT rather than a broader `GITHUB_TOKEN`, and not for scope: GitHub does not let pushes made
+# with `GITHUB_TOKEN` start workflow runs, and the push is what starts the measurement.
 permissions:
   contents: read
   copilot-requests: write
@@ -130,12 +129,20 @@ pre-steps:
   # and `$HOME` is in none of awf's mounts, which are `${RUNNER_TEMP}/gh-aw`, the workspace, the
   # tool cache and `/tmp/gh-aw`. HANDOFF.md records how that was established, and it is worth
   # re-checking if gh-aw's generator ever changes.
+  #
+  # `CODEGEN_REPO_TOKEN` is the fallback because it is what exists today: a classic PAT with `repo`,
+  # already SSO-authorised for the org, already used by the measure job to check out the generator.
+  # It is also far broader than this needs -- `repo` reaches every repository its owner can, not
+  # just this one -- so `PORT_PUSH_TOKEN` is preferred whenever someone provisions it, and a
+  # fine-grained token scoped to tt-metal with `contents: write` and `actions: read` is all the
+  # launcher actually uses. The breadth is why dispatch.py refuses to push a snapshot that touches
+  # `.github/`: see the comment there, the risk is specific and it is not about the push.
   - name: Place the dispatch credential outside the sandbox
     env:
-      PORT_DISPATCH_TOKEN: ${{ secrets.PORT_PUSH_TOKEN }}
+      PORT_DISPATCH_TOKEN: ${{ secrets.PORT_PUSH_TOKEN || secrets.CODEGEN_REPO_TOKEN }}
     run: |
       if [ -z "$PORT_DISPATCH_TOKEN" ]; then
-        echo "::error::PORT_PUSH_TOKEN is not set. The launcher cannot push a scratch ref or dispatch port-measure.yaml without it, so build and verify would both fail on the agent's first tool call."
+        echo "::error::Neither PORT_PUSH_TOKEN nor CODEGEN_REPO_TOKEN is set. The launcher cannot push a scratch ref without one, so build and verify would both fail on the agent's first tool call."
         exit 1
       fi
       install -d -m 700 "$HOME/.port-dispatch"
@@ -277,7 +284,7 @@ post-steps:
   - name: Delete any scratch refs a dispatch left behind
     if: always()
     env:
-      PORT_DISPATCH_TOKEN: ${{ secrets.PORT_PUSH_TOKEN }}
+      PORT_DISPATCH_TOKEN: ${{ secrets.PORT_PUSH_TOKEN || secrets.CODEGEN_REPO_TOKEN }}
     run: |
       [ -n "$PORT_DISPATCH_TOKEN" ] || exit 0
       shred -u "$HOME/.port-dispatch/token" 2>/dev/null || rm -f "$HOME/.port-dispatch/token"

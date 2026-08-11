@@ -388,6 +388,27 @@ with tempfile.TemporaryDirectory() as tmp:
     check("a second call snapshots the same tree",
           _git(repo, "rev-parse", f"{commit}^{{tree}}") == _git(repo, "rev-parse", f"{again}^{{tree}}"))
 
+    # The pushed copy of the workflow is the copy that runs, so an edit to it is not a proposal.
+    (repo / ".github/workflows").mkdir(parents=True)
+    (repo / ".github/workflows/port-measure.yaml").write_text("on: push\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "add the pipeline")
+    pipeline_base = _git(repo, "rev-parse", "HEAD")
+    (repo / ".github/workflows/port-measure.yaml").write_text("on: push\n# and something else\n")
+    tampered, _ = dispatch.commit_worktree(repo, work, "test")
+    try:
+        dispatch.refuse_pipeline_edits(repo, pipeline_base, tampered)
+        check("a snapshot touching the pipeline is refused", False, "it was allowed")
+    except dispatch.DispatchError as exc:
+        check("a snapshot touching the pipeline is refused",
+              "port-measure.yaml" in str(exc), str(exc))
+
+    (repo / ".github/workflows/port-measure.yaml").write_text("on: push\n")
+    (repo / "tracked.txt").write_text("an ordinary edit\n")
+    ordinary, _ = dispatch.commit_worktree(repo, work, "test")
+    dispatch.refuse_pipeline_edits(repo, pipeline_base, ordinary)
+    check("an ordinary port edit still goes through", True)
+
     # The baseline dispatch hands the routing test back inside `workspace/`, at its repo-relative
     # path, and the launcher has to place it without being told where it belongs.
     results = Path(tmp) / "results"

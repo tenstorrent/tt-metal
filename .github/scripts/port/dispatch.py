@@ -168,6 +168,33 @@ def git(*args: str, cwd: Path, env: dict | None = None, check: bool = True) -> s
     return result.stdout.strip()
 
 
+def refuse_pipeline_edits(repo: Path, base: str, commit: str) -> None:
+    """Refuse to send a snapshot that modifies the pipeline grading it.
+
+    This is the one place the push trigger costs something. The workflow that runs is the copy in
+    the commit that was pushed, so an edit to `.github/workflows/port-measure.yaml` would not be a
+    proposal -- it would be the next thing to execute, on CIv2, with the generator credential in
+    scope. The same goes for the harness scripts: `gate.py` is the thing deciding whether the port
+    is any good, and it also comes from the scratch commit.
+
+    A narrow push token makes most of this GitHub's problem, since it rejects pushes touching
+    `.github/workflows/**` without an explicit workflow scope. A classic `repo` PAT may carry that
+    scope, so the guard is here rather than assumed. It is cheap and it does not depend on which
+    credential happens to be configured.
+
+    `gate.py`'s write-path check covers the same ground from the other side, but only at verify
+    time -- which is after the modified workflow would already have run.
+    """
+    changed = git("diff", "--name-only", base, commit, cwd=repo).splitlines()
+    pipeline = sorted(p for p in changed if p.startswith(".github/"))
+    if pipeline:
+        raise DispatchError(
+            "refusing to dispatch: this would change the pipeline that measures and grades the "
+            "port, and the pushed copy is the one that runs. Revert these and try again:\n  "
+            + "\n  ".join(pipeline)
+        )
+
+
 def commit_worktree(repo: Path, work: Path, message: str) -> tuple[str, str]:
     """Turn the current worktree into one commit on top of HEAD, without disturbing either.
 
@@ -457,6 +484,7 @@ def main() -> int:
         # not the commit's own parent, it grades against the wrong tree and quietly reports the
         # difference as the agent writing where it should not have.
         raise DispatchError(f"HEAD moved from {base[:12]} to {parent[:12]} while snapshotting")
+    refuse_pipeline_edits(repo, base, commit)
     log(f"{args.mode} for {args.op}: pushing {commit[:12]} (base {base[:12]}) to {branch}")
 
     with credentialed(work, token_file) as git_env:
