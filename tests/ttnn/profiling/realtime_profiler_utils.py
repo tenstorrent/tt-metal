@@ -37,6 +37,9 @@ def profile_realtime_program(
                     "runtime_id": int(record.runtime_id),
                     "chip_id": int(record.chip_id),
                     "duration_ns": record.duration_ns,
+                    "duration_cycles": int(record.end_timestamp) - int(record.start_timestamp),
+                    "frequency_ghz": float(record.frequency),
+                    "sync_error_ns": int(record.clock_sync.error_ns),
                     "kernel_sources": tuple(record.kernel_sources),
                 }
             )

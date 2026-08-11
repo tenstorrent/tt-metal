@@ -724,6 +724,37 @@ def create_global_semaphores(mesh_device, cores, initial_value):
     return [ttnn.create_global_semaphore(mesh_device, cores, initial_value) for _ in range(2)]
 
 
+def _log_rt_frequency_diagnostics(all_records, program_records):
+    """Per-chip stats for the measured program, plus a frequency histogram over the whole run
+    window — makes DVFS throttling visible directly in the CI log."""
+    for record in sorted(program_records, key=lambda r: r["chip_id"]):
+        logger.info(
+            f"RT profiler chip {record['chip_id']}: cycles={record['duration_cycles']}, "
+            f"duration={record['duration_ns'] / 1e6:.3f} ms, frequency={record['frequency_ghz']:.4f} GHz, "
+            f"sync_error={record['sync_error_ns']}ns"
+        )
+    frequencies = [r["frequency_ghz"] for r in all_records if r["frequency_ghz"] > 0]
+    if not frequencies:
+        return
+    lo, hi = min(frequencies), max(frequencies)
+    num_bins = 20
+    bin_width = max((hi - lo) / num_bins, 1e-4)
+    counts = {}
+    for f in frequencies:
+        b = min(int((f - lo) / bin_width), num_bins - 1)
+        counts[b] = counts.get(b, 0) + 1
+    peak = max(counts.values())
+    logger.info(
+        f"RT profiler frequency histogram: {len(frequencies)} records across the run window, "
+        f"range {lo:.4f}-{hi:.4f} GHz:"
+    )
+    for b in range(num_bins):
+        n = counts.get(b, 0)
+        if n:
+            bar = "#" * max(1, round(40 * n / peak))
+            logger.info(f"  {lo + b * bin_width:.4f}-{lo + (b + 1) * bin_width:.4f} GHz | {bar} {n}")
+
+
 def profile_ring_joint_runtime_duration_ns(mesh_device, run_fn):
     if not ttnn.device.IsProgramRealtimeProfilerActive():
         pytest.fail("Real-time profiler must be active for SDPA perf checks")
@@ -736,6 +767,7 @@ def profile_ring_joint_runtime_duration_ns(mesh_device, run_fn):
     runtime_id = records[0]["runtime_id"]
     first_program_records = [record for record in records if record["runtime_id"] == runtime_id]
     duration_ns = max(record["duration_ns"] for record in first_program_records)
+    _log_rt_frequency_diagnostics(records, first_program_records)
     return int(duration_ns), first_program_records
 
 
@@ -4654,6 +4686,17 @@ def test_ring_joint_attention_perf_check(
     effective_cores = MESH_CONFIG.sdpa_cores
 
     utilization = compute_ring_joint_utilization(
+        local_seq_len,
+        sq,
+        model.d_q,
+        model.d_v,
+        local_nhq,
+        duration_ns,
+        effective_cores,
+        model.is_causal,
+        duration_cycles=max(record["duration_cycles"] for record in perf_records),
+    )
+    utilization_wall_clock = compute_ring_joint_utilization(
         local_seq_len, sq, model.d_q, model.d_v, local_nhq, duration_ns, effective_cores, model.is_causal
     )
 
@@ -4662,7 +4705,8 @@ def test_ring_joint_attention_perf_check(
 
     logger.info(
         f"Ring joint SDPA perf check {config_id}: "
-        f"duration={duration_ns/1e6:.3f} ms, math_util={utilization:.2f}% "
+        f"duration={duration_ns/1e6:.3f} ms, math_util={utilization:.2f}% per-cycle "
+        f"({utilization_wall_clock:.2f}% wall-clock at nominal) "
         f"(expected {expected_util:.2f}%, band [{lower:.2f}, {upper:.2f}]), "
         f"profiler_records={len(perf_records)}"
     )
@@ -5632,7 +5676,7 @@ def test_ring_joint_attention_minimax3_gqa_create_chunked_perf_table(
 
 
 def compute_chunked_prefill_perf_check_utilization(
-    mesh_config, model, chunk_size, perf_chunk, duration_ns, measured_core_count
+    mesh_config, model, chunk_size, perf_chunk, duration_ns, measured_core_count, duration_cycles=None
 ):
     # Chunk geometry: q_per_dev Q rows attend to the full prefix (non-causal rectangle) plus
     # the current chunk's causal triangle. Folding the triangle into an effective K/V length
@@ -5648,7 +5692,15 @@ def compute_chunked_prefill_perf_check_utilization(
     ), f"effective_cores=0 (measured_core_count={measured_core_count}) - profiler output incomplete"
 
     utilization = compute_ring_joint_utilization(
-        q_per_dev, effective_kv, model.d_q, model.d_v, model.nhq, duration_ns, effective_cores, is_causal=False
+        q_per_dev,
+        effective_kv,
+        model.d_q,
+        model.d_v,
+        model.nhq,
+        duration_ns,
+        effective_cores,
+        is_causal=False,
+        duration_cycles=duration_cycles,
     )
     return utilization, effective_cores
 
@@ -5763,8 +5815,18 @@ def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, rin
         close_ring_joint_sdpa_runtime(runtime)
 
     utilization, _ = compute_chunked_prefill_perf_check_utilization(
+        MESH_CONFIG,
+        model,
+        chunk_size,
+        perf_chunk,
+        duration_ns,
+        MESH_CONFIG.sdpa_cores,
+        duration_cycles=max(record["duration_cycles"] for record in perf_records),
+    )
+    utilization_wall_clock, _ = compute_chunked_prefill_perf_check_utilization(
         MESH_CONFIG, model, chunk_size, perf_chunk, duration_ns, MESH_CONFIG.sdpa_cores
     )
+    logger.info(f"wall-clock-at-nominal math_util for comparison: {utilization_wall_clock:.2f}%")
 
     lower = expected_util * (1 - RING_JOINT_PERF_MARGIN)
     upper = expected_util * (1 + RING_JOINT_PERF_MARGIN)
@@ -5827,8 +5889,18 @@ def test_ring_joint_attention_minimax3_gqa_chunked_perf_check(
         close_ring_joint_sdpa_runtime(runtime)
 
     utilization, _ = compute_chunked_prefill_perf_check_utilization(
+        MESH_CONFIG,
+        model,
+        chunk_size,
+        perf_chunk,
+        duration_ns,
+        MESH_CONFIG.sdpa_cores,
+        duration_cycles=max(record["duration_cycles"] for record in perf_records),
+    )
+    utilization_wall_clock, _ = compute_chunked_prefill_perf_check_utilization(
         MESH_CONFIG, model, chunk_size, perf_chunk, duration_ns, MESH_CONFIG.sdpa_cores
     )
+    logger.info(f"wall-clock-at-nominal math_util for comparison: {utilization_wall_clock:.2f}%")
 
     lower = expected_util * (1 - RING_JOINT_PERF_MARGIN)
     upper = expected_util * (1 + RING_JOINT_PERF_MARGIN)
@@ -5904,7 +5976,19 @@ def test_ring_joint_attention_gpt_oss_chunked_sliding_perf_check(q_chunk_size, k
         duration_ns,
         mesh_config.sdpa_cores,
         is_causal=False,
+        duration_cycles=max(record["duration_cycles"] for record in perf_records),
     )
+    utilization_wall_clock = compute_ring_joint_utilization(
+        q_per_device,
+        GPT_OSS_RING_SINK_CONFIG.sliding_window_size,
+        GPT_OSS_RING_SINK_CONFIG.head_dim,
+        GPT_OSS_RING_SINK_CONFIG.head_dim,
+        GPT_OSS_CHUNKED_MODEL.nhq,
+        duration_ns,
+        mesh_config.sdpa_cores,
+        is_causal=False,
+    )
+    logger.info(f"wall-clock-at-nominal math_util for comparison: {utilization_wall_clock:.2f}%")
     lower = expected_util * (1 - margin)
     upper = expected_util * (1 + margin)
     logger.info(
