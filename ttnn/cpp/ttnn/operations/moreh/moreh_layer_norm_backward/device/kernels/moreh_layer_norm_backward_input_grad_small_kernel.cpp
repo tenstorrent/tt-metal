@@ -19,7 +19,7 @@ void kernel_main() {
     constexpr bool is_lastdim_layernorm = get_arg(args::is_lastdim_layernorm) == 1;
     constexpr bool is_groupnorm = get_arg(args::is_groupnorm) == 1;
 
-    binary_op_init_common(dfb::x, dfb::mean, dfb::dx);
+    compute_kernel_hw_startup(dfb::x, dfb::mean, dfb::dx);
 
     DataflowBuffer dfb_dy_obj(dfb::dy);                // output_grad(==dy)
     DataflowBuffer dfb_x_obj(dfb::x);                  // input(==x)
@@ -87,10 +87,10 @@ void kernel_main() {
         dfb_recip_nrstd_obj.reserve_back(onetile);
 
         if (is_lastdim_layernorm) {
-            mul_bcast_cols_init_short_with_dt(dfb_n_recip_n_obj, dfb_rstd_obj);
+            mul_bcast_cols_init_with_dt(dfb_n_recip_n_obj, dfb_rstd_obj);
             mul_tiles_bcast_cols(dfb::n_recip_n, dfb::rstd, 1, 0, dst0);
         } else {
-            mul_tiles_bcast_scalar_init_short_with_dt(dfb_n_recip_n_obj, dfb_rstd_obj);
+            mul_bcast_scalar_init_with_dt(dfb_n_recip_n_obj, dfb_rstd_obj);
             mul_tiles_bcast_scalar(dfb::n_recip_n, dfb::rstd, 1, 0, dst0);
         }
         tile_regs_commit();
@@ -113,10 +113,10 @@ void kernel_main() {
             dfb_xmm_obj.reserve_back(onetile);
 
             if (is_lastdim_layernorm) {
-                sub_bcast_cols_init_short_with_dt(dfb_x_obj, dfb_mean_obj);
+                sub_bcast_cols_init_with_dt(dfb_x_obj, dfb_mean_obj);
                 sub_tiles_bcast_cols(dfb::x, dfb::mean, 0, 0, dst0);
             } else {
-                sub_tiles_bcast_scalar_init_short_with_dt(dfb_x_obj, dfb_mean_obj);
+                sub_bcast_scalar_init_with_dt(dfb_x_obj, dfb_mean_obj);
                 sub_tiles_bcast_scalar(dfb::x, dfb::mean, 0, 0, dst0);
             }
 
@@ -152,10 +152,10 @@ void kernel_main() {
             dfb_xmm_obj.wait_front(onetile);
 
             if (is_lastdim_layernorm) {
-                mul_bcast_cols_init_short_with_dt(dfb_xmm_obj, dfb_rstd_obj);
+                mul_bcast_cols_init_with_dt(dfb_xmm_obj, dfb_rstd_obj);
                 mul_tiles_bcast_cols(dfb_xmm, dfb::rstd, 0, 0, dst0);
             } else {
-                mul_tiles_bcast_scalar_init_short_with_dt(dfb_xmm_obj, dfb_rstd_obj);
+                mul_bcast_scalar_init_with_dt(dfb_xmm_obj, dfb_rstd_obj);
                 mul_tiles_bcast_scalar(dfb_xmm, dfb::rstd, 0, 0, dst0);
             }
             tile_regs_commit();
@@ -179,11 +179,11 @@ void kernel_main() {
             dfb_gamma_obj.wait_front(onetile);  // comes from the reader
 
             if (is_groupnorm) {
-                mul_tiles_bcast_scalar_init_short_with_dt(dfb_dy_obj, dfb_gamma_obj);
+                mul_bcast_scalar_init_with_dt(dfb_dy_obj, dfb_gamma_obj);
                 mul_tiles_bcast_scalar(dfb::dy, dfb::gamma, 0, 0, dst0);
             } else {
                 if (is_lastdim_layernorm) {
-                    mul_bcast_rows_init_short_with_dt(dfb_dy_obj, dfb_gamma_obj);
+                    mul_bcast_rows_init_with_dt(dfb_dy_obj, dfb_gamma_obj);
                     mul_tiles_bcast_rows(dfb::dy, dfb::gamma, 0, 0, dst0);
                 } else {
                     mul_tiles_init_with_dt(dfb_dy_obj, dfb_gamma_obj);
@@ -391,10 +391,10 @@ void kernel_main() {
             dfb_ndymdysum_obj.reserve_back(onetile);
 
             if (is_lastdim_layernorm) {
-                sub_bcast_cols_init_short_with_dt(dfb_ndy_obj, dfb_dysum_obj);
+                sub_bcast_cols_init_with_dt(dfb_ndy_obj, dfb_dysum_obj);
                 sub_tiles_bcast_cols(dfb_ndy, dfb::dysum, 0, 0, dst0);
             } else {
-                sub_tiles_bcast_scalar_init_short_with_dt(dfb_ndy_obj, dfb_dysum_obj);
+                sub_bcast_scalar_init_with_dt(dfb_ndy_obj, dfb_dysum_obj);
                 sub_tiles_bcast_scalar(dfb_ndy, dfb::dysum, 0, 0, dst0);
             }
             tile_regs_commit();
@@ -414,10 +414,10 @@ void kernel_main() {
             dfb_yydysum_obj.reserve_back(onetile);
 
             if (is_lastdim_layernorm) {
-                mul_bcast_cols_init_short_with_dt(dfb_y_obj, dfb_ydysum_obj);
+                mul_bcast_cols_init_with_dt(dfb_y_obj, dfb_ydysum_obj);
                 mul_tiles_bcast_cols(dfb::y, dfb::ydysum, wt, 0, dst0);
             } else {
-                mul_tiles_bcast_scalar_init_short_with_dt(dfb_y_obj, dfb_ydysum_obj);
+                mul_bcast_scalar_init_with_dt(dfb_y_obj, dfb_ydysum_obj);
                 mul_tiles_bcast_scalar(dfb::y, dfb::ydysum, wt, 0, dst0);
             }
             tile_regs_commit();

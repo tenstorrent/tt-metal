@@ -433,7 +433,7 @@ no positional CTA survives.
   `constexpr auto` handle alias per phase name, and **one** `DataflowBuffer` object per real DFB with
   the phase-local names becoming `DataflowBuffer&` references to it. Explicitly **not** `alias_with`.
 - [Pass DFB handles directly to LLKs and kernel-lib helpers](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/shared/port_patterns.md#pattern-pass-dfb-handles-directly-to-llks-and-kernel-lib-helpers)
-  — `copy_tile`, `add_tiles`, `mul_tiles*`, `sub_tiles*`, `binary_op_init_common`, and
+  — `copy_tile`, `add_tiles`, `mul_tiles*`, `sub_tiles*`, `compute_kernel_hw_startup`, and
   `compute_kernel_lib::reduce<…>` as a non-type template argument.
 - [Demoting per-group CTA to RTA](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/shared/port_patterns.md#anti-pattern-demoting-per-group-cta-to-rta)
   — avoided; both factories keep two compute `KernelSpec`s in two `WorkUnitSpec`s.

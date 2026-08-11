@@ -67,7 +67,7 @@ void kernel_main() {
 
     // Both output buffers are always allocated, so this selection needs no preprocessor gate.
     constexpr auto dfb_out_init = gamma_grad_has_value ? dfb::dgamma : dfb::dbeta;
-    binary_op_init_common(dfb::dy, dfb::dy, dfb_out_init);
+    compute_kernel_hw_startup(dfb::dy, dfb::dy, dfb_out_init);
 
     dfb_scaler_obj.wait_front(onetile);  // comes from the reader
 
@@ -175,10 +175,10 @@ void kernel_main() {
                 dfb_xmm_obj.reserve_back(onetile);
 
                 if (is_lastdim_layernorm) {
-                    sub_bcast_cols_init_short_with_dt(dfb_x_obj, dfb_mean_obj);
+                    sub_bcast_cols_init_with_dt(dfb_x_obj, dfb_mean_obj);
                     sub_tiles_bcast_cols(dfb::x, dfb::mean, 0, 0, dst0);
                 } else {
-                    sub_tiles_bcast_scalar_init_short_with_dt(dfb_x_obj, dfb_mean_obj);
+                    sub_bcast_scalar_init_with_dt(dfb_x_obj, dfb_mean_obj);
                     sub_tiles_bcast_scalar(dfb::x, dfb::mean, 0, 0, dst0);
                 }
 
@@ -219,10 +219,10 @@ void kernel_main() {
                 dfb_y_obj.reserve_back(onetile);
 
                 if (is_lastdim_layernorm) {
-                    mul_bcast_cols_init_short_with_dt(dfb_xmm_obj, dfb_rstd_obj);
+                    mul_bcast_cols_init_with_dt(dfb_xmm_obj, dfb_rstd_obj);
                     mul_tiles_bcast_cols(dfb::xmm, dfb::rstd, 0, 0, dst0);
                 } else {
-                    mul_tiles_bcast_scalar_init_short_with_dt(dfb_xmm_obj, dfb_rstd_obj);
+                    mul_bcast_scalar_init_with_dt(dfb_xmm_obj, dfb_rstd_obj);
                     mul_tiles_bcast_scalar(dfb::xmm, dfb::rstd, 0, 0, dst0);
                 }
                 tile_regs_commit();

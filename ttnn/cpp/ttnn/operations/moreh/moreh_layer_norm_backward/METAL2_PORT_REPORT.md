@@ -11,6 +11,10 @@
 
 No factories left on the legacy concept; nothing in the directory still builds a `ProgramDescriptor`.
 
+Brought up to date with `main` after the port was written; see
+[Catching up with main](#catching-up-with-main) for the two compute-API renames that required a
+follow-up commit. Tests re-run green afterwards.
+
 ## Provenance
 
 - **Recipe docs (this port):** `925d3c36ce9 2026-08-07 docs(metal_2.0): permit repairing what a pass falsified, and only that`
@@ -30,6 +34,59 @@ sweep (ran it; see the *Grep-check caveat* under Open items). The rest are audit
 the invoker did not ask for, so this port did not run them. Flagging it because the op is now a
 candidate for at least the style passes — it has 13–14 self-looped compute DFBs, though **no** DM
 self-loop and no sync-free (raw-pointer) DFB, so the two style passes may well find nothing.
+
+## Catching up with main
+
+The branch was brought up to date with `main` after the port was written, and the port needed one
+adaptation commit on top. Recording it here because it is the kind of churn the next porter of a moreh
+op will hit.
+
+The branch was rebased onto `main`, so the port sits directly on it and the PR diff is this op
+directory and nothing else. (An earlier round integrated `main` with a merge commit instead, to avoid
+rewriting the published branch; that merge is gone now that the branch was rebuilt.)
+
+**What main changed under this op:** nothing structural — two mechanical renames in the compute-kernel
+API, applied to the legacy kernels on main while this port was in flight. Exactly three files
+conflicted (the three compute kernels), and every conflict hunk had the same shape: main had renamed
+the helper, the port had renamed the operands.
+
+| legacy name (what the port was written against) | name on main |
+|---|---|
+| `binary_op_init_common(icb0, icb1, ocb)` | `compute_kernel_hw_startup(icb0, icb1, ocb)` |
+| `sub_bcast_cols_init_short_with_dt` | `sub_bcast_cols_init_with_dt` |
+| `sub_tiles_bcast_scalar_init_short_with_dt` | `sub_bcast_scalar_init_with_dt` |
+| `mul_bcast_cols_init_short_with_dt` | `mul_bcast_cols_init_with_dt` |
+| `mul_tiles_bcast_scalar_init_short_with_dt` | `mul_bcast_scalar_init_with_dt` |
+| `mul_bcast_rows_init_short_with_dt` | `mul_bcast_rows_init_with_dt` |
+
+Note the two `*_bcast_scalar_*` rows also drop the `_tiles` infix, so they are not a uniform
+`_init_short_with_dt` → `_init_with_dt` substitution. `binary_op_init_common` is still present on main
+but `[[deprecated]]` (removal announced for after 2026-09-15); main's own kernels had already moved off
+it, so the port follows main rather than leaning on the deprecated spelling.
+
+**How it was resolved.** The conflicts were resolved to the *ported* version — keeping the Metal 2.0
+structure and temporarily keeping the pre-rename helper names — and the renames were then applied as a
+separate follow-up commit. That keeps the port
+commit readable as "the Metal 2.0 transformation" and isolates "what main's churn forced" into its own
+diff, rather than blending the two.
+
+**Nothing else in the port was affected.** The factories, both readers, both writers, the device-op
+headers and the op-local helper header replayed without conflict. `metal_v2_artifacts.hpp`,
+`kernel_spec.hpp`, `program_spec.hpp`, `program_run_args.hpp`, `dataflow_buffer.h`,
+`experimental/kernel_args.h`, `reduce_helpers_compute.hpp` and the *dataflow* `moreh_common.hpp` are all
+unchanged across that range. The one `metal2_host_api` change in it
+(`advanced_options.hpp`) is comments plus a compile-time-vararg field this op does not set.
+
+**The recipe docs are not in this PR.** The port ran against the `metal_2.0` recipe tree, which lives on
+its own doc branch and is deliberately never merged to `main`; the Provenance hashes above name commits
+there, not commits in this PR. An earlier round of this branch carried those ~97 doc commits along, which
+would have landed the whole recipe tree on `main`; they have been dropped.
+
+**Equivalence check on the resolution.** Because the port is a syntax-only swap, the *ordered sequence*
+of LLK / helper calls in each ported compute kernel should be identical to main's legacy version of the
+same file. It is, for all three: 143 calls (gamma_beta_grad), 219 (input_grad small), 300 (input_grad
+large), matching main position for position. That is the check that would have caught a conflict
+resolution which silently dropped or reordered an init call.
 
 ## TTNN ProgramFactory
 
@@ -204,7 +261,8 @@ relaxation.
 
 ### Test coverage notes
 
-All runs on **Wormhole n300**, from a `./build_metal.sh --build-tests` build of this branch.
+All runs on **Wormhole n300**, from a `./build_metal.sh --build-tests` build of this branch. Every
+number below was re-confirmed **after** merging main in; the pre-merge run gave the same counts.
 
 - **The gate, pre- and post-port.** All six backward tests, per the brief's test gate:
   `pytest tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_layer_norm.py -k backward -v`
@@ -214,7 +272,7 @@ All runs on **Wormhole n300**, from a `./build_metal.sh --build-tests` build of 
   The 26 skips are the file's `bfloat8_b` parametrizations, which the tests skip themselves
   (`pytest.skip("bfloat8_b is not supported in the kernel")`); they skip identically before and after.
 - **Full-file regression (forward + backward):** `pytest …/test_moreh_layer_norm.py -v` →
-  **50 passed, 49 skipped**, post-port. No forward test regressed.
+  **50 passed, 49 skipped**, post-port and again after merging main in. No forward test regressed.
 - **`_large` algorithm — verified locally, deliberately not committed** (invoker decision D2b).
   No committed parametrization reaches `use_large_algorithm`
   (`dfb_usage >= available_L1`, `…input_grad_program_factory.cpp:200`) — the file's widest normalized
@@ -227,8 +285,9 @@ All runs on **Wormhole n300**, from a `./build_metal.sh --build-tests` build of 
   - **Large path confirmed selected:** the log line
     `"Large moreh_layer_norm_backward_input_grad algorithm is selected."` appears **twice** (once per
     parametrization) and `"Small …"` **zero** times.
-  - **Result: 2 passed.** Both ported `_large` sources produce correct numerics against the torch
-    reference at the same `rtol=0.1 / atol=0.5` the committed tests use.
+  - **Result: 2 passed**, both before and after merging main in. Both ported `_large` sources produce
+    correct numerics against the torch reference at the same `rtol=0.1 / atol=0.5` the committed tests
+    use.
   - The scaffold file was deleted after the run and is not in the diff.
 - **Gap worth closing: the large InputGrad path has no committed coverage at all.** Both of its sources
   (`reader_…_input_grad_large.cpp`, `…_input_grad_large_kernel.cpp`) are now Metal 2.0 and would break
