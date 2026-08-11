@@ -28,9 +28,15 @@ void kernel_main() {
 #ifdef DO_MASK_H
     DataflowBuffer dfb_mask_h_obj(dfb::mask_h);  // mask_h
 #endif
-    // mask_w belongs to the groupnorm shape this kernel was written for. The factory does not enable
-    // groupnorm and allocates no mask_w buffer, so nothing binds the handle and DO_MASK_W is never
-    // emitted: the whole path compiles out, exactly as dead as it already was.
+    // mask_w belongs to the groupnorm shape this kernel was written for. The factory hardwires
+    // is_groupnorm to false and allocates no mask_w buffer, so nothing binds the handle, DO_MASK_W is
+    // never emitted, and the whole path compiles out — exactly as dead as it already was.
+    //
+    // Kept rather than deleted, deliberately. mask_w is not dead on its own: every is_groupnorm branch
+    // in this kernel is unreachable for the same single reason, so dropping mask_w alone would leave
+    // the groupnorm scaffolding half torn down while the rest of it still reads as live. Whether to
+    // wire groupnorm up or retire it is a behavioral call for the op owner, and either way it is one
+    // change covering all of that scaffolding at once.
 #ifdef DO_MASK_W
     DataflowBuffer dfb_mask_w_obj(dfb::mask_w);  // mask_w
 #endif

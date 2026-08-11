@@ -231,6 +231,15 @@ relaxation.
   flag still occupies a compile-time argument, so it also widens the JIT cache key for no benefit. Either
   the groupnorm path should be wired up or the scaffolding retired; settled as out-of-scope for this port
   by invoker decision D1, so it needs a decision from the op owner.
+
+  **This surfaced in review.** A reviewer asked whether the `#ifdef DO_MASK_W` blocks in
+  `moreh_layer_norm_backward_gamma_beta_grad_kernel.cpp` — which the port's own comment describes as
+  dead — could simply be deleted. They can, in the sense that nothing reaches them; but mask_w is dead
+  *only* because `is_groupnorm` is false, and that same one reason kills 11 other `is_groupnorm`
+  branches across the three compute kernels (6 / 2 / 3) plus the `is_groupnorm` compile-time argument
+  and the `do_mask_w` derivation. Deleting mask_w alone would leave the scaffolding half torn down.
+  Declined for this PR and the kernel comment was expanded to say so, so the next reader does not have
+  to re-derive it. Whoever takes the groupnorm decision should treat all of that as one change.
 - **`packer_l1_acc` is destructured from `get_compute_kernel_config_args` and dropped** in both factories
   (`…gamma_beta_grad_program_factory.cpp:139`, `…input_grad_program_factory.cpp:163`). Not a port artifact —
   Metal 2.0's `ComputeGen1Config` has no field for it either, so there was nothing to carry across. If a
