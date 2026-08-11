@@ -290,7 +290,7 @@
       -vvv --tb=short
   skus:
     bh_loudbox:
-      timeout: 5
+      timeout: 3
   owner_id: U09LK84G4TF # Nikola Milicevic
   team: models
 
