@@ -403,15 +403,14 @@ def test_pad(device, h, w, padding, torch_padding, value):
 @pytest.mark.parametrize("w", [64])
 @pytest.mark.parametrize("padding,torch_padding", [(((32, 32),), (32, 32))])
 @pytest.mark.parametrize("value", [0])
-def test_pad_padding_validation_front_pad_not_supported(device, h, w, padding, torch_padding, value):
+def test_pad_padding_validation_front_pad_not_supported(device, expect_error, h, w, padding, torch_padding, value):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
 
-    with pytest.raises(RuntimeError) as e:
+    with expect_error(RuntimeError, "ttnn.pad: on device tile padding does not support front padding"):
         ttnn.pad(input_tensor, padding=padding, value=value)
-    assert "ttnn.pad: on device tile padding does not support front padding" in str(e.value)
     return
 
 
@@ -419,15 +418,14 @@ def test_pad_padding_validation_front_pad_not_supported(device, h, w, padding, t
 @pytest.mark.parametrize("w", [64])
 @pytest.mark.parametrize("padding,torch_padding", [(((0, 32), (0, 32), (0, 32)), (0, 32, 0, 32, 0, 32))])
 @pytest.mark.parametrize("value", [0])
-def test_pad_padding_validation_length(device, h, w, padding, torch_padding, value):
+def test_pad_padding_validation_length(device, expect_error, h, w, padding, torch_padding, value):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
 
-    with pytest.raises(RuntimeError) as e:
+    with expect_error(RuntimeError, "ttnn.pad: padding len can't be larger than input tensor rank"):
         ttnn.pad(input_tensor, padding=padding, value=value)
-    assert "ttnn.pad: padding len can't be larger than input tensor rank" in str(e.value)
     return
 
 
@@ -487,7 +485,7 @@ def test_pad_back_to_back(device, h, w, padding, torch_padding, value):
 @pytest.mark.parametrize("w", [64])
 @pytest.mark.parametrize("padding", [((0, 32), (0, 32)), ((1, 64), (0, 96)), ((0, 64), (0, 43)), ((32, 64), (64, 96))])
 @pytest.mark.parametrize("value", [0])
-def test_pad_for_tensor_in_tile_layout(device, h, w, padding, value):
+def test_pad_for_tensor_in_tile_layout(device, expect_error, h, w, padding, value):
     torch.manual_seed(0)
     torch_padding = (padding[1][0], padding[1][1], padding[0][0], padding[0][1])
 
@@ -502,9 +500,8 @@ def test_pad_for_tensor_in_tile_layout(device, h, w, padding, value):
         or padding[1][0] % ttnn.TILE_SIZE != 0
         or padding[1][1] % ttnn.TILE_SIZE != 0
     ):
-        with pytest.raises(RuntimeError) as e:
-            output_tensor = ttnn.pad(input_tensor, padding=padding, value=value)
-        assert "must be a multiple of the tile size on height and width" in str(e.value)
+        with expect_error(RuntimeError, "must be a multiple of the tile size on height and width"):
+            ttnn.pad(input_tensor, padding=padding, value=value)
         return
     else:
         output_tensor = ttnn.pad(input_tensor, padding=padding, value=value)
@@ -1251,7 +1248,7 @@ def test_pad_nd_sharded_to_nd_sharded_front_padding_row_major(
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-def test_pad_nd_sharded_front_padding_tile_layout_not_supported(device, dtype):
+def test_pad_nd_sharded_front_padding_tile_layout_not_supported(device, expect_error, dtype):
     torch.manual_seed(42)
 
     tensor_shape = [1, 1, 32, 32]
@@ -1275,7 +1272,7 @@ def test_pad_nd_sharded_front_padding_tile_layout_not_supported(device, dtype):
         memory_config=input_memory_config,
     )
 
-    with pytest.raises(RuntimeError, match="ttnn.pad: on device tile padding does not support front padding"):
+    with expect_error(RuntimeError, "ttnn.pad: on device tile padding does not support front padding"):
         ttnn.pad(
             input_ttnn_tensor,
             padded_shape,
