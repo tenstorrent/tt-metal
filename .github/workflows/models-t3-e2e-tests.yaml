@@ -41,11 +41,11 @@ on:
           - distilbert
           - squeezebert
           - mnist-mlp
-          - tinyllama_1_1b_ddp32_shakespeare
-          - llama_8b_tp8_ddp4_shakespeare
-          - qwen3_1_7b_ddp32_shakespeare
-          - tiny_deepseek_v3_ddp32_char_shakespeare
-          - llama_70b_tp8_fsdp4_shakespeare
+          - "[tt-train] tinyllama_1_1b_ddp32"
+          - "[tt-train] llama_8b_tp8_ddp4"
+          - "[tt-train] qwen3_1_7b_ddp32"
+          - "[tt-train] tiny_deepseek_v3_ddp32"
+          - "[tt-train] llama_70b_tp8_fsdp4"
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
         required: false
