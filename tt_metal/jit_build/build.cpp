@@ -360,6 +360,7 @@ void JitBuildEnv::init(
         root_ + "tt_metal",
         root_ + "tt_metal/hw/inc",
         root_ + "tt_metal/tt-llk/common",
+        root_ + "tt_metal/tt-llk/tools/include",
         root_ + "tt_metal/hostdevcommon/api",
         root_ + "tt_metal/api/"};
 

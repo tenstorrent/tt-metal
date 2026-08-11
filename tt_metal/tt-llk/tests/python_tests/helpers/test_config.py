@@ -570,6 +570,7 @@ class TestConfig:
                     )
                 ],
                 "-I../common",
+                "-I../tools/include",
                 "-I../../hw/inc",
                 "-Ifirmware/riscv/common",
                 "-Ihelpers/include",
