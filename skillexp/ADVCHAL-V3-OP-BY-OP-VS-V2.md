@@ -110,20 +110,47 @@ the ladder is *swept*, and it is the single most expensive line in the run.
 **What it cost:** 1.581980 vs 1.824205 = **−242.2 µs/layer × 25 layers = −6,055 µs/model**, on a cell that
 shipped −1,198. That one veto is **73 % of the entire v3-vs-v2 gap across all five comparable cells.**
 
-## 1.5 The correctness question that is still open, and why 88 matters
+## 1.5 The correctness question — settled for the op, and v2's own data confirms it
 
-| version | grid | sliding PCC | verdict |
-|---|---:|---:|---|
-| v2 | **88** | **0.998993** *(its `final.json`, real-weight HF layer reference)* | shipped |
-| v3 | **11** | **0.994573** | vetoed the kind |
-| v3 | 2, 4, 8, 22, 44 | **not measured** | vetoed by inheritance |
+Whole-layer PCC on the sliding kind, each from its own artefacts:
 
-v2's 88 passes at 0.9990 and v3's 11 fails at 0.9946 — **on the same op, same model, same kind, same host.** If
-that holds under an isolated test, PCC is **non-monotonic in the core count of a reduction**, which is a
-tt-metal shard-spec question and not a stage question. If it does not hold, one of the two oracles is
-mis-scoped. Either way the resolution is the same cheap experiment: the isolated single-op sweep at
-**1 / 8 / 11 / 22 / 44 / 88** cores in [`PCC-BY-GRID`](ADVCHAL-V3-PCC-BY-GRID.md) §4, now with 88 and 8 added
-because those are the two grids that decide it.
+| version | grid | source | **whole-layer PCC** | verdict |
+|---|---:|---|---:|---|
+| v3 | 1 *(incumbent, interleaved)* | `evidence_sliding_attention.json` | **0.99962801** | baseline |
+| **v2** | **88** | `oracle/norm88/pcc_layer0_sliding_attention_shared1.json`, `decode_pcc` | **0.99962934** | **shipped** |
+| v3 | **11** | `evidence_sliding_attention.json` | **0.99457296** | **vetoed the kind** |
+| v3 | 2, 4, 8, 22, 44 | — | **never measured** | vetoed by inheritance |
+
+**v2's 88-core candidate scores the same as v3's untouched incumbent — 0.99962934 against 0.99962801, a
+difference of 1.3 × 10⁻⁶.** So at 88 cores the norm re-grid is, at layer scope, a numerical no-op. That is an
+*independent confirmation of the sweep below* from v2's own oracle file, and it makes the 11-core 0.99457 an
+outlier against both the isolated op and v2's whole-layer measurement at a different grid.
+
+⚠ **One caveat that cannot be closed from the artefacts.** v2's oracle records its scope —
+`decode_current_pos=32, sequence_length=32, shared_physical_cache=true`, plus a separate
+`prefill_pcc=0.99880996`. **v3's sliding oracle records no such scope**, only the value: this is RUN-LOG **P4**,
+`oracle_reference` left advisory rather than CRITICAL. So "11 cores flips something 88 does not" and "the two
+oracles evaluate different positions" both remain live, and **the artefacts cannot distinguish them.** That is
+the cost of P4, priced at 6,055 µs/model.
+
+**✅ Settled — the sweep was run.** [`NORM-GRID-SWEEP`](ADVCHAL-V3-NORM-GRID-SWEEP.md) measured this op at
+1/2/4/8/11/22/44/88 cores, in four rectangles the model cannot emit, at three `subblock_w` values, with and
+without a weight, at dynamic ranges to 1 × 10¹² — **79 configurations.** Every one returns
+**PCC 0.999998–1.000000**; the worst deviation anywhere is **7.3 × 10⁻⁷**, and 11 and 88 are numerically
+indistinguishable from each other and from the interleaved incumbent.
+
+**So neither version's 0.9990 nor 0.9946 is about this op.** Both are whole-layer numbers, and the op contributes
+≤ 10⁻⁷ of a 5.06 × 10⁻³ gap. The remaining mechanism is **discontinuity, not rounding**: the router norm feeds
+`ttnn.topk`, and a 10⁻⁷ perturbation near a routing boundary flips an expert selection — which is why the drop is
+a step to the same value at every rung rather than a slide. **A 0.995 whole-layer bar on a sparse-MoE decoder
+measures expert-selection agreement and cannot gate a placement change.**
+
+One more thing the sweep found: **88 cores costs 69.15 µs against the interleaved incumbent's 44.68** on this op
+in isolation — the advised grid is **55 % slower than doing nothing**, and the slowest of all 79. The cheapest is
+4 cores as **2×2 at 19.71 µs**, a rectangle the model's `(C,1)`/`(11,h)` rule cannot produce. But the isolated
+ranking and the end-to-end ladder **disagree** (end-to-end preferred 8 and 11, with 2 and 4 worse), which is the
+deeper point: **per-op cost does not compose, so a per-op advisor cannot be trusted to pick the grid.** That is
+the argument for the ladder, measured.
 
 ## 1.6 What v3 did better here, stated plainly: it could see the op at all
 
@@ -286,5 +313,8 @@ v3 could not find.
    measured and it is the rung both open questions turn on.
 3. **A substituted geometry must be diffed against the advice and against the prior implementation before it is
    measured** (§2.3). Two lines separate −5.09 % at PCC 0.9990 from −4.11 % at PCC 0.917.
-4. **Isolated single-op PCC sweep at 1 / 8 / 11 / 22 / 44 / 88 cores** (§1.5), which settles whether §1.4's veto
-   was correct-but-overreaching or simply wrong.
+4. ~~Isolated single-op PCC sweep~~ — **done**: [`NORM-GRID-SWEEP`](ADVCHAL-V3-NORM-GRID-SWEEP.md), 79
+   configurations. §1.4's veto was **simply wrong**, not over-reaching: the op cannot produce the deviation it was
+   rejected for, by a factor of 6,879.
+5. **Gate a placement candidate on the op's own output**, not only on the layer's PCC — the change the sweep
+   argues for, and the one that would have prevented §1.4.

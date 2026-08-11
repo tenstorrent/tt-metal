@@ -1,0 +1,603 @@
+{
+ "device_grid": [
+  11,
+  10
+ ],
+ "hidden": 2816,
+ "eps": 9.99999997e-07,
+ "iters": 30,
+ "results": [
+  {
+   "input": "unit",
+   "sweep": "D interleaved",
+   "cores": null,
+   "grid": null,
+   "block_w": null,
+   "subblock_w": null,
+   "pcc": 0.9999986979803863,
+   "us": 60.54108962416649,
+   "note": "incumbent path"
+  },
+  {
+   "input": "unit",
+   "sweep": "A ladder",
+   "cores": 1,
+   "grid": [
+    1,
+    1
+   ],
+   "block_w": 88,
+   "subblock_w": 4,
+   "note": "model rule",
+   "pcc": null,
+   "us": null,
+   "error": "RuntimeError: TT_THROW @ /home/mvasiljevic/tt-metal/tt_metal/impl/program/program.cpp:1549: tt::exception\ninfo:\nStatically allocated circular buffers in program 6 clash with L1 buffers on core r"
+  },
+  {
+   "input": "unit",
+   "sweep": "A ladder",
+   "cores": 2,
+   "grid": [
+    2,
+    1
+   ],
+   "block_w": 44,
+   "subblock_w": 4,
+   "note": "model rule",
+   "pcc": 0.9999986979803863,
+   "us": 37.942081689834595,
+   "error": null
+  },
+  {
+   "input": "unit",
+   "sweep": "A ladder",
+   "cores": 4,
+   "grid": [
+    4,
+    1
+   ],
+   "block_w": 22,
+   "subblock_w": 2,
+   "note": "model rule",
+   "pcc": 0.9999986979803863,
+   "us": 33.76975655555725,
+   "error": null
+  },
+  {
+   "input": "unit",
+   "sweep": "A ladder",
+   "cores": 8,
+   "grid": [
+    8,
+    1
+   ],
+   "block_w": 11,
+   "subblock_w": 1,
+   "note": "model rule",
+   "pcc": 0.9999986979803863,
+   "us": 34.05008465051651,
+   "error": null
+  },
+  {
+   "input": "unit",
+   "sweep": "A ladder",
+   "cores": 11,
+   "grid": [
+    11,
+    1
+   ],
+   "block_w": 8,
+   "subblock_w": 4,
+   "note": "model rule",
+   "pcc": 0.9999986979803863,
+   "us": 36.1735001206398,
+   "error": null
+  },
+  {
+   "input": "unit",
+   "sweep": "A ladder",
+   "cores": 22,
+   "grid": [
+    11,
+    2
+   ],
+   "block_w": 4,
+   "subblock_w": 4,
+   "note": "model rule",
+   "pcc": 0.9999986979803863,
+   "us": 43.25760528445244,
+   "error": null
+  },
+  {
+   "input": "unit",
+   "sweep": "A ladder",
+   "cores": 44,
+   "grid": [
+    11,
+    4
+   ],
+   "block_w": 2,
+   "subblock_w": 2,
+   "note": "model rule",
+   "pcc": 0.9999986979803863,
+   "us": 54.599251598119736,
+   "error": null
+  },
+  {
+   "input": "unit",
+   "sweep": "A ladder",
+   "cores": 88,
+   "grid": [
+    11,
+    8
+   ],
+   "block_w": 1,
+   "subblock_w": 1,
+   "note": "model rule  <-- NEVER MEASURED in the v3 run; v2 shipped it",
+   "pcc": 0.9999986979803863,
+   "us": 86.41602471470833,
+   "error": null
+  },
+  {
+   "input": "unit",
+   "sweep": "B shape",
+   "cores": 2,
+   "grid": [
+    1,
+    2
+   ],
+   "block_w": 44,
+   "subblock_w": 4,
+   "note": "same 2 cores as A, rectangle 1x2 instead of 2x1",
+   "pcc": 0.9999986979803863,
+   "us": 38.939062505960464,
+   "error": null
+  },
+  {
+   "input": "unit",
+   "sweep": "B shape",
+   "cores": 4,
+   "grid": [
+    2,
+    2
+   ],
+   "block_w": 22,
+   "subblock_w": 2,
+   "note": "same 4 cores as A, rectangle 2x2 instead of 4x1",
+   "pcc": 0.9999986979803863,
+   "us": 36.82496026158333,
+   "error": null
+  },
+  {
+   "input": "unit",
+   "sweep": "B shape",
+   "cores": 8,
+   "grid": [
+    4,
+    2
+   ],
+   "block_w": 11,
+   "subblock_w": 1,
+   "note": "same 8 cores as A, rectangle 4x2 instead of 8x1",
+   "pcc": 0.9999986979803863,
+   "us": 35.99422052502632,
+   "error": null
+  },
+  {
+   "input": "unit",
+   "sweep": "B shape",
+   "cores": 8,
+   "grid": [
+    2,
+    4
+   ],
+   "block_w": 11,
+   "subblock_w": 1,
+   "note": "same 8 cores as A, rectangle 2x4 instead of 8x1",
+   "pcc": 0.9999986979803863,
+   "us": 38.061756640672684,
+   "error": null
+  },
+  {
+   "input": "unit",
+   "sweep": "C blocking",
+   "cores": 1,
+   "grid": [
+    1,
+    1
+   ],
+   "block_w": 88,
+   "subblock_w": 2,
+   "note": "model would pick subblock_w=4",
+   "pcc": null,
+   "us": null,
+   "error": "RuntimeError: TT_THROW @ /home/mvasiljevic/tt-metal/tt_metal/impl/program/program.cpp:1549: tt::exception\ninfo:\nStatically allocated circular buffers in program 74 clash with L1 buffers on core "
+  },
+  {
+   "input": "unit",
+   "sweep": "C blocking",
+   "cores": 1,
+   "grid": [
+    1,
+    1
+   ],
+   "block_w": 88,
+   "subblock_w": 1,
+   "note": "model would pick subblock_w=4",
+   "pcc": null,
+   "us": null,
+   "error": "RuntimeError: TT_THROW @ /home/mvasiljevic/tt-metal/tt_metal/impl/program/program.cpp:1549: tt::exception\ninfo:\nStatically allocated circular buffers in program 76 clash with L1 buffers on core "
+  },
+  {
+   "input": "unit",
+   "sweep": "C blocking",
+   "cores": 11,
+   "grid": [
+    11,
+    1
+   ],
+   "block_w": 8,
+   "subblock_w": 2,
+   "note": "model would pick subblock_w=4",
+   "pcc": 0.9999986979803863,
+   "us": 36.629848182201385,
+   "error": null
+  },
+  {
+   "input": "unit",
+   "sweep": "C blocking",
+   "cores": 11,
+   "grid": [
+    11,
+    1
+   ],
+   "block_w": 8,
+   "subblock_w": 1,
+   "note": "model would pick subblock_w=4",
+   "pcc": 0.9999986979803863,
+   "us": 35.196542739868164,
+   "error": null
+  },
+  {
+   "input": "unit",
+   "sweep": "C blocking",
+   "cores": 22,
+   "grid": [
+    11,
+    2
+   ],
+   "block_w": 4,
+   "subblock_w": 2,
+   "note": "model would pick subblock_w=4",
+   "pcc": 0.9999986979803863,
+   "us": 45.3973188996315,
+   "error": null
+  },
+  {
+   "input": "unit",
+   "sweep": "C blocking",
+   "cores": 22,
+   "grid": [
+    11,
+    2
+   ],
+   "block_w": 4,
+   "subblock_w": 1,
+   "note": "model would pick subblock_w=4",
+   "pcc": 0.9999986979803863,
+   "us": 43.353065848350525,
+   "error": null
+  },
+  {
+   "input": "unit",
+   "sweep": "C blocking",
+   "cores": 44,
+   "grid": [
+    11,
+    4
+   ],
+   "block_w": 2,
+   "subblock_w": 1,
+   "note": "model would pick subblock_w=2",
+   "pcc": 0.9999986979803863,
+   "us": 56.14664405584335,
+   "error": null
+  },
+  {
+   "input": "residual",
+   "sweep": "D interleaved",
+   "cores": null,
+   "grid": null,
+   "block_w": null,
+   "subblock_w": null,
+   "pcc": 0.9999985204881563,
+   "us": 58.37203934788704,
+   "note": "incumbent path"
+  },
+  {
+   "input": "residual",
+   "sweep": "A ladder",
+   "cores": 1,
+   "grid": [
+    1,
+    1
+   ],
+   "block_w": 88,
+   "subblock_w": 4,
+   "note": "model rule",
+   "pcc": null,
+   "us": null,
+   "error": "RuntimeError: TT_THROW @ /home/mvasiljevic/tt-metal/tt_metal/impl/program/program.cpp:1549: tt::exception\ninfo:\nStatically allocated circular buffers in program 6 clash with L1 buffers on core r"
+  },
+  {
+   "input": "residual",
+   "sweep": "A ladder",
+   "cores": 2,
+   "grid": [
+    2,
+    1
+   ],
+   "block_w": 44,
+   "subblock_w": 4,
+   "note": "model rule",
+   "pcc": 0.9999986375694726,
+   "us": 38.928817957639694,
+   "error": null
+  },
+  {
+   "input": "residual",
+   "sweep": "A ladder",
+   "cores": 4,
+   "grid": [
+    4,
+    1
+   ],
+   "block_w": 22,
+   "subblock_w": 2,
+   "note": "model rule",
+   "pcc": 0.9999986375694726,
+   "us": 34.52040255069733,
+   "error": null
+  },
+  {
+   "input": "residual",
+   "sweep": "A ladder",
+   "cores": 8,
+   "grid": [
+    8,
+    1
+   ],
+   "block_w": 11,
+   "subblock_w": 1,
+   "note": "model rule",
+   "pcc": 0.9999986375694726,
+   "us": 35.24310886859894,
+   "error": null
+  },
+  {
+   "input": "residual",
+   "sweep": "A ladder",
+   "cores": 11,
+   "grid": [
+    11,
+    1
+   ],
+   "block_w": 8,
+   "subblock_w": 4,
+   "note": "model rule",
+   "pcc": 0.9999986375694726,
+   "us": 36.45941615104675,
+   "error": null
+  },
+  {
+   "input": "residual",
+   "sweep": "A ladder",
+   "cores": 22,
+   "grid": [
+    11,
+    2
+   ],
+   "block_w": 4,
+   "subblock_w": 4,
+   "note": "model rule",
+   "pcc": 0.9999986375694726,
+   "us": 44.29928958415985,
+   "error": null
+  },
+  {
+   "input": "residual",
+   "sweep": "A ladder",
+   "cores": 44,
+   "grid": [
+    11,
+    4
+   ],
+   "block_w": 2,
+   "subblock_w": 2,
+   "note": "model rule",
+   "pcc": 0.9999986066075149,
+   "us": 54.59459498524666,
+   "error": null
+  },
+  {
+   "input": "residual",
+   "sweep": "A ladder",
+   "cores": 88,
+   "grid": [
+    11,
+    8
+   ],
+   "block_w": 1,
+   "subblock_w": 1,
+   "note": "model rule  <-- NEVER MEASURED in the v3 run; v2 shipped it",
+   "pcc": 0.9999986066075149,
+   "us": 86.01974695920944,
+   "error": null
+  },
+  {
+   "input": "residual",
+   "sweep": "B shape",
+   "cores": 2,
+   "grid": [
+    1,
+    2
+   ],
+   "block_w": 44,
+   "subblock_w": 4,
+   "note": "same 2 cores as A, rectangle 1x2 instead of 2x1",
+   "pcc": 0.9999986375694726,
+   "us": 39.14954140782356,
+   "error": null
+  },
+  {
+   "input": "residual",
+   "sweep": "B shape",
+   "cores": 4,
+   "grid": [
+    2,
+    2
+   ],
+   "block_w": 22,
+   "subblock_w": 2,
+   "note": "same 4 cores as A, rectangle 2x2 instead of 4x1",
+   "pcc": 0.9999986375694726,
+   "us": 36.68526187539101,
+   "error": null
+  },
+  {
+   "input": "residual",
+   "sweep": "B shape",
+   "cores": 8,
+   "grid": [
+    4,
+    2
+   ],
+   "block_w": 11,
+   "subblock_w": 1,
+   "note": "same 8 cores as A, rectangle 4x2 instead of 8x1",
+   "pcc": 0.9999986375694726,
+   "us": 36.13391891121864,
+   "error": null
+  },
+  {
+   "input": "residual",
+   "sweep": "B shape",
+   "cores": 8,
+   "grid": [
+    2,
+    4
+   ],
+   "block_w": 11,
+   "subblock_w": 1,
+   "note": "same 8 cores as A, rectangle 2x4 instead of 8x1",
+   "pcc": 0.9999986375694726,
+   "us": 37.16070204973221,
+   "error": null
+  },
+  {
+   "input": "residual",
+   "sweep": "C blocking",
+   "cores": 1,
+   "grid": [
+    1,
+    1
+   ],
+   "block_w": 88,
+   "subblock_w": 2,
+   "note": "model would pick subblock_w=4",
+   "pcc": null,
+   "us": null,
+   "error": "RuntimeError: TT_THROW @ /home/mvasiljevic/tt-metal/tt_metal/impl/program/program.cpp:1549: tt::exception\ninfo:\nStatically allocated circular buffers in program 74 clash with L1 buffers on core "
+  },
+  {
+   "input": "residual",
+   "sweep": "C blocking",
+   "cores": 1,
+   "grid": [
+    1,
+    1
+   ],
+   "block_w": 88,
+   "subblock_w": 1,
+   "note": "model would pick subblock_w=4",
+   "pcc": null,
+   "us": null,
+   "error": "RuntimeError: TT_THROW @ /home/mvasiljevic/tt-metal/tt_metal/impl/program/program.cpp:1549: tt::exception\ninfo:\nStatically allocated circular buffers in program 76 clash with L1 buffers on core "
+  },
+  {
+   "input": "residual",
+   "sweep": "C blocking",
+   "cores": 11,
+   "grid": [
+    11,
+    1
+   ],
+   "block_w": 8,
+   "subblock_w": 2,
+   "note": "model would pick subblock_w=4",
+   "pcc": 0.9999986375694726,
+   "us": 36.06313839554787,
+   "error": null
+  },
+  {
+   "input": "residual",
+   "sweep": "C blocking",
+   "cores": 11,
+   "grid": [
+    11,
+    1
+   ],
+   "block_w": 8,
+   "subblock_w": 1,
+   "note": "model would pick subblock_w=4",
+   "pcc": 0.9999986375694726,
+   "us": 35.65289080142975,
+   "error": null
+  },
+  {
+   "input": "residual",
+   "sweep": "C blocking",
+   "cores": 22,
+   "grid": [
+    11,
+    2
+   ],
+   "block_w": 4,
+   "subblock_w": 2,
+   "note": "model would pick subblock_w=4",
+   "pcc": 0.9999986375694726,
+   "us": 44.48508843779564,
+   "error": null
+  },
+  {
+   "input": "residual",
+   "sweep": "C blocking",
+   "cores": 22,
+   "grid": [
+    11,
+    2
+   ],
+   "block_w": 4,
+   "subblock_w": 1,
+   "note": "model would pick subblock_w=4",
+   "pcc": 0.9999986375694726,
+   "us": 42.92698577046394,
+   "error": null
+  },
+  {
+   "input": "residual",
+   "sweep": "C blocking",
+   "cores": 44,
+   "grid": [
+    11,
+    4
+   ],
+   "block_w": 2,
+   "subblock_w": 1,
+   "note": "model would pick subblock_w=2",
+   "pcc": 0.9999986066075149,
+   "us": 55.45560270547867,
+   "error": null
+  }
+ ]
+}

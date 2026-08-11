@@ -190,6 +190,14 @@ The actual defect: all 17 carry `verdict = rejected_kind_by_absolute_oracle`, an
 **−242.2 µs/layer × 25 layers = −6,055 µs/model**, on a cell that shipped −1,198. **73 % of the whole v3-vs-v2
 gap.**
 
+**And the sweep makes this worse than a scope error.**
+[`NORM-GRID-SWEEP`](ADVCHAL-V3-NORM-GRID-SWEEP.md) measured the op in isolation across 79 configurations: the
+largest PCC deviation it can produce at *any* grid is **7.3 × 10⁻⁷**, against the **5.06 × 10⁻³** whole-layer drop
+that triggered the veto — **6,879× too small.** So the op under test provably did not cause the number it was
+rejected for. The veto is not "correct but over-broad"; **the attribution behind it was wrong before the scope
+question arises.** Second fix, and the substantive one: **gate a placement candidate on the op's own output**, not
+only on the layer's PCC — on a sparse-MoE layer the latter measures expert-selection agreement.
+
 Unmodelled because I specified the ladder as a *performance* search and the oracle as a *gate*, and never asked
 what **scope** a gate verdict has. `SKILL.md` says to sweep the ladder and says nothing about how far a
 correctness rejection generalises — so the cell picked the widest scope available. Fix: an oracle verdict binds

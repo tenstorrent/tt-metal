@@ -59,7 +59,23 @@ grid-dependent correctness bug is visible as a number with nothing attached to i
 
 ---
 
-# 4. The finding: `rms_norm` widened off 1 core degrades PCC on gemma-4-26B's *sliding* kind, reproducibly
+# 4. ⚠⚠ RETRACTED — the sweep was run and there is no bug here
+
+**[`NORM-GRID-SWEEP`](ADVCHAL-V3-NORM-GRID-SWEEP.md) ran the experiment §4 asked for, on 79 configurations, and
+the hypothesis below is false.** The op is clean at every core count, every rectangle, every `subblock_w`, with
+and without a weight, at dynamic ranges to 1 × 10¹²: **worst PCC deviation anywhere 7.3 × 10⁻⁷, against the
+5.06 × 10⁻³ whole-layer drop it was blamed for — 6,879× too small.** 11 cores and 88 cores are numerically
+indistinguishable from each other and from the interleaved incumbent.
+
+**And the "three independent reproductions" below were not independent**: all three cells ran the same candidate
+policy, so that is one observation reported three times. The clustering was real; the attribution was mine and
+it was wrong. **No tt-metal bug to file.**
+
+The section is kept verbatim below because the *whole-layer* numbers in it are still the measurements, and
+because the way the inference failed is the point: **a whole-layer PCC was attributed to a single op with no
+per-op evidence, and nothing in the artefacts could contradict it because `op_under_test` was advisory.**
+
+## 4 (superseded). The original hypothesis: `rms_norm` widened off 1 core degrades PCC on the *sliding* kind
 
 **Three independent cells, three different arms, same model, same op, same layer kind, same result:**
 
@@ -136,6 +152,11 @@ filing rather than writing off as a tight bar.
    gap is visible. Worth ~6,055 µs/model on g26onA alone.
 2b. **Put the advised grid and the previous version's shipped grid on the ladder.** 88 was the one rung never
    measured, and both open questions here turn on it.
-3. **Isolated single-op test** for §4, on this host, at 1/11/22/44/88 cores.
-4. Until §4 is settled, gemma-4-26B's sliding-attention norm results — v2's and v3's — are **mutually
-   inconsistent**, and neither should be quoted as settled.
+3. ~~Isolated single-op test for §4~~ — **done**, [`NORM-GRID-SWEEP`](ADVCHAL-V3-NORM-GRID-SWEEP.md). §4 retracted.
+3b. **Gate a placement candidate on the op's own output, not only the layer's PCC** — the change the sweep argues
+   for. On a sparse-MoE layer a 0.995 whole-layer bar measures expert-selection agreement, not arithmetic.
+4. ~~v2's and v3's sliding norm results are mutually inconsistent~~ — **resolved.** They are not inconsistent
+   about the *op*: it is clean at both grids. They differ about a **whole-layer** number that the op cannot have
+   caused. v2's 0.9990 and v3's 0.9946 are both plausible readings of a layer whose PCC is a discontinuous
+   function of tiny perturbations (expert selection), which is why neither is a valid gate for a placement
+   change.
