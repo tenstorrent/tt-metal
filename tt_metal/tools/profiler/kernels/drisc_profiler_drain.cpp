@@ -36,6 +36,38 @@
 //
 // The NIU must already be in stream mode -- a DRISC in the default NOC2AXI mode cannot initiate NoC, and
 // the socket config write has to be able to land in L1.
+//
+// ---- ROLE SPLIT (compile arg 20; 0 = off, the whole file behaves exactly as above) ----
+//
+// The knee is set by the WORST sweep and that sweep is dominated by CREDIT-WAIT: 50-97 us of an 86-127 us
+// worst sweep, against 1.3 us when the host is keeping up. It is a BURST problem, not a bandwidth one --
+// sustained egress is ~1.37 GB/s aggregate (~8% of the 16.5 GB/s ceiling) but one busy sweep ships 581 KB
+// in 35.2 us, which IS the ceiling. The 12 MiB host FIFO is only ~21 busy sweeps of slack, and it cannot be
+// enlarged: the FW maps nwin = ceil((in_off + bytes + 64) / 2 MiB) consecutive TLB windows per socket and
+// kNSockets * nwin <= 16, so 12 MiB already uses 14 of 16.
+//
+// So split the job across FOUR DRISCs instead of making two do all of it:
+//
+//   FILLER (kRole=1)  sweep worker rings -> write frames into its OWN device-DRAM ring. No socket, no PCIe,
+//                     no host MMIO at all. Its back-pressure is a DRAM ring of hundreds of MB, not 12 MiB.
+//   MOVER  (kRole=2)  read frames out of a DRAM ring -> push to the existing D2H socket, byte-for-byte the
+//                     same protocol the full-job drainer uses, so the host path is untouched.
+//
+// One ring per filler, so the ring is structurally single-producer/single-consumer and no de-interleaving is
+// ever needed. The handshake is a monotonic frame count: the filler publishes `head` into a word in its own
+// L1; the mover NoC-reads head, moves head-tail frames, and NoC-writes `tail` back into that same block.
+// Every wait on either side is BOUNDED with a give-up -- an unbounded spin on a DRISC is unkillable and
+// unfeedable, and because the producers are lossless it takes the workload down with it.
+//
+// Placement is evidence-based, not arbitrary. Only DRAM cores in NoC row y == 0 are safe to HOST-FACE
+// (FINDINGS N+29: y==0 1/75 failures vs y!=0 16/125, Fisher p ~ 0.006), which is exactly two cores on this
+// part -- so the movers take those and the fillers go on y!=0 banks. That is measured to be safe for the
+// FILLER duty specifically: two 25-run blocks on bank 5, N+29's worst core at 5/25 for a full-job drainer,
+// produced 0/25 failures held in stream mode and 0/25 doing filler-only duty. The hazard lives in the
+// egress/host-facing half.
+//
+// The frame layout does not change, which is what keeps the host decoder untouched: a DRAM ring slot is the
+// same 2,640-word prefix+span the socket path ships, so the mover copies whole frames and never re-frames.
 
 #include <cstdint>
 
@@ -226,6 +258,28 @@ void kernel_main() {
     // What is left is issuing those reads on BOTH NoCs, which doubles outstanding transactions without
     // needing more L1. Writes are only ~0.9% of the sweep, so sharing NOC_INDEX with them costs little.
     constexpr uint32_t kReadSplit = get_compile_time_arg_val(19);
+    // ---- ROLE SPLIT (see the header). 0 = today's full-job drainer, and every arg below is then 0. ----
+    constexpr uint32_t kRoleFull = 0, kRoleFiller = 1, kRoleMover = 2;
+    constexpr uint32_t kRole = get_compile_time_arg_val(20);
+    constexpr uint32_t kDramBank = get_compile_time_arg_val(21);    // allocator bank id of this ring
+    constexpr uint32_t kDramAddr = get_compile_time_arg_val(22);    // bank-relative base of this ring
+    constexpr uint32_t kDramFrames = get_compile_time_arg_val(23);  // ring capacity in whole frames
+    constexpr uint32_t kHsAddr = get_compile_time_arg_val(24);      // FILLER: its own handshake block, in L1
+    constexpr uint32_t kPeerXY = get_compile_time_arg_val(25);      // MOVER: (y<<16)|x virtual of its filler
+    constexpr uint32_t kPeerHsAddr = get_compile_time_arg_val(26);  // MOVER: that filler's handshake block
+    // Handshake block: four words, 16 B apart so each is independently addressable by a 4 B NoC write
+    // without a read-modify-write on its neighbours.
+    //   +0  head     filler stores locally,  mover NoC-reads
+    //   +16 tail     mover NoC-writes,       filler reads locally
+    //   +32 probe_f  host writes a magic,    mover NoC-reads and echoes into its own L1  (proves reads work)
+    //   +48 probe_m  mover NoC-writes magic, host reads it off the filler                (proves writes work)
+    // Both probes exist because this is a SECOND producer/consumer path, and the last one of those silently
+    // destroyed a capture (1.03M records lost, every lane's nesting corrupt) while every existing counter
+    // read clean. An unverified peer-L1 coordinate would fail exactly that way: plausible counters, garbage
+    // handshake. So the addressing is checked at bring-up rather than assumed.
+    constexpr uint32_t kHsHead = 0, kHsTail = 16, kHsProbeF = 32, kHsProbeM = 48;
+    constexpr uint32_t kProbeMoverMagic = 0x5A0FE1EDu;
+    static_assert(kRole == kRoleFull || kRole == kRoleFiller || kRole == kRoleMover, "unknown drainer role");
     static_assert(kGenSlots >= 1, "need at least one slot per staging generation");
 
     static_assert(kSpanBytes <= NOC_MAX_BURST_SIZE, "the fused span read must fit one NoC burst");
@@ -273,10 +327,18 @@ void kernel_main() {
     const uint32_t noc_index_after = noc_index;
     UnicastEndpoint src;
 
-    SocketSenderInterface sender = create_sender_socket_interface(kSocketConfigAddr);
-    const uint32_t pcie_xy_enc = kPcieEncOverride != 0 ? kPcieEncOverride : sender.d2h.pcie_xy_enc;
-    const uint64_t pcie_base = (static_cast<uint64_t>(sender.d2h.data_addr_hi) << 32) | sender.downstream_fifo_addr;
-    set_sender_socket_page_size(sender, kPageBytes);
+    // A FILLER owns no socket: nothing wrote a config into its L1, so `create_sender_socket_interface` would
+    // read uninitialised L1 and `set_sender_socket_page_size` would then compute pointers from garbage and
+    // scribble somewhere unrelated. Skip the whole thing rather than pass it a zeroed decoy.
+    SocketSenderInterface sender;
+    uint32_t pcie_xy_enc = 0;
+    uint64_t pcie_base = 0;
+    if constexpr (kRole != kRoleFiller) {
+        sender = create_sender_socket_interface(kSocketConfigAddr);
+        pcie_xy_enc = kPcieEncOverride != 0 ? kPcieEncOverride : sender.d2h.pcie_xy_enc;
+        pcie_base = (static_cast<uint64_t>(sender.d2h.data_addr_hi) << 32) | sender.downstream_fifo_addr;
+        set_sender_socket_page_size(sender, kPageBytes);
+    }
 
     volatile tt_l1_ptr uint32_t* stop = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kStopAddr);
     *stop = 0;
@@ -307,8 +369,37 @@ void kernel_main() {
     // loop's stale 12 and was twice mis-diagnosed as the sweep-body write barrier. Every blocking call
     // needs its own marker or the phase word lies by omission.
     constexpr uint32_t kPhSockBar = 14;
+    // 16 = the DRAM ring capacity wait (a FILLER's only blocking wait, and the one c_reserve now measures).
+    constexpr uint32_t kPhRingWait = 16;
     *hb = 0;
     *phase = kPhaseInit;
+
+    // ---- role-split state ----
+    //
+    // The four probe/telemetry words live in the same 64 B pad behind `done` that hb/phase/dbg already use,
+    // so the host can read them WHILE the loop runs -- the results block is only published on exit, which is
+    // useless for verifying a handshake that has to work before any data flows.
+    volatile tt_l1_ptr uint32_t* mv_probe_f = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 20);
+    volatile tt_l1_ptr uint32_t* mv_probe_frame = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 24);
+    volatile tt_l1_ptr uint32_t* mv_live_head = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 28);
+    volatile tt_l1_ptr uint32_t* mv_live_tail = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 32);
+    // FILLER: its own handshake block. head is stored locally and read over the NoC by its mover; tail is
+    // written over the NoC by that mover and read locally here.
+    volatile tt_l1_ptr uint32_t* hs_head = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kHsAddr + kHsHead);
+    volatile tt_l1_ptr uint32_t* hs_tail = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kHsAddr + kHsTail);
+    uint32_t frames_staged = 0;    // FILLER: frames written into DRAM (monotonic; == published head)
+    uint32_t frames_flushed = 0;   // FILLER: of those, how many are barrier-flushed and safe to publish
+    uint32_t mv_tail = 0;          // MOVER: frames consumed out of the ring (monotonic)
+    uint32_t mv_moved = 0;         // MOVER: frames shipped to the host
+    uint32_t mv_max_n = 0;         // MOVER: largest batch moved in one iteration
+    uint32_t ring_hi = 0;          // head - tail high-water: how much elastic buffer is REALLY used
+    uint32_t ring_blocked = 0;     // FILLER: stage_run calls that had to wait for ring room at all
+    uint32_t hs_bad = 0;           // MOVER: head reads that were structurally impossible -- MUST stay 0
+    if constexpr (kRole == kRoleFiller) {
+        *hs_head = 0;
+        // NOT hs_tail: the host zeroes it before launch and the MOVER owns it from then on. Zeroing it here
+        // would race a mover that has already started acking.
+    }
 
     // Every frame's prefix is IDENTICAL and the bulk read lands past it (at slot + 16 words), so it is
     // written once here and never touched again. It used to be 16 stores per core per visit.
@@ -441,6 +532,118 @@ void kernel_main() {
         }
     };
 
+    // FILLER egress: the same `count` adjacent, already-framed slots, but written into this filler's DRAM
+    // ring instead of to the host. Structurally identical to ship_run -- wait for room, one write, account
+    // the phases -- and deliberately so, because that shape is what the WORST-sweep breakdown is built on.
+    //
+    // c_reserve stays pointed at the blocking wait (now ring room rather than socket credit), so the host's
+    // "WORST sweep = read + proc + credit-wait + write + wr-barrier" line keeps meaning the same thing.
+    // Getting that wrong would hide the very quantity this change exists to move.
+    auto stage_run = [&](uint32_t start, uint32_t count) {
+        // Guarded as a whole rather than per-statement: kDramFrames is 0 on every non-filler build, and
+        // `frames_staged % kDramFrames` would then be a compile-time divide by zero even though nothing
+        // ever calls this.
+        if constexpr (kRole != kRoleFiller) {
+            (void)start;
+            (void)count;
+            return;
+        } else {
+        if (count == 0) {
+            return;
+        }
+        if (egress_dead) {
+            *phase = kPhDropped;
+            dropped_frames += count;
+            return;
+        }
+        const uint64_t t0 = get_timestamp();
+        *phase = kPhRingWait;
+        // BOUNDED, with the same three ways out as reserve_pages_bounded: room granted, host asked us to
+        // stop, or the deadline passed. Dropping a frame keeps the producers running -- the heads for these
+        // slots are already written back -- and losing capture beats wedging the workload.
+        bool room = false;
+        bool waited = false;
+        for (;;) {
+            invalidate_l1_cache();
+            // tail is only ever ADVANCED by the mover and head only by us, so this cannot underflow.
+            const uint32_t inflight = frames_staged - *hs_tail;
+            if (inflight > ring_hi) {
+                ring_hi = inflight;
+            }
+            if (inflight + count <= kDramFrames) {
+                room = true;
+                break;
+            }
+            waited = true;
+            if (*stop != 0 || get_timestamp() >= t0 + kCreditWaitCycles) {
+                break;
+            }
+        }
+        if (waited) {
+            ring_blocked++;
+        }
+        const uint64_t t1 = get_timestamp();
+        c_reserve += t1 - t0;
+        if (static_cast<uint32_t>(t1 - t0) > max_reserve) {
+            max_reserve = static_cast<uint32_t>(t1 - t0);
+        }
+        if (!room) {
+            *phase = kPhDropped;
+            credit_timeouts++;
+            dropped_frames += count;
+            return;
+        }
+        *phase = kPhWrChunk;
+        const uint32_t src = kStageBase + start * kSlotBytes;
+        const uint32_t slot0 = frames_staged % kDramFrames;
+        // The ring is a whole number of frames, so a FRAME never straddles the wrap -- but a RUN of adjacent
+        // frames can, and socket_push_pages' trick of only wrapping a pointer does not apply here. Split it,
+        // exactly as ship_once splits at the FIFO wrap.
+        const uint32_t first = (slot0 + count > kDramFrames) ? (kDramFrames - slot0) : count;
+        noc_async_write(
+            src,
+            get_noc_addr_from_bank_id<true>(kDramBank, kDramAddr + slot0 * kSlotBytes, NOC_INDEX),
+            first * kSlotBytes,
+            NOC_INDEX);
+        if (first < count) {
+            noc_async_write(
+                src + first * kSlotBytes,
+                get_noc_addr_from_bank_id<true>(kDramBank, kDramAddr, NOC_INDEX),
+                (count - first) * kSlotBytes,
+                NOC_INDEX);
+        }
+        const uint64_t t2 = get_timestamp();
+        c_wr_chunk += t2 - t1;
+        c_write += t2 - t1;
+        *phase = kPhWrDone;
+        frames_staged += count;
+        pages += count * kPagesPerSlot;
+        pushes++;
+        }
+    };
+
+    // Publish head, but only as far as the write barrier has actually FLUSHED. The mover reads whatever this
+    // says and immediately treats those frames as complete, so publishing an unflushed frame hands it bytes
+    // that are still in flight -- the same corruption trade the staging-reuse barrier exists to prevent.
+    // Called only from the success path of a bounded barrier.
+    auto publish_head = [&]() {
+        if constexpr (kRole == kRoleFiller) {
+            if (frames_flushed != frames_staged) {
+                frames_flushed = frames_staged;
+                *hs_head = frames_flushed;
+            }
+        }
+    };
+
+    // What process_batch calls. One name, so the sweep body is byte-identical across roles.
+    auto emit_run = [&](uint32_t start, uint32_t count) {
+        if constexpr (kRole == kRoleFiller) {
+            stage_run(start, count);
+        } else {
+            ship_run(start, count);
+        }
+    };
+
     // Fill the staging area once for the ablation: egress must ship deterministic bytes, and uninitialised
     // L1 would make a corruption result unreadable if we ever needed one.
     if constexpr (kAblate != 0) {
@@ -449,6 +652,30 @@ void kernel_main() {
         for (uint32_t i = 0; i < nwords; i++) {
             stg[i] = 0xAB000000u | (i & 0x00FFFFFFu);
         }
+    }
+
+    // ---- MOVER bring-up probe: prove BOTH directions of the peer-L1 handshake before any data moves ----
+    //
+    // A wrong peer coordinate or a wrong L1 address does not fail loudly -- it reads a plausible-looking
+    // garbage `head`, and the mover then ships whatever DRAM happens to contain. So read the magic the host
+    // planted in the filler's probe_f word and echo it into our own L1, and write our own magic into the
+    // filler's probe_m word. The host checks both during the heartbeat verify and refuses the run if either
+    // is wrong. probe_m is a separate word from tail on purpose: writing a magic into TAIL would make the
+    // filler read an enormous consumed-count and overwrite frames.
+    if constexpr (kRole == kRoleMover) {
+        const uint64_t peer_hs = get_noc_addr(kPeerXY & 0xFFFFu, kPeerXY >> 16, kPeerHsAddr + kHsProbeF);
+        noc_async_read(peer_hs, kHeadScratch, 4u, NOC_INDEX);
+        noc_b.async_read_barrier();
+        invalidate_l1_cache();
+        *mv_probe_f = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kHeadScratch);
+        volatile tt_l1_ptr uint32_t* msrc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kHeadScratch + 32u);
+        *msrc = kProbeMoverMagic;
+        noc_async_write(
+            kHeadScratch + 32u,
+            get_noc_addr(kPeerXY & 0xFFFFu, kPeerXY >> 16, kPeerHsAddr + kHsProbeM),
+            4u,
+            NOC_INDEX);
+        (void)write_barrier_bounded(get_timestamp() + kCreditWaitCycles, dbg_hw_ack, dbg_sw_ack);
     }
 
     const uint64_t t_start = get_timestamp();
@@ -488,6 +715,92 @@ void kernel_main() {
                 // once per iteration.
                 *hb = sweeps * kAblateBatches + b + 1;
             }
+        } else if constexpr (kRole == kRoleMover) {
+        // ---- MOVER: DRAM ring -> staging -> the existing D2H socket ----
+        //
+        // No worker grid, no control-vector scan, no head write-back. The frames in the ring are already
+        // complete (prefix + span, written by the filler), so this is a copy and a push -- which is why the
+        // socket protocol, the host FIFO and the host decoder are all untouched by the role split.
+        const uint64_t t_r0 = get_timestamp();
+        noc_async_read(
+            get_noc_addr(kPeerXY & 0xFFFFu, kPeerXY >> 16, kPeerHsAddr + kHsHead), kHeadScratch, 4u, NOC_INDEX);
+        // The FREE-function barrier, matching the free-function read above. Noc{}::async_read_barrier() is a
+        // different accounting path, and a barrier that watches the wrong counters returns EARLY -- which
+        // here would mean reading a head value that has not landed yet.
+        noc_async_read_barrier(NOC_INDEX);
+        invalidate_l1_cache();
+        const uint32_t head = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kHeadScratch);
+        uint32_t n = head - mv_tail;
+        // HANDSHAKE SANITY, and it is not paranoia -- this exact check is what turns a silent capture
+        // corruption into a reported number.
+        //
+        // head is monotonic and the filler can never be more than kDramFrames ahead, so n > kDramFrames is
+        // structurally impossible and means the value is not a head at all. Observed for real: releasing the
+        // filler's NIU (stop=2) flips it back to NOC2AXI, where an inbound DRAM-range address is forwarded to
+        // GDDR instead of terminating at L1 -- so this read started returning GDDR contents (0xF5AE93CB), n
+        // underflowed to ~4.1e9, the `n > kNStage` clamp quietly turned that into "7 frames are ready", and
+        // the mover shipped 1,800 frames of garbage that no existing counter noticed. Bail instead of clamp.
+        if (n > kDramFrames) {
+            hs_bad++;
+            n = 0;
+            egress_dead = true;  // the peer is gone or unreadable; shipping anything more is corruption
+        }
+        if (n > ring_hi) {
+            ring_hi = n;
+        }
+        if (n != 0) {
+            // Bounded by staging, then by the ring wrap -- clamping at the wrap costs one short read per lap
+            // and keeps this a SINGLE contiguous DRAM read, which matters because reads are what the mover
+            // is made of.
+            if (n > kNStage) {
+                n = kNStage;
+            }
+            const uint32_t off = mv_tail % kDramFrames;
+            if (off + n > kDramFrames) {
+                n = kDramFrames - off;
+            }
+            noc_async_read(
+                get_noc_addr_from_bank_id<true>(kDramBank, kDramAddr + off * kSlotBytes, NOC_INDEX),
+                kStageBase,
+                n * kSlotBytes,
+                NOC_INDEX);
+            noc_b.async_read_barrier();
+            c_read += get_timestamp() - t_r0;
+            if (*mv_probe_frame == 0) {
+                // First frame word the mover ever saw. The host checks it against spsc_span_w0(), which
+                // proves the filler's DRAM write and this read agree on the address -- end to end, with no
+                // host-side DRAM read needed and no way for a plausible-but-wrong ring address to pass.
+                *mv_probe_frame = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kStageBase);
+            }
+            // Release the ring region NOW: the bytes are in staging, so the filler may reuse it immediately.
+            // Doing this before the push (rather than after) is what keeps the filler off the ring ceiling.
+            mv_tail += n;
+            volatile tt_l1_ptr uint32_t* tsrc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kHeadScratch + 32u);
+            *tsrc = mv_tail;
+            noc_async_write(
+                kHeadScratch + 32u,
+                get_noc_addr(kPeerXY & 0xFFFFu, kPeerXY >> 16, kPeerHsAddr + kHsTail),
+                4u,
+                NOC_INDEX);
+            *mv_live_head = head;
+            *mv_live_tail = mv_tail;
+            ship_run(0, n);
+            frames += n;
+            mv_moved += n;
+            if (n > mv_max_n) {
+                mv_max_n = n;
+            }
+            // ONE barrier covers both the PCIe push (staging is about to be refilled) and the tail write
+            // (the filler cannot see room until it lands).
+            const uint64_t t_b0 = get_timestamp();
+            *phase = kPhBar2;
+            if (!write_barrier_bounded(t_b0 + kCreditWaitCycles, dbg_hw_ack, dbg_sw_ack)) {
+                egress_dead = true;
+            }
+            c_barrier += get_timestamp() - t_b0;
+        } else {
+            c_read += get_timestamp() - t_r0;
+        }
         } else {
         // ---- software pipeline: read generation G on kReadNoc while generation G^1 ships on NOC_INDEX ----
         //
@@ -554,7 +867,7 @@ void kernel_main() {
                 if (peak > sweep_max_run) { sweep_max_run = peak; }
                 const uint32_t live = r0 + r1 + r2 + r3 + r4;
                 if (live == 0) {
-                    ship_run(run_start, run_len);
+                    emit_run(run_start, run_len);
                     run_len = 0;
                     continue;
                 }
@@ -589,7 +902,7 @@ void kernel_main() {
                 frames++;
                 total_words += live;
             }
-            ship_run(run_start, run_len);
+            emit_run(run_start, run_len);
             gen_shipped[g] = true;
             // SATURATING. The nested ship_run time is subtracted out so it is not double-counted against
             // proc, but if that term ever exceeds the elapsed span the unsigned subtract wraps -- observed
@@ -614,6 +927,7 @@ void kernel_main() {
                     egress_dead = true;
                     break;
                 }
+                publish_head();  // those DRAM writes are now flushed, so the mover may have them
                 gen_shipped[gen] = false;
             }
 
@@ -680,6 +994,8 @@ void kernel_main() {
             *phase = kPhBar2;
             if (!write_barrier_bounded(t_b0 + kCreditWaitCycles, dbg_hw_ack, dbg_sw_ack)) {
                 egress_dead = true;
+            } else {
+                publish_head();
             }
             c_barrier += get_timestamp() - t_b0;
         }
@@ -707,7 +1023,10 @@ void kernel_main() {
         // Asymmetric on purpose. Widening the gap raises fill but walks toward the ring ceiling, where a
         // lossless producer BLOCKS and we would have traded host bytes for a stalled workload; narrowing it
         // only costs bytes. So: creep up, collapse down.
-        if constexpr (kFillPct != 0) {
+        // A MOVER is excluded: it has no worker grid, so sweep_max_run and total_words are permanently 0 and
+        // the controller would read "spans arriving 0% full", creep the gap to its 200,000-cycle ceiling and
+        // sleep ~148 us between pushes -- pacing the consumer instead of the producer, which is backwards.
+        if constexpr (kFillPct != 0 && kRole != kRoleMover) {
             // THREE-LEVEL RESPONSE. The first version collapsed the gap to 0 whenever the single hottest
             // core crossed 3/4, which at 120 cores fires nearly every sweep -- so the gap never held and
             // pacing did nothing at low producer rates (delay 125: gap stuck ~1,200 of a 20,000 ceiling,
@@ -744,7 +1063,9 @@ void kernel_main() {
 
     // socket_barrier() waits for the host to ack everything, so it hangs on a dead consumer just
     // like the write barrier did. Skip both when we already know the consumer is gone.
-    const bool consumer_gone = egress_dead || credit_timeouts != 0;
+    // A FILLER has no socket at all, so both socket calls in this tail are skipped for it -- not because they
+    // would be slow but because `sender` was never initialised.
+    const bool consumer_gone = egress_dead || credit_timeouts != 0 || kRole == kRoleFiller;
     *phase = kPhSockBar;
     if (!consumer_gone) {
         socket_barrier(sender);
@@ -752,6 +1073,9 @@ void kernel_main() {
     *phase = kPhBarTail;
     *phase = kPhTailBar;  // distinct from kPhBar1: the tail barrier used to run while phase still read 11
     (void)write_barrier_bounded(get_timestamp() + kCreditWaitCycles, dbg_hw_ack, dbg_sw_ack);
+    // Publish the LAST staged frames. Without this the final batch is written to the ring but never announced,
+    // so the mover cannot drain it and the tail of every capture is silently short by up to one sweep.
+    publish_head();
     const uint64_t t_end = get_timestamp();
 
     const uint64_t cycles = t_end - t_start;
@@ -804,6 +1128,23 @@ void kernel_main() {
     out[42] = gap;  // where the pacing controller settled
     out[40] = static_cast<uint32_t>(c_ph_head & 0xFFFFFFFFu);
     out[41] = static_cast<uint32_t>(c_ph_head >> 32);
+    // ---- role-split instrumentation (0 on the default path) ----
+    // Shipped WITH the feature, not added after a bad capture: the last single-producer ring driven by two
+    // threads lost 1.03M records and corrupted every lane's nesting while every pre-existing counter read
+    // clean. ring_hi says how much of the elastic buffer is actually used (the whole justification for it);
+    // ring_blocked says whether the ring ever became the new bottleneck.
+    out[48] = kRole;
+    out[49] = (kRole == kRoleFiller) ? frames_staged : mv_moved;
+    out[50] = ring_hi;      // head - tail high-water, in frames
+    out[51] = ring_blocked; // FILLER: pushes that had to wait for ring room
+    out[52] = kDramFrames;
+    out[53] = (kRole == kRoleFiller) ? *hs_tail : mv_tail;
+    out[54] = mv_max_n;
+    out[55] = (kRole == kRoleMover) ? *mv_probe_frame : 0u;
+    out[56] = (kRole == kRoleMover) ? *mv_probe_f : 0u;
+    // MUST BE ZERO. Non-zero means the mover read something that cannot be a head (see the check site), so
+    // every frame it shipped from then on is suspect.
+    out[57] = hs_bad;
 
     *phase = kPhaseExit;
     // Only hand the socket back if the consumer was still alive. update_socket_config() talks to the same
