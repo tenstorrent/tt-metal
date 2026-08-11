@@ -478,8 +478,7 @@ void kernel_main() {
         }
     }
 
-    // Keep the semaphore counts and targets monotonic across batches. Resetting them inside the batch loop
-    // can erase an increment that a faster writer has already sent for the next batch.
+    // Reset the out_ready semaphores once, only after all batches
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out2_ready_sem), 0);
 }

@@ -156,3 +156,22 @@ def test_to_dtype_with_tile_layout(height, width, from_dtype, to_dtype):
         assert_with_pcc(torch_input_tensor, output_tensor, bfloat4_pcc)
     else:
         assert_equal(torch_input_tensor, output_tensor)
+
+
+@pytest.mark.parametrize(
+    "values, from_dtype, to_dtype, expected_torch_dtype",
+    [
+        ([-128.0, -1.0, 0.0, 1.0, 127.0], ttnn.float32, ttnn.int8, torch.int8),
+        ([-128, -1, 0, 1, 127], ttnn.int8, ttnn.int32, torch.int32),
+        ([-128, -1, 0, 1, 127], ttnn.int32, ttnn.int8, torch.int8),
+    ],
+)
+def test_to_dtype_int8_value_check(values, from_dtype, to_dtype, expected_torch_dtype):
+    torch_input = torch.tensor(values, dtype=tt_dtype_to_torch_dtype[from_dtype])
+    expected = torch.tensor(values, dtype=expected_torch_dtype)
+
+    input_tensor = ttnn.from_torch(torch_input)
+    output_tensor = ttnn.to_dtype(input_tensor, to_dtype)
+
+    assert output_tensor.dtype == to_dtype
+    assert_equal(expected, ttnn.to_torch(output_tensor, dtype=expected_torch_dtype))
