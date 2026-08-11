@@ -38,6 +38,7 @@ from ttnn.operations.rms_norm import rms_norm
 from ttnn.operations.rms_norm.rms_norm_program_descriptor import (
     CB_INPUT_TILES,
     CB_OUTPUT_TILES,
+    READER_ACCESSOR_CT_BASE,
     create_program_descriptor,
 )
 
@@ -213,6 +214,72 @@ def test_rms_norm_sharded_mixed_gamma_dtype(device):
 # ---------------------------------------------------------------------------
 # 4. The pinned perf geometries Refinement 5 measures
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "row_major"])
+@pytest.mark.parametrize(
+    "shape", [(1, 1, 32, 4064), (1, 1, 96, 6144), (1, 1, 992, 3000)], ids=["w4064", "w6144", "w3000"]
+)
+def test_rms_norm_height_shard_wide_w(device, shape, layout):
+    """Refinement 2b — HEIGHT_SHARDED with a hidden slice too wide to hold whole.
+
+    HEIGHT cuts the INDEPENDENT `row` axis, so `w_group_size == 1` and
+    `core_w_tiles == tensor_w_tiles` by construction: the caller has pinned the very
+    knob the residency solve would otherwise raise, and past C ~ 127 the resident
+    shards plus the C-wide streaming CBs no longer fit L1. The op then chunks the
+    hidden axis (`w_chunk_tiles`) instead of refusing. Both layouts are covered
+    because they chunk DIFFERENT buffers: TILE pins the block CBs over the shards
+    and chunks gamma/normed; ROW_MAJOR additionally chunks the tilize/untilize
+    staging pair and lays the block out chunk-major.
+    """
+    _, _, got, expected = _run(device, shape, ML.HEIGHT_SHARDED, layout)
+    assert _pcc(got, expected) > 0.999, f"PCC {_pcc(got, expected)}"
+
+
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "row_major"])
+def test_rms_norm_hidden_chunking_is_a_live_knob(device, layout):
+    """`w_chunk_tiles` is turned ONLY when the whole hidden slice does not fit.
+
+    Structural, because it is invisible to a numerical check: a narrow geometry must
+    keep the byte-identical single-chunk schedule (chunk == the whole hidden slice),
+    and a wide HEIGHT shard must actually come back with a SMALLER chunk. Reads the
+    knob off the reader's compile-time args, which is where all three kernels get it.
+    """
+
+    def chunk_and_width(shape):
+        memory_config = auto_shard_config(
+            list(shape), ML.HEIGHT_SHARDED, layout=layout, dtype=ttnn.bfloat16, device=device
+        )
+        ttnn_input = ttnn.from_torch(
+            torch.randn(shape, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=layout,
+            device=device,
+            memory_config=memory_config,
+        )
+        ttnn_gamma = ttnn.from_torch(
+            torch.randn(1, 1, 1, shape[-1], dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=layout,
+            device=device,
+        )
+        ttnn_output = ttnn.allocate_tensor_on_device(
+            ttnn.Shape(list(shape)), ttnn.bfloat16, layout, device, memory_config
+        )
+        descriptor = create_program_descriptor(
+            ttnn_input, ttnn_gamma, ttnn_output, epsilon=1e-6, compute_kernel_config=ttnn.ComputeConfigDescriptor()
+        )
+        reader_ct = list(descriptor.kernels[0].compile_time_args)
+        # reader CT layout: [C, tensor_w_tiles, ..., w_chunk_tiles] — see
+        # READER_ACCESSOR_CT_BASE in the program descriptor.
+        return reader_ct[READER_ACCESSOR_CT_BASE - 1], reader_ct[0]
+
+    narrow_chunk, narrow_c = chunk_and_width((1, 1, 256, 512))
+    assert narrow_chunk == narrow_c, "a geometry that fits must keep the single-chunk (unchunked) schedule"
+
+    wide_chunk, wide_c = chunk_and_width((1, 1, 96, 6144))
+    assert wide_chunk < wide_c, f"a wide HEIGHT shard must chunk the hidden axis (got {wide_chunk} of {wide_c})"
+    assert wide_chunk >= 1
 
 
 @pytest.mark.parametrize(

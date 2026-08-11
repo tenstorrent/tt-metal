@@ -26,29 +26,30 @@ multicast source, and a compute input — three parties).
 
 ## CB table
 
-Symbols: `R` = `block_row_tiles`, `C` = `core_w_tiles`, `G` = `w_group_size`.
+Symbols: `R` = `block_row_tiles`, `C` = `core_w_tiles`, `G` = `w_group_size`, `WC` = `w_chunk_tiles`
+(the hidden-axis chunk; `WC == C`, one chunk, on every geometry that fits without chunking, and `NC = ceil(C / WC)`).
 `T_in` = `tile_size(input_dtype)`, `T_γ` = `tile_size(gamma_dtype)`, `T_f32` = 4096, `T_bf16` = 2048.
 Indicators: `rm_in`, `rm_out`, `rm_γ`, `has_gamma`, `has_tail` ∈ {0,1}.
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
-| `cb_input_rm` | `rm_cb_depth · C` = `2·C` | `C` | `{row: streams → one 32-row block, hidden: spans → C}` | `T_in` | reader | compute | whole kernel, RM input only | **Cannot share.** Concurrent with `cb_input_tiles` by construction — `tilize` reads one while writing the other. Capacity exceeds live set by 2× deliberately: depth 2 overlaps stick reads with `tilize`. |
-| `cb_input_tiles` | `input_cb_depth · R · C` = `2·R·C` | `R · C` | `{row: spans → R, hidden: spans → C}` | `T_in` | reader (TILE) / compute-`tilize` (RM) | compute | one block, two in flight | **Cannot share.** Live from `sumsq_block` through `scale_block`, overlapping every other block-scoped buffer. Capacity is 2× the live set: the depth-2 prefetch is an explicit pipelining decision (`double_buffer`, 2.78×) and is what stops the DRAM read serializing against compute. |
+| `cb_input_rm` | `rm_cb_depth · WC` = `2·WC` | `WC` | `{row: streams → one 32-row block, hidden: spans → C}` | `T_in` | reader | compute | whole kernel, RM input only | **Cannot share.** Concurrent with `cb_input_tiles` by construction — `tilize` reads one while writing the other. Capacity exceeds live set by 2× deliberately: depth 2 overlaps stick reads with `tilize`. |
+| `cb_input_tiles` | `input_cb_depth · R · (rm_in ? NC·WC : C)` = `2·R·C` unchunked | `R · C` | `{row: spans → R, hidden: spans → C}` | `T_in` | reader (TILE) / compute-`tilize` (RM) | compute | one block, two in flight | **Cannot share.** Live from `sumsq_block` through `scale_block`, overlapping every other block-scoped buffer. Capacity is 2× the live set: the depth-2 prefetch is an explicit pipelining decision (`double_buffer`, 2.78×) and is what stops the DRAM read serializing against compute. |
 | `cb_scaler` | `1` | `1` | `{row: streams → 0, hidden: streams → 0}` — a constant, scales with neither | `T_bf16` (mandated, `reduce_helpers_dataflow.inl:185-187`) | reader | compute | whole kernel | **Cannot share.** Lifetime is the whole kernel, so it overlaps everything. Bare literal capacity is correct: the live set is genuinely one tile. |
 | `cb_wmask` | `has_tail · 1` | `1` | `{row: streams → 0, hidden: streams → 0}` — one column mask for the ragged tile, independent of both extents | `T_bf16` | reader | compute | whole kernel, only when `has_tail` | **Cannot share.** Whole-kernel lifetime. Not allocated at all when `partial_w == 0` or this core does not own the last hidden tile. |
 | `cb_zero_tile` | `1` | `1` | `{row: streams → 0, hidden: streams → 0}` | `T_f32` | reader | compute | whole kernel | **Cannot share.** Whole-kernel lifetime; it is the identity `B` operand of the `combine_stat_block` accumulation. |
-| `cb_stat_sq` | `R` | `R` | `{row: spans → R, hidden: streams → the whole slice passes through DEST, never through this buffer}` | `T_f32` | compute | compute | `sumsq_block` → `reduce_stat_block` | **Cannot share** with `cb_tail_masked`: `mask_tail_block` accumulates *into* `cb_stat_sq` while reading `cb_tail_masked`, so the two are simultaneously live. |
+| `cb_stat_sq` | `R · (NC + has_tail)` = `R` unchunked | `R · nc` | `{row: spans → R, hidden: streams → the whole slice passes through DEST, never through this buffer}` | `T_f32` | compute | compute | `sumsq_block` → `reduce_stat_block` | **Cannot share** with `cb_tail_masked`: `mask_tail_block` accumulates *into* `cb_stat_sq` while reading `cb_tail_masked`, so the two are simultaneously live. |
 | `cb_tail_masked` | `has_tail · R` | `R` | `{row: spans → R, hidden: streams → window of exactly 1 (the ragged tile)}` | `T_f32` | compute | compute | `mask_tail_block` only | **Cannot share** with `cb_stat_sq` (concurrent, above). Could share with `cb_stat_sum` — disjoint lifetimes, identical format and size — but is left separate because it is `has_tail`-conditional and the saving is `R` fp32 tiles (≤ 32 KiB at the `MAX_GATHER_TILES` bound); recorded as an available, deliberately unclaimed reuse. |
 | `cb_stat_partial` | `R` | `R` | `{row: spans → R, hidden: streams → fully folded into a column}` | `T_f32` | compute | writer | `reduce_stat_block` → the gather write | **Cannot share.** Live across the gather, concurrently with `cb_stat_gather` (this core's own slot is written from it). |
 | `cb_stat_gather` | `R · G` | `R · G` | `{row: spans → R, hidden: spans → the cross-core extent G — all G slices of a tile-row must be resident at once, which is the whole purpose}` | `T_f32` | writer | compute | `combine_stat_block` only | **Cannot share.** Allocated on **every** group member, not just roots, because `mcast_pipe.hpp:44-45` requires an identical `dst_l1` on all receivers and a root-only CB would shift every later CB's address on the roots. The non-root copies are dead space — the accounted price of a uniform L1 map. Capacity equals live set exactly. |
 | `cb_stat_sum` | `R` | `R` | `{row: spans → R, hidden: streams → G partials folded in DEST}` | `T_f32` | compute | compute | `combine_stat_block` only | **Cannot share** with `cb_stat_gather` (concurrent — it is the destination of that reduction) or with `cb_rstd_send` (concurrent — the finalize chain reads one and packs the other). |
 | `cb_rstd_send` | `R` | `R` | `{row: spans → R, hidden: streams → 0}` | `T_f32` | compute | writer | `combine_stat_block` only, root-meaningful | **Cannot share** with `cb_rstd`: the multicast uses `src != dst` so the root loops back into its own `cb_rstd` (`mcast_pipe.inl:84`), which requires two distinct addresses. Merging them would also make one CB a compute product, a writer multicast source and a compute input — three parties, which the CB ownership invariant forbids. |
 | `cb_rstd` | `R` | `R` | `{row: spans → R, hidden: streams → 0}` | `T_f32` | writer | compute | combine → `scale_block` | **Cannot share.** Must sit at an identical L1 address on every group member (multicast destination), and is live across `scale_block`. |
-| `cb_gamma_rm` | `rm_γ · has_gamma · C` | `C` | `{row: streams → 0, hidden: spans → C}` | `T_γ` | reader | compute | until `load_gamma_slice` completes | **Cannot share.** Concurrent with `cb_gamma_tiles` (`tilize` reads one, writes the other). Its lifetime is disjoint from every block-scoped buffer, but it is freed conceptually rather than reallocated; sharing it with `cb_normed` was rejected because the page formats differ (`T_γ` vs `T_in`) whenever `gamma_dtype != input_dtype`, which is an explicit TARGET axis. |
-| `cb_gamma_tiles` | `has_gamma · C` | `C` | `{row: streams → 0 — one copy serves every block, hidden: spans → C}` | `T_γ` | reader (TILE) / compute-`tilize` (RM) | compute | whole kernel | **Cannot share.** Whole-kernel lifetime; waited upfront by `gamma_block` every block and never popped. This is what keeps gamma at one DRAM read per core rather than one per block. |
-| `cb_normed` | `has_gamma · R · C` | `R · C` | `{row: spans → R, hidden: spans → C}` | `T_in` | compute | compute | `scale_block` → `gamma_block` | **Cannot share.** Concurrent with `cb_input_tiles` (`scale_block` reads that and writes this) and with `cb_output_tiles` (`gamma_block` reads this and writes that). Not allocated when gamma is absent — `scale_block` then packs straight into `cb_output_tiles` (Rule 3 pattern 1). Sharing with `cb_output_tiles` via an in-place transform was **rejected**: the writer is already a consumer of `cb_output_tiles`, so an in-place second pass would race the writer for pages the first pass pushed. |
-| `cb_output_tiles` | `output_cb_depth · C` = `2·C` | `C` | `{row: streams → one tile-row at a time, hidden: spans → C}` | `T_in` | compute | writer (TILE out) / compute-`untilize` (RM out) | one block | **Cannot share.** Concurrent with `cb_normed`. Capacity exceeds the live set by 2×: depth 2 both overlaps the drain with compute and gives the writer a ≥ 4–8-tile batch behind one barrier (`double_buffer`). |
-| `cb_output_rm` | `rm_out · rm_cb_depth · C` = `2·C` | `C` | `{row: streams → one tile-row, hidden: spans → C}` | `T_in` | compute | writer | one block, RM output only | **Cannot share.** Concurrent with `cb_output_tiles` (`untilize` reads one, writes the other). |
+| `cb_gamma_rm` | `rm_γ · has_gamma · WC` | `WC` | `{row: streams → 0, hidden: spans → C}` | `T_γ` | reader | compute | until `load_gamma_slice` completes | **Cannot share.** Concurrent with `cb_gamma_tiles` (`tilize` reads one, writes the other). Its lifetime is disjoint from every block-scoped buffer, but it is freed conceptually rather than reallocated; sharing it with `cb_normed` was rejected because the page formats differ (`T_γ` vs `T_in`) whenever `gamma_dtype != input_dtype`, which is an explicit TARGET axis. |
+| `cb_gamma_tiles` | `has_gamma · WC` | `WC` | `{row: streams → 0 — one copy serves every block, hidden: spans → C}` | `T_γ` | reader (TILE) / compute-`tilize` (RM) | compute | whole kernel | **Cannot share.** Whole-kernel lifetime; waited upfront by `gamma_block` every block and never popped. This is what keeps gamma at one DRAM read per core rather than one per block. |
+| `cb_normed` | `has_gamma · R · WC` | `R · WC` | `{row: spans → R, hidden: spans → C}` | `T_in` | compute | compute | `scale_block` → `gamma_block` | **Cannot share.** Concurrent with `cb_input_tiles` (`scale_block` reads that and writes this) and with `cb_output_tiles` (`gamma_block` reads this and writes that). Not allocated when gamma is absent — `scale_block` then packs straight into `cb_output_tiles` (Rule 3 pattern 1). Sharing with `cb_output_tiles` via an in-place transform was **rejected**: the writer is already a consumer of `cb_output_tiles`, so an in-place second pass would race the writer for pages the first pass pushed. |
+| `cb_output_tiles` | `output_cb_depth · WC` = `2·WC` (`R · WC` on the RM-out leg) | `WC` | `{row: streams → one tile-row at a time, hidden: spans → C}` | `T_in` | compute | writer (TILE out) / compute-`untilize` (RM out) | one block | **Cannot share.** Concurrent with `cb_normed`. Capacity exceeds the live set by 2×: depth 2 both overlaps the drain with compute and gives the writer a ≥ 4–8-tile batch behind one barrier (`double_buffer`). |
+| `cb_output_rm` | `rm_out · rm_cb_depth · WC` = `2·WC` | `WC` | `{row: streams → one tile-row, hidden: spans → C}` | `T_in` | compute | writer | one block, RM output only | **Cannot share.** Concurrent with `cb_output_tiles` (`untilize` reads one, writes the other). |
 
 ## Symbol table
 
@@ -59,6 +60,8 @@ Every non-block parameter in a capacity expression, with its bound and the predi
 | `R` = `block_row_tiles` | block extent along `row` | `1 ≤ R ≤ min(core_row_tiles, MAX_GATHER_TILES / G)` and `R ≤ (l1_cb_budget − fixed_bytes) / per_row_bytes` | The residency solve below (a closed form, not a search) plus the declared `MAX_GATHER_TILES` mechanism cap. |
 | `C` = `core_w_tiles` | block extent along `hidden` | `1 ≤ C ≤ max_core_w_tiles`, where `max_core_w_tiles` is the largest `C` satisfying `fixed_bytes(C) + per_row_bytes(C) ≤ l1_cb_budget` at `R = 1` | The regime-selection function raises `G` until `C = ceil(tensor_w_tiles / G)` clears this bound. This is the **residency predicate** — it is what makes regimes R1/R2 reachable and R3 unnecessary within the declared universe. |
 | `G` = `w_group_size` | cores per reduction group | `1 ≤ G ≤ min(tensor_w_tiles, grid_x · grid_y)`, and `G = w_group_cols · w_group_rows` with `w_group_cols \| grid_x`, `w_group_rows \| grid_y` | Mechanism caps: a group must be a rectangle for `Mcast2D`, and a core owning zero hidden tiles would hang the gather. |
+| `WC` = `w_chunk_tiles` | block extent along `hidden` of the buffers that only *stream* over it | `1 ≤ WC ≤ C`; `WC = C` (one chunk) unless a resident shard's `C` does not fit | Refinement 2b. A shard spec pins `G` **and** `C`, so when the depth ladder still does not fit, the hidden axis is chunked and the *coarsest* `WC` that fits is taken. Interleaved geometries never reach it — `_select_regime` still has `G`. |
+| `NC` = `ceil(C / WC)` | hidden chunks per block | `1` unchunked | Derived, in the kernels too (`CB_CHUNK_TILES` is the only CT arg). Sets `cb_stat_sq`'s column count: one partial `Σ x²` column per chunk, folded by the reduce that already sums a tile-row's columns. |
 | `input_cb_depth`, `output_cb_depth`, `rm_cb_depth` | buffer depths | `2` in Phase 0 | Explicit pipelining knobs; perf lamp P1 measures alternatives. |
 | `MAX_GATHER_TILES` | cap on `R · G` | `64` (fp32 tiles = 256 KiB) | Declared mechanism cap; bounds `cb_stat_gather`, the only buffer whose capacity is a product of two extents. |
 | `l1_cb_budget` | bytes available to CBs | `device.l1_size_per_core() − L1_RESERVE_BYTES`, `L1_RESERVE_BYTES = 131072` | Named host constant covering kernel binaries, stack, semaphores and allocator alignment — **not** a safety fraction. |
@@ -67,11 +70,14 @@ Every non-block parameter in a capacity expression, with its bound and the predi
 ## Total per-core footprint
 
 ```
-per_row_bytes  = T_in · (input_cb_depth + has_gamma) · C            # cb_input_tiles + cb_normed
-               + T_f32 · (5 + has_tail + G)                         # cb_stat_sq, _partial, _sum, cb_rstd_send,
-                                                                    #   cb_rstd, [cb_tail_masked], cb_stat_gather
-fixed_bytes    = T_in · C · (output_cb_depth + rm_in·rm_cb_depth + rm_out·rm_cb_depth)
-               + T_γ  · has_gamma · C · (1 + rm_γ)                  # cb_gamma_tiles [+ cb_gamma_rm]
+# WC = w_chunk_tiles (= C, one chunk, unless a resident shard forced chunking);
+# NC = ceil(C / WC); pin_in / pin_out = the block CB is the resident shard itself,
+# which costs the CB arena nothing (its bytes come off the budget once, up front).
+per_row_bytes  = T_in · (!pin_in · input_cb_depth · (rm_in ? NC·WC : C) + has_gamma · WC)
+               + T_f32 · (4 + NC + has_tail + G)                    # cb_stat_sq (NC[+1] cols), _partial,
+                                                                    #   _sum, cb_rstd_send, cb_rstd, cb_stat_gather
+fixed_bytes    = T_in · (!pin_out · output_cb_depth · WC + rm_in·rm_cb_depth·WC + rm_out·rm_cb_depth·WC)
+               + T_γ  · has_gamma · WC · (1 + rm_γ)                 # cb_gamma_tiles [+ cb_gamma_rm]
                + T_f32                                              # cb_zero_tile
                + T_bf16 · (1 + has_tail)                            # cb_scaler [+ cb_wmask]
 
@@ -81,6 +87,15 @@ block_row_tiles = clamp( floor((l1_cb_budget − fixed_bytes) / per_row_bytes),
                          1,
                          min(core_row_tiles, MAX_GATHER_TILES / G) )
 ```
+
+**The chunking trade, stated as a formula.** `WC` moves two terms in opposite directions:
+`T_in·(2 + has_gamma)·WC` (the streaming buffers) falls with a finer chunk while
+`T_f32·NC = T_f32·ceil(C/WC)` (one stat column per chunk) rises, so the footprint is minimized near
+`WC ≈ sqrt(C · T_f32 / (T_in·(2+has_gamma)))` and the solve simply takes the **coarsest** `WC` that
+fits — chunking is a residency fallback, not a target. Worked: a HEIGHT-sharded `(1,1,96,6144)` bf16
+TILE core holds `C = 192`; the two resident shards take `2 · 393 216 B` of the `1 441 792 B` budget,
+leaving `655 360 B` against an unchunked `cb_gamma_tiles + cb_normed` of `2 · 393 216 B` — it does not
+fit, and `WC = 128` does (`2 · 262 144 + 2 · 4096 + 26 624 = 559 104 B`).
 
 **Which terms scale with which knob.** Everything in `per_row_bytes` scales with `R`. Within it,
 `T_in · (input_cb_depth + has_gamma) · C` also scales with `C` (the two block-sized buffers), and
@@ -122,8 +137,8 @@ For the chosen hybrid split. `N` = tensor bytes, `W_bytes` = `W · gamma_element
 
 | Tensor | DRAM crossings | Why that many | Cross-core traffic added |
 |--------|----------------|---------------|--------------------------|
-| `input_tensor` | **1×** (`N` bytes) | `cb_input_tiles` holds the whole block resident from `sumsq_block` through `scale_block`, so the apply pass re-reads it from L1, not DRAM. This is the residency decision the hidden-axis split exists to enable; without it the count would be 2× (regime R3). | none |
-| `gamma` | **`num_row_groups ×`** (`num_row_groups · W_bytes`) | Structurally unreachable minimum: gamma does not vary along `row`, so each of the `num_row_groups` disjoint row-groups must have its own copy. *Within* a group it is read exactly once — the hidden split partitions it across the group's members. Read once per core for the whole kernel, never per block, because `cb_gamma_tiles` is never popped. | none (scheme lamp G1 would convert `num_row_groups − 1` of these reads into a multicast) |
+| `input_tensor` | **1×** (`N` bytes), **0×** on a resident shard | `cb_input_tiles` holds the whole block resident from `sumsq_block` through `scale_block`, so the apply pass re-reads it from L1, not DRAM. This is the residency decision the hidden-axis split exists to enable; without it the count would be 2× (regime R3). | none |
+| `gamma` | **`num_row_groups ×`**, or **`num_row_groups · num_blocks_this_core ×`** when the hidden axis is chunked | Structurally unreachable minimum: gamma does not vary along `row`, so each of the `num_row_groups` disjoint row-groups must have its own copy. *Within* a group it is read exactly once — the hidden split partitions it across the group's members. Read once per core for the whole kernel, never per block, because `cb_gamma_tiles` is never popped — **except** under hidden-axis chunking (Refinement 2b), where only one chunk of the vector fits L1 at a time and it is re-fed per block (`W_bytes` per block, on geometries whose whole slice would not fit at all; `num_blocks_this_core` is 1 on every HEIGHT-sharded case measured). | none (scheme lamp G1 would convert `num_row_groups − 1` of these reads into a multicast) |
 | `output` | **1×** (`N` bytes) | Written once, streamed out of `cb_output_tiles` as it is produced. | none |
 | per-block statistics | 0 | Never touch DRAM. | Per block: `(G−1) · R` fp32 tiles unicast into the root's gather slots, plus `R` fp32 tiles multicast to `G` receivers. Over a core's whole assignment: `num_blocks_this_core · R · 4096 · G` bytes of gather-plus-broadcast, i.e. `core_row_tiles · G · 4096` bytes independent of `R`. |
 
