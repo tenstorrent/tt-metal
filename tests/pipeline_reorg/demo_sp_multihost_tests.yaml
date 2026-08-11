@@ -64,6 +64,7 @@
       --mesh-graph-descriptor "${MGD}" \
       --hosts "${RESOLVED_HOSTS}" \
       --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+      -- \
       python3 -m models.demos.deepseek_v3_b1.demo.cli \
         --max-new-tokens 4096 \
         --no-stop-at-eos \
@@ -95,6 +96,7 @@
 #       --mesh-graph-descriptor "${MGD}" \
 #       --hosts "${RESOLVED_HOSTS}" \
 #       --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+#       -- \
 #       python3 -m models.demos.deepseek_v3_b1.demo.cli \
 #         --max-new-tokens 128000 \
 #         --repeat-generations 2 \
@@ -140,6 +142,7 @@
 #       --mesh-graph-descriptor "${MGD}" \
 #       --hosts "${RESOLVED_HOSTS}" \
 #       --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+#       -- \
 #       python3 -m models.demos.deepseek_v3_b1.demo.teacher_forced \
 #         --weights real \
 #         --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
@@ -171,6 +174,7 @@
       --mesh-graph-descriptor "${MGD}" \
       --hosts "${RESOLVED_HOSTS}" \
       --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+      -- \
       python3 -m models.demos.deepseek_v3_b1.demo.cli \
         --max-new-tokens 4096 \
         --no-stop-at-eos \
@@ -201,6 +205,7 @@
 #       --mesh-graph-descriptor "${MGD}" \
 #       --hosts "${RESOLVED_HOSTS}" \
 #       --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+#       -- \
 #       python3 -m models.demos.deepseek_v3_b1.demo.cli \
 #         --max-new-tokens 128000 \
 #         --repeat-generations 2 \
