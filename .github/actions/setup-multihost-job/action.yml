@@ -48,11 +48,11 @@ inputs:
       Cabling descriptor for ttop-recovery (arg 3). Defaults match the runner
       ConfigMap script (/scaleout_configs/..., not /data/scaleout_configs/...).
     required: false
-    default: /scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto
+    default: /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto
   deployment-descriptor-path:
     description: Deployment descriptor for ttop-recovery (arg 4)
     required: false
-    default: /scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto
+    default: /data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto
   max-recovery-attempts:
     description: Max ttop-ipmi-reset + validation attempts (arg 2 to ttop-recovery)
     required: false
