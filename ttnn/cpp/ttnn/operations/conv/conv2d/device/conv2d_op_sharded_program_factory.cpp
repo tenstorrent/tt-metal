@@ -638,8 +638,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     // unnecessary overhead for reconfigs are added. Last iteration of l1 accumulation
     // does a spill and reload, so need more than 2 blocks to use l1 acc for packer
     // For bias, last iteration of l1 acc remains in intermediate buffer, does not spill and reload
-    const bool packer_l1_acc_en =
-        determine_packer_l1_acc(packer_l1_acc, has_bias, in0_num_blocks_w) && (has_bias || !height_sharded);
+    const bool packer_l1_acc_en = determine_packer_l1_acc(packer_l1_acc, has_bias, in0_num_blocks_w);
     const uint32_t batch = sliding_window_config.get_output_shape()[0];
     const uint32_t output_image_width = sliding_window_config.get_output_shape()[2];
     const uint32_t output_image_height = sliding_window_config.get_output_shape()[1];

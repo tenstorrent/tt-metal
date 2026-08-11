@@ -172,11 +172,7 @@ std::vector<CBInfo> get_cb_info(
     const uint32_t conv_act_c_blocks = weight_matrix_width_ntiles / per_core_out_matrix_width_ntiles;
     const uint32_t in0_num_blocks_w =
         sharding_scheme == TensorMemoryLayout::BLOCK_SHARDED ? num_blocks_act_w * conv_act_c_blocks : num_blocks_act_w;
-    // Packer L1 accumulation is not deterministic with the FIFO partials schedule for no-bias height-sharded
-    // convolutions (GH #52572), so use the software-reload path until the packer schedule can preserve a stable
-    // accumulation target.
-    packer_l1_acc = determine_packer_l1_acc(packer_l1_acc, enable_bias, in0_num_blocks_w) &&
-                    (enable_bias || sharding_scheme != TensorMemoryLayout::HEIGHT_SHARDED);
+    packer_l1_acc = determine_packer_l1_acc(packer_l1_acc, enable_bias, in0_num_blocks_w);
     const tt::tt_metal::DataType partial_dtype =
         packer_l1_acc ? (fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16) : output_datatype;
     const tt::DataFormat partial_df = datatype_to_dataformat_converter(partial_dtype);
