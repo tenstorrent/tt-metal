@@ -33,6 +33,7 @@ from helpers.sfpu_domains import (
     edge_spec,
     exclude_undefined,
     for_op_pipeline,
+    op_edge_points,
     sfpu_unary_ops,
     specials_safe,
 )
@@ -645,10 +646,25 @@ def _int_unary_stimuli_spec(mathop):
     # would diverge from the two's-complement golden).
     if mathop in (MathOperation.LeftShift, MathOperation.RightShift):
         return StimuliSpec.uniform(low=0.0, high=1_000_000.0)
-    # Unary max/min compare against the fixed scalar 1000; straddle it so both the
-    # keep-input and take-scalar branches are exercised. Positive-only keeps signed
-    # and unsigned interpretations identical (safe under sign-magnitude Dst).
-    return StimuliSpec.uniform(low=0.0, high=2000.0)
+
+    # Unary max/min compare against a fixed scalar; both branches plus the comparison
+    # tie itself have to be exercised. A uniform draw straddles the scalar but reaches
+    # it with probability ~0, so the tie — the one point where a `>` / `>=` slip is
+    # visible — was never tested. Take the exact value from op_edge_points(), which is
+    # where the golden's scalar is mirrored for exactly this purpose, and pair it with a
+    # deterministic spread either side. custom() zero-fills the rest of each face, which
+    # is itself a below-scalar probe.
+    edges = [int(v) for v in op_edge_points(mathop)]
+    if not edges:
+        raise AssertionError(
+            f"{mathop.name} has no op_edge_points() entry, so the int sweep cannot probe "
+            "its comparison scalar — add one in sfpu_domains._OP_EDGE_POINTS"
+        )
+    straddle = [float(v + d) for v in edges for d in (-1, 0, 1)]
+    # Positive-only keeps signed and unsigned interpretations identical (safe under
+    # sign-magnitude Dst).
+    spread = [float(v) for v in range(0, 2001, 125)]
+    return StimuliSpec.custom(values=straddle + spread, seed=0)
 
 
 @parametrize(

@@ -24,6 +24,7 @@ from .sfpu_dispatch_constants import (
     CLAMP_MAX,
     CLAMP_MIN,
     HARDSHRINK_LAMBDA,
+    INT_MAXMIN_SCALAR,
     RELU_MAX_THRESHOLD,
     RELU_MIN_THRESHOLD,
     SOFTPLUS_THRESHOLD,
@@ -1517,11 +1518,17 @@ _OP_EDGE_POINTS: Dict[MathOperation, Tuple[float, ...]] = {
     MathOperation.Ceil: (-2.0, -1.0, 0.0, 1.0, 2.0),
     MathOperation.Trunc: (-1.0, 0.0, 1.0),
     MathOperation.Frac: (-1.5, -1.0, 1.0, 1.5),
-    # Integer scalar comparisons against UnarySFPUGolden._int_maxmin_scalar = 1000.
-    MathOperation.UnaryMaxInt32: (1000,),
-    MathOperation.UnaryMinInt32: (1000,),
-    MathOperation.UnaryMaxUint32: (1000,),
-    MathOperation.UnaryMinUint32: (1000,),
+    # Integer scalar comparisons against UnarySFPUGolden._int_maxmin_scalar. These four
+    # are not in _OP_DOMAIN_REGISTRY, so sfpu_unary_ops() never puts them in an edge
+    # sweep and edge_spec() never sees them: their consumer is
+    # test_sfpu_unary._int_unary_stimuli_spec, which reads op_edge_points() directly to
+    # place the exact comparison tie in its stimuli. Keep that call in mind before
+    # editing — dropping these entries makes the tie untestable rather than merely
+    # unlisted.
+    MathOperation.UnaryMaxInt32: (INT_MAXMIN_SCALAR,),
+    MathOperation.UnaryMinInt32: (INT_MAXMIN_SCALAR,),
+    MathOperation.UnaryMaxUint32: (INT_MAXMIN_SCALAR,),
+    MathOperation.UnaryMinUint32: (INT_MAXMIN_SCALAR,),
 }
 
 
