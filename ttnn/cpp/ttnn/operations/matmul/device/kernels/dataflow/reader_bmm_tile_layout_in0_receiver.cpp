@@ -23,8 +23,6 @@ void kernel_main() {
     constexpr uint32_t num_blocks_inner_dim = get_compile_time_arg_val(1);
     constexpr uint32_t num_blocks_w_dim = get_compile_time_arg_val(2);
     constexpr uint32_t num_blocks_h_dim = get_compile_time_arg_val(3);
-    // in0 mcast args
-    uint32_t in0_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(5));
     // batch args
     constexpr uint32_t batch = get_compile_time_arg_val(6);
     // sparsity args
@@ -37,9 +35,6 @@ void kernel_main() {
     DataflowBuffer dfb_in0(dfb_id_in0);
     Semaphore<> sender_sem(get_compile_time_arg_val(4));
     Semaphore<> receiver_sem(get_compile_time_arg_val(5));
-
-    volatile tt_l1_ptr uint32_t* in0_mcast_receiver_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_mcast_receiver_semaphore_addr);
 
     for (uint32_t b = 0; b < batch; ++b) {
         if constexpr (get_batch_from_reader) {
@@ -54,7 +49,7 @@ void kernel_main() {
             // wait on in0 semaphore value to become VALID (set by mcast sender after it multicasts data)
             receiver_sem.wait_min(VALID);
 
-            const auto is_batch_valid = *in0_mcast_receiver_semaphore_addr_ptr == VALID;
+            const auto is_batch_valid = receiver_sem.read() == VALID;
 
             // We need to pass the value to compute cores regardless of the value of is_batch_valid
             ckernel::mailbox_write(ckernel::ThreadId::UnpackThreadId, is_batch_valid);

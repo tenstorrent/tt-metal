@@ -29,6 +29,7 @@
  *  - wait(value): Block until the semaphore is set to the specified value.  Does not decrement the semaphore.
  *  - wait_min(value): Block until the semaphore is at least the specified value.  Does not decrement the semaphore.
  *  - set(value): Set the semaphore to the specified value.
+ *  - read(): Return the current semaphore value without blocking or modifying it.
  *  - set_multicast(...): Set the semaphore value on multiple cores.
  *  - set_multicast_loopback_src(...): Set the semaphore value on multiple cores including the source.
  *  - relay_unicast(dst_sem, ...): Set a different remote semaphore on one core to this semaphore's local value.
@@ -115,6 +116,19 @@ public:
      */
     void set(uint32_t value) {
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_l1_addr_), value);
+    }
+
+    /**
+     * @brief Read the current value of the semaphore.
+     * @note Non-blocking, and does not modify the semaphore. The L1 cache is invalidated before the
+     *       load so that remote updates are observed, matching the read semantics of wait()/wait_min().
+     *
+     * @return The current semaphore value.
+     */
+    uint32_t read() const {
+        auto* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_l1_addr_);
+        invalidate_l1_cache();
+        return *sem_addr;
     }
 
     /**
