@@ -174,3 +174,45 @@ pattern."* It fooled a v2 preflight into refusing four launches. Correct form, u
 Consequence: I would have reported the dense cells as running when they had not started. Caught within one
 command, but only because a start time of `etime 00:00` looked wrong.
 
+
+## PAUSED — watch and heartbeat stopped 2026-08-11 09:41 UTC
+
+The run has been paused since 07:27 (`.challenger-STOP`, `.dense-STOP`). The **watch was still running and
+publishing for another two hours** after that, so this is the record of stopping it and how to bring it back.
+
+| what | state |
+|---|---|
+| `skillexp_watch.sh` (machine a) | **stopped**, was pid 3439781, `SIGTERM`, its `EXIT` trap cleared `.watch-a.lock` and `.watch-a.pid` |
+| last heartbeat tick | `2026-08-11T09:31:00 IDLE tick=53 stage=none tmux=GONE mg=down cx=down cpu+0s dev=ok disk=2149G` |
+| last published status | `origin/.../skillexp/status/a` @ `cdbbc6edc11`, `2026-08-11T07:56:44Z` |
+| `.challenger-STOP` / `.dense-STOP` | **still in place** — leave them until the guard fix lands |
+| devices | free, nothing holding `/dev/tenstorrent*` |
+
+**Why it was worth stopping rather than leaving:** every tick since the pause published
+`ALERT IDLE: no multigoal process, no live stage, devices are free. The next stage needs launching` — an alert for
+a condition that is deliberate. A monitor that alarms on an intended state trains its reader to ignore it, and the
+board it force-pushes says "needs launching" when the correct state is "paused pending a decision". It was also
+still repeating a **v2-era** alert (`p-advchal-v2-nmFN reports CONTAMINATED`), which is stale by two weeks.
+
+**Also stopped: three loops left running by earlier sessions**, none of them part of this run.
+
+| pid | age | what it was |
+|---|---|---|
+| 1969997 | 12 d | v2-era cell-tagging validator; `git fetch origin --tags` every 600 s against the shared clone |
+| 3910120 | 8 d | `until ! pgrep -f 'bash /tmp/watch_results.sh'` waiter from a finished session |
+| 4050469 | 8 d | waiter on a task-output file from session `366e7e69` |
+
+The first one mattered: it was fetching tags into `/home/mvasiljevic/skillexp-book` every ten minutes for twelve
+days, i.e. mutating a shared checkout on a schedule nobody was reading. Its exit was visible as a task
+notification with code 144 (`128 + SIGTERM`).
+
+**To resume**, in this order:
+1. land the guard/policy fix ([`GUARD-FINDING`](../../tt-metal/skillexp/ADVCHAL-V3-GUARD-FINDING.md) action 1) and
+   the oracle-provenance gate change, since re-running before them reproduces the same unattributable verdict;
+2. `MACHINE=a INTERVAL=1800 CHECK_EVERY=300 STALL=3600 TTSMI=idle-only PUBLISH=1 PUBLISH_BOARD=1 SCALE=flat setsid nohup bash skillexp_watch.sh > watch-stdout.log 2>&1 &`
+   from `~/skillexp-logs`;
+3. remove `.challenger-STOP` / `.dense-STOP` last, so the watch is up before the queue is.
+
+**Note for the next watch stand-up:** the watch has **no stop sentinel** — the only ways out are `MAX_TICKS` and a
+signal, while the drivers it monitors both take one (`.challenger-STOP`). Give it a `.watch-a-STOP` check in the
+`CHECK_EVERY` sleep loop so pausing the run and pausing its monitor are the same gesture.

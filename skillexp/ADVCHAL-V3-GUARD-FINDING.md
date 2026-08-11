@@ -221,3 +221,86 @@ prefill lengths is untested by this oracle at all, and that is its own finding.*
 5. **A phase-gated placement knob needs a cross-phase consistency assertion.** The KV cache carries the
    disagreement into the measurement, and nothing in the artefacts showed it. Generalise to phi and north-mini,
    which also gained decode-only knobs in v3.
+
+
+---
+
+# 6. The full causal chain, end to end — every step measured
+
+Asked whether the decode grid's relation to prefill had been traced fully. **It had not**: §1–§5 established
+*where* and *when*, and left the amplification unexplained — how a 1-ULP perturbation in one norm becomes
+5.2 × 10⁻³ in the layer output, and why phase *agreement* cancels it rather than accuracy. That is now traced, and
+it corrects a published claim on the way.
+
+## 6a. ⚠ Correction: the grids are **not** identical on the real activation
+
+[`NORM-GRID-SWEEP`](ADVCHAL-V3-NORM-GRID-SWEEP.md) reported every grid bit-identical. That was measured on
+**synthetic** inputs. Dumping the **real** site-1 activation out of the live layer
+(`(1,1,1,2816)`, absmax 3.281, std 0.972) and re-running with the real `input_layernorm.weight` (absmax 30.62):
+
+| config | PCC vs float64 | vs interleaved |
+|---|---:|---|
+| interleaved | 0.999998582598 | — |
+| 2c / 4c / 8c / 11c / 22c / 44c | **0.999998666122** | **514/2816 differ** — all identical *to each other* |
+| **88c** | 0.999998626433 | **1022/2816 differ** — and differs from the group above |
+
+So the grids *do* differ on real data, and 88 differs most. **But all of them are equally accurate** — within
+1.4 × 10⁻⁶ of float64, and every sharded variant is very slightly *more* accurate than interleaved. **No grid is
+wrong. They are 1 bf16 ULP apart from each other in 18–36 % of channels, and that is all.**
+→ [`PITFALLS`](ADVCHAL-V3-ANALYST-PITFALLS.md) ERROR 15, third instance.
+
+## 6b. The amplifier: a top-8-of-128 expert selection flips
+
+Dumped `ttnn.topk`'s output during the oracle's decode step in three configurations:
+
+| configuration | selected experts | |
+|---|---|:--|
+| interleaved (incumbent) | 47, 53, 124, 61, 122, 121, **104**, 50 | reference behaviour |
+| **decode-only sharded** | 47, 53, 124, 61, 122, 50, 121, **123** | **expert 104 → 123** |
+| both phases sharded | 47, 53, 124, 61, 122, 121, **104**, 50 | **identical to interleaved** |
+
+And the two numbers that make it inevitable:
+
+| | |
+|---|---|
+| logit gap between the **8th and 9th** expert | **0.015625** — one bf16 ULP at that magnitude |
+| max \|Δlogit\| caused by the 1-ULP norm difference | **0.046875 — 3× the gap** |
+
+**The perturbation is three times the margin that decides the selection.** So the flip is not bad luck; at this
+gap it is the expected outcome.
+
+## 6c. The chain, complete
+
+1. Sharded and interleaved `rms_norm` differ by **1 bf16 ULP in 18–36 % of channels** on the real activation. Both
+   are accurate to ~1.4 × 10⁻⁶ against float64 — **neither is wrong** (§6a).
+2. Site 1 is `input_ln`, feeding QKV. **Prefill wrote the cached K/V from the interleaved path; decode computes the
+   new Q/K/V from the sharded one** (§3).
+3. Attention over that **hybrid** cache is perturbed, and the perturbation flows through the residual into the
+   **router logits**: max \|Δlogit\| = **0.046875**.
+4. The 8th-vs-9th expert gap is **0.015625**. The perturbation exceeds it.
+5. **The selection flips — expert 104 out, 123 in** (§6b).
+6. A different expert set is a different function, so the layer output moves by **5.2 × 10⁻³** — three orders of
+   magnitude more than any arithmetic error involved.
+7. Sharding **both** phases removes the hybrid: everything sits on one footing, the logits land back inside the
+   gap, the selection returns to the reference's exact eight experts, and PCC returns to **0.9996293**.
+
+**That is why *agreement* is what matters and accuracy is not.** Both paths are equally accurate; only their
+*mixture* is fatal, because the mixture is what shifts a logit across a decision boundary.
+
+## 6d. Four earlier observations that this explains
+
+| observation | explanation |
+|---|---|
+| cost grows with prefill length: 9.4 × 10⁻⁵ @4, 1.2 × 10⁻⁴ @8, **5.3 × 10⁻³ @32** (§5) | more cached entries → more of the hybrid in the attention output → a larger logit perturbation. Below seq ~8 it stays under the 0.0156 gap and **no flip occurs**; at 32 it exceeds it |
+| `full_attention` is **740×** less sensitive (§2) | no flip there — its logit margins are not crossed by the same perturbation |
+| grid barely changes the layer number (0.99437 @88 vs 0.99457 @11) | different grids give different 1-ULP *patterns*, so slightly different post-flip values — the same flip either way |
+| **north-mini's oracle cannot see it** ([`CORE-ISSUE`](ADVCHAL-V3-CORE-ISSUE.md)) | it decodes at position 0 against an **empty** cache. No cached entries → no hybrid → no logit shift → no flip. Structurally undetectable |
+
+## 6e. What is still not established
+
+- **That the flip is the *only* amplifier.** A flip is measured and its magnitude is sufficient, but the
+  attention-path contribution has not been separated from the MoE-path contribution. Ablating the MoE (route to
+  the interleaved expert set while keeping the sharded attention) would settle it.
+- **Why the perturbation grows with prefill length rather than shrinking.** Measured, not derived; the sign was the
+  opposite of my prediction (ERROR 18).
+- **Whether `full_attention`'s margin is wide or its perturbation small.** Its logit gap was not dumped.

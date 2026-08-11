@@ -47,7 +47,13 @@ divisors**; 88 was the only one missing.
 | 44 | 11×4 | 2 | 2 | 0.99999876 | 42.04 |
 | **88** *(advised; v2 shipped it)* | 11×8 | 1 | 1 | **0.99999876** | **69.15** |
 
-**Every grid returns the identical PCC to eight decimals, and identical to the interleaved incumbent.** The two
+⚠ **CORRECTED — this held only for the synthetic inputs used here.** On the **real** site-1 activation dumped from
+the live layer, grids 2–44 differ from interleaved in **514/2816** channels and 88 in **1022/2816**, with 88 also
+differing from the 2–44 group — while all remain within 1.4 × 10⁻⁶ of float64.
+[`GUARD-FINDING`](ADVCHAL-V3-GUARD-FINDING.md) §6a. The conclusion that *no grid is inaccurate* survives; the
+conclusion that *all grids are identical* does not.
+
+**Every grid returns the identical PCC to eight decimals here, and identical to the interleaved incumbent.** The two
 grids the run's decision turned on — **11**, which was measured at 0.99457 in the model and vetoed the kind, and
 **88**, which v2 shipped and was never tried — are **numerically indistinguishable** from each other and from
 doing nothing.

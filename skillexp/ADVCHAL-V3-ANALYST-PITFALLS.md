@@ -455,3 +455,18 @@ fixes it at zero. [`CORE-ISSUE`](ADVCHAL-V3-CORE-ISSUE.md).
 > places — *name what the apparatus holds fixed, and check whether the deployed system varies it* — and it is
 > cheap: sweeping the one constant that mattered cost eight minutes; not sweeping it cost this corpus 5,919 µs and
 > me six retractions.
+
+## ERROR 15, third instance — and the one question that would have caught all three
+
+Published "every grid bit-identical" from 79 configurations that all used **synthetic** input tensors. Dumping the
+**real** activation out of the live layer shows grids 2–44 differing from interleaved in 514/2816 channels and 88 in
+1022/2816. The *accuracy* conclusion survived; the *identity* conclusion did not, and the identity conclusion was
+the one I used to argue the op "provably cannot" be involved.
+
+Three instances now, same shape: synthetic input for real (here), decode shape for prefill shape (ERROR 15),
+`seq_len=32` for all lengths (ERROR 18). Every time, the substitute came from what was **convenient to construct**
+rather than from what the system actually runs.
+
+> **The question:** *is the input to my reconstruction the input the system uses, or one I made up?* If made up —
+> **go and capture the real one.** Dumping the real activation took one patched line and one 31-second run, and it
+> overturned a published claim that three earlier experiments had been built on.
