@@ -369,45 +369,6 @@ def generate_ring_joint_perf_model_configs(
         seq_len=4096,
     )
 
-    # MiniMax-H3 — 1xGalaxy, TP=4 / SP=8, one packed video+audio+text sequence per denoise step.
-    # 56 attention heads / TP=4 = 14 per device, head_dim 128, full (non-causal) self-attention.
-    # seq_len is per-device: the packed sequence padded to sp_size * TILE, divided by sp_size.
-    # 768P at 16:9 is 768x1344, giving 1008 tokens per latent frame.
-    for duration_s, local_seq_len, q_sizes, k_sizes in (
-        # Grids kept near each duration's measured optimum rather than a wide cross-product, so a
-        # re-run is minutes rather than an hour. Measured best on 4x8 Blackhole Galaxy, TP=4 / SP=8:
-        #   5s  (320, 384)   7.56 ms, 56.7% util
-        #   10s (256, 512)  24.75 ms, 64.7% util
-        #   15s (256, 512)  51.61 ms, 67.9% util
-        # q=352 measured and rejected: 7.947 ms vs 7.596 at q=320 (+4.6%, util 53.9% vs 56.4%). It was
-        # tried because single-chip SDPA at this shape shows 28.6% slot waste at every q, which q=352
-        # would zero out -- but that waste comes from the single-chip op pinning 110//14 = 7 cores per
-        # head (98 cores used). The ring op distributes q-chunks over all 110 cores and is already at
-        # 4.5% slot waste, so q=352 only adds pad waste. Do not infer ring blockings from single-chip.
-        ("5s", 4768, [256, 320], [256, 384]),
-        ("10s", 9216, [256, 320], [384, 512]),
-        ("15s", 13632, [256, 352], [384, 512]),
-    ):
-        perf_configs[f"minimax_h3_{duration_s}_768p"] = ModelConfig(
-            name=f"minimax_h3_{duration_s}_768p",
-            nhq=14,
-            nhk=14,
-            nhv=14,
-            d_q=128,
-            d_k=128,
-            d_v=128,
-            is_causal=False,
-            q_dtype=ttnn.bfloat16,
-            kv_dtype=ttnn.bfloat16,
-            # L1 bounds the (q, k) product: with 14 heads of head_dim 128 the statically allocated
-            # circular buffers must fit Blackhole's 1.57 MB. Measured to overflow: any k=1024
-            # (1.70 MB), (320, 512) (1.65 MB), and q >= 640 at k=256. Combos in these cross-products
-            # that overflow are recorded as error rows by the harness, which carries on.
-            q_chunk_sizes=q_sizes,
-            k_chunk_sizes=k_sizes,
-            seq_len=local_seq_len,
-        )
-
     return perf_configs
 
 
