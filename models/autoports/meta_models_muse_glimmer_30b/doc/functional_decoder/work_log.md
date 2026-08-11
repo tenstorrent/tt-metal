@@ -151,7 +151,8 @@ to a file. `-s` disables pytest's capture, so pytest's own progress lines go thr
 block-buffered Python stdout while the tt-metal C++ logger writes straight to the file —
 the log therefore showed device-open messages and *no* test progress for half an hour. That
 looked like a stall, so the run was killed. It was not a stall: measured afterwards, each
-reference query block costs ~5 s and the whole test is ~20 min.
+reference query block costs ~5 s and the whole two-test suite is ~17 min
+(`logs/long_context_suite.log`: 1013.61 s), i.e. ~8.5 min per layer kind.
 
 Killing pytest mid-run left the devices undiscoverable (`tt-smi -ls --local` aborted inside
 `TopologyDiscovery::init_device`, `tt_device.cpp:144`) and one orphaned
@@ -194,7 +195,8 @@ python -m pytest models/autoports/meta_models_muse_glimmer_30b/tests/test_functi
   -q -k "not long_context"
 ```
 
-Long-context suite (full 131072 context, ~18 min: the host reference is the cost):
+Long-context suite (full 131072 context, ~17 min for both layer kinds: the host reference is
+the cost):
 
 ```bash
 python -m pytest models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py \
@@ -266,10 +268,13 @@ which is beyond max L1 size of 1572864 B` — recorded as `RuntimeError` rows in
 (`q_chunk=512, k_chunk=256` does run on the chunked call site, at 8.51 ms: legal, still slower
 than 256/256's 7.55 ms.)
 The k-chunk axis was extended after a review noted it was under-swept: `k_chunk=256` with
-`q_chunk=256` is a further ~12% (8.44-8.59 ms -> 7.46-7.55 ms) and is the shipped default. The full 11x10
-grid and the 11x8 sub-grid are within ~1% of each other for prefill and both beat the
-Wormhole-shaped 8x8 by ~30%; the full grid is kept because it is derived from
-`compute_with_storage_grid_size()` rather than hard-coded. For decode the *smaller* 8x4
+`q_chunk=256` is a further ~12% (8.44-8.59 ms -> 7.46-7.55 ms) and is the shipped default. For prefill the full 11x10
+grid is simply the fastest measured grid on both call sites: 7.459 ms (sliding) and 7.546 ms
+(chunked), against 8.708 / 8.337 ms on 11x8 (11-17% slower) and 11.004 / 10.613 ms on the
+Wormhole-shaped 8x8 (41-48% slower). It is also what `compute_with_storage_grid_size()`
+returns, so nothing is hard-coded. (The "~1% between 11x10 and 11x8" figure belongs to
+**batch-32 decode**, where the CSV has 209.46 us vs 206.49 us — that is the comparison quoted
+in the `DECODE_SDPA_GRID` comment.) For decode the *smaller* 8x4
 grid wins at batch 1 — with only 2 KV heads a wider grid deepens the flash-decode reduction
 tree without adding useful parallelism — but it is only legal while every (user, KV head)
 pair still gets its own core (bug 8).
@@ -505,9 +510,16 @@ was pushed.
 
 | repo | branch | commit | contents |
 |---|---|---|---|
-| tt-metal | `agentic-research/hous/multigoal-claude` | `c24bb9de468f` | everything under `models/autoports/meta_models_muse_glimmer_30b/` — implementation, host reference, tests, scripts and evidence |
+| tt-metal | `agentic-research/hous/multigoal-claude` | `c24bb9de468f` | everything under `models/autoports/meta_models_muse_glimmer_30b/` — the implementation (including the decode page-table capacity guard, the `layer_rope_theta` assertion, the HF-snapshot fix and the tightened multi-chunk bar, all of which predate this commit), the host reference, the tests, the scripts and the evidence at that point |
 | tt-metal | same | `6c3a6236d44` | this section |
-| tt-metal | same | `6b9aa772d56` | the round-3/4 corrections: the decode page-table capacity guard, the `layer_rope_theta` assertion, the HF-snapshot fix, the tightened multi-chunk bar, the evidence-gate additions, and the re-run evidence |
+| tt-metal | same | `6b9aa772d56` | round-4 review remediation: `scripts/render_evidence.py` gains the decode-core-count gate and the gzip-aware reader, `tests/test_functional_decoder_perf.py` switches to `decoder.blocks_per_seq`, the doc corrections the review required, and **all** evidence re-collected on the resulting code (both suite logs, watcher, 8 perf artifact sets) |
+| tt-metal | same | `fcba707fe0c` | the `6b9aa772d56` SHA in this table |
+| tt-metal | same | (next row) | the round-5 review's two doc corrections: this table's contents column and §6's grid comparison |
+| tt-metal | same | `PENDING` | the SHA of the row above (a commit cannot contain its own hash, so the SHA of a doc-only correction always lands one commit later) |
+
+`tt/functional_decoder.py`, `reference/hf_reference.py` and `tests/test_functional_decoder.py`
+are byte-identical between `c24bb9de468f` and HEAD: the only post-`c24bb9de468f` code changes
+are the evidence-gate script and the perf test.
 
 The commit contains only this stage's files; the one other dirty path in the worktree
 (`tt_metal/third_party/tt-cluster-descriptors/`, an untracked submodule checkout) was left
