@@ -6,10 +6,10 @@
 Shapes and reference latencies come from
 `eval/golden_tests/rms_norm/feature_spec.py`'s `perf` loose cases
 (`achievable_ns`, measured on blackhole_p150b at 1350 MHz).  Those loose cases
-pin `fp32_dest_acc_en=False`, which is outside the Phase 0 SUPPORTED rectangle,
-so they xfail in the golden suite and never reach the kernel — this file runs
-the same shapes at the Phase 0 corner (`fp32_dest_acc_en=True`,
-`math_fidelity=HiFi2`) so the numbers are measurable.
+pin `fp32_dest_acc_en=False` + `math_fidelity=HiFi2`; Refinement 1 added
+`fp32_dest_acc_en=False` to SUPPORTED, so since then this harness runs the
+**exact** pinned perf configuration (it used to proxy it at
+`fp32_dest_acc_en=True`, because that value was outside Phase 0's rectangle).
 
 Run under the profiler for DEVICE KERNEL DURATION [ns]:
 
@@ -53,7 +53,7 @@ def test_rms_norm_perf(device, rows, hidden, achievable_ns):
     tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     tt_gamma = ttnn.from_torch(torch_gamma, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
-    cfg = ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True)
+    cfg = ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=False)
     tt_out = rms_norm(tt_input, gamma=tt_gamma, epsilon=1e-6, compute_kernel_config=cfg)
 
     x = torch_input.float()
