@@ -38,7 +38,7 @@ an expectation.
 | phi-3.5 `fuse-noadvise` | 725 | 160.4 | **22.1 %** | ~2.8 % | largest pool in the corpus |
 | phi-3.5 `nofuse-noadvise-onA` | 569 | 70.4 | 12.4 % | ~1.5 % | boundary-only |
 | phi-3.5 `nofuse-noadvise` | 700 | 70.7 | 10.1 % | ~1.3 % | boundary-only |
-| gemma-4-26B `nofuse-noadvise-onA` | 3770 | 361.7 | 9.6 % | ~1.2 % | 353 µs of it is cliff |
+| gemma-4-26B `nofuse-noadvise-onA` | 3770 | 361.7 | 9.6 % | ~1.2 % | ⚠ **REFUTED BEFORE THE RUN — see §2a.** v2 had already banked **13.0 %** from this same baseline |
 | phi-3.5 `exp17` | 1016 | 83.6 | 8.2 % | ~1.0 % | boundary-only |
 | gemma-4-12B `exp11` | 2517 | 194.9 | 7.7 % | ~1.0 % | |
 | north-mini `fuse-noadvise` | 1174 | 56.8 | 4.8 % | ~0.6 % | **measured 1.76 %** — see §3 |
@@ -59,6 +59,34 @@ committed artefacts show, so a step-0 prior derived from v2 data **understates**
 improves. And gemma-4-26B `fuse-noadvise` and llama-3.2-1B `exp17` are absent entirely: they committed no perf
 CSV, so their capacity is **unknown, not small**.
 
+## 2a. ⚠ The metric is refuted on its largest cell, and the disconfirming datum was in the source data
+
+**gemma-4-26B `-onA`: this table says a 9.6 % upper bound and a ~1.2 % expectation. v2's own `final.json` for
+that cell records `before_us` 54,633.6 → `after_us` 47,528.2 — a *shipped, confirmed, real-weight-oracled*
+**−7,105.4 µs = −13.01 %.** And v3's incumbent profiles the same cell at `before_us` **54,633.6 — the identical
+number**, so the two are on the same baseline and directly comparable.
+
+So the estimate predicted **1.2 % where 13.0 % was already banked from the same starting point.** That is not an
+under-estimate, it is **self-refuting**: the *upper bound* (9.6 %) came out **below a delivered result** (13.0 %).
+A bound that excludes an observation from its own source data is wrong on its face, and no device time was
+needed to see it.
+
+**Why the pool came out that small.** `flagged` is the **advisor-attributable** share of the profile window —
+and this cell's v2 reconciliation reports a **0.000 µs advisor-attributable ceiling** with **64.7 % of the
+sliding window untraced** (sparse experts). So the capacity metric inherited *exactly* the attribution defect
+that the cliff check exists to bypass. The caveat is written two paragraphs above the table — *"a step-0 prior
+derived from v2 data understates any cell whose coverage improves"* — and the number was used anyway.
+
+**The rule this needed, and it is one comparison:**
+
+> **A cell's capacity estimate is floored by what that cell has already been measured to deliver from the same
+> baseline.** If the formula returns less than the floor, **the formula is refuted for that cell, not the
+> floor.** Check every row against v2's `model_estimate.before_us`/`after_us` before publishing the column.
+
+**Corpus-level, the same check.** "On the order of 1 ms/model across the corpus, not 9" is refuted by **one
+row**: this cell alone had **7.1 ms** banked. Summing v2's five comparable cells gives **12.0 ms already
+delivered** against a prediction of ~1 ms total. The predicted-vs-banked comparison was never made.
+
 ## 3. Per-cell expectations, revised
 
 `was` = the target in CHANGES §6. `why` links to the pitfalls entry.
@@ -67,7 +95,7 @@ CSV, so their capacity is **unknown, not small**.
 |---|---|---|---|
 | **phi-3.5 `fuse-noadvise`** *(step 1, the gate)* | −10.43 % must be reached, else the rebuild is wrong | **process criteria, not a number** — see §5 | E3: −10.43 % was produced by a hand-written `PHI_ROPE_MODE` patch, not by anything the stage can do. Keeping it as a pass/fail gate risks stopping a correct run for a capability reason |
 | **gemma-4-26B `nofuse-noadvise`** | −12.44 %, "26× what it shipped" | **unknown; treat as uncalibrated** | Same provenance class as nmFN: no `done` tag, and step 0 could not reproduce its window from its own CSVs. Its number was never checkable |
-| **gemma-4-26B `-onA`** | −13.63 % (44 cores over the advised 88) | **~1.2 % from a 9.6 % pool**, and the 44-vs-88 increment ≈ **0.1 pp, not 1 pp** | E2: the per-rung value was contradicted by the same corpus and measured at 0.08 pp |
+| **gemma-4-26B `-onA`** | −13.63 % (44 cores over the advised 88) | ⚠ **~1.2 % — REFUTED, §2a.** v2 shipped **−13.01 % / −7,105 µs from the identical baseline.** The floor is v2's result; the open question was only the *increment* (44 vs 88 ≈ 0.1 pp), and a total-pool number cannot answer an increment question | E2 for the increment; **§2a for the level, which is the error that mattered** |
 | **north-mini `fuse-noadvise`** | −11.28 % (16 cores) | **−1.76 % — MEASURED**, 16 best by 0.08 pp | E1: exactly one v2 measurement (32 cores → 0.5184) fails to reproduce; its ladder neighbour reproduces to 0.2 % |
 | north-mini `nofuse-noadvise` | ">0 candidates; 11 worth 632 µs/model" | **unchanged in kind**, re-derive capacity after capture | Coverage predictions are the ones that held: nmFN went 69 % → ~14 % untraced, 49/49 layers |
 | north-mini `-onA` | 2 candidates, 61.9 µs/model | unchanged | same |
@@ -82,6 +110,10 @@ two are now uncalibrated (nmFN, g26B) and two were sized on per-rung deltas meas
 assumption. Summing the flagged pools and applying the measured 12.5 % gives an expectation on the order of
 **1 ms/model across the corpus, not 9**. Stated as an order of magnitude on purpose: one cell's realised
 fraction is one data point.
+
+⚠ **And it is wrong — see §2a.** v2's five comparable cells had **12.0 ms** on file, shipped and oracled. A
+corpus prediction of ~1 ms against 12 ms already banked from the same baselines is refuted before the run
+starts. The measured outcome was 6.8 ms.
 
 ## 4. What the shakedown says about the stage, beyond the numbers
 

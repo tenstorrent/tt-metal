@@ -13,7 +13,7 @@ The distribution is the finding, so it goes first.
 
 | | count | what it cost |
 |---|---|---|
-| **(A) wrong estimates** | 4 | credibility of the predictions — no measurement was harmed |
+| **(A) wrong estimates** | 5 | credibility of the predictions — no measurement was harmed, but **one (§2.0) was refuted by its own source data before the run** |
 | **(B) wrongly implemented** | 3 | noise: false positives that make real signals harder to see |
 | **(C) unexpected side effects** | 4 | **the actual lost wins** — 0.90 % provably on one cell, and plausibly gemma-4-26B `-onA`'s entire sliding kind (§3.2a) |
 
@@ -48,6 +48,35 @@ sign. Over-correction is the same failure with better manners.
 ---
 
 # 2. Category (A) — wrong estimates
+
+## 2.0 The one that is not merely wrong: a bound published below a known result
+
+Separated from §1 because it is a different failure. §1 is *"my multiplier was calibrated on a defective
+run"* — a bad estimate. This is **an estimate contradicted by the data it was computed from**, which needed no
+run at all to catch.
+
+| | |
+|---|---|
+| v2, gemma-4-26B `-onA`, from its own `final.json` | 54,633.6 → 47,528.2 µs = **−7,105.4 µs = −13.01 %**, shipped, confirmed, oracled |
+| v3's incumbent for the same cell | `before_us` **54,633.6** — identical |
+| what I published as the **upper bound** | **9.6 %** |
+| what I published as the expectation | **~1.2 %** |
+
+**An upper bound below a delivered measurement on the same baseline is not an under-estimate, it is refuted.**
+The mechanism: `flagged` is the *advisor-attributable* window share, and this cell's reconciliation reports a
+**0.000 µs advisor-attributable ceiling** with 64.7 % of its dominant kind untraced — so the capacity metric
+inherited the attribution defect the cliff check exists to bypass. I wrote that caveat directly above the table
+and used the number anyway.
+
+**The rule:** *a capacity estimate is floored by what the cell has already been measured to deliver from the
+same baseline; if the formula returns less, the formula is refuted for that cell.* One comparison per row,
+against v2's `before_us`/`after_us`. Corpus-wide it refutes the headline as well: ~1 ms predicted against
+**12.0 ms** already banked on five comparable cells.
+
+**And it is the §4 pattern again, one level up.** §4 says I specified every *rule* by what it should catch and
+never by what it would wrongly catch. Here I specified a *metric* by what it should measure and never asked
+**what observation would prove this metric wrong** — with the disconfirming observation sitting in the source
+file.
 
 ## 2.1 nmFN: expected −11.28 %, measured −1.69 %
 
