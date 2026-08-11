@@ -234,6 +234,19 @@ jobs:
           echo "$CMD"
           eval "$CMD"
 
+      - name: Prepare artifacts for upload
+        if: always()
+        run: |
+          # upload-artifact rejects ':' in paths (NTFS-safe). WAN/automapper dumps use ISO
+          # timestamps like partial_run_2026-08-10T16:51:48+0000.pkl under ttrun-cwd.
+          if [ -d "$PIPELINE_DIR" ]; then
+            find "$PIPELINE_DIR" -depth -name '*:*' -print0 2>/dev/null | while IFS= read -r -d '' path; do
+              dir=$(dirname "$path")
+              base=$(basename "$path")
+              mv -f "$path" "$dir/$(printf '%s' "$base" | tr ':' '_')"
+            done
+          fi
+
       - name: Upload launch + per-rank logs and automapper outputs
         if: always()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
