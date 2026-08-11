@@ -17,10 +17,9 @@ namespace ttnn::experimental::deepseek::moe {
 // Replaces the per-expert host loop
 //   for e in experts:
 //       gate_up = matmul(x, gate_up_w[e]); act = swiglu(gate_up, intermediate, limit)
-//       down    = matmul(act, down_w[e]);  acc += down * routing_weights[:, e]
-// with a single device operation. Expert selection/scaling is read on-device from
-// `routing_weights` (no host-side expert-id / "hit" list): for token b, the i-th weight pair is
-// scaled by routing_weights[b, i], so experts with zero routing weight contribute nothing.
+//       down    = matmul(act, down_w[e]);  acc += down * w[:, e]
+// with a single device operation. Expert selection/scaling is derived on-device from the router's
+// output (no host-side expert-id / "hit" list) -- see ROUTING INPUT below.
 //
 // BATCHING. The B tokens are the rows of dim -2 and share a single 32-row tile, so a [1, B, S, H]
 // activation must be folded into [1, 1, B*S, H] by the caller. Batching costs essentially nothing
@@ -41,18 +40,33 @@ namespace ttnn::experimental::deepseek::moe {
 // exactly once); it costs one gather/broadcast synchronization per block instead of one for the whole
 // op, and it double-buffers the activation block so consecutive blocks pipeline.
 //
+// ROUTING INPUT. The routing decision stays in the sparse form the router produces it: each token's
+// selected expert ids plus the unbiased score row they index, both passed through in their native
+// TILE layout. The op gathers each token's k scores, normalizes them (sum to 1, then
+// `routed_scaling_factor`) and derives the hit ids and per-token weights itself. That is what the
+// op's internals already use, so widening the k values into an E-wide weight row would be a
+// temporary built by a scatter + normalize + relayout chain purely for the first kernel to scan it
+// straight back down to k -- and it turns an O(E x B) hit scan into an O(B x k) one.
+//
 // Args:
 //   input_tensor:     activations, [1, 1, B, H] with B <= 32 token rows.
-//   routing_weights:  per-token routing weights, [1, 1, B, E], with E == gate_up_weights.size().
+//   routing_indices:  selected expert ids, [1, 1, B, top_k] TILE, either UINT16 (a `ttnn.topk`
+//                     index output) or BFLOAT16 (a `ttnn.embedding` gather from an id table; exact
+//                     for E <= 256, and the only dtype that op gathers).
+//   routing_scores:   unbiased per-expert scores, [1, 1, B, E] TILE bfloat16 -- the tensor the ids
+//                     index into (the selection may have ranked a bias-corrected copy of it).
+//   top_k:            ids per token (<= 16); 0 takes it from routing_indices.
+//   routed_scaling_factor / routing_eps: the normalize tail applied per token,
+//                     w = scale * s / (sum(s) + eps).
 //   gate_up_weights:  one [H, 2I] weight tensor per expert (all experts provided), with the
 //                     gate/up columns interleaved at tile (32-col) granularity so each core's
 //                     [H, 64] DRAM shard is the [gate_tile | up_tile] pair for its output tile.
 //   down_weights:     one [I, H] weight tensor per expert.
-//   num_experts:      number of routing-selected ("hit") experts to run: the number of columns that
-//                     are nonzero in at least one routing row (the union over tokens). May be passed
-//                     as an upper bound -- useful when B > 1, where the exact union size is data
-//                     dependent while the compiled program is not -- at the cost of one redundant
-//                     weight fetch per unused slot; the surplus experts contribute nothing.
+//   num_experts:      number of routing-selected ("hit") experts to run: the size of the union of
+//                     the tokens' selections. May be passed as an upper bound -- useful when B > 1,
+//                     where the exact union size is data dependent while the compiled program is
+//                     not -- at the cost of one redundant weight fetch per unused slot; the surplus
+//                     experts contribute nothing.
 //   intermediate_size: SwiGLU intermediate size I.
 //   swiglu_limit:     clamp limit used by the SwiGLU activation.
 //   experts_block_size: experts to hold in L1 at once; 0 (the default) means all `num_experts`,
@@ -65,20 +79,25 @@ namespace ttnn::experimental::deepseek::moe {
 // Returns a [1, B, H] BFLOAT16 TILE tensor (the B token rows padded to a 32-row tile):
 //   act       = silu(clamp(gate, max=limit)) * clamp(up, -limit, limit),
 //               where [gate, up] = x @ gate_up_w[hit_ids[i]];
-//   output[b] = sum_i routing_weights[b, hit_ids[i]] * (act[b] @ down_w[hit_ids[i]]),
-// with hit_ids the routing-selected experts in ascending order. The I SwiGLU columns are distributed
-// across the 8x8 compute grid, each core reading its [H, 128] interleaved gate/up shard and its
-// [I, H/64] down shard per selected expert in a single NoC read from the DRAM ND-sharded weights;
-// the SwiGLU activation is gathered onto core {0,0} and broadcast back for the down matmul.
-// input_tensor must be TILE layout and routing_weights ROW_MAJOR bfloat16.
+//   output[b] = sum_i w[b, hit_ids[i]] * (act[b] @ down_w[hit_ids[i]]),
+// with hit_ids the routing-selected experts in ascending order and w the normalized weights above
+// (zero for a token that did not select the expert). The I SwiGLU columns are distributed across the
+// 8x8 compute grid, each core reading its [H, 128] interleaved gate/up shard and its [I, H/64] down
+// shard per selected expert in a single NoC read from the DRAM ND-sharded weights; the SwiGLU
+// activation is gathered onto core {0,0} and broadcast back for the down matmul. All three input
+// tensors are TILE layout.
 Tensor fused_experts(
     const Tensor& input_tensor,
-    const Tensor& routing_weights,
+    const Tensor& routing_indices,
+    const Tensor& routing_scores,
     const std::vector<Tensor>& gate_up_weights,
     const std::vector<Tensor>& down_weights,
     uint32_t num_experts,
     uint32_t intermediate_size,
     float swiglu_limit,
+    uint32_t top_k = 0,
+    float routed_scaling_factor = 1.0F,
+    float routing_eps = 0.0F,
     uint32_t experts_block_size = 0,
     const std::optional<MemoryConfig>& memory_config = std::nullopt);
 

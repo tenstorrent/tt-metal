@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import NamedTuple, Optional
 
 import ttnn
 import torch
@@ -33,18 +33,28 @@ from .weight_cache import WeightCache, _as_cache, _load_weight, _materialize, _m
 # ---------------------------------------------------------------------------- #
 
 
-def _normalize_routing(scores: ttnn.Tensor, mask: ttnn.Tensor, scaling: float) -> ttnn.Tensor:
-    """Mask the per-expert ``scores`` to the selected experts, renormalise per token
-    to sum to 1, and scale by ``routed_scaling_factor``.
+class SparseRouting(NamedTuple):
+    """A routing decision in the form ``fused_experts`` consumes it.
 
-    Shared by the prefill (``forward``) and trace-safe (``forward_static``) routing
-    paths of both routers: only *which* experts the ``mask`` selects (learned top-k
-    vs. frozen hash, host-built vs. on-device) differs between paths; the
-    select/normalise/scale tail is identical.
+    The op takes the selected expert ids and the score row they index and does the
+    normalize/scale itself, so the router hands over ``ttnn.topk``'s output untouched.
+    Widening this into a dense ``[1,1,T,E]`` weight row (scatter a one-hot mask, mask the
+    scores, sum, divide, scale, relayout -- nine device ops) only to have the op's first
+    kernel scan those E columns straight back down to k values is pure round-tripping.
+
+    ``scores``: ``[1,1,T,E]`` TILE bf16, the *unbiased* per-expert scores -- the values
+    that become the weights. ``indices``: ``[1,1,T,k]`` TILE, which experts won: uint16
+    from the learned router's topk (possibly ranked on a bias-corrected copy of
+    ``scores``), bf16 from the hash router's table lookup, since ``ttnn.embedding``
+    gathers only bf16. The op reads either.
     """
-    selected = ttnn.multiply(scores, mask)
-    denom = ttnn.add(ttnn.sum(selected, dim=-1, keepdim=True), 1.0e-20)
-    return ttnn.multiply(ttnn.div(selected, denom), scaling)
+
+    scores: ttnn.Tensor
+    indices: ttnn.Tensor
+
+
+# Guards the per-token renormalize against an all-zero score row.
+_ROUTING_EPS = 1.0e-20
 
 
 class DeepSeekV4MLP(DeepSeekV4Module):
@@ -150,12 +160,14 @@ class DeepSeekV4MLP(DeepSeekV4Module):
 class DeepSeekV4TopKRouter(DeepSeekV4Module):
     """ttnn port of ``DeepseekV4TopKRouter``.
 
-    Produces a *dense* ``[1, 1, T, E]`` routing-weight tensor: ``sqrtsoftplus``
-    of the gate logits gives per-expert scores; the top-k experts (by
-    ``scores + e_score_correction_bias``) are selected via ``ttnn.topk`` +
-    ``ttnn.scatter`` into a one-hot mask; the masked scores are renormalised to
-    sum to 1 per token and scaled by ``routed_scaling_factor``. Unselected
-    experts carry weight 0, which lets the dense expert compute drop them.
+    ``sqrtsoftplus`` of the gate logits gives per-expert scores, and the top-k experts are
+    selected by ``ttnn.topk`` on ``scores + e_score_correction_bias``. That pair -- the
+    unbiased scores and the winning ids -- is the whole routing decision, and it is what
+    :class:`DeepSeekV4PreloadedExperts` is handed (see :class:`SparseRouting`).
+
+    The renormalize-and-scale tail the reference applies to the selected scores happens
+    inside ``fused_experts``, on the k values per token it already has to read, rather
+    than here across a dense E-wide row.
     """
 
     def __init__(self, config, weights: dict, device: ttnn.MeshDevice, cache: Optional[WeightCache] = None):
@@ -173,76 +185,25 @@ class DeepSeekV4TopKRouter(DeepSeekV4Module):
             device,
             cache_file_name=cache.file("gate.e_score_correction_bias"),
         )
-        # Persistent scatter operands for the trace-safe decode path, keyed by token
-        # count (the decode batch). ``ttnn.zeros`` / ``ttnn.ones`` host-init their
-        # buffers (a host->device write that is illegal mid-capture), so the static
-        # router reuses pre-built constants instead of allocating + writing them each
-        # call. Scatter allocates its own output, so the zeros stay zero and a width is
-        # built at most once.
-        self._scatter_operands: dict[int, tuple[ttnn.Tensor, ttnn.Tensor]] = {}
 
     def _scores(self, x_flat: ttnn.Tensor) -> ttnn.Tensor:
-        """Per-expert ``sqrtsoftplus`` gate scores ``[1,1,T,E]`` (shared head of both
-        the prefill and trace-safe routing paths)."""
+        """Per-expert ``sqrtsoftplus`` gate scores ``[1,1,T,E]``."""
         return ttnn.sqrt(ttnn.softplus(self.gate(x_flat)))
 
-    def forward(self, x_flat: ttnn.Tensor) -> ttnn.Tensor:
-        """``x_flat`` is ``[1, 1, T, H]``; returns routing weights ``[1, 1, T, E]``."""
+    def forward(self, x_flat: ttnn.Tensor) -> SparseRouting:
+        """``x_flat`` is ``[1, 1, T, H]``; returns the selected experts and their scores.
+
+        Trace-safe as it stands, so prefill and the captured decode share this one path:
+        every op here allocates its own output and nothing is host-initialised.
+        """
         scores = self._scores(x_flat)  # [1, 1, T, E]
+        # Ranked on the bias-corrected scores, weighted by the uncorrected ones -- which is
+        # why both halves of the pair travel to the expert op instead of just the winners'
+        # values. topk's ids are returned exactly as produced: TILE uint16, [1,1,T,k].
         biased = ttnn.add(scores, self.e_score_correction_bias)
         _profile(self.device)
-
-        # Top-k selection -> one-hot mask. Scatter (rather than a >= threshold
-        # compare) selects exactly k experts even if two scores collide under
-        # bf16 rounding. Scatter wants ROW_MAJOR + a matching-rank index tensor.
-        # Prefill (T > 1) freshly host-inits the zeros/ones scatter operands; the
-        # trace-safe T == 1 path reuses persistent constants (see forward_static).
-        _, top_idx = ttnn.topk(biased, self.top_k, dim=-1)  # [1, 1, T, k]
-        t = x_flat.shape[2]
-        top_idx = ttnn.to_layout(top_idx, ttnn.ROW_MAJOR_LAYOUT)
-        mask = ttnn.zeros([1, 1, t, self.num_experts], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, self.device)
-        src = ttnn.ones([1, 1, t, self.top_k], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, self.device)
-        mask = ttnn.scatter(mask, -1, top_idx, src)
-        mask = ttnn.to_layout(mask, ttnn.TILE_LAYOUT)
-
-        # Weights are the *unbiased* scores gathered at the selected experts,
-        # normalised per token, then scaled. Masking before the sum makes the
-        # dense [1,1,T,E] tensor equal the reference's gathered/normalised one.
-        return _normalize_routing(scores, mask, self.routed_scaling_factor)
-
-    def _scatter_constants(self, t: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """The ``[1,1,T,E]`` zeros and ``[1,1,T,k]`` ones the static scatter needs.
-
-        Built on first use for a given width and kept: the first call is a compile
-        run, which precedes every trace capture, so the host-init write happens while
-        it is still legal and the capture then just re-reads the same buffers.
-        """
-        if t not in self._scatter_operands:
-            self._scatter_operands[t] = (
-                ttnn.zeros([1, 1, t, self.num_experts], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, self.device),
-                ttnn.ones([1, 1, t, self.top_k], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, self.device),
-            )
-        return self._scatter_operands[t]
-
-    def forward_static(self, x_flat: ttnn.Tensor) -> ttnn.Tensor:
-        """Trace-safe top-k routing over ``T`` tokens (the decode batch, one token per
-        user) -> ``[1,1,T,E]``.
-
-        Identical math to :meth:`forward`, but the scatter's zeros / ones operands are
-        persistent constants rather than freshly ``ttnn.zeros`` / ``ttnn.ones`` tensors
-        (whose host-init write is rejected during trace capture). Scatter allocates its
-        own output, which is allowed.
-        """
-        scores = self._scores(x_flat)  # [1, 1, T, E]
-        biased = ttnn.add(scores, self.e_score_correction_bias)
-
-        _, top_idx = ttnn.topk(biased, self.top_k, dim=-1)  # [1, 1, T, k]
-        top_idx = ttnn.to_layout(top_idx, ttnn.ROW_MAJOR_LAYOUT)
-        zeros, ones = self._scatter_constants(x_flat.shape[2])
-        mask = ttnn.scatter(zeros, -1, top_idx, ones)
-        mask = ttnn.to_layout(mask, ttnn.TILE_LAYOUT)
-
-        return _normalize_routing(scores, mask, self.routed_scaling_factor)
+        _, top_idx = ttnn.topk(biased, self.top_k, dim=-1)
+        return SparseRouting(scores=scores, indices=top_idx)
 
 
 class DeepSeekV4HashRouter(DeepSeekV4Module):
@@ -252,17 +213,17 @@ class DeepSeekV4HashRouter(DeepSeekV4Module):
     Expert *selection* is a frozen ``tid2eid[input_ids]`` lookup — a fixed
     token-id -> expert-id table — rather than a learned top-k argmax. The learned
     gate still produces the per-expert ``sqrtsoftplus`` scores that weight the
-    selected experts; only the *which-experts* decision is static. As with
-    :class:`DeepSeekV4TopKRouter` we emit a dense ``[1,1,T,E]`` weight tensor
-    (selected experts carry their renormalised score, the rest are 0) so the same
-    dense / preloaded expert compute consumes it.
+    selected experts; only the *which-experts* decision is static. The output is the
+    same :class:`SparseRouting` pair the learned router emits, so both feed the expert
+    compute through one contract.
 
-    For the traced decode path the selection is done *fully on device*: the frozen
-    ``tid2eid`` table is materialised once into a dense one-hot expert-mask table
-    ``[vocab, E]`` resident on device, and the per-token selection mask is gathered
-    with :func:`ttnn.embedding` straight from the (on-device) token id — no
-    host-side scatter and no per-step host->device mask copy. The host prefill
-    ``forward`` keeps the simple host scatter.
+    The selection is gathered *fully on device* by embedding the token id in the frozen
+    ``tid2eid`` table, which is already the ``[vocab, k]`` list of expert ids the sparse
+    contract wants — no host-side scatter and no per-step host->device copy. It is held as
+    bfloat16 because that is the only dtype :func:`ttnn.embedding` gathers from; every
+    expert id is exact there (E <= 256), and ``fused_experts`` reads bf16-encoded ids
+    directly. That leaves the table at ``[vocab, k]`` instead of the ``[vocab, E]`` one-hot
+    it used to expand to — for a 128k vocab, 1.5 MB instead of 64 MB.
     """
 
     def __init__(self, config, weights: dict, device: ttnn.MeshDevice, cache: Optional[WeightCache] = None):
@@ -277,52 +238,45 @@ class DeepSeekV4HashRouter(DeepSeekV4Module):
         tid = weights["gate.tid2eid"]
         tid = tid() if callable(tid) else tid
         self.tid2eid = tid.long()
-        # Dense one-hot expert-selection table [vocab, E] resident on device: row
-        # ``t`` is the selection mask for token id ``t``. ``ttnn.embedding`` gathers
-        # the per-token mask on device from the (on-device) token id, so the static
-        # decode router needs no host-side scatter / per-step mask copy.
-        vocab = self.tid2eid.shape[0]
-        mask_table = torch.zeros(vocab, self.num_experts, dtype=torch.float32)
-        mask_table.scatter_(1, self.tid2eid, 1.0)
-        self.mask_table = ttnn.from_torch(mask_table, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        assert self.num_experts <= 256, (
+            f"hash routing embeds expert ids as bf16, which is only exact below 256; "
+            f"num_local_experts is {self.num_experts}"
+        )
+        self.eid_table = ttnn.from_torch(
+            self.tid2eid.float(), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+        )
 
     def _scores(self, x_flat: ttnn.Tensor) -> ttnn.Tensor:
         """Per-expert ``sqrtsoftplus`` gate scores (shared head of both routing paths)."""
         return ttnn.sqrt(ttnn.softplus(self.gate(x_flat)))
 
-    def forward(self, x_flat: ttnn.Tensor, input_ids: torch.Tensor) -> ttnn.Tensor:
-        """``x_flat`` ``[1,1,T,H]`` and ``input_ids`` torch ``[..]`` (T tokens);
-        returns dense routing weights ``[1,1,T,E]``."""
+    def _select(self, token_in: ttnn.Tensor, t: int) -> ttnn.Tensor:
+        """Gather the ``[1,1,T,k]`` selected expert ids for on-device token ids ``[1,T]``."""
+        ids = ttnn.embedding(token_in, self.eid_table, layout=ttnn.TILE_LAYOUT)  # [1, T, k] bf16
+        return ttnn.reshape(ids, [1, 1, t, self.top_k])
+
+    def forward(self, x_flat: ttnn.Tensor, input_ids: torch.Tensor) -> SparseRouting:
+        """``x_flat`` ``[1,1,T,H]`` and ``input_ids`` torch ``[..]`` (T tokens).
+
+        The prefill entry point: it uploads the host ``input_ids`` and then routes exactly
+        as :meth:`forward_static` does from the persistent on-device ids.
+        """
         scores = self._scores(x_flat)  # [1, 1, T, E]
         t = x_flat.shape[2]
         _profile(self.device)
-
-        # Per-token expert selection gathered on device from the one-hot mask table
-        # via ``ttnn.embedding`` (token ids -> dense one-hot mask [1,1,T,E]). The
-        # prefill path uploads the host ``input_ids``; the trace-safe path
-        # (forward_static) gathers from the persistent on-device token id instead.
         ids_tt = ttnn.from_torch(
             input_ids.reshape(1, t).long().to(torch.int32),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.device,
         )
-        mask_tt = ttnn.embedding(ids_tt, self.mask_table, layout=ttnn.TILE_LAYOUT)  # [1, T, E]
-        mask_tt = ttnn.reshape(mask_tt, [1, 1, t, self.num_experts])
+        return SparseRouting(scores=scores, indices=self._select(ids_tt, t))
 
-        return _normalize_routing(scores, mask_tt, self.routed_scaling_factor)
-
-    def forward_static(self, x_flat: ttnn.Tensor, token_in: ttnn.Tensor) -> ttnn.Tensor:
+    def forward_static(self, x_flat: ttnn.Tensor, token_in: ttnn.Tensor) -> SparseRouting:
         """Trace-safe, fully on-device hash routing: ``token_in`` ``[1,T]`` are the
-        (persistent, on-device) decode token ids, one per user of a batched step. The
-        per-token expert-selection mask is gathered from the on-device ``mask_table``
-        with :func:`ttnn.embedding` and the gate score path stays on device. Returns
-        dense routing weights ``[1,1,T,E]``."""
-        t = x_flat.shape[2]
-        mask_tt = ttnn.embedding(token_in, self.mask_table, layout=ttnn.TILE_LAYOUT)  # [1, T, E]
-        mask_tt = ttnn.reshape(mask_tt, [1, 1, t, self.num_experts])
-        scores = self._scores(x_flat)
-        return _normalize_routing(scores, mask_tt, self.routed_scaling_factor)
+        (persistent, on-device) decode token ids, one per user of a batched step."""
+        ids = self._select(token_in, x_flat.shape[2])
+        return SparseRouting(scores=self._scores(x_flat), indices=ids)
 
 
 # --------------------------------------------------------------------------- #
@@ -452,6 +406,9 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
         self.intermediate = config.moe_intermediate_size
         self.hidden = config.hidden_size
         self.limit = config.swiglu_limit
+        # Applied inside the op on the sparse path, where the weights are derived here
+        # rather than handed over pre-normalized.
+        self.routed_scaling_factor = config.routed_scaling_factor
         cache = _as_cache(cache)
 
         # ``fused_experts`` is hard-wired to the real V4-Flash sizes: ``H == 4096``
@@ -493,101 +450,69 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
                 _load_fused_weight(down_t(), device, down_nd, cache_file_name=cache.file(dn_f_name), dtype=dtype)
             )
 
-    def _run_fused(self, x_tok: ttnn.Tensor, routing_row: ttnn.Tensor, num_experts: int) -> ttnn.Tensor:
-        """Run ``fused_experts`` for one token. ``x_tok`` ``[1,1,1,H]`` (TILE) and
-        ``routing_row`` a ROW_MAJOR routing slice; returns ``[1,1,1,H]``."""
-        routing_row = ttnn.reshape(routing_row, [1, 1, 1, self.num_experts])
+    def _run_fused(self, x_tok: ttnn.Tensor, routing: SparseRouting) -> ttnn.Tensor:
+        """Run ``fused_experts`` for one token. ``x_tok`` is ``[1,1,1,H]`` (TILE) and
+        ``routing`` that token's slice of the router's output; returns ``[1,1,1,H]``.
+
+        ``num_experts`` is always ``top_k``: one token selects at most that many distinct
+        experts, so the op's program -- and any trace holding it -- is the same every step.
+        Both tensors go in exactly as the router produced them: the op reads the ids and
+        the score row out of their tiles and applies the normalize-and-scale tail itself.
+        """
         out = ttnn.experimental.deepseek.moe.fused_experts(
             x_tok,
-            routing_weights=routing_row,
+            routing_indices=routing.indices,
+            routing_scores=routing.scores,
             gate_up_weights=self._gate_up_fused,
             down_weights=self._down_fused,
-            num_experts=num_experts,
+            num_experts=self.top_k,
             intermediate_size=self.intermediate,
             swiglu_limit=self.limit,
+            top_k=self.top_k,
+            routed_scaling_factor=self.routed_scaling_factor,
+            routing_eps=_ROUTING_EPS,
         )  # [1, 1, H]
         return ttnn.reshape(out, [1, 1, 1, self.hidden])
 
-    def _decode_token(self, x_tok: ttnn.Tensor, rw_tok: ttnn.Tensor) -> ttnn.Tensor:
-        """Run one token's routed FFN through ``fused_experts``.
+    def _token_routing(self, routing: SparseRouting, i: int) -> SparseRouting:
+        """Token ``i``'s slice of a ``T``-token routing decision."""
+        return SparseRouting(
+            scores=ttnn.slice(routing.scores, [0, 0, i, 0], [1, 1, i + 1, self.num_experts]),
+            indices=ttnn.slice(routing.indices, [0, 0, i, 0], [1, 1, i + 1, self.top_k]),
+        )
 
-        ``x_tok`` ``[1,1,1,H]`` and ``rw_tok`` the host routing-weight row ``[E]``;
-        returns ``[1,1,1,H]``. The op finds the active (non-zero) experts from the
-        routing row itself, so we only pass ``num_experts`` = the hit count.
-        """
-        routing_row = ttnn.to_layout(rw_tok, ttnn.ROW_MAJOR_LAYOUT)
-        out = self._run_fused(x_tok, routing_row, self.top_k)
-        _profile(self.device)
-        return out
+    def forward(self, x_flat: ttnn.Tensor, routing: SparseRouting) -> ttnn.Tensor:
+        """``x_flat`` ``[1,1,T,H]`` plus the router's decision; returns ``[1,1,T,H]``.
 
-    def forward(self, x_flat: ttnn.Tensor, routing_weights: ttnn.Tensor) -> ttnn.Tensor:
-        """``x_flat`` ``[1,1,T,H]`` and ``routing_weights`` ``[1,1,T,E]``; returns ``[1,1,T,H]``.
-
-        Every token runs as its own single-token ``fused_experts`` op (the op is
-        natively ``T == 1``), so prefill is computed by decode: the ``T`` per-token
-        outputs are concatenated back into ``[1,1,T,H]``.
+        Trace-safe: nothing is read back to host. ``T`` tokens run as ``T`` single-token
+        ops rather than one wider one -- they route to different experts, so there is no
+        weight to share between them -- and ``T`` is fixed at capture time, so a captured
+        trace stays a flat op sequence. Prefill therefore goes through the same path.
         """
         t = x_flat.shape[2]
         _profile(self.device)
 
         if t == 1:
-            return self._decode_token(x_flat, routing_weights)
+            out = self._run_fused(x_flat, routing)
+            _profile(self.device)
+            return out
 
-        h = x_flat.shape[3]
-        e = routing_weights.shape[3]
-        # A single row is not a tile, so it cannot be cut out of a width-sharded tensor;
-        # a batched decode arrives sharded (straight off the sharded post-attention norm),
-        # so drop to interleaved before slicing the tokens apart.
+        # One row is not a whole tile, so it cannot be cut out of a width-sharded tensor,
+        # and a batched step arrives sharded from the post-attention norm.
         if x_flat.is_sharded():
             x_flat = ttnn.to_memory_config(x_flat, ttnn.DRAM_MEMORY_CONFIG)
-        if routing_weights.is_sharded():
-            routing_weights = ttnn.to_memory_config(routing_weights, ttnn.DRAM_MEMORY_CONFIG)
-        per_token = [
-            self._decode_token(
-                ttnn.slice(x_flat, [0, 0, i, 0], [1, 1, i + 1, h]),
-                ttnn.slice(routing_weights, [0, 0, i, 0], [1, 1, i + 1, e]),
+        h = x_flat.shape[3]
+        per_token = []
+        for i in range(t):
+            per_token.append(
+                self._run_fused(ttnn.slice(x_flat, [0, 0, i, 0], [1, 1, i + 1, h]), self._token_routing(routing, i))
             )
-            for i in range(t)
-        ]
+            _profile(self.device)
         return ttnn.concat(per_token, dim=2)
 
-    def decode_static(self, x_tok: ttnn.Tensor, routing_weights: ttnn.Tensor) -> ttnn.Tensor:
-        """Trace-safe routed FFN over ``T`` tokens. ``x_tok`` ``[1,1,T,H]`` and
-        ``routing_weights`` ``[1,1,T,E]`` (a device tensor); returns ``[1,1,T,H]``.
-
-        Unlike :meth:`forward`, the active experts are *not* read back to host:
-        ``fused_experts`` finds the non-zero experts from the routing row on device
-        and ``num_experts`` is fixed to ``num_experts_per_tok`` (the router always
-        selects exactly ``top_k``), so the op's program — and hence the trace — is
-        invariant across steps.
-
-        ``T`` is the batched decode's user count. The op is natively one token, so the
-        users run as ``T`` ops rather than one wider one: they route to different
-        experts, so there is no weight to share between them and nothing to gain from
-        fusing them anyway. ``T`` is fixed at capture time, so the trace stays a flat
-        op sequence.
-        """
-        routing_row = ttnn.to_layout(routing_weights, ttnn.ROW_MAJOR_LAYOUT)
-        t = x_tok.shape[2]
-        if t == 1:
-            return self._run_fused(x_tok, routing_row, self.top_k)
-        h, e = x_tok.shape[3], routing_weights.shape[3]
-        # One row is not a tile, so it cannot be cut out of a width-sharded tensor, and
-        # a batched step arrives sharded from the post-attention norm. Drop to
-        # interleaved first; ``fused_experts`` reads an interleaved token either way.
-        if x_tok.is_sharded():
-            x_tok = ttnn.to_memory_config(x_tok, ttnn.DRAM_MEMORY_CONFIG)
-        if routing_row.is_sharded():
-            routing_row = ttnn.to_memory_config(routing_row, ttnn.DRAM_MEMORY_CONFIG)
-        per_token = [
-            self._run_fused(
-                ttnn.slice(x_tok, [0, 0, i, 0], [1, 1, i + 1, h]),
-                ttnn.slice(routing_row, [0, 0, i, 0], [1, 1, i + 1, e]),
-                self.top_k,
-            )
-            for i in range(t)
-        ]
-        return ttnn.concat(per_token, dim=2)
+    # The routed FFN has no host readback and no host-initialised operands, so the traced
+    # decode path is just :meth:`forward`.
+    decode_static = forward
 
 
 class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
@@ -642,14 +567,13 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
         _profile(self.device)
 
         with _region("MOE_ROUTER"):
-            if self.is_hash:
-                routing_weights = self.gate(x_flat, input_ids)  # [1, 1, T, E]
-            else:
-                routing_weights = self.gate(x_flat)  # [1, 1, T, E]
+            # Either router hands over the same (scores, selected ids) pair; they differ only
+            # in how the ids are chosen (learned topk vs frozen table lookup).
+            routing = self.gate(x_flat, input_ids) if self.is_hash else self.gate(x_flat)
         _profile(self.device)
 
         with _region("MOE_EXPERTS"):
-            routed = self.experts(x_flat, routing_weights)  # [1, 1, T, H]
+            routed = self.experts(x_flat, routing)  # [1, 1, T, H]
         _profile(self.device)
 
         with _region("MOE_SHARED"):
@@ -664,8 +588,8 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
         """Trace-safe single-token-per-user MoE. ``hidden`` ``[B, 1, 1, H]`` -> same.
 
         Routing stays entirely on device: the learned top-k router is already
-        host-sync-free, and hash layers gather their expert-selection mask on device
-        from the persistent ``hash_token`` ``[1,B]`` device token ids (see
+        host-sync-free, and hash layers gather their selected expert ids on device from
+        the persistent ``hash_token`` ``[1,B]`` device token ids (see
         :meth:`DeepSeekV4HashRouter.forward_static`). The routed FFN runs through the
         no-host-readback fused-experts decode path.
 
@@ -676,10 +600,12 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
         """
         b, h = hidden.shape[0], hidden.shape[-1]
         x_flat = ttnn.reshape(hidden, [1, 1, b, h])
+        # The learned router has no separate trace-safe variant: it allocates every operand
+        # it uses, so :meth:`DeepSeekV4TopKRouter.forward` is already capture-safe.
         if self.is_hash:
-            routing_weights = self.gate.forward_static(x_flat, hash_token)
+            routing = self.gate.forward_static(x_flat, hash_token)
         else:
-            routing_weights = self.gate.forward_static(x_flat)
-        routed = self.experts.decode_static(x_flat, routing_weights)  # [1, 1, B, H]
+            routing = self.gate(x_flat)
+        routed = self.experts.decode_static(x_flat, routing)  # [1, 1, B, H]
         shared = self.shared_experts(x_flat)  # [1, 1, B, H]
         return ttnn.reshape(ttnn.add(routed, shared), [b, 1, 1, h])

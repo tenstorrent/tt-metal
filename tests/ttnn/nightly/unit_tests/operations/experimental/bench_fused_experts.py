@@ -112,21 +112,26 @@ def main(
 
                 # Every token selects the same experts, so the union stays top_k for any batch and
                 # the bytes read per step do not change -- only the tokens they are amortized over.
-                routing = torch.zeros((1, 1, batch, num_experts), dtype=torch.float32)
-                routing[..., :num_nonzero] = 1.0 / num_nonzero
-                routing_tt = ttnn.from_torch(routing, dtype=ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+                ids = torch.arange(num_nonzero, dtype=torch.int32).expand(1, 1, batch, num_nonzero)
+                ids_tt = ttnn.from_torch(ids, dtype=ttnn.uint16, device=device, layout=ttnn.TILE_LAYOUT)
+                scores = torch.ones((1, 1, batch, num_experts), dtype=torch.float32)
+                scores_tt = ttnn.from_torch(scores, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
 
                 for experts_block in experts_blocks:
 
-                    def run(x_tt=x_tt, routing_tt=routing_tt, num_nonzero=num_nonzero, block=experts_block):
+                    def run(
+                        x_tt=x_tt, ids_tt=ids_tt, scores_tt=scores_tt, num_nonzero=num_nonzero, block=experts_block
+                    ):
                         return ttnn.experimental.deepseek.moe.fused_experts(
                             x_tt,
-                            routing_weights=routing_tt,
+                            routing_indices=ids_tt,
+                            routing_scores=scores_tt,
                             gate_up_weights=gate_up_tt,
                             down_weights=down_tt,
                             num_experts=num_nonzero,
                             intermediate_size=intermediate,
                             swiglu_limit=10.0,
+                            top_k=num_nonzero,
                             experts_block_size=block,
                         )
 

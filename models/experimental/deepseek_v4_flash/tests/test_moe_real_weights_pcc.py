@@ -50,6 +50,7 @@ from models.common.utility_functions import comp_allclose, comp_pcc
 from models.experimental.deepseek_v4_flash.tt.moe import (
     DeepSeekV4PreloadedExperts,
     DeepSeekV4SparseMoeBlock,
+    _ROUTING_EPS,
     _swiglu_cols_per_core,
 )
 from models.experimental.deepseek_v4_flash.tt.quant import dequantize_weight
@@ -214,6 +215,21 @@ def _torch_routed_experts(
     return routed
 
 
+def _dense_from_sparse_routing(routing, cfg: types.SimpleNamespace) -> torch.Tensor:
+    """Widen a router's ``(scores, indices)`` pair into the dense ``[T, E]`` weight row.
+
+    The renormalize-and-scale tail this applies is the one ``fused_experts`` runs on device
+    from the same two tensors, so the reference below and the op start from equal routing.
+    """
+    scores = ttnn.to_torch(routing.scores).float().reshape(-1, cfg.num_local_experts)
+    ids = ttnn.to_torch(routing.indices).long().reshape(-1, cfg.num_experts_per_tok)
+    selected = torch.gather(scores, -1, ids)
+    weights = cfg.routed_scaling_factor * selected / (selected.sum(dim=-1, keepdim=True) + 1.0e-20)
+    dense = torch.zeros_like(scores)
+    dense.scatter_(-1, ids, weights)
+    return dense
+
+
 def _torch_router_topk(
     flat: torch.Tensor, gate_w: torch.Tensor, gate_bias: torch.Tensor, cfg: types.SimpleNamespace
 ) -> list[set]:
@@ -291,8 +307,11 @@ def test_moe_real_weights_pcc(device, reset_seeds, moe_layer, batch_size: int, s
     # runs on device (here and again inside ``block.forward``, deterministically);
     # bf16 top-k *selection* divergence vs fp32 is reported separately below
     # because it is an inherent dtype effect, not a port bug.
-    dense_w_tt = block.gate(x_flat)
-    dense_w = ttnn.to_torch(dense_w_tt).reshape(flat.shape[0], cfg.num_local_experts).float()
+    #
+    # The router emits the selected ids and the score row, leaving the normalize to
+    # ``fused_experts``; widening that here is what the reference needs and doubles as a
+    # check that the op's on-device version of the same tail agrees.
+    dense_w = _dense_from_sparse_routing(block.gate(x_flat), cfg)
 
     reference = _torch_experts_and_shared(flat, dense_w, experts, shared, cfg).reshape(hidden.shape)
 
@@ -358,24 +377,31 @@ def _sharing_expert_sets(batch: int, top_k: int, num_experts: int, sharing: str)
     return [list(base) if b % 2 == 0 else list(alternate) for b in range(batch)]
 
 
-def _dense_routing(expert_sets: list[list[int]], num_experts: int, scaling: float) -> torch.Tensor:
-    """Dense ``[B, E]`` routing weights for explicit per-token expert sets.
+def _routing(expert_sets: list[list[int]], num_experts: int, scaling: float):
+    """Routing for explicit per-token expert sets: ``(ids [B, k], scores [B, E], dense [B, E])``.
 
-    Mirrors the router's output convention, which is what both the op and the reference rely on: a
-    token's selected experts carry positive weights summing to 1 (scaled by
-    ``routed_scaling_factor``) and every unselected expert is *exactly* 0.
+    The first two are what a router hands the op. The third is the per-token weights the op derives
+    from them -- each token's selected scores renormalized to sum to 1, then scaled by
+    ``routed_scaling_factor``, and exactly 0 for every unselected expert -- widened here so the fp32
+    reference can index them expert-major.
     """
-    dense = torch.zeros(len(expert_sets), num_experts, dtype=torch.float32)
-    for b, ids in enumerate(expert_sets):
-        w = torch.rand(len(ids), dtype=torch.float32) + 0.5
-        dense[b, torch.tensor(ids)] = (w / w.sum()) * scaling
-    return dense
+    ids = torch.tensor(expert_sets, dtype=torch.int64)
+    scores = (torch.rand(len(expert_sets), num_experts, dtype=torch.float32) + 0.5).to(torch.bfloat16).float()
+    selected = torch.gather(scores, -1, ids)
+    dense = torch.zeros_like(scores)
+    dense.scatter_(-1, ids, scaling * selected / (selected.sum(dim=-1, keepdim=True) + _ROUTING_EPS))
+    return ids, scores, dense
 
 
 def _run_fused_experts(
-    device, experts: DeepSeekV4PreloadedExperts, cfg: types.SimpleNamespace, x: torch.Tensor, dense_w: torch.Tensor
+    device,
+    experts: DeepSeekV4PreloadedExperts,
+    cfg: types.SimpleNamespace,
+    x: torch.Tensor,
+    ids: torch.Tensor,
+    scores: torch.Tensor,
 ) -> torch.Tensor:
-    """One ``fused_experts`` call over ``x [B, H]`` / ``dense_w [B, E]`` -> ``[B, H]`` fp32.
+    """One ``fused_experts`` call over ``x [B, H]`` and the routing pair -> ``[B, H]`` fp32.
 
     ``num_experts`` is the size of the union of the tokens' selections, which is exactly the number
     of distinct experts the op fetches weights for. It is run in blocks of :data:`EXPERTS_BLOCK_SIZE`,
@@ -383,22 +409,32 @@ def _run_fused_experts(
     starts to matter for the wider unions the disjoint cases produce.
     """
     batch, hidden = x.shape
-    num_active = int((dense_w.abs().sum(0) > 0).sum())
+    num_active = len(set(ids.flatten().tolist()))
     x_tt = ttnn.from_torch(x.reshape(1, 1, batch, hidden), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    routing_tt = ttnn.from_torch(
-        dense_w.reshape(1, 1, batch, cfg.num_local_experts),
+    ids_tt = ttnn.from_torch(
+        ids.to(torch.int32).reshape(1, 1, batch, ids.shape[-1]),
+        dtype=ttnn.uint16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    scores_tt = ttnn.from_torch(
+        scores.reshape(1, 1, batch, cfg.num_local_experts),
         dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT,
         device=device,
     )
     out = ttnn.experimental.deepseek.moe.fused_experts(
         x_tt,
-        routing_weights=routing_tt,
+        routing_indices=ids_tt,
+        routing_scores=scores_tt,
         gate_up_weights=experts._gate_up_fused,
         down_weights=experts._down_fused,
         num_experts=num_active,
         intermediate_size=cfg.moe_intermediate_size,
         swiglu_limit=cfg.swiglu_limit,
+        top_k=cfg.num_experts_per_tok,
+        routed_scaling_factor=cfg.routed_scaling_factor,
+        routing_eps=_ROUTING_EPS,
         experts_block_size=EXPERTS_BLOCK_SIZE,
     )  # [1, B, H]
     return ttnn.to_torch(out).float().reshape(batch, hidden)
@@ -444,8 +480,7 @@ def test_moe_real_weights_batched_fused_experts_pcc(
     # reference differs from the device only in compute, not in its operands.
     x = torch.randn(batch_size, cfg.hidden_size, dtype=torch.float32).to(torch.bfloat16).float()
     expert_sets = _sharing_expert_sets(batch_size, cfg.num_experts_per_tok, cfg.num_local_experts, sharing)
-    dense_w = _dense_routing(expert_sets, cfg.num_local_experts, cfg.routed_scaling_factor)
-    dense_w = dense_w.to(torch.bfloat16).float()
+    ids, scores, dense_w = _routing(expert_sets, cfg.num_local_experts, cfg.routed_scaling_factor)
 
     hit_ids = (dense_w.abs().sum(0) > 0).nonzero().flatten().tolist()
     per_token_selections = sum(len(s) for s in expert_sets)
@@ -464,10 +499,13 @@ def test_moe_real_weights_batched_fused_experts_pcc(
         )
 
     signpost("fused_experts_START", f"batch={batch_size} sharing={sharing}")
-    batched = _run_fused_experts(device, experts, cfg, x, dense_w)
+    batched = _run_fused_experts(device, experts, cfg, x, ids, scores)
     signpost("fused_experts_END", f"batch={batch_size} sharing={sharing}")
     per_token = torch.cat(
-        [_run_fused_experts(device, experts, cfg, x[b : b + 1], dense_w[b : b + 1]) for b in range(batch_size)]
+        [
+            _run_fused_experts(device, experts, cfg, x[b : b + 1], ids[b : b + 1], scores[b : b + 1])
+            for b in range(batch_size)
+        ]
     )
     reference = _torch_routed_experts(x, dense_w, experts, cfg.swiglu_limit)
 

@@ -56,7 +56,7 @@ uint32_t align_up_32(uint32_t x) { return (x + 31u) & ~31u; }
 // including a single-slot cb_act.
 //
 // Pipeline (per block of experts: two phases with one synchronization between):
-//   - {0,0} (NoC 0) reads the B routing rows, computes/broadcasts the selected ("hit")
+//   - {0,0} (NoC 0) reads the routing ids and scores, computes/broadcasts the selected ("hit")
 //     expert ids (ascending) and their per-token weights, and acts as the activation-gather leader.
 //   - {1,0} (NoC 1) reads the activation tile row and broadcasts it to every
 //     core's L1 (cb_input).
@@ -86,14 +86,18 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    const auto& routing_weights = tensor_args.routing_weights;
+    // Routing arrives as the router produced it: each token's selected expert ids plus the score
+    // row they index. Only the {0,0} sender kernel reads the two, and only to populate cb_bcast;
+    // everything downstream of that consumes cb_bcast.
+    const auto& routing_tensor = tensor_args.routing_indices;
     const auto& input_tensor = tensor_args.input_tensor;
     auto& output_tensor = tensor_return_value;
 
-    auto* routing_buffer = routing_weights.buffer();
+    auto* routing_buffer = routing_tensor.buffer();
+    auto* score_buffer = tensor_args.routing_scores.buffer();
     auto* input_buffer = input_tensor.buffer();
     auto* out_buffer = output_tensor.buffer();
-    auto* device = routing_weights.device();
+    auto* device = routing_tensor.device();
 
     const auto grid = device->compute_with_storage_grid_size();
     TT_FATAL(
@@ -170,18 +174,28 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     const tt::DataFormat down_df = datatype_to_dataformat_converter(down0.dtype());
 
     const tt::DataFormat gate_up_df = datatype_to_dataformat_converter(gate_up0.dtype());
-    const tt::DataFormat routing_df = datatype_to_dataformat_converter(routing_weights.dtype());
+    const tt::DataFormat routing_df = datatype_to_dataformat_converter(routing_tensor.dtype());
     const tt::DataFormat out_df = datatype_to_dataformat_converter(output_tensor.dtype());
     const tt::DataFormat input_df = datatype_to_dataformat_converter(input_tensor.dtype());
 
-    constexpr uint32_t routing_elem_bytes = 2;  // bfloat16
-    constexpr uint32_t out_elem_bytes = 4;      // uint32 expert ids (broadcast scratch)
-    // Each routing row spans all provided experts, and there is one ROW_MAJOR page per token row.
-    const uint32_t routing_page_bytes = num_weights * routing_elem_bytes;
-    // The rows are read page-by-page into cb_routing at the buffer's *aligned* page stride, so each
-    // read's L1 destination has the same alignment as the DRAM page it comes from (the logical page
-    // can be as small as 2*E bytes, which on its own would not be a legal NoC destination offset).
+    constexpr uint32_t out_elem_bytes = 4;  // uint32 expert ids (broadcast scratch)
+    // The ids are one TILE page covering every token row at once (B <= 32 and top_k <= 16 both fit
+    // inside a single 32x32 tile), so there is exactly one page to read. It lands in cb_routing at
+    // the buffer's *aligned* page stride, so the read's L1 destination shares the alignment of the
+    // DRAM page it comes from.
+    const uint32_t routing_page_bytes = static_cast<uint32_t>(routing_buffer->page_size());
     const uint32_t routing_row_stride = static_cast<uint32_t>(routing_buffer->aligned_page_size());
+    // The score row lives in its own tile row of E/32 pages, read whole and then indexed in L1 (the
+    // kernel needs at most top_k scattered elements per token, but reading tiles keeps every NoC
+    // transfer page-aligned).
+    const uint32_t score_page_bytes = static_cast<uint32_t>(score_buffer->page_size());
+    const uint32_t score_page_stride = static_cast<uint32_t>(score_buffer->aligned_page_size());
+    const uint32_t score_pages = static_cast<uint32_t>(score_buffer->num_pages());
+    const uint32_t top_k = operation_attributes.top_k;
+    // topk emits uint16 ids; ttnn.embedding can only gather from a bfloat16 table, so a
+    // table-driven router delivers the same ids as bf16 (exact below 256). Both are 2-byte
+    // elements in the same tile geometry -- only the decode differs.
+    const bool index_is_bf16 = routing_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16;
     // cb_bcast carries the compacted expert ids (num_weights uint32, ascending hit ids padded
     // with the sentinel) followed by the active experts' routing weights (num_active * batch fp32
     // bit patterns, hit-major then token row), broadcast to every core in one multicast.
@@ -208,8 +222,18 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     // derives -limit internally).
     const uint32_t limit_bits = std::bit_cast<uint32_t>(operation_attributes.swiglu_limit);
 
-    // cb_routing holds all `batch` routing rows, one per aligned page stride.
-    const uint32_t routing_cb_bytes = std::max<uint32_t>(align_up_32(batch * routing_row_stride), 32u);
+    // cb_routing is the {0,0} sender's private scratch for turning the routing input into the
+    // cb_bcast id/weight list: the single id page, then the score tile row, then the selection
+    // scratch -- a num_weights-bit "was this expert selected" bitmap, a num_weights-entry uint16
+    // table mapping an expert id to its position in the compacted hit list, and the batch's decoded
+    // ids. All three are O(E) or O(B*k) and too large for the RISC's stack, so they are carved out
+    // of this CB instead.
+    const uint32_t score_l1_offset = align_up_32(routing_row_stride);
+    const uint32_t scratch_l1_offset = align_up_32(score_l1_offset + score_pages * score_page_stride);
+    const uint32_t bitmap_bytes = align_up_32(((num_weights + 31u) / 32u) * 4u);
+    const uint32_t rank_bytes = align_up_32(num_weights * 2u);
+    const uint32_t scratch_bytes = bitmap_bytes + rank_bytes + align_up_32(batch * top_k * 2u);
+    const uint32_t routing_cb_bytes = std::max<uint32_t>(scratch_l1_offset + scratch_bytes, 32u);
     const uint32_t bcast_cb_bytes = std::max<uint32_t>(align_up_32(bcast_page_bytes), 32u);
     const uint32_t input_cb_bytes = input_num_pages * input_page_size;
     // Double-buffer the matmul output so compute can run ahead of the writer. Each core
@@ -601,12 +625,24 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
         cb_rscalar,
         down_prefetch,
         batch,
-        routing_row_stride,
         experts_block,
         gate_up_reserve_tiles,
         down_reserve_tiles,
+        // ---- routing ----
+        top_k,
+        index_is_bf16 ? 1u : 0u,
+        std::bit_cast<uint32_t>(operation_attributes.routed_scaling_factor),
+        std::bit_cast<uint32_t>(operation_attributes.routing_eps),
+        score_pages,
+        score_page_bytes,
+        score_page_stride,
+        score_l1_offset,
+        scratch_l1_offset,
+        bitmap_bytes,
+        rank_bytes,
     };
     TensorAccessorArgs(*routing_buffer).append_to(sender_ct_args);
+    TensorAccessorArgs(*score_buffer).append_to(sender_ct_args);
     TensorAccessorArgs(*gate_up0_buffer).append_to(sender_ct_args);
     TensorAccessorArgs(*down0_buffer).append_to(sender_ct_args);
     append_addrs_ct(sender_ct_args);
@@ -620,11 +656,18 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
         .processor = DataMovementProcessor::RISCV_0,
         .noc = NOC::NOC_0,
     };
-    // Pass the routing buffer as a BufferBinding (not a raw address) so the framework
-    // patches the address on program-cache hits instead of rebuilding the descriptor.
+    // Pass the routing buffers as BufferBindings (not raw addresses) so the framework
+    // patches the addresses on program-cache hits instead of rebuilding the descriptor.
     sender_desc.emplace_runtime_args(
         sender,
-        {routing_buffer, mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, num_dests, core_index_for(sender)});
+        {routing_buffer,
+         mcast_start_x,
+         mcast_start_y,
+         mcast_end_x,
+         mcast_end_y,
+         num_dests,
+         core_index_for(sender),
+         score_buffer});
     desc.kernels.push_back(std::move(sender_desc));
 
     // ---- Input-broadcaster kernel on {1,0} (NoC 1). ----
