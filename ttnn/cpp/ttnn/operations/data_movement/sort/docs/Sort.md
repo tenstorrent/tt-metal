@@ -74,6 +74,7 @@ Both `ROW_MAJOR` and `COL_MAJOR` shard orientations are accepted.
   the `indices` dtype must be `UINT16` or `UINT32`.
 - The two preallocated tensors may have **different** layouts and memory
   configs from each other and from the input.
+- For sort widths greater than 256, preallocated `uint16` indices use an internal `uint32` tensor and are cast back when the width fits.
 - If the buffer changes during the composite-layer conversions, the user's
   tensor handle is silently rebound to the new buffer so the call site sees
   the result regardless.

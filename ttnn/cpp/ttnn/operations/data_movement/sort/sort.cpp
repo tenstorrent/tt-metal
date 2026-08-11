@@ -330,13 +330,19 @@ std::vector<Tensor> sort(
     // UINT16 values corrupt for sort widths above 256 (SFPU LO16 tracking limit)
     // in both 16- and 32-bit dest modes; route those through FLOAT32 (exact for
     // every uint16 value) and cast the values back after sorting. The indices
-    // output is unaffected (UINT32 via the device-op width rule).
+    // output is also forced to UINT32 above 256, including preallocated UINT16
+    // outputs, then cast back when the logical width fits.
     const bool widen_u16 = (padded_input_tensor.dtype() == DataType::UINT16 &&
                             padded_input_tensor.logical_shape()[-1] > 256);
+    const bool force_u32_indices =
+        padded_input_tensor.logical_shape()[-1] > 256 && optional_output_tensors.has_value() &&
+        std::get<1>(*optional_output_tensors).dtype() == DataType::UINT16;
     if (widen_u16) {
         padded_input_tensor = ttnn::typecast(padded_input_tensor, DataType::FLOAT32);
-        // The prim requires UINT16/UINT32 indices; let it allocate FLOAT32
-        // values + UINT32 indices and rebind the user's handles below.
+    }
+    if (widen_u16 || force_u32_indices) {
+        // Let the prim allocate a UINT32 index tensor and rebind the user's
+        // preallocated handles below.
         output_tensors = {std::nullopt, std::nullopt};
     }
     auto sorted_tensors = ttnn::prim::sort(
@@ -345,8 +351,10 @@ std::vector<Tensor> sort(
     auto results = dm::post_sort_transform_tensor(
         input_tensor, sorted_tensors, dim, is_dim_last_idx, original_lshape, device_op_mem_cfg);
 
-    if (widen_u16) {
-        results[0] = ttnn::typecast(results[0], DataType::UINT16);
+    if (widen_u16 || force_u32_indices) {
+        if (widen_u16) {
+            results[0] = ttnn::typecast(results[0], DataType::UINT16);
+        }
         // Honor a preallocated UINT16 index output only when every index fits.
         if (optional_output_tensors.has_value() &&
             std::get<1>(*optional_output_tensors).dtype() == DataType::UINT16) {

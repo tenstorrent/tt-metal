@@ -148,6 +148,30 @@ def test_sort_stable_uint16_input_with_preallocated_outputs(width, descending, d
         ttnn.to_torch(ttnn_sort_indices, dtype=torch.uint16).to(torch.int64),
     )
 
+@pytest.mark.parametrize("width", [288, 544])
+@pytest.mark.parametrize("descending", [False, True])
+def test_sort_stable_bfloat16_input_with_preallocated_uint16_indices(width, descending, device):
+    input = torch.zeros((1, 1, 32, width), dtype=torch.bfloat16)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    torch_sort_values, torch_sort_indices = torch.sort(input, dim=-1, descending=descending, stable=True)
+    ttnn_sort_values = ttnn.zeros_like(ttnn_input)
+    ttnn_sort_indices = ttnn.zeros_like(ttnn_input, dtype=ttnn.uint16)
+
+    ttnn.sort(
+        ttnn_input,
+        dim=-1,
+        descending=descending,
+        stable=True,
+        out=(ttnn_sort_values, ttnn_sort_indices),
+    )
+
+    assert_equal(torch_sort_values, ttnn.to_torch(ttnn_sort_values))
+    assert_equal(
+        torch_sort_indices.to(torch.int64),
+        ttnn.to_torch(ttnn_sort_indices, dtype=torch.uint16).to(torch.int64),
+    )
+
 
 @pytest.mark.parametrize(
     "shape, dim, descending",
