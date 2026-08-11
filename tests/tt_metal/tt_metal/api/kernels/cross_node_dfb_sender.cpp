@@ -5,7 +5,7 @@
 // CrossNodeDFB sender kernel
 //
 // Compile-time parameters (via kernel compile_args):
-//   [0] remote_dfb_id      - runtime-assigned slot (return value of AttachCrossNodeDFB on host)
+//   [0] remote_dfb_id      - runtime-assigned slot (CreateCrossNodeDFB remote_dfb_id on host)
 //   [1] entry_size         - bytes per entry (must be L1_ALIGNMENT multiple)
 //   [2] num_entries        - number of entries to push per receiver
 //   [3] write_primitive    - 0=write_broadcast, 1=write_strided,

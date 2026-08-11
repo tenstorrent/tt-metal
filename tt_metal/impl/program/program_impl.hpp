@@ -309,13 +309,7 @@ public:
         uint32_t credit_reset_addr;
         uint32_t credit_reset_size;
         uint32_t entry_size;
-        std::optional<std::string> relay_dfb_name;
-    };
-
-    // Runtime slot registry: one ascending slot per distinct CrossNodeDFB attached to this program.
-    struct CrossNodeDFBSlotRegistration {
-        uint8_t remote_dfb_id;
-        std::optional<std::string> relay_dfb_name;
+        uint8_t relay_dfb_id;
     };
 
     // Read-only accessor for dispatch to iterate CrossNodeDFB attachments.
@@ -323,15 +317,20 @@ public:
         return per_core_cross_node_dfbs_;
     }
 
-    // Mirrors GlobalCB's remote-CB attachment path.
-    uint8_t attach_cross_node_dfb(
-        const CoreRangeSet& cores,
-        const experimental::CrossNodeDFB& gdfb,
-        const std::optional<std::string>& relay_dfb_name = std::nullopt);
+    // Wire a CrossNodeDFB onto its all_cores and store it under the new slot id.
+    uint8_t add_cross_node_dfb(experimental::CrossNodeDFB gdfb);
 
-    // Update the config page address for a previously-attached CrossNodeDFB slot.
-    // Called when the CrossNodeDFB was reallocated dynamically.
-    void update_dynamic_cross_node_dfb_address(const experimental::CrossNodeDFB& gdfb);
+    const experimental::CrossNodeDFB& get_cross_node_dfb(uint8_t remote_dfb_id) const;
+    experimental::CrossNodeDFB& get_cross_node_dfb(uint8_t remote_dfb_id);
+
+    // Mark a normal local DFB as the typed relay for an attached CrossNodeDFB.
+    // The local DFB borrows the CrossNode data buffer; its device_slot is emitted
+    // only on receiver cores and consumed by CrossNodeDFB::bind_relay().
+    void register_cross_node_relay_dfb(
+        const CoreRangeSet& receiver_cores, uint8_t remote_dfb_id, uint32_t relay_dfb_host_id);
+
+    // Retarget the data ring of an existing CrossNodeDFB slot to `buffer`.
+    void update_dynamic_cross_node_dfb_address(uint8_t remote_dfb_id, Buffer& buffer);
 
     // Allocates TCs and remapper configs, cannot be done on creation because we need to determine if a set of DFBs on a
     // core require remapper being enabled
@@ -533,7 +532,10 @@ private:
     // CrossNodeDFB attachments: per-core list of (remote_dfb_id, config_page_addr, entry_size).
     // 0-based ascending index space; separate from DFB index space.
     std::unordered_map<CoreCoord, std::vector<CrossNodeDFBAttachment>> per_core_cross_node_dfbs_;
-    std::unordered_map<size_t, CrossNodeDFBSlotRegistration> cross_node_dfb_slot_registry_;
+    // Host objects owned by this program, keyed by remote_dfb_id.
+    std::unordered_map<uint8_t, experimental::CrossNodeDFB> cross_node_dfbs_;
+    // Optional typed relay: remote_dfb_id → local DFB host id (from CreateCrossNodeRelayDataflowBuffer).
+    std::unordered_map<uint8_t, uint32_t> cross_node_relay_host_ids_;
     uint8_t next_cross_node_dfb_slot_ = 0;
     tt::tt_metal::experimental::dfb::detail::TileCounterAllocator tile_counter_allocator_;
     tt::tt_metal::experimental::dfb::detail::RemapperIndexAllocator remapper_index_allocator_;

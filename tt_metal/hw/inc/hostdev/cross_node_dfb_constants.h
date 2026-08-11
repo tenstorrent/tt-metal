@@ -15,8 +15,9 @@ inline constexpr uint16_t CROSS_NODE_DFB_OFFSET_NONE = 0xFF;
 // Max CrossNodeDFBs attachable per program / per core (remote_dfb_id in [0, MAX)).
 inline constexpr uint32_t MAX_CROSS_NODE_DFBS = 16;
 
-// Words per dense kernel-config slot: [config_page_addr, entry_size].
-inline constexpr uint32_t UINT32_WORDS_PER_CROSS_NODE_DFB_CONFIG = 2;
+// Words per dense kernel-config slot: [config_page_addr, entry_size, relay_dfb_id].
+// relay_dfb_id is RELAY_DFB_INVALID when the host did not declare a relay.
+inline constexpr uint32_t UINT32_WORDS_PER_CROSS_NODE_DFB_CONFIG = 3;
 
 // Leading word of the kernel-config CrossNode region: num_slots, then dense slots.
 inline constexpr uint32_t CROSS_NODE_DFB_REGION_HEADER_WORDS = 1;

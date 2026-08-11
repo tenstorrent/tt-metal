@@ -92,7 +92,7 @@ struct CrossNodeDFBInterface {
 static_assert(sizeof(CrossNodeDFBInterface) == sizeof(CrossNodeReceiverDFBInterface));
 
 // Global array, one entry per remote DFB index (indexed by remote_dfb_id).
-// Firmware populates from the kernel config page; register_relay_dfb() fills receiver.relay_id.
+// Firmware populates from the kernel config page.
 extern CrossNodeDFBInterface g_cross_node_dfb_interface[MAX_CROSS_NODE_DFBS];
 
 FORCE_INLINE CrossNodeSenderDFBInterface& get_cross_node_sender_dfb_interface(uint32_t dfb_id) {

@@ -355,7 +355,7 @@ void finalize_dfb_masks(
 }
 
 // Compute cross_node_dfb_offset for all kernel groups and return the new base offset.
-// CrossNodeDFB region: word[0]=num_slots, then num_slots × 2-word entries.
+// CrossNodeDFB region: word[0]=num_slots, then num_slots × 3-word entries.
 // If none are attached, launch-msg cross_node_dfb_offset is CROSS_NODE_DFB_OFFSET_NONE.
 uint32_t finalize_cross_node_dfbs(
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups, ttsl::Span<ProgramImpl*> programs, uint32_t base_offset) {
@@ -1495,7 +1495,7 @@ private:
 };
 
 // Generates multicast write commands for CrossNodeDFB kernel-config entries.
-// Region: word[0]=num_slots, then dense [config_page_addr, entry_size] pairs
+// Region: word[0]=num_slots, then dense [config_page_addr, entry_size, relay_dfb_id] slots
 // (slot index == remote_dfb_id). Starts at ProgramConfig::cross_node_dfb_offset.
 class CrossNodeDFBCommandGenerator {
 public:
@@ -1548,6 +1548,7 @@ public:
                     const uint32_t base = CROSS_NODE_DFB_REGION_HEADER_WORDS + slot * CROSS_NODE_DFB_CONFIG_WORDS;
                     payload[base + 0] = attachment.config_page_addr;
                     payload[base + 1] = attachment.entry_size;
+                    payload[base + 2] = attachment.relay_dfb_id;
                 }
 
                 const CoreCoord virtual_start =

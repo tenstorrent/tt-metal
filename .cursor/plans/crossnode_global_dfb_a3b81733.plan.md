@@ -18,7 +18,7 @@ todos:
     content: "Phase 2b: Quasar GlobalDFB (no per-program wipe) + cross-program persistence tests"
     status: pending
   - id: phase3-relay
-    content: "Phase 3: Relay for CrossNode+Global; streaming-only Global→compute; WH/BH+Quasar relay tests"
+    content: "Phase 3a: CrossNode relay — host Approach C, bind_relay/RelayView (real DataflowBuffer), WH/BH device DM→TRISC tests; 3b Global+Quasar later"
     status: pending
 isProject: false
 ---
@@ -58,7 +58,7 @@ flowchart LR
     S2[Sender prog A] -->|durable config| R2[Receiver prog B]
   end
   subgraph phase3 [Phase3 Relay]
-    R3[Receiver DM] -->|push_relay_front| L[Local DFB]
+    R3[Receiver DM] -->|bind_relay plus push_back| L[Local DFB]
     L --> C[Compute TRISC]
   end
 ```
@@ -236,7 +236,7 @@ sequenceDiagram
 
 
 
-Relay (Phase 3, optional): DM owns CrossNode/Global wait/pop; compute uses local DFB on same L1 (`register_relay_dfbs` / `push_relay_front`).
+Relay (Phase 3, optional): DM owns CrossNode/Global wait/pop; compute uses a host-declared local DFB on the same L1. Device: host-provisioned `bind_relay()` → `RelayView`, whose `reserve_back`/`push_back` forward to a real `DataflowBuffer`.
 
 **Not in v1:** nested-wrap / rotated-subring compute reads; compute as remote credit owner (no NOC atomics from TRISC).
 
@@ -282,7 +282,7 @@ For B, consuming “the next weight” is not always `rd_ptr + entry_size` in th
 | -------------------------------- | ----------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Prefer non-rotated layouts       | Streaming or per-receiver consume-order shards                                                        | Best: normal local DFB / TC ops                                                                                                                      |
 | Different base per receiver      | Each receiver owns an independent ring (or shard) laid out in its read order                          | Eliminates rotation; TCs work normally. This is “different bases,” but it is **not** one shared rotated ring — it is N separate FIFOs (or N shards). |
-| DM remaps into relay             | Receiver DM walks the weird addressing; `push_relay_front` presents a **linear** local DFB to compute | Good Quasar path if a rotated shared ring is unavoidable: compute never sees dual-wrap                                                               |
+| DM remaps into relay             | Receiver DM walks the weird addressing; `relay.push_back` presents a **linear** local DFB to compute | Good Quasar path if a rotated shared ring is unavoidable: compute never sees dual-wrap                                                               |
 | Software dual-wrap view API      | Explicit offset + logical wrap on WH/BH CB pointers (today’s matmul)                                  | Poor Quasar TC fit: TCs track occupancy/free-space only, not a second logical wrap                                                                   |
 | New first-class “RotatedViewDFB” | Host/device abstraction encoding start offset + region                                                | Only if product later requires wait-for-all rotated matmul via DFB APIs on compute                                                                   |
 
@@ -385,7 +385,7 @@ Device (same patterns for both types):
 ```text
 Sender:   reserve_back[_for_receiver] → write_to_receiver | write_broadcast | write_strided → flush_writes → push_back[_to_receiver]
 Receiver: wait_front → get_read_ptr → pop_front
-Relay:    register_relay_dfbs → DM wait_front + push_relay_front; compute local DFB wait/pop
+Relay:    host declares typed pair → DM bind_relay + remote wait/pop + local relay push; compute local DFB wait/pop + completion
 Global:   commit()
 ```
 
@@ -434,101 +434,172 @@ Global:   commit()
 
 ---
 
-## Phase 3 — Relay (both types)
+## Phase 3 — Relay (CrossNode first; Global follows same shape)
 
-- Relay is **optional**: only when compute consumes. DM↔DM CrossNode/Global need no local DFB.
-- When used: DM owns remote credits; compute uses local DFB aliased to same L1 FIFO ([#47637 relay](https://github.com/tenstorrent/tt-metal/pull/47637) + remote CB overlay pattern).
-- Device: `register_relay_dfbs`, `push_relay_front`.
-- **Streaming-only** (or DM-linearized) for Global→compute; no RotatedView abstraction in this phase.
-- Quasar: co-init with local DFB/TC (shared ring, separate SW rd vs remote credits).
+Relay is **optional**: only when compute consumes. Pure DM↔DM needs no local DFB and no device bind.
+**Streaming-only** (or DM-linearized) for Global→compute; no RotatedView in this phase.
 
-**Tests:** `RelayDFB_DM_to_Compute_1to1` (CrossNode); `RelayDFB_Global_Streaming`; Quasar relay smoke; plus existing DM↔DM tests remain without relay. (No CrossNode mid-flight entry_size resize — fixed at Create; resize belongs on GlobalDFB if needed.)
+### Contract (locked)
 
-### Relay considerations — connecting a local DFB to CrossNode/Global
+| Layer | Who | What |
+|-------|-----|------|
+| L1 alias | **Host Approach C** | Local DFB/CB backed by `remote.dfb_buffer()` (same address/size/cores) |
+| Relay declaration | **Host (required)** | Typed CrossNode↔local-DFB relationship; creates the alias and records the pair. A name alone is not a declaration |
+| Credit ownership | **DM only** | CrossNode `wait_front` / `pop_front` (NOC ack). TRISC never opens CrossNode |
+| Local publish | **DM via `bind_relay()` only** | Required DM path: `cn.bind_relay()` → `RelayView`. DM must **not** construct `DataflowBuffer` from the relay binding token |
+| Local consume | **TRISC via normal token** | `DataflowBuffer(dfb::relay_…)` / CTA `device_slot` — normal local consumer; no CrossNode, no `bind_relay` |
+| Arch sync | Local DFB impl | WH/BH: `cb_push_back` (shared `pages_received`). Quasar: TC post via `DataflowBuffer::push_back` after `dfb_ensure_ready` |
 
-Host must participate in **address aliasing**. Device must participate in **credit/relay ownership**. Those are different “connections”; conflating them leads to half-wired APIs (e.g. Attach storing `relay_dfb_name` without resolving L1 or slot).
+**DM vs TRISC binding split (UX lock):** Host emits the relay local DFB's `DFBBindingToken` / Metal 2.0 accessor **only to TRISC (consumer) kernels**. DM receiver kernels do **not** get that token in their bindings or compile args — they open the relay solely through `cn.bind_relay()`, which reads the host-provisioned `iface.relay_id`. That prevents “I have a relay token so I’ll just `DataflowBuffer(token)` on DM” confusion while leaving TRISC looking like every other local DFB consumer.
 
-#### What “connected” means (three layers)
+**Delete / do not keep (CrossNode):** `push_relay_front` (wrong — pointer-only, bypasses shared credits/TCs), `align_local_dfb`, `align_one_relay_init`, `align_relay_init` geometry patch, `align_local_cbs_to_cross_node_receiver_dfb` (already removed). GlobalDFB later reintroduces GlobalCB-style live-ptr align only.
 
-1. **Same L1 FIFO (host)** — The local DFB/CB must be backed by the CrossNode/Global **data ring** address. Proven pattern today: GlobalCB via `CreateCircularBuffer(program, cores, config, *global_cb)` → `globally_allocated_address` from the GCB buffer ([`circular_buffer.cpp`](tt_metal/impl/buffers/circular_buffer.cpp); matmul ~2134–2142). Without this, relay is two unrelated rings.
-2. **Which local index pairs with which remote slot (host or kernel args)** — So DM knows `relay_id` ↔ `remote_dfb_id`. TRISC only needs the local index.
-3. **Runtime relay protocol (device)** — Receiver DM: `register_relay_dfb` → `wait_front` → `push_relay_front` → `pop_front` (NOC ack). Compute: local `wait_front`/`pop_front` only. Credits stay with DM; compute never issues NOC atomics.
+**Avoid:** Approach A alone (silent L1 mismatch). **Avoid:** Attach name alone. **Avoid v1:** Approach D (hide bind in FW). **Avoid:** emitting the relay `DFBBindingToken` to DM.
 
-So: host **must** own (1). (2) needs an explicit association somewhere. (3) is always a device API. Relay remains **optional** — DM↔DM skips (2)/(3) entirely. CrossNode vs Global share the same host aliasing shape; Global only means the aliased buffer outlives programs.
+---
 
-#### Approach A — Device-only wiring
+### Implementation order — CrossNode relay (WH/BH first)
 
-Host creates CrossNode/Global + a separate local CB/DFB; kernels take `remote_dfb_id` + `relay_cb_id` as compile args; DM calls `register_relay_dfb`. (Current relay test kernels.)
+#### Step 1 — Host Approach C (L1 alias + slot)
 
-| Pros | Cons |
-|------|------|
-| Minimal host API; flexible per-kernel | Easy to mis-alias addresses; host does not validate the pair |
-| Matches “DM owns credits” clearly | Every kernel re-implements pairing / compile-arg wiring |
-| Fine for DM↔DM (no relay) | |
-
-#### Approach B — Attach metadata only (`relay_dfb_name`)
-
-`AttachCrossNodeDFB(..., "local_relay_dfb")` stores a name (comment: resolve at JIT). As landed: **stored, not resolved** — does not alias L1.
-
-| Pros | Cons |
-|------|------|
-| Host records intent; optional for DM-only | Name alone does not connect memory |
-| Can later auto-inject align / validate | Stringly-typed; must match Metal 2.0 accessor names |
-| Same Attach site for Global across programs | Half-built today — false sense of wiring |
-
-#### Approach C — Host “create local DFB from remote” (GlobalCB pattern) — **preferred**
-
-Mirror GCB: a host call creates a **local** DFB/CB whose buffer is the CrossNode/Global data buffer, and records the local↔remote pair.
+Goal: one typed host operation both (1) creates a local DFB whose backing store **is** the CrossNode data ring and (2) marks that local DFB as the only relay that may bind to this CrossNodeDFB.
 
 ```text
-CreateCrossNodeDFB / CreateGlobalDFB
-Attach*(program, cores, remote)                    // remote slot
-CreateDataflowBuffer(program, cores, local, remote) // aliases remote.dfb_buffer()
-# or Attach*(..., relay_dfb = local_handle)
+gdfb_result = CreateCrossNodeDFB(program, device, mapping, entry_size, num_entries, ...)
+remote_slot = gdfb_result.remote_dfb_id   // wired on all mapping cores
+
+# Required typed relationship (name TBD):
+relay_id = CreateCrossNodeRelayDataflowBuffer(
+    program,
+    receiver_cores,
+    DataflowBufferConfig{.entry_size = entry_size, .num_entries = num_entries, ...},
+    gdfb)
 ```
 
-| Pros | Cons |
-|------|------|
-| Host **owns** address aliasing (hard to get wrong) | New Create/Attach overload surface |
-| Can validate size / shard / core membership | Couples local DFB allocator to remote object |
-| Matches proven GlobalCB UX | Still need device `register_relay_dfb` (or auto-inject) |
-| Natural Metal 2.0 binding later (`binds_to: cross_node_x`) | |
+`CreateCrossNodeRelayDataflowBuffer` is not merely a borrowing convenience. It must:
 
-#### Approach D — Fully automatic host (no device register)
+1. Create the normal local DFB through `CreateDataflowBuffer`, with borrowed storage set from `gdfb.dfb_buffer()`.
+2. Record a typed pair in `Program`: `{CrossNodeDFB host identity, local DFB host id}`.
+3. Validate one relay per CrossNode attachment; relay cores are receiver cores (or a supported subset); entry size, depth, L1 type, shard grid and byte size match.
+4. At program finalization, resolve the local host `id` to `device_slot` and emit that slot in the receiver CrossNode config/launch metadata.
+5. Have FW initialize `CrossNodeReceiverDFBInterface::relay_id` from that host-emitted slot, or `RELAY_DFB_INVALID` when no relay was declared.
+6. When binding kernels to the relay local DFB: emit the `DFBBindingToken` / accessor **only to TRISC consumers**. Do **not** add the relay accessor (or a Gen1 CTA for its `device_slot`) to the DM receiver kernel — DM uses `cn.bind_relay()`.
 
-Host sees the pair and injects init so kernels never call `register_relay_dfb`.
+This makes host declaration authoritative. The existing string `relay_dfb_name` may remain tooling metadata, but it must resolve to the same typed local DFB or be removed; it cannot independently enable relay.
 
-| Pros | Cons |
-|------|------|
-| Kernels look like normal local DFB consumers | Hides credit ownership; hard to debug |
-| | Resize / multi-relay / mid-kernel rebinding get magical |
-| | Prefetcher-style switching is awkward |
+Emit to kernels (compile args or Metal 2.0 bindings):
+- DM receiver: `remote_dfb_id` only — **no** relay `DFBBindingToken`
+- TRISC: relay `DFBBindingToken` / `device_slot` only — normal local DFB construction
 
-#### TRISC runtime align — **GlobalDFB only**, not CrossNode
+**IDs reminder:** host `id` for aliasing/pairing bookkeeping; `device_slot` for all device indices / `DFBBindingToken` / `get_logical_handle()`.
 
-`align_local_cbs_to_remote_cb` exists because GlobalCB/GlobalDFB rings **persist mid-flight across programs**: a freshly FW-inited local CB starts at ring begin, while the live remote `rd_ptr` may be elsewhere. TRISC must re-align to that live state (today manually; long-term JIT-emitted like `ALIGN_LOCAL_CBS_TO_REMOTE_CBS`).
+#### Step 2 — Device API rewrite (`cross_node_dfb.h`)
 
-**CrossNode does not need this.** Every CrossNode program init resets `fifo_rd_ptr` / `fifo_wr_ptr` to `fifo_start_addr`. With Approach **C** (local CB/DFB aliased onto `dfb_buffer()`), normal local CB/DFB FW init already matches the ring — no TRISC helper, no remote id in the compute kernel, no JIT `ALIGN_LOCAL_CBS_TO_CROSS_NODE_*`.
+Replace the current relay block with:
 
-| Type | TRISC align needed? | Mechanism |
-|------|---------------------|-----------|
-| **CrossNodeDFB** | **No** | Host Approach C + reset-on-init FW; TRISC only local wait/pop |
-| **GlobalDFB** (Phase 2/3) | **Yes** (WH/BH) | `align_local_cbs_to_global_receiver_dfb` (name TBD) — GlobalCB mirror; JIT-emit long-term. Quasar: preserve TC state across programs / co-init, not a software ptr patch |
-| DM `register_relay_dfb` | Both (when relay used) | Stores `relay_id`; DM-side `align_relay_init` may still reset DM's local wr/rd copy at register time |
+```cpp
+// DM only
+RelayView bind_relay();  // requires host-provisioned iface.relay_id; constructs DataflowBuffer(relay_id)
 
-Removed: `align_local_cbs_to_cross_node_receiver_dfb` (was a mistaken CrossNode port of the GlobalCB helper).
+class RelayView {
+  DataflowBuffer dfb_;   // ctor → WH/BH: LocalCBInterface; Quasar: LocalDFBInterface + dfb_ensure_ready
+public:
+  FORCE_INLINE void reserve_back(uint32_t n) { dfb_.reserve_back(n); }
+  FORCE_INLINE void push_back(uint32_t n) { dfb_.push_back(n); }
+  FORCE_INLINE void wait_consumed(uint16_t n); // wait until TRISC popped n published entries
+  // no wait_front/pop_front on DM — TRISC owns consume
+};
+```
 
-#### Plan default (Phase 3)
+`bind_relay()` is **required on DM** (not optional sugar): it is the only supported way for the receiver DM to open the relay. It asserts `iface.relay_id != RELAY_DFB_INVALID`, takes no token, and constructs the real `DataflowBuffer` from the host-provisioned slot (so Quasar still hits `dfb_ensure_ready` / correct iface). The same local DFB still gets a generated `DFBBindingToken`, but that token is emitted only to TRISC.
 
-| Concern | Who |
-|---------|-----|
-| Same L1 address / size / cores | **Host** — prefer **Approach C** |
-| Optional name/handle for tooling & Metal 2.0 | Host metadata on Attach (**B** as supplement — resolve it or drop it; do not rely on it alone) |
-| Credit bridge (`push_relay_front` / `pop_front`) | **Device** — keep `register_relay_dfb` explicit on DM |
-| TRISC local CB ptr/limit sync (CrossNode) | **Nothing** — Approach C + reset-on-init suffice; TRISC never sees remote id |
-| TRISC local CB ptr/limit sync (Global) | **Host/JIT** — emit Global align define (GlobalCB pattern); not applicable to CrossNode |
+DM loop:
 
-**Avoid for production ops:** device-only (A) as the sole contract — address sharing will silently break. **Avoid:** Attach string as the only API (B alone). **Avoid for v1:** fully hiding relay in FW (D).
+```cpp
+CrossNodeDFB cn(remote_slot);
+auto relay = cn.bind_relay();   // only DM path — do not DataflowBuffer(relay_token) here
+
+for (...) {
+    relay.reserve_back(n);   // local free space (TRISC caught up)
+    cn.wait_front(n);        // remote SW credits — payload already in shared L1
+    relay.push_back(n);      // publish to TRISC (cb_push_back / TC post)
+    relay.wait_consumed(n);  // TRISC has popped the n published relay entries
+    cn.pop_front(n);         // only now may the remote sender reuse their L1 slots
+}
+```
+
+TRISC (normal local DFB — token works as usual):
+
+```cpp
+DataflowBuffer relay(dfb::relay_weights);  // or Gen1 CTA device_slot
+for (...) {
+    relay.wait_front(n);
+    // compute / copy out for test verification
+    relay.pop_front(n);
+}
+```
+
+`relay.wait_consumed(n)` waits until free space has grown by `n` relative to the post-`push_back` level (capped at capacity). That means TRISC has popped those published entries. Required for in-place/zero-copy relay because `cn.pop_front(n)` returns remote credits and permits the sender to overwrite those ring slots. `relay.push_back(n)` only makes entries visible to TRISC—it does not mean TRISC has consumed them.
+
+This v1 protocol serializes each published batch. A future pipelined implementation may expose cumulative local-consumption progress or use a reverse completion channel, but it must preserve the same rule: no remote ack until the corresponding local consumer lifetime has ended. Do not implement the reverse completion channel as an UNPACK-side `DataflowBuffer::push_back`; compute production is PACK-side.
+
+FW: keep `relay_id` on `CrossNodeReceiverDFBInterface`, but populate it from host metadata rather than from `bind_relay`. No TRISC CrossNode init path.
+
+Quasar: no extra CrossNode TC logic — relay local DFB goes through normal DFB descriptor + FW TC init; remote credits remain software `pages_sent`/`pages_acked`.
+
+#### Step 3 — Kernels
+
+Rewrite orphaned kernels (or replace):
+
+| Kernel | Role |
+|--------|------|
+| `cross_node_dfb_relay_receiver.cpp` | DM: host-provisioned `bind_relay()` + loop above; compile args `remote_slot`, `num_entries` (+ entry_size if needed) |
+| `cross_node_dfb_relay_trisc.cpp` | TRISC: local wait/pop only (already trimmed); optionally write a sentinel / checksum into a result L1 for host check |
+| Sender | Reuse `cross_node_dfb_sender.cpp` (Flow A/2) |
+
+Use `RelayView::wait_consumed(n)` before each remote `pop_front`. Tests transfer more than the ring depth to verify that sender wrap cannot overwrite TRISC-visible entries.
+
+#### Step 4 — Device tests (WH/BH CrossNode) — must run kernels on device
+
+All in `test_cross_node_dfb.cpp` (or sibling) via `MeshDispatchFixture`. Host-only Attach-name checks are **not** relay coverage.
+
+| Test | What it proves |
+|------|----------------|
+| `RelayDFB_DM_to_Compute_1to1` | Approach C alias + DM bind + TRISC consume; host verifies payload (TRISC copies tiles to a result buffer / DRAM, or DM+TRISC cooperate on a known pattern) |
+| `RelayDFB_Broadcast_1to4` | One sender broadcasts to four receiver DM→TRISC relay paths; host verifies every receiver shard. Delay one TRISC to prove collective sender progress respects the slow receiver |
+| `RelayDFB_Backpressure_NoOverwrite` | Ring depth 2–4 and transfers >2× depth; TRISC deliberately delayed. Completion DFB gates `cn.pop_front`, and final payload/order proves no wrapped overwrite |
+| `RelayDFB_MultiEntryPush` | `reserve/wait/push/pop` with `n>1` batches |
+| `RelayDFB_HostRelationshipValidation` | Reject wrong page size/cores/size, duplicate relay, non-receiver relay cores, unresolved name, and attaching a generic borrowed local DFB that was not created/marked as this CrossNode relay |
+| `RelayDFB_UnmarkedBindRejected` | Optional watcher/assert device negative test: raw Gen1 kernel calls `bind_relay()` for a CrossNode object with no host relay declaration and faults on `RELAY_DFB_INVALID` |
+
+Delete / replace misleading early tests: name-only `ProgramCrossNodeDFBsAPI_RelayDFBNames` may remain as metadata smoke; any “RelayDFBAlignment” that doesn’t run TRISC must not claim relay coverage.
+
+**Quasar CrossNode relay** (after Phase 1b): same tests; TC path exercised automatically via `DataflowBuffer`. Add `RelayDFB_Quasar_TCReady` smoke if needed (construct before push does not hang — `dfb_ensure_ready`).
+
+**GlobalDFB relay** (after Phase 2): `RelayDFB_Global_Streaming` + cross-program persistence with live-ptr align on WH/BH; not part of first CrossNode relay land.
+
+#### Step 5 — Docs / cleanup
+
+- Update `CrossNode_Global_DFB.md` relay API to `bind_relay` / `RelayView`; remove `push_relay_front`.
+- Comment Flows in `cross_node_dfb.h` RELAY section to match snippets above.
+- Plan FAQ 3b: compute never needs remote id on CrossNode.
+
+---
+
+### GlobalDFB relay deltas (later)
+
+Same Approach C + `bind_relay`. Extra on WH/BH: DM and/or JIT-emitted TRISC `align_local_cbs_to_global_receiver_dfb` because the ring may be mid-flight. Quasar: do **not** wipe TC / local DFB state across programs; co-init once with Global object.
+
+---
+
+### Approach summary (reference)
+
+| | Idea | Role now |
+|--|------|----------|
+| **A** Device-only | Kernels pass ids; no host alias | Tests-only scaffolding; not production |
+| **B** Attach name | Metadata | Optional; never alone |
+| **C** Host alias local onto `dfb_buffer()` | **Required** | |
+| **D** Hide bind in FW | No device `bind_relay` | Avoid v1 |
 
 ---
 
@@ -538,6 +609,7 @@ Removed: `align_local_cbs_to_cross_node_receiver_dfb` (was a mistaken CrossNode 
 - Non-streaming / nested-wrap Global→matmul compute; no RotatedViewDFB abstraction in Phases 1–3.
 - Host `ResetGlobalDFBPointers` (H↔D sync with device commit; recreate object instead).
 - Building primary path on `remote_cb_push_back_and_write_pages`.
+- JIT auto-emit of `bind_relay` (Approach D).
 
 ---
 
@@ -545,6 +617,9 @@ Removed: `align_local_cbs_to_cross_node_receiver_dfb` (was a mistaken CrossNode 
 
 ```text
 Phase 0 → Phase 1a (WH/BH CrossNode) → Phase 1b (Quasar CrossNode)
-       → Phase 2a (WH/BH Global) → Phase 2b (Quasar Global)
-       → Phase 3 (relay) → later: Metal 2.0 ProgramSpec
+       → Phase 3a (CrossNode relay WH/BH: host C → device bind_relay → device tests)
+       → Phase 2a/2b (Global) → Phase 3b (Global relay + Quasar relay smoke)
+       → later: Metal 2.0 ProgramSpec
 ```
+
+**Why pull CrossNode relay before Global?** Borrowed `dfb_buffer()` already exists; Approach C unblocks real DM→TRISC coverage without waiting on persistence/commit. Global relay reuses the same device API.

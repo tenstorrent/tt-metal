@@ -1,7 +1,7 @@
 # CrossNodeDFB & GlobalDFB — Live Working Document
 
 **Branch:** `abhullar/gb-cn-dfbs`
-**Status date:** 2026-08-05 (updated after stash apply)
+**Status date:** 2026-08-10
 **Purpose:** Portable design + implementation handoff so work can continue on another machine without Cursor chat context.
 
 > **This chat vs prior chats:** The Quasar tilize / datacopy investigation in a recent session is **unrelated**. CrossNode/Global DFB design lived primarily in [CrossNode Global DFB plan](e74d1ad1-0a33-4a49-806f-7d14aedd38f2) (~2026-07-21). This document is the branch-checkable source of truth.
@@ -16,7 +16,7 @@
 | **Phase 1a — WH/BH CrossNodeDFB** | **Mostly landed (unstaged stash apply)** — see snapshot below |
 | **Phase 1b — Quasar CrossNodeDFB** | Pending |
 | **Phase 2a/2b — GlobalDFB** | Not started (config word[4] reserved for future checkpoint) |
-| **Phase 3 — Relay** | **Partial early land** on CrossNode (device hooks + `TensixRelayDFBAlignment`); full Phase 3 still open |
+| **Phase 3 — Relay** | CrossNode host/device implementation + on-device tests added; final hardware rerun pending |
 | **Metal 2.0 ProgramSpec wiring** | Still out of scope; stub still fatals |
 
 **Immediate next steps (Phase 1a close-out, then 1b):**
@@ -50,13 +50,13 @@ Stash applied ~**3.4k LOC** of WH/BH CrossNodeDFB onto `abhullar/gb-cn-dfbs` (gi
 ### Host surface (as landed)
 
 ```text
-experimental::CreateCrossNodeDFB(device, sender_receiver_mapping, entry_size, num_entries, buffer_type=L1)
-experimental::AttachCrossNodeDFB(program, core_spec, dfb, relay_dfb_name = nullopt) → uint8_t slot
-experimental::UpdateDynamicCrossNodeDFBAddress(program, dfb)
+experimental::CreateCrossNodeDFB(program, device, mapping, entry_size, num_entries, ...) → uint8_t remote_dfb_id
+experimental::CreateCrossNodeRelayDataflowBuffer(program, receivers, config, remote_dfb_id) → relay host id
+experimental::UpdateDynamicCrossNodeDFBAddress(program, remote_dfb_id, buffer)
 ```
 
 - Include via `impl/dataflow_buffer/cross_node_dfb.hpp` — **not** yet re-exported from `tt_metal/api/tt-metalium/host_api.hpp`.
-- Data + config buffers are **runtime-allocated** inside Create (receiver-sharded data ring; config sharded over senders ∪ receivers). **No borrowed-user-buffer Create overload yet.**
+- Data is program-allocated or user-borrowed; config remains runtime-allocated.
 - `Attach` takes optional singular `relay_dfb_name` (not a list).
 - Mutual exclusion: CrossNodeDFB and GlobalCircularBuffer cannot coexist on the same Program.
 - Docs on Attach/device header: **same-program only; reset on program init; persistence is GlobalDFB.**
@@ -68,7 +68,8 @@ Layered API matches the Phase 0 FAQ:
 ```text
 Sender:   reserve_back[_for_receiver] → write_{broadcast,to_receiver,strided} → flush_writes → push_back[_to_receiver]
 Receiver: wait_front → get_read_ptr → pop_front
-Relay:    register_relay_dfb / push_relay_front
+Relay DM: bind_relay() → RelayView reserve_back/push_back/wait_consumed(n)
+Relay TRISC: normal DataflowBuffer(binding_token) wait_front/pop_front
 ```
 
 - Prefix layout matches Remote CB so credit helpers can `reinterpret_cast`.
@@ -99,7 +100,10 @@ Relay:    register_relay_dfb / push_relay_front
 | `TensixDecoupledWriteThenCredit` | Write then separate push |
 | `TensixMultipleSenders_MtoN` | Multi-sender |
 | `TensixProgramInitResetsPointers` | **Correct** CrossNode semantics (replaces old CrossProgramPersistence) |
-| `TensixRelayDFBAlignment` | Same-program relay attachment + fixed-size push/pop |
+| `CrossNodeDFB_RelayDFB_DMToCompute_1to1` | Typed host alias + DM bind + TRISC consume |
+| `CrossNodeDFB_RelayDFB_Broadcast_1to4` | Four receiver DM→TRISC relay paths |
+| `CrossNodeDFB_RelayDFB_Backpressure_NoOverwrite` | Multiple wraps with TRISC delay and safe remote ack |
+| `CrossNodeDFB_RelayDFB_MultiEntryPush` | Batched local publish/consume |
 | `TensixBarrierCompletesAll` | Barrier |
 
 Explicitly **not** present (and called out in comments): `TensixRelayDFBTriscCrossProgramPersistence` — deferred to GlobalDFB / Phase 2–3.
@@ -147,7 +151,7 @@ flowchart LR
     S2[Sender prog A] -->|durable config| R2[Receiver prog B]
   end
   subgraph phase3 [Phase3 Relay]
-    R3[Receiver DM] -->|push_relay_front| L[Local DFB]
+    R3[Receiver DM] -->|bind_relay plus push_back| L[Local DFB]
     L --> C[Compute TRISC]
   end
 ```
@@ -168,7 +172,7 @@ Sender:   reserve_back[_for_receiver]
 
 Receiver: wait_front → get_read_ptr / read → pop_front
 
-Relay (optional): register_relay_dfb / push_relay_front
+Relay (optional): host declares typed pair; DM `bind_relay()`; TRISC uses normal local DFB token
 ```
 
 Naming: **relay** (not “shadow”). Landed Attach uses singular `relay_dfb_name`.
@@ -243,8 +247,8 @@ RTA vs config overwrite (`fix_crossnodedfb_rta_ordering_bug_*`): re-verify on th
 - [x] Layered device API (write_* then credit push)
 - [x] Create / Attach / UpdateDynamic + GlobalCB mutual exclusion
 - [x] DM↔DM tests + `TensixProgramInitResetsPointers` (not CrossProgramPersistence)
-- [x] Relay hooks + `TensixRelayDFBAlignment` (early Phase 3)
-- [ ] Borrowed user L1 + shard-spec validation / mismatch tests
+- [x] Typed CrossNode relay host/device implementation + device tests (Phase 3; final hardware rerun pending)
+- [x] Borrowed user L1 + shard-spec validation / mismatch tests
 - [ ] Hybrid Metal 2.0 kernel style for tests (optional polish vs plan rule)
 - [ ] Export via public `host_api.hpp` if desired
 - [ ] Confirm build + `test_cross_node_dfb` green on WH/BH against current main
@@ -267,10 +271,12 @@ RTA vs config overwrite (`fix_crossnodedfb_rta_ordering_bug_*`): re-verify on th
 - [ ] FW must **not** wipe Global config every program
 - [ ] Cross-program persistence tests on QSR
 
-### Phase 3 — Relay (both) — PARTIAL on CrossNode
+### Phase 3 — Relay (both) — CrossNode implementation added
 
-- [x] CrossNode: `register_relay_dfb` / `push_relay_front` / Attach `relay_dfb_name` / `TensixRelayDFBAlignment`
-- [ ] Full DM→Compute correctness suite; Global streaming relay; Quasar relay smoke
+- [x] CrossNode typed host alias + host-provisioned relay device slot
+- [x] DM-only `bind_relay()` / `RelayView`; TRISC normal local DFB binding
+- [x] CrossNode DM→Compute 1:1, 1:4, backpressure/no-overwrite and batched tests added
+- [ ] Final hardware rerun; Global streaming relay; Quasar relay smoke
 - [ ] Streaming-only (or DM-linearized) for Global→compute
 - [ ] Host aliasing API (Approach C below) — preferred over name-only Attach
 
@@ -281,19 +287,19 @@ Host must participate in **address aliasing**. Device must participate in **cred
 **Three layers of “connected”:**
 
 1. **Same L1 FIFO (host)** — Local DFB/CB backed by the CrossNode/Global data ring. Proven pattern: GlobalCB `CreateCircularBuffer(..., *global_cb)` → `globally_allocated_address`. Without this, relay is two unrelated rings.
-2. **Local index ↔ remote slot (host or kernel args)** — So DM/TRISC know `relay_id` ↔ `remote_dfb_id`.
-3. **Runtime relay protocol (device)** — DM: `register_relay_dfb` → `wait_front` → `push_relay_front` → `pop_front`. Compute: local wait/pop only. Credits stay with DM.
+2. **Typed local index ↔ remote slot (host)** — Host emits `relay_id` into the CrossNode receiver interface; DM cannot choose an arbitrary token.
+3. **Runtime relay protocol (device)** — DM: `bind_relay` → remote wait → local push → wait local empty → remote pop. Compute: normal local wait/pop only.
 
 Relay is optional (DM↔DM skips 2/3). CrossNode and Global share the same host aliasing shape; Global only means the aliased buffer outlives programs.
 
 | Approach | Idea | Pros | Cons |
 |----------|------|------|------|
-| **A Device-only** | Kernels take remote+local IDs; DM `register_relay_dfb` (current test kernels) | Minimal host API; clear credit ownership | Easy to mis-alias L1; no host validation |
+| **A Device-only** | Kernels take remote+local IDs without a host relationship | Minimal host API | Easy to mis-alias L1; no host validation; rejected |
 | **B Attach name only** | `Attach(..., relay_dfb_name)` stored for JIT resolve | Records intent; optional for DM-only | As landed: stored not resolved; does not alias memory |
-| **C Host create-from-remote (preferred)** | `CreateDataflowBuffer(..., remote)` or Attach with local handle — aliases `remote.dfb_buffer()` like GlobalCB | Host owns aliasing; validate size/shard/cores; Metal 2.0-friendly | New Create/Attach surface; still need device register |
-| **D Fully automatic host** | Host injects init; no device `register_relay_dfb` | Kernels look like normal local consumers | Hides credits; resize / multi-relay / prefetcher switching get magical |
+| **C Host create-from-remote (selected)** | `CreateCrossNodeRelayDataflowBuffer(..., remote)` aliases `remote.dfb_buffer()` and records the typed pair | Host owns aliasing; validates size/shard/cores; Metal 2.0-friendly | New Create surface |
+| **D Fully automatic host** | Host hides relay opening from DM | Kernels look like normal local consumers | Hides credit ownership; rejected for v1 |
 
-**Plan default:** Host **C** for L1 aliasing + pairing; **B** only as optional metadata (resolve or drop — never alone); device keeps explicit `register_relay_dfb` / `push_relay_front`. Avoid A-alone for production ops; avoid D for v1.
+**Plan default:** Host **C** for L1 aliasing + pairing; **B** only as optional metadata. DM uses parameterless `bind_relay()`; TRISC alone receives the normal relay DFB token.
 
 ### Explicitly out of scope (for now)
 

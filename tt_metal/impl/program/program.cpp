@@ -1299,41 +1299,27 @@ CBHandle detail::ProgramImpl::add_circular_buffer(
     return add_circular_buffer_(circular_buffer);
 }
 
-uint8_t detail::ProgramImpl::attach_cross_node_dfb(
-    const CoreRangeSet& cores,
-    const experimental::CrossNodeDFB& gdfb,
-    const std::optional<std::string>& relay_dfb_name) {
-    TT_FATAL(this->compiled_.empty(), "Cannot attach CrossNodeDFB to an already compiled program {}", this->id);
+uint8_t detail::ProgramImpl::add_cross_node_dfb(experimental::CrossNodeDFB gdfb) {
+    TT_FATAL(this->compiled_.empty(), "Cannot add CrossNodeDFB to an already compiled program {}", this->id);
     // Check mutual exclusion: GlobalCircularBuffer and CrossNodeDFB cannot coexist in the same program.
     for (const auto& [core, remote_bits] : per_core_remote_cb_indices_) {
         TT_FATAL(
             !remote_bits.any(),
-            "Cannot attach a CrossNodeDFB to a program that already has GlobalCircularBuffers. "
+            "Cannot add a CrossNodeDFB to a program that already has GlobalCircularBuffers. "
             "GlobalCircularBuffer and CrossNodeDFB are mutually exclusive within a program.");
     }
 
-    const size_t gdfb_key = std::hash<experimental::CrossNodeDFB>{}(gdfb);
-    uint8_t remote_dfb_id = 0;
-    auto slot_it = cross_node_dfb_slot_registry_.find(gdfb_key);
-    if (slot_it != cross_node_dfb_slot_registry_.end()) {
-        TT_FATAL(
-            slot_it->second.relay_dfb_name == relay_dfb_name,
-            "CrossNodeDFB relay_dfb_name mismatch across AttachCrossNodeDFB calls for the same CrossNodeDFB");
-        remote_dfb_id = slot_it->second.remote_dfb_id;
-    } else {
-        constexpr uint8_t max_cross_node_dfbs = static_cast<uint8_t>(MAX_CROSS_NODE_DFBS);
-        TT_FATAL(
-            next_cross_node_dfb_slot_ < max_cross_node_dfbs,
-            "Exceeded maximum number ({}) of CrossNodeDFBs per program",
-            max_cross_node_dfbs);
-        remote_dfb_id = next_cross_node_dfb_slot_++;
-        cross_node_dfb_slot_registry_[gdfb_key] = {remote_dfb_id, relay_dfb_name};
-    }
+    constexpr uint8_t max_cross_node_dfbs = static_cast<uint8_t>(MAX_CROSS_NODE_DFBS);
+    TT_FATAL(
+        next_cross_node_dfb_slot_ < max_cross_node_dfbs,
+        "Exceeded maximum number ({}) of CrossNodeDFBs per program",
+        max_cross_node_dfbs);
+    const uint8_t remote_dfb_id = next_cross_node_dfb_slot_++;
+    const CoreRangeSet& cores = gdfb.all_cores();
 
     for (const auto& core_range : cores.ranges()) {
         for (const auto& core : core_range) {
             auto& attachments = per_core_cross_node_dfbs_[core];
-            // Check for duplicate slot on the same core.
             for (const auto& a : attachments) {
                 TT_FATAL(
                     a.remote_dfb_id != remote_dfb_id,
@@ -1347,7 +1333,7 @@ uint8_t detail::ProgramImpl::attach_cross_node_dfb(
                  gdfb.credit_reset_address(),
                  gdfb.credit_reset_size(),
                  gdfb.entry_size(),
-                 relay_dfb_name});
+                 std::numeric_limits<uint8_t>::max()});
             TT_FATAL(
                 remote_dfb_id == static_cast<uint8_t>(attachments.size() - 1),
                 "CrossNodeDFB remote_dfb_id {} must be dense (expected {}) on core {}",
@@ -1356,36 +1342,97 @@ uint8_t detail::ProgramImpl::attach_cross_node_dfb(
                 core.str());
         }
     }
+    cross_node_dfbs_.emplace(remote_dfb_id, std::move(gdfb));
     return remote_dfb_id;
 }
 
-void detail::ProgramImpl::update_dynamic_cross_node_dfb_address(const experimental::CrossNodeDFB& gdfb) {
-    const size_t gdfb_key = std::hash<experimental::CrossNodeDFB>{}(gdfb);
-    auto slot_it = cross_node_dfb_slot_registry_.find(gdfb_key);
-    TT_FATAL(
-        slot_it != cross_node_dfb_slot_registry_.end(),
-        "UpdateDynamicCrossNodeDFBAddress: CrossNodeDFB is not attached to program {}",
-        this->id);
-    const uint8_t remote_dfb_id = slot_it->second.remote_dfb_id;
+const experimental::CrossNodeDFB& detail::ProgramImpl::get_cross_node_dfb(uint8_t remote_dfb_id) const {
+    auto it = cross_node_dfbs_.find(remote_dfb_id);
+    TT_FATAL(it != cross_node_dfbs_.end(), "get_cross_node_dfb: slot {} is not in program {}", remote_dfb_id, this->id);
+    return it->second;
+}
 
-    bool found = false;
-    for (auto& [core, attachments] : per_core_cross_node_dfbs_) {
-        for (auto& a : attachments) {
-            if (a.remote_dfb_id == remote_dfb_id) {
-                // Validate topology: the receiver / sender sets must be identical.
-                TT_FATAL(
-                    gdfb.all_cores().contains(CoreRangeSet(CoreRange(core))),
-                    "UpdateDynamicCrossNodeDFBAddress: core {} is not in the CrossNodeDFB's all_cores",
-                    core.str());
-                a.config_page_addr = gdfb.config_address();
-                a.credit_reset_addr = gdfb.credit_reset_address();
-                a.credit_reset_size = gdfb.credit_reset_size();
-                a.entry_size = gdfb.entry_size();
-                found = true;
-            }
-        }
+experimental::CrossNodeDFB& detail::ProgramImpl::get_cross_node_dfb(uint8_t remote_dfb_id) {
+    return const_cast<experimental::CrossNodeDFB&>(
+        static_cast<const detail::ProgramImpl*>(this)->get_cross_node_dfb(remote_dfb_id));
+}
+
+void detail::ProgramImpl::register_cross_node_relay_dfb(
+    const CoreRangeSet& receiver_cores, uint8_t remote_dfb_id, uint32_t relay_dfb_host_id) {
+    TT_FATAL(
+        this->compiled_.empty(), "Cannot register a CrossNodeDFB relay on an already compiled program {}", this->id);
+
+    const experimental::CrossNodeDFB& gdfb = get_cross_node_dfb(remote_dfb_id);
+
+    auto relay_dfb = get_dataflow_buffer(relay_dfb_host_id);
+    TT_FATAL(relay_dfb != nullptr, "Relay DFB host id {} does not exist", relay_dfb_host_id);
+    TT_FATAL(relay_dfb->borrows_memory(), "CrossNode relay DFB {} must use borrowed memory", relay_dfb_host_id);
+    TT_FATAL(
+        relay_dfb->config.entry_size == gdfb.entry_size(),
+        "Relay DFB entry size {} must match CrossNodeDFB entry size {}",
+        relay_dfb->config.entry_size,
+        gdfb.entry_size());
+    TT_FATAL(
+        relay_dfb->config.num_entries == gdfb.num_entries(),
+        "Relay DFB depth {} must match CrossNodeDFB depth {}",
+        relay_dfb->config.num_entries,
+        gdfb.num_entries());
+    TT_FATAL(
+        relay_dfb->core_ranges == receiver_cores.merge_ranges(),
+        "Relay DFB core ranges must match the declared relay receiver cores");
+    TT_FATAL(
+        gdfb.receiver_cores().merge(receiver_cores).num_cores() == gdfb.receiver_cores().num_cores(),
+        "CrossNode relay cores must be a subset of the CrossNodeDFB receiver cores");
+    TT_FATAL(
+        relay_dfb->device_slot < std::numeric_limits<uint8_t>::max(),
+        "Relay DFB device slot {} cannot be represented in CrossNode receiver metadata",
+        relay_dfb->device_slot);
+
+    auto relay_it = cross_node_relay_host_ids_.find(remote_dfb_id);
+    TT_FATAL(
+        relay_it == cross_node_relay_host_ids_.end() || relay_it->second == relay_dfb_host_id,
+        "CrossNodeDFB slot {} already has relay DFB host id {}",
+        remote_dfb_id,
+        relay_it != cross_node_relay_host_ids_.end() ? relay_it->second : 0);
+    cross_node_relay_host_ids_[remote_dfb_id] = relay_dfb_host_id;
+
+    relay_dfb->set_borrowed_memory_base_addr(gdfb.buffer_address());
+    const uint8_t relay_device_slot = static_cast<uint8_t>(relay_dfb->device_slot);
+
+    for (const CoreCoord& core : corerange_to_cores(receiver_cores)) {
+        auto attachment_it = per_core_cross_node_dfbs_.find(core);
+        TT_FATAL(
+            attachment_it != per_core_cross_node_dfbs_.end(),
+            "CrossNodeDFB must be created on relay receiver core {} before registering its relay",
+            core.str());
+        auto& attachments = attachment_it->second;
+        TT_FATAL(
+            remote_dfb_id < attachments.size() && attachments[remote_dfb_id].remote_dfb_id == remote_dfb_id,
+            "CrossNodeDFB slot {} is not present on relay receiver core {}",
+            remote_dfb_id,
+            core.str());
+        auto& attachment = attachments[remote_dfb_id];
+        TT_FATAL(
+            attachment.relay_dfb_id == std::numeric_limits<uint8_t>::max() ||
+                attachment.relay_dfb_id == relay_device_slot,
+            "CrossNodeDFB slot {} already has relay device slot {} on core {}",
+            remote_dfb_id,
+            attachment.relay_dfb_id,
+            core.str());
+        attachment.relay_dfb_id = relay_device_slot;
     }
-    TT_FATAL(found, "UpdateDynamicCrossNodeDFBAddress: no CrossNodeDFB attachments found in program {}", id);
+}
+
+void detail::ProgramImpl::update_dynamic_cross_node_dfb_address(uint8_t remote_dfb_id, Buffer& buffer) {
+    experimental::CrossNodeDFB& gdfb = get_cross_node_dfb(remote_dfb_id);
+    gdfb.retarget_data_buffer(buffer);
+
+    auto relay_it = cross_node_relay_host_ids_.find(remote_dfb_id);
+    if (relay_it != cross_node_relay_host_ids_.end()) {
+        auto relay_dfb = get_dataflow_buffer(relay_it->second);
+        relay_dfb->set_borrowed_memory_base_addr(gdfb.buffer_address());
+    }
+
     // Invalidate cached command sequences so they are re-assembled with new addresses.
     cached_program_command_sequences_.clear();
     trace_cached_program_command_sequences_.clear();

@@ -165,7 +165,7 @@ struct kernel_config_msg_t {
     // Byte offset of CrossNodeDFB kernel-config region from kernel_config_base.
     // CROSS_NODE_DFB_OFFSET_NONE (0xFF) means no CrossNodeDFBs on this launch.
     // Valid offsets are L1-aligned and therefore never equal 0xFF. Region layout:
-    //   word[0] = num_slots; then dense [config_page_addr, entry_size] pairs.
+    //   word[0] = num_slots; then dense [config_page_addr, entry_size, relay_dfb_id] slots.
     volatile uint16_t cross_node_dfb_offset;
     volatile uint32_t kernel_text_offset[MaxProcessorsPerCoreType];
     volatile uint32_t kernel_text_size[MaxProcessorsPerCoreType];

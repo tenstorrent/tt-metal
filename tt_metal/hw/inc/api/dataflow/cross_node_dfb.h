@@ -4,16 +4,21 @@
 
 #pragma once
 
+// WH/BH only for now; Quasar CrossNode device API is a follow-up.
+#ifndef ARCH_QUASAR
+
 #include <cstdint>
 #include "internal/cross_node_dfb_interface.h"
 #include "internal/circular_buffer_interface.h"
 #include "api/alignment.h"
+#include "api/debug/assert.h"
 #include "api/debug/waypoint.h"
 #include "internal/risc_attribs.h"
 
 #if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/remote_circular_buffer.h"
@@ -34,7 +39,7 @@ static_assert(
 namespace experimental {
 
 // CrossNodeDFB: device-side kernel class for a globally-allocated ring FIFO shared across
-// kernels within a single program (WH/BH only; Quasar support planned for a future PR).
+// kernels within a single program (WH/BH only).
 // Not persistent across programs: firmware resets fifo ptrs and credit counters on every
 // program init. Cross-program persistence is GlobalDFB.
 //
@@ -95,30 +100,28 @@ namespace experimental {
 //  RELAY DFB FLOW — bridging CrossNodeDFB to Compute
 // ═══════════════════════════════════════════════════════════════════════
 //
-//  Compute cannot issue NOC atomics. Data is bridged via a local
-//  DataflowBuffer (relay DFB): DMs owns the CrossNodeDFB and issues all acks
-//  via pop_front; Compute reads from the relay DFB's local interface.
+//  Compute cannot issue NOC atomics. Data is bridged via a host-declared local
+//  DataflowBuffer that aliases the CrossNode ring. DM owns CrossNode credits;
+//  TRISC consumes through the normal local DFB API.
 //
-//  The relay DFB shares the same L1 FIFO buffer as the CrossNodeDFB.  Its rd_ptr is
-//  managed independently by Compute (via pop_front) and starts aligned to the
-//  CrossNodeDFB rd_ptr at registration time.
+//  Host writes the relay local DFB's device slot into the receiver interface.
+//  DM deliberately receives no relay binding token and must use bind_relay().
 //
 //  DM (receiver kernel):
-//    DataflowBuffer<...> relay_dfb(local_handle);     // local DFB backed by same FIFO
-//    cn_dfb.register_relay_dfb(relay_dfb);            // init: wr_ptr = rd_ptr = start
+//    auto relay = cn_dfb.bind_relay();                 // constructs the real local DFB
 //    while (has_more) {
-//        relay_dfb.reserve_back(n);                   // wait until TRISC consumed previous data
+//        relay.reserve_back(n);                       // wait for local free space
 //        cn_dfb.wait_front(n);                        // wait for sender's data (pages_sent)
-//        cn_dfb.push_relay_front(n);                  // advance relay wr_ptr → TRISC unblocks
-//        // optional: wait for TRISC done signal (sync_cb pattern)
+//        relay.push_back(n);                          // publish via CB credits
+//        relay.wait_consumed(n);                      // wait for TRISC to free the local slots
 //        cn_dfb.pop_front(n);                         // advance DM rd_ptr + NOC-ack sender
 //    }
 //
 //  Compute kernel (reads relay DFB, no CrossNodeDFB or NOC knowledge):
-//    cb_wait_front(relay_dfb_id, n);                  // polls relay fifo_wr_ptr (set by DM)
-//    // read from cb_read_ptr(relay_dfb_id) ...
-//    cb_pop_front(relay_dfb_id, n);                   // advance Compute's fifo_rd_ptr only
-//                                                     // DM's pop_front already acked sender
+//    DataflowBuffer relay(dfb::relay_name);           // normal generated binding token
+//    relay.wait_front(n);
+//    // consume ...
+//    relay.pop_front(n);
 class CrossNodeDFB {
 public:
     FORCE_INLINE explicit CrossNodeDFB(uint8_t remote_dfb_id) : id_(remote_dfb_id) {}
@@ -297,9 +300,7 @@ public:
     // Flush all posted payload writes from this core before publishing pages_sent.
     // Posted writes do not return completion acknowledgements; receiver visibility of
     // the subsequently posted credit is the end-to-end synchronization point.
-    FORCE_INLINE void flush_writes(const Noc& noc = Noc{}) {
-        noc.async_writes_flushed<NocOptions::POSTED>();
-    }
+    FORCE_INLINE void flush_writes(const Noc& noc = Noc{}) { noc.async_writes_flushed<NocOptions::POSTED>(); }
 
     // Credit-only: advance fifo_wr_ptr by num_entries and NOC-inc pages_sent on ALL
     // receivers.  Call after all write_* for this slot.
@@ -425,57 +426,54 @@ public:
     }
 #endif  // KERNEL_BUILD && !COMPILE_FOR_TRISC
 
+#if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
     // -----------------------------------------------------------------------
-    // Relay DFB registration and alignment
+    // Host-declared relay DFB
     // -----------------------------------------------------------------------
 
-    // Register one local DataflowBuffer as the relay for this CrossNodeDFB (receiver side only).
-    //
-    // The relay shares the same L1 FIFO as the CrossNodeDFB and exposes it to TRISC via the
-    // standard DataflowBuffer / CB API. Host must co-allocate them at the same L1 address.
-    //
-    // Intra-core sync (same as GlobalCB receiver):
-    //   - relay.fifo_wr_ptr is managed by the receiver DM via push_relay_front() after wait_front()
-    //   - relay.fifo_rd_ptr is managed by TRISC via pop_front()
-    //   - The receiver DM must never write relay.fifo_rd_ptr after init
-    //
-    // Typical receiver-DM loop:
-    //   register_relay_dfb(relay);            // init: wr_ptr = rd_ptr = start
-    //   while (has_more) {
-    //       relay.reserve_back(n);
-    //       gdfb.wait_front(n);
-    //       gdfb.push_relay_front(n);
-    //       gdfb.pop_front(n);
-    //   }
-    template <typename DFB>
-    FORCE_INLINE void register_relay_dfb(DFB& local_dfb) {
-        CrossNodeReceiverDFBInterface& iface = get_cross_node_receiver_dfb_interface(id_);
-        iface.relay_id = local_dfb.get_logical_handle();
-        align_relay_init();
-    }
+    // Producer-only view. It intentionally exposes only the local operations the
+    // receiver DM owns; TRISC constructs the same local DFB from its normal token.
+    class RelayView {
+    public:
+        FORCE_INLINE explicit RelayView(uint16_t relay_dfb_id) : dfb_(relay_dfb_id) {}
 
-    // Advance the relay DFB's fifo_wr_ptr by num_entries.
-    // Call after wait_front(n) to unblock TRISC's cb_wait_front(relay_id, n).
-    // Does NOT touch fifo_rd_ptr.
-    FORCE_INLINE void push_relay_front(uint32_t num_entries) {
-        CrossNodeReceiverDFBInterface& iface = get_cross_node_receiver_dfb_interface(id_);
-        if (iface.relay_id == RELAY_DFB_INVALID) {
-            return;
-        }
-        LocalCBInterface& relay = get_local_cb_interface(iface.relay_id);
-        const uint32_t len_bytes = num_entries * iface.fifo_page_size;
-        uint32_t new_wr = relay.fifo_wr_ptr + len_bytes;
-        if (new_wr >= relay.fifo_limit) {
-            new_wr = iface.fifo_start_addr + (new_wr - relay.fifo_limit);
-        }
-        relay.fifo_wr_ptr = new_wr;
-    }
+        FORCE_INLINE void reserve_back(uint16_t num_entries) { dfb_.reserve_back(num_entries); }
+        FORCE_INLINE void push_back(uint16_t num_entries) { dfb_.push_back(num_entries); }
 
-    // Manual one-shot alignment into a local DataflowBuffer (when not using register_relay_dfb).
-    template <typename DFB>
-    FORCE_INLINE void align_local_dfb(DFB& local_dfb) {
-        align_one_relay_init(local_dfb);
+        // Wait until TRISC has consumed the num_entries just published via push_back.
+        // Call after push_back and before cn.pop_front so the remote ack cannot free
+        // L1 that TRISC is still reading.
+        FORCE_INLINE void wait_consumed(uint16_t num_entries) {
+            ASSERT(num_entries <= dfb_.get_local_num_entries());
+            WAYPOINT("CNCW");
+            // entries_received is written by this RISC in push_back; entries_acked is a
+            // register-mapped counter TRISC updates as uint16, so compare at uint16.
+            const uint16_t relay_dfb_id = dfb_.get_id();
+            volatile tt_reg_ptr uint32_t* entries_received_ptr = get_cb_tiles_received_ptr(relay_dfb_id);
+            const uintptr_t entries_acked_ptr = reinterpret_cast<uintptr_t>(get_cb_tiles_acked_ptr(relay_dfb_id));
+            uint16_t entries_received;
+            uint16_t entries_acked;
+            do {
+                invalidate_l1_cache();
+                entries_received = static_cast<uint16_t>(entries_received_ptr[0]);
+                entries_acked = static_cast<uint16_t>(reg_read(entries_acked_ptr));
+            } while (entries_received != entries_acked);
+            WAYPOINT("CNCD");
+        }
+
+    private:
+        DataflowBuffer dfb_;
+    };
+
+    // Open the relay declared by CreateCrossNodeRelayDataflowBuffer on the host.
+    // No token is accepted here: receiver DM kernels cannot select an arbitrary
+    // local DFB.
+    FORCE_INLINE RelayView bind_relay() {
+        const CrossNodeReceiverDFBInterface& iface = get_cross_node_receiver_dfb_interface(id_);
+        ASSERT(iface.relay_id != RELAY_DFB_INVALID);
+        return RelayView(iface.relay_id);
     }
+#endif
 
     // -----------------------------------------------------------------------
     // Accessors
@@ -500,31 +498,8 @@ private:
     FORCE_INLINE uint32_t get_config_word(uint32_t config_ptr, uint32_t word_idx) {
         return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(config_ptr)[word_idx];
     }
-
-    // Init: set relay fifo_wr_ptr = fifo_rd_ptr = CrossNodeDFB start, plus limit/page_size.
-    // Called once from register_relay_dfb(). After this, the receiver DM owns fifo_wr_ptr
-    // (advances via push_relay_front) and TRISC owns fifo_rd_ptr (advances via pop_front).
-    FORCE_INLINE void align_relay_init() {
-        CrossNodeReceiverDFBInterface& iface = get_cross_node_receiver_dfb_interface(id_);
-        if (iface.relay_id == RELAY_DFB_INVALID) {
-            return;
-        }
-        LocalCBInterface& relay = get_local_cb_interface(iface.relay_id);
-        relay.fifo_wr_ptr = iface.fifo_rd_ptr;
-        relay.fifo_rd_ptr = iface.fifo_rd_ptr;
-        relay.fifo_limit = iface.fifo_limit_page_aligned;
-        relay.fifo_page_size = iface.fifo_page_size;
-    }
-
-    template <typename DFB>
-    FORCE_INLINE void align_one_relay_init(DFB& dfb) {
-        const CrossNodeReceiverDFBInterface& iface = get_cross_node_receiver_dfb_interface(id_);
-        LocalCBInterface& relay = get_local_cb_interface(dfb.get_logical_handle());
-        relay.fifo_wr_ptr = iface.fifo_rd_ptr;
-        relay.fifo_rd_ptr = iface.fifo_rd_ptr;
-        relay.fifo_limit = iface.fifo_limit_page_aligned;
-        relay.fifo_page_size = iface.fifo_page_size;
-    }
 };
 
 }  // namespace experimental
+
+#endif  // !ARCH_QUASAR

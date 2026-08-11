@@ -31,18 +31,19 @@
 //   word[8]  = sender_physical_coord.x
 //   word[9]  = sender_physical_coord.y
 
-// 2-word kernel-config entry format per CrossNodeDFB, densely packed after a header word:
+// 3-word kernel-config entry format per CrossNodeDFB, densely packed after a header word:
 //   region at cross_node_dfb_offset:
 //     word[0] = num_slots
-//     slot i in [0, num_slots): [config_page_addr, entry_size]
-// Slot index i matches the remote_dfb_id returned by AttachCrossNodeDFB (0 .. num-1).
+//     slot i in [0, num_slots): [config_page_addr, entry_size, relay_dfb_id]
+// Slot index i matches the remote_dfb_id returned by CreateCrossNodeDFB (0 .. num-1).
 // Launch-msg cross_node_dfb_offset == CROSS_NODE_DFB_OFFSET_NONE means no CrossNodeDFBs.
 
 namespace experimental {
 
-// Populate one CrossNodeDFB slot from a kernel-config entry [config_page_ptr, entry_size].
+// Populate one CrossNodeDFB slot from [config_page_ptr, entry_size, relay_dfb_id].
 // CrossNode is same-program only: every setup resets fifo ptrs to fifo_start_addr.
-FORCE_INLINE void setup_one_cross_node_dfb_slot(uint32_t dfb_id, uint32_t config_page_ptr, uint32_t entry_size_word) {
+FORCE_INLINE void setup_one_cross_node_dfb_slot(
+    uint32_t dfb_id, uint32_t config_page_ptr, uint32_t entry_size_word, uint32_t relay_dfb_id_word) {
     if (config_page_ptr == 0) {
         return;
     }
@@ -96,9 +97,7 @@ FORCE_INLINE void setup_one_cross_node_dfb_slot(uint32_t dfb_id, uint32_t config
         iface.aligned_pages_acked_ptr = aligned_acked_ptr;
         iface.remote_pages_acked_ptr = remote_cnt_ptr;
         iface.fifo_limit_page_aligned = fifo_limit;
-        // Relay registration is filled later by register_relay_dfb() from the kernel.
-        iface.relay_id = RELAY_DFB_INVALID;
-
+        iface.relay_id = static_cast<uint8_t>(relay_dfb_id_word);
     }
 }
 
@@ -109,7 +108,7 @@ FORCE_INLINE void setup_cross_node_dfb_interfaces(uint32_t tt_l1_ptr* dfb_l1_bas
     volatile tt_l1_ptr uint32_t* dfb_config_addr = dfb_l1_base;
 
     for (uint32_t dfb_id = 0; dfb_id < num_cross_node_dfbs; ++dfb_id) {
-        setup_one_cross_node_dfb_slot(dfb_id, dfb_config_addr[0], dfb_config_addr[1]);
+        setup_one_cross_node_dfb_slot(dfb_id, dfb_config_addr[0], dfb_config_addr[1], dfb_config_addr[2]);
         dfb_config_addr += UINT32_WORDS_PER_CROSS_NODE_DFB_CONFIG;
     }
 }

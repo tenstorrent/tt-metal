@@ -1166,7 +1166,8 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                         device_id, physical_core, std::span<const uint8_t>(dfb_config_vec.data(), bytes_written), addr);
                 }
 
-                // CrossNodeDFB config: word[0]=num_slots, then dense [config_page_addr, entry_size] pairs.
+                // CrossNodeDFB config: word[0]=num_slots, then dense
+                // [config_page_addr, entry_size, relay_dfb_id] slots.
                 const uint32_t cross_node_dfb_offset = program.impl().get_program_config(index).cross_node_dfb_offset;
                 const auto& per_core_cross_node_dfbs = program.impl().get_per_core_cross_node_dfbs();
                 auto it = per_core_cross_node_dfbs.find(logical_core);
@@ -1189,6 +1190,7 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                         const uint32_t base = CROSS_NODE_DFB_REGION_HEADER_WORDS + slot * CROSS_NODE_DFB_CONFIG_WORDS;
                         cross_node_dfb_vec[base + 0] = attachment.config_page_addr;
                         cross_node_dfb_vec[base + 1] = attachment.entry_size;
+                        cross_node_dfb_vec[base + 2] = attachment.relay_dfb_id;
 
                         // Reset the actual config-page credits before GO. Firmware only
                         // initializes its local interface, so it cannot erase a credit
