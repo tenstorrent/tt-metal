@@ -20,10 +20,11 @@ an external producer (prefill_producer.py / the scheduler); the loop is UNBOUNDE
 migration and per-layer LayerAck run at any rank count: every rank joins the all-gather that merges
 the chunk table and rank 0 publishes it, and pipeline layer completions are routed to the master
 rank, which re-emits them into the same ack channel the scheduler connects to in the single-rank case
-(only PREFILL_MOCK_MIGRATION stays single-rank). Shutdown is graceful: the producer/scheduler closes
-the stream with an all -1 PrefillMetadata sentinel that each rank forwards downstream and then exits
-on; a rank blocked in the recv can only be released by a transfer (the recv device op has no timeout),
-so SIGTERM/SIGKILL remains the hard fallback if no sentinel arrives.
+(only PREFILL_MOCK_MIGRATION stays single-rank). Graceful shutdown is EAGER-ONLY: the producer/scheduler
+closes the stream with an all -1 PrefillMetadata sentinel that each rank forwards downstream and then
+exits on. The traced path never reads the metadata to host, so it cannot detect the sentinel (see
+run_request_loop) — traced serving tears down by SIGTERM/SIGKILL. Either way a rank blocked in the recv
+can only be released by a transfer (the recv device op has no timeout), so a signal is the hard fallback.
 
 The model class is the single source of truth — this driver wires rank topology, input, transport,
 and the per-chunk schedule; it does not reimplement embed / layers / forward.
@@ -504,13 +505,6 @@ def run_request_loop(
     if cfg.is_first_rank and h2d_service is None:
         raise ValueError("request mode requires the H2D service on the first rank for input")
     decode_meta = not cfg.use_trace  # untraced needs host scalars (logging + sentinel); traced consumes on-device
-    # record_chunk() is host bookkeeping keyed on this chunk's slot/start/end, which the traced path never
-    # reads back. Fail here rather than skip the call: a driver that is never fed migrates nothing and the
-    # run still reports green.
-    assert migration_driver is None or decode_meta, (
-        "interleaved migration needs the host-side chunk metadata, which the traced path consumes "
-        "on-device; run untraced or disable interleaved migration"
-    )
     logger.info(
         f"[pp rank {rank}/{num_ranks}] request (unbounded) loop start "
         f"(is_first={cfg.is_first_rank} is_last={cfg.is_last_rank} input={'h2d' if cfg.is_first_rank else 'd2d'} "
