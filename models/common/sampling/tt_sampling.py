@@ -370,13 +370,11 @@ class TTSampling(LightweightModule):
 
         vocab_shard_dims = get_vocab_shard_dims(self.cluster_shape, self.sampling_all_gather_axis)
         # The compact tail-mask path masks only the padded tail, but it has to slice the
-        # logits and concat them back. ttnn.concat only honours sub_core_grids when the
-        # input is unsharded and the output is interleaved; otherwise it falls through to
-        # the "massaged" untilize/transpose path, which is invoked without sub_core_grids
-        # and so runs on the full Tensix grid. The sampling logits are width-sharded
-        # (DECODE_LOGITS_MEMCFG), so on a sampling sub-core grid the concat escapes the
-        # sub-device. Use the plain full-width additive mask (one elementwise add, no
-        # reassembly) whenever a sub-core grid is in use.
+        # logits and concat them back. ttnn.concat now honours sub_core_grids on every path
+        # except the transpose fallback, which it rejects outright rather than escaping the
+        # sub-device. That fallback fires when the last dim is not buffer-aligned, which the
+        # sliced logits can be, so keep using the plain full-width additive mask (one
+        # elementwise add, no reassembly) whenever a sub-core grid is in use.
         tail_mask = (
             build_tail_invalid_vocab_mask(
                 self.vocab_size,

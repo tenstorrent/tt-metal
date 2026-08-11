@@ -437,6 +437,9 @@ def test_concat_many_inputs(device, num_inputs):
         (((1, 1, 256, 512), (1, 1, 256, 256)), 3),
         (((1, 1, 32, 1024), (1, 1, 32, 1024)), 0),
         (((1, 1, 32, 64), (1, 1, 32, 64)), 0),
+        # tile-padded on the concat dim (64 vs 48) so TILE takes the untilize/retilize path, while the
+        # 96 B row stays buffer-aligned so neither layout falls back to a transpose.
+        (((1, 1, 32, 48), (1, 1, 32, 48)), 3),
     ],
 )
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
@@ -469,6 +472,66 @@ def test_concat_sub_core_grids(device, layout, dim, input_shapes, sub_core_grids
     output = ttnn.to_torch(output)
 
     assert_equal(torch_output_tensor, output)
+
+
+CONCAT_SUB_CORE_GRID = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(4, 7))})
+
+
+@pytest.mark.parametrize("shape", [(1, 1, 32, 64)])
+def test_concat_sub_core_grids_stays_in_grid(device, shape):
+    a = torch.randn(shape, dtype=torch.bfloat16)
+    b = torch.randn(shape, dtype=torch.bfloat16)
+    in1 = ttnn.from_torch(
+        a, dtype=ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    in2 = ttnn.from_torch(
+        b, dtype=ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    # A kernel group touching a core outside every sub-device trips ProgramImpl::determine_sub_device_ids.
+    manager = device.create_sub_device_manager([ttnn.SubDevice([CONCAT_SUB_CORE_GRID])], 0)
+    device.load_sub_device_manager(manager)
+    try:
+        output = ttnn.concat(
+            [in1, in2],
+            dim=3,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            sub_core_grids=CONCAT_SUB_CORE_GRID,
+        )
+        output = ttnn.to_torch(output)
+    finally:
+        device.clear_loaded_sub_device_manager()
+        device.remove_sub_device_manager(manager)
+
+    assert_equal(torch.concat([a, b], dim=3), output)
+
+
+def test_concat_sub_core_grids_rejects_transpose_fallback(device, expect_error):
+    shape = (1, 1, 32, 40)  # 80 B rows are not DRAM-aligned, so concat would transpose first
+    a = torch.randn(shape, dtype=torch.bfloat16)
+    tt = ttnn.from_torch(
+        a, dtype=ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    with expect_error(RuntimeError, "cannot honour sub_core_grids"):
+        ttnn.concat([tt, tt], dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG, sub_core_grids=CONCAT_SUB_CORE_GRID)
+
+
+# Row bytes 128/96/80 vs the DRAM alignment (32 on WH, 64 on BH) pick concat's direct vs massaged
+# path. 96 B is the only width where the two arches disagree: direct on WH, massaged on BH.
+@pytest.mark.parametrize("width", [64, 48, 40], ids=["aligned_both", "aligned_wh_only", "aligned_neither"])
+def test_concat_rm_last_dim_8_inputs(device, width):
+    torch_inputs = [torch.randn((1, 1, 32, width), dtype=torch.bfloat16) for _ in range(8)]
+    tt_inputs = [
+        ttnn.from_torch(
+            t, dtype=ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        for t in torch_inputs
+    ]
+
+    output = ttnn.concat(tt_inputs, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    assert_equal(torch.concat(torch_inputs, dim=-1), ttnn.to_torch(output))
 
 
 @pytest.mark.parametrize(
