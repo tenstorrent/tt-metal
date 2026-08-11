@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <cstdint>
 #include <map>
 #include <string>
@@ -154,7 +155,24 @@ ProgramDescriptor UpdateCacheMultiCoreProgramFactory::create_descriptor(
 
     uint32_t B = input_tensor.padded_shape()[-2];
     uint32_t Bcache = cache_tensor.padded_shape()[0];
-    const uint32_t granularity = std::min(static_cast<uint32_t>(2), Bcache);  // granularity = 2 best for performance
+    // Precompute per-tile user-chunk counts on the host so kernels keep the original fixed
+    // granularity for-loop (no min/while in the hot path). Last tile in a head may be short.
+    const uint32_t tiles_per_head = B / TILE_HEIGHT;
+    const uint32_t users_full = std::min(TILE_HEIGHT, Bcache);
+    const uint32_t users_last = Bcache - (tiles_per_head - 1) * TILE_HEIGHT;
+    TT_FATAL(
+        tiles_per_head > 0 && users_last > 0 && users_last <= TILE_HEIGHT,
+        "Invalid update_cache batch geometry: Bcache={}, B_input={}, tiles_per_head={}, users_last={}",
+        Bcache,
+        B,
+        tiles_per_head,
+        users_last);
+    uint32_t granularity = std::min(static_cast<uint32_t>(2), Bcache);  // granularity = 2 best for performance
+    if (users_full % granularity != 0 || users_last % granularity != 0) {
+        granularity = 1;
+    }
+    const uint32_t u_count_full = users_full / granularity;
+    const uint32_t u_count_last = users_last / granularity;
     uint32_t num_batched_heads = input_tensor.padded_shape()[1] * B / tt::constants::TILE_HEIGHT;
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -275,8 +293,6 @@ ProgramDescriptor UpdateCacheMultiCoreProgramFactory::create_descriptor(
         }}},
     });
 
-    // Per-group user count is derived at runtime in the kernels as
-    // min(TILE_HEIGHT, Bcache - batch_idx) so the last group of a non-tile batch is short.
     // Reader kernel
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)src0_cb_index, (std::uint32_t)src1_cb_index, (std::uint32_t)granularity};
@@ -320,8 +336,7 @@ ProgramDescriptor UpdateCacheMultiCoreProgramFactory::create_descriptor(
 
     // Compute kernel(s) — group_1 has num_batched_heads_per_core_group_1, optional group_2
     // gets a second compute kernel with the group_2 count baked into compile-time args.
-    // Bcache / batch_start_id are per-core runtime args so each group can derive a short
-    // last-tile user count (see kernels).
+    // Per-core runtime args carry host-computed u_count_full / u_count_last (see below).
     std::vector<uint32_t> compute_kernel_args = {
         src0_cb_index,
         src1_cb_index,
@@ -401,7 +416,10 @@ ProgramDescriptor UpdateCacheMultiCoreProgramFactory::create_descriptor(
              cache_head_num_tiles,
              cache_start_id,
              input_start_id,
-             batch_start_id});
+             batch_start_id,
+             tiles_per_head,
+             u_count_full,
+             u_count_last});
 
         writer_desc.emplace_runtime_args(
             core,
@@ -416,14 +434,16 @@ ProgramDescriptor UpdateCacheMultiCoreProgramFactory::create_descriptor(
              batch_start_id,
              dyn.Wbytes,
              dyn.tile_update_offset,
-             dyn.batch_read_offset});
+             dyn.batch_read_offset,
+             tiles_per_head,
+             u_count_full,
+             u_count_last});
 
-        // Compute derives per-group user counts from (Bcache, batch_start_id) at runtime.
         if (i < g1_numcores) {
-            compute_desc_g1.emplace_runtime_args(core, {Bcache, batch_start_id});
+            compute_desc_g1.emplace_runtime_args(core, {batch_start_id, tiles_per_head, u_count_full, u_count_last});
         } else {
             TT_FATAL(compute_desc_g2.has_value(), "Expected compute group_2 descriptor when assigning group_2 cores");
-            compute_desc_g2->emplace_runtime_args(core, {Bcache, batch_start_id});
+            compute_desc_g2->emplace_runtime_args(core, {batch_start_id, tiles_per_head, u_count_full, u_count_last});
         }
         total_batched_heads += num_batched_heads_per_core;
     }
@@ -451,8 +471,8 @@ void UpdateCacheMultiCoreProgramFactory::override_runtime_arguments(
     // get_compute_kernel_config_args, TensorAccessorArgs, kernel-source strings, a fresh per-core arg
     // vector) on a hit.
     // Kernel push order in create_descriptor: reader(0), writer(1), compute group_1(2),
-    // [compute group_2(3)]. Compute runtime args (Bcache, batch_start_id) are shape-derived and
-    // covered by the program hash, so they are not patched here.
+    // [compute group_2(3)]. Compute runtime args (batch_start_id, tiles_per_head, u_count_*) are
+    // shape-derived and covered by the program hash, so they are not patched here.
     constexpr uint32_t kReaderKernelIdx = 0;
     constexpr uint32_t kWriterKernelIdx = 1;
     constexpr uint32_t kReaderDstAddrArgIdx = 0;
