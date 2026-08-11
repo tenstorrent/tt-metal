@@ -115,3 +115,98 @@
   "the golden resilience / pad_poison cases pin `fp32_dest_acc_en=False`, which is unsupported, so
   replay them at `True`" — that premise is now obsolete, so it sweeps both DEST datapaths and its
   docstring says why. Unit directory: **464 passed / 36 skipped / 0 failed** (was 372/36/0).
+
+## Refinement 2 — Sharded input/output placements (all three schemes)
+
+- **Date**: 2026-08-11
+- **What was done**: added `HEIGHT_SHARDED`, `WIDTH_SHARDED` and `BLOCK_SHARDED` to
+  `SUPPORTED["memory_layout"]`, consuming the resident shard **in place** and producing a matching
+  sharded output. This was a *placement* unlock of the scheme Phase 0 already built (lamp S1) — the
+  cross-core combine, `_cb_specs`/`_cb_bytes`/`_max_block_row_tiles`, `read_slice_rows` /
+  `write_slice_rows`, the `Mcast2D` wiring and the **entire compute schedule** were reused unchanged.
+  What was added:
+  - `_ShardView` — the shard spec read AS the block geometry, so `_select_regime` is never called for
+    a sharded input: HEIGHT cuts the independent `row` axis ⇒ `w_group_size = 1` and the combine
+    degenerates to a local copy; WIDTH cuts the dependent `hidden` axis ⇒ the whole shard grid is
+    **one** reduction group; BLOCK cuts both ⇒ one grid row of the shard rectangle is a group.
+    `_shard_core_infos` clamps every extent to the tensor, because a shard grid need not divide it
+    (`auto_shard_config` ceil-splits and pads the last shard).
+  - `_sharded_cb` — `cb_input_tiles` / `cb_output_tiles` pinned **zero-copy** over the resident L1
+    buffer via `ttnn.cb_descriptor_from_sharded_tensor` on the TILE legs. `load_block` and
+    `store_block` become the CB handshake alone: **zero NoC traffic** for the activations. The
+    shard's pages are already tile-row-major at row stride `C`, and total pushes
+    (`core_row_tiles · C`) never exceed the shard's page count, so the CB pointer never wraps.
+  - `LocalShardAccessor` + `read_shard_rows` / `write_shard_rows` — the ROW_MAJOR legs cannot pin
+    (the block CB there is the `tilize`/`untilize` staging buffer, whose group-uniform tile-row
+    stride is not the shard's stick stride), so they re-stride the sticks **core-locally**, L1 → L1,
+    with a single bulk transfer per 32-row group when the strides already agree. Still zero DRAM
+    crossings. `LocalShardAccessor` exposes the same `get_noc_addr(page, offset)` shape as
+    `TensorAccessor`, which is what lets one `read_slice_rows` body serve both legs.
+  - **Per-core `partial_w`.** A ROW_MAJOR WIDTH/BLOCK shard's width granule is the **L1 alignment**,
+    not a tile, so a core's hidden slice can be 8–16 elements of a 32-column tile: *every* core can
+    carry a ragged tail, not just the one owning the tensor's last hidden tile. The CT constant
+    `PARTIAL_W` became the runtime `core_partial_w` (plus a CT `HAS_ANY_TAIL` to gate the mask CB);
+    on every other path this reduces to exactly the old `owns_last_w_tile && W % 32` condition.
+  - **Mcast-box filler cores.** A WIDTH shard grid is often *not* a rectangle (16 slices on an
+    11-wide grid = a full row + a 5-core row) while the `rstd` broadcast needs one. The group
+    rectangle is now the shard grid's bounding box, and the cores in it that own no shard stay
+    program cores carrying the identical CB map — so the broadcast lands in a reserved `cb_rstd`
+    instead of unowned L1 — with `num_blocks = 0` returning them immediately from all three kernels.
+    They receive and never ack, which is why `Mcast2D` is now given an explicit `num_active = G − 1`
+    instead of the dense fan-out (`mcast_pipe`'s documented divergent-ack case).
+  - Two L1 levers: `_DEPTH_LADDER` (a shard spec pins both `G` and `C`, so `R` and the buffer depths
+    are the only residency knobs left; depth is spent first and surrendered last, and no interleaved
+    geometry ever leaves step 0, so the default path is byte-identical), and the `cb_gamma_rm` →
+    `cb_input_rm` alias (Rule 3 pattern 3: disjoint lifetimes, same producer *and* consumer, guarded
+    on equal page formats so a mixed-precision gamma keeps its own buffer). Together they took the
+    loose-sharded slice from 263 to 269 passing.
+- **Accuracy achieved**: PCC ≥ 0.99996 (bf16 rtol/atol well inside the golden gate 0.995/0.04) across
+  all three schemes × {TILE, ROW_MAJOR} × {bfloat16, bfloat8_b, float32} on shapes
+  `(1,1,256,512)`, `(1,1,32,2048)`, `(1,1,100,736)`, `(1,1,224,1000)`, `(1,1,32,4095)`,
+  `(1,1,32,4096)`, `(1,1,32,8192)`, `(128,8192)`, `(1,1,160,11008)`, `(2047,2047)`, `(99991,64)`.
+  `bfloat8_b` sharded PCC ≥ 0.99986 (gate 0.99/0.10). The six `pad_poison` shapes are green on all
+  three placements: PCC ≥ 0.99998 with got/true ratio ≈ 1.0, i.e. the mask-before-square identity and
+  the true-`W` divisor both survive sharding. All five pinned `group="perf"` shard geometries run at
+  PCC ≥ 0.9998, which **unblocks Refinement 5**.
+- **Golden test progress**: loose-sharded slice **269 / 281** passing (3 skipped). Cartesian slices:
+  **516 / 516** on `{1x1x32x64, 1x1x32x50, 1x1x17x64, 4x8x32x47}` (all four placements, all dtype /
+  precision / gamma combinations) and **761 / 777** on
+  `{2x4x128x512, 1x1x2048x256, 1024x1024, 1x1x32x4096, 1x17x128}`. No xpass-strict drift. Prior
+  phases unchanged: unit directory 82 + 324 passed, 0 failed.
+- **Issues encountered**:
+  1. **A DRAM read TRUNCATES its source address to the DRAM alignment** (64 B on Blackhole) — no
+     assert, no hang, just a neighbouring slice. Every core whose gamma slice started mid-tile was
+     reading gamma from the aligned offset *below* its own: PCC 0.28–0.50 on RM WIDTH/BLOCK. Isolated
+     by a deterministic probe (all-ones input + a repeating gamma ramp): the no-gamma output was
+     *exactly* 1.0 everywhere, so the reduction was provably right and only gamma was misplaced, and
+     the observed gamma offsets were the true ones quantized to 64 B. Fixed by having the host pass a
+     DRAM-**aligned** read offset plus the leading bytes to drop; `lead == 0` on every previously
+     working path, so those reads are byte-identical.
+  2. **The shifted re-read then hit a sub-L1-alignment offset.** With fp32 activations and a bf16
+     gamma the offset is a multiple of the *gamma* element size only (8 B against the fp32 ROW_MAJOR
+     4-element granule), so the L1 → L1 hop that performs the shift was itself misaligned: PCC 0.44
+     on 4 cartesian cells. Fixed by doing the shift with the CPU (`copy_l1_bytes`) — the one transfer
+     whose source alignment is not ours to choose.
+  3. **`_cb_bytes` was dropping its `depths` argument**, so the depth ladder computed identical
+     numbers at every step and rescued nothing. Caught by instrumenting the solve on the failing
+     shapes rather than by reading the code.
+  4. Pad columns of a sub-tile slice are now zeroed in `read_slice_rows` (free when the slice fills
+     the block row, i.e. every tile-aligned case). `garbage · 0` is NaN if the garbage is non-finite,
+     and a ROW_MAJOR WIDTH shard makes half of every tile a pad column, turning a latent risk into
+     the common case.
+  5. **Deferred (Refinement 2b), one class, 12 loose + 16 cartesian cells:** `HEIGHT_SHARDED` at
+     large `W`. HEIGHT cuts the independent axis, so `G = 1` and `C = tensor_w_tiles` — the caller
+     pinned the knob the solve uses to bound `C`. Past `C ≈ 127` (bf16) / `C ≈ 64` (fp32) the two
+     resident shards plus `cb_gamma_tiles` alone exceed the budget, and the descriptor raises. This
+     is a **capacity** limit, not a tuning one: verified at the ladder's last step with `R` already 1.
+     Left failing rather than silenced in EXCLUSIONS. Refinement 2b names the lever — chunk the
+     hidden axis inside a core, which for a *resident* shard is a nearly free regime R3, since R3's
+     fatal cost (a second whole-tensor DRAM read for the apply pass) is zero when the input is
+     already in L1.
+- **Tests added**: `tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_sharded.py` (31 cases) —
+  correctness per scheme × layout, no-gamma, output-inherits-shard-spec, the sub-tile ROW_MAJOR
+  slices and the mixed gamma dtype (regressions for issues 1 and 2), the five pinned perf geometries,
+  and `test_rms_norm_tile_shard_is_consumed_in_place`, which asserts the **zero-copy contract
+  structurally** on the program descriptor. That last one matters: an accessor read of a core's own
+  shard returns the same bytes, so no numerical test can tell "sharding implemented" from "sharding
+  tolerated" — only the descriptor can.

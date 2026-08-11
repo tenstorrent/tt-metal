@@ -116,7 +116,7 @@ shrink at fp32/HiFi4, so `test_rms_norm_precision_matrix` derives its scale-bug 
 `group="perf"` cases now run for real at their pinned `fp32_dest_acc_en=False` + HiFi2 config, so
 those phases can measure the configuration they are specified against instead of proxying it.
 
-### [ ] Refinement 2 — Sharded input/output placements (all three schemes)
+### [~] Refinement 2 — Sharded input/output placements (all three schemes)
 
 **Goal**: add `ttnn.TensorMemoryLayout.HEIGHT_SHARDED`, `WIDTH_SHARDED` and `BLOCK_SHARDED` to
 `SUPPORTED["memory_layout"]`, consuming the resident shard **in place** and writing a matching
@@ -145,6 +145,73 @@ There is no implementation skill for placement yet — `/memory-layouts` is RM/T
 placement, so do not invoke it here. Order: after Refinement 1 (so the sharded cells land at both
 `fp32_dest_acc_en` values in one pass) and before Refinement 5, which measures the sharded perf
 geometries this creates.
+
+**Outcome**: all three placements landed in `SUPPORTED["memory_layout"]` and are consumed
+**natively** — `_sharded_cb` pins `cb_input_tiles` / `cb_output_tiles` zero-copy over the resident
+L1 buffers on the TILE legs (the reader's and writer's DRAM legs disappear entirely; asserted
+structurally by `test_rms_norm_tile_shard_is_consumed_in_place`, since a `TensorAccessor` read of a
+local shard is numerically indistinguishable and would pass every value check). The ROW_MAJOR legs
+cannot pin — the block CB there is the `tilize`/`untilize` staging buffer, whose group-uniform
+tile-row stride is not the shard's stick stride — so they re-stride the sticks core-locally
+(L1 → L1, one bulk transfer per 32-row group when the strides already agree); still zero DRAM
+crossings for the activations. The geometry is **read off the spec, not re-chosen** (`_ShardView`):
+HEIGHT ⇒ `G = 1` and the combine degenerates to a local copy; WIDTH ⇒ the whole shard grid is one
+group; BLOCK ⇒ one grid row of the shard rectangle. `_select_regime` is not called for a sharded
+input. Two structures the spec forced: a WIDTH shard grid is often **not a rectangle** (16 slices on
+an 11-wide grid = a full row + a 5-core row) while the `rstd` broadcast needs one, so the group
+rectangle is the bounding box and the shard-less cores in it stay program cores holding the
+identical CB map — receiving the broadcast, never acking, which is why the mcast now carries an
+explicit `num_active = G − 1`; and a ROW_MAJOR WIDTH/BLOCK shard's width granule is the **L1
+alignment**, not a tile, so `partial_w` became **per-core** (every core can carry a ragged tail, not
+just the one owning the tensor's last hidden tile). Two real bugs came out of that second one, both
+fixed and both pinned by tests: a DRAM read **truncates** its source address to the DRAM alignment,
+so every core was reading gamma from the 64-byte-aligned offset *below* its own slice (PCC 0.28);
+and the shifted re-read then hit a sub-L1-alignment offset once the gamma dtype differed from the
+activation's (PCC 0.44). Measured: PCC ≥ 0.99996 across all three schemes × TILE/ROW_MAJOR ×
+{bf16, bfloat8_b, fp32}; the `pad_poison` shapes are green on all three placements (PCC ≥ 0.99998,
+got/true ratio ≈ 1.0, so the mask-before-square and the true-`W` divisor both survive sharding);
+all five pinned `group="perf"` shard geometries run, which **unblocks Refinement 5**. Golden slices:
+loose-sharded 269/281 pass (was 263 before the two L1 levers below), cartesian slices 516/516 and
+761/777. Two L1 levers landed alongside: `_DEPTH_LADDER` (a shard spec pins both `G` and `C`, so `R`
+and the buffer depths are the only residency knobs left — depth is spent first and surrendered last,
+and no interleaved geometry ever leaves step 0) and the `cb_gamma_rm` → `cb_input_rm` alias (Rule 3
+pattern 3, same producer and consumer, guarded on equal page formats). **Deferred to 2b**: every
+remaining failure — 12 loose + 16 cartesian in the slices run — is the *same* capacity limit, not a
+correctness gap. See Refinement 2b.
+
+### [ ] Refinement 2b — HEIGHT_SHARDED wide-`W`: chunk the hidden axis inside a core
+
+**Goal**: close the one class Refinement 2 left failing. `HEIGHT_SHARDED` cuts the **independent**
+`row` axis, so `w_group_size == 1` by construction and `core_w_tiles == tensor_w_tiles` — the caller
+pinned the very knob the residency solve uses to bound `C`, so the escape hatch "raise `G` until the
+slice fits" is gone. Past `C ≈ 127` (bf16) or `C ≈ 64` (fp32 activations, or an fp32 gamma) the
+resident input shard + resident output shard + `cb_gamma_tiles` (`C` tiles) **alone** exceed the
+1.44 MiB budget and `_max_block_row_tiles` returns 0, so the program descriptor raises with
+"the per-core CB working set … does not fit L1 … the shard spec pins both". Confirmed exhaustively
+at the ladder's last step: no depth or block setting reaches it (`R` is already 1 — a HEIGHT shard
+is often one tile-row), which is exactly why this is a scheme item and not a knob-turn.
+
+Failing cells observed: loose `HEIGHT_SHARDED` at `W ∈ {3000, 4064, 4095, 5119, 5120, 6144, 11008}`
+(12 of 281 in the loose-sharded slice) plus the cartesian `1x1x32x4096` HEIGHT column at fp32 or
+with an fp32 gamma (16 of 777). WIDTH and BLOCK are unaffected at every width tested up to
+`W = 11008` — they split `hidden` and so shrink `C` themselves. One WIDTH cell fails for the mirror
+reason (`13x777x1023` puts a 650 KiB full-height shard on each of 32 cores, leaving 110 KiB for a
+`R·G = 32`-tile `cb_stat_gather`).
+
+**The lever, and why it is cheap here**: regime R3 (`op_design.md`, streaming two-pass) chunks the
+hidden axis into `w_chunk_tiles` so the working set is `O(chunk)` instead of `O(C)`. R3 was rejected
+for Phase 0 because its cost is **one extra whole-tensor DRAM read** for the apply pass — by far the
+largest term in the traffic ranking. For a *resident* shard that cost is **zero**: the apply pass
+re-reads the same L1 the first pass read, so R3's only remaining cost is the per-chunk
+`Accumulate` reload (`reduce_helpers_compute.hpp:328`) and per-chunk phase-boundary reconfig. The
+design already says `core_w_tiles` is the only extent the CBs are sized against, so `w_chunk_tiles`
+slots underneath it. Gate the chunked path on `sharded && C > (whatever the solve admits)` so every
+currently-green geometry keeps the single-chunk path byte-identical. Note `cb_gamma_tiles` must
+chunk too — at `C = 344` it is 688 KiB on its own, which is most of the overrun.
+
+**Done when**: the `HEIGHT_SHARDED` cells above pass (or, where even a one-tile chunk cannot fit,
+fail for a *different*, documented reason), no currently-passing cell regresses, and
+`test_rms_norm_sharded.py` gains a wide-`W` HEIGHT case per layout.
 
 ### [ ] Refinement 3 — Speed up the perf-flagged wide interleaved decode profile
 

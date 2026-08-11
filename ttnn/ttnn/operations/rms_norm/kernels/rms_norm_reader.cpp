@@ -107,6 +107,28 @@ FORCE_INLINE void zero_l1_bytes(uint32_t addr, uint32_t bytes) {
     }
 }
 
+// Copy `bytes` of L1 from `src` to a NON-OVERLAPPING `dst`, with the CPU rather
+// than the NoC. Used for the one transfer whose source alignment is not under our
+// control: shifting a gamma slice down by `lead` bytes, where `lead` is only a
+// multiple of the GAMMA element size (8 bytes for a bf16 gamma against an fp32
+// activation's 4-element ROW_MAJOR width granule) and therefore can be finer than
+// the 16-byte L1 alignment a NoC read needs.
+FORCE_INLINE void copy_l1_bytes(uint32_t dst, uint32_t src, uint32_t bytes) {
+    if (((dst | src | bytes) & 3u) == 0) {
+        volatile tt_l1_ptr uint32_t* d = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst);
+        volatile tt_l1_ptr uint32_t* s = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src);
+        for (uint32_t i = 0, n = bytes >> 2; i < n; ++i) {
+            d[i] = s[i];
+        }
+    } else {
+        volatile tt_l1_ptr uint16_t* d = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(dst);
+        volatile tt_l1_ptr uint16_t* s = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(src);
+        for (uint32_t i = 0, n = bytes >> 1; i < n; ++i) {
+            d[i] = s[i];
+        }
+    }
+}
+
 // A resident-shard "accessor" with the same page/offset shape as TensorAccessor,
 // resolving to THIS core's own L1: the shard is already here, so the address is
 // `shard_base + page * shard_row_bytes`. This is what lets read_slice_rows (and
@@ -247,14 +269,16 @@ void kernel_main() {
             if (gamma_lead_bytes == 0) {
                 read_slice_rows<cb_gamma_stage, CB_W_TILES>(gamma_acc, 1, gamma_slice_bytes, 0, gamma_read_offset);
             } else {
-                // This core's gamma slice does NOT start on a DRAM-aligned boundary
-                // (a ROW_MAJOR WIDTH/BLOCK shard's width granule is the L1
-                // alignment, so a slice can start mid-tile). A DRAM read TRUNCATES
-                // its source address to the DRAM alignment — silently returning a
-                // neighbouring slice — so fetch the aligned span into scratch past
-                // the gamma row, then re-fetch it L1 -> L1 at the exact offset: an
-                // L1 source only needs the 16-byte L1 alignment, which every slice
-                // offset has (the RM width granule IS that alignment).
+                // This core's gamma slice does NOT start on a DRAM-aligned boundary.
+                // A ROW_MAJOR WIDTH/BLOCK shard's width granule is the L1 alignment
+                // in INPUT elements, so a slice can start mid-tile — and once the
+                // gamma dtype differs from the activation's (bf16 weights against
+                // fp32 activations) the resulting gamma byte offset need not even be
+                // L1-aligned. A DRAM read TRUNCATES its source address to the DRAM
+                // alignment, silently returning a neighbouring slice, so: fetch the
+                // ALIGNED span into scratch past the gamma row, then shift it down by
+                // `lead` with the CPU (the one transfer whose source alignment is not
+                // ours to choose — see copy_l1_bytes).
                 constexpr uint32_t block_row_bytes = (get_tile_size(cb_gamma_stage) / TILE_HW_DIM) * CB_W_TILES;
                 cb_reserve_back(cb_gamma_stage, CB_W_TILES);
                 const uint32_t row = get_write_ptr(cb_gamma_stage);
@@ -265,9 +289,8 @@ void kernel_main() {
                 noc_async_read(
                     gamma_acc.get_noc_addr(0, gamma_read_offset), scratch, gamma_lead_bytes + gamma_slice_bytes);
                 noc_async_read_barrier();
-                noc_async_read(::get_noc_addr(scratch + gamma_lead_bytes), row, gamma_slice_bytes);
+                copy_l1_bytes(row, scratch + gamma_lead_bytes, gamma_slice_bytes);
                 zero_l1_bytes(row + gamma_slice_bytes, block_row_bytes - gamma_slice_bytes);
-                noc_async_read_barrier();
                 cb_push_back(cb_gamma_stage, CB_W_TILES);
             }
         } else {

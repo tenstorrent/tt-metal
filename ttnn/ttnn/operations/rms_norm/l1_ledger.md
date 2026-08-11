@@ -172,6 +172,31 @@ The inventory above was built as designed — no buffer in it was added, and the
 | **`cb_stat_sq` carries `R · (1 + has_tail_global)` pages on every core, including cores that do not own the tensor's last hidden tile** (live set `R` there). | `cb_stat_sq` | Same uniform-L1-map requirement as `cb_stat_gather`: every CB is allocated identically group-wide because two of them are addressed by a peer's local pointer. The dead `R` fp32 pages on non-tail-owning cores are the accounted price; they are bounded by `MAX_GATHER_TILES` like every other `R`-scaled row. |
 | **No row changed shape (Refinement 1).** `T_in` / `T_γ` gain a third value — `tile_size(bfloat8_b) = 1088` — and every `T_f32` / `T_bf16` row is untouched at BOTH `fp32_dest_acc_en` settings. | none (values only) | Refinement 1 added `dtype`/`gamma_dtype` = `bfloat8_b` and `fp32_dest_acc_en = False`, and neither is a footprint change. (1) Block-float only *narrows* the `T_in`/`T_γ`-scaled rows (1088 vs 2048/4096 bytes per tile), so the residency predicate is strictly easier to satisfy and the selected `(G, C, R)` can only get coarser — never a new OOM. (2) The whole `cb_stat_*` chain (`cb_stat_sq`, `_partial`, `_gather`, `_sum`, `cb_rstd_send`, `cb_rstd`) plus `cb_zero_tile` are pinned to `T_f32` **unconditionally** — they do NOT follow `fp32_dest_acc_en`, and `cb_scaler` / `cb_wmask` stay `T_bf16` (`reduce_helpers_dataflow.inl:185-187` `static_assert`s the scaler format). That was already true at Phase 0; Refinement 1 is what makes it load-bearing, because `fp32_dest_acc_en = False` narrows only the *in-DEST* accumulation while `Σ x²` still crosses L1 in fp32. Demoting any of those rows to `T_in` would be the `row_reduce_accumulate` failure mode, not a saving. (3) DEST capacity is never spelled as a literal — the helpers read `DEST_AUTO_LIMIT`, which doubles 4 → 8 when fp32 DEST accumulation is off — so no capacity in this ledger assumes the halved value. |
 
+### Refinement 2 deltas — physical shard placements
+
+Three rows change shape, and one previously-unclaimed reuse is now claimed. The
+**live sets and axis accounting are unchanged**: a shard supplies the same `(R, C, G)`
+geometry `_select_regime` would otherwise choose, so this is a placement change, not
+a blocking change.
+
+| Change | Row(s) affected | Why |
+|--------|-----------------|-----|
+| **`cb_input_tiles` costs the CB arena NOTHING on a TILE-layout sharded input.** Its capacity becomes the shard's own bank size (`shard_row_tiles · C` pages ≥ `R · C`), and its address is the tensor's L1 buffer address. | `cb_input_tiles` | This is what "sharding implemented" means: `ttnn.cb_descriptor_from_sharded_tensor` pins the CB zero-copy over the resident shard, so `load_block` is the CB handshake alone and the reader's DRAM leg disappears (`_sharded_cb`). The shard's pages are already tile-row-major at row stride `C`, i.e. exactly the block layout compute expects, and total pushes over the kernel (`core_row_tiles · C`) never exceed capacity, so the pointer never wraps. The bytes do not vanish — they move out of the arena and into the budget, which now subtracts both shards' `aligned_size_per_bank` before the solve runs. |
+| **`cb_output_tiles` likewise on a TILE-layout sharded output.** | `cb_output_tiles` | Symmetric: compute packs straight into the block's final home and `store_block` is the CB handshake alone. The pad columns / padded tile-rows compute also writes land in the shard's own padding, outside the logical tensor, and are never read back. |
+| **`cb_gamma_rm` now SHARES `cb_input_rm`** when `gamma_dtype == input_dtype` (so the page formats match). | `cb_gamma_rm` (conditionally deleted) | Rule 3 pattern 3 (alias disjoint lifetimes) — the reuse the Phase 0 row recorded as rejected, now available: `cb_gamma_rm` is filled once and dies the instant `load_gamma_slice` has tilized it, strictly before `cb_input_rm`'s first push, and **both have the same producer (the reader) and the same consumer (compute's `tilize`)**, so single-producer/single-consumer holds. Saves `C` tiles on every ROW_MAJOR-input × ROW_MAJOR-gamma case. The Phase 0 rejection stands for the mixed-precision case it was written about: one CB index carries one data format, so `gamma_dtype != input_dtype` keeps its own buffer. |
+| **The buffer depths are now a LADDER, not fixed knobs** (`_DEPTH_LADDER`): `(input_cb_depth, rm_cb_depth)` steps `(2,2) → (2,1) → (1,1)`, and the solve takes the first step that fits. | `cb_input_rm`, `cb_output_rm`, `cb_input_tiles` | A shard spec pins BOTH `G` and `C`, so `R` and the depths are the only residency knobs left — and `R` is often already 1 (a HEIGHT shard of one tile-row). Depth buys overlap, so it is spent first and surrendered last: step 0 is the knobs, and no interleaved geometry ever leaves it, so the default path is byte-identical. |
+
+**Where a physical shard leaves the footprint standing.** For HEIGHT_SHARDED the shard
+cuts the independent `row` axis, so `G == 1` by construction and `C == tensor_w_tiles` —
+the one op dimension that reaches a capacity is no longer bounded by "raise `G`", because
+the caller pinned `G`. At `C ≳ 127` (bf16) or `C ≳ 64` (fp32, or an fp32 gamma) the
+resident input shard + resident output shard + `cb_gamma_tiles` (`C` tiles) alone exceed
+the 1.44 MiB budget, and the solve raises rather than allocate. That is the sole remaining
+gap in this refinement and it is a **capacity** limit, not a tuning one: no depth or block
+setting reaches it. See `op_requirements.md` Refinement 2b — the fix is to chunk the hidden
+axis inside a core, which for a *resident* shard is a nearly free version of regime R3
+(R3's fatal cost is a second DRAM read of the input; a resident shard has none).
+
 ### Corrected footprint expressions (what the host actually computes)
 
 These are what `_cb_bytes()` *derives* from `_cb_specs()` — they are recorded here as the closed
@@ -219,3 +244,28 @@ The decode row is the design's predicted best case: a single row-group cannot re
 so DRAM traffic is exactly the named-boundary minimum. The `G = 22` (rather than 110) choice is
 **perf lamp P2, now measured and adopted** — see `MAX_W_GROUP_SIZE` in
 `rms_norm_program_descriptor.py` for the numbers.
+
+### Data-movement budget — a physically SHARDED input/output (Refinement 2)
+
+The activation crossings drop from 1× DRAM to **0×**: the input is already in L1 and the
+output's final home is L1, so neither activation tensor crosses DRAM at all inside the op.
+
+| Tensor | DRAM crossings, INTERLEAVED | DRAM crossings, `*_SHARDED` | Why |
+|--------|----------------------------|-----------------------------|-----|
+| `input_tensor` | 1× (`N` bytes) | **0×** | The shard IS the block, resident in the consuming core's own L1. TILE: consumed through a pinned zero-copy CB, so not one byte moves. ROW_MAJOR: re-strided CORE-LOCALLY (L1 → L1) into the tile-row stride `tilize` requires, because the shard's stick stride is its own width — still no DRAM crossing, and one bulk transfer per 32-row group when the strides already agree. |
+| `output` | 1× (`N` bytes) | **0×** | Symmetric. TILE: compute packs into the pinned output shard. ROW_MAJOR: `untilize` emits the uniform stride, the writer re-strides it core-locally into the shard. |
+| `gamma` | `num_row_groups ×` | `num_row_groups ×` — **1×** for WIDTH_SHARDED | Unchanged in kind: gamma stays interleaved DRAM and is read once per core for the whole kernel. WIDTH_SHARDED is the structural minimum, because the whole shard grid is ONE reduction group (`num_row_groups == 1`), so the group's members read disjoint slices and gamma crosses DRAM exactly once. HEIGHT_SHARDED is the worst case (one row-group per core). |
+| per-block statistics | 0 | 0 | Unchanged. Per block: `(G−1)·R` fp32 tiles unicast into the root's gather slots + `R` tiles multicast to the group rectangle. HEIGHT_SHARDED has `G == 1`, so the round degenerates to a local copy and there is **no cross-core traffic at all**. |
+
+A core's own shard is never addressed through a `TensorAccessor`; the accessor keeps owning
+interleaved I/O and gamma. `tests/.../test_rms_norm_sharded.py::test_rms_norm_tile_shard_is_consumed_in_place`
+asserts the pinning on the descriptor, because an accessor read of a local shard is
+numerically indistinguishable from the zero-copy path and would pass every value check.
+
+**Filler cores.** A WIDTH shard grid is not always a rectangle (16 slices on an 11-wide grid
+is a full row plus a 5-core row), and the `rstd` broadcast needs one. The group rectangle is
+therefore the shard grid's bounding box, and the cores in it that own no shard stay program
+cores — they hold the identical CB map (so the broadcast lands in a reserved `cb_rstd` rather
+than in unowned L1) and nothing else. They receive `R` fp32 tiles per block and never ack,
+which is why the mcast is emitted with an explicit `num_active = G − 1`. Cost: at most
+`grid_x − 1` cores' worth of otherwise-idle L1 map per group.
