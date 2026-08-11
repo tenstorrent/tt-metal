@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import itertools
+import math
 from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Dict
@@ -25,6 +26,7 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    runtime,
 )
 from helpers.sfpu_domains import (
     _OP_DOMAIN_REGISTRY,
@@ -1091,14 +1093,65 @@ def test_sfpu_binary_int_shift_edge_cases(
 # =============================================================================
 
 
-def _build_edge_pair_src(mathop, formats):
+# The edge-pair probe is partitioned before it is driven, and the partition is what makes
+# the xfails below mean anything. One tensor holding every pole of an op mixes failure
+# classes that have nothing to do with each other: div's lost zero sign is documented
+# Wormhole SFPMAD behaviour that Blackhole is documented to fix, while div(0, 0) returning
+# inf is the kernel's own reciprocal composition and fixed nowhere. Bundled into one
+# variant, one xfail covers both — so the zero sign improving on Blackhole still reports
+# XFAIL rather than the XPASS it was recorded to produce, and a *new* mismatch anywhere in
+# the tensor is invisible for as long as either known one survives.
+#
+# Classified by what the golden says the answer is, rather than by a per-op predicate on
+# the operands, because that is where the classes actually live and the golden is the
+# authority on it: `fmod(-2, +1/64)` is a negative-zero case and `fmod(+2, -1/64)` is not,
+# which no reading of the operand signs gets right.
+_EDGE_CLASS_BOTH_ZERO = "both_zero"
+_EDGE_CLASS_NAN = "nan_golden"
+_EDGE_CLASS_NEGATIVE_ZERO = "negative_zero_golden"
+_EDGE_CLASS_ORDINARY = "ordinary"
+
+# both_zero first: 0/0, xlogy(0, 0) and 0**0 are indeterminate forms produced by the
+# kernel's own composition (a reciprocal, an exp(b·ln a)), which is a different cause from
+# x % 0 even where both goldens are NaN.
+_EDGE_CLASSES = (
+    _EDGE_CLASS_BOTH_ZERO,
+    _EDGE_CLASS_NAN,
+    _EDGE_CLASS_NEGATIVE_ZERO,
+    _EDGE_CLASS_ORDINARY,
+)
+
+
+def _classify_edge_pair(mathop, a, b):
+    """Which failure class the pair (*a*, *b*) belongs to for *mathop*."""
+    if a == 0.0 and b == 0.0:
+        return _EDGE_CLASS_BOTH_ZERO
+
+    golden = get_golden_generator(BinarySFPUGolden)
+    result = float(golden.ops[mathop](torch.tensor(a), torch.tensor(b)))
+    if math.isnan(result):
+        return _EDGE_CLASS_NAN
+    if result == 0.0 and math.copysign(1.0, result) < 0.0:
+        return _EDGE_CLASS_NEGATIVE_ZERO
+    return _EDGE_CLASS_ORDINARY
+
+
+def _build_edge_pair_src(mathop, formats, edge_class):
     """Two-tile override: tile 0 holds operand A, tile 1 holds operand B, paired by index.
 
-    Returns None when neither operand has an edge worth probing, which is the caller's cue
-    to skip. Cycles the pair list to fill a full tile the way the shift builder does, so
-    the override divides evenly into whatever buffer sfpu_binary picks.
+    Only the pairs in *edge_class* are driven, so each class fails or passes on its own
+    evidence. Returns None when neither operand has an edge worth probing, or when this
+    class is empty for this op — both are the caller's cue to skip. Cycles the pair list to
+    fill a full tile the way the shift builder does, so the override divides evenly into
+    whatever buffer sfpu_binary picks.
     """
-    pairs = edge_pair_values(mathop, formats.input_format, formats.output_format)
+    pairs = [
+        pair
+        for pair in edge_pair_values(
+            mathop, formats.input_format, formats.output_format
+        )
+        if _classify_edge_pair(mathop, *pair) == edge_class
+    ]
     if not pairs:
         return None
     num_elements = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
@@ -1174,10 +1227,25 @@ assert _BINARY_EDGE_OPS, (
 #   0**0 returns 0 where C, torch and the golden give 1. pow evaluates exp(b·ln a), so this
 #   is a composition artifact rather than anything the ISA prescribes.
 #
+# Those two groups are exactly the classes the probe is partitioned into: the documented
+# one is _EDGE_CLASS_NEGATIVE_ZERO, and the open ones are _EDGE_CLASS_BOTH_ZERO (the
+# indeterminate forms, and 0**0) and _EDGE_CLASS_NAN (x % 0). _EDGE_CLASS_ORDINARY holds
+# everything that agreed — the ±inf poles, the finite quotients, the exact remainders — and
+# is asserted rather than tolerated, which is only possible now that it is not sharing a
+# tensor with the others.
+#
 # Recorded as non-strict xfails per Phase 0's precedent for approximate exp: the case still
 # executes and reports XPASS if the behaviour changes. Enumerated per (input, output,
 # dest_acc) rather than by predicate so a combination drifting in or out shows up here.
-_BINARY_EDGE_DIVERGENCES = {
+#
+# Keyed by (op, edge class): the combination lists below started as one list per op, and
+# every class of an op inherits it. That is the honest starting point rather than a
+# measurement — the old bundled variant could only report "something in this tensor
+# diverges", so which class drove which combination into the list is not recoverable from
+# it. The first per-class run on each arch tightens them: a class that XPASSes across the
+# board loses its entry, and one that XPASSes on Blackhole alone becomes arch-gated the way
+# the reduce xfail is.
+_BINARY_EDGE_COMBINATIONS = {
     MathOperation.SfpuElwdiv: (
         (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.No),
         (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.Yes),
@@ -1217,19 +1285,50 @@ _ZERO_SIGN_ISA_NOTE = (
     "zero'); Blackhole is documented to preserve it, so expect XPASS there"
 )
 
+# Which classes of each op are expected to diverge, and why — one reason per class, so the
+# xfail says what it is waiting for. A class absent from an op's dict is asserted to pass:
+# the ±inf poles, the finite quotients and the exact remainders all agreed on Wormhole.
 _BINARY_EDGE_REASON = {
-    MathOperation.SfpuElwdiv: f"div(0, -x) returns +0.0 not -0.0 ({_ZERO_SIGN_ISA_NOTE}), "
-    "and div(0, 0) returns inf not nan, which the ISA does not explain. The finite poles "
-    "and every ±inf agree exactly.",
-    MathOperation.SfpuXlogy: f"xlogy(0, tiny) returns +0.0 not -0.0 ({_ZERO_SIGN_ISA_NOTE}), "
-    "and xlogy(0, 0) returns -inf not nan.",
-    MathOperation.SfpuElwpow: "0**0 returns 0; C, torch and the golden all give 1. Not "
-    "explained by the ISA — pow evaluates exp(b·ln a), so this is composition.",
-    MathOperation.SfpuBinaryFmod: f"fmod(x, 0) returns inf not nan, and a negative divisor "
-    f"loses the sign of a zero result ({_ZERO_SIGN_ISA_NOTE}).",
-    MathOperation.SfpuBinaryRemainder: f"remainder(x, 0) returns inf not nan, and a "
-    f"negative divisor loses the sign of a zero result ({_ZERO_SIGN_ISA_NOTE}).",
+    MathOperation.SfpuElwdiv: {
+        _EDGE_CLASS_BOTH_ZERO: "div(0, 0) returns inf, not nan. SFPMAD follows IEEE for "
+        "0 x inf, so this is the kernel's own reciprocal composition rather than the "
+        "multiply — not explained by the ISA, and not expected to change on Blackhole.",
+        _EDGE_CLASS_NEGATIVE_ZERO: f"div(0, -x) returns +0.0, not -0.0 "
+        f"({_ZERO_SIGN_ISA_NOTE}).",
+    },
+    MathOperation.SfpuXlogy: {
+        _EDGE_CLASS_BOTH_ZERO: "xlogy(0, 0) returns -inf, not nan — the same "
+        "indeterminate 0 x inf as div, and equally unexplained by the ISA.",
+        _EDGE_CLASS_NEGATIVE_ZERO: f"xlogy(0, tiny) returns +0.0, not -0.0 "
+        f"({_ZERO_SIGN_ISA_NOTE}).",
+    },
+    MathOperation.SfpuElwpow: {
+        _EDGE_CLASS_BOTH_ZERO: "0**0 returns 0; C, torch and the golden all give 1. Not "
+        "explained by the ISA — pow evaluates exp(b·ln a), so this is composition.",
+    },
+    MathOperation.SfpuBinaryFmod: {
+        _EDGE_CLASS_BOTH_ZERO: "fmod(0, 0) returns inf, not nan.",
+        _EDGE_CLASS_NAN: "fmod(x, 0) returns inf, not nan. Not explained by the ISA.",
+        _EDGE_CLASS_NEGATIVE_ZERO: f"fmod loses the sign of a zero result "
+        f"({_ZERO_SIGN_ISA_NOTE}).",
+    },
+    MathOperation.SfpuBinaryRemainder: {
+        _EDGE_CLASS_BOTH_ZERO: "remainder(0, 0) returns inf, not nan.",
+        _EDGE_CLASS_NAN: "remainder(x, 0) returns inf, not nan. Not explained by the ISA.",
+        _EDGE_CLASS_NEGATIVE_ZERO: f"remainder loses the sign of a zero result "
+        f"({_ZERO_SIGN_ISA_NOTE}).",
+    },
 }
+
+# No op may claim a divergence without a combination list to apply it to, and none may
+# list combinations with nothing to apply them to.
+assert set(_BINARY_EDGE_REASON) == set(_BINARY_EDGE_COMBINATIONS), (
+    "_BINARY_EDGE_REASON and _BINARY_EDGE_COMBINATIONS disagree on which ops diverge: "
+    f"{set(_BINARY_EDGE_REASON) ^ set(_BINARY_EDGE_COMBINATIONS)}"
+)
+assert all(
+    cls in _EDGE_CLASSES for classes in _BINARY_EDGE_REASON.values() for cls in classes
+), "_BINARY_EDGE_REASON names an edge class that _classify_edge_pair never returns"
 
 
 @pytest.mark.nightly
@@ -1237,22 +1336,32 @@ _BINARY_EDGE_REASON = {
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
     mathop=_BINARY_EDGE_OPS,
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    # runtime(): the class selects which values go in the override tensor and nothing
+    # else, so all four share one ELF instead of compiling the same kernel four times.
+    edge_class=runtime(list(_EDGE_CLASSES)),
 )
-def test_sfpu_binary_edges(request, formats, dest_acc, mathop):
-    """Drive each binary op's registered pole against a spread of counterpart values."""
+def test_sfpu_binary_edges(request, formats, dest_acc, mathop, edge_class):
+    """Drive one class of each binary op's registered pole against its counterparts.
+
+    One variant per (op, class) rather than per op: see the comment above _EDGE_CLASSES for
+    why a single tensor holding every pole cannot report which behaviour changed.
+    """
     _skip_fp32_no_dest_acc(formats, dest_acc)
     _skip_bh_float16_no_dest_acc(formats, dest_acc)
 
-    if (formats.input_format, formats.output_format, dest_acc) in (
-        _BINARY_EDGE_DIVERGENCES.get(mathop, ())
+    reason = _BINARY_EDGE_REASON.get(mathop, {}).get(edge_class)
+    if reason is not None and (
+        (formats.input_format, formats.output_format, dest_acc)
+        in _BINARY_EDGE_COMBINATIONS[mathop]
     ):
-        request.node.add_marker(
-            pytest.mark.xfail(reason=_BINARY_EDGE_REASON[mathop], strict=False)
-        )
+        request.node.add_marker(pytest.mark.xfail(reason=reason, strict=False))
 
-    src = _build_edge_pair_src(mathop, formats)
+    src = _build_edge_pair_src(mathop, formats, edge_class)
     if src is None:
-        pytest.skip(reason=f"{mathop.name} has no registered per-operand edge to probe")
+        pytest.skip(
+            reason=f"{mathop.name} has no {edge_class} pair among its registered "
+            "per-operand edges"
+        )
 
     sfpu_binary(formats, dest_acc, mathop, src_A_override=src)
 
