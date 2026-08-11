@@ -106,6 +106,33 @@ so appending to the tensor alone leaves the extra tiles unread. Widening that co
 tap is the one host change required, and it is the same work the optional-tensor route would have
 needed for its own CB anyway.
 
+### Status: the CB is built and verified (supersedes the "NOT COMPILED" label on ee35285c0b8)
+
+`Conv2dCb::SNAKE_PARAMS`, its `CBInfo` entry and the `SNAKE_PARAMS_CB_ID` define are compiled and
+regression-tested. That commit's subject says NOT COMPILED because at the time it was; it since has
+been, and the label is stale rather than wrong-in-substance.
+
+    BUILD_RC=0
+    depthwise gate   conv1d=8.082e-08  mac=8.082e-08   bit-identical to before the CB existed
+    full VAE suite   17 passed, 0 failed, 184 s
+
+**Building needs the main checkout.** The worktree's `build_Release` is a symlink to the main
+checkout's, whose cmake cache is configured against `/data/rshirvani/tt-metal`, so `build_metal.sh`
+from the worktree refuses outright -- and a build that did run would compile the main checkout's
+sources, not the worktree's. Host C++ edits therefore have to be copied to `/data/rshirvani/tt-metal`
+and built there; device kernels are JIT-compiled from `TT_METAL_HOME` and do take effect from the
+worktree, which is why every kernel change in this branch could be verified in place and this one
+could not.
+
+**The L1 risk is neutralised for the default path** by allocating the CB with 0 pages unless the env
+var is set, so `post_conv2d_op_memory_checks` sums exactly what it summed before for every non-snake
+conv. It still applies to the gated path when that is first exercised.
+
+**Rebuild cost, corrected again:** ~2 h wall clock, not the 5-10 min estimated in 7aa264d7b53. That
+estimate assumed one .cpp plus a link; this touched `conv2d_op_program_factory_common.hpp`, and a
+header change plus unity builds invalidates most of ttnn. Budget accordingly -- a .cpp-only change
+should still be quick, a header change should not be attempted casually.
+
 ### Final answer on the carrier: a small persistent CB, not the weights CB
 
 Two attempts at the weights-CB route each surfaced a further problem. Both are real and neither is
