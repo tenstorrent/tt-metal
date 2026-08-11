@@ -28,7 +28,7 @@ def causal_depthwise_conv_reference(
 
     window = torch.cat((history.float(), inputs.float()), dim=1)
     output = F.conv1d(window.transpose(1, 2), weight.float(), groups=channels).transpose(1, 2)
-    final_state = window[:, -(kernel - 1) :] if kernel > 1 else window[:, :0]
+    final_state = (window[:, -(kernel - 1) :] if kernel > 1 else window[:, :0]).clone()
     return F.silu(output), final_state
 
 

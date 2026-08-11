@@ -30,6 +30,13 @@ def test_causal_convolution_split_equivalence() -> None:
     assert_equal(full_state, split_state, name="split convolution state")
 
 
+def test_causal_convolution_state_has_compact_storage() -> None:
+    inputs = torch.randn(2, 64, 32)
+    weight = torch.randn(32, 1, 4)
+    _, state = causal_depthwise_conv_reference(inputs, weight)
+    assert state.untyped_storage().nbytes() == state.numel() * state.element_size()
+
+
 def test_gate_formulas() -> None:
     raw = torch.tensor([[[[-2.0, 0.5], [1.0, 3.0]]]])
     a_log = torch.log(torch.tensor([[[[2.0], [4.0]]]]))
