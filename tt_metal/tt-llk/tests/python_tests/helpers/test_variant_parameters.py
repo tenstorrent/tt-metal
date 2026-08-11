@@ -647,6 +647,49 @@ class GENERALIZED_MOE_GATE(TemplateParameter):
 
 
 @dataclass
+class DEEPSEEK_MOE_GATE(TemplateParameter):
+    mode: int = 0
+    sub_op: int = 0
+    sigmoid: bool = False
+    reload: bool = False
+    eps: int = 0
+    scale: int = 0
+
+    def convert_to_cpp(self) -> str:
+        lines: list[str] = [
+            f"constexpr int DMG_MODE = {self.mode};",
+            f"constexpr int DMG_SUB_OP = {self.sub_op};",
+            f"constexpr bool DMG_SIGMOID = {str(self.sigmoid).lower()};",
+            f"constexpr bool DMG_RELOAD = {str(self.reload).lower()};",
+            f"constexpr std::uint32_t DMG_EPS = {self.eps};",
+            f"constexpr std::uint32_t DMG_SCALE = {self.scale};",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
+class HADAMARD(TemplateParameter):
+    """Compile-time configuration for the H128 Hadamard test.
+
+    ``normalize`` is the Compute API's own template flag: it turns the post-MM2 SFPU pass that
+    scales the result by 1/sqrt(128) on or off.
+    ``h16_tile_index`` is the index of the H_16 tile within buffer_A. The unpack init preprograms
+    config context 1's srcA base from it once, so it is compile-time and must stay fixed for the
+    whole run.
+    """
+
+    normalize: bool = True
+    h16_tile_index: int = 0
+
+    def convert_to_cpp(self) -> str:
+        lines: list[str] = [
+            f"constexpr bool HADAMARD_NORMALIZE = {str(self.normalize).lower()};",
+            f"constexpr std::uint32_t HADAMARD_H16_TILE_INDEX = {self.h16_tile_index};",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
 class TOPK_XL(TemplateParameter):
     k: int = 512
     num_chunks: int = 1

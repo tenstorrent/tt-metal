@@ -67,10 +67,14 @@ inline void deepseek_moe_gate_eltwise_binary_reuse_dest_as_src() {
 
 template <EltwiseBinaryType eltwise_binary_type, DstSync Dst, bool is_fp32_dest_acc_en, MathFidelity math_fidelity>
 inline void _llk_math_deepseek_moe_gate_eltwise_binary_(
-    const std::uint32_t num_faces, std::uint32_t dst_index, const bool clear_fp32_dst_acc) {
+    const std::uint32_t num_faces, std::uint32_t dst_index, const bool /* clear_fp32_dst_acc */) {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
-    constexpr std::uint32_t ZERO_ACC_MODE = p_zeroacc::CLR_16;
+    // No ZEROACC is issued here, so whatever DEST holds on entry is accumulated onto. That is
+    // why clear_fp32_dst_acc above is accepted and ignored: it is kept only because the llk_api
+    // wrapper and the Compute API pass it through. Reinstating the clear means issuing a
+    // TTI_ZEROACC in this mode:
+    // constexpr std::uint32_t ZERO_ACC_MODE = p_zeroacc::CLR_16;
     static_assert(
         !(eltwise_binary_type == EltwiseBinaryType::ELWMUL && high_fidelity),
         "High fidelity is not supported for ELWMUL");
