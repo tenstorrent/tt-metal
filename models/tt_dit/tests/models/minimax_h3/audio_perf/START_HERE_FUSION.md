@@ -162,6 +162,38 @@ two kernels is the template to copy.
 Then widen the resident chunk from the band to the resblock chain, which is where the order of
 magnitude is.
 
+## Widening, step 1: the snake now rides the phase conv (2026-08-11)
+
+`MINIMAX_H3_AUDIO_FUSE_SNAKE_CONV=1` (with `MINIMAX_H3_AUDIO_FUSE_BAND=1`) folds the band's two
+per-phase `snake_beta` calls into the convs that produce the phases. **Decode 1.113 s -> 1.002 s,
+1.110x**, PSNR 68.6 dB against the default output. Per band, against the unfused band:
+
+    C=32 T41403   1.12x   5.565e-08
+    C=16 T82806   1.34x   4.421e-08
+    C=8  T165606  1.21x   6.541e-08
+
+Verify with `band_snake_conv_verify.py`. Two things this settled that are worth carrying forward:
+
+* **The fused band is no longer a wash.** `fuse_band_enabled`'s docstring said neutral, and it was --
+  the decomposition doubled the op count. Deleting the two activations is what tips it. The two flags
+  must move together; the band alone is still neutral.
+* **C <= 32 only, for a known reason.** The reader fetches the parameter tiles at column offset 0 and
+  the compute kernel reads CB tiles 0 and 1 whatever output column it is on, so at C=64 columns 32-63
+  get channel 0-31's parameters: rel_rmse **2.6e-01**, against exact for every one-tile-wide shape.
+  The sender kernel's own comment predicted exactly this. **This is the first thing to fix when
+  continuing** -- it needs the block's column offset in the reader and a column index in compute, and
+  it unblocks stages at C=64/128/256/512.
+
+### What is left between here and the resblock chain
+
+Per band the chain is now `2 fused phase convs -> 2 pad concats -> 2 down convs -> add`. The two
+concats are the next target and they are large: `PROFILE_2026_08_06.txt` puts Concat at 469 calls and
+**285.3 ms, the single biggest line item**, and 252 of those calls are these per-band `p0`/`p1` builds.
+Each copies the whole M-row phase to prepend 2-3 replicate rows. Widening the upsample window so the
+phase convs emit those rows directly would remove the copy for the interior, leaving only the outermost
+chunk needing the true replicate rule -- which is the same halo-versus-replicate distinction
+`FUSED_BAND_DESIGN.md` already calls the trap.
+
 ## Build procedure -- this bites
 
 **Host C++ must be built from the main checkout.** The worktree's `build_Release` is a symlink to

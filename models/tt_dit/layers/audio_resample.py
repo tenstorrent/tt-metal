@@ -63,6 +63,13 @@ def fuse_band_enabled() -> bool:
     full length), and this stage is as sensitive to op count as to bytes. Kept off because neutral and
     more complex loses; kept at all because the decomposition is the one a real fused kernel wants, and
     it is proven correct here.
+
+    **That verdict is now out of date, in this band's favour.** What made it a wash was the extra op
+    count, and `MINIMAX_H3_AUDIO_FUSE_SNAKE_CONV` deletes the largest part of it: the two per-phase
+    activations fold into the convs that produce the phases, taking their layout round trips with them.
+    With both on, the decode measures **1.002 s against the 1.113 s default (1.110x)** at 207 latents,
+    PSNR 68.6 dB against the default's output -- two orders inside the 49.45 dB the decode already
+    carries against CPU. Turn the two on together; on its own this one is still a wash.
     """
     return os.environ.get("MINIMAX_H3_AUDIO_FUSE_BAND", "0") == "1"
 
