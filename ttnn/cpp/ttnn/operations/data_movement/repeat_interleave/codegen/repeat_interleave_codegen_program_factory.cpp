@@ -161,8 +161,7 @@ ProgramDescriptor RepeatInterleaveCodegenProgramFactory::create_descriptor(
     // ROW_MAJOR whole-stick (outer/H) path (ops/repeat_interleave/spec.py::
     // build_repeat_interleave_rm_factory). supported_by_codegen() unconditionally rejects the
     // within-stick (last-dim) case -- validate_on_program_cache_miss TT_FATALs before this
-    // factory ever runs -- so the last-dim kernel (reader_repeat_interleave_lastdim_rm.cpp) is
-    // deliberately not wired here; it would be unreachable dead code.
+    // factory ever runs -- so no within-stick reader is wired here; it would be unreachable.
     TT_FATAL(
         rep_dim != ndim - 1,
         "repeat_interleave codegen: RM within-stick (last-dim) replication is not wired in this "

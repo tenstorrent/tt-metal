@@ -18,8 +18,8 @@
 //   src       = block*SRC_LOWER + in_rep*LOWER_PAGES + lo
 //
 // This is valid only when the interleaved dim is a whole-stick (outer or H)
-// dim — i.e. NOT the last (W, within-stick) dim. The Python builder routes the
-// last-dim case to reader_repeat_interleave_lastdim_rm.cpp instead.
+// dim — i.e. NOT the last (W, within-stick) dim, which needs a different
+// addressing scheme and is outside this port's scope.
 //
 // CT args: stick_size, input_page_size, l1_slot_stride, TensorAccessorArgs(in_t),
 //          cb_id, NUM_REPEATS, LOWER_PAGES, REP_DIM_PAGES, BATCH

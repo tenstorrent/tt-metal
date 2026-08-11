@@ -49,7 +49,7 @@ void kernel_main() {
         while (pages_left > 0) {
             batch = (pages_left < BATCH) ? pages_left : BATCH;
             cb.wait_front(prev_batch + batch);
-            noc.async_write_barrier();
+            noc.async_writes_flushed();
             cb.pop_front(prev_batch);
 
             l1_offset = 0;
@@ -63,13 +63,13 @@ void kernel_main() {
         }
 
         // Drain
-        noc.async_write_barrier();
+        noc.async_writes_flushed();
         cb.pop_front(prev_batch);
     } else {
         for (uint32_t i = 0; i < num_pages; i++) {
             cb.wait_front(1);
             noc.async_write(cb, d, stick_size, {.offset_bytes = 0}, {.page_id = page_id++, .offset_bytes = 0});
-            noc.async_write_barrier();
+            noc.async_writes_flushed();
             cb.pop_front(1);
         }
     }

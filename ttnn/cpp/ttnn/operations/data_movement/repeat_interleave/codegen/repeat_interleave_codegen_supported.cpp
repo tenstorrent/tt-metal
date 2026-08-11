@@ -98,12 +98,11 @@ bool supported_by_codegen(
         if (shape[ndim - 1] < 2) {
             return false;
         }
-        // Within-stick (last W) dim IS a real, working kernel
-        // (reader_repeat_interleave_lastdim_rm.cpp) but codegen_repeat_interleave.py's
-        // invalidate_vector still defers it ("within-stick (last W) dim deferred for RM path").
-        // This predicate mirrors that stale ledger, not device capability, per
-        // repeat_interleave.yaml's dim == ndim - 1 out-of-scope case; the program factory does
-        // not wire that kernel because supported_by_codegen() never lets it be reached.
+        // The generator has a working within-stick (last W) reader, but
+        // codegen_repeat_interleave.py's invalidate_vector still defers it ("within-stick
+        // (last W) dim deferred for RM path"). This predicate mirrors that stale ledger, not
+        // device capability, per repeat_interleave.yaml's dim == ndim - 1 out-of-scope case.
+        // Widening the scope means porting that reader, not just relaxing this clause.
         if (nd == ndim - 1) {
             return false;
         }
