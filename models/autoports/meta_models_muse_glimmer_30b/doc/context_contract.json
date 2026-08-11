@@ -12,6 +12,7 @@
     "Optimized decoder-layer stage: one MuseGlimmerTextDecoderLayer on a (1, 1) Blackhole mesh, BFP4 weights at LoFi, BFP8 paged KV cache, L1 width-sharded decode residual, DRAM-sharded decode matmuls, explicit 2D prefill program configs.",
     "No capability reduction. The advertised 131072 context is unchanged and the optimization *reduced* the KV-cache footprint by half (BF16 -> BFP8), so the capacity headroom grew.",
     "Prefill and decode were exercised at the full advertised context in the functional stage; this stage did not change the chunking, padding, page-table or position handling that makes that work, and re-tests every non-aligned length the functional stage covered.",
+    "The full 131072-token contract is measured on the optimized path, not inherited: prefill at 131072 and 131071 plus decode at position 131071, both layer kinds, PCC 0.9982-0.9990 (doc/optimized_decoder/logs/long_context_suite.log).",
     "The vision tower / projector are a separate stage; their absence is the stage split, not a context or capability reduction."
   ],
   "device": {
@@ -39,6 +40,8 @@
         31,
         32,
         100,
+        512,
+        777,
         1000,
         2048,
         2080,
@@ -72,7 +75,8 @@
         4,
         32
       ],
-      "test": "models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_full_context_prefill_and_decode"
+      "test": "models/autoports/meta_models_muse_glimmer_30b/tests/test_optimized_decoder.py::test_full_context_prefill_and_decode",
+      "coverage_note": "131072 and 131071 measured on this stage's own prefill path. The reference is driven with a query-block filter (first, middle and last 8192-token block of each prompt) so one 131072-token host reference per layer kind stays affordable; the shorter lengths in test_paged_prefill_decode_pcc keep full every-position coverage. Every PCC record carries its coverage string. The functional stage's every-position streaming PCC at 131072 remains as the stage-01 evidence for the same contract."
     },
     "decode": {
       "max_context": 131072,
@@ -89,7 +93,8 @@
         32
       ],
       "traced": true,
-      "test": "models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_full_context_prefill_and_decode"
+      "test": "models/autoports/meta_models_muse_glimmer_30b/tests/test_optimized_decoder.py::test_full_context_prefill_and_decode",
+      "coverage_note": "Decode at position 131071 on the cache the 131071-token optimized prefill wrote, both layer kinds."
     }
   },
   "kv_cache": {

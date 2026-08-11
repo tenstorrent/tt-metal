@@ -79,12 +79,12 @@ local snapshot:
 
 | policy | synthetic prefill | synthetic decode | real prefill | real decode | traced decode ms |
 |---|---|---|---|---|---|
-| `bf16_baseline` | 0.999435 / 0.999369 | 0.999036 / 0.999431 | 0.999921 / 0.999946 | 0.999701 / 0.999956 | 2.2020 |
-| `bfp8_all_hifi2` | 0.999339 / 0.999197 | 0.998824 / 0.999154 | 0.999918 / 0.999942 | 0.999378 / 0.999956 | 1.8454 |
-| `bfp8_all_lofi` | 0.998985 / 0.998785 | 0.998325 / 0.998494 | 0.999906 / 0.999939 | 0.999690 / 0.999948 | 1.2540 |
-| `bfp8_attn_bfp4_gateup` | 0.995402 / 0.994298 | 0.994665 / 0.993967 | 0.999591 / 0.999677 | 0.999562 / 0.999459 | 1.1534 |
-| `bfp8_attn_bfp4_mlp` | 0.993672 / 0.992139 | 0.992878 / 0.991679 | 0.999166 / 0.999265 | 0.999130 / 0.998838 | 1.0987 |
-| **`bfp4_all`** | 0.968571 / 0.963860 | 0.969769 / 0.960209 | **0.998612 / 0.998959** | **0.996970 / 0.998435** | **1.0639** |
+| `bf16_baseline` | 0.999178 / 0.999066 | 0.998918 / 0.999232 | 0.999899 / 0.999935 | 0.999672 / 0.999947 | 2.2020 |
+| `bfp8_all_hifi2` | 0.998722 / 0.998476 | 0.998606 / 0.998617 | 0.999824 / 0.999898 | 0.999399 / 0.999958 | 1.8454 |
+| `bfp8_all_lofi` | 0.998643 / 0.998391 | 0.998190 / 0.998693 | 0.999869 / 0.999921 | 0.999659 / 0.999948 | 1.2540 |
+| `bfp8_attn_bfp4_gateup` | 0.995062 / 0.993910 | 0.994555 / 0.994158 | 0.999533 / 0.999644 | 0.999497 / 0.999480 | 1.1534 |
+| `bfp8_attn_bfp4_mlp` | 0.993321 / 0.991733 | 0.992784 / 0.991905 | 0.999053 / 0.999183 | 0.999161 / 0.998850 | 1.0987 |
+| **`bfp4_all`** | 0.968243 / 0.963489 | 0.969057 / 0.960099 | **0.998470 / 0.998871** | **0.996974 / 0.998443** | **1.0639** |
 
 (sliding_rope / full_nope, sequence length 512, both weight sources measured in one
 process on the final code by `scripts/sweep_optimized_precision.py`; raw artifact
@@ -241,7 +241,140 @@ afford `in0_block_w=1`, which costs far more than the extra cores gain. That fil
 
 Fold cutoff: 512 rows (54.12 ms) beats 1024 (57.77) and 2048 (57.79).
 
-## 6. Evidence collected
+## 6. Stage-review follow-ups
+
+An independent review of §1-§5 returned `more-work-needed` on six items. What changed:
+
+### 6.1 The decode matmul family rejection was not earned
+
+The review's headline finding: the "a wider worker set is not expressible" conclusion in
+`perf/accounting.json` rested on a comparison against `ttnn.linear` with **no program
+config at all**. `$optimize` OPT-004/OPT-014 require an explicitly configured
+alternative-geometry candidate under the *same* dtype/fidelity before a dominant `SLOW` row
+is accepted.
+
+Built and measured (`decode_matmul="mcast1d"`): an explicit
+`MatmulMultiCoreReuseMultiCast1DProgramConfig` per role — `mcast_in0=True`, in0 L1
+width-sharded, DRAM-interleaved weights, per-role `in0_block_w` from the same L1 budget
+model, BFP4/LoFi.
+
+| decode matmul family | cores | traced decode ms |
+|---|---|---|
+| DRAM-sharded (selected) | 12, op-chosen | **1.0644** |
+| 1D multicast, 8x2 = 16 cores | 16 | 1.2311 |
+| 1D multicast, 4x4 = 16 cores | 16 | 1.2532 |
+| 1D multicast, 8x1 = 8 cores | 8 | L1 overflow |
+| no program config, DRAM-interleaved weights | ~104 | 1.4019 |
+
+So more than 12 compute cores *is* expressible for these shapes, and it loses by 16%. 16
+cores is the ceiling for that family: `num_cores` must divide both the tiled K and the
+tiled N, `gcd(208, 144) = gcd(208, 128) = gcd(128, 208) = 16`, and 26/52/104 have no
+rectangle inside an 11x10 grid. The accounting text now says that instead of
+"not expressible".
+
+### 6.2 `PREFILL_IN0_BLOCK_W_CAP = 8` was an unmeasured constant
+
+The three attention prefill rows sat at an 8-tile K block while their tiled K (208 and 128)
+has 13, 16 and 26 as legal divisors that the L1 model says fit. Swept:
+
+| cap | prefill 8192 ms |
+|---|---|
+| 8 (original) | 53.94 / 53.86 |
+| 13 | 52.91 |
+| 16 | 52.84 |
+| **26** | **52.55 / 53.10** |
+| 52 | 62.21 |
+| 104 | 62.29 |
+| 208 | 62.29 |
+
+26 is now the default. In the final committed report the per-role K blocks are 26 (QKV),
+26 (attention gate), 16 (output projection), 8 (SwiGLU gate/up, where the L1 budget stops
+it) and 26 (SwiGLU down); four of the five rows are `FLOP`-bound rather than `SLOW`, and the
+down projection went from 71.4% to 77.6% of the LoFi peak. Above cap 26 the attention rows
+regress sharply.
+
+### 6.3 The tilize claim was false
+
+`README.md` claimed no tilize appears in the committed reports;
+`tracy/sliding_rope/decode_1_perf_report.csv` has 2 `TilizeWithValPaddingDeviceOperation`
+per token, 11.2 µs, 1.07% of the batch-1 decode step. It is the
+`ttnn.embedding` -> `rotary_embedding_hf` layout boundary in `_rope_decode_mats` (the decode
+cos/sin tables must be ROW_MAJOR for the gather and TILE for the rotary kernel), inherited
+unchanged from the functional stage at 135.0 µs; only its *share* changed, because
+everything around it got 3x faster. It is absent from the batch-32 report, where 32 users
+fill the tile row.
+
+`decode_rope_pad_to_tile` (now on by default) gathers a whole tile row of positions instead,
+and the op **disappears from the report**: the RoPE metadata path is now Embeddings 5.2 µs +
+Transpose 8.3 µs + Slice 3.2 µs per token against the previous Embeddings + Tilize +
+Transpose 17.7 µs — the same total, with no tilize. Whole-step latency is a tie (1.0630 vs
+1.0640 ms). The audit paragraph now describes how it was removed rather than asserting it was
+never there.
+
+### 6.4 The SwiGLU prefill asymmetry is classified
+
+See *Anomalies* in [`README.md`](README.md). Summary: in `sliding_rope/prefill_8192` the ten
+`6656 x 19968` rows measure `8943/9577  8948/8945  8943/8937  8936/9773  8936/10034` µs -
+seven at 8936-8948 and three at 9577-10034, the three carrying `SLOW`. It is sporadic, not
+strictly positional: two of the five iterations are symmetric. Controls: all ten rows are
+stable at 4096 on the same path (4468-4473) and all ten are stable at 8192 on the
+full-attention path (8937-8953); the down projection is stable everywhere. The sliding path
+at 8192 is the only one that allocates and frees the non-chunked SDPA's 8192-token Q/K/V
+immediately before the SwiGLU block, whose two projections then allocate 327 MB outputs back
+to back. The reading is DRAM allocator/refresh state, not compute - which is why it is
+intermittent and why the down projection, running after both intermediates are freed, never
+shows it. Both candidate mitigations lose (packed gate/up 56.6 vs 53.2 ms; sub-blocking adds
+a concat per chunk), so it stays inside the headline number rather than being worked around.
+The two documentation claims it contradicted are corrected.
+
+### 6.5 The context contract was advertising stage-01 evidence
+
+`doc/context_contract.json` claimed 131072 with a `test_functional_decoder.py` reference,
+for a prefill path this stage rewrote. `test_full_context_prefill_and_decode` now exists in
+the optimized suite and passes on both layer kinds: prefill at 131072 and at 131071, decode
+at position 131071, prefill PCC 0.9982-0.9984, K-cache 0.9998, decode 0.9986-0.9990. The
+reference is driven with a query-block filter (first, middle, last block of each prompt) so
+one 131072-token host reference per kind stays affordable; every PCC record carries its
+coverage string, and the shorter lengths keep full every-position coverage.
+
+### 6.6 DRAM banks and DRAM readers were conflated
+
+The docs used "DRAM bank count" for both 8 (`mesh_device.dram_grid_size().x`, the grid the
+weights are width-sharded over and the value `_prefill_grid_x` must match) and 12 (the
+worker set `get_optimal_dram_bank_to_reader_assignment` picks, and the `Cores` column of
+every dominant decode row). They are now named separately. The roofline constants are also
+cited rather than back-computed: 512 GB/s is
+`tt_perf_report.ArchitectureSpec("blackhole").dram_bandwidth_gb_s` — chip-wide, the same
+constant its `DRAM %` column divides by, not worker-relative — and 5.5296 TFLOP/s per core
+is its LoFi `tflops_per_core`.
+
+### 6.7 Math fidelity was only swept as a whole-policy switch
+
+The review noted that `PrecisionPolicy` carries `attn_fidelity`, `mlp_fidelity` and
+`mlp_down_fidelity` separately but §3 only compared LoFi against HiFi2 at BFP8 weights.
+Fidelity is a knob independent of dtype, so it is now isolated per projection group at the
+shipped BFP4 weights (`bfp4_all_hifi2_attn`, `bfp4_all_hifi2_mlp`):
+
+| candidate | traced decode ms |
+|---|---|
+| **LoFi everywhere (shipped)** | **1.0632** |
+| HiFi2 on the attention projections | 1.1950 (+12%) |
+| HiFi2 on the SwiGLU projections | 1.6752 (+58%) |
+
+LoFi is the right pairing for BFP4 in both groups by a wide margin, which is what the
+expected pairing predicted but had not been measured for this model.
+
+Also from the review, smaller: the shadowed duplicate `_prefill_in0_block_w` definition was
+removed (the two copies differed in their no-fit return value, which `_prefill_fold`
+depends on); a stale comment naming the wrong default policy was fixed; the decode SDPA
+output memory config gained an L1 candidate (a tie, kept because it is the rule-consistent
+choice); a real-weight batch-4 test was added
+(`test_real_weights_batched`), since OPT-012 lists larger batch among the conditions a
+synthetic-only precision failure must be re-checked under; and the candidate table now
+states the +-0.17% repeat spread of the selected configuration, so the sub-0.4% results are
+labelled ties rather than measurements.
+
+## 7. Evidence collected
 
 * **Correctness**: 97 tests, all passing, both layer kinds
   ([`logs/full_suite.log`](logs/full_suite.log), 241 PCC records in
@@ -251,7 +384,7 @@ Fold cutoff: 512 rows (54.12 ms) beats 1024 (57.77) and 2048 (57.79).
 * **Performance**: `tt-perf-report` tables, filtered CSVs, summaries with advice, and the
   gzipped raw Tracy ops CSV for prefill 4096/8192 and decode batch 1/32 on both layer kinds
   ([`tracy/`](tracy)), plus wall clock in [`perf/perf_summary.json`](perf/perf_summary.json).
-* **Candidate table**: [`perf/candidates.json`](perf/candidates.json), 8 sections, 45
+* **Candidate table**: [`perf/candidates.json`](perf/candidates.json), 11 sections, 66
   measured candidates.
 * **Precision sweep**: [`pcc/policy_sweep.json`](pcc/policy_sweep.json) — every named policy
   on synthetic *and* real weights, both layer kinds, with the dtype/fidelity each one
@@ -271,21 +404,29 @@ recommendations on the optimized reports and their disposition:
 
 | advice | on | disposition |
 |---|---|---|
-| `in0_block_w=1 is small, try in0_block_w=2 or above` | gone from every row | **fixed** — the smallest surviving value on any dominant row is 4 |
+| `in0_block_w=1 is small, try in0_block_w=2 or above` | gone from every row | **fixed** — the smallest surviving value on any dominant row is 4 (decode SwiGLU gate/up) and 8 (prefill SwiGLU gate/up); the rest are 8-26 |
 | `If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED)` | gone from every decode row | **fixed** — decode in0 is `L1_WIDTH_SHARDED` everywhere |
 | `If possible place input 0 in L1` | still on the prefill matmul rows | **rejected with reason**: prefill activations at 8192 x 6656 are 104 MB in BF16 and cannot be held in the 157 MB of aggregate L1 alongside the weights and intermediates; the skill's own guidance is that prefill activations belong in DRAM interleaved |
 | `No output subblock size found` | the DRAM-sharded decode rows | **not actionable**: the DRAM-sharded factory computes its own subblocks from `per_core_N_compute`; the field is not exposed on the program config |
 | `Use HiFi2 or HiFi4 with BF16 activations for improved accuracy` | the LoFi rows | **rejected with evidence**: this is accuracy advice on a path measured at 0.9970-0.9990 real-weight PCC against a 0.995 bar, and HiFi2 costs 32% (§3) |
 
-The `SLOW` marker remains on three of the five prefill matmul rows (the three attention
-projections) and on all five decode rows. On the decode rows it reflects the 12-core DRAM
-worker set, not a config choice — see the README's *Performance accounting*. On the prefill
-attention rows it reflects 59-63% of the LoFi FLOP peak; the two dominant SwiGLU rows are
-no longer `SLOW` at all.
+One more advice item appears in the prefill summaries and was omitted from an earlier
+version of this table: `High Op-to-Op Gap`, self-reported at 0.0% of the window (the summed
+gap is 22 µs per 51 ms prefill iteration and 50 µs per 1.06 ms decode window). Immaterial,
+and the end-to-end/device reconciliation in §7 already accounts for the host term.
 
-## 7. Exact commands
+The `SLOW` marker remains on the three attention prefill rows (59-63% of the LoFi FLOP
+peak), on the second SwiGLU projection of the sliding path at 8192 (see §6.4), and on all
+five decode rows. On the decode rows it reflects the 12-core DRAM-reader worker set, which
+§6.1 measured an explicit larger-grid alternative against.
+
+## 8. Exact commands
 
 ```bash
+# the full-context contract on the optimized path (§6.5, ~4 min)
+python -m pytest models/autoports/meta_models_muse_glimmer_30b/tests/test_optimized_decoder.py -q \
+  -k long_context -s
+
 # precision policy sweep, synthetic and real weights (the §3 table)
 python models/autoports/meta_models_muse_glimmer_30b/scripts/sweep_optimized_precision.py
 
@@ -331,12 +472,14 @@ KINDS=sliding_rope DECODE_ITERS=32 CONTEXT=4096 PREFILL_SEQ=8192 \
   python models/autoports/meta_models_muse_glimmer_30b/scripts/sweep_optimized_decoder.py
 ```
 
-## 8. Checkpoint
+## 9. Checkpoint
 
 Stage-owned changes committed locally; nothing pushed. The commit SHA is recorded in §9
 after the fact, because the artifacts this log describes necessarily precede the commit
 that contains them.
 
-## 9. Commit SHAs
+## 10. Commit SHAs
 
-* `TBD` — optimized decoder, tests, sweep/collect/repro scripts, docs and evidence.
+* `48dd8e2caa7` — optimized decoder, tests, sweep/collect/repro scripts, docs and evidence.
+* the follow-up commit recorded in the runner log — the six stage-review items in §6,
+  their measurements, and the regenerated artifacts.

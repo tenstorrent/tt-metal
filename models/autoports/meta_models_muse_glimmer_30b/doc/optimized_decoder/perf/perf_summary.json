@@ -8,8 +8,8 @@
       "batch": 1,
       "context": 4096,
       "iterations": 32,
-      "wall_clock_ms_per_iter": 1.0447298436702113,
-      "tokens_per_second": 957.1852532583237,
+      "wall_clock_ms_per_iter": 1.0436703751111054,
+      "tokens_per_second": 958.156927558228,
       "signposts": [
         "PERF_DECODE",
         "PERF_DECODE_END"
@@ -55,6 +55,8 @@
           "fp32_dest_acc_en": false,
           "pack_qkv_gate": false,
           "pack_mlp_gate_up": false,
+          "sdpa_output_l1": true,
+          "rope_pad_to_tile": true,
           "program_configs": {
             "qkv": {
               "fused_activation": null,
@@ -99,7 +101,7 @@
             8
           ],
           "matmul_cutoff": 512,
-          "in0_block_w_cap": 8,
+          "in0_block_w_cap": 26,
           "out_subblock_max": 8,
           "weight_memory": "dram_sharded",
           "chunk_size": 8192,
@@ -117,8 +119,8 @@
       "batch": 1,
       "context": 4096,
       "iterations": 12,
-      "wall_clock_ms_per_iter": 1.0755265842211277,
-      "tokens_per_second": 929.7771107389016,
+      "wall_clock_ms_per_iter": 1.0750019998037412,
+      "tokens_per_second": 930.2308276473589,
       "signposts": [
         "PERF_DECODE",
         "PERF_DECODE_END"
@@ -164,6 +166,8 @@
           "fp32_dest_acc_en": false,
           "pack_qkv_gate": false,
           "pack_mlp_gate_up": false,
+          "sdpa_output_l1": true,
+          "rope_pad_to_tile": true,
           "program_configs": {
             "qkv": {
               "fused_activation": null,
@@ -208,7 +212,7 @@
             8
           ],
           "matmul_cutoff": 512,
-          "in0_block_w_cap": 8,
+          "in0_block_w_cap": 26,
           "out_subblock_max": 8,
           "weight_memory": "dram_sharded",
           "chunk_size": 8192,
@@ -226,8 +230,8 @@
       "batch": 32,
       "context": 4096,
       "iterations": 32,
-      "wall_clock_ms_per_iter": 1.2720642498607049,
-      "tokens_per_second": 25155.96205419978,
+      "wall_clock_ms_per_iter": 1.2775136251548247,
+      "tokens_per_second": 25048.656523034617,
       "signposts": [
         "PERF_DECODE",
         "PERF_DECODE_END"
@@ -273,6 +277,8 @@
           "fp32_dest_acc_en": false,
           "pack_qkv_gate": false,
           "pack_mlp_gate_up": false,
+          "sdpa_output_l1": true,
+          "rope_pad_to_tile": true,
           "program_configs": {
             "qkv": {
               "fused_activation": null,
@@ -317,7 +323,7 @@
             8
           ],
           "matmul_cutoff": 512,
-          "in0_block_w_cap": 8,
+          "in0_block_w_cap": 26,
           "out_subblock_max": 8,
           "weight_memory": "dram_sharded",
           "chunk_size": 8192,
@@ -335,8 +341,8 @@
       "batch": 32,
       "context": 4096,
       "iterations": 12,
-      "wall_clock_ms_per_iter": 1.2862695839430671,
-      "tokens_per_second": 24878.144052745,
+      "wall_clock_ms_per_iter": 1.2850359162257519,
+      "tokens_per_second": 24902.02771451434,
       "signposts": [
         "PERF_DECODE",
         "PERF_DECODE_END"
@@ -382,6 +388,8 @@
           "fp32_dest_acc_en": false,
           "pack_qkv_gate": false,
           "pack_mlp_gate_up": false,
+          "sdpa_output_l1": true,
+          "rope_pad_to_tile": true,
           "program_configs": {
             "qkv": {
               "fused_activation": null,
@@ -426,7 +434,7 @@
             8
           ],
           "matmul_cutoff": 512,
-          "in0_block_w_cap": 8,
+          "in0_block_w_cap": 26,
           "out_subblock_max": 8,
           "weight_memory": "dram_sharded",
           "chunk_size": 8192,
@@ -444,8 +452,8 @@
       "batch": 1,
       "context": 4096,
       "iterations": 32,
-      "wall_clock_ms_per_iter": 1.06422168755671,
-      "tokens_per_second": 939.653844393875,
+      "wall_clock_ms_per_iter": 1.0625198437992367,
+      "tokens_per_second": 941.1588930182373,
       "signposts": [
         "PERF_DECODE",
         "PERF_DECODE_END"
@@ -491,6 +499,8 @@
           "fp32_dest_acc_en": false,
           "pack_qkv_gate": false,
           "pack_mlp_gate_up": false,
+          "sdpa_output_l1": true,
+          "rope_pad_to_tile": true,
           "program_configs": {
             "qkv": {
               "fused_activation": null,
@@ -535,7 +545,7 @@
             8
           ],
           "matmul_cutoff": 512,
-          "in0_block_w_cap": 8,
+          "in0_block_w_cap": 26,
           "out_subblock_max": 8,
           "weight_memory": "dram_sharded",
           "chunk_size": 8192,
@@ -553,8 +563,8 @@
       "batch": 1,
       "context": 4096,
       "iterations": 12,
-      "wall_clock_ms_per_iter": 1.1032945840270258,
-      "tokens_per_second": 906.3762430066496,
+      "wall_clock_ms_per_iter": 1.102564583561616,
+      "tokens_per_second": 906.9763485143868,
       "signposts": [
         "PERF_DECODE",
         "PERF_DECODE_END"
@@ -600,6 +610,8 @@
           "fp32_dest_acc_en": false,
           "pack_qkv_gate": false,
           "pack_mlp_gate_up": false,
+          "sdpa_output_l1": true,
+          "rope_pad_to_tile": true,
           "program_configs": {
             "qkv": {
               "fused_activation": null,
@@ -644,7 +656,7 @@
             8
           ],
           "matmul_cutoff": 512,
-          "in0_block_w_cap": 8,
+          "in0_block_w_cap": 26,
           "out_subblock_max": 8,
           "weight_memory": "dram_sharded",
           "chunk_size": 8192,
@@ -662,8 +674,8 @@
       "batch": 32,
       "context": 4096,
       "iterations": 32,
-      "wall_clock_ms_per_iter": 1.1609631874307524,
-      "tokens_per_second": 27563.32013491056,
+      "wall_clock_ms_per_iter": 1.1617060004027735,
+      "tokens_per_second": 27545.69571725146,
       "signposts": [
         "PERF_DECODE",
         "PERF_DECODE_END"
@@ -709,6 +721,8 @@
           "fp32_dest_acc_en": false,
           "pack_qkv_gate": false,
           "pack_mlp_gate_up": false,
+          "sdpa_output_l1": true,
+          "rope_pad_to_tile": true,
           "program_configs": {
             "qkv": {
               "fused_activation": null,
@@ -753,7 +767,7 @@
             8
           ],
           "matmul_cutoff": 512,
-          "in0_block_w_cap": 8,
+          "in0_block_w_cap": 26,
           "out_subblock_max": 8,
           "weight_memory": "dram_sharded",
           "chunk_size": 8192,
@@ -771,8 +785,8 @@
       "batch": 32,
       "context": 4096,
       "iterations": 12,
-      "wall_clock_ms_per_iter": 1.1968064172833692,
-      "tokens_per_second": 26737.82454529012,
+      "wall_clock_ms_per_iter": 1.1937343333556782,
+      "tokens_per_second": 26806.634529850173,
       "signposts": [
         "PERF_DECODE",
         "PERF_DECODE_END"
@@ -818,6 +832,8 @@
           "fp32_dest_acc_en": false,
           "pack_qkv_gate": false,
           "pack_mlp_gate_up": false,
+          "sdpa_output_l1": true,
+          "rope_pad_to_tile": true,
           "program_configs": {
             "qkv": {
               "fused_activation": null,
@@ -862,7 +878,7 @@
             8
           ],
           "matmul_cutoff": 512,
-          "in0_block_w_cap": 8,
+          "in0_block_w_cap": 26,
           "out_subblock_max": 8,
           "weight_memory": "dram_sharded",
           "chunk_size": 8192,
@@ -880,8 +896,8 @@
       "seq_len": 4096,
       "batch": 1,
       "iterations": 5,
-      "wall_clock_ms_per_iter": 25.086328602628782,
-      "tokens_per_second": 163276.18380837052,
+      "wall_clock_ms_per_iter": 24.585567999747582,
+      "tokens_per_second": 166601.8047678237,
       "signposts": [
         "PERF_PREFILL",
         "PERF_PREFILL_END"
@@ -927,6 +943,8 @@
           "fp32_dest_acc_en": false,
           "pack_qkv_gate": false,
           "pack_mlp_gate_up": false,
+          "sdpa_output_l1": true,
+          "rope_pad_to_tile": true,
           "program_configs": {
             "qkv": {
               "fused_activation": null,
@@ -971,7 +989,7 @@
             8
           ],
           "matmul_cutoff": 512,
-          "in0_block_w_cap": 8,
+          "in0_block_w_cap": 26,
           "out_subblock_max": 8,
           "weight_memory": "dram_sharded",
           "chunk_size": 8192,
@@ -989,8 +1007,8 @@
       "seq_len": 4096,
       "batch": 1,
       "iterations": 5,
-      "wall_clock_ms_per_iter": 25.099832800333388,
-      "tokens_per_second": 163188.33804923174,
+      "wall_clock_ms_per_iter": 24.404247000347823,
+      "tokens_per_second": 167839.63872934174,
       "signposts": [
         "PERF_PREFILL",
         "PERF_PREFILL_END"
@@ -1036,6 +1054,8 @@
           "fp32_dest_acc_en": false,
           "pack_qkv_gate": false,
           "pack_mlp_gate_up": false,
+          "sdpa_output_l1": true,
+          "rope_pad_to_tile": true,
           "program_configs": {
             "qkv": {
               "fused_activation": null,
@@ -1080,7 +1100,7 @@
             8
           ],
           "matmul_cutoff": 512,
-          "in0_block_w_cap": 8,
+          "in0_block_w_cap": 26,
           "out_subblock_max": 8,
           "weight_memory": "dram_sharded",
           "chunk_size": 8192,
@@ -1098,8 +1118,8 @@
       "seq_len": 8192,
       "batch": 1,
       "iterations": 5,
-      "wall_clock_ms_per_iter": 53.54237900173757,
-      "tokens_per_second": 153000.29906654224,
+      "wall_clock_ms_per_iter": 52.437713398830965,
+      "tokens_per_second": 156223.4405168138,
       "signposts": [
         "PERF_PREFILL",
         "PERF_PREFILL_END"
@@ -1145,6 +1165,8 @@
           "fp32_dest_acc_en": false,
           "pack_qkv_gate": false,
           "pack_mlp_gate_up": false,
+          "sdpa_output_l1": true,
+          "rope_pad_to_tile": true,
           "program_configs": {
             "qkv": {
               "fused_activation": null,
@@ -1189,7 +1211,7 @@
             8
           ],
           "matmul_cutoff": 512,
-          "in0_block_w_cap": 8,
+          "in0_block_w_cap": 26,
           "out_subblock_max": 8,
           "weight_memory": "dram_sharded",
           "chunk_size": 8192,
@@ -1207,8 +1229,8 @@
       "seq_len": 8192,
       "batch": 1,
       "iterations": 5,
-      "wall_clock_ms_per_iter": 52.83194999792613,
-      "tokens_per_second": 155057.68763639368,
+      "wall_clock_ms_per_iter": 51.85603520076256,
+      "tokens_per_second": 157975.82611714082,
       "signposts": [
         "PERF_PREFILL",
         "PERF_PREFILL_END"
@@ -1254,6 +1276,8 @@
           "fp32_dest_acc_en": false,
           "pack_qkv_gate": false,
           "pack_mlp_gate_up": false,
+          "sdpa_output_l1": true,
+          "rope_pad_to_tile": true,
           "program_configs": {
             "qkv": {
               "fused_activation": null,
@@ -1298,7 +1322,7 @@
             8
           ],
           "matmul_cutoff": 512,
-          "in0_block_w_cap": 8,
+          "in0_block_w_cap": 26,
           "out_subblock_max": 8,
           "weight_memory": "dram_sharded",
           "chunk_size": 8192,
@@ -1316,8 +1340,8 @@
       "seq_len": 4096,
       "batch": 1,
       "iterations": 5,
-      "wall_clock_ms_per_iter": 25.755880199722014,
-      "tokens_per_second": 159031.64513260193,
+      "wall_clock_ms_per_iter": 25.215442999615334,
+      "tokens_per_second": 162440.13639032576,
       "signposts": [
         "PERF_PREFILL",
         "PERF_PREFILL_END"
@@ -1363,6 +1387,8 @@
           "fp32_dest_acc_en": false,
           "pack_qkv_gate": false,
           "pack_mlp_gate_up": false,
+          "sdpa_output_l1": true,
+          "rope_pad_to_tile": true,
           "program_configs": {
             "qkv": {
               "fused_activation": null,
@@ -1407,7 +1433,7 @@
             8
           ],
           "matmul_cutoff": 512,
-          "in0_block_w_cap": 8,
+          "in0_block_w_cap": 26,
           "out_subblock_max": 8,
           "weight_memory": "dram_sharded",
           "chunk_size": 8192,
@@ -1425,8 +1451,8 @@
       "seq_len": 4096,
       "batch": 1,
       "iterations": 5,
-      "wall_clock_ms_per_iter": 25.712230600765906,
-      "tokens_per_second": 159301.62044665194,
+      "wall_clock_ms_per_iter": 25.12669980060309,
+      "tokens_per_second": 163013.84712295912,
       "signposts": [
         "PERF_PREFILL",
         "PERF_PREFILL_END"
@@ -1472,6 +1498,8 @@
           "fp32_dest_acc_en": false,
           "pack_qkv_gate": false,
           "pack_mlp_gate_up": false,
+          "sdpa_output_l1": true,
+          "rope_pad_to_tile": true,
           "program_configs": {
             "qkv": {
               "fused_activation": null,
@@ -1516,7 +1544,7 @@
             8
           ],
           "matmul_cutoff": 512,
-          "in0_block_w_cap": 8,
+          "in0_block_w_cap": 26,
           "out_subblock_max": 8,
           "weight_memory": "dram_sharded",
           "chunk_size": 8192,
@@ -1534,8 +1562,8 @@
       "seq_len": 8192,
       "batch": 1,
       "iterations": 5,
-      "wall_clock_ms_per_iter": 54.81156480091158,
-      "tokens_per_second": 149457.51010311893,
+      "wall_clock_ms_per_iter": 53.78454859892372,
+      "tokens_per_second": 152311.40194349294,
       "signposts": [
         "PERF_PREFILL",
         "PERF_PREFILL_END"
@@ -1581,6 +1609,8 @@
           "fp32_dest_acc_en": false,
           "pack_qkv_gate": false,
           "pack_mlp_gate_up": false,
+          "sdpa_output_l1": true,
+          "rope_pad_to_tile": true,
           "program_configs": {
             "qkv": {
               "fused_activation": null,
@@ -1625,7 +1655,7 @@
             8
           ],
           "matmul_cutoff": 512,
-          "in0_block_w_cap": 8,
+          "in0_block_w_cap": 26,
           "out_subblock_max": 8,
           "weight_memory": "dram_sharded",
           "chunk_size": 8192,
@@ -1643,8 +1673,8 @@
       "seq_len": 8192,
       "batch": 1,
       "iterations": 5,
-      "wall_clock_ms_per_iter": 54.94539960054681,
-      "tokens_per_second": 149093.46477695787,
+      "wall_clock_ms_per_iter": 53.795118801645,
+      "tokens_per_second": 152281.4742766122,
       "signposts": [
         "PERF_PREFILL",
         "PERF_PREFILL_END"
@@ -1690,6 +1720,8 @@
           "fp32_dest_acc_en": false,
           "pack_qkv_gate": false,
           "pack_mlp_gate_up": false,
+          "sdpa_output_l1": true,
+          "rope_pad_to_tile": true,
           "program_configs": {
             "qkv": {
               "fused_activation": null,
@@ -1734,7 +1766,7 @@
             8
           ],
           "matmul_cutoff": 512,
-          "in0_block_w_cap": 8,
+          "in0_block_w_cap": 26,
           "out_subblock_max": 8,
           "weight_memory": "dram_sharded",
           "chunk_size": 8192,

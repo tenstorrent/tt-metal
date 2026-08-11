@@ -96,7 +96,12 @@ DECODE_MLP_CORES = 52
 # more than the 25% extra cores gain on this Blackhole grid.
 PREFILL_MATMUL_CUTOFF = 512
 PREFILL_MATMUL_GRID = (11, 8)
-PREFILL_IN0_BLOCK_W_CAP = 8
+# Upper bound on the prefill K block. The per-role value is derived from an L1 budget,
+# so this only bounds the search; 26 measured best (52.6-53.1 ms at 8192 tokens against
+# 53.9-53.9 at 8), because it lets the three attention projections use a 26-tile K block
+# while the L1 model still holds the 19968-wide SwiGLU projections at 8. Above 26 the
+# attention rows regress sharply (52 and 104 both measured 62.2 ms).
+PREFILL_IN0_BLOCK_W_CAP = 26
 PREFILL_OUT_SUBBLOCK_MAX = 8
 
 
@@ -159,7 +164,8 @@ def _policy(name: str, **kwargs) -> PrecisionPolicy:
 
 #: Named policies. ``bf16_baseline`` reproduces the functional stage's numerics so the
 #: optimized layout work can be measured without a dtype change; the others are the
-#: precision candidates the stage swept. ``bfp8_attn_bfp4_mlp`` is the selected default.
+#: precision candidates the stage swept. ``bfp4_all`` is the selected default; see
+#: ``doc/optimized_decoder/pcc/policy_sweep.json`` for every policy on both weight sources.
 POLICIES: dict[str, PrecisionPolicy] = {
     "bf16_baseline": _policy(
         "bf16_baseline",
@@ -198,6 +204,20 @@ POLICIES: dict[str, PrecisionPolicy] = {
     "bfp4_all": _policy(
         "bfp4_all",
         attn_weight_dtype=ttnn.bfloat4_b,
+    ),
+    # Per-tensor-group fidelity probes for the selected dtype policy: the whole-policy
+    # sweep above only compares LoFi against HiFi2 at BFP8 weights, and math fidelity is a
+    # knob independent of dtype, so these two isolate it per projection group at BFP4.
+    "bfp4_all_hifi2_attn": _policy(
+        "bfp4_all_hifi2_attn",
+        attn_weight_dtype=ttnn.bfloat4_b,
+        attn_fidelity=ttnn.MathFidelity.HiFi2,
+    ),
+    "bfp4_all_hifi2_mlp": _policy(
+        "bfp4_all_hifi2_mlp",
+        attn_weight_dtype=ttnn.bfloat4_b,
+        mlp_fidelity=ttnn.MathFidelity.HiFi2,
+        mlp_down_fidelity=ttnn.MathFidelity.HiFi2,
     ),
 }
 
@@ -273,6 +293,8 @@ class OptimizedDecoder(LightweightModule):
         pack_mlp_gate_up: bool = False,
         decode_packer_l1_acc: bool = True,
         decode_fp32_acc: bool = False,
+        decode_sdpa_output_l1: bool = True,
+        decode_rope_pad_to_tile: bool = True,
         weight_memory: str = "dram_sharded",
     ):
         super().__init__()
@@ -326,6 +348,14 @@ class OptimizedDecoder(LightweightModule):
         )
         self.decode_sdpa_k_chunk = decode_sdpa_k_chunk or DECODE_SDPA_K_CHUNK
 
+        if decode_matmul not in ("dram_sharded", "mcast1d", "interleaved"):
+            raise ValueError(f"unknown decode_matmul {decode_matmul!r}")
+        if decode_matmul == "mcast1d" and (pack_qkv_gate or pack_mlp_gate_up):
+            raise ValueError(
+                "projection packing is only implemented for the DRAM-sharded decode matmul family; "
+                "the 1D multicast family needs num_cores to divide the tiled N, which the packed "
+                "widths do not satisfy on a legal rectangle"
+            )
         self.decode_matmul = decode_matmul
         self.decode_residual_grid = decode_residual_grid
         self.decode_cores = decode_residual_grid[0] * decode_residual_grid[1]
@@ -335,6 +365,8 @@ class OptimizedDecoder(LightweightModule):
         self.prefill_in0_block_w_cap = prefill_in0_block_w_cap
         self.prefill_out_subblock_max = prefill_out_subblock_max
         self.weight_memory = weight_memory
+        self.decode_sdpa_output_l1 = decode_sdpa_output_l1
+        self.decode_rope_pad_to_tile = decode_rope_pad_to_tile
         # Per-role in0_block_w overrides for the geometry sweep. Roles:
         # "qkv", "attn_gate", "wo", "mlp_gate_up", "mlp_down".
         self.decode_in0_block_w = dict(decode_in0_block_w or {})
@@ -431,11 +463,14 @@ class OptimizedDecoder(LightweightModule):
 
         Two facts about ``matmul_multicore_reuse_mcast_dram_sharded`` drive this:
 
-        * the *compute* width per worker is ``ceil(N_tiles / num_dram_banks)``, not
-          ``per_core_N``. ``per_core_N`` in the program config only sets the output
-          storage shard, and the op picks its own worker set (one per DRAM bank, 8 here).
-          So a larger ``cores`` does not add compute; it only narrows the in0 shard and
-          therefore shrinks the legal ``in0_block_w``.
+        * the op picks its **own** worker set, from
+          ``get_optimal_dram_bank_to_reader_assignment`` - 12 cores on this p300c, which is
+          what the profiler's ``Cores`` column reports, and *not* the same as the 8 DRAM
+          banks the weights are width-sharded over. The compute width per worker is
+          ``ceil(N_tiles / workers)``, not ``per_core_N``: ``per_core_N`` in the program
+          config only sets the output storage shard. So a larger ``cores`` does not add
+          compute; it only narrows the in0 shard and therefore shrinks the legal
+          ``in0_block_w``.
         * the weight circular buffer is *triple* buffered:
           ``3 * per_core_N_compute * in0_block_w * dram_aligned_tile_bytes``. That is what
           makes the K block dtype-dependent: at BF16 the 19968-wide SwiGLU projection
@@ -444,6 +479,11 @@ class OptimizedDecoder(LightweightModule):
         per_core_m = math.ceil(m / TILE)
         per_core_n_storage = math.ceil(n / (TILE * cores))
         k_tiles_per_core = k // (TILE * cores)
+        # The DRAM bank count is a deliberately conservative proxy for the op's reader
+        # worker count (8 against the 12 it actually picks): it over-estimates
+        # per_core_N_compute and therefore the weight circular buffer, so the in0_block_w
+        # this model accepts is always legal, never optimistic. The per-role sweep in
+        # doc/optimized_decoder/perf/candidates.json confirms the values it picks win.
         banks = self.mesh_device.dram_grid_size().x
         per_core_n_compute = math.ceil(n / TILE / banks)
 
@@ -471,6 +511,44 @@ class OptimizedDecoder(LightweightModule):
             per_core_M=per_core_m,
             per_core_N=per_core_n_storage,
             fused_activation=fused_activation,
+        )
+
+    def _mcast1d_pc(self, role: str, *, m: int, k: int, n: int, cores: int, weight_dtype, fused_activation=None):
+        """1D multicast decode matmul program config (the non-DRAM-sharded candidate family).
+
+        Unlike the DRAM-sharded op, this one computes on the grid it is given, so it is the
+        way to put more than the DRAM-sharded op's 12 reader cores on a dominant decode
+        matmul. It needs ``num_cores`` to divide both the tiled K (for the width-sharded
+        in0) and the tiled N (for the width-sharded output), and the grid must be a
+        rectangle - which on this model pins every role to 16 cores, because
+        ``gcd(208, 144) = gcd(208, 128) = gcd(128, 208) = 16`` and 26/52/104 have no
+        rectangle inside an 11x10 grid.
+        """
+        per_core_m = math.ceil(m / TILE)
+        per_core_n = n // TILE // cores
+        k_tiles_per_core = k // (TILE * cores)
+        act_tile = _tile_bytes(self.precision.activation_dtype)
+        w_tile = _tile_bytes(weight_dtype)
+        fixed = per_core_m * per_core_n * 2 * act_tile
+        budget = L1_MATMUL_CB_BUDGET - fixed
+        block_w = 1
+        for candidate in range(k_tiles_per_core, 0, -1):
+            if k_tiles_per_core % candidate:
+                continue
+            if 2 * candidate * (per_core_m * act_tile + per_core_n * w_tile) <= budget:
+                block_w = candidate
+                break
+        block_w = self.decode_in0_block_w.get(role, block_w)
+        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=self.decode_residual_grid,
+            in0_block_w=block_w,
+            out_subblock_h=1,
+            out_subblock_w=_out_subblock_w(per_core_n, 1, 4),
+            per_core_M=per_core_m,
+            per_core_N=per_core_n,
+            fuse_batch=True,
+            fused_activation=fused_activation,
+            mcast_in0=True,
         )
 
     def _build_decode_configs(self):
@@ -524,6 +602,58 @@ class OptimizedDecoder(LightweightModule):
             cores=cores,
             weight_dtype=self.precision.attn_weight_dtype,
         )
+
+        if self.decode_matmul == "mcast1d":
+            # One coherent 16-core rectangle for every role, so there is no SwiGLU
+            # working-shard reshard at all and every matmul output is already on the
+            # residual grid the sharded norms need.
+            self.decode_qkv_pc = self._mcast1d_pc(
+                "qkv",
+                m=TILE,
+                k=hidden,
+                n=cfg.qkv_width,
+                cores=cores,
+                weight_dtype=self.precision.attn_weight_dtype,
+            )
+            self.decode_attn_gate_pc = self._mcast1d_pc(
+                "attn_gate",
+                m=TILE,
+                k=hidden,
+                n=attn_gate_width,
+                cores=cores,
+                weight_dtype=self.precision.attn_weight_dtype,
+            )
+            self.decode_wo_pc = self._mcast1d_pc(
+                "wo",
+                m=TILE,
+                k=attn_gate_width,
+                n=hidden,
+                cores=cores,
+                weight_dtype=self.precision.attn_weight_dtype,
+            )
+            self.decode_mlp_gate_up_pc = self._mcast1d_pc(
+                "mlp_gate_up",
+                m=TILE,
+                k=hidden,
+                n=cfg.intermediate_size,
+                cores=cores,
+                weight_dtype=self.precision.mlp_weight_dtype,
+            )
+            self.decode_mlp_down_pc = self._mcast1d_pc(
+                "mlp_down",
+                m=TILE,
+                k=cfg.intermediate_size,
+                n=hidden,
+                cores=cores,
+                weight_dtype=self.precision.mlp_down_weight_dtype,
+            )
+            self.decode_mlp_packed_pc = None
+            self.decode_qkvg_pc = None
+            self.decode_mlp_in_memcfg = self.decode_residual_memcfg
+            self.decode_attn_gate_memcfg = self._width_sharded_memcfg(attn_gate_width, cores, grid)
+            self.decode_mlp_out_memcfg = self._width_sharded_memcfg(cfg.intermediate_size, cores, grid)
+            self.decode_qkv_out_memcfg = self._width_sharded_memcfg(cfg.qkv_width, cores, grid)
+            return
 
         # Phase-specific MLP working shard (OPT-011). The attention projections are
         # pinned to 16 cores by gcd(hidden_tiles=208, qkv_tiles=144) = 16, but the SwiGLU
@@ -599,6 +729,8 @@ class OptimizedDecoder(LightweightModule):
         pack_mlp_gate_up: bool = False,
         decode_packer_l1_acc: bool = True,
         decode_fp32_acc: bool = False,
+        decode_sdpa_output_l1: bool = True,
+        decode_rope_pad_to_tile: bool = True,
         weight_dtype=None,
         cache_dtype=None,
     ) -> "OptimizedDecoder":
@@ -797,6 +929,8 @@ class OptimizedDecoder(LightweightModule):
             pack_mlp_gate_up=pack_mlp_gate_up,
             decode_packer_l1_acc=decode_packer_l1_acc,
             decode_fp32_acc=decode_fp32_acc,
+            decode_sdpa_output_l1=decode_sdpa_output_l1,
+            decode_rope_pad_to_tile=decode_rope_pad_to_tile,
             weight_memory=weight_memory,
         )
 
@@ -876,31 +1010,6 @@ class OptimizedDecoder(LightweightModule):
         )
 
     # ---------------------------------------------------------------- prefill
-
-    def _prefill_in0_block_w(self, *, k_tiles: int, per_core_m: int, per_core_n: int, weight_dtype) -> int:
-        """Largest legal ``in0_block_w`` whose circular buffers still fit Blackhole L1.
-
-        ``in0_block_w`` must divide the tiled K dimension, and the 2D multicast matmul
-        allocates roughly ``2 * in0_block_w * per_core_N`` weight tiles plus
-        ``2 * in0_block_w * per_core_M`` activation tiles plus the output/intermediate
-        blocks per core. For the 19968-wide SwiGLU projections at BF16 that caps
-        ``in0_block_w`` at 2, but at BFP4 the same budget allows 8 - i.e. the reduced
-        weight dtype buys a 4x larger K block as well as less DRAM traffic, so the value
-        is derived from the budget rather than pinned to a constant.
-        """
-        act_tile = _tile_bytes(self.precision.activation_dtype)
-        w_tile = _tile_bytes(weight_dtype)
-        # out CB + interm0 CB (BF16: packer_l1_acc on, fp32_dest_acc off for matmuls).
-        fixed = per_core_m * per_core_n * 2 * act_tile
-        budget = max(L1_MATMUL_CB_BUDGET - fixed, 2 * (act_tile + w_tile))
-        cap = min(self.prefill_in0_block_w_cap, k_tiles)
-        for candidate in range(cap, 0, -1):
-            if k_tiles % candidate:
-                continue
-            cb = 2 * candidate * (per_core_m * act_tile + per_core_n * w_tile)
-            if cb <= budget:
-                return candidate
-        return 1
 
     def _prefill_grid_x(self, n_tiles: int) -> int:
         """Compute-grid width for a prefill 2D matmul.
@@ -1507,8 +1616,26 @@ class OptimizedDecoder(LightweightModule):
         x.deallocate(True)
         return out
 
+    def _decode_out_memcfg(self, role: str):
+        """Output memory config for a decode matmul role.
+
+        The DRAM-sharded op ignores this and builds its own layout, so that family just
+        asks for ``L1_WIDTH_SHARDED`` and the consumers follow the producer. The 1D
+        multicast family does honour it, and every role lands on the same 16-core
+        rectangle as the residual, which is what removes the SwiGLU reshards.
+        """
+        if self.decode_matmul != "mcast1d":
+            return ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+        return {
+            "qkv": self.decode_qkv_out_memcfg,
+            "attn_gate": self.decode_attn_gate_memcfg,
+            "wo": self.decode_residual_memcfg,
+            "mlp_gate_up": self.decode_mlp_out_memcfg,
+            "mlp_down": self.decode_residual_memcfg,
+        }[role]
+
     def _decode_linear(self, x, weight, *, role: str, program_config, memory_config, kernel_config):
-        if self.decode_matmul == "dram_sharded":
+        if self.decode_matmul in ("dram_sharded", "mcast1d"):
             return ttnn.linear(
                 x,
                 weight,
@@ -1517,8 +1644,8 @@ class OptimizedDecoder(LightweightModule):
                 memory_config=memory_config,
                 dtype=self.precision.activation_dtype,
             )
-        # "interleaved": the functional stage's default-program-config path, kept as a
-        # measurable candidate for the geometry/topology comparison.
+        # "interleaved": the functional stage's default-program-config path, kept as the
+        # no-explicit-config baseline for the family comparison.
         return ttnn.linear(
             x,
             weight,
@@ -1539,7 +1666,7 @@ class OptimizedDecoder(LightweightModule):
                 self.w_mlp_gate_up,
                 role="mlp_gate_up_packed",
                 program_config=self.decode_mlp_packed_pc,
-                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                memory_config=self._decode_out_memcfg("mlp_gate_up_packed"),
                 kernel_config=self.mlp_kernel_config,
             )
             rows = packed.shape[-2]
@@ -1552,7 +1679,7 @@ class OptimizedDecoder(LightweightModule):
                 self.w_mlp_gate,
                 role="mlp_gate_up",
                 program_config=self.decode_mlp_gate_up_pc,
-                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                memory_config=self._decode_out_memcfg("mlp_gate_up"),
                 kernel_config=self.mlp_kernel_config,
             )
             up = self._decode_linear(
@@ -1560,7 +1687,7 @@ class OptimizedDecoder(LightweightModule):
                 self.w_mlp_up,
                 role="mlp_gate_up",
                 program_config=self.decode_mlp_gate_up_pc,
-                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                memory_config=self._decode_out_memcfg("mlp_gate_up"),
                 kernel_config=self.mlp_kernel_config,
             )
         activated = ttnn.multiply(
@@ -1577,7 +1704,7 @@ class OptimizedDecoder(LightweightModule):
             self.w_mlp_down,
             role="mlp_down",
             program_config=self.decode_mlp_down_pc,
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            memory_config=self._decode_out_memcfg("mlp_down"),
             kernel_config=self.mlp_down_kernel_config,
         )
         activated.deallocate(True)
@@ -1614,7 +1741,7 @@ class OptimizedDecoder(LightweightModule):
                 self.wqkvg,
                 role="qkvg",
                 program_config=self.decode_qkvg_pc,
-                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                memory_config=self._decode_out_memcfg("qkvg"),
                 kernel_config=self.attn_kernel_config,
             )
             rows = qkvg.shape[-2]
@@ -1628,7 +1755,7 @@ class OptimizedDecoder(LightweightModule):
                 self.wqkv,
                 role="qkv",
                 program_config=self.decode_qkv_pc,
-                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                memory_config=self._decode_out_memcfg("qkv"),
                 kernel_config=self.attn_kernel_config,
             )
             gate = self._decode_linear(
@@ -1636,7 +1763,7 @@ class OptimizedDecoder(LightweightModule):
                 self.w_attn_gate,
                 role="attn_gate",
                 program_config=self.decode_attn_gate_pc,
-                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                memory_config=self._decode_out_memcfg("attn_gate"),
                 kernel_config=self.attn_kernel_config,
             )
         xn.deallocate(True)
@@ -1705,7 +1832,9 @@ class OptimizedDecoder(LightweightModule):
             page_table_tensor=page_table,
             scale=cfg.sdpa_scale,
             sliding_window_size=cfg.sliding_window,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            # The next op reshards this to one core per user anyway, so the interleaved
+            # buffer type is a candidate, not a contract; measured in the candidate table.
+            memory_config=ttnn.L1_MEMORY_CONFIG if self.decode_sdpa_output_l1 else ttnn.DRAM_MEMORY_CONFIG,
             program_config=self._decode_sdpa_program_config(batch),
             compute_kernel_config=self.sdpa_kernel_config,
             block_size=self.block_size,
@@ -1733,7 +1862,7 @@ class OptimizedDecoder(LightweightModule):
             self.wo,
             role="wo",
             program_config=self.decode_wo_pc,
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            memory_config=self._decode_out_memcfg("wo"),
             kernel_config=self.attn_kernel_config,
         )
         gated.deallocate(True)
@@ -1773,8 +1902,18 @@ class OptimizedDecoder(LightweightModule):
         """
         cfg = self.config
         cache = self.rope_cache
-        cos = ttnn.embedding(rope_idxs, cache["cos_decode"], layout=ttnn.TILE_LAYOUT)
-        sin = ttnn.embedding(rope_idxs, cache["sin_decode"], layout=ttnn.TILE_LAYOUT)
+        idxs, idxs_owned = rope_idxs, False
+        if self.decode_rope_pad_to_tile and rope_idxs.shape[-1] < ttnn.TILE_SIZE:
+            # Candidate for the per-token TilizeWithValPadding the batch-1 gather pays:
+            # gather a whole tile row of positions so the tilize has nothing to pad. The
+            # extra rows index position 0, which is a valid row of the cache, and they are
+            # sliced off below.
+            idxs = ttnn.pad(rope_idxs, [(0, 0), (0, ttnn.TILE_SIZE - rope_idxs.shape[-1])], value=0)
+            idxs_owned = True
+        cos = ttnn.embedding(idxs, cache["cos_decode"], layout=ttnn.TILE_LAYOUT)
+        sin = ttnn.embedding(idxs, cache["sin_decode"], layout=ttnn.TILE_LAYOUT)
+        if idxs_owned:
+            idxs.deallocate(True)
         cos = ttnn.transpose(ttnn.unsqueeze_to_4D(cos), 1, 2)
         sin = ttnn.transpose(ttnn.unsqueeze_to_4D(sin), 1, 2)
         if cos.shape[1] != batch:
@@ -1919,6 +2058,8 @@ class OptimizedDecoder(LightweightModule):
                 "fp32_dest_acc_en": self.decode_fp32_acc,
                 "pack_qkv_gate": self.pack_qkv_gate,
                 "pack_mlp_gate_up": self.pack_mlp_gate_up,
+                "sdpa_output_l1": self.decode_sdpa_output_l1,
+                "rope_pad_to_tile": self.decode_rope_pad_to_tile,
                 "program_configs": {
                     role: program_config_to_dict(pc)
                     for role, pc in (

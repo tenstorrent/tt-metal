@@ -1664,3 +1664,225 @@ def test_stress_repeated_prefill_decode(
         for cache in kv_cache:
             cache.deallocate(True)
         page_table_tt.deallocate(True)
+
+
+@pytest.mark.long_context
+@pytest.mark.parametrize("kind_id", KIND_IDS)
+def test_full_context_prefill_and_decode(
+    kind_id,
+    kinds,
+    text_config,
+    synthetic_state_dicts,
+    build_reference,
+    build_optimized_decoder,
+    mg_mesh_device,
+    record_pcc,
+):
+    """The full advertised context on the *optimized* path: 131072, 131071, decode at 131071.
+
+    The functional stage proved the 131072-token contract with a streaming PCC over every
+    query position. This stage rewrote the prefill matmul path underneath it - the row
+    fold and its zero padding, the L1-budget-derived program configs and the
+    DRAM-width-sharded weight grid - so ``doc/context_contract.json`` must not keep
+    advertising 131072 on stage-01 evidence alone.
+
+    What is different at 131072 rather than 8192 is the *number* of chunks (16 instead of
+    1) and how far into the page table and the RoPE table they reach, not the fold: each
+    ``_prefill_linear`` call still sees one 8192-row chunk. So the reference is driven with
+    a block filter that keeps the first, a middle and the last query block of each prompt -
+    including the block that lands on the padded tail - rather than every block, which
+    keeps one 131072-token host reference per layer kind affordable. The K/V cache is
+    compared over the same blocks, and decode runs at the last addressable position on the
+    cache the 131071-token prefill wrote.
+
+    Coverage is recorded on every PCC record so the artifact says exactly what was
+    measured; ``test_paged_prefill_decode_pcc`` still covers every position at the shorter
+    lengths.
+    """
+    kind = kinds[kind_id]
+    state_dict = synthetic_state_dicts[kind.layer_idx]
+    ref = build_reference(kind.layer_idx, state_dict)
+    block_size = DEFAULT_BLOCK
+    decoder = build_optimized_decoder(kind.layer_idx, state_dict, precision=STRUCTURAL_POLICY, block_size=block_size)
+
+    max_context = text_config.max_position_embeddings
+    hidden_size = text_config.hidden_size
+    hidden = R.unit_rms_hidden_states((1, max_context, hidden_size), seed=97)
+
+    for prefill_len in (max_context, max_context - 1):
+        kv_cache, page_table, page_table_tt = _alloc_paged(
+            decoder,
+            mg_mesh_device,
+            batch=1,
+            total_tokens=max_context,
+            block_size=block_size,
+            page_seed=1000 + prefill_len % 7,
+            pool_multiplier=1,
+        )
+        hidden_tt = U.prefill_input(hidden[:, :prefill_len], mg_mesh_device)
+        out_dev = decoder.prefill_forward(hidden_tt, kv_cache=kv_cache, page_table=page_table_tt)
+        assert out_dev.shape[-2] == prefill_len
+        hidden_tt.deallocate(True)
+
+        # Keep the first, a middle and the last reference query block. The reference picks
+        # its own block size from the length; ask it for one that divides both lengths.
+        q_chunk = 8192
+        kept = {0, (prefill_len // 2 // q_chunk) * q_chunk, ((prefill_len - 1) // q_chunk) * q_chunk}
+
+        stats = R.StreamingPCC()
+        blocks = []
+
+        def on_chunk(start, end, out_chunk, _stats=stats, _blocks=blocks, _limit=prefill_len):
+            end = min(end, _limit)
+            if start >= _limit or out_chunk is None:
+                return
+            device_slice = ttnn.slice(out_dev, [0, 0, start, 0], [1, 1, end, hidden_size])
+            _stats.update(out_chunk[:, : end - start], U.prefill_output(device_slice))
+            device_slice.deallocate(True)
+            _blocks.append((start, end))
+
+        # Drive the reference with the full 131072 rows even when the device prompt is
+        # 131071: attention is causal, so the reference output at position p is identical
+        # for both lengths, and this leaves ref_k/ref_v long enough to hold the decode
+        # step at position 131071. The streaming comparison is clamped to prefill_len.
+        _, ref_k, ref_v = ref.prefill(
+            hidden,
+            q_chunk=q_chunk,
+            q_chunk_filter=lambda start, end: start in kept,
+            on_chunk=on_chunk,
+            backend="sdpa",
+        )
+        assert blocks, "no reference query block was computed"
+        assert blocks[-1][1] == prefill_len, f"the last block was not covered: {blocks[-1]}"
+        covered = sum(end - start for start, end in blocks)
+        pcc_value = stats.pcc
+        record_pcc(
+            f"prefill_len{prefill_len}",
+            pcc_value,
+            seq_len=prefill_len,
+            kind=kind_id,
+            policy=STRUCTURAL_POLICY,
+            coverage=f"{covered}/{prefill_len} positions in {len(blocks)} blocks",
+        )
+        assert pcc_value >= PCC_BAR, f"prefill PCC {pcc_value} at seq_len {prefill_len}"
+
+        cache_pcc = U.pcc(
+            ref_k[:, :, :q_chunk],
+            U.read_paged_cache(kv_cache[0], page_table, block_size=block_size, seq_len=q_chunk),
+        )
+        record_pcc(
+            f"prefill_k_cache_len{prefill_len}",
+            cache_pcc,
+            seq_len=prefill_len,
+            kind=kind_id,
+            policy=STRUCTURAL_POLICY,
+            coverage=f"first {q_chunk} positions",
+        )
+        assert cache_pcc >= PCC_BAR
+        out_dev.deallocate(True)
+
+        if prefill_len == max_context - 1:
+            position = max_context - 1
+            ref_k[:, :, position] = 0
+            ref_v[:, :, position] = 0
+            hidden_d = R.unit_rms_hidden_states((1, 1, hidden_size), seed=98)
+            ref_d = ref.decode(hidden_d, ref_k, ref_v, torch.tensor([position]))
+            current_pos, rope_idxs = U.position_tensors([position], mg_mesh_device)
+            out_d = U.decode_output(
+                decoder.decode_forward(
+                    U.decode_input(hidden_d, mg_mesh_device),
+                    kv_cache=kv_cache,
+                    page_table=page_table_tt,
+                    current_pos=current_pos,
+                    rope_idxs=rope_idxs,
+                )
+            )
+            decode_pcc = U.pcc(ref_d, out_d)
+            record_pcc("decode_max_position", decode_pcc, position=position, kind=kind_id, policy=STRUCTURAL_POLICY)
+            assert decode_pcc >= PCC_BAR, f"decode PCC {decode_pcc} at position {position}"
+
+        del ref_k, ref_v
+        for cache in kv_cache:
+            cache.deallocate(True)
+        page_table_tt.deallocate(True)
+
+
+@pytest.mark.real_weights
+@pytest.mark.parametrize("kind_id", KIND_IDS)
+def test_real_weights_batched(
+    kind_id, kinds, text_config, build_reference, build_optimized_decoder, mg_mesh_device, record_pcc
+):
+    """Batch > 1 on real weights at the shipped BFP4 policy.
+
+    OPT-012 lists larger batch among the conditions a synthetic-only precision failure has
+    to be re-checked under on real weights. The batched paths themselves are
+    policy-independent and covered at BFP8 by ``test_batched_prefill_and_decode``; what
+    this adds is the shipped policy's real-weight accuracy when four users share a prefill
+    and a decode step, which is the case the batch-32 structural test cannot speak to.
+    """
+    kind = kinds[kind_id]
+    state_dict = R.load_real_layer_state_dict(kind.layer_idx)
+    ref = build_reference(kind.layer_idx, state_dict, tag="real")
+    block_size = DEFAULT_BLOCK
+    decoder = build_optimized_decoder(
+        kind.layer_idx, state_dict, tag="real", precision=DEFAULT_POLICY, block_size=block_size
+    )
+
+    batch, seq_len = 4, 512
+    hidden = torch.cat(
+        [
+            R.stacked_layer_input(text_config, kind.layer_idx, R.real_token_ids(seq_len, offset=user * seq_len))
+            for user in range(batch)
+        ],
+        dim=0,
+    )
+    ref_out, ref_k, ref_v = _ref_prefill_batch(ref, hidden, cache_len=seq_len + 1)
+
+    kv_cache, page_table, page_table_tt = _alloc_paged(
+        decoder, mg_mesh_device, batch=batch, total_tokens=seq_len + 1, block_size=block_size, page_seed=515
+    )
+    out = U.prefill_output(
+        decoder.prefill_forward(U.prefill_input(hidden, mg_mesh_device), kv_cache=kv_cache, page_table=page_table_tt)
+    )
+    for user in range(batch):
+        user_pcc = U.pcc(ref_out[user], out[user])
+        record_pcc(
+            f"prefill_real_weights_batch{batch}_user{user}",
+            user_pcc,
+            seq_len=seq_len,
+            kind=kind_id,
+            weights="real",
+            policy=DEFAULT_POLICY,
+        )
+        assert user_pcc >= PCC_BAR, f"user {user} prefill PCC {user_pcc}"
+
+    hidden_d = torch.cat(
+        [
+            R.stacked_layer_input(text_config, kind.layer_idx, R.real_token_ids(1, offset=(user + 1) * seq_len))
+            for user in range(batch)
+        ],
+        dim=0,
+    )
+    positions = torch.tensor([seq_len] * batch)
+    ref_d = ref.decode(hidden_d, ref_k, ref_v, positions)
+    current_pos, rope_idxs = U.position_tensors(positions.tolist(), mg_mesh_device)
+    out_d = U.decode_output(
+        decoder.decode_forward(
+            U.decode_input(hidden_d, mg_mesh_device),
+            kv_cache=kv_cache,
+            page_table=page_table_tt,
+            current_pos=current_pos,
+            rope_idxs=rope_idxs,
+        )
+    )
+    for user in range(batch):
+        user_pcc = U.pcc(ref_d[user], out_d[user])
+        record_pcc(
+            f"decode_real_weights_batch{batch}_user{user}",
+            user_pcc,
+            position=seq_len,
+            kind=kind_id,
+            weights="real",
+            policy=DEFAULT_POLICY,
+        )
+        assert user_pcc >= PCC_BAR, f"user {user} decode PCC {user_pcc}"
