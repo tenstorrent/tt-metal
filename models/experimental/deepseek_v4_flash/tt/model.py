@@ -226,7 +226,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
         require_cache: bool = False,
         pipeline_group_size: Optional[int] = None,
         use_prefetcher: Optional[bool] = None,
-        num_prefetch_slabs: int = 1,
+        num_prefetch_pages: int = 16,
     ):
         """Build the V4-Flash model off the checkpoint.
 
@@ -383,7 +383,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
                     cache=layer_cache,
                     weight_dtype=weight_dtype,
                     use_prefetcher=self.use_prefetcher,
-                    prefetch_buffers=self._prefetch_buffers_for(current_device, weight_dtype, num_prefetch_slabs),
+                    prefetch_buffers=self._prefetch_buffers_for(current_device, weight_dtype, num_prefetch_pages),
                 )
             )
             _profile(current_device)
@@ -502,7 +502,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 return li
         return None
 
-    def _prefetch_buffers_for(self, device, weight_dtype, num_prefetch_slabs) -> Optional[dict]:
+    def _prefetch_buffers_for(self, device, weight_dtype, num_prefetch_pages) -> Optional[dict]:
         """The GCBs for ``device``, built on first use and reused after.
 
         One set per device rather than per layer: a GCB is a permanent L1 allocation, and
@@ -517,7 +517,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
         if key not in self._prefetch_buffers_by_device:
             self._prefetch_buffers_by_device[key] = (
                 device,
-                make_attention_prefetch_buffers(device, weight_dtype, num_prefetch_slabs),
+                make_attention_prefetch_buffers(device, weight_dtype, num_prefetch_pages),
             )
         return self._prefetch_buffers_by_device[key][1]
 

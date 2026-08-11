@@ -16,11 +16,12 @@
 //   - default: the in1 CB is globally allocated over the L1-resident weight shard, so the
 //     reader only has to declare its tiles available.
 //   - ENABLE_GLOBAL_CB: the weights are pushed into a DRAM-sender GlobalCircularBuffer by the
-//     tensor prefetcher. Exactly one remote page per invocation carries this receiver's whole
-//     [Bc*K, Nc] slab. The reader waits for that page, hands the tiles to compute through the
-//     local alias CB, and releases the page only after compute signals (via the sync CB) that
-//     it has finished reading -- releasing earlier would let the prefetcher overwrite weights
-//     still in use. This kernel runs only on the B core range set, so every core is a receiver.
+//     tensor prefetcher. This receiver's [Bc*K, Nc] slab arrives as num_k_blocks remote pages,
+//     each a whole number of rows (num_k_blocks == 1 is the whole slab in one page). The reader
+//     waits for a page, hands its tiles to compute through the local alias CB, and releases it
+//     only after compute signals (via the sync CB) that it has finished reading -- releasing
+//     earlier would let the prefetcher overwrite weights still in use. This kernel runs only on
+//     the B core range set, so every core is a receiver.
 void kernel_main() {
     constexpr uint32_t in0_cb_index = get_compile_time_arg_val(0);
     constexpr uint32_t full_in0_cb_index = get_compile_time_arg_val(1);
@@ -28,9 +29,10 @@ void kernel_main() {
     constexpr uint32_t tile_size_bytes = get_compile_time_arg_val(3);
     constexpr uint32_t num_senders = get_compile_time_arg_val(4);
     constexpr uint32_t in1_cb_index = get_compile_time_arg_val(5);
-    constexpr uint32_t in1_num_tiles = get_compile_time_arg_val(6);
+    constexpr uint32_t in1_page_tiles = get_compile_time_arg_val(6);
     constexpr uint32_t remote_cb_index = get_compile_time_arg_val(7);
     constexpr uint32_t sync_cb_index = get_compile_time_arg_val(8);
+    constexpr uint32_t num_k_blocks = get_compile_time_arg_val(9);
 
     const uint32_t b_idx = get_arg_val<uint32_t>(0);
 
@@ -43,12 +45,13 @@ void kernel_main() {
     UnicastEndpoint sender;
 
 #ifdef ENABLE_GLOBAL_CB
-    in1_cb.reserve_back(in1_num_tiles);
+    // Publish the first page before the gather so the prefetcher's transfer overlaps it.
+    in1_cb.reserve_back(in1_page_tiles);
     experimental::remote_cb_wait_front(remote_cb_index, 1);
-    in1_cb.push_back(in1_num_tiles);
+    in1_cb.push_back(in1_page_tiles);
 #else
-    in1_cb.reserve_back(in1_num_tiles);
-    in1_cb.push_back(in1_num_tiles);
+    in1_cb.reserve_back(in1_page_tiles);
+    in1_cb.push_back(in1_page_tiles);
 #endif
     full_in0_cb.reserve_back(num_senders * block_slice_tiles);
 
@@ -69,8 +72,20 @@ void kernel_main() {
     full_in0_cb.push_back(num_senders * block_slice_tiles);
 
 #ifdef ENABLE_GLOBAL_CB
-    // Compute signals here once it has finished reading every in1 tile of this slab.
     CircularBuffer sync_cb(sync_cb_index);
+    // Page p-1's credit is returned only after page p has been published, so the reader runs a
+    // page ahead of the credit return and the remote read pointer lags by one page. That is what
+    // makes the wait below mean "the page I still owe a credit for, plus the new one": it can
+    // never reach past this weight's own pages into a transfer nobody has queued.
+    for (uint32_t page = 1; page < num_k_blocks; ++page) {
+        in1_cb.reserve_back(in1_page_tiles);
+        experimental::remote_cb_wait_front(remote_cb_index, 2);
+        in1_cb.push_back(in1_page_tiles);
+        sync_cb.wait_front(1);
+        sync_cb.pop_front(1);
+        experimental::remote_cb_pop_front(remote_cb_index, 1);
+    }
+    // Compute signals here once it has finished reading every in1 tile of the last page.
     sync_cb.wait_front(1);
     sync_cb.pop_front(1);
     experimental::remote_cb_pop_front(remote_cb_index, 1);
