@@ -2480,6 +2480,188 @@ inline bool topology_sat_run_sharing_portfolio(
     return true;
 }
 
+// Collaborative multithreaded ENUMERATION (TT_TOPO_SAT_SHARE=1 on the -n N path). N incremental CaDiCaL workers share
+// BOTH learned clauses (speed) and blocking clauses (distinctness): when a worker finds a solution not yet in the
+// shared found-set, it records it and broadcasts a blocking clause every worker imports, so the workers collaboratively
+// enumerate DISTINCT solutions in parallel while each stays warm (keeps its own learned clauses/phases -- what makes
+// solutions 2..N cheap). Blocking clauses are portable across workers because the encoding is deterministic (identical
+// var ids), the same property the learned-clause sharing relies on. Only the plain distinct-mapping case is handled
+// (unique_shapes / forbidden shapes fall back to the single-threaded loop). Fills results_out (up to max_solutions).
+inline bool topology_sat_run_sharing_portfolio_enum(
+    const TopologySatGraphView& graph_data,
+    const TopologySatConstraintView& constraint_data,
+    ConnectionValidationMode validation_mode,
+    int n_workers,
+    long base_seed,
+    bool fastsat,
+    int share_budget,
+    int share_max_size,
+    size_t max_solutions,
+    bool unique_shapes,
+    std::vector<std::vector<int>>& results_out) {
+    std::atomic<bool> done{false};
+    std::mutex mtx;
+    ClauseSharingPool learn_pool;  // learned clauses -> speed
+    ClauseSharingPool block_pool;  // blocking clauses (one per found solution) -> distinctness
+    std::set<std::vector<int>> seen;
+    std::vector<std::vector<int>> results;
+    const auto t0 = std::chrono::steady_clock::now();
+    std::vector<std::thread> workers;
+    workers.reserve(static_cast<size_t>(n_workers));
+    for (int k = 0; k < n_workers; ++k) {
+        workers.emplace_back([&, k]() {
+            TopologySatSolver solver;
+            solver.configure_for_blocking_clause_enumeration();
+            solver.set_cancel_flag(&done);
+            (void)solver.set_option("seed", static_cast<int>((base_seed >= 0 ? base_seed : 0) + k));
+            if (fastsat) {
+                (void)solver.set_option("target", 2);
+                (void)solver.set_option("phase", 1);
+            }
+            TopologySatHardEncoding enc;
+            {
+                std::lock_guard<std::mutex> lk(mtx);
+                if (done.load(std::memory_order_relaxed)) {
+                    return;
+                }
+                if (!topology_sat_encode_hard_constraints(
+                        solver, graph_data, constraint_data, enc, validation_mode, /*quiet_mode=*/true)) {
+                    return;
+                }
+            }
+            solver.enable_clause_export(&learn_pool, k, share_max_size);
+            const int assumption = topology_sat_symmetry_assumption_lit(graph_data, enc);
+
+            // Dedup key for a mapping: its shape key when unique_shapes (so symmetric image-permutations collapse to
+            // one solution, matching the single-threaded path), else the raw mapping.
+            auto sig_of = [&](const std::vector<int>& m) -> std::vector<int> {
+                return unique_shapes ? topology_mapping_shape_key(m) : m;
+            };
+            // Build the blocking-clause literals that exclude this solution: the shape-blocking clause when
+            // unique_shapes, else ¬(at least one of its chosen assignments). Literals are in enc's var space, which is
+            // identical across workers (deterministic encoding), so they are portable through the shared pool.
+            auto build_block = [&](const std::vector<int>& m, std::vector<int>& out) -> bool {
+                if (unique_shapes) {
+                    return topology_sat_build_shape_blocking_clause(enc, topology_mapping_shape_key(m), out);
+                }
+                out.clear();
+                const size_t nt = enc.assign_lit.size();
+                for (size_t t = 0; t < nt; ++t) {
+                    const int cg = m[t];
+                    if (cg < 0) {
+                        return false;
+                    }
+                    const auto& globs = enc.allowed_global_idx[t];
+                    const auto& lits = enc.assign_lit[t];
+                    bool fk = false;
+                    for (size_t j = 0; j < globs.size(); ++j) {
+                        if (static_cast<int>(globs[j]) == cg) {
+                            out.push_back(-lits[j]);
+                            fk = true;
+                            break;
+                        }
+                    }
+                    if (!fk) {
+                        return false;
+                    }
+                }
+                return true;
+            };
+
+            bool first = true;
+            std::size_t learn_cursor = 0, block_cursor = 0;
+            std::vector<std::vector<int>> imported;
+            for (;;) {
+                if (done.load(std::memory_order_relaxed)) {
+                    return;
+                }
+                // Import peers' blocking clauses (search a solution distinct from everything found) + learned clauses.
+                imported.clear();
+                block_pool.drain(k, block_cursor, imported);
+                for (const auto& cl : imported) {
+                    for (const int lit : cl) {
+                        solver.add(lit);
+                    }
+                    solver.add(0);
+                }
+                imported.clear();
+                learn_pool.drain(k, learn_cursor, imported);
+                for (const auto& cl : imported) {
+                    for (const int lit : cl) {
+                        solver.add(lit);
+                    }
+                    solver.add(0);
+                }
+                if (first && assumption != 0) {
+                    solver.assume(assumption);
+                }
+                const int status = solver.solve_limited(share_budget);
+                if (status == TopologySatSolver::kSat) {
+                    std::vector<int> m;
+                    if (!topology_sat_decode_hard_solution(solver, enc, m)) {
+                        return;
+                    }
+                    std::vector<int> blk;
+                    const bool have_blk = build_block(m, blk);
+                    const std::vector<int> sig = sig_of(m);
+                    bool record = false;
+                    {
+                        std::lock_guard<std::mutex> lk(mtx);
+                        if (!done.load(std::memory_order_relaxed) && seen.find(sig) == seen.end()) {
+                            seen.insert(sig);
+                            results.push_back(m);
+                            record = true;
+                            if (results.size() >= max_solutions) {
+                                done.store(true);
+                            }
+                        }
+                    }
+                    if (record && have_blk) {
+                        block_pool.publish(k, blk);  // broadcast so every OTHER worker also excludes this solution
+                    }
+                    if (!have_blk) {
+                        done.store(true);  // can't block -> stop to avoid re-finding it forever
+                        return;
+                    }
+                    for (const int lit : blk) {  // block it in my own solver too (I skip my own pool entries)
+                        solver.add(lit);
+                    }
+                    solver.add(0);
+                    first = false;
+                    continue;
+                }
+                if (status == TopologySatSolver::kUnsat) {
+                    if (first && assumption != 0) {
+                        first = false;  // symmetry hint may have forced UNSAT -- retry the window without it
+                        continue;
+                    }
+                    done.store(true);  // exhausted: no solution distinct from all current blocks -> none remain
+                    return;
+                }
+                // status == 0: conflict budget exhausted -> loop, re-import fresh blocks/learned clauses, retry.
+                first = false;
+            }
+        });
+    }
+    for (auto& w : workers) {
+        w.join();
+    }
+    results_out = std::move(results);
+    if (results_out.size() > max_solutions) {
+        results_out.resize(max_solutions);
+    }
+    log_info(
+        tt::LogFabric,
+        "[topo-sat] clause-sharing enum: {}-way found {} distinct solution(s) in {:.1f} ms (learn_pool={}, "
+        "block_pool={})",
+        n_workers,
+        results_out.size(),
+        topology_sat_elapsed_ms(t0),
+        learn_pool.size(),
+        block_pool.size());
+    return !results_out.empty();
+}
+
 bool topology_sat_search(
     const TopologySatGraphView& graph_data,
     const TopologySatConstraintView& constraint_data,
@@ -3026,6 +3208,35 @@ bool topology_sat_search_n(
 
     if (graph_data.n_global < graph_data.n_target) {
         return false;
+    }
+
+    // Opt-in multithreaded enumeration (TT_TOPO_SAT_SHARE=1): collaborative clause-sharing portfolio enumerates
+    // distinct solutions in parallel (shape-dedup honored, matching the single-threaded path). Skipped only when the
+    // caller seeds initial forbidden shapes (not modeled here); otherwise fills all_mappings_out directly, and on
+    // empty falls through to the single-threaded loop so nothing is lost.
+    if (initial_forbidden_shape_keys.empty() && topology_sat_env_long("TT_TOPO_SAT_SHARE", 0) != 0) {
+        const int nw = static_cast<int>(topology_sat_env_long("TT_TOPO_SAT_SHARE_WORKERS", 16));
+        if (nw > 1) {
+            const long base_seed = topology_sat_env_long("TT_TOPO_SAT_SEED", 0);
+            const bool fastsat = topology_sat_env_long("TT_TOPO_SAT_FASTSAT", 0) != 0;
+            const int budget = static_cast<int>(topology_sat_env_long("TT_TOPO_SAT_SHARE_BUDGET", 2000));
+            const int max_size = static_cast<int>(topology_sat_env_long("TT_TOPO_SAT_SHARE_MAX_SIZE", 8));
+            std::vector<std::vector<int>> res;
+            if (topology_sat_run_sharing_portfolio_enum(
+                    graph_data, constraint_data, validation_mode, nw, base_seed, fastsat, budget, max_size,
+                    max_solutions, unique_shapes, res) &&
+                !res.empty()) {
+                all_mappings_out = std::move(res);
+                state.mapping = all_mappings_out.back();
+                std::fill(state.used.begin(), state.used.end(), false);
+                for (int gi : state.mapping) {
+                    if (gi >= 0 && static_cast<size_t>(gi) < state.used.size()) {
+                        state.used[static_cast<size_t>(gi)] = true;
+                    }
+                }
+                return true;
+            }
+        }
     }
 
     // One CaDiCaL::Solver for the whole enumeration: encode once, then add blocking clauses and solve() in a loop.
