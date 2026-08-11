@@ -3,6 +3,7 @@
 
 set(UNIT_TESTS_LEGACY_SRC
     test_add_two_ints.cpp
+    test_x280_host_access.cpp
     test_noc_reg_dump.cpp
     test_noc_write_to_l2cpu.cpp
     test_bcast.cpp
