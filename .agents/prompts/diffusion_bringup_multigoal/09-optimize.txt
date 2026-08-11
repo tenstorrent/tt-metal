@@ -1,0 +1,16 @@
+/goal Use $optimize, $tt-enable-tracing, and $tt-device-usage for the $DIFFUSION_MODEL DiT under the $diffusion-model-bringup contract in the current tt-metal checkout.
+
+As the user, I explicitly authorize you to use subagents when a selected skill requests or recommends them.
+
+This goal creates the optimize state for the repo-local tt_dit diffusion pipeline. Start from the completed multichip DiT (and its end-to-end pipeline) and optimize warmed per-step latency and weight residency under models/tt_dit/models/transformers/<model>/ and pipelines/<model>/ plus tests and docs; do not begin datatype-sweep work in this goal. Preserve correctness — the per-step velocity PCC bar must hold.
+
+Goal completion requirements:
+- The optimization pass starts with an operation-topology audit of the measured per-step forward: repeated same-input matmuls, avoidable reshard/layout conversions, candidate fused/packed projections (e.g. the rotate_half constant matmul fused, QKV packing), composite-op replacements, and lower-movement data paths. The README/work_log records current ops, candidate replacements, action taken, and before/after evidence. A first TTNN/API error is not enough to reject a material optimization.
+- Weight residency is optimized: cache/stage DiT (and encoder) weights so repeated denoise steps and repeated generations do not re-load from host; the pipeline's wall-clock breakdown shows weight loading no longer dominates the warmed loop. Record the caching scheme and the before/after breakdown.
+- Tracing: capture and replay the per-step DiT forward with $tt-enable-tracing ONLY after measuring that the forward is host-dispatch-bound — trace eliminates dispatch overhead, so if the per-step forward is compute/CCL-bound, measure and record that trace does not help rather than assuming it does. Where trace is applied, replay correctness matches the untraced forward (no stale inputs / bad replay) and the loop stays trace-safe (stable buffers, tensor timesteps).
+- Warmed per-step latency before and after optimization is reported; the final path beats the best correct baseline/candidate (fewer ops or cleaner topology alone is not enough). tt-perf-report human-readable tables plus CSV/provenance logs exist for the per-step forward; actionable advice is tried and rejected advice has before/after evidence.
+- Per-step velocity PCC stays at the acceptance bar (>= 0.99, relative_rmse <= 0.15) after optimization, with any material delta explained; a degeneracy check (no NaN/Inf) passes. The final measured path has no unnecessary torch/from_torch/to_torch, tilize/untilize, reshard, or host fallback. Watcher-clean optimized-correctness run and stress/repeated-run coverage exist.
+- capability_contract.json is preserved (or updated with evidence if a layout/residency change alters capacity). doc/optimize/DESIGN.md and work_log.md record the topology audit, before/after PCC and perf, the trace decision + evidence, weight-caching scheme, tt-perf-report conclusions, rejected options, and exact artifacts. The $optimize checklist is completed with evidence.
+- $stage-review returns `clean-pass`; findings fixed/rereviewed. Local commit stage-owned touched-repo changes; never push; log SHAs.
+
+Unmet requirements, review findings, failed gates: work. Stop only after `$autofix` fails.

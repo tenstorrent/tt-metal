@@ -1,0 +1,7 @@
+interface:
+  display_name: "Diffusion Model Bringup"
+  short_description: "Orchestrate a full TTNN diffusion-model bringup (DiT+VAE+encoder+denoise loop)"
+  default_prompt: "Use $diffusion-model-bringup to orchestrate a full Tenstorrent bringup of a diffusers video/image/audio diffusion model in tt_dit — reference baseline, scheduler, functional DiT block, full DiT, text encoder, VAE decoder(s), multichip, end-to-end pipeline, optimize/trace, precision sweep — deferring to the diffusion sub-skills and leaving PCC + perceptual evidence per stage."
+
+policy:
+  allow_implicit_invocation: true
