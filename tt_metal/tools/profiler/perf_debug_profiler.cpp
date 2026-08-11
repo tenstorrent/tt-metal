@@ -57,7 +57,7 @@ namespace tt::tt_metal {
 namespace pz = tt::tt_metal::profiler;
 
 // Host-only record type for a PP_DATA payload continuation. Never appears on the wire, so it only has to
-// avoid the codes prof_packet.h actually uses (0,1,2,5..11); 31 is the top of the 5-bit type field.
+// avoid the codes spsc_packet.h actually uses (0,1,2,5..11); 31 is the top of the 5-bit type field.
 constexpr uint32_t kRecDataCont = 31u;
 // Largest payload the 7-bit wire size field can express, in uint64s -- bounds the consumer's scratch.
 constexpr uint32_t kMaxEventValues = 64;
@@ -1397,7 +1397,7 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
         const bool has_socket = sk != kNoSocket;
         try {
             if (has_socket) {
-            // sender_is_l2cpu switches the socket between "physical NoC coord + full L1 address" (DRISC,
+            // sender_uses_physical_noc_addr switches the socket between "physical NoC coord + full L1 addr" (DRISC,
             // drainer) and the normal worker path (logical coord, worker-L1 semantics). The socket picks the
             // static-vs-dynamic write path by ASKING UMD whether this core has a window (see init_sender_tlb),
             // so the window configured just above is what puts the DRISC on the static path.
@@ -1408,7 +1408,8 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
                     scoord,
                     tensix_drain ? ctx.drisc_logical[d] : CoreCoord(drisc_phys.x, drisc_phys.y)},
                 static_cast<uint32_t>((static_cast<uint64_t>(kHRingWords) * 4 / kPageSize) * kPageSize),
-                distributed::D2HSocket::ExternalConfigBuffer{.address = cfg_l1, .sender_is_l2cpu = !tensix_drain});
+                distributed::D2HSocket::ExternalConfigBuffer{
+                    .address = cfg_l1, .sender_uses_physical_noc_addr = !tensix_drain});
             ctx.sockets[sk]->set_page_size(kPageSize);
             // MEASURE the flow-control poll directly. The per-poll cost derived from the rounded "poll X%"
             // log line differed ~10x between a fast and a degraded card, but that figure is too indirect to

@@ -29,7 +29,6 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
-
 static double compute_bw_gbs(uint64_t total_bytes, uint64_t cycles, uint32_t clk_hz) {
     return static_cast<double>(total_bytes) * clk_hz / cycles / 1e9;
 }
@@ -857,12 +856,11 @@ INSTANTIATE_TEST_SUITE_P(
     });
 
 // ---------------------------------------------------------------------------------------------
-// DRISC scatter-read microbenchmark -- the DRISC port of the X280 test_x280_rdrbench.
+// DRISC scatter-read microbenchmark.
 //
-// Answers the question the X280 bench answered for L2CPU harts: how fast can one DRISC pull
-// profiler-sized markers out of worker-core L1 over the NoC, and does adding a second/fourth
-// DRISC scale or crater (the X280 cratered at 3 harts on shared-L2CPU pressure -- DRISCs on
-// different banks are physically separate cores, so the mechanism behind that cliff is absent).
+// How fast can one DRISC pull profiler-sized markers out of worker-core L1 over the NoC, and does
+// adding a second/fourth DRISC scale or crater? DRISCs on different banks are physically separate
+// cores, so contention for a shared read port is not a mechanism available here.
 //
 // Reads only; no D2H egress. The numbers are an ingest ceiling to size the drainer against.
 // ---------------------------------------------------------------------------------------------
@@ -1010,7 +1008,7 @@ protected:
     }
 
     // Round-robin control-vector poll: how long one DRISC takes to sweep every core's 64-word
-    // (256 B) control vector -- the "is there anything to drain" scan that precedes X280 profstream FW's
+    // (256 B) control vector -- the "is there anything to drain" scan that precedes the
     // adaptive bulk decision. Reports the per-core cost and the full-grid sweep period, both from
     // the DRISC's own wall clock, plus the measured DRISC clock so those numbers stand on a
     // device-side measurement rather than on the host's aiclk reading.
@@ -1060,7 +1058,7 @@ protected:
 
 // Round-robin poll of every core's 64-word (256 B) profiler control vector -- the scan that decides
 // whether to bulk-drain. Two variants per depth: read-only, and read + the adaptive switch's tail-delta
-// arithmetic (X280 profstream FW: full += tails[r] - heads[c*NRISC+r] over 5 RISCs), so the difference isolates
+// arithmetic (full += tails[r] - heads[c*NRISC+r] over 5 RISCs), so the difference isolates
 // what the CPU-side poll work costs on top of the NoC read.
 //
 // All timings come from the DRISC's own wall clock (RISCV_DEBUG_REG_WALL_CLOCK). The kernel also times
@@ -1144,7 +1142,7 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCD2HSocketEgress) {
                 devices_[0],
                 distributed::MeshCoreCoord(distributed::MeshCoordinate(0, 0), CoreCoord(drisc_phys.x, drisc_phys.y)),
                 fifo_size,
-                distributed::D2HSocket::ExternalConfigBuffer{.address = cfg_l1, .sender_is_l2cpu = true});
+                distributed::D2HSocket::ExternalConfigBuffer{.address = cfg_l1, .sender_uses_physical_noc_addr = true});
             socket.set_page_size(page_size);
 
             std::vector<uint32_t> payload(page_size / sizeof(uint32_t), 0xD2D2D2D2u);
@@ -1370,7 +1368,7 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCFusedDrainToHost) {
             devices_[0],
             distributed::MeshCoreCoord(distributed::MeshCoordinate(0, 0), CoreCoord(d_phys.x, d_phys.y)),
             32 * kPageBytes,
-            distributed::D2HSocket::ExternalConfigBuffer{.address = cfg, .sender_is_l2cpu = true});
+            distributed::D2HSocket::ExternalConfigBuffer{.address = cfg, .sender_uses_physical_noc_addr = true});
         socket.set_page_size(kPageBytes);
 
         Program program = CreateProgram();
@@ -1569,7 +1567,7 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCTwoTierDrainToHost) {
             devices_[0],
             distributed::MeshCoreCoord(distributed::MeshCoordinate(0, 0), CoreCoord(d_phys.x, d_phys.y)),
             32 * kPageBytes,
-            distributed::D2HSocket::ExternalConfigBuffer{.address = cfg, .sender_is_l2cpu = true});
+            distributed::D2HSocket::ExternalConfigBuffer{.address = cfg, .sender_uses_physical_noc_addr = true});
         socket.set_page_size(kPageBytes);
 
         Program program = CreateProgram();
@@ -1699,7 +1697,7 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCTwoTierDrainToHost) {
     set_niu_mode(0);
 }
 
-// The complete drainer: monitor the 64-word control vector on every core, run X280 profstream FW's adaptive
+// The complete drainer: monitor the 64-word control vector on every core, run the adaptive
 // threshold, whole-core-read only the cores that trip it, and push those to the host.
 //
 // The host sets each core's tails so a chosen number trip ADAPT_THRESH. Hot counts are multiples of
@@ -1782,7 +1780,7 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCAdaptiveDrainToHost) {
             devices_[0],
             distributed::MeshCoreCoord(distributed::MeshCoordinate(0, 0), CoreCoord(d_phys.x, d_phys.y)),
             32 * kPageBytes,
-            distributed::D2HSocket::ExternalConfigBuffer{.address = cfg, .sender_is_l2cpu = true});
+            distributed::D2HSocket::ExternalConfigBuffer{.address = cfg, .sender_uses_physical_noc_addr = true});
         socket.set_page_size(kPageBytes);
 
         Program program = CreateProgram();
@@ -1866,8 +1864,7 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCAdaptiveDrainToHost) {
 }
 
 // Scale the direct drainer: N DRISCs, each owning a slice of the grid and pushing to its own D2H
-// socket. Same shape as the X280 reader fan-out, except each reader here is also its own egress path,
-// so there is no relay and no shared ring.
+// socket. Each reader is also its own egress path, so there is no relay and no shared ring.
 //
 // The grid is split by whole pages (15 pages of 8 cores), so slices are as even as 15/N allows:
 // N=2 -> 8+7, N=3 -> 5+5+5, N=4 -> 4+4+4+3. The largest slice sets the sweep time.
@@ -1945,7 +1942,7 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCMultiDrainerScaling) {
                 devices_[0],
                 distributed::MeshCoreCoord(distributed::MeshCoordinate(0, 0), CoreCoord(phys[i].x, phys[i].y)),
                 kFifoPages * kPageBytes,
-                distributed::D2HSocket::ExternalConfigBuffer{.address = cfg, .sender_is_l2cpu = true}));
+                distributed::D2HSocket::ExternalConfigBuffer{.address = cfg, .sender_uses_physical_noc_addr = true}));
             sockets.back()->set_page_size(kPageBytes);
 
             auto kid = CreateKernel(
@@ -2118,7 +2115,7 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCIngestStraightToHost) {
             devices_[0],
             distributed::MeshCoreCoord(distributed::MeshCoordinate(0, 0), CoreCoord(d_phys.x, d_phys.y)),
             32 * page_bytes,
-            distributed::D2HSocket::ExternalConfigBuffer{.address = cfg, .sender_is_l2cpu = true});
+            distributed::D2HSocket::ExternalConfigBuffer{.address = cfg, .sender_uses_physical_noc_addr = true});
         socket.set_page_size(page_bytes);
 
         Program program = CreateProgram();
@@ -2288,7 +2285,7 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCPipelineAtoBtoHost) {
             devices_[0],
             distributed::MeshCoreCoord(distributed::MeshCoordinate(0, 0), CoreCoord(b_phys.x, b_phys.y)),
             32 * kPageBytes,
-            distributed::D2HSocket::ExternalConfigBuffer{.address = b_cfg, .sender_is_l2cpu = true});
+            distributed::D2HSocket::ExternalConfigBuffer{.address = b_cfg, .sender_uses_physical_noc_addr = true});
         socket.set_page_size(kPageBytes);
 
         Program program = CreateProgram();
@@ -2615,7 +2612,7 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCD2HSocketEgressTuned) {
             devices_[0],
             distributed::MeshCoreCoord(distributed::MeshCoordinate(0, 0), CoreCoord(drisc_phys.x, drisc_phys.y)),
             kFifoPages * page_size,
-            distributed::D2HSocket::ExternalConfigBuffer{.address = cfg_l1, .sender_is_l2cpu = true});
+            distributed::D2HSocket::ExternalConfigBuffer{.address = cfg_l1, .sender_uses_physical_noc_addr = true});
         socket.set_page_size(page_size);
 
         std::vector<uint32_t> payload(page_size / sizeof(uint32_t), 0xD2D2D2D2u);
@@ -2773,8 +2770,8 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCWholeCoreDepthBeyondBuffer) {
 }
 
 // The 8 us kernel-train question, measured on the DRISC: a full adaptive sweep (poll every core,
-// run X280 profstream FW's threshold decision, whole-core bulk read for each core that trips it) against
-// the 8 us budget the X280 sustained.
+// run the adaptive threshold decision, whole-core bulk read for each core that trips it) against
+// an 8 us budget.
 //
 // The host sets each core's control-vector tails so a chosen number of cores trip ADAPT_THRESH.
 // That is the knob that matters: at steady state only a small fraction of cores have accumulated
@@ -2935,7 +2932,7 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCScatterReadBurstAndDepthSweep) {
 }
 
 // Poll-floor sweep: hold the burst config and shrink the polled grid. At K=1 the per-visit cost
-// dominates, which is the metric to compare against the X280's ~58 ns/core floor.
+// dominates, which is the per-core poll floor.
 TEST_F(DramKernelDRISCScatterFixture, DRISCScatterReadPollFloor) {
     constexpr uint32_t kReadsInFlight = 8;
     prime_worker_l1(32 * kMarkerBytes);  // cover the largest K exercised below
@@ -2947,9 +2944,8 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCScatterReadPollFloor) {
     }
 }
 
-// Multi-DRISC scaling: the X280's hard ceiling was 2 harts (3 cratered to 0.29 GB/s on shared
-// L2CPU pressure). Each DRISC here is a separate core on a separate bank with its own NIU pair,
-// so this is the test of whether that cliff reappears.
+// Multi-DRISC scaling: each DRISC is a separate core on a separate bank with its own NIU pair,
+// so this is the test of whether aggregate ingest scales with DRISC count or hits a cliff.
 TEST_F(DramKernelDRISCScatterFixture, DRISCScatterReadMultiCoreScaling) {
     constexpr uint32_t kMarkersPerRead = 32;
     constexpr uint32_t kReadsInFlight = 8;
