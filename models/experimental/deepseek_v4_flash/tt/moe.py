@@ -4,7 +4,8 @@ import ttnn
 import torch
 
 from .common import DeepSeekV4Module, _profile, _region
-from .layers import Linear
+from .decode_prefetch import check_decode_layout, decode_prefetch_page_bytes, make_decode_prefetch_buffers
+from .layers import Linear, LinearDecode
 from .weight_cache import WeightCache, _as_cache, _load_weight, _materialize, _memo
 
 # ---------------------------------------------------------------------------- #
@@ -51,6 +52,13 @@ class DeepSeekV4MLP(DeepSeekV4Module):
 
     Used as the always-on *shared expert*: ``down(silu(gate(x)) * up(x))`` with
     no clamp (the routed experts clamp; the shared expert does not).
+
+    ``use_prefetcher=True`` runs the three projections as :class:`LinearDecode` on
+    DRISC-prefetched weights, streamed through the same GCB the attention block uses (see
+    ``decode_prefetch``) instead of reading them from DRAM on every call. That path is decode
+    shaped: it width-shards the tokens over one tile-row, which caps it at the 32 rows a tile
+    holds, so a prefill-width input has to use the default ``ttnn.linear`` path. It also needs
+    ``config``, to check the fixed weight layouts against the shapes this model wants.
     """
 
     def __init__(
@@ -60,21 +68,83 @@ class DeepSeekV4MLP(DeepSeekV4Module):
         device: ttnn.MeshDevice,
         cache: Optional[WeightCache] = None,
         weight_dtype: ttnn.DataType = ttnn.bfloat16,
+        config=None,
+        use_prefetcher: bool = False,
+        prefetch_buffers: Optional[dict] = None,
     ):
         cache = _as_cache(cache)
-        self.gate_proj = Linear(
-            weights[f"{prefix}.gate_proj.weight"], device, cache.file(f"{prefix}.gate_proj"), dtype=weight_dtype
+        self.device = device
+        self.use_prefetcher = use_prefetcher
+        if not use_prefetcher:
+            self.gate_proj = Linear(
+                weights[f"{prefix}.gate_proj.weight"], device, cache.file(f"{prefix}.gate_proj"), dtype=weight_dtype
+            )
+            self.up_proj = Linear(
+                weights[f"{prefix}.up_proj.weight"], device, cache.file(f"{prefix}.up_proj"), dtype=weight_dtype
+            )
+            self.down_proj = Linear(
+                weights[f"{prefix}.down_proj.weight"], device, cache.file(f"{prefix}.down_proj"), dtype=weight_dtype
+            )
+            return
+
+        hidden, inter = config.hidden_size, config.moe_intermediate_size
+        if prefetch_buffers is None:
+            prefetch_buffers = make_decode_prefetch_buffers(device, weight_dtype)
+        prefetch = {"use_prefetcher": True, "global_cb_page_bytes": decode_prefetch_page_bytes(weight_dtype)}
+        self.gate_proj = LinearDecode(
+            weights[f"{prefix}.gate_proj.weight"],
+            device,
+            cache.file(f"{prefix}.gate_proj"),
+            dtype=weight_dtype,
+            **check_decode_layout("shared_gate_proj", hidden, inter),
+            global_cb=prefetch_buffers["shared_gate_proj"],
+            **prefetch,
         )
-        self.up_proj = Linear(
-            weights[f"{prefix}.up_proj.weight"], device, cache.file(f"{prefix}.up_proj"), dtype=weight_dtype
+        self.up_proj = LinearDecode(
+            weights[f"{prefix}.up_proj.weight"],
+            device,
+            cache.file(f"{prefix}.up_proj"),
+            dtype=weight_dtype,
+            **check_decode_layout("shared_up_proj", hidden, inter),
+            global_cb=prefetch_buffers["shared_up_proj"],
+            **prefetch,
         )
-        self.down_proj = Linear(
-            weights[f"{prefix}.down_proj.weight"], device, cache.file(f"{prefix}.down_proj"), dtype=weight_dtype
+        self.down_proj = LinearDecode(
+            weights[f"{prefix}.down_proj.weight"],
+            device,
+            cache.file(f"{prefix}.down_proj"),
+            dtype=weight_dtype,
+            **check_decode_layout("shared_down_proj", inter, hidden),
+            global_cb=prefetch_buffers["shared_down_proj"],
+            **prefetch,
         )
 
+    def prefetch_weights(self):
+        """Stage the three projection weights ahead of the :meth:`forward` that uses them.
+
+        Queued gate, up, down: the order :meth:`forward` runs them, which is the order they
+        must come off the shared GCB's single FIFO. The attention block's weights precede
+        them, since it runs first in the decoder layer.
+        """
+        if not self.use_prefetcher:
+            return
+        self.gate_proj.fetch_weights()
+        self.up_proj.fetch_weights()
+        self.down_proj.fetch_weights()
+
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        gate = ttnn.silu(self.gate_proj(x))
-        return self.down_proj(ttnn.multiply(gate, self.up_proj(x)))
+        """``x`` ``[1, 1, T, H]`` (tokens packed onto the row axis) -> ``[1, 1, T, H]``.
+
+        The packed form is what ``matmul_decode`` needs on the prefetched path -- it reads the
+        row axis as the tokens and a leading rank-4 batch as separate matmuls, so per-user rows
+        would decode as T one-token matmuls -- and it is what the caller already built for the
+        router, so nothing is reshaped here.
+        """
+        # Prefetched, gate and up leave their results width-sharded over the 32 cores holding
+        # 64 columns each, which is exactly how down_proj wants its activation sharded along
+        # K, so the product feeds it where it already sits and nothing reshards in between.
+        out = self.down_proj(ttnn.multiply(ttnn.silu(self.gate_proj(x)), self.up_proj(x)))
+        return out
 
 
 class DeepSeekV4TopKRouter(DeepSeekV4Module):
@@ -535,6 +605,8 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
         gate=None,
         cache: Optional[WeightCache] = None,
         weight_dtype: ttnn.DataType = ttnn.bfloat16,
+        use_prefetcher: bool = False,
+        prefetch_buffers: Optional[dict] = None,
     ):
         self.device = device
         self.hidden = config.hidden_size
@@ -546,7 +618,21 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
         # The routed-expert compute (a :class:`DeepSeekV4PreloadedExperts` keeping
         # all 256 experts resident on device in BFloat4_b) is always injected.
         self.experts = experts
-        self.shared_experts = DeepSeekV4MLP(weights, "shared_experts", device, cache=cache, weight_dtype=weight_dtype)
+        # Only the shared expert is prefetched: the routed experts are already resident.
+        self.shared_experts = DeepSeekV4MLP(
+            weights,
+            "shared_experts",
+            device,
+            cache=cache,
+            weight_dtype=weight_dtype,
+            config=config,
+            use_prefetcher=use_prefetcher,
+            prefetch_buffers=prefetch_buffers,
+        )
+
+    def prefetch_weights(self):
+        """Stage the shared expert's weights ahead of the decode that uses them."""
+        self.shared_experts.prefetch_weights()
 
     def forward(self, hidden: ttnn.Tensor, input_ids: Optional[torch.Tensor] = None) -> ttnn.Tensor:
         """``hidden`` ``[B, S, 1, H]`` -> ``[B, S, 1, H]``. ``input_ids`` is required
@@ -564,15 +650,15 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
 
         with _region("MOE_EXPERTS"):
             routed = self.experts(x_flat, routing_weights)  # [1, 1, T, H]
-            routed = ttnn.reshape(routed, [b, s, 1, h])
         _profile(self.device)
 
         with _region("MOE_SHARED"):
-            shared = self.shared_experts(hidden)  # [B, S, 1, H]
+            shared = self.shared_experts(x_flat)  # [1, 1, T, H]
 
         _profile(self.device)
 
-        return ttnn.add(routed, shared)
+        # Summed on the packed rows and unpacked once, rather than unpacking each half.
+        return ttnn.reshape(ttnn.add(routed, shared), [b, s, 1, h])
 
     def decode_static(self, hidden: ttnn.Tensor, hash_token: ttnn.Tensor | None = None) -> ttnn.Tensor:
         """Trace-safe single-token-per-user MoE. ``hidden`` ``[B, 1, 1, H]`` -> same.
@@ -595,6 +681,5 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
         else:
             routing_weights = self.gate.forward_static(x_flat)
         routed = self.experts.decode_static(x_flat, routing_weights)  # [1, 1, B, H]
-        routed = ttnn.reshape(routed, [b, 1, 1, h])
-        shared = self.shared_experts(hidden)
-        return ttnn.add(routed, shared)
+        shared = self.shared_experts(x_flat)  # [1, 1, B, H]
+        return ttnn.reshape(ttnn.add(routed, shared), [b, 1, 1, h])

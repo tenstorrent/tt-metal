@@ -83,6 +83,8 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
             gate=gate,
             cache=cache.sub("mlp"),
             weight_dtype=weight_dtype,
+            use_prefetcher=use_prefetcher,
+            prefetch_buffers=prefetch_buffers,
         )
         self.input_layernorm = DeepSeekV4RMSNorm(
             weights["input_layernorm.weight"], eps, device, cache.file("input_layernorm"), sharded=True
@@ -103,14 +105,16 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
         _profile(self.device)
 
     def prefetch_weights(self):
-        """Stage this layer's attention weights ahead of the :meth:`decode` that uses them.
+        """Stage this layer's prefetched weights ahead of the :meth:`decode` that uses them.
 
-        Delegates to the attention block, which covers its compressor too; neither the MoE path
-        nor the hyper-connections have prefetcher weights. Under the prefetcher the layers on a
-        device share GCBs, so the requests queued here must be consumed by this layer's own
-        decode before any later layer queues its own.
+        Attention first (its own four projections and its compressor's pair), then the MoE
+        block's shared expert -- the order :meth:`decode` runs them, which is what the single
+        GCB every layer on the device shares requires of its one FIFO. The routed experts and
+        the hyper-connections have no prefetched weights. The requests queued here must be
+        consumed by this layer's own decode before any later layer queues its own.
         """
         self.self_attn.prefetch_weights()
+        self.mlp.prefetch_weights()
 
     def _mix(
         self, post: ttnn.Tensor, comb: ttnn.Tensor, sublayer_out: ttnn.Tensor, streams: ttnn.Tensor
