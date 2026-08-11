@@ -1,5 +1,11 @@
 # The core issue: the harness chose the shape of the code, and each model's fixture chose which defects were visible
 
+**Read [`WHAT-THE-AGENT-GOT-WRONG`](ADVCHAL-V3-WHAT-THE-AGENT-GOT-WRONG.md) alongside this.** That file answers the
+narrower and more useful question — *why is the PCC bad, how could the agent have known what the number meant, and
+how could it have fixed it* — and its answer is that **a placement change that preserves arithmetic to 10⁻⁶ cannot
+cost 5 × 10⁻³ at layer scope, so the 1000× discrepancy was itself the signal.** This file is the systemic account;
+that one is the agent's actual reasoning error.
+
 **v3 did not underperform v2 because it searched worse or judged worse. It underperformed because the one thing it
 did not change — the *scope* of its measurement — is the thing that determined both what its agents wrote and what
 its gate could see.** Everything v3 added (absolute oracle, legal ladder, cliff check, fresh-process confirmation,

@@ -490,3 +490,25 @@ That is the third time in this session that reasoning stood in for a four-minute
 other tree), ERROR 18 (vary the fixture), and now this. **The pattern is not that my reasoning is unusually bad; it
 is that in this codebase the experiments are unusually cheap**, and every time I chose to reason instead, the
 reasoning was wrong in the direction that made my analysis more interesting.
+
+## The one check that subsumes several of these: *can my change physically do this?*
+
+ERRORS 12, 15 and 19 and the stage's own veto all share a shape, and it is sharper than "vary your fixtures":
+**a number was accepted as describing a change that the change is not capable of producing.**
+
+- The stage measured **5 × 10⁻³** at layer scope from re-placing a reduction whose output is accurate to
+  **10⁻⁶**. A thousandfold gap, on numbers already in its artefact.
+- I published a **tt-metal kernel bug** from the same number, when the same one-line magnitude argument rules a
+  kernel out.
+
+Neither of us asked the question, and asking it costs nothing:
+
+> **Before believing a measurement about your change, bound what your change can do.** A reassociated bf16
+> reduction moves elements by ~1 ULP; on a 2816-wide PCC that is ~10⁻⁶. If the instrument says 10⁻³, the
+> instrument is describing **something else that your change perturbed** — go find the coupling. Do not accept the
+> larger number just because it came from the gate.
+
+The corollary for tooling: **gate the op on the op.** A whole-layer PCC is an integrity check, not a per-op
+correctness test, and on a sparse-MoE decoder it has a discontinuous floor (~1 % of tokens flip an expert under a
+1-ULP perturbation) that is unrelated to the arithmetic under test. Using it as a per-op gate is what turned a
+one-field fix into a written-off 5,919 µs.
