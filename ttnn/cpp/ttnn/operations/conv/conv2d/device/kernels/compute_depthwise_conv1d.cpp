@@ -18,6 +18,11 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+
+// Defined below, next to the SFPU accumulate path it was written for, but called from all four
+// accumulate paths -- the earliest of which precedes the definition.
+template <uint32_t dst_acc, uint32_t dst_a, uint32_t dst_b>
+inline void apply_snake_beta(DataflowBuffer params_dfb);
 #include "api/dataflow/dataflow_buffer.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
@@ -88,6 +93,16 @@ inline void mul_and_accumulate_block(
         if (is_last_tap) {
             const uint32_t i = 0;
             SFPU_OP_FUNC_ACTIVATION
+        }
+#endif
+#ifdef SNAKE_PARAMS_CB_ID
+        // FPU path: only dst[0] holds the accumulator here, so slots 1 and 2 are free for the
+        // parameters. The snake must be applied on **every** accumulate path, not just the SFPU one --
+        // having it in one path only is why the first attempt produced output bit-identical to a plain
+        // conv: the shape simply took a different path.
+        if (is_last_tap) {
+            DataflowBuffer snake_params_dfb(SNAKE_PARAMS_CB_ID);
+            apply_snake_beta<0, 1, 2>(snake_params_dfb);
         }
 #endif
         tile_regs_commit();
@@ -322,6 +337,14 @@ inline void mul_and_accumulate_coalesced_block_sfpu(
                 SFPU_OP_FUNC_ACTIVATION
             }
 #endif
+#ifdef SNAKE_PARAMS_CB_ID
+            // Coalesced SFPU path. This one accumulates the whole block before reaching here, so it is
+            // already at the equivalent of the last tap.
+            {
+                DataflowBuffer snake_params_dfb(SNAKE_PARAMS_CB_ID);
+                apply_snake_beta<DST_ACC, DST_ACT, DST_ACC + 3>(snake_params_dfb);
+            }
+#endif
             tile_regs_commit();
 
             out_dfb.reserve_back(1);
@@ -369,6 +392,13 @@ inline void mul_and_accumulate_coalesced_block(DataflowBuffer in0_dfb, DataflowB
             {
                 const uint32_t i = 0;
                 SFPU_OP_FUNC_ACTIVATION
+            }
+#endif
+#ifdef SNAKE_PARAMS_CB_ID
+            // Coalesced FPU path: accumulator in dst[0], slots 1 and 2 free.
+            {
+                DataflowBuffer snake_params_dfb(SNAKE_PARAMS_CB_ID);
+                apply_snake_beta<0, 1, 2>(snake_params_dfb);
             }
 #endif
             tile_regs_commit();
