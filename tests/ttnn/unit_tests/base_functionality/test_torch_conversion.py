@@ -194,31 +194,43 @@ def test_from_torch_conversion(device, shape, ttnn_dtype, torch_dtype, ttnn_layo
 @pytest.mark.parametrize("ttnn_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("convert_with_device", [True, False])
 def test_to_torch_conversion(device, shape, ttnn_dtype, torch_dtype, ttnn_layout, convert_with_device):
-    ttnn_dtype_has_random = ttnn_dtype not in [ttnn.uint8, ttnn.int8, ttnn.int32]
-    if ttnn_dtype_has_random:
-        for store_input_on_device in [True, False]:
+    torch.manual_seed(0)
+    for store_input_on_device in [True, False]:
+        layout = ttnn.TILE_LAYOUT if (ttnn_dtype in TTNN_MUST_TILE_TYPES) else ttnn_layout
+        if ttnn_dtype in TTNN_MUST_TILE_TYPES:
+            ttnn_input_tensor = ttnn.typecast(
+                ttnn.rand(shape, dtype=ttnn.float32, device=device, layout=layout), ttnn_dtype
+            )
+        elif is_ttnn_float_type(ttnn_dtype):
             ttnn_input_tensor = ttnn.rand(
                 shape,
                 dtype=ttnn_dtype,
                 device=device,
-                layout=ttnn.TILE_LAYOUT if (ttnn_dtype in TTNN_MUST_TILE_TYPES) else ttnn_layout,
+                layout=layout,
+            )
+        else:
+            ttnn_input_tensor = ttnn.from_torch(
+                torch.randint(0, 100, shape, dtype=torch.int64),
+                dtype=ttnn_dtype,
+                device=device,
+                layout=layout,
             )
 
-            if not store_input_on_device:
-                ttnn_input_tensor = ttnn.from_device(ttnn_input_tensor)
+        if not store_input_on_device:
+            ttnn_input_tensor = ttnn.from_device(ttnn_input_tensor)
 
-            torch_result_tensor = ttnn.to_torch(
-                ttnn_input_tensor, dtype=torch_dtype, device=device if convert_with_device else None
-            )
-            assert (
-                torch_result_tensor.dtype == torch_dtype
-            ), f"Expected result {torch_dtype}, got result tensor {torch_result_tensor.dtype} when converting TTNN tensor {ttnn_input_tensor.dtype}"
-
-        assert_with_pcc(
-            expected_pytorch_result=torch_result_tensor,
-            actual_pytorch_result=ttnn_input_tensor.cpu().to_torch(),
-            pcc=get_expected_conversion_pcc(ttnn_dtype, torch_dtype),
+        torch_result_tensor = ttnn.to_torch(
+            ttnn_input_tensor, dtype=torch_dtype, device=device if convert_with_device else None
         )
+        assert (
+            torch_result_tensor.dtype == torch_dtype
+        ), f"Expected result {torch_dtype}, got result tensor {torch_result_tensor.dtype} when converting TTNN tensor {ttnn_input_tensor.dtype}"
+
+    assert_with_pcc(
+        expected_pytorch_result=torch_result_tensor,
+        actual_pytorch_result=ttnn_input_tensor.cpu().to_torch(),
+        pcc=get_expected_conversion_pcc(ttnn_dtype, torch_dtype),
+    )
 
 
 @pytest.mark.parametrize("seed", list(range(6)))
@@ -459,13 +471,11 @@ def test_torch_conversion_unsigned_edge_cases_random(device, shape, ttnn_dtype, 
         low = np.iinfo(np.uint32).min
         high = np.iinfo(np.uint32).max
 
-    ttnn_input_tensor = ttnn.rand(
-        shape,
+    ttnn_input_tensor = ttnn.from_torch(
+        torch.randint(low, high + 1, shape, dtype=torch.int64),
         dtype=ttnn_dtype,
         device=device,
         layout=ttnn_layout,
-        low=low,
-        high=high,
     )
 
     torch_result_tensor: torch.Tensor = ttnn.to_torch(ttnn_input_tensor)
