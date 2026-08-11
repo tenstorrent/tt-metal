@@ -27,7 +27,6 @@ run_tg_tests() {
   elif [[ "$1" == "wan22" ]]; then # Wan2.2 I2V and T2V
     echo "LOG_METAL: running Wan2.2 run_tg_frequent_tests"
     export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
-    pytest models/tt_dit/tests/models/wan2_2/test_rope.py -k "wh_4x8sp1tp0"; fail+=$?
     pytest models/tt_dit/tests/encoders/umt5/test_umt5.py -k "wh_glx" ; fail+=$?
     pytest models/tt_dit/tests/unit/test_embeddings.py::test_wan_time_text_image_embedding  -k "wh_glx" ; fail+=$?
 

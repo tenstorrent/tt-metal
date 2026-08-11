@@ -1090,27 +1090,22 @@
 # ============================================================================
 # Multihost (exabox) model-unit tests
 # ============================================================================
-# Entries whose SKU carries an `allocation` block in .github/sku_config.yaml
-# (bh_sc1, bh_sc4, bh_sc4-blitz, bh_sc4-mgd, bh_sc16 - all runs_on
-# exabox-multihost-with-nfs) are routed by the pipeline to the
-# `models-unit-tests-multihost` job in models-unit-tests-impl.yaml instead of the
-# single-host container job. That job provisions the cluster via ttop, so the cmd
-# only needs to launch the test across the allocated hosts. The allocation writes
-# the hostfile/rankfile/rank-bindings under /etc/ttop; weights live on /mnt/models.
+# Entries whose SKU `runs_on` includes an `exabox-multihost-ci-*` label
+# (bh_sc1 → exabox-multihost-ci-sc1, bh_sc4 → …-sc4, bh_sc16 → …-sc16) are routed
+# by prepare_test_matrix.py to `models-unit-tests-multihost`. That job runs on the
+# matching multihost-ci runner; the runner hook provisions workers from
+# `container.image`. The hook exposes host topology under /etc/ttop (hostfile;
+# do not rely on rank_bindings.yaml / mgd.textproto). Weights live on /mnt/models.
 #
-# The example below runs the Flux.1-dev DiT unit tests on the single-galaxy exabox SKU
-# (bh_sc1). The cmd mirrors the "TT-DiT Flux.1-dev unit tests" entry above; the pipeline
-# routes it to the multihost job purely because bh_sc1 carries an allocation block.
+# The example below runs Flux.1-dev DiT unit tests on bh_sc1. The pipeline routes
+# it to the multihost job because the SKU label is exabox-multihost-ci-*.
 - name: "Flux multihost tests"
   cmd: |
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1
-    # Plain single-rank mpirun (no tt-run). For one rank, tt-run's only job was to turn the rank
-    # binding into these env vars and build the mpirun command; we set them directly. Host
-    # selection (PRTE_MCA_prte_default_hostfile=/etc/ttop/hostfile), TCP interface
-    # (OMPI_MCA_btl_tcp_if_include), and env forwarding (PRTE_MCA_prte_fwd_environment) all come
-    # from the job env. The rank owns one connected 4x2 (8-device) block, so run the Flux
-    # pipeline's 8-device (2x4) parametrization.
+    # Plain single-rank mpirun (no tt-run). Host topology comes from the multihost-ci
+    # runner (/etc/ttop/hostfile). The rank owns one connected 4x2 (8-device) block,
+    # so run the Flux pipeline's 8-device (2x4) parametrization.
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
     export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/flux1/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
@@ -1183,9 +1178,9 @@
     # test_audio_ltx discovers its checkpoint via the DEFAULT hf cache (~/.cache/huggingface), not
     # HF_HOME -- symlink it to the pre-staged /mnt/models cache so it resolves offline (no-op for the rest).
     mpirun --pernode --tag-output bash -lc 'mkdir -p ~/.cache && ln -sfn /mnt/models/huggingface ~/.cache/huggingface' || true
-    # One ttop allocation runs every LTX component test on the 4x8 galaxy (bh_sc1). Block tests use
-    # random weights; audio/upsampler/lora resolve offline from /mnt/models. Run all, accumulate
-    # failures, fail the leg if any component failed.
+    # One multihost-ci-sc1 leg runs every LTX component test on the 4x8 galaxy (bh_sc1).
+    # Block tests use random weights; audio/upsampler/lora resolve offline from /mnt/models.
+    # Run all, accumulate failures, fail the leg if any component failed.
     rc=0
     run() { mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" python3 -m pytest --timeout 1800 "$@" || rc=1; }
     # Cheap/CPU/block tests first so a slow later test can never starve them out of the leg timeout.
@@ -1211,22 +1206,36 @@
   team: models
 
 # ----------------------------------------------------------------------------
-# WAN 2.2 multihost quad-galaxy tests (bh_sc4-mgd)
+# WAN 2.2 multihost quad-galaxy tests (bh_sc4 / exabox-multihost-ci-sc4)
 # ----------------------------------------------------------------------------
 - name: TT-DiT Wan2.2-A14B transformer block unit tests
   cmd: |
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000
-    TTRUN_DIR=/etc/ttop
-    PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
-    python3 "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" \
-      --rank-binding "${TTRUN_DIR}/rank_bindings.yaml" --tcp-interface ens5f0np0 \
-      --mpi-args "--tag-output --host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --wdir ${TT_METAL_HOME}" \
-      python3 -m pytest --timeout 10000 models/tt_dit/tests/models/wan2_2/test_transformer_wan.py -k "4x32sp1tp0nl2_ring_is_fsdp0 and 14b-720p"
+    MGD="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
+    UNIT_TEST="${TT_METAL_HOME}/models/tt_dit/tests/models/wan2_2/test_transformer_wan.py"
+    TTRUN_PY="${TTRUN_PY:-${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py}"
+    PIPELINE_DIR="${PIPELINE_DIR:-/tmp/wan-unit-${GITHUB_RUN_ID:-$$}-${GITHUB_JOB:-job}}"
+    TTRUN_CWD="${TTRUN_CWD:-${PIPELINE_DIR}/ttrun-cwd}"
+    mkdir -p "${PIPELINE_DIR}/ranklogs" "${TTRUN_CWD}"
+    RESOLVED_HOSTS=$(awk 'NF {printf "%s,", $1}' /etc/ttop/hostfile | sed 's/,$//')
+    test -f "${TTRUN_PY}" || { echo "ERROR: missing ${TTRUN_PY}"; exit 1; }
+    test -f "${MGD}" || { echo "ERROR: missing ${MGD}"; exit 1; }
+    test -f "${UNIT_TEST}" || { echo "ERROR: missing ${UNIT_TEST}"; exit 1; }
+
+    cd "${TTRUN_CWD}"
+    python3 "${TTRUN_PY}" \
+      --skip-executable-check \
+      --tcp-interface ens5f0np0 \
+      --mesh-graph-descriptor "${MGD}" \
+      --hosts "${RESOLVED_HOSTS}" \
+      --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+      -- \
+      python3 -m pytest --timeout 10000 "${UNIT_TEST}" -k "4x32sp1tp0nl2_ring_is_fsdp0 and 14b-720p"
   model: wan-2.2-t2v
   model_family: Wan
   skus:
-    bh_sc4-mgd:
+    bh_sc4:
       timeout: 40
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee

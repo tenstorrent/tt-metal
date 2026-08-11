@@ -46,6 +46,13 @@ from ...utils.video import Audio
 
 LTX_UPSAMPLER_HF_REF = "Lightricks/LTX-2.3:ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
 
+# Default DiT-linear quant preset. Empty selects the bf16 baseline (the default); set
+# LTX_QUANT=all_bf8_lofi to opt into the shipped bf8 1080p tier (its perf/VBench floors are calibrated
+# against it), or LTX_QUANT=all_bf4_lofi for the bf4 probe tier (measurement only — bf4 activations
+# destroy quality). _resolve_quant_config resolves this once and threads the tag into the transformer
+# cache name, so a quantized cache stays separate from the baseline.
+LTX_QUANT_DEFAULT = ""
+
 DEFAULT_NEGATIVE_PROMPT = (
     "blurry, out of focus, overexposed, underexposed, low contrast, washed out colors, excessive noise, "
     "grainy texture, poor lighting, flickering, motion blur, distorted proportions, unnatural skin tones, "
@@ -307,6 +314,10 @@ class LTXPipeline:
         self._image_conditioning: bool = bool(image_conditioning)
 
         if self.checkpoint_name is not None:
+            # Resolved before construction so the LtxQuantProfile is baked into the transformer modules
+            # (Parameter.load typecasts DiT-linear weights to the preset dtype as they load), rather
+            # than typecast afterward by a post-load hook.
+            self._resolve_quant_config()
             self._instantiate_modules(extra_transformer_variants or [])
             self._register_coresident_exclusions()
             self._prime_caches()
@@ -507,6 +518,7 @@ class LTXPipeline:
             # auto-detected from the conditioning-image path or forced by the caller). Pure T2V keeps
             # the fast scalar-AdaLN path — no separate on/off flag.
             image_conditioning=bool(self.vae is not None and self.vae.encoder_blocks and self._image_conditioning),
+            quant_config=getattr(self, "_quant_config", None),
             lora_enabled=self.lora_enabled,
         )
 
@@ -613,14 +625,44 @@ class LTXPipeline:
         self._prepare_audio_decoder()
         self._prepare_transformer(0)
 
+    def _resolve_quant_config(self) -> None:
+        """Resolve the DiT-linear quant preset (LTX_QUANT_DEFAULT unless LTX_QUANT names another).
+
+        LTX_QUANT="" selects the bf16 baseline. Runs before ``_instantiate_modules`` so the resolved
+        ``LtxQuantProfile`` is baked into transformer construction (weights load direct-to-quant)."""
+        self._quant_cache_tag = None
+        self._quant_config = None
+        preset = os.environ.get("LTX_QUANT", LTX_QUANT_DEFAULT).strip()
+        if not preset:
+            return
+        from ...models.transformers.ltx.quant_config import LtxQuantProfile
+
+        # Explicit registry, not getattr(LtxQuantProfile, preset): the profile's instance methods
+        # (linear_kwargs, ...) are class attributes too, so getattr would resolve LTX_QUANT=linear_kwargs
+        # to a callable and crash instead of falling back to bf16.
+        presets = {"all_bf8_lofi": LtxQuantProfile.all_bf8_lofi, "all_bf4_lofi": LtxQuantProfile.all_bf4_lofi}
+        factory = presets.get(preset)
+        if factory is None:
+            logger.warning(f"LTX_QUANT='{preset}' is not a quant preset; running baseline (bf16/HiFi2)")
+            return
+        logger.info(f"LTX_QUANT='{preset}': building the transformer with the DiT-linear quant config")
+        # _quant_cache_tag routes cache writes/reads to a preset-tagged dir; it must equal the resolved
+        # preset or a run poisons the wrong-precision cache (cached tensorbins carry their dtype).
+        self._quant_cache_tag = preset
+        self._quant_config = factory()
+
     def _prepare_transformer(self, idx: int = 0) -> None:
         state = self.transformer_states[idx]
+        # The transformer is built with the quant config, so a cache miss loads weights direct-to-quant
+        # and the write holds the quantized tensorbins. quant_tag keeps that cache separate from the
+        # bf16 baseline.
         state.checkpoint.load(
             state.model,
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
             is_fsdp=self.is_fsdp,
             lora_specs=state.lora_specs,
+            quant_tag=getattr(self, "_quant_cache_tag", None),
         )
         self.transformer = state.model
         # dynamic_load restores the cached (LoRA-free) base weights on every
