@@ -15,16 +15,15 @@
 // threads never write each other's entries:
 //
 //   TRISC0 (unpack)       -> ids [0, 16)
-//   TRISC1 (math)         -> none (math issues no TDMA; DFB fifo state does not exist on math)
+//   TRISC1 (math)         -> none (math issues no TDMA)
 //   TRISC2 (pack)         -> ids [16, 24)
 //   TRISC3 (isolate-SFPU) -> ids [24, 32)
 //
-// Note on math kernels that take an operand/DFB id (e.g. llk_math_transpose_dest_init,
+// Note on math kernels that take an operand id (e.g. llk_math_transpose_dest_init,
 // llk_math_eltwise_unary_datacopy_init): the id is used only for shape/format lookup
 // (get_operand_dst_format / get_operand_num_faces / ...) to configure the ALU — no math kernel
-// touches a BFD, so the decoupling of BFD ids from DFB ids does not affect them. (Metal 2.0
-// named accessors would eventually replace those id-based format lookups; that is orthogonal
-// to the BFD work.)
+// touches a BFD, so this allocator does not affect them. (Metal 2.0 named accessors would
+// eventually replace those id-based format lookups; that is orthogonal to the BFD work.)
 //
 // Each thread bump-allocates within its own partition and wraps to the partition base once
 // exhausted (wrap-around is by design). An op's init call allocates an id, programs the table
