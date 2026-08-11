@@ -481,4 +481,24 @@ process.**
 * `$autofix` was used once, for the bug in section 9; the earlier failures were explained
   directly by op-validation source, triage output, or a script bug and fixed at the cause.
 
+## 11. Checkpoint commit
+
+Stage-owned changes are committed locally on `agentic-research/hous/multigoal-claude`; nothing
+was pushed.
+
+| repo | branch | commit | contents |
+|---|---|---|---|
+| tt-metal | `agentic-research/hous/multigoal-claude` | `c24bb9de468f` | everything under `models/autoports/meta_models_muse_glimmer_30b/` — implementation, host reference, tests, scripts and all evidence |
+
+The commit contains only this stage's files; the one other dirty path in the worktree
+(`tt_metal/third_party/tt-cluster-descriptors/`, an untracked submodule checkout) was left
+alone. `doc/.gitignore` re-includes `*.csv`, `*.log` and `generated/` for this subtree, which
+the repo root `.gitignore` excludes, because those are the stage's evidence; the two artifacts
+that exceed the repo's 500 KB pre-commit limit (the raw Tracy ops CSVs and the watcher log) are
+committed gzipped, and `scripts/render_evidence.py` reads either form.
+
+The PCC artifact records `git_head` `c24bb9de468f` and code fingerprint `68b4a0ca63d305c9` for
+all 165 records — i.e. the evidence was produced by exactly the committed code, after the
+pre-commit formatting hooks had settled.
+
 See `README.md` for the results tables and the exact artifact paths.
