@@ -347,9 +347,13 @@ std::vector<Tensor> sort(
 
     if (widen_u16) {
         results[0] = ttnn::typecast(results[0], DataType::UINT16);
-        // Honor a preallocated UINT16 index output when the width fits.
+        // Honor a preallocated UINT16 index output only when every index fits.
         if (optional_output_tensors.has_value() &&
             std::get<1>(*optional_output_tensors).dtype() == DataType::UINT16) {
+            TT_FATAL(
+                original_lshape[normalized_dim] <= std::numeric_limits<uint16_t>::max(),
+                "UINT16 index output cannot represent sort width {}",
+                original_lshape[normalized_dim]);
             results[1] = ttnn::typecast(results[1], DataType::UINT16);
         }
     }
