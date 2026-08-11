@@ -123,7 +123,7 @@ tt::tt_metal::ProgramDescriptor AffineExclusiveScanProgramFactory::create_descri
             args.push_back(physical.x);
             args.push_back(physical.y);
         }
-        dataflow.emplace_runtime_args(core, std::move(args));
+        dataflow.emplace_runtime_args(core, args);
         compute.emplace_runtime_args(core, {group});
     }
 
