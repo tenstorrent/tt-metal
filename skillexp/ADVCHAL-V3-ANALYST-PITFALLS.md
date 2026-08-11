@@ -1,4 +1,9 @@
-# advchal-v3 — mistakes made building v3, and since corrected
+# advchal-v3 — mistakes made building and analysing v3, and since corrected
+
+**Two phases. ERRORS 1–11 were made building the stage; ERRORS 12–17 were made analysing the run**, and the
+second set matters more for reading this corpus: five of the six are the same mistake, and **every one was caught
+by the user asking "are you sure?", never by me.** Start at §"The pattern the *analysis* phase added" if you want
+the calibration rather than the history.
 
 The v2 corpus kept [`ADVCHAL-V2-ANALYST-PITFALLS.md`](https://github.com/tenstorrent/agentic-research/blob/main/shard-advisor-experiments/03-advisor-stage-v2/analysis/ADVCHAL-V2-ANALYST-PITFALLS.md)
 — 39 published claims later retracted, grouped by the error pattern that produced them — and called it the
@@ -305,3 +310,107 @@ every defect of the run it was calibrated on.
 
 **So naming a bias does not remove it. It moved from over-claiming to over-correcting, which is the same
 failure with better manners** — and it is harder to spot, because under-claiming reads as rigour.
+
+---
+
+# The pattern the *analysis* phase added: I falsified mechanisms in a reconstruction and asserted about the system
+
+ERRORS 1–11 were made while **building** v3. ERRORS 12–17 were made while **analysing** it, over a single
+session, and five of the six are one mistake: **I rebuilt a piece of the system in isolation, got a clean
+negative, and stated a conclusion about the real system that the reconstruction was not entitled to support.**
+
+Every one was caught by the user asking a version of *"are you sure?"* — never by me. That is the signal to
+weigh: **the questions that overturned my conclusions cost the user one sentence each, and cost me between four
+minutes and four hours of measurement to answer.** If a single question can overturn a published claim, the claim
+was not ready to publish.
+
+## ERROR 12 — I called one observation reported three times "three independent reproductions"
+
+Published a candidate tt-metal defect on the strength of gemma-4-26B's `rms_norm` scoring ~0.9946 in three cells
+"that never saw each other's artefacts". They had not — **but all three ran the same candidate policy**, so it is
+one measurement of one configuration, replicated by construction. Independence is a property of the *inputs*, not
+of the *filesystem*. **Check what the observations share before counting them.**
+
+## ERROR 13 — I inferred "it stopped searching" from absent evidence rather than reading all of it
+
+Wrote that the cell *"tried one rung and stopped searching that kind"* from the `not_retested` strings. The
+ladder had in fact been **fully swept — 17 measurements**; the defect was that **one rung's verdict was
+extrapolated to sixteen untested ones**. Reading every measurement file first would have given the sharper
+finding immediately. Same shape as ERROR 10.
+
+## ERROR 14 — I moved a number between cells
+
+Put phiB's `0.998993` into gemma-onA's row. The correct value, `0.9996293`, was in a file I had already opened.
+**A PCC belongs to a (cell, kind, config, oracle-scope) tuple; carrying the value without the tuple is how it
+lands in the wrong row.**
+
+## ERROR 15 — "provably cannot" from a reconstruction that held the real variable fixed
+
+Ran 79 isolated configurations of the norm, found the op grid-insensitive to 7.3 × 10⁻⁷, and concluded the op
+**"provably cannot"** have caused the layer's 5.06 × 10⁻³ drop — *"6,879× too small"*.
+
+**The reconstruction used the decode-shaped input, `[1,1,1,2816]`: one real row and thirty-one of padding. The
+real layer also runs the norm in *prefill*, on `[1,32,2816]` — thirty-two real rows.** That case was never
+tested, and **that is exactly where the effect lives.** The isolated result was correct and the conclusion drawn
+from it was not.
+
+> **An isolated reconstruction can only falsify a mechanism under the conditions it reproduces.** Before
+> concluding, list what the real system varies that the reconstruction holds fixed — here: input shape, execution
+> phase, which of the eight call sites, weight present or absent — and say which of those the negative covers.
+> I had *four* held-fixed variables and mentioned none.
+
+## ERROR 16 — "the only reading consistent with the numbers", when running the other tree took four minutes
+
+From v2's oracle file matching v3's *incumbent* to 1.3 × 10⁻⁶, I concluded that **v2's oracle had run with the
+sharding inactive**, that its 88-core number was "an incumbent-grade measurement filed under two names", and
+recommended **striking v2's −5,919 µs/model win** — 47 % of v2's corpus total. I published it.
+
+**Then I checked out v2's tree and ran it. 88 cores reproduces `0.9996293363224806` exactly, with the sharding
+active and engaged.** The oracle had exercised the change. The proximity to the incumbent was not evidence of
+inactivity — **it was the finding: at one tile per core the sharded reduction is genuinely as accurate as the
+interleaved one.** And 11/22/44 fail in v2's tree too, so the ladder is **non-monotonic**, which is what I had
+originally guessed and then talked myself out of on the strength of ERROR 15.
+
+Two things to keep from this:
+
+- **"The only reading consistent with the numbers" is a phrase that means I have stopped looking for readings.**
+  When it appears, the next action is to enumerate one more reading, not to publish.
+- **The experiment that settled it — check out the other version and run its own test — cost four minutes.**
+  I had already built the worktree tooling to do it. I inferred where I could have measured, and the inference
+  was wrong in the direction that made my analysis more interesting.
+
+## ERROR 17 — I did not update this file as I went
+
+Asked directly whether I was recording each confident-and-wrong finding here. **I was not.** I was correcting
+`RESULTS`, `DEVIATIONS` and `PCC-BY-GRID` in place — so the *conclusions* were right by the end, and the
+**record of how often my confident conclusions were wrong was missing entirely.** Which is the one thing this
+file exists to carry, and the one thing a reader needs in order to calibrate the rest of the corpus.
+
+That is not a clerical slip. **Correcting a claim in place removes the evidence that the claim was made.** Six
+retractions in one session is itself the most decision-relevant fact the session produced, and it was the only
+fact not being written down.
+
+> **A retraction goes in two places: the document that carried the claim, and this one.** The first keeps the
+> corpus correct; the second keeps its author's confidence auditable. Doing only the first makes the corpus look
+> like it was right all along.
+
+## The corrected finding these six produced
+
+For the record, because it is the actual result and it took all six errors to reach:
+
+| sliding cores | v2 tree | v3 tree + v2-style guard | v3 tree as shipped (decode-only) |
+|---:|---:|---:|---:|
+| 0 — interleaved | 0.9996280142258483 ✅ | — | 0.9996280142258483 ✅ |
+| 11 | 0.9943331194625922 ❌ | **0.9943331194625922** ❌ | 0.9945729603715616 ❌ |
+| 22 | 0.9942874693564726 ❌ | **0.9942874693564726** ❌ | 0.9944099795374435 ❌ |
+| 44 | 0.9941146130802025 ❌ | **0.9941146130802025** ❌ | 0.9945729603715616 ❌ |
+| **88** | **0.9996293363224806 ✅** | **0.9996293363224806 ✅** | 0.9943716809625597 ❌ |
+
+**The two trees are numerically identical once the guard matches — to sixteen digits, at every rung.** The
+weight-resharding difference I chased is irrelevant. The single difference that decides the cell is that
+**v2 shards the norm in prefill and decode, v3 shards it in decode only** — so v3 builds its KV cache with
+interleaved norms and then reads it with sharded ones. That inconsistency costs ~5 × 10⁻³ of layer PCC at every
+grid, and at 88 cores it converts a **pass** into a **fail**.
+
+**So v2's win is real and correctness-established, and v3 lost it to two independent defects of its own:** 88 was
+missing from its ladder, *and* its decode-only guard would have failed 88 even if the rung had been there.
