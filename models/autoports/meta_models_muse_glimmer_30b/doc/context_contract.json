@@ -12,7 +12,7 @@
     "Optimized decoder-layer stage: one MuseGlimmerTextDecoderLayer on a (1, 1) Blackhole mesh, BFP4 weights at LoFi, BFP8 paged KV cache, L1 width-sharded decode residual, DRAM-sharded decode matmuls, explicit 2D prefill program configs.",
     "No capability reduction. The advertised 131072 context is unchanged and the optimization *reduced* the KV-cache footprint by half (BF16 -> BFP8), so the capacity headroom grew.",
     "Prefill and decode were exercised at the full advertised context in the functional stage; this stage did not change the chunking, padding, page-table or position handling that makes that work, and re-tests every non-aligned length the functional stage covered.",
-    "The full 131072-token contract is measured on the optimized path, not inherited: prefill at 131072 and 131071 plus decode at position 131071, both layer kinds, PCC 0.9982-0.9990 (doc/optimized_decoder/logs/long_context_suite.log).",
+    "The full 131072-token contract is measured on the optimized path, not inherited: prefill at 131072 and 131071 plus decode at position 131071, both layer kinds and both precision policies (the structural bfp8_all_lofi at the 0.995 bar, and the shipped bfp4_all against a length-independence floor derived from its own 1000-token measurement). Every value is in doc/optimized_decoder/pcc/pcc_results.json under test_full_context_prefill_and_decode with its coverage string; the run is doc/optimized_decoder/logs/full_suite.log.",
     "The vision tower / projector are a separate stage; their absence is the stage split, not a context or capability reduction."
   ],
   "device": {
@@ -76,7 +76,7 @@
         32
       ],
       "test": "models/autoports/meta_models_muse_glimmer_30b/tests/test_optimized_decoder.py::test_full_context_prefill_and_decode",
-      "coverage_note": "131072 and 131071 measured on this stage's own prefill path. The reference is driven with a query-block filter (first, middle and last 8192-token block of each prompt) so one 131072-token host reference per layer kind stays affordable; the shorter lengths in test_paged_prefill_decode_pcc keep full every-position coverage. Every PCC record carries its coverage string. The functional stage's every-position streaming PCC at 131072 remains as the stage-01 evidence for the same contract."
+      "coverage_note": "131072 and 131071 measured on this stage's own prefill path, at both precision policies. The reference is driven with a query-block filter (first, middle and last 8192-token block of each prompt) so one 131072-token host reference per layer kind and policy stays affordable; the shorter lengths in test_paged_prefill_decode_pcc keep full every-position coverage. Every PCC record carries its coverage string and the bar it was asserted against."
     },
     "decode": {
       "max_context": 131072,
@@ -116,7 +116,7 @@
     "bar_source": "unchanged from the functional stage; no model-specific exception claimed",
     "artifact": "models/autoports/meta_models_muse_glimmer_30b/doc/optimized_decoder/pcc/pcc_results.json",
     "policy_sweep_artifact": "models/autoports/meta_models_muse_glimmer_30b/doc/optimized_decoder/pcc/policy_sweep.json",
-    "note": "The shipped bfp4_all policy is accepted on real checkpoint weights (prefill 0.9986/0.9990, decode 0.9970/0.9984). On synthetic i.i.d. weights the same code measures 0.960-0.970; that is a block-float quantisation property of adversarial synthetic blocks, not an implementation defect, and the structural tests run the same code path at bfp8_all_lofi so they still assert the full bar on synthetic weights."
+    "note": "The shipped bfp4_all policy is accepted on real checkpoint weights and real activations. Every measured value lives in doc/optimized_decoder/pcc/{pcc_results,policy_sweep,length_dependence}.json rather than being quoted here, because quoted ranges drifted from the artifacts twice. On synthetic i.i.d. weights the same code measures far lower; that is a block-float property of adversarial synthetic blocks, not an implementation defect, and the structural tests run the same code path at bfp8_all_lofi so they still assert the full bar on synthetic weights. The context-length axis has its own real-weight control (length_dependence.json, test_real_weights_length_independence)."
   },
   "layer_kinds": {
     "sliding_rope": {

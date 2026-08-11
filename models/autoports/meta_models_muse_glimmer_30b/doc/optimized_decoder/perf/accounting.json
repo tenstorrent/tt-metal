@@ -1,4 +1,75 @@
 {
+  "swiglu_prefill_anomaly": {
+    "artifact": "tracy/sliding_rope/prefill_8192_perf_report.csv",
+    "iterations": 5,
+    "pairs": [
+      [
+        8939.549,
+        10046.805
+      ],
+      [
+        8939.955,
+        9746.507
+      ],
+      [
+        8941.524,
+        8942.07
+      ],
+      [
+        8934.704,
+        9775.86
+      ],
+      [
+        8938.176,
+        9774.273
+      ]
+    ],
+    "slow_rows": 4,
+    "total_rows": 10,
+    "symmetric_iterations": 1,
+    "stable_range": [
+      8934.704,
+      8942.07
+    ],
+    "outlier_range": [
+      9746.507,
+      10046.805
+    ],
+    "slowdown_pct": [
+      12.388796191988893,
+      9.029506276551903,
+      9.357864230610291,
+      9.340111221613224
+    ],
+    "excess_us_per_iteration": 717.2252666666667,
+    "excess_share_of_window_pct": 1.43707536298042,
+    "controls": {
+      "the same op at 4096 on the same path": {
+        "range": [
+          4468.498,
+          4473.221
+        ],
+        "slow_rows": 0,
+        "rows": 10
+      },
+      "the same op at 8192 on the full-attention path": {
+        "range": [
+          8938.322,
+          8946.162
+        ],
+        "slow_rows": 0,
+        "rows": 10
+      },
+      "the down projection on the same path": {
+        "range": [
+          7920.71,
+          7933.161
+        ],
+        "slow_rows": 0,
+        "rows": 5
+      }
+    }
+  },
   "device": {
     "arch": "blackhole",
     "board": "p300c",
@@ -60,6 +131,6 @@
     "Prefill matmuls run on 64 of 110 cores. grid_x is pinned to the 8 DRAM banks because a 2D multicast matmul with DRAM width-sharded weights returns NaN for any other width (scripts/repro_prefill_matmul_grid_x9.py), and grid_y above 8 measured 48% slower. The reachable 64-core roofline and the measured matmul time are in the prefill workload rows as roofline_64_core_ms and matmul_device_ms; the top-level roofline_ms is the unreachable 110-core figure.",
     "Prefill end-to-end is 4-9% above device time, down from ~20% in the functional stage. What remains is per-chunk host dispatch; prefill is not traced because the chunk count depends on the prompt length.",
     "Non-matmul prefill time is ~34% of the window: SDPA ~13%, elementwise ~9%, norms ~9%. Prefill activations are DRAM interleaved by design, so the norms are not sharded.",
-    "In sliding_rope prefill at 8192 tokens one of the two identical SwiGLU projections is sporadically 7-12% slower: seven of the ten committed rows sit at 8936-8948 us and three at 9577-10034, and two of the five iterations are symmetric, so it is intermittent rather than positional or monotonic. The pair is stable in all ten rows at 4096 and in all ten on the full-attention path. Read as DRAM allocator/refresh state after the non-chunked windowed SDPA's 8192-token Q/K/V, immediately before two 327 MB back-to-back allocations; both candidate mitigations lose. The excess is 1.03% of the window and is inside the reported numbers, not excluded from them. See README.md 'Anomalies'."
+    "In sliding_rope prefill at 8192 tokens one of the two identical SwiGLU projections is sporadically slower: 6 of the 10 committed rows sit at 8935-8942 us and 4 at 9747-10047 (9.0-12.4% slower), with 1 of 5 iterations symmetric, so it is intermittent rather than positional or monotonic. The pair is stable on the full-attention path and at 4096 tokens. Read as DRAM allocator/refresh state after the non-chunked windowed SDPA's 8192-token Q/K/V, immediately before two 327 MB back-to-back allocations; both candidate mitigations lose. The excess is 1.44% of the window and is inside the reported numbers, not excluded from them. Derived from tracy/sliding_rope/prefill_8192_perf_report.csv; see README.md 'Anomalies'."
   ]
 }

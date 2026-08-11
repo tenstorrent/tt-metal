@@ -375,8 +375,17 @@ shipped BFP4 weights (`bfp4_all_hifi2_attn`, `bfp4_all_hifi2_mlp`):
 
 Every group is isolated, in both phases: gate/up separately from down (the second review
 noted the first pass moved them together), and each prefill group separately from the
-aggregate. LoFi is the right pairing for BFP4 everywhere by a wide margin, which is what the
-expected pairing predicted but had not been measured for this model.
+aggregate. LoFi is the right pairing for BFP4 everywhere by a wide margin, which is what the expected
+pairing predicted but had not been measured for this model.
+
+One thing worth recording explicitly: in [`pcc/policy_sweep.json`](pcc/policy_sweep.json)
+every `bfp4_all_*` fidelity variant records **bit-identical** prefill, decode and K-cache PCC
+to `bfp4_all`, across both weight sources and both layer kinds, even though the resolved
+fidelity dicts differ and latency moves 12-58%. That is the expected behaviour rather than a
+harness bug: a BFP4 `srcA` has no low mantissa bits left for HiFi2's extra pass to consume,
+so above LoFi the fidelity setting buys no accuracy at all and costs only throughput. The
+accuracy side of this trade is measured as exactly zero, which is why LoFi is not a
+compromise here.
 
 ### 6.8 The re-stamped 131072 evidence, and a length-dependence finding
 
@@ -421,7 +430,7 @@ drift:
 
 | paired comparison | pairs | effect |
 |---|---|---|
-| SwiGLU working cores 52 vs 26 | 1.0638/1.0886, 1.0811/1.0953, 1.0780/1.0951 | 26 slower by 1.42%, 1.31%, 1.59% — consistent |
+| SwiGLU working cores 52 vs 26 | 1.0638/1.0886, 1.0811/1.0953, 1.0780/1.0951 | 26 slower by 2.33%, 1.31%, 1.59% — consistent |
 | prefill `in0_block_w` cap 26 vs 8 | 53.334/54.360, 53.385/54.294 | cap 8 slower by 1.92%, 1.70% — consistent |
 
 Both selections hold. Everything else under ~1.7% is now reported as a tie rather than a win,
@@ -455,9 +464,127 @@ synthetic-only precision failure must be re-checked under; the sweep harness gai
 are named as the one unsharded norm pair with their 8 µs cost; and the `Slice`/`Pad` ops the
 new RoPE gather introduced are accounted for in the data-movement audit.
 
+### 6.13 Third-review fixes
+
+A third review found the *numbers* sound but the hand-typed prose layer drifting from the
+regenerated artifacts, plus one real instrumentation defect. What changed:
+
+**The BFP4 branch of the full-context test had three no-op assertions.** `bar` was set to
+`0.0` for the shipped policy, so `assert prefill >= bar`, `assert cache_pcc >= bar` and
+`assert decode_pcc >= bar` all reduced to `>= 0.0`; only the prefill metric had the
+length-shape check. The decode record also omitted `threshold=` (so it was stamped with the
+0.995 default it was never asserted against) and hard-coded `policy=STRUCTURAL_POLICY`,
+which put a 0.9640 record into the artifact labelled as a gating BFP8 measurement. Now every
+BFP4 metric — prefill, K-cache and decode-at-131071 — is floored at *its own* 1000-token
+measurement minus `SYNTHETIC_LENGTH_DELTA`, that floor is what gets stamped on the record,
+and the short-length references are recorded too.
+
+**The prose figures are now generated.** Two rounds of review found hand-typed numbers
+drifting from the CSVs they cited — the SwiGLU anomaly classification was rewritten in round
+2 and was *still* quoting an earlier collection's row times, `SLOW` count, symmetry count and
+window share. `render_optimized_evidence.py` now derives them (`swiglu_anomaly()`,
+`prefill_matmul_bounds()`) and writes them into `README.md` between
+`<!-- generated:NAME -->` markers, and `render_optimized_accounting.py` imports the same
+helper for `named_limitations`. The test/record/candidate/watcher counts are generated the
+same way. A stale figure is now a renderer bug, not a transcription slip.
+
+**The dtype/fidelity machine check was decode-only.** It globbed `decode_*_perf_report.csv`
+and keyed the role off `shape.replace("32 x ", "")`, which cannot match a prefill row label
+like `b={16} x 512 x 6656 x 4608` — so the prefill half silently checked nothing. It now
+globs both phases, keys off the trailing `K x N`, and asserts it matched 40 rows (5 roles x 8
+artifacts).
+
+**Smaller.** The sweep's PCC gate now *asserts* against a `PCC_MIN` floor instead of only
+recording; `test_optimized_beats_functional_topology` pins the knobs this stage selected
+(`decode_mlp_cores`, `sdpa_output_l1`, `rope_pad_to_tile`, `in0_block_w_cap`,
+`out_subblock_h`, `matmul_cutoff`, `weight_memory`) so a silent revert fails a test;
+`perf_summary.json` records carry the code fingerprint, so the Tracy artifacts are tied to
+validated code by more than the run timeline; the round-2 KV-cache byte error survived in
+`candidates.json` (64 MiB, should be 68 MiB) and is fixed; a paired-comparison percentage was
+wrong (+1.42% should be +2.33%); the sub-1.7% `in0_block_w` role deltas are relabelled ties
+rather than wins; the stale `long_context_suite.log` is deleted and its two citations
+repointed at `full_suite.log`; and `policy_sweep.json`'s bit-identical PCC across every BFP4
+fidelity variant is explained (a BFP4 `srcA` has no low mantissa bits for HiFi2's extra pass
+to consume, so above LoFi fidelity buys no accuracy and costs only throughput).
+
+### 6.14 Hardware incident: device contention with another workload
+
+Recorded as infrastructure evidence, not a model result, as `$tt-device-usage` requires.
+
+**Signature.** The validation pass launched after the third review stalled with no log output
+for 20 minutes. The process was alive but had used 29 s of CPU; its last line was
+
+```
+UMD | Waiting for lock 'CHIP_IN_USE_0_PCIe' which is currently held by thread TID: 1762, PID: 1762
+```
+
+**What I concluded, and where that was wrong.** `ps -p 1762` showed no such process, and a
+scan of `/proc/*/fd` found only my own blocked pytest holding `/dev/tenstorrent`, so I read
+it as a stale UMD lock left by a dead process and ran the sanctioned recovery: killed my own
+run, `timeout 60 tt-smi -ls --local` (8 board rows, healthy), `timeout 180 tt-smi -r` (exit
+0, all four PCI devices reset), `timeout 60 tt-smi -ls --local` (healthy again), then the
+mesh smoke — which still blocked.
+
+The `/proc` scan was **incomplete**: as an unprivileged user I can only read `/proc/PID/fd`
+for my own processes, so a device holder owned by another user is invisible to it. With
+`sudo docker ps` the real holder is obvious: container `06ef949fa7f4` / **`Qwen3-32B`**, a
+vLLM server owned by `ttuser`, started 15:28, still `Up` and health-checking, with
+`/dev/tenstorrent*` mapped in. PID 1762 is its PID *inside the container namespace*, which is
+why the host could not see it and why the robust mutex could not be recovered — the owner is
+alive, just unreachable from my namespace.
+
+**So the reset was taken against a live third-party workload.** It should not have been. The
+correct check before any reset is `sudo docker ps` plus a privileged `/proc/*/fd` scan, not
+an unprivileged one. The server survived (`RestartCount 0`, health checks passing, 0 requests
+in flight at the time), but that is luck, not diligence. Recorded here so the next stage does
+not repeat it.
+
+**Action taken.** None further. The stale-lock recovery does not apply to a live holder, and
+killing another user's 32B server or deleting its shm segment is operator territory, not
+something this stage should do autonomously. The device work waits for the server to release
+the hardware.
+
+**State at the incident.** The stage was fully validated at commit `a3d494f05a4`: 105 tests,
+watcher clean over 56, eight `tt-perf-report` artifacts, both evidence renderers exiting 0.
+Only the third-review fixes (§6.13) were outstanding; they are code and documentation changes
+that need one more validation pass before their artifacts can be regenerated.
+
+### 6.15 Outstanding at hand-off
+
+Exactly one step is left, and it needs the hardware:
+
+```bash
+# regenerates pcc/pcc_results.json with the current fingerprint and executes the
+# corrected BFP4 assertions from §6.13 for the first time
+python -m pytest models/autoports/meta_models_muse_glimmer_30b/tests/test_optimized_decoder.py -q
+python models/autoports/meta_models_muse_glimmer_30b/scripts/render_optimized_evidence.py   # must exit 0
+```
+
+What that does and does not affect:
+
+* **`tt/optimized_decoder.py` is byte-identical to `a3d494f05a4`**, the commit whose 105-test
+  run, watcher run and eight `tt-perf-report` artifacts are committed here
+  (`git diff a3d494f05a4 -- tt/` is empty). No perf, dtype, geometry or device-time number in
+  this directory can have moved: the §6.13 changes are test instrumentation, sweep/renderer
+  scripts and documentation only.
+* **`pcc/pcc_results.json` therefore carries the previous fingerprint.** Every PCC value in it
+  was produced by this exact decoder, but by the pre-§6.13 test file, so
+  `render_optimized_evidence.py` correctly reports it stale and exits non-zero. That is the
+  one gate this directory does not currently pass.
+* **The corrected BFP4 assertions have not executed.** Their floors are derivable from the
+  committed records and both clear comfortably — the 131071 decode measured 0.963983 against a
+  floor of about 0.9397 (its 1000-token decode reference minus `SYNTHETIC_LENGTH_DELTA`), and
+  the K-cache 0.993473 against about 0.9735 — but "derivable" is not "measured", which is the
+  whole point of §6.13.
+
+Everything else in this directory is measured, current and self-consistent: the generated
+README blocks, `accounting.json` and `evidence_tables.md` were all regenerated from the
+committed CSVs after §6.13, and the dtype/fidelity check now covers 40 rows across both
+phases.
+
 ## 7. Evidence collected
 
-* **Correctness**: 105 tests, all passing, both layer kinds
+* **Correctness**: the full suite, all passing, both layer kinds
   ([`logs/full_suite.log`](logs/full_suite.log), PCC records in
   [`pcc/pcc_results.json`](pcc/pcc_results.json)). Every record carries a code fingerprint
   over the optimized layer, the functional layer, the host reference and the test files;
@@ -476,7 +603,7 @@ new RoPE gather introduced are accounted for in the data-movement audit.
   weights (see §6.8).
 * **Accounting**: [`perf/accounting.json`](perf/accounting.json) — roofline, device time and
   end-to-end from the same runs, with named limitations.
-* **Watcher**: 54 tests under `TT_METAL_WATCHER=10`, zero findings
+* **Watcher**: zero findings
   ([`watcher/WATCHER_SUMMARY.md`](watcher/WATCHER_SUMMARY.md)).
 * **Stress**: `test_stress_repeated_prefill_decode` — three cycles of prefill + 8 decode
   steps on real weights, PCC asserted every cycle and outputs asserted bit-identical
@@ -500,22 +627,24 @@ version of this table: `High Op-to-Op Gap`, self-reported at 0.0% of the window 
 gap is 22 µs per 51 ms prefill iteration and 50 µs per 1.06 ms decode window). Immaterial,
 and the end-to-end/device reconciliation in §7 already accounts for the host term.
 
-The `SLOW` marker remains on the three attention prefill rows (59-63% of the LoFi FLOP
-peak), on the second SwiGLU projection of the sliding path at 8192 (see §6.4), and on all
-five decode rows. On the decode rows it reflects the 12-core DRAM-reader worker set, which
-§6.1 measured an explicit larger-grid alternative against.
+Which prefill rows still carry `SLOW` is generated into the README's *What changed* section
+from the committed `Bound` column rather than stated here, because an earlier hand-typed
+version of this sentence was wrong. All five decode rows carry it; there it reflects the
+12-core DRAM-reader worker set, which §6.1 measured an explicit larger-grid alternative
+against.
 
 ## 8. Exact commands
 
 ```bash
-# the full-context contract on the optimized path (§6.5, ~4 min)
+# the full-context contract on the optimized path, both policies (§6.5/§6.8, ~15 min);
+# it is part of the ordinary suite, this just selects it
 python -m pytest models/autoports/meta_models_muse_glimmer_30b/tests/test_optimized_decoder.py -q \
   -k long_context -s
 
 # precision policy sweep, synthetic and real weights (the §3 table)
 python models/autoports/meta_models_muse_glimmer_30b/scripts/sweep_optimized_precision.py
 
-# correctness (97 tests, ~7 min)
+# correctness (the full suite, ~16 min)
 python -m pytest models/autoports/meta_models_muse_glimmer_30b/tests/test_optimized_decoder.py -q
 
 # performance artifacts, one Tracy session per (mode, kind, size)

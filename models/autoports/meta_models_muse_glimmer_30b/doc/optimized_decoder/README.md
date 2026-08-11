@@ -61,11 +61,15 @@ Five things, in descending order of measured effect. The candidate table in
    prefill matmuls were all marked `SLOW` with `in0_block_w=1` and ran at 37-50% of the
    HiFi2 FLOP peak. They now run at an L1-budget-derived `in0_block_w` — 26 tiles for the
    QKV, attention-gate and SwiGLU-down projections, 16 for the output projection, 8 for the
-   19968-wide SwiGLU gate/up where the budget stops it — output subblocks up to `1x8`, and
-   58-78% of the LoFi peak. Four of the five rows are `FLOP`-bound rather than `SLOW`; the
-   output projection remains `SLOW` at 58.1% (its `per_core_N` of 26 has no divisor above 2
-   for the output subblock), and one SwiGLU row is sporadically `SLOW` on the sliding path at
-   8192 tokens (see *Anomalies*).
+   19968-wide SwiGLU gate/up where the budget stops it — with output subblocks up to `1x8`.
+
+   <!-- generated:prefill-bounds -->
+Measured across every prefill matmul row in the four committed reports: **53.7-77.7%** of the LoFi FLOP peak. Rows marked `SLOW` in at least one artifact: `4096 x 6656`, `6656 x 19968`; every other shape is `FLOP`-bound.
+<!-- /generated:prefill-bounds -->
+
+   `out_subblock_h` was swept too (1 / 2 / 4 → 52.86 / 53.14 / 53.34 ms at 8192 tokens);
+   `h=1` stays. One SwiGLU row is additionally `SLOW` on the sliding path at 8192 tokens for
+   a reason that is not a program-config choice — see *Anomalies*.
 5. **Fused elementwise**: SiLU folded into the SwiGLU multiply and sigmoid folded into the
    attention-gate multiply, removing two full-size unary passes per layer per phase
    (3.2% of functional prefill device time on its own).
@@ -211,7 +215,7 @@ x (L1 width-sharded, 16 cores)
   -> reshard to residual grid, sharded RMSNorm, residual add
 ```
 
-Device-time share: matmuls 82.4%, elementwise 4.2%, SDPA 3.6%, norms 4.3%, everything
+Device-time share: matmuls 82.4%, elementwise 4.2%, norms 4.3%, SDPA 3.5%, everything
 else 5.5%. The four `Reshard` ops per layer — the SwiGLU working-shard boundary in and
 out, and the two matmul outputs that have to land back on the residual grid before their
 norm — cost 7.1 µs combined, 0.7%.
@@ -279,7 +283,7 @@ Named limitations, in the order they bound the result:
   both are generated into `perf/accounting.json` as `roofline_64_core_ms` and
   `matmul_device_ms`. The 13.0 ms figure in the table above is the unreachable 110-core
   roofline.
-* **Prefill end-to-end is 8-9% above device time**, down from ~20% in the functional stage.
+* **Prefill end-to-end is 6.6-9.4% above device time**, down from ~20% in the functional stage.
   What remains is per-chunk host dispatch. Prefill is not traced because the chunk count
   depends on the prompt length.
 * **Non-matmul prefill time is 34% of the window**: SDPA 13.1%, elementwise 9.3%, norms
@@ -287,24 +291,28 @@ Named limitations, in the order they bound the result:
 
 ## Anomalies
 
-**One of the two identical SwiGLU projections is sporadically 7-12% slower, on the sliding
-path at 8192 tokens only.** In `tracy/sliding_rope/prefill_8192_perf_report.csv` the ten
-`b={16} x 512 x 6656 x 19968` rows (two per measured iteration, identical shape, cores,
-dtype, fidelity, `in0_block_w` and output subblock) measure
+**One of the two identical SwiGLU projections is sporadically slower, on the sliding path at
+8192 tokens only.** The figures below are regenerated from the committed CSV by
+[`../../scripts/render_optimized_evidence.py`](../../scripts/render_optimized_evidence.py) —
+an earlier hand-typed version of this paragraph drifted from the artifact it cited, so it is
+no longer typed.
+
+<!-- generated:anomaly -->
+In `tracy/sliding_rope/prefill_8192_perf_report.csv` the 10 `6656 x 19968` rows (5 iterations x 2, identical
+shape, cores, dtype, fidelity, `in0_block_w` and output subblock) measure
 
 ```
-8943 / 9577    8948 / 8945    8943 / 8937    8936 / 9773    8936 / 10034     (µs)
+8940 / 10047    8940 / 9747    8942 / 8942    8935 / 9776    8938 / 9774     (microseconds)
 ```
 
-Seven of the ten sit at 8936-8948 µs; three are 9577, 9773 and 10034 and carry the `SLOW`
-marker. The excess over the stable 8936-8948 baseline is 1.03% of the window, and it is
-*sporadic* rather than strictly positional —
-two of the five iterations are symmetric.
+6 of the 10 sit at 8935-8942; **4 carry the `SLOW` marker** at
+9747-10047, i.e. 9.0-12.4% slower. 1 of the 5 iterations is
+symmetric, so it is intermittent rather than positional. The excess over the stable
+baseline is 717 microseconds per iteration, **1.44% of the window**.
 
-Controls, all from the committed artifacts: the same op is stable in all ten rows at 4096
-tokens on the same path (4468-4473) and in all ten rows at 8192 tokens on the
-**full-attention** path (8937-8953), and the down projection is stable everywhere. So it is
-neither a shape, a program-config, nor a dtype effect.
+Controls, all from the committed artifacts: the same op at 4096 on the same path 4468-4473 us over 10 rows, 0 SLOW; the same op at 8192 on the full-attention path 8938-8946 us over 10 rows, 0 SLOW; the down projection on the same path 7921-7933 us over 5 rows, 0 SLOW. So it is neither a shape, a
+program-config nor a dtype effect.
+<!-- /generated:anomaly -->
 
 What is specific to sliding_rope at 8192 is DRAM occupancy history: that path runs the
 *non-chunked* windowed SDPA over the whole 8192-token slice, so Q `[1, 32, 8192, 128]` plus
@@ -317,8 +325,7 @@ projection, which runs after both large intermediates are freed, never shows it.
 It is left in place rather than worked around: both candidate mitigations lose. Packing gate
 and up into one 39936-wide matmul measured 56.6 ms against 53.2 ms, and sub-blocking the
 SwiGLU over the sequence would add a concat per chunk. It is inside the headline number, not
-excluded from it, and it is recorded here, in `work_log.md` §6.4 and in the committed rows
-rather than smoothed away.
+excluded from it.
 
 ## TTNN findings
 
@@ -350,7 +357,11 @@ heads together otherwise.
 
 ## Tests
 
-105 tests, all passing ([`logs/full_suite.log`](logs/full_suite.log)):
+<!-- generated:counts -->
+**105** correctness tests, **285** PCC records, **86** measured candidates in 13 sections, **56** tests under watcher.
+<!-- /generated:counts -->
+
+All passing ([`logs/full_suite.log`](logs/full_suite.log)):
 
 ```bash
 python -m pytest models/autoports/meta_models_muse_glimmer_30b/tests/test_optimized_decoder.py -q
@@ -401,9 +412,9 @@ The other layout ops in the measured decode path are the four
 `Reshard`s at the SwiGLU working-shard boundary and the `InterleavedToSharded` /
 `ShardedToInterleaved` pairs the head-creation and RoPE helpers require at their API
 boundaries; all are named in the op-family table with their cost. A `sliding_rope` decode
-window carries three `Slice` ops and one `Pad` per token — the head-concat batch trim plus
-three from the tile-padded RoPE gather; a `full_nope` window carries one `Slice` and no `Pad`,
-because a NoPE layer has no gather at all. None is a fallback.
+window carries three `Slice` ops and one `Pad` per token — the head-concat batch trim plus two
+`Slice` and one `Pad` from the tile-padded RoPE gather; a `full_nope` window carries one
+`Slice` and no `Pad`, because a NoPE layer has no gather at all. None is a fallback.
 
 ## Watcher
 
@@ -491,8 +502,8 @@ layer); and the mesh is `(1, 1)`, so no collective appears in any committed repo
 | Reduced-precision experiments on real weights and real activations | `pcc/policy_sweep.json` — six policies x two weight sources x two layer kinds; plus `pcc/length_dependence.json` for the context-length axis |
 | Performance accounting reconciled (roofline, device, end-to-end from the same run) | `perf/accounting.json`, generated by `render_optimized_accounting.py` |
 | Batch capability preserved | batch 1 is the optimized target; batch 4 and 32 correctness at BFP8, batch 4 at the shipped BFP4 policy on real weights |
-| Functional checks still pass against the optimized path | 101 tests, `logs/full_suite.log` |
-| PCC at the functional bar for every layer kind | `pcc/pcc_results.json` (285 records), min in `evidence_tables.md` |
+| Functional checks still pass against the optimized path | `logs/full_suite.log` (count in the *Tests* section, generated) |
+| PCC at the functional bar for every layer kind | `pcc/pcc_results.json`; the gating minimum and the per-test bars are tabulated in `evidence_tables.md` |
 | Paged KV cache and warmed trace replay still correct | `test_paged_prefill_decode_pcc`, `test_page_block_sizes`, `test_traced_decode_pcc`, `test_ragged_slots_and_current_positions` |
 | Runtime fallback audit clean | *Runtime fallback audit* above, with the two on-device layout conversions named and costed |
 | Stress / repeated-run coverage | `test_stress_repeated_prefill_decode` — three cycles of prefill + 8 decode steps on real weights, outputs bit-identical across cycles |

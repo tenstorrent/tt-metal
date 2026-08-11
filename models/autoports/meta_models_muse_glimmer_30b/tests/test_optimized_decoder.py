@@ -1388,6 +1388,19 @@ def test_optimized_beats_functional_topology(
 
     decode = summary["decode"]
     assert decode["residual_cores"] * decode["residual_shard_width"] == text_config.hidden_size
+    # The knobs the stage selected with measured evidence. Pinning them here means a silent
+    # revert fails a test rather than only changing a number in a perf artifact.
+    assert decode["mlp_working_cores"] == 52, decode["mlp_working_cores"]
+    assert decode["sdpa_output_l1"] is True
+    assert decode["rope_pad_to_tile"] is True
+    assert decode["packer_l1_acc"] is True
+    assert decode["fp32_dest_acc_en"] is False
+    prefill = summary["prefill"]
+    assert prefill["in0_block_w_cap"] == 26, prefill["in0_block_w_cap"]
+    assert prefill["out_subblock_h"] == 1, prefill["out_subblock_h"]
+    assert prefill["out_subblock_max"] == 8, prefill["out_subblock_max"]
+    assert prefill["matmul_cutoff"] == 512, prefill["matmul_cutoff"]
+    assert prefill["weight_memory"] == "dram_sharded"
     memory_config = decoder.decode_residual_memory_config
     assert memory_config.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
     assert memory_config.buffer_type == ttnn.BufferType.L1
@@ -1730,17 +1743,25 @@ def test_full_context_prefill_and_decode(
     # policy at 1000 tokens and requires the 131072-token PCC to be within
     # LENGTH_INDEPENDENCE_DELTA of it. That is the length-dependence check the absolute bar
     # cannot make.
-    bar = PCC_BAR if policy == STRUCTURAL_POLICY else 0.0
+    # Only the structural BFP8 policy gets an absolute bar here; the BFP4 metrics are
+    # floored at their own 1000-token measurement below (`short_floor`), which is a real
+    # number rather than 0.0 and is what gets stamped on each record.
+    bar = PCC_BAR
 
     max_context = text_config.max_position_embeddings
     hidden_size = text_config.hidden_size
     hidden = R.unit_rms_hidden_states((1, max_context, hidden_size), seed=97)
 
-    short_reference_pcc = None
+    # For the shipped BFP4 policy an absolute bar on synthetic weights would be arbitrary
+    # (see test_synthetic_weight_precision_discrepancy), so every metric is instead floored
+    # at its own 1000-token measurement minus SYNTHETIC_LENGTH_DELTA. That floor is a real
+    # number, it is what gets stamped on the record, and it catches exactly the failure an
+    # absolute bar cannot: accuracy that degrades as the prefix grows.
+    short_floor = {}
     if policy != STRUCTURAL_POLICY:
         short_len = 1000
-        short_out, _, _ = ref.prefill(hidden[:, :short_len], backend="eager")
-        short_kv, _, short_pt_tt = _alloc_paged(
+        short_out, short_k, short_v = ref.prefill(hidden[:, :short_len], backend="eager")
+        short_kv, short_pt, short_pt_tt = _alloc_paged(
             decoder,
             mg_mesh_device,
             batch=1,
@@ -1751,19 +1772,47 @@ def test_full_context_prefill_and_decode(
         short_dev = decoder.prefill_forward(
             U.prefill_input(hidden[:, :short_len], mg_mesh_device), kv_cache=short_kv, page_table=short_pt_tt
         )
-        short_reference_pcc = U.pcc(short_out, U.prefill_output(short_dev))
+        short_metrics = {
+            "prefill": U.pcc(short_out, U.prefill_output(short_dev)),
+            "k_cache": U.pcc(
+                short_k, U.read_paged_cache(short_kv[0], short_pt, block_size=block_size, seq_len=short_len)
+            ),
+        }
         short_dev.deallocate(True)
+        short_hidden_d = R.unit_rms_hidden_states((1, 1, hidden_size), seed=98)
+        cache_len = short_len + 2
+        k_pad = torch.zeros(1, short_k.shape[1], cache_len, short_k.shape[3], dtype=short_k.dtype)
+        v_pad = torch.zeros_like(k_pad)
+        k_pad[:, :, :short_len] = short_k
+        v_pad[:, :, :short_len] = short_v
+        short_ref_d = ref.decode(short_hidden_d, k_pad, v_pad, torch.tensor([short_len]))
+        short_pos, short_rope = U.position_tensors([short_len], mg_mesh_device)
+        short_out_d = decoder.decode_forward(
+            U.decode_input(short_hidden_d, mg_mesh_device),
+            kv_cache=short_kv,
+            page_table=short_pt_tt,
+            current_pos=short_pos,
+            rope_idxs=short_rope,
+        )
+        short_metrics["decode"] = U.pcc(short_ref_d, U.decode_output(short_out_d))
+        short_out_d.deallocate(True)
         for tensor in (short_kv[0], short_kv[1], short_pt_tt):
             tensor.deallocate(True)
-        record_pcc(
-            f"prefill_len{short_len}_{policy}_length_reference",
-            short_reference_pcc,
-            seq_len=short_len,
-            kind=kind_id,
-            policy=policy,
-            threshold=bar,
-            coverage="full; the length-independence reference for the 131072 run",
-        )
+        for metric, value in short_metrics.items():
+            short_floor[metric] = value - SYNTHETIC_LENGTH_DELTA
+            record_pcc(
+                f"{metric}_len{short_len}_{policy}_length_reference",
+                value,
+                seq_len=short_len,
+                kind=kind_id,
+                policy=policy,
+                threshold=bar,
+                coverage="full; the length-independence reference for the 131072 run",
+            )
+
+    def floor_for(metric):
+        """The bar this metric is actually asserted against, and stamped with."""
+        return short_floor.get(metric, bar)
 
     for prefill_len in (max_context, max_context - 1):
         kv_cache, page_table, page_table_tt = _alloc_paged(
@@ -1818,15 +1867,12 @@ def test_full_context_prefill_and_decode(
             seq_len=prefill_len,
             kind=kind_id,
             policy=policy,
-            threshold=bar,
+            threshold=floor_for("prefill"),
             coverage=f"{covered}/{prefill_len} positions in {len(blocks)} blocks",
         )
-        assert pcc_value >= bar, f"prefill PCC {pcc_value} at seq_len {prefill_len} ({policy})"
-        if short_reference_pcc is not None:
-            assert pcc_value >= short_reference_pcc - SYNTHETIC_LENGTH_DELTA, (
-                f"{policy} loses more accuracy with length than the measured synthetic drift: "
-                f"{pcc_value} at {prefill_len} against {short_reference_pcc} at 1000 tokens"
-            )
+        assert pcc_value >= floor_for("prefill"), (
+            f"prefill PCC {pcc_value} at seq_len {prefill_len} ({policy}) is below " f"{floor_for('prefill')}"
+        )
 
         cache_pcc = U.pcc(
             ref_k[:, :, :q_chunk],
@@ -1838,10 +1884,12 @@ def test_full_context_prefill_and_decode(
             seq_len=prefill_len,
             kind=kind_id,
             policy=policy,
-            threshold=bar,
+            threshold=floor_for("k_cache"),
             coverage=f"first {q_chunk} positions",
         )
-        assert cache_pcc >= bar
+        assert cache_pcc >= floor_for("k_cache"), (
+            f"K-cache PCC {cache_pcc} at seq_len {prefill_len} ({policy}) is below " f"{floor_for('k_cache')}"
+        )
         out_dev.deallocate(True)
 
         if prefill_len == max_context - 1:
@@ -1862,9 +1910,16 @@ def test_full_context_prefill_and_decode(
             )
             decode_pcc = U.pcc(ref_d, out_d)
             record_pcc(
-                f"decode_max_position_{policy}", decode_pcc, position=position, kind=kind_id, policy=STRUCTURAL_POLICY
+                f"decode_max_position_{policy}",
+                decode_pcc,
+                position=position,
+                kind=kind_id,
+                policy=policy,
+                threshold=floor_for("decode"),
             )
-            assert decode_pcc >= bar, f"decode PCC {decode_pcc} at position {position} ({policy})"
+            assert decode_pcc >= floor_for("decode"), (
+                f"decode PCC {decode_pcc} at position {position} ({policy}) is below " f"{floor_for('decode')}"
+            )
 
         del ref_k, ref_v
         for cache in kv_cache:

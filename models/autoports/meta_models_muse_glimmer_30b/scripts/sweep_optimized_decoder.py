@@ -51,6 +51,10 @@ DECODE_ITERS = int(os.environ.get("DECODE_ITERS", "32"))
 PREFILL_ITERS = int(os.environ.get("PREFILL_ITERS", "3"))
 PREFILL_SEQ = int(os.environ.get("PREFILL_SEQ", "0"))  # 0 = skip prefill timing
 PCC_SEQ = int(os.environ.get("PCC_SEQ", "0"))  # 0 = skip the correctness gate
+# Floor the gate asserts against. The default suits the synthetic-weight BFP4 policies, whose
+# expected synthetic PCC is ~0.96; raise it for BFP8 candidates. A candidate below the floor
+# is recorded as failed rather than timed, so a fast wrong answer cannot enter the table.
+PCC_MIN = float(os.environ.get("PCC_MIN", "0.95"))
 OUT = Path(os.environ.get("OUT", "/tmp/perf_probe.json"))
 
 R.configure_host_threads()
@@ -137,6 +141,17 @@ try:
             if PCC_SEQ:
                 try:
                     row.update(_pcc_gate(dec, mesh, text_config, kind, PCC_SEQ))
+                    if min(row["prefill_pcc"], row["decode_pcc"]) < PCC_MIN:
+                        row["pcc_error"] = (
+                            f"below the PCC_MIN floor {PCC_MIN}: prefill {row['prefill_pcc']:.6f}, "
+                            f"decode {row['decode_pcc']:.6f}"
+                        )
+                        print(f"PCC  {kind_id} {label} GATE_FAIL {row['pcc_error']}", flush=True)
+                        rows.append(row)
+                        for tensor in (kv[0], kv[1], ptt):
+                            tensor.deallocate(True)
+                        del dec
+                        continue
                     print(
                         f"PCC  {kind_id} {label} prefill={row['prefill_pcc']:.6f} " f"decode={row['decode_pcc']:.6f}",
                         flush=True,

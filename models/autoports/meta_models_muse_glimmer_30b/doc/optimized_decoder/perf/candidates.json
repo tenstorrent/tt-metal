@@ -209,7 +209,7 @@
           "label": "wo in0_block_w=4",
           "decode_ms": 1.0694,
           "kept": false,
-          "note": ""
+          "note": "+0.48%, inside the drift band: a tie, not a win for the default"
         },
         {
           "label": "wo in0_block_w=2",
@@ -233,7 +233,7 @@
           "label": "down in0_block_w=6",
           "decode_ms": 1.0796,
           "kept": false,
-          "note": ""
+          "note": "+1.44%, inside the drift band: a tie, not a win for the default"
         },
         {
           "label": "down in0_block_w=4",
@@ -251,7 +251,7 @@
           "label": "mlp_cores=26 with in0_block_w=8 (gate_up and down)",
           "decode_ms": 1.0776,
           "kept": false,
-          "note": "larger K block, fewer shards: still loses to 52/4"
+          "note": "larger K block, fewer shards: 1.25% behind 52/4, inside the 1.7% drift band, so a tie on this measurement - the paired re-measurement below is what separates them"
         },
         {
           "label": "mlp_cores=26 with in0_block_w=4",
@@ -297,7 +297,7 @@
           "label": "BFP8 KV cache, SDPA grid 8x4, k_chunk 64",
           "decode_ms": 1.0636,
           "kept": true,
-          "note": "selected; also halves cache DRAM (64 MiB vs 128 MiB per layer at 131072/batch 1)"
+          "note": "selected; also halves cache DRAM (68 MiB vs 128 MiB per layer at 131072/batch 1)"
         },
         {
           "label": "BF16 KV cache",
@@ -505,7 +505,7 @@
           "label": "SwiGLU working cores 26, pair A",
           "decode_ms": 1.0886,
           "kept": false,
-          "note": "+1.42%"
+          "note": "+2.33%"
         },
         {
           "label": "SwiGLU working cores 52, pair B",

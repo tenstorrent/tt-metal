@@ -39,6 +39,27 @@ from models.autoports.meta_models_muse_glimmer_30b.tests import decoder_test_uti
 from models.autoports.meta_models_muse_glimmer_30b.tt.optimized_decoder import DEFAULT_POLICY, OptimizedDecoder
 
 KIND_IDS = ["sliding_rope", "full_nope"]
+
+
+def _code_fingerprint() -> str:
+    """The same hash the correctness suite stamps on every PCC record.
+
+    Without it the perf and Tracy artifacts are tied to the validated code only by the run
+    timeline; with it a stale profile is detectable.
+    """
+    import hashlib
+
+    from models.autoports.meta_models_muse_glimmer_30b.tests.test_optimized_decoder import (
+        FINGERPRINTED_SOURCES,
+    )
+
+    repo_root = Path(__file__).resolve().parents[4]
+    digest = hashlib.sha256()
+    for relative in FINGERPRINTED_SOURCES:
+        digest.update((repo_root / relative).read_bytes())
+    return digest.hexdigest()[:16]
+
+
 PERF_DIR = Path(__file__).resolve().parents[1] / "doc" / "optimized_decoder" / "perf"
 PREFILL_ITERS = int(os.environ.get("MUSE_GLIMMER_PREFILL_ITERS", "5"))
 DECODE_ITERS = int(os.environ.get("MUSE_GLIMMER_DECODE_ITERS", "32"))
@@ -170,6 +191,7 @@ def test_prefill_perf(
             "signposts": ["PERF_PREFILL", "PERF_PREFILL_END"],
             "profiled": _profiled(),
             "config": decoder.config_summary(),
+            "code_sha256": _code_fingerprint(),
         }
     )
 
@@ -247,6 +269,7 @@ def test_decode_perf(kind_id, batch, kinds, text_config, synthetic_state_dicts, 
             "signposts": ["PERF_DECODE", "PERF_DECODE_END"],
             "profiled": _profiled(),
             "config": decoder.config_summary(),
+            "code_sha256": _code_fingerprint(),
         }
     )
     ttnn.release_trace(mg_mesh_device, trace_id)

@@ -10,8 +10,8 @@ truth: `doc/optimized_decoder/pcc/pcc_results.json` (285 measurements,
 
 Provenance: every record carries `code_sha256` (a hash of the optimized layer, the
 functional layer it inherits its correctness contracts from, the host reference and the
-test files), `git_head` and `recorded_at`. Current fingerprint `0c001f8b379c2783`;
-**285 of 285** records were produced by exactly this code and none are stale.
+test files), `git_head` and `recorded_at`. Current fingerprint `ca0cfaff900bf088`;
+**0 of 285** records were produced by exactly this code, **285 are stale**: test_batched_multichunk_prefill_shared_pool[full_nope], test_batched_multichunk_prefill_shared_pool[sliding_rope], test_batched_prefill_and_decode[32-full_nope], test_batched_prefill_and_decode[32-sliding_rope], test_batched_prefill_and_decode[4-full_nope], test_batched_prefill_and_decode[4-sliding_rope], test_continued_prefill_contract[full_nope], test_full_context_prefill_and_decode[full_nope-bfp4_all], test_full_context_prefill_and_decode[full_nope-bfp8_all_lofi], test_full_context_prefill_and_decode[sliding_rope-bfp4_all], test_full_context_prefill_and_decode[sliding_rope-bfp8_all_lofi], test_page_block_sizes[128-full_nope], test_page_block_sizes[128-sliding_rope], test_page_block_sizes[32-full_nope], test_page_block_sizes[32-sliding_rope], test_page_block_sizes[64-full_nope], test_page_block_sizes[64-sliding_rope], test_paged_prefill_decode_pcc[100-full_nope], test_paged_prefill_decode_pcc[100-sliding_rope], test_paged_prefill_decode_pcc[1000-full_nope], test_paged_prefill_decode_pcc[1000-sliding_rope], test_paged_prefill_decode_pcc[12345-full_nope], test_paged_prefill_decode_pcc[12345-sliding_rope], test_paged_prefill_decode_pcc[2048-full_nope], test_paged_prefill_decode_pcc[2048-sliding_rope], test_paged_prefill_decode_pcc[2080-full_nope], test_paged_prefill_decode_pcc[2080-sliding_rope], test_paged_prefill_decode_pcc[3000-full_nope], test_paged_prefill_decode_pcc[3000-sliding_rope], test_paged_prefill_decode_pcc[32-full_nope], test_paged_prefill_decode_pcc[32-sliding_rope], test_paged_prefill_decode_pcc[8192-full_nope], test_paged_prefill_decode_pcc[8192-sliding_rope], test_paged_prefill_decode_pcc[8256-full_nope], test_paged_prefill_decode_pcc[8256-sliding_rope], test_ragged_slots_and_current_positions[full_nope], test_ragged_slots_and_current_positions[sliding_rope], test_real_weights_batched[full_nope], test_real_weights_batched[sliding_rope], test_real_weights_length_independence[bfp4_all], test_real_weights_length_independence[bfp8_attn_bfp4_mlp], test_real_weights_non_aligned_and_traced[full_nope], test_real_weights_non_aligned_and_traced[sliding_rope], test_real_weights_prefill_decode[full_nope], test_real_weights_prefill_decode[sliding_rope], test_short_prefill_lengths[full_nope], test_short_prefill_lengths[sliding_rope], test_stress_repeated_prefill_decode[full_nope], test_stress_repeated_prefill_decode[sliding_rope], test_synthetic_weight_precision_discrepancy[full_nope], test_synthetic_weight_precision_discrepancy[sliding_rope], test_traced_decode_pcc[real-full_nope], test_traced_decode_pcc[real-sliding_rope], test_traced_decode_pcc[synthetic-full_nope], test_traced_decode_pcc[synthetic-sliding_rope]
 
 18 records carry a *diagnostic* threshold below the bar. They all belong to
 `test_synthetic_weight_precision_discrepancy`, which measures the BFP4 policies on
@@ -252,6 +252,16 @@ cache or a helper default silently reverting BFP4 to BF16 cannot pass unnoticed.
 | `full_nope/decode_32` | 32 x 4096 x 6656 | 12 | BFLOAT4_B | LoFi | True | L1_WIDTH_SHARDED | 8 | -x- | 52.6 | 50.7 | 50.0 |
 | `full_nope/decode_32` | 32 x 6656 x 19968 | 12 | BFLOAT4_B | LoFi | True | L1_WIDTH_SHARDED | 4 | -x- | 236.7 | 54.9 | 54.2 |
 | `full_nope/decode_32` | 32 x 19968 x 6656 | 12 | BFLOAT4_B | LoFi | True | L1_WIDTH_SHARDED | 12 | -x- | 229.5 | 56.5 | 55.8 |
+| `full_nope/prefill_4096` | b={8} x 512 x 6656 x 4608 | 64.0 | BFLOAT4_B | LoFi | False | DRAM_INTERLEAVED | 26 | 1x6 | 1036.8 | 20.3 | 68.5 |
+| `full_nope/prefill_4096` | b={8} x 512 x 6656 x 4096 | 64.0 | BFLOAT4_B | LoFi | False | DRAM_INTERLEAVED | 26 | 1x8 | 934.7 | 21.2 | 67.5 |
+| `full_nope/prefill_4096` | b={8} x 512 x 4096 x 6656 | 64.0 | BFLOAT4_B | LoFi | False | DRAM_INTERLEAVED | 16 | 1x2 | 1013.3 | 19.7 | 62.5 |
+| `full_nope/prefill_4096` | b={8} x 512 x 6656 x 19968 | 64.0 | BFLOAT4_B | LoFi | False | DRAM_INTERLEAVED | 8 | 1x6 | 4470.3 | 12.4 | 68.8 |
+| `full_nope/prefill_4096` | b={8} x 512 x 19968 x 6656 | 64.0 | BFLOAT4_B | LoFi | False | DRAM_INTERLEAVED | 26 | 1x2 | 3968.6 | 14.0 | 77.5 |
+| `full_nope/prefill_8192` | b={16} x 512 x 6656 x 4608 | 64.0 | BFLOAT4_B | LoFi | False | DRAM_INTERLEAVED | 26 | 1x6 | 2069.1 | 18.8 | 68.5 |
+| `full_nope/prefill_8192` | b={16} x 512 x 6656 x 4096 | 64.0 | BFLOAT4_B | LoFi | False | DRAM_INTERLEAVED | 26 | 1x8 | 1864.4 | 19.8 | 67.5 |
+| `full_nope/prefill_8192` | b={16} x 512 x 4096 x 6656 | 64.0 | BFLOAT4_B | LoFi | False | DRAM_INTERLEAVED | 16 | 1x2 | 2011.4 | 18.4 | 62.6 |
+| `full_nope/prefill_8192` | b={16} x 512 x 6656 x 19968 | 64.0 | BFLOAT4_B | LoFi | False | DRAM_INTERLEAVED | 8 | 1x6 | 8942.1 | 11.0 | 68.8 |
+| `full_nope/prefill_8192` | b={16} x 512 x 19968 x 6656 | 64.0 | BFLOAT4_B | LoFi | False | DRAM_INTERLEAVED | 26 | 1x2 | 7924.9 | 12.4 | 77.6 |
 | `sliding_rope/decode_1` | 32 x 6656 x 4608 | 12 | BFLOAT4_B | LoFi | True | L1_WIDTH_SHARDED | 13 | -x- | 57.2 | 52.4 | 51.7 |
 | `sliding_rope/decode_1` | 32 x 6656 x 4096 | 12 | BFLOAT4_B | LoFi | True | L1_WIDTH_SHARDED | 13 | -x- | 51.9 | 51.3 | 50.6 |
 | `sliding_rope/decode_1` | 32 x 4096 x 6656 | 12 | BFLOAT4_B | LoFi | True | L1_WIDTH_SHARDED | 8 | -x- | 52.7 | 50.6 | 50.0 |
@@ -262,6 +272,18 @@ cache or a helper default silently reverting BFP4 to BF16 cannot pass unnoticed.
 | `sliding_rope/decode_32` | 32 x 4096 x 6656 | 12 | BFLOAT4_B | LoFi | True | L1_WIDTH_SHARDED | 8 | -x- | 52.5 | 50.5 | 49.8 |
 | `sliding_rope/decode_32` | 32 x 6656 x 19968 | 12 | BFLOAT4_B | LoFi | True | L1_WIDTH_SHARDED | 4 | -x- | 236.7 | 54.8 | 54.1 |
 | `sliding_rope/decode_32` | 32 x 19968 x 6656 | 12 | BFLOAT4_B | LoFi | True | L1_WIDTH_SHARDED | 12 | -x- | 229.5 | 56.6 | 55.9 |
+| `sliding_rope/prefill_4096` | b={8} x 512 x 6656 x 4608 | 64.0 | BFLOAT4_B | LoFi | False | DRAM_INTERLEAVED | 26 | 1x6 | 1035.2 | 20.3 | 68.5 |
+| `sliding_rope/prefill_4096` | b={8} x 512 x 6656 x 4096 | 64.0 | BFLOAT4_B | LoFi | False | DRAM_INTERLEAVED | 26 | 1x8 | 933.8 | 21.2 | 67.5 |
+| `sliding_rope/prefill_4096` | b={8} x 512 x 4096 x 6656 | 64.0 | BFLOAT4_B | LoFi | False | DRAM_INTERLEAVED | 16 | 1x2 | 1050.2 | 19.7 | 62.7 |
+| `sliding_rope/prefill_4096` | b={8} x 512 x 6656 x 19968 | 64.0 | BFLOAT4_B | LoFi | False | DRAM_INTERLEAVED | 8 | 1x6 | 4470.8 | 12.4 | 68.8 |
+| `sliding_rope/prefill_4096` | b={8} x 512 x 19968 x 6656 | 64.0 | BFLOAT4_B | LoFi | False | DRAM_INTERLEAVED | 26 | 1x2 | 3966.5 | 14.0 | 77.5 |
+| `sliding_rope/prefill_8192` | b={16} x 512 x 6656 x 4608 | 64.0 | BFLOAT4_B | LoFi | False | DRAM_INTERLEAVED | 26 | 1x6 | 2068.7 | 18.8 | 68.5 |
+| `sliding_rope/prefill_8192` | b={16} x 512 x 6656 x 4096 | 64.0 | BFLOAT4_B | LoFi | False | DRAM_INTERLEAVED | 26 | 1x8 | 1865.2 | 19.8 | 67.5 |
+| `sliding_rope/prefill_8192` | b={16} x 512 x 4096 x 6656 | 64.0 | BFLOAT4_B | LoFi | False | DRAM_INTERLEAVED | 16 | 1x2 | 2131.6 | 15.8 | 53.7 |
+| `sliding_rope/prefill_8192` | b={16} x 512 x 6656 x 19968 | 64.0 | BFLOAT4_B | LoFi | False | DRAM_INTERLEAVED | 8 | 1x6 | 9297.9 | 11.0 | 68.8 |
+| `sliding_rope/prefill_8192` | b={16} x 512 x 19968 x 6656 | 64.0 | BFLOAT4_B | LoFi | False | DRAM_INTERLEAVED | 26 | 1x2 | 7925.5 | 12.4 | 77.6 |
+
+Rows machine-checked against the policy: **40** (5 roles x 8 artifacts).
 
 ### SDPA program configs actually executed
 
@@ -343,14 +365,14 @@ the stage-01 baseline for the same workload.
 |---|---|---|---|---|
 | budget-derived defaults (qkv/gate 13, wo 8, gate_up 4, down 12) | 1.0643 | - | **yes** | the L1 model picks the largest legal value in every role |
 | qkv/attn_gate in0_block_w=1 | 1.2452 | - | no | 17% slower: the K block matters |
-| wo in0_block_w=4 | 1.0694 | - | no |  |
+| wo in0_block_w=4 | 1.0694 | - | no | +0.48%, inside the drift band: a tie, not a win for the default |
 | wo in0_block_w=2 | 1.0803 | - | no |  |
 | gate_up in0_block_w=2 | 1.1097 | - | no |  |
 | gate_up in0_block_w=1 | 1.4612 | - | no | 37% slower |
-| down in0_block_w=6 | 1.0796 | - | no |  |
+| down in0_block_w=6 | 1.0796 | - | no | +1.44%, inside the drift band: a tie, not a win for the default |
 | down in0_block_w=4 | 1.0960 | - | no |  |
 | down in0_block_w=3 | 1.1127 | - | no |  |
-| mlp_cores=26 with in0_block_w=8 (gate_up and down) | 1.0776 | - | no | larger K block, fewer shards: still loses to 52/4 |
+| mlp_cores=26 with in0_block_w=8 (gate_up and down) | 1.0776 | - | no | larger K block, fewer shards: 1.25% behind 52/4, inside the 1.7% drift band, so a tie on this measurement - the paired re-measurement below is what separates them |
 | mlp_cores=26 with in0_block_w=4 | 1.1171 | - | no | precision-locked geometry cross-check |
 
 **Same-input projection packing (OPT-001 / OPT-010)**
@@ -366,7 +388,7 @@ the stage-01 baseline for the same workload.
 
 | candidate | decode ms | prefill 8192 ms | kept | note |
 |---|---|---|---|---|
-| BFP8 KV cache, SDPA grid 8x4, k_chunk 64 | 1.0636 | - | **yes** | selected; also halves cache DRAM (64 MiB vs 128 MiB per layer at 131072/batch 1) |
+| BFP8 KV cache, SDPA grid 8x4, k_chunk 64 | 1.0636 | - | **yes** | selected; also halves cache DRAM (68 MiB vs 128 MiB per layer at 131072/batch 1) |
 | BF16 KV cache | 1.0655 | - | no | no latency win and twice the cache footprint |
 | SDPA grid 11x10 | 1.0641 | - | no |  |
 | SDPA grid 8x8 | 1.0640 | - | no |  |
@@ -415,7 +437,7 @@ the stage-01 baseline for the same workload.
 | candidate | decode ms | prefill 8192 ms | kept | note |
 |---|---|---|---|---|
 | SwiGLU working cores 52, pair A | 1.0638 | - | **yes** |  |
-| SwiGLU working cores 26, pair A | 1.0886 | - | no | +1.42% |
+| SwiGLU working cores 26, pair A | 1.0886 | - | no | +2.33% |
 | SwiGLU working cores 52, pair B | 1.0811 | - | **yes** |  |
 | SwiGLU working cores 26, pair B | 1.0953 | - | no | +1.31% |
 | SwiGLU working cores 52, pair C | 1.0780 | - | **yes** |  |
@@ -456,4 +478,4 @@ Named limitations:
 * Prefill matmuls run on 64 of 110 cores. grid_x is pinned to the 8 DRAM banks because a 2D multicast matmul with DRAM width-sharded weights returns NaN for any other width (scripts/repro_prefill_matmul_grid_x9.py), and grid_y above 8 measured 48% slower. The reachable 64-core roofline and the measured matmul time are in the prefill workload rows as roofline_64_core_ms and matmul_device_ms; the top-level roofline_ms is the unreachable 110-core figure.
 * Prefill end-to-end is 4-9% above device time, down from ~20% in the functional stage. What remains is per-chunk host dispatch; prefill is not traced because the chunk count depends on the prompt length.
 * Non-matmul prefill time is ~34% of the window: SDPA ~13%, elementwise ~9%, norms ~9%. Prefill activations are DRAM interleaved by design, so the norms are not sharded.
-* In sliding_rope prefill at 8192 tokens one of the two identical SwiGLU projections is sporadically 7-12% slower: seven of the ten committed rows sit at 8936-8948 us and three at 9577-10034, and two of the five iterations are symmetric, so it is intermittent rather than positional or monotonic. The pair is stable in all ten rows at 4096 and in all ten on the full-attention path. Read as DRAM allocator/refresh state after the non-chunked windowed SDPA's 8192-token Q/K/V, immediately before two 327 MB back-to-back allocations; both candidate mitigations lose. The excess is 1.03% of the window and is inside the reported numbers, not excluded from them. See README.md 'Anomalies'.
+* In sliding_rope prefill at 8192 tokens one of the two identical SwiGLU projections is sporadically slower: 6 of the 10 committed rows sit at 8935-8942 us and 4 at 9747-10047 (9.0-12.4% slower), with 1 of 5 iterations symmetric, so it is intermittent rather than positional or monotonic. The pair is stable on the full-attention path and at 4096 tokens. Read as DRAM allocator/refresh state after the non-chunked windowed SDPA's 8192-token Q/K/V, immediately before two 327 MB back-to-back allocations; both candidate mitigations lose. The excess is 1.44% of the window and is inside the reported numbers, not excluded from them. Derived from tracy/sliding_rope/prefill_8192_perf_report.csv; see README.md 'Anomalies'.

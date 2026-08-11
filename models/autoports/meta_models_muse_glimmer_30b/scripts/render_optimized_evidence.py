@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import collections
 import csv
+import pathlib
 import gzip
 import hashlib
 import json
@@ -382,7 +383,8 @@ def _matmul_rows_table() -> list[str]:
         "|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     seen: set[tuple] = set()
-    for path in sorted(DOC.glob("tracy/*/decode_*_perf_report.csv")):
+    checked = 0
+    for path in sorted(DOC.glob("tracy/*/*_perf_report.csv")):
         with _open_csv(path) as handle:
             rows = [
                 r for r in csv.DictReader(handle) if (r.get("OP Code") or r.get("OP CODE") or "").startswith("Matmul")
@@ -394,7 +396,11 @@ def _matmul_rows_table() -> list[str]:
         for code, group in aggregated.items():
             first = group[0]
             shape = code.replace("MatmulDeviceOperation ", "")
-            key = shape.replace("32 x ", "").strip()
+            # Decode rows are "32 x K x N"; prefill rows are "b={16} x 512 x K x N". The
+            # role is the trailing "K x N" in both, and keying off that is what makes the
+            # dtype/fidelity check fire for prefill as well - it silently did not before.
+            parts = [piece.strip() for piece in shape.split(" x ")]
+            key = " x ".join(parts[-2:]) if len(parts) >= 2 else shape.strip()
             times = [float(r["Device Time"]) for r in group]
             subblock = f"{first.get('Output Subblock H') or '-'}x{first.get('Output Subblock W') or '-'}"
             lines.append(
@@ -407,6 +413,7 @@ def _matmul_rows_table() -> list[str]:
             role = _EXPECTED_WEIGHT_DTYPE.get(key)
             if role and (artifact, code) not in seen:
                 seen.add((artifact, code))
+                checked += 1
                 want_dtype, want_fidelity = expected[role]
                 got_dtype = first["Input 1 Datatype"].strip()
                 got_fidelity = first["Math Fidelity"].split()[0].strip()
@@ -420,7 +427,12 @@ def _matmul_rows_table() -> list[str]:
                         f"{artifact}: matmul {shape} ran at {got_fidelity}, policy "
                         f"'{policy.name}' claims {want_fidelity}"
                     )
-    return lines + [""]
+    if checked < 40:
+        PROBLEMS.append(
+            f"the dtype/fidelity check only matched {checked} matmul rows; it should cover 5 roles "
+            "x 8 artifacts = 40"
+        )
+    return lines + ["", f"Rows machine-checked against the policy: **{checked}** (5 roles x 8 artifacts).", ""]
 
 
 def _executed_geometry_table() -> list[str]:
@@ -540,6 +552,204 @@ def _accounting_table() -> list[str]:
     return lines + [""]
 
 
+# --------------------------------------------------------------- generated prose
+
+
+def swiglu_anomaly() -> dict:
+    """Derive the SwiGLU prefill asymmetry straight from the committed CSV.
+
+    Round 2 of the stage review found this classification hand-typed from an earlier
+    profiler collection and wrong in every derived figure, so it is computed here and
+    written into the README and ``accounting.json`` from one source.
+    """
+    path = DOC / "tracy/sliding_rope/prefill_8192_perf_report.csv"
+    if not path.is_file():
+        return {}
+    with _open_csv(path) as handle:
+        rows = list(csv.DictReader(handle))
+
+    def times(csv_path, needle):
+        if not pathlib.Path(csv_path).is_file():
+            return []
+        with _open_csv(pathlib.Path(csv_path)) as handle_:
+            return [
+                (float(r["Device Time"]), (r.get("Bound") or "").strip())
+                for r in csv.DictReader(handle_)
+                if needle in (r.get("OP Code") or "")
+            ]
+
+    pair = times(path, "6656 x 19968")
+    if not pair:
+        return {}
+    window = sum(float(r["Device Time"]) for r in rows if (r.get("Device Time") or "").strip())
+    iterations = len(pair) // 2
+    slow = [t for t, bound in pair if bound == "SLOW"]
+    fast = [t for t, bound in pair if bound != "SLOW"]
+    baseline = sum(fast) / len(fast) if fast else 0.0
+    symmetric = sum(1 for i in range(iterations) if pair[2 * i][1] != "SLOW" and pair[2 * i + 1][1] != "SLOW")
+    excess = sum(t - baseline for t in slow)
+    controls = {
+        "the same op at 4096 on the same path": times(
+            DOC / "tracy/sliding_rope/prefill_4096_perf_report.csv", "6656 x 19968"
+        ),
+        "the same op at 8192 on the full-attention path": times(
+            DOC / "tracy/full_nope/prefill_8192_perf_report.csv", "6656 x 19968"
+        ),
+        "the down projection on the same path": times(path, "19968 x 6656"),
+    }
+    return {
+        "artifact": str(path.relative_to(DOC)),
+        "iterations": iterations,
+        "pairs": [[pair[2 * i][0], pair[2 * i + 1][0]] for i in range(iterations)],
+        "slow_rows": len(slow),
+        "total_rows": len(pair),
+        "symmetric_iterations": symmetric,
+        "stable_range": [min(fast), max(fast)] if fast else None,
+        "outlier_range": [min(slow), max(slow)] if slow else None,
+        "slowdown_pct": [100 * (t / baseline - 1) for t in slow] if fast else [],
+        "excess_us_per_iteration": excess / iterations if iterations else 0.0,
+        "excess_share_of_window_pct": 100 * excess / window if window else 0.0,
+        "controls": {
+            name: {
+                "range": [min(t for t, _ in v), max(t for t, _ in v)],
+                "slow_rows": sum(1 for _, b in v if b == "SLOW"),
+                "rows": len(v),
+            }
+            for name, v in controls.items()
+            if v
+        },
+    }
+
+
+def prefill_matmul_bounds() -> dict:
+    """Measured FLOPs% range and SLOW attribution over every prefill matmul row."""
+    rows = []
+    for path in sorted(DOC.glob("tracy/*/prefill_*_perf_report.csv")):
+        with _open_csv(path) as handle:
+            for row in csv.DictReader(handle):
+                code = row.get("OP Code") or ""
+                if code.startswith("Matmul"):
+                    rows.append((code, (row.get("Bound") or "").strip(), float(row["FLOPs %"])))
+    if not rows:
+        return {}
+    shapes = {}
+    for code, bound, flops in rows:
+        shape = code.split("x ", 1)[-1] if " x " in code else code
+        shape = " x ".join(code.split(" x ")[-2:])
+        entry = shapes.setdefault(shape, {"bound": set(), "flops": []})
+        entry["bound"].add(bound)
+        entry["flops"].append(flops)
+    return {
+        "flops_pct_min": min(f for _, _, f in rows),
+        "flops_pct_max": max(f for _, _, f in rows),
+        "slow_shapes": sorted(s for s, e in shapes.items() if "SLOW" in e["bound"]),
+        "flop_bound_shapes": sorted(s for s, e in shapes.items() if "SLOW" not in e["bound"]),
+    }
+
+
+def _anomaly_markdown(a: dict) -> str:
+    pairs = "    ".join("{:.0f} / {:.0f}".format(lo, hi) for lo, hi in a["pairs"])
+    controls = "; ".join(
+        "{} {:.0f}-{:.0f} us over {} rows, {} SLOW".format(
+            name, v["range"][0], v["range"][1], v["rows"], v["slow_rows"]
+        )
+        for name, v in a["controls"].items()
+    )
+    return (
+        "In `{artifact}` the {total} `6656 x 19968` rows ({iters} iterations x 2, identical\n"
+        "shape, cores, dtype, fidelity, `in0_block_w` and output subblock) measure\n\n"
+        "```\n{pairs}     (microseconds)\n```\n\n"
+        "{stable_n} of the {total} sit at {lo:.0f}-{hi:.0f}; **{slow} carry the `SLOW` marker** at\n"
+        "{olo:.0f}-{ohi:.0f}, i.e. {smin:.1f}-{smax:.1f}% slower. {sym} of the {iters} iterations {verb}\n"
+        "symmetric, so it is intermittent rather than positional. The excess over the stable\n"
+        "baseline is {exc:.0f} microseconds per iteration, **{share:.2f}% of the window**.\n\n"
+        "Controls, all from the committed artifacts: {controls}. So it is neither a shape, a\n"
+        "program-config nor a dtype effect."
+    ).format(
+        artifact=a["artifact"],
+        total=a["total_rows"],
+        iters=a["iterations"],
+        pairs=pairs,
+        stable_n=a["total_rows"] - a["slow_rows"],
+        lo=a["stable_range"][0],
+        hi=a["stable_range"][1],
+        slow=a["slow_rows"],
+        olo=a["outlier_range"][0],
+        ohi=a["outlier_range"][1],
+        smin=min(a["slowdown_pct"]),
+        smax=max(a["slowdown_pct"]),
+        sym=a["symmetric_iterations"],
+        verb="is" if a["symmetric_iterations"] == 1 else "are",
+        exc=a["excess_us_per_iteration"],
+        share=a["excess_share_of_window_pct"],
+        controls=controls,
+    )
+
+
+GENERATED_BLOCKS: dict = {}
+
+
+def build_generated_blocks() -> None:
+    anomaly = swiglu_anomaly()
+    if anomaly:
+        GENERATED_BLOCKS["anomaly"] = _anomaly_markdown(anomaly)
+    bounds = prefill_matmul_bounds()
+    if bounds:
+        slow = ", ".join("`{}`".format(s) for s in bounds["slow_shapes"]) or "none"
+        GENERATED_BLOCKS["prefill-bounds"] = (
+            "Measured across every prefill matmul row in the four committed reports: "
+            "**{:.1f}-{:.1f}%** of the LoFi FLOP peak. Rows marked `SLOW` in at least one "
+            "artifact: {}; every other shape is `FLOP`-bound."
+        ).format(bounds["flops_pct_min"], bounds["flops_pct_max"], slow)
+    counts = {}
+    if PCC_JSON.is_file():
+        counts["pcc_records"] = len(json.loads(PCC_JSON.read_text())["records"])
+    if CANDIDATES_JSON.is_file():
+        payload = json.loads(CANDIDATES_JSON.read_text())
+        counts["candidate_sections"] = len(payload["sections"])
+        counts["candidate_rows"] = sum(len(s["rows"]) for s in payload["sections"])
+    for name, log in (("tests", "logs/full_suite.log"), ("watcher_tests", "watcher/pytest_watcher.log")):
+        path = DOC / log
+        if path.is_file():
+            found = re.findall(r"(\d+) passed", path.read_text(errors="ignore"))
+            if found:
+                counts[name] = int(found[-1])
+    if counts:
+        GENERATED_BLOCKS["counts"] = (
+            "**{tests}** correctness tests, **{pcc}** PCC records, **{rows}** measured candidates in "
+            "{sections} sections, **{watch}** tests under watcher."
+        ).format(
+            tests=counts.get("tests", "?"),
+            pcc=counts.get("pcc_records", "?"),
+            rows=counts.get("candidate_rows", "?"),
+            sections=counts.get("candidate_sections", "?"),
+            watch=counts.get("watcher_tests", "?"),
+        )
+
+
+def rewrite_generated_blocks() -> None:
+    """Fill every ``<!-- generated:NAME -->`` block in the README from the artifacts.
+
+    Two review rounds found hand-typed figures drifting from regenerated artifacts. The
+    figures that drift are now written here, so a stale number is a renderer bug rather
+    than a transcription slip.
+    """
+    build_generated_blocks()
+    readme = DOC / "README.md"
+    if not readme.is_file():
+        return
+    text = readme.read_text()
+    for name, body in GENERATED_BLOCKS.items():
+        start, end = "<!-- generated:{} -->".format(name), "<!-- /generated:{} -->".format(name)
+        if start not in text or end not in text:
+            PROBLEMS.append("README.md is missing the generated block markers for {!r}".format(name))
+            continue
+        head = text[: text.index(start) + len(start)]
+        tail = text[text.index(end) :]
+        text = head + "\n" + body + "\n" + tail
+    readme.write_text(text)
+
+
 def main() -> int:
     lines = [
         "# Optimized decoder evidence tables — meta-models/Muse-Glimmer-30B",
@@ -553,7 +763,8 @@ def main() -> int:
     lines += ["## Performance", ""]
     lines += perf_tables()
     OUT.write_text("\n".join(lines).rstrip("\n") + "\n")
-    print(f"wrote {OUT}")
+    rewrite_generated_blocks()
+    print(f"wrote {OUT} and the README generated blocks")
     if PROBLEMS:
         print("\nEVIDENCE PROBLEMS:", file=sys.stderr)
         for problem in PROBLEMS:

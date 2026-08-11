@@ -71,15 +71,19 @@ NAMED_LIMITATIONS = [
     "the prompt length.",
     "Non-matmul prefill time is ~34% of the window: SDPA ~13%, elementwise ~9%, norms ~9%. Prefill "
     "activations are DRAM interleaved by design, so the norms are not sharded.",
-    "In sliding_rope prefill at 8192 tokens one of the two identical SwiGLU projections is "
-    "sporadically 7-12% slower: seven of the ten committed rows sit at 8936-8948 us and three at "
-    "9577-10034, and two of the five iterations are symmetric, so it is intermittent rather than "
-    "positional or monotonic. The pair is stable in all ten rows at 4096 and in all ten on the "
-    "full-attention path. Read as DRAM allocator/refresh state after the non-chunked windowed "
-    "SDPA's 8192-token Q/K/V, immediately before two 327 MB back-to-back allocations; both "
-    "candidate mitigations lose. The excess is 1.03% of the window and is inside the reported "
-    "numbers, not excluded from them. See README.md 'Anomalies'.",
+    # index 5 is replaced at render time with figures derived from the committed CSV
+    "SWIGLU_ANOMALY_PLACEHOLDER",
 ]
+
+
+def _swiglu_anomaly() -> dict:
+    """Reuse the evidence renderer's derivation so both artifacts cannot disagree."""
+    import sys as _sys
+
+    _sys.path.insert(0, str(MODEL_DIR / "scripts"))
+    from render_optimized_evidence import swiglu_anomaly
+
+    return swiglu_anomaly()
 
 
 def _arch_spec():
@@ -152,7 +156,36 @@ def main() -> int:
             }
         )
 
+    anomaly = _swiglu_anomaly()
+    limitations = list(NAMED_LIMITATIONS)
+    limitations[5] = (
+        "In sliding_rope prefill at 8192 tokens one of the two identical SwiGLU projections is "
+        "sporadically slower: {stable} of the {total} committed rows sit at {lo:.0f}-{hi:.0f} us and "
+        "{slow} at {olo:.0f}-{ohi:.0f} ({smin:.1f}-{smax:.1f}% slower), with {sym} of {iters} "
+        "iterations symmetric, so it is intermittent rather than positional or monotonic. The pair "
+        "is stable on the full-attention path and at 4096 tokens. Read as DRAM allocator/refresh "
+        "state after the non-chunked windowed SDPA's 8192-token Q/K/V, immediately before two "
+        "327 MB back-to-back allocations; both candidate mitigations lose. The excess is {share:.2f}% "
+        "of the window and is inside the reported numbers, not excluded from them. Derived from "
+        "{artifact}; see README.md 'Anomalies'."
+    ).format(
+        stable=anomaly["total_rows"] - anomaly["slow_rows"],
+        total=anomaly["total_rows"],
+        lo=anomaly["stable_range"][0],
+        hi=anomaly["stable_range"][1],
+        slow=anomaly["slow_rows"],
+        olo=anomaly["outlier_range"][0],
+        ohi=anomaly["outlier_range"][1],
+        smin=min(anomaly["slowdown_pct"]),
+        smax=max(anomaly["slowdown_pct"]),
+        sym=anomaly["symmetric_iterations"],
+        iters=anomaly["iterations"],
+        share=anomaly["excess_share_of_window_pct"],
+        artifact=anomaly["artifact"],
+    )
+
     payload = {
+        "swiglu_prefill_anomaly": anomaly,
         "device": {
             "arch": "blackhole",
             "board": "p300c",
@@ -176,7 +209,7 @@ def main() -> int:
             ),
         },
         "workloads": workloads,
-        "named_limitations": NAMED_LIMITATIONS,
+        "named_limitations": limitations,
     }
     OUT.write_text(json.dumps(payload, indent=2) + "\n")
     print(f"wrote {OUT}")

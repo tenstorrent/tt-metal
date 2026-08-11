@@ -38,9 +38,9 @@ reports *free* bytes, so no overflow) — the same floor the functional stage me
 the sharded/DRAM-sharded kernels this stage introduced did not eat into it.
 
 Not covered here, for runtime reasons: the full-context (131072) path. That path *is*
-exercised on this stage's code by `test_full_context_prefill_and_decode` in the ordinary
-suite ([`../logs/long_context_suite.log`](../logs/long_context_suite.log)), just not under
-watcher.
+exercised on this stage's code, at both precision policies, by
+`test_full_context_prefill_and_decode` in the ordinary suite
+([`../logs/full_suite.log`](../logs/full_suite.log)) — just not under watcher.
 
 The raw log is committed gzipped (`generated/watcher/watcher.log.gz`) because the repo's
 pre-commit hook rejects files over 500 KB; `generated/watcher/kernel_names.txt` and
