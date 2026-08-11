@@ -28,7 +28,11 @@ in §6.41/§6.43). A probe in `/tmp` cannot be re-run by whoever inherits this.
 | `prefill_f32_act.py` | does fp32 prefill (typecast at the cache boundary) help past frame 0? | **no** — gain is gone by step 1; also shows decode is O(1) in position (§6.56) |
 | `fp32_cache_handrolled.py` | can an fp32 KV cache be had by hand-rolling around `sdpa_decode`? | **no** — 44.7× slower; the op-count model fails on ops that materialise tensors (§6.57) |
 | `bf16_decode.py` | what do bf16 weights through decode cost and buy? | **+29% for nothing** — worst-sample error is non-monotonic (§6.57) |
-| `run_mos.py` / `mos_percase.py` | automated MOS (DistillMOS) — is the device perceptually worse than fp32? | **no** — delta −0.017/−0.027; long-form mean **4.63** (§6.59). Needs `/tmp/mosvenv`, see `mos_setup.sh` |
+| `mos_batch.py` | automated MOS over a run's utterances — **this is the one `quality_report.py` calls** | wired into `--tier audio`; prints `MOS_MEAN` / `MOS_LONGFORM` / `MOS_MIN` for the harness to parse |
+| `run_mos.py` / `mos_percase.py` | the one-off MOS investigations `mos_batch.py` grew out of — is the device perceptually worse than fp32? | **no** — delta −0.017/−0.027; long-form mean **4.63** at §6.59, **4.61** on the current build (§6.67) |
+| `tail_probe.py` | does a change make rare BAD utterances likelier? counts failures, not means | the right shape for tail risk: many seeds on the three prompts that actually score low (§6.62) |
+| `click_origin.py` | case 6 clicks — ours or the model's? | **the model's** — the fp32 reference clicks MORE on the same seed (69 vs 60) |
+| `make_ref_ab.py` / `make_sampler.py` | build fp32-reference-vs-device pairs and a listening sampler from the current build | the inputs to every listening pass; §3 is explicit that a developer saying "ok" is not an eval |
 | `perceptual.py` | MCD / F0 / codec transparency vs the fp32 reference | codec SNR 42.9 dB, LSD 0.62 dB; **MCD failed its self-test and is not reported** (§6.59) |
 | `frame_ab.py` | does a block A/B predict the frame? | **no** — −2.124 ms on the blocks, 0 on the frame (§6.63) |
 | `rtf_repeat.sh` | how repeatable is the generator? | **0.390 ms** over three identical runs, so it can decide (§6.63) |

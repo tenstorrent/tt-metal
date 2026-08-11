@@ -38,10 +38,8 @@ DTYPE = ttnn.bfloat16
 # NOTES.md [gpt-03] -- DECODE'S INTERMEDIATES LIVE IN L1, not DRAM -- the same...
 _L1 = ttnn.L1_MEMORY_CONFIG
 
-# NOTES.md [gpt-04] -- the decode RMSNorm is NOT width-sharded on Blackhole. Sharding it wins
-# on Wormhole and LOSES here, by the same margin and for the same reason -- the reshard is the
-# tax, and the p150's interleaved kernel made the reduction cheap enough that the tax is pure
-# loss. That is why _NORM_SHARD / _NORM_PRG / _norm_dec are gone from this branch.
+# The decode RMSNorm IS width-sharded -- see _NORM_SHARD below and NOTES.md [gpt-28]. [gpt-04] is
+# the superseded N150-vs-p150 record and describes the opposite; read [gpt-28] first.
 
 # NOTES.md [gpt-05] -- Decode runs in ttnn's DECODE-NATIVE head layout, [1...
 _QKV_WIDTH = (N_HEADS + 2 * N_KV_HEADS) * HEAD_DIM      # 6144, one fused projection
@@ -101,7 +99,7 @@ def _pc(prg, key):
     """program_config kwarg for `key`, or nothing at all when prg is empty (the prefill path)."""
     return {"program_config": prg[key]} if prg else {}
 
-# NOTES.md [gpt-28] -- the decode RMSNorm is width-sharded again, +5.693 ms/frame. 6.39/6.40
+# NOTES.md [gpt-28] -- the decode RMSNorm is width-sharded again, +5.399 ms/frame. 6.39/6.40
 # rejected this at +4.4 ms WORSE, but that cost was the RESHARD DISPATCH, which 6.65 traced away.
 # DECODE ONLY: the shard spec fixes the height at one tile, so prefill fails outright.
 _NORM_GRID = (8, 4)                   # 32 cores x block_w 3 == 96 tiles; the grid barely matters
@@ -326,8 +324,6 @@ class TtVoxtralGPT:
             compute_kernel_config=COMPUTE_CONFIG, program_config=_SDPA_PRG)
         # NOTES.md [gpt-03b] -- no memory_config move: L1 here measures 0.999x, see [gpt-03]...
         a = ttnn.reshape(o, [1, 1, Q_WIDTH])
-        # in place -- see NOTES.md [gpt-25]. Safe: `x` is the layer input and is dead the moment
-        # this returns, and _norm below is evaluated BEFORE _mlp mutates anything.
         # NOTES.md [gpt-27] -- residual as bias. Decode is M=1, so the residual IS a row vector.
         x = ttnn.linear(a, w["wo"], bias=ttnn.reshape(x, [1, DIM]), program_config=DECODE_PRG["wo"],
                         compute_kernel_config=COMPUTE_CONFIG, memory_config=_L1)

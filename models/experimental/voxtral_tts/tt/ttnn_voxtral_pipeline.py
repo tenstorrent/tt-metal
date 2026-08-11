@@ -38,7 +38,9 @@ def open_device(device_id=0, trace_region_size=TRACE_REGION_SIZE):
 class TtVoxtralPipeline:
     """All three blocks on device. generate(embeds) -> frames; decode(frames) -> waveform."""
 
-    def __init__(self, device, ckpt_path=DEFAULT_CKPT, max_seq_len=1024):
+    def __init__(self, device, ckpt_path=DEFAULT_CKPT, max_seq_len=2048):
+        """`max_seq_len` holds prompt + generated frames TOGETHER and is the only cap on utterance
+        length -- 2048 is ~136 s of audio. Raising it costs DRAM and nothing per frame (§6.69)."""
         self.device = device
         # NOTES.md [pipe-03] -- embed_frame is a host gather, so it needs the backbone's...
         self.wb = backbone.load_backbone_state(ckpt_path)

@@ -205,19 +205,24 @@ current build is `generated/SAMPLER_current_build.wav` (13 clips, 136 s); play w
 
 ## 4. Where we are now — the numbers to beat
 
-| | current |
+| | current (p150, `§6.67`) |
 |---|---|
-| long-form RTF | **0.57–0.64** |
-| per frame | **~48 ms** — Block 1 ~23, Block 2 ~20.8, host 0.2 |
-| long-form WER | **0 wrong words** (298 over all 15 cases; 274 over the 3-case subset) |
-| Block 1 worst-sample mean / p90 | 0.92% / 1.28%, min PCC 0.999040 |
-| Block 2 velocity PCC | 0.99998480 |
-| `[END_AUDIO]` natural termination | 15/15 |
-| listening pass | "sounds good", `§6.38`-era build |
+| per frame | **27.723 ms** — Block 1 ~15.9, Block 2 ~15.0, host ~2 |
+| long-form RTF | **0.3647** |
+| long-form WER | **0 wrong words of 596** |
+| MOS long-form / min / mean | 4.6050 / 2.6597 / 3.9972 |
+| clicks / natural `[END_AUDIO]` | 52 / 30 |
+| utterance length ceiling | `max_seq_len`, holding prompt + frames; 2048 ≈ 136 s. Costs DRAM, not RTF (`§6.69`) |
+| listening pass | done on this build — `generated/SAMPLER_current_build.wav` |
 
 **"Long-form" means ≥100 frames — currently cases 2, 3 and 10.** Quote only those, always with the
 case list. **Case 0 includes kernel compilation (RTF ~1.8) and must be excluded.** Short cases are
 seed noise: the same code at seeds 0/1/2 swung that bucket 0.88–2.06%.
+
+> This table read **48 ms/frame, RTF 0.57–0.64, WER over 298 words** until 2026-08-11 — the N150
+> numbers, ~30 sections stale, and contradicting §1 of this very file. If you are editing here,
+> the headline lives in THREE places (this table, the top of this file, `STATUS.md §1`) and they
+> must move together.
 
 Reproduce these before changing anything, so you know the ground you stand on.
 

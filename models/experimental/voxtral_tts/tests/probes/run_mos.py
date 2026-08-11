@@ -15,7 +15,8 @@ import glob, json, os, sys
 import numpy as np, soundfile as sf, torch
 import distillmos
 
-GEN = "/localdev/lserbedzija/repos/tt-metal/models/experimental/voxtral_tts/generated"
+V = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+GEN = os.path.join(V, "generated")
 m = distillmos.ConvTransformerSQAModel(); m.eval()
 
 def score(path):
@@ -27,7 +28,7 @@ def score(path):
     with torch.no_grad():
         return float(m(x).item())
 
-fx = json.load(open("/localdev/lserbedzija/repos/tt-metal/models/experimental/voxtral_tts/tests/prompt_fixture.json"))["cases"]
+fx = json.load(open(os.path.join(V, "tests", "prompt_fixture.json")))["cases"]
 print("=== DEVICE vs fp32 REFERENCE on identical prompts (the comparison that matters) ===")
 print(f"  {'pair':<34} {'device':>8} {'fp32 ref':>9} {'delta':>7}")
 for p in sorted(glob.glob(os.path.join(GEN, "*_FP32REF_s*.wav"))):

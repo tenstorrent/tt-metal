@@ -3,8 +3,8 @@
 # quality_baseline and biasBefore are the same code path and read 37.47 vs 39.93 ms/frame, so the
 # harness spread may exceed the 1.918 ms the bias change delivers. If so, no RTF quoted from a
 # single run means anything, and the interleaved block A/B is the only timing instrument of record.
-cd /localdev/lserbedzija/repos/tt-metal
-source /tmp/claude-1211416647/-localdev-lserbedzija/5377abb4-5495-4786-b60f-1d18a8772305/scratchpad/env.sh
+cd "${TT_METAL_HOME:?set TT_METAL_HOME to the repo root}"
+export PYTHONPATH="$TT_METAL_HOME/ttnn:$TT_METAL_HOME/tools:$TT_METAL_HOME"   # all three -- §2
 V=models/experimental/voxtral_tts
 for r in 1 2 3; do
   for s in 0 1; do
