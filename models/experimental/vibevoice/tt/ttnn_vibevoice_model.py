@@ -82,8 +82,6 @@ class TTVibeVoiceModel:
         cls,
         mesh_device,
         model_path: str,
-        cfg_scale: float = 1.3,
-        num_diffusion_steps: int = 10,
         weight_cache_dir: Optional[str] = None,
     ) -> "TTVibeVoiceModel":
         """Load all submodule weights and build TT model.
@@ -230,6 +228,7 @@ class TTVibeVoiceModel:
             speech_bias_factor=self._speech_bias_factor,
             acoustic_fix_std=self._config.acoustic_tokenizer.fix_std,
             acoustic_encode_chunk_samples=prod(self._config.acoustic_tokenizer.encoder_ratios),
+            latent_size=self._config.diffusion_head.latent_size,
             ref_inference=ref_inference,
         )
 

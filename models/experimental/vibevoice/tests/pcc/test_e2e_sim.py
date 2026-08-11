@@ -200,9 +200,7 @@ def test_e2e_sim_tt_voice_clone(mesh_device):
     else:
         processor = _make_processor()
         inputs = _process_inputs(processor, target_path)
-        tt_model = TTVibeVoiceModel.from_checkpoint(
-            mesh_device, MODEL_PATH, cfg_scale=CFG_SCALE, num_diffusion_steps=NUM_DIFFUSION_STEPS
-        )
+        tt_model = TTVibeVoiceModel.from_checkpoint(mesh_device, MODEL_PATH)
         tt_speech = _tt_generate_speech(tt_model, processor.tokenizer, inputs, MAX_NEW_TOKENS)
         _sanity_check("tt", tt_speech)
         sf.write(str(tt_wav_path), tt_speech.clamp(-1.0, 1.0).numpy(), SR)
@@ -321,9 +319,7 @@ def test_e2e_sim_4speaker(mesh_device):
         else:
             if tt_model is None:
                 processor = _make_processor()
-                tt_model = TTVibeVoiceModel.from_checkpoint(
-                    mesh_device, MODEL_PATH, cfg_scale=CFG_SCALE, num_diffusion_steps=NUM_DIFFUSION_STEPS
-                )
+                tt_model = TTVibeVoiceModel.from_checkpoint(mesh_device, MODEL_PATH)
             inputs = _process_inputs(processor, VOICES_DIR / voice_files[name])
             tt_speech = _tt_generate_speech(tt_model, processor.tokenizer, inputs, MAX_NEW_TOKENS)
             _sanity_check(name, tt_speech)

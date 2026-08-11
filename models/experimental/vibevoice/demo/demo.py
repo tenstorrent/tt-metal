@@ -367,8 +367,6 @@ def main() -> int:
         tt_model = TTVibeVoiceModel.from_checkpoint(
             mesh,
             model_path,
-            cfg_scale=args.cfg_scale,
-            num_diffusion_steps=args.num_steps,
             weight_cache_dir=args.weight_cache_dir,
         )
         print(f"[vibevoice_demo] model load: {_time.perf_counter() - _t_load0:.1f}s", flush=True)

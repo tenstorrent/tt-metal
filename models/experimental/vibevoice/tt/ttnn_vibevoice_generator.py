@@ -174,6 +174,7 @@ class TTVibeVoiceGenerator:
         speech_bias_factor: Optional[float] = None,
         acoustic_fix_std: float = 0.5,
         acoustic_encode_chunk_samples: int = 3200,
+        latent_size: int = 64,
         ref_inference=None,
     ):
         self.lm = lm_tt
@@ -205,6 +206,7 @@ class TTVibeVoiceGenerator:
         self.speech_bias_factor = speech_bias_factor
         self.acoustic_fix_std = acoustic_fix_std
         self.acoustic_encode_chunk_samples = acoustic_encode_chunk_samples
+        self.latent_size = latent_size
 
         self.valid_token_ids = [
             speech_start_id,
@@ -454,7 +456,7 @@ class TTVibeVoiceGenerator:
             # Sized to the longest row (rows are processor-padded to a common length), with a floor
             # of the warmup count so the eager warmup gathers stay in bounds.
             self._enc_table = ttnn.zeros(
-                [max(n_rows, 4), chunk],
+                [max(n_rows, 8), chunk],
                 dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=dev,
@@ -471,7 +473,7 @@ class TTVibeVoiceGenerator:
         # First warmup encode also supplies vae_dim for the accumulator, which must be allocated
         # before the REMAINING warmups so the scatter's programs land in the program cache too —
         # a capture cannot load new binaries.  Index overrun during warmup+capture is why the
-        # accumulator's floor (8) exceeds the audio table's (4): 4 warmup + 2 capture writes.
+        # accumulator and audio table both floor at 8: 4 warmup + 2 capture writes (indices 0..5).
         _warm = self.acoustic_tok.encode(self._enc_input(chunk), use_cache=True, is_final_chunk=False)
         if n_rows:
             self._enc_lat_alloc(dev, max(n_rows, 8), int(_warm.shape[-1]), _warm.dtype)
@@ -880,10 +882,10 @@ class TTVibeVoiceGenerator:
         self,
         condition: ttnn.Tensor,
         neg_condition: ttnn.Tensor,
-        latent_size: int = 64,
         noise_2x: Optional[torch.Tensor] = None,
         rng: Optional[torch.Generator] = None,
     ) -> ttnn.Tensor:
+        latent_size = self.latent_size
         if self.ref_inference is not None:
             pos = self._hidden_to_condition_torch(condition)
             neg = self._hidden_to_condition_torch(neg_condition)
@@ -1017,7 +1019,7 @@ class TTVibeVoiceGenerator:
         if not self._trace_segment:
             return False
         self._sf_noise_table = ttnn.randn(
-            [max_steps, 64],
+            [max_steps, self.latent_size],
             device=self.device,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -1381,8 +1383,8 @@ class TTVibeVoiceGenerator:
 
     def _post_diffusion_embeds_ref(self, speech_latent: ttnn.Tensor) -> Tuple[ttnn.Tensor, torch.Tensor]:
         m = self.ref_inference.model
-        scale = self.speech_scaling_factor or m.speech_scaling_factor.item()
-        bias = self.speech_bias_factor or m.speech_bias_factor.item()
+        scale = self.speech_scaling_factor if self.speech_scaling_factor is not None else m.speech_scaling_factor.item()
+        bias = self.speech_bias_factor if self.speech_bias_factor is not None else m.speech_bias_factor.item()
         lat = ttnn.to_torch(speech_latent).to(torch.float32).reshape(1, -1)
         speech_latent_ref = lat.unsqueeze(1)
         scaled = speech_latent_ref / scale - bias
@@ -1420,8 +1422,8 @@ class TTVibeVoiceGenerator:
         """The post-diffusion op graph: inverse-norm → acoustic decode → semantic encode
         → connectors → fused embed.  Reads ``latent`` for both the decode and acoustic
         connector (so a single persistent input tensor suffices under trace)."""
-        scale = self.speech_scaling_factor or 1.0
-        bias = self.speech_bias_factor or 0.0
+        scale = self.speech_scaling_factor if self.speech_scaling_factor is not None else 1.0
+        bias = self.speech_bias_factor if self.speech_bias_factor is not None else 0.0
 
         # Inverse-normalise the current latent frame to the acoustic VAE space, fully on device (no host round-trip).
         # scale/bias are Python floats, so this is scaled = latent * (1/scale) - bias.
@@ -1575,7 +1577,6 @@ class TTVibeVoiceGenerator:
 
         # Determine the max number of AR steps up front — it sizes the fixed KV cache.
         initial_length = input_ids.shape[-1]
-        initial_len = int(attention_mask.sum(dim=-1)[0].item())
         forced_tokens: Optional[List[int]] = None
         if forced_token_ids is not None:
             forced_tokens = forced_token_ids.reshape(-1).tolist()
@@ -1587,7 +1588,7 @@ class TTVibeVoiceGenerator:
         else:
             max_steps = min(
                 cfg.max_position_embeddings - initial_length,
-                int(self.max_length_times * initial_len),
+                int(self.max_length_times * initial_length),
             )
 
         # Preallocate fixed-size KV caches (TT LM path only).  Positive cache holds
@@ -1695,9 +1696,9 @@ class TTVibeVoiceGenerator:
             if self._sf_ttnn_randn and self._sf_randn_noise_table(max_steps, _dev_seed):
                 _vv_debug(f"diffusion noise: ttnn.randn on device, seed={_dev_seed} (NOT torch-reference values)")
             else:
-                diffusion_noise = torch.randn(max_steps, 2, 1, 1, 64, dtype=torch.float32, generator=rng).to(
-                    torch.bfloat16
-                )
+                diffusion_noise = torch.randn(
+                    max_steps, 2, 1, 1, self.latent_size, dtype=torch.float32, generator=rng
+                ).to(torch.bfloat16)
                 # Upload it once as a gather table so the traced frame picks its row on device.
                 self._sf_upload_noise_table(diffusion_noise)
 
@@ -1791,9 +1792,7 @@ class TTVibeVoiceGenerator:
                         ttnn.synchronize_device(device)
                         tracy.signpost("start")
                         _vv_debug(f"Tracy signpost start: eager diffusion {_profile_diff}")
-                    speech_latent = self._run_speech_diffusion(
-                        cond_pos, cond_neg, latent_size=64, noise_2x=noise_2x, rng=rng
-                    )
+                    speech_latent = self._run_speech_diffusion(cond_pos, cond_neg, noise_2x=noise_2x, rng=rng)
                     if _profile_diff and diffusion_frames == _profile_diff:
                         import tracy
 
