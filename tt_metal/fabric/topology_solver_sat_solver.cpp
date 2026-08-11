@@ -157,16 +157,61 @@ private:
     std::atomic<bool>* cancel_ = nullptr;
 };
 
+// CLAUSE-SHARING export adapter. CaDiCaL invokes learning(size) as each clause is learned; if it returns true, the
+// clause's literals are streamed via learn(lit) terminated by learn(0). We keep only short clauses (size <= max_size:
+// short clauses are the high-value, low-volume ones portfolio solvers share) and publish each to the shared pool.
+// Pure export -- import is done by the portfolio driver via add() between conflict-budget windows (keeps the solver a
+// plain incremental CaDiCaL; no observed-var freezing).
+class ClauseExportLearner : public CaDiCaL::Learner {
+public:
+    ClauseExportLearner(ClauseSharingPool* pool, int producer_id, int max_size) :
+        pool_(pool), producer_id_(producer_id), max_size_(max_size) {}
+
+    bool learning(int size) override { return pool_ != nullptr && size > 0 && size <= max_size_; }
+
+    void learn(int lit) override {
+        if (lit != 0) {
+            buf_.push_back(lit);
+            return;
+        }
+        if (!buf_.empty()) {
+            pool_->publish(producer_id_, buf_);
+            buf_.clear();
+        }
+    }
+
+private:
+    ClauseSharingPool* pool_ = nullptr;
+    int producer_id_ = 0;
+    int max_size_ = 0;
+    std::vector<int> buf_;
+};
+
 }  // namespace
 
 struct TopologySatSolver::Impl {
     mutable CaDiCaL::Solver solver;
     HeartbeatTerminator heartbeat;
+    std::unique_ptr<ClauseExportLearner> export_learner;
 
     Impl() {
         solver.set("quiet", 1);
         heartbeat.bind(&solver);
         solver.connect_terminator(&heartbeat);
+    }
+
+    ~Impl() {
+        if (export_learner) {
+            solver.disconnect_learner();
+        }
+    }
+
+    void enable_clause_export(ClauseSharingPool* pool, int producer_id, int max_size) {
+        if (pool == nullptr) {
+            return;
+        }
+        export_learner = std::make_unique<ClauseExportLearner>(pool, producer_id, max_size);
+        solver.connect_learner(export_learner.get());
     }
 
     void reserve(int max_var) {
@@ -235,6 +280,10 @@ void TopologySatSolver::configure_for_blocking_clause_enumeration() {
 bool TopologySatSolver::set_option(const std::string& name, int value) { return impl_->solver.set(name.c_str(), value); }
 
 void TopologySatSolver::set_cancel_flag(std::atomic<bool>* flag) { impl_->set_cancel(flag); }
+
+void TopologySatSolver::enable_clause_export(ClauseSharingPool* pool, int producer_id, int max_size) {
+    impl_->enable_clause_export(pool, producer_id, max_size);
+}
 
 bool TopologySatSolver::write_dimacs(const std::string& path) {
     log_info(

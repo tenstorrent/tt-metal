@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <memory>
 #include <atomic>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -15,6 +16,42 @@
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
 
 namespace tt::tt_fabric::detail {
+
+// Lock-guarded learned-clause exchange for the clause-sharing portfolio (Option 1: replicate gimsatul's one trick --
+// sharing short learned clauses across parallel workers -- natively in CaDiCaL, so incrementality is retained).
+// Producers publish() filtered learned clauses (captured via CaDiCaL's Learner callback); each consumer keeps its own
+// monotonic cursor and drain()s the clauses it has not yet seen, skipping its own. Soundness: every shared clause is a
+// clause the producer LEARNED from the same base formula, hence entailed by it, so importing it removes no model and
+// changes no answer -- it only prunes the consumer's search. Facade-level (no CaDiCaL types) so it can be created by
+// the portfolio driver and handed to each worker's solver.
+struct ClauseSharingPool {
+    void publish(int producer_id, const std::vector<int>& lits) {
+        std::lock_guard<std::mutex> lk(m_);
+        clauses_.push_back(Entry{producer_id, lits});
+    }
+    // Append every clause after `cursor` not produced by `consumer_id` into `out`; advance `cursor` to the end.
+    void drain(int consumer_id, std::size_t& cursor, std::vector<std::vector<int>>& out) {
+        std::lock_guard<std::mutex> lk(m_);
+        for (std::size_t i = cursor; i < clauses_.size(); ++i) {
+            if (clauses_[i].producer_id != consumer_id) {
+                out.push_back(clauses_[i].lits);
+            }
+        }
+        cursor = clauses_.size();
+    }
+    std::size_t size() const {
+        std::lock_guard<std::mutex> lk(m_);
+        return clauses_.size();
+    }
+
+private:
+    struct Entry {
+        int producer_id;
+        std::vector<int> lits;
+    };
+    mutable std::mutex m_;
+    std::vector<Entry> clauses_;
+};
 
 /**
  * Thin IPASIR-style facade over CaDiCaL (`cadical.hpp`). DIMACS wire protocol: positive variable ids, 0 ends a
@@ -74,6 +111,13 @@ struct TopologySatSolver {
     // Point the solver's terminator at a shared cancel flag: once *flag is true, solve() aborts (returns non-SAT).
     // Used by the parallel seed portfolio so the first thread to hit SAT cancels the rest. nullptr = no cancel.
     void set_cancel_flag(std::atomic<bool>* flag);
+
+    // CLAUSE-SHARING portfolio (Option 1): connect a CaDiCaL Learner that publishes every learned clause of size
+    // <= `max_size` into `pool` tagged with `producer_id`. Combined with importing peers' clauses via add() between
+    // conflict-budget windows, this reproduces gimsatul's clause-sharing while every worker stays a full incremental
+    // CaDiCaL (keeps BVE/warmth/enumeration -- unlike the ExternalPropagator path, which would freeze observed vars
+    // and disable elimination). Call once, before solve(). `pool` must outlive this solver. No-op if pool == nullptr.
+    void enable_clause_export(ClauseSharingPool* pool, int producer_id, int max_size);
 
     // Write the current CNF to a DIMACS file (experiment hook: feed an external parallel/clause-sharing solver).
     // Returns true on success. Variable numbering matches declare_one_more_variable() so a model round-trips.

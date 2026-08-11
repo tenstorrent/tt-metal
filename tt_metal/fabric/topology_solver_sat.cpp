@@ -2408,6 +2408,126 @@ inline bool topology_sat_run_portfolio(
     return true;
 }
 
+// CLAUSE-SHARING portfolio (Option 1). Like topology_sat_run_portfolio, but the N seed workers COOPERATE: each
+// connects a Learner that publishes its short learned clauses to a shared pool, and between conflict-budget windows
+// imports peers' clauses via add(). This reproduces gimsatul's clause-sharing while every worker stays a full
+// incremental CaDiCaL (BVE/warmth intact) -- the ExternalPropagator import path was rejected because it freezes
+// observed vars and disables elimination. Sharing is sound + model-preserving (every shared clause is entailed by the
+// common base formula). Falls back to first-to-SAT semantics; the first worker to a model cancels the rest.
+inline bool topology_sat_run_sharing_portfolio(
+    const TopologySatGraphView& graph_data,
+    const TopologySatConstraintView& constraint_data,
+    ConnectionValidationMode validation_mode,
+    int n_workers,
+    long base_seed,
+    bool fastsat,
+    int share_budget,
+    int share_max_size,
+    bool quiet_mode,
+    std::vector<int>& mapping_out) {
+    std::atomic<bool> done{false};
+    std::mutex mtx;
+    ClauseSharingPool pool;
+    std::atomic<long> shared_total{0};
+    std::vector<int> best;
+    int winner = -1;
+    double win_ms = 0.0;
+    const auto t0 = std::chrono::steady_clock::now();
+    std::vector<std::thread> workers;
+    workers.reserve(static_cast<size_t>(n_workers));
+    for (int k = 0; k < n_workers; ++k) {
+        workers.emplace_back([&, k]() {
+            TopologySatSolver solver;
+            solver.set_cancel_flag(&done);
+            (void)solver.set_option("seed", static_cast<int>((base_seed >= 0 ? base_seed : 0) + k));
+            if (fastsat) {
+                (void)solver.set_option("target", 2);
+                (void)solver.set_option("phase", 1);
+            }
+            TopologySatHardEncoding enc;
+            {
+                std::lock_guard<std::mutex> lk(mtx);
+                if (done.load(std::memory_order_relaxed)) {
+                    return;
+                }
+                if (!topology_sat_encode_hard_constraints(
+                        solver, graph_data, constraint_data, enc, validation_mode, /*quiet_mode=*/true)) {
+                    return;
+                }
+            }
+            // Connect export AFTER encode so only learned (not input) clauses are published.
+            solver.enable_clause_export(&pool, k, share_max_size);
+            const int assumption = topology_sat_symmetry_assumption_lit(graph_data, enc);
+
+            // Budgeted incremental loop: solve a window, import peers' clauses, repeat until SAT/UNSAT/cancel.
+            bool first = true;
+            std::size_t cursor = 0;
+            std::vector<std::vector<int>> imported;
+            for (;;) {
+                if (done.load(std::memory_order_relaxed)) {
+                    return;
+                }
+                if (first && assumption != 0) {
+                    solver.assume(assumption);  // one-shot hint (retracted after the solve)
+                }
+                const int status = solver.solve_limited(share_budget);
+                if (status == TopologySatSolver::kSat) {
+                    std::vector<int> m;
+                    if (!topology_sat_decode_hard_solution(solver, enc, m)) {
+                        return;
+                    }
+                    std::lock_guard<std::mutex> lk(mtx);
+                    if (!done.exchange(true)) {
+                        best = std::move(m);
+                        winner = k;
+                        win_ms = topology_sat_elapsed_ms(t0);
+                    }
+                    return;
+                }
+                if (status == TopologySatSolver::kUnsat) {
+                    if (first && assumption != 0) {
+                        first = false;  // the hint may have forced UNSAT -- retry the window without it
+                        continue;
+                    }
+                    return;  // genuine UNSAT for this worker
+                }
+                // status == 0: conflict budget exhausted (or cancelled) -> import peers' clauses and continue.
+                first = false;
+                imported.clear();
+                pool.drain(k, cursor, imported);
+                for (const auto& cl : imported) {
+                    for (const int lit : cl) {
+                        solver.add(lit);
+                    }
+                    solver.add(0);
+                }
+                shared_total.fetch_add(static_cast<long>(imported.size()), std::memory_order_relaxed);
+            }
+        });
+    }
+    for (auto& w : workers) {
+        w.join();
+    }
+    if (winner < 0) {
+        return false;
+    }
+    mapping_out = std::move(best);
+    if (!quiet_mode) {
+        log_info(
+            tt::LogFabric,
+            "[topo-sat-profile] sharing-portfolio: {}-way, winner=seed_offset {} in {:.1f} ms (budget={}, max_size={}, "
+            "pool={}, imports={})",
+            n_workers,
+            winner,
+            win_ms,
+            share_budget,
+            share_max_size,
+            pool.size(),
+            shared_total.load(std::memory_order_relaxed));
+    }
+    return true;
+}
+
 bool topology_sat_search(
     const TopologySatGraphView& graph_data,
     const TopologySatConstraintView& constraint_data,
@@ -2493,11 +2613,20 @@ bool topology_sat_search(
         if (portfolio_n > 1) {
             const long base_seed = topology_sat_env_long("TT_TOPO_SAT_SEED", 0);
             const bool fastsat = topology_sat_env_long("TT_TOPO_SAT_FASTSAT", 0) != 0;
+            // TT_TOPO_SAT_SHARE=1 -> cooperative clause-sharing portfolio (Option 1) instead of the independent race.
+            const bool share = topology_sat_env_long("TT_TOPO_SAT_SHARE", 0) != 0;
+            const int share_budget = static_cast<int>(topology_sat_env_long("TT_TOPO_SAT_SHARE_BUDGET", 2000));
+            const int share_max_size = static_cast<int>(topology_sat_env_long("TT_TOPO_SAT_SHARE_MAX_SIZE", 8));
             const auto t_pf = std::chrono::steady_clock::now();
             std::vector<int> m;
-            if (topology_sat_run_portfolio(
-                    graph_data, constraint_data, validation_mode, static_cast<int>(portfolio_n), base_seed, fastsat,
-                    quiet_mode, m)) {
+            const bool ok =
+                share ? topology_sat_run_sharing_portfolio(
+                            graph_data, constraint_data, validation_mode, static_cast<int>(portfolio_n), base_seed,
+                            fastsat, share_budget, share_max_size, quiet_mode, m)
+                      : topology_sat_run_portfolio(
+                            graph_data, constraint_data, validation_mode, static_cast<int>(portfolio_n), base_seed,
+                            fastsat, quiet_mode, m);
+            if (ok) {
                 state.mapping = std::move(m);
                 std::fill(state.used.begin(), state.used.end(), false);
                 for (size_t t = 0; t < state.mapping.size(); ++t) {
