@@ -9,7 +9,7 @@
 //   2. DECIDE sum (tail - head) across the 5 RISC tails; a core reaching ADAPT_THRESH goes on the list
 //   3. DRAIN  whole-core 10 KB reads for listed cores, accumulated into a socket page, pushed when full
 //
-// This is profstream.c's adaptive switch with the bulk read wired straight to a D2H socket instead of
+// This is X280 profstream FW's adaptive switch with the bulk read wired straight to a D2H socket instead of
 // a relay. The deliberate departure is the same as before: no per-RISC fallback below the threshold. A
 // read costs ~40 cycles regardless of payload, so five per-lane reads cost 5x one whole-core read that
 // fetches the same data plus slack.
@@ -44,7 +44,7 @@ void kernel_main() {
     constexpr uint32_t kResultsAddr = get_compile_time_arg_val(7);
 
     constexpr uint32_t kPageBytes = kCoresPerPage * kBytesPerCore;
-    constexpr uint32_t kTailWordOffset = 5;  // profstream.c: tails start at word 5
+    constexpr uint32_t kTailWordOffset = 5;  // = kernel_profiler::SPSC_RING_TAIL_0, the first of the 5 per-RISC tails in the control vector
     constexpr uint32_t kNumRisc = 5;
     constexpr uint32_t kMaxCores = 256;
     static_assert(kBytesPerCore <= NOC_MAX_BURST_SIZE, "whole-core read must fit one NoC packet");

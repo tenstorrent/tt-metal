@@ -42,7 +42,7 @@ void kernel_main() {
     constexpr uint32_t kSocketConfigAddr = get_compile_time_arg_val(6);
     constexpr uint32_t kResultsAddr = get_compile_time_arg_val(7);
 
-    constexpr uint32_t kTailWordOffset = 5;  // profstream.c: tails start at word 5
+    constexpr uint32_t kTailWordOffset = 5;  // = kernel_profiler::SPSC_RING_TAIL_0, the first of the 5 per-RISC tails in the control vector
     constexpr uint32_t kNumRisc = 5;
     static_assert(kCoreSpan <= NOC_MAX_BURST_SIZE, "control vector + rings must fit one NoC packet");
 

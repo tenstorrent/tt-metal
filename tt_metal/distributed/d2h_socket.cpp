@@ -329,7 +329,8 @@ void D2HSocket::init_common(const std::shared_ptr<MeshDevice>& mesh_device) {
     // (bit60 = NOC_XY_PCIE_ENCODING outbound routing). With IOMMU enabled that goes to the PCIe bus, so an
     // IOMMU-pinned PinnedMemory IOVA is reachable the same way the hugepage channel is -- PROVIDED the sender
     // is handed the FULL pcie_base|IOVA addr (a bare lo32 offset reads wrong on the drainer). So L2CPU can use
-    // PinnedMemory too; profzone gets the full FIFO addr via P_HOST_BASE and writes it with bit60 set.
+    // PinnedMemory too; the drainer gets the full FIFO addr from its socket config buffer (compile arg
+    // kSocketConfigAddr) and writes it with bit60 set.
     // The predicate this branch used to spell out by hand -- is_iommu_enabled() ||
     // get_supports_64_bit_pcie_addressing() -- is exactly upstream's d2h_uses_hugepage_fallback(), so use theirs.
     bool can_use_pinned_memory = !d2h_uses_hugepage_fallback(MetalContext::instance());
