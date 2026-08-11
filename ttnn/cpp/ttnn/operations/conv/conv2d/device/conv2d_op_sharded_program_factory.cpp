@@ -1098,6 +1098,19 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
                   dest_reuse_scratch_cb_id}) {
                 depthwise_unpack_to_dest[cb] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
             }
+            // The snake parameters are read with `copy_tile` exactly like the operands above, so they
+            // need the same override or they arrive through SrcA at TF32 -- 10 mantissa bits, and
+            // truncated toward zero rather than rounded. Measured without it: both alpha and inv_beta
+            // come back low, never high, by an amount that matches 10-bit truncation column by column
+            // (col 9 predicted 4.5e-04 against 4.59e-04 measured), for rel_rmse 4.4e-04 overall --
+            // the same 2^-11-ish TF32 residual this block already describes for the activation.
+            //
+            // Gated on the env var like the rest of the snake path: the CB carries zero pages when it
+            // is off, and this keeps the default path's generated formats untouched.
+            if (std::getenv("TT_CONV1D_SNAKE_PARAMS") != nullptr) {
+                depthwise_unpack_to_dest[get_cb_info_by_name(cb_info, Conv2dCb::SNAKE_PARAMS).index] =
+                    tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+            }
         }
 
         compute_kernel_args = {
