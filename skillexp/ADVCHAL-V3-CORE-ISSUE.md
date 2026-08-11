@@ -139,3 +139,57 @@ correctness at production prefill lengths, and neither oracle tests more than on
 6. **Add a *scope* review to the stage, not just a rigour review.** Before the next run, one question per gate
    check: *what does this check hold fixed that the deployed model varies?* Layer count, batch, prefill length,
    execution phase, cache state. Every defect in this corpus is in that list.
+
+
+---
+
+# ⚠ Correction: north-mini's win is probably safe, and I overstated the risk
+
+The table above called north-mini `-onA` *"pattern present and untestable by its own gate"* and set it beside a
+mechanism that cost gemma 5.2 × 10⁻³. **Tested, and the risk was overstated.**
+
+Ran the model's own prefill → decode path with real layer-1 weights and compared knob-off against
+`decode_norm_cores=16` as a function of prefill depth — a differential test, which is enough to detect a
+prefill/decode inconsistency without rewriting its reference:
+
+| prefill tokens | PCC(norm_off, norm_16) | max \|Δ\| |
+|---:|---:|---:|
+| 0 | 0.9998240581 | 9.77 × 10⁻³ |
+| 4 | 0.9998727673 | 5.13 × 10⁻³ |
+| 8 | 0.9998737445 | 4.40 × 10⁻³ |
+| 16 | 0.9999178386 | 3.91 × 10⁻³ |
+| **32** | **0.9999537598** | 3.42 × 10⁻³ |
+
+**The divergence shrinks with cache depth — the opposite of gemma, where it grew 9.4 × 10⁻⁵ → 5.3 × 10⁻³.** So
+no routing discontinuity is being crossed here: north-mini scores its experts with a **sigmoid**, not a softmax
+over a top-8 of 128, and its margins are not being flipped. And its oracle's degenerate fixture (prefill 0) is the
+configuration where the knob's effect is **largest** (1.76 × 10⁻⁴), not smallest — so the 9.78 × 10⁻⁴ margin it
+passed by was measured at the worst case, and the effect only improves with depth.
+
+**Conclusion: the −1,400 µs stands.** What remains true is narrower: its oracle's reference is a closed form valid
+only at position 0 (`attention == V`, no Q, no K, no softmax), so **the knob's effect on the Q/K path is not
+checked by its own gate** — the reassurance above comes from this differential test, not from the oracle. The
+oracle should still be extended; the win should not be doubted.
+
+## And a real defect found on the way: the shipped win cannot be turned off
+
+`from_state_dict` contains
+
+```python
+if candidate == "default" and batch == 1:
+    # Advisor-challenger winner: the 16-core rung beat both sides of
+    # the advisor's 22-core choice in fresh traced-replay processes.
+    policy = replace(policy, decode_norm_cores=16)
+```
+
+**It overrides the policy unconditionally.** `dataclasses.replace(POLICIES["default"], decode_norm_cores=None)`
+comes back as **16**, with an identical shard spec. So:
+
+- the shipped win is **not ablatable through the model's own policy surface**;
+- **any A/B measurement of it via `POLICIES` silently compares 16 against 16** — my first attempt did exactly
+  that and returned *bit-identical at every prefill depth*, which reads as "the knob has no effect";
+- reproducing or re-measuring the −1,400 µs requires editing the constructor.
+
+**A shipped optimisation that its own policy surface cannot disable is not measurable, and the failure mode is
+silent agreement rather than an error.** Every other cell in this corpus expresses its winner as a policy field.
+This one should too.
