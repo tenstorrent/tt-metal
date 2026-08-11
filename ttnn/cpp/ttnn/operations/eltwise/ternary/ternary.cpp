@@ -106,6 +106,8 @@ inline bool is_invalid_bcast(const ttnn::operations::ternary::TernaryBroadcastTy
     return broadcast_type == ttnn::operations::ternary::TernaryBroadcastType::INVALID_BCAST;
 }
 
+inline bool is_integer_dtype(DataType dtype) { return dtype == DataType::INT32 || dtype == DataType::UINT32; }
+
 // TTT: tensor, tensor, tensor
 Tensor invoke_impl(
     const Tensor& predicate,
@@ -433,12 +435,17 @@ Tensor mac(
     bool is_subtile_bcast = (broadcast_type == TernaryBroadcastType::ROW_BCAST) ||
                             (broadcast_type == TernaryBroadcastType::COL_BCAST) ||
                             (broadcast_type == TernaryBroadcastType::SCALAR_BCAST);
+    // The SFPU mac path multiplies and accumulates in the FP32 SFPU registers, so integer
+    // inputs would be reinterpreted as floats. Keep them on the composite path.
+    bool is_any_input_integer =
+        is_integer_dtype(input_tensor_a.dtype()) || is_integer_dtype(input_tensor_b.dtype()) ||
+        is_integer_dtype(input_tensor_c.dtype());
 
-    if (is_invalid_bcast(broadcast_type) || (is_any_input_block_format && is_subtile_bcast)) {
+    if (is_invalid_bcast(broadcast_type) || (is_any_input_block_format && is_subtile_bcast) || is_any_input_integer) {
         TT_FATAL(
             !output.has_value(),
             "ttnn::mac: output_tensor is not supported when the operation falls back to the composite path "
-            "(unsupported broadcast shape or block-float subtile broadcast). "
+            "(unsupported broadcast shape, block-float subtile broadcast, or integer input dtype). "
             "Remove output_tensor or use shapes/dtypes that are supported by the native LLK path.");
         TT_FATAL(
             !sub_core_grids.has_value(),
@@ -466,6 +473,20 @@ Tensor mac(
     const Tensor& input_tensor_b,
     float value,
     const std::optional<MemoryConfig>& memory_config) {
+    auto broadcast_type = get_broadcast_type(input_tensor_a.logical_shape(), input_tensor_b.logical_shape());
+
+    bool is_any_input_block_format = is_block_float(input_tensor_a.dtype()) || is_block_float(input_tensor_b.dtype());
+    bool is_subtile_bcast = (broadcast_type == TernaryBroadcastType::ROW_BCAST) ||
+                            (broadcast_type == TernaryBroadcastType::COL_BCAST) ||
+                            (broadcast_type == TernaryBroadcastType::SCALAR_BCAST);
+    bool is_any_input_integer = is_integer_dtype(input_tensor_a.dtype()) || is_integer_dtype(input_tensor_b.dtype());
+
+    if (is_invalid_bcast(broadcast_type) || (is_any_input_block_format && is_subtile_bcast) || is_any_input_integer) {
+        log_debug(tt::LogOp, "Mac Fallback - TTS");
+        return _mac(input_tensor_a, input_tensor_b, value, memory_config);
+    }
+
+    log_debug(tt::LogOp, "Mac LLK - TTS");
     return ttnn::prim::ternary(
         TernaryOpType::MAC,
         input_tensor_a,
@@ -483,6 +504,20 @@ Tensor mac(
     float value,
     const Tensor& input_tensor_c,
     const std::optional<MemoryConfig>& memory_config) {
+    auto broadcast_type = get_broadcast_type(input_tensor_a.logical_shape(), input_tensor_c.logical_shape());
+
+    bool is_any_input_block_format = is_block_float(input_tensor_a.dtype()) || is_block_float(input_tensor_c.dtype());
+    bool is_subtile_bcast = (broadcast_type == TernaryBroadcastType::ROW_BCAST) ||
+                            (broadcast_type == TernaryBroadcastType::COL_BCAST) ||
+                            (broadcast_type == TernaryBroadcastType::SCALAR_BCAST);
+    bool is_any_input_integer = is_integer_dtype(input_tensor_a.dtype()) || is_integer_dtype(input_tensor_c.dtype());
+
+    if (is_invalid_bcast(broadcast_type) || (is_any_input_block_format && is_subtile_bcast) || is_any_input_integer) {
+        log_debug(tt::LogOp, "Mac Fallback - TST");
+        return _mac(input_tensor_a, value, input_tensor_c, memory_config);
+    }
+
+    log_debug(tt::LogOp, "Mac LLK - TST");
     return ttnn::prim::ternary(
         TernaryOpType::MAC,
         input_tensor_a,
@@ -496,6 +531,15 @@ Tensor mac(
 
 // TSS: a * scalar1 + scalar2 — native unary SFPU kernel (single pass, no intermediate tensor)
 Tensor mac(const Tensor& input_tensor_a, float value1, float value2, const std::optional<MemoryConfig>& memory_config) {
+    // The unary mac_tss kernel packs both scalars as floats and computes in the FP32 SFPU
+    // registers, so integer inputs stay on the composite path (which preserves the integer
+    // output dtype the pre-LLK implementation produced).
+    if (is_integer_dtype(input_tensor_a.dtype())) {
+        log_debug(tt::LogOp, "Mac Fallback - TSS");
+        return _mac(input_tensor_a, value1, value2, memory_config);
+    }
+
+    log_debug(tt::LogOp, "Mac LLK - TSS");
     return ttnn::mac_tss(input_tensor_a, value1, value2, memory_config);
 }
 

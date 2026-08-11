@@ -26,8 +26,13 @@ inline void mac_init() {
 
     // Record the replay sequence once at init time with fixed dest offsets.
     // All callers use tile indices (0, 1, 2, 0) → offsets (0, 64, 128, 0).
-    constexpr InstrModLoadStore mod0 =
-        (data_format == DataFormat::Float32) ? InstrModLoadStore::FP32 : InstrModLoadStore::DEFAULT;
+    // The SFPLOAD/SFPSTORE instruction mod describes the DST register layout, which is
+    // 32-bit only when fp32 dest accumulation is enabled - it is not a property of the
+    // input tensor's data format.  Keying it off data_format would issue FP32-mode
+    // accesses against a 16-bit DST whenever the inputs are fp32 but the output dtype
+    // (which is what drives fp32_dest_acc_en) is bf16, and 16-bit accesses against a
+    // 32-bit DST in the mirrored case.
+    constexpr InstrModLoadStore mod0 = is_fp32_dest_acc_en ? InstrModLoadStore::FP32 : InstrModLoadStore::DEFAULT;
     if constexpr (is_fp32_dest_acc_en) {
         lltt::record(0, 6);
         TT_SFPLOAD(p_sfpu::LREG0, mod0, ADDR_MOD_3, 0);

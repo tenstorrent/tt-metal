@@ -30,5 +30,8 @@ Tensor _lerp_overload(
 }  // namespace operations::ternary
 
 Tensor _mac(const Tensor&, const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
+Tensor _mac(const Tensor&, const Tensor&, float, const std::optional<MemoryConfig>&);
+Tensor _mac(const Tensor&, float, const Tensor&, const std::optional<MemoryConfig>&);
+Tensor _mac(const Tensor&, float, float, const std::optional<MemoryConfig>&);
 
 }  // namespace ttnn

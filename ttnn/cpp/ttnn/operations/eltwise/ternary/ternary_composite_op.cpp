@@ -149,9 +149,26 @@ Tensor _lerp(
 
 }  // namespace operations::ternary
 
-// Fallback composite implementation for mac (TTT)
-// compute multiply-accumulate: y = a * b + c
+// Fallback composite implementations for mac: y = a * b + c.
+// Used when the native LLK path cannot serve the request (unsupported broadcast,
+// block-float subtile broadcast, or integer dtypes, which the SFPU mac path does
+// not handle - it computes in the FP32 SFPU accumulator).
 Tensor _mac(const Tensor& a, const Tensor& b, const Tensor& c, const std::optional<MemoryConfig>& output_mem_config) {
+    return ttnn::add(ttnn::multiply(a, b, std::nullopt, output_mem_config), c, std::nullopt, output_mem_config);
+}
+
+// TTS: a * b + scalar
+Tensor _mac(const Tensor& a, const Tensor& b, float c, const std::optional<MemoryConfig>& output_mem_config) {
+    return ttnn::add(ttnn::multiply(a, b, std::nullopt, output_mem_config), c, std::nullopt, output_mem_config);
+}
+
+// TST: a * scalar + c
+Tensor _mac(const Tensor& a, float b, const Tensor& c, const std::optional<MemoryConfig>& output_mem_config) {
+    return ttnn::add(ttnn::multiply(a, b, std::nullopt, output_mem_config), c, std::nullopt, output_mem_config);
+}
+
+// TSS: a * scalar1 + scalar2
+Tensor _mac(const Tensor& a, float b, float c, const std::optional<MemoryConfig>& output_mem_config) {
     return ttnn::add(ttnn::multiply(a, b, std::nullopt, output_mem_config), c, std::nullopt, output_mem_config);
 }
 
