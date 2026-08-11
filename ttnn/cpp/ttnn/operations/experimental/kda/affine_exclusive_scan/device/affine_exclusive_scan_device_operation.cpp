@@ -17,7 +17,6 @@ void check_device_tensor(const Tensor& tensor, const char* name) {
         "affine_exclusive_scan: {} must be an allocated device tensor",
         name);
     TT_FATAL(tensor.layout() == Layout::TILE, "affine_exclusive_scan: {} must use TILE layout", name);
-    TT_FATAL(!tensor.is_sharded(), "affine_exclusive_scan: {} must use interleaved memory", name);
 }
 
 void check_affine_tensor(const Tensor& tensor, const char* name) {
