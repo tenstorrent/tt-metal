@@ -64,19 +64,22 @@ void kernel_main() {
     constexpr uint32_t dfb_id_in0 = 0;
     constexpr uint32_t tile_height = 32;
 
+    // elem_size stays compile-time: it is a template parameter to fill_with_val<>().
+    // The width-in-bytes sizes below are shape-derived and only size NOC reads / addressing, so they
+    // are read as runtime args to keep the compiled binary shape-invariant (disk-cache hit).
     constexpr uint32_t tile_row_shift_bits = get_compile_time_arg_val(0);
-    constexpr uint32_t unpadded_X_size = get_compile_time_arg_val(1);
-    constexpr uint32_t elem_size = get_compile_time_arg_val(2);
-    constexpr uint32_t num_pages_in_row = get_compile_time_arg_val(3);
-    constexpr uint32_t page_size = get_compile_time_arg_val(4);
-    constexpr uint32_t size_of_valid_data_in_last_page_in_row = get_compile_time_arg_val(6);
-    constexpr auto src_args = TensorAccessorArgs<7>();
+    constexpr uint32_t elem_size = get_compile_time_arg_val(1);
+    constexpr uint32_t num_pages_in_row = get_compile_time_arg_val(2);
+    constexpr auto src_args = TensorAccessorArgs<3>();
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t padded_X_size = get_arg_val<uint32_t>(1);
     const uint32_t pad_value = get_arg_val<uint32_t>(2);
     const uint32_t start_page_id = get_arg_val<uint32_t>(3);
     const uint32_t n_block_reps = get_arg_val<uint32_t>(4);
+    const uint32_t unpadded_X_size = get_arg_val<uint32_t>(5);
+    const uint32_t page_size = get_arg_val<uint32_t>(6);
+    const uint32_t size_of_valid_data_in_last_page_in_row = get_arg_val<uint32_t>(7);
 
     const uint32_t num_tiles_per_row =
         padded_X_size >> tile_row_shift_bits;  // means / 64, assuming bfloat16, there are 64 bytes per tile row
@@ -132,7 +135,8 @@ void kernel_main() {
     };
 
     uint32_t page_id = start_page_id;
-    uint32_t rt_arg_idx = 5;
+    // Fixed runtime args occupy indices 0..7; per-BlockRep vararg groups start at index 8.
+    uint32_t rt_arg_idx = 8;
     uint32_t count = 1;
     constexpr int32_t n_mixed_idx = 1;
     constexpr int32_t n_pad_idx = 2;

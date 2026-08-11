@@ -92,7 +92,6 @@ ProgramDescriptor TilizeWithValPaddingMultiCoreDefaultFactory::create_descriptor
     uint32_t elem_size = a.element_size();
     uint32_t num_pages_in_row = 1;
     uint32_t page_size = a.logical_shape()[-1] * a.element_size();
-    uint32_t aligned_page_size = a.buffer()->aligned_page_size();
     uint32_t size_of_valid_data_in_last_page_in_row = a.logical_shape()[-1] * a.element_size();
     if (a.is_sharded() && a.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
         page_size = a.buffer()->page_size();
@@ -102,14 +101,11 @@ ProgramDescriptor TilizeWithValPaddingMultiCoreDefaultFactory::create_descriptor
         size_of_valid_data_in_last_page_in_row = unpadded_row_size_bytes - (num_pages_in_row - 1) * page_size;
     }
 
-    std::vector<uint32_t> reader_ct_args = {
-        shift_bits,
-        unpadded_row_size_bytes,
-        elem_size,
-        num_pages_in_row,
-        page_size,
-        aligned_page_size,
-        size_of_valid_data_in_last_page_in_row};
+    // Only shape-invariant values remain compile-time. elem_size stays CT because the reader uses it
+    // as a template parameter. unpadded_row_size_bytes / page_size / size_of_valid_data_in_last_page_in_row
+    // are shape-derived and moved to runtime args (they only size NOC reads); the unused
+    // aligned_page_size CT arg was dropped.
+    std::vector<uint32_t> reader_ct_args = {shift_bits, elem_size, num_pages_in_row};
     TensorAccessorArgs(*src0_buffer).append_to(reader_ct_args);
 
     KernelDescriptor reader_desc;
@@ -144,10 +140,13 @@ ProgramDescriptor TilizeWithValPaddingMultiCoreDefaultFactory::create_descriptor
     std::optional<KernelDescriptor> compute_desc;
     if (!core_range.empty()) {
         KernelDescriptor cd;
-        cd.kernel_source = "ttnn/cpp/ttnn/kernel/compute/tilize.cpp";
+        // nblocks_per_core (work-split loop bound) moved compile-time -> runtime so the compiled
+        // binary is shape-invariant (disk-cache hit). num_tiles_per_row (width in tiles) stays the
+        // compile-time tilize LLK template parameter.
+        cd.kernel_source = "ttnn/cpp/ttnn/kernel/compute/tilize_variable_num_blocks.cpp";
         cd.source_type = KernelDescriptor::SourceType::FILE_PATH;
         cd.core_ranges = core_range;
-        cd.compile_time_args = {nblocks_per_core, num_tiles_per_row};
+        cd.compile_time_args = {num_tiles_per_row};
         cd.config = ComputeConfigDescriptor{
             .fp32_dest_acc_en = fp32_llk_acc,
             .unpack_to_dest_mode = unpack_to_dest_mode,
@@ -158,10 +157,10 @@ ProgramDescriptor TilizeWithValPaddingMultiCoreDefaultFactory::create_descriptor
     std::optional<KernelDescriptor> compute_cliff_desc;
     if (has_cliff) {
         KernelDescriptor cd;
-        cd.kernel_source = "ttnn/cpp/ttnn/kernel/compute/tilize.cpp";
+        cd.kernel_source = "ttnn/cpp/ttnn/kernel/compute/tilize_variable_num_blocks.cpp";
         cd.source_type = KernelDescriptor::SourceType::FILE_PATH;
         cd.core_ranges = core_range_cliff;
-        cd.compile_time_args = {nblocks_per_core_cliff, num_tiles_per_row};
+        cd.compile_time_args = {num_tiles_per_row};
         cd.config = ComputeConfigDescriptor{
             .fp32_dest_acc_en = fp32_llk_acc,
             .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
@@ -191,12 +190,16 @@ ProgramDescriptor TilizeWithValPaddingMultiCoreDefaultFactory::create_descriptor
         // reader runtime args — Buffer* slot auto-registers as a BufferBinding so the
         // framework patches addresses on cache hits.
         KernelDescriptor::RTArgList reader_rt_args;
-        reader_rt_args.reserve(5 + assignment.size() * 5);
+        reader_rt_args.reserve(8 + assignment.size() * 5);
         reader_rt_args.push_back(src0_buffer);
         reader_rt_args.push_back(padded_row_size_bytes);
         reader_rt_args.push_back(packed_pad_value);
         reader_rt_args.push_back(start_page_id);
         reader_rt_args.push_back(static_cast<uint32_t>(assignment.size()));
+        // Shape-derived NOC-read sizes moved compile-time -> runtime (indices 5,6,7).
+        reader_rt_args.push_back(unpadded_row_size_bytes);
+        reader_rt_args.push_back(page_size);
+        reader_rt_args.push_back(size_of_valid_data_in_last_page_in_row);
 
         uint32_t nblocks_per_core_local = 0;
         BlockRep ref_el = assignment[0];
@@ -230,6 +233,16 @@ ProgramDescriptor TilizeWithValPaddingMultiCoreDefaultFactory::create_descriptor
 
         // writer runtime args
         writer_desc.emplace_runtime_args(core, {dst_buffer, num_tiles_per_core, tile_start_id});
+
+        // compute runtime args: number of blocks this core processes (work-split loop bound) moved
+        // compile-time -> runtime. The cliff core (last core) uses the cliff compute descriptor.
+        if (has_cliff && i == ncores - 1) {
+            if (compute_cliff_desc.has_value()) {
+                compute_cliff_desc->emplace_runtime_args(core, {nblocks_per_core_local});
+            }
+        } else if (compute_desc.has_value()) {
+            compute_desc->emplace_runtime_args(core, {nblocks_per_core_local});
+        }
 
         tile_start_id += num_tiles_per_core;
     }

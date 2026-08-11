@@ -122,8 +122,12 @@ ProgramDescriptor TilizeMultiCoreDefaultProgramFactory::create_descriptor(
 
     /** compute
      */
-    std::vector<uint32_t> compute_args = {nblocks_per_core, ntiles_per_block};
-    std::vector<uint32_t> compute_args_cliff = {nblocks_per_core_cliff, ntiles_per_block};
+    // nblocks_per_core is a pure work-split loop bound: it is passed to the tilize LLK as a runtime
+    // function arg (not a template param), so moving it compile-time -> runtime keeps the compiled
+    // binary shape-invariant (disk-cache hit) with no perf effect. ntiles_per_block (width in tiles)
+    // stays compile-time - it is the perf-critical tilize template parameter.
+    std::vector<uint32_t> compute_args = {ntiles_per_block};
+    std::vector<uint32_t> compute_args_cliff = {ntiles_per_block};
 
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     // UInt8 uses 32-bit dest as integer (not float): do not enable FP32 unpack-to-dest mode.
@@ -134,7 +138,7 @@ ProgramDescriptor TilizeMultiCoreDefaultProgramFactory::create_descriptor(
     std::optional<KernelDescriptor> compute_desc;
     if (!core_range.ranges().empty()) {
         KernelDescriptor cd;
-        cd.kernel_source = "ttnn/cpp/ttnn/kernel/compute/tilize.cpp";
+        cd.kernel_source = "ttnn/cpp/ttnn/kernel/compute/tilize_variable_num_blocks.cpp";
         cd.source_type = KernelDescriptor::SourceType::FILE_PATH;
         cd.core_ranges = core_range;
         cd.compile_time_args = std::move(compute_args);
@@ -148,7 +152,7 @@ ProgramDescriptor TilizeMultiCoreDefaultProgramFactory::create_descriptor(
     std::optional<KernelDescriptor> compute_cliff_desc;
     if (!core_range_cliff.empty()) {
         KernelDescriptor cd;
-        cd.kernel_source = "ttnn/cpp/ttnn/kernel/compute/tilize.cpp";
+        cd.kernel_source = "ttnn/cpp/ttnn/kernel/compute/tilize_variable_num_blocks.cpp";
         cd.source_type = KernelDescriptor::SourceType::FILE_PATH;
         cd.core_ranges = core_range_cliff;
         cd.compile_time_args = std::move(compute_args_cliff);
@@ -190,6 +194,11 @@ ProgramDescriptor TilizeMultiCoreDefaultProgramFactory::create_descriptor(
              ntiles_per_block * nblocks_per_core,  // ntiles per core
              tile_start_id});                      // start id
 
+        // compute runtime args: nblocks_per_core (work-split loop bound) moved compile-time -> runtime
+        if (compute_desc.has_value()) {
+            compute_desc->emplace_runtime_args(core, {nblocks_per_core});
+        }
+
         tile_start_id += ntiles_per_block * nblocks_per_core;
         page_start_id += tile_height * nblocks_per_core * num_pages_in_row;
     }
@@ -216,6 +225,11 @@ ProgramDescriptor TilizeMultiCoreDefaultProgramFactory::create_descriptor(
             {dst_buffer,
              ntiles_per_block * nblocks_per_core_cliff,  // ntiles per core
              tile_start_id});                            // start id
+
+        // compute runtime args: nblocks_per_core_cliff (work-split loop bound) moved compile-time -> runtime
+        if (compute_cliff_desc.has_value()) {
+            compute_cliff_desc->emplace_runtime_args(core, {nblocks_per_core_cliff});
+        }
     }
 
     desc.kernels.push_back(std::move(reader_desc));

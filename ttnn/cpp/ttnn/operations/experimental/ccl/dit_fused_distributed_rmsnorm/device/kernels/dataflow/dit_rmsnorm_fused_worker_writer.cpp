@@ -39,16 +39,16 @@ constexpr uint32_t stats_transposed_local_cb = get_compile_time_arg_val(3);
 constexpr uint32_t stats_transposed_gathered_cb = get_compile_time_arg_val(4);
 constexpr uint32_t ring_size = get_compile_time_arg_val(5);
 constexpr uint32_t head_dim_tiles = get_compile_time_arg_val(6);
-constexpr uint32_t total_num_tile_rows = get_compile_time_arg_val(7);
-constexpr uint32_t max_rounds = get_compile_time_arg_val(8);              // pages per (device,forwarder)
-constexpr uint32_t stick_bytes = get_compile_time_arg_val(9);             // 128
-constexpr uint32_t num_chunks_per_device = get_compile_time_arg_val(10);  // num_forwarders*max_rounds
+constexpr uint32_t stick_bytes = get_compile_time_arg_val(7);  // 128
+// total_num_tile_rows, max_rounds (pages per (device,forwarder)) and num_chunks_per_device
+// (num_forwarders*max_rounds) are runtime args (rt[9..11]): pure output-page / DRAM-scratch-page
+// strides that grow with resolution, so keeping them compile-time forced a per-resolution recompile.
 // Shared packet CB (created on the whole core grid -> uniform L1 addr, so this
 // worker's get_write_ptr(packet_cb) == the forwarder core's packet base) and
 // grid-uniform sync sem ids.
-constexpr uint32_t packet_cb = get_compile_time_arg_val(11);
-constexpr uint32_t arrival_sem_id = get_compile_time_arg_val(12);
-constexpr uint32_t go_sem_id = get_compile_time_arg_val(13);
+constexpr uint32_t packet_cb = get_compile_time_arg_val(8);
+constexpr uint32_t arrival_sem_id = get_compile_time_arg_val(9);
+constexpr uint32_t go_sem_id = get_compile_time_arg_val(10);
 // Tile row-0 layout (post transpose_wh): face_00 row0 = bytes [0,64), face_01
 // row0 = bytes [1024,1088). 32 fp32 = 128 B real data per stat tile.
 constexpr uint32_t kFaceRowBytes = 64u;
@@ -61,7 +61,7 @@ static_assert(stick_bytes % kStatBytes == 0, "stick_bytes must be a whole multip
 constexpr uint32_t num_stats = stick_bytes / kStatBytes;
 
 // Scalar/eps/trans_mat population args (after the output + dram accessors).
-constexpr auto output_args = TensorAccessorArgs<14>();
+constexpr auto output_args = TensorAccessorArgs<11>();
 constexpr auto stats_dram_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
 constexpr uint32_t SCB = stats_dram_args.next_compile_time_args_offset();
 constexpr uint32_t w_sum_cb = get_compile_time_arg_val(SCB + 0);
@@ -86,6 +86,10 @@ void kernel_main() {
     const uint32_t fwd_y = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t my_forwarder_index = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t my_slot = get_arg_val<uint32_t>(arg_idx++);
+    // rt[9..11]: addressing strides moved from CT so the binary is resolution-invariant.
+    const uint32_t total_num_tile_rows = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t max_rounds = get_arg_val<uint32_t>(arg_idx++);             // pages per (device,forwarder)
+    const uint32_t num_chunks_per_device = get_arg_val<uint32_t>(arg_idx++);  // num_forwarders*max_rounds
 
     // Grid-uniform: my own packet_cb base == the forwarder's packet base; sem
     // addrs are the same on me and the forwarder.

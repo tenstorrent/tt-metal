@@ -67,7 +67,10 @@ void kernel_main() {
     constexpr uint32_t out_subblock_tile_count = get_compile_time_arg_val(15);
 
     // batch args
-    constexpr uint32_t MtNt = get_compile_time_arg_val(16);  // if 0
+    // MtNt (per-batch output tile stride, = Mt * Nt) used to be compile-time arg 16. It is now passed
+    // as a runtime arg (read below, after the fused-op args) so this kernel binary is shape-invariant
+    // and can hit the persistent kernel cache across matmuls that differ only in total M/N. Compile-time
+    // slot 16 is retained (factory passes 0) to keep the remaining compile-arg indices unchanged.
     // Don't need batch; same as batch from READER args
 
 #ifdef FUSE_BIAS
@@ -83,6 +86,9 @@ void kernel_main() {
     if constexpr (fuse_op_reduce_scatter) {
         op_signaler = OpSignaler(rt_args_idx);
     }
+    // MtNt runtime arg: the program factory appends it as the final runtime arg, after any fused-op
+    // (OpSignaler) runtime args, so it is always last regardless of the fuse_op_reduce_scatter path.
+    const uint32_t MtNt = get_arg_val<uint32_t>(rt_args_idx++);
     // WRITER
 
     constexpr uint32_t dfb_id_in1 = get_named_compile_time_arg_val("cb_in1");

@@ -576,7 +576,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
         (std::uint32_t)out_subblock_h,                     // out_subblock_h
         (std::uint32_t)(out_subblock_w * out_subblock_h),  // out_subblocks_w * out_subblocks_h
         // batch args
-        (std::uint32_t)M * N  // MtNt
+        (std::uint32_t)0  // MtNt: moved to a runtime arg (appended below) so the binary is shape-invariant
     };
     if (bias_mesh.has_value()) {
         in1_receiver_writer_compile_time_args.push_back((std::uint32_t)in1_block_w);
@@ -1519,6 +1519,9 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                     fused_op_signaler->push_matmul_fused_op_rt_args(mm_in1_receiver_writer_args, in0_idx, in1_idx);
                 }
 
+                // MtNt (per-batch output tile stride) as the final runtime arg; see receiver-writer kernel.
+                mm_in1_receiver_writer_args.push_back((std::uint32_t)M * N);
+
                 {
                     std::vector<std::variant<uint32_t, std::reference_wrapper<const tt::tt_metal::MeshTensor>>>
                         in1_recv_variant(mm_in1_receiver_writer_args.begin(), mm_in1_receiver_writer_args.end());
@@ -2110,7 +2113,7 @@ create_program_mcast_in0_in1(
         (std::uint32_t)out_subblock_h,                     // out_subblock_h
         (std::uint32_t)(out_subblock_w * out_subblock_h),  // out_subblocks_w * out_subblocks_h
         // batch args
-        (std::uint32_t)M * N  // MtNt
+        (std::uint32_t)0  // MtNt: moved to a runtime arg (appended below) so the binary is shape-invariant
     };
     if (bias_mesh.has_value()) {
         in1_receiver_writer_compile_time_args.push_back((std::uint32_t)in1_block_w);
@@ -3010,6 +3013,9 @@ create_program_mcast_in0_in1(
                 if (fuse_op && fused_op_signaler->is_reduce_scatter()) {
                     fused_op_signaler->push_matmul_fused_op_rt_args(mm_in1_receiver_writer_args, in0_idx, in1_idx);
                 }
+
+                // MtNt (per-batch output tile stride) as the final runtime arg; see receiver-writer kernel.
+                mm_in1_receiver_writer_args.push_back((std::uint32_t)M * N);
 
                 // left half
                 if ((core.x - start_core_x) <= half_core || (transpose_mcast and core.y == start_core_y)) {

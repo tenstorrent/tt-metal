@@ -210,7 +210,10 @@ ttnn::device_operation::ProgramArtifacts CloneProgramFactory::create_program_art
             }
         }
 
-        auto make_compute = [&](const KernelSpecName& unique_id, uint32_t num_tiles) {
+        // num_tiles is now a per-node runtime arg (mirrors reader/writer), so the compute
+        // binary is hashed only by source + (empty) CTAs and is identical across shapes →
+        // JIT disk-cache hit instead of a recompile per new shape.
+        auto make_compute = [&](const KernelSpecName& unique_id) {
             return KernelSpec{
                 .unique_id = unique_id,
                 .source = "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/compute_kernel.cpp",
@@ -219,16 +222,16 @@ ttnn::device_operation::ProgramArtifacts CloneProgramFactory::create_program_art
                          .dfb_spec_name = SRC, .accessor_name = "src", .endpoint_type = DFBEndpointType::CONSUMER},
                      DFBBinding{
                          .dfb_spec_name = DST, .accessor_name = "dst", .endpoint_type = DFBEndpointType::PRODUCER}},
-                .compile_time_args = {{"num_tiles", num_tiles}},
+                .runtime_arg_schema = {.runtime_arg_names = Group<std::string>{"num_tiles"}},
                 .hw_config = compute_hw,
             };
         };
 
         if (!core_group_1.ranges().empty()) {
-            spec.kernels.push_back(make_compute(COMPUTE_G1, num_units_per_core_group_1));
+            spec.kernels.push_back(make_compute(COMPUTE_G1));
         }
         if (!core_group_2.ranges().empty()) {
-            spec.kernels.push_back(make_compute(COMPUTE_G2, num_units_per_core_group_2));
+            spec.kernels.push_back(make_compute(COMPUTE_G2));
         }
     }
 
@@ -252,12 +255,15 @@ ttnn::device_operation::ProgramArtifacts CloneProgramFactory::create_program_art
 
     // ---------------------------------------------------------------------
     // Runtime args (per node). Legacy node-first loop preserved; AddRuntimeArgsForNode
-    // transposes into the name-first ProgramRunArgs table. Compute kernels carry only a
-    // CTA (num_tiles), so they need no KernelRunArgs entry.
+    // transposes into the name-first ProgramRunArgs table. The compute kernels now carry
+    // a per-node num_tiles runtime arg (previously a CTA), routed to whichever core group
+    // hosts each node — COMPUTE_G1 for group-1 nodes, COMPUTE_G2 for group-2 nodes.
     // ---------------------------------------------------------------------
     ProgramRunArgs run_args;
     KernelRunArgs reader_ra{.kernel = READER};
     KernelRunArgs writer_ra{.kernel = WRITER};
+    KernelRunArgs compute_g1_ra{.kernel = COMPUTE_G1};
+    KernelRunArgs compute_g2_ra{.kernel = COMPUTE_G2};
 
     uint32_t start_id = 0;
     uint32_t num_cores_group_1 = core_group_1.num_cores();
@@ -298,10 +304,28 @@ ttnn::device_operation::ProgramArtifacts CloneProgramFactory::create_program_art
             }
             start_id += num_units_per_core;
         }
+
+        // Route the compute kernel's num_tiles to this node's core group. Only the
+        // convert_dtype path instantiates the compute kernels; group membership follows
+        // the same i < num_cores_group_1 split used for num_units_per_core above.
+        if (convert_dtype) {
+            auto& compute_ra = i < num_cores_group_1 ? compute_g1_ra : compute_g2_ra;
+            AddRuntimeArgsForNode(compute_ra.runtime_arg_values, core, {{"num_tiles", num_units_per_core}});
+        }
     }
 
     run_args.kernel_run_args.push_back(std::move(reader_ra));
     run_args.kernel_run_args.push_back(std::move(writer_ra));
+    // Push a KernelRunArgs only for compute groups that actually have a KernelSpec (a
+    // non-empty core group); an entry for an absent kernel would fail SetProgramRunArgs.
+    if (convert_dtype) {
+        if (!core_group_1.ranges().empty()) {
+            run_args.kernel_run_args.push_back(std::move(compute_g1_ra));
+        }
+        if (!core_group_2.ranges().empty()) {
+            run_args.kernel_run_args.push_back(std::move(compute_g2_ra));
+        }
+    }
 
     run_args.tensor_args.emplace(INPUT, TensorArgument{input.mesh_tensor()});
     run_args.tensor_args.emplace(OUTPUT, TensorArgument{output.mesh_tensor()});

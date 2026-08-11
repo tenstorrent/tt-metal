@@ -1519,7 +1519,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         (std::uint32_t)out_subblock_h,                     // out_subblock_h
         (std::uint32_t)(out_subblock_w * out_subblock_h),  // out_subblocks_w * out_subblocks_h
         // batch args
-        (std::uint32_t)M * N  // MtNt
+        (std::uint32_t)0  // MtNt: moved to a runtime arg (appended below) so the binary is shape-invariant
     };
 
     if (bias_tensor.has_value()) {
@@ -2027,6 +2027,9 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
                     mm_in1_receiver_writer_args.push_back(out_num_blocks_x);
                 }
             }
+
+            // MtNt (per-batch output tile stride) as the final runtime arg; see receiver-writer kernel.
+            mm_in1_receiver_writer_args.push_back((std::uint32_t)M * N);
 
             tt_metal::SetRuntimeArgs(
                 program,
@@ -4487,7 +4490,7 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
         (std::uint32_t)out_subblock_h,                     // out_subblock_h
         (std::uint32_t)(out_subblock_w * out_subblock_h),  // out_subblocks_w * out_subblocks_h
         // batch args
-        (std::uint32_t)M * N  // MtNt
+        (std::uint32_t)0  // MtNt: moved to a runtime arg (appended below) so the binary is shape-invariant
     };
 
     if (bias_tensor.has_value()) {
@@ -4996,6 +4999,9 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
                     mm_in1_receiver_writer_args.push_back(out_num_blocks_x);
                 }
             }
+
+            // MtNt (per-batch output tile stride) as the final runtime arg; see receiver-writer kernel.
+            mm_in1_receiver_writer_args.push_back((std::uint32_t)M * N);
 
             {
                 std::vector<std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>> in1_recv_variant(

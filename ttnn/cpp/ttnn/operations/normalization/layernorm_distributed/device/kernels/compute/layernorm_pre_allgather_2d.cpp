@@ -29,7 +29,7 @@ constexpr auto dfb_inp_id = dfb::in0;  // just a
 #endif
 
 void kernel_main() {
-    constexpr auto NCHt = get_arg(args::NCHt);
+    const auto NCHt = get_arg(args::NCHt);
     constexpr auto Wt = get_arg(args::Wt);
     constexpr auto blk = get_arg(args::blk);
     constexpr auto num_cores_y = get_arg(args::num_cores_y);

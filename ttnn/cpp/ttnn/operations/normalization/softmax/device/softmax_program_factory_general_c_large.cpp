@@ -183,22 +183,26 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryGeneralCLarge::create_program_artif
         };
     };
 
-    auto make_compute = [&](const KernelSpecName& id, std::uint32_t N) {
+    // N (per-core tile count) and dim_size (reduction-tile count) are passed as runtime args (RTA) rather
+    // than compile-time args so the compiled binary is shape-invariant (disk-cache hit instead of recompile).
+    // The compute kernel already reads them non-constexpr via get_arg(args::N)/get_arg(args::dim_size), so
+    // the kernel source is unchanged. Perf-neutral: the reduction loops are deliberately not unrolled here.
+    auto make_compute = [&](const KernelSpecName& id) {
         return KernelSpec{
             .unique_id = id,
             .source = std::string(SOFTMAX_KERNEL_PATH_GENERAL) + "/moreh_softmax_c_large.cpp",
             .compiler_options = {.defines = compute_defines, .opt_level = tt::tt_metal::KernelBuildOptLevel::O3},
             .dfb_bindings = compute_dfb_bindings(),
-            .compile_time_args = {{"N", N}, {"dim_size", static_cast<std::uint32_t>(dim_size)}},
+            .runtime_arg_schema = {.runtime_arg_names = {"N", "dim_size"}},
             .hw_config = make_compute_hw(),
         };
     };
 
     bool has_core_group_2 = num_tiles_per_core_group_2 > 0;
 
-    Group<KernelSpec> kernels = {reader, writer, make_compute(COMPUTE_G1, num_tiles_per_core_group_1)};
+    Group<KernelSpec> kernels = {reader, writer, make_compute(COMPUTE_G1)};
     if (has_core_group_2) {
-        kernels.push_back(make_compute(COMPUTE_G2, num_tiles_per_core_group_2));
+        kernels.push_back(make_compute(COMPUTE_G2));
     }
 
     Group<WorkUnitSpec> work_units;
@@ -223,6 +227,8 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryGeneralCLarge::create_program_artif
     ProgramRunArgs run_args;
     KernelRunArgs reader_ra{.kernel = READER};
     KernelRunArgs writer_ra{.kernel = WRITER};
+    KernelRunArgs compute_g1_ra{.kernel = COMPUTE_G1};
+    KernelRunArgs compute_g2_ra{.kernel = COMPUTE_G2};
 
     const auto core_x_offset = core_range.start_coord.x;
     const auto core_y_offset = core_range.start_coord.y;
@@ -255,10 +261,20 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryGeneralCLarge::create_program_artif
              {"inner_size", inner_size},
              {"dim_size", static_cast<std::uint32_t>(dim_size)}});
 
+        // Route compute RTAs to the matching group's kernel (core is guaranteed in group 1 or 2 above).
+        auto& compute_ra = core_group_1.contains(core) ? compute_g1_ra : compute_g2_ra;
+        AddRuntimeArgsForNode(
+            compute_ra.runtime_arg_values,
+            core,
+            {{"N", num_tiles_per_core}, {"dim_size", static_cast<std::uint32_t>(dim_size)}});
+
         tile_offset += num_tiles_per_core;
     }
 
-    run_args.kernel_run_args = {std::move(reader_ra), std::move(writer_ra)};
+    run_args.kernel_run_args = {std::move(reader_ra), std::move(writer_ra), std::move(compute_g1_ra)};
+    if (has_core_group_2) {
+        run_args.kernel_run_args.push_back(std::move(compute_g2_ra));
+    }
     run_args.tensor_args.emplace(SRC, input_mt);
     run_args.tensor_args.emplace(DST, output_mt);
 

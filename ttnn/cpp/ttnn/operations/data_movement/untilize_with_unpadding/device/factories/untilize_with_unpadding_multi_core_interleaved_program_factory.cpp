@@ -138,8 +138,11 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreInterleavedProgram
     if (fp32_dest_acc_en) {
         unpack_to_dest_mode[tt::CBIndex::c_0] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
+    // Use the runtime-num-blocks variant (as the sibling untilize op does): nblocks_per_core is a
+    // pure work-split loop bound, so passing it as a runtime arg keeps the compiled binary
+    // shape-invariant (disk-cache hit). num_tiles_per_row (width in tiles) stays compile-time.
     const std::string compute_kernel(
-        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
+        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_variable_num_blocks.cpp");
 
     // Track compute kernel indices in case both full and cliff exist; we push them after the
     // dataflow kernels so reader stays at index 0 and writer at index 1.
@@ -151,14 +154,13 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreInterleavedProgram
         compute_desc.kernel_source = compute_kernel;
         compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         compute_desc.core_ranges = core_range;
-        compute_desc.compile_time_args = {nblocks_per_core, num_tiles_per_row, tt::CBIndex::c_0, tt::CBIndex::c_16};
+        compute_desc.compile_time_args = {num_tiles_per_row, tt::CBIndex::c_0, tt::CBIndex::c_16};
         compute_desc.defines = compute_kernel_defines;
         compute_desc.config = ComputeConfigDescriptor{
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .unpack_to_dest_mode = unpack_to_dest_mode,
         };
         full_compute_idx = 2 + static_cast<int>(desc.kernels.size());  // reader at 0, writer at 1 once pushed
-        (void)full_compute_idx;
         desc.kernels.push_back(std::move(compute_desc));
     }
     if (has_cliff) {
@@ -166,14 +168,13 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreInterleavedProgram
         cliff_desc.kernel_source = compute_kernel;
         cliff_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         cliff_desc.core_ranges = core_range_cliff;
-        cliff_desc.compile_time_args = {nblocks_per_core_cliff, num_tiles_per_row, tt::CBIndex::c_0, tt::CBIndex::c_16};
+        cliff_desc.compile_time_args = {num_tiles_per_row, tt::CBIndex::c_0, tt::CBIndex::c_16};
         cliff_desc.defines = std::move(compute_kernel_defines);
         cliff_desc.config = ComputeConfigDescriptor{
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
         };
         cliff_compute_idx = 2 + static_cast<int>(desc.kernels.size());
-        (void)cliff_compute_idx;
         desc.kernels.push_back(std::move(cliff_desc));
     }
 
@@ -237,6 +238,21 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreInterleavedProgram
     // Insert reader+writer at the beginning so they occupy descriptor positions 0 and 1.
     desc.kernels.insert(desc.kernels.begin(), std::move(writer_desc));
     desc.kernels.insert(desc.kernels.begin(), std::move(reader_desc));
+
+    // Compute runtime args: nblocks_per_core (work-split loop bound) moved compile-time -> runtime.
+    // Indices full_compute_idx / cliff_compute_idx were precomputed to account for the reader/writer
+    // now occupying positions 0 and 1. Each full core processes nblocks_per_core blocks; the cliff
+    // core processes nblocks_per_core_cliff (matching the previous compile-time constants exactly).
+    if (full_compute_idx >= 0) {
+        for (const auto& core : corerange_to_cores(core_range)) {
+            desc.kernels[full_compute_idx].emplace_runtime_args(core, {nblocks_per_core});
+        }
+    }
+    if (cliff_compute_idx >= 0) {
+        for (const auto& core : corerange_to_cores(core_range_cliff)) {
+            desc.kernels[cliff_compute_idx].emplace_runtime_args(core, {nblocks_per_core_cliff});
+        }
+    }
 
     return desc;
 }

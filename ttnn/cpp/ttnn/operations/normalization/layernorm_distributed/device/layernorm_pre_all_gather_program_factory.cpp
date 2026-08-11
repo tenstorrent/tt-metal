@@ -599,8 +599,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
                         .accessor_name = "out",
                         .endpoint_type = m2::DFBEndpointType::PRODUCER},
                 },
-            .compile_time_args =
-                {{"NCHt", tiles_per_core_x}, {"Wt", tiles_per_core_y}, {"blk", block_size}, {"num_cores_y", cores_y}},
+            .compile_time_args = {{"Wt", tiles_per_core_y}, {"blk", block_size}, {"num_cores_y", cores_y}},
+            .runtime_arg_schema = {.runtime_arg_names = {"NCHt"}},
             .hw_config = ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config),
         };
         bind_self_loop(compute, PRE2D_X2, "x2");
@@ -659,6 +659,11 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
     ////////////////////////////////////////////////////////////////////////////
     m2::KernelRunArgs reader_run{.kernel = PRE2D_READER};
     m2::KernelRunArgs writer_run{.kernel = PRE2D_WRITER};
+    // NCHt (per-core row count) is a runtime arg so the compute binary is shape-invariant (cache-hit
+    // across resolutions instead of recompile). The merge and worker computes are distinct kernel
+    // specs on disjoint node sets, so each needs its own KernelRunArgs covering exactly its nodes.
+    m2::KernelRunArgs compute_merge_run{.kernel = PRE2D_COMPUTE_MERGE};
+    m2::KernelRunArgs compute_worker_run{.kernel = PRE2D_COMPUTE_WORKER};
 
     for (uint32_t x = 0; x < cores_x; ++x) {
         for (uint32_t y = 0; y < cores_y; ++y) {
@@ -682,10 +687,13 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
                  {"reduce_core_noc_y", static_cast<uint32_t>(merge_core.y)},
                  {"y", y}});
             if (is_merge_core) {
+                m2::AddRuntimeArgsForNode(compute_merge_run.runtime_arg_values, core, {{"NCHt", tiles_per_core_x}});
                 m2::AddRuntimeArgsForNode(
                     writer_run.runtime_arg_values,
                     core,
                     {{"num_tiles", num_tile_rows_per_core * out0_tiles}, {"tile_offset", out_tile_offset}});
+            } else {
+                m2::AddRuntimeArgsForNode(compute_worker_run.runtime_arg_values, core, {{"NCHt", tiles_per_core_x}});
             }
         }
     }
@@ -711,7 +719,10 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
     };
 
     m2::ProgramRunArgs run_args;
-    run_args.kernel_run_args = {std::move(reader_run), std::move(writer_run)};
+    run_args.kernel_run_args = {std::move(reader_run), std::move(writer_run), std::move(compute_merge_run)};
+    if (has_worker_cores) {
+        run_args.kernel_run_args.push_back(std::move(compute_worker_run));
+    }
     run_args.tensor_args.emplace(PRE2D_INPUT_T, input_mesh);
     run_args.tensor_args.emplace(PRE2D_OUTPUT_T, output_mesh);
     if (fuse_pre_add) {

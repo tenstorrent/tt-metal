@@ -413,6 +413,15 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     const bool per_batch_weight =
         has_weight && !per_token_weight && batch > 1 && affine_tile_rows(*weight) == batch;
     const bool per_batch_bias = has_bias && !per_token_bias && batch > 1 && affine_tile_rows(*bias) == batch;
+    // rows_per_batch_tiles (= num_tile_rows / batch) is a per-RESOLUTION value (num_tile_rows grows
+    // with the token count), so passing it as a kernel compile-time arg would fold the row count into
+    // the kernel hash and force a recompile per resolution. It is consumed ONLY on the per-batch adaLN
+    // path (reader `if constexpr(per_batch_weight/bias)` batch indexing; compute ignores it entirely).
+    // So gate it: pass the real value only when a per-batch affine tensor is present, else 0. In the
+    // common (batch==1 / non-per-batch) case this is 0 for EVERY resolution -> the reader + compute
+    // binaries are shape-invariant and hit the disk cache. per-batch adaLN shapes (rare) still bake the
+    // real value and recompile, exactly as before, keeping the `if constexpr` batch math correct.
+    const uint32_t rows_per_batch_tiles_arg = (per_batch_weight || per_batch_bias) ? rows_per_batch_tiles : 0u;
     // Broadcast reader read count: 1 row for true-broadcast, `batch` rows for per-batch adaLN.
     // Broadcast bulk-read count is one row (num_tile_cols): only TRUE broadcast [1,1,H] uses the
     // one-shot resident read. per-batch adaLN now streams its per-row batch slice (like per-token),
@@ -1098,7 +1107,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         // consumed + popped per row like per-token. rows_per_batch_tiles = num_tile_rows / batch.
         static_cast<uint32_t>(per_batch_weight),
         static_cast<uint32_t>(per_batch_bias),
-        rows_per_batch_tiles,
+        rows_per_batch_tiles_arg,  // 0 unless per-batch adaLN (keeps the binary resolution-invariant)
     };
     TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     if (has_weight) {
@@ -1155,7 +1164,9 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
             num_targets_forward,
             num_targets_backward,
             head_dim_tiles,
-            num_tile_rows,
+            // (total_num_tile_rows moved to a runtime arg — it is only an output-page
+            //  stride, and it grows with resolution, so keeping it compile-time forced a
+            //  per-resolution recompile of the drain writer.)
         };
         TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
         // Scalar/eps/trans_mat population args (the writer always populates these
@@ -1194,13 +1205,13 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
             stats_transposed_gathered_cb_id,
             args.ring_size,
             head_dim_tiles,
-            num_tile_rows,
-            max_rounds,
             stick_bytes,  // 128 (RMS, 1 stat) or 256 (LayerNorm, mean+M2)
-            num_chunks_per_device,
             packet_cb_id,
             arrival_sem_id,
             go_sem_id,
+            // total_num_tile_rows, max_rounds, num_chunks_per_device moved to runtime args
+            // (all three are pure addressing strides that grow with resolution — keeping them
+            //  compile-time forced a per-resolution recompile of the worker writer).
         };
         TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
         TensorAccessorArgs(stats_dram_buffer).append_to(writer_compile_args);
@@ -1242,9 +1253,10 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
             f,  // forwarder_index
             num_forwarders,
             group_size,
-            max_rounds,
+            max_rounds,   // NOTE: still compile-time — it sizes present_count[max_rounds] in the
+                          // forwarder kernel; converting it needs a fixed-cap array (follow-up).
             stick_bytes,  // 128 (RMS) or 256 (LayerNorm: mean+M2)
-            num_chunks_per_device,
+            // num_chunks_per_device moved to a runtime arg (rt[2]) — pure page stride.
             arrival_sem_id,
             go_sem_id,
         };
@@ -1323,7 +1335,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         // arg stability.
         static_cast<uint32_t>(per_batch_weight),
         static_cast<uint32_t>(per_batch_bias),
-        rows_per_batch_tiles,
+        rows_per_batch_tiles_arg,  // 0 unless per-batch adaLN; compute ignores it (kept for arg stability)
     };
 
     // fp32 dest accumulation is REQUIRED, unconditionally — not just for fp32
@@ -1411,8 +1423,10 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
 
         std::vector<uint32_t> writer_rt_args;
         if (!use_mux) {
-            // is_tp_1 drain-only writer: output_addr, start, end, trans_mat (rt[3]).
-            writer_rt_args = {output_addr, tile_row_start, tile_row_end, trans_mat_addr_rt};
+            // is_tp_1 drain-only writer: output_addr, start, end, trans_mat (rt[3]),
+            // total_num_tile_rows (rt[4]; output-page stride, was CT — moved to RT to keep
+            // the binary resolution-invariant).
+            writer_rt_args = {output_addr, tile_row_start, tile_row_end, trans_mat_addr_rt, num_tile_rows};
         } else {
             // worker-writer: output, start, end, trans_mat, stats_dram (rt[4]),
             // forwarder NoC x/y, my_forwarder_index, my_slot.
@@ -1424,6 +1438,11 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
             writer_rt_args.push_back(static_cast<uint32_t>(forwarder_virtual[f].y));
             writer_rt_args.push_back(f);
             writer_rt_args.push_back(worker_slot(i));
+            // rt[9..11]: total_num_tile_rows, max_rounds, num_chunks_per_device — output-page
+            // + DRAM-scratch-page strides moved from CT to RT (resolution-invariant binary).
+            writer_rt_args.push_back(num_tile_rows);
+            writer_rt_args.push_back(max_rounds);
+            writer_rt_args.push_back(num_chunks_per_device);
         }
         SetRuntimeArgs(program, writer_kernel_id, core, writer_rt_args);
 
@@ -1449,7 +1468,10 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         const auto& core = forwarder_cores[f];
         const uint32_t group_begin = f * workers_per_forwarder;
         const uint32_t group_end = std::min(group_begin + workers_per_forwarder, num_workers);
-        std::vector<uint32_t> fwd_rt = {stats_dram_addr, out_ready_sem_bank_addr};
+        // rt[2] = num_chunks_per_device (page stride, moved from CT). Inserted before the
+        // variable-length worker-coord / present_count / fabric-connection rt args; override
+        // only refreshes rt[0]/rt[1], so this fixed slot is safe.
+        std::vector<uint32_t> fwd_rt = {stats_dram_addr, out_ready_sem_bank_addr, num_chunks_per_device};
         for (uint32_t w = group_begin; w < group_end; w++) {
             fwd_rt.push_back(static_cast<uint32_t>(worker_virtual[w].x));
             fwd_rt.push_back(static_cast<uint32_t>(worker_virtual[w].y));

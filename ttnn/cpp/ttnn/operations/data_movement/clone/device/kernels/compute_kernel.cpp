@@ -9,7 +9,7 @@
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
-    constexpr auto num_tiles = get_arg(args::num_tiles);
+    auto num_tiles = get_arg(args::num_tiles);
     DataflowBuffer src_dfb(dfb::src);
     DataflowBuffer dst_dfb(dfb::dst);
     unary_op_init_common(dfb::src, dfb::dst);
