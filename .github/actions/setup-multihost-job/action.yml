@@ -1,0 +1,265 @@
+name: Setup Multihost Job
+description: >
+  Shared exabox multihost setup: download build/wheel artifacts, fan them out to
+  workers with mpirun --pernode, reset + validate the cluster, and sanity-check
+  ttnn (and optionally /mnt/models). Callers must already have checked out the
+  repo and set PIPELINE_DIR when using validation logs or scratch staging.
+
+inputs:
+  build-artifact-name:
+    description: Name of the build artifact (.tar.zst)
+    required: true
+  wheel-artifact-name:
+    description: Name of the ttnn wheel artifact
+    required: true
+  artifacts-path:
+    description: Directory to download artifacts into (shared NFS recommended)
+    required: false
+    default: /ci/artifacts
+  extra-pip-packages:
+    description: >
+      Extra packages to install alongside the ttnn wheel on every worker
+      (space-separated). Models e2e/unit pass pytest + pytest-timeout.
+    required: false
+    default: ""
+  unpack-build-on-nfs:
+    description: >
+      Also unpack the build archive into /ci/tt-metal (needed when the runner
+      generates pipeline configs that expect binaries under /ci/tt-metal/build).
+    required: false
+    default: "false"
+  create-pipeline-dir:
+    description: Create $PIPELINE_DIR if set (NFS scratch for ranklogs / automapper cwd)
+    required: false
+    default: "true"
+  check-mnt-models:
+    description: Verify /mnt/models is readable on every worker
+    required: false
+    default: "true"
+  validate-before-reset:
+    description: >
+      Run cluster validation once before entering the reset loop; skip reset if
+      the cluster is already healthy.
+    required: false
+    default: "true"
+  write-validation-logs:
+    description: >
+      Write per-host cluster validation output under
+      $PIPELINE_DIR/cluster_validation_logs/<hostname>/attempt_N (requires PIPELINE_DIR).
+    required: false
+    default: "false"
+  cabling-descriptor-path:
+    description: Path to cabling descriptor for run_cluster_validation
+    required: false
+    default: /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto
+  deployment-descriptor-path:
+    description: Path to deployment descriptor for run_cluster_validation
+    required: false
+    default: /data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto
+  max-recovery-attempts:
+    description: Max tt-smi reset + validation attempts
+    required: false
+    default: "10"
+  reset-timeout-minutes:
+    description: Timeout for the reset/validate step
+    required: false
+    default: "30"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Download Build Artifact
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        name: ${{ inputs.build-artifact-name }}
+        path: ${{ inputs.artifacts-path }}
+
+    - name: Download Python Wheel
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        name: ${{ inputs.wheel-artifact-name }}
+        path: ${{ inputs.artifacts-path }}
+
+    - name: Unpack artifacts & install
+      shell: bash
+      env:
+        ARTIFACTS_PATH: ${{ inputs.artifacts-path }}
+        EXTRA_PIP_PACKAGES: ${{ inputs.extra-pip-packages }}
+        UNPACK_BUILD_ON_NFS: ${{ inputs.unpack-build-on-nfs }}
+        CREATE_PIPELINE_DIR: ${{ inputs.create-pipeline-dir }}
+      run: |
+        set -euo pipefail
+        # Move the cloned directory to workers. TODO: Clone directly to NFS
+        rm -rf /ci/tt-metal
+        cp -r "$GITHUB_WORKSPACE" /ci/tt-metal
+        if ! command -v zstd >/dev/null 2>&1; then
+          echo "zstd not found in runner context, installing fallback..."
+          sudo apt-get update
+          sudo apt-get install -y zstd
+        fi
+        shopt -s globstar nullglob
+        build_archives=("${ARTIFACTS_PATH}"/**/*.tar.zst)
+        echo "Found ${#build_archives[@]} .tar.zst candidate(s) under ${ARTIFACTS_PATH}"
+        printf ' - %s\n' "${build_archives[@]}"
+        if [ ${#build_archives[@]} -eq 0 ]; then
+          echo "ERROR: Could not find any .tar.zst under ${ARTIFACTS_PATH}"
+          echo "Artifact directory layout:"
+          ls -R "${ARTIFACTS_PATH}"
+          exit 1
+        fi
+        BUILD_ARCHIVE="${build_archives[0]}"
+        echo "Using build archive: ${BUILD_ARCHIVE}"
+
+        if [ "${CREATE_PIPELINE_DIR}" = "true" ] && [ -n "${PIPELINE_DIR:-}" ]; then
+          # Per-job NFS scratch (ranklogs, automapper cwd). Do NOT copy the full
+          # tt-metal tree here — that OOMs the 4Gi Actions runner.
+          mkdir -p "$PIPELINE_DIR"
+        fi
+
+        if [ "${UNPACK_BUILD_ON_NFS}" = "true" ]; then
+          # Pipeline config generation runs on the runner and expects test binaries
+          # under /ci/tt-metal/build/test.
+          tar --zstd -xf "${BUILD_ARCHIVE}" -C /ci/tt-metal
+        fi
+
+        # Workers + runner local copy for runtime (local disk).
+        sudo rm -rf /home/user/tt-metal
+        sudo mkdir -p /home/user
+        sudo chown "$(id -u):$(id -g)" /home/user
+        cp -r /ci/tt-metal /home/user/
+        tar --zstd -xf "${BUILD_ARCHIVE}" -C /home/user/tt-metal
+
+        mpirun --pernode bash -lc 'rm -rf /home/user/tt-metal && cp -r /ci/tt-metal /home/user/'
+        mpirun --pernode git -C /home/user/tt-metal submodule update --init --recursive
+        mpirun --pernode tar --zstd -xf "${BUILD_ARCHIVE}" -C /home/user/tt-metal
+
+        ttnn_wheels=("${ARTIFACTS_PATH}"/**/ttnn-*.whl)
+        echo "Found ${#ttnn_wheels[@]} ttnn wheel candidate(s) under ${ARTIFACTS_PATH}"
+        printf ' - %s\n' "${ttnn_wheels[@]}"
+        if [ ${#ttnn_wheels[@]} -eq 0 ]; then
+          echo "ERROR: Could not find ttnn-*.whl under ${ARTIFACTS_PATH}"
+          echo "Artifact directory layout:"
+          ls -R "${ARTIFACTS_PATH}"
+          exit 1
+        fi
+        # shellcheck disable=SC2086 # intentional word-split of EXTRA_PIP_PACKAGES
+        mpirun --pernode uv pip install "${ttnn_wheels[@]}" ${EXTRA_PIP_PACKAGES}
+
+    - name: Reset cards and validate cluster
+      shell: bash
+      working-directory: /tmp
+      timeout-minutes: ${{ fromJSON(inputs.reset-timeout-minutes) }}
+      env:
+        VALIDATE_BEFORE_RESET: ${{ inputs.validate-before-reset }}
+        WRITE_VALIDATION_LOGS: ${{ inputs.write-validation-logs }}
+        CABLING_DESCRIPTOR_PATH: ${{ inputs.cabling-descriptor-path }}
+        DEPLOYMENT_DESCRIPTOR_PATH: ${{ inputs.deployment-descriptor-path }}
+        MAX_RECOVERY_ATTEMPTS: ${{ inputs.max-recovery-attempts }}
+      run: |
+        set -euo pipefail
+
+        echo "--- Pre-check: tt-smi visibility on all hosts ---"
+        mpirun --pernode --tag-output \
+          bash -lc '
+            snapshot=$(tt-smi --snapshot_no_tty --snapshot)
+            driver=$(jq -r ".host_info.Driver // \"unknown\"" <<< "$snapshot")
+            tt_smi=$(jq -r ".host_sw_vers.tt_smi // \"unknown\"" <<< "$snapshot")
+            echo "$(hostname): Driver=${driver} tt_smi=${tt_smi}"
+          ' || true
+
+        run_cluster_validation() {
+          local attempt="$1"
+          if [ "${WRITE_VALIDATION_LOGS}" = "true" ]; then
+            if [ -z "${PIPELINE_DIR:-}" ]; then
+              echo "ERROR: write-validation-logs=true requires PIPELINE_DIR"
+              return 1
+            fi
+            # Logs must land on shared NFS ($PIPELINE_DIR): mpirun --pernode runs on
+            # workers, and upload-artifact only sees the Actions runner filesystem.
+            mpirun --pernode --tag-output bash -lc "
+              out=\"${PIPELINE_DIR}/cluster_validation_logs/\$(hostname)/attempt_${attempt}\"
+              mkdir -p \"\$out\"
+              /home/user/tt-metal/build/tools/scaleout/run_cluster_validation \
+                --send-traffic \
+                --hard-fail \
+                --cabling-descriptor-path \"${CABLING_DESCRIPTOR_PATH}\" \
+                --deployment-descriptor-path \"${DEPLOYMENT_DESCRIPTOR_PATH}\" \
+                --num-iterations 5 \
+                --output-path \"\$out\"
+            "
+          else
+            mpirun --pernode --tag-output \
+              /home/user/tt-metal/build/tools/scaleout/run_cluster_validation \
+              --send-traffic \
+              --hard-fail \
+              --cabling-descriptor-path "${CABLING_DESCRIPTOR_PATH}" \
+              --deployment-descriptor-path "${DEPLOYMENT_DESCRIPTOR_PATH}" \
+              --num-iterations 5
+          fi
+        }
+
+        if [ "${VALIDATE_BEFORE_RESET}" = "true" ]; then
+          echo "--- Checking cluster health before reset ---"
+          if run_cluster_validation 0; then
+            echo "SUCCESS: Cluster validation passed without reset"
+            exit 0
+          fi
+        fi
+
+        for attempt in $(seq 1 "$MAX_RECOVERY_ATTEMPTS"); do
+          echo "=== Recovery attempt $attempt of $MAX_RECOVERY_ATTEMPTS ==="
+          reset_success=false
+          validation_success=false
+
+          echo "--- Resetting cards with tt-smi ---"
+          if mpirun --pernode tt-smi -glx_reset; then
+            reset_success=true
+          else
+            echo "WARNING: Reset failed on attempt $attempt"
+          fi
+
+          if [ "$reset_success" = true ]; then
+            echo "--- Sleeping 5s after reset to allow links/services to settle ---"
+            sleep 5
+
+            echo "--- Running cluster validation ---"
+            if run_cluster_validation "$attempt"; then
+              validation_success=true
+            else
+              echo "WARNING: Validation failed on attempt $attempt"
+            fi
+          else
+            echo "WARNING: Skipping validation because reset failed on attempt $attempt"
+          fi
+
+          if [ "$reset_success" = true ] && [ "$validation_success" = true ]; then
+            echo "SUCCESS: Reset and cluster validation passed on attempt $attempt"
+            exit 0
+          fi
+
+          if [ "$attempt" -lt "$MAX_RECOVERY_ATTEMPTS" ]; then
+            echo "Sleeping 30s before retry..."
+            sleep 30
+          fi
+        done
+
+        echo "ERROR: Recovery failed after $MAX_RECOVERY_ATTEMPTS attempts"
+        exit 1
+
+    - name: Verify ttnn imports on workers
+      shell: bash
+      working-directory: /tmp
+      run: |
+        mpirun --pernode --tag-output bash -lc '
+          python3 -c "import ttnn; print(\"ttnn import: OK\")"
+          python3 -c "import ttnn.device; print(\"ttnn.device import: OK\")"
+        '
+
+    - name: Check /mnt/models access on workers
+      if: ${{ inputs.check-mnt-models == 'true' }}
+      shell: bash
+      working-directory: /tmp
+      run: |
+        mpirun --pernode --tag-output bash -lc '
+          test -r /mnt/models
+        '

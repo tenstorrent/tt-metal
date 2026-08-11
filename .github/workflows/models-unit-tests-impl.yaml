@@ -215,9 +215,8 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
 
-  # Multihost (exabox) model-unit tests. Extracted into its own reusable workflow so the exabox
-  # lifecycle lives in one file (candidate to de-dup against demo-sp / models-e2e multihost impls)
-  # without touching the single-host pipeline. Legs are selected by SKU: an entry is routed here
+  # Multihost (exabox) model-unit tests. Extracted into its own reusable workflow; shared setup
+  # lives in .github/actions/setup-multihost-job. Legs are selected by SKU: an entry is routed here
   # when prepare_test_matrix.py marks it "multihost": true (exabox-multihost* runs_on and/or
   # allocation block) and load-test-matrix collects into matrix_multihost.
   models-unit-tests-multihost:
