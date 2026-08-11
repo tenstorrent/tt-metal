@@ -34,6 +34,7 @@ import ttnn
 from ...layers.linear import ColParallelLinear, Linear, RowParallelLinear
 from ...layers.module import Module, ModuleList
 from ...layers.normalization import LayerNorm
+from ...utils.mochi import get_rot_transformation_mat
 from ...utils.tensor import bf16_tensor, typed_tensor
 
 if TYPE_CHECKING:
@@ -269,18 +270,32 @@ def vision_rope_tensors(
     head_dim: int,
     spatial_merge_size: int,
     rope_theta: float = 10000.0,
+    padded_head_dim: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """`(cos, sin)` of shape `(total_patches, head_dim)` for the tower's rotary embedding.
+    """`(cos, sin)` of shape `(total_patches, padded_head_dim)` for the tower's rotary embedding.
 
-    The two position axes each contribute `head_dim // 4` frequencies, giving `head_dim // 2` before
-    the `rotate_half` duplication. Built on the host and uploaded, as elsewhere in this port.
+    The two position axes each contribute `head_dim // 4` frequencies, giving `head_dim // 2` distinct
+    values. These are laid out **interleaved** -- channels `(2j, 2j+1)` share frequency `j` -- to feed
+    `ttnn.experimental.rotary_embedding_llama`, whose tile transformation matrix rotates adjacent pairs.
+    This matches the SPLIT->INTERLEAVED permute applied to the q/k projection at load
+    (`_rope_permute_qk`); the halves layout the reference uses would need the unpermuted weights.
+
+    Padded from `head_dim` to `padded_head_dim` with an **identity tail** (cos=1, sin=0), so the zero
+    channels `_pad_head_dim` appended to each head pass through the rotation untouched. Built on the
+    host and uploaded, as elsewhere in this port.
     """
+    padded_head_dim = padded_head_dim or math.ceil(head_dim / _TILE) * _TILE
     position_ids = vision_rope_position_ids(grid_thw, spatial_merge_size=spatial_merge_size)
     dim = head_dim // 2
     inv_freq = 1.0 / (rope_theta ** (torch.arange(0, dim, 2, dtype=torch.float) / dim))
     freqs = (position_ids.unsqueeze(-1) * inv_freq).flatten(1)
-    emb = torch.cat((freqs, freqs), dim=-1)
-    return emb.cos(), emb.sin()
+    emb = torch.repeat_interleave(freqs, 2, dim=-1)
+    cos, sin = emb.cos(), emb.sin()
+    pad = padded_head_dim - head_dim
+    if pad:
+        cos = torch.nn.functional.pad(cos, (0, pad), value=1.0)
+        sin = torch.nn.functional.pad(sin, (0, pad), value=0.0)
+    return cos, sin
 
 
 def _pad_head_dim(weight: torch.Tensor, *, num_heads: int, head_dim: int, padded: int, axis: int) -> torch.Tensor:
@@ -298,6 +313,23 @@ def _pad_head_dim(weight: torch.Tensor, *, num_heads: int, head_dim: int, padded
         return torch.nn.functional.pad(shaped, pad).reshape(num_heads * padded, *weight.shape[1:])
     shaped = weight.reshape(weight.shape[0], num_heads, head_dim)
     return torch.nn.functional.pad(shaped, (0, padded - head_dim)).reshape(weight.shape[0], num_heads * padded)
+
+
+def _rope_permute_qk(t: torch.Tensor, *, num_heads: int, head_dim: int) -> torch.Tensor:
+    """Reorder each head's output channels SPLIT-rotation -> INTERLEAVED for `rotary_embedding_llama`.
+
+    Moves the SPLIT pair `(i, i + head_dim // 2)` to adjacent interleaved slots `(2i, 2i + 1)`, so the
+    op's tile transformation matrix (which rotates neighbours) reproduces the reference's `rotate_half`.
+    Applied to the q and k projections (weight rows on `axis=0`, or bias) BEFORE `_pad_head_dim`, so the
+    appended zeros stay the identity tail; v is left untouched. Mirrors the gemma connector's
+    `_permute_qk` -- omitting it makes interleaved RoPE score against the wrong channels (PCC ~0.09).
+    """
+    half = head_dim // 2
+    perm = torch.empty(head_dim, dtype=torch.long)
+    perm[0::2] = torch.arange(half)
+    perm[1::2] = torch.arange(half, head_dim)
+    rest = t.shape[1:]
+    return t.reshape(num_heads, head_dim, *rest).index_select(1, perm).reshape(num_heads * head_dim, *rest)
 
 
 def _with_batch_axis(x: ttnn.Tensor) -> tuple[ttnn.Tensor, bool]:
@@ -441,6 +473,11 @@ class Qwen3VlVisionAttention(Module):
             self.qkv = Linear(hidden_size, 3 * self.inner, bias=True, mesh_device=mesh_device)
             self.proj = Linear(self.inner, hidden_size, bias=True, mesh_device=mesh_device)
 
+        # Tile transformation matrix for the fused interleaved RoPE (`rotary_embedding_llama`). A shared
+        # constant, replicated across the mesh; the q/k weights were permuted SPLIT->INTERLEAVED at load
+        # (`_rope_permute_qk`) so this neighbour-rotation matches the reference's `rotate_half`.
+        self._rope_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
+
         # Match the decoder attention's SDPA precision (`model_qwen3vl.py::Qwen3VlAttention`):
         # HiFi4 with fp32 accumulation. The default is lower precision, and while a single block still
         # scores ~99.99% either way, 27 of them compound -- the tower is deep enough that the
@@ -483,15 +520,24 @@ class Qwen3VlVisionAttention(Module):
             exp_approx_mode=False,  # False is the more accurate softmax
         )
 
+    def _rope_interleave_qk(self, parts: tuple[torch.Tensor, ...]) -> tuple[torch.Tensor, ...]:
+        """Permute only the q and k thirds of a `[q|k|v]` pack SPLIT->INTERLEAVED; leave v as is."""
+        q, k, v = parts
+        pk = dict(num_heads=self.num_heads, head_dim=self.head_dim)
+        return _rope_permute_qk(q, **pk), _rope_permute_qk(k, **pk), v
+
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         kw = dict(num_heads=self.num_heads, head_dim=self.head_dim, padded=self.padded_head_dim)
         tp = self._p.tp_factor
         if (w := state.get("qkv.weight")) is not None:
-            # the reference packs [q|k|v] on the output axis; pad each third's heads independently
-            padded = torch.cat([_pad_head_dim(part, axis=0, **kw) for part in w.chunk(3, dim=0)])
+            # the reference packs [q|k|v] on the output axis; permute q/k to interleaved for the fused
+            # RoPE, then pad each third's heads independently. v carries no position and is untouched.
+            parts = self._rope_interleave_qk(w.chunk(3, dim=0))
+            padded = torch.cat([_pad_head_dim(part, axis=0, **kw) for part in parts])
             state["qkv.weight"] = _interleave_for_col_parallel(padded, parts=3, tp_factor=tp)
         if (b := state.get("qkv.bias")) is not None:
-            padded = torch.cat([_pad_head_dim(part, axis=0, **kw) for part in b.chunk(3, dim=0)])
+            parts = self._rope_interleave_qk(b.chunk(3, dim=0))
+            padded = torch.cat([_pad_head_dim(part, axis=0, **kw) for part in parts])
             state["qkv.bias"] = _interleave_for_col_parallel(padded, parts=3, tp_factor=tp)
         if (w := state.get("proj.weight")) is not None:
             # `proj` is row-parallel: its INPUT axis is the one that fractures, and it fractures
@@ -527,9 +573,30 @@ class Qwen3VlVisionAttention(Module):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+        # Fused interleaved RoPE: one `rotary_embedding_llama` kernel per tensor replaces the
+        # rotate_half slice/neg/concat/mul chain. cos/sin arrive as `(seq, padded_head_dim)`; the op
+        # wants `[1, 1, seq, padded_head_dim]` (head-broadcast), and adding unit leading dims is a
+        # metadata view, not a copy. The padded tail of cos/sin is identity, so channels 72..95 (the
+        # `_pad_head_dim` zeros) pass through untouched.
         cos, sin = pos_embeds
-        q = _apply_vision_rope(q, cos, sin, self.head_dim)
-        k = _apply_vision_rope(k, cos, sin, self.head_dim)
+        cos = ttnn.reshape(cos, (1, 1, cos.shape[-2], cos.shape[-1]))
+        sin = ttnn.reshape(sin, (1, 1, sin.shape[-2], sin.shape[-1]))
+        q = ttnn.experimental.rotary_embedding_llama(
+            q,
+            cos,
+            sin,
+            self._rope_trans_mat,
+            is_decode_mode=False,
+            compute_kernel_config=self._sdpa_compute_kernel_config,
+        )
+        k = ttnn.experimental.rotary_embedding_llama(
+            k,
+            cos,
+            sin,
+            self._rope_trans_mat,
+            is_decode_mode=False,
+            compute_kernel_config=self._sdpa_compute_kernel_config,
+        )
 
         single_block = cu_seqlens is None or len(cu_seqlens) <= 2
         if self._p.sp:
@@ -676,19 +743,6 @@ class Qwen3VlVisionAttention(Module):
             cu_window_seqlens=cu_window,
             windowed_q_token_offset_tensor=q_offsets,
         )
-
-
-def _apply_vision_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor, head_dim: int) -> ttnn.Tensor:
-    """Rotate the leading `head_dim` channels of each head, leaving the padding tail untouched.
-
-    The padded channels carry no position, so rotating them would mix zeros into the rotation and is
-    simply skipped.
-    """
-    rot, tail = x[..., :head_dim], x[..., head_dim:]
-    half = head_dim // 2
-    rotated = ttnn.concat([ttnn.neg(rot[..., half:]), rot[..., :half]], dim=-1)
-    out = ttnn.add(ttnn.mul(rot, cos), ttnn.mul(rotated, sin))
-    return ttnn.concat([out, tail], dim=-1) if tail.shape[-1] else out
 
 
 class Qwen3VlVisionBlock(Module):
