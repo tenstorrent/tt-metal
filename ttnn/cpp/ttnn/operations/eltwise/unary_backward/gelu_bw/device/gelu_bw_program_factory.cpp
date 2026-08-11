@@ -132,6 +132,12 @@ tt::tt_metal::ProgramDescriptor GeluBwProgramFactory::create_descriptor(
     } else {
         compute_defines["COPY_DEST_VALUES"] = "copy_dest_values<DataFormat::Float16_b>";
     }
+
+    if (output.dtype() == DataType::BFLOAT16) {
+        compute_defines["BF16_ROUNDING_MODE"] = "ckernel::DstRoundingMode::NearestEven";
+    } else {
+        compute_defines["BF16_ROUNDING_MODE"] = "ckernel::DstRoundingMode::Default";
+    }
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = compute_kernel_path;
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
