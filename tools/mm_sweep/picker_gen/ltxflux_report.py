@@ -23,6 +23,13 @@ import sys
 
 MM, CMP = sys.argv[1], sys.argv[2]
 AS_MD = "--md" in sys.argv
+# --regime-a: keep only shapes the op is actually FOR. regime_a_matmul targets low-arithmetic-intensity
+# M << N; applying it to M > N shapes measures it outside its design envelope, and most of the picker
+# infeasibilities are exactly there (every M=4864 LTX shape has N <= 4096 < M).
+REGIME_A = "--regime-a" in sys.argv
+# --max-m N: cap M. The acceptance scope for this op is small-Mt; large M is where the AG leg dominates the
+# composition anyway, so it says little about the MM.
+MAXM = next((int(a.split("=")[1]) for a in sys.argv if a.startswith("--max-m=")), None)
 
 ra = {}
 for line in open(MM):
@@ -39,6 +46,10 @@ for c in csv.DictReader(open(CMP)):
     def f(x):
         return float(x) if x not in ("", None) else None
 
+    if REGIME_A and not (key[0] < key[2]):
+        continue
+    if MAXM is not None and key[0] > MAXM:
+        continue
     ag, mm_old, fused = f(c["ag_us"]), f(c["mm_us"]), f(c["agmm_us"])
     mm_ra = r.get("median_us") if r.get("outcome") == "ok" else None
     rows.append(

@@ -73,8 +73,9 @@ def shipped_cost(Mt, Kt, Nt, cfg, g):
     kbe = min(kb, 2)
     compT = g["Mblk"] * g["Nown"] * g["Ktl"] / ((kbe / (kbe + 0.5)) * (area / (area + 2.0)))
     ovlT = g["Mblk"] * g["Nown"] * g["Ktl"] / g["Nbpc"]
-    return (max(readT, compT) + ovlT) * (1.0 + 0.5 * (g["wasteK"] + g["wasteN"])) \
-        + 0.8 * max(0, Pk - 1) * g["Mblk"] * g["Nown"]
+    return (max(readT, compT) + ovlT) * (1.0 + 0.5 * (g["wasteK"] + g["wasteN"])) + 0.8 * max(0, Pk - 1) * g[
+        "Mblk"
+    ] * g["Nown"]
 
 
 def shortlist(Mt, Kt, Nt, k):
@@ -90,15 +91,20 @@ def shortlist(Mt, Kt, Nt, k):
     if not cands:
         return []
     out, seen = [], set()
-    pools = [(phys_cost, cands), (shipped_cost, cands),
-             # The guarded fallback picks an Sm=1 ANCHOR for non-table shapes; ranking over all Sm buries it
-             # under Sm>1 candidates, so rank the Sm==1 subset separately to make sure it is covered.
-             (shipped_cost, [cg for cg in cands if cg[0][2] == 1])]
+    pools = [
+        (phys_cost, cands),
+        (shipped_cost, cands),
+        # The guarded fallback picks an Sm=1 ANCHOR for non-table shapes; ranking over all Sm buries it
+        # under Sm>1 candidates, so rank the Sm==1 subset separately to make sure it is covered.
+        (shipped_cost, [cg for cg in cands if cg[0][2] == 1]),
+    ]
     for costf, pool in pools:
         if not pool:
             continue
-        ranked = sorted(pool, key=lambda cg: (costf(Mt, Kt, Nt, cg[0], cg[1]),
-                                              -cg[1]["sub_area"] * cg[0][3], -cg[1]["cores"], cg[0]))
+        ranked = sorted(
+            pool,
+            key=lambda cg: (costf(Mt, Kt, Nt, cg[0], cg[1]), -cg[1]["sub_area"] * cg[0][3], -cg[1]["cores"], cg[0]),
+        )
         for cfg, _ in ranked[:k]:
             if cfg not in seen:
                 seen.add(cfg)
@@ -117,8 +123,14 @@ def measure(M, K, N, cfg, env):
     if not line:
         return None
     d = json.loads(line[11:])
+    # CORRECTNESS BEFORE TIMING. The worker computes PCC on its first (untimed) call, so a config that is
+    # wrong is discarded before its timing is ever considered. Both gates matter and they catch different
+    # things: PCC catches "numerics are wrong", the finite count catches a handful of NaN/Inf among millions
+    # of elements, which barely moves PCC but is a hard failure (BUG_rscatter_nonfinite.md was exactly that).
     if d.get("outcome") != "ok" or d.get("pcc", 0) < 0.999:
-        return None          # never accept a config that failed PCC, however fast it looked
+        return None
+    if d.get("n_nonfinite", 0) != 0 or d.get("finite") is False:
+        return None
     return d["median_us"]
 
 
@@ -127,9 +139,17 @@ def main():
     ap.add_argument("shapes", nargs="*", help="MxKxN")
     ap.add_argument("--shapes-file")
     ap.add_argument("--topk", type=int, default=8)
-    ap.add_argument("--relaunches", type=int, default=2,
-                    help="fresh relaunches used to CONFIRM the winner beats the shipped pick")
+    ap.add_argument(
+        "--relaunches", type=int, default=2, help="fresh relaunches used to CONFIRM the winner beats the shipped pick"
+    )
     ap.add_argument("--min-gain", type=float, default=1.5, help="percent; below this, keep the shipped pick")
+    ap.add_argument(
+        "--apply",
+        action="store_true",
+        help="write the confirmed winners into kTable via apply_table.py, then show the diff. "
+        "Tuning stays OFFLINE either way -- this edits a source table that the runtime "
+        "picker already consults; it never adds measurement to the operator.",
+    )
     a = ap.parse_args()
     shapes = list(a.shapes)
     if a.shapes_file:
@@ -160,8 +180,11 @@ def main():
         results.sort()
         best_us, best_cfg = results[0]
         if shipped_us is not None and shipped_us <= best_us:
-            print("[%s] %d shortlisted; shipped pick %.2f us already best (shortlist best %s @ %.2f us)"
-                  % (nm, len(results), shipped_us, ",".join(map(str, best_cfg)), best_us), flush=True)
+            print(
+                "[%s] %d shortlisted; shipped pick %.2f us already best (shortlist best %s @ %.2f us)"
+                % (nm, len(results), shipped_us, ",".join(map(str, best_cfg)), best_us),
+                flush=True,
+            )
             continue
         # CONFIRM against the shipped pick with fresh relaunches -- a single reading is not enough on this
         # hardware (this gate rejected 6 of 32 apparent wins during the campaign).
@@ -177,13 +200,26 @@ def main():
             apply_args.append('"%s=%s:AUTOTUNE %+.1f%%"' % (nm, cs, statistics.mean(gains)))
         else:
             verdict = "keep shipped pick (%s)" % ("/".join("%+.1f%%" % g for g in gains) if gains else "no baseline")
-        print("[%s] shortlist %d measured, best %s @ %.2f us -- %s" % (nm, len(results), cs, best_us, verdict),
-              flush=True)
-    if apply_args:
-        print("\n# apply with:\npython3 tools/mm_sweep/picker_gen/apply_table.py \\\n  " +
-              " \\\n  ".join(apply_args))
-    else:
+        print(
+            "[%s] shortlist %d measured, best %s @ %.2f us -- %s" % (nm, len(results), cs, best_us, verdict), flush=True
+        )
+    if not apply_args:
         print("\n# nothing to apply: the shipped pick was within %.1f%% on every shape" % a.min_gain)
+        return
+    cmd = "python3 tools/mm_sweep/picker_gen/apply_table.py \\\n  " + " \\\n  ".join(apply_args)
+    if not a.apply:
+        print("\n# apply with:\n" + cmd)
+        return
+    # Strip the shell quoting the printed form carries; argv here needs the bare strings.
+    bare = [x.strip('"') for x in apply_args]
+    r = subprocess.run([sys.executable, os.path.join(HERE, "apply_table.py")] + bare, capture_output=True, text=True)
+    print(r.stdout + r.stderr, end="")
+    if r.returncode != 0:
+        print("apply_table.py FAILED; kTable not modified")
+        return
+    tbl = "ttnn/cpp/ttnn/operations/experimental/regime_a_matmul/device/regime_a_matmul_config.cpp"
+    print("\n# kTable patch (review before committing):")
+    print(subprocess.run(["git", "diff", "--", tbl], capture_output=True, text=True).stdout, end="")
 
 
 if __name__ == "__main__":
