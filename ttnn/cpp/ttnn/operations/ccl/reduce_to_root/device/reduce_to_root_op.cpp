@@ -92,12 +92,23 @@ ReduceToRootOp::spec_return_value_t ReduceToRootOp::compute_output_specs(
         intermediate_specs.push_back(tensor_args.optional_intermediate_tensor.value().tensor_spec());
         return {intermediate_specs, final_output_spec};
     }
-    // intermediate shape is the shape of the 3 tenssors combined so that we can send them all in a single packet
-    uint32_t shape_0 = final_output_spec[0].memory_config().shard_spec()->shape[0];
-    uint32_t shape_1 = final_output_spec[0].memory_config().shard_spec()->shape[1] +
-                       (2 * final_output_spec[1].memory_config().shard_spec()->shape[1]);
-    Shape intermediate_shape = Shape{shape_0, shape_1};
-    tt::tt_metal::TensorSpec intermediate_spec(intermediate_shape, final_output_spec[0].tensor_layout());
+    // Every shard core receives one packet holding its l shard plus the matching s and m pages, so each core needs a
+    // shard of (l shard width + 2 * s shard width) and the tensor spans that shard on every core of the l grid.
+    const auto& l_memory_config = final_output_spec[0].memory_config();
+    const auto& l_shard_spec = l_memory_config.shard_spec().value();
+    const auto& s_shard_spec = final_output_spec[1].memory_config().shard_spec().value();
+
+    const uint32_t shard_height = l_shard_spec.shape[0];
+    const uint32_t intermediate_shard_width = l_shard_spec.shape[1] + (2 * s_shard_spec.shape[1]);
+    const uint32_t num_shard_cores = l_shard_spec.num_cores();
+
+    Shape intermediate_shape = Shape{shard_height, intermediate_shard_width * num_shard_cores};
+    tt::tt_metal::ShardSpec intermediate_shard_spec(
+        l_shard_spec.grid, {shard_height, intermediate_shard_width}, l_shard_spec.orientation);
+    tt::tt_metal::MemoryConfig intermediate_memory_config(
+        l_memory_config.memory_layout(), l_memory_config.buffer_type(), intermediate_shard_spec);
+    tt::tt_metal::TensorSpec intermediate_spec(
+        intermediate_shape, final_output_spec[0].tensor_layout().with_memory_config(intermediate_memory_config));
     intermediate_specs.push_back(intermediate_spec);
 
     return {intermediate_specs, final_output_spec};

@@ -276,7 +276,8 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             .set_page_size(packet_header_cb_id, packet_header_size_bytes)
             .set_tile_dims(packet_header_cb_id, stats_tile);
 
-    auto total_pkt_size = packet_size_bytes + 1024;
+    // The writers append the s and m pages after the l payload, so a packet is 2 aligned pages larger than the payload.
+    const uint32_t total_pkt_size = packet_size_bytes + (2 * aligned_input_page_size_bytes);
     constexpr auto packet_cb_id = tt::CBIndex::c_7;
     tt::tt_metal::CircularBufferConfig cb_packet_config =
         tt::tt_metal::CircularBufferConfig(2 * total_pkt_size, {{packet_cb_id, input_dataformat}})
@@ -356,8 +357,8 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
 
     constexpr auto packet_cb_id_2 = tt::CBIndex::c_18;
     tt::tt_metal::CircularBufferConfig cb_packet_config_2 =
-        tt::tt_metal::CircularBufferConfig(packet_size_bytes, {{packet_cb_id_2, input_dataformat}})
-            .set_page_size(packet_cb_id_2, packet_size_bytes)
+        tt::tt_metal::CircularBufferConfig(total_pkt_size, {{packet_cb_id_2, input_dataformat}})
+            .set_page_size(packet_cb_id_2, total_pkt_size)
             .set_tile_dims(packet_cb_id_2, stats_tile);
 
     constexpr auto cb_s_temp = tt::CBIndex::c_19;

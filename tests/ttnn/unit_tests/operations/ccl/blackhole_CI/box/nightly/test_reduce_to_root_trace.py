@@ -87,9 +87,6 @@ def compute_reference_reduce_to_root(
     return torch.cat(l_final_cores, dim=1), torch.cat(s_final_cores, dim=1), torch.cat(m_final_cores, dim=1)
 
 
-@pytest.mark.skip(
-    reason="Consistently failing with data mismatch after trace replay on all BH multi-chip setups. See #39098"
-)
 @skip_for_wormhole_b0("This test is for blackhole")
 @pytest.mark.parametrize(
     "device_params",
@@ -332,3 +329,112 @@ def test_reduce_to_root_with_trace(bh_2d_mesh_device):
     m_ref_col0 = m_ref[:, m_cols_to_check]
     m_match = torch.allclose(m_output_col0, m_ref_col0, rtol=rtol, atol=atol)
     assert m_match, "M tensor output does not match reference after trace execution"
+
+
+@skip_for_wormhole_b0("This test is for blackhole")
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D}),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_1d_linear"],
+)
+def test_reduce_to_root_auto_intermediate(bh_2d_mesh_device):
+    """Same reduction without an intermediate_tensor, so the op computes the intermediate spec itself."""
+
+    num_devices = 4
+    root_coord = (1, 0)
+    root_device_idx = root_coord[0]
+    num_cores = 8
+
+    topology = ttnn.Topology.Linear
+    validate_test(num_devices, topology, bh_2d_mesh_device.shape, 0)
+    submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+
+    l_shape = [8, 128 * num_cores]
+    s_shape = [8, 32 * num_cores]
+    dtype = ttnn.bfloat16
+    layout = ttnn.TILE_LAYOUT
+    tile = ttnn.Tile((8, 32))
+
+    mux_cores = [ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 1), ttnn.CoreCoord(2, 2), ttnn.CoreCoord(2, 3)]
+
+    shard_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3)),
+            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 3)),
+        }
+    )
+    mem_config_l = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.types.BufferType.L1,
+        ttnn.ShardSpec(shard_grid, [8, 128], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    mem_config_s = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.types.BufferType.L1,
+        ttnn.ShardSpec(shard_grid, [8, 32], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+    mesh_mapper = ttnn.create_mesh_mapper(
+        submesh_device,
+        ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementReplicate()], submesh_device.shape),
+    )
+
+    torch.manual_seed(42)
+    l_data_per_device = []
+    s_data_per_device = []
+    m_data_per_device = []
+    for device_idx in range(num_devices):
+        l_data_per_device.append(torch.randn(l_shape, dtype=torch.bfloat16) * 0.5 + device_idx)
+        s_data_per_device.append(torch.rand(s_shape, dtype=torch.bfloat16) * 0.5 + 1.0 + device_idx * 0.1)
+        m_data_per_device.append(torch.randn(s_shape, dtype=torch.bfloat16) * 0.5 + device_idx)
+
+    def to_device(per_device, mem_config):
+        return ttnn.from_torch(
+            torch.stack(per_device, dim=0),
+            device=submesh_device,
+            layout=layout,
+            tile=tile,
+            dtype=dtype,
+            memory_config=mem_config,
+            mesh_mapper=mesh_mapper,
+        )
+
+    l_tensor = to_device(l_data_per_device, mem_config_l)
+    s_tensor = to_device(s_data_per_device, mem_config_s)
+    m_tensor = to_device(m_data_per_device, mem_config_s)
+
+    scale_value = float(1)
+    l_ref, s_ref, m_ref = compute_reference_reduce_to_root(
+        l_data_per_device, s_data_per_device, m_data_per_device, root_device_idx, num_cores, scale_value
+    )
+
+    out_l, out_s, out_m = ttnn.reduce_to_root(
+        l_tensor,
+        s_tensor,
+        m_tensor,
+        root_coord=ttnn.MeshCoordinate(root_coord),
+        scale_fp32=scale_value,
+        topology=topology,
+        input_mux_cores=mux_cores,
+    )
+    ttnn.synchronize_device(submesh_device)
+
+    composer = ttnn.ConcatMeshToTensor(submesh_device, dim=0)
+    out_l_root = ttnn.to_torch(out_l, mesh_composer=composer)[root_device_idx]
+    out_s_root = ttnn.to_torch(out_s, mesh_composer=composer)[root_device_idx]
+    out_m_root = ttnn.to_torch(out_m, mesh_composer=composer)[root_device_idx]
+
+    rtol = 0.01
+    atol = 0.06
+    cols_to_check = [i * 32 for i in range(num_cores)]
+
+    assert torch.allclose(out_l_root, l_ref, rtol=rtol, atol=atol), "L tensor output does not match reference"
+    assert torch.allclose(
+        out_s_root[:, cols_to_check], s_ref[:, cols_to_check], rtol=rtol, atol=atol
+    ), "S tensor output does not match reference"
+    assert torch.allclose(
+        out_m_root[:, cols_to_check], m_ref[:, cols_to_check], rtol=rtol, atol=atol
+    ), "M tensor output does not match reference"
