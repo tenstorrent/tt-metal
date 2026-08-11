@@ -19,6 +19,8 @@
 #include "tt_metal/impl/emulation/emulated_program_runner.hpp"  // emule::pump_device (host-interleaved socket)
 #endif
 #include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
+#include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include <umd/device/chip_helpers/tlb_manager.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <cstdlib>
@@ -198,15 +200,28 @@ void H2DSocket::init_data_buffer(const std::shared_ptr<MeshDevice>& mesh_device,
     auto num_data_cores = mesh_device->num_worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0});
     auto shard_grid = mesh_device->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0});
 
+    // HYBRID mode: the FIFO is only used on the receiver core, so allocate it
+    // there per-core instead of reserving fifo_size on every worker core.
+    const bool per_core = buffer_type_ == BufferType::L1 &&
+                          tt::tt_metal::MetalContext::instance().rtoptions().get_allocator_mode_hybrid();
+    if (per_core) {
+        shard_grid = CoreRangeSet(CoreRange(recv_core_.core_coord));
+        num_data_cores = 1;
+    }
+
     // Allocate buffer at a PCIe aligned address. This requires extra memory to be allocated.
     auto total_data_buffer_size = num_data_cores * (fifo_size_ + pcie_alignment);
 
+    auto sharding_args = BufferShardingArgs(
+        ShardSpecBuffer(shard_grid, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_data_cores, 1}),
+        TensorMemoryLayout::HEIGHT_SHARDED);
+    if (per_core) {
+        experimental::per_core_allocation::set_per_core_allocation(sharding_args, true);
+    }
     DeviceLocalBufferConfig data_buffer_specs = {
         .page_size = fifo_size_ + pcie_alignment,
         .buffer_type = buffer_type_,
-        .sharding_args = BufferShardingArgs(
-            ShardSpecBuffer(shard_grid, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_data_cores, 1}),
-            TensorMemoryLayout::HEIGHT_SHARDED),
+        .sharding_args = sharding_args,
         .bottom_up = std::nullopt,
         .sub_device_id = std::nullopt,
     };
@@ -214,7 +229,13 @@ void H2DSocket::init_data_buffer(const std::shared_ptr<MeshDevice>& mesh_device,
         .size = total_data_buffer_size,
     };
     data_buffer_ = MeshBuffer::create(data_mesh_buffer_specs, data_buffer_specs, mesh_device.get());
-    aligned_data_buf_start_ = tt::align(data_buffer_->address(), pcie_alignment);
+    // Per-core buffers have a real address only via the per-core API;
+    // address() is not valid for them (host would push to a bogus L1 spot).
+    const DeviceAddr data_buf_base = per_core
+                                         ? experimental::per_core_allocation::get_per_core_address(
+                                               *data_buffer_, recv_core_.device_coord, recv_core_.core_coord)
+                                         : data_buffer_->address();
+    aligned_data_buf_start_ = tt::align(data_buf_base, pcie_alignment);
     write_ptr_ = 0;
 }
 
