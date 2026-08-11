@@ -227,12 +227,22 @@ block rather than `target_sources`, and `commit_worktree` snapshotted all thirte
 untracked kernels and tracked CMake edits together -- while leaving HEAD and the index where the
 agent left them. Reproduce it the same way if any of those change; it costs seconds and no cluster.
 
+The trigger itself is no longer among the unknowns. Probed live on 2026-08-11, before the secret
+existed, by pushing a scratch ref by hand from a laptop -- a user credential behaves the same way
+the launcher's PAT will, so this needed nothing provisioned:
+
+    git push origin "$(git commit-tree 'HEAD^{tree}' -p HEAD \
+      -m '{"mode":"build","op":"untilize"}'):refs/heads/port-op-scratch/probe-1"
+
+[Run 31508403789](https://github.com/tenstorrent/tt-metal/actions/runs/31508403789) started from that
+push within seconds, from a workflow file that has never been on `main`. `resolve` parsed the
+message, filled every default, and `check-harbor` and `build-artifact/parse-platform` both went
+green on `needs.resolve.outputs.*`. Cancelled once the docker job started, since the remaining 20
+minutes of CPU pool would have proved nothing further. Two minutes of hosted runner, no card, no
+credits -- do this again after any change to the trigger, the message format or the resolve job.
+
 The untested surface, roughly in the order a first run will meet it:
 
-- **That the push starts anything at all.** Everything rests on a PAT push to `port-op-scratch/**`
-  starting `port-measure.yaml` from the pushed commit. If it does not, the symptom is the launcher
-  waiting five minutes and reporting that no run appeared, and the first thing to check is whether
-  the token is really a PAT.
 - **The rest of the round trip.** Find-the-run-by-SHA, poll, artifact download, scratch-ref cleanup.
 - **The `/codegen` volume in the device job.** It is mounted from a checkout path the way
   `test-dispatch.yaml` mounts `docker-job`, but Docker creates the host directory before the
@@ -257,15 +267,13 @@ And, unchanged from before the split, the things a device was always going to ha
 
 ### How to run the dry run once it is unblocked
 
-Cheapest first, so each failure costs the least it can. The first two need no agent and no Copilot
-credits -- they are the manual push from the section above, which is worth doing by hand precisely
-because it isolates the half that has never run:
+Cheapest first, so each failure costs the least it can. Step 1 is already done, above.
 
-1. A manual scratch push with `{"mode":"build","op":"untilize"}`. Proves the push trigger fires, the
-   `resolve` job parses the message, and the `build-artifact.yaml` wiring is right. No card, so it
-   is also the cheapest thing to get wrong.
-2. The same with `"mode":"baseline"` from a scaffolded tree -- exercises the device job, the
-   `/codegen` mount, the wheel install and the results artifact.
+1. ~~A manual scratch push with `mode: build`.~~ Done: the trigger, `resolve` and the front of
+   `build-artifact.yaml` are proven.
+2. A manual scratch push with `"mode":"baseline"` from a scaffolded tree, letting the build run to
+   completion this time. Exercises the device job, the `/codegen` mount, the wheel install and the
+   results artifact -- the whole half that has never executed. Still no agent and no credits.
 3. Push the branch to `ebanerjee/port-op-dryrun` to trigger `port-op` itself, which runs step 2 as
    its own pre-agent step and then hands over to the agent.
 
