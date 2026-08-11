@@ -100,3 +100,84 @@ is **detection**, not correctness.
    cell where v3's approach beat v2's outright.
 6. **Audit v2's shipped knobs with the intensity I applied to v3's.** One pass found a defect in v2's gemma guard;
    the count of "v2 defects" is currently a measure of my attention, not of v2.
+
+
+---
+
+# 7. Two of the holes closed, artefact-only, with the run untouched
+
+Done while phi-exp17 held the device, so all of this is git and artefacts — no measurement.
+
+## 7a. north-mini `fuse-noadvise`, the 2,200 µs hole — two causes, and one is a real v3 loss
+
+**Cause 1: v2's number is not comparable, and its key measurement does not reproduce.**
+
+| | v2 | v3 |
+|---|---:|---:|
+| `model_estimate.before_us` | **24,949.2** | **27,628.1** — **11 % apart** |
+| provenance | **untagged, transcript-derived** | tagged, generator-derived |
+| the 32-core grid it shipped | **0.5184** | **0.544174 — 5.0 % apart, does not reproduce** |
+
+v3 measured the *same core count* v2 shipped and got a materially different number, on a baseline 11 % away. My
+earlier dismissal — *"v2's cell was `CONTAMINATED`"* — was the right conclusion for the wrong reason: the issue is
+not contamination, it is **a different baseline plus an unreproducible measurement.** That was checkable in two
+commands and I asserted it instead.
+
+**Cause 2, and this one is a genuine v3 loss: the clause-2 oracle defect, again.** The full-attention-sparse kind:
+
+| candidate | ms | oracle PCC | vs bar 0.995 | vs incumbent 0.9996039 |
+|---|---:|---:|---:|---:|
+| `advised_plan_verbatim` | 0.544025 | 0.9995907679 | **+4.59 × 10⁻³** | −1.3 × 10⁻⁵ |
+| **`confirm_norm_8` — fastest** | **0.541720** | **0.9995288788** | **+4.53 × 10⁻³** | −7.5 × 10⁻⁵ |
+| `norm_11` | 0.541924 | 0.9995689473 | +4.57 × 10⁻³ | −3.5 × 10⁻⁵ |
+| `norm_64` — worst | 0.548404 | 0.9994590858 | +4.46 × 10⁻³ | −1.4 × 10⁻⁴ |
+| knob off | 0.553180 | — | — | — |
+
+**All ten rejected.** The cell's own verdict string: *"incumbent retained: every measured norm grid failed the
+real-weight no-regression oracle."* Every one of them **clears the model's own bar by 4.5 × 10⁻³ while falling short
+of the incumbent by at most 1.4 × 10⁻⁴ — a factor of 30 to 60.**
+
+Cost: `0.553180 → 0.541720` = **−2.07 % across 12 layers = −137.5 µs/model, against a 6.7 µs band — 20× the band.**
+
+**So clause 2 now has three measured instances**: phi `-onA` (−0.90 %/layer, PCC gap 1.2 × 10⁻⁷), north-mini
+`fuse-noadvise` (−137.5 µs/model, PCC gap ≤ 1.4 × 10⁻⁴), and it is the rule implicated in g26onA's fourteen
+`rejected_kind_by_absolute_oracle` verdicts, which remain unaudited. It is the **second-largest systematic defect in
+the corpus after the phase mismatch**, and unlike that one it is a rule I wrote
+([`DEVIATIONS`](ADVCHAL-V3-DEVIATIONS.md) §3.1, taken verbatim from `IMPROVEMENTS` A1).
+
+## 7b. qwen `fuse-noadvise`, the 434 µs hole — coverage, not judgement
+
+**The cell took exactly two measurements**, one per kind, both the advised plan verbatim, and **both slower than the
+incumbent**:
+
+| kind | layers | incumbent ms | advised plan ms | | share of model |
+|---|---:|---:|---:|---|---:|
+| `full_attention` | 16 | 1.2081442 | **1.222304** | +1.2 % slower | 1.8 % |
+| `linear_attention` | 48 | 19.1295758 | **19.142862** | +0.07 % slower | **98.2 %** |
+
+No ladder, no cliff candidates, no oracle on either — against nmFN's 20+ and g26onA's 33 measurements. The reason is
+in the third column: **`linear_attention` is 915,860 µs of a 932,388 µs model — 98.2 % — and it produced no
+reconciliation**, so the cliff check had nothing to rank and the only candidate available was the advisor's plan,
+which is slower on both kinds.
+
+**So v3's zero here is defensible but under-searched, and the cause is coverage rather than a decision defect.** v2's
+−434 µs (−0.046 % of model) came from the 1.8 % kind. This is the one cell where the honest statement is *"98 % of
+the model was invisible to both versions and nothing here is established."*
+
+## 7c. Revised coverage
+
+| | µs | share |
+|---|---:|---:|
+| fully explained | **9,826** | **87 %** |
+| — of which with a measured fix | 7,192 | 64 % |
+| — of which explained without one (§7a, §7b) | 2,634 | 23 % |
+| still partial | **1,477** | **13 %** |
+
+Remaining: phi `fuse-noadvise` **989 µs** — I claimed the rope was inexpressible and **never tested whether v2's
+implementation ports**, the move that recovered phiB entirely; phi `-onA` **340 µs** — clause-2 artefacts identified
+but never re-measured; gemma-4-26B `nofuse-noadvise` **148 µs** — P3 unresolved.
+
+**And clause 2 is now the highest-value single change**, ahead of the phase fix by count of affected cells: three
+measured instances, one of them a rule I wrote, and the remedy is the one already drafted — *the veto is the model's
+own bar, full stop; "worse than the incumbent" becomes a recorded observation requiring explanation only when the
+gap is material.*
