@@ -325,9 +325,17 @@ void kernel_main() {
     constexpr bool gqa_grouped_kv = ring_joint::is_gqa_grouped_kv_head_mode(v_shares_k_buffer, NH, NHK, NHV);
     constexpr bool k_uses_batch_chain = ring_joint::uses_shared_k_batch_chain(gqa_grouped_kv, NHK);
     constexpr bool use_head_chain = enable_kv_chains && !gqa_grouped_kv;
-    // In-place latent-V (single-tile Q): the compute kernel reads V straight from K^T, so the
+    // In-place latent-V: the compute kernel reads V straight from K^T, so the
     // reader never materializes V. Shared with the program factory and compute kernel.
-    constexpr bool kt_inplace_v = kt_inplace_v_enabled(v_shares_k_buffer, Sq_chunk_t);
+    constexpr bool kt_inplace_v = kt_inplace_v_enabled(
+        v_shares_k_buffer,
+        Sq_chunk_t,
+#ifdef Q_TINY_BATCH
+        true
+#else
+        false
+#endif
+    );
     constexpr uint32_t q_heads_per_v = NH / NHV;
     // Slots 37-39: sharded-joint scalars appended by the factory after upstream's attention-sink /
     // sliding-window / metadata fields (slots 32-36 above).
@@ -776,25 +784,44 @@ void kernel_main() {
         }
         uint32_t gqa_group_q_iter = 0;
 
-        for (uint32_t q_iter = 0; q_iter < loop_q_count; ++q_iter) {
+        constexpr uint32_t q_iter_step =
+#ifdef Q_TINY_BATCH
+            10;
+#else
+            1;
+#endif
+        for (uint32_t q_iter = 0; q_iter < loop_q_count; q_iter += q_iter_step) {
             // Check if this is a real iteration or only padded chain/mcast synchronization.
             const bool is_padded_iter = (q_iter >= q_per_core);
 
             // Same-core GQA uses group-major (batch, Q chunk, head) scheduling so consecutive
             // iterations reuse one K/V window.  Every other specialization retains the ordinary
             // head-major flat order and optional causal zigzag remap.
-            const auto decoded_q =
-                decompose_global_q_index(global_q_start + q_iter, num_q_chunks, NH, use_zigzag_balancing);
+            const auto decoded_q = decompose_global_q_index_grouped(
+                global_q_start + q_iter, num_q_chunks, NH, use_zigzag_balancing, q_iter_step);
             const uint32_t nb = decoded_q.nb;
             const uint32_t nq = decoded_q.nq;
             const uint32_t q_chunk = decoded_q.q_chunk;
             const uint32_t nk = nq / q_heads_per_k;
-            const auto q_row_start_tile = q_chunk * Sq_chunk_t;
+            const auto q_row_start_tile =
+#ifdef Q_TINY_BATCH
+                q_chunk / 2;
+#else
+                q_chunk * Sq_chunk_t;
+#endif
+            const auto q_input_row_start =
+#ifdef Q_TINY_BATCH
+                q_chunk;
+#else
+                q_row_start_tile;
+#endif
             const bool is_joint_q = has_joint_q ? (q_chunk >= num_local_q_chunks) : false;
             const uint32_t q_iter_local = [&]() {
                 if constexpr (enable_kv_chains && gqa_grouped_kv) {
                     return gqa_group_q_iter;
                 } else {
+                    // Chain limits are expressed in logical Q chunks.  Keep the
+                    // grouped loop counter in the same units (0, 4, 8, ...).
                     return q_iter;
                 }
             }();
@@ -838,11 +865,16 @@ void kernel_main() {
             }
 
             // Default to local Q tensor; override below for joint Q when applicable.
-            Slice q_slice(nb, nq, q_row_start_tile, q_row_start_tile + Sq_chunk_t, 0, DHt);
+            Slice q_slice(nb, nq, q_input_row_start, q_input_row_start + Sq_chunk_t, 0, DHt);
             [[maybe_unused]] uint32_t q_end_seq_tile = q_local_padded_Nt;
             if constexpr (has_joint_q) {
                 if (is_joint_q) {
-                    const uint32_t joint_q_row_start_tile = (q_chunk - num_local_q_chunks) * Sq_chunk_t;
+                    const uint32_t joint_q_row_start_tile =
+#ifdef Q_TINY_BATCH
+                        q_chunk - num_local_q_chunks;
+#else
+                        (q_chunk - num_local_q_chunks) * Sq_chunk_t;
+#endif
                     q_slice = Slice(nb, nq, joint_q_row_start_tile, joint_q_row_start_tile + Sq_chunk_t, 0, DHt);
                     // Lt_local: per-device joint-Q shard tile count (== Lt on the replicated path).
                     // joint_q is a local tensor starting at row 0; the mesh tensor tracks which global
@@ -853,7 +885,7 @@ void kernel_main() {
 
             // When q_per_core == 1, Q is identical across ring iterations: compute keeps it
             // fronted in the CB, so we only need to read it once on the first active ring iteration.
-            const bool need_q_read = (q_per_core > 1) || !q_pushed;
+            const bool need_q_read = (q_per_core > q_iter_step) || !q_pushed;
 
             ring_joint::SlidingQWorkPlan sliding_q_plan;
             if constexpr (has_sliding_window) {
@@ -988,7 +1020,15 @@ void kernel_main() {
                 if constexpr ((k_uses_batch_chain && batch_mcast_enabled) || (gqa_grouped_kv && gqa_mcast_enabled)) {
                     // Ensures that compute has completed with the previous K chunk before we overwrite the buffer with
                     // the next K chunk for mcast.
-                    const uint32_t reserve_tiles = is_padded_iter ? 2 * k_chunk_tiles : k_chunk_tiles;
+                    const uint32_t reserve_tiles =
+#ifdef Q_TINY_BATCH
+                        // q10 has one grouped work item per active core and at most one padded
+                        // multicast handshake on an idle QB core. Nothing was pushed on that
+                        // path, so the single K entry is wholly free and can be reused in place.
+                        k_chunk_tiles;
+#else
+                        is_padded_iter ? 2 * k_chunk_tiles : k_chunk_tiles;
+#endif
                     cb_k.reserve_back(reserve_tiles);
                 } else {
                     cb_k.reserve_back(k_chunk_tiles);
@@ -1109,11 +1149,17 @@ void kernel_main() {
                         if (ring_iter == 0) {
                             // Local causal chunks beyond this limit are fully masked. Compute still
                             // advances the K/V FIFO phase, but does not consume V values for them.
+                            constexpr uint32_t q_full_tile_rows =
+#ifdef Q_TINY_BATCH
+                                Sq_chunk_t / 2;
+#else
+                                Sq_chunk_t;
+#endif
                             const uint32_t causal_k_limit =
-                                (q_row_start_tile + Sq_chunk_t + Sk_chunk_t - 1) / Sk_chunk_t;
+                                (q_row_start_tile + q_full_tile_rows + Sk_chunk_t - 1) / Sk_chunk_t;
                             skip_v_materialization = k_chunk >= causal_k_limit;
                             if (!skip_v_materialization && k_chunk == causal_k_limit - 1) {
-                                const uint32_t active_rows = q_row_start_tile + Sq_chunk_t - k_chunk * Sk_chunk_t;
+                                const uint32_t active_rows = q_row_start_tile + q_full_tile_rows - k_chunk * Sk_chunk_t;
                                 if (active_rows < Sk_chunk_t) {
                                     // Compute narrows active_Sk to this same row count, so the unfilled tail
                                     // of the fixed-size V entry is kept for FIFO phase only and is never read.

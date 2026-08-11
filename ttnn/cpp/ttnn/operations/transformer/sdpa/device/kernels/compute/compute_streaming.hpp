@@ -386,9 +386,8 @@ void inplace_v_matmul_pack_batched(
     uint32_t inner_dim,
     uint32_t KT_stride) {
     // Each output column is written column-major into DST (column c at c*subblock_h), but the
-    // pack below reads DST row-major; the two orderings only coincide when subblock_h==1, which
-    // kt_inplace_v guarantees via Sq_chunk_t==1. Enforce it so this can't silently corrupt if
-    // reused with multi-tile Q.
+    // pack below reads DST row-major. This helper is selected only for the single-row path;
+    // multi-row qtiny uses the strided-wide helper below.
     static_assert(subblock_h == 1, "inplace_v_matmul_pack_batched requires single-tile Q (subblock_h==1)");
     // subblock_h DST tiles per output column; batch as many columns as DST holds.
     const uint32_t cols_per_batch = dst_size / subblock_h;
@@ -436,7 +435,8 @@ void inplace_v_matmul_pack_strided_wide(
     uint32_t in0_index_start,
     uint32_t inner_dim,
     uint32_t KT_stride) {
-    static_assert(subblock_h == 1, "strided latent-V path requires one tiny Q row");
+    static_assert(subblock_h * subblock_w <= compute_kernel_lib::DEST_AUTO_LIMIT);
+    static_assert(subblock_h == 1 || subblock_w == 1);
     static_assert(vDHt % subblock_w == 0, "latent V width must divide the output width");
     set_matmul_streamed_in1_stride(in1_cb, KT_stride);
     configure_row_pack_width(out_cb, subblock_w);
@@ -1078,8 +1078,14 @@ static void apply_lightweight_mask_streaming(
         if constexpr (is_causal_sdpa || has_sliding_window) {
             if (apply_causal || apply_sliding_window || kv_pad_rotation_enabled) {
                 const uint32_t q_tile = q_subblock * sbh + row;
+#ifdef Q_TINY_BATCH
+                const uint32_t q_pos_u32 = q_start_tile + q_tile / 2;
+                const uint32_t row_primary_diag_idx = primary_diag_idx + (q_tile & 1u);
+#else
                 const uint32_t q_pos_u32 =
                     q_global_tile_for_mask_row<kv_pad_rotation_enabled>(q_tile, q_start_tile, kv_pad_rotation);
+                const uint32_t row_primary_diag_idx = primary_diag_idx;
+#endif
                 const uint32_t mask_cols = kv_pad_rotation_enabled ? num_cols : active_Sk;
                 if constexpr (kv_pad_rotation_enabled) {
                     if (q_pos_u32 == KV_PAD_ROTATION_INVALID_TILE) {
@@ -1114,7 +1120,7 @@ static void apply_lightweight_mask_streaming(
                         }
                         const int32_t k_pos = static_cast<int32_t>(k_pos_u32);
                         l1_acc_causal_col_mask(
-                            mask_cb, out_cb, row_offset, col, q_pos, k_pos, neginf_idx, primary_diag_idx);
+                            mask_cb, out_cb, row_offset, col, q_pos, k_pos, neginf_idx, row_primary_diag_idx);
                     }
                 } else if (straddle_col == 0) {
                     // Fast path: K coords contiguous across cols.
@@ -1123,13 +1129,13 @@ static void apply_lightweight_mask_streaming(
                         if (diag_col < 0) {
                             stamper.neginf_suffix(0);
                         } else if (static_cast<uint32_t>(diag_col) < mask_cols) {
-                            stamper.stamp_tile_at(diag_col, primary_diag_idx);
+                            stamper.stamp_tile_at(diag_col, row_primary_diag_idx);
                             stamper.neginf_suffix(diag_col + 1);
                         }
                     } else if constexpr (has_sliding_window && !is_causal_sdpa) {
                         if (apply_sliding_window) {
                             stamp_sliding_trailing_edge<trailing_base_tiles, trailing_remainder>(
-                                stamper, q_pos, k_start_tile, primary_diag_idx, sliding_trailing_next_idx);
+                                stamper, q_pos, k_start_tile, row_primary_diag_idx, sliding_trailing_next_idx);
                         }
                     }
                 } else {
@@ -1142,7 +1148,7 @@ static void apply_lightweight_mask_streaming(
                                 k_pos += static_cast<int32_t>(straddle_jump);
                             }
                             l1_acc_causal_col_mask(
-                                mask_cb, out_cb, row_offset, col, q_pos, k_pos, neginf_idx, primary_diag_idx);
+                                mask_cb, out_cb, row_offset, col, q_pos, k_pos, neginf_idx, row_primary_diag_idx);
                         }
                     }
                 }
@@ -1829,11 +1835,11 @@ static void sdpa_inner_loop_step(
                 configure_row_pack_width(out_cb, qktv_subblock_w);
                 for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                     // Same in-place-vs-materialized V addressing as the q_subblock-0 drain above.
-                    // kt_inplace_v is constexpr-true only when Sq_chunk_t == 1, which yields a
-                    // single row-group — so this outer q_subblock loop is skipped entirely on that
-                    // path and kt_inplace_v is effectively false here. The ternary is kept symmetric
-                    // with the q_subblock-0 site so the addressing forms stay paired.
-                    const uint32_t qktv_in1_index = kt_inplace_v ? (v_subblock * KT_stride) : v_index_offset;
+                    // In-place latent V stores adjacent output columns KT_stride pages apart.
+                    // q_subblock 0 programs that streamed stride; later row groups reuse it and
+                    // advance the starting row by the full output-subblock width.
+                    const uint32_t qktv_in1_index =
+                        kt_inplace_v ? (v_subblock * qktv_subblock_w * KT_stride) : v_index_offset;
                     blocked_matmul_and_pack<false, kt_inplace_v ? 1 : vDHt, vDHt>(
                         cb_qkt_im,
                         cb_v_in,
@@ -2384,6 +2390,13 @@ void sdpa_ring_v2(
 
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
     constexpr bool has_sliding_window = sliding_window_size > 0;
+    constexpr uint32_t q_iter_step =
+#ifdef Q_TINY_BATCH
+        10;
+#else
+        1;
+#endif
+    const bool multiple_q_work_items = q_per_core > q_iter_step;
     static_assert(!has_sliding_window || chunked_enabled, "Sliding windows require chunked prefill");
     // is_causal: diagonal stamp only on iter 0 (K is local-frame). Chunked: every iter (absolute coords).
     const bool is_causal_iter = (is_causal_sdpa && (ring_iter == 0)) || chunked_enabled;
@@ -2391,7 +2404,11 @@ void sdpa_ring_v2(
     // reduce_trigger enables early reduce start via semaphore signaling from packer to unpacker.
     // All conditions are compile-time except the active_Sk == Sk_chunk_t guard (padded chunks).
     constexpr bool can_reduce_trigger =
+#ifdef Q_TINY_BATCH
+        false;
+#else
         (Sk_chunk_t % qkt_subblock_w == 0) && (Sk_chunk_t / qkt_subblock_w > 1) && (Sk_chunk_t % 2 == 0);
+#endif
 
     // Subblock width for the non-padded (common) case — compile-time constant.
     constexpr uint32_t full_sbw = qkt_subblock_w;
@@ -2438,7 +2455,7 @@ void sdpa_ring_v2(
 
     auto normalize_only = [&]() {
         AccumulatorHalf q_prev_norm = acc_state.prev;
-        if (q_per_core > 1 && ring_iter > 0) {
+        if (multiple_q_work_items && ring_iter > 0) {
             q_prev_norm = {cb_sum_in, cb_max_in, cb_prev_out};
         }
         constexpr uint32_t norm_dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
@@ -2456,7 +2473,7 @@ void sdpa_ring_v2(
             CircularBuffer(cb_attention_sink).pop_front(1);
         }
         sdpa_cb_pop_front_out_of_line(q_prev_norm.max, Sq_chunk_t);
-        if (q_per_core > 1) {
+        if (multiple_q_work_items) {
             CircularBuffer(cb_signal).reserve_back(1);
             sdpa_cb_push_back_out_of_line(cb_signal, 1);
         }
@@ -2516,11 +2533,11 @@ void sdpa_ring_v2(
 
     // -----------------------------------------------------------------------
 
-    for (uint32_t q = global_q_start; q < global_q_end; q++) {
+    for (uint32_t q = global_q_start; q < global_q_end; q += q_iter_step) {
         // Compute Q chunk index (with optional zigzag remapping for causal balancing).
         // num_q_chunks is total per-head chunks (local + joint), matching the divisor the
         // writer/reader use to flatten (batch, head, q_chunk) — see ring_joint_sdpa.cpp.
-        uint32_t q_chunk = remap_q_index(q, num_q_chunks, use_zigzag_balancing) % num_q_chunks;
+        uint32_t q_chunk = remap_q_index_grouped(q, num_q_chunks, use_zigzag_balancing, q_iter_step) % num_q_chunks;
 #ifdef Q_TINY_TILE
         const uint32_t q_chunk_full_tile = q_chunk / 2;
         const uint32_t q_chunk_half = q_chunk & 1u;
@@ -2528,22 +2545,34 @@ void sdpa_ring_v2(
         const uint32_t q_chunk_full_tile = q_chunk;
         constexpr uint32_t q_chunk_half = 0;
 #endif
+        constexpr uint32_t q_full_tile_rows =
+#ifdef Q_TINY_BATCH
+            Sq_chunk_t / 2;
+#else
+            Sq_chunk_t;
+#endif
+        constexpr uint32_t q_full_start_stride =
+#ifdef Q_TINY_BATCH
+            1;
+#else
+            Sq_chunk_t;
+#endif
 
         // Causal K-chunk limit and Q start tile for this Q chunk
         uint32_t causal_k_limit = num_kv_chunks;
         uint32_t q_start_tile = 0;
         if constexpr (has_sliding_window) {
             q_start_tile = logical_nt - ring_size * q_local_padded_Nt + chunked.ring_index * q_local_padded_Nt +
-                           q_chunk_full_tile * Sq_chunk_t;
+                           q_chunk_full_tile * q_full_start_stride;
         } else if constexpr (is_causal_sdpa) {
             if (is_causal_iter) {
-                q_start_tile = q_chunk_full_tile * Sq_chunk_t;
-                causal_k_limit = (q_start_tile + Sq_chunk_t + Sk_chunk_t - 1) / Sk_chunk_t;
+                q_start_tile = q_chunk_full_tile * q_full_start_stride;
+                causal_k_limit = (q_start_tile + q_full_tile_rows + Sk_chunk_t - 1) / Sk_chunk_t;
             }
         } else if constexpr (chunked_enabled) {
             // Absolute Q tile row. Diag stamp masks K past Q's range; logical_n skip handles K past the cache.
-            q_start_tile =
-                chunked.q_start_idx_t + chunked.ring_index * q_local_padded_Nt + q_chunk_full_tile * Sq_chunk_t;
+            q_start_tile = chunked.q_start_idx_t + chunked.ring_index * q_local_padded_Nt +
+                           q_chunk_full_tile * q_full_start_stride;
         }
 
         if (try_balanced_skip(q_chunk)) {
@@ -2596,7 +2625,7 @@ void sdpa_ring_v2(
         // (cb_prev_out, cb_max_in, cb_sum_in) — no copy_block needed.
         // After K0's swap, reset q_cur to original accumulator CBs for normal ping-pong.
         const AccumulatorHalf original_prev = q_prev;
-        const bool restore_from_staging = (q_per_core > 1 && !is_first_active_iter);
+        const bool restore_from_staging = multiple_q_work_items && !is_first_active_iter;
         ASSERT(!has_sliding_window || !restore_from_staging);
         if (restore_from_staging) {
             q_prev = {cb_sum_in, cb_max_in, cb_prev_out};
@@ -2629,7 +2658,7 @@ void sdpa_ring_v2(
             const bool is_last_k_of_last_ring_iter = is_last_ring_iter && is_last_k;
 
             // Signal writer that last K-chunk is starting (for row-by-row DMA save/restore).
-            if (is_last_k && q_per_core > 1) {
+            if (is_last_k && multiple_q_work_items) {
                 CircularBuffer(cb_signal).reserve_back(1);
                 sdpa_cb_push_back_out_of_line(cb_signal, 1);
             }
@@ -2730,13 +2759,13 @@ void sdpa_ring_v2(
                     const uint32_t k_global_start =
                         kv_global_tile_for_local<true, local_padded_Nt, chunk_size_t, q_local_padded_Nt>(
                             source_ring_id, source_k_chunk * Sk_chunk_t);
-                    const uint32_t q_global_end = q_start_tile + Sq_chunk_t;
+                    const uint32_t q_global_end = q_start_tile + q_full_tile_rows;
                     if (k_global_start < q_global_end && q_global_end - k_global_start < active_Sk_param) {
                         active_Sk_param = q_global_end - k_global_start;
                         chunk_sbw = largest_factor_le(active_Sk_param, qkt_subblock_w);
                     }
                 } else if (is_causal_iter && k_chunk == causal_k_limit - 1) {
-                    const uint32_t causal_active = q_start_tile + Sq_chunk_t - k_chunk * Sk_chunk_t;
+                    const uint32_t causal_active = q_start_tile + q_full_tile_rows - k_chunk * Sk_chunk_t;
                     if (causal_active < active_Sk_param) {
                         active_Sk_param = causal_active;
                         chunk_sbw = largest_factor_le(active_Sk_param, qkt_subblock_w);
@@ -2747,7 +2776,7 @@ void sdpa_ring_v2(
             // On last K-chunk of non-last ring iters (multi-Q), redirect output, sum, and max
             // to writer-staging CBs, eliminating post-loop copy_block calls.
             // Writer drains cb_out row-by-row during SALAD; cb_sum_out and cb_max_out bulk after.
-            const bool save_to_staging = is_last_k && !is_last_ring_iter && q_per_core > 1;
+            const bool save_to_staging = is_last_k && !is_last_ring_iter && multiple_q_work_items;
             ASSERT(!has_sliding_window || !save_to_staging);
             const uint32_t step_save_out_cb = save_to_staging ? cb_out : INVALID_CB;
             const uint32_t step_save_max_cb = save_to_staging ? cb_max_out : INVALID_CB;
@@ -2770,7 +2799,7 @@ void sdpa_ring_v2(
             const bool step_apply_causal = [&]() {
                 if constexpr (has_sliding_window) {
                     return q_start_tile < step_k_start_tile + Sk_chunk_t &&
-                           q_start_tile + Sq_chunk_t > step_k_start_tile;
+                           q_start_tile + q_full_tile_rows > step_k_start_tile;
                 }
                 return is_causal_iter;
             }();
@@ -2854,7 +2883,7 @@ void sdpa_ring_v2(
                 step_save_out_cb,
                 step_save_max_cb,
                 step_apply_causal,
-                kv_pad_rotation_enabled ? q_chunk_full_tile * Sq_chunk_t : q_start_tile,
+                kv_pad_rotation_enabled ? q_chunk_full_tile * q_full_start_stride : q_start_tile,
                 step_k_start_tile,
                 lw_mask.neginf_tile_idx,
                 has_sliding_window ? 1 : lw_mask.causal_diag_tile_idx + q_chunk_half,
@@ -2889,12 +2918,12 @@ void sdpa_ring_v2(
         // Pop Q — not popped inside step since ring_mode gates the early Q pop.
         // When q_per_core == 1, Q is identical across ring iterations so we keep it
         // fronted in the CB and only pop on the last iteration to avoid redundant DRAM re-reads.
-        if (q_per_core > 1 || is_last_ring_iter) {
+        if (multiple_q_work_items || is_last_ring_iter) {
             sdpa_cb_pop_front_out_of_line(cb_q_in, Sq_chunk_t * DHt);
         }
 
         // Persist or save accumulators for next ring iteration
-        if (q_per_core == 1) {
+        if (!multiple_q_work_items) {
             // Single Q-chunk: persist in L1 (no DRAM round-trip)
             acc_state.prev = q_prev;
             acc_state.cur = q_cur;

@@ -58,6 +58,20 @@ FORCE_INLINE uint32_t remap_q_index(uint32_t linear_index, uint32_t num_q_chunks
     return linear_index;
 }
 
+FORCE_INLINE uint32_t
+remap_q_index_grouped(uint32_t linear_index, uint32_t num_q_chunks, bool use_zigzag, uint32_t group_size) {
+    if (!use_zigzag || group_size == 1) {
+        return remap_q_index(linear_index, num_q_chunks, use_zigzag);
+    }
+    const uint32_t head_idx = linear_index / num_q_chunks;
+    const uint32_t pos = linear_index % num_q_chunks;
+    const uint32_t num_groups = num_q_chunks / group_size;
+    const uint32_t group_pos = pos / group_size;
+    const uint32_t lane = pos % group_size;
+    const uint32_t group = (group_pos & 1u) ? num_groups - 1 - group_pos / 2 : group_pos / 2;
+    return head_idx * num_q_chunks + group * group_size + lane;
+}
+
 /**
  * Result of decomposing a global Q index into (batch, head, q_chunk) coordinates.
  */
@@ -84,5 +98,15 @@ FORCE_INLINE GlobalQIndex decompose_global_q_index(uint32_t idx, uint32_t num_q_
         /*nb=*/remapped / (NQH * num_q_chunks),
         /*nq=*/(remapped / num_q_chunks) % NQH,
         /*q_chunk=*/remapped % num_q_chunks,
+    };
+}
+
+FORCE_INLINE GlobalQIndex decompose_global_q_index_grouped(
+    uint32_t idx, uint32_t num_q_chunks, uint32_t NQH, bool use_zigzag, uint32_t group_size) {
+    const uint32_t remapped = remap_q_index_grouped(idx, num_q_chunks, use_zigzag, group_size);
+    return {
+        remapped / (NQH * num_q_chunks),
+        (remapped / num_q_chunks) % NQH,
+        remapped % num_q_chunks,
     };
 }

@@ -86,9 +86,17 @@ void kernel_main() {
     // per-ring-iteration joint tail mask and the joint out-of-bounds K-chunk skip.
     constexpr uint32_t logical_lt = get_compile_time_arg_val(53);
     constexpr uint32_t v_cb_physical_width_t = v_shares_k_buffer ? DHt : vDHt;
-    // In-place latent-V (single-tile Q): read V straight from K^T instead of materializing it.
+    // In-place latent-V: read V straight from K^T instead of materializing it.
     // Shared with the program factory and reader via kt_inplace_v_enabled().
-    constexpr bool kt_inplace_v = kt_inplace_v_enabled(v_shares_k_buffer, Sq_chunk_t);
+    constexpr bool kt_inplace_v = kt_inplace_v_enabled(
+        v_shares_k_buffer,
+        Sq_chunk_t,
+#ifdef Q_TINY_BATCH
+        true
+#else
+        false
+#endif
+    );
     // Diagonal-mask tile slot is shared by the kernel's is_causal path and the chunked-prefill
     // path. kernel_is_causal is masked off by the program factory when chunked is on, so only
     // one of the two paths drives the stamp per program — but they share the CB slot layout.

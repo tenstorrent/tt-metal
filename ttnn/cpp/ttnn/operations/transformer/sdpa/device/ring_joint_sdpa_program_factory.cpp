@@ -1026,7 +1026,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
     const bool q_tiny_tile = q_chunk_size == tt::constants::FACE_HEIGHT;
     const uint32_t q_tile_height = q_tiny_tile ? tt::constants::FACE_HEIGHT : tt::constants::TILE_HEIGHT;
-    const uint32_t Sq_chunk_t = q_chunk_size / q_tile_height;
+    // Ten independent q16 rows share each K unpack transaction on QB. They remain
+    // separate 16x32 pages in every CB and in the output tensor.
+    const uint32_t Sq_chunk_t = q_tiny_tile ? 10u : q_chunk_size / q_tile_height;
     const uint32_t Sk_chunk_t = k_chunk_size / tt::constants::TILE_HEIGHT;
 
     // Chunked-prefill balanced layout: each device holds one per-chunk K region per chunk.
@@ -1204,7 +1206,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t all_heads_num_q_chunks = B * NH * num_q_chunks;
     const uint32_t max_q_per_core = tt::div_up(all_heads_num_q_chunks, num_cores);
 
-    const uint32_t q_buffer_factor = (max_q_per_core > 1) ? 2 : 1;
+    // A q16 work item already contains the entire ten-row per-core batch, so it does
+    // not need a second Q entry even though its logical chunk count is ten.
+    const uint32_t q_buffer_factor = q_tiny_tile ? 1 : ((max_q_per_core > 1) ? 2 : 1);
 
     log_debug(tt::LogOp, "max_q_per_core: {}", max_q_per_core);
 
@@ -1213,7 +1217,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // (an L1->L1 transfer) we read the first vDHt rows of K^T directly. V is never produced and the
     // phase-2 matmul consumes one V column tile per issue (out_subblock_w=1). The kernels derive the
     // same predicate from their compile-time args via the shared kt_inplace_v_enabled() helper.
-    const bool kt_inplace_v = kt_inplace_v_enabled(v_shares_k_buffer, Sq_chunk_t);
+    const bool kt_inplace_v = kt_inplace_v_enabled(v_shares_k_buffer, Sq_chunk_t, q_tiny_tile);
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
@@ -1221,8 +1225,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // build the next V while compute consumed the current one; with in-place latent V (kt_inplace_v)
     // there is no V entry, but the 3rd K^T slot still buys prefetch slack that hides the reader's
     // NoC latency tail — measured ~+3pt math util on the dv512 q32 shape vs double-buffering.
-    uint32_t k_tiles = Sk_chunk_t * DHt * (v_shares_k_buffer ? 3 : 2);
-    uint32_t v_tiles = Sk_chunk_t * vDHt * 2;  // double buffer
+    uint32_t k_tiles = Sk_chunk_t * DHt * (v_shares_k_buffer ? (q_tiny_tile ? 1 : 3) : 2);
+    uint32_t v_tiles = Sk_chunk_t * vDHt * (q_tiny_tile ? 1 : 2);
     uint32_t mask_tiles = Sq_chunk_t * Sk_chunk_t;
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
     uint32_t out_im_tiles = Sq_chunk_t * vDHt;
@@ -1245,6 +1249,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t qk_in0_block_w = DHt;
     auto [qk_out_subblock_h, qk_out_subblock_w] =
         detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
+    if (q_tiny_tile) {
+        qk_out_subblock_h = Sq_chunk_t / 2;
+        qk_out_subblock_w = 1;
+    }
 
     TT_FATAL(
         Sq_chunk_t % qk_out_subblock_h == 0,
@@ -1296,6 +1304,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         dst_size,
         /*max_subblock_h=*/use_streaming_compute ? 2 : UINT32_MAX,
         /*max_subblock_w=*/(kt_inplace_v && !q_tiny_tile) ? 1u : UINT32_MAX);
+    if (q_tiny_tile) {
+        out_out_subblock_h = Sq_chunk_t / 2;
+        out_out_subblock_w = 1;
+    }
     // Streaming compute may widen the QKT@V row group beyond the host matmul subblock
     // height for odd Q chunks. The writer must drain cb_out with the same row-group
     // cadence that compute pushes, otherwise deferred-save rows can be popped and
@@ -1686,6 +1698,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
     if (q_tiny_tile) {
         defines["Q_TINY_TILE"] = "1";
+        defines["Q_TINY_BATCH"] = "1";
     }
 
     // NOTE: CreateKernel calls are deferred until after chain construction so that
@@ -1804,7 +1817,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // Sliding folds every local/halo K/V range into one final pass per Q, so it never saves
     // or restores accumulators through DRAM. Keep valid, format-compatible CB indices in the
     // compile-time ABI without reserving separate L1 storage for those unreachable paths.
-    const bool needs_dram_accumulator_staging = !has_sliding_window;
+    const bool needs_dram_accumulator_staging = !has_sliding_window && (!q_tiny_tile || max_q_per_core > Sq_chunk_t);
     const uint32_t cb_stats_in = needs_dram_accumulator_staging
                                      ? allocate_tile_cb(statistics_tiles, im_tile_size, im_df, &q_row_tile)
                                      : cb_max_A;
@@ -1950,7 +1963,14 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     uint32_t base_chunks_per_core = 0;
     uint32_t extra_chunks_per_core = 0;
     uint32_t cores_doing_extra_work = 0;
-    if (enable_zigzag_balancing) {
+    if (q_tiny_tile) {
+        constexpr uint32_t q_batch = 10;
+        TT_FATAL(total_q_chunks % q_batch == 0, "q16 batch requires total Q work divisible by ten");
+        const uint32_t total_batches = total_q_chunks / q_batch;
+        cores_doing_extra_work = total_batches % num_cores;
+        base_chunks_per_core = (num_cores == 0) ? 0 : (total_batches / num_cores) * q_batch;
+        extra_chunks_per_core = (num_cores == 0) ? 0 : q_batch;
+    } else if (enable_zigzag_balancing) {
         log_debug(tt::LogOp, "Enabling zigzag balancing with even num_q_chunks: {}", num_q_chunks);
         const uint32_t total_pairs = total_q_chunks / 2;
         cores_doing_extra_work = total_pairs % num_cores;
@@ -2613,6 +2633,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     compute_kernel.config = ComputeConfigDescriptor{
         .math_fidelity = q_tiny_tile ? MathFidelity::LoFi : math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
         .math_approx_mode = q_tiny_tile ? true : math_approx_mode,
     };
 
