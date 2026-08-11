@@ -300,7 +300,7 @@ def test_deepseek_moe_gate(seed, approx):
     regions = _regions(
         _config(
             DEEPSEEK_MOE_GATE(
-                mode=MODE_GATE, eps=_fp32_bits(EPS), scale=_fp32_bits(SCALE)
+                dmg_mode=MODE_GATE, dmg_eps=_fp32_bits(EPS), dmg_scale=_fp32_bits(SCALE)
             ),
             _gate_tiles(payload),
             src_b=bias,
@@ -323,10 +323,10 @@ def test_deepseek_moe_gate_sigmoid(seed):
     regions = _regions(
         _config(
             DEEPSEEK_MOE_GATE(
-                mode=MODE_GATE,
-                sigmoid=True,
-                eps=_fp32_bits(EPS),
-                scale=_fp32_bits(SCALE),
+                dmg_mode=MODE_GATE,
+                dmg_sigmoid=True,
+                dmg_eps=_fp32_bits(EPS),
+                dmg_scale=_fp32_bits(SCALE),
             ),
             # Not _gate_tiles: this front-end does its transpose in transpose_wh_tile on the raw L1
             # tile, so the payload goes up as-is and the golden transposes.
@@ -365,7 +365,7 @@ def test_deepseek_moe_gate_normalization(norm):
     regions = _regions(
         _config(
             DEEPSEEK_MOE_GATE(
-                mode=MODE_GATE, eps=_fp32_bits(eps), scale=_fp32_bits(scale)
+                dmg_mode=MODE_GATE, dmg_eps=_fp32_bits(eps), dmg_scale=_fp32_bits(scale)
             ),
             _gate_tiles(payload),
             src_b=bias,
@@ -387,7 +387,7 @@ def test_deepseek_moe_gate_shipping_config(dest_sync, num_faces):
     regions = _regions(
         _config(
             DEEPSEEK_MOE_GATE(
-                mode=MODE_GATE, eps=_fp32_bits(EPS), scale=_fp32_bits(SCALE)
+                dmg_mode=MODE_GATE, dmg_eps=_fp32_bits(EPS), dmg_scale=_fp32_bits(SCALE)
             ),
             _gate_tiles(payload),
             src_b=bias,
@@ -467,7 +467,7 @@ def test_deepseek_moe_gate_binary(math_op, fidelity):
 
     faces = _run(
         _config(
-            DEEPSEEK_MOE_GATE(mode=MODE_BINARY),
+            DEEPSEEK_MOE_GATE(dmg_mode=MODE_BINARY),
             _binary_tiles(scores),
             src_b=bias,
             math_op=math_op,
@@ -484,7 +484,7 @@ def test_deepseek_moe_gate_binary_reload():
 
     faces = _run(
         _config(
-            DEEPSEEK_MOE_GATE(mode=MODE_BINARY, reload=True),
+            DEEPSEEK_MOE_GATE(dmg_mode=MODE_BINARY, dmg_reload=True),
             _binary_tiles(scores),
             src_b=bias,
         )
@@ -501,7 +501,7 @@ def test_deepseek_moe_gate_binary_acc_to_dest():
 
     faces = _run(
         _config(
-            DEEPSEEK_MOE_GATE(mode=MODE_BINARY),
+            DEEPSEEK_MOE_GATE(dmg_mode=MODE_BINARY),
             _binary_tiles(scores, acc_base=base),
             src_b=bias,
             acc_to_dest=True,
@@ -519,7 +519,7 @@ def test_deepseek_moe_gate_binary_num_faces(num_faces):
 
     faces = _run(
         _config(
-            DEEPSEEK_MOE_GATE(mode=MODE_BINARY),
+            DEEPSEEK_MOE_GATE(dmg_mode=MODE_BINARY),
             _binary_tiles(scores),
             src_b=bias,
             num_faces=num_faces,
@@ -540,7 +540,7 @@ def test_deepseek_moe_gate_step0():
     tags, tiles = _tag_tiles()
 
     regions = _regions(
-        _config(DEEPSEEK_MOE_GATE(mode=MODE_MOVE, sub_op=MOVE_STEP0), tiles)
+        _config(DEEPSEEK_MOE_GATE(dmg_mode=MODE_MOVE, dmg_sub_op=MOVE_STEP0), tiles)
     )
 
     for region in (SCORES, IDS, KEYS, INTERMEDIATE):
@@ -563,7 +563,7 @@ def test_deepseek_moe_gate_step1():
     tags, tiles = _tag_tiles()
 
     regions = _regions(
-        _config(DEEPSEEK_MOE_GATE(mode=MODE_MOVE, sub_op=MOVE_STEP1), tiles)
+        _config(DEEPSEEK_MOE_GATE(dmg_mode=MODE_MOVE, dmg_sub_op=MOVE_STEP1), tiles)
     )
 
     for region in (SCORES, IDS, KEYS):
@@ -589,7 +589,7 @@ def test_deepseek_moe_gate_step2():
     tags, tiles = _tag_tiles()
 
     regions = _regions(
-        _config(DEEPSEEK_MOE_GATE(mode=MODE_MOVE, sub_op=MOVE_STEP2), tiles)
+        _config(DEEPSEEK_MOE_GATE(dmg_mode=MODE_MOVE, dmg_sub_op=MOVE_STEP2), tiles)
     )
 
     for region in (SCORES, IDS):
