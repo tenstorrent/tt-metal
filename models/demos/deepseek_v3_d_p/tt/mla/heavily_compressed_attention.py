@@ -16,11 +16,14 @@ from models.demos.deepseek_v3_d_p.tt.mla.rope import get_rot_transformation_mat
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
 
-def _tail_tile_buf(chunk_tokens: int, compress_rate: int) -> int:
+def _buf_for_width(width: int) -> int:
     """Rows the tail_tile write assembles at once: the up to TILE_SIZE-1 entries already in the open tile
     plus one chunk's worth, rounded to whole tiles. 64 for a 4096-token chunk, 96 for 5120."""
-    width = -(-int(chunk_tokens) // compress_rate)
     return -(-(ttnn.TILE_SIZE - 1 + width) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+
+
+def _tail_tile_buf(chunk_tokens: int, compress_rate: int) -> int:
+    return _buf_for_width(-(-int(chunk_tokens) // compress_rate))
 
 
 def hca_block_bias(position_ids: torch.Tensor, compressed_len: int, compress_rate: int) -> torch.Tensor:
@@ -380,6 +383,7 @@ class TtHCA(_TtHCABase):
         self.wo_b = self._to_tt_linear_weight(o_b_proj_weight, tp_shard_dim=2)
 
         self.trans_mat = self._from_torch(get_rot_transformation_mat())
+        self._tail_tile_cache = {}
 
     def alloc_state(self, max_seq_len: int, batch: int = 1, chunk_tokens: int | None = None) -> TtHCAState:
         """Size the state once for the longest context this layer will serve, so its shape is fixed for
@@ -661,33 +665,36 @@ class TtHCA(_TtHCABase):
         all of them -- so a shift that crosses a tile boundary is not a special case."""
         tile = ttnn.TILE_SIZE
         f, r_e = divmod(state.entry_count, tile)
-        buf = -(-(tile - 1 + width) // tile) * tile
+        shift, take = self._tail_tile_matrices(r_e, width)
 
         src = ttnn.concat([state.tail, new_entries], dim=2)  # [B, 1, tile + width, head_dim]
-        merged = ttnn.matmul(self._shift_to_tile(r_e, width, buf), src, memory_config=self.memory_config)
+        merged = ttnn.matmul(shift, src, memory_config=self.memory_config)
         ttnn.kv_cache.fill_cache_for_user_(state.compressed_kv, merged, 0, update_idx=f * tile)
-        state.tail = ttnn.matmul(
-            self._take_open_tile(state.entry_count + width, f, buf), merged, memory_config=self.memory_config
-        )
+        state.tail = ttnn.matmul(take, merged, memory_config=self.memory_config)
 
-    def _shift_to_tile(self, r_e, width, buf):
-        """One-hot [buf, tile + width]: merged row i takes src row i + (tile - r_e), for the r_e + width
-        rows that carry entries. The rest stay zero, so nothing reads past src."""
-        tile = ttnn.TILE_SIZE
-        rows = torch.arange(r_e + width)
-        p = torch.zeros(1, 1, buf, tile + width)
-        p[0, 0, rows, rows + (tile - r_e)] = 1.0
-        return self._from_torch(p)
+    def _tail_tile_matrices(self, r_e, width):
+        """The two one-hot matrices depend on nothing but ``(r_e, width)``, and r_e only ever walks the
+        multiples of gcd(width, TILE_SIZE) -- one value for a 4096-token chunk, four for 5120. Uploading
+        them costs ~0.9 ms of host time that device perf does not see, so they are built once and kept."""
+        key = (r_e, width)
+        if key not in self._tail_tile_cache:
+            tile, buf = ttnn.TILE_SIZE, _buf_for_width(width)
 
-    def _take_open_tile(self, entry_count, f, buf):
-        """One-hot [tile, buf] lifting the next open tile out of merged, right-aligned. Rows before the
-        first live entry stay zero -- that is what lets the next chunk's shift skip them by construction
-        instead of masking them."""
-        tile = ttnn.TILE_SIZE
-        rows = torch.arange(tile - entry_count % tile, tile)
-        b = torch.zeros(1, 1, tile, buf)
-        b[0, 0, rows, rows + (entry_count - f * tile) - tile] = 1.0
-        return self._from_torch(b)
+            # merged row i takes src row i + (tile - r_e), for the r_e + width rows that carry entries;
+            # the rest stay zero, so nothing reads past src.
+            rows = torch.arange(r_e + width)
+            shift = torch.zeros(1, 1, buf, tile + width)
+            shift[0, 0, rows, rows + (tile - r_e)] = 1.0
+
+            # lift the next open tile back out of merged, right-aligned. Rows before its first live entry
+            # stay zero -- that is what lets the next chunk's shift skip them by construction.
+            live = (r_e + width) % tile
+            rows = torch.arange(tile - live, tile)
+            take = torch.zeros(1, 1, tile, buf)
+            take[0, 0, rows, rows + (r_e + width) - tile] = 1.0
+
+            self._tail_tile_cache[key] = (self._from_torch(shift), self._from_torch(take))
+        return self._tail_tile_cache[key]
 
     def _o_proj(self, attn):
         """[B, num_heads/tp, S/sp, head_dim] -> [B, 1, S/sp, hidden/tp], the block's own input layout."""
