@@ -123,14 +123,19 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
         the first rank, or a placeholder hidden-state activation on a non-first pipeline
         rank (which receives the real activation over the D2D socket)."""
 
-    def prefill_chunk(self, input_tensor, kv_cache, *, slot_id, actual_start, actual_end):
+    def prefill_chunk(self, input_tensor, kv_cache, *, slot_id, actual_start, actual_end, request_id=0):
         """Prefill ONE chunk into user `slot_id`'s slice of `kv_cache` (the engine-owned
         cache, passed in), in order (a chunk's KV must be written before the next reads
         it). `[actual_start, actual_end)` is the absolute KV-position range of the chunk's
         real (non-pad) tokens: actual_start is the cache write offset, and the last chunk's
         tail may be pad (actual_end < actual_start + chunk_size). Return this rank's output
         hidden state on a non-last pipeline rank, or None on the last/single rank (the
-        populated cache is the output)."""
+        populated cache is the output).
+
+        `request_id` is the engine's chunk counter; the runner ALWAYS passes it, so accept it
+        even if unused. Only the pipelined layer-completion sink consumes it (to build a
+        globally-dense `seq = request_id * num_layers + layer_idx`); a single-rank LayerAck
+        channel carries no payload and can ignore it."""
 
     # --- OPTIONAL hooks — implement only if your model supports golden-trace bring-up / cache migration;
     #     production serving never calls them. Keep the heavy PCC / table logic in your model's own

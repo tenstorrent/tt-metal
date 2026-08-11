@@ -1308,6 +1308,10 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
 
         // Writer CT args
         std::vector<uint32_t> writer_ct_args = common_ct_args;
+        // Keep this manual descriptor in sync with minimal_default_writer.cpp. The writer
+        // consumes this argument before the optional worker-mux configuration; the reader
+        // does not consume it, so it must not be part of common_ct_args.
+        writer_ct_args.push_back(ring_size - 1);  // barrier_target_count
         // fabric_mux_connection_ct_args
         writer_ct_args.push_back(mux_config.get_num_buffers(tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL));
         writer_ct_args.push_back(

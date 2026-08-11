@@ -221,12 +221,29 @@ class TtPrefillRuntime:
         return x
 
     def compile(self, kv_caches=None) -> None:
-        """Warm up the kernels by running one zero-token chunk through prefill_chunk (JIT-compiles)."""
+        """Warm up the kernels by running zero-token chunks through prefill_chunk (JIT-compiles).
+
+        Two warmups: the first chunk (actual_start=0, the gather-Q path) AND — when the config is
+        multi-chunk (max_seq_len > chunk_size) — a second chunk (actual_start>0), which is the ONLY
+        path that fires the SP ring cache-read (attention/dense_sp.py). Without the second warmup the
+        ring kernels JIT-compile inside the first *served/timed* chunk, inflating first-request TTFT.
+        (This is separate from the one-time empty-disk kernel-cache compile that only the very first run
+        ever pays.) One-shot (max_seq_len == chunk_size) never reaches the ring path and uses FABRIC_1D,
+        so it skips the second warmup."""
         assert self.model_built
         chunk = self.config.chunk_size
-        logger.info(f"GPT-OSS TtPrefillRuntime.compile() — warming up one {chunk}-token chunk")
-        tt_input = self.make_chunk_input([0] * chunk)
-        self.prefill_chunk(tt_input, kv_caches, slot_id=0, actual_start=0, actual_end=chunk)
+        ring = self.config.max_seq_len > chunk
+        logger.info(
+            f"GPT-OSS TtPrefillRuntime.compile() — warming up {'2 chunks (gather-Q + ring cache-read)' if ring else 'one chunk'} "
+            f"of {chunk} tokens"
+        )
+        # prefill_chunk consumes (deallocates) its input tensor, so build a fresh input per call.
+        self.prefill_chunk(self.make_chunk_input([0] * chunk), kv_caches, slot_id=0, actual_start=0, actual_end=chunk)
+        if ring:
+            # actual_start>0 drives the ring cache-read; it reads the prefix we just wrote at [0, chunk).
+            self.prefill_chunk(
+                self.make_chunk_input([0] * chunk), kv_caches, slot_id=0, actual_start=chunk, actual_end=2 * chunk
+            )
         ttnn.synchronize_device(self.mesh_device)
         self.compiled = True
 

@@ -190,6 +190,7 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
             is_first_rank=params.is_first_rank,
             is_last_rank=params.is_last_rank,
             pipeline_activation_emb_tp_sharded=self.pipeline_activation_emb_tp_sharded,
+            use_trace=params.use_trace,
         )
         return TtPrefillRuntime(
             mesh_device=mesh_device,

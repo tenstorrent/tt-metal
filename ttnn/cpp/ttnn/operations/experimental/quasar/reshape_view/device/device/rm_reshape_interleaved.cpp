@@ -31,7 +31,6 @@ Runtime arguments
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_buffer.h"
-#include "api/debug/dprint.h"  // required in all kernels using DPRINT
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 
 void kernel_main() {
