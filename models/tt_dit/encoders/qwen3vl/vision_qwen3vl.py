@@ -510,20 +510,21 @@ class Qwen3VlVisionAttention(Module):
         seq_len = hidden_states.shape[-2]
         qkv = self.qkv.forward(hidden_states)
 
-        # Sliced rather than `ttnn.split`: split reports a *tile-padded* row count on its outputs, so
-        # a patch count that is not a multiple of 32 (784 for a 28x28 grid) made the reshape below
-        # disagree with `seq_len` and fail. Slicing the last dimension keeps the logical row count.
-        # Under TP the local slice is `[q_d | k_d | v_d]` of width `3 * local_inner` (see
-        # `_interleave_for_col_parallel`), so the stride and the head count are both the local ones.
-        q, k, v = (
-            ttnn.permute(
-                ttnn.reshape(
-                    qkv[..., i * self.local_inner : (i + 1) * self.local_inner],
-                    (1, seq_len, self.num_local_heads, self.padded_head_dim),
-                ),
-                (0, 2, 1, 3),
-            )
-            for i in range(3)
+        # `nlp_create_qkv_heads` does the head split in a single op, replacing the
+        # 3x(slice + reshape + permute) this used to take: it emits q/k/v as
+        # `(1, num_local_heads, seq_len, padded_head_dim)` directly. Crucially it builds its output from
+        # the tensor's *logical* shape, so a patch count that is not a multiple of 32 (784 for a 28x28
+        # grid) survives -- unlike `ttnn.split`, which reported the tile-padded count and forced the old
+        # slice-based path. The local qkv is `[q_d | k_d | v_d]` of width `3 * local_inner` (see
+        # `_interleave_for_col_parallel`), which is the packed layout the op expects; MHA means the q and
+        # kv head counts are equal, and head_dim is inferred from the width as the padded 96.
+        qkv = ttnn.reshape(qkv, (1, 1, seq_len, 3 * self.local_inner))
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            qkv,
+            num_heads=self.num_local_heads,
+            num_kv_heads=self.num_local_heads,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         cos, sin = pos_embeds
