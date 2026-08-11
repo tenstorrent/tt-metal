@@ -25,6 +25,10 @@
 # Blackhole hardware/CI; this host is Wormhole.
 
 import torch
+from conftest import blackhole_only
+from helpers.advance_llk_includes import (  # noqa: F401  (module-scoped autouse fixture)
+    advance_llk_include_paths,
+)
 from helpers.device import BootMode
 from helpers.format_config import DataFormat
 from helpers.golden_generators import MatmulGolden, get_golden_generator
@@ -100,6 +104,7 @@ def _grid():
     return combos
 
 
+@blackhole_only
 @parametrize(
     formats=COMPRESSED_MM_FORMATS,
     ct_kt_rows=_grid(),
