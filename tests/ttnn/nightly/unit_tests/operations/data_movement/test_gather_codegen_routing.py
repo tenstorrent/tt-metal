@@ -144,3 +144,85 @@ def test_gather_codegen_rejects_an_unknown_implementation(device, expect_error, 
     # otherwise answer without dispatching, so an unknown value never passes silently.
     with expect_error(RuntimeError, "Unknown gather implementation selector"):
         ttnn.gather(xt, **kwargs, implementation=selector)
+
+
+# --- Hand-added off-grid regressions ---
+
+
+def _codegen_vs_native(device, shape, kwargs, *, layout=ttnn.TILE_LAYOUT, **gather_kwargs):
+    xt = ttnn.from_torch(_make_input(shape, ttnn.bfloat16), dtype=ttnn.bfloat16, layout=layout, device=device)
+    kwargs = _materialize_index(shape, kwargs, layout, device)
+    golden = ttnn.to_torch(ttnn.gather(xt, **kwargs, implementation=_NATIVE))
+    return golden, ttnn.gather(xt, **kwargs, **gather_kwargs, implementation=_CODEGEN)
+
+
+_TILE_BYTES = 32 * 32 * 2  # bfloat16 tile page, already 64-byte aligned
+
+
+def _brimful_streaming_case(device, wt_index, ht_tiles=2):
+    """A gather whose streaming input CB fills the whole per-core L1 budget in a single block.
+
+    The block count, not the row width, is what puts the CB against the ceiling: a row the budget
+    can just hold streams in one block whose depth IS the row, leaving under a page of slack, while
+    a wider row splits into two blocks of half the depth and fits under any budget. So the witness
+    row is the budget itself, in tile pages, minus the index and output pages that share it — and it
+    has to be computed per device, because Wormhole's L1 is 36 pages smaller than Blackhole's and a
+    row hardcoded for one is not brimful on the other.
+
+    wt_index sizes the row-buffered plan's max(4, Wt_index)-deep output CB past the same budget, so
+    selection reaches the streaming factory rather than the interleaved one.
+    """
+    # total_bytes_per_bank is the allocator's allocatable size, i.e. already net of the base the
+    # static CB region starts at — the same quantity gather_usable_l1() derives on the C++ side.
+    budget = ttnn.get_memory_view(device, ttnn.BufferType.L1).total_bytes_per_bank
+    wt_input = (budget - 2 * _TILE_BYTES) // _TILE_BYTES
+    height = 32 * ht_tiles
+    return [1, 1, height, 32 * wt_input], {"dim": -1, "index": [1, 1, height, 32 * wt_index]}
+
+
+def test_gather_codegen_streaming_yields_to_a_live_l1_buffer(device):
+    # L1 tensors allocate downward from the top of L1 and static CBs stack upward from the allocator
+    # base, so a co-resident L1 tensor is a hard ceiling on the streaming input CB: a depth taken
+    # from the architecture's L1 size fails program creation instead of streaming in more blocks.
+    # A brimful row leaves under one page of slack, so displacing a single page per bank is enough;
+    # this tensor displaces dozens on any grid, well clear of alignment effects.
+    shape, kwargs = _brimful_streaming_case(device, wt_index=16)
+    resident = ttnn.from_torch(
+        torch.zeros([1, 1, 2048, 4096], dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    try:
+        golden, out = _codegen_vs_native(device, shape, kwargs)
+        assert_equal(golden, ttnn.to_torch(out))
+    finally:
+        ttnn.deallocate(resident)
+
+
+def test_gather_codegen_streaming_honours_an_l1_output(device):
+    # The op's own output is allocated before its program is created, so an L1 output_mem_config
+    # lowers the same ceiling — with no unrelated tensor in play and nothing to deallocate.
+    # Wt_index=256 over two tile-rows puts 512 output pages in L1, at least two per bank on any
+    # grid, where one is already more than a brimful row's slack.
+    shape, kwargs = _brimful_streaming_case(device, wt_index=256)
+    golden, out = _codegen_vs_native(device, shape, kwargs, memory_config=ttnn.L1_MEMORY_CONFIG)
+    assert out.memory_config().buffer_type == ttnn.BufferType.L1
+    assert_equal(golden, ttnn.to_torch(out))
+
+
+def test_gather_codegen_tiled_honours_a_partial_core_grid(device):
+    # Ht=4 tile-rows and Wt_index=6 select the tiled factory, and restricting the split to 5 cores
+    # gives 5 of the 24 output tiles to each: every core after the first starts mid-row, so its
+    # w_count-sized pop batches straddle the output CB's ring end. cb_pop_front wraps the read
+    # pointer only on an exact ring landing, and the full worker grid cannot produce this split
+    # (tiled requires Ht < core count, which bounds work per core below the ring depth).
+    #
+    # test_gather.py::test_gather_sub_core_grids reaches the same kernels today only because
+    # is_demoted() returns false for everything, so `auto` happens to pick codegen there. This one
+    # forces codegen, and so keeps covering the sub-grid split once a demotion exists.
+    shape, kwargs = ([1, 1, 128, 256], {"dim": -1, "index": [1, 1, 128, 192]})
+    sub_core_grids = ttnn.CoreRangeSet([ttnn.CoreRange((0, 0), (4, 0))])
+    golden, out = _codegen_vs_native(device, shape, kwargs, sub_core_grids=sub_core_grids)
+    assert_equal(golden, ttnn.to_torch(out))

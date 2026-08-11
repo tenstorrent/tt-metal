@@ -39,10 +39,25 @@ constexpr const char* kWriterStreaming =
     "ttnn/cpp/ttnn/operations/data_movement/gather/codegen/kernels/gather_writer_streaming.cpp";
 
 // The device's real per-core CB ceiling, standing in for the Python builders' fixed USABLE_L1.
+//
+// L1 tensors are allocated downward from the top of L1 while static CBs stack upward from the
+// allocator base, so any live L1 buffer -- this call's own output when output_mem_config asks for
+// L1 -- is the true ceiling: Program::validate_circular_buffer_region rejects a CB region that
+// ends above the lowest occupied L1 address, and a routing gate that ignored it would fail program
+// creation instead of picking a plan that fits.
+//
+// The frontier is read at program-creation time and baked into the resulting program, but it is not
+// part of the program-cache key (the own-output contribution cannot be: the output is allocated
+// after the key is computed). A cached streaming program therefore keeps the block depth its first
+// dispatch could afford -- the same first-miss-wins property every op that sizes CBs to fill L1 has.
 uint64_t gather_usable_l1(const Tensor& input_tensor) {
     auto* device = input_tensor.device();
-    return static_cast<uint64_t>(device->l1_size_per_core()) -
-           device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    const uint64_t base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    uint64_t ceiling = static_cast<uint64_t>(device->l1_size_per_core());
+    if (const auto lowest_l1_buffer = device->lowest_occupied_compute_l1_address(); lowest_l1_buffer.has_value()) {
+        ceiling = std::min(ceiling, static_cast<uint64_t>(lowest_l1_buffer.value()));
+    }
+    return ceiling > base ? ceiling - base : 0;
 }
 
 // builder_utils.py::rect_core_range_set — packs `nc` cores into at most two CoreRanges by treating
@@ -213,13 +228,9 @@ uint32_t gather_streaming_chunk_tiles(const Tensor& input_tensor, const Tensor& 
     // block count keeps the scan count identical and drops the padding re-reads: a Wt_input=1000 row
     // that needs two blocks then costs 1000 input pages per row instead of 2 * ceiling.
     //
-    // This is where the port must NOT copy the reference's number: build_gather_streaming_factory
-    // sizes its block against builder_utils.USABLE_L1, a fixed 1_400_000-byte constant, while the
-    // port asks the device (gather_usable_l1) as the porting guide requires. The real budget is
-    // larger, so `min(affordable, Wt_input)` alone would make the port's tail padding strictly worse
-    // than the reference's on the same shape. Deriving the depth from the block count instead makes
-    // the port's page count independent of the budget, and its scan count can only be lower than the
-    // reference's (a larger budget never needs more blocks).
+    // Deriving the depth from the block count also makes the page count independent of the budget,
+    // so the port and build_gather_streaming_factory agree on the depth even where their budgets
+    // differ, and a larger budget can only lower the scan count, never raise it.
     const uint32_t n_chunks = (Wt_input + max_resident - 1) / max_resident;
     return (Wt_input + n_chunks - 1) / n_chunks;
 }
