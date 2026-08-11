@@ -5,55 +5,62 @@
 # pending promotion. Include path (shadow -I) repoint on promotion. Primitive differs from tt-blaze only in
 # FPU<->SFPU signalling cadence (orthogonal to this numerical golden).
 #
-# sdpa_bcast_col_srca_srcb_reuse documented contract
-# (llk_math_sdpa_bcast_col_srca_srcb_reuse.h / llk_unpack_A_sdpa.h header banners):
-#   - eltwise ADD/SUB/MUL of a per-tile operand (SrcA) with a *column* broadcast (SrcB), where the column source is
-#     DEST reused as a source register (DEST -> SrcB via MOVD2B), reused across every SrcA row. This is the softmax
-#     scale / normalize step; the MUL path additionally supports high fidelity.
-#   - This "srca_srcb" variant additionally waits on a SrcA data-valid in the preamble
-#     (STALLWAIT WAIT_SFPU|SRCA_VLD|SRCB_VLD) and takes an explicit DEST source index `isrc`. The execute clears
-#     SrcA+SrcB (SETRWC CLR_AB) at the end — there is no separate postamble (unlike the sibling srcb_reuse primitive).
-#   - num_faces: the init helper LLK_ASSERTs {1, 2, 4}, but sdpa_bcast_col_srca_srcb_reuse_configure_mop hard-asserts
-#     == 2. So the only instantiable shape is a 16x32 tiny tile (num_faces == 2).
-#   - The column source is DEST[src_index]; SRCB_BCAST_COL fans each column-0 value across its row and reuses it
-#     across SrcA rows.
-#   - Unpack side is the base llk_unpack_A execute paired with the _llk_unpack_A_sdpa_init_ MOP config, plus
-#     _llk_unpack_A_sdpa_set_srcb_dummy_valid_() which injects the dummy SrcB SET_DVALID the math preamble's
-#     STALLWAIT(SRCB_VLD) waits on before its MOVD2B; the sdpa unpack header itself is init/mop-config + that helper.
+# sdpa_bcast_col_srca_srcb_reuse documented contract (llk_math_sdpa_bcast_col_srca_srcb_reuse.h banner, plus what the
+# op was measured to do on p100a):
+#   - This is the DEST-to-DEST variant of the softmax scale step. It reuses DEST for BOTH operands: the MOP body is
+#     [MOVD2A, MOVD2A, ELWMUL], so SrcA is refilled from DEST[dst] before every ELWMUL and every addrmod has
+#     .srca.incr == 0. Nothing unpacked into SrcA survives, so there is no SrcA operand stream and no
+#     Elwmul(src_A, src_B_bcast) golden -- an unpacked buffer_A tile would simply be discarded.
+#   - Its ELWMUL carries CLR_NONE and ACCUMULATES into DEST, and SrcA is a copy of DEST, so the op computes
+#         out = X + X * bcast_col(P)   ==   X * (1 + bcast_col(P))
+#     with X the tile seeded at DEST[dst] and P the column source seeded at DEST[isrc]. This is exactly why the demo's
+#     SFPU side subtracts 1 from the scale it produces ("Without -1: bcast = prev * exp + prev", sdpa.h:207-210).
+#   - Both DEST indices are RAW DEST ROW offsets, not tile indices, so the kernel keeps them 64 apart (one 32x32 dest
+#     tile) and passes isrc != dst -- with isrc == dst the golden degenerates to X * (1 + bcast_col(X)).
+#   - The preamble waits on STALLWAIT(WAIT_SFPU | SRCA_VLD | SRCB_VLD), so the unpacker must call the SrcA+SrcB
+#     dummy-valid helper _llk_unpack_A_sdpa_set_srca_srcb_dummy_valid_(), not the SrcB-only one.
 #
-# This advance test exercises the MUL (softmax-scale) instantiation, LoFi, on a single 16x32 tiny tile. The signalling
-# cadence (fused_signalling / output_granularity) is orthogonal to this numerical golden.
+# Geometry: the MOP is two 8-row ELWMULs with dest.incr == 8 and srcb.incr == 0, i.e. 16 CONTIGUOUS dest rows with
+# both halves reusing the same 8 per-row scales. That is the demo's tile -- an 8x32 logical tile packed into one
+# 16x16 DEST face ("Each tile is 8x32, which is the same as a full 16x16 face", sdpa.h:317) with dest rows 0-7
+# holding logical columns 0-15 and rows 8-15 holding columns 16-31. So the test drives a single 16x16 face
+# (num_faces == 1 on the unpack/pack side) and builds the golden directly in that flat DEST-row order; the MATH mop
+# still gets num_faces == 2, the only value its LLK_ASSERT permits, which is where the two 8-row chunks come from.
 #
-# Blackhole-only. Deliverable here is compile-green (compile-producer). On-device numerical verification is
-# pending Blackhole hardware/CI; this host is Wormhole.
+# This test deliberately does NOT share helpers/sdpa_bcast_utils.py with the srcb_reuse pair: same op family, but a
+# different function of the inputs (DEST-to-DEST scale-by-(1+P) vs a two-operand-tile SrcA stream), so there is no
+# common golden to factor out.
+#
+# Blackhole-only (@blackhole_only): the primitive headers resolve through a Blackhole-only shadow -I.
 
 import torch
+from conftest import blackhole_only
+from helpers.advance_llk_includes import (  # noqa: F401  (module-scoped autouse fixture)
+    advance_llk_include_paths,
+)
 from helpers.device import BootMode
 from helpers.format_config import DataFormat
-from helpers.golden_generators import (
-    BroadcastGolden,
-    EltwiseBinaryGolden,
-    get_golden_generator,
-)
-from helpers.llk_params import (
-    BroadcastType,
-    DestAccumulation,
-    MathFidelity,
-    MathOperation,
-    format_dict,
-)
+from helpers.llk_params import DestAccumulation, format_dict
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import NUM_FACES, TILE_COUNT
-from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
 
 # LoFi-only, bf16-natural path. Keep the grid tiny for the advance test.
 SDPA_FORMATS = input_output_formats([DataFormat.Float16_b])
 
+# One 16x16 DEST face per tile (see the geometry note above).
+FACE_R_DIM = 16
+FACE_C_DIM = 16
+NUM_FACES_HOST = 1
+TILE_DIMS = [FACE_R_DIM, FACE_C_DIM]
+# The op's 8 logical rows; dest rows r and r + 8 share the scale from P dest row r.
+LOGICAL_ROWS = 8
 
+
+@blackhole_only
 @parametrize(
     formats=SDPA_FORMATS,
 )
@@ -65,98 +72,47 @@ def test_sdpa_bcast_col_srca_srcb_reuse(
     if isinstance(formats, tuple):
         (formats,) = formats
 
-    # Single 16x32 tiny tile, num_faces == 2 (the only shape the SDPA mop config accepts).
-    num_faces = 2
-    face_r_dim = 16
-    tile_rows = 16
-    tile_dims = [tile_rows, 32]
-    dimensions = [tile_rows, 32]
+    torch_format = format_dict[formats.output_format]
     tile_cnt = 1
 
-    torch_format = format_dict[formats.output_format]
-
-    # buffer_A = operand tile (streamed into SrcA). buffer_B = column-source tile; only column 0 of each face matters
-    # (the value MOVD2B/SRCB_BCAST_COL fans across the row), but the whole tile is a valid column-source seed for DEST.
+    # buffer_A = X, the tile the op scales in place. buffer_B = P, the column source; only column 0 of each of its
+    # first 8 dest rows is read (that is what MOVD2B latches into SrcB and SRCB_BCAST_COL fans across the row).
+    # A single 16x16 face means no tilize step is needed: face-major and row-major coincide.
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
-        input_dimensions_A=dimensions,
+        input_dimensions_A=TILE_DIMS,
         stimuli_format_B=formats.input_format,
-        input_dimensions_B=dimensions,
-        tile_dimensions=tile_dims,
+        input_dimensions_B=TILE_DIMS,
+        tile_dimensions=TILE_DIMS,
     )
 
-    tilized_A = tilize_block(
-        src_A,
-        dimensions,
-        formats.input_format,
-        num_faces=num_faces,
-        tile_dimensions=tile_dims,
-        face_r_dim=face_r_dim,
-    )
-    tilized_B = tilize_block(
-        src_B,
-        dimensions,
-        formats.input_format,
-        num_faces=num_faces,
-        tile_dimensions=tile_dims,
-        face_r_dim=face_r_dim,
-    )
-
-    # Golden built in UNTILIZED (row-major) space, then compared to the untilized result read back from L1. Mirrors
-    # test_eltwise_bcast_col_custom.py: the broadcast is computed in tilized space (that is where the column-0 value
-    # lives), untilized, then row-expanded to the operand width. Doing the eltwise on untilized tensors avoids
-    # untilizing the golden — during compile-producer the golden generators are dummies whose eltwise output is a
-    # full-tile 1024-element zero tensor, and untilizing that against a 16x32 shape would spuriously fail.
-    broadcast_golden = get_golden_generator(BroadcastGolden)
-    src_B_bcast_tilized = broadcast_golden(
-        BroadcastType.Column,
-        tilized_B.flatten(),
-        formats.input_format,
-        num_faces=num_faces,
-        tile_cnt=tile_cnt,
-        face_r_dim=face_r_dim,
-        input_format=formats.input_format,
-    )
-
-    src_B_bcast = untilize_block(
-        src_B_bcast_tilized,
-        formats.input_format,
-        dimensions,
-        num_faces=num_faces,
-        tile_dimensions=tile_dims,
-        face_r_dim=face_r_dim,
-    ).flatten()
-
-    generate_golden = get_golden_generator(EltwiseBinaryGolden)
-    golden_tensor = generate_golden(
-        MathOperation.Elwmul,
-        src_A,
-        src_B_bcast,
-        formats.output_format,
-        MathFidelity.LoFi,
-        input_format=formats.input_format,
-        input_format_B=formats.input_format,
-    )
+    # Golden, in the same flat DEST-row order the packer writes back:
+    #   out[d, c] = X[d, c] * (1 + P[d % 8, 0])
+    # The scale repeats every 8 dest rows because srcb.incr == 0 across the MOP's two 8-row chunks.
+    x = src_A.reshape(FACE_R_DIM, FACE_C_DIM).to(torch_format)
+    p_col0 = src_B.reshape(FACE_R_DIM, FACE_C_DIM).to(torch_format)[:LOGICAL_ROWS, 0]
+    scale = 1.0 + p_col0.repeat(FACE_R_DIM // LOGICAL_ROWS).reshape(FACE_R_DIM, 1)
+    golden_tensor = (x * scale).flatten()
 
     configuration = TestConfig(
         "sources/sdpa_bcast_col_srca_srcb_reuse_test.cpp",
         formats,
         runtimes=[
-            NUM_FACES(num_faces, num_faces, num_faces),
+            NUM_FACES(NUM_FACES_HOST, NUM_FACES_HOST, NUM_FACES_HOST),
             TILE_COUNT(tile_cnt),
         ],
         variant_stimuli=StimuliConfig(
-            tilized_A.flatten(),
+            src_A,
             formats.input_format,
-            tilized_B.flatten(),
+            src_B,
             formats.input_format,
             formats.output_format,
             tile_count_A=tile_cnt_A,
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt,
-            num_faces=num_faces,
-            face_r_dim=face_r_dim,
-            tile_dimensions=tile_dims,
+            num_faces=NUM_FACES_HOST,
+            face_r_dim=FACE_R_DIM,
+            tile_dimensions=TILE_DIMS,
             use_dense_tile_dimensions=True,
         ),
         dest_acc=DestAccumulation.No,
@@ -164,15 +120,6 @@ def test_sdpa_bcast_col_srca_srcb_reuse(
     )
 
     res_from_L1 = configuration.run().result
-
-    res_from_L1 = untilize_block(
-        res_from_L1,
-        formats.output_format,
-        dimensions,
-        num_faces=num_faces,
-        tile_dimensions=tile_dims,
-        face_r_dim=face_r_dim,
-    ).flatten()
 
     assert len(res_from_L1) == len(
         golden_tensor

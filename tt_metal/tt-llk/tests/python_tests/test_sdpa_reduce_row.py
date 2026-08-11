@@ -20,17 +20,16 @@
 # This advance test exercises the MAX instantiation, block_width == 1, on a single 8x32 tile carried inside a 32x32
 # DEST tile.
 #
-# Blackhole-only. Deliverable here is compile-green (compile-producer). On-device numerical verification is pending
-# Blackhole hardware/CI; this host is Wormhole.
+# Blackhole-only (@blackhole_only): the primitive header resolves through a Blackhole-only shadow -I.
+# The golden below is verified on Blackhole silicon (p100a), not compile-green only.
 
 import torch
-from conftest import skip_for_coverage
-from helpers.format_config import DataFormat
-from helpers.golden_generators import (
-    TILE_DIMENSIONS,
-    ReduceBlockMaxRowGolden,
-    get_golden_generator,
+from conftest import blackhole_only, skip_for_coverage
+from helpers.advance_llk_includes import (  # noqa: F401  (module-scoped autouse fixture)
+    advance_llk_include_paths,
 )
+from helpers.format_config import DataFormat
+from helpers.golden_generators import TILE_DIMENSIONS
 from helpers.llk_params import (
     DestAccumulation,
     DestSync,
@@ -58,10 +57,15 @@ from helpers.utils import passed_test
 
 # A single 32x32 tile carrying one 8x32 SFPU reduce span. block_width == 1.
 TILE_DIM = 32
+# The reduce span: 8 logical rows, packed into DEST face 0 as 16 rows of 16 lanes.
+LOGICAL_ROWS = 8
+FACE_R_DIM = 16
+FACE_C_DIM = 16
 
 
 # Has a compilation error on coverage (shared with the analog sfpu_reduce_sdpa path,
 # https://github.com/tenstorrent/tt-llk/issues/884).
+@blackhole_only
 @skip_for_coverage
 @parametrize(
     formats=input_output_formats(
@@ -94,19 +98,21 @@ def test_sdpa_reduce_row(
 
     # GOLDEN GENERATION
     # *******************************************************
-    # Undo tilization so src_A is standard [32, 32], then take the per-row max across the full tile width into column
-    # 0 (ReduceBlockMaxRowGolden), the SDPA row-reduce contract. PROVISIONAL until Blackhole on-device confirms the
-    # exact DEST/lane addressing of the 8x32 reduce span; the golden validates the shared (non-signalling) numeric
-    # path only.
+    # Undo tilization so src_A is standard [32, 32] row-major, matching the readback below.
     src_A_untilized = untilize_block(src_A, formats.input_format, input_dimensions)
+    src_A_rowmajor = torch.as_tensor(src_A_untilized).reshape(input_dimensions)
 
-    generate_golden = get_golden_generator(ReduceBlockMaxRowGolden)
-    golden_tensor = generate_golden(
-        src_A_untilized.flatten(),
-        1,  # block_ct_dim == 1 (single 32-col span)
-        formats.output_format,
-        input_dimensions,
-    )
+    # The reduce span is an 8x32 tile packed into a SINGLE 16x16 DEST face, not 8 row-major rows of a 32x32 tile:
+    # DEST rows 0-7 carry logical columns 0-15 and DEST rows 8-15 carry logical columns 16-31 ("Each 8x32 tile is a
+    # full 16x16 face's worth of lanes"). For a 32x32 tile, DEST face 0 is row-major rows 0-15, columns 0-15, so
+    # logical row r spans row-major rows r and r + 8 of that face. Verified on p100a: reducing over the row-major
+    # 32-column row instead (what ReduceBlockMaxRowGolden computes) disagrees on exactly the rows where
+    # max(A[r, 16:32]) != max(A[r + 8, 0:16]).
+    face0 = src_A_rowmajor[:FACE_R_DIM, :FACE_C_DIM]
+    span = torch.cat(
+        [face0[:LOGICAL_ROWS, :], face0[LOGICAL_ROWS : 2 * LOGICAL_ROWS, :]], dim=1
+    )  # [8, 32] logical tile
+    golden_rowmax = span.amax(dim=1).to(format_dict[formats.output_format])
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half, dest_acc, formats, input_dimensions, TILE_DIMENSIONS
@@ -146,10 +152,9 @@ def test_sdpa_reduce_row(
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
     res_tensor = untilize_block(res_tensor, formats.output_format, input_dimensions)
 
-    golden_rowmajor = golden_tensor.reshape(input_dimensions)
-
     # Only column [0] holds the row-max (the SFPSHFT2 within-row epilogue leaves other lanes unspecified), so validate
-    # column [0]. Only the first 8 rows carry the 8x32 reduce span.
+    # column [0]. Only the first LOGICAL_ROWS DEST rows carry the reduce output.
+    res_tensor = torch.as_tensor(res_tensor).reshape(input_dimensions)
     assert passed_test(
-        golden_rowmajor[:8, 0], res_tensor[:8, 0], formats.output_format
+        golden_rowmax, res_tensor[:LOGICAL_ROWS, 0], formats.output_format
     ), "Assert against golden failed"

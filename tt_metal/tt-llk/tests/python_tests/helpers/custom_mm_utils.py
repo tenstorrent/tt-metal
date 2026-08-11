@@ -1,0 +1,117 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+"""Shared layout/golden helpers for the custom-matmul family of advance tests.
+
+`test_custom_mm.py`, `test_compressed_custom_mm.py`, `test_sdpa_custom_mm.py` and
+`test_sdpa_custom_mm_reuse_dest_srcb.py` all drive a partial-in0 custom matmul, and previously each
+carried its own copy of the CT_DIMS / KT_DIMS / IN0_ROWS grid plus its own (wrong) idea of how in0
+is laid out in L1. Both live here once.
+
+Two layouts appear in this family, and neither is a plain tilized tile:
+
+1. `pack_in0_faces` -- custom_mm / compressed_custom_mm / sdpa_custom_mm.
+   `_llk_unpack_AB_custom_mm_init_` sets `unpB_x_end = unpB_face_r_dim * FACE_C_DIM - 1` and issues two
+   UNPACRs per k-tile, with the SrcB L1 base programmed once and advanced by counters whose stride is a
+   single face, `datum_size * FACE_C_DIM * face_r_dim`. So in0 is `kt_dim * 2` DENSELY packed faces of
+   `in0_rows x 16`, not `kt_dim` padded 32x32 tiles -- an in0 k-tile is `64 * in0_rows` bytes, and
+   TILE_SIZE_UNPACK_A is dead on this path because `tile_index_b` is 0. This matches what the
+   silicon-validated `compressed_utils.run_compressed` emits.
+
+2. `pack_sdpa_dest_tile` / `sdpa_dest_tile_golden` -- sdpa_custom_mm_reuse_dest_srcb.
+   That primitive reads in0 out of DEST, and every tile it touches is 16 DEST rows: an 8x32 logical tile
+   packed into ONE 16x16 face, rows 0-7 holding logical columns 0-15 and rows 8-15 holding columns 16-31
+   (the demo's convention -- "Each tile is 8x32, which is the same as a full 16x16 face", sdpa.h:317).
+"""
+
+import torch
+
+from .tile_constants import FACE_C_DIM  # noqa: F401  (re-exported for the tests below)
+
+FACE_R_DIM = 16
+
+# Header contract: ct_dim 1..16, kt_dim even (2..256), in0 rows in {1, 2, 4, 8}.
+CT_DIMS = [1, 2, 4, 8, 16]
+KT_DIMS = [2, 4]
+IN0_ROWS = [1, 2, 4, 8]
+
+# sdpa_custom_mm and sdpa_custom_mm_reuse_dest_srcb do NOT sweep in0 rows: their addrmod helpers hardcode
+# `constexpr std::uint32_t face_r_dim = 8` / an 8-row dest step, so 8 is the only shape they implement.
+IN0_ROWS_SDPA = 8
+
+# The op's logical tile height once in0 rows are fixed at 8, and the DEST face that carries it.
+SDPA_LOGICAL_ROWS = 8
+SDPA_FACE_R_DIM = 16
+
+# K-aware absolute floor for the goldens below. A single LoFi MVMUL accumulates the K-deep sum in a bf16
+# dest, so noise grows ~linearly per K-tile -- a floor that Float16_b's default atol (0.05) is too tight
+# for at large kt. Same calibration as compressed_utils.run_compressed; PCC remains the real gate.
+FLOAT16B_DEFAULT_ATOL = 0.05
+ACC_ATOL_PER_KT = 0.005
+
+
+def matmul_grid(ct_dims=None, kt_dims=None, in0_rows=None):
+    """The (ct_dim, kt_dim, in0_rows) sweep shared by the custom_mm-style tests."""
+    combos = []
+    for ct in ct_dims if ct_dims is not None else CT_DIMS:
+        for kt in kt_dims if kt_dims is not None else KT_DIMS:
+            for rows in in0_rows if in0_rows is not None else IN0_ROWS:
+                combos.append((ct, kt, rows))
+    return combos
+
+
+def matmul_acc_atol(golden, kt_dim):
+    """Scale the absolute tolerance by kt * mean|nonzero golden| (never below the format default)."""
+    active = golden.abs().flatten()
+    active = active[active > 0]
+    mean_active = active.mean().item() if active.numel() else 0.0
+    return max(FLOAT16B_DEFAULT_ATOL, ACC_ATOL_PER_KT * kt_dim * mean_active)
+
+
+def pack_in0_faces(in0, kt_dim, torch_format):
+    """Layout 1: in0 [in0_rows, kt_dim*32] -> kt_dim*2 dense (in0_rows x FACE_C_DIM) faces, row-major."""
+    return torch.cat(
+        [
+            in0[:, i * FACE_C_DIM : (i + 1) * FACE_C_DIM].reshape(-1)
+            for i in range(kt_dim * 2)
+        ]
+    ).to(torch_format)
+
+
+def _to_dest_face(block, torch_format):
+    """One 8x32 logical block -> a 16x16 DEST face: rows 0-7 = cols 0-15, rows 8-15 = cols 16-31."""
+    top = block[:, :FACE_C_DIM]
+    bottom = block[:, FACE_C_DIM : 2 * FACE_C_DIM]
+    return torch.cat([top, bottom], dim=0).to(torch_format)  # [16, 16]
+
+
+def pack_sdpa_dest_tile(in0, kt_dim, torch_format):
+    """Layout 2 (input side): in0 [8, kt_dim*32] -> one 4-face 32x32 tile, face i == K-tile i.
+
+    A single A2D datacopy of the returned tile lands face i at DEST rows 16*i, which is exactly where
+    `_llk_math_sdpa_custom_mm_reuse_dest_srcb_` reads K-tile i (src_index + i*16). Unused face slots are
+    zero-filled so the tile is a well-formed 1024-datum tile regardless of kt_dim.
+    """
+    faces = []
+    for k in range(4):
+        if k < kt_dim:
+            faces.append(
+                _to_dest_face(in0[:, k * 32 : (k + 1) * 32], torch_format).reshape(-1)
+            )
+        else:
+            faces.append(torch.zeros(SDPA_FACE_R_DIM * FACE_C_DIM, dtype=torch_format))
+    return torch.cat(faces)
+
+
+def sdpa_dest_tile_golden(out, torch_format):
+    """Layout 2 (output side): an 8x(nt_dim*32) result -> the flat order the packer writes back.
+
+    One 16x16 face per output tile, in the same rows-0-7/rows-8-15 split as `pack_sdpa_dest_tile`.
+    """
+    nt_dim = out.shape[1] // 32
+    return torch.cat(
+        [
+            _to_dest_face(out[:, n * 32 : (n + 1) * 32], torch_format).reshape(-1)
+            for n in range(nt_dim)
+        ]
+    )
