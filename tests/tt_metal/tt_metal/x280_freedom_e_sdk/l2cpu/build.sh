@@ -188,8 +188,23 @@ for src in hello_x280_lim.c x280_lim_console.c x280_bringup.c; do
 done
 
 echo "--- link"
+# Two link-time settings that are not optional, both found by running this under
+# emulation (qemu/run_qemu.sh) rather than by reading code:
+#
+#   __stack_size  The BSP's linker script defaults to 0x400 = 1 KiB per hart.
+#                 newlib's vfprintf needs far more than that; with 1 KiB the
+#                 stack silently runs off the bottom, corrupts a saved return
+#                 address, and the first printf() "returns" to 0. 0x8000 is what
+#                 tt-llm-engine's own x280/ld/x280.ld allocates per hart, so
+#                 match it.
+#   -u _printf_float
+#                 nano.specs drops floating-point support from printf; without
+#                 this, "%f" prints nothing. Costs a few KB.
+#
+# Both are PROVIDE/weak in the BSP, so --defsym wins without editing the BSP.
 "$GCC" "${FLAGS[@]}" \
     -Wl,--gc-sections -Wl,-Map,"$OUT/hello_x280_lim.map" \
+    -Wl,--defsym=__stack_size=0x8000 -u _printf_float \
     -nostartfiles -nostdlib \
     -L "$BSP/install/lib/$CONFIG" \
     -T "$BSP/metal.default.lds" \

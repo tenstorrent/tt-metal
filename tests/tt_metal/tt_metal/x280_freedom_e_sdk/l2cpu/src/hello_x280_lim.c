@@ -61,16 +61,35 @@ static void report_core(void) {
     printf("  mimpid                              = 0x%lx\n", (unsigned long)READ_CSR("mimpid"));
     printf("  misa                                = 0x%lx\n", (unsigned long)READ_CSR("misa"));
 
-    // vlenb is CSR 0xc22. Reading it traps as an illegal instruction unless
-    // mstatus.VS has been taken out of Off -- which freedom-metal's _enter does
-    // not do, and src/x280_bringup.c's __metal_before_start hook does. So a
-    // sane number here is a live check that the hook ran.
-    const unsigned long vlenb = (unsigned long)READ_CSR("0xc22");
-    printf("  vlenb (CSR 0xc22)                   = %lu bytes -> VLEN=%lu\n", vlenb, vlenb * 8);
+    // misa bit 21 ('V' is letter 22, so bit 'V'-'A' = 21) reports the vector
+    // extension. An X280 sets it; a generic U54 (what qemu models) does not.
+    // Only read vlenb when V is actually present -- otherwise CSR 0xc22 is an
+    // illegal instruction and we would trap for no reason.
+    const uintptr_t misa = READ_CSR("misa");
+    const int has_v = (misa >> 21) & 1;
+    if (has_v) {
+        // Reading vlenb also traps if mstatus.VS is still Off, which is where it
+        // sits at reset. freedom-metal's _enter does not change it;
+        // src/x280_bringup.c's __metal_before_start hook does. So a sane number
+        // here is a live check that the hook ran.
+        const unsigned long vlenb = (unsigned long)READ_CSR("0xc22");
+        printf("  misa.V (vector)                     = yes\n");
+        printf("  vlenb (CSR 0xc22)                   = %lu bytes -> VLEN=%lu\n", vlenb, vlenb * 8);
+    } else {
+        printf("  misa.V (vector)                     = no (not an X280 -- emulated core)\n");
+        printf("  vlenb (CSR 0xc22)                   = skipped, V absent\n");
+    }
     printf(
-        "  mstatus.VS                          = %lu (0=Off; nonzero means the\n",
+        "  mstatus.VS                          = %lu (0=Off. On an X280 the\n",
         (unsigned long)((READ_CSR("mstatus") >> 9) & 0x3));
-    printf("                                         __metal_before_start hook ran)\n");
+    printf("                                         __metal_before_start hook makes\n");
+    printf("                                         this nonzero; on a core without\n");
+    printf("                                         V the field is hardwired to 0.)\n");
+#ifdef X280_QEMU
+    printf("  build flavor                        = X280_QEMU (emulation harness)\n");
+#else
+    printf("  build flavor                        = hardware (CEASE, no UART mirror)\n");
+#endif
     printf("\n");
 }
 
@@ -83,8 +102,8 @@ static void report_freedom_metal(void) {
     printf("  metal_cpu_get_current_hartid()      = %d\n", hartid);
     printf("  metal_cpu_get_num_harts()           = %d\n", metal_cpu_get_num_harts());
     if (cpu != NULL) {
-        printf("  metal_cpu_get_timebase()            = %llu Hz\n", metal_cpu_get_timebase(cpu));
-        printf("  metal_cpu_get_timer()               = %llu ticks\n", metal_cpu_get_timer(cpu));
+        printf("  metal_cpu_get_timebase()            = %lu Hz\n", (unsigned long)metal_cpu_get_timebase(cpu));
+        printf("  metal_cpu_get_timer()               = %lu ticks\n", (unsigned long)metal_cpu_get_timer(cpu));
     } else {
         printf("  metal_cpu_get()                     = NULL\n");
     }
@@ -106,9 +125,9 @@ static void report_lim(void) {
         (unsigned long)(uintptr_t)metal_segment_stack_begin,
         (unsigned long)(uintptr_t)metal_segment_stack_end);
     printf(
-        "  console block                       = 0x%08lx (magic 0x%016llx)\n",
+        "  console block                       = 0x%08lx (magic 0x%016lx)\n",
         X280_CONSOLE_ADDR,
-        (unsigned long long)X280_CONSOLE_MAGIC);
+        (unsigned long)X280_CONSOLE_MAGIC);
     printf("  sentinel                            = 0x%08lx\n", (unsigned long)(uintptr_t)X280_SENTINEL_ADDR);
     printf("\n");
 }

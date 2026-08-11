@@ -31,9 +31,17 @@
 // .data is copied and .bss is zeroed. Touching globals here is not safe; CSR
 // writes are.
 void __metal_before_start(void) {
-    // mstatus.VS = Initial (bits [10:9] = 0b01). At reset VS = Off, and any
-    // vector instruction -- including a read of vlenb -- traps as an illegal
-    // instruction. X280 is rv64gcv with VLEN=512.
+    // mstatus.FS = Dirty (bits [14:13] = 0b11). At reset FS = Off and *any* FP
+    // instruction traps. This build is -mabi=lp64d, so doubles live in FP
+    // registers and even a function prologue that spills fs0 needs FS on.
+    // freedom-metal's _enter does not touch FS, and neither does
+    // tt-llm-engine's x280/boot/entry.S -- which is fine for firmware that
+    // never uses FP, and a hang the moment it does.
+    __asm__ __volatile__("csrs mstatus, %0" ::"r"((uintptr_t)(3u << 13)));
+
+    // mstatus.VS = Initial (bits [10:9] = 0b01). Same story for the vector
+    // unit: at reset VS = Off, and any vector instruction -- including a read
+    // of vlenb -- traps as an illegal instruction. X280 is rv64gcv, VLEN=512.
     //
     // Source: SiFive coreip_21G3.04.00 manual section 5.8, and the identical
     // step in tt-llm-engine's x280/boot/entry.S.
@@ -44,8 +52,14 @@ void __metal_before_start(void) {
 // entry.S uses the same raw encoding in its trap handler; freedom-metal has no
 // notion of it (its metal_shutdown() drives a sifive,test0 block, which an
 // L2CPU tile does not have), so spell it out.
+//
+// X280_QEMU builds skip it: qemu models a generic SiFive U54, which does not
+// implement SiFive's custom CEASE and would take an illegal-instruction trap.
+// The wfi park is what upstream freedom-metal does anyway.
 __attribute__((noreturn)) void x280_cease(void) {
+#ifndef X280_QEMU
     __asm__ __volatile__(".word 0x30500073");  // CEASE
+#endif
     for (;;) {
         __asm__ __volatile__("wfi");
     }

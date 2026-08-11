@@ -28,7 +28,19 @@ void x280_console_init(void) {
     X280_CONSOLE->data[0] = '\0';
 }
 
+#ifdef X280_QEMU
+// Emulation only. qemu's `sifive_u` machine has a SiFive UART at 0x10010000, so
+// mirroring each byte there makes the same output visible on a terminal. A real
+// L2CPU tile has no UART and this is compiled out; the LIM path below is the one
+// that matters on hardware.
+#define X280_QEMU_UART_TXDATA ((volatile uint32_t*)0x10010000UL)
+static void qemu_uart_putc(int c) { *X280_QEMU_UART_TXDATA = (uint32_t)(c & 0xff); }
+#else
+static inline void qemu_uart_putc(int c) { (void)c; }
+#endif
+
 int metal_tty_putc(int c) {
+    qemu_uart_putc(c);
     const uint32_t at = X280_CONSOLE->len;
     if (at + 1 >= X280_CONSOLE_CAPACITY) {
         X280_CONSOLE->dropped++;
