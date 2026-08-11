@@ -176,6 +176,30 @@ class TestUpdateCache:
         assert eq_cache and eq_update
 
 
+@pytest.mark.parametrize("num_users", [33, 34, 40])
+@pytest.mark.parametrize("num_heads", [1])
+def test_update_cache_decode_rejects_non_tile_batch(num_users, num_heads, device, expect_error):
+    """Reject Bcache > 32 that is not a multiple of TILE_HEIGHT (see #52671).
+
+    Without short last-group support, update_cache would silently wrap and
+    corrupt earlier cache users. Prefer a hard error over silent corruption.
+    """
+    head_dim = 64
+    max_seq_len = 128
+    cache_idx = 0
+    pad_users = ((num_users + 31) // 32) * 32
+
+    cache = torch.zeros([num_users, num_heads, max_seq_len, head_dim]).bfloat16().float()
+    cachett = ttnn.Tensor(cache, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+    x = torch.randn([num_users, num_heads, 1, head_dim]).bfloat16().float()
+    if pad_users > num_users:
+        x = torch.cat((x, torch.zeros(pad_users - num_users, num_heads, 1, head_dim)), dim=0)
+    xt = ttnn.Tensor(x.permute(2, 1, 0, 3), ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+
+    with expect_error(RuntimeError, "does not support cache batch"):
+        ttnn.update_cache(cachett, xt, cache_idx, batch_offset=0)
+
+
 @skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("in_sharded", [False, True])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
