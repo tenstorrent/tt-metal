@@ -607,10 +607,11 @@
     TTRUN_DIR=/etc/ttop
     TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
     MGD="${TT_METAL_HOME}/models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_4galaxy_connected_mesh_graph_descriptor.textproto"
-    # The producer (raw mpirun) needs an explicit slotted host list; the runner
-    # goes through tt-run automapper, which discovers rank->mesh placement from the
-    # MGD and takes the plain comma-separated host list.
-    HOSTS=$(awk 'NF {printf "%s:1,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
+    # The runner goes through tt-run automapper, which discovers rank->mesh placement
+    # from the MGD and takes the plain comma-separated host list. The producer (raw
+    # mpirun) needs a slotted host list in the SAME rank order tt-run's discovery chose
+    # (parsed from the generated rankfile below) so its master co-locates with runner
+    # rank 0 -- the H2D stream service is host-local /dev/shm IPC.
     RESOLVED_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
     # tt-run Phase 1 (generate_rank_bindings) writes generated/ttrun/ under the
     # launch cwd; keep it on shared NFS so the runner pod can read rank-0 outputs.
@@ -646,6 +647,7 @@
     cd "${TTRUN_CWD}"
     python3 "${TTRUN_PY}" \
       --skip-executable-check \
+      --force-rediscovery \
       --tcp-interface ens5f0np0 \
       --mesh-graph-descriptor "${MGD}" \
       --hosts "${RESOLVED_HOSTS}" \
@@ -671,6 +673,20 @@
       sleep 5
     done
     [ -f "${TABLE_PATH}" ] || { echo "KV table not published within timeout"; exit 1; }
+
+    # tt-run discovery -- not hostfile order -- decides which host runs runner rank i.
+    # The H2D stream service is host-local IPC (a /dev/shm descriptor written by runner
+    # rank 0), so the producer's master (rank 0) must land on that same host. Derive the
+    # producer host order from the generated rankfile (--force-rediscovery guarantees it
+    # was written fresh this run) so producer rank i co-locates with runner rank i. Using
+    # raw hostfile order races discovery and intermittently strands the master on the
+    # wrong host -- H2DStreamService.connect then times out and TT_THROWs.
+    RANKFILE=$(ls -t "${TTRUN_CWD}"/generated/ttrun/*/rankfile 2>/dev/null | head -1)
+    [ -f "${RANKFILE}" ] || { echo "tt-run rankfile not found under ${TTRUN_CWD}/generated/ttrun/*/rankfile"; exit 1; }
+    # rankfile lines are "rank N=hostname slots=X"; emit "N hostname", sort by rank, join as host:1.
+    HOSTS=$(awk '/^rank[[:space:]]+[0-9]+=/ {n=$2; sub(/=.*/,"",n); h=$2; sub(/^[0-9]+=/,"",h); print n" "h}' "${RANKFILE}" | sort -n | awk '{printf "%s%s:1", (NR>1?",":""), $2}')
+    [ -n "${HOSTS}" ] || { echo "failed to parse producer host order from ${RANKFILE}"; exit 1; }
+    echo "producer host order from tt-run discovery: ${HOSTS}"
 
     MPIRUN=$(command -v mpirun-ulfm || command -v mpirun)
     set +e
