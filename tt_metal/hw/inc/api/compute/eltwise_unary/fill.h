@@ -79,7 +79,7 @@ ALWI void fill_tile_int(uint32_t idst, uint32_t param0) {
         VectorMode::RC,
         param0));
 #else
-    // Quasar's int fill path (_calculate_fill_int_ in ckernel_sfpu_fill.h) only supports
+    // Quasar's int fill path (calculate_fill in ckernel_sfpu_fill.h) only supports
     // Int32/Int16/Int8/UInt8 — UInt32 and UInt16 (valid on WH/BH above) are not yet supported here.
     static_assert(
         DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::Int16 || DATA_FORMAT == DataFormat::Int8 ||

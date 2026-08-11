@@ -43,6 +43,11 @@ inline void _fill_store_(const std::uint32_t bits) {
  */
 template <DataFormat FMT, bool IS_32b_DEST_EN, int ITERATIONS = SFPU_ITERATIONS>
 inline void calculate_fill(const std::conditional_t<_is_int_format_(FMT), std::uint32_t, float> value) {
+    static_assert(
+        _is_int_format_(FMT) || FMT == DataFormat::Float16 || FMT == DataFormat::Float16_b ||
+            FMT == DataFormat::Float32,
+        "Unsupported data format for calculate_fill. Supported: Int32, Int16, Int8, UInt8, Float16, Float16_b, "
+        "Float32");
     if constexpr (_is_int_format_(FMT)) {
         constexpr std::uint32_t SFPMEM_MODE = IS_32b_DEST_EN ? p_sfpu::sfpmem::INT32 : _sfpu_sfpmem_type_<FMT>();
         _fill_store_<SFPMEM_MODE, ITERATIONS>(value);
