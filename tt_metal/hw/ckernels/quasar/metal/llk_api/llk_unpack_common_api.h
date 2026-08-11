@@ -32,14 +32,11 @@
  */
 template <ckernel::trisc::BfdResource R, ckernel::trisc::L1AccessMode MODE = ckernel::trisc::L1AccessMode::Continuous>
 inline std::uint8_t llk_unpack_program_bfd_(const std::uint32_t operand_id) {
-    const std::uint8_t bfd_id = ckernel::trisc::bfd_alloc<R>();
     // TODO: with multiple TCs are there multiple descriptors? Only tc_slots[0] is programmed.
-    const buffer_descriptor_u buf_desc = ckernel::trisc::construct_buf_desc<MODE>(
+    return ckernel::trisc::bfd_alloc_and_program<R, MODE>(
         get_operand_tensor_shape(operand_id),
         get_local_dfb_interface(operand_id).tc_slots[0].base_addr,
         static_cast<std::uint32_t>(unpack_src_format[operand_id]));
-    ckernel::trisc::_configure_buf_desc_table_(bfd_id, buf_desc);
-    return bfd_id;
 }
 
 /**

@@ -5,6 +5,7 @@
 
 #include <cstdint>
 
+#include "ckernel_trisc_common.h"
 #include "ckernel_trisc_id.h"
 
 // Buffer descriptor (BFD) id allocator.
@@ -135,6 +136,25 @@ template <BfdResource R>
 inline std::uint8_t bfd_current()
 {
     return bfd_state.current[static_cast<std::uint8_t>(R)];
+}
+
+/**
+ * @brief One-stop op-init sequence: allocate the next buffer descriptor id for resource R,
+ * construct the descriptor from the L1 buffer info, and program the table entry. The returned
+ * id is baked into the op's MOP by the caller.
+ * @tparam R: TDMA resource the id will drive
+ * @tparam MODE: L1 access mode (Continuous, or Strided for PACR/UNPACR_STRIDE tiny-tiles)
+ * @param tensor_shape: Tile/face dimensions and shape of the buffer
+ * @param l1_base_addr: base address of the buffer in L1 (16B units)
+ * @param l1_data_format: L1 data encoding format
+ * @return the allocated buffer descriptor id
+ */
+template <BfdResource R, L1AccessMode MODE = L1AccessMode::Continuous>
+inline std::uint8_t bfd_alloc_and_program(const TensorShape& tensor_shape, const std::uint32_t l1_base_addr, const std::uint32_t l1_data_format)
+{
+    const std::uint8_t id = bfd_alloc<R>();
+    _configure_buf_desc_table_(id, construct_buf_desc<MODE>(tensor_shape, l1_base_addr, l1_data_format));
+    return id;
 }
 
 } // namespace ckernel::trisc
