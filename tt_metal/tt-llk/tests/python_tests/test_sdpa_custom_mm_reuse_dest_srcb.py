@@ -31,8 +31,6 @@ from helpers.advance_llk_includes import (  # noqa: F401  (module-scoped autouse
     advance_llk_include_paths,
 )
 from helpers.custom_mm_utils import (
-    FACE_C_DIM,
-    FACE_R_DIM,
     IN0_ROWS_SDPA,
     KT_DIMS,
     matmul_acc_atol,
@@ -53,6 +51,7 @@ from helpers.test_variant_parameters import (
     NUM_FACES,
     TILE_COUNT,
 )
+from helpers.tile_constants import FACE_C_DIM, MAX_FACE_R_DIM
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
 
@@ -153,7 +152,7 @@ def test_sdpa_custom_mm_reuse_dest_srcb(
     # Each output tile is a single 16x16 DEST face written at the start of a full 32x32 L1 tile, so keep that face
     # and drop the three faces of L1 the kernel never touches. StimuliConfig's num_faces would narrow the readback
     # for us, but it narrows the buffer_A / buffer_B *writes* too, which would truncate the in1 K-tiles.
-    face_datums = FACE_R_DIM * FACE_C_DIM
+    face_datums = MAX_FACE_R_DIM * FACE_C_DIM
     tile_datums = len(res_tensor) // NT_DIM
     res_tensor = torch.cat(
         [

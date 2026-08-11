@@ -26,9 +26,7 @@ Two layouts appear in this family, and neither is a plain tilized tile:
 
 import torch
 
-from .tile_constants import FACE_C_DIM  # noqa: F401  (re-exported for the tests below)
-
-FACE_R_DIM = 16
+from .tile_constants import FACE_C_DIM, MAX_FACE_R_DIM
 
 # Header contract: ct_dim 1..16, kt_dim even (2..256), in0 rows in {1, 2, 4, 8}.
 CT_DIMS = [1, 2, 4, 8, 16]
@@ -38,10 +36,6 @@ IN0_ROWS = [1, 2, 4, 8]
 # sdpa_custom_mm and sdpa_custom_mm_reuse_dest_srcb do NOT sweep in0 rows: their addrmod helpers hardcode
 # `constexpr std::uint32_t face_r_dim = 8` / an 8-row dest step, so 8 is the only shape they implement.
 IN0_ROWS_SDPA = 8
-
-# The op's logical tile height once in0 rows are fixed at 8, and the DEST face that carries it.
-SDPA_LOGICAL_ROWS = 8
-SDPA_FACE_R_DIM = 16
 
 # K-aware absolute floor for the goldens below. A single LoFi MVMUL accumulates the K-deep sum in a bf16
 # dest, so noise grows ~linearly per K-tile -- a floor that Float16_b's default atol (0.05) is too tight
@@ -115,7 +109,7 @@ def pack_sdpa_dest_tile(in0, kt_dim, torch_format):
                 _to_dest_face(in0[:, k * 32 : (k + 1) * 32], torch_format).reshape(-1)
             )
         else:
-            faces.append(torch.zeros(SDPA_FACE_R_DIM * FACE_C_DIM, dtype=torch_format))
+            faces.append(torch.zeros(MAX_FACE_R_DIM * FACE_C_DIM, dtype=torch_format))
     return torch.cat(faces)
 
 
@@ -181,7 +175,7 @@ def face_result_leading(res_tensor, tile_cnt):
     full 32x32 L1 tile. StimuliConfig's num_faces would narrow the readback for us, but it narrows the
     buffer_A / buffer_B *writes* too, which would truncate the operands.
     """
-    face_datums = FACE_R_DIM * FACE_C_DIM
+    face_datums = MAX_FACE_R_DIM * FACE_C_DIM
     tile_datums = len(res_tensor) // tile_cnt
     return torch.cat(
         [

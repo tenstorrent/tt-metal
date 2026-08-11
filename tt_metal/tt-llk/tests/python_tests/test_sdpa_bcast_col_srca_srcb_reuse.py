@@ -46,16 +46,15 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import MATH_NUM_FACES, NUM_FACES, TILE_COUNT
+from helpers.tile_constants import FACE_C_DIM, MAX_FACE_R_DIM
 from helpers.utils import passed_test
 
 # LoFi-only, bf16-natural path. Keep the grid tiny for the advance test.
 SDPA_FORMATS = input_output_formats([DataFormat.Float16_b])
 
 # One 16x16 DEST face per tile (see the geometry note above).
-FACE_R_DIM = 16
-FACE_C_DIM = 16
 NUM_FACES_HOST = 1
-TILE_DIMS = [FACE_R_DIM, FACE_C_DIM]
+TILE_DIMS = [MAX_FACE_R_DIM, FACE_C_DIM]
 # The op's 8 logical rows; dest rows r and r + 8 share the scale from P dest row r.
 LOGICAL_ROWS = 8
 
@@ -89,9 +88,13 @@ def test_sdpa_bcast_col_srca_srcb_reuse(
     # Golden, in the same flat DEST-row order the packer writes back:
     #   out[d, c] = X[d, c] * (1 + P[d % 8, 0])
     # The scale repeats every 8 dest rows because srcb.incr == 0 across the MOP's two 8-row chunks.
-    x = src_A.reshape(FACE_R_DIM, FACE_C_DIM).to(torch_format)
-    p_col0 = src_B.reshape(FACE_R_DIM, FACE_C_DIM).to(torch_format)[:LOGICAL_ROWS, 0]
-    scale = 1.0 + p_col0.repeat(FACE_R_DIM // LOGICAL_ROWS).reshape(FACE_R_DIM, 1)
+    x = src_A.reshape(MAX_FACE_R_DIM, FACE_C_DIM).to(torch_format)
+    p_col0 = src_B.reshape(MAX_FACE_R_DIM, FACE_C_DIM).to(torch_format)[
+        :LOGICAL_ROWS, 0
+    ]
+    scale = 1.0 + p_col0.repeat(MAX_FACE_R_DIM // LOGICAL_ROWS).reshape(
+        MAX_FACE_R_DIM, 1
+    )
     golden_tensor = (x * scale).flatten()
 
     configuration = TestConfig(
@@ -116,7 +119,7 @@ def test_sdpa_bcast_col_srca_srcb_reuse(
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt,
             num_faces=NUM_FACES_HOST,
-            face_r_dim=FACE_R_DIM,
+            face_r_dim=MAX_FACE_R_DIM,
             tile_dimensions=TILE_DIMS,
             use_dense_tile_dimensions=True,
         ),
