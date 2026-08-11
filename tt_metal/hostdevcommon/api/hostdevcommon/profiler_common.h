@@ -44,22 +44,7 @@ enum BufferIndex {
 // (8 DM + 4 x 4 TRISC).
 static constexpr std::uint32_t PROFILER_MAX_RISC_COUNT = 24;
 
-// Number of per-processor slots reserved in each bank of the L1 control vector (the
-// host-end-index bank and the device-end-index bank).
-//
-// DIAGNOSTIC PATCH for issue #51415 -- do not merge as-is.
-//
-// This was widened from 5 to PROFILER_MAX_RISC_COUNT (24) in #49417, which grew
-// profiler_msg_t -- and therefore dev_msgs_t and MEM_MAILBOX_SIZE -- by 128B on
-// Wormhole and Blackhole. Because MEM_MAILBOX_SIZE sits at the bottom of the Tensix
-// L1 map, that shifted MEM_MAP_END (0x8840 -> 0x88C0) and with it both the
-// kernel-config/kernel-text base and the L1 allocator base (0x19C40 -> 0x19CC0).
-// The fabric mux-v2 ubench builds its entire L1 layout off the allocator base, and
-// its payload_sweep_1s_2048B_buf8_r0 case lost 5.5% (18.535 -> 17.523 B/c).
-//
-// Restoring 5 here reverts the WH/BH L1 map to its pre-#49417 layout so the causal
-// link can be confirmed on hardware. Quasar's 24 processors need 24 slots, so the
-// real fix is to make this arch-dependent rather than a single shared constant.
+// TODO: make this architecture (wh/bh) specific --> needs to be moved out of this common profiler file.
 static constexpr std::uint32_t PROFILER_CONTROL_RISC_SLOTS = 5;
 
 // ---- ID_LH marker-word bit layout (shared device packer / host decoder) ----
@@ -123,7 +108,6 @@ enum ControlBuffer {
     HOST_BUFFER_END_INDEX_T1,
     HOST_BUFFER_END_INDEX_T2,
     // slots [5, PROFILER_CONTROL_RISC_SLOTS) would be headroom for additional processors
-    // (e.g. Quasar DM/Neo); empty while the slot count is back at 5.
     DEVICE_BUFFER_END_INDEX_BR_ER = PROFILER_CONTROL_RISC_SLOTS,
     DEVICE_BUFFER_END_INDEX_NC,
     DEVICE_BUFFER_END_INDEX_T0,
@@ -175,9 +159,7 @@ struct TimestampedDataSize<TS_DATA_16B> {
 // TODO: use data types in profile_msg_t rather than addresses/sizes
 constexpr static std::uint32_t PROFILER_L1_CONTROL_VECTOR_SIZE = 32;
 constexpr static std::uint32_t PROFILER_L1_CONTROL_BUFFER_SIZE = PROFILER_L1_CONTROL_VECTOR_SIZE * sizeof(uint32_t);
-// The control vector is indexed by ControlBuffer, so its last entry must be addressable.
-// This does not hold on main today: with PROFILER_CONTROL_RISC_SLOTS == 24 the last entry
-// lands at index 64 in a 64-word vector (see the overflow reported in issue #51127).
+// Ensures our control vector is addressable
 static_assert(
     DRAM_PROFILER_ADDRESS_T2_0 < PROFILER_L1_CONTROL_VECTOR_SIZE,
     "ControlBuffer's last entry does not fit in the L1 control vector");
