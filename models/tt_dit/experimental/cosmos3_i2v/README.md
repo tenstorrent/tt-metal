@@ -108,6 +108,8 @@ byte-identical whether or not the positive is JSON.
 | `TT_DIT_CACHE_DIR` | **unset — you must set it** | On-disk tensor cache root. Required: the second trunk loads weights only from cache (it has no state-dict source), so an unset dir fails the build. |
 | `TT_COSMOS3_ENABLE_SP_RING` | `1` (on) | Ring SDPA + matching scatter for the sp=2 path. Leave on. `0` disables (produces noise on native-cfg). |
 | `TT_COSMOS3_CFG_SPLIT_LARGER` | unset | `1` splits the larger axis instead (4×8 → dual 4×4: TP=4, SP=4). Rebalances TP↔SP; not more parallelism. |
+| `TT_COSMOS3_CCL_RING` | unset | `1` opens the mesh with `FABRIC_1D_RING` and routes the trunk RowParallel RS / ColParallel AG over `Topology.Ring` on the TP axis: warm step 6.74s → 6.27s (−7%). Incompatible with `TT_METAL_WATCHER` on Blackhole — the ring router + watcher instrumentation overflows the 25600 B ACTIVE_ETH kernel-config buffer at mesh open (`open_mesh` fails fast with the escape hatches). Ring also perturbs bf16 CCL accumulation order, so same-seed runs are valid but not bit-reproducible across trace re-captures. |
+| `TT_COSMOS3_GQA_KV` | unset | `1` feeds ring-joint SDPA grouped K/V (per-device 8Q/1KV) instead of broadcasting to 64 heads — 8x less ring KV transport. Requires a ttnn build where joint+grouped-KV validation is lifted in `ring_joint_sdpa_device_operation.cpp`; older builds fail fast with the joint+GQA TT_FATAL. |
 
 ## Cache
 

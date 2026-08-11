@@ -15,6 +15,7 @@
 import copy
 import json
 import math
+import os
 from dataclasses import dataclass
 from typing import Any, Callable, Literal
 
@@ -754,6 +755,7 @@ class Cosmos3OmniPipeline(DiffusionPipeline):
         action_condition_frame_indexes: list[int] = []
         action_image_size: torch.Tensor | None = None
         vision_condition_frames: list[int] | None = None
+        latent_tail_to_zero_fill = 0
 
         # Build the vision conditioning tensor (always [1, 3, T, H, W], in [-1, 1], on device).
         if action is not None:
@@ -782,15 +784,34 @@ class Cosmos3OmniPipeline(DiffusionPipeline):
                 if conditioning_frame_2d is not None
                 else torch.zeros(1, 3, 1, height, width, dtype=dtype, device=device)
             )
-        else:
+        elif os.environ.get("TT_COSMOS3_VE_FULL_ENCODE", "0") == "1":
             vision_tensor = torch.zeros(1, 3, num_frames, height, width, dtype=dtype, device=device)
             if conditioning_frame_2d is not None:
                 # Single conditioning frame at t=0, repeat-pad the rest with that same frame.
                 vision_tensor[:, :, 0] = conditioning_frame_2d
                 if num_frames > 1:
                     vision_tensor[:, :, 1:] = conditioning_frame_2d.unsqueeze(2).expand(-1, -1, num_frames - 1, -1, -1)
+        else:
+            # The vision mask built below anchors at most latent frame 0, and the
+            # VAE encoder is temporally causal, so latent frame 0 is a function of
+            # pixel frame 0 alone. Encoding just that frame and zero-filling the
+            # unused latent tail is bit-identical to encoding the repeat-padded
+            # full video (the tail is masked out either way) and skips ~1 GB of
+            # host->device transfer plus the chunked encode at 720p/189f.
+            # TT_COSMOS3_VE_FULL_ENCODE=1 restores the full-video encode.
+            vision_tensor = (
+                conditioning_frame_2d.unsqueeze(2)
+                if conditioning_frame_2d is not None
+                else torch.zeros(1, 3, 1, height, width, dtype=dtype, device=device)
+            )
+            latent_tail_to_zero_fill = (num_frames - 1) // self.vae.config.scale_factor_temporal
 
         x0_tokens_vision = self._encode_video(vision_tensor).contiguous().float()
+        if latent_tail_to_zero_fill:
+            b, c, _, h, w = x0_tokens_vision.shape
+            x0_tokens_vision = torch.cat(
+                [x0_tokens_vision, x0_tokens_vision.new_zeros(b, c, latent_tail_to_zero_fill, h, w)], dim=2
+            )
         if action_image_size is not None:
             x0_tokens_vision = self._remove_action_video_padding_from_latent(x0_tokens_vision, action_image_size)
         vision_shape = tuple(x0_tokens_vision.shape)

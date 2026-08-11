@@ -118,8 +118,9 @@ class NativeLayerProxy(nn.Module):
         # Single-entry cache for the rotary (cos/sin × und/gen) tensors uploaded each
         # forward. The rotary tuple lives in the pipeline's static_pre cache and is
         # reused across every denoise step, so caching by tuple identity holds across
-        # all 50 steps. A new generation builds a new tuple → key miss → rebuild
-        # (old ttnn tensors fall out of scope and Python GC deallocates them).
+        # all 50 steps. A new generation builds a new tuple → key miss → same-shape
+        # buffers are refreshed IN PLACE (see _refresh_replicated: re-allocating under
+        # a live trace puts the buffer on a trace-owned address and replay clobbers it).
         object.__setattr__(self, "_rotary_cache_key", None)
         object.__setattr__(self, "_rotary_cache_value", None)
         # und_seq (text embedding) is invariant across all denoise steps within a
@@ -127,25 +128,33 @@ class NativeLayerProxy(nn.Module):
         # Caching by object identity avoids re-uploading it every step.
         object.__setattr__(self, "_und_cache_key", None)
         object.__setattr__(self, "_und_cache_value", None)
+        # Persistent staging buffer for the per-step gen upload. gen_seq changes every
+        # step, but the device buffer must not: a fresh allocation while the trunk trace
+        # is live can alias trace-owned addresses (see _refresh_replicated), so the
+        # upload is refreshed in place into this buffer on every call.
+        object.__setattr__(self, "_gen_stage_value", None)
 
     @staticmethod
-    def _to_tile_ttnn(x: torch.Tensor, mesh_device: ttnn.MeshDevice) -> ttnn.Tensor:
-        """Host torch [N, D] (or [N, H]) → replicated TILE ttnn [1, 1, N, D]."""
+    def _host_tile_view(x: torch.Tensor) -> torch.Tensor:
+        """Host torch [N, D] / [B, N, D] / 4D → bf16 contiguous [1, 1/B, N, D] view."""
         # Reshape to [1, 1, N, last] so the native trunk gets the contract it expects.
         # ttnn.from_torch can't reshape into 4D from 2D directly; do it host-side.
         if x.ndim == 2:
             n, d = x.shape
-            host = x.detach().to(torch.bfloat16).contiguous().view(1, 1, n, d)
-        elif x.ndim == 3:
+            return x.detach().to(torch.bfloat16).contiguous().view(1, 1, n, d)
+        if x.ndim == 3:
             b, n, d = x.shape
-            host = x.detach().to(torch.bfloat16).contiguous().view(1, b, n, d)
-        elif x.ndim == 4:
-            host = x.detach().to(torch.bfloat16).contiguous()
-        else:
-            msg = f"NativeLayerProxy._to_tile_ttnn expected rank-2/3/4 input, got rank {x.ndim}"
-            raise ValueError(msg)
+            return x.detach().to(torch.bfloat16).contiguous().view(1, b, n, d)
+        if x.ndim == 4:
+            return x.detach().to(torch.bfloat16).contiguous()
+        msg = f"NativeLayerProxy._host_tile_view expected rank-2/3/4 input, got rank {x.ndim}"
+        raise ValueError(msg)
+
+    @staticmethod
+    def _to_tile_ttnn(x: torch.Tensor, mesh_device: ttnn.MeshDevice) -> ttnn.Tensor:
+        """Host torch [N, D] (or [N, H]) → replicated TILE ttnn [1, 1, N, D]."""
         return ttnn.from_torch(
-            host,
+            NativeLayerProxy._host_tile_view(x),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
@@ -154,8 +163,35 @@ class NativeLayerProxy(nn.Module):
         )
 
     @staticmethod
+    def _refresh_replicated(x: torch.Tensor, mesh_device: ttnn.MeshDevice, cached: ttnn.Tensor | None) -> ttnn.Tensor:
+        """Replicated upload that refreshes a same-shape cached tensor IN PLACE.
+
+        A ttnn trace bakes absolute buffer addresses. Re-allocating a cross-step
+        input (und/rotary) while a captured trace is live hands the new buffer a
+        trace-owned address, and every replay then clobbers it — gen 2+ decodes
+        to noise. Copying into the pre-capture buffer keeps the baked addresses
+        valid across generations; a fresh allocation happens only on shape change
+        (where trace replay is impossible anyway).
+        """
+        host = NativeLayerProxy._host_tile_view(x)
+        if cached is not None and tuple(cached.shape) == tuple(host.shape):
+            host_tt = ttnn.from_torch(
+                host,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            ttnn.copy_host_to_device_tensor(host_tt, cached)
+            return cached
+        return NativeLayerProxy._to_tile_ttnn(x, mesh_device)
+
+    @staticmethod
     def _to_tile_ttnn_sharded(
-        x: torch.Tensor, mesh_device: ttnn.MeshDevice, sp_axis: int, gen_seq_multiple: int
+        x: torch.Tensor,
+        mesh_device: ttnn.MeshDevice,
+        sp_axis: int,
+        gen_seq_multiple: int,
+        shard_features: bool = False,
     ) -> tuple[ttnn.Tensor, int]:
         """Host torch [N, D] → sp-sharded TILE ttnn `[1, 1, N_padded/sp, D]`, plus pad_n.
 
@@ -180,7 +216,12 @@ class NativeLayerProxy(nn.Module):
         if len(mesh_shape) != 2:
             msg = f"sp sharding expects 2D mesh, got {mesh_shape}"
             raise ValueError(msg)
-        dims = (2 if sp_axis == 0 else None, 2 if sp_axis == 1 else None)
+        if shard_features:
+            # Feature-sharded residual stream (TT_COSMOS3_TP_SHARD): tokens on the sp
+            # axis, hidden features on the tp axis.
+            dims = (2, 3) if sp_axis == 0 else (3, 2)
+        else:
+            dims = (2 if sp_axis == 0 else None, 2 if sp_axis == 1 else None)
         mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=dims)
         tensor = ttnn.from_torch(
             host,
@@ -191,6 +232,36 @@ class NativeLayerProxy(nn.Module):
             mesh_mapper=mapper,
         )
         return tensor, pad_n
+
+    @staticmethod
+    def _refresh_sharded(
+        x: torch.Tensor,
+        mesh_device: ttnn.MeshDevice,
+        cached: ttnn.Tensor | None,
+        sp_axis: int,
+        gen_seq_multiple: int,
+        shard_features: bool = False,
+    ) -> tuple[ttnn.Tensor, int]:
+        """Sharded upload with the same in-place refresh contract as _refresh_replicated."""
+        n, d = x.shape
+        pad_n = (-n) % gen_seq_multiple
+        if cached is not None and tuple(cached.shape) == (1, 1, n + pad_n, d):
+            padded = torch.cat([x, x.new_zeros(pad_n, d)], dim=0) if pad_n > 0 else x
+            host = padded.detach().to(torch.bfloat16).contiguous().view(1, 1, n + pad_n, d)
+            mesh_shape = tuple(mesh_device.shape)
+            if shard_features:
+                dims = (2, 3) if sp_axis == 0 else (3, 2)
+            else:
+                dims = (2 if sp_axis == 0 else None, 2 if sp_axis == 1 else None)
+            host_tt = ttnn.from_torch(
+                host,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=dims),
+            )
+            ttnn.copy_host_to_device_tensor(host_tt, cached)
+            return cached, pad_n
+        return NativeLayerProxy._to_tile_ttnn_sharded(x, mesh_device, sp_axis, gen_seq_multiple, shard_features)
 
     @staticmethod
     def _from_replicated_ttnn(x_tt: ttnn.Tensor, target_shape: tuple[int, ...]) -> torch.Tensor:
@@ -233,7 +304,7 @@ class NativeLayerProxy(nn.Module):
 
         und_key = id(und_seq)
         if self._und_cache_key != und_key:
-            und_tt = self._to_tile_ttnn(und_seq, mesh_device)
+            und_tt = self._refresh_replicated(und_seq, mesh_device, self._und_cache_value)
             object.__setattr__(self, "_und_cache_key", und_key)
             object.__setattr__(self, "_und_cache_value", und_tt)
         else:
@@ -260,10 +331,13 @@ class NativeLayerProxy(nn.Module):
                 raise ValueError(msg)
 
         if sp_factor > 1:
-            gen_tt, pad_n_gen = self._to_tile_ttnn_sharded(gen_seq, mesh_device, sp_axis, gen_seq_multiple)
+            gen_tt, pad_n_gen = self._refresh_sharded(
+                gen_seq, mesh_device, self._gen_stage_value, sp_axis, gen_seq_multiple
+            )
         else:
-            gen_tt = self._to_tile_ttnn(gen_seq, mesh_device)
+            gen_tt = self._refresh_replicated(gen_seq, mesh_device, self._gen_stage_value)
             pad_n_gen = 0
+        object.__setattr__(self, "_gen_stage_value", gen_tt)
         logical_n_gen = gen_seq.shape[0]
 
         # Cache the rotary uploads: cos_und/sin_und/cos_gen/sin_gen are derived from
@@ -272,14 +346,15 @@ class NativeLayerProxy(nn.Module):
         rotary_key = id(rotary_emb)
         cached = self._rotary_cache_value if self._rotary_cache_key == rotary_key else None
         if cached is None:
-            cos_und_tt = self._to_tile_ttnn(cos_und, mesh_device)
-            sin_und_tt = self._to_tile_ttnn(sin_und, mesh_device)
+            prev = self._rotary_cache_value or (None, None, None, None)
+            cos_und_tt = self._refresh_replicated(cos_und, mesh_device, prev[0])
+            sin_und_tt = self._refresh_replicated(sin_und, mesh_device, prev[1])
             if sp_factor > 1:
-                cos_gen_tt, _ = self._to_tile_ttnn_sharded(cos_gen, mesh_device, sp_axis, gen_seq_multiple)
-                sin_gen_tt, _ = self._to_tile_ttnn_sharded(sin_gen, mesh_device, sp_axis, gen_seq_multiple)
+                cos_gen_tt, _ = self._refresh_sharded(cos_gen, mesh_device, prev[2], sp_axis, gen_seq_multiple)
+                sin_gen_tt, _ = self._refresh_sharded(sin_gen, mesh_device, prev[3], sp_axis, gen_seq_multiple)
             else:
-                cos_gen_tt = self._to_tile_ttnn(cos_gen, mesh_device)
-                sin_gen_tt = self._to_tile_ttnn(sin_gen, mesh_device)
+                cos_gen_tt = self._refresh_replicated(cos_gen, mesh_device, prev[2])
+                sin_gen_tt = self._refresh_replicated(sin_gen, mesh_device, prev[3])
             object.__setattr__(self, "_rotary_cache_value", (cos_und_tt, sin_und_tt, cos_gen_tt, sin_gen_tt))
             object.__setattr__(self, "_rotary_cache_key", rotary_key)
         else:
@@ -1051,7 +1126,17 @@ def build_cosmos3_i2v_native_pipeline(
         dropped because the host HF transformer still owns those.
         """
         state = pipe.transformer.state_dict()
-        return {k: v for k, v in state.items() if k.split(".", 1)[0] in expected_top_level}
+        # Truncated-depth trunks (TT_COSMOS3_NUM_LAYERS) hold fewer layers than the HF
+        # state dict; keys past the trunk's depth would fail the unexpected-keys check.
+        n_layers = len(native_trunk.layers)
+
+        def _keep(k: str) -> bool:
+            top = k.split(".", 1)[0]
+            if top not in expected_top_level:
+                return False
+            return not (top == "layers" and int(k.split(".")[1]) >= n_layers)
+
+        return {k: v for k, v in state.items() if _keep(k)}
 
     print(
         f"[native-pipeline] hf_transformer.state_dict() has {len(pipe.transformer.state_dict())} "
@@ -1067,12 +1152,17 @@ def build_cosmos3_i2v_native_pipeline(
         _cache_subfolder = "transformer-native-proj-in"
     else:
         _cache_subfolder = "transformer-native"
+    # Sharded post-attn gen norm weights (DistributedRMSNorm) have a different on-disk
+    # layout than replicated RMSNorm under the same cache key -- fork the subfolder.
+    if os.environ.get("TT_COSMOS3_TP_SHARD") in ("1", "true", "True"):
+        _cache_subfolder += "-tpshard"
     cache.load_model(
         native_trunk,
         model_name=cache_namespace,
         subfolder=_cache_subfolder,
         parallel_config=parallel_config,
         mesh_shape=mesh_shape,
+        mesh_device=device,
         dtype="bf16" if trunk_weight_dtype == ttnn.bfloat16 else "bfp8",
         get_torch_state_dict=_native_trunk_filtered_state_dict,
     )

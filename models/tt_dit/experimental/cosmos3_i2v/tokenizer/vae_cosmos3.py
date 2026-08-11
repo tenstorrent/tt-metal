@@ -264,6 +264,7 @@ class Cosmos3VAEEncoderAdapter:
             subfolder="vae_encoder",
             parallel_config=self._parallel_config,
             mesh_shape=tuple(self.device.shape),
+            mesh_device=self.device,
             get_torch_state_dict=lambda: self._torch_vae.state_dict(),
         )
 

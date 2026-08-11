@@ -158,12 +158,17 @@ def _build_second_trunk(
         _subfolder = "transformer-native-proj-in"
     else:
         _subfolder = "transformer-native"
+    # Sharded post-attn gen norm weights (DistributedRMSNorm) have a different on-disk
+    # layout than replicated RMSNorm under the same cache key -- fork the subfolder.
+    if os.environ.get("TT_COSMOS3_TP_SHARD") in ("1", "true", "True"):
+        _subfolder += "-tpshard"
     cache.load_model(
         trunk,
         model_name=cache_namespace,
         subfolder=_subfolder,
         parallel_config=parallel_config,
         mesh_shape=mesh_shape,
+        mesh_device=submesh,
         dtype="bf16" if trunk_weight_dtype == ttnn.bfloat16 else "bfp8",
         get_torch_state_dict=None,
     )
@@ -180,18 +185,21 @@ def _make_cfg_pipeline_class():
         _dual_proxy: DualSubmeshProxy
 
         def __call__(self, *args, **kwargs):
-            # Both caches below are keyed by id() of a per-generation object (input_ids /
-            # the rotary tuple). Within one generation that id is stable; across
-            # generations a freed object's id gets reused, so a stale entry is a false
-            # hit — and a smaller prior gen's rotary then fails a larger one
-            # (cos_seq_len < seq_len). Reset both per call.
+            # The proxy upload caches are keyed by id() of a per-generation object
+            # (input_ids / the rotary tuple). Across generations a freed object's id
+            # gets reused, so a stale entry is a false hit. Reset the KEYS only: a key
+            # miss re-uploads through the in-place refresh into the same pre-capture
+            # device buffers. Nulling the VALUES instead forces a fresh allocation
+            # under the live trunk trace, whose first replay clobbers it — every later
+            # step then copies trace-intermediate garbage into the baked rotary
+            # buffers (gen 2+ corrupts at PCC ~0.3).
             cache = getattr(self.transformer, "_static_pre_cache", None)
             if cache is not None:
                 cache.clear()
             for proxy in (getattr(self._dual_proxy, "_proxy_a", None), getattr(self._dual_proxy, "_proxy_b", None)):
                 if proxy is not None:
                     object.__setattr__(proxy, "_rotary_cache_key", None)
-                    object.__setattr__(proxy, "_rotary_cache_value", None)
+                    object.__setattr__(proxy, "_und_cache_key", None)
             return super().__call__(*args, **kwargs)
 
         def _dispatch_cond_uncond(
