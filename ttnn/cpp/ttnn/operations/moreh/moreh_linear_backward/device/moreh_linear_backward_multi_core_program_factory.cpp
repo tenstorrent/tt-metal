@@ -60,8 +60,11 @@ tt::tt_metal::ProgramDescriptor MorehBiasAddBackwardOperation::MultiCoreProgramF
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
     const uint32_t in0_t = 2;
-    const uint32_t in1_t = 1;
-    const uint32_t in2_t = 2;  // mask_h_w
+    // The reduce is over H, so a ragged H is handled by a full/partial scaler pair instead of by
+    // masking the last H tile; a ragged W still needs its mask tile, because those padding columns
+    // survive the reduce into the output.
+    const uint32_t in1_t = do_mask_h ? 2 : 1;  // scaler (full + partial pair when H is ragged)
+    const uint32_t in2_t = 2;                  // mask_h_w
 
     const uint32_t out0_t = 1;
     const uint32_t im0_t = 1;

@@ -331,6 +331,10 @@ def moreh_linear_backward(
         ([2, 4, 4, 1024], [1200, 1024], [1, 1], [2, 4, 4, 1200]),
         ([2, 1, 2, 1, 2, 2, 96, 95], [127, 95], [1, 1], [2, 1, 2, 1, 2, 2, 96, 127]),
         ([2, 1, 2, 3, 2, 2, 96, 95], [127, 95], [1, 127], [2, 1, 2, 3, 2, 2, 96, 127]),
+        # Ragged H spanning more than one tile (95 -> Ht=3, 31 valid rows in the last one). The bias
+        # grad reduces the output grad over H, and every other ragged case here has Ht == 1, so this is
+        # the only shape where the last H tile is preceded by full ones.
+        ([95, 64], [127, 64], [1, 127], [95, 127]),
     ),
 )
 @pytest.mark.parametrize(
