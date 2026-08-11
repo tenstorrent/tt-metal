@@ -414,7 +414,6 @@
 - name: Gemma-4-E4B unit tests
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt
-    unset TT_METAL_WATCHER  # blocked by #50886
     export HF_MODEL=models/demos/gemma4/configs/gemma-4-E4B-it
     pytest --timeout 600 \
       --ignore=models/demos/gemma4/tests/unit/test_lm_head.py \
@@ -444,7 +443,6 @@
 
 - name: Gemma-4-26B-A4B unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
     uv pip install -r models/demos/gemma4/requirements.txt
     export HF_MODEL=models/demos/gemma4/configs/gemma-4-26B-A4B-it
     pytest --timeout 900 \
@@ -480,7 +478,6 @@
 - name: Gemma-4-31B unit tests
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt
-    unset TT_METAL_WATCHER  # blocked by #50886
     export HF_MODEL=models/demos/gemma4/configs/gemma-4-31B-it
     pytest --timeout 900 \
       --ignore=models/demos/gemma4/tests/unit/test_lm_head.py \
@@ -512,7 +509,6 @@
 
 - name: Gemma-4-12B unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
     uv pip install -r models/demos/gemma4/requirements.txt
     export HF_MODEL=models/demos/gemma4/configs/gemma-4-12B-it
     pytest --timeout 900 \
@@ -916,7 +912,6 @@
 
 - name: TT-DiT Flux.1-schnell unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1
     pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k flux_schnell
@@ -932,7 +927,6 @@
 
 - name: TT-DiT Flux.1-dev unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1
     pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k flux_dev
@@ -1112,7 +1106,6 @@
 
 - name: TT-DiT Wan2.2-T2V-A14B unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1 VBENCH_CACHE_DIR=/mnt/MLPerf/vbench TORCH_HOME=/mnt/MLPerf/vbench/torch_hub
     pytest --timeout 1000 models/tt_dit/tests/models/wan2_2/test_rope.py
@@ -1134,7 +1127,6 @@
 
 - name: TT-DiT Wan2.2-I2V-A14B unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1 VBENCH_CACHE_DIR=/mnt/MLPerf/vbench TORCH_HOME=/mnt/MLPerf/vbench/torch_hub
     pytest --timeout 10000 models/tt_dit/tests/models/wan2_2/test_pipeline_wan_i2v.py -k "is_fsdp1"
