@@ -30,12 +30,14 @@ jobs:
         timeout-minutes: 20
 
       - name: Set up env variables
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          echo "UBUNTU_VERSION=22.04" >> $GITHUB_ENV
-          echo "PYTHON_VERSION=3.10" >> $GITHUB_ENV
+          echo "UBUNTU_VERSION=22.04" >> "$GITHUB_ENV"
+          echo "PYTHON_VERSION=3.10" >> "$GITHUB_ENV"
 
-          VERSION="${{ inputs.version }}"
+          VERSION="$INPUT_VERSION"
           if [ -z "$VERSION" ]; then
             VERSION="dev-${GITHUB_REF_NAME//\//-}"
           fi
