@@ -206,3 +206,29 @@ def test_r4_the_run_calls_it_before_touching_the_device():
     _end = body.find("\ndef ", 1)
     body = body if _end < 0 else body[:_end]
     assert body.index("_preflight_tool") < body.index("discover("), "preflight runs after discovery"
+
+
+def test_r5_a_rejected_discovery_is_a_refusal_not_a_crash():
+    """THE COST OF GETTING THIS WRONG, observed on a real Voxtral run.
+
+    The lead agent rejected the discovery plan (the correctness gate covered a strict subset of the
+    perf surface). before_loop returned 1 for it, like any exception. The supervisor read 1 as a
+    likely native crash and restarted the child -- so a second optimize came up carrying the very
+    gate that had just been rejected, and raced the corrected run for the same board. Both were
+    loading the model onto the device at once; the profile came back with no ops_perf_results CSV
+    and the board wedged hard enough that `tt-smi -r` could not restart the ARC core.
+
+    A verdict must terminate. Both halves are asserted: the code before_loop returns, and run.py
+    refusing to launder that code through its complete-manifest fallback.
+    """
+    bl = (_PA / "agent" / "before_loop.py").read_text()
+    i = bl.index("discovery failed (")
+    tail = bl[i : i + 900]
+    assert "DiscoveryRejected" in tail, "a rejected discovery still exits like a crash"
+    assert "EXIT_REFUSED" in tail
+
+    run_src = (_PA / "cc_optimize" / "run.py").read_text()
+    j = run_src.index("rc == EXIT_REFUSED")
+    assert "raise SystemExit(EXIT_REFUSED)" in run_src[j : j + 700], "a refused discovery is not propagated"
+    # and it must be decided BEFORE the fallback that continues on a complete manifest
+    assert j < run_src.index("but the manifest is complete"), "the refusal is checked after the override"

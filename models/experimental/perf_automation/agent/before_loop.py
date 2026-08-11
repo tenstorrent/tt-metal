@@ -1146,6 +1146,16 @@ def main(argv: list[str] | None = None) -> int:
         print(f"\n  ✗ discovery failed ({type(exc).__name__}):", file=sys.stderr)
         for _ln in str(exc).splitlines():
             print(f"      {_ln}", file=sys.stderr)
+        # A REJECTION IS NOT A CRASH. The lead agent stopping the run is a decision, and returning 1
+        # made the supervisor read it as a likely native crash and RESTART the child -- which on a
+        # real run meant a second optimize, still carrying the gate that had just been rejected,
+        # racing the corrected run for the same board until both wedged it.
+        from .probes import DiscoveryRejected
+
+        if isinstance(exc, DiscoveryRejected):
+            from ..cc_optimize.run import EXIT_REFUSED
+
+            return EXIT_REFUSED
         return 1
 
     p = result["profile"]

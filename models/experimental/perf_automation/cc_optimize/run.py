@@ -210,6 +210,13 @@ def discover(
         capture=False,
         stall_s=adaptive_timer(repo_root, "build", env_key="PERF_MCP_DISCOVER_STALL_SEC"),
     )
+    if rc == EXIT_REFUSED:
+        # Discovery REFUSED — the lead agent rejected the plan (e.g. the correctness gate does not
+        # cover the perf surface). That is a verdict, not a failure to be worked around: neither the
+        # complete-manifest fallback below nor a supervisor restart may override it. Propagating the
+        # same code keeps the refusal intact all the way out of the process tree.
+        print("  [optimize/cc] discovery refused the run — not continuing, not restarting.", flush=True)
+        raise SystemExit(EXIT_REFUSED)
     mani = _latest_manifest(perf_dir)
     if mani is None or rc is None:
         return None
@@ -376,6 +383,8 @@ def _gate_status(repo_root: Path, mcp_env: dict, devices: str) -> dict:
         _measure_backstop(repo_root),
         "termination_check",
         stall_s=adaptive_timer(repo_root, "profile", env_key="PERF_MCP_MEASURE_STALL_SEC"),
+        observe_op="profile",
+        observe_root=repo_root,
     )
     if rc is None:
         return {"can_stop": False, "halt": False, "reason": "", "kind": ""}
@@ -517,6 +526,8 @@ def _fullpipe_e2e_inner(repo_root: Path, mcp_env: dict, devices: str, label: str
         _measure_backstop(repo_root),
         f"full-pipeline ({label})",
         stall_s=adaptive_timer(repo_root, "profile", env_key="PERF_MCP_MEASURE_STALL_SEC"),
+        observe_op="profile",
+        observe_root=repo_root,
     )
     if rc is None:
         return (None, "")
@@ -735,6 +746,8 @@ def _run_op_sigs(repo_root: Path, mcp_env: dict, devices: str, node: str, case, 
         _measure_backstop(repo_root),
         "coverage probe",
         stall_s=adaptive_timer(repo_root, "profile", env_key="PERF_MCP_MEASURE_STALL_SEC"),
+        observe_op="profile",
+        observe_root=repo_root,
     )
     if rc is None:
         return None, "", []
@@ -2006,33 +2019,11 @@ def _reclaim_device(devices: str, error_text: str = "") -> str:
     was never reset while the healthy board was reset repeatedly for eleven hours. The reset is now
     routed through the shared primitive, so it picks the target from evidence, VERIFIES the device
     came back, and spends the same escalation budget as every other reset in the tool."""
-    import glob as _glob
-
-    protected = set()
-    _p = os.getpid()
-    for _ in range(64):
-        if _p <= 1:
-            break
-        protected.add(_p)
-        try:
-            _p = int(open("/proc/%d/stat" % _p).read().split()[3])
-        except Exception:  # noqa: BLE001
-            break
-    holders = set()
-    for _n in _glob.glob("/dev/tenstorrent/*"):
-        try:
-            _r = subprocess.run(["fuser", _n], capture_output=True, text=True, timeout=30)
-            holders.update(int(_t) for _t in (_r.stdout + " " + _r.stderr).split() if _t.strip().isdigit())
-        except Exception:  # noqa: BLE001
-            pass
-    killed = []
-    for _pid in holders - protected:
-        try:
-            os.kill(_pid, signal.SIGKILL)
-            killed.append(_pid)
-        except Exception:  # noqa: BLE001
-            pass
     _dr_mod = _dr()
+    # The reap lives in the recovery primitive now, so EVERY reset gets it rather than the three
+    # sites that happened to call this function. Kept here too because this caller reports what it
+    # killed, and `recover` below is a no-op reap by then -- the holders are already gone.
+    killed = _dr_mod.reap_device_holders()
     _status = {"last": ""}
 
     def _issue(target):
@@ -2156,6 +2147,44 @@ def _llm_child_alive(pgid: int) -> bool:
     return False
 
 
+def _wait_for_thermal_headroom_before_device_work(label: str = "") -> None:
+    """Let the board cool BEFORE any device subprocess, not just before a measurement.
+
+    THE GAP THIS CLOSES, measured on a liquid-cooled p300c. The gate existed and worked, but its
+    only caller was _measure_full_pipeline_guarded -- so it covered readings and nothing else. A
+    Voxtral perf-test build is 30-60 minutes of continuous device work (HF weights + 17 stub
+    uploads, repeated once per generator attempt) with no gate on it at all. The chips went 57C ->
+    103C and the AICLK fell 1350 -> 800, and then the FIRST measurement started on a board already
+    pinned to the clamp. gemma never showed this because its device time is mostly gated
+    measurements, which cool between readings; the build phase is where the heat actually comes
+    from.
+
+    So the gate belongs at the point where a device process is LAUNCHED -- which is here, the one
+    function every device-touching subprocess goes through -- rather than at the point where a
+    number is taken. One call site, no second copy of the policy.
+
+    BEST-EFFORT BY DESIGN. It never raises: a board whose temperature cannot be read, or one that
+    stays hot past PERF_MCP_THERMAL_WAIT_S, still runs. The clamp check downstream decides whether
+    the resulting reading counts. Refusing to launch would turn a hot board into a failed run,
+    which is worse than a reading the ledger already knows how to reject.
+
+    It also does NOT fix a NOC hang. Measured: the same soak died at 5.5 min at full rate and 36
+    min at a quarter of it. Cooler and slower delays the hang; it does not prevent it.
+    """
+    try:
+        from .perf_mcp import _wait_for_thermal_headroom
+
+        ok, temp = _wait_for_thermal_headroom()
+        if not ok and temp is not None:
+            print(
+                "  [thermal-gate] %s starting at %.1fC (still above this board's clamp threshold)"
+                % (label or "device work", temp),
+                flush=True,
+            )
+    except Exception:  # noqa: BLE001 -- a gate that cannot run must not stop the work
+        pass
+
+
 def _run_device_proc(
     cmd,
     cwd,
@@ -2166,6 +2195,8 @@ def _run_device_proc(
     reset_on_timeout: bool = True,
     capture: bool = True,
     stall_s: int = 0,
+    observe_op: str = "",
+    observe_root: Path | None = None,
 ):
     """Run a DEVICE-touching subprocess so a device wedge can never hang the tool forever. Own session +
     hard timeout; on timeout SIGKILL the WHOLE process group + _reclaim_device (kill any holder + tt-smi
@@ -2176,6 +2207,8 @@ def _run_device_proc(
       BUILD   discover                                          -> PERF_MCP_DISCOVER_STALL_SEC (1200s), backstop PERF_MCP_DISCOVER_TIMEOUT (10800s)
       MEASURE gate / coverage / op-sig / full-pipeline runs     -> PERF_MCP_MEASURE_STALL_SEC  (600s),  backstop PERF_MCP_MEASURE_BACKSTOP (3600s)
       ROUND   agent round                                       -> PERF_MCP_ROUND_STALL_SEC   (600s)"""
+    _wait_for_thermal_headroom_before_device_work(label)
+    _obs_t0 = time.monotonic()
     _piped = bool(capture or stall_s)
     proc = subprocess.Popen(
         list(cmd),
@@ -2261,6 +2294,27 @@ def _run_device_proc(
         )
         return None, ""
     finally:
+        # TEACH THE TIMER WHAT THIS OP COSTS -- INCLUDING WHEN IT WAS KILLED.
+        #
+        # `_measure_backstop` derives the hard wall from "observed PROFILE durations", and nothing
+        # ever recorded one: record_observed had exactly two callers, "pcc" and "round". So
+        # _op_cost("profile") stayed 0, adaptive_timer took its `cost <= 0` cold-start branch every
+        # time, and every measurement on every model got the same 600 s guess forever.
+        #
+        # Measured on Voxtral, 2026-08-11: the baseline profile was killed at 900 s ("hard limit")
+        # while still printing decode_trace_step #96. The run then optimized for hours with no
+        # BEFORE number. A second attempt would have used the same 600 s, because a kill taught the
+        # timer nothing -- and a kill is the single strongest piece of evidence that the budget was
+        # too small.
+        #
+        # So it records in `finally`, on the timeout path as much as the success path, exactly as
+        # _fullpipe_e2e already does for "pcc". A hard-limit kill at 900 s becomes 900 s of observed
+        # cost, and the next budget is 6x that instead of a constant.
+        if observe_op and observe_root is not None:
+            try:
+                record_observed(observe_root, observe_op, time.monotonic() - _obs_t0)
+            except Exception:  # noqa: BLE001
+                pass
         # Reap any lingering group member on EVERY exit. A daemon child (profiler, not-fully-closed mesh)
         # can outlive the main subprocess and keep holding the device -- a stale holder that wedges the
         # NEXT device op (observed: a completed baseline measurement leaked a holder that blocked the

@@ -1038,6 +1038,17 @@ def make_run_profiled(
             ensure_profiler_patched(root)
         except Exception:
             pass
+        # COOL FIRST. This launches the profiled run, and a profiled run BUILDS THE MODEL -- weights
+        # plus every graduated stub -- before it takes a single sample. On a 3B multimodal pipeline
+        # that is tens of minutes of device work, and doing it on a board still hot from the last
+        # attempt is how a profile ends up sampled entirely at the 800 MHz clamp. The gate lives in
+        # one place (perf_mcp) and is called from the two points where device work STARTS.
+        try:
+            from ..cc_optimize.run import _wait_for_thermal_headroom_before_device_work
+
+            _wait_for_thermal_headroom_before_device_work("profiled run")
+        except Exception:  # noqa: BLE001 -- never let the gate stop the run
+            pass
         node_id = resolve_node_id(root, perf_test, case, env=env, runner=collect_runner)
         cmd = build_tracy_command(node_id, None, out_dir)
         support_count = int(env.get("TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT") or 0)

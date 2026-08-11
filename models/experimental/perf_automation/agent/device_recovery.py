@@ -338,6 +338,58 @@ def targets_for(error_text: str = "", config_target: str = "", expand=None) -> l
     return out
 
 
+def _protected_pids() -> set:
+    """This process and every ancestor -- the one set a reclaim must never kill.
+
+    Killing an ancestor kills the orchestrator or the supervisor that would do the recovering, so a
+    self-hold is handled by exiting to the supervisor (which reclaims from outside), never by the
+    holder shooting itself. Walks /proc rather than psutil so it works on a bare host, and is bounded
+    at 64 hops so a malformed /proc cannot spin it.
+    """
+    protected, pid = set(), os.getpid()
+    for _ in range(64):
+        if pid <= 1:
+            break
+        protected.add(pid)
+        try:
+            pid = int(open("/proc/%d/stat" % pid).read().split()[3])
+        except Exception:  # noqa: BLE001
+            break
+    return protected
+
+
+def reap_device_holders() -> list:
+    """SIGKILL every process holding /dev/tenstorrent except this one and its ancestors.
+
+    Returns the pids killed, so the caller can say what it did rather than claiming it silently.
+
+    BEST-EFFORT AT EVERY STEP. No `fuser`, an unreadable /proc, a holder that exits between the scan
+    and the kill -- all of it degrades to "reaped fewer than there were", never to an exception. This
+    runs on the recovery path, where the board is already in trouble; a reclaim that can raise would
+    turn a recoverable wedge into a dead run.
+    """
+    import glob as _glob
+    import signal as _signal
+    import subprocess as _sp
+
+    protected = _protected_pids()
+    holders = set()
+    for node in _glob.glob("/dev/tenstorrent/*"):
+        try:
+            r = _sp.run(["fuser", node], capture_output=True, text=True, timeout=30)
+            holders.update(int(t) for t in (r.stdout + " " + r.stderr).split() if t.strip().isdigit())
+        except Exception:  # noqa: BLE001
+            pass
+    killed = []
+    for pid in sorted(holders - protected):
+        try:
+            os.kill(pid, _signal.SIGKILL)
+            killed.append(pid)
+        except Exception:  # noqa: BLE001
+            pass
+    return killed
+
+
 def recover(where: str, reset, error_text: str = "", config_target: str = "", log=None, expand=None) -> bool:
     """Reset the device and REPORT WHETHER IT CAME BACK. True only on a VERIFIED-healthy device.
 
@@ -369,6 +421,26 @@ def recover(where: str, reset, error_text: str = "", config_target: str = "", lo
     #
     # So resets are tried, bounded by the limit, and the kernel log is consulted only AFTER they have
     # failed -- to say WHY, which is the difference between "unrecoverable" and "reboot the host".
+    # RECLAIM BEFORE RESET, AT EVERY RECOVERY POINT. A reset clears the CHIP; it does nothing about
+    # the process that was mid-transfer when the chip went, and that process keeps its device handles
+    # open against a device whose state has just been destroyed. It cannot make progress and it
+    # cannot be reset out of the way.
+    #
+    # Observed on Voxtral, 2026-08-11: a perf-test build blocked in ttnn.from_torch at 18:12:51 and
+    # was still holding 8 /dev/tenstorrent fds at 19:37 -- 85 minutes, 91 minutes of CPU across 65
+    # threads, no log output after the first second. Three perf-test regenerations reset the chip and
+    # each one then fought that orphan for the device; all three reported "device wedged on a
+    # non-capturable step". Killing it by hand let the run walk straight through to Step 9.
+    #
+    # The reap already existed -- in run.py's _reclaim_device, which its own docstring calls "the
+    # UNIVERSAL device reclaim used at EVERY recovery point". It was wired into three of the eight
+    # reset sites. The other five (perf_test_gen x2, perf_mcp x2, probes) reset without it, and those
+    # are exactly the paths a wedged perf-test build takes. A policy that holds at three of eight
+    # call sites is not a policy, so it moves HERE, into the one primitive every reset routes
+    # through, and the callers stop deciding.
+    reaped = reap_device_holders()
+    if reaped and log:
+        log("reclaimed %d device holder(s) before reset at %s: %s" % (len(reaped), where, reaped))
     targets = targets_for(error_text, config_target, expand=expand)
     for tgt in targets:
         try:
