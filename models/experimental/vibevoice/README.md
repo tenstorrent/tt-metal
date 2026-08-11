@@ -355,7 +355,6 @@ drive profiling, or configure a test. Values are `1`/`0` unless stated.
 | `VV_WEIGHT_CACHE_DIR` | unset | Device-weight cache directory (same as `--weight-cache-dir`; else `$TT_CACHE_PATH/vibevoice/weight_cache`, else `generated/ttnn/vibevoice/weight_cache`) |
 | `VV_DISABLE_WEIGHT_CACHE` | unset (cache on) | Set to `1`/`true`/`yes` to disable the device-weight cache and rebuild from the checkpoint every run (same effect as `--no-weight-cache`) |
 | `VV_TRACE_SEGMENT` | `0` in the generator; `1` in the ISL-sweep test | Whole-segment fused decode trace. The demo always sets it explicitly from `--trace` (default on) / `--no-trace`, so the generator's `0` default only applies to callers that set neither |
-| `VV_FUSED_ROPE` | `1` (on) | Fused bf16 `rotary_embedding_llama` decode RoPE + on-device cos/sin tables, replacing the per-position fp32 RoPE rows (3.97 ms → 0.31 ms per frame). Was off after a 100-min run showed the speaking rate accelerating (median 208 wpm vs 153) with every energy/spectral gate passing; re-validated on the current frame — 42,498 AR tokens (same as the pacing-safe reference), 93.04 min, whisper pacing 169/173/195 wpm early/mid/late (median 173, natural 150-190). Permutes `wq`/`wk` at load, so its default must match `resolve_weight_cache`'s `rope{0,1}` key |
 | `VV_TTNN_RANDN` | `0` (off) | Draw diffusion init noise and the acoustic fix-std jitter with `ttnn.randn` on device instead of torch. Off by default: it is a different generator, so renders stop matching the torch reference and PCC comparison against it is no longer meaningful |
 
 **Decode / audio-path optimizations** — on by default; toggle off only to A/B or bisect a regression.
@@ -363,12 +362,9 @@ drive profiling, or configure a test. Values are `1`/`0` unless stated.
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `VV_BF8B_FFN` | `1` (on) | Store the deep tokenizer SwiGLU FFN weights (dim 2048/1024, ≥ 2M elems, inside the audio-decode path) as bfloat8_b — halves the DRAM read on those matmuls. `0` restores bf16 (bit-exact, slower); the cache filename carries the dtype, so both settings keep their own cached weights. Not bit-exact. (The LM and diffusion-head FFN bf8b weights are hard-wired, **not** gated by this var) |
-| `VV_POST_UNPAD_SHARD` | `1` (on) | Shard the TILE→ROW_MAJOR untilize of the post streaming-conv tensors so it parallelizes over shards instead of tile-rows. Pure data movement — byte-identical |
 | `VV_POST_L2_PROGCFG` | `1` (on) | Tuned 1D matmul program configs for the deepest tokenizer FFN down-proj (dim 2048/1024, T ≤ 32) instead of the auto config. Byte-identical |
 | `VV_DW1_MULREDUCE` | `1` (on) | Run depthwise (`groups == in == out`) streaming convs as an explicit multiply-reduce instead of dense `conv2d`. `0` restores `conv2d` |
-| `VV_CONV_SINGLE_BLOCK` | `1` (on) | Force cached grouped / depthwise streaming convs onto a single-block schedule |
-| `VV_CONV_HS` | `1` (on) | Height-shard streaming convs whose output width is within `[VV_CONV_HS_MIN_OUTW, VV_CONV_HS_MAX_OUTW]`; `0` falls back to the `act_block_h_override` pin |
-| `VV_CONV_SB_CAP`, `VV_CONV_HS_MIN_OUTW`, `VV_CONV_HS_MAX_OUTW`, `VV_POST_SCALE_FOLD` | 1600 / 128 / 0 (no cap) / off | Micro-tuning for the conv / post path; leave at defaults. `VV_POST_SCALE_FOLD` is experimental (off) and, like `VV_FUSED_ROPE`, participates in the weight-cache key |
+| `VV_POST_SCALE_FOLD` | off | Experimental fold in the post path; leave off. Participates in the weight-cache key |
 
 **Profiling & diagnostics** — off by default; for perf capture and debugging only.
 
@@ -668,7 +664,6 @@ single transfer.
 | fused audio+token readback | D2H ×1 | one `to_torch` returns `[audio …, token_idx]`; the token half is what the AR loop blocks on, since a trace cannot branch |
 | `_emit_audio` (append) | hostCPU | accumulate frame audio into the waveform |
 | `_gen_tokens.append` / `valid_ids[idx]` | hostCPU | token record; map the constrained-argmax **local** index to the global id (kept local so it survives the bf16 cast into the fused tensor) |
-| host pos/neg mirror `+=1`, RoPE write ×4 | hostCPU + H2D ×4 | **only when `VV_FUSED_ROPE=0`**: the mirrors exist solely to index the fp32 cos/sin tables. On the fused path (the default) the rows are gathered on device and none of this runs |
 
 **2. Segment boundary — runs only when a new speaker segment starts.**
 
@@ -677,7 +672,7 @@ single transfer.
 | inter-segment token readbacks (`speech_end`/text/`speech_start` argmax) | D2H | advance AR control across boundary/text tokens |
 | frame-0 `write_int` pos/neg + seed-hidden copy | H2D+D2D | rewind device positions; seed loop-carried hidden from segment-start hidden |
 | `_sf_zero_conv` | H2D | reset acoustic/semantic conv streaming caches for the new segment |
-| `_boot` writes (embed + RoPE for neg-prefill) | D2D (+ H2D ×2 when `VV_FUSED_ROPE=0`) | seed the negative-CFG condition for the segment's first frame. The embed is a device-to-device copy; only the fp32 RoPE rows touch the host |
+| `_boot` write (embed for neg-prefill) | D2D | seed the negative-CFG condition for the segment's first frame, as a device-to-device copy |
 
 **3. One-time — runs once per `generate()` call.**
 
