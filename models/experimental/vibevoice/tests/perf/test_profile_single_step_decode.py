@@ -122,8 +122,6 @@ def test_profile_single_step_decode(mesh_device, device_params, model_path):
     tt_model = TTVibeVoiceModel.from_checkpoint(
         mesh_device,
         model_path,
-        cfg_scale=_CFG_SCALE,
-        num_diffusion_steps=_NUM_DIFFUSION_STEPS,
     )
 
     warm_kw = _generate_kwargs(processor, inputs, max_new_tokens=warmup_tokens)

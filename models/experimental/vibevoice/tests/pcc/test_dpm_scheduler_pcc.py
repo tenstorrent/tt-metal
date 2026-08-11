@@ -4,7 +4,7 @@
 """Phase 1c — DPM Scheduler PCC test.
 
 Tests scheduler math alone with synthetic eps tensors (same torch.manual_seed).
-After 10 steps, latent PCC >= 0.99.
+Latent PCC >= 0.99 after the configured number of steps.
 """
 
 import pytest
@@ -32,18 +32,18 @@ def _build_reference_scheduler():
     )
 
 
-NUM_STEPS = 10
 LATENT_SIZE = 64
 
 
 @pytest.mark.timeout(600)
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
-def test_dpm_scheduler_pcc(mesh_device):
+@pytest.mark.parametrize("num_steps", [10, 15, 20])
+def test_dpm_scheduler_pcc(mesh_device, num_steps):
     torch.manual_seed(42)
 
     # Reference scheduler
     ref_sched = _build_reference_scheduler()
-    ref_sched.set_timesteps(NUM_STEPS)
+    ref_sched.set_timesteps(num_steps)
 
     # TT scheduler (same configuration)
     tt_sched = TTDPMSolverMultistepScheduler(
@@ -56,7 +56,7 @@ def test_dpm_scheduler_pcc(mesh_device):
         lower_order_final=True,
         timestep_spacing="linspace",
     )
-    tt_sched.set_timesteps(NUM_STEPS)
+    tt_sched.set_timesteps(num_steps)
 
     # Shared initial latent
     latent_torch = torch.randn(1, LATENT_SIZE, dtype=torch.float32)
@@ -70,7 +70,7 @@ def test_dpm_scheduler_pcc(mesh_device):
     )
 
     # Pre-generate the same noise for each step
-    all_eps = [torch.randn(1, LATENT_SIZE, dtype=torch.float32) for _ in range(NUM_STEPS)]
+    all_eps = [torch.randn(1, LATENT_SIZE, dtype=torch.float32) for _ in range(num_steps)]
 
     # --- Reference loop ---
     for step_idx, t_val in enumerate(ref_sched.timesteps):
@@ -80,7 +80,7 @@ def test_dpm_scheduler_pcc(mesh_device):
         latent_ref = result.prev_sample
 
     # --- TT loop ---
-    for step_idx in range(NUM_STEPS):
+    for step_idx in range(num_steps):
         eps = all_eps[step_idx]
         eps_tt = ttnn.as_tensor(
             eps.to(torch.bfloat16).view(1, 1, 1, LATENT_SIZE),
@@ -96,4 +96,4 @@ def test_dpm_scheduler_pcc(mesh_device):
     latent_ref_flat = latent_ref.view(1, LATENT_SIZE).to(torch.float32)
 
     passed, pcc_val = comp_pcc(latent_ref_flat, latent_tt_torch, pcc=0.99)
-    assert passed, f"DPM scheduler PCC {pcc_val:.6f} < 0.99"
+    assert passed, f"DPM scheduler PCC {pcc_val:.6f} < 0.99 (num_steps={num_steps})"

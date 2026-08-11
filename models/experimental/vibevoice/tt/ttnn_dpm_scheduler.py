@@ -231,11 +231,7 @@ class TTDPMSolverMultistepScheduler:
         """
         assert self._step_index is not None, "call set_timesteps first"
 
-        lower_order_final = (
-            self.lower_order_final
-            and (self._step_index == self.num_inference_steps - 1)
-            and self.num_inference_steps < 15
-        )
+        lower_order_final = self.lower_order_final and (self._step_index == self.num_inference_steps - 1)
 
         converted = self.convert_model_output(model_output, sample)
         # shift model_outputs ring buffer
