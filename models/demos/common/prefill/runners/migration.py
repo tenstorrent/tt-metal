@@ -34,6 +34,36 @@ from loguru import logger
 
 import ttnn
 
+# ---------------------------------------------------------------------------
+# Migration metadata transport selection (feature toggle)
+#
+# Two transports hand the migration metadata (device map + KV chunk table) to the
+# migration worker:
+#   * LEGACY (default): push the device map over the co-located worker's shmem queues
+#     (_deliver_local_device_map) and SET_TABLE + block on WORKER_READY
+#     (publish_serialized_table_and_wait_ready). Requires the worker to already be running.
+#   * FILE EXPORT (opt-in): drop the device map to a host-local text file (one
+#     ``mesh_id chip_id umd_id`` line per chip) and leave the table protobuf on disk; an
+#     externally-managed migration worker picks both up. No MigrationLayerClient, no
+#     SET_TABLE/WORKER_READY handshake. Enabled with PREFILL_MIGRATION_EXPORT_TO_FILE=1;
+#     file path via PREFILL_MIGRATION_DEVICE_MAP_PATH.
+#
+# The two paths are kept cleanly separated (each transport fork in prefill_runner is a single
+# branch on this flag) so either one can be deleted wholesale later.
+# ---------------------------------------------------------------------------
+
+_DEFAULT_DEVICE_MAP_FILE = "/tmp/prefill-device-map.txt"
+
+
+def migration_file_export_enabled() -> bool:
+    """True when the FILE-EXPORT transport is toggled on (PREFILL_MIGRATION_EXPORT_TO_FILE=1)."""
+    return os.environ.get("PREFILL_MIGRATION_EXPORT_TO_FILE", "0") == "1"
+
+
+def migration_device_map_file_path() -> str:
+    """Host-local device-map text file the FILE-EXPORT transport writes."""
+    return os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", _DEFAULT_DEVICE_MAP_FILE)
+
 
 def _disaggregation():
     """KvChunkAddressTable + serializer come from ttnn.experimental.disaggregation
@@ -273,6 +303,38 @@ def serialize_prebuilt_kv_chunk_table(*, table, path: str) -> str:
         f"(configs={table.num_configs()}, entries={table.total_entries()})"
     )
     return path
+
+
+def export_device_map_to_file(mesh_device, mesh_shape, path: str) -> str:
+    """FILE-EXPORT transport: write this rank's local device map as a host-local text file.
+
+    One line per chip — ``fabric_mesh_id fabric_chip_id umd_chip_id`` — in the same entry order
+    ``send_device_map`` uses on the legacy worker transport, so the external migration worker can
+    consume either. Written atomically (temp file + rename) so a concurrent reader never sees a
+    partial map. The deployment that launches the runners owns the file lifecycle (it must start
+    each run from a clean path).
+    """
+    device_map = _build_device_map(mesh_device, mesh_shape)
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as map_file:
+        map_file.writelines(f"{mesh_id} {chip_id} {umd_id}\n" for mesh_id, chip_id, umd_id in device_map)
+    os.replace(tmp, path)
+    logger.info(f"[migration] device map ({len(device_map)} chips) exported to {path} (file-export transport)")
+    return path
+
+
+def export_device_map_file_and_gather_stage_layout(
+    mesh_device, kv_base_addr, mesh_shape, first_layer_idx, num_my_layers, device_map_path: str
+):
+    """FILE-EXPORT transport counterpart of :func:`deliver_device_map_and_gather_stage_layout`.
+
+    ALL RANKS run this. Instead of pushing the local FNID->UMD map to a co-located worker's shmem
+    queues, each rank drops it to a host-local text file (``export_device_map_to_file``) for the
+    externally-managed worker, then joins the same collective all-gather that merges every stage
+    into one table. Returns the gathered ``stage_layout`` (see ``allgather_kv_stage_layout``).
+    """
+    export_device_map_to_file(mesh_device, mesh_shape, device_map_path)
+    return allgather_kv_stage_layout(mesh_device, kv_base_addr, mesh_shape, first_layer_idx, num_my_layers)
 
 
 def deliver_device_map_and_gather_stage_layout(
