@@ -544,11 +544,20 @@ ProgramArgs parse_arguments(int argc, char** argv) {
         if (result.contains("distinct-host-sets")) {
             args.distinct_host_sets = true;
             if (!args.all_solutions) {
-                log_warning(tt::LogFabric, "--distinct-host-sets has no effect without --all-solutions; ignoring it.");
+                log_warning(
+                    tt::LogFabric,
+                    "--distinct-host-sets has no effect without --all-solutions/--max-solutions; ignoring it.");
             }
         }
         if (result.contains("allow-shape-permutations")) {
             args.allow_shape_permutations = true;  // hidden: turns OFF the always-on solver unique_shapes dedup
+            // Only consulted on the --all-solutions enumeration path (implied by --max-solutions too),
+            // so warn if neither is set -- same limitation as --distinct-host-sets above.
+            if (!args.all_solutions) {
+                log_warning(
+                    tt::LogFabric,
+                    "--allow-shape-permutations has no effect without --all-solutions/--max-solutions; ignoring it.");
+            }
         }
 
         return args;
