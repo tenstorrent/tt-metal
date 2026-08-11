@@ -18,6 +18,22 @@ namespace llk::san
 {
 
 // per thread state
+extern State* const state;
+
+#if 0
+// DISABLED. The pre-refactor surface: the per-Exu configure/check hooks, the operation_init/check/
+// uninit trio keyed on the old Operation enum, the thread_* context helpers, and the zone RAII types.
+// All of it is written against State<T>, SanitizerState and the Operation enum, none of which exist
+// any more, and all of it routes into the legacy region of impl.h that is disabled for the same
+// reason.
+//
+// Disabled rather than deleted because the behaviour still has to be carried over -- the context
+// tracking and the reporting in particular, which the guarded entry points above do not yet do.
+//
+// sstanisic todo: port onto the new state model and re-enable, or delete once output.h is rewritten.
+
+// sstanisic todo: SanitizerState no longer exists -- this and the legacy hooks below it go as
+// the per-exu configure/check functions are replaced by the guarded entry points.
 extern SanitizerState* const sanitizer;
 
 static inline void thread_init()
@@ -49,6 +65,94 @@ static inline void thread_context_pop()
 {
     thread_context_pop_impl(thread_context_get());
 }
+
+#endif // legacy surface
+
+namespace detail
+{
+
+constexpr Thread get_thread()
+{
+    if constexpr (COMPILE_FOR_TRISC == 0)
+    {
+        return Thread::TRISC0;
+    }
+    else if constexpr (COMPILE_FOR_TRISC == 1)
+    {
+        return Thread::TRISC1;
+    }
+    else if constexpr (COMPILE_FOR_TRISC == 2)
+    {
+        return Thread::TRISC2;
+    }
+    else if constexpr (COMPILE_FOR_TRISC == 3)
+    {
+        return Thread::TRISC3;
+    }
+}
+
+} // namespace detail
+
+// ---------------------------------------------------------------------------------------
+// Entry points
+// ---------------------------------------------------------------------------------------
+//
+// Thin forwarders. Every rule about what may be passed, and every diagnostic for breaking one, lives
+// in impl.h -- because that layer is arch independent and this one is not. What a thread may be
+// handed is a property of the sanitizer's own model, so it is stated once and is identical for every
+// target; only the two genuinely target-specific things are supplied here.
+//
+// Those two are T, defaulting to the thread this translation unit is compiled for, and the per-thread
+// state object. T is a parameter rather than being read from COMPILE_FOR_TRISC inside impl.h for
+// exactly one reason: the diagnostics tests are host compiled, where there is no such macro, and they
+// have to be able to name each thread to check the rules for it.
+//
+// init(), execute() and uninit() name their operation as the leading template argument, so kernels
+// write init<OperationUnpackTilize>(...). It is not inferred from the arguments: naming it is what
+// lets a nullary uninit<Op>() still be checked, and what removes the need to prove an inferred
+// operation unambiguous.
+
+template <Thread T = detail::get_thread(), typename... Vs>
+static inline void configure(Vs&&... values)
+{
+    state_operand_impl<ApiClass::Configure, T>(*state, std::forward<Vs>(values)...);
+}
+
+template <Thread T = detail::get_thread(), typename... Vs>
+static inline void reconfigure(Vs&&... values)
+{
+    state_operand_impl<ApiClass::Reconfigure, T>(*state, std::forward<Vs>(values)...);
+}
+
+template <typename Op, Thread T = detail::get_thread(), typename... Vs>
+static inline void init(Vs&&... values)
+{
+    state_operation_impl<ApiClass::Initialize, Op, T>(*state, std::forward<Vs>(values)...);
+}
+
+template <typename Op, Thread T = detail::get_thread(), typename... Vs>
+static inline void execute(Vs&&... values)
+{
+    state_operation_impl<ApiClass::Execute, Op, T>(*state, std::forward<Vs>(values)...);
+}
+
+template <typename Op, Thread T = detail::get_thread(), typename... Vs>
+static inline void uninit(Vs&&... values)
+{
+    state_operation_impl<ApiClass::Uninitialize, Op, T>(*state, std::forward<Vs>(values)...);
+}
+
+#if 0
+// DISABLED. The pre-refactor surface: the per-Exu configure/check hooks, the operation_init/check/
+// uninit trio keyed on the old Operation enum, the thread_* context helpers, and the zone RAII types.
+// All of it is written against State<T>, SanitizerState and the Operation enum, none of which exist
+// any more, and all of it routes into the legacy region of impl.h that is disabled for the same
+// reason.
+//
+// Disabled rather than deleted because the behaviour still has to be carried over -- the context
+// tracking and the reporting in particular, which the guarded entry points above do not yet do.
+//
+// sstanisic todo: port onto the new state model and re-enable, or delete once output.h is rewritten.
 
 // Goes in LLK_LIB in HWConfigure and HWReconfig
 // State set + no hw config within kernel check
@@ -264,6 +368,8 @@ public:
     }
 };
 
+#endif // legacy surface
+
 } // namespace llk::san
 
 #define LLK_SAN_FUNCTION() llk::san::FunctionZone _function_zone_
@@ -275,9 +381,46 @@ public:
 namespace llk::san
 {
 
+// Sanitizer disabled. The five entry points still have to exist and still have to accept exactly what
+// the enabled build accepts, so that turning the sanitizer off can never change whether a kernel
+// compiles -- only what it does. They take their arguments by forwarding reference and discard them.
+//
+// No guard runs here, deliberately. The rules are compile-time-only, and duplicating them in the
+// disabled path would be a second copy free to disagree with the first; a kernel is expected to be
+// built with the sanitizer on at least once, which is where the rules are enforced.
+
+template <Thread T = Thread::TRISC0, typename... Vs>
+static inline void configure([[maybe_unused]] Vs&&... values)
+{
+}
+
+template <Thread T = Thread::TRISC0, typename... Vs>
+static inline void reconfigure([[maybe_unused]] Vs&&... values)
+{
+}
+
+template <typename Op, Thread T = Thread::TRISC0, typename... Vs>
+static inline void init([[maybe_unused]] Vs&&... values)
+{
+}
+
+template <typename Op, Thread T = Thread::TRISC0, typename... Vs>
+static inline void execute([[maybe_unused]] Vs&&... values)
+{
+}
+
+template <typename Op, Thread T = Thread::TRISC0, typename... Vs>
+static inline void uninit([[maybe_unused]] Vs&&... values)
+{
+}
+
+#if 0
+// DISABLED, mirroring the enabled build: the legacy no-op surface, written against State<T> and the
+// old Operation enum. Re-enable alongside the legacy hooks in the LLK_SAN_ENABLE branch.
 static inline void thread_init()
 {
 }
+
 
 template <bool reconfig = false>
 static inline void unpack_operand_configure(
@@ -354,6 +497,8 @@ template <Operation op>
 void operation_uninit()
 {
 }
+
+#endif // legacy surface
 
 } // namespace llk::san
 
