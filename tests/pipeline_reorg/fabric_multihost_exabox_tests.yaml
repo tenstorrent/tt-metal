@@ -47,12 +47,6 @@
     test -x "${FABRIC_BIN}" || { echo "ERROR: missing ${FABRIC_BIN}"; exit 1; }
     test -f "${FABRIC_CFG}" || { echo "ERROR: missing ${FABRIC_CFG}"; exit 1; }
 
-    # multihost-ci may set TT_MESH_GRAPH_DESC_PATH=/etc/ttop/mgd.textproto without shipping the file.
-    # Install our MGD there and force the env so Phase 1/2 cannot pick up a stale path.
-    mpirun --pernode bash -lc "sudo mkdir -p /etc/ttop && sudo cp -f '${MGD}' /etc/ttop/mgd.textproto"
-    unset TT_MESH_GRAPH_DESC_PATH
-    export TT_MESH_GRAPH_DESC_PATH="${MGD}"
-
     cd "${TTRUN_CWD}"
     python3 "${TTRUN_PY}" \
       --skip-executable-check \
@@ -69,12 +63,6 @@
   owner_id: U0845EV7A5U # Umair Cheema
   team: scaleout
   sp_config: sc4
-
-# ============================================================================
-# DC validation (quad) — same script the DC runs (#50505)
-# ============================================================================
-# --image none: workers have no docker daemon; launch the C++ binary on the
-# worker image provisioned by multihost-ci (container.image).
 
 - name: "DC validation (quad) neighbor exchange"
   cmd: |
@@ -126,7 +114,6 @@
       exit 1
     fi
 
-    # Collect script-local logs onto NFS for the impl upload step.
     if [ -d fabric_test_logs ]; then
       cp -a fabric_test_logs "${PIPELINE_DIR}/" || true
     fi
