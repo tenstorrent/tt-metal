@@ -39,8 +39,8 @@ _DEFAULT_DEVICE_MAP_FILE = "/tmp/prefill-device-map.txt"
 
 def migration_file_export_enabled() -> bool:
     """True when PREFILL_MIGRATION_EXPORT_TO_FILE=1: drop the device map and KV chunk table on
-    the filesystem for an externally-managed migration worker, instead of pushing them over the
-    co-located worker's shmem queues (no MigrationLayerClient, no SET_TABLE/WORKER_READY)."""
+    the filesystem for the KV manager (tt-d-gen), instead of pushing them over the co-located
+    worker's shmem queues (no MigrationLayerClient, no SET_TABLE/WORKER_READY)."""
     return os.environ.get("PREFILL_MIGRATION_EXPORT_TO_FILE", "0") == "1"
 
 
