@@ -1,7 +1,12 @@
 # advchal-v3 — results: did v3 beat v2?
 
-**No. On the same 11 cells v3 delivered −6,769 µs/model against v2's −15,177 µs — 45 %.** It is better than v2
-at *measuring*, and worse at *acting on what it measured*.
+**On the same 11 cells v3 delivered −6,769 µs/model against v2's −15,177 µs as published — 45 %. But v2's
+largest single win does not survive re-measurement**, and with it struck the comparison is **−6,769 vs −9,258,
+73 %.** [`REMEASURE`](ADVCHAL-V3-REMEASURE.md)
+
+The one-line verdict: **v3 measures better than v2 everywhere, and v3's remaining real losses are two cells, not
+five.** Where the two disagreed most, v3 was right — but by a route that could not be audited, which is why it took
+a re-measure to find out.
 
 The stage was rebuilt to fix defects v2's own corpus documented, so the only question worth a table is
 **v3 against v2, cell by cell, on the same baseline.** That is this file. Op-level and layout-level detail for
@@ -44,15 +49,18 @@ transcript-derived, and `nmFN`'s is the one the v2 corpus itself treats as void.
 
 ## 1.1 Split by where v3's output came from
 
-| | v2 | v3 | |
-|---|---:|---:|---|
-| **the 8 cells v2 won** | **−15,176.8** | **−4,068.3** | **27 %** |
-| **the 3 cells v2 scored 0.0** | 0.0 | **−2,701.0** | value v2 could not see at all |
-| **all 11** | −15,176.8 | −6,769.3 | 45 % |
+| | v2 as published | v2 verified | v3 | v3 / v2 verified |
+|---|---:|---:|---:|---:|
+| **the 8 cells v2 won** | −15,176.8 | **−9,257.8** | −4,068.3 | **44 %** |
+| of which g26onA sliding | −5,919.0 | **0 — struck** | 0 | — |
+| of which nmFN (`CONTAMINATED`, untagged) | −2,551.3 | −2,551.3 ⚠ | −351.3 | never checkable |
+| **the 3 cells v2 scored 0.0** | 0.0 | 0.0 | **−2,701.0** | value v2 could not see at all |
+| **all 11** | −15,176.8 | **−9,257.8** | −6,769.3 | **73 %** |
 
-**40 % of everything v3 shipped comes from cells v2 was blind to**, and on the cells where both versions could
-see the work v3 shipped **a quarter** of what v2 did. That is the run's result, and it is the opposite shape from
-what was predicted.
+**40 % of everything v3 shipped comes from cells v2 was blind to.** On the cells where both versions could see the
+work, v3 shipped **44 %** of v2's verified total — and one of the two remaining large v2 wins (nmFN, −2,551 µs) is
+the cell v2's own driver marked `CONTAMINATED` and left untagged. Strip that too and the comparison is
+**−6,418 vs −6,706, 96 %**, on the cells where both versions have checkable evidence.
 
 ## 1.2 Where the 8,407 µs went — three cells are 98 % of it
 
