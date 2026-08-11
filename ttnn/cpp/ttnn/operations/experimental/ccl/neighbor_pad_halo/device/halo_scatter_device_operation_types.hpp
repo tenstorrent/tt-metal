@@ -9,7 +9,7 @@
 
 namespace ttnn::experimental::prim {
 
-// Local (no-fabric) repack into a padded buffer [outer, H+2pH, W+2pW
+// Local (no-fabric) repack into a padded buffer [outer, H+2pH, W+2pW, C]
 struct NpHaloScatterParams {
     uint32_t np_padding_h;  // H halo rows per side (pH)
     uint32_t np_padding_w;  // W halo cols per side (pW)

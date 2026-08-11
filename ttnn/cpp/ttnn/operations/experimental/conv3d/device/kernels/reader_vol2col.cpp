@@ -8,7 +8,7 @@
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 #include <ttnn/operations/experimental/conv3d/device/kernels/conv3d_gather_tuning.hpp>
 
-// Logical-pad masking (opt-in, halo mode only): the gather's interior-read path zeros sticks whose GLOBAL spatial
+// Logical-pad masking (opt-in, independent of halo mode)
 namespace {
 uint32_t g_mask_logical_h = 0;
 uint32_t g_mask_logical_w = 0;
@@ -412,7 +412,7 @@ void gather_rows_to_shard(
                     }
                 }
                 if constexpr (check_padding) {
-                    // Universal logical-pad mask (halo mode): any position whose GLOBAL coord is beyond the logical
+                    // Universal logical-pad mask
                     bool logical_masked = false;
                     if (g_mask_logical_h != 0 &&
                         static_cast<uint32_t>(static_cast<int32_t>(g_mask_h_start) + h_in) >= g_mask_logical_h) {
@@ -429,7 +429,8 @@ void gather_rows_to_shard(
                     const bool in_padding = t_outside || h_outside || w_outside;
                     if (in_padding) {
                         if constexpr (halo_mode) {
-                            // Temporal boundary stays zero (T not halo-exchanged)
+                            // Temporal boundary stays zero; spatial boundary reads
+                            // the neighbor's stick from the compact [Htop|Hbot|Wleft|Wright] halo buffer.
                             if (t_outside) {
                                 zeroPad<C_in_block_bytes>(noc, shard_cb, shard_offset);
                             } else {
@@ -839,7 +840,6 @@ void kernel_main() {
     constexpr uint32_t cb_dram_read_scratch = get_compile_time_arg_val(39);
     constexpr bool enable_dram_read_staging = get_compile_time_arg_val(40) == 1;
     constexpr uint32_t dram_read_alignment = get_compile_time_arg_val(41);
-    // Halo-aware mode: spatial (H/W) boundary conv-window positions read from a compact [H-top|H-bot|W-left|W-right]
     constexpr bool halo_mode = get_compile_time_arg_val(42) == 1;
     // Logical-pad masking
     constexpr bool mask_mode = get_compile_time_arg_val(43) == 1;
@@ -871,7 +871,7 @@ void kernel_main() {
     // Halo buffer accessor follows the input accessor.
     constexpr auto halo_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
     const auto halo_reader = TensorAccessor(halo_args, halo_addr);
-    // Reset mask globals every invocation: the gather reads them unconditionally
+    // Reset mask globals every invocation
     g_mask_logical_h = 0;
     g_mask_logical_w = 0;
     g_mask_h_start = 0;
@@ -966,7 +966,7 @@ void kernel_main() {
                                 const int32_t w_shard_start =
                                     static_cast<int32_t>(w_block * stride_w) - static_cast<int32_t>(padding_w);
                                 const uint32_t W_shard_cur = (w_block_end - 1 - w_block) * stride_w + kW;
-                                // Pad-block gate: a block whose largest GLOBAL input index exceeds the logical
+                                // Pad-block gate
                                 bool block_has_pad = false;
                                 if constexpr (mask_mode) {
                                     const int32_t h_max_g = static_cast<int32_t>(g_mask_h_start) + h_shard_start +

@@ -15,7 +15,9 @@ using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
 
-// ============================================================================ create_mesh_workload
+// ============================================================================
+// create_mesh_workload — each mesh coordinate gets the same single-core program.
+// ============================================================================
 NpHaloScatterMeshWorkloadFactory::cached_mesh_workload_t NpHaloScatterMeshWorkloadFactory::create_mesh_workload(
     const NpHaloScatterParams& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
@@ -36,7 +38,10 @@ NpHaloScatterMeshWorkloadFactory::cached_mesh_workload_t NpHaloScatterMeshWorklo
     return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
 }
 
-// ============================================================================ create_at
+// ============================================================================
+// create_at — one writer kernel on a single core that copies each compact halo
+// stick to its fixed padded-buffer border page (in place; interior untouched).
+// ============================================================================
 NpHaloScatterMeshWorkloadFactory::cached_program_t NpHaloScatterMeshWorkloadFactory::create_at(
     const NpHaloScatterParams& op,
     const ttnn::MeshCoordinate& /*mesh_coordinate*/,
@@ -66,7 +71,8 @@ NpHaloScatterMeshWorkloadFactory::cached_program_t NpHaloScatterMeshWorkloadFact
     const uint32_t page_size = compact->aligned_page_size();
     tt::DataFormat df = datatype_to_dataformat_converter(tensor_args.compact_buffer.dtype());
 
-    // Every padded page is written once: interior (Hd*Wd) from x + border
+    // Every padded page is written once: interior (Hd*Wd) from x + border (2 H-sections pH*Wd + 2
+    // W-sections Hp*pW) from compact, per frame.
     const uint32_t interior_sticks = outer * Hd * Wd;
     const uint32_t border_sticks = outer * (2 * pH * Wd + 2 * pW * Hp);
     const uint32_t total_sticks = interior_sticks + border_sticks;
@@ -98,7 +104,8 @@ NpHaloScatterMeshWorkloadFactory::cached_program_t NpHaloScatterMeshWorkloadFact
         all_cores,
         writer_cfg);
 
-    // Per-core [x_addr, compact_addr, dst_addr, stick_start, stick_count]
+    // Per-core [x_addr, compact_addr, dst_addr, stick_start, stick_count]; contiguous ranges row-wise
+    // over [work_start, total_sticks).
     uint32_t assigned = work_start;
     for (const auto& cr : all_cores.ranges()) {
         for (const auto& c : cr) {
@@ -116,7 +123,9 @@ NpHaloScatterMeshWorkloadFactory::cached_program_t NpHaloScatterMeshWorkloadFact
     return cached_program_t{std::move(program), {NpHaloScatterArtifacts{writer_kernel_id, all_cores}}};
 }
 
-// ============================================================================ override_runtime_arguments
+// ============================================================================
+// override_runtime_arguments — refresh the (x, compact, padded) DRAM addresses.
+// ============================================================================
 void NpHaloScatterMeshWorkloadFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
     const NpHaloScatterParams& /*op*/,

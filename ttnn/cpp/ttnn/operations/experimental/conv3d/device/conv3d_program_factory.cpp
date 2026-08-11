@@ -294,9 +294,8 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     log_debug(tt::LogOp, "CB matmul_result_rm: page_size={} bytes, num_pages={}", tile_size, matmul_M_t * matmul_N_t);
 
     bool is_padding_zeros = operation_attributes.padding_mode == "zeros";
-    // Halo-aware mode: spatial (H/W) boundary conv-window positions read from the compact halo buffer instead
     const bool halo_mode = tensor_args.halo_buffer.has_value() && is_padding_zeros;
-    // Logical-pad masking: opt-in
+    // Logical-pad masking: opt-in.
     const bool mask_mode = tensor_args.pad_offset_tensor.has_value() &&
                            (operation_attributes.logical_h_mask != 0 || operation_attributes.logical_w_mask != 0);
 
