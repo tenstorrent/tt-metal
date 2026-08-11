@@ -53,19 +53,6 @@ namespace {
 // conservative for it; that costs nothing, since it is a tie there anyway.
 constexpr uint64_t k_direct_rs_max_input_bytes = 512ull << 10;
 
-// Topology is a scoped enum with no fmt formatter; Ring vs Torus is worth reading in the warning below
-// (it separates the 1D hop-count routing regime from the 2D destination-node one).
-const char* direct_rs_topology_name(tt::tt_fabric::Topology topology) {
-    switch (topology) {
-        case tt::tt_fabric::Topology::Ring: return "Ring";
-        case tt::tt_fabric::Topology::Torus: return "Torus";
-        case tt::tt_fabric::Topology::Linear: return "Linear";
-        case tt::tt_fabric::Topology::Mesh: return "Mesh";
-        case tt::tt_fabric::Topology::NeighborExchange: return "NeighborExchange";
-    }
-    return "unknown";
-}
-
 bool use_direct_reduce_scatter(
     const ttnn::Tensor& input_tensor,
     int32_t dim,
@@ -209,14 +196,13 @@ ttnn::Tensor reduce_scatter(
                 log_debug(
                     tt::LogOp,
                     "reduce_scatter: taking the DIRECT (one-shot) path -- num_devices={}, per-device input "
-                    "{} B (gate {} B), dtype={}, scatter dim={}, shape={}, topology={}.",
+                    "{} B (gate {} B), dtype={}, scatter dim={}, shape={}.",
                     std::get<0>(key),
                     input_tensor.buffer()->size(),
                     k_direct_rs_max_input_bytes,
                     input_tensor.dtype(),
                     normalized_dim,
-                    input_tensor.padded_shape(),
-                    direct_rs_topology_name(topology_));
+                    input_tensor.padded_shape());
             }
         }
         return ttnn::prim::reduce_scatter_minimal_direct(
