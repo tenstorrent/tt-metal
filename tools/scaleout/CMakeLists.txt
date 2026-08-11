@@ -1,34 +1,25 @@
 project(scaleout_tools)
 
-add_executable(
-    run_cluster_validation
-    validation/run_cluster_validation.cpp
-    validation/utils/ethernet_link_metrics_serialization.cpp
-    validation/utils/ethernet_link_api.cpp
-    validation/utils/cluster_validation_utils.cpp
-)
+include(sources.cmake)
 
-add_executable(
-    run_fabric_manager
-    fabric_manager/run_fabric_manager.cpp
-    fabric_manager/utils/fabric_manager_utils.cpp
-)
+add_executable(run_cluster_validation)
+target_sources(run_cluster_validation PRIVATE ${RUN_CLUSTER_VALIDATION_SRCS})
+
+add_executable(run_fabric_manager)
+target_sources(run_fabric_manager PRIVATE ${RUN_FABRIC_MANAGER_SRCS})
 
 # Library target
 add_library(scaleout_tools OBJECT)
 add_library(TT::ScaleoutTools ALIAS scaleout_tools)
 
 include(protobuf)
-set(PROTO_SCHEMAS
-    ${CMAKE_CURRENT_SOURCE_DIR}/factory_system_descriptor/schemas/factory_system_descriptor.proto
-    ${CMAKE_CURRENT_SOURCE_DIR}/cabling_descriptor/schemas/node_config.proto
-    ${CMAKE_CURRENT_SOURCE_DIR}/cabling_descriptor/schemas/cluster_config.proto
-    ${CMAKE_CURRENT_SOURCE_DIR}/deployment_descriptor/schemas/deployment.proto
-    ${CMAKE_CURRENT_SOURCE_DIR}/validation/schemas/ethernet_link_metrics.proto
-)
+
+# GENERATE_PROTO_FILES feeds these into a custom build command, which needs absolute paths
+# (a relative path would be resolved against the build dir, not this source dir).
+list(TRANSFORM SCALEOUT_PROTO_SCHEMAS PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/")
 
 set(GENERATED_PROTO_SRCS)
-foreach(PROTO_FILE ${PROTO_SCHEMAS})
+foreach(PROTO_FILE ${SCALEOUT_PROTO_SCHEMAS})
     GENERATE_PROTO_FILES(${PROTO_FILE} OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR})
     list(APPEND GENERATED_PROTO_SRCS ${PROTO_SRCS})
 endforeach()
@@ -44,23 +35,9 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES
-            board/board.hpp
-            cabling_generator/cabling_generator.hpp
-            cabling_generator/regen_descriptors.hpp
-            connector/connector.hpp
-            factory_system_descriptor/query.hpp
-            factory_system_descriptor/utils.hpp
-            node/node_types.hpp
+        FILES ${SCALEOUT_TOOLS_API_HEADERS}
     PRIVATE
-        node/node.cpp
-        node/node_types.cpp
-        board/board.cpp
-        cabling_generator/cabling_generator.cpp
-        cabling_generator/regen_descriptors.cpp
-        connector/connector.cpp
-        factory_system_descriptor/query.cpp
-        factory_system_descriptor/utils.cpp
+        ${SCALEOUT_TOOLS_SRCS}
         ${GENERATED_PROTO_SRCS}
 )
 
@@ -155,7 +132,8 @@ tt_reuse_precompile_headers(scaleout_tools TT::CommonPCH)
 
 install(TARGETS scaleout_tools EXPORT Metalium LIBRARY COMPONENT metalium-runtime FILE_SET api COMPONENT metalium-dev)
 
-add_executable(2d_big_mesh_cabling_gen src/2d_big_mesh_cabling_gen.cpp)
+add_executable(2d_big_mesh_cabling_gen)
+target_sources(2d_big_mesh_cabling_gen PRIVATE ${SCALEOUT_2D_BIG_MESH_CABLING_GEN_SRCS})
 
 set_target_properties(
     2d_big_mesh_cabling_gen
@@ -176,7 +154,8 @@ target_link_libraries(
         cxxopts::cxxopts
 )
 
-add_executable(run_cabling_generator src/run_cabling_generator.cpp)
+add_executable(run_cabling_generator)
+target_sources(run_cabling_generator PRIVATE ${RUN_CABLING_GENERATOR_SRCS})
 
 set_target_properties(
     run_cabling_generator
@@ -197,7 +176,8 @@ target_link_libraries(
         cxxopts::cxxopts
 )
 
-add_executable(run_regen_descriptors src/run_regen_descriptors.cpp)
+add_executable(run_regen_descriptors)
+target_sources(run_regen_descriptors PRIVATE ${RUN_REGEN_DESCRIPTORS_SRCS})
 
 set_target_properties(
     run_regen_descriptors
@@ -218,7 +198,8 @@ target_link_libraries(
         cxxopts::cxxopts
 )
 
-add_executable(generate_cluster_descriptor src/generate_cluster_descriptor.cpp)
+add_executable(generate_cluster_descriptor)
+target_sources(generate_cluster_descriptor PRIVATE ${GENERATE_CLUSTER_DESCRIPTOR_SRCS})
 
 set_target_properties(
     generate_cluster_descriptor
@@ -240,7 +221,8 @@ target_link_libraries(
 )
 
 # Generate MGD library
-add_library(generate_mgd_lib OBJECT generate_mgd/generate_mgd.cpp)
+add_library(generate_mgd_lib OBJECT)
+target_sources(generate_mgd_lib PRIVATE ${GENERATE_MGD_LIB_SRCS})
 
 add_dependencies(
     generate_mgd_lib
@@ -271,7 +253,8 @@ target_link_libraries(
 )
 
 # Generate MGD CLI tool (standalone, links against fabric for protobuf implementation)
-add_executable(generate_mgd generate_mgd/generate_mgd_main.cpp)
+add_executable(generate_mgd)
+target_sources(generate_mgd PRIVATE ${GENERATE_MGD_SRCS})
 
 add_dependencies(
     generate_mgd
@@ -309,7 +292,8 @@ target_link_libraries(
 
 if(ENABLE_DISTRIBUTED)
     # MPI stress test: ring-based sendrecv packet validation across all ranks
-    add_executable(run_mpi_stress_test validation/run_mpi_stress_test.cpp)
+    add_executable(run_mpi_stress_test)
+    target_sources(run_mpi_stress_test PRIVATE ${RUN_MPI_STRESS_TEST_SRCS})
 
     set_target_properties(
         run_mpi_stress_test
@@ -321,7 +305,8 @@ if(ENABLE_DISTRIBUTED)
     target_link_libraries(run_mpi_stress_test PRIVATE OpenMPI::MPI)
 
     # Generate rank bindings tool
-    add_executable(generate_rank_bindings src/generate_rank_bindings.cpp)
+    add_executable(generate_rank_bindings)
+    target_sources(generate_rank_bindings PRIVATE ${GENERATE_RANK_BINDINGS_SRCS})
 
     set_target_properties(
         generate_rank_bindings

@@ -125,6 +125,7 @@ set_target_properties(
 
 if(TT_METAL_USE_EMULE)
     target_link_options(unit_tests_api PRIVATE -rdynamic)
+    target_link_libraries(unit_tests_api_lib PRIVATE tt-emule::headers)
 
     # Per-fiber ASAN sanitizer-state isolation test. Its own binary because it
     # includes the emule kernel-side context header (jit_hw/internal/
