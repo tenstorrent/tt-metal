@@ -386,8 +386,6 @@ def test_decode_ref_cond_frame_pcc(mesh_device):
     tt_model = TTVibeVoiceModel.from_checkpoint(
         mesh_device,
         MODEL_PATH,
-        cfg_scale=CFG_SCALE,
-        num_diffusion_steps=NUM_DIFFUSION_STEPS,
     )
     tt_model.set_speech_scale_bias(
         ref_model.model.speech_scaling_factor.item(),
