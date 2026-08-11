@@ -228,8 +228,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, params.TILE_SIZE_PACK);
-    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst);
+    // The output is the single 16x16 DEST face the op writes (params.num_faces == 1, tile == one face), so the
+    // geometry has to be passed explicitly: the wrappers default to a full four-face 32x32 tile, and the Default-mode
+    // pack MOP loops MOP_OUTER_LOOP == num_faces * num_tiles, so the default would retire 4 faces per _llk_pack_ and
+    // write 4 * 512 B into the 512 B buffer_Res slot (faces 1-3 being whatever else is in DEST). Matches the
+    // sibling tests, which pass (face_r_dim, tile_c_dim, num_faces) through as well.
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
+        formats.pack_src, formats.pack_dst, params.TILE_SIZE_PACK, FACE_R_DIM, FACE_C_DIM /* tile_c_dim: one face wide */, params.num_faces);
+    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, FACE_C_DIM, params.num_faces);
     _llk_pack_dest_init_<DST_SYNC, is_fp32_dest_acc_en>();
     _llk_packer_wait_for_math_done_();
     for (std::uint32_t i = 0; i < params.TILE_CNT; i++)
