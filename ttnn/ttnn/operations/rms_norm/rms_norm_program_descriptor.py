@@ -69,6 +69,38 @@ OUTPUT_CB_DEPTH = 2  # writer drains tile-row r while compute produces r+1
 RM_CB_DEPTH = 2  # overlaps stick reads/writes with tilize / untilize
 L1_RESERVE_BYTES = 131072  # kernel binaries, stack, semaphores, allocator slack
 MAX_GATHER_TILES = 64  # cap on block_row_tiles * w_group_size (cb_stat_gather)
+# Perf lamp P2 — an upper bound on the cores per reduction group. Maximum
+# occupancy is the default first step, but at tensor_row_tiles == 1 the selection
+# pushes w_group_size to the whole grid, leaving 3-4 hidden tiles of real work per
+# core against a full gather + multicast round. 0 = uncapped.
+#
+# MEASURED on blackhole_p150b (110-core grid), interleaved bf16 decode shapes,
+# device kernel ns, uncapped -> capped at 32 (which admits G <= 22 on this grid):
+#   (1,1,32,5120): 17676 -> 11088 ns (1.59x)   (1,1,32,7168): 18624 -> 12165 ns (1.53x)
+#   (1,1,32,2304): 12056 ->  9677 ns (1.25x)   (1,1,32,1024):  8927 ->  8672 ns (1.03x)
+# Prefill (tensor_row_tiles >> grid) is unaffected: it already selects G = 1..5.
+MAX_W_GROUP_SIZE = 32
+# Perf lamp P1 — the smallest number of blocks a core's row assignment is cut
+# into. `input_cb_depth = 2` only buys read/compute overlap when there is a
+# block b+1 for the reader to prefetch while compute runs block b; at
+# num_blocks == 1 the DRAM read fully serializes against compute. Raising this
+# trades combine rounds (one per block) for that overlap. 1 = coarsest block,
+# no forced pipelining.
+#
+# MEASURED FLAT on blackhole_p150b (device kernel ns, 1 / 2 / 3 / 4 blocks):
+#   (1,1,8192,1024) 104674 / 103894 / 106145 / 103801
+#   (1,1,8192,2304) 219050 / 218364 / 222682 / 224441
+#   (1,1,8192,5120) 425343 / 428822 / 425210 / 422477
+#   (1,1,8192,7168) 605501 / 597240 / 595999 / 598579
+#   (1,1,  32,7168)  12378 /  12423 /  12256 /  12208
+# i.e. these shapes are not read-vs-compute serialization bound — the wall is
+# aggregate DRAM bandwidth (the widest prefill case moves 33.5 MB in ~104 us =
+# ~330 GB/s) plus the 3-vs-2 tile-row imbalance of 256 tile-rows over 110 cores.
+# The knob is KEPT at its byte-identical default: it costs nothing there, and it
+# is the lever to turn once a co-binding stage (compute, or the DRAM run length)
+# is shortened. Follow-up: re-measure after any change that lowers the DRAM
+# floor, and pair it with input_cb_depth 3-4 as op_design.md's lamp P1 suggests.
+MIN_PIPELINE_BLOCKS = 1
 
 TILE_HW = 32
 FP32_TILE_BYTES = 4096
@@ -184,22 +216,39 @@ def _max_block_row_tiles(geo, C, G, core_row_tiles, is_rm_out, has_tail, budget)
     if fixed_bytes + per_row_bytes > budget:
         return 0
     cap = min(core_row_tiles, max(1, MAX_GATHER_TILES // G))
+    if MIN_PIPELINE_BLOCKS > 1:
+        # Perf lamp P1: cut the assignment into >= MIN_PIPELINE_BLOCKS blocks so
+        # the depth-`input_cb_depth` input CB has a block to prefetch.
+        cap = min(cap, max(1, _div_up(core_row_tiles, MIN_PIPELINE_BLOCKS)))
     return max(1, min((budget - fixed_bytes) // per_row_bytes, cap))
 
 
-def _select_regime(geo, grid_x, grid_y, is_rm_out, budget):
-    """Exact, deterministic regime-selection function (op_design.md).
+def _select_candidates(geo, grid_x, grid_y, is_rm_out, budget, w_group_cap):
+    """Every (gc, gr) split that clears the mechanism caps and fits L1.
 
-    Returns (w_group_cols, w_group_rows, core_w_tiles_ceil, block_row_tiles).
+    Score, in priority order:
+      1. active cores        — fill the grid;
+      2. -G                  — fewest combine partners (each round is a gather
+         barrier + a root reduce + a multicast);
+      3. R                   — coarsest block, i.e. fewest combine rounds.
+
+    A `-max_tiles_per_core` term was measured as a second key (prefer the split
+    whose BUSIEST core carries the least work, e.g. G=2 x 80 tiles over G=1 x 96
+    tiles at (8192, 1024) — both fill all 110 cores). It is NOT used: measured on
+    blackhole_p150b it won (1,1,8192,2304) 220420 -> 198307 ns but lost
+    (1,1,8192,1024) 102445 -> 123259 ns, i.e. the extra combine round and the
+    halved DRAM run length outweigh the balance gain more often than not.
     """
     has_tail = 1 if geo.partial_w != 0 else 0
-    best = None
+    out = []
     for gc in _divisors(grid_x):
         for gr in _divisors(grid_y):
             G = gc * gr
             num_groups = (grid_x // gc) * (grid_y // gr)
             if G > geo.tensor_w_tiles:
                 continue  # mechanism cap: a core owning zero hidden tiles hangs the gather
+            if w_group_cap and G > w_group_cap:
+                continue  # perf lamp P2
             C = _div_up(geo.tensor_w_tiles, G)
             active_groups = min(geo.tensor_row_tiles, num_groups)
             core_row_tiles = _div_up(geo.tensor_row_tiles, active_groups)
@@ -207,15 +256,29 @@ def _select_regime(geo, grid_x, grid_y, is_rm_out, budget):
             if R == 0:
                 continue
             score = (active_groups * G, -G, R)
-            if best is None or score > best[0]:
-                best = (score, (gc, gr, C, R))
-    if best is None:
+            out.append((score, (gc, gr, C, R)))
+    return out
+
+
+def _select_regime(geo, grid_x, grid_y, is_rm_out, budget):
+    """Exact, deterministic regime-selection function (op_design.md).
+
+    Returns (w_group_cols, w_group_rows, core_w_tiles_ceil, block_row_tiles).
+
+    MAX_W_GROUP_SIZE is a PREFERENCE, not a mechanism cap: if no capped candidate
+    fits L1 (a hidden dim so wide that residency needs a large group), the search
+    is retried uncapped rather than failing.
+    """
+    candidates = _select_candidates(geo, grid_x, grid_y, is_rm_out, budget, MAX_W_GROUP_SIZE)
+    if not candidates and MAX_W_GROUP_SIZE:
+        candidates = _select_candidates(geo, grid_x, grid_y, is_rm_out, budget, 0)
+    if not candidates:
         raise RuntimeError(
             "rms_norm: no work split fits L1 for shape "
             f"{tuple(geo.shape)} (regime R3, streaming two-pass, is not implemented). "
             "Reduce the hidden dimension or use a larger grid."
         )
-    return best[1]
+    return max(candidates, key=lambda c: c[0])[1]
 
 
 # ==========================================================================

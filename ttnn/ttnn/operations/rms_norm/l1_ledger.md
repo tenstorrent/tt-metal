@@ -152,3 +152,56 @@ geometries in `feature_spec.py` for these shapes use 28–32 cores rather than 6
 > The alternative that is *not* cheapest and *is* lamped for a structural reason is regime **R3**
 > (`+N` DRAM bytes, one extra full read of the input). It is reachable through the `Accumulate` path
 > already present in the reduce helper and the reader's `byte_offset_within_page` chunk hook.
+
+
+---
+
+## Implementation deltas (recorded by the implementer)
+
+The inventory above was built as designed — no buffer in it was added, and the two
+"available, deliberately unclaimed" reuses stayed unclaimed. Four rows changed shape.
+
+| Change | Row(s) affected | Why |
+|--------|-----------------|-----|
+| **`C` is now GROUP-UNIFORM, not per-core.** `C` = `cb_w_tiles` = `ceil(tensor_w_tiles / G)` on **every** core of a group; a core's ragged share rides as the runtime `core_w <= C`. | every `C`-scaled row | Two hard mechanisms, not a preference. (1) A CB's page capacity must be an exact multiple of its push/pop quantum (`dataflow_api.h:216-221`, "no other wrap is legal"); a ragged per-core quantum does not divide the one uniform capacity the multicast/gather L1 map already forced. (2) `cb_rstd` / `cb_stat_gather` are addressed by a peer's LOCAL pointer. The statistics phases still walk only `core_w` columns (at row stride `C`), so the pad tiles never enter the reduction; the apply phases cover them and the writer drops them. This also collapsed the design's two kernel core-ranges into one. |
+| **`cb_tail_masked` does not exist.** | `cb_tail_masked` (deleted) | `mask_tail_block` is now ONE fused chain — `BinaryFpu(x_tail, wmask, Mul, Row) -> Square<> -> PackTile` — so the masked value never lands in L1. Rule 3 pattern 4 (fold into the accumulator), the same pattern that removed `cb_input_squared`. Saves `has_tail * R` fp32 tiles. |
+| **`cb_stat_sq` is `R * (1 + has_tail)` pages, not `R`.** | `cb_stat_sq` | The bulk accumulation and the masked tail write **two stat columns per tile-row** (`r * nc + col`, caller-managed strided packs into one caller-reserved window), and `reduce<SUM, REDUCE_ROW>` folds both columns in one call over `of(R, nc)`. This replaces the design's `L1Accumulation::Enabled` re-pack, which `eltwise_chain.inl:1007-1017` pins to a SINGLE output tile (`walk` is false whenever L1 accumulation is on), so it cannot accumulate into `R` distinct tiles. Net vs. the design: `+has_tail * R` fp32 tiles here, `-has_tail * R` from the deleted `cb_tail_masked` — a wash. |
+| **`cb_output_tiles` is `R * C` pages on the ROW_MAJOR-output path** (still `output_cb_depth * C` on the tiled path). | `cb_output_tiles` | `gamma_block` and `untilize_out_block` are sequential compute helpers — both own all three TRISCs, so they cannot pipeline through a depth-2 buffer: the producer would block on `cb_reserve_back` before the consumer ever runs. Same rule as `cb_normed` (`ttnn-cb-memory-fundamentals.md`). The term therefore moves from `fixed_bytes` to `per_row_bytes` on that path. |
+
+### Corrected footprint expressions (what the host actually computes)
+
+```
+per_row_bytes  = T_in  * C * (input_cb_depth + has_gamma + rm_out)     # cb_input_tiles, cb_normed, [cb_output_tiles]
+               + T_f32 * (4 + (1 + has_tail) + G)                      # cb_stat_partial/_sum/_rstd_send/_rstd,
+                                                                       #   cb_stat_sq (1+has_tail cols), cb_stat_gather
+fixed_bytes    = T_in  * C * ((1 - rm_out) * output_cb_depth
+                              + rm_in * rm_cb_depth + rm_out * rm_cb_depth)
+               + T_gamma * has_gamma * C * (1 + rm_gamma)              # cb_gamma_tiles [+ cb_gamma_rm]
+               + T_bf16 * (1 + has_tail)                               # cb_scaler [+ cb_wmask]
+               + T_f32                                                 # cb_zero_tile
+
+block_row_tiles = clamp( floor((l1_cb_budget - fixed_bytes) / per_row_bytes),
+                         1, min(core_row_tiles, MAX_GATHER_TILES / G) )
+```
+
+`l1_cb_budget = l1_size_per_core(arch) - L1_RESERVE_BYTES`, `L1_RESERVE_BYTES = 131072`.
+Nothing scales with `tensor_row_tiles` or `tensor_w_tiles`; the only op dimension reaching a
+capacity is `tensor_w_tiles`, and only through `C = ceil(tensor_w_tiles / G)`, which the
+residency predicate bounds by raising `G`.
+
+## Data-movement budget — measured selections
+
+Unchanged from the table above in kind: **input 1x DRAM, output 1x DRAM, gamma
+`num_row_groups x`**, statistics never touch DRAM. Two selection facts, measured on a
+blackhole_p150b 11x10 grid:
+
+| Shape | `G` | row-groups | `C` | `R` | cores | DRAM crossings | Cross-core per block |
+|-------|-----|-----------|-----|-----|-------|----------------|----------------------|
+| `(1,1,8192,7168)` prefill | 5 | 22 | 45 | 3 | 110 | in 1x, out 1x, gamma 22x | `4*R` fp32 tiles gathered + `R` multicast to 5 |
+| `(1,1,32,7168)` decode | 22 | 1 | 11 | 1 | 22 | in 1x, out 1x, gamma **1x** (the minimum) | `21*R` gathered + `R` multicast to 22 |
+| `(1,1,8192,1024)` prefill | 1 | 110 | 32 | 3 | 110 | in 1x, out 1x, gamma 110x | degenerate (local copy) |
+
+The decode row is the design's predicted best case: a single row-group cannot replicate gamma,
+so DRAM traffic is exactly the named-boundary minimum. The `G = 22` (rather than 110) choice is
+**perf lamp P2, now measured and adopted** — see `MAX_W_GROUP_SIZE` in
+`rms_norm_program_descriptor.py` for the numbers.
