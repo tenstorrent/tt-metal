@@ -580,7 +580,7 @@ recorded here but not enforced by anything.
 
 | Component | Version |
 |-----------|---------|
-| tt-metal / TT-Metalium | commit `e7cf6d43d15` — `git describe`: `v0.77.0-dev20260810-87-ge7cf6d43d15` (2026-08-11) |
+| tt-metal / TT-Metalium | commit `11a23bb758e` — `git describe`: `v0.77.0-dev20260811-90-g11a23bb758e` (2026-08-11) |
 | TTNN | in-tree `ttnn/ttnn/`, resolved via `PYTHONPATH=$TT_METAL_HOME`; no version of its own — the tt-metal commit above is the only handle |
 | Arch | `ARCH_NAME=blackhole` (Blackhole P150 — see [Supported devices](#supported-devices)) |
 
@@ -637,14 +637,22 @@ one repo and must not drift apart.
 
 Measured on **Blackhole P150** against the PyTorch reference (software stack: see
 [Dependency versions](#dependency-versions)), running the whole `tests/pcc/` suite in one pass
-(`pytest models/experimental/xtts/tests/pcc/ -v -s`) at tt-metal commit `e7cf6d43d15`:
-**24/24 passed** in 362 s (14/14 in 289 s before this pass added the GPT prefill/decode matrix and
-the ISL sweep). There is a single column because Blackhole P150 is the only supported device.
+(`pytest models/experimental/xtts/tests/pcc/ -v -s`) at tt-metal commit `11a23bb758e`:
+**24/24 passed**. There is a single column because Blackhole P150 is the only supported device.
 
-These numbers are **provisional**: the branch has not yet been rebased onto `main`, and the rebase
-is deliberately being done last so one final run produces the published set. Four upstream commits
-in the pending range touch ops on XTTS's hot path (LayerNorm intermediate CBs, `tanh` bf16, SFPU
-range handling, and a Blackhole RM-reshape fix), so every value here should be re-measured after it.
+**Measured after the rebase onto `main`, and nothing moved.** The rebase was deliberately done last
+so one final run would produce the published set, because four commits in the incoming range land on
+ops this model leans on: LayerNorm intermediate CBs (#52081 — XTTS runs ~62 LayerNorms per forward),
+`tanh` bf16 (#52732 — the vocoder's final op), SFPU range handling (#52172 — gelu / sigmoid / log /
+sqrt / leaky_relu), and a Blackhole RM-reshape fix (#50967 — the mel frontend's shape). All four are
+ancestors of this commit, and **every deterministic PCC below is byte-identical to the pre-rebase
+run** — including `es_sample`, the value with the least headroom over its gate, and the HiFi-GAN
+decoder that `tanh` feeds. Only the two sampled eval metrics moved, which is what they are documented
+to do.
+
+One measurement caveat: the first post-rebase suite took 1254 s rather than the usual ~362 s, because
+the rebase invalidated the JIT kernel cache and every kernel recompiled. Warm runs are back to normal;
+don't read that number as a regression.
 
 | File | Test case | PCC / metric |
 |------|-----------|--------------:|
@@ -668,7 +676,7 @@ range handling, and a Blackhole RM-reshape fix), so every value here should be r
 | `test_tt_inference.py` | End-to-end spectrogram PCC (teacher-forced, 16 codes) | 0.990931 |
 | | ↳ raw-waveform PCC, same run (informational only — see [Test gates](#test-gates)) | 0.905271 |
 | | Long-reference conditioning latents (10.0 s → 3 windows of 4/4/2 s, averaged) | 0.998796 |
-| | `test_tt_eval` — CER / UTMOS / SECS (150-code cap; text didn't finish before the cap) | 0.2874 / skipped (no `torchaudio`) / 0.6268 |
+| | `test_tt_eval` — CER / UTMOS / SECS (150-code cap; text didn't finish before the cap) | 0.3353 / skipped (no `torchaudio`) / 0.5841 |
 | `test_tt_trace.py` | Fully-traced vs eager spectrogram PCC (167 codes) | 1.0 |
 | | `test_tt_traced_session_reuse` — A/B/A-again state hygiene | exact match (41 / 63 / 41 codes; run 3 == run 1 bit-for-bit) |
 | | ↳ traced session's vocoder vs **eager**, same inputs (checked out-of-suite — see below) | bit-identical, max delta 0.0 |
@@ -679,9 +687,10 @@ before STOP fired (the transcript matches the *first* sentence verbatim); it is 
 synthesis-quality regression — `test_tt_eval_traced`'s single self-terminating sentence scores CER
 0.016. Both eval tests are sampled and their metrics are **not reproducible run to run**; treat
 them as ballpark, and A/B correctness changes against `test_tt_inference`'s teacher-forced PCC
-instead. Concretely, two runs of identical code hours apart gave `test_tt_eval` CER 0.3353 → 0.2874
-and SECS 0.5408 → 0.6268, while every deterministic PCC above was byte-identical across the same two
-runs. A moved eval metric is therefore not evidence of anything on its own.
+instead. Concretely, three runs of the same code gave `test_tt_eval` CER 0.3353 → 0.2874 → 0.3353
+and SECS 0.5408 → 0.6268 → 0.5841, while every deterministic PCC above was byte-identical across all
+three — the third being the post-rebase run, i.e. a *different tt-metal commit* that moved neither.
+A moved eval metric is therefore not evidence of anything on its own.
 
 ### Fixed during this pass — the traced session, and its bit-exactness
 
@@ -811,15 +820,15 @@ fully traced: setup + decode + vocoder) on **Blackhole P150**:
 
 | Quantity | Value |
 |----------|------:|
-| Generated | 211 codes (self-terminated at STOP, under the 240-code cap) → 9.912 s audio |
+| Generated | 200 codes (self-terminated at STOP, under the 240-code cap) → 9.400 s audio |
 | Setup replay (conditioning + speaker + prefill) | 0.042 s (30 s reference = 8 conditioning windows) |
-| Decode replay (211 codes) | 1.705 s (≈ 8.1 ms/code) |
-| Vocoder replay | 0.022 s |
-| **Total replay** | **1.769 s** |
+| Decode replay (200 codes) | 1.612 s (≈ 8.1 ms/code) |
+| Vocoder replay | 0.020 s |
+| **Total replay** | **1.674 s** |
 | RTF (replay / audio) | **0.178** — ≈5.6× faster than real-time |
-| Time-to-first-chunk | 1.769 s (non-streaming: first audio == full clip) |
-| Compile / capture (one-time, excluded from RTF) | 40.316 s |
-| End-to-end wall (weight load + audio prep + generate + write) | 52.24 s |
+| Time-to-first-chunk | 1.674 s (non-streaming: first audio == full clip) |
+| Compile / capture (one-time, excluded from RTF) | 44.579 s |
+| End-to-end wall (weight load + audio prep + generate + write) | 56.31 s |
 
 Setup replay scales with the number of conditioning windows, so it moves with the reference length:
 12.8 ms for 1 window (a 3 s clip), 21 ms for 3 (one 9.7 s clip), 42 ms for the default 8. It is a
@@ -829,8 +838,8 @@ The ≈8.1 ms/code decode rate matches the per-step device-time note in
 [tt/xtts_generator.py](tt/xtts_generator.py): each captured decode step is measured at ~8 ms of
 device work, with the per-step blocking fence and token readback hidden inside it (alternatives —
 non-blocking execute, polling less often — were all worse or equal; see the source comment). The
-Tracy dump below now confirms this independently: **7.578 ms** of pure device FW time in one
-signposted decode step, with the remaining ~0.5 ms being the fence and readback.
+Tracy dump below now confirms this independently: **7.427 ms** of pure device FW time in one
+signposted decode step, with the remaining ~0.6 ms being the fence and readback.
 
 ### GPT single-step device profiles (Tracy)
 
@@ -841,33 +850,32 @@ signpost-windowed totals — one prefill, one decode step:
 | Workload | Device FW | Ops | Notes |
 |----------|----------:|----:|-------|
 | GPT prefill (128 prompt positions, 30 layers) | 6.884 ms | 397 | One-time per generation; part of the 42 ms setup leg |
-| GPT decode, one code (30 layers, traced cache write) | 7.578 ms | 557 | Paid **per audio code** — this is the model's dominant cost |
+| GPT decode, one code (30 layers, traced cache write) | 7.427 ms | 557 | Paid **per audio code** — this is the model's dominant cost |
 
 Per-op breakdown of the decode step (the report to read when the code rate moves):
 
 | Op | Count | Total | % of step | Per op |
 |----|------:|------:|----------:|-------:|
-| `TernaryDeviceOperation` (traced KV-cache write) | 60 | 2378 µs | **31.4%** | 39.6 µs |
-| `MatmulDeviceOperation` | 121 | 2373 µs | 31.3% | 19.6 µs |
-| `NlpCreateHeadsDeviceOperation` | 30 | 882 µs | 11.6% | 29.4 µs |
-| `SDPAOperation` | 30 | 691 µs | 9.1% | 23.0 µs |
-| `LayerNormDeviceOperation` | 62 | 540 µs | 7.1% | 8.7 µs |
-| `NLPConcatHeadsDeviceOperation` | 30 | 313 µs | 4.1% | 10.4 µs |
-| everything else (7 op types) | 224 | 401 µs | 5.3% | — |
+| `MatmulDeviceOperation` | 121 | 2371 µs | 31.9% | 19.6 µs |
+| `TernaryDeviceOperation` (traced KV-cache write) | 60 | 2229 µs | **30.0%** | 37.2 µs |
+| `NlpCreateHeadsDeviceOperation` | 30 | 882 µs | 11.9% | 29.4 µs |
+| `SDPAOperation` | 30 | 692 µs | 9.3% | 23.1 µs |
+| `LayerNormDeviceOperation` | 62 | 540 µs | 7.3% | 8.7 µs |
+| `NLPConcatHeadsDeviceOperation` | 30 | 313 µs | 4.2% | 10.4 µs |
+| everything else (7 op types) | 224 | 400 µs | 5.4% | — |
 
-**The largest single cost in decode is the trace-safety workaround, not the model.** Those 60
-ternary ops are the two `ttnn.where(onehot, k, k_cache, output_tensor=k_cache)` cache writes per
-layer × 30 layers — the data-driven one-hot select
-([tt/xtts_gpt_block.py](tt/xtts_gpt_block.py)) that a captured trace requires because it cannot
-take an eager Python `write_idx`. They cost **more than all 121 matmuls combined**. The eager path
-does the same job with `ttnn.update_cache`, which the prefill profile measures at **2.6 µs** per
-call against 39.6 µs here — a ~15× gap, because `where` rewrites the entire
-`[1, 16, 384, 64]` cache while `update_cache` touches one row.
+**The trace-safety workaround costs about as much as the entire matmul budget.** Those 60 ternary
+ops are the two `ttnn.where(onehot, k, k_cache, output_tensor=k_cache)` cache writes per layer × 30
+layers — the data-driven one-hot select ([tt/xtts_gpt_block.py](tt/xtts_gpt_block.py)) that a
+captured trace requires because it cannot take an eager Python `write_idx`. They land within 6% of
+all 121 matmuls put together. The eager path does the same job with `ttnn.update_cache`, which the
+prefill profile measures at **2.6 µs** per call against 37.2 µs here — a ~14× gap, because `where`
+rewrites the entire `[1, 16, 384, 64]` cache while `update_cache` touches one row.
 
 Two consequences worth knowing before optimizing anything else here:
 
-- **~2.2 ms of every 7.6 ms decode step is this write** (≈29%). Over the demo's 211 codes that is
-  ~0.47 s of the 1.71 s decode replay.
+- **~2.2 ms of every 7.4 ms decode step is this write** (≈30%). Over the demo's 200 codes that is
+  ~0.45 s of the 1.61 s decode replay.
 - **It scales with `max_seq`, not with position.** A larger `max_new_tokens` makes *every* step
   slower, since the whole cache is rewritten each time regardless of how far in you are. Raising
   the code budget is therefore not free the way it would be with an O(1) row write.
@@ -894,14 +902,14 @@ the PCC sweep's architectural 384 (see [Context length](#context-length-support)
 
 | ISL | prompt | max_seq | codes | audio (s) | TTFT (ms) | codes/s | ms/code | setup (ms) | vocoder (ms) | replay (s) | RTF |
 |----:|-------:|--------:|------:|----------:|----------:|--------:|--------:|-----------:|-------------:|-----------:|----:|
-| 32 | 64 | 288 | 87 | 4.03 | 49.0 | 133.1 | 7.511 | 41.4 | 8.53 | 0.703 | 0.174 |
+| 32 | 64 | 288 | 87 | 4.03 | 48.9 | 133.0 | 7.519 | 41.4 | 8.52 | 0.704 | 0.175 |
 | 64 | 96 | 320 | 131 | 6.08 | 49.6 | 128.7 | 7.767 | — | — | 1.072 | 0.176 |
-| 96 | 128 | 352 | 204 | 9.47 | 49.6 | 125.8 | 7.948 | 41.7 | 20.99 | 1.684 | 0.178 |
-| 128 | 160 | 384 | 204 | 9.47 | 50.1 | 123.9 | 8.071 | 42.1 | 21.02 | 1.709 | 0.180 |
-| 192 | 224 | 448 | 204 | 9.47 | 51.0 | 114.9 | 8.703 | 42.3 | 21.00 | 1.839 | 0.194 |
-| 256 | 288 | 512 | 204 | 9.47 | 51.4 | 112.7 | 8.872 | 42.6 | 21.01 | 1.873 | 0.198 |
-| 320 | 352 | 576 | 204 | 9.47 | 53.0 | 107.5 | 9.301 | 43.7 | 21.06 | 1.962 | 0.207 |
-| 352 | 384 | 608 | 204 | 9.47 | 52.6 | 106.6 | 9.379 | 43.2 | 21.00 | 1.977 | 0.209 |
+| 96 | 128 | 352 | 204 | 9.47 | 49.5 | 126.4 | 7.908 | 41.6 | 21.00 | 1.676 | 0.177 |
+| 128 | 160 | 384 | 204 | 9.47 | 50.2 | 124.0 | 8.067 | 42.1 | 20.98 | 1.709 | 0.180 |
+| 192 | 224 | 448 | 204 | 9.47 | 51.0 | 115.1 | 8.692 | 42.3 | 21.00 | 1.836 | 0.194 |
+| 256 | 288 | 512 | 204 | 9.47 | 51.4 | 113.3 | 8.824 | 42.5 | 20.96 | 1.864 | 0.197 |
+| 320 | 352 | 576 | 204 | 9.47 | 53.0 | 107.6 | 9.296 | 43.7 | 21.00 | 1.961 | 0.207 |
+| 352 | 384 | 608 | 204 | 9.47 | 52.5 | 107.5 | 9.306 | 43.2 | 20.98 | 1.963 | 0.207 |
 
 Metric definitions — XTTS is **non-streaming**, one call emits the whole clip:
 
@@ -914,15 +922,15 @@ Metric definitions — XTTS is **non-streaming**, one call emits the whole clip:
 
 Three things this sweep establishes:
 
-- **Decode cost scales with `max_seq`, not with position**: 7.511 → 9.379 ms/code (**+24.9%**) as
+- **Decode cost scales with `max_seq`, not with position**: 7.519 → 9.306 ms/code (**+23.8%**) as
   the cache grows 288 → 608, while every row generates the same 204 codes. This is the direct
-  consequence of the traced one-hot cache write rewriting the *whole* cache each step (~31% of a
+  consequence of the traced one-hot cache write rewriting the *whole* cache each step (~30% of a
   decode step — see [the per-op breakdown](#gpt-single-step-device-profiles-tracy)). Raising
   `max_new_tokens` is therefore **not free**: it slows every step of every generation, not just the
   extra ones.
-- **TTFT is essentially flat** — 49.0 → 53.0 ms across an 11× range of text length. Setup is
+- **TTFT is essentially flat** — 48.9 → 53.0 ms across an 11× range of text length. Setup is
   dominated by the 8 conditioning windows, not by the prompt, so prefill length barely registers.
-- **RTF stays ~5× faster than real time** everywhere (0.174 → 0.209), degrading only as the decode
+- **RTF stays ~5× faster than real time** everywhere (0.175 → 0.207), degrading only as the decode
   rate does.
 
 **The ISL 64 row is measured standalone.** In the sweep it threw the L1 circular-buffer allocation
