@@ -351,6 +351,7 @@ class TtPrefillBlock(LightweightModule):
             self.ffn = self._build_moe(
                 mesh_device=mesh_device,
                 model_cfg=model_cfg,
+                config=config,
                 state_dict=state_dict,
                 seq_len=seq_len,
                 sp_axis=sp_axis,
@@ -392,6 +393,7 @@ class TtPrefillBlock(LightweightModule):
     def _build_moe(
         mesh_device,
         model_cfg,
+        config,
         state_dict,
         seq_len,
         sp_axis,
