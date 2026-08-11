@@ -24,6 +24,8 @@ operations:
         src_b: "input_A"
         operation: "TransposeDest"
         unpacker: "TransposeDestUnpacker"
+        transpose_within_face: true
+        transpose_faces: true
     block_size: [64, 64]
     pack:
       - output: "output"

@@ -53,18 +53,6 @@ install(
         COMPONENT metalium-runtime
 )
 
-if(NOT ENABLE_TRACY)
-    return()
-endif()
-
-# Tracy-enabled-only tuning (only meaningful when profiling is actually compiled in):
-# Their code preserves frame pointers (-fno-omit-frame-pointer) → backtraces work.
-target_compile_options(TracyClient PUBLIC -fno-omit-frame-pointer)
-# Tracy sources emit this warning under our global -Werror; keep suppression local to TracyClient.
-target_compile_options(TracyClient PRIVATE -Wno-unused-variable)
-# Their executable exports symbols (-rdynamic) → Tracy can map addresses to names.
-target_link_options(TracyClient PUBLIC -rdynamic)
-
 # TracyClient is a PUBLIC dependency of TT::Metalium, so its interface exports
 # $<INSTALL_INTERFACE:include/tracy>. Tracy's own header install rules are
 # COMPONENT-less (they land in "Unspecified", which cmake/packaging.cmake drops),
@@ -74,6 +62,10 @@ target_link_options(TracyClient PUBLIC -rdynamic)
 # Ship the public headers under the dev component so the SDK package is consistent.
 # Layout mirrors Tracy's own install: tracy/Tracy.hpp plus its ../client and
 # ../common siblings, all under <includedir>/tracy.
+# Keep this ABOVE the ENABLE_TRACY early-return below -- same reasoning as the
+# TracyClient install above: these are Tracy's own stub headers when
+# TRACY_ENABLE=OFF, and the packaged SDK must ship them regardless of
+# ENABLE_TRACY so a disabled-tracy build stays find_package-consistent.
 install(
     DIRECTORY
         ${CMAKE_CURRENT_SOURCE_DIR}/tracy/public/tracy
@@ -87,6 +79,18 @@ install(
     PATTERN
     "*.hpp"
 )
+
+if(NOT ENABLE_TRACY)
+    return()
+endif()
+
+# Tracy-enabled-only tuning (only meaningful when profiling is actually compiled in):
+# Their code preserves frame pointers (-fno-omit-frame-pointer) → backtraces work.
+target_compile_options(TracyClient PUBLIC -fno-omit-frame-pointer)
+# Tracy sources emit this warning under our global -Werror; keep suppression local to TracyClient.
+target_compile_options(TracyClient PRIVATE -Wno-unused-variable)
+# Their executable exports symbols (-rdynamic) → Tracy can map addresses to names.
+target_link_options(TracyClient PUBLIC -rdynamic)
 
 set(NO_FILESELECTOR ON)
 

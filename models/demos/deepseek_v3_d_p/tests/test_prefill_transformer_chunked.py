@@ -970,7 +970,7 @@ _PADDED_MODES = ["notrace", "traced"]
                 # semaphores there (use_l1_small_for_semaphores) instead of pinning the main-L1 floor.
                 # Kept minimal: L1_SMALL is carved from the top of L1, so a large value would shift the
                 # main-L1 buffer floor down and could re-introduce the clash.
-                "l1_small_size": 512,
+                "l1_small_size": 768,
                 # Needed only by mode="traced"; device_params is a separate parametrize axis so it
                 # cannot be conditioned on `mode`. Reserving it for every mode costs DRAM headroom the
                 # non-traced modes do not use — harmless here (the traced L61/full55k case, which has
@@ -991,7 +991,7 @@ _PADDED_MODES = ["notrace", "traced"]
                 "fabric_config": ttnn.FabricConfig.FABRIC_2D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
                 "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-                "l1_small_size": 512,
+                "l1_small_size": 768,
                 "trace_region_size": 256 * 1024 * 1024,
             },
             2,
@@ -1063,9 +1063,8 @@ def test_kimi_prefill_transformer_chunked_padded(
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE),
-                # Small L1_SMALL region for the MoE routing all-gather's global semaphores
-                # (use_l1_small_for_semaphores); see the Kimi chunked test for the rationale.
-                "l1_small_size": 512,
+                # Routing consumes 512 B; leave 256 B for sparse-MLA high-bandwidth-gather semaphores.
+                "l1_small_size": 768,
             },
             2,
             ttnn.Topology.Linear,
@@ -1711,7 +1710,7 @@ def run_chunked_transformer_updated(
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
                 # L1_SMALL region for the MoE routing all-gather's semaphores (see TtMoERoutingSetup).
-                "l1_small_size": 512,
+                "l1_small_size": 768,
                 # Required by mode="traced": without it conftest logs "No trace region size" and the
                 # captured trace buffers come out of general DRAM instead of a reserved region —
                 # unbounded, and trace_bytes() then reports 0.00 MB because the TRACE pool is empty.
@@ -1807,7 +1806,7 @@ def test_kimi_prefill_transformer_chunked_perf(
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
                 # L1_SMALL region for the MoE routing all-gather's semaphores (see TtMoERoutingSetup).
-                "l1_small_size": 512,
+                "l1_small_size": 768,
                 # Required by mode="traced": without it conftest logs "No trace region size" and the
                 # captured trace buffers come out of general DRAM instead of a reserved region —
                 # unbounded, and trace_bytes() then reports 0.00 MB because the TRACE pool is empty.
@@ -1965,9 +1964,8 @@ def test_ds_prefill_transformer_chunked_no_pcc(
                 "fabric_config": ttnn.FabricConfig.FABRIC_2D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE),
                 "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-                # Small L1_SMALL region for the MoE routing all-gather's global semaphores
-                # (use_l1_small_for_semaphores); see test_glm_prefill_transformer_chunked.
-                "l1_small_size": 512,
+                # Routing consumes 512 B; leave 256 B for sparse-MLA high-bandwidth-gather semaphores.
+                "l1_small_size": 768,
             },
             2,
             ttnn.Topology.Linear,
