@@ -8,7 +8,9 @@ The supported path is deliberately narrow:
 * capture one Metal trace per step so materialized Gumbel noise can be
   refreshed between replays and the host can check one halt scalar;
 * reuse the traces across requests through a fixed ``p_max`` reveal-mask
-  prefix reader and a model-lifetime logits adapter;
+  prefix reader and a model-lifetime logits adapter (under
+  ``DG_DENOISE_REVEAL_BUCKETS`` the wrapper re-captures at a per-request
+  power-of-two ``p_max`` — each capture is still one fixed span);
 * require the released one-step stability criterion.
 
 Legacy fixed-count, grouped-window, lazy-capture, frozen-prefix, prefix-growth
@@ -59,11 +61,29 @@ _CONTROLLER_ATTR = "_upfront_traced_denoise_controller"
 # DG_DENOISE_REVEAL_PMAX always wins; both paths get identical validation.
 _DEFAULT_REVEAL_PMAX: int | None = None
 
+# Bucketed reveal spans (DG_DENOISE_REVEAL_BUCKETS, generator_vllm.py) re-capture the
+# controller at a power-of-two span sized to the live request instead of the one
+# deployment-wide worst case. The active bucket must win over the env pin — in bucket
+# mode DG_DENOISE_REVEAL_PMAX (or the registered default) is the CEILING the buckets
+# are clipped to, not the capture span — and it reaches this module through the same
+# registration side door as the default, for the same denoise_block_fn-protocol reason.
+_ACTIVE_REVEAL_PMAX: int | None = None
+
 
 def set_default_reveal_pmax(p_max: int | None) -> None:
     """Register the derived fixed reveal span used when DG_DENOISE_REVEAL_PMAX is unset."""
     global _DEFAULT_REVEAL_PMAX
     _DEFAULT_REVEAL_PMAX = None if p_max is None else int(p_max)
+
+
+def set_active_reveal_pmax(p_max: int | None) -> None:
+    """Register (or clear) the bucket span the next controller capture binds to.
+
+    Only the reveal-bucket policy in ``generator_vllm.py`` sets this, immediately
+    before a release-and-recapture; ``None`` restores env/default resolution.
+    """
+    global _ACTIVE_REVEAL_PMAX
+    _ACTIVE_REVEAL_PMAX = None if p_max is None else int(p_max)
 
 
 def upfront_capture_enabled() -> bool:
@@ -92,7 +112,9 @@ def prefix_borrow_enabled() -> bool:
 def _resolve_reveal_pmax(adapter) -> int:
     """Resolve and validate the fixed prefix span used by every captured trace."""
     raw = os.environ.get("DG_DENOISE_REVEAL_PMAX", "").strip()
-    if not raw:
+    if _ACTIVE_REVEAL_PMAX is not None:
+        p_max = _ACTIVE_REVEAL_PMAX
+    elif not raw:
         if _DEFAULT_REVEAL_PMAX is None:
             raise RuntimeError("up-front denoise capture requires an explicit bounded DG_DENOISE_REVEAL_PMAX")
         p_max = _DEFAULT_REVEAL_PMAX

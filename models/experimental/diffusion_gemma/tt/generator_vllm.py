@@ -77,6 +77,7 @@ from models.experimental.diffusion_gemma.tt.hybrid_kv import (
 from models.experimental.diffusion_gemma.tt.serving import BlockDiffusionServingSession
 from models.experimental.diffusion_gemma.tt.traced_denoise import (
     UPFRONT_DENOISE_STEPS,
+    set_active_reveal_pmax,
     set_default_reveal_pmax,
     upfront_capture_enabled,
     upfront_traced_denoise_block,
@@ -233,6 +234,79 @@ def _coarse_prefill_buckets_enabled() -> bool:
         "yes",
         "on",
     )
+
+
+def _reveal_buckets_enabled() -> bool:
+    """Whether the up-front denoise trace binds a per-request reveal-span bucket.
+
+    Off (default), every capture binds the deployment-wide worst case
+    (DG_DENOISE_REVEAL_PMAX / max_model_len) and every denoise step pays that
+    span's SDPA regardless of the live request: measured 440 ms/step at 262144
+    against 205 ms/step at 4096 for the same block (P150x4, 2026-08-10). On,
+    captures bind the smallest power-of-two span covering the request's current
+    prefix plus one canvas, growing by release-and-recapture at block
+    boundaries when a long generation crosses its bucket.
+    """
+    return os.environ.get("DG_DENOISE_REVEAL_BUCKETS", "0").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def _reveal_bucket_floor() -> int:
+    """Smallest reveal bucket (default 4096): below this the span no longer dominates."""
+    raw = os.environ.get("DG_REVEAL_BUCKET_FLOOR", "").strip()
+    floor = int(raw) if raw else 4096
+    if floor <= 0 or floor % ttnn.TILE_SIZE:
+        raise RuntimeError(f"DG_REVEAL_BUCKET_FLOOR must be a positive {ttnn.TILE_SIZE}-token multiple, got {floor}")
+    return floor
+
+
+def _reveal_bucket_downshift_enabled() -> bool:
+    """Whether admission may recapture DOWN to a smaller bucket (default on).
+
+    Downshift is what returns the speed after a long request parks the resident
+    bucket high; the 4x hysteresis in ``_resolve_reveal_bucket_change`` keeps
+    alternating short/long traffic from recapturing on every request.
+    """
+    return os.environ.get("DG_REVEAL_BUCKET_DOWNSHIFT", "1").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def _resolve_reveal_bucket(needed_span: int, *, ceiling: int) -> int:
+    """Smallest power-of-two bucket >= max(needed, floor), clipped to the ceiling.
+
+    The ceiling (DG_DENOISE_REVEAL_PMAX / derived max_model_len span) is returned
+    for spans between the last power of two below it and the ceiling itself, so a
+    non-power-of-two ceiling like 261888 still yields a servable bucket. A needed
+    span beyond the ceiling raises — same contract as the fixed-span validation.
+    """
+    needed_span = int(needed_span)
+    ceiling = int(ceiling)
+    if needed_span > ceiling:
+        raise ValueError(f"reveal span {needed_span} exceeds the deployment ceiling {ceiling}")
+    bucket = _reveal_bucket_floor()
+    while bucket < needed_span:
+        bucket *= 2
+    return min(bucket, ceiling)
+
+
+def _resolve_reveal_bucket_change(desired: int, resident: int) -> bool:
+    """Whether a capture at ``resident`` should be rebuilt to serve ``desired``.
+
+    Upshift is mandatory (the mask cannot reveal beyond the captured span);
+    downshift is worth one recapture only when at least 4x of the span comes
+    back, and only when enabled.
+    """
+    if desired > resident:
+        return True
+    return _reveal_bucket_downshift_enabled() and desired * 4 <= resident
 
 
 def _aligned_prefill_len(prompt_len: int) -> int:
@@ -434,6 +508,16 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         # span as an argument without changing the denoise_block_fn protocol; register the
         # resolved value so it does not have to re-read (and re-require) the env var.
         set_default_reveal_pmax(self._upfront_pmax)
+        # Per-request reveal-span buckets: _upfront_pmax stays the CEILING; captures bind
+        # the active bucket registered immediately before each (re)capture. The startup BOS
+        # capture only reveals one tile plus a canvas, so it binds the floor bucket — which
+        # also makes startup capture itself cheaper than a worst-case-span capture.
+        self._upfront_reveal_bucket = None
+        if self._upfront and _reveal_buckets_enabled():
+            self._upfront_reveal_bucket = _resolve_reveal_bucket(
+                ttnn.TILE_SIZE + self.canvas_length, ceiling=self._upfront_pmax
+            )
+            set_active_reveal_pmax(self._upfront_reveal_bucket)
         # Frozen prompt-prefix KV reuse (APC prototype, #47466): a single registry
         # shared across sessions so a request whose aligned prompt is a prefix of the
         # resident contiguous-cache prompt can skip its prefill. Inert unless
@@ -964,6 +1048,105 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         finally:
             self._upfront_rebuild_in_progress = False
 
+    def _reveal_upshift_needed_span(self, session) -> int | None:
+        """Span the next block needs when it no longer fits the resident bucket.
+
+        ``adapter.prompt_len`` is the request's CURRENT revealed base (it advances
+        with every committed block), so a long generation crossing its capture
+        bucket is detected here, at a block boundary, before the replay's own
+        rebind validation would reject it.
+        """
+        if not (self._upfront and _reveal_buckets_enabled()):
+            return None
+        adapter = self._persistent_adapter
+        controller = getattr(adapter, "_upfront_traced_denoise_controller", None) if adapter is not None else None
+        if controller is None or not getattr(controller, "captured", False):
+            return None
+        resident = int(getattr(controller, "reveal_pmax", 0) or 0)
+        needed = int(getattr(adapter, "prompt_len", 0) or 0) + self.canvas_length
+        return needed if resident and needed > resident else None
+
+    def _rebuild_for_reveal_upshift(self, session, *, needed_span: int, row: int):
+        """Release the resident traces and recapture at a bigger bucket mid-request.
+
+        Same primitive as the cold-prefill rebuild — the capture decodes the live
+        session's next block while tracing, so this call RETURNS that block's
+        emission — minus the prefill compile (the session keeps its cache; only
+        the denoise span grows). Buckets double, so a generation reaching span S
+        pays O(log2(S/floor)) recaptures over its whole lifetime.
+        """
+        if getattr(self, "_upfront_rebuild_in_progress", False):
+            raise RuntimeError("concurrent up-front reveal upshift is unsupported")
+        if any(existing is not session for existing in self._sessions.values()):
+            # Recapture invalidates every session's traces; with more than one
+            # active sequence this needs the batched-capture ownership story.
+            raise RuntimeError("reveal-span upshift requires the growing request to be the only active session")
+        new_bucket = _resolve_reveal_bucket(needed_span, ceiling=int(self._upfront_pmax))
+        resident = int(self._upfront_reveal_bucket or 0)
+        self._upfront_rebuild_in_progress = True
+        _metric(
+            "reveal_upshift_begin",
+            row=row,
+            needed_span=needed_span,
+            resident=resident,
+            desired=new_bucket,
+            rebuild_index=int(getattr(self, "_upfront_rebuilds", 0)) + 1,
+        )
+        try:
+            # NOT release_persistent_capture(): that detaches every active request and
+            # resets the adapter, and this request must survive the recapture. Release
+            # only the controller (traces + its device buffers); the adapter keeps its
+            # live request state and the capture rebuilds its mask/RoPE buffers at the
+            # new span (prepare_reveal_mask_buffers releases-then-resizes).
+            adapter = self._persistent_adapter
+            attr = "_upfront_traced_denoise_controller"
+            controller = getattr(adapter, attr, None)
+            if controller is not None:
+                controller.release()
+                delattr(adapter, attr)
+            self._persistent_adapter = None  # republished after a successful capture
+            ttnn.synchronize_device(self.model[0].mesh_device)
+            set_active_reveal_pmax(new_bucket)
+            recapture_holes = self._reserve_cold_recapture_holes()
+            try:
+                emission, adapter, trace_stats = self._capture_prefilled_session(session)
+            finally:
+                self._release_cold_recapture_holes(recapture_holes)
+            session._persistent_adapter = adapter
+            self._persistent_adapter = adapter
+            self._upfront_reveal_bucket = new_bucket
+            self._upfront_rebuilds = int(getattr(self, "_upfront_rebuilds", 0)) + 1
+            _metric(
+                "reveal_upshift_complete",
+                row=row,
+                bucket=new_bucket,
+                rebuilds=self._upfront_rebuilds,
+                trace_stats=trace_stats,
+                dram=_dram_snapshot(self.model[0].mesh_device),
+            )
+            return emission
+        except BaseException as upshift_error:
+            set_active_reveal_pmax(resident or None)
+            adapter = getattr(session, "_logits_fn", None)
+            self._persistent_adapter = None
+            self._release_unpublished_adapter(adapter, label="failed reveal-upshift")
+            session._logits_fn = None
+            session._persistent_adapter = None
+            try:
+                ttnn.synchronize_device(self.model[0].mesh_device)
+            except BaseException as cleanup_error:
+                logger.error(f"failed to synchronize after reveal-upshift error: {cleanup_error}")
+            _metric(
+                "reveal_upshift_failed",
+                row=row,
+                needed_span=needed_span,
+                desired=new_bucket,
+                error=repr(upshift_error),
+            )
+            raise
+        finally:
+            self._upfront_rebuild_in_progress = False
+
     def warmup_model_decode(self, *args, **kwargs):
         """No-op: model-level denoise needs no separate decode warmup."""
         del args, kwargs
@@ -1078,6 +1261,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
                 execution_len = None
                 session = self._make_session()
             cold_rebuild = False
+            desired_bucket = None
             if upfront:
                 if self._persistent_adapter is None:
                     raise RuntimeError(
@@ -1091,6 +1275,25 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
                         f"aligned prefill plus canvas exceeds fixed reveal span: "
                         f"{cache_len} + {self.canvas_length} > {p_max}"
                     )
+                if _reveal_buckets_enabled() and self._upfront_reveal_bucket is not None:
+                    candidate = _resolve_reveal_bucket(cache_len + self.canvas_length, ceiling=int(p_max))
+                    if _resolve_reveal_bucket_change(candidate, int(self._upfront_reveal_bucket)):
+                        # Committed (active span registered, tracker updated) only around
+                        # the rebuild call below, so the rejection path and a failed
+                        # rebuild leave the resident capture's bookkeeping intact.
+                        desired_bucket = candidate
+                        logger.info(
+                            f"[DiffusionGemma vLLM] reveal bucket change "
+                            f"{self._upfront_reveal_bucket} -> {desired_bucket} for cache_len={cache_len}; "
+                            "releasing the resident trace before recapture"
+                        )
+                        _metric(
+                            "reveal_bucket_change",
+                            row=row,
+                            cache_len=cache_len,
+                            resident=int(self._upfront_reveal_bucket),
+                            desired=desired_bucket,
+                        )
                 warmed = getattr(self, "_upfront_prefill_warmup_lens", frozenset())
                 if not _prefill_execution_len_is_warmed(execution_len, warmed):
                     if _lazy_prefill_recapture_enabled():
@@ -1161,17 +1364,30 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
                         self._sessions[row] = session
                         blocks.append(self._stop_block(session))
                         continue
+            if desired_bucket is not None:
+                cold_rebuild = True
             if upfront and not cold_rebuild:
                 session.attach_persistent_adapter(self._persistent_adapter)
             ttft_t0 = time.perf_counter()
             try:
                 if cold_rebuild:
-                    cache_len, emission = self._rebuild_for_cold_prefill(
-                        session,
-                        prompt_tokens,
-                        expected_cache_len=cache_len,
-                        execution_len=execution_len,
-                    )
+                    if desired_bucket is not None:
+                        set_active_reveal_pmax(desired_bucket)
+                    try:
+                        cache_len, emission = self._rebuild_for_cold_prefill(
+                            session,
+                            prompt_tokens,
+                            expected_cache_len=cache_len,
+                            execution_len=execution_len,
+                        )
+                    except BaseException:
+                        if desired_bucket is not None:
+                            # The failed capture never published; the next capture must
+                            # bind whatever bucket the tracker still records.
+                            set_active_reveal_pmax(self._upfront_reveal_bucket)
+                        raise
+                    if desired_bucket is not None:
+                        self._upfront_reveal_bucket = desired_bucket
                 else:
                     cache_len = session.prefill(prompt_tokens)
                     emission = session.decode_block()
@@ -1265,7 +1481,11 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
                 blocks.append(self._stop_block(session))
                 continue
             try:
-                emission = session.decode_block()
+                upshift_span = self._reveal_upshift_needed_span(session)
+                if upshift_span is not None:
+                    emission = self._rebuild_for_reveal_upshift(session, needed_span=upshift_span, row=row)
+                else:
+                    emission = session.decode_block()
             except BaseException:
                 # Detach the failed request. A model-lifetime up-front capture remains
                 # owned by the wrapper and is released only at terminal shutdown.

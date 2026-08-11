@@ -1433,3 +1433,208 @@ def test_device_two_sequential_requests_match_eager_without_recapture(upfront_de
             assert stats["traces_captured"] == 48
     finally:
         wrapper.release_persistent_capture()
+
+
+# --- reveal-span buckets (DG_DENOISE_REVEAL_BUCKETS) ----------------------------
+# The up-front capture binds ONE fixed span; buckets re-capture at a per-request
+# power-of-two span instead of the deployment worst case (measured 440 ms/step at
+# 262144 vs 205 ms/step at 4096 for the same block, P150x4 2026-08-10). These are
+# host-side policy and orchestration tests; the capture itself is exercised by the
+# device suites above.
+
+
+def test_reveal_bucket_resolution(expect_error):
+    pytest.importorskip("vllm")
+    from models.experimental.diffusion_gemma.tt import generator_vllm as GV
+
+    assert GV._resolve_reveal_bucket(1, ceiling=262144) == 4096  # floor
+    assert GV._resolve_reveal_bucket(4096, ceiling=262144) == 4096
+    assert GV._resolve_reveal_bucket(4097, ceiling=262144) == 8192
+    assert GV._resolve_reveal_bucket(70000, ceiling=262144) == 131072
+    # A non-power-of-two ceiling still yields a servable bucket.
+    assert GV._resolve_reveal_bucket(200000, ceiling=261888) == 261888
+    with expect_error(ValueError, match="exceeds the deployment ceiling"):
+        GV._resolve_reveal_bucket(262145, ceiling=262144)
+
+
+def test_reveal_bucket_floor_env(monkeypatch, expect_error):
+    pytest.importorskip("vllm")
+    from models.experimental.diffusion_gemma.tt import generator_vllm as GV
+
+    monkeypatch.setenv("DG_REVEAL_BUCKET_FLOOR", "8192")
+    assert GV._resolve_reveal_bucket(1, ceiling=262144) == 8192
+    monkeypatch.setenv("DG_REVEAL_BUCKET_FLOOR", "1000")  # not a tile multiple
+    with expect_error(RuntimeError, match="DG_REVEAL_BUCKET_FLOOR"):
+        GV._resolve_reveal_bucket(1, ceiling=262144)
+
+
+def test_reveal_bucket_change_policy(monkeypatch):
+    pytest.importorskip("vllm")
+    from models.experimental.diffusion_gemma.tt import generator_vllm as GV
+
+    # Upshift is mandatory.
+    assert GV._resolve_reveal_bucket_change(8192, 4096) is True
+    # Downshift needs 4x hysteresis: adjacent buckets never ping-pong.
+    assert GV._resolve_reveal_bucket_change(4096, 8192) is False
+    assert GV._resolve_reveal_bucket_change(4096, 16384) is True
+    assert GV._resolve_reveal_bucket_change(4096, 4096) is False
+    monkeypatch.setenv("DG_REVEAL_BUCKET_DOWNSHIFT", "0")
+    assert GV._resolve_reveal_bucket_change(4096, 16384) is False
+    assert GV._resolve_reveal_bucket_change(32768, 16384) is True
+
+
+def _reveal_upshift_wrapper(generator_vllm, *, session, adapter):
+    wrapper = object.__new__(generator_vllm.DiffusionGemmaForCausalLM)
+    wrapper.model = [SimpleNamespace(mesh_device="mesh")]
+    wrapper.canvas_length = 256
+    wrapper._upfront = True
+    wrapper._upfront_pmax = 262144
+    wrapper._upfront_reveal_bucket = 4096
+    wrapper._upfront_rebuild_in_progress = False
+    wrapper._upfront_rebuilds = 0
+    wrapper._sessions = {0: session}
+    wrapper._persistent_adapter = adapter
+    return wrapper
+
+
+def test_vllm_reveal_upshift_detection(monkeypatch):
+    pytest.importorskip("vllm")
+    from models.experimental.diffusion_gemma.tt import generator_vllm
+
+    monkeypatch.setenv("DG_DENOISE_REVEAL_BUCKETS", "1")
+    controller = SimpleNamespace(captured=True, reveal_pmax=4096)
+    adapter = SimpleNamespace(
+        _upfront_traced_denoise_controller=controller,
+        prompt_len=3968,  # 3968 + 256 = 4224 > 4096
+        use_reveal_mask=True,
+    )
+    session = SimpleNamespace()
+    wrapper = _reveal_upshift_wrapper(generator_vllm, session=session, adapter=adapter)
+
+    assert wrapper._reveal_upshift_needed_span(session) == 4224
+    adapter.prompt_len = 3840  # 3840 + 256 = 4096 fits exactly
+    assert wrapper._reveal_upshift_needed_span(session) is None
+    monkeypatch.setenv("DG_DENOISE_REVEAL_BUCKETS", "0")
+    adapter.prompt_len = 3968
+    assert wrapper._reveal_upshift_needed_span(session) is None
+
+
+def test_vllm_reveal_upshift_recaptures_on_live_session(monkeypatch):
+    pytest.importorskip("vllm")
+    import ttnn
+
+    from models.experimental.diffusion_gemma.tt import generator_vllm
+
+    monkeypatch.setenv("DG_DENOISE_REVEAL_BUCKETS", "1")
+    events = []
+    spans = []
+    emission = SimpleNamespace(tokens=torch.zeros((1, 256), dtype=torch.long))
+    controller = SimpleNamespace(captured=True, reveal_pmax=4096, release=lambda: events.append("controller_release"))
+    adapter = SimpleNamespace(
+        _upfront_traced_denoise_controller=controller,
+        prompt_len=3968,
+        use_reveal_mask=True,
+    )
+    session = SimpleNamespace(_logits_fn=adapter, _persistent_adapter=None)
+    wrapper = _reveal_upshift_wrapper(generator_vllm, session=session, adapter=adapter)
+
+    def capture_prefilled(captured_session):
+        assert captured_session is session
+        # The resident controller must be gone before a fresh capture can bind.
+        assert not hasattr(adapter, "_upfront_traced_denoise_controller")
+        events.append("capture")
+        return emission, adapter, [{"traces_captured": 48}]
+
+    wrapper._capture_prefilled_session = capture_prefilled
+    wrapper._reserve_cold_recapture_holes = lambda: events.append("holes") or []
+    wrapper._release_cold_recapture_holes = lambda reservations: events.append("holes_released")
+    monkeypatch.setattr(ttnn, "synchronize_device", lambda mesh: events.append("sync"))
+    monkeypatch.setattr(generator_vllm, "set_active_reveal_pmax", lambda span: spans.append(span))
+    monkeypatch.setattr(generator_vllm, "_metric", lambda *args, **kwargs: None)
+    monkeypatch.setattr(generator_vllm, "_dram_snapshot", lambda *args, **kwargs: {})
+
+    actual = wrapper._rebuild_for_reveal_upshift(session, needed_span=4224, row=0)
+
+    assert actual is emission
+    assert events == ["controller_release", "sync", "holes", "capture", "holes_released"]
+    assert spans == [8192]
+    assert wrapper._upfront_reveal_bucket == 8192
+    assert wrapper._persistent_adapter is adapter
+    assert session._persistent_adapter is adapter
+    assert wrapper._upfront_rebuilds == 1
+    assert wrapper._upfront_rebuild_in_progress is False
+    # The live session was never detached.
+    assert wrapper._sessions == {0: session}
+
+
+def test_vllm_reveal_upshift_failure_restores_span_and_unpublishes(monkeypatch, expect_error):
+    pytest.importorskip("vllm")
+    import ttnn
+
+    from models.experimental.diffusion_gemma.tt import generator_vllm
+
+    monkeypatch.setenv("DG_DENOISE_REVEAL_BUCKETS", "1")
+    spans = []
+    released = []
+    controller = SimpleNamespace(captured=True, reveal_pmax=4096, release=lambda: None)
+    adapter = SimpleNamespace(
+        _upfront_traced_denoise_controller=controller,
+        prompt_len=3968,
+        use_reveal_mask=True,
+    )
+    session = SimpleNamespace(_logits_fn=adapter, _persistent_adapter=None)
+    wrapper = _reveal_upshift_wrapper(generator_vllm, session=session, adapter=adapter)
+
+    def failing_capture(captured_session):
+        raise RuntimeError("capture blew up")
+
+    wrapper._capture_prefilled_session = failing_capture
+    wrapper._reserve_cold_recapture_holes = lambda: []
+    wrapper._release_cold_recapture_holes = lambda reservations: None
+    monkeypatch.setattr(ttnn, "synchronize_device", lambda mesh: None)
+    monkeypatch.setattr(generator_vllm, "set_active_reveal_pmax", lambda span: spans.append(span))
+    monkeypatch.setattr(
+        generator_vllm.DiffusionGemmaForCausalLM,
+        "_release_unpublished_adapter",
+        staticmethod(lambda a, *, label: released.append((a, label))),
+    )
+    monkeypatch.setattr(generator_vllm, "_metric", lambda *args, **kwargs: None)
+
+    with expect_error(RuntimeError, match="capture blew up"):
+        wrapper._rebuild_for_reveal_upshift(session, needed_span=4224, row=0)
+
+    # Attempted bucket first, then restored to the still-recorded resident.
+    assert spans == [8192, 4096]
+    assert wrapper._upfront_reveal_bucket == 4096
+    assert wrapper._persistent_adapter is None
+    assert session._logits_fn is None
+    assert session._persistent_adapter is None
+    assert released and released[0][1] == "failed reveal-upshift"
+    assert wrapper._upfront_rebuild_in_progress is False
+
+
+def test_vllm_reveal_upshift_refuses_extra_sessions(monkeypatch, expect_error):
+    pytest.importorskip("vllm")
+    from models.experimental.diffusion_gemma.tt import generator_vllm
+
+    monkeypatch.setenv("DG_DENOISE_REVEAL_BUCKETS", "1")
+    controller = SimpleNamespace(captured=True, reveal_pmax=4096, release=lambda: None)
+    adapter = SimpleNamespace(_upfront_traced_denoise_controller=controller, prompt_len=3968)
+    session = SimpleNamespace(_logits_fn=adapter, _persistent_adapter=None)
+    wrapper = _reveal_upshift_wrapper(generator_vllm, session=session, adapter=adapter)
+    wrapper._sessions = {0: session, 1: SimpleNamespace()}
+
+    with expect_error(RuntimeError, match="only active session"):
+        wrapper._rebuild_for_reveal_upshift(session, needed_span=4224, row=0)
+
+
+def test_active_reveal_pmax_overrides_env(monkeypatch):
+    monkeypatch.setenv("DG_DENOISE_REVEAL_PMAX", "262144")
+    adapter = SimpleNamespace(tt_model=None)
+    try:
+        TD.set_active_reveal_pmax(8192)
+        assert TD._resolve_reveal_pmax(adapter) == 8192
+        TD.set_active_reveal_pmax(None)
+        assert TD._resolve_reveal_pmax(adapter) == 262144
+    finally:
+        TD.set_active_reveal_pmax(None)
