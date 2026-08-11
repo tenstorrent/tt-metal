@@ -219,10 +219,11 @@ def read_wait_globals(
             command_pointer = int(triage_state.cmd_ptr)
         except TimeoutDeviceRegisterError:
             raise
-        except Exception:
-            last_wait_count = _read_symbol_value(kernel_elf, "last_wait_count", loc_mem_access, check_value=True)
-            last_wait_stream = _read_symbol_value(kernel_elf, "last_wait_stream", loc_mem_access, check_value=True)
-            command_pointer = _read_symbol_value(kernel_elf, "cmd_ptr", loc_mem_access, check_value=True)
+        except Exception as e:
+            log_check(
+                False,
+                f"Failed to read dispatch_s triage state for kernel {dispatcher_core_data.kernel_name} on {risc_name}: {e}",
+            )
     else:
         last_wait_count = _read_symbol_value(
             kernel_elf, "last_wait_count", loc_mem_access, check_value=is_dispatcher_kernel
