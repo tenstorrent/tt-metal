@@ -481,5 +481,5 @@ that contains them.
 ## 10. Commit SHAs
 
 * `48dd8e2caa7` — optimized decoder, tests, sweep/collect/repro scripts, docs and evidence.
-* the follow-up commit recorded in the runner log — the six stage-review items in §6,
-  their measurements, and the regenerated artifacts.
+* `df5c3988f12` — the seven stage-review items in §6, their measurements, and the
+  regenerated artifacts.
