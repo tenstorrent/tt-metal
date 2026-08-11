@@ -4,7 +4,6 @@
 
 #include "high_bw_all_gather_unicast_factory.hpp"
 #include "high_bw_all_gather_scheduler.hpp"
-#include "kernels/snake_ring.hpp"
 
 #include <array>
 #include <cstddef>
@@ -13,6 +12,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/mesh_ring_plan.hpp"
 
 namespace ttnn::operations::experimental::high_bw_all_gather {
 
@@ -320,28 +320,30 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
         linearized_mesh_ring,
         axis);
     const auto mesh_shape = mesh_device->shape();
-    const auto snake_orientation = operation_attributes.snake_ring_orientation;
-    const auto snake_ring_coordinate = [&](uint32_t index) {
-        return MeshCoordinate(
-            snake_ring::coordinate_row(index, mesh_shape[0], mesh_shape[1], snake_orientation),
-            snake_ring::coordinate_col(index, mesh_shape[0], mesh_shape[1], snake_orientation));
-    };
-    const uint32_t device_idx =
-        linearized_mesh_ring
-            ? snake_ring::index_from_coordinate(
-                  sender_device_coord[0], sender_device_coord[1], mesh_shape[0], mesh_shape[1], snake_orientation)
-            : ::ttnn::ccl::get_linearized_index_from_physical_coord(
-                  input_tensor, sender_device_coord, std::optional<uint32_t>{operation_attributes.cluster_axis});
-
-    auto fwd_coord = linearized_mesh_ring
-                         ? std::optional<MeshCoordinate>{snake_ring_coordinate((device_idx + 1) % num_devices)}
-                         : ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
-                               input_tensor, sender_device_coord, 1, topology, axis);
-    auto bwd_coord =
-        linearized_mesh_ring
-            ? std::optional<MeshCoordinate>{snake_ring_coordinate((device_idx + num_devices - 1) % num_devices)}
-            : ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
-                  input_tensor, sender_device_coord, -1, topology, axis);
+    TT_FATAL(
+        !linearized_mesh_ring ||
+            (operation_attributes.mesh_rows == mesh_shape[0] && operation_attributes.mesh_cols == mesh_shape[1]),
+        "cached full mesh-ring shape {}x{} does not match live mesh shape {}",
+        operation_attributes.mesh_rows,
+        operation_attributes.mesh_cols,
+        mesh_shape);
+    const ttnn::operations::ccl::common::MeshRingPlan mesh_ring_plan{
+        .cluster_axis = linearized_mesh_ring ? std::nullopt : std::optional<uint32_t>{axis},
+        .full_mesh = linearized_mesh_ring,
+        .orientation = operation_attributes.snake_ring_orientation,
+        .mesh_rows = linearized_mesh_ring ? operation_attributes.mesh_rows : mesh_shape[0],
+        .mesh_cols = linearized_mesh_ring ? operation_attributes.mesh_cols : mesh_shape[1],
+        .ring_size = num_devices,
+        .num_links = operation_attributes.num_links,
+        .topology = topology,
+        .fabric_config = operation_attributes.fabric_config,
+        .axis_topology = operation_attributes.axis_topology,
+        .route_plan_hash = operation_attributes.neighbor_route_plan_hash};
+    const auto mesh_ring_position =
+        ttnn::operations::ccl::common::get_mesh_ring_position(input_tensor, sender_device_coord, mesh_ring_plan);
+    const uint32_t device_idx = mesh_ring_position.transport_rank;
+    auto fwd_coord = mesh_ring_position.forward_coord;
+    auto bwd_coord = mesh_ring_position.backward_coord;
 
     // Stripes a direction sends from a device: ring -> N/2; line fwd -> d+1, bwd -> N-d; 0 at a dead endpoint.
     // Also queried for the downstream device to choose granular vs single data_valid signalling.

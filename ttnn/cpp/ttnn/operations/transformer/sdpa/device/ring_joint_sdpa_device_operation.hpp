@@ -50,7 +50,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     int32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     uint32_t num_links,
-    uint32_t cluster_axis,
+    std::optional<uint32_t> cluster_axis,
     const MeshDevice& mesh_device,
     ttnn::ccl::Topology topology,
     CoreCoord ccl_core_grid_offset,

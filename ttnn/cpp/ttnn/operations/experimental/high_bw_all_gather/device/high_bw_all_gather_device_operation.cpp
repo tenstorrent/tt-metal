@@ -9,29 +9,14 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/mesh_ring_plan.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
-
-#include <tt-metalium/experimental/fabric/pipeline_builder.hpp>
 
 #include <algorithm>
 
 namespace ttnn::operations::experimental::high_bw_all_gather {
 
 namespace CMAKE_UNIQUE_NAMESPACE {
-
-std::optional<uint32_t> normalize_tensor_dim(int dim, uint32_t rank) {
-    const int normalized_dim = dim < 0 ? static_cast<int>(rank) + dim : dim;
-    if (normalized_dim < 0 || normalized_dim >= static_cast<int>(rank)) {
-        return std::nullopt;
-    }
-    return static_cast<uint32_t>(normalized_dim);
-}
-
-bool placement_shards_dim(
-    const tt::tt_metal::distributed::MeshMapperConfig::Placement& placement, uint32_t gather_dim, uint32_t rank) {
-    const auto* shard = std::get_if<tt::tt_metal::distributed::MeshMapperConfig::Shard>(&placement);
-    return shard != nullptr && normalize_tensor_dim(shard->dim, rank) == gather_dim;
-}
 
 tt::tt_metal::TensorTopology derive_output_topology(
     const Tensor& input_tensor, const std::optional<uint32_t>& cluster_axis, uint32_t gather_dim) {
@@ -53,149 +38,13 @@ tt::tt_metal::TensorTopology derive_output_topology(
         // A full-mesh ring consumes every shard placement of the gather dimension.
         const uint32_t rank = input_tensor.logical_shape().rank();
         for (auto& placement : output_placements) {
-            if (placement_shards_dim(placement, gather_dim, rank)) {
+            if (ttnn::operations::ccl::common::placement_shards_tensor_dim(placement, gather_dim, rank)) {
                 placement = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
             }
         }
     }
     return tt::tt_metal::TensorTopology(
         input_topology.distribution_shape(), std::move(output_placements), input_topology.mesh_coords());
-}
-
-MeshCoordinate snake_ring_coordinate(
-    uint32_t index, const tt::tt_metal::distributed::MeshShape& shape, snake_ring::Orientation orientation) {
-    return MeshCoordinate(
-        snake_ring::coordinate_row(index, shape[0], shape[1], orientation),
-        snake_ring::coordinate_col(index, shape[0], shape[1], orientation));
-}
-
-bool has_row_major_mesh_coordinates(const Tensor& tensor) {
-    const auto& mesh_coords = tensor.tensor_topology().mesh_coords();
-    const auto shape = tensor.device()->shape();
-    if (mesh_coords.size() != shape.mesh_size()) {
-        return false;
-    }
-    uint32_t index = 0;
-    for (const auto& coord : tt::tt_metal::distributed::MeshCoordinateRange(shape)) {
-        if (mesh_coords[index++] != coord) {
-            return false;
-        }
-    }
-    return true;
-}
-
-uint32_t gather_shard_factor(const Tensor& tensor, uint32_t gather_dim) {
-    const auto& topology = tensor.tensor_topology();
-    const auto& distribution_shape = topology.distribution_shape();
-    const auto& placements = topology.placements();
-    if (placements.size() != distribution_shape.dims()) {
-        return 0;
-    }
-    uint32_t factor = 1;
-    const uint32_t rank = tensor.logical_shape().rank();
-    for (uint32_t axis = 0; axis < distribution_shape.dims(); ++axis) {
-        if (placement_shards_dim(placements[axis], gather_dim, rank)) {
-            factor *= distribution_shape[axis];
-        }
-    }
-    return factor;
-}
-
-// Proves that every neighbor edge used by the unicast implementation is a single physical Fabric hop and has all
-// requested links. A Fabric2D logical axis must not be admitted merely because a route exists: this program only
-// emits one-hop sends to its immediate mesh neighbors.
-std::optional<uint64_t> resolve_direct_neighbor_route_hash(
-    const Tensor& tensor,
-    const std::optional<uint32_t>& axis,
-    uint32_t num_links,
-    tt::tt_fabric::Topology topology,
-    snake_ring::Orientation snake_orientation = snake_ring::Orientation::Row,
-    bool log_rejection = true) {
-    auto* mesh_device = tensor.device();
-    const auto shape = mesh_device->shape();
-    const bool linearized_mesh_ring = !axis.has_value();
-    if ((axis.has_value() && shape[*axis] < 2) || num_links == 0) {
-        return std::nullopt;
-    }
-
-    const bool is_ring = linearized_mesh_ring || topology == tt::tt_fabric::Topology::Ring;
-    auto hash = ttsl::hash::hash_objects_with_default_seed(
-        axis, linearized_mesh_ring, snake_orientation, num_links, shape, topology);
-    const uint32_t group_count = linearized_mesh_ring ? 1 : shape[1 - *axis];
-    const uint32_t rank_count = linearized_mesh_ring ? shape.mesh_size() : shape[*axis];
-    for (uint32_t group = 0; group < group_count; ++group) {
-        for (uint32_t rank = 0; rank < rank_count; ++rank) {
-            const auto source_coord = linearized_mesh_ring
-                                          ? snake_ring_coordinate(rank, shape, snake_orientation)
-                                          : (*axis == 0 ? MeshCoordinate(rank, group) : MeshCoordinate(group, rank));
-            const auto source = mesh_device->get_fabric_node_id(source_coord);
-            for (const int32_t offset : {-1, 1}) {
-                const int32_t destination_rank_signed = static_cast<int32_t>(rank) + offset;
-                if (!is_ring && (destination_rank_signed < 0 || destination_rank_signed >= rank_count)) {
-                    continue;  // A linear endpoint has no neighbor in this direction.
-                }
-                const auto destination_rank = static_cast<uint32_t>(
-                    (destination_rank_signed + static_cast<int32_t>(rank_count)) % static_cast<int32_t>(rank_count));
-                const auto destination_coord = linearized_mesh_ring
-                                                   ? snake_ring_coordinate(destination_rank, shape, snake_orientation)
-                                                   : (*axis == 0 ? MeshCoordinate(destination_rank, group)
-                                                                 : MeshCoordinate(group, destination_rank));
-                const auto destination = mesh_device->get_fabric_node_id(destination_coord);
-                const auto direction = tt::tt_fabric::pipeline_get_forwarding_direction(source, destination);
-                if (!direction.has_value()) {
-                    if (log_rejection) {
-                        log_warning(
-                            tt::LogOp,
-                            "high_bw_all_gather rejected non-routable neighbor edge {} -> {}",
-                            source_coord,
-                            destination_coord);
-                    }
-                    return std::nullopt;
-                }
-                const auto neighbors = tt::tt_fabric::pipeline_get_chip_neighbors(source, *direction);
-                const auto mesh_it = neighbors.find(*destination.mesh_id);
-                if (mesh_it == neighbors.end() ||
-                    std::find(mesh_it->second.begin(), mesh_it->second.end(), destination.chip_id) ==
-                        mesh_it->second.end()) {
-                    if (log_rejection) {
-                        log_warning(
-                            tt::LogOp,
-                            "high_bw_all_gather rejected non-direct neighbor edge {} -> {}",
-                            source_coord,
-                            destination_coord);
-                    }
-                    return std::nullopt;
-                }
-                const auto link_indices = tt::tt_fabric::get_forwarding_link_indices(source, destination);
-                for (uint32_t link = 0; link < num_links; ++link) {
-                    if (std::find(link_indices.begin(), link_indices.end(), link) == link_indices.end()) {
-                        if (log_rejection) {
-                            log_warning(
-                                tt::LogOp,
-                                "high_bw_all_gather neighbor edge {} -> {} does not provide requested link {}; "
-                                "usable links={}",
-                                source_coord,
-                                destination_coord,
-                                link,
-                                link_indices);
-                        }
-                        return std::nullopt;
-                    }
-                }
-                hash = ttsl::hash::hash_objects(
-                    hash,
-                    source.mesh_id,
-                    source.chip_id,
-                    destination.mesh_id,
-                    destination.chip_id,
-                    group,
-                    rank,
-                    destination_rank,
-                    link_indices);
-            }
-        }
-    }
-    return hash;
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
@@ -254,10 +103,10 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_miss(
             mesh_shape,
             static_cast<uint32_t>(args.snake_ring_orientation));
         TT_FATAL(
-            has_row_major_mesh_coordinates(input_tensor),
+            ttnn::operations::ccl::common::has_row_major_mesh_coordinates(input_tensor),
             "high_bw_all_gather full-mesh ring currently requires row-major tensor mesh coordinates");
         TT_FATAL(
-            gather_shard_factor(input_tensor, args.dim) == args.num_devices,
+            ttnn::operations::ccl::common::tensor_dim_shard_factor(input_tensor, args.dim) == args.num_devices,
             "high_bw_all_gather full-mesh ring requires the input to be sharded over gather dim {} across all {} "
             "devices",
             args.dim,
@@ -507,34 +356,16 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
     const size_t packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     const bool one_active_axis = (axis_num_devices[0] > 1) != (axis_num_devices[1] > 1);
     const bool fabric_is_2d = ::tt::tt_fabric::is_2d_fabric_config(fabric_config);
-    snake_ring::Orientation snake_orientation = snake_ring::Orientation::Row;
-    if (linearized_mesh_ring && mesh_shape[0] % 2 != 0) {
-        snake_orientation = snake_ring::Orientation::Column;
-    }
+    snake_ring::Orientation snake_orientation =
+        linearized_mesh_ring && mesh_shape[0] % 2 != 0 ? snake_ring::Orientation::Column : snake_ring::Orientation::Row;
     std::optional<uint64_t> direct_neighbor_route_hash;
-    if (linearized_mesh_ring && fabric_is_2d) {
-        for (const auto candidate : {snake_ring::Orientation::Row, snake_ring::Orientation::Column}) {
-            const uint32_t lane_count = candidate == snake_ring::Orientation::Row ? mesh_shape[0] : mesh_shape[1];
-            if (lane_count % 2 != 0) {
-                continue;
-            }
-            const uint32_t closing_axis = candidate == snake_ring::Orientation::Row ? 0 : 1;
-            auto candidate_hash = resolve_direct_neighbor_route_hash(
-                input_tensor, std::nullopt, collective_num_links, axis_topology[closing_axis], candidate, false);
-            if (candidate_hash.has_value()) {
-                snake_orientation = candidate;
-                direct_neighbor_route_hash = candidate_hash;
-                break;
-            }
+    if (fabric_is_2d && (linearized_mesh_ring || one_active_axis)) {
+        const auto mesh_ring_plan = ttnn::operations::ccl::common::resolve_mesh_ring_plan(
+            input_tensor, cluster_axis, collective_num_links, axis_topology, true, "high_bw_all_gather");
+        if (mesh_ring_plan.has_value()) {
+            snake_orientation = mesh_ring_plan->orientation;
+            direct_neighbor_route_hash = mesh_ring_plan->route_plan_hash;
         }
-        if (!direct_neighbor_route_hash.has_value()) {
-            const uint32_t closing_axis = snake_orientation == snake_ring::Orientation::Row ? 0 : 1;
-            direct_neighbor_route_hash = resolve_direct_neighbor_route_hash(
-                input_tensor, std::nullopt, collective_num_links, axis_topology[closing_axis], snake_orientation, true);
-        }
-    } else if (!linearized_mesh_ring && fabric_is_2d && one_active_axis) {
-        direct_neighbor_route_hash = resolve_direct_neighbor_route_hash(
-            input_tensor, cluster_axis, collective_num_links, axis_topology[*cluster_axis]);
     }
     const uint32_t active_axis = cluster_axis.value_or(0);
     const auto active_topology = axis_topology[active_axis];
