@@ -59,7 +59,9 @@ def parse_runids():
 
 
 def pcc(a, b):
-    x, y = a.flatten().float(), b.flatten().float()
+    # float64: in fp32 the dot/norm accumulation over millions of elements rounds enough to return values
+    # slightly ABOVE 1.0 (seen: 1.000036), which reads as a broken metric in a report.
+    x, y = a.flatten().double(), b.flatten().double()
     x = x - x.mean()
     y = y - y.mean()
     d = (x.norm() * y.norm()).item()
@@ -97,7 +99,15 @@ def main():
 
         o = call("pcc")
         ttnn.synchronize_device(dev)
-        res["pcc"] = round(pcc(ref, ttnn.to_torch(ttnn.from_device(o))[0, 0]), 6)
+        got = ttnn.to_torch(ttnn.from_device(o))[0, 0]
+        res["pcc"] = round(pcc(ref, got), 6)
+        # EXPLICIT finite check, separate from PCC. A handful of NaN/Inf among millions of elements barely
+        # moves PCC but is a hard correctness failure -- BUG_rscatter_nonfinite.md on this branch was exactly
+        # that. Count them rather than just asserting, so a regression says how bad it is.
+        finite = torch.isfinite(got)
+        res["n_nonfinite"] = int((~finite).sum())
+        res["finite"] = bool(res["n_nonfinite"] == 0)
+        res["out_absmax"] = round(float(got[finite].abs().max()) if finite.any() else float("nan"), 4)
 
         for b in range(NBLOCKS):
             for _ in range(WARMUP):
