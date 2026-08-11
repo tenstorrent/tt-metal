@@ -457,7 +457,7 @@ class TtDFlashDrafter:
         # mesh-sharded tensor is the local shard (cf. mla.py:1378 `seq_len_local = q.shape[2]`), and the
         # table is SP-sharded on dim 2, so its logical chunk_global rows arrive here as chunk_local. This
         # still catches the failure mode it is here for: a full-depth table shards to cache_seq/sp >= seq
-        # per chip, which would rope rows [0, seq) of the wrong slab.
+        # per chip, which would rope rows [0, seq) of the wrong aligned 5k chunk.
         assert cos.shape[2] == seq, (
             f"rope table per-chip seq {cos.shape[2]} != chunk_local {seq} (global {chunk_global}); "
             f"rotary_embedding_hf would silently rope the wrong positions"
