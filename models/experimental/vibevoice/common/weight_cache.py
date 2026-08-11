@@ -49,19 +49,18 @@ def resolve_weight_cache(
     Enabled by default for every caller; ``VV_DISABLE_WEIGHT_CACHE=1`` turns it off. The directory
     is ``weight_cache_dir`` → ``$VV_WEIGHT_CACHE_DIR`` → ``$TT_CACHE_PATH/vibevoice/weight_cache`` →
     ``generated/ttnn/vibevoice/weight_cache``. The cache key folds in the checkpoint identity and the
-    weight-value-affecting flags (``VV_FUSED_ROPE`` → ``rope{0,1}``, ``VV_POST_SCALE_FOLD`` →
-    ``fold{0,1}``). Pass ``submodule`` to get the namespaced child (``"lm"``, ``"acoustic_tokenizer"``,
-    …) matching what ``from_checkpoint`` uses, so component tests share its cache files.
+    weight-value-affecting flags (``VV_POST_SCALE_FOLD`` → ``fold{0,1}``). Pass ``submodule`` to get
+    the namespaced child (``"lm"``, ``"acoustic_tokenizer"``, …) matching what ``from_checkpoint``
+    uses, so component tests share its cache files.
     """
     if os.environ.get("VV_DISABLE_WEIGHT_CACHE", "").lower() in ("1", "true", "yes"):
         return WeightCache(None, enabled=False)
     cache_dir = weight_cache_dir or os.environ.get("VV_WEIGHT_CACHE_DIR") or default_weight_cache_root()
-    # Must track _FUSED_ROPE's default in tt/ttnn_vibevoice_lm.py: the flag permutes wq/wk at load,
-    # so keying a fused-RoPE run as rope0 would reuse unpermuted cached weights and silently produce
-    # wrong output.
-    rope = 1 if os.environ.get("VV_FUSED_ROPE", "1") == "1" else 0
+    # ``rope1`` is fixed: fused RoPE is unconditional (it permutes wq/wk at load), so every cached
+    # weight set is the permuted one.  The segment is kept in the key so caches written before the
+    # flag was removed still resolve.
     fold = 1 if os.environ.get("VV_POST_SCALE_FOLD", "") == "1" else 0
-    wc = WeightCache.for_checkpoint(cache_dir, model_path, enabled=True, variant=f"rope{rope}_fold{fold}")
+    wc = WeightCache.for_checkpoint(cache_dir, model_path, enabled=True, variant=f"rope1_fold{fold}")
     return wc.child(submodule) if submodule else wc
 
 

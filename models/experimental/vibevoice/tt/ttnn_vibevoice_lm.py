@@ -17,7 +17,6 @@ Device forward:
 """
 
 import math
-import os
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
@@ -306,12 +305,13 @@ def preprocess_lm_weights(
     _lm_head_key = "lm_head.weight" if "lm_head.weight" in state_dict else "tok_embeddings.weight"
     lm_head_tt = _tile(lambda: state_dict[_lm_head_key], device, wc, "lm_head")
 
-    # Adjacent-pair head_dim reorder for the fused RoPE kernel (see _FUSED_ROPE).  Only the ROTATED
-    # projections move — wq, wk and their biases — so wv/wo and the residual stream are untouched.
-    _perm = _interleave_perm(config.head_dim) if _FUSED_ROPE else None
+    # Adjacent-pair head_dim reorder for the fused RoPE kernel (see the RoPE section below).  Only
+    # the ROTATED projections move — wq, wk and their biases — so wv/wo and the residual stream are
+    # untouched.
+    _perm = _interleave_perm(config.head_dim)
 
     def _rope_perm(key: str, t: torch.Tensor) -> torch.Tensor:
-        if _perm is None or not key.endswith(("attention.wq", "attention.wk")):
+        if not key.endswith(("attention.wq", "attention.wk")):
             return t
         return _permute_head_dim(t, config.head_dim, _perm)
 
@@ -400,8 +400,8 @@ def preprocess_lm_weights(
 # RoPE helpers (host precomputation, device application)
 # ──────────────────────────────────────────────────────────────
 
-# VV_FUSED_ROPE=1 replaces the 9-op fp32 RoPE chain in the hot batch-2 decode with
-# ttnn.experimental.rotary_embedding_llama and builds/reads the cos/sin tables entirely on device.
+# RoPE is the FUSED one throughout: ttnn.experimental.rotary_embedding_llama in the hot batch-2
+# decode (replacing a 9-op fp32 chain), with the cos/sin tables built and read entirely on device.
 # The kernel pairs ADJACENT head_dim elements while VibeVoice/HF pair (i, i + hd/2), so the bridge
 # is a relabelling of head_dim: permuting the ROTATED projections' out dim (wq, wk and their biases)
 # by _interleave_perm at load makes q/k emerge already adjacent-paired, and permuting the cos/sin
@@ -411,15 +411,8 @@ def preprocess_lm_weights(
 # table.  The decode paths take the kernel's bf16 RoPE, which leaves greedy tokens unchanged but is
 # not bit-exact.
 #
-# Default ON.  It was previously shipped OFF because a long-form render showed the speaking rate
-# accelerating while every energy/spectral gate still passed — a pacing regression the per-op gates
-# do not catch — and has since been re-validated to hold natural pacing on the current frame.
-# VV_FUSED_ROPE=0 restores the fp32 RoPE rows.
-#
-# NOTE: this default must stay in lockstep with resolve_weight_cache's rope{0,1} variant key in
-# common/weight_cache.py — the flag PERMUTES wq/wk at load, so a mismatched key would load
-# unpermuted weights from a stale cache directory and silently produce wrong output.
-_FUSED_ROPE = os.environ.get("VV_FUSED_ROPE", "1") == "1"
+# NOTE: the load-time wq/wk permute is why resolve_weight_cache (common/weight_cache.py) pins the
+# ``rope1`` cache-key segment — a cache written without the permute must never be reused here.
 
 
 def _interleave_perm(head_dim: int) -> np.ndarray:
@@ -434,35 +427,6 @@ def _interleave_perm(head_dim: int) -> np.ndarray:
 def _permute_head_dim(t: torch.Tensor, head_dim: int, perm: np.ndarray) -> torch.Tensor:
     """Reorder head_dim WITHIN each head of a projection weight [n*hd, in] or bias [n*hd]."""
     return t.reshape(-1, head_dim, *t.shape[1:])[:, perm].reshape(t.shape)
-
-
-def _build_rope_cache(seq_len: int, head_dim: int, rope_theta: float = 1_000_000.0):
-    """Build cos/sin RoPE tables using numpy. Returns numpy arrays [S, head_dim]."""
-    half = head_dim // 2
-    inv_freq = (1.0 / (rope_theta ** (np.arange(0, half, dtype=np.float32) * 2.0 / head_dim))).astype(np.float32)
-    positions = np.arange(seq_len, dtype=np.float32)
-    freqs = np.outer(positions, inv_freq)  # [S, half]
-    emb = np.concatenate([freqs, freqs], axis=-1).astype(np.float32)  # [S, head_dim]
-    return np.cos(emb).astype(np.float32), np.sin(emb).astype(np.float32)
-
-
-def _build_rope_cache_tt(
-    seq_len: int,
-    head_dim: int,
-    device,
-    rope_theta: float = 1_000_000.0,
-) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
-    """Build RoPE cos/sin on device. Returns [1, 1, seq_len, head_dim] TILE."""
-    cos, sin = _build_rope_cache(seq_len, head_dim, rope_theta)  # numpy [S, hd]
-    cos_4d = cos[np.newaxis, np.newaxis, :, :]  # [1, 1, S, head_dim]
-    sin_4d = sin[np.newaxis, np.newaxis, :, :]
-    cos_tt = ttnn.as_tensor(
-        cos_4d, device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
-    sin_tt = ttnn.as_tensor(
-        sin_4d, device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
-    return cos_tt, sin_tt
 
 
 def _build_rope_tables_dev(
@@ -509,98 +473,21 @@ def _build_rope_tables_dev(
     return cos_tt, sin_tt, cos_emb, sin_emb
 
 
-def _rotate_half_ttnn(x: ttnn.Tensor) -> ttnn.Tensor:
-    """Rotate half: [B, n, S, hd] → [-x2, x1] where x = [x1 | x2], hd split in half."""
-    sh = x.shape
-    B, n, S, hd = sh[0], sh[1], sh[2], sh[3]
-    half = hd // 2
-    x1 = ttnn.slice(x, [0, 0, 0, 0], [B, n, S, half], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    x2 = ttnn.slice(x, [0, 0, 0, half], [B, n, S, hd], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    return ttnn.concat(
-        [ttnn.neg(x2, memory_config=ttnn.DRAM_MEMORY_CONFIG), x1], dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
-
-
-def _apply_rope_ttnn(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
-    """Apply RoPE in float32 (matches reference fp32 RoPE numerics)."""
-    x_f32 = ttnn.typecast(x, ttnn.float32)
-    rotated = ttnn.add(
-        ttnn.mul(x_f32, cos, memory_config=ttnn.DRAM_MEMORY_CONFIG),
-        ttnn.mul(_rotate_half_ttnn(x_f32), sin, memory_config=ttnn.DRAM_MEMORY_CONFIG),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    return ttnn.typecast(rotated, ttnn.bfloat16)
-
-
-def _rope_neg_sin(sin: ttnn.Tensor) -> ttnn.Tensor:
-    """concat(-sin[:hd/2], sin[hd/2:]) — the sign of rotate_half folded into the sin row."""
-    hd = sin.shape[-1]
-    half = hd // 2
-    s1 = ttnn.slice(sin, [0, 0, 0, 0], [sin.shape[0], 1, 1, half], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    s2 = ttnn.slice(sin, [0, 0, 0, half], [sin.shape[0], 1, 1, hd], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    return ttnn.concat(
-        [ttnn.neg(s1, memory_config=ttnn.DRAM_MEMORY_CONFIG), s2], dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
-
-
-def _rope_b2_tables(rope_rows) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
-    """Stack both CFG rows' RoPE constants ONCE per frame: (cos [2,1,1,hd], nsin [2,1,1,hd]).
-
-    The rows are position-dependent but layer-independent, so all 28 layers share these.
-    ~10 ops per frame, against the ~870 ops/frame `_apply_rope_b2` removes.
-    """
-    cos2 = ttnn.concat([r[0] for r in rope_rows], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    nsin2 = ttnn.concat([_rope_neg_sin(r[1]) for r in rope_rows], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    return cos2, nsin2
-
-
-def _apply_rope_b2(x: ttnn.Tensor, cos2: ttnn.Tensor, nsin2: ttnn.Tensor) -> ttnn.Tensor:
-    """RoPE on BOTH CFG rows at once: [2,n,1,hd] bf16 -> [2,n,1,hd] bf16, in 4 ops.
-
-    Byte-identical (measured maxabsdiff==0) to two per-row `_apply_rope_ttnn` calls, which
-    cost 9 ops each.  Three independent rewrites, each exact:
-
-    * `rotate_half(x)*sin == roll(x, hd/2, -1) * concat(-sin1, sin2)`.  Rolling right by hd/2
-      yields concat(x2, x1), and pairing it with the pre-negated sin gives concat(-x2*s1, x1*s2)
-      — the same products with the sign flipped on the operand instead of the result, which is
-      IEEE-exact.  Replaces slice/slice/neg/concat with one data-movement op.
-    * Batching the two CFG rows.  These are elementwise ops, so a row's result does not depend
-      on the other row; slicing after == slicing before.  Halves the number of calls.
-    * Dropping both typecasts.  `mul(bf16, fp32)->fp32` upcasts exactly (bf16->fp32 is lossless),
-      and asking the final `add` for bf16 packs with the same round-to-nearest-even the trailing
-      `typecast` applied.
-
-    Measured (isolated, one layer's worth): q 37.6 -> 14.5 us (2.60x), k 25.2 -> 8.8 us (2.88x),
-    both maxabsdiff==0.  Deployed frame 4235 -> 3489 ops and 38.89 -> 37.68 ms; end-to-end
-    2p_goat decode 22.89 -> 24.63 tok/s (+7.6%, 3 interleaved reps each, spread <=0.1).  The
-    600-token render is byte-identical (same sha256) to the pre-change one.
-    NOTE `ttnn.roll` is not a single kernel -- it expands to slice/slice/concat -- so the roll
-    rewrite pays only for the dropped `neg`; the batching and the typecast removal are the bulk.
-    """
-    half = x.shape[-1] // 2
-    return ttnn.add(
-        ttnn.mul(x, cos2, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.float32),
-        ttnn.mul(ttnn.roll(x, half, -1), nsin2, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.float32),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        dtype=ttnn.bfloat16,
-    )
-
-
 def _apply_rope_interleaved_ttnn(
     x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor, trans_mat: ttnn.Tensor
 ) -> ttnn.Tensor:
-    """Adjacent-pair RoPE in float32 — for equal cos/sin values, byte-identical to _apply_rope_ttnn
-    on the permuted layout.
+    """Adjacent-pair RoPE in float32 — for equal cos/sin values, byte-identical to the half-split
+    fp32 rotate (``x*cos + rotate_half(x)*sin``) on the permuted layout.
 
     The adjacent-pair rotate [-x1, x0, -x3, x2, …] is a signed permutation, so ``x @ trans_mat``
     reproduces it exactly for the bf16-valued q/k the projections emit (verified bit-exact at every
-    decode and prefill shape); the surrounding fp32 mul/add/typecasts match _apply_rope_ttnn op for
-    op.  Used by prefill, which therefore keeps its fp32 RoPE numerics.
+    decode and prefill shape); the surrounding fp32 mul/add matches the half-split chain op for op.
+    Used by prefill, which therefore keeps its fp32 RoPE numerics.
     """
     # Leading BF16->FP32 widen and trailing FP32->BF16 narrow are folded away (byte-identical):
     # mul(bf16, fp32)->fp32 upcasts losslessly, the matmul against the signed-permutation trans_mat
     # reproduces the rotate exactly for bf16-valued x (dtype=fp32 out), and add(dtype=bf16) packs with
-    # the same round-to-nearest-even the dropped typecast applied.  Same fold as _apply_rope_b2.
+    # the same round-to-nearest-even the dropped typecast applied.
     return ttnn.add(
         ttnn.mul(x, cos, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.float32),
         ttnn.mul(
@@ -726,9 +613,6 @@ class TTVibeVoiceLM:
         self.scale = 1.0 / math.sqrt(self.cfg.head_dim)
         # Precompute full RoPE tables on device once (sliced per call via ttnn.slice)
         max_len = self.cfg.max_position_embeddings
-        self._fused_rope = _FUSED_ROPE
-        if not self._fused_rope:
-            self._cos_tt, self._sin_tt = _build_rope_cache_tt(max_len, self.cfg.head_dim, device, self.cfg.rope_theta)
         # Causal-mask state for the fp32 prefill path (see _causal_mask).  The host builds only
         # the [S, S] triangular block, keyed by chunk length; the widened per-chunk mask lives in
         # a single slot so device DRAM stays flat across a chunked prefill.
@@ -737,38 +621,12 @@ class TTVibeVoiceLM:
         self._mask_tt: Optional[ttnn.Tensor] = None
 
         # ── Trace-safe decode state (Phase C) ──────────────────────────────
-        # Host RoPE rows: the traced decode writes a per-position [1,1,1,hd] cos/sin
-        # row into a persistent device buffer each step (instead of slicing the device
-        # table with a Python-int position, which would bake into the trace).
-        if self._fused_rope:
-            # PART 1 on device: adjacent-pair tables built by ttnn arange/mul/cos/sin, no numpy
-            # tables at all (so no host RoPE rows exist — PART 2 gathers them on device below).
-            self._cos_tt, self._sin_tt, self._cos_emb, self._sin_emb = _build_rope_tables_dev(
-                max_len, self.cfg.head_dim, device, self.cfg.rope_theta
-            )
-            self._cos_np = self._sin_np = None
-        else:
-            self._cos_np, self._sin_np = _build_rope_cache(
-                max_len, self.cfg.head_dim, self.cfg.rope_theta
-            )  # [max_len, hd]
-            # On-device bf16 RoPE tables [max_len, hd] ROW_MAJOR for the llama-style path: the row
-            # for a DEVICE position is gathered on-device via ttnn.embedding (bf16-only), so the
-            # position can advance on-device (plus_one) with no per-step host RoPE write.  bf16 RoPE
-            # closely tracks the fp32 host rows and does not flip greedy tokens.
-            self._cos_emb = ttnn.as_tensor(
-                torch.from_numpy(self._cos_np).to(torch.bfloat16),
-                device=device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            self._sin_emb = ttnn.as_tensor(
-                torch.from_numpy(self._sin_np).to(torch.bfloat16),
-                device=device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+        # PART 1 on device: adjacent-pair tables built by ttnn arange/mul/cos/sin, so no host RoPE
+        # rows exist at all — PART 2 gathers the per-position row on device from the device position
+        # (which can then self-advance with plus_one inside a trace).
+        self._cos_tt, self._sin_tt, self._cos_emb, self._sin_emb = _build_rope_tables_dev(
+            max_len, self.cfg.head_dim, device, self.cfg.rope_theta
+        )
         # Height-sharded L1 memcfg for the paged_update_cache input [1,1,n_kv,hd]
         # (heads tile-padded to 32, one batch row => one core).  paged_update_cache
         # takes a device-tensor write index so the KV write position varies per replay.
@@ -787,43 +645,42 @@ class TTVibeVoiceLM:
             ttnn.BufferType.L1,
             ttnn.ShardSpec(_shard_grid_b2, [32, self.cfg.head_dim], ttnn.ShardOrientation.ROW_MAJOR),
         )
-        if self._fused_rope:
-            # PART 3 resources.  rotary_embedding_llama's decode mode wants [1,B,heads,hd]
-            # height-sharded L1 with a TILE_HEIGHT-tall shard — which _kv_update_shard_mc already
-            # is, so the rotated K feeds paged_update_cache with no extra conversion.  The kernel's
-            # ±1 matrix is tile-local (32×32, bf16); the fp32 applies use the full head_dim one.
-            self._rope_trans_bf16 = ttnn.as_tensor(
-                get_rot_transformation_mat(dhead=32),
-                device=device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.MemoryConfig(
-                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                    ttnn.BufferType.L1,
-                    ttnn.ShardSpec(_shard_grid, [32, 32], ttnn.ShardOrientation.ROW_MAJOR),
-                ),
-            )
-            # Batch-2 variant: the ±1 matrix must be REPLICATED per core (llama's
-            # RotarySetup does `.repeat(1, 1, batch, 1)`), not split across them — a single
-            # tile height-sharded over 2 cores leaves core 1 reading garbage.
-            self._rope_trans_bf16_b2 = ttnn.as_tensor(
-                get_rot_transformation_mat(dhead=32).repeat(1, 1, 2, 1),
-                device=device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.MemoryConfig(
-                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                    ttnn.BufferType.L1,
-                    ttnn.ShardSpec(_shard_grid_b2, [32, 32], ttnn.ShardOrientation.ROW_MAJOR),
-                ),
-            )
-            self._rope_trans_f32 = ttnn.as_tensor(
-                get_rot_transformation_mat(dhead=self.cfg.head_dim),
-                device=device,
-                dtype=ttnn.float32,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+        # PART 3 resources.  rotary_embedding_llama's decode mode wants [1,B,heads,hd]
+        # height-sharded L1 with a TILE_HEIGHT-tall shard — which _kv_update_shard_mc already
+        # is, so the rotated K feeds paged_update_cache with no extra conversion.  The kernel's
+        # ±1 matrix is tile-local (32×32, bf16); the fp32 applies use the full head_dim one.
+        self._rope_trans_bf16 = ttnn.as_tensor(
+            get_rot_transformation_mat(dhead=32),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(_shard_grid, [32, 32], ttnn.ShardOrientation.ROW_MAJOR),
+            ),
+        )
+        # Batch-2 variant: the ±1 matrix must be REPLICATED per core (llama's
+        # RotarySetup does `.repeat(1, 1, batch, 1)`), not split across them — a single
+        # tile height-sharded over 2 cores leaves core 1 reading garbage.
+        self._rope_trans_bf16_b2 = ttnn.as_tensor(
+            get_rot_transformation_mat(dhead=32).repeat(1, 1, 2, 1),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(_shard_grid_b2, [32, 32], ttnn.ShardOrientation.ROW_MAJOR),
+            ),
+        )
+        self._rope_trans_f32 = ttnn.as_tensor(
+            get_rot_transformation_mat(dhead=self.cfg.head_dim),
+            device=device,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
     def alloc_kv_cache(self, max_seq: int, dtype: ttnn.DataType = ttnn.bfloat16, batch: int = 1) -> KVCache:
         """Preallocate a fixed-size KV cache sized to ``max_seq`` (rounded up).
@@ -1041,12 +898,8 @@ class TTVibeVoiceLM:
                 sin_tt = ttnn.slice(
                     sin_tt, [0, 0, start_pos, 0], [1, 1, start_pos + S, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG
                 )
-            if self._fused_rope:
-                q = _apply_rope_interleaved_ttnn(q, cos_tt, sin_tt, self._rope_trans_f32)
-                k = _apply_rope_interleaved_ttnn(k, cos_tt, sin_tt, self._rope_trans_f32)
-            else:
-                q = _apply_rope_ttnn(q, cos_tt, sin_tt)
-                k = _apply_rope_ttnn(k, cos_tt, sin_tt)
+            q = _apply_rope_interleaved_ttnn(q, cos_tt, sin_tt, self._rope_trans_f32)
+            k = _apply_rope_interleaved_ttnn(k, cos_tt, sin_tt, self._rope_trans_f32)
 
         if S > 1:
             # ── Prefill: fp32 manual attention reading the fixed-cache prefix ──
@@ -1391,18 +1244,11 @@ class TTVibeVoiceLM:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # [1, n_heads/n_kv, 1, hd]
 
-        # RoPE via the per-position row (broadcasts over the head dim; same numerics
-        # as the eager sliced-table path).  cos_row/sin_row are the height-sharded bf16 rows on the
-        # fused path, where the rotate also delivers the [1,B,heads,hd] layout used below.
-        if self._fused_rope:
-            q_dec = self._rope_decode_fused(q, cos_row, sin_row)
-            k_1bkd = self._rope_decode_fused(k, cos_row, sin_row)
-        else:
-            q = _apply_rope_ttnn(q, cos_row, sin_row)
-            k = _apply_rope_ttnn(k, cos_row, sin_row)
-            q_dec = ttnn.permute(q, (0, 2, 1, 3))  # [1, B, n_heads, hd]
-            # KV write at cur_pos: paged_update_cache needs input [1,B,n_kv,hd] height-sharded L1.
-            k_1bkd = ttnn.to_memory_config(ttnn.permute(k, (0, 2, 1, 3)), self._kv_update_shard_mc)
+        # RoPE via the per-position row (broadcasts over the head dim).  cos_row/sin_row are the
+        # height-sharded bf16 rows, and the rotate also delivers the [1,B,heads,hd] layout used
+        # below — the q permute and the KV write's [1,B,n_kv,hd] shard are absorbed into it.
+        q_dec = self._rope_decode_fused(q, cos_row, sin_row)
+        k_1bkd = self._rope_decode_fused(k, cos_row, sin_row)
         v_1bkd = ttnn.to_memory_config(ttnn.permute(v, (0, 2, 1, 3)), self._kv_update_shard_mc)
         ttnn.experimental.paged_update_cache(
             kv_cache.keys[layer_idx], k_1bkd, update_idxs_tensor=cur_pos, page_table=None
@@ -1477,8 +1323,6 @@ class TTVibeVoiceLM:
     def forward_decode_traced_embeds(
         self,
         inputs_embeds: ttnn.Tensor,
-        cos_row: ttnn.Tensor,
-        sin_row: ttnn.Tensor,
         cur_pos: ttnn.Tensor,
         kv_cache: KVCache,
         return_last_hidden: bool = False,
@@ -1486,6 +1330,10 @@ class TTVibeVoiceLM:
         lm_head_w: Optional[ttnn.Tensor] = None,
     ) -> Tuple[Optional[ttnn.Tensor], Optional[ttnn.Tensor]]:
         """Capturable single-token decode over an already-embedded input [1,1,1,hidden].
+
+        The RoPE rows come from ``cur_pos`` on device, so the whole step — RoPE-row selection
+        included — is driven by the device position tensor (llama pattern) and nothing is written
+        from host per step.
 
         ``need_logits=False`` skips the lm_head projection entirely (used by the negative-CFG
         forward, whose logits are discarded — bit-exact, saves the full lm_head).  ``lm_head_w``
@@ -1495,10 +1343,8 @@ class TTVibeVoiceLM:
         x = inputs_embeds
         if x.dtype == ttnn.float32:
             x = ttnn.typecast(x, ttnn.bfloat16)
-        if self._fused_rope:
-            # PART 2 on device: cos/sin come from cur_pos via the device table, so the caller's
-            # host-written rows are unused (and are not even built — see __init__).
-            cos_row, sin_row = self._rope_rows_sharded(cur_pos)
+        # PART 2 on device: cos/sin gathered from cur_pos via the device table.
+        cos_row, sin_row = self._rope_rows_sharded(cur_pos)
         for layer_idx in range(cfg.num_hidden_layers):
             x = self._transformer_layer_traced(x, layer_idx, cos_row, sin_row, cur_pos, kv_cache)
         x = ttnn.rms_norm(
@@ -1585,12 +1431,6 @@ class TTVibeVoiceLM:
             out.append(ttnn.to_memory_config(ttnn.reshape(t, [1, 2, n, hd]), self._kv_update_shard_mc_b2))
         return out[0], out[1], out[2]
 
-    def _rope_decode_fused_b2(self, t: ttnn.Tensor, cos_sh: ttnn.Tensor, sin_sh: ttnn.Tensor) -> ttnn.Tensor:
-        """_rope_decode_fused over BOTH CFG rows at once.  [2, n, 1, hd] → [1, 2, n, hd] sharded."""
-        return ttnn.experimental.rotary_embedding_llama(
-            self._to_sdpa_b2(t), cos_sh, sin_sh, self._rope_trans_bf16_b2, is_decode_mode=True
-        )
-
     def _rope_decode_fused(self, t: ttnn.Tensor, cos_sh: ttnn.Tensor, sin_sh: ttnn.Tensor) -> ttnn.Tensor:
         """PART 3 on device: adjacent-pair RoPE on a decode q or k via the fused kernel.
 
@@ -1600,19 +1440,6 @@ class TTVibeVoiceLM:
         """
         t = ttnn.to_memory_config(ttnn.permute(t, (0, 2, 1, 3)), self._kv_update_shard_mc)
         return ttnn.experimental.rotary_embedding_llama(t, cos_sh, sin_sh, self._rope_trans_bf16, is_decode_mode=True)
-
-    def forward_decode_traced_embeds_dev_rope(
-        self,
-        inputs_embeds: ttnn.Tensor,
-        cur_pos: ttnn.Tensor,
-        kv_cache: KVCache,
-        return_last_hidden: bool = False,
-    ) -> Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]:
-        """Like forward_decode_traced_embeds but the RoPE rows are gathered ON DEVICE from
-        cur_pos (bf16) instead of supplied as host-written fp32 rows — so the whole step,
-        including RoPE-row selection, is driven by the device position tensor (llama pattern)."""
-        cos_row, sin_row = self._rope_rows_from_pos(cur_pos)
-        return self.forward_decode_traced_embeds(inputs_embeds, cos_row, sin_row, cur_pos, kv_cache, return_last_hidden)
 
     # ── CFG batch-2 fused decode (pos row0 + neg row1 in one B=2 forward) ─────────
     # The two CFG forwards (pos-LM, neg-LM) are weight-DRAM-bound at M=1, so batching
@@ -1631,7 +1458,6 @@ class TTVibeVoiceLM:
         x: ttnn.Tensor,  # [2,1,1,H]  row0=pos, row1=neg
         layer_w: LayerWeights,
         rope_rows,  # per-row [1,1,1,hd] [(cos0,sin0),(cos1,sin1)], or ONE (cos,sin) [1,2,1,hd]
-        rope_b2,  # (cos2, nsin2) [2,1,1,hd] stacked once per frame — fp32-RoPE path
         cur_positions,  # [cur_pos0, cur_pos1] per-row [1] int32, or ONE [2] int32 (shared cache)
         kv_caches,  # [kv0, kv1] separate [1,..] caches, or ONE shared batch-2 KVCache
         layer_idx: int,
@@ -1655,44 +1481,21 @@ class TTVibeVoiceLM:
         if layer_w.qkv_bias is not None:
             qkv = ttnn.add(qkv, layer_w.qkv_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        shared = isinstance(kv_caches, KVCache)
-        # The batched path slices the projection straight into the attention layout; the per-row
-        # and prefill paths still need the head-split op.
-        split_direct = shared and self._fused_rope
-        if not split_direct:
-            q, k, v = ttnn.experimental.nlp_create_qkv_heads(
-                qkv,
-                num_heads=n_heads,
-                num_kv_heads=n_kv,
-                transpose_k_heads=False,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )  # [2, n_heads/n_kv, 1, hd]
-
-        if shared:
+        if isinstance(kv_caches, KVCache):
             # ── Shared batch-2 cache: ONE attention for both CFG rows ──────────────────
-            if split_direct:
-                # nlp_create_qkv_heads runs on 2 cores (it shards over batch) and its output is
-                # then permuted into the [1,2,n,hd] the batched attention wants.  Slicing the
-                # projection and reshaping straight into that layout does the same rearrangement
-                # in ops that spread over the whole grid.  Exact: both are pure relabelings of
-                # the same contiguous [q|k|v] row.
-                q_s, k_s, v_dec = self._qkv_split_b2(qkv)
-                cos_sh, sin_sh = rope_rows
-                q_dec = ttnn.experimental.rotary_embedding_llama(
-                    q_s, cos_sh, sin_sh, self._rope_trans_bf16_b2, is_decode_mode=True
-                )
-                k_dec = ttnn.experimental.rotary_embedding_llama(
-                    k_s, cos_sh, sin_sh, self._rope_trans_bf16_b2, is_decode_mode=True
-                )
-            elif self._fused_rope:
-                cos_sh, sin_sh = rope_rows
-                q_dec = self._rope_decode_fused_b2(q, cos_sh, sin_sh)  # [1,2,n_heads,hd] sharded
-                k_dec = self._rope_decode_fused_b2(k, cos_sh, sin_sh)  # [1,2,n_kv,hd] sharded
-                v_dec = self._to_sdpa_b2(v)
-            else:
-                q_dec = self._to_sdpa_b2(_apply_rope_b2(q, rope_b2[0], rope_b2[1]))
-                k_dec = self._to_sdpa_b2(_apply_rope_b2(k, rope_b2[0], rope_b2[1]))
-                v_dec = self._to_sdpa_b2(v)
+            # nlp_create_qkv_heads runs on 2 cores (it shards over batch) and its output is then
+            # permuted into the [1,2,n,hd] the batched attention wants.  Slicing the projection and
+            # reshaping straight into that layout does the same rearrangement in ops that spread
+            # over the whole grid.  Exact: both are pure relabelings of the same contiguous
+            # [q|k|v] row.
+            q_s, k_s, v_dec = self._qkv_split_b2(qkv)
+            cos_sh, sin_sh = rope_rows
+            q_dec = ttnn.experimental.rotary_embedding_llama(
+                q_s, cos_sh, sin_sh, self._rope_trans_bf16_b2, is_decode_mode=True
+            )
+            k_dec = ttnn.experimental.rotary_embedding_llama(
+                k_s, cos_sh, sin_sh, self._rope_trans_bf16_b2, is_decode_mode=True
+            )
             ttnn.experimental.paged_update_cache(
                 kv_caches.keys[layer_idx], k_dec, update_idxs_tensor=cur_positions, page_table=None
             )
@@ -1719,13 +1522,16 @@ class TTVibeVoiceLM:
                 memory_config=_QO_DECODE_OUT_MEMCFG,
             )
 
-        # RoPE + the q/k/v permute run BATCHED over both CFG rows, then the rows are split for the
-        # per-row KV caches.  Everything up to the split is elementwise or pure data movement, so
-        # slicing afterwards is byte-identical to the old slice-then-rope-then-permute order — but
-        # it halves the call count and drops RoPE from 9 ops to 4 (see _apply_rope_b2).
-        if not self._fused_rope:
-            qp = ttnn.permute(_apply_rope_b2(q, rope_b2[0], rope_b2[1]), (0, 2, 1, 3))  # [2,1,n_heads,hd]
-            kp = ttnn.permute(_apply_rope_b2(k, rope_b2[0], rope_b2[1]), (0, 2, 1, 3))
+        # ── Two SEPARATE [1,..] caches: split the rows and run the B=1 attention twice ──
+        # The head-split op is only needed here; the batched path above slices the projection
+        # straight into the attention layout.
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            qkv,
+            num_heads=n_heads,
+            num_kv_heads=n_kv,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # [2, n_heads/n_kv, 1, hd]
         vp = ttnn.permute(v, (0, 2, 1, 3))  # [2,1,n_kv,hd]
 
         # Per-row attention on the two separate caches — identical ops to the B=1 path.
@@ -1733,20 +1539,11 @@ class TTVibeVoiceLM:
         for b in range(2):
             cur_pos = cur_positions[b]
             kv_cache = kv_caches[b]
-            if self._fused_rope:
-                cos_row, sin_row = rope_rows[b]
-                qb = ttnn.slice(q, [b, 0, 0, 0], [b + 1, n_heads, 1, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                kb = ttnn.slice(k, [b, 0, 0, 0], [b + 1, n_kv, 1, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                q_dec = self._rope_decode_fused(qb, cos_row, sin_row)
-                k_1bkd = self._rope_decode_fused(kb, cos_row, sin_row)
-            else:
-                q_dec = ttnn.slice(
-                    qp, [b, 0, 0, 0], [b + 1, 1, n_heads, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG
-                )  # [1, 1, n_heads, hd]
-                k_1bkd = ttnn.to_memory_config(
-                    ttnn.slice(kp, [b, 0, 0, 0], [b + 1, 1, n_kv, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG),
-                    self._kv_update_shard_mc,
-                )
+            cos_row, sin_row = rope_rows[b]
+            qb = ttnn.slice(q, [b, 0, 0, 0], [b + 1, n_heads, 1, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            kb = ttnn.slice(k, [b, 0, 0, 0], [b + 1, n_kv, 1, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            q_dec = self._rope_decode_fused(qb, cos_row, sin_row)
+            k_1bkd = self._rope_decode_fused(kb, cos_row, sin_row)
             v_1bkd = ttnn.to_memory_config(
                 ttnn.slice(vp, [b, 0, 0, 0], [b + 1, 1, n_kv, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG),
                 self._kv_update_shard_mc,
@@ -1779,7 +1576,7 @@ class TTVibeVoiceLM:
         )
         return out  # [2,1,1,H]
 
-    def _transformer_layer_traced_b2(self, x, layer_idx, rope_rows, rope_b2, cur_positions, kv_caches) -> ttnn.Tensor:
+    def _transformer_layer_traced_b2(self, x, layer_idx, rope_rows, cur_positions, kv_caches) -> ttnn.Tensor:
         lw = self.w.layers[layer_idx]
         x_norm = ttnn.rms_norm(
             x,
@@ -1788,7 +1585,7 @@ class TTVibeVoiceLM:
             compute_kernel_config=_HIFI4,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        attn_out = self._attention_decode_traced_b2(x_norm, lw, rope_rows, rope_b2, cur_positions, kv_caches, layer_idx)
+        attn_out = self._attention_decode_traced_b2(x_norm, lw, rope_rows, cur_positions, kv_caches, layer_idx)
         x = ttnn.add(x, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         x_norm = ttnn.rms_norm(
             x,
@@ -1807,7 +1604,6 @@ class TTVibeVoiceLM:
     def forward_decode_traced_embeds_b2(
         self,
         embeds_b2: ttnn.Tensor,  # [2,1,1,H]  row0=pos input, row1=neg input
-        rope_rows,  # [(cos0,sin0),(cos1,sin1)]
         cur_positions,  # [cur_pos0, cur_pos1]
         kv_caches,  # [kv0, kv1]
         lm_head_w: Optional[ttnn.Tensor] = None,
@@ -1822,19 +1618,16 @@ class TTVibeVoiceLM:
         x = embeds_b2
         if x.dtype == ttnn.float32:
             x = ttnn.typecast(x, ttnn.bfloat16)
-        if self._fused_rope:
-            # PART 2 on device, once per step: both CFG rows' cos/sin gathered from their device
-            # positions, so the caller's host-written rows are unused (and are not even built).
-            # Shared batch-2 cache → ONE gather landing both rows on their own core.
-            rope_rows = (
-                self._rope_rows_sharded_b2(cur_positions)
-                if isinstance(kv_caches, KVCache)
-                else [self._rope_rows_sharded(p) for p in cur_positions]
-            )
-        # Stack the two CFG rows' cos / sign-folded sin once — they are layer-invariant.
-        rope_b2 = None if self._fused_rope else _rope_b2_tables(rope_rows)
+        # PART 2 on device, once per step (the rows are layer-invariant): both CFG rows' cos/sin
+        # gathered from their device positions.  Shared batch-2 cache → ONE gather landing both
+        # rows on their own core.
+        rope_rows = (
+            self._rope_rows_sharded_b2(cur_positions)
+            if isinstance(kv_caches, KVCache)
+            else [self._rope_rows_sharded(p) for p in cur_positions]
+        )
         for layer_idx in range(cfg.num_hidden_layers):
-            x = self._transformer_layer_traced_b2(x, layer_idx, rope_rows, rope_b2, cur_positions, kv_caches)
+            x = self._transformer_layer_traced_b2(x, layer_idx, rope_rows, cur_positions, kv_caches)
         x = ttnn.rms_norm(
             x,
             weight=self.w.norm_w,

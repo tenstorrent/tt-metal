@@ -164,9 +164,8 @@ def reference_full_prefill_hidden(ref_model, hf_lm_fp32, hf_lm_bf16, inputs: dic
     verified PCC=1.0) so they stay tractable at 32k-64k ISL.
 
     Returns ``(fp32_hidden [B, S, H], bf16_past_key_values, fp32_past_key_values)``; each cache holds
-    post-RoPE keys and raw values per layer. TT matches this under ``VV_FUSED_ROPE=0``; with fused
-    RoPE the stored TT keys use adjacent-pair head_dim order and are remapped in
-    ``compare_kv_cache_pcc``.
+    post-RoPE keys and raw values per layer. The stored TT keys use adjacent-pair head_dim order
+    (fused RoPE) and are remapped back to this layout in ``compare_kv_cache_pcc``.
     """
     with torch.no_grad():
         inputs_embeds = ref_model.model.get_input_embeddings()(inputs["input_ids"]).to(torch.float32)
@@ -197,16 +196,13 @@ def _tt_cache_layer_to_torch(cache_tensor: ttnn.Tensor, n_kv: int, seq_len: int,
 def _tt_k_to_hf_head_dim_layout(tt_k: torch.Tensor, head_dim: int) -> torch.Tensor:
     """Map fused-RoPE TT keys from adjacent-pair head_dim order back to HF half-split order.
 
-    With ``VV_FUSED_ROPE=1``, ``wq``/``wk`` (and cos/sin) are permuted by ``_interleave_perm`` at
-    load so the fused adjacent-pair RoPE kernel matches HF. Attention is invariant to that
-    shared relabelling, but the **stored** post-RoPE K lives in interleaved order — comparing it
-    elementwise to HF's half-split K yields anti-correlated PCC (~-0.12). Values are untouched.
-    When fused RoPE is off, TT already matches HF layout and this is a no-op.
+    ``wq``/``wk`` (and cos/sin) are permuted by ``_interleave_perm`` at load so the fused
+    adjacent-pair RoPE kernel matches HF. Attention is invariant to that shared relabelling, but
+    the **stored** post-RoPE K lives in interleaved order — comparing it elementwise to HF's
+    half-split K yields anti-correlated PCC (~-0.12). Values are untouched.
     """
-    from models.experimental.vibevoice.tt.ttnn_vibevoice_lm import _FUSED_ROPE, _interleave_perm
+    from models.experimental.vibevoice.tt.ttnn_vibevoice_lm import _interleave_perm
 
-    if not _FUSED_ROPE:
-        return tt_k
     perm = _interleave_perm(head_dim)
     inv = torch.empty(head_dim, dtype=torch.long)
     inv[perm] = torch.arange(head_dim, dtype=torch.long)
