@@ -325,11 +325,33 @@ std::vector<Tensor> sort(
 
     // pre_sort_transform_tensor always moves the sort dimension to position -1,
     // so the device op always sorts along the last dimension.
+    //
+    // UINT16 values corrupt for sort widths above 256 (SFPU LO16 tracking limit)
+    // in both 16- and 32-bit dest modes; route those through FLOAT32 (exact for
+    // every uint16 value) and cast the values back after sorting. The indices
+    // output is unaffected (UINT32 via the device-op width rule).
+    const bool widen_u16 = (padded_input_tensor.dtype() == DataType::UINT16 &&
+                            padded_input_tensor.logical_shape()[-1] > 256);
+    if (widen_u16) {
+        padded_input_tensor = ttnn::typecast(padded_input_tensor, DataType::FLOAT32);
+        if (!preallocated_layout_mismatch) {
+            if (output_tensors[0].has_value()) {
+                output_tensors[0] = ttnn::typecast(*output_tensors[0], DataType::FLOAT32);
+            }
+            if (output_tensors[1].has_value()) {
+                output_tensors[1] = ttnn::typecast(*output_tensors[1], DataType::FLOAT32);
+            }
+        }
+    }
     auto sorted_tensors = ttnn::prim::sort(
         padded_input_tensor, static_cast<int8_t>(-1), descending, stable, device_op_mem_cfg, output_tensors);
 
     auto results = dm::post_sort_transform_tensor(
         input_tensor, sorted_tensors, dim, is_dim_last_idx, original_lshape, device_op_mem_cfg);
+
+    if (widen_u16) {
+        results[0] = ttnn::typecast(results[0], DataType::UINT16);
+    }
 
     // The device op always writes to DRAM when sort_mem_cfg is sharded (to avoid
     // shard-spec conflicts with the W-padded intermediate tensor shape).  After
