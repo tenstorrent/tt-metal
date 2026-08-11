@@ -75,6 +75,23 @@ struct TopologySatSolver {
     // Used by the parallel seed portfolio so the first thread to hit SAT cancels the rest. nullptr = no cancel.
     void set_cancel_flag(std::atomic<bool>* flag);
 
+    // Write the current CNF to a DIMACS file (experiment hook: feed an external parallel/clause-sharing solver).
+    // Returns true on success. Variable numbering matches declare_one_more_variable() so a model round-trips.
+    bool write_dimacs(const std::string& path);
+
+    // HYBRID: solve the current formula (+ `assumption_units` baked in as temporary hard units, since gimsatul has
+    // no assumption API) with the external gimsatul binary (path from TT_TOPO_SAT_GIMSATUL_BIN), `threads` workers.
+    // Returns kSat / kUnsat / 0 (unknown, e.g. no binary -> caller should fall back to CaDiCaL). On kSat, val()
+    // returns gimsatul's model until the next solve()/solve_limited(). Requires the clause tee (auto-enabled when
+    // TT_TOPO_SAT_GIMSATUL is set). Lets our solver keep driving descent/decode/enumeration while delegating the
+    // heavy SAT search. See ONESHOT_EXTERNAL_SAT_EXPERIMENT.md.
+    int gimsatul_solve(int threads, const std::vector<int>& assumption_units);
+
+    // HYBRID warm-start: after gimsatul_solve() found a model, bias CaDiCaL's decision phases toward it, so a
+    // subsequent NATIVE incremental descent starts from gimsatul's feasible solution (gimsatul does the heavy first
+    // solve; CaDiCaL does the cheap incremental tightening, reusing its own learned clauses). No-op if no model.
+    void phase_hint_from_last_gimsatul_model();
+
     static constexpr int kSat = 10;
     static constexpr int kUnsat = 20;
 
@@ -84,6 +101,16 @@ private:
     int next_var_ = 0;
     std::size_t num_clauses_ = 0;
     std::size_t num_literals_ = 0;
+    // EXPERIMENT: faithful DIMACS tee. CaDiCaL::write_dimacs drops clauses added incrementally after a solve()
+    // (e.g. the occupancy/host-cap clauses built in solve_minimize_groups), so when dump_record_ is on we record
+    // every literal add()'ed and emit DIMACS from this tape instead. Enabled only when TT_TOPO_SAT_DUMP_DIMACS is
+    // set, so production pays nothing.
+    bool dump_record_ = false;
+    std::vector<int> dump_tape_;
+    // HYBRID: when a gimsatul_solve() found a model, val() answers from it (per-var sign: +1 true, -1 false, 0 unset)
+    // instead of CaDiCaL, until the next native solve()/solve_limited() clears it.
+    bool have_gimsatul_model_ = false;
+    std::vector<signed char> gimsatul_model_;
 };
 
 // Internal SAT function declarations — implemented in topology_solver_sat.cpp.

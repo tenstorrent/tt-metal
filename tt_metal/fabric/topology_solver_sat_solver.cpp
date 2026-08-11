@@ -7,8 +7,11 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <memory>
+#include <unistd.h>
 #include <string>
 #include <string_view>
 
@@ -212,7 +215,15 @@ struct TopologySatSolver::Impl {
     }
 };
 
-TopologySatSolver::TopologySatSolver() : impl_(std::make_unique<Impl>()) {}
+TopologySatSolver::TopologySatSolver() : impl_(std::make_unique<Impl>()) {
+    // Turn on the faithful DIMACS tee when a dump is requested OR the gimsatul hybrid is active (it exports the tape
+    // to feed gimsatul). Production (neither set) pays nothing.
+    const char* dp = std::getenv("TT_TOPO_SAT_DUMP_DIMACS");
+    const char* gm = std::getenv("TT_TOPO_SAT_GIMSATUL");
+    if ((dp != nullptr && dp[0] != '\0') || (gm != nullptr && gm[0] != '\0' && gm[0] != '0')) {
+        dump_record_ = true;
+    }
+}
 
 void TopologySatSolver::configure_for_blocking_clause_enumeration() {
     // Only valid in CONFIGURING state (before the first non-config add()).
@@ -224,6 +235,114 @@ void TopologySatSolver::configure_for_blocking_clause_enumeration() {
 bool TopologySatSolver::set_option(const std::string& name, int value) { return impl_->solver.set(name.c_str(), value); }
 
 void TopologySatSolver::set_cancel_flag(std::atomic<bool>* flag) { impl_->set_cancel(flag); }
+
+bool TopologySatSolver::write_dimacs(const std::string& path) {
+    log_info(
+        tt::LogFabric, "[topo-sat] write_dimacs tee: record={} tape_clauses~={}", dump_record_, num_clauses_);
+    // Faithful export from our own clause tape (CaDiCaL::write_dimacs drops post-solve incremental clauses).
+    if (!dump_record_) {
+        return impl_->solver.write_dimacs(path.c_str()) == nullptr;  // fallback (base encode only)
+    }
+    FILE* f = std::fopen(path.c_str(), "w");
+    if (f == nullptr) {
+        return false;
+    }
+    std::fprintf(f, "p cnf %d %zu\n", next_var_ < 0 ? 0 : next_var_, num_clauses_);
+    for (const int lit : dump_tape_) {
+        if (lit == 0) {
+            std::fputs("0\n", f);
+        } else {
+            std::fprintf(f, "%d ", lit);
+        }
+    }
+    std::fclose(f);
+    return true;
+}
+
+int TopologySatSolver::gimsatul_solve(int threads, const std::vector<int>& assumption_units) {
+    have_gimsatul_model_ = false;
+    const char* bin = std::getenv("TT_TOPO_SAT_GIMSATUL_BIN");
+    if (bin == nullptr || bin[0] == '\0' || !dump_record_) {
+        return 0;  // no binary / no tape -> unknown; caller falls back to native solve
+    }
+    const std::string base = std::string("/tmp/tt_gimsatul_") + std::to_string(static_cast<long>(::getpid()));
+    const std::string cnf = base + ".cnf";
+    const std::string out = base + ".out";
+    // Write the faithful CNF (recorded tape) + the assumption units (gimsatul has no assume()).
+    FILE* f = std::fopen(cnf.c_str(), "w");
+    if (f == nullptr) {
+        return 0;
+    }
+    std::fprintf(f, "p cnf %d %zu\n", next_var_ < 0 ? 0 : next_var_, num_clauses_ + assumption_units.size());
+    for (const int lit : dump_tape_) {
+        if (lit == 0) {
+            std::fputs("0\n", f);
+        } else {
+            std::fprintf(f, "%d ", lit);
+        }
+    }
+    for (const int u : assumption_units) {
+        std::fprintf(f, "%d 0\n", u);
+    }
+    std::fclose(f);
+
+    const std::string cmd =
+        std::string(bin) + " " + cnf + " --threads=" + std::to_string(threads) + " > " + out + " 2>/dev/null";
+    (void)std::system(cmd.c_str());
+
+    FILE* r = std::fopen(out.c_str(), "r");
+    if (r == nullptr) {
+        std::remove(cnf.c_str());
+        return 0;
+    }
+    int status = 0;
+    gimsatul_model_.assign(static_cast<size_t>(next_var_ < 0 ? 0 : next_var_) + 1, 0);
+    static thread_local std::vector<char> buf(1 << 16);
+    while (std::fgets(buf.data(), static_cast<int>(buf.size()), r) != nullptr) {
+        const char* line = buf.data();
+        if (line[0] == 's') {
+            if (std::strstr(line, "UNSATISFIABLE") != nullptr) {
+                status = kUnsat;
+            } else if (std::strstr(line, "SATISFIABLE") != nullptr) {
+                status = kSat;
+            }
+        } else if (line[0] == 'v') {
+            const char* p = line + 1;
+            char* end = nullptr;
+            for (long v = std::strtol(p, &end, 10); p != end; v = std::strtol(p, &end, 10)) {
+                p = end;
+                if (v == 0) {
+                    break;
+                }
+                const long a = v < 0 ? -v : v;
+                if (a >= 1 && a < static_cast<long>(gimsatul_model_.size())) {
+                    gimsatul_model_[static_cast<size_t>(a)] = (v < 0) ? -1 : 1;
+                }
+            }
+        }
+    }
+    std::fclose(r);
+    std::remove(cnf.c_str());
+    std::remove(out.c_str());
+    if (status == kSat) {
+        have_gimsatul_model_ = true;
+    }
+    return status;
+}
+
+void TopologySatSolver::phase_hint_from_last_gimsatul_model() {
+    if (!have_gimsatul_model_) {
+        return;
+    }
+    for (size_t v = 1; v < gimsatul_model_.size(); ++v) {
+        const signed char s = gimsatul_model_[v];
+        if (s > 0) {
+            impl_->phase(static_cast<int>(v));
+        } else if (s < 0) {
+            impl_->phase(-static_cast<int>(v));
+        }
+    }
+}
 
 TopologySatSolver::~TopologySatSolver() = default;
 
@@ -243,6 +362,9 @@ void TopologySatSolver::add(int lit) {
     } else {
         ++num_literals_;
     }
+    if (dump_record_) {
+        dump_tape_.push_back(lit);
+    }
     impl_->add(lit);
 }
 
@@ -252,9 +374,15 @@ void TopologySatSolver::phase(int lit) { impl_->phase(lit); }
 
 void TopologySatSolver::unphase(int lit) { impl_->unphase(lit); }
 
-int TopologySatSolver::solve() { return impl_->solve(); }
+int TopologySatSolver::solve() {
+    have_gimsatul_model_ = false;  // a native solve supersedes any prior gimsatul model
+    return impl_->solve();
+}
 
-int TopologySatSolver::solve_limited(int max_conflicts) { return impl_->solve_limited(max_conflicts); }
+int TopologySatSolver::solve_limited(int max_conflicts) {
+    have_gimsatul_model_ = false;
+    return impl_->solve_limited(max_conflicts);
+}
 
 void TopologySatSolver::set_progress_phase(std::string_view phase) { impl_->set_progress_phase(phase); }
 
@@ -262,6 +390,22 @@ void TopologySatSolver::set_solution_progress(std::int64_t found, std::int64_t t
     impl_->set_solution_progress(found, target);
 }
 
-int TopologySatSolver::val(int lit) const { return impl_->val(lit); }
+int TopologySatSolver::val(int lit) const {
+    // If a gimsatul model is live, answer from it (matches CaDiCaL val semantics: return `lit` if the literal is
+    // satisfied, `-lit` if falsified, 0 if unassigned).
+    if (have_gimsatul_model_) {
+        const long a = lit < 0 ? -static_cast<long>(lit) : static_cast<long>(lit);
+        if (a >= 1 && a < static_cast<long>(gimsatul_model_.size())) {
+            const signed char s = gimsatul_model_[static_cast<size_t>(a)];
+            if (s == 0) {
+                return 0;
+            }
+            const bool lit_true = (lit > 0) ? (s > 0) : (s < 0);
+            return lit_true ? lit : -lit;
+        }
+        return 0;
+    }
+    return impl_->val(lit);
+}
 
 }  // namespace tt::tt_fabric::detail
