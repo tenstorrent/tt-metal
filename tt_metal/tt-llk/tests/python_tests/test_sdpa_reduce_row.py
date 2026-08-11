@@ -52,6 +52,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     generate_input_dim,
 )
+from helpers.tile_constants import FACE_C_DIM, MAX_FACE_R_DIM
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
 
@@ -59,8 +60,6 @@ from helpers.utils import passed_test
 TILE_DIM = 32
 # The reduce span: 8 logical rows, packed into DEST face 0 as 16 rows of 16 lanes.
 LOGICAL_ROWS = 8
-FACE_R_DIM = 16
-FACE_C_DIM = 16
 
 
 # Has a compilation error on coverage (shared with the analog sfpu_reduce_sdpa path,
@@ -108,7 +107,7 @@ def test_sdpa_reduce_row(
     # logical row r spans row-major rows r and r + 8 of that face. Verified on p100a: reducing over the row-major
     # 32-column row instead (what ReduceBlockMaxRowGolden computes) disagrees on exactly the rows where
     # max(A[r, 16:32]) != max(A[r + 8, 0:16]).
-    face0 = src_A_rowmajor[:FACE_R_DIM, :FACE_C_DIM]
+    face0 = src_A_rowmajor[:MAX_FACE_R_DIM, :FACE_C_DIM]
     span = torch.cat(
         [face0[:LOGICAL_ROWS, :], face0[LOGICAL_ROWS : 2 * LOGICAL_ROWS, :]], dim=1
     )  # [8, 32] logical tile
