@@ -31,8 +31,6 @@ void kernel_main() {
     constexpr uint32_t full_stick_size = get_compile_time_arg_val(1);
     constexpr auto dst_args = TensorAccessorArgs<2>();
 
-    constexpr uint32_t WRITE_BATCH = 8;
-
     // ``full_stick_size`` is the logical row width, not necessarily the
     // interleaved buffer's aligned physical page pitch.
     const uint32_t destination_page_size = dst_args.get_aligned_page_size();
@@ -43,8 +41,10 @@ void kernel_main() {
 
     out_cb.wait_front(tiles_per_core);
     uint32_t l1_read_offset = 0;
-    uint32_t writes_pending = 0;
 
+    // Issue every stick of the held tile-row before syncing (no intermediate
+    // flush) so up to num_sticks writes are in flight, matching
+    // writer_untilize_interleaved's cadence.
     for (uint32_t row = 0; row < num_sticks; ++row) {
         noc.async_write(
             out_cb,
@@ -53,18 +53,11 @@ void kernel_main() {
             {.offset_bytes = l1_read_offset},
             {.page_id = start_stick + row, .offset_bytes = offset_bytes});
         l1_read_offset += chunk_size;
-        writes_pending++;
-
-        if (writes_pending == WRITE_BATCH) {
-            noc.async_writes_flushed();
-            writes_pending = 0;
-        }
     }
 
-    // ``noc.async_writes_flushed`` only drains the command queue; it does not
-    // prove the NOC has finished reading this CB page.  Always fence before the
-    // pop, including the exact-multiple-of-WRITE_BATCH case where
-    // writes_pending is zero.
+    // Single barrier before the pop: drains all writes so the NOC is done
+    // reading the CB page. ``async_writes_flushed`` would only drain the
+    // command queue, which is not sufficient for CB reuse.
     noc.async_write_barrier();
 
     out_cb.pop_front(tiles_per_core);
