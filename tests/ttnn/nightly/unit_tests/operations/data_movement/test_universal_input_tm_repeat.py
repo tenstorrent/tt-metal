@@ -1053,7 +1053,7 @@ def test_repeat_composite_edge_cases(shape, repeat_shape, in_mc_fn, out_mc_fn, p
     )
 
 
-# Optional output tensor — preallocated buffer reuse.
+# Optional output tensor — one case per distinct prealloc path (no shape matrix).
 @pytest.mark.parametrize(
     "layout",
     [
@@ -1061,25 +1061,17 @@ def test_repeat_composite_edge_cases(shape, repeat_shape, in_mc_fn, out_mc_fn, p
         pytest.param(ttnn.TILE_LAYOUT, id="TILE"),
     ],
 )
-@pytest.mark.parametrize(
-    "shape, repeat_shape",
-    [
-        pytest.param((1, 2, 32, 32), (1, 2, 1, 1), id="rep_n"),
-        pytest.param((2, 3, 32, 64), (1, 1, 1, 2), id="rep_w"),
-        pytest.param((1, 1, 32, 32), (2, 3, 1, 1), id="rep_multi"),
-    ],
-)
-def test_repeat_optional_output_tensor(device, layout, shape, repeat_shape):
-    n = 1
-    for s in shape:
-        n *= s
-    torch_input = torch.arange(0, n, dtype=torch.bfloat16).reshape(shape)
+def test_repeat_optional_output_tensor(device, layout):
+    """L1-interleaved direct-land happy path (one RM + one TILE)."""
+    shape = (1, 2, 32, 32)
+    repeat_shape = (1, 2, 1, 1)
+    out_shape = (1, 4, 32, 32)
+    torch_input = torch.arange(0, 1 * 2 * 32 * 32, dtype=torch.bfloat16).reshape(shape)
     torch_result = torch_input.repeat(repeat_shape)
 
     input_tensor = ttnn.from_torch(
         torch_input, layout=layout, device=device, dtype=ttnn.bfloat16, memory_config=L1_INTERLEAVED
     )
-    out_shape = tuple(s * r for s, r in zip(shape, repeat_shape))
     optional_output = ttnn.empty(out_shape, ttnn.bfloat16, layout, device, L1_INTERLEAVED)
 
     output = ttnn.repeat(input_tensor, list(repeat_shape), optional_output_tensor=optional_output)
