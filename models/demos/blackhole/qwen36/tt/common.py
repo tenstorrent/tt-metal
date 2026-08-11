@@ -5,7 +5,6 @@ import os
 
 from loguru import logger
 
-from models.common.weight_cache import build_cached_state_dict, mark_weight_cache_complete, weight_cache_is_complete
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 
@@ -44,33 +43,16 @@ def create_tt_model(
         args.n_layers = n_layers
         args.attention_type_list = args.attention_type_list[:n_layers]
 
-    # Warm ttnn cache => skip the HF from_pretrained load for the (text) weights; they build from
-    # .tensorbin. Pure placeholder is safe: the vision tower uses a SEPARATE live HF reference model
-    # (tt/vision/model.py), so it never sees this state_dict. Partial win -- the vision reference
-    # load is not skipped (follow-up). Only for a full build (layer truncation => partial cache). (#45400)
+    # The warm ttnn cache skip is disabled for qwen36: a placeholder state_dict makes
+    # vision_demo.py emit token soup while still passing (its only output check is
+    # `len(set(generated)) > 1`). The claim that a pure placeholder is safe because the vision
+    # tower uses a separate live HF reference does not hold -- something on the splice / M-RoPE
+    # path, which text_demo.py never exercises, reads this state_dict. Re-enable once those
+    # host-consumed weights are captured to the sidecar via `is_host_weight`, as gemma3 does.
     cache_path = args.weight_cache_path()
-    full_build = n_layers is None and layer_indices is None
-    cache_identity = dict(
-        model_name=args.model_name,
-        n_layers=args.n_layers,
-        mesh_shape=tuple(args.mesh_device.shape),
-    )
-    loaded_real_weights = False
-    if (
-        full_build
-        and not getattr(args, "dummy_weights", False)
-        and weight_cache_is_complete(cache_path, **cache_identity)
-    ):
-        logger.info("Warm ttnn weight cache detected -- skipping HF state_dict load (text weights).")
-        state_dict = build_cached_state_dict(cache_path)
-    else:
-        logger.info("Loading + remapping weights via Qwen36ModelArgs.load_state_dict()...")
-        state_dict = args.load_state_dict()
-        loaded_real_weights = bool(state_dict) and not getattr(args, "dummy_weights", False)
+    logger.info("Loading + remapping weights via Qwen36ModelArgs.load_state_dict()...")
+    state_dict = args.load_state_dict()
 
     model = Qwen36Model(mesh_device, args, state_dict, tensor_cache_path=cache_path)
-
-    if loaded_real_weights and full_build:
-        mark_weight_cache_complete(cache_path, state_dict, **cache_identity)
 
     return args, model, state_dict
