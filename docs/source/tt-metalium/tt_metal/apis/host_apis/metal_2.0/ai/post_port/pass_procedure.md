@@ -60,6 +60,27 @@ behaviour-preservation property at the top**; read it, because it tells you what
 in [Step 4](#step-4--re-verify) is and is not entitled to conclude. A recipe may also override a
 step of this procedure outright, and will say so where it does.
 
+### Style passes and semantic passes
+
+The fix recipes are filed under two directories, and the split is not about how big the change is.
+
+- **`style/`** — the change is expressive. What the program *means* is untouched; what changes is how
+  the code says it. Your sentinel set is a real check, and the characteristic way to be wrong is to
+  miss a site.
+- **`semantic/`** — the change alters something about how the program *runs*, even where the numerics
+  come out identical: what work the device actually does, when it is dispatched, what the compiler is
+  now free to assume. These do not change behaviour deliberately — preserving it is still the whole
+  point — but whether it *is* preserved rests on reasoning your tests cannot fully police.
+
+What that changes for you is where the burden sits. A style pass is bounded by its recipe. A semantic
+pass is bounded by its recipe **and** by the judgement of the person who launched it, who is closer
+to this op than you are and who is expecting to hear what you saw. So on a semantic pass: take the
+stop rules literally rather than hunting for a reading that lets you finish, report the things you
+noticed even when you are fairly confident they are fine, and treat *"I would have had to decide that
+myself"* as a reason to stop rather than as a decision to make.
+
+If your invoker did not say which kind you are running, the recipe's own path tells you.
+
 **Why this is worth doing.** The port that preceded you was mechanical — it got the op compiling
 against the new API, but a mechanical conversion leaves the code expressing the old model in new
 syntax. What survives these passes is what everyone downstream learns Metal 2.0 *from*: the next

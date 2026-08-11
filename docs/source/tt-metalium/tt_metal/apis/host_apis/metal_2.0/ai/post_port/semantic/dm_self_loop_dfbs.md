@@ -3,10 +3,16 @@
 > **Procedure:** [`pass_procedure.md`](../pass_procedure.md). Read it first; it is the *how*. This
 > file is the *what*, and it uses the procedure's steps unchanged.
 >
-> **Behaviour-preserving?** Yes. The converted kernel performs the same reads and writes, in the same
-> order, to and from the same remote addresses. Its own L1 region may land elsewhere — a scratchpad
-> is allocated alongside DFBs out of the same region, so the allocation order shifts — and nothing
-> functional depends on that.
+> **This is a semantic pass** — see [what that
+> means](../pass_procedure.md#style-passes-and-semantic-passes). It replaces the FIFO's own address
+> arithmetic with arithmetic you write, and removes the credit bookkeeping the FIFO was doing on the
+> way. Your sentinels are a real check on the numerics and a weak one on everything else, which is
+> why this recipe stops as often as it does. Take those stops literally.
+>
+> **Behaviour-preserving?** Yes, by intent. The converted kernel performs the same reads and writes,
+> in the same order, to and from the same remote addresses. Its own L1 region may land elsewhere — a
+> scratchpad is allocated alongside DFBs out of the same region, so the allocation order shifts — and
+> nothing functional depends on that.
 >
 > **Target:** Gen1 (Wormhole / Blackhole) ops already ported to Metal 2.0. **Data movement kernels
 > only** — see [Why data movement only](#why-data-movement-only).
@@ -123,7 +129,7 @@ At the spec level that resolves to a simple test: **every** `KernelSpec` binding
    **Every use on the list, and at least one of the four FIFO calls → this is a site.**
 
    **Every use on the list, but none of the four FIFO calls → not a site *for this pass*.** A
-   self-loop that never calls the FIFO machinery belongs to the [sync-free pass](sync_free_dfbs.md),
+   self-loop that never calls the FIFO machinery belongs to the [sync-free pass](../style/sync_free_dfbs.md),
    which is a smaller and safer change. Note it in your report for that pass and **carry on surveying
    the rest** — this is a per-DFB verdict, not a reason to stop. An op can easily hold one of each.
 
@@ -160,14 +166,15 @@ At the spec level that resolves to a simple test: **every** `KernelSpec` binding
 
 An op with no fake-FIFO DM self-loops is a legitimate zero-site pass.
 
-> **Run this pass before the [sync-free pass](sync_free_dfbs.md) on the same op.** The two are
-> siblings — both end at a `Scratchpad` — and one op can hold a site for each, so they will meet in
-> the same file and often the same kernel prologue. Order them this way because this pass is the one
-> that rewrites control flow: doing it against an unmodified kernel keeps its diff readable, and the
-> sync-free pass afterwards is a small, local change that reads cleanly on top. The reverse order
-> works but buries the riskier diff underneath the cheaper one.
+> **Run the [sync-free pass](../style/sync_free_dfbs.md) before this one on the same op.** The two
+> are siblings — both end at a `Scratchpad` — and one op can hold a site for each, so they will meet
+> in the same file and often the same kernel prologue. Take the safe one first: sync-free is a style
+> pass whose worst outcome is a missed site, and it teaches both the DFB-to-scratchpad substitution
+> and the helper-hidden-call failure mode that step 4 above turns on. Arriving here having already
+> run it makes that cross-reference a callback rather than a detour.
 >
-> They never contend for the same buffer: a DFB either calls the FIFO machinery or it does not.
+> They never contend for the same buffer: a DFB either calls the FIFO machinery or it does not. So
+> the order is about which diff you would rather write second, not a correctness constraint.
 
 ## Step 3 — Apply
 
