@@ -139,6 +139,33 @@ void kernel_main() {
     constexpr uint32_t weight_inner_block_stride_h =
         weight_next_block_stride_h / weight_block_height_num_outer;  // TODO: Pass as args
 
+#ifdef SNAKE_PARAMS
+    // Per-channel snake parameters: the last two tile-rows of the weight matrix, alpha then inv_beta.
+    // Pushed **once for the whole op**, not per block: the compute kernel reads them on every output
+    // tile and never pops (they are identical across a block, so popping would destroy them for the
+    // tiles that follow). Pushing per block would overflow a 2-page CB on the second block.
+    //
+    // Column offset 0: the audio tail is C<=32, one tile wide, so a block covers the whole channel
+    // axis. Wider outputs need the block's column offset here.
+    {
+        DataflowBuffer dfb_snake(SNAKE_PARAMS_CB_ID);
+        constexpr uint32_t snake_tile_nbytes = get_tile_size(SNAKE_PARAMS_CB_ID);
+        dfb_snake.reserve_back(2);
+        uint32_t snake_write_offset = 0;
+        for (uint32_t row = 0; row < 2; ++row) {
+            noc.async_read(
+                s_weight,
+                dfb_snake,
+                snake_tile_nbytes,
+                {.page_id = SNAKE_ALPHA_ROW_TILE_ID + row * SNAKE_PARAM_ROW_STRIDE},
+                {.offset_bytes = snake_write_offset});
+            snake_write_offset += snake_tile_nbytes;
+        }
+        noc.async_read_barrier();
+        dfb_snake.push_back(2);
+    }
+#endif
+
     uint32_t l1_write_addr_act = 0;
     for (uint32_t bh = 0; bh < out_num_blocks_h; bh++) {
         // READ WEIGHTS + MCAST SEND WEIGHTS

@@ -926,6 +926,18 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     if (is_conv_1d_depthwise_conv && std::getenv("TT_CONV1D_SNAKE_PARAMS") != nullptr) {
         compute_defines["SNAKE_PARAMS_CB_ID"] =
             std::to_string(get_cb_info_by_name(cb_info, Conv2dCb::SNAKE_PARAMS).index);
+        // The parameters live as the last two tile-rows of the weight matrix, alpha then inv_beta.
+        // Safe to append there because the reader's strides come from the matrix *width*
+        // (weight_stride_h = weight_matrix_width_ntiles) and the block height, never from its total
+        // height -- weight_matrix_height is read only by the % TILE_HEIGHT assertion. The reader
+        // fetches them into the dedicated CB above, not into the streaming weights CB.
+        const uint32_t weight_matrix_height_ntiles = weight_matrix_height / tt::constants::TILE_HEIGHT;
+        writer_mcast_sender_defines["SNAKE_PARAMS"] = "1";
+        writer_mcast_sender_defines["SNAKE_PARAMS_CB_ID"] =
+            std::to_string(get_cb_info_by_name(cb_info, Conv2dCb::SNAKE_PARAMS).index);
+        writer_mcast_sender_defines["SNAKE_ALPHA_ROW_TILE_ID"] =
+            std::to_string((weight_matrix_height_ntiles - 2) * weight_matrix_width_ntiles);
+        writer_mcast_sender_defines["SNAKE_PARAM_ROW_STRIDE"] = std::to_string(weight_matrix_width_ntiles);
     }
     if (enable_split_reader) {
         compute_defines["SPLIT_READER"] = "1";
