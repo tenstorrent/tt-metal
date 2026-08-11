@@ -115,10 +115,6 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-          # demo-sp always reset historically; keep that to avoid a surprise
-          # validate-before-reset behavior change on the SP pipeline.
-          validate-before-reset: "false"
-          write-validation-logs: "true"
 
       - name: ${{ matrix.test-group.name }}
         id: run-test
@@ -137,8 +133,6 @@ jobs:
           eval "$CMD"
 
       # MUST precede NFS cleanup: staging stays until logs are uploaded.
-      # Cluster validation logs are written per-host under
-      # $PIPELINE_DIR/cluster_validation_logs/<hostname>/ (not runner-local /tmp).
       - name: Upload launch + per-rank logs and automapper outputs
         if: always()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0

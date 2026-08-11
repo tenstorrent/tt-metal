@@ -115,7 +115,6 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           check-mnt-models: "false"
-          write-validation-logs: "true"
 
       - name: ${{ matrix.test-group.name }}
         id: run-test

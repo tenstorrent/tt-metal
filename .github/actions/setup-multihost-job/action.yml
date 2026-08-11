@@ -1,9 +1,10 @@
 name: Setup Multihost Job
 description: >
   Shared exabox multihost setup: download build/wheel artifacts, fan them out to
-  workers with mpirun --pernode, reset + validate the cluster, and sanity-check
-  ttnn (and optionally /mnt/models). Callers must already have checked out the
-  repo and set PIPELINE_DIR when using validation logs or scratch staging.
+  workers with mpirun --pernode, run ttop-recovery (runner ConfigMap) to IPMI-reset
+  + validate the cluster, and sanity-check ttnn (and optionally /mnt/models).
+  Callers must already have checked out the repo and set PIPELINE_DIR when using
+  scratch staging.
 
 inputs:
   build-artifact-name:
@@ -36,32 +37,28 @@ inputs:
     description: Verify /mnt/models is readable on every worker
     required: false
     default: "true"
-  validate-before-reset:
+  cluster-validation-bin:
     description: >
-      Run cluster validation once before entering the reset loop; skip reset if
-      the cluster is already healthy.
+      Path to run_cluster_validation (arg 1 to ttop-recovery). Must exist on
+      workers after unpack (default matches the ConfigMap script default).
     required: false
-    default: "true"
-  write-validation-logs:
-    description: >
-      Write per-host cluster validation output under
-      $PIPELINE_DIR/cluster_validation_logs/<hostname>/attempt_N (requires PIPELINE_DIR).
-    required: false
-    default: "false"
+    default: /home/user/tt-metal/build/tools/scaleout/run_cluster_validation
   cabling-descriptor-path:
-    description: Path to cabling descriptor for run_cluster_validation
+    description: >
+      Cabling descriptor for ttop-recovery (arg 3). Defaults match the runner
+      ConfigMap script (/scaleout_configs/..., not /data/scaleout_configs/...).
     required: false
-    default: /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto
+    default: /scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto
   deployment-descriptor-path:
-    description: Path to deployment descriptor for run_cluster_validation
+    description: Deployment descriptor for ttop-recovery (arg 4)
     required: false
-    default: /data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto
+    default: /scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto
   max-recovery-attempts:
-    description: Max tt-smi reset + validation attempts
+    description: Max ttop-ipmi-reset + validation attempts (arg 2 to ttop-recovery)
     required: false
     default: "10"
   reset-timeout-minutes:
-    description: Timeout for the reset/validate step
+    description: Timeout for the ttop-recovery step
     required: false
     default: "30"
 
@@ -145,106 +142,37 @@ runs:
         # shellcheck disable=SC2086 # intentional word-split of EXTRA_PIP_PACKAGES
         mpirun --pernode uv pip install "${ttnn_wheels[@]}" ${EXTRA_PIP_PACKAGES}
 
+    # Recovery lives in the multihost-ci runner ConfigMap (ttop-recovery +
+    # ttop-ipmi-reset), not inlined here: IPMI reset via /run/ttop-ipmi/reset and
+    # cluster validation with the unpacked binary.
     - name: Reset cards and validate cluster
       shell: bash
       working-directory: /tmp
       timeout-minutes: ${{ fromJSON(inputs.reset-timeout-minutes) }}
       env:
-        VALIDATE_BEFORE_RESET: ${{ inputs.validate-before-reset }}
-        WRITE_VALIDATION_LOGS: ${{ inputs.write-validation-logs }}
+        CLUSTER_VALIDATION: ${{ inputs.cluster-validation-bin }}
+        MAX_RECOVERY_ATTEMPTS: ${{ inputs.max-recovery-attempts }}
         CABLING_DESCRIPTOR_PATH: ${{ inputs.cabling-descriptor-path }}
         DEPLOYMENT_DESCRIPTOR_PATH: ${{ inputs.deployment-descriptor-path }}
-        MAX_RECOVERY_ATTEMPTS: ${{ inputs.max-recovery-attempts }}
       run: |
         set -euo pipefail
-
-        echo "--- Pre-check: tt-smi visibility on all hosts ---"
-        mpirun --pernode --tag-output \
-          bash -lc '
-            snapshot=$(tt-smi --snapshot_no_tty --snapshot)
-            driver=$(jq -r ".host_info.Driver // \"unknown\"" <<< "$snapshot")
-            tt_smi=$(jq -r ".host_sw_vers.tt_smi // \"unknown\"" <<< "$snapshot")
-            echo "$(hostname): Driver=${driver} tt_smi=${tt_smi}"
-          ' || true
-
-        run_cluster_validation() {
-          local attempt="$1"
-          if [ "${WRITE_VALIDATION_LOGS}" = "true" ]; then
-            if [ -z "${PIPELINE_DIR:-}" ]; then
-              echo "ERROR: write-validation-logs=true requires PIPELINE_DIR"
-              return 1
-            fi
-            # Logs must land on shared NFS ($PIPELINE_DIR): mpirun --pernode runs on
-            # workers, and upload-artifact only sees the Actions runner filesystem.
-            mpirun --pernode --tag-output bash -lc "
-              out=\"${PIPELINE_DIR}/cluster_validation_logs/\$(hostname)/attempt_${attempt}\"
-              mkdir -p \"\$out\"
-              /home/user/tt-metal/build/tools/scaleout/run_cluster_validation \
-                --send-traffic \
-                --hard-fail \
-                --cabling-descriptor-path \"${CABLING_DESCRIPTOR_PATH}\" \
-                --deployment-descriptor-path \"${DEPLOYMENT_DESCRIPTOR_PATH}\" \
-                --num-iterations 5 \
-                --output-path \"\$out\"
-            "
-          else
-            mpirun --pernode --tag-output \
-              /home/user/tt-metal/build/tools/scaleout/run_cluster_validation \
-              --send-traffic \
-              --hard-fail \
-              --cabling-descriptor-path "${CABLING_DESCRIPTOR_PATH}" \
-              --deployment-descriptor-path "${DEPLOYMENT_DESCRIPTOR_PATH}" \
-              --num-iterations 5
-          fi
-        }
-
-        if [ "${VALIDATE_BEFORE_RESET}" = "true" ]; then
-          echo "--- Checking cluster health before reset ---"
-          if run_cluster_validation 0; then
-            echo "SUCCESS: Cluster validation passed without reset"
-            exit 0
-          fi
+        if ! command -v ttop-recovery >/dev/null 2>&1; then
+          echo "ERROR: ttop-recovery not on PATH (expected from multihost-ci runner ConfigMap)"
+          exit 1
         fi
-
-        for attempt in $(seq 1 "$MAX_RECOVERY_ATTEMPTS"); do
-          echo "=== Recovery attempt $attempt of $MAX_RECOVERY_ATTEMPTS ==="
-          reset_success=false
-          validation_success=false
-
-          echo "--- Resetting cards with tt-smi ---"
-          if mpirun --pernode tt-smi -glx_reset; then
-            reset_success=true
-          else
-            echo "WARNING: Reset failed on attempt $attempt"
-          fi
-
-          if [ "$reset_success" = true ]; then
-            echo "--- Sleeping 5s after reset to allow links/services to settle ---"
-            sleep 5
-
-            echo "--- Running cluster validation ---"
-            if run_cluster_validation "$attempt"; then
-              validation_success=true
-            else
-              echo "WARNING: Validation failed on attempt $attempt"
-            fi
-          else
-            echo "WARNING: Skipping validation because reset failed on attempt $attempt"
-          fi
-
-          if [ "$reset_success" = true ] && [ "$validation_success" = true ]; then
-            echo "SUCCESS: Reset and cluster validation passed on attempt $attempt"
-            exit 0
-          fi
-
-          if [ "$attempt" -lt "$MAX_RECOVERY_ATTEMPTS" ]; then
-            echo "Sleeping 30s before retry..."
-            sleep 30
-          fi
-        done
-
-        echo "ERROR: Recovery failed after $MAX_RECOVERY_ATTEMPTS attempts"
-        exit 1
+        if [ ! -x "$CLUSTER_VALIDATION" ]; then
+          echo "ERROR: run_cluster_validation not found/executable at: $CLUSTER_VALIDATION"
+          echo "Did unpack/install finish before recovery?"
+          ls -la "$(dirname "$CLUSTER_VALIDATION")" 2>/dev/null || true
+          exit 1
+        fi
+        echo "Running ttop-recovery with cluster validation: $CLUSTER_VALIDATION"
+        # Args: <run_cluster_validation> <max_retries> <cabling> <deployment>
+        ttop-recovery \
+          "$CLUSTER_VALIDATION" \
+          "$MAX_RECOVERY_ATTEMPTS" \
+          "$CABLING_DESCRIPTOR_PATH" \
+          "$DEPLOYMENT_DESCRIPTOR_PATH"
 
     - name: Verify ttnn imports on workers
       shell: bash

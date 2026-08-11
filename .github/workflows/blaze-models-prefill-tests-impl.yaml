@@ -172,14 +172,12 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           create-pipeline-dir: "false"
-          # blaze always reset historically; keep that behavior.
-          validate-before-reset: "false"
           reset-timeout-minutes: "45"
 
       # Same mechanism as .github/actions/setup-job, which this job can't use (not a container
       # job, tests run under mpirun): on dispatch stall the runtime runs
       # TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE inside the hung rank, then throws. Armed here
-      # rather than job-wide so setup-multihost-job's cluster-validation loop is unaffected.
+      # rather than job-wide so setup-multihost-job's ttop-recovery step is unaffected.
       - name: 🧯 Enable tt-triage on hang
         if: ${{ inputs.hang-detection-timeout > 0 }}
         timeout-minutes: 5
