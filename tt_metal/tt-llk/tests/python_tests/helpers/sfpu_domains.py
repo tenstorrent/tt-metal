@@ -1554,21 +1554,67 @@ _SPECIALS_CARRYING_INPUTS: FrozenSet[DataFormat] = frozenset(
 )
 
 
+# Ops whose golden defines a result for non-finite *inputs*, and may therefore have cat-B
+# specials injected. This is the golden-side gate; specials_safe() above is the
+# pipeline-side one, and both have to pass. Neither implies the other: a pipeline can
+# deliver NaN perfectly to a golden that has no answer for it.
+#
+# Empty, and that is a measurement rather than caution. Injecting specials on every triple
+# specials_safe() allows gives **272 failures out of 564 variants** -- 48% -- and the
+# failures are not the (format, dest_acc) matrix, which is gated correctly, but goldens
+# that return inf where IEEE says nan and so on. The expansion plan's rule of thumb was
+# "default to injecting the edge; xfail the handful the golden cannot yet express"; the
+# measurement says the handful is half the op list, which makes cat B golden work rather
+# than a stimulus change.
+#
+# Per op rather than one global bool, because the global only had two states: no specials
+# anywhere, or ~270 xfails -- and 270 xfails is not coverage, it is a monument. An op joins
+# here once its golden defines a result at +inf, -inf, NaN, +0.0 and -0.0, carrying the
+# reason it is ready; the sweeps then inject specials for that op alone. That turns the
+# remaining cat-B work into a series of one-op commits rather than one that cannot land.
+SPECIALS_READY_OPS: Dict[MathOperation, str] = {}
+
+
+def _dest_acc_flag(dest_acc: Union[bool, Enum]) -> bool:
+    """Normalise a 32-bit-destination flag to a plain bool.
+
+    DestAccumulation is an Enum whose two members wrap True and False, so ``bool(member)``
+    is True for *both* of them -- ``DestAccumulation.No`` included. A caller that passes
+    the member directly instead of ``dest_acc == DestAccumulation.Yes`` therefore does not
+    get an error, it gets every triple evaluated as the 32-bit-dest case, which silently
+    flips specials on and off for whole rows of the matrix.
+
+    Read ``.value`` when handed the enum, take a bool as-is, and reject anything else
+    rather than guessing. The enum itself is not imported here: this module deliberately
+    carries no llk_params test-side types beyond MathOperation, and duck-typing on
+    ``.value`` keeps it that way.
+    """
+    value = getattr(dest_acc, "value", dest_acc)
+    if not isinstance(value, bool):
+        raise TypeError(
+            "dest_acc must be a bool or a DestAccumulation member, got "
+            f"{dest_acc!r} ({type(dest_acc).__name__})"
+        )
+    return value
+
+
 def specials_safe(
     input_format: DataFormat,
     output_format: DataFormat,
-    dest_acc: bool,
+    dest_acc: Union[bool, Enum],
 ) -> bool:
     """May FLOAT_SPECIALS be injected on this (input, output, dest_acc) triple?
 
-    ``dest_acc`` is truthy for a 32-bit destination (pass
-    ``dest_acc == DestAccumulation.Yes``; the enum is not imported here to keep this
-    module free of llk_params' test-side types beyond MathOperation).
+    ``dest_acc`` is a 32-bit-destination flag: either a plain bool or a
+    ``DestAccumulation`` member. Both are accepted because the member is the natural
+    thing for a caller to have, and its truthiness is a trap -- see _dest_acc_flag.
 
     Returns False for anything not positively established, so a new format defaults to
     "do not inject" rather than to a wall of failures with one root cause. Every rule
     below reproduces a measured verdict; see the section comment for the measurement.
     """
+    dest_acc = _dest_acc_flag(dest_acc)
+
     if input_format not in _SPECIALS_CARRYING_INPUTS:
         return False  # block-float / MX / integer input cannot carry them at all
 
@@ -1595,9 +1641,14 @@ def specials_safe(
 
 def specials_safe_formats(
     formats: List["InputOutputFormat"],  # noqa: F821 - test-side type, duck-typed
-    dest_acc: bool,
+    dest_acc: Union[bool, Enum],
 ) -> List["InputOutputFormat"]:  # noqa: F821
-    """Filter an input_output_formats() list down to the triples that carry specials."""
+    """Filter an input_output_formats() list down to the triples that carry specials.
+
+    Normalises *dest_acc* once here rather than leaving it to the per-format calls, so a
+    bad argument raises even when *formats* is empty.
+    """
+    dest_acc = _dest_acc_flag(dest_acc)
     return [
         f for f in formats if specials_safe(f.input_format, f.output_format, dest_acc)
     ]

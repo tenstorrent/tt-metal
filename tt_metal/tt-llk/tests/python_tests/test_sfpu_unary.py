@@ -29,6 +29,7 @@ from helpers.param_config import (
 )
 from helpers.sfpu_domains import (
     _UNARY_OPS_NOT_SWEPT,
+    SPECIALS_READY_OPS,
     edge_spec,
     exclude_undefined,
     for_op_pipeline,
@@ -451,19 +452,6 @@ _EDGE_SWEEP_OPS = sorted(
     sfpu_unary_ops() - set(_UNARY_OPS_NOT_SWEPT), key=lambda o: o.name
 )
 
-# Cat B (IEEE specials) is OFF, and this is a measured decision rather than caution.
-# Injecting them on the triples specials_safe() allows gives **272 failures out of 564
-# variants** — 48% — and the failures are not the (format, dest_acc) matrix (that part is
-# gated correctly) but goldens that do not model non-finite *inputs*. The plan's §6b rule
-# of thumb was "default to injecting the edge; xfail the handful the golden cannot yet
-# express"; the measurement says the handful is half the op list, which turns cat B from a
-# stimulus change into golden work — Phase 5, not Phase 4.
-#
-# Enabling it now would mean either a red suite or ~270 xfails, and 270 xfails is not
-# coverage, it is a monument. The switch stays here so the number can be reproduced:
-#   _EDGE_SWEEP_SPECIALS = True  ->  272F/286P/6S over the same 752 cases.
-_EDGE_SWEEP_SPECIALS = False
-
 # What the cat-A/cat-D probes found on Wormhole, first time these points have been driven.
 # Recorded as xfails rather than tolerated or probed-around, following Phase 0's precedent
 # for approximate exp: the case still *executes* and reports XPASS if the behaviour
@@ -576,8 +564,11 @@ def test_eltwise_unary_sfpu_edges(
     if mathop == MathOperation.ReluMin:
         pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1120")
 
-    specials = _EDGE_SWEEP_SPECIALS and specials_safe(
-        formats.input_format, formats.output_format, dest_acc == DestAccumulation.Yes
+    # Two independent gates, and both have to pass: _SPECIALS_READY_OPS says the *golden*
+    # defines a result for non-finite inputs, specials_safe() says the *pipeline* delivers
+    # them intact. Neither implies the other.
+    specials = mathop in SPECIALS_READY_OPS and specials_safe(
+        formats.input_format, formats.output_format, dest_acc
     )
     spec_A = edge_spec(
         mathop,
