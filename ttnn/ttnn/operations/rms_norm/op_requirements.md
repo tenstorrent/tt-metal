@@ -58,7 +58,7 @@ def rms_norm(
 - **Golden baseline**: 737 / 737 supported cells passing; 6174 xfail_expected; 33900 invalid_skipped;
   0 in every loud category (per `verifier_report.json`).
 
-### [ ] Refinement 1 — Numerical configurability expansion (`fp32_dest_acc_en=False` + `bfloat8_b`)
+### [x] Refinement 1 — Numerical configurability expansion (`fp32_dest_acc_en=False` + `bfloat8_b`)
 
 **Goal**: add `False` to `SUPPORTED["fp32_dest_acc_en"]` and `ttnn.bfloat8_b` to both
 `SUPPORTED["dtype"]` and `SUPPORTED["gamma_dtype"]`, keeping `{float32, fp32_dest_acc_en=False}` in
@@ -89,6 +89,32 @@ add an `EXCLUSIONS` entry for them expecting cell movement; (2) the golden `pad_
 `(x·mask)² == x²·mask` still holds, but the *poisoned* magnitude (1000.0) squared in a bf16 DEST is
 where a lost mask now shows up as a large error rather than a small one. Keep `has_tail`'s stat
 column fp32.
+
+**Outcome**: landed in full, **zero kernel changes** — the three `.cpp` files are byte-identical to
+Phase 0. Every named work item was already satisfied by construction and was verified rather than
+built: DEST capacity is only ever read through `DEST_AUTO_LIMIT` / `Dst::D0` (no literal assumes the
+halved fp32 value, so the 4 → 8 doubling needs nothing); the whole `cb_stat_*` chain plus
+`cb_zero_tile` were already pinned to fp32 **unconditionally** rather than following
+`fp32_dest_acc_en`, and `cb_scaler` / `cb_wmask` already stay bf16; and `_cb_specs()` already derived
+every input/output/gamma CB format from the corresponding tensor's dtype, so `bfloat8_b` flowed
+through as a third `tile_size` value (1088 B, which only *narrows* the L1 footprint). The sole real
+blocker was host-side: `Tensor.element_size()` **raises** for block-float dtypes ("datum for bfp2,
+bfp4, bfp8 is invalid"), fixed with `_elem_bytes()` returning 0 for `bfpN` — only the ROW_MAJOR stick
+legs consume an element size and block-float has no ROW_MAJOR form (ttnn itself `TT_FATAL`s on
+`layout == Layout::TILE`, confirming `feature_spec.INVALID` is right to *skip* those cells).
+**Nothing landed in EXCLUSIONS**: every cell the refinement named measured green, well inside the
+golden `TOLERANCES` — bf16 @ `fp32_dest_acc_en=False` PCC ≥ 0.99993 / rel-RMS ≤ 0.012 (gate
+0.995/0.04), `bfloat8_b` PCC ≥ 0.99985 / rel-RMS ≤ 0.021 (gate 0.99/0.10), `gamma_dtype=bfloat8_b`
+against bf16 and fp32 activations PCC ≥ 0.99994. The `pad_poison` collision the notes flagged is
+clean: all 6 interleaved poisoned shapes pass at `fp32_dest_acc_en=False` with PCC ≥ 0.99998, so the
+mask-before-square identity does hold under a 16-bit DEST. One incidental finding worth recording,
+not a defect: at **LoFi** the FPU's 5-bit truncating (not rounding) mantissa biases both the
+`x · rstd` and `· gamma` multiplies low, giving a measured ~3.5 % systematic shrink (got/true ratio
+median 0.965 at bf16) while PCC stays ≥ 0.9995 — the same mechanism Phase 0 recorded as a ~0.1 %
+shrink at fp32/HiFi4, so `test_rms_norm_precision_matrix` derives its scale-bug band from
+`math_fidelity` instead of firing on it. **This unblocks Refinements 3/4**: all 8 interleaved
+`group="perf"` cases now run for real at their pinned `fp32_dest_acc_en=False` + HiFi2 config, so
+those phases can measure the configuration they are specified against instead of proxying it.
 
 ### [ ] Refinement 2 — Sharded input/output placements (all three schemes)
 

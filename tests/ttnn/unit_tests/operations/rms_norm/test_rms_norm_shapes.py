@@ -3,19 +3,26 @@
 
 """Shape-resilience sweep for rms_norm — DO NOT DELETE.
 
-The golden suite's `resilience` and `pad_poison` loose cases are pinned to
-`fp32_dest_acc_en=False`, which is outside the Phase 0 SUPPORTED rectangle, so
-they all xfail and never exercise the kernel.  Those shapes are precisely the
-adversarial ones for this op's work split — prime tile counts that never divide
-the grid, widths far past one core's L1, extreme aspect ratios, poisoned tile
-padding — so this file replays them at the Phase 0 corner
-(`fp32_dest_acc_en=True`), where they DO run.
+Replays the golden suite's `resilience` and `pad_poison` loose-case shapes as a
+local regression net.  They are the adversarial ones for this op's work split —
+prime tile counts that never divide the grid, widths far past one core's L1,
+extreme aspect ratios, poisoned tile padding.
+
+PRECISION AXIS. Those golden cases are pinned to `fp32_dest_acc_en=False`.  At
+Phase 0 that was outside SUPPORTED, so they all xfailed and this file could only
+replay them at the maxed-out corner (`True`).  Refinement 1 put `False` in
+SUPPORTED, so the golden cases now run for real — and this file sweeps BOTH
+settings, because the two take different DEST datapaths (16- vs 32-bit
+accumulation, and hence a different `DEST_AUTO_LIMIT`).  `False` is the setting
+the golden suite actually exercises; `True` remains the Phase 0 corner.
 
 What each block stresses:
   * `_RESILIENCE_SHAPES`  — the regime-selection function, the ragged hidden
     split (core_w < cb_w_tiles), the ragged row split, and num_blocks > 1.
   * `_PAD_POISON_SHAPES`  — the ragged-hidden-tile mask: a small W where one
-    tile of padding is 11-38% of the row, filled with a loud finite value.
+    tile of padding is 11-38% of the row, filled with a loud finite value.  Under
+    a 16-bit DEST accumulator a lost mask shows up as a LARGE error (the poison
+    value 1000.0 squared), which is exactly why the sweep covers `False`.
 """
 
 import pytest
@@ -37,7 +44,15 @@ def _torch_rms_norm(x, gamma):
     return out * gamma.float().reshape(-1)
 
 
-def _run(device, shape, layout, poison=None, pcc=PCC):
+# The two DEST datapaths, as a single-source parametrize axis shared by both
+# sweeps below. False is what the golden resilience / pad_poison cases pin.
+FP32_DEST_ACC = [
+    pytest.param(True, id="fp32_acc"),
+    pytest.param(False, id="bf16_acc"),
+]
+
+
+def _run(device, shape, layout, fp32_dest_acc_en=True, poison=None, pcc=PCC):
     torch.manual_seed(0)
     torch_input = torch.randn(shape, dtype=torch.float32).to(torch.bfloat16)
     torch_gamma = torch.randn((1,) * (len(shape) - 1) + (shape[-1],), dtype=torch.float32).to(torch.bfloat16)
@@ -50,7 +65,12 @@ def _run(device, shape, layout, poison=None, pcc=PCC):
     if poison is not None and layout == ttnn.TILE_LAYOUT:
         tt_gamma = ttnn.fill_implicit_tile_padding(tt_gamma, poison)
 
-    tt_out = rms_norm(tt_input, gamma=tt_gamma, epsilon=EPS)
+    cfg = ttnn.ComputeConfigDescriptor()
+    cfg.math_fidelity = ttnn.MathFidelity.HiFi4
+    cfg.fp32_dest_acc_en = fp32_dest_acc_en
+    cfg.math_approx_mode = False
+
+    tt_out = rms_norm(tt_input, gamma=tt_gamma, epsilon=EPS, compute_kernel_config=cfg)
     assert tt_out.layout == tt_input.layout
     assert tuple(tt_out.shape) == tuple(shape)
     assert_with_pcc(expected, ttnn.to_torch(tt_out).float(), pcc)
@@ -115,8 +135,9 @@ _RESILIENCE_SHAPES = [
 
 @pytest.mark.parametrize("shape", _RESILIENCE_SHAPES, ids=lambda s: "x".join(str(d) for d in s))
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "row_major"])
-def test_rms_norm_resilience_shapes(device, shape, layout):
-    _run(device, shape, layout)
+@pytest.mark.parametrize("fp32_dest_acc_en", FP32_DEST_ACC)
+def test_rms_norm_resilience_shapes(device, shape, layout, fp32_dest_acc_en):
+    _run(device, shape, layout, fp32_dest_acc_en=fp32_dest_acc_en)
 
 
 # Mirrors feature_spec.py::_PAD_POISON_SHAPES. TILE only — a ROW_MAJOR tensor
@@ -132,5 +153,6 @@ _PAD_POISON_SHAPES = [
 
 
 @pytest.mark.parametrize("shape", _PAD_POISON_SHAPES, ids=lambda s: "x".join(str(d) for d in s))
-def test_rms_norm_pad_poison(device, shape):
-    _run(device, shape, ttnn.TILE_LAYOUT, poison=1000.0)
+@pytest.mark.parametrize("fp32_dest_acc_en", FP32_DEST_ACC)
+def test_rms_norm_pad_poison(device, shape, fp32_dest_acc_en):
+    _run(device, shape, ttnn.TILE_LAYOUT, fp32_dest_acc_en=fp32_dest_acc_en, poison=1000.0)
