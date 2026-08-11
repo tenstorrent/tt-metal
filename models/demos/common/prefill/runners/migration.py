@@ -34,7 +34,7 @@ from loguru import logger
 
 import ttnn
 
-_DEFAULT_DEVICE_MAP_FILE = "/tmp/prefill-device-map.txt"
+_DEFAULT_DEVICE_MAP_FILE = "/tmp/prefill_device_map.txt"
 
 
 def migration_file_export_enabled() -> bool:
