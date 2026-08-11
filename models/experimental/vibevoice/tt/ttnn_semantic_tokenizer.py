@@ -84,7 +84,7 @@ _FFN_DOWN_PROGCFG = {
 }
 
 
-# ── TILE -> ROW_MAJOR untilize for the streaming convs (VV_POST_UNPAD_SHARD=1) ─
+# ── TILE -> ROW_MAJOR untilize for the streaming convs ────────────────────────
 # ``ttnn.to_layout(x, ROW_MAJOR)`` on a TILE [1, 1, T, C] lowers to UntilizeWithUnpadding, whose
 # INTERLEAVED program factory parallelises over TILE ROWS ONLY:
 #   num_blocks = padded_H / 32   (untilize_with_unpadding_device_operation.cpp, select_program_factory)
@@ -95,7 +95,6 @@ _FFN_DOWN_PROGCFG = {
 # A SHARDED input takes a different factory entirely, one that parallelises over SHARDS, so sharding
 # first buys the core count the interleaved path cannot.  Untilize is pure data movement, so this is
 # byte-identical by construction.
-_UNPAD_SHARD = os.environ.get("VV_POST_UNPAD_SHARD", "1") == "1"
 
 
 def _untilize_rm(x: ttnn.Tensor) -> ttnn.Tensor:
@@ -104,7 +103,7 @@ def _untilize_rm(x: ttnn.Tensor) -> ttnn.Tensor:
     Falls back to plain ``to_layout`` whenever the shard form does not apply (batched input, a
     width that will not tile-divide, or a shape the interleaved path already spreads well).
     """
-    if not _UNPAD_SHARD or x.layout != ttnn.TILE_LAYOUT or x.memory_config().is_sharded():
+    if x.layout != ttnn.TILE_LAYOUT or x.memory_config().is_sharded():
         return ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
 
     shp = list(x.shape)
@@ -143,6 +142,14 @@ def _untilize_rm(x: ttnn.Tensor) -> ttnn.Tensor:
     out = ttnn.untilize_with_unpadding(xs, [0, 0, t - 1, c - 1], memory_config=ttnn.DRAM_MEMORY_CONFIG)
     ttnn.deallocate(xs)
     return out
+
+
+# Minimum conv output width for the HEIGHT_SHARDED depthwise pin (see TTStreamingConv1d.forward).
+# Below it the pin is both unusable and pointless: the high-channel / tiny-width stages overflow L1
+# under HEIGHT_SHARDED, and those outputs are a few tiles at most, so conv2d's auto config already
+# spreads them one tile per core and act_block_h collapses to that per-core height — a single act
+# block either way.
+_HS_MIN_OUTW = 128
 
 
 # ──────────────────────────────────────────────────────────────
@@ -568,44 +575,23 @@ class TTConv1d:
             input_width = T
             conv_padding = (0, 0, cp, extra_pad)
 
-        # VV_CONV_SINGLE_BLOCK=1 (default): force the depthwise conv (groups>1) onto the
-        # single-height-block path by setting act_block_h >= the full output height.  The
-        # multi-block path in compute_depthwise_conv1d.cpp uses a separate-scratch scheme whose
-        # numerics differ, and this conv is the only value-changing op in the streaming feedback
-        # loop, so a small delta here compounds over a long-form render.  Pinning the single-block
-        # path keeps the depthwise numerics stable.
+        # Cached grouped / depthwise streaming convs are pinned HEIGHT_SHARDED, which keeps
+        # act_block_h at the full per-core output height — a SINGLE height block — while the work
+        # still spreads over many cores.  The multi-block path in compute_depthwise_conv1d.cpp uses
+        # a separate-scratch scheme whose numerics differ, and this conv is the only value-changing
+        # op in the streaming feedback loop, so a small delta here compounds over a long-form
+        # render; the single-block schedule keeps the depthwise numerics stable.
+        #
+        # Only the wide-output stages take the pin (see _HS_MIN_OUTW).
         _conv_cfg = None
-        if os.environ.get("VV_CONV_SINGLE_BLOCK", "1") == "1" and self.groups > 1 and use_cache:
+        if self.groups > 1 and use_cache:
             out_w = (T_padded - self.K) // self.stride + 1
-            abh = ((out_w + 31) // 32) * 32
-            # A full-height single block above the cap overflows L1, so cap it — beyond the cap the
-            # conv stays on auto (multi-block).
-            _sb_cap = int(os.environ.get("VV_CONV_SB_CAP", "1600"))
-            # HEIGHT_SHARDED pin (default on; VV_CONV_HS=0 to force the act_block_h_override pin):
-            # act_block_h stays at the full per-core height (single block) while the work spreads
-            # over many cores — no oversized act_block_h_override and none of its "not a valid
-            # override" spam.  It only fits the wide-output stages: high-channel/tiny-width stages
-            # (out_w < VV_CONV_HS_MIN_OUTW) overflow L1 under HEIGHT_SHARDED, so they stay on auto
-            # (see the sub-threshold note below).  VV_CONV_HS_MAX_OUTW>0 caps the HS set, so HS
-            # coverage can be made identical to the override pin's — isolating the layout mechanism
-            # from the pinned-set change.
-            _hs_max = int(os.environ.get("VV_CONV_HS_MAX_OUTW", "0"))
-            _hs_min = int(os.environ.get("VV_CONV_HS_MIN_OUTW", "128"))
-            _hs = os.environ.get("VV_CONV_HS", "1") == "1" and out_w >= _hs_min and (_hs_max == 0 or out_w <= _hs_max)
-            # Below the HS threshold the override pin is inert, so it is never passed: those outputs
-            # are a few tiles at most, conv2d spreads them one tile per core, and act_block_h
-            # collapses to that per-core height — a single act block either way, the same config auto
-            # picks.  An override wider than the per-core height only costs a "not a valid override"
-            # info line per shard-layout candidate per call.  Verified bit-exact against the pinned
-            # path, so there is no A/B switch.
-            if _hs:
+            if out_w >= _HS_MIN_OUTW:
                 _conv_cfg = ttnn.Conv2dConfig(shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED)
-            elif _hs_min <= out_w <= _sb_cap:
-                _conv_cfg = ttnn.Conv2dConfig(act_block_h_override=abh)
             if os.environ.get("VV_CONV_DBG") == "1":
                 print(
                     f"[conv sb] g={self.groups} in={self.in_ch} out={self.out_ch} "
-                    f"Tpad={T_padded} outw={out_w} abh={abh} pinned={_conv_cfg is not None}",
+                    f"Tpad={T_padded} outw={out_w} pinned={_conv_cfg is not None}",
                     flush=True,
                 )
         # Depthwise single-column output → mul + reduce instead of a dense conv2d (see _dw_mr).
