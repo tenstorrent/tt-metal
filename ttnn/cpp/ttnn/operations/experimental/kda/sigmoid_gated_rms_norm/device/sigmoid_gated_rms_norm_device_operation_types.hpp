@@ -19,7 +19,7 @@ struct SigmoidGatedRmsNormParams {
     uint32_t value_dim;
     float epsilon;
     tt::tt_metal::MemoryConfig output_mem_config;
-    DataType output_dtype;
+    tt::tt_metal::DataType output_dtype;
     DeviceComputeKernelConfig compute_kernel_config;
 };
 
