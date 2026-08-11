@@ -4,19 +4,31 @@ Eight demos showcasing different fusion capabilities on Tenstorrent Wormhole har
 
 **Test file:** `tests/ttnn/unit_tests/operations/fused/parallel_sequential/demo/test_fused_demo.py`
 
-Perf tests are parametrized by `perf_mode`: `cold_start`, `e2e`, or `device_fw`. Run subsets with `-k`:
+Normal pytest runs exercise correctness only (`perf_mode="none"`). The current
+slide benchmarks for Parallel Chains and Balanced Tree are separate manual
+tests gated by `TT_METAL_RUN_FUSION_SLIDE_PERF=1`:
 
 ```bash
-# Run all tests (all perf_modes):
+# Run correctness tests:
 python -m pytest tests/ttnn/unit_tests/operations/fused/parallel_sequential/demo/test_fused_demo.py -xvs
 
-# Run perf demos only, one mode:
-python -m pytest tests/ttnn/unit_tests/operations/fused/parallel_sequential/demo/test_fused_demo.py -xvs -k "TestPerfDemos and e2e"
+# Run one steady-state slide benchmark mode:
+TT_METAL_RUN_FUSION_SLIDE_PERF=1 python -m pytest \
+  tests/ttnn/unit_tests/operations/fused/parallel_sequential/demo/test_fused_demo.py \
+  -k "slide_parallel_chains_e2e and persistent" -q -s
 
-# Run with Tracy device profiler (device_fw mode — must use individual test IDs, not -k, since tracy splits args):
-export TT_METAL_DEVICE_PROFILER=1
-python -m tracy -r -m pytest tests/ttnn/unit_tests/operations/fused/parallel_sequential/demo/test_fused_demo.py::TestPerfDemos::test_linear_chain_rms_matmul_rms_fused[H128-perf_mode=device_fw] -xvs
+# Capture one mode-specific device profile:
+TT_METAL_RUN_FUSION_SLIDE_PERF=1 \
+TT_METAL_DEVICE_PROFILER=1 \
+TT_METAL_PROFILER_CPP_POST_PROCESS=1 \
+python -m pytest \
+  'tests/ttnn/unit_tests/operations/fused/parallel_sequential/demo/test_fused_demo.py::TestPerfDemos::test_slide_parallel_chains_fused_device_fw[mode=inline]' \
+  -q
 ```
+
+The older demo methods retain disabled `cold_start`, `e2e`, and `device_fw`
+branches for historical measurements. Add those values back to their local
+`perf_mode` parametrization only when reproducing an older table.
 
 All timing measured on Wormhole n300 (single chip), BF16.
 
@@ -28,13 +40,28 @@ Single dispatch, no timing loops. Designed for Tracy device profiling (`TT_METAL
 
 ### `e2e` — What does the user see in steady state?
 
-Measured by `_time_e2e()`: 5 warmup iterations (discarded), then 100 timed iterations, all caches warm. Reports `total_ms / 100`. This captures the full host→device→host round-trip per iteration, including host dispatch overhead, `fusion_dispatch_op` argument patching, and NOC transfers. This measures the op's total time in a pipelined environment.
+Measured by the slide benchmark tests: 5 warmup iterations (discarded), then the median of seven 100-iteration trials, all caches warm. This captures steady-state pipelined throughput, including host descriptor/container work, dispatch overhead, `fusion_dispatch_op` argument patching, and device execution. It is not single-request latency.
 
-The fused E2E path uses `run()`, which calls `build()` once (cache miss on first call, cache hit thereafter) and `launch()` each iteration. `launch()` dispatches via `fusion_dispatch_op`, which patches only the tensor-address slots that changed since the previous dispatch — skipping unchanged slots entirely.
+The August 2026 refresh reports both current fusion usage modes:
+
+- **Inline:** recreate the descriptors and container each iteration, then use the warm fusion build cache.
+- **Persistent:** create descriptors and the container once, call `update()` for the activation, and reuse the container's hot dispatch path.
+
+Both modes use the production command-lifetime semaphore bank. All logical
+barrier words are packed into one lockstep-sharded L1 tensor, initialized by
+one queued write, and released after dispatch submission. No semaphore tensor
+is retained in the fusion cache or between forward passes.
+
+Each mode is benchmarked in an isolated pytest invocation so persistent
+intermediate allocations from one mode cannot affect another mode's available
+L1.
 
 ### `cold_start` — How long until first output?
 
 All caches cleared (JIT disk + in-memory + program + fusion build), then one full execution including JIT compilation. For fused tests this is `run()` (which internally calls `build()` + `launch()`) plus `synchronize()`; for unfused tests it's the ttnn op calls which trigger JIT internally. This matters for model loading and first-inference latency — fusion JIT-compiles one kernel instead of N.
+
+Cold-start values belong to the older per-demo workflow and are not part of
+the August 2026 slide refresh.
 
 ### Apples-to-apples configs
 
@@ -175,16 +202,17 @@ out_a, out_b = Parallel(
 
 **Program configs:** LN/RMS on 1x8 grids, matmul `MatmulMultiCoreReuseProgramConfig`. `fp32=True`, `math_approx=False`, `HiFi4`.
 
-Unfused breakdown: LN FW=44.7 us + matmul FW=18.5 us + RMS FW=26.9 us + matmul FW=18.1 us = 108.2 us. (Unfused runs 4 sequential dispatches on a single (0,0)-based grid.)
+**August 11, 2026 refresh.** Unfused breakdown: LN FW=42.236 us + matmul FW=17.762 us + RMS FW=27.008 us + matmul FW=17.929 us = 104.935 us. Unfused runs four sequential dispatches on a single `(0,0)`-based grid.
 
-| Metric | Fused | Unfused | Speedup |
-|--------|------:|--------:|--------:|
-| Device FW | 69.9 us | 108.2 us (4 ops) | **1.55x** |
-| Device kernel | 68.8 us | 105.1 us | **1.53x** |
-| E2E steady state | 0.072 ms | 0.163 ms | **2.26x** |
-| Cold start | 1870 ms | 4348 ms | **2.33x** |
+| Metric | Fused Inline | Fused Persistent | Unfused | Inline speedup | Persistent speedup |
+|--------|-------------:|-----------------:|--------:|---------------:|-------------------:|
+| Device FW | 68.313 us | 68.357 us | 104.935 us (4 ops) | **1.536x** | **1.535x** |
+| Device kernel | 67.561 us | 67.614 us | 102.369 us | **1.515x** | **1.514x** |
+| E2E | 0.691 ms | 0.180 ms | 0.274 ms | 0.40x | **1.52x** |
 
-The **1.55x device speedup** comes from parallelism — both chains overlap on disjoint core columns. Chain A (LN+MM = 44.7+18.5 = 63 us) and Chain B (RMS+MM = 26.9+18.1 = 45 us) run simultaneously, so fused time ~ `max(63, 45)` + barriers = 70 us. The **2.26x E2E speedup** additionally saves per-dispatch overhead (4 dispatches → 1) and benefits from `fusion_dispatch_op`'s lightweight cache-hit path.
+Inline and Persistent were captured in independent single-dispatch device-profiler runs. Their FW durations differ by only 0.044 us (0.064%) and their kernel durations by 0.053 us (0.078%), confirming that both modes execute the same device program within run-to-run noise.
+
+The **1.54x device speedup** demonstrates the intended parallelism: both chains overlap on disjoint core columns. The command-lifetime semaphore bank removes per-semaphore blocking initialization, allowing Persistent E2E throughput to realize the device benefit and beat the mature unfused program-cache path by **1.52x**. Inline remains host-bound because descriptor and container construction occurs every iteration.
 
 **PCC:** Chain A = 1.0000, Chain B = 1.0000
 
@@ -230,16 +258,17 @@ ll, lr, rl, rr = Sequential(
 
 **Program configs:** LN sharded, matmul `MatmulMultiCoreReuseProgramConfig`, slice tile-path with named CT args. `fp32=True`, `math_approx=False`, `HiFi4`.
 
-Unfused breakdown (13 dispatches): ln_stem FW=42.7 us + 2 slices FW=11.9 us + 2 matmuls FW=36.0 us + 4 leaf slices FW=11.3 us + 4 leaf LNs FW=99.1 us = 201.1 us.
+**August 11, 2026 refresh.** Unfused breakdown (13 dispatches): stem LN FW=39.744 us + two slices FW=12.020 us + two matmuls FW=35.850 us + four leaf slices FW=11.586 us + four leaf LNs FW=97.590 us = 196.790 us.
 
-| Metric | Fused | Unfused | Speedup |
-|--------|------:|--------:|--------:|
-| Device FW | 120.8 us | 201.1 us (13 ops) | **1.66x** |
-| Device kernel | 118.6 us | 189.9 us | **1.60x** |
-| E2E steady state | 0.152 ms | 0.500 ms | **3.29x** |
-| Cold start | 2150 ms | 6088 ms | **2.83x** |
+| Metric | Fused Inline | Fused Persistent | Unfused | Inline speedup | Persistent speedup |
+|--------|-------------:|-----------------:|--------:|---------------:|-------------------:|
+| Device FW | 119.810 us | 119.795 us | 196.790 us (13 ops) | **1.642x** | **1.643x** |
+| Device kernel | 118.329 us | 118.293 us | 186.730 us | **1.578x** | **1.579x** |
+| E2E | 1.669 ms | 0.264 ms | 0.965 ms | 0.58x | **3.65x** |
 
-The **1.66x device speedup** comes from branch parallelism — the fused kernel runs independent tree branches simultaneously on disjoint core subsets. The **3.29x E2E speedup** additionally saves per-dispatch overhead across 12 eliminated dispatches plus the lightweight `fusion_dispatch_op` cache-hit path. The **2.83x cold start speedup** comes from JIT-compiling 1 fused kernel instead of 13 individual kernels.
+Inline and Persistent were captured independently here as well. Their FW durations differ by only 0.015 us (0.013%) and their kernel durations by 0.036 us (0.030%).
+
+The **1.64x device speedup** comes from branch parallelism across disjoint core subsets. Persistent mode also collapses 13 host submissions into one and, with semaphore initialization reduced to one queued bank write, reaches a **3.65x E2E throughput speedup**. Inline is still slower because rebuilding 13 descriptors and the nested container dominates.
 
 **PCC:** 1.000000 (leaf LN output vs unfused reference)
 

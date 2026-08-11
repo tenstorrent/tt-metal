@@ -41,6 +41,20 @@ namespace ttnn::program_descriptors {
 
 using CoreCoord = tt::tt_metal::CoreCoord;
 
+namespace {
+
+tt::tt_metal::Buffer* get_backing_buffer(const tt::tt_metal::CBDescriptor& descriptor) {
+    if (descriptor.buffer != nullptr) {
+        return descriptor.buffer;
+    }
+    if (descriptor.tensor != nullptr) {
+        return descriptor.tensor->mesh_buffer().get_reference_buffer();
+    }
+    return nullptr;
+}
+
+}  // namespace
+
 // Helper class to enable Python syntax: rtargs[x][y] = [arg1, arg2, ...]
 // This translates to: rtargs.push_back({CoreCoord(x, y), {arg1, arg2, ...}})
 class RuntimeArgsColProxy {
@@ -436,7 +450,7 @@ void py_module_types(nb::module_& mod) {
             "Byte offset from buffer base address for CB placement (default 0)")
         .def(
             "has_buffer",
-            [](const tt::tt_metal::CBDescriptor& self) { return self.buffer != nullptr; },
+            [](const tt::tt_metal::CBDescriptor& self) { return get_backing_buffer(self) != nullptr; },
             R"pbdoc(
                 Check if this CB has a pinned L1 buffer.
 
@@ -444,7 +458,7 @@ void py_module_types(nb::module_& mod) {
                 Writes to this CB go directly to that tensor's L1 space.
 
                 Returns:
-                    True if a buffer pointer is set, False otherwise.
+                    True if a buffer or tensor backing is set, False otherwise.
             )pbdoc")
         .def(
             "has_global_circular_buffer",
@@ -489,19 +503,21 @@ void py_module_types(nb::module_& mod) {
             "set_buffer_from_cb",
             [](tt::tt_metal::CBDescriptor& self, const tt::tt_metal::CBDescriptor& other) {
                 self.buffer = other.buffer;
+                self.tensor = other.tensor;
             },
             nb::arg("other"),
             R"pbdoc(
-                Copy buffer pointer from another CBDescriptor.
+                Copy buffer or tensor backing from another CBDescriptor.
 
-                Used by the build cache to update sharded CB buffer pointers
-                on cache hit without rebuilding the entire descriptor.
+                Used by fusion to update sharded CB backing on cache hit
+                without rebuilding the entire descriptor. Tensor-backed
+                descriptors remain tensor-backed.
             )pbdoc")
         .def(
             "buffer_address",
             [](const tt::tt_metal::CBDescriptor& self) -> std::optional<uint32_t> {
-                if (self.buffer != nullptr) {
-                    return self.buffer->address();
+                if (auto* buffer = get_backing_buffer(self); buffer != nullptr) {
+                    return buffer->address();
                 }
                 return std::nullopt;
             },

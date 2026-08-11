@@ -16,7 +16,6 @@ import ttnn
 
 from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
 
-
 # =============================================================================
 # Data Classes
 # =============================================================================
@@ -26,11 +25,11 @@ from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
 class BarrierConfig:
     """Configuration for the two-level barrier between phases.
 
-    Holds GlobalSemaphore references (to prevent GC) and their L1 addresses,
-    plus physical core coordinates for the global barrier.
+    Holds L1 bank-word addresses and physical core coordinates for the
+    cross-core barrier.
     """
 
-    # L1 addresses of per-core flags (from GlobalSemaphore.address())
+    # L1 addresses of per-core bank words
     compute_done_addr: int = 0
     writer_done_addr: int = 0
     global_arrive_addr: int = 0
@@ -44,21 +43,18 @@ class BarrierConfig:
     # Physical (x, y) of every core EXCEPT core 0, for unicast release
     other_core_phys_coords: List[Tuple[int, int]] = field(default_factory=list)
 
-    # GlobalSemaphore references (prevent GC)
-    _sem_refs: List[Any] = field(default_factory=list)
-
 
 @dataclass
 class BarrierSegment:
     """A barrier scope covering a range of phase transitions.
 
-    Each segment has its own ``global_arrive`` / ``global_release``
-    GlobalSemaphore pair and physical core coordinates for NOC unicast.
+    Each segment has its own ``global_arrive`` / ``global_release`` bank words
+    and physical core coordinates for NOC unicast.
     """
 
     config: BarrierConfig  # Physical core coords + mcast params
-    arrive_addr: int = 0  # GlobalSemaphore L1 address for arrive
-    release_addr: int = 0  # GlobalSemaphore L1 address for release
+    arrive_addr: int = 0  # L1 bank-word address for arrive
+    release_addr: int = 0  # L1 bank-word address for release
 
 
 @dataclass
@@ -79,18 +75,16 @@ class MultiBarrierSpec:
     math_drained_addr: int = 0
     # Map: phase_transition_index -> (segment_index, call_index_within_segment)
     transition_map: Dict[int, Tuple[int, int]] = field(default_factory=dict)
-    _sem_refs: List[Any] = field(default_factory=list)
 
 
 @dataclass
 class _SemaphoreSpec:
-    """Blueprint for allocating a barrier GlobalSemaphore at dispatch time.
+    """Blueprint for one logical word in a fusion semaphore bank.
 
-    Stored in ``_CacheEntry`` instead of live ``GlobalSemaphore`` objects so
-    that no L1 is pinned between dispatches.  At each dispatch, fresh
-    semaphores are allocated from these specs, their addresses are patched
-    into the cached ``ProgramDescriptor``'s runtime args, and they are freed
-    after dispatch completes (via command queue ordering).
+    Stored in ``_CacheEntry`` so no L1 is pinned between dispatches. At each
+    dispatch, one bank is allocated from all specs, its word addresses are
+    patched into the cached ``ProgramDescriptor`` runtime args, and the bank
+    is released after dispatch submission via command-queue-safe lifetime.
     """
 
     core_ranges: Any  # CoreRangeSet
@@ -108,7 +102,6 @@ class _BuildResult:
         "descriptor",
         "input_tensors",
         "output_tensors",
-        "semaphores",
         "kernel_labels",
         "kernel_phase_map",
         "cb_source_map",
@@ -124,7 +117,6 @@ class _BuildResult:
         descriptor,
         input_tensors,
         output_tensors,
-        semaphores=(),
         kernel_labels=(),
         kernel_phase_map=(),
         cb_source_map=(),
@@ -137,7 +129,6 @@ class _BuildResult:
         self.descriptor = descriptor
         self.input_tensors = input_tensors
         self.output_tensors = output_tensors
-        self.semaphores = semaphores
         self.kernel_labels = kernel_labels
         self.kernel_phase_map = kernel_phase_map
         self.cb_source_map = cb_source_map

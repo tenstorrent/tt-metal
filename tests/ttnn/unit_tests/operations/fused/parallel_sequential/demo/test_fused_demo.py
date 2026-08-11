@@ -30,7 +30,10 @@ To run profiling modes, add the desired values back to the @pytest.mark.parametr
 list in the test, then optionally filter with: pytest ... -k cold_start
 """
 
+import gc
+import os
 import shutil
+import statistics
 import time
 from pathlib import Path
 
@@ -44,7 +47,6 @@ from models.common.utility_functions import is_watcher_enabled, skip_with_llk_as
 from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
 from models.experimental.ops.descriptors.fusion import clear_build_cache
 
-
 # =============================================================================
 # Helpers
 # =============================================================================
@@ -54,6 +56,12 @@ COMPUTE_CONFIG = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi4,
     math_approx_mode=False,
     fp32_dest_acc_en=True,
+)
+
+RUN_SLIDE_PERF = os.environ.get("TT_METAL_RUN_FUSION_SLIDE_PERF", "").strip().lower() in {"1", "true", "yes", "on"}
+SLIDE_PERF_SKIP = pytest.mark.skipif(
+    not RUN_SLIDE_PERF,
+    reason="Manual slide benchmark; set TT_METAL_RUN_FUSION_SLIDE_PERF=1 to run",
 )
 
 
@@ -293,6 +301,22 @@ def _time_e2e(fn, device, num_warmup=5, num_measure=100):
         fn()
     sync()
     return 1000 * (time.perf_counter() - t0) / num_measure
+
+
+def _benchmark_e2e_mode(fn, device, *, num_trials=7, num_measure=100):
+    """Measure one mode in isolation and return its median and raw samples."""
+    for _ in range(5):
+        fn()
+    ttnn.synchronize_device(device)
+
+    samples_us = [_time_e2e(fn, device, num_warmup=0, num_measure=num_measure) * 1000 for _ in range(num_trials)]
+    return statistics.median(samples_us), samples_us
+
+
+def _print_slide_perf_result(demo, mode, median_us, samples_us):
+    print(f"\nFUSION_SLIDE_PERF demo={demo} metric=steady_state_throughput")
+    samples = ",".join(f"{sample:.3f}" for sample in samples_us)
+    print(f"FUSION_SLIDE_PERF demo={demo} mode={mode} " f"median_us={median_us:.3f} samples_us={samples}")
 
 
 # =============================================================================
@@ -1134,11 +1158,19 @@ class TestPerfDemos:
             shards,
         )
 
-    def _sharded_tree_make_ops(self, device):
-        """Create all OpDescriptors for the sharded tree."""
+    def _sharded_tree_make_ops(self, device, *, setup=None, persistent=False):
+        """Create all OpDescriptors for the sharded tree.
+
+        ``setup`` lets throughput benchmarks reuse the same model tensors while
+        constructing fresh inline descriptors. ``persistent`` omits the root
+        activation so the returned tree can be reused via ``ln_stem.update()``.
+        """
         from models.experimental.ops.descriptors.normalization import layer_norm
         from models.experimental.ops.descriptors.data_movement.slice import slice
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+
+        if setup is None:
+            setup = self._sharded_tree_setup(device)
 
         (
             stem_cores,
@@ -1155,16 +1187,15 @@ class TestPerfDemos:
             tt_B_left,
             tt_B_right,
             shards,
-        ) = self._sharded_tree_setup(device)
+        ) = setup
 
         rows, cols = 2048, 256
         half = rows // 2
         quarter = rows // 4
 
         # Level 0: stem LN on 16 cores (auto-detects sharded input grid)
-        ln_stem = layer_norm.layer_norm(
-            tt_input, core_range_set=stem_cores, epsilon=1e-5, compute_kernel_config=COMPUTE_CONFIG
-        )
+        stem_kwargs = dict(core_range_set=stem_cores, epsilon=1e-5, compute_kernel_config=COMPUTE_CONFIG)
+        ln_stem = layer_norm.layer_norm(**stem_kwargs) if persistent else layer_norm.layer_norm(tt_input, **stem_kwargs)
 
         # Level 1: slice (sharded on 8 cores) -> matmul (sharded output on 8 cores)
         sl_top = slice(
@@ -1267,7 +1298,7 @@ class TestPerfDemos:
     def _sharded_tree_container(self, ops):
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
 
-        (ln_stem, sl_top, sl_bot, mm_left, mm_right, sl_tl, sl_bl, sl_tr, sl_br, ln_ll, ln_lr, ln_rl, ln_rr) = ops
+        ln_stem, sl_top, sl_bot, mm_left, mm_right, sl_tl, sl_bl, sl_tr, sl_br, ln_ll, ln_lr, ln_rl, ln_rr = ops
         return Sequential(
             ln_stem,
             Parallel(
@@ -2008,6 +2039,333 @@ class TestPerfDemos:
             e2e = _time_e2e(unfused, device)
         else:
             pytest.fail(f"Unsupported perf_mode={perf_mode!r}")
+
+    # -----------------------------------------------------------------
+    # Manual slide benchmarks — Parallel Chains and Balanced Tree only
+    # -----------------------------------------------------------------
+
+    def _parallel_chains_fused_callable(self, setup, *, persistent):
+        from models.experimental.ops.descriptors.fusion import Parallel, Sequential
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+
+        (
+            cores_a,
+            cores_b,
+            sharded_in_a,
+            sharded_in_b,
+            sharded_out_a,
+            sharded_out_b,
+            mm_cfg_a,
+            mm_cfg_b,
+            ta,
+            tb,
+            tw,
+            tbi,
+            tB,
+        ) = setup
+
+        def make_container():
+            common_a = dict(
+                core_range_set=cores_a,
+                weight=tw,
+                epsilon=1e-5,
+                compute_kernel_config=COMPUTE_CONFIG,
+                memory_config=sharded_in_a,
+            )
+            common_b = dict(
+                core_range_set=cores_b,
+                weight=tw,
+                epsilon=1e-5,
+                compute_kernel_config=COMPUTE_CONFIG,
+                memory_config=sharded_in_b,
+            )
+            la = (
+                layer_norm.layer_norm(bias=tbi, **common_a)
+                if persistent
+                else layer_norm.layer_norm(ta, bias=tbi, **common_a)
+            )
+            rb = rms_norm.rms_norm(**common_b) if persistent else rms_norm.rms_norm(tb, **common_b)
+            ma = matmul_desc(
+                la.output_tensors[0],
+                tB,
+                core_range_set=cores_a,
+                program_config=mm_cfg_a,
+                compute_kernel_config=COMPUTE_CONFIG,
+                output_mem_config=sharded_out_a,
+            )
+            mb = matmul_desc(
+                rb.output_tensors[0],
+                tB,
+                core_range_set=cores_b,
+                program_config=mm_cfg_b,
+                compute_kernel_config=COMPUTE_CONFIG,
+                output_mem_config=sharded_out_b,
+            )
+            container = Parallel(
+                chain_a=Sequential(ln_a=la, mm_a=ma),
+                chain_b=Sequential(rms_b=rb, mm_b=mb),
+            )
+            return container, la, rb
+
+        if persistent:
+            container, la, rb = make_container()
+
+            def run_persistent():
+                la.update(ta)
+                rb.update(tb)
+                return container.run()
+
+            return run_persistent
+
+        def run_inline():
+            container, _, _ = make_container()
+            return container.run()
+
+        return run_inline
+
+    def _parallel_chains_unfused_callable(self, device, setup):
+        (
+            cores,
+            _,
+            sharded_in,
+            _,
+            sharded_out,
+            _,
+            mm_cfg,
+            _,
+            ta,
+            tb,
+            tw,
+            tbi,
+            tB,
+        ) = setup
+
+        # The unfused TTNN path requires a (0,0)-origin grid. Copy branch B's
+        # activation to the same memory layout outside the timed region.
+        tb_origin = ttnn.from_torch(
+            ttnn.to_torch(tb),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=sharded_in,
+        )
+        ln_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(1, 8),
+            subblock_w=4,
+            block_h=4,
+            block_w=8,
+            inplace=False,
+        )
+
+        def run_unfused():
+            ua1 = ttnn.layer_norm(
+                ta,
+                weight=tw,
+                bias=tbi,
+                epsilon=1e-5,
+                program_config=ln_cfg,
+                compute_kernel_config=COMPUTE_CONFIG,
+                memory_config=sharded_in,
+            )
+            ua2 = ttnn.matmul(
+                ua1,
+                tB,
+                program_config=mm_cfg,
+                compute_kernel_config=COMPUTE_CONFIG,
+                memory_config=sharded_out,
+            )
+            ub1 = ttnn.rms_norm(
+                tb_origin,
+                weight=tw,
+                epsilon=1e-5,
+                program_config=ln_cfg,
+                compute_kernel_config=COMPUTE_CONFIG,
+                memory_config=sharded_in,
+            )
+            ub2 = ttnn.matmul(
+                ub1,
+                tB,
+                program_config=mm_cfg,
+                compute_kernel_config=COMPUTE_CONFIG,
+                memory_config=sharded_out,
+            )
+            return ua2, ub2
+
+        return run_unfused
+
+    def _sharded_tree_fused_callable(self, device, setup, *, persistent):
+        if not persistent:
+
+            def run_inline():
+                built = self._sharded_tree_make_ops(device, setup=setup)
+                return self._sharded_tree_container(built[:13]).run()
+
+            return run_inline
+
+        built = self._sharded_tree_make_ops(device, setup=setup, persistent=True)
+        root = built[0]
+        tree = self._sharded_tree_container(built[:13])
+        tt_input = setup[10]
+
+        def run_persistent():
+            root.update(tt_input)
+            return tree.run()
+
+        return run_persistent
+
+    def _sharded_tree_unfused_callable(self, setup):
+        (
+            stem_cores,
+            left_cores,
+            _,
+            ll_cores,
+            _,
+            _,
+            _,
+            mm_cfg,
+            _,
+            mm_n,
+            tt_input,
+            tt_B_left,
+            tt_B_right,
+            shards,
+        ) = setup
+        rows, cols = 2048, 256
+        half, quarter = rows // 2, rows // 4
+
+        def _shard_mem(cores, shard_h, shard_w):
+            spec = ttnn.ShardSpec(cores, [shard_h, shard_w], ttnn.ShardOrientation.ROW_MAJOR)
+            return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, spec)
+
+        branch_mem = _shard_mem(left_cores, 128, 256)
+        mm_mem = _shard_mem(left_cores, 128, 128)
+        leaf_mem = _shard_mem(ll_cores, 128, 128)
+        stem_ln_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(2, 8),
+            subblock_w=4,
+            block_h=8,
+            block_w=4,
+            inplace=False,
+        )
+        leaf_ln_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(1, 4),
+            subblock_w=4,
+            block_h=4,
+            block_w=4,
+            inplace=False,
+        )
+
+        def run_unfused():
+            u_stem = ttnn.layer_norm(
+                tt_input,
+                epsilon=1e-5,
+                compute_kernel_config=COMPUTE_CONFIG,
+                program_config=stem_ln_cfg,
+                memory_config=shards["stem"],
+            )
+            u_top = ttnn.slice(u_stem, [0, 0, 0, 0], [1, 1, half, cols], memory_config=branch_mem)
+            u_bot = ttnn.slice(u_stem, [0, 0, half, 0], [1, 1, rows, cols], memory_config=branch_mem)
+            u_left = ttnn.matmul(
+                u_top,
+                tt_B_left,
+                program_config=mm_cfg,
+                compute_kernel_config=COMPUTE_CONFIG,
+                memory_config=mm_mem,
+            )
+            u_right = ttnn.matmul(
+                u_bot,
+                tt_B_right,
+                program_config=mm_cfg,
+                compute_kernel_config=COMPUTE_CONFIG,
+                memory_config=mm_mem,
+            )
+            leaves = (
+                ttnn.slice(u_left, [0, 0, 0, 0], [1, 1, quarter, mm_n], memory_config=leaf_mem),
+                ttnn.slice(u_left, [0, 0, quarter, 0], [1, 1, half, mm_n], memory_config=leaf_mem),
+                ttnn.slice(u_right, [0, 0, 0, 0], [1, 1, quarter, mm_n], memory_config=leaf_mem),
+                ttnn.slice(u_right, [0, 0, quarter, 0], [1, 1, half, mm_n], memory_config=leaf_mem),
+            )
+            return tuple(
+                ttnn.layer_norm(
+                    leaf,
+                    epsilon=1e-5,
+                    compute_kernel_config=COMPUTE_CONFIG,
+                    program_config=leaf_ln_cfg,
+                    memory_config=leaf_mem,
+                )
+                for leaf in leaves
+            )
+
+        return run_unfused
+
+    @SLIDE_PERF_SKIP
+    @pytest.mark.parametrize("mode", ["inline", "persistent", "unfused"])
+    def test_slide_parallel_chains_e2e(self, device, mode):
+        setup = self._parallel_chains_setup(device)
+        mode_callables = {
+            "inline": lambda: self._parallel_chains_fused_callable(setup, persistent=False),
+            "persistent": lambda: self._parallel_chains_fused_callable(setup, persistent=True),
+            "unfused": lambda: self._parallel_chains_unfused_callable(device, setup),
+        }
+        median_us, samples_us = _benchmark_e2e_mode(mode_callables[mode](), device)
+        _print_slide_perf_result("parallel_chains", mode, median_us, samples_us)
+
+    def test_parallel_chains_persistent_releases_semaphore_bank_l1(self, device):
+        run = self._parallel_chains_fused_callable(self._parallel_chains_setup(device), persistent=True)
+        for _ in range(5):
+            run()
+        ttnn.synchronize_device(device)
+        gc.collect()
+        pages_before = len(ttnn._ttnn.reports.get_buffer_pages(device))
+
+        for _ in range(100):
+            run()
+        ttnn.synchronize_device(device)
+        gc.collect()
+
+        assert len(ttnn._ttnn.reports.get_buffer_pages(device)) == pages_before
+
+    @SLIDE_PERF_SKIP
+    @pytest.mark.parametrize("mode", ["inline", "persistent", "unfused"])
+    def test_slide_balanced_tree_e2e(self, device, mode):
+        setup = self._sharded_tree_setup(device)
+
+        mode_callables = {
+            "inline": lambda: self._sharded_tree_fused_callable(device, setup, persistent=False),
+            "persistent": lambda: self._sharded_tree_fused_callable(device, setup, persistent=True),
+            "unfused": lambda: self._sharded_tree_unfused_callable(setup),
+        }
+        median_us, samples_us = _benchmark_e2e_mode(mode_callables[mode](), device)
+        _print_slide_perf_result("balanced_tree", mode, median_us, samples_us)
+
+    @SLIDE_PERF_SKIP
+    @pytest.mark.parametrize("mode", ["inline", "persistent"])
+    def test_slide_parallel_chains_fused_device_fw(self, device, mode):
+        """Single-dispatch entry point for manual device profiling."""
+        setup = self._parallel_chains_setup(device)
+        run = self._parallel_chains_fused_callable(setup, persistent=mode == "persistent")
+        run()
+        ttnn.synchronize_device(device)
+
+    @SLIDE_PERF_SKIP
+    def test_slide_parallel_chains_unfused_device_fw(self, device):
+        """Single-dispatch entry point for manual device profiling."""
+        self.test_parallel_chains_ln_mm_rms_mm_unfused(device, "device_fw")
+
+    @SLIDE_PERF_SKIP
+    @pytest.mark.parametrize("mode", ["inline", "persistent"])
+    def test_slide_balanced_tree_fused_device_fw(self, device, mode):
+        """Single-dispatch entry point for manual device profiling."""
+        setup = self._sharded_tree_setup(device)
+        run = self._sharded_tree_fused_callable(device, setup, persistent=mode == "persistent")
+        run()
+        ttnn.synchronize_device(device)
+
+    @SLIDE_PERF_SKIP
+    def test_slide_balanced_tree_unfused_device_fw(self, device):
+        """Single-dispatch entry point for manual device profiling."""
+        self.test_sharded_tree_ln_slice_matmul_slice_ln_unfused(device, "device_fw")
 
 
 # =============================================================================

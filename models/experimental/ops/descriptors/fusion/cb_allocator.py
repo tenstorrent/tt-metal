@@ -903,19 +903,20 @@ def _extract_remote_cb_indices(descriptor: "ttnn.ProgramDescriptor") -> Set[int]
     return indices
 
 
-# Convention: CB-reference named compile-time args MUST start with this prefix
-# and have a value in range [0, 31]. Non-CB args MUST NOT use this prefix.
-CB_ARG_PREFIX = "cb_"
+# Convention: CB/DFB-reference named compile-time args use one of these
+# prefixes and have a non-negative integer value. Other named args, such as
+# ``dfb_length``, must not use a recognized ID prefix.
+CB_ARG_PREFIXES = ("cb_", "dfb_id_")
 
 
 def _is_cb_named_arg(name: str, value: Any) -> bool:
     """Check if a named compile-time arg refers to a CB index.
 
-    Returns True if the name starts with CB_ARG_PREFIX and the value
-    is a non-negative integer.  The actual slot bound is validated by
-    the pool allocator, not here.
+    Returns True if the name starts with a recognized CB/DFB ID prefix
+    and the value is a non-negative integer. The actual slot bound is
+    validated by the pool allocator, not here.
     """
-    if not name.startswith(CB_ARG_PREFIX):
+    if not name.startswith(CB_ARG_PREFIXES):
         return False
     if not isinstance(value, int) or value < 0:
         return False
