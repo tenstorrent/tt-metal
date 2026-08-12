@@ -20,7 +20,7 @@ from loguru import logger
 from tests.ttnn.utils_for_testing import comp_pcc
 import tests.ttnn.unit_tests.kernel_lib.chain_test_lib as lib
 
-HELD_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/lifecycle/held_b.cpp"
+HELD_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/lifecycle/held_b.cpp"
 
 # Selector -> lifecycle name (must match held_b.cpp).
 LIFECYCLES = {
@@ -62,7 +62,7 @@ def test_held_b_lifecycle(device, life, name):
     assert pcc_ok, f"lifecycle {name}: {msg}"
 
 
-OUTPUT_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/lifecycle/out_lifecycle.cpp"
+OUTPUT_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/lifecycle/out_lifecycle.cpp"
 OUT_LIFECYCLES = {
     0: "Streaming",
     1: "Bulk",
@@ -99,10 +99,10 @@ def test_output_lifecycle(device, life, name):
     assert pcc_ok, f"output lifecycle {name}: {msg}"
 
 
-INPLACE_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/lifecycle/inplace_chain.cpp"
+INPLACE_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/lifecycle/inplace_chain.cpp"
 INPLACE_LIFECYCLES = {
     0: "BulkDrain+Streaming",
-    1: "Chunked+Chunked",
+    1: "PerBlockSize+PerBlockSize",
     2: "Streaming+Streaming",
 }
 
@@ -139,7 +139,7 @@ def test_inplace_chain_lifecycle(device, life, name):
     assert pcc_ok, f"in-place lifecycle {name}: {msg}"
 
 
-OUTER_DIR = "ttnn/cpp/ttnn/kernel_lib/tests/outer_stream"
+OUTER_DIR = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/outer_stream"
 
 
 def _build_outer_reader(tt_a, tt_b, height_tiles, width_tiles, grid):
