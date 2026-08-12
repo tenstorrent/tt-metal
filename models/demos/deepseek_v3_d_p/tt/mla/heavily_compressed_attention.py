@@ -88,6 +88,85 @@ class _TtHCABase(LightweightModule):
             mesh_mapper=mesh_mapper,
         )
 
+    def _build_rope_table(self, count: int, stride: int):
+        """cos/sin for every position this layer can ever rotate by, REPLICATED so each chip can reach any
+        row. Built once; forward only gathers from it.
+
+        Replicated and not SP-sharded because the rows a chip needs move with ``kv_actual``: chip c wants
+        ``kv_actual + c*local + [0, local)``, which walks past any fixed contiguous shard. MLA avoids the
+        replication by rotating which token lands on which chip (mla/utils.py:83) so its shard is
+        position-invariant, but that rotation would break the compressor's contiguous 128-token windows.
+        At 64 rope columns in bf16 a table is 128 B a row: 14 MB for a 56K token cache, 246 MB at 1M
+        against ~32 GiB of DRAM per chip."""
+        positions = (torch.arange(count) * stride).unsqueeze(0)
+        cos, sin = self.rotary_emb(torch.zeros(1), position_ids=positions.to(torch.long), layer_type="compress")
+        pair = []
+        for t in (cos, sin):
+            t = t.repeat_interleave(2, dim=-1)  # [1, count, rope_head_dim]
+            pair.append(
+                ttnn.from_torch(
+                    t,
+                    device=self.device,
+                    dtype=self.dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=self.memory_config,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.device) if self.is_mesh else None,
+                )
+            )
+        return tuple(pair)
+
+    def _rope_index_base(self, rows: int):
+        """The gather index splits into a constant and a scalar: index[c][r] = base + c*rows + r. This is the
+        constant half, SP-sharded so chip c holds its own row, plus a 1-element buffer for the base.
+
+        Only ``base`` moves between chunks, so forward pushes 4 bytes rather than computing sp*rows indices
+        on host -- the same shape MLA's per-chunk metadata uses (tt_prefill_runtime.py:481)."""
+        mapper = None
+        if self.is_mesh:
+            dims = [None, None]
+            dims[self.sp_axis] = 0
+            mapper = ttnn.ShardTensor2dMesh(self.device, mesh_shape=tuple(self.device.shape), dims=dims)
+        const = ttnn.from_torch(
+            torch.arange(self.sp_factor * rows, dtype=torch.int32).view(self.sp_factor, rows),
+            device=self.device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=mapper,
+        )
+        base = ttnn.from_torch(
+            torch.zeros(1, 1, dtype=torch.int32),
+            device=self.device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device) if self.is_mesh else None,
+        )
+        return const, base
+
+    def _rope_index(self, index_base, base: int):
+        """This chunk's gather index, built on device from the constant half plus a 4-byte base."""
+        const, buf = index_base
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(
+                torch.full((1, 1), int(base), dtype=torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device) if self.is_mesh else None,
+            ),
+            buf,
+        )
+        return ttnn.add(const, buf)
+
+    def _rope_gather(self, table, index):
+        """Pick this chunk's rows out of the replicated table. ttnn.embedding addresses rows BY INDEX, so
+        unlike ttnn.slice it carries no tile-alignment constraint -- which matters for the compressor,
+        whose per-chip start ``entry_count + c*n_windows`` is never a multiple of TILE_SIZE. Index values
+        stay out of the program hash, so every chunk reuses one program."""
+        out = []
+        for t in table:
+            g = ttnn.embedding(index, t, layout=ttnn.TILE_LAYOUT, dtype=self.dtype)
+            out.append(ttnn.reshape(g, [1, 1, g.shape[-2], g.shape[-1]]))
+        return tuple(out)
+
     def _cos_sin(self, positions: torch.Tensor, negate_sin: bool = False):
         """``negate_sin`` gives the conjugate rotation used to undo RoPE on the attention output."""
         positions = positions[:1].to(torch.long)
@@ -148,6 +227,8 @@ class TtHCACompressor(_TtHCABase):
         self.position_bias = self._from_torch(position_bias.detach().reshape(1, 1, self.compress_rate, self.head_dim))
         self.kv_norm_weight = self._from_torch(kv_norm_weight.detach().reshape(1, 1, 1, self.head_dim))
         self.trans_mat = self._from_torch(get_rot_transformation_mat())
+        self._entry_rope = None  # set by TtHCA.alloc_state; None means build on host (standalone use)
+        self._entry_index = None
 
     @classmethod
     def from_reference(cls, device, reference, config, **kwargs) -> "TtHCACompressor":
@@ -246,10 +327,16 @@ class TtHCACompressor(_TtHCABase):
             nope_dim = self.head_dim - self.rope_head_dim
             nope = ttnn.slice(compressed, [0, 0, 0, 0], [batch, 1, n_windows, nope_dim])
             rope = ttnn.slice(compressed, [0, 0, 0, nope_dim], [batch, 1, n_windows, self.head_dim])
-            positions = (
-                torch.arange(n_windows * self.sp_factor) * self.compress_rate + first_window_position
-            ).unsqueeze(0)
-            cos, sin = self._cos_sin(positions)
+            if self._entry_rope is None:  # standalone compressor use: no state, so no table
+                positions = (
+                    torch.arange(n_windows * self.sp_factor) * self.compress_rate + first_window_position
+                ).unsqueeze(0)
+                cos, sin = self._cos_sin(positions)
+            else:
+                # Index is in ENTRIES: table row k carries position k*compress_rate, so the window's
+                # position has to be divided back down.
+                idx = self._rope_index(self._entry_index, first_window_position // self.compress_rate)
+                cos, sin = self._rope_gather(self._entry_rope, idx)
             rope = ttnn.experimental.rotary_embedding_llama(rope, cos, sin, self.trans_mat, is_decode_mode=False)
             compressed_kv = ttnn.concat([nope, rope], dim=-1)
 
@@ -386,6 +473,8 @@ class TtHCA(_TtHCABase):
         self._shift_cache = {}
         self._take_cache = {}
         self._carry_index = {}
+        self._slab_rope = None  # set by alloc_state for chunked use; None means build per call
+        self._slab_index = None
 
     def alloc_state(self, max_seq_len: int, batch: int = 1, chunk_tokens: int | None = None) -> TtHCAState:
         """Size the state once for the longest context this layer will serve, so its shape is fixed for
@@ -411,6 +500,17 @@ class TtHCA(_TtHCABase):
         )
         if chunk_tokens is not None:
             self._build_carry_index(chunk)
+
+        # Rope tables for every position this state can serve, so forward gathers instead of building.
+        # The slab needs one row per TOKEN and the compressor one per ENTRY; both are sized on chunk-padded
+        # capacity because pos_padded covers [kv_actual, kv_actual + chunk) even for the last chunk.
+        if chunk_tokens is not None:
+            rate, sl = self.compressor.compress_rate, chunk // self.sp_factor
+            tokens = -(-int(max_seq_len) // chunk) * chunk + chunk
+            self._slab_rope = self._build_rope_table(tokens, 1)
+            self._slab_index = self._rope_index_base(sl)
+            self.compressor._entry_rope = self.compressor._build_rope_table(-(-tokens // rate), rate)
+            self.compressor._entry_index = self.compressor._rope_index_base(sl // rate)
         return TtHCAState(
             compressed_kv=self._from_torch(torch.zeros(batch, 1, capacity, self.head_dim)),
             sliding_carry=self._from_torch(torch.zeros(batch, 1, self.sliding_window, self.head_dim)),
@@ -856,16 +956,17 @@ class TtHCA(_TtHCABase):
             f"the final chunk may be ragged, non-final chunks must be a multiple of {compress_rate}"
         )
 
-        # The rope op matches cos/sin to the tensor seq, so the stems need one position per PADDED row.
-        # The compressor keeps the real ones -- they drive block_bias.
-        pos_padded = position_ids
-        if position_ids.shape[1] < seq_pad_global:
-            tail = torch.arange(1, seq_pad_global - position_ids.shape[1] + 1).unsqueeze(0)
-            pos_padded = torch.cat([position_ids, position_ids[:, -1:] + tail], dim=1)
-
-        # One build for the whole padded slab: the q stem, the kv stem and the output un-rope all rotate
-        # by the same positions, and each rebuild is ~2.9 ms of host time (rotary_emb plus two uploads).
-        cos, sin = self._cos_sin(pos_padded)
+        # One rotation for the whole padded slab: the q stem, the kv stem and the output un-rope all want
+        # it, and a rebuild is ~2.9 ms of host time. Chunked runs gather it from the table alloc_state
+        # built; single-shot rotates once, so a table it would have to build inside forward is pure cost.
+        if self._slab_rope is not None:
+            cos, sin = self._rope_gather(self._slab_rope, self._rope_index(self._slab_index, state.kv_actual))
+        else:
+            pos_padded = position_ids
+            if position_ids.shape[1] < seq_pad_global:
+                tail = torch.arange(1, seq_pad_global - position_ids.shape[1] + 1).unsqueeze(0)
+                pos_padded = torch.cat([position_ids, position_ids[:, -1:] + tail], dim=1)
+            cos, sin = self._cos_sin(pos_padded)
         q = self._q_stem(hidden_states, cos, sin)
         sliding_kv = self._kv_stem(hidden_states, cos, sin)
         new_entries, block_bias = self.compressor(
