@@ -100,8 +100,6 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumHFactory::cr
         .num_entries = do_mask_h ? 2u : 1u,
         .data_format_metadata = scaler_dfb_data_format,
     });
-    // The mask_h, accum_dst and masked_input buffers are gone: the partial scaler handles the ragged
-    // last tile inside a single reduce(), so there is nothing to mask, stage or accumulate.
     constexpr uint32_t num_output_tiles = 2;
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = OUT_DFB,
@@ -145,9 +143,6 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumHFactory::cr
                 // Read by the kernel but unused there (the column loop strides by Wt); kept as-is,
                 // since dropping it would be a change to the kernel's argument list beyond the port.
                 {"HtWt", HtWt},
-                // Valid rows in the last H tile, in [1, 31]; only read under DO_MASK_H. The
-                // partial-scaler helper takes the fill count as a template parameter, so it has to
-                // reach the reader at compile time.
                 {"partial_h", mask_h},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"col_start_tile_id", "curr_col_in_batch", "num_cols"}},

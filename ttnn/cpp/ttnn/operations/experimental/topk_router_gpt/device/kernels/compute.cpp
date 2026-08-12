@@ -268,10 +268,6 @@ void kernel_main() {
     // =====================================================================
 
     // Step 1: Find max per row
-    // WaitUpfrontNoPop: the helper waits for the single input tile but leaves it in the CB, because
-    // step 2 below reads it again. It also waits the scaler without popping it (this kernel owns that
-    // CB's lifetime, see the wait_front/pop_front around this phase) and does the output
-    // reserve_back/push_back itself.
     compute_kernel_lib::reduce<
         PoolType::MAX,
         ReduceDim::REDUCE_ROW,
@@ -300,10 +296,6 @@ void kernel_main() {
     cb_reduce_scalar.pop_front(1);
 
     // Step 3: Reduce SUM per row + reciprocal
-    // Same no-pop policy: step 4 multiplies the same exp tile by the reciprocal computed here. The
-    // reciprocal runs as the post-reduce op, i.e. on the accumulated DST register before the pack, and
-    // the helper issues the SUM+REDUCE_ROW operand-swapped format reconfig that used to be spelled out
-    // here.
     compute_kernel_lib::reduce<
         PoolType::SUM,
         ReduceDim::REDUCE_ROW,

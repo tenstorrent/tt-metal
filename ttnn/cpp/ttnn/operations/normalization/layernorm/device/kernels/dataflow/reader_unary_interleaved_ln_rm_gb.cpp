@@ -92,9 +92,6 @@ void kernel_main() {
     if constexpr (!use_welford) {
         constexpr uint32_t dfb_in_2 = get_named_compile_time_arg_val("cb_scaler");
         constexpr uint32_t partial_last_tile_cols = W % tt::constants::TILE_WIDTH;
-        // Non-tile-aligned W: emit the full + partial scaler pair in one call. The compute side
-        // selects the partial tile for the last W tile (numeric.h's accumulate loop, which encodes
-        // the same rule as compute_kernel_lib::ReducePartialScaler::last_tile_at(1)).
         if constexpr (partial_last_tile_cols > 0) {
             dataflow_kernel_lib::calculate_and_prepare_partial_reduce_scalers<
                 dfb_in_2,

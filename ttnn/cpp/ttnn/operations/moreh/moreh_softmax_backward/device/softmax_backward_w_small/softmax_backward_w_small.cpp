@@ -35,8 +35,6 @@ tt::tt_metal::ProgramDescriptor MorehSoftmaxBackwardOperation::MorehSoftmaxBackw
 
     auto num = input_grad.physical_volume() / H / W;
 
-    // Valid columns in the last W tile; TILE_WIDTH when W is tile-aligned. Needed before the CBs are
-    // sized, because a ragged W makes the reader emit a full/partial scaler pair instead of one tile.
     uint32_t mask_w = input_grad.logical_shape()[-1] % tt::constants::TILE_WIDTH;
     if (mask_w == 0) {
         mask_w = tt::constants::TILE_WIDTH;
@@ -81,8 +79,6 @@ tt::tt_metal::ProgramDescriptor MorehSoftmaxBackwardOperation::MorehSoftmaxBackw
             .page_size = tile_size_data,
         }}},
     });
-    // scaler: a full/partial pair when W is ragged, so the sum reduce can exclude the padding columns of
-    // the last W tile; a single tile otherwise.
     desc.cbs.push_back(CBDescriptor{
         .total_size = (do_partial_w ? 2 : 1) * tile_size_data,
         .core_ranges = all_cores,
@@ -92,8 +88,6 @@ tt::tt_metal::ProgramDescriptor MorehSoftmaxBackwardOperation::MorehSoftmaxBackw
             .page_size = tile_size_data,
         }}},
     });
-    // c_3 (mask) is gone: it only zeroed the padding columns that fed the sum reduce, which the partial
-    // scaler now excludes directly.
     // input_grad
     desc.cbs.push_back(CBDescriptor{
         .total_size = 2 * tile_size_data,
@@ -225,8 +219,6 @@ tt::tt_metal::ProgramDescriptor MorehSoftmaxBackwardOperation::MorehSoftmaxBackw
             TT_THROW("Core not in specified core ranges");
         }
 
-        // The packed 1.0f scaler that used to be arg 5 is gone: the reader already computed the SUM
-        // scaler itself with calculate_and_prepare_reduce_scaler and ignored the value.
         reader_desc.emplace_runtime_args(
             core, {output.buffer(), output_grad.buffer(), num_tiles_per_core, tile_offset, Wt, mask_w});
 

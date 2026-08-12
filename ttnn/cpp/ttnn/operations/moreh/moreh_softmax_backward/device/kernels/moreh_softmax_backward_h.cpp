@@ -16,9 +16,6 @@ void kernel_main() {
     constexpr auto cb_dy = tt::CBIndex::c_1;
     DataflowBuffer dfb_dy_obj(cb_dy);
     constexpr auto cb_bcast_scaler = tt::CBIndex::c_2;
-    // c_3 (mask) is gone: the ragged last H tile is excluded by the partial scaler below instead of
-    // being zeroed with mask_tile. The mask only ever fed the sum reduce here — dx is recomputed from
-    // y and dy — so nothing else observes those padding rows.
     constexpr auto cb_dx = tt::CBIndex::c_16;
     DataflowBuffer dfb_dx_obj(cb_dx);
 
@@ -33,25 +30,16 @@ void kernel_main() {
 
     uint32_t N = get_compile_time_arg_val(0);
     uint32_t Ht = get_compile_time_arg_val(1);
-    // Valid rows in the last H tile (TILE_H when H is tile-aligned). Ht is already a compile-time arg,
-    // so this kernel is built per shape and the ragged case costs nothing at runtime.
     constexpr uint32_t mask_h = get_compile_time_arg_val(2);
     constexpr uint32_t TILE_H = 32;
     constexpr bool do_partial_h = mask_h < TILE_H;
 
-    // The reader emits cb_bcast_scaler as a full/partial pair only when H is ragged; tile 1 fills just
-    // the valid rows, so the reduce excludes the padding instead of relying on a masked copy.
     constexpr auto partial_scaler = do_partial_h ? compute_kernel_lib::ReducePartialScaler::last_tile_at(1)
                                                  : compute_kernel_lib::ReducePartialScaler::none();
 
     for (uint32_t n = 0; n < N; ++n) {
 #ifdef LOG
         // sum(dy)
-        //
-        // One reduce over all Ht tiles of dy, in place. This replaces a two-phase split that reduced
-        // Ht-1 tiles into an intermediate, masked the last dy tile into a second intermediate, reduced
-        // that separately and added the two together (plus a special case for Ht == 1). dy is not
-        // popped here: the epilogue below reads it again.
         compute_kernel_lib::reduce<
             PoolType::SUM,
             ReduceDim::REDUCE_COL,
@@ -85,8 +73,6 @@ void kernel_main() {
         dfb_dy_obj.pop_front(Ht);
 #else
         // step 1, compute y * dy
-        // No longer masks the last tile: cb_ydy feeds nothing but the reduce below, which now excludes
-        // the padding rows itself.
         for (uint32_t h = 0; h < Ht; ++h) {
             mul_tiles_to_cb(dfb_y_obj, dfb_dy_obj, dfb_ydy_obj, h, h, /*pop0=*/0, /*pop1=*/0);
         }

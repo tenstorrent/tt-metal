@@ -385,12 +385,6 @@ ALWI void reduce(
     } else {
         reduce_init<reduce_type, reduce_dim>(input_dfb_id, scaler_dfb_id, output_dfb_id);
     }
-    // Partial scaler: the reader may append a partial-fill scaler tile at index >0, used for the last
-    // tile along the reduce dimension. Wait for every tile up to and including it.
-    //
-    // REDUCE_SCALAR can't use one: the LLK applies the scaler twice (row then col), which a single
-    // partial tile cannot encode. The Int32 SFPU fold path never reads the scaler CB at all, so it
-    // would silently ignore a partial scaler and return a wrong answer. Reject both.
     if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR) {
         ASSERT(partial_scaler.last_tile_scaler_idx == 0);
     }
@@ -667,7 +661,6 @@ ALWI void reduce(
                     // Base dst_index: from accumulation config or 0 for multi-column output
                     uint32_t dst_idx = get_dst_index(accumulate);
                     // Last H-tile picks up the partial scaler when one was prepared by the reader.
-                    // (Unused on the is_sfpu path, which never reads the scaler CB.)
                     [[maybe_unused]] const uint32_t scaler_idx =
                         (ht == Ht - 1) ? partial_scaler.last_tile_scaler_idx : 0;
                     for (uint32_t i = wt; i < chunk_end; ++i) {

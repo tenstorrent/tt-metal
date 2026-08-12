@@ -20,16 +20,9 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb::input, dfb::input, dfb::out);
 
-    // Non-tile-aligned H: the reader emits a full scaler (tile 0) and a partial scaler (tile 1).
-    // The reduce helper applies tile 1 to the LAST H tile of each column, so the padding rows are
-    // multiplied by zero and contribute nothing. This replaces the previous workaround, which
-    // copied the last tile into DST, applied mask_tile against a separate 0/1 mask CB, packed the
-    // result into a scratch CB, and folded it in with a second accumulating reduce.
     constexpr auto partial_scaler = do_mask_h ? compute_kernel_lib::ReducePartialScaler::last_tile_at(1)
                                               : compute_kernel_lib::ReducePartialScaler::none();
 
-    // tiles arrive in NCWH order (H-contiguous), so one column's Ht tiles stream in back-to-back
-    // and collapse into a single output tile.
     for (uint32_t nc = 0; nc < NC; nc++) {
         for (uint32_t wt = 0; wt < Wt; ++wt) {
             compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, dfb::input, dfb::scaler, dfb::out>(

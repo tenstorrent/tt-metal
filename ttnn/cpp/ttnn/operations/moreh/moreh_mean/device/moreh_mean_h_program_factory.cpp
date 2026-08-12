@@ -86,8 +86,6 @@ ttnn::device_operation::ProgramArtifacts MorehMeanOperation::MorehMeanHFactory::
         .num_entries = do_mask_h ? 2u : 1u,
         .data_format_metadata = data_format,
     });
-    // The mask_h, accum_dst and masked_input buffers are gone: the partial scaler handles the ragged
-    // last tile inside a single reduce(), so there is nothing to mask, stage or accumulate.
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = OUT_DFB,
         .entry_size = tile_size(data_format),
@@ -130,9 +128,6 @@ ttnn::device_operation::ProgramArtifacts MorehMeanOperation::MorehMeanHFactory::
                 {"HtWt", HtWt},
                 // The reduce scaler is 1/origin_H for this column reduction.
                 {"reduce_factor", origin_H},
-                // Valid rows in the last H tile, in [1, 31]; only read under DO_MASK_H. The
-                // partial-scaler helper takes the fill count as a template parameter, so it has to
-                // reach the reader at compile time.
                 {"partial_h", mask_h},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"col_start_tile_id", "curr_col_in_batch", "num_cols"}},
@@ -164,8 +159,6 @@ ttnn::device_operation::ProgramArtifacts MorehMeanOperation::MorehMeanHFactory::
     KernelSpec::CompilerOptions::Defines compute_defines(compute_defines_map);
 
     auto compute_hw = ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config);
-    // The accum_dst UnpackToDest entry went away with the accumulator buffer itself: a single
-    // reduce() per column keeps the running sum in DEST and never round-trips it through a DFB.
 
     auto make_compute = [&](const KernelSpecName& unique_id, uint32_t units_per_core) {
         Group<DFBBinding> dfb_bindings = {

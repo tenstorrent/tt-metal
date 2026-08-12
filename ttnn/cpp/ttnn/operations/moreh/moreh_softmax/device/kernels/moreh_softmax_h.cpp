@@ -47,17 +47,11 @@ void kernel_main() {
                                                      : compute_kernel_lib::ReducePartialScaler::none();
 
     dfb_mask_obj.wait_front(onetile);
-    // max_scaler carries a full/partial pair; sum_scaler stays a single tile because the sum still
-    // consumes exps that this kernel masks in place (see the exp loop below).
     dfb_max_scaler_obj.wait_front(num_max_scaler_tiles);
     dfb_sum_scaler_obj.wait_front(onetile);
 
     for (std::uint32_t n = 0; n < N; ++n) {
         // find max value
-        // The reader emits max_scaler as a full/partial pair (tile 1 fills only the valid rows of the
-        // last H tile), so the ragged tail is handled inside a single reduce. This replaces a
-        // two-phase split that reduced Ht-1 tiles, masked the last one into a scratch DFB, and folded
-        // it back in with an accumulating reduce.
         compute_kernel_lib::reduce<
             PoolType::MAX,
             ReduceDim::REDUCE_COL,

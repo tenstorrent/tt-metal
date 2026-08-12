@@ -58,8 +58,6 @@ bool is_softmax_general_w_small_available(
     auto intermed_tile_size = tt::tile_size(intermed_data_format);
     auto mask_scaler_tile_size = tt::tile_size(mask_scaler_format);
 
-    // A ragged W makes the reader emit a full/partial max-scaler pair instead of a single tile; the
-    // predicate matches softmax_program_factory_general_w_small and the shared compute kernel.
     uint32_t mask_w = w % tile_width;
     if (mask_w == 0) {
         mask_w = tile_width;
@@ -108,8 +106,6 @@ bool is_softmax_general_h_small_available(
     auto intermed_tile_size = tt::tile_size(intermed_data_format);
     auto mask_scaler_tile_size = tt::tile_size(mask_scaler_format);
 
-    // A ragged H makes the reader emit a full/partial max-scaler pair instead of a single tile; the
-    // predicate matches softmax_program_factory_general_h_small and the shared compute kernel.
     uint32_t mask_h = h % tile_height;
     if (mask_h == 0) {
         mask_h = tile_height;

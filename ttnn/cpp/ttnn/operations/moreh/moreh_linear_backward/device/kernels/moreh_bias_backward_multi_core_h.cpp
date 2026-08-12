@@ -43,8 +43,6 @@ void kernel_main() {
                 bool last_row = (ht == Ht - 1);
                 bool last_col = (wt == Wt_per_core - 1);
                 bool last_out = (num_tile_done == num_tiles - 1);
-                // Only a ragged W still needs the mask tile. A ragged H is excluded by the partial
-                // scaler below, so those tiles no longer take the copy-mask-restage detour.
                 bool do_mask = (do_mask_w && last_col);
 
                 if (do_mask) {
@@ -57,8 +55,6 @@ void kernel_main() {
                     copy_tile_to_dst_init_short(cb_in0);
                     copy_tile(cb_in0, 0, dst0);
 
-                    // mask_h_w tile 0 (the H mask) is no longer applied here: the partial scaler
-                    // handles a ragged H. Tile 1 (the W mask) still is.
                     if (do_mask_w && last_col) {
 #if defined FP32_DEST_ACC_EN
                         reconfig_data_format_srca(cb_mask_h_w);
@@ -85,10 +81,6 @@ void kernel_main() {
                 const auto reduce_block = compute_kernel_lib::ReduceInputBlockShape::single();
                 const auto reduce_layout = compute_kernel_lib::ReduceInputMemoryLayout::contiguous();
                 const auto reduce_accum = compute_kernel_lib::Accumulate::at(cb_intermed1, num_tile_done);
-                // Each call reduces exactly one tile, so "the last tile along the reduce dim of this
-                // call" is that tile: the ragged H tile of each batch takes the partial scaler and
-                // every other tile takes the full one. This is the per-call form the ReducePartialScaler
-                // docs describe for accumulating reduces.
                 const auto reduce_partial = (do_mask_h && last_row)
                                                 ? compute_kernel_lib::ReducePartialScaler::last_tile_at(1)
                                                 : compute_kernel_lib::ReducePartialScaler::none();
