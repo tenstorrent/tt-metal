@@ -52,11 +52,10 @@ inline uint32_t dense_rm_padding_identity_bits(tt::DataFormat df, tt::tt_metal::
 }
 
 // True when the reduce uses the SFPU path instead of the FPU GMPOOL/matmul path.
-// Int32 MAX, MIN and SUM always use SFPU (FPU has no Int32 support); Int32 MIN drives the LLK MIN
-// directly, while float/bf16 MIN lowers to -MAX(-x). Float32 SUM and MAX opt into SFPU only when the
-// host requests the accurate path (`use_sfpu_reduce`): the FPU path truncates fp32 to tf32,
-// so the SFPU preserves full fp32. mean is lowered to SUM + a 1/N post-mul before this is consulted,
-// so only SUM (never AVG) is checked for fp32.
+// Int32 always uses SFPU (FPU has no Int32 support). Float32 opts in only when the host requests
+// the accurate path (`use_sfpu_reduce`): the FPU truncates fp32 to tf32, so the SFPU preserves full
+// fp32. mean arrives as SUM (host lowers to SUM + 1/N); fast-mode float/bf16 MIN arrives as MAX
+// with negate=true via -MAX(-x), so only accurate MIN reaches here as MIN.
 inline bool use_sfpu_reduce_path(
     tt::tt_metal::DataType dtype, tt::tt_metal::ReduceOpMath math_op, bool use_sfpu_reduce = false) {
     using tt::tt_metal::ReduceOpMath;
@@ -64,11 +63,11 @@ inline bool use_sfpu_reduce_path(
         return math_op == ReduceOpMath::MAX || math_op == ReduceOpMath::SUM || math_op == ReduceOpMath::MIN;
     }
     return use_sfpu_reduce && dtype == tt::tt_metal::DataType::FLOAT32 &&
-           (math_op == ReduceOpMath::SUM || math_op == ReduceOpMath::MAX);
+           (math_op == ReduceOpMath::SUM || math_op == ReduceOpMath::MAX || math_op == ReduceOpMath::MIN);
 }
 
 // True when a non-unity scalar must be a post-reduce multiply instead of via the scaler CB: MAX/MIN,
-// the Int32 SFPU path, and the accurate fp32 SFPU mean all ignore the scaler CB (fp32 matches AVG/SUM).
+// the Int32 SFPU path, and the accurate fp32 SFPU path all ignore the scaler CB.
 inline bool requires_post_mul(
     tt::tt_metal::ReduceOpMath math_op, tt::tt_metal::DataType dtype, float scaler, bool use_sfpu_reduce = false) {
     using tt::tt_metal::ReduceOpMath;
