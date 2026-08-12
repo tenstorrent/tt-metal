@@ -1090,6 +1090,22 @@
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
 
+- name: TT-DiT Stable Diffusion 3.5 Large unit tests
+  cmd: |
+    unset TT_METAL_WATCHER  # blocked by #50886
+    unset HF_HUB_OFFLINE
+    pytest --timeout 300 models/tt_dit/tests/models/sd35/test_vae_sd35.py
+    pytest --timeout 300 models/tt_dit/tests/models/sd35/test_attention_sd35.py
+    pytest --timeout 300 models/tt_dit/tests/models/sd35/test_transformer_sd35.py::test_sd35_transformer_block
+  model: sd35
+  model_family: Stable Diffusion
+  skus:
+    wh_llmbox:
+      timeout: 10
+      tier: 3
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
 # ============================================================================
 # Multihost (exabox) model-unit tests
 # ============================================================================

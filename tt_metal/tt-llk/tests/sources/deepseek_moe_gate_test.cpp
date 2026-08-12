@@ -184,6 +184,68 @@ static inline void run_gate()
     _llk_math_deepseek_moe_gate_transpose_dest_single_face_step2_<is_fp32_dest_acc_en, IS_32BIT>();
 }
 
+// Determinism sanitize (test-only). Port of gmg_sanitize_scratch from generalized_moe_gate_test.cpp
+// (tt-metal#52699); deepseek_moe_gate is the predecessor primitive and shares the defect.
+//
+// The gate's answer is row 0, columns 0..7 of the SCORES and IDS tiles -- exactly what
+// test_deepseek_moe_gate.py reads: it slices output_torch[:, 0, :8] and output_indices_torch[:, 0, :8]
+// (test_deepseek_moe_gate), and result_indices[:, 0, :8] (test_deepseek_moe_gate_uint16_high_bit).
+// The sort and the sum_top2 "replicate down the column" broadcast SFPSTORE full 32-lane rows whose
+// non-rank lanes were never written this run, so every other packed lane holds residue. That residue
+// is a fixed point once warm, so run 0 (cold) differs from runs 1..N and the bit-exact check flags the
+// variant even though the answer is stable (run 31583572316: 7 variants, offsets 40/42/43).
+//
+// WHERE THE RESIDUE COMES FROM IS NOT KNOWN. #52699 states the carrier is the SFPU LReg file; that
+// does not hold for this primitive. Zeroing LREG0-7 in _init_deepseek_moe_gate_topk, with all 32 lanes
+// enabled first (SFPMOV is condition-code gated), left the failing set byte-for-byte unchanged --
+// run 31594274508, same 7 variants, same offsets. Since that clears a superset of the registers any
+// individual load helper could leave undefined, "make the topk load helpers total" is ruled out as a
+// fix too. The remaining candidates are DEST scratch the gate re-reads mid-sequence, or SFPU state
+// outside LREG0-7; neither has been instrumented.
+//
+// This sanitize works because it is carrier-agnostic: it zeroes the junk after it is produced,
+// whatever produced it. Keep only the answer and zero every other DEST row the packer ships.
+// Validated on both arches at 500 runs -- BH run 31594272654, WH run 31598446222.
+//
+// MODE_GATE only: run_kernel invokes this from the MODE_GATE branch alone. MODE_MOVE and MODE_BINARY
+// are separate branches and are deliberately left untouched -- only the GATE path confines its result
+// to row 0, cols 0..7, so it is the only mode whose scratch can be safely zeroed.
+static inline void dmg_sanitize_scratch()
+{
+    // Address everything through sfpi dst_reg -- the mapping generalized_moe_gate proved lands on the
+    // right rows here (raw SFP offsets / ZEROACC start mid-tile). dst_reg[k] maps to TTI address 2k, so
+    // each packed DEST tile is 32 dst_reg rows and the 4 tiles span dst_reg[0..127]. A packed 16-col row
+    // is split across TWO dst_reg rows -- even columns in dst_reg[2r], odd columns in dst_reg[2r+1] --
+    // so the answer (packed row 0 of SCORES/IDS) lives in dst_reg pairs {0,1} and {32,33}.
+    constexpr int DREG_PER_TILE = ckernel::sfpu::dst_tile_offset / 2; // 32
+    constexpr int SCORES_LO     = SCORES_TILE * DREG_PER_TILE;        // 0  (even cols of SCORES row 0)
+    constexpr int SCORES_HI     = SCORES_LO + 1;                      // 1  (odd  cols)
+    constexpr int IDS_LO        = IDS_TILE * DREG_PER_TILE;           // 32 (even cols of IDS row 0)
+    constexpr int IDS_HI        = IDS_LO + 1;                         // 33 (odd  cols)
+    constexpr int NUM_DREG      = NUM_DEST_TILES * DREG_PER_TILE;     // 128
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    for (int k = 0; k < NUM_DREG; ++k)
+    {
+        if (k == SCORES_LO || k == SCORES_HI || k == IDS_LO || k == IDS_HI)
+        {
+            continue;
+        }
+        sfpi::dst_reg[k] = 0.0f;
+    }
+    // Mask each answer row-half to the top-8: with columns split even/odd, cols 0..7 are the first four
+    // even and first four odd columns -> lanes 0..3 -> vConstTileId < 8; zero the residue past them.
+    for (const int dreg : {SCORES_LO, SCORES_HI, IDS_LO, IDS_HI})
+    {
+        sfpi::vFloat v = sfpi::dst_reg[dreg];
+        v_if (sfpi::vConstTileId >= 8)
+        {
+            v = 0.0f;
+        }
+        v_endif;
+        sfpi::dst_reg[dreg] = v;
+    }
+}
+
 static inline void run_move()
 {
     if constexpr (DMG_SUB_OP == MOVE_STEP0)
@@ -290,6 +352,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     if constexpr (DMG_MODE == MODE_GATE)
     {
         run_gate();
+        dmg_sanitize_scratch();
     }
     else if constexpr (DMG_MODE == MODE_MOVE)
     {
