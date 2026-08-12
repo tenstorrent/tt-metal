@@ -94,55 +94,84 @@ private:
     uint32_t page_id_, byte_off_, chunk_in_stripe_, sent_, count_, phase_, stripe_jump_;
 };
 
+////////////////////////////////////////////////////////////////
+// FabricWriter tunables
+//
+// Kernel-local on purpose: both are pure perf knobs with no correctness or API implications, so they belong
+// here to be swept and then baked in, not plumbed through the op.
+////////////////////////////////////////////////////////////////
+
+// Depth of the packet-header ring. A header cannot be re-pointed while its copy into the fabric buffer is
+// still in flight, so the ring depth is exactly how many packets can be outstanding: at depth 1 every packet
+// costs a flush and nothing pipelines. Depths past the sender's slot count are harmless but pointless --
+// reserve_slot() blocks first.
+// TODO(perf): sweep, jointly with the mux's num_buffers_per_channel (all_gather_unicast_factory.cpp), whose
+// "past two it gains nothing" result was measured at depth 1 and so no longer applies.
+constexpr uint32_t fabric_header_ring_size = 2;
+
+// Post the payload/header writes into the fabric buffer, i.e. no ack. Drops the ack return traffic from the
+// worker's NOC, which the mux forwarder shares. Ordering against the credit doorbell is preserved: the
+// doorbell is issued after the payload, to the same destination on the same VC.
+// TODO(perf): sweep.
+constexpr bool fabric_use_posted_writes = false;
+
 // Unicasts pages one hop to the single neighbor. Handles packetization (pack several pages into one
 // scatter-write packet when they fit, else split a big page across packets), and the semaphore increments
 // that announce them.
 //
 // Templated on the sender type (SenderT*) so the same writer drives either a direct WorkerToFabricEdmSender
-// (one worker per direction) or a FabricMuxV2Sender (workers sharing a fabric mux). The send calls accept
-// either (see CheckFabricSenderType in api_common.h), so no route-manager is needed -- which is also why this
-// class routes its own headers.
+// (one worker per direction) or a FabricMuxV2Sender (workers sharing a fabric mux). Both expose the same
+// stateful send lane, so no route-manager is needed -- which is also why this class routes its own headers.
+//
+// Sends use the stateful lane: the NOC command buffers are programmed once in the constructor and each send
+// only rewrites src/dst/len, instead of reprogramming coordinates, VC and command fields per packet. The
+// headers are therefore populated here (populate_unicast_*_fields) rather than by the linear fabric API,
+// which only drives the non-stateful lane.
 template <uint32_t page_size, uint32_t packet_size, typename SenderT>
 class FabricWriter {
 public:
     FabricWriter(const Noc& noc, SenderT* sender, uint16_t neighbor_chip_id, uint16_t neighbor_mesh_id) :
-        noc{noc},
-        sender{sender},
-        scatter_packet_header{PacketHeaderPool::allocate_header(1)},
-        unicast_packet_header{PacketHeaderPool::allocate_header(1)},
-        sem_packet_header{PacketHeaderPool::allocate_header(1)},
-        scatter_header({}, {}),
-        chunk_count{0} {
-        std::array<uint64_t, max_pages_per_packet> dummy_addrs{};  // init to 0s
-        std::array<uint16_t, max_pages_per_packet - 1> chunk_sizes{};
-        chunk_sizes.fill(page_size);
+        noc{noc}, sender{sender}, scatter_header({}, {}), chunk_count{0} {
         constexpr uint8_t num_hops = 1;  // store-and-forward: always the immediate neighbor
 
-        fabric_api::fabric_unicast_noc_scatter_write_set_state<UnicastScatterWriteUpdateMask::ChunkSizes>(
-            scatter_packet_header,
-            num_hops,
-            NocUnicastScatterCommandHeader(dummy_addrs.data(), chunk_sizes.data(), pages_per_packet));
+        for (uint32_t i = 0; i < fabric_header_ring_size; ++i) {
+            data_headers[i] = PacketHeaderPool::allocate_header(1);
+            if constexpr (use_scatter_write) {
+                std::array<uint64_t, max_pages_per_packet> dummy_addrs{};  // init to 0s
+                std::array<uint16_t, max_pages_per_packet - 1> chunk_sizes{};
+                chunk_sizes.fill(page_size);
+                fabric_api::fabric_unicast_noc_scatter_write_set_state<UnicastScatterWriteUpdateMask::ChunkSizes>(
+                    data_headers[i],
+                    num_hops,
+                    NocUnicastScatterCommandHeader(dummy_addrs.data(), chunk_sizes.data(), pages_per_packet));
+            } else {
+                fabric_api::fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::None>(
+                    data_headers[i], num_hops);
+            }
+            set_route(data_headers[i], neighbor_chip_id, neighbor_mesh_id);
+        }
 
-        fabric_api::fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::None>(
-            unicast_packet_header, num_hops);
+        if constexpr (use_scatter_write) {
+            // scatter_write imposes a min chunk count, so a lone trailing chunk goes out as a plain unicast
+            // write. Kept out of the ring: it is rare, and sharing the ring would cost a header slot per entry.
+            tail_header = PacketHeaderPool::allocate_header(1);
+            fabric_api::fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::None>(tail_header, num_hops);
+            set_route(tail_header, neighbor_chip_id, neighbor_mesh_id);
+        }
 
         // One atomic-inc header for the "alive" barrier inc + data_valid signals; Flush orders it after the
         // payload it announces.
+        sem_header = PacketHeaderPool::allocate_header(1);
         fabric_api::fabric_unicast_noc_unicast_atomic_inc_set_state<
             UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
-            sem_packet_header, num_hops, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0u, 1u});
+            sem_header, num_hops, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0u, 1u});
+        set_route(sem_header, neighbor_chip_id, neighbor_mesh_id);
 
-        // For Fabric_2D, set_state() sets routes only in its RoutingPlaneConnectionManager overloads, so set
-        // them here. Keyed on the header type since the FABRIC_2D define is absent on the mux path.
-        if constexpr (std::is_base_of_v<tt::tt_fabric::HybridMeshPacketHeader, PACKET_HEADER_TYPE>) {
-            using MeshHeader = volatile tt::tt_fabric::HybridMeshPacketHeader*;
-            fabric_set_unicast_route(
-                reinterpret_cast<MeshHeader>(scatter_packet_header), neighbor_chip_id, neighbor_mesh_id);
-            fabric_set_unicast_route(
-                reinterpret_cast<MeshHeader>(unicast_packet_header), neighbor_chip_id, neighbor_mesh_id);
-            fabric_set_unicast_route(
-                reinterpret_cast<MeshHeader>(sem_packet_header), neighbor_chip_id, neighbor_mesh_id);
-        }
+        // Program the send command buffers once. From here until teardown nothing else on this RISC may use
+        // write_reg_cmd_buf or write_at_cmd_buf: the CB ops touch no NOC at all, and the local output copy uses
+        // write_cmd_buf, so the writer kernel is clear -- but note that the sender's own close() does clobber
+        // the credit state, which is why it only runs after the last send.
+        sender->template setup_stateful_send_cmd_bufs<fabric_use_posted_writes>();
     }
 
     ~FabricWriter() {
@@ -151,9 +180,11 @@ public:
 
     // Increment a semaphore on the neighbor.
     void atomic_inc(uint64_t addr, uint32_t val) {
-        fabric_api::fabric_unicast_noc_unicast_atomic_inc_with_state<
-            UnicastAtomicIncUpdateMask::DstAddr | UnicastAtomicIncUpdateMask::Val>(
-            sender, sem_packet_header, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{addr, val});
+        // sem_header is not part of the ring, so drain before re-pointing it.
+        flush_if_pending();
+        populate_unicast_atomic_inc_fields<UnicastAtomicIncUpdateMask::DstAddr | UnicastAtomicIncUpdateMask::Val>(
+            sem_header, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{addr, val});
+        send_header_only(sem_header);
     }
 
     void async_write(uint32_t l1_addr, uint64_t remote_noc_addr) {
@@ -166,24 +197,15 @@ public:
             }
             scatter_header.noc_address[chunk_count++] = remote_noc_addr;
             if (chunk_count == pages_per_packet) {
-                noc.async_writes_flushed();
-                scatter_header.chunk_count = chunk_count;
-                fabric_api::fabric_unicast_noc_scatter_write_with_state<
-                    UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::PayloadSize>(
-                    sender, scatter_packet_header, start_l1_addr, scatter_header, payload_size);
-                chunk_count = 0;
+                send_scatter_packet(payload_size);
             }
         } else {
             // Page larger than a packet: split across packets.
             for (uint32_t packet = 0; packet < packets_per_page; ++packet) {
-                noc.async_writes_flushed();
-                fabric_api::fabric_unicast_noc_unicast_write_with_state<
-                    UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
-                    sender,
-                    unicast_packet_header,
-                    l1_addr,
-                    tt::tt_fabric::NocUnicastCommandHeader{remote_noc_addr},
-                    (packet < packets_per_page - 1) ? payload_size : last_payload_size);
+                const uint16_t size = (packet < packets_per_page - 1) ? payload_size : last_payload_size;
+                populate_unicast_write_fields<UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
+                    current_data_header(), size, tt::tt_fabric::NocUnicastCommandHeader{remote_noc_addr});
+                send_data_packet(l1_addr, size);
                 l1_addr += payload_size;
                 remote_noc_addr += payload_size;
             }
@@ -195,30 +217,26 @@ public:
         if constexpr (use_scatter_write) {
             static_assert(min_pages_per_packet == 2, "hardcoded to assume scatter_write min_pages_per_packet == 2");
             if (chunk_count > 0) {
-                noc.async_writes_flushed();
                 if (chunk_count == 1) {
                     // Note: currently, scatter_write necessitates chunk_count >= 2, so we use unicast_write
                     // for chunk_count == 1.
                     // Note: this is hardcoded assuming NOC_SCATTER_WRITE_MIN_CHUNKS == 2. Else need to put
                     // the below unicast_write in a loop.
-                    fabric_api::fabric_unicast_noc_unicast_write_with_state<
+                    // tail_header is not part of the ring, so drain before re-pointing it.
+                    flush_if_pending();
+                    populate_unicast_write_fields<
                         UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
-                        sender,
-                        unicast_packet_header,
-                        start_l1_addr,
-                        tt::tt_fabric::NocUnicastCommandHeader{scatter_header.noc_address[0]},
-                        page_size);
+                        tail_header, page_size, tt::tt_fabric::NocUnicastCommandHeader{scatter_header.noc_address[0]});
+                    send_with_payload(tail_header, start_l1_addr, page_size);
                 } else {
-                    scatter_header.chunk_count = chunk_count;
-                    fabric_api::fabric_unicast_noc_scatter_write_with_state<
-                        UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::PayloadSize>(
-                        sender, scatter_packet_header, start_l1_addr, scatter_header, chunk_count * page_size);
+                    send_scatter_packet(chunk_count * page_size);
                 }
                 chunk_count = 0;
             }
         }
-        // Wait for Fabric writes to be sent out before popping CB entry
-        noc.async_writes_flushed();
+        // The CB page is about to be reused: every payload read out of it must have left L1. Already satisfied
+        // if the last send happened to land on a ring wrap.
+        flush_if_pending();
     }
 
 private:
@@ -236,12 +254,95 @@ private:
     // Last payload for the page_size >= packet_size case (a page sent as multiple packets).
     static constexpr uint32_t last_payload_size = page_size - ((packets_per_page - 1) * packet_size);
 
+    // The stateful send lane owns write_reg_cmd_buf (payload/header) and write_at_cmd_buf (credit doorbell).
+    // Under dynamic NOC those alias the general-purpose write_cmd_buf that the local output copy uses, and the
+    // programmed state would be clobbered mid-loop.
+    static_assert(noc_mode == DM_DEDICATED_NOC, "FabricWriter's stateful send lane requires dedicated NOC mode");
+
+    // Ring + optional scatter tail + semaphore. The pool hangs at runtime when exhausted, so bound it here.
+    static constexpr uint32_t num_headers = fabric_header_ring_size + (use_scatter_write ? 2u : 1u);
+    static_assert(
+        num_headers <= NUM_PACKET_HEADERS / MaxDMProcessorsPerCoreType,
+        "fabric_header_ring_size does not fit this RISC's share of the packet header pool");
+
+    static constexpr NocOptions flush_opts = fabric_use_posted_writes ? NocOptions::POSTED : NocOptions::DEFAULT;
+
+    // For Fabric_2D, set_state() sets routes only in its RoutingPlaneConnectionManager overloads, so set them
+    // here. Keyed on the header type since the FABRIC_2D define is absent on the mux path.
+    static void set_route(
+        volatile tt_l1_ptr PACKET_HEADER_TYPE* header, uint16_t neighbor_chip_id, uint16_t neighbor_mesh_id) {
+        if constexpr (std::is_base_of_v<tt::tt_fabric::HybridMeshPacketHeader, PACKET_HEADER_TYPE>) {
+            using MeshHeader = volatile tt::tt_fabric::HybridMeshPacketHeader*;
+            fabric_set_unicast_route(reinterpret_cast<MeshHeader>(header), neighbor_chip_id, neighbor_mesh_id);
+        }
+    }
+
+    FORCE_INLINE void flush() {
+        noc.async_writes_flushed<flush_opts>();
+        pending = 0;
+    }
+
+    FORCE_INLINE void flush_if_pending() {
+        if (pending != 0) {
+            flush();
+        }
+    }
+
+    // The sender does not gate on its own flow control, so reserve a slot first. The count is cached because
+    // get_num_free_write_slots() invalidates the whole L1 data cache (a `fence` on Blackhole); this way we only
+    // pay it when we actually run dry.
+    FORCE_INLINE void reserve_slot() {
+        while (free_slots == 0) {
+            free_slots = sender->get_num_free_write_slots();
+        }
+        --free_slots;
+    }
+
+    FORCE_INLINE void send_header_only(volatile tt_l1_ptr PACKET_HEADER_TYPE* header) {
+        reserve_slot();
+        sender->template send_current_slot_stateful_non_blocking_from_address<fabric_use_posted_writes>(
+            (uint32_t)header, sizeof(PACKET_HEADER_TYPE));
+        ++pending;
+    }
+
+    FORCE_INLINE void send_with_payload(
+        volatile tt_l1_ptr PACKET_HEADER_TYPE* header, uint32_t l1_addr, uint32_t size) {
+        reserve_slot();
+        sender->template send_current_slot_stateful_non_blocking<fabric_use_posted_writes>(
+            l1_addr, size, (uint32_t)header);
+        ++pending;
+    }
+
+    FORCE_INLINE volatile tt_l1_ptr PACKET_HEADER_TYPE* current_data_header() const { return data_headers[header_idx]; }
+
+    // Send the packet built in the current ring header, then rotate. Wrapping flushes, so the header we come
+    // back to is guaranteed to have left L1 before it is re-pointed.
+    FORCE_INLINE void send_data_packet(uint32_t l1_addr, uint32_t size) {
+        send_with_payload(current_data_header(), l1_addr, size);
+        if (++header_idx == fabric_header_ring_size) {
+            header_idx = 0;
+            flush();
+        }
+    }
+
+    FORCE_INLINE void send_scatter_packet(uint16_t size) {
+        scatter_header.chunk_count = chunk_count;
+        populate_unicast_scatter_write_fields<
+            UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::PayloadSize>(
+            current_data_header(), size, scatter_header);
+        send_data_packet(start_l1_addr, size);
+        chunk_count = 0;
+    }
+
     const Noc& noc;
     SenderT* sender;  // direct or mux sender
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* scatter_packet_header;
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* unicast_packet_header;
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* sem_packet_header;
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* data_headers[fabric_header_ring_size];
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* tail_header = nullptr;  // scatter straggler only
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* sem_header = nullptr;
     NocUnicastScatterCommandHeader scatter_header;
-    uint8_t chunk_count;     // accumulated chunks not yet sent in a packet
-    uint32_t start_l1_addr;  // start address of the accumulated contiguous chunks
+    uint32_t header_idx = 0;  // next ring header to build into
+    uint32_t pending = 0;     // packets issued since the last flush (their headers may still be in flight)
+    uint32_t free_slots = 0;  // cached sender slot credit
+    uint8_t chunk_count;      // accumulated chunks not yet sent in a packet
+    uint32_t start_l1_addr;   // start address of the accumulated contiguous chunks
 };

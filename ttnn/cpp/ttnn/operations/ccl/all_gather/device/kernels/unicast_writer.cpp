@@ -38,7 +38,10 @@ void kernel_main() {
     constexpr uint32_t packet_size = get_compile_time_arg_val(6);
     constexpr bool do_init_barrier = get_compile_time_arg_val(7) != 0;
     constexpr uint32_t data_valid_granularity = get_compile_time_arg_val(8);
-    constexpr auto output_tensor_args = TensorAccessorArgs<9>();
+    // Mux slots per channel. Must match what the host configured the mux with -- both come from the same
+    // factory constant. Unused on the direct-connection path.
+    [[maybe_unused]] constexpr uint8_t mux_num_buffers_per_channel = get_compile_time_arg_val(9);
+    constexpr auto output_tensor_args = TensorAccessorArgs<10>();
 
     constexpr uint32_t outputs_per_cb_page = cb_page_size / output_chunk_size;
 
@@ -81,13 +84,15 @@ void kernel_main() {
     ///////////////////////////////////////////////////
 
 #ifdef USE_WORKER_MUX
-    // Connect to our channel on the Fabric mux.
+    // Connect to our channel on the Fabric mux. The compile-time slot count folds the slot wrap-around into a
+    // constant.
     //
-    // TODO(perf): FabricMuxV2Sender<true> stages payloads into mux slots before the mux is READY. Likely low
-    // value here -- a mux is only used when bandwidth-bound, and staging would delay the do_init_barrier inc
-    // that unblocks the neighbor's writer -- but cheap to try.
-    // TODO(perf): FabricMuxV2Sender<false, N> makes slot wrap-around compile-time; needs num_buffers as a CT arg.
-    using SenderT = tt::tt_fabric::FabricMuxV2Sender<>;
+    // TODO(perf): eager staging (FabricMuxV2Sender<true>) lets us fill mux slots before the mux reports READY.
+    // The knob is not on/off but *where* the flush goes: while staging, nothing we send is visible to the
+    // forwarder, so an unflushed do_init_barrier inc leaves the neighbor's writer blocked until the staging
+    // ring fills or we flush. Sweep flush-immediately-after-open (the control, equivalent to a blocking open)
+    // against flush-after-the-first-CB-page, and note the head start is capped at num_buffers packets.
+    using SenderT = tt::tt_fabric::FabricMuxV2Sender</*EAGER_STAGING=*/false, mux_num_buffers_per_channel>;
     SenderT mux_connection = SenderT::build_from_args(arg_idx);
     mux_connection.open();
     SenderT* sender = &mux_connection;
@@ -176,7 +181,9 @@ void kernel_main() {
     ///////////////////////////////////////////////////
 
     // Commit our own NOC writes (the iter-0 local copy, plus the packet writes into the mux buffer) before
-    // teardown.
+    // teardown. The fabric flush picks the posted/non-posted counter to match how the packets were issued,
+    // which the barriers below cannot do.
+    fabric.async_writes_flushed();
     noc_async_write_barrier();
     noc_async_atomic_barrier();
 

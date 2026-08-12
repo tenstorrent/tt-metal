@@ -379,6 +379,15 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_args);
 
+    // Mux slots per channel. Shared with the writer kernel, which needs it at compile time to fold its slot
+    // wrap-around; the two must agree or the mux's flow control breaks.
+    // A single buffer stalls the worker on every credit round-trip to the forwarder, so one is never right.
+    // TODO(perf): re-sweep. The earlier "past two it gains nothing, and very deep rings start to hurt again"
+    // result was measured when the writer flushed before every packet, which capped it at one packet in
+    // flight regardless of slot count. The writer now pipelines over a header ring (fabric_header_ring_size in
+    // kernels/unicast_common.hpp), so the two want sweeping together.
+    constexpr uint8_t num_buffers_per_channel = 2;
+
     // Writer
     std::vector<uint32_t> writer_compile_args = {
         output_chunk_size,         // NOC write size = min(input, output)
@@ -390,6 +399,7 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
         packet_size,               // packet_size
         do_init_barrier,           // send init handshake before relaying
         data_valid_granularity,    // signal data_valid once per this many CB pages
+        num_buffers_per_channel,   // mux slots per channel (mux path only)
     };
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
 
@@ -411,9 +421,6 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
 
     // Fabric mux
     const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
-    // Sweep result. A single buffer stalls the worker on every credit round-trip to the forwarder; past two
-    // it gains nothing, and very deep rings start to hurt again.
-    constexpr uint8_t num_buffers_per_channel = 2;
     // The fabric maximum is also the smallest safe value here: our payload is the max payload, and an
     // undersized slot silently overruns the next one.
     const size_t channel_buffer_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
