@@ -2,7 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Device-side `block_residual` lifecycle for Kimi K3 attention residuals, plus
-the stack driver that walks it.
+the walk over it and the two ways to drive that walk.
+
+`TtAttnResWalk` is the one a transformer uses: it keeps its own layer loop and calls
+into the walk from inside it. `attn_res_stack_split` drives the same walk from
+per-layer callables instead, for a caller that has no loop of its own. Both are the
+same schedule because the second is written on the first.
 
 The stream keeps `reference.attn_res.attn_res`'s `prefix_sum` / `num_sealed` /
 `seal` / `accumulate` / `block_size` surface, and `attn_res_stack_split` keeps that
@@ -136,6 +141,93 @@ def _block_sites(layers, q_pre, q_post, q_out, block_size):
     return [order[start : start + sites] for start in range(0, len(order), sites)]
 
 
+class TtAttnResWalk(object):
+    """One forward pass's residual bookkeeping, driven by the caller's layer loop.
+
+    A transformer that owns its own loop cannot hand it to `attn_res_stack_split`, so this
+    exposes the same schedule as four calls it makes from where it already is:
+
+        walk = TtAttnResWalk(op, embeddings, q_pre, q_post, q_out, len(layers))
+        for layer_idx, layer in enumerate(layers):
+            h, borrowed = walk.open_layer(layer_idx)   # pre-attention read
+            walk.write(attention(h))
+            if not borrowed:
+                ttnn.deallocate(h)
+            h = walk.read()                            # post-attention read
+            walk.write(mlp(h))
+            ttnn.deallocate(h)
+        hidden = walk.finish()                         # model-level read
+
+    `open_layer` is what a caller cannot reconstruct from the parts: it owes a read, and
+    on a block boundary also a seal and the batch that follows it, in that order and no
+    other. The read belongs to the outgoing block, so it precedes the seal; the batch is
+    over the snapshot the seal just installed, so it follows it.
+
+    A read costs one dispatch and no read is optional — `write` defers its sum into the
+    next one. A caller that skips reads and sums by hand is running the reference
+    architecture's residual, not this one.
+
+    Everything here is one pass's state and none of it survives `finish`. The op is not:
+    it holds the weights and outlives every walk built on it.
+    """
+
+    def __init__(self, op, hidden_states, q_pre, q_post, q_out, num_layers, block_size=BLOCK_SIZE):
+        self.op = op
+        self.block_size = block_size
+        self.stream = TtAttnResStream(op, hidden_states, block_size=block_size)
+        self._blocks = iter(_block_sites(num_layers, q_pre, q_post, q_out, block_size))
+        self._pending = iter(())
+        self._partials = self._shifts = self._masses = None
+
+    def read(self):
+        """The next read site, in the order the schedule issues them."""
+        site, query = next(self._pending)
+        return self.stream.merge(self._partials, self._shifts, self._masses, query, site)
+
+    def write(self, module_out):
+        """Add a module's output to the live stream, taking ownership of it."""
+        self.stream.accumulate(module_out)
+
+    def open_layer(self, layer_idx):
+        """This layer's pre-attention read, and the seal and batch it may owe first.
+
+        Returns `(h, borrowed)`. Layer 0 has nothing sealed to read against, so it borrows
+        the live stream itself and the caller must not free what it got — every later layer
+        owns its `h`.
+        """
+        borrowed = self.stream.num_sealed == 0
+        h = self.stream.prefix_sum if borrowed else self.read()
+
+        if layer_idx % self.block_size == 0:
+            self.stream.seal()
+            # The read above was the outgoing block's last site, so replacing the batches
+            # here strands nothing.
+            queries = next(self._blocks)
+            self._free_batches()
+            self._partials, self._shifts, self._masses = self.op.inter_block(self.stream.block_residual, queries)
+            self._pending = enumerate(queries)
+        return h, borrowed
+
+    def finish(self):
+        """The single model-level read, and the end of the walk.
+
+        Returns what `model.norm` sees. The walk's own tensors are freed here; the returned
+        one is the caller's.
+        """
+        out = self.read()
+        self._free_batches()
+        self.stream.deallocate()
+        return out
+
+    def _free_batches(self):
+        if self._shifts is None:
+            return
+        ttnn.deallocate(self._partials)
+        ttnn.deallocate(self._shifts)
+        ttnn.deallocate(self._masses)
+        self._partials = self._shifts = self._masses = None
+
+
 def attn_res_stack_split(op, hidden_states, q_pre, q_post, q_out, attn_fns, mlp_fns, block_size=BLOCK_SIZE, hook=None):
     """Walk a whole stack's residual bookkeeping.
 
@@ -168,48 +260,20 @@ def attn_res_stack_split(op, hidden_states, q_pre, q_post, q_out, attn_fns, mlp_
         `[1, 1, N, d/tp_factor]` — what `model.norm` sees. The stream is freed
         here; the returned tensor is the caller's.
     """
-    stream = TtAttnResStream(op, hidden_states, block_size=block_size)
-    blocks = iter(_block_sites(len(attn_fns), q_pre, q_post, q_out, block_size))
-    pending = iter(())
-    partials = shifts = masses = None
-
-    def read():
-        site, q = next(pending)
-        return stream.merge(partials, shifts, masses, q, site)
+    walk = TtAttnResWalk(op, hidden_states, q_pre, q_post, q_out, len(attn_fns), block_size=block_size)
 
     for layer_idx, (attn_fn, mlp_fn) in enumerate(zip(attn_fns, mlp_fns)):
-        # Only reach for the stream itself when no read follows — the property settles the
-        # write that `merge` would otherwise fold into its own pass.
-        borrowed = stream.num_sealed == 0
-        h = stream.prefix_sum if borrowed else read()
-
-        if layer_idx % block_size == 0:
-            stream.seal()
-            # The read just above is the outgoing block's last site, so replacing `pending`
-            # and freeing its batches here strands nothing. `inter_block` has to follow the
-            # seal, not precede it — the snapshot it batches over is the one just installed.
-            queries = next(blocks)
-            if shifts is not None:
-                ttnn.deallocate(partials)
-                ttnn.deallocate(shifts)
-                ttnn.deallocate(masses)
-            partials, shifts, masses = op.inter_block(stream.block_residual, queries)
-            pending = enumerate(queries)
-
-        stream.accumulate(attn_fn(h))
+        h, borrowed = walk.open_layer(layer_idx)
+        walk.write(attn_fn(h))
+        # Layer 0 borrows the live stream rather than reading it; the stream still owns it.
         if not borrowed:
             ttnn.deallocate(h)
 
-        h = read()
-        stream.accumulate(mlp_fn(h))
+        h = walk.read()
+        walk.write(mlp_fn(h))
         ttnn.deallocate(h)
 
         if hook is not None:
-            hook(layer_idx, stream)
+            hook(layer_idx, walk.stream)
 
-    out = read()
-    ttnn.deallocate(partials)
-    ttnn.deallocate(shifts)
-    ttnn.deallocate(masses)
-    stream.deallocate()
-    return out
+    return walk.finish()
