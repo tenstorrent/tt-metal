@@ -56,6 +56,7 @@ def create_tt_model(
     page_params,
     dtype=ttnn.bfloat8_b,
     use_paged_kv_cache=False,
+    text_only=False,
 ):
     tt_model_args = ModelArgs(
         mesh_device,
@@ -65,9 +66,12 @@ def create_tt_model(
         max_seq_len=max_seq_len,
     )
     # Warm ttnn cache => skip the HF from_pretrained load for the (text) Transformer weights; they
-    # build from .tensorbin. Pure placeholder is safe here: the vision path uses a SEPARATE live HF
-    # reference model (see this demo's from_pretrained), so it never sees this state_dict. Partial
-    # win by design -- the vision reference load is not skipped (tracked as follow-up). (#45400)
+    # build from .tensorbin. TEXT-ONLY callers only. The "a placeholder is safe because the vision
+    # path uses a separate live HF reference" reasoning was disproved on qwen36, where the same
+    # comment held and vision_demo.py still generated token soup from a dataless state_dict (CI
+    # run 31503881448) -- the multimodal splice reads weights the placeholder cannot supply. The
+    # equivalent weight has not been identified here, so this fork does not get to assume it is
+    # unaffected: callers that attach a vision tower must leave text_only=False. (#45400)
     cache_dir = tt_model_args.weight_cache_path(dtype)
     cache_identity = dict(
         model_name=tt_model_args.model_name,
@@ -75,8 +79,12 @@ def create_tt_model(
         mesh_shape=tuple(tt_model_args.mesh_device.shape),
     )
     loaded_real_weights = False
-    if not getattr(tt_model_args, "dummy_weights", False) and weight_cache_is_complete(cache_dir, **cache_identity):
-        logger.info("Warm ttnn weight cache detected -- skipping HF state_dict load (text Transformer).")
+    if (
+        text_only
+        and not getattr(tt_model_args, "dummy_weights", False)
+        and weight_cache_is_complete(cache_dir, **cache_identity)
+    ):
+        logger.info("Warm ttnn weight cache detected -- skipping HF state_dict load (text-only build).")
         state_dict = build_cached_state_dict(cache_dir)
     else:
         state_dict = tt_model_args.load_state_dict()
