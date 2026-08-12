@@ -105,3 +105,71 @@ def test_rms_norm_perf_pipeline_blocks(device, rows, hidden, min_blocks, monkeyp
 
     monkeypatch.setattr(pd, "MIN_PIPELINE_BLOCKS", min_blocks)
     test_rms_norm_perf(device, rows, hidden, 0)
+
+
+# --- Refinement 3: the combine tree is structural, not numerical ---------------
+#
+# The two-stage grid combine and the flat root-gather produce the SAME numbers, so
+# no value check can tell them apart — only the descriptor can (the same argument
+# as the zero-copy shard assertion and the chunking knob in test_rms_norm_sharded).
+# Pin both directions: a 2-D reduction group must take the tree, and a group that
+# is a single grid row (or has a level-1 span of 1) must keep the flat path, which
+# is the Phase 0 code verbatim.
+
+
+def test_rms_norm_combine_tree_shape():
+    """`_tree_for_box` — level-1 x level-2 fan-in of the combine, per group box."""
+    from ttnn.operations.rms_norm.rms_norm_program_descriptor import _tree_for_box
+
+    # A fully populated multi-row rectangle reduces along x, then along y.
+    assert _tree_for_box(22, 11, 2) == (11, 2)
+    assert _tree_for_box(110, 11, 10) == (11, 10)
+    # One grid row: nothing to do at level 2.
+    assert _tree_for_box(11, 11, 1) == (11, 1)
+    # A vertical line: level 1 would be a self-write, so stay flat (an extra hop
+    # costs ~1 us of NoC + semaphore + CB latency and folds the same tiles).
+    assert _tree_for_box(5, 1, 5) == (5, 1)
+    # A box with filler cores (a shard grid that is not a rectangle): flat, because
+    # a leader's ACTIVE row count is not group-uniform.
+    assert _tree_for_box(16, 11, 2) == (16, 1)
+    # The degenerate single-core group.
+    assert _tree_for_box(1, 1, 1) == (1, 1)
+
+
+@pytest.mark.parametrize(
+    "rows,hidden,expect_two_stage",
+    [
+        # tensor_row_tiles == 1 fills the grid along `hidden`, so the group is the
+        # whole 2-D grid -> tree.
+        (32, 7168, True),
+        # tensor_row_tiles >> num_groups keeps w_group_size == 1 -> flat.
+        (8192, 1024, False),
+    ],
+    ids=["decode_two_stage", "prefill_flat"],
+)
+def test_rms_norm_combine_tree_is_selected(device, rows, hidden, expect_two_stage):
+    from ttnn.operations.rms_norm.rms_norm_program_descriptor import (
+        create_program_descriptor,
+        WRITER_MCAST_CT_BASE,
+    )
+
+    shape = (1, 1, rows, hidden)
+    tt_input = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    tt_gamma = ttnn.from_torch(
+        torch.zeros((1, 1, 1, hidden), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    tt_out = ttnn.allocate_tensor_on_device(
+        ttnn.Shape(list(shape)), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, tt_input.memory_config()
+    )
+    descriptor = create_program_descriptor(
+        tt_input, tt_gamma, tt_out, epsilon=1e-6, compute_kernel_config=ttnn.ComputeConfigDescriptor()
+    )
+    # writer CT layout ends [..., w_chunk_tiles, STAGE2_SPAN, SEM_GATHER2] before
+    # the mcast block — see WRITER_MCAST_CT_BASE in the program descriptor.
+    stage2_span = list(descriptor.kernels[1].compile_time_args)[WRITER_MCAST_CT_BASE - 2]
+    assert (stage2_span > 1) == expect_two_stage, f"stage2_span={stage2_span} for {shape}"

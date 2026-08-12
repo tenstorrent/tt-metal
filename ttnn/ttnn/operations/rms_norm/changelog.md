@@ -281,3 +281,82 @@
   structural check that a narrow geometry keeps the single-chunk schedule while a wide HEIGHT shard
   comes back with a strictly smaller chunk — invisible to any numerical check, exactly like the
   zero-copy assertion next to it.
+
+## Refinement 3 — Speed up the perf-flagged wide interleaved decode profile
+- **Date**: 2026-08-12
+- **What was done**: a perf-only phase (no SUPPORTED change) on `(1,1,32,7168)` INTERLEAVED at its
+  pinned config (bf16 / TILE / gamma bf16 TILE / `fp32_dest_acc_en=False` / HiFi2). Every step was
+  driven by a temporary `DeviceZoneScopedN` timeline (removed before the final commit; the numbers
+  are recorded in the kernels' comments), which showed the op is a **latency chain**, not a
+  bandwidth wall: the input block only reached compute at 5.9 µs of a 12.5 µs op.
+  Three levers, in the order they were measured:
+  1. **`cb_zero_tile` off the reader's critical path.** The fp32 zero tile — the identity B operand
+     of the combine's `Add` accumulation, read by combine LEADERS and nobody else — was filled by a
+     4096-byte scalar store loop in *every* core's reader, *ahead* of the input block: 2363 ns of
+     pure critical path on all 22 cores. It moved to the leader's **writer**, whose BRISC idles ~6 µs
+     waiting for the first partial. Still exactly one producer kernel per CB, just a different one.
+  2. **Gamma read behind the input block.** Gamma is first consumed by the apply pass, which cannot
+     start until the combine has returned `rstd` — microseconds after the input block, which gates
+     everything. Moving it behind the first block read removed another 1447 ns from the critical
+     path and the read is now fully hidden under the combine round. **Gated on a TILE gamma**: see
+     Issues.
+     After 1+2: 12467 → 9721 ns.
+  3. **The scheme-change: a two-stage grid combine** (`tensix_all_reduce`'s `two_stage_grid_reduce`)
+     replacing flat root-gather. The combine is now ALWAYS a two-level tree (`_tree_for_box`):
+     level 1 folds one grid ROW of the group on that row's leader, level 2 folds the row totals on
+     the root; `stage2_span == 1` is the degenerate flat gather and is the Phase 0 code verbatim,
+     which every group that is not a fully populated multi-row rectangle keeps (a shard grid with
+     filler cores, any 1-D group, `G == 1`, and `nx == 1` where level 1 would be a self-write). Two
+     new CBs (`cb_stat_gather2`, `cb_branch_sum`) exist only on that path, and `cb_stat_gather`
+     shrinks from `R·G` to `R·nx`, so the tree is a net **L1 saving** (`R·(nx+ny+1)` against
+     `R·nx·ny`) and `MAX_GATHER_TILES` now caps `R·max(S1,S2)`.
+  4. **`MAX_W_GROUP_SIZE` 32 → 0** (the knob stays live). The cap existed only because the flat
+     root's combine was O(G) on one core; with the tree, the full-grid group is the *fastest* pick
+     instead of 1.5× the slowest. This also removes the idle-core artefact the verifier flagged on
+     the cap's unmeasured neighbours (44 of 110 cores active at `tensor_row_tiles = 2`).
+- **Measured (device kernel ns, blackhole_p150b, pinned perf config)**:
+  decode `(1,1,32,W)` — 1024 **9101 → 6882** (1.32×), 2304 **9730 → 7299** (1.33×),
+  5120 **11219 → 8350** (1.34×), **7168 12467 → 8987 (1.39×)**, against the phase's goal of
+  `achievable_ns/7 ≈ 14894 ns`, now cleared by 1.66×.
+  prefill `(1,1,8192,W)` — 103076 → 99559, 220005 → 212595, 425343 → 425990, 591707 → 592081, i.e.
+  unchanged to within the 2–3 % noise band (the cap never bound there).
+  Component numbers: the root's combine chain 3630 → 1360 ns; the same `G = 110` geometry that cost
+  19133 ns under the flat combine costs 9210 ns under the tree.
+- **Accuracy achieved**: unchanged — the tree sums the same partials in a different association
+  order. `-m perf` 13/13 (soft `pcc_threshold = 0.9995` holds), `-m pad_poison` 24/24
+  (PCC ≥ 0.99998, so the mask-before-square identity and the true-`W` divisor survive the new
+  combine), the acceptance suite at its own per-dtype PCC gates 82/82.
+- **Golden test progress**: targeted slices (the harness re-runs the full suite). `-m perf` 13/13,
+  `-m pad_poison` 24/24, cartesian `1x1x64x128` 165 passed / 39 xfailed / 0 xpass-drift,
+  `test_op_loose` 381 passed / 3 failed — the 3 are exactly the cells Refinement 2b recorded as
+  remaining (`1x1x160x11008` + `1x224x11008` TILE HEIGHT, `13x777x1023` WIDTH), unchanged.
+- **Issues encountered**:
+  1. **The gamma reorder is illegal for a ROW_MAJOR gamma** — PCC ~ 0 on every RM-gamma cell (132
+     unit failures). A RM gamma has two consumers that both run before the block loop can: compute
+     tilizes the stick into `cb_gamma_tiles` up front, and under `ALIAS_GAMMA_RM` the staging buffer
+     IS `cb_input_rm`, whose alias is justified precisely by "gamma dies before the input's first
+     push". Reordering made compute tilize input sticks as gamma. Fixed by gating the reorder on
+     `!IS_RM_GAMMA`; the RM path keeps the old order byte-for-byte. Found by bisecting the two WIP
+     commits against the unit suite (no_gamma RM passed, gamma RM failed — which named the cause).
+  2. **The tree must not be taken when `nx == 1`** (a vertical line of cores): level 1 would be a
+     self-write, buying nothing and paying a full extra hop. Caught by the `G = 5` (1×5) point of the
+     cap sweep.
+  3. **A leader that is not the root still runs a combine chain**, so `cb_zero_tile` is filled on
+     every LEADER, not only the root — the first version filled it on the root alone and would have
+     hung every non-root leader on `cb_wait_front(cb_zero_tile)`.
+- **What is left (a finding, not a queued task)**: the decode profile is now a latency chain whose
+  two largest single items are both hop/latency rather than arithmetic — the level-2 rendezvous
+  (~1.1 µs for one 4 KiB tile + a semaphore) and the root's finalize chain
+  (`CopyTile → MulUnary → AddUnary → Rsqrt` on ONE fp32 tile, ~1.3 µs to produce 32 useful numbers,
+  since a REDUCE_ROW result is column-0-valid). The next levers would be a narrower stat payload
+  (bf16 `cb_stat_gather`, design lamp P6) or broadcasting the SUM so every core finalizes in
+  parallel; both are new schemes with their own precision / serialization questions. See the
+  `**Outcome**` line in `op_requirements.md`.
+- **Tests added**: `test_rms_norm_perf.py` grows two structural cases —
+  `test_rms_norm_combine_tree_shape` (the `_tree_for_box` topology table, including the flat
+  fallbacks) and `test_rms_norm_combine_tree_is_selected` (a decode shape must come back with a
+  two-stage writer CT block and a prefill shape with the flat one). Structural because the two
+  combines produce identical numbers, so no value check can tell them apart — the same argument as
+  the zero-copy shard assertion and the chunking knob. The harness itself now runs the **exact**
+  pinned perf config (`fp32_dest_acc_en=False`), which Refinement 1 unblocked and which it was still
+  proxying at `True`.

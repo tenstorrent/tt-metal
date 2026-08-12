@@ -284,3 +284,54 @@ cores — they hold the identical CB map (so the broadcast lands in a reserved `
 than in unowned L1) and nothing else. They receive `R` fp32 tiles per block and never ack,
 which is why the mcast is emitted with an explicit `num_active = G − 1`. Cost: at most
 `grid_x − 1` cores' worth of otherwise-idle L1 map per group.
+
+---
+
+## Refinement 3 deltas — the two-stage grid combine
+
+The combine is now a **two-level tree** (`_tree_for_box`), not a flat root-gather. Level 1 folds
+one grid ROW of the group on that row's leader; level 2 folds the row totals on the root.
+`stage2_span == 1` is the degenerate flat gather and is the Phase 0 inventory byte-for-byte, which
+is what every group that is not a fully populated multi-row rectangle keeps (a shard grid with
+filler cores, any 1-D group, `G == 1`, and `nx == 1` — where level 1 would be a self-write).
+
+| CB | Pages (capacity) | Live set | Spans / streams | Format | Producer | Consumer | Lifetime | Shares with / why not |
+|----|------------------|----------|-----------------|--------|----------|----------|----------|-----------------------|
+| `cb_stat_gather` (**resized**) | `R · S1` | `R · S1` | `{row: spans → R, hidden: spans → the LEVEL-1 cross-core extent S1}` | `T_f32` | writer | compute | `combine_stat_block` level 1 | Unchanged in kind; `S1` is now one grid row of the group (`nx`) instead of the whole group (`G`), so this CB **shrinks** by a factor `ny` whenever the tree is taken. |
+| `cb_stat_gather2` (**new**, id 15) | `R · S2` | `R · S2` | `{row: spans → R, hidden: spans → the LEVEL-2 extent S2 = ny}` | `T_f32` | writer (leaders → root) | compute (root) | `combine_stat_block` level 2 | **Cannot share.** Concurrent with `cb_stat_gather` (level 1's result feeds it) and with `cb_stat_sum` (its destination). Not allocated at all when the tree is flat. |
+| `cb_branch_sum` (**new**, id 18) | `R` | `R` | `{row: spans → R, hidden: streams → S1 partials folded in DEST}` | `T_f32` | compute (leader) | writer (leader) | `combine_stat_block`, between the levels | **Cannot share** with `cb_stat_partial` (both are compute→writer, but a leader holds this one while the next block's partial is being produced) or with `cb_stat_sum` (that one is the root's level-2 destination, live at the same time on the root). Not allocated when the tree is flat. |
+
+**Net L1: the tree COSTS NOTHING and usually saves.** Flat holds `R·G = R·nx·ny` fp32 stat-gather
+tiles; the tree holds `R·(nx + ny + 1)`. At the decode geometry `11 × 2` that is 14 tiles against
+22, and at `11 × 10` it is 22 against 110 — i.e. the deeper the group, the larger the saving. The
+`MAX_GATHER_TILES` cap correspondingly moves from `R·G` to `R · max(S1, S2)`, which is the largest
+buffer that actually exists.
+
+### Data-movement budget — cross-core traffic per block (updated)
+
+Activation and gamma DRAM crossings are **unchanged** (input 1×, output 1×, gamma
+`num_row_groups ×`; 0× for the activations on a resident shard). Only the statistics traffic
+changes shape:
+
+| Combine | Unicasts into ONE core's L1 | fp32 tile adds on the critical path | Multicast |
+|---------|-----------------------------|--------------------------------------|-----------|
+| Flat (Phase 0, still used where the tree does not apply) | `G − 1`, all into the root | `G`, all on the root | `R` tiles to the group rectangle |
+| Two-stage grid (Refinement 3) | `nx − 1` into each row leader, then `ny − 1` into the root | `nx` (in parallel on every leader) + `ny` (root) | unchanged |
+
+Total bytes on the NoC are the same to within one extra `R`-tile hop per leader; what changes is
+the **fan-in at any one destination** and the **serial tile-add count on the root**, which is what
+the measurement showed to be the binding term (3630 ns of a 12467 ns decode op at `G = 22`).
+
+### Measured selections — updated for `MAX_W_GROUP_SIZE = 0`
+
+| Shape | `G` (was) | `S1 × S2` | `C` | `R` | cores (was) | DRAM crossings |
+|-------|-----------|-----------|-----|-----|-------------|----------------|
+| `(1,1,32,7168)` decode | 110 (22) | 11 × 10 | 3 | 1 | 110 (22) | in 1×, out 1×, gamma **1×** (still the minimum: one row-group) |
+| `(1,1,32,5120)` decode | 110 (22) | 11 × 10 | 2 | 1 | 110 (22) | in 1×, out 1×, gamma 1× |
+| `(1,1,32,2304)` decode | 55 (22) | 11 × 5 | 2 | 1 | 55 (22) | in 1×, out 1×, gamma 1× |
+| `(1,1,32,1024)` decode | 22 (22) | 11 × 2 | 2 | 1 | 22 (22) | unchanged |
+| every `(1,1,8192,W)` prefill | 1–2 (unchanged) | flat | unchanged | unchanged | 110 | unchanged |
+
+The prefill rows are untouched: the score ties on occupancy for every `G` that fills the grid and
+the `−G` tiebreak still takes the smallest, so the cap was never binding there (measured: 99 559 /
+212 595 / 425 990 / 592 081 ns against 103 076 / 220 005 / 425 343 / 591 707 before).

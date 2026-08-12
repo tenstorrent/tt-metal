@@ -254,7 +254,7 @@ ROW_MAJOR shard wider than that CB alone cannot be rescued by chunking either �
 R3 (re-stride each chunk from the resident shard twice, once per pass) would make it `O(WC)` at the
 cost of the block residency, and no golden cell needs it today.
 
-### [ ] Refinement 3 — Speed up the perf-flagged wide interleaved decode profile
+### [x] Refinement 3 — Speed up the perf-flagged wide interleaved decode profile
 
 **Type**: perf
 
@@ -288,6 +288,39 @@ a `_WIDE` loose case. Both the cap and `MIN_PIPELINE_BLOCKS` live in one host co
 re-tuning them is a knob-turn; replacing flat root-gather with a two-stage grid combine is a
 scheme-change and the bigger of the two pieces of work — size the phase accordingly (one T3 lever
 is a whole phase).
+
+**Outcome**: **(1,1,32,7168) 12467 → 8987 ns (1.39×)** at its exact pinned config (bf16 / TILE /
+INTERLEAVED / gamma bf16 TILE / `fp32_dest_acc_en=False` / HiFi2, blackhole_p150b), against a goal
+of `104259/7 ≈ 14894 ns` that is now cleared by 1.66×; the three secondary decode cases came along
+at 1.32–1.34× (1024 9101 → 6882, 2304 9730 → 7299, 5120 11219 → 8350) and the four prefill cases are
+unchanged to within noise (99 559 / 212 595 / 425 990 / 592 081 vs 103 076 / 220 005 / 425 343 /
+591 707). Golden: `-m perf` 13/13, `-m pad_poison` 24/24, the `1x1x64x128` cartesian slice 165/165
+with no xpass drift, `test_op_loose` 381/384 — the 3 failures are the exact cells Refinement 2b
+recorded as remaining (two `W=11008` TILE HEIGHT cells + `13x777x1023` WIDTH), not regressions. Unit
+directory 503 passed / 0 failed.
+Three levers landed, each measured by a `DeviceZoneScopedN` timeline rather than guessed:
+(1) the fp32 `cb_zero_tile` fill (2363 ns of scalar stores) sat on EVERY core's reader ahead of the
+input block although only a combine root reads it — moved to the leader's writer, whose BRISC idles
+~6 µs; (2) the gamma slice was read ahead of the input block although it is first consumed after the
+combine — moved behind it (TILE gamma only: a ROW_MAJOR gamma is tilized before the block loop and
+aliases `cb_input_rm`, and reordering it gave PCC ~ 0, caught by the unit suite); (3) the
+scheme-change — a **two-stage grid combine** replacing flat root-gather, which cut the root's
+combine chain 3630 → 1360 ns and, more importantly, made a full-grid reduction group affordable, so
+`MAX_W_GROUP_SIZE` went 32 → 0 (`G = 110` now costs 9210 ns where the flat combine cost 19133).
+**What binds now, and what I did not do.** The decode profile is a LATENCY CHAIN, not a bandwidth
+wall: on the final timeline the member core spends 2.5 µs waiting for its first input tile, 0.8 µs
+on the statistics, ~3 µs waiting for the combine round, 1.3 µs on the apply and ~1 µs draining. Two
+terms inside the combine are now the largest single items and both are hop/latency, not arithmetic:
+the level-2 rendezvous (~1.1 µs for one 4 KiB tile plus a semaphore) and the root's **finalize
+chain** — `CopyTile → MulUnary → AddUnary → Rsqrt` on ONE fp32 tile — at ~1.3 µs, i.e. ~1.3 µs of
+SFPU work to produce 32 useful numbers (a REDUCE_ROW result is column-0-valid, so 31/32 of every
+stat tile is wasted work). The next lever I would try is a **narrower stat payload** (bf16
+`cb_stat_gather`, design lamp P6 — halves every hop's bytes and the tile-add cost, at a PCC risk the
+`row_reduce_accumulate` note explains) or moving the finalize off the root by broadcasting the SUM
+and letting each core finalize in parallel (it is ~1.3 µs on the root's critical path today, and
+would become ~1.3 µs on every core's post-mcast path, so it only wins if the apply can overlap it).
+I did not take either: both are new schemes with their own precision/serialization questions, and
+this phase's named lever (the combine topology) is landed and measured.
 
 ### [ ] Refinement 4 — Speed up the prefill (bandwidth-bound) profiles
 
