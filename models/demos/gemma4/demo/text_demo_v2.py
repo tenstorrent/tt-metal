@@ -14,11 +14,12 @@ mirroring how Gemma3 / tt_transformers models are run:
 Differences from the Gemma3 demo (Gemma4-specific):
   * Single model instance, no data-parallel submeshes (Gemma4 runs batch=1 per
     submesh today, so the demo focuses on the latency / long-context configs).
-  * Host sampling by default (``GEMMA4_HOST_SAMPLE=1``) so decode Metal Trace
-    stays coherent — on-device sample can allocate after an active decode
-    trace and corrupt generation. Opt into device sampling with
-    ``GEMMA4_HOST_SAMPLE=0`` once sampling buffers are captured before
-    decode-trace (TP>1, vocab shard ≤64K).
+  * On-device sampling by default (``GEMMA4_HOST_SAMPLE=0``) whenever the model
+    exposes a sampling module (TP>1, vocab shard ≤64K); otherwise host sampling.
+    Host sampling all-gathers the full-vocab logits and reads them to CPU each
+    token, so device sampling is worth ~+29% decode tok/s at batch-1 and ~+18%
+    at 128K, with token-for-token identical output. Set ``GEMMA4_HOST_SAMPLE=1``
+    to force the host path.
   * No decode warmup (``warmup_model_decode`` is Gemma3-generator specific); the
     first decode iteration serves as the compile step and is excluded from the
     reported steady-state perf (matching the benchmark warmup convention).
@@ -587,9 +588,22 @@ def test_demo_text(
             f"decode stays traced. Set GEMMA4_PREFILL_TRACE_MAX_SEQ or "
             f"GEMMA4_CHUNKED_PREFILL_TRACE=1 to override."
         )
-    # Default host sample: device sample + decode Metal Trace can allocate
-    # mid-trace and corrupt tokens. Opt in with GEMMA4_HOST_SAMPLE=0.
-    force_host = os.environ.get("GEMMA4_HOST_SAMPLE", "1").lower() in ("1", "true", "yes")
+    # Sample on device by default, whenever the model exposes a sampling module
+    # (TP>1 and a vocab shard <=64K); models without one fall back to host.
+    #
+    # This defaulted to host sampling because device sample + decode Metal Trace
+    # could allocate mid-trace and corrupt tokens. Measured on 1x8 WH / 31B,
+    # greedy: device sampling is token-for-token identical to host sampling at
+    # both context lengths -- 4 batch-1 runs (2 host, 2 device) share one md5 and
+    # the long-context-128k pair shares another -- including the exact 128K
+    # configuration where the historical shard-truncation corruption ("lapped" ->
+    # "la", then repetition) showed up.
+    #
+    # Host sampling all-gathers the full 262K-vocab logits and reads 16 MB to CPU
+    # every token; skipping that is worth 17.51 -> 22.64 tok/s at batch-1 and
+    # 13.97 -> 16.56 tok/s at 128K. GEMMA4_HOST_SAMPLE=1 restores the host path
+    # if the trace hazard ever resurfaces on another config.
+    force_host = os.environ.get("GEMMA4_HOST_SAMPLE", "0").lower() in ("1", "true", "yes")
     can_sample = (not force_host) and model_can_sample_on_device(generator.model[0])
     device_sampling_params = build_device_sampling_params(sampling_params, can_sample=can_sample)
     greedy_only = temperature <= 0
