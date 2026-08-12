@@ -176,6 +176,8 @@ class Sampling1D(LightweightModule):
 
     def load_device_buffers(self):
         """Materialize all LazyBuffer fields from resolved config."""
+        import torch
+
         if self._device_buffers_loaded:
             return
 
@@ -186,6 +188,24 @@ class Sampling1D(LightweightModule):
         self._local_indices = _materialize(cfg.local_indices)
         self._seeds = _materialize(cfg.seeds)
         self._user_ids = _materialize(cfg.user_ids)
+        num_devices = cfg.mesh_device.get_num_devices()
+        per_device_vocab = cfg.vocab_size // num_devices
+        mesh_shape = tuple(cfg.mesh_device.shape)
+        greedy_tp_axis = 1 if mesh_shape[1] > 1 else 0
+        shard_dims = (None, 1) if greedy_tp_axis == 1 else (1, None)
+        rank_offsets = (
+            (torch.arange(num_devices, dtype=torch.int32).reshape(1, num_devices, 1, 1) * per_device_vocab)
+            .expand(1, num_devices, cfg.max_batch_size, 1)
+            .contiguous()
+        )
+        self._greedy_local_offsets = ttnn.from_torch(
+            rank_offsets,
+            device=cfg.mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(cfg.mesh_device, dims=shard_dims, mesh_shape=mesh_shape),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
         from models.common.utils import LogProbsCalculator  # lazy: transitively imports torch
 
         self._log_probs_calculator = LogProbsCalculator(cfg.mesh_device, cfg.sub_core_grids, cfg.tt_ccl)
@@ -253,6 +273,108 @@ class Sampling1D(LightweightModule):
     def forward(self, logits, **kwargs):
         """Dispatcher."""
         return self.decode_forward(logits, **kwargs)
+
+    def greedy_decode_forward(self, logits: ttnn.Tensor, *, tt_out_tok: ttnn.Tensor | None = None):
+        """Exact split argmax without gathering the full vocabulary.
+
+        Each rank reduces its local vocabulary to one value/token pair.  A tiny
+        FP32 packet all-gather then selects the global winner on device.  This
+        is semantically greedy and avoids a full-vocabulary collective.
+        """
+
+        self.load_device_buffers()
+        cfg = self.config
+        if cfg.mesh_device.get_num_devices() == 1:
+            return self._sample_argmax(logits, tt_out_tok)[0]
+
+        logits_bf16 = ttnn.typecast(logits, dtype=ttnn.bfloat16, sub_core_grids=cfg.sub_core_grids)
+        local_values = ttnn.max(logits_bf16, dim=-1, keepdim=True)
+        logits_rm = ttnn.untilize(logits_bf16, use_multicore=True, sub_core_grids=cfg.sub_core_grids)
+        local_indices_rm = ttnn.argmax(logits_rm, dim=-1, keepdim=True)
+        local_indices = ttnn.to_layout(local_indices_rm, ttnn.TILE_LAYOUT)
+        local_indices_int32 = ttnn.typecast(
+            local_indices,
+            dtype=ttnn.int32,
+            sub_core_grids=cfg.sub_core_grids,
+        )
+        local_global_indices = ttnn.add(
+            self._greedy_local_offsets,
+            local_indices_int32,
+            dtype=ttnn.int32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        local_values_fp32 = ttnn.typecast(local_values, dtype=ttnn.float32, sub_core_grids=cfg.sub_core_grids)
+        local_indices_fp32 = ttnn.typecast(
+            local_global_indices,
+            dtype=ttnn.float32,
+            sub_core_grids=cfg.sub_core_grids,
+        )
+        local_packet = ttnn.concat(
+            [local_values_fp32, local_indices_fp32],
+            dim=2,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        cluster_axis = None if 1 in cfg.mesh_device.shape else 0
+        gathered = self._perform_all_gather(
+            local_packet,
+            dim=1,
+            cluster_axis=cluster_axis,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            num_links=cfg.num_gather_links,
+            buffer_key="SAMPLING_GREEDY_PACKET",
+            dtype=local_packet.dtype,
+        )
+        gathered_rm = ttnn.to_layout(gathered, ttnn.ROW_MAJOR_LAYOUT)
+        packet_view = ttnn.reshape(
+            gathered_rm,
+            (1, 1, cfg.mesh_device.get_num_devices(), 2 * cfg.max_batch_size),
+        )
+        candidate_values = ttnn.slice(
+            packet_view,
+            [0, 0, 0, 0],
+            [1, 1, cfg.mesh_device.get_num_devices(), cfg.max_batch_size],
+            [1, 1, 1, 1],
+        )
+        candidate_indices_rm = ttnn.slice(
+            packet_view,
+            [0, 0, 0, cfg.max_batch_size],
+            [1, 1, cfg.mesh_device.get_num_devices(), 2 * cfg.max_batch_size],
+            [1, 1, 1, 1],
+        )
+        candidate_indices = ttnn.to_layout(candidate_indices_rm, ttnn.TILE_LAYOUT)
+        winner_rm = ttnn.argmax(candidate_values, dim=2, keepdim=True)
+        winner = ttnn.to_layout(winner_rm, ttnn.TILE_LAYOUT)
+        selected_fp32 = ttnn.gather(candidate_indices, dim=2, index=winner)
+        selected_uint32 = ttnn.typecast(selected_fp32, dtype=ttnn.uint32, sub_core_grids=cfg.sub_core_grids)
+        greedy_tokens = ttnn.untilize(selected_uint32, use_multicore=True, sub_core_grids=cfg.sub_core_grids)
+
+        for temporary in (
+            local_values,
+            local_indices,
+            local_indices_int32,
+            local_global_indices,
+            local_values_fp32,
+            local_indices_fp32,
+            local_packet,
+            gathered,
+            logits_bf16,
+            logits_rm,
+            local_indices_rm,
+            gathered_rm,
+            candidate_values,
+            candidate_indices_rm,
+            candidate_indices,
+            winner_rm,
+            winner,
+            selected_fp32,
+            selected_uint32,
+        ):
+            ttnn.deallocate(temporary)
+        if tt_out_tok is not None:
+            ttnn.copy(greedy_tokens, tt_out_tok)
+            ttnn.deallocate(greedy_tokens)
+            return tt_out_tok
+        return greedy_tokens
 
     # -- Argmax path (port from tt_sampling.py:310-341) -----------------------
 
@@ -448,21 +570,25 @@ class Sampling1D(LightweightModule):
         # Pad the per-device shard up to the next power of 2 so ttnn.topk hits its fast path.
         # Padded entries get -inf so they are never selected; the pre-padded _local_indices buffer
         # is widened to match (see _resolve_sampling1d_config). Mirrors tt_sampling.py:451-458.
+        padded_input = None
         if cfg.pad_to_power_of_2 and not _is_power_of_2(x_bf16.shape[-1]):
             padded_width = _upper_power_of_2(x_bf16.shape[-1])
-            x_bf16 = ttnn.pad(
+            padded_input = ttnn.pad(
                 x_bf16,
                 [(0, 0), (0, 0), (0, 0), (0, padded_width - x_bf16.shape[-1])],
                 value=-sys.float_info.max,
                 sub_core_grids=cfg.sub_core_grids,
             )
+            x_bf16 = padded_input
 
         topk_values, topk_indices = ttnn.topk(
             x_bf16,
             k=cfg.max_top_k,
             dim=-1,
             sub_core_grids=cfg.sub_core_grid_topk,
-            indices_tensor=self._local_indices,
+            # Native indices avoid UINT16 corruption for a 65,536-wide
+            # Blackhole reduction; they are exactly the local token IDs.
+            indices_tensor=None if padded_input is not None else self._local_indices,
         )
 
         # For 1D meshes use cluster_axis=None
@@ -487,9 +613,13 @@ class Sampling1D(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             num_links=cfg.num_gather_links,
             buffer_key="SAMPLING_INDICES",
-            dtype=ttnn.uint16,
+            dtype=topk_indices.dtype,
         )
         ttnn.deallocate(topk_indices)
+        if padded_input is not None:
+            # Keep the padded input alive until both asynchronous consumers
+            # have been enqueued.
+            ttnn.deallocate(padded_input)
 
         return gathered_values, gathered_indices
 

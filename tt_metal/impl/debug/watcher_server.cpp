@@ -307,11 +307,11 @@ void WatcherServer::Impl::create_log_file() {
     fprintf(f, "\t\tNWD is \"noc write done\"\n");
     fprintf(
         f,
-        "\trmsg(%s host run message): D/H device/host dispatch; NOC ID; I/G/D init/go/done; | separator; "
-        "enable flags %s\n",
+        "\trmsg(%s host run message): D/H device/host dispatch; NOC ID; "
+        "I/G/D/R/H/T init/go/done/reset/host-reset/trace-replay; | separator; enable flags %s\n",
         tensix_info.main_processor.c_str(),
         tensix_info.enable_legend.c_str());
-    fprintf(f, "\tsmsg(subordinate run message): I/G/D for subordinate processors\n");
+    fprintf(f, "\tsmsg(subordinate run message): I/G/D/L/W/S for subordinate processors\n");
     fprintf(f, "\tk_ids: kernel IDs per processor (ID map to file at end of section)\n");
     fprintf(f, "\n");
     fflush(f);
