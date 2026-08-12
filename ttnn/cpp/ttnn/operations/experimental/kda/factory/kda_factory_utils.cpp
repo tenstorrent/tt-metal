@@ -118,6 +118,7 @@ tt::tt_metal::ComputeConfigDescriptor kda_compute_cfg(
     return tt::tt_metal::ComputeConfigDescriptor{
         .math_fidelity = std::get<0>(args),
         .fp32_dest_acc_en = std::get<2>(args),
+        .dst_full_sync_en = std::get<4>(args),
         .math_approx_mode = std::get<1>(args)};
 }
 
