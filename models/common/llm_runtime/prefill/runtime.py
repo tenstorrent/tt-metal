@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Prefill invocation, trace hooks, and result handling."""
+"""Public prefill orchestration facade and transient cleanup."""
 
 from __future__ import annotations
 

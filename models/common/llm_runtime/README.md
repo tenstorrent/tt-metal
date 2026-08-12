@@ -176,7 +176,13 @@ released.
 | `config.py` | Trace policy, warmup policy, paged-KV policy, and canonical page-table geometry |
 | `prefill/config.py` | Fully resolved static prefill collaborators, capabilities, and geometry ceilings |
 | `prefill/plan.py` | Pure host-side construction of `PrefillRequest` and `PrefillChunk` values |
-| `prefill/runtime.py` | Prefill preparation, eager sequence execution, trace hooks, assembly, and transient cleanup |
+| `prefill/signatures.py` | Prepared requests plus pure eager-program and trace identity construction |
+| `prefill/inputs.py` | Host/device input values, staging, in-place replay refresh, and rotary handling |
+| `prefill/trace.py` | Trace capture plans, mutable replay state, input refresh, and replay ownership |
+| `prefill/postprocess.py` | Sampling classification, K/P/T state, output extraction, and device sampling |
+| `prefill/assembly.py` | Streaming synchronized readback, source-row restoration, and result release |
+| `prefill/sequence.py` | Eager regular/chunk lifecycle and failure-safe ownership transfer |
+| `prefill/runtime.py` | Stable public facade, collaborator composition, model-body calls, and transient cleanup |
 | `prefill/sampling_helpers.py` | Stateless prefill sampling parameter and log-probability helpers |
 | `decode.py` | Decode preparation, signatures, eager invocation, trace refresh, output leases, and cleanup |
 | `execution.py` | `EagerExecutor` and `TracedExecutor` composition |
@@ -413,6 +419,11 @@ chunk trace can be replayed repeatedly in a host loop for a long request.
 it is not permission to route a selected-operation trace miss to eager.
 Preflight covers the complete public call before the first KV write, and exact
 association misses raise `TraceCoverageError`.
+
+The capability query intentionally uses only its legacy token/length/start
+inputs and therefore cannot classify page-table or sampling details. Serving
+correctness does not rely on that approximation: traced execution prepares the
+real request and preflights every resulting program-to-trace association.
 
 ### Eager decode
 
