@@ -385,6 +385,12 @@ std::shared_ptr<PinnedMemory> PinnedMemory::Create(
     HostBuffer& host_buffer,
     bool map_to_noc,
     PinnedMemoryDeviceAccess access) {
+    TT_FATAL(
+        access != PinnedMemoryDeviceAccess::ReadOnly || GetMemoryPinningParameters(mesh_device).supports_read_only,
+        "Device-read-only pinning was requested but is not available on this system; it needs an active IOMMU and "
+        "KMD 2.9.0 or newer. Check MemoryPinningParameters::supports_read_only before requesting ReadOnly, or "
+        "request ReadWrite.");
+
     // Extract all coordinates from the range set
     std::vector<distributed::MeshCoordinate> coordinates = coordinate_range_set.coords();
 

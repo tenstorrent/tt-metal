@@ -182,6 +182,8 @@ public:
      * @param coordinate_range_set Set of mesh coordinates to pin memory for
      * @param host_buffer Existing host memory to map (must not be null)
      * @param map_to_noc Whether to map the buffer to the NOC
+     * @param access Device permissions for the mapping. Requesting ReadOnly throws unless
+     *               GetMemoryPinningParameters(mesh_device).supports_read_only is true, so check that first.
      * @return Unique pointer to the created PinnedMemory instance
      */
     static std::shared_ptr<PinnedMemory> Create(
