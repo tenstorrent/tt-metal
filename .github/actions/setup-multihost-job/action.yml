@@ -16,19 +16,13 @@ inputs:
   artifacts-path:
     description: Directory to download artifacts into (shared NFS recommended)
     required: false
-    default: /ci/artifacts
+    default: /home/user/artifacts
   extra-pip-packages:
     description: >
       Extra packages to install alongside the ttnn wheel on every worker
       (space-separated). Models e2e/unit pass pytest + pytest-timeout.
     required: false
     default: ""
-  unpack-build-on-nfs:
-    description: >
-      Also unpack the build archive into /ci/tt-metal (needed when the runner
-      generates pipeline configs that expect binaries under /ci/tt-metal/build).
-    required: false
-    default: "false"
   create-pipeline-dir:
     description: Create $PIPELINE_DIR if set (NFS scratch for ranklogs / automapper cwd)
     required: false
@@ -78,18 +72,11 @@ runs:
       env:
         ARTIFACTS_PATH: ${{ inputs.artifacts-path }}
         EXTRA_PIP_PACKAGES: ${{ inputs.extra-pip-packages }}
-        UNPACK_BUILD_ON_NFS: ${{ inputs.unpack-build-on-nfs }}
         CREATE_PIPELINE_DIR: ${{ inputs.create-pipeline-dir }}
       run: |
         set -euo pipefail
         # Move the cloned directory to workers. TODO: Clone directly to NFS
-        rm -rf /ci/tt-metal
         cp -r "$GITHUB_WORKSPACE" /ci/tt-metal
-        if ! command -v zstd >/dev/null 2>&1; then
-          echo "zstd not found in runner context, installing fallback..."
-          sudo apt-get update
-          sudo apt-get install -y zstd
-        fi
         shopt -s globstar nullglob
         build_archives=("${ARTIFACTS_PATH}"/**/*.tar.zst)
         echo "Found ${#build_archives[@]} .tar.zst candidate(s) under ${ARTIFACTS_PATH}"
@@ -109,20 +96,12 @@ runs:
           mkdir -p "$PIPELINE_DIR"
         fi
 
-        if [ "${UNPACK_BUILD_ON_NFS}" = "true" ]; then
-          # Pipeline config generation runs on the runner and expects test binaries
-          # under /ci/tt-metal/build/test.
-          tar --zstd -xf "${BUILD_ARCHIVE}" -C /ci/tt-metal
-        fi
-
         # Workers + runner local copy for runtime (local disk).
-        sudo rm -rf /home/user/tt-metal
-        sudo mkdir -p /home/user
-        sudo chown "$(id -u):$(id -g)" /home/user
-        cp -r /ci/tt-metal /home/user/
+
+        cp -r /home/user/tt-metal /ci/tt-metal 
         tar --zstd -xf "${BUILD_ARCHIVE}" -C /home/user/tt-metal
 
-        mpirun --pernode bash -lc 'rm -rf /home/user/tt-metal && cp -r /ci/tt-metal /home/user/'
+        mpirun --pernode bash -lc 'cp -r /ci/tt-metal /home/user/'
         mpirun --pernode git -C /home/user/tt-metal submodule update --init --recursive
         mpirun --pernode tar --zstd -xf "${BUILD_ARCHIVE}" -C /home/user/tt-metal
 
