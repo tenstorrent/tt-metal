@@ -18,10 +18,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <limits>
 #include <memory>
 #include <numeric>
 #include <set>
+#include <string>
+#include <system_error>
 #include <type_traits>
 #include <vector>
 #include <sys/mman.h>
@@ -938,29 +941,52 @@ TEST_F(MeshTensorDeviceTest, LargeWriteRoundtrip_PinnedMemoryPath) {
 }
 
 TEST_F(MeshTensorPinnedMemoryBudgetTest, LargeReadOnlyFileBackedWriteUsesReadOnlyPinnedMemory) {
-    const auto pinning_params = tt::tt_metal::experimental::GetMemoryPinningParameters(*mesh_device_);
-    if (!pinning_params.can_map_to_noc || !pinning_params.supports_read_only ||
-        tt::tt_metal::MetalContext::instance().rtoptions().get_pinned_memory_cache_limit_bytes() == 0) {
-        GTEST_SKIP() << "Device-read-only pinned NOC mappings are not available";
-    }
-
     const Shape shape{1, 1, 1024, 9216};
     const size_t buffer_size = static_cast<size_t>(shape.volume()) * sizeof(uint32_t);
     ASSERT_GT(buffer_size, kPinnedWriteThresholdBytesForTest);
 
-    char file_name[] = "./tt_metal_read_only_tensor_XXXXXX";
-    int writable_fd = mkstemp(file_name);
+    const auto pinning_params = tt::tt_metal::experimental::GetMemoryPinningParameters(*mesh_device_);
+    if (!pinning_params.can_map_to_noc || !pinning_params.supports_read_only) {
+        GTEST_SKIP() << "Device-read-only pinned NOC mappings are not available";
+    }
+    // Budget guards, matching the sibling large-pin tests: without these an undersized pin budget makes try_pin
+    // return nullptr and the ASSERT below fails the test instead of skipping it.
+    const size_t cache_limit = tt::tt_metal::MetalContext::instance().rtoptions().get_pinned_memory_cache_limit_bytes();
+    if (cache_limit < buffer_size || pinning_params.max_total_pin_size < buffer_size || pinning_params.max_pins < 1) {
+        GTEST_SKIP() << "Requires a pin budget large enough for a " << buffer_size << " byte mapping";
+    }
+
+    const std::string file_template =
+        (std::filesystem::temp_directory_path() / "tt_metal_read_only_tensor_XXXXXX").string();
+    std::vector<char> file_name(file_template.begin(), file_template.end());
+    file_name.push_back('\0');
+    int writable_fd = mkstemp(file_name.data());
     ASSERT_NE(writable_fd, -1);
+    // Remove the file on every exit path. The explicit unlink below normally gets there first; this covers an
+    // ASSERT failure in between, which would otherwise abort the test body and leave 36 MiB on disk per run.
+    struct FileRemover {
+        std::string path;
+        ~FileRemover() {
+            std::error_code ec;
+            std::filesystem::remove(path, ec);
+        }
+    } file_remover{std::string(file_name.data())};
+
     ASSERT_EQ(ftruncate(writable_fd, buffer_size), 0);
     void* writable_mapping = mmap(nullptr, buffer_size, PROT_READ | PROT_WRITE, MAP_SHARED, writable_fd, 0);
     ASSERT_NE(writable_mapping, MAP_FAILED);
-    std::fill_n(static_cast<uint32_t*>(writable_mapping), shape.volume(), 0x12345678u);
+    // Position-dependent contents, so the round-trip check below can catch a wrong offset, a repeated page or a
+    // dropped host_offset_ adjustment. A uniform fill would compare equal through any of those.
+    uint32_t* writable_words = static_cast<uint32_t*>(writable_mapping);
+    for (size_t i = 0; i < static_cast<size_t>(shape.volume()); ++i) {
+        writable_words[i] = static_cast<uint32_t>(i) * 2654435761u + 0x9e3779b9u;
+    }
     ASSERT_EQ(munmap(writable_mapping, buffer_size), 0);
     ASSERT_EQ(close(writable_fd), 0);
 
-    int read_only_fd = open(file_name, O_RDONLY | O_CLOEXEC);
+    int read_only_fd = open(file_name.data(), O_RDONLY | O_CLOEXEC);
     ASSERT_NE(read_only_fd, -1);
-    ASSERT_EQ(unlink(file_name), 0);
+    ASSERT_EQ(unlink(file_name.data()), 0);
     void* read_only_mapping = mmap(nullptr, buffer_size, PROT_READ, MAP_SHARED, read_only_fd, 0);
     ASSERT_NE(read_only_mapping, MAP_FAILED);
     ASSERT_EQ(close(read_only_fd), 0);
@@ -976,16 +1002,24 @@ TEST_F(MeshTensorPinnedMemoryBudgetTest, LargeReadOnlyFileBackedWriteUsesReadOnl
     auto topology = TensorTopology::create_sharded_tensor_topology(mesh_device_->shape());
     auto host_tensor = host_tensor_from_buffer_with_topology(std::move(distributed_buffer), spec, topology);
 
+    auto& cache = tt::tt_metal::experimental::PinnedMemoryCache::instance();
     auto& cq = mesh_device_->mesh_command_queue();
+    const size_t entries_before = cache.num_entries();
     MeshTensor device_tensor = cq.enqueue_write_tensor(host_tensor);
     cq.finish();
+
+    // The write itself must have created the pin. Asserting only on a try_pin issued after the fact would pass
+    // even if the H2D path stopped pinning altogether, since that call would just build a fresh mapping.
+    ASSERT_EQ(cache.num_entries(), entries_before + 1);
 
     auto shard = host_tensor.buffer().get_shard(coord);
     ASSERT_TRUE(shard.has_value());
     const auto range = distributed::MeshCoordinateRangeSet(distributed::MeshCoordinateRange(coord, coord));
-    auto pinned = tt::tt_metal::experimental::PinnedMemoryCache::instance().try_pin(
+    auto pinned = cache.try_pin(
         *mesh_device_, range, *shard, true, tt::tt_metal::experimental::PinnedMemoryDeviceAccess::ReadOnly);
     ASSERT_TRUE(pinned);
+    // No new entry: this is the mapping the write created, not a second one, so its permissions are the write's.
+    EXPECT_EQ(cache.num_entries(), entries_before + 1);
     EXPECT_EQ(pinned->get_device_access(), tt::tt_metal::experimental::PinnedMemoryDeviceAccess::ReadOnly);
 
     HostTensor result = cq.enqueue_read_tensor(device_tensor);

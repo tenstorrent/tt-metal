@@ -463,6 +463,9 @@ private:
 
     // Cached system IOMMU status to avoid slow queries at MeshDevice construction
     bool iommu_enabled_ = false;
+    // Cached device-read-only pinning support. Reading the KMD version parses sysfs, and this is queried once per
+    // tensor shard on the transfer path, so it must not be recomputed per call.
+    bool read_only_page_pinning_supported_ = false;
 
     // There is an entry for every device that can be targeted (MMIO and remote)
     std::unordered_map<ChipId, metal_SocDescriptor> sdesc_per_chip_;

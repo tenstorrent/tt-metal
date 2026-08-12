@@ -218,9 +218,7 @@ bool Cluster::is_base_routing_fw_enabled(tt::tt_metal::ClusterType cluster_type)
 
 bool Cluster::is_iommu_enabled() const { return this->iommu_enabled_; }
 
-bool Cluster::is_read_only_page_pinning_supported() const {
-    return this->iommu_enabled_ && tt::umd::PCIDevice::read_kmd_version() >= tt::umd::KMD_READ_ONLY_PAGE_PINNING;
-}
+bool Cluster::is_read_only_page_pinning_supported() const { return this->read_only_page_pinning_supported_; }
 
 Cluster::Cluster(llrt::RunTimeOptions& rtoptions) : rtoptions_(rtoptions) {
     ZoneScoped;
@@ -335,6 +333,7 @@ void Cluster::initialize_device_drivers() {
 
     // Cache IOMMU status (expensive to query repeatedly)
     this->iommu_enabled_ = false;
+    this->read_only_page_pinning_supported_ = false;
     if (this->target_type_ == tt::TargetDevice::Silicon) {
         const auto& mmio_ids = this->driver_->get_target_mmio_device_ids();
         if (!mmio_ids.empty()) {
@@ -342,6 +341,9 @@ void Cluster::initialize_device_drivers() {
             auto* pci = this->driver_->get_chip(mmio_id)->get_tt_device()->get_pci_device();
             if (pci) {
                 this->iommu_enabled_ = pci->is_iommu_enabled();
+                this->read_only_page_pinning_supported_ =
+                    this->iommu_enabled_ &&
+                    tt::umd::PCIDevice::read_kmd_version() >= tt::umd::KMD_READ_ONLY_PAGE_PINNING;
             }
         }
     }

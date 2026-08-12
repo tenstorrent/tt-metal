@@ -222,6 +222,11 @@ std::shared_ptr<PinnedMemory> PinnedMemoryCache::try_pin(
     const PinnedMemoryDeviceAccess actual_access =
         access == PinnedMemoryDeviceAccess::ReadOnly && !params.supports_read_only ? PinnedMemoryDeviceAccess::ReadWrite
                                                                                    : access;
+    // A widened request asks the driver to pin for writing memory the caller only promised to read. When that memory is
+    // genuinely non-writable -- an mmap(PROT_READ) of a file, the case read-only pinning exists for -- the pin fails
+    // every time, no matter how many slots are free. Eviction cannot help, so such a failure must not drive the
+    // retry loop below or it would unpin the entire cache for this device on the way to giving up.
+    const bool widened_to_read_write = actual_access != access;
 
     // No usable entry. Before creating a new pin, check whether any existing
     // entry for this address is still referenced externally on an MMIO device
@@ -280,6 +285,11 @@ std::shared_ptr<PinnedMemory> PinnedMemoryCache::try_pin(
             current_size_bytes_ += pinned->get_buffer_size();
             return pinned;
         } catch (...) {
+            // A widened read-only request may be unpinnable for write no matter what is evicted; give up rather
+            // than draining the cache. See widened_to_read_write above.
+            if (widened_to_read_write) {
+                return nullptr;
+            }
             // Pin limit exceeded. Find the oldest LRU entry that shares an MMIO device
             // with the target and evict it to free a kernel pin slot.
             if (!evict_oldest_entry_for_mmio_ids(target_mmio_ids)) {

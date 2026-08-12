@@ -861,6 +861,64 @@ TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRange) {
     EXPECT_EQ(dst_aligned, src);
 }
 
+// A device-read-only mapping cannot be a D2H destination: the device would NOC-write into an IOMMU mapping that
+// faults, which shows up as a hung read rather than a test failure. issue_read_buffer_dispatch_command_sequence
+// guards against that by excluding read-only mappings from the direct pinned-write path. Nothing else in the tree
+// reaches that guard -- every in-tree read pins ReadWrite -- so this attaches a read-only pin to a read transfer
+// explicitly and checks the data still arrives via the fallback.
+TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithReadOnlyPinnedMemoryUsesUnpinnedPath) {
+    const auto pinning_params = experimental::GetMemoryPinningParameters(*mesh_device_);
+    if (!pinning_params.can_map_to_noc || !pinning_params.supports_read_only) {
+        GTEST_SKIP() << "Device-read-only pinned NOC mappings are not available";
+        return;
+    }
+    uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
+
+    DeviceLocalBufferConfig per_device_buffer_config{
+        .page_size = single_tile_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
+
+    const uint32_t tiles_per_device = 128;
+    const uint32_t bytes_per_device = tiles_per_device * single_tile_size;
+
+    ReplicatedBufferConfig global_buffer_config{.size = bytes_per_device};
+    auto mesh_buffer = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device_.get());
+
+    std::vector<uint32_t> src(bytes_per_device / sizeof(uint32_t), 0);
+    std::iota(src.begin(), src.end(), 0);
+
+    distributed::MeshCoordinate coord(0, 0);
+    auto write_transfer = distributed::ShardDataTransfer{coord}
+                              .host_data(static_cast<void*>(const_cast<uint32_t*>(src.data())))
+                              .region(BufferRegion(0, bytes_per_device));
+    mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, {write_transfer}, /*blocking=*/true);
+
+    auto dst = std::make_shared<vector_aligned<uint32_t>>(bytes_per_device / sizeof(uint32_t), 0);
+    uint32_t* dst_ptr_aligned = reinterpret_cast<uint32_t*>(dst->data());
+    HostBuffer host_buffer(ttsl::Span<uint32_t>(dst_ptr_aligned, bytes_per_device / sizeof(uint32_t)), MemoryPin(dst));
+
+    // The host memory is writable; only the device's view of it is restricted, which is what makes this the case
+    // the guard has to catch rather than one the driver would reject up front.
+    auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
+    std::shared_ptr<experimental::PinnedMemory> pinned_read_only = experimental::PinnedMemory::Create(
+        *mesh_device_,
+        coordinate_range_set,
+        host_buffer,
+        /*map_to_noc=*/true,
+        experimental::PinnedMemoryDeviceAccess::ReadOnly);
+    ASSERT_TRUE(pinned_read_only);
+    ASSERT_EQ(pinned_read_only->get_device_access(), experimental::PinnedMemoryDeviceAccess::ReadOnly);
+
+    auto read_transfer = distributed::ShardDataTransfer{coord}
+                             .host_data(static_cast<void*>(dst_ptr_aligned))
+                             .region(BufferRegion(0, bytes_per_device));
+    experimental::ShardDataTransferSetPinnedMemory(read_transfer, pinned_read_only);
+    mesh_device_->mesh_command_queue().enqueue_read_shards({read_transfer}, mesh_buffer, /*blocking=*/true);
+
+    std::vector<uint32_t> dst_aligned(dst_ptr_aligned, dst_ptr_aligned + (bytes_per_device / sizeof(uint32_t)));
+
+    EXPECT_EQ(dst_aligned, src);
+}
+
 TEST_F(MeshBufferTestSuite, EnqueueReadWithDistributedHostBufferAndPinnedMemory) {
     if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
         GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
