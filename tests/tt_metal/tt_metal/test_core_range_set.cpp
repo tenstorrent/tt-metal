@@ -59,11 +59,11 @@ void check_program_is_mapped_to_correct_cores(
 }
 
 void check_semaphores_are_initialized(
-    distributed::MeshDevice& mesh_device,
+    distributed::MeshDevice& unit_mesh,
     Program& program,
     const CoreRangeSet& core_range_set,
     const std::vector<uint32_t>& golden_sem_values) {
-    IDevice* device = slow_dispatch::physical_device_from_unit_mesh(mesh_device);
+    IDevice* device = unit_mesh.get_devices()[0];
     for (auto core_range : core_range_set.ranges()) {
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
             for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
@@ -71,7 +71,7 @@ void check_semaphores_are_initialized(
                 std::vector<uint32_t> res;
                 auto sem_base_addr = program.impl().get_sem_base_addr(device, logical_core, CoreType::WORKER);
                 slow_dispatch::ReadFromL1(
-                    mesh_device,
+                    unit_mesh,
                     logical_core,
                     sem_base_addr,
                     program.impl().get_sem_size(device, logical_core, CoreType::WORKER),

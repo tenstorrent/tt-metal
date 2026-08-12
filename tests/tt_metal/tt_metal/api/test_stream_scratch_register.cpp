@@ -32,14 +32,15 @@ TEST_F(UnitMeshFixture, StreamScratchRegisterTensixCores) {
 // Test stream scratch register APIs on Erisc cores
 TEST_F(UnitMeshFixture, StreamScratchRegisterEriscCores) {
     // Check if device has active ethernet cores
-    if (this->device().get_active_ethernet_cores(true).empty()) {
+    auto ethernet_cores = this->device().get_devices()[0]->get_active_ethernet_cores(true);
+    if (ethernet_cores.empty()) {
         GTEST_SKIP() << "No active ethernet cores available on this device";
     }
 
     Program program = CreateProgram();
 
     // Get first available ethernet core
-    auto eth_core = *this->device().get_active_ethernet_cores(true).begin();
+    auto eth_core = *ethernet_cores.begin();
 
     // Create CoreRangeSet for this single ethernet core
     std::set<CoreRange> eth_core_ranges;
