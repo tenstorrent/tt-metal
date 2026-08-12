@@ -7,7 +7,6 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
-#include <optional>
 #include <tuple>
 
 #include <tt-metalium/buffer_types.hpp>
@@ -15,31 +14,15 @@
 #include <tt-metalium/hal_types.hpp>
 #include <ostream>
 
-// forward declarations
 namespace tt::tt_metal {
+
 class IDevice;
-class GlobalSemaphore;
 class GlobalSemaphoreImpl;
-
-GlobalSemaphore CreateGlobalSemaphore(
-    IDevice* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type);
-GlobalSemaphore CreateGlobalSemaphore(
-    IDevice* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type);
-
-namespace experimental {
-GlobalSemaphore CreateGlobalSemaphore(
-    IDevice* device,
-    const CoreRangeSet& cores,
-    std::optional<uint32_t> initial_value,
-    BufferType buffer_type,
-    uint64_t address);
-}  // namespace experimental
-}  // namespace tt::tt_metal
-
-namespace tt::tt_metal {
 
 class GlobalSemaphore {
 public:
+    explicit GlobalSemaphore(GlobalSemaphoreImpl impl);
+
     GlobalSemaphore(const GlobalSemaphore& other);
     GlobalSemaphore& operator=(const GlobalSemaphore& other);
 
@@ -57,31 +40,11 @@ public:
     static constexpr auto attribute_names = std::forward_as_tuple("cores", "buffer_type");
     std::tuple<CoreRangeSet, BufferType> attribute_values() const;
 
-    // Internal constructor (internal use only)
-    explicit GlobalSemaphore(GlobalSemaphoreImpl impl);
-
     GlobalSemaphoreImpl& impl();
     const GlobalSemaphoreImpl& impl() const;
 
 private:
-    GlobalSemaphore(
-        IDevice* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
-
-    GlobalSemaphore(
-        IDevice* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
-
     std::unique_ptr<GlobalSemaphoreImpl> impl_;
-
-    friend GlobalSemaphore CreateGlobalSemaphore(
-        IDevice* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type);
-    friend GlobalSemaphore CreateGlobalSemaphore(
-        IDevice* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type);
-    friend GlobalSemaphore experimental::CreateGlobalSemaphore(
-        IDevice* device,
-        const CoreRangeSet& cores,
-        std::optional<uint32_t> initial_value,
-        BufferType buffer_type,
-        uint64_t address);
 };
 
 }  // namespace tt::tt_metal

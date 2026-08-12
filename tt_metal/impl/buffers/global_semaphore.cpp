@@ -115,15 +115,17 @@ GlobalSemaphore CreateGlobalSemaphore(
 }
 }  // namespace experimental
 
+GlobalSemaphore CreateGlobalSemaphore(
+    IDevice* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type) {
+    return GlobalSemaphore(GlobalSemaphoreImpl(device, cores, initial_value, buffer_type));
+}
+
+GlobalSemaphore CreateGlobalSemaphore(
+    IDevice* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type) {
+    return GlobalSemaphore(GlobalSemaphoreImpl(device, std::move(cores), initial_value, buffer_type));
+}
+
 // GlobalSemaphore implementation
-
-GlobalSemaphore::GlobalSemaphore(
-    IDevice* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type) :
-    GlobalSemaphore(GlobalSemaphoreImpl(device, cores, initial_value, buffer_type)) {}
-
-GlobalSemaphore::GlobalSemaphore(
-    IDevice* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type) :
-    GlobalSemaphore(GlobalSemaphoreImpl(device, std::move(cores), initial_value, buffer_type)) {}
 
 GlobalSemaphore::GlobalSemaphore(GlobalSemaphoreImpl impl) :
     impl_(std::make_unique<GlobalSemaphoreImpl>(std::move(impl))) {}

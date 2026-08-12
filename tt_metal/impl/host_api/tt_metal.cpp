@@ -1780,16 +1780,6 @@ uint32_t CreateSemaphore(
     return program.impl().create_semaphore(crs, initial_value, core_type);
 }
 
-GlobalSemaphore CreateGlobalSemaphore(
-    IDevice* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type) {
-    return GlobalSemaphore(device, cores, initial_value, buffer_type);
-}
-
-GlobalSemaphore CreateGlobalSemaphore(
-    IDevice* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type) {
-    return GlobalSemaphore(device, std::move(cores), initial_value, buffer_type);
-}
-
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config) {
     return Buffer::create(config.device, config.size, config.page_size, config.buffer_type);
 }
