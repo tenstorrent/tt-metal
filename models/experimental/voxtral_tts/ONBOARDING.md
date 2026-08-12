@@ -203,9 +203,11 @@ way to actually *hear* the model, and no metric substitutes for that. The sample
 is `generated/SAMPLER_shipcheck.wav` (15 clips, 140.0 s), built by `tests/probes/make_sampler.py`
 from the `quality_shipcheck` run on `035983fef2`; play it with `ffplay -nodisp -autoexit`.
 
-**NOBODY HAS LISTENED TO IT YET** — see `§4`. Three of its clips are the deliberately adversarial
-fixture prompts and the index labels them so; `STATUS.md §3.2` records the fp32 CPU reference
-collapsing on the same text, so they are a model limitation, not a port defect.
+It has been listened to — `§6.73`. Three of its clips are the deliberately adversarial fixture
+prompts and the index labels them so; `STATUS.md §3.2` records the fp32 CPU reference collapsing on
+the same text, so they are a model limitation, not a port defect. **`make_ref_ab.py` renders the
+fp32 side and `make_ab_sampler.py` interleaves the two, level-matched** — that pairing is what turned
+`§6.73` from an impression into a measurement.
 
 `make_sampler.py TAG` builds one from any tagged run — it only STITCHES existing wavs, so the tag
 must name a generation you actually ran. `SAMPLER_p150_HEAD.wav` is the older `§6.58` one on
@@ -224,7 +226,7 @@ must name a generation you actually ran. `SAMPLER_p150_HEAD.wav` is the older `�
 | MOS long-form / min / mean | 4.6050 / 2.6597 / 3.9972 |
 | clicks / natural `[END_AUDIO]` | 52 / 30 |
 | utterance length ceiling | `max_seq_len`, holding prompt + frames; 2048 ≈ 136 s. Costs DRAM, not RTF (`§6.69`) |
-| listening pass | **NOT DONE — the last open quality question.** The sampler for this build is ready and unheard: `generated/SAMPLER_shipcheck.wav` (15 clips, 140 s). Every objective metric passes; naturalness has never been evaluated by a human on any p150 build |
+| listening pass | **DONE on this build** (`§6.73`) — `generated/SAMPLER_shipcheck.wav` vs `SAMPLER_FP32REF.wav`, plus the interleaved `SAMPLER_AB_hs_hand_vs_fp32.wav`. One finding, on an adversarial fixture, traced to the model. **Still not a naturalness eval** — one listener, no raters (`§3`) |
 
 **"Long-form" means ≥100 frames — currently cases 2, 3 and 10.** Quote only those, always with the
 case list. **Case 0 includes kernel compilation (RTF ~1.8) and must be excluded.** Short cases are
@@ -251,7 +253,7 @@ Weakest to strongest. Every claim in STATUS names which rungs it cleared.
 | `--gate decode` | ~4 min | Block 1 precision, 15 prompts × 22 frames |
 | **frame-count A/B** | ~90 s | **bit-exactness** — see below |
 | WER, ≥3 seeds | ~10 min | output quality |
-| listening pass | minutes | what no metric catches |
+| listening pass | minutes | what no metric catches — and `§6.73` is the proof: cases 4/10/11/14 are bucketed out of WER, so a human ear is the ONLY instrument covering them |
 
 ### The frame-count A/B is an EXACTNESS gate and NOT a quality gate
 

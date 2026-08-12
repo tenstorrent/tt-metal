@@ -32,7 +32,9 @@ in §6.41/§6.43). A probe in `/tmp` cannot be re-run by whoever inherits this.
 | `run_mos.py` / `mos_percase.py` | the one-off MOS investigations `mos_batch.py` grew out of — is the device perceptually worse than fp32? | **no** — delta −0.017/−0.027; long-form mean **4.63** at §6.59, **4.61** on the current build (§6.67) |
 | `tail_probe.py` | does a change make rare BAD utterances likelier? counts failures, not means | the right shape for tail risk: many seeds on the three prompts that actually score low (§6.62) |
 | `click_origin.py` | case 6 clicks — ours or the model's? | **the model's** — the fp32 reference clicks MORE on the same seed (69 vs 60) |
-| `make_ref_ab.py` / `make_sampler.py` | build fp32-reference-vs-device pairs and a listening sampler from the current build | the inputs to every listening pass; §3 is explicit that a developer saying "ok" is not an eval |
+| `make_sampler.py [TAG]` | one listening file from a tagged run; `FP32REF` builds the reference twin in the same order | `SAMPLER_shipcheck.wav` (device, 2m20s) and `SAMPLER_FP32REF.wav` (2m30s). Was pinned to the `_prg` tag, which is how a sampler outlived two builds |
+| `make_ref_ab.py [CASE:SEED ...]` | render the fp32 CPU reference for a case | ~0.9 s/frame on CPU, so a long-form case is minutes. Renders do NOT go stale — the reference is deterministic per (text, voice, seed) |
+| `make_ab_sampler.py [TAG]` | interleave device against reference, clip for clip, level-matched | the side-by-side §3 asked for and never had. Levels matched because §3.2 warns an 11–16% difference biases a casual comparison |
 | `perceptual.py` | MCD / F0 / codec transparency vs the fp32 reference | codec SNR 42.9 dB, LSD 0.62 dB; **MCD failed its self-test and is not reported** (§6.59) |
 | `frame_ab.py` | does a block A/B predict the frame? | **no** — −2.124 ms on the blocks, 0 on the frame (§6.63) |
 | `rtf_repeat.sh` | how repeatable is the generator? | **0.390 ms** over three identical runs, so it can decide (§6.63) |
@@ -41,6 +43,7 @@ in §6.41/§6.43). A probe in `/tmp` cannot be re-run by whoever inherits this.
 | `norm_traced.py` | is the sharded norm faster once traced? | **yes, +5.4 ms/frame** — reverses §6.39/§6.40 (§6.67) |
 | `trace_probe.py` | is the ~68 µs per-op floor device time or host dispatch? | dispatch is **2.8–3.9%**, not 0% and not the ~100 µs others assumed (§6.49) |
 | `seq_len_limits.py` | how long a prompt, how long an utterance, and what does length cost? | prefill has **no ceiling** (clean to 4096; the "~1024" claim was never measured); utterance length is `max_seq_len`, and it costs DRAM, not RTF (§6.69) |
+| `traced_headsplit.py` | what does BLOCK 2's head split cost inside the trace? | the fused op is **90.5 µs** against nine hand-rolled ops' 48.6 — §6.68 closed the sweep quoting Block 1's 6.2 µs for this decision (§6.72) |
 | `xref_audit.py` | do the `[gpt-26]` / `§6.x` pointers still resolve? **run after any doc edit** | found a `codec-22` pointer cited twice and defined nowhere. Cannot catch a pointer to a REVERSED section — that stays manual. (Written WITHOUT brackets on purpose: this file is one of the four the audit scans, so naming a dead pointer in prose re-breaks it — which is exactly what the commit adding this row did.) |
 
 **Read `frame_ab.py` before trusting any block A/B.** A tight loop measures device time with
