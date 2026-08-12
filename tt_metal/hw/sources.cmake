@@ -104,6 +104,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/experimental/eltwise_mul_scalar.h
     inc/api/compute/experimental/fast_untilize.h
     inc/api/compute/experimental/mul_reduce_scalar.h
+    inc/api/compute/experimental/pack_block_uninit.h
     inc/api/compute/experimental/rmsnorm.h
     inc/api/compute/experimental/semaphore.h
     inc/api/compute/experimental/sum_reduce_scalar.h
