@@ -382,7 +382,7 @@ going fully streamed measured **2.7x worse**.
 
 ---
 
-### [ ] Refinement 5 — The padded path, end to end (prompt P1 + P2 + P4 + P5)
+### [x] Refinement 5 — The padded path, end to end (prompt P1 + P2 + P4 + P5)
 
 **Goal**: add the whole padding surface in one pass — it is a single CT-selected reader body
 (`PAD_ENABLED`), not four features:
@@ -418,6 +418,42 @@ already-aligned input must stay bit-identical *and* not slower.
 `to_torch_with_padded_shape(out) == F.pad(x, pad_value)`), for all three alignment flavours, all three
 fill buckets, rank 0/2/3, and the padded sharded topologies; an unaligned input with no pad argument
 still raises a `ValueError` mentioning `pad`; the aligned bench arms are unregressed.
+
+**Outcome** (`[x]`, 2026-08-12): the whole padding surface lands in one pass. Golden registry
+**22 -> 42 supported_pass**, `supported_fail` / `xpass_drift` / `xfail_wrong_mode` all **0** — the
++20 is exactly BLOCK 2 of `feature_spec.INPUTS`, i.e. every padded cell, interleaved AND sharded.
+Unit dir **142 passed / 17 xfailed / 0 failed**. Everything is **bit-exact** (`torch.equal`, not
+PCC): 13/13 interleaved padded geometries, **7/7** padded sharded topologies (P4), rank 0 (P5), and
+4 position-encoded geometries that make a mis-placed fill an exact mismatch rather than a plausible
+number.
+
+*The framing is the refinement.* Padding is not four features — it changes exactly two things: the
+GEOMETRY the op is blocked over becomes the padded shape, and the reader gains ONE CT-selected body.
+`blocking()`, the core split, the CBs, **compute and the writer are not touched at all**, because
+they only ever see the padded tile grid — which is why P4's sharded topologies needed no new
+placement code. Two things the design did not state and measurement/analysis added: a padded call
+must not consume the **input** shard in place (the fill would have to be written into the caller's
+own input tensor) — but may still alias the **output** shard, so a padded crossover stays zero-copy;
+and §8.3's single whole-block fill ships split into its **two disjoint regions**, so a store never
+targets a byte an in-flight read owns.
+
+*Perf, measured, and NOT gated on (the entry says correctness-only, and the fill moves zero NoC
+bytes).* Cumulative bench re-measured in one run: all 10 prior shapes within ±2 % (noise). Four new
+rows, each with the same padded tile grid as an existing row so the cost is readable directly:
+**`padded_noop` 44 181 ns vs `square` 44 170 = 1.0002x** — the degenerate `pad_mode="auto"` on an
+aligned input is *free*, because `pad_plan` disarms (`pad_enabled == 0`) rather than because the pad
+body is cheap, and `test_r5_aligned_path_is_structurally_unchanged` compares the whole reader CT-arg
+vector to prove it. `padded_h_tail` 44 013 / `padded_w_tail` 44 453 are inside noise too.
+
+*Remaining headroom, as a FINDING (not a queue item).* The one regime that pays is the
+fill-DOMINATED one: **`padded_row_vector [1,1,1,16384]` 28 888 ns vs `wide_short`'s identical output
+grid at 6 844 = 4.2x**. Ablation classifies it as neither DM- nor compute-bound but **store-bound**:
+`ablate_read` is **0.991x** (the 64 KB read is nothing) and `ablate_all` — which stubs read, compute
+and write but *not* the fill — is still **23 881 ns, 83 % of the wall**. The named next lever is to
+fill ONE row with stores and replicate it to the block's other rows with local L1->L1
+`noc_async_read`s. Not taken here: this is a generality slot, and the lever introduces a
+read-after-store ordering dependency that needs its own measurement. On every shape where the pad is
+a tail rather than the bulk, the numbers above say there is nothing to win.
 
 ---
 

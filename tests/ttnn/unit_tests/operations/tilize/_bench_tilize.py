@@ -112,6 +112,25 @@ SHAPES = {
     # pull reads 256 B. One shape per side of the gate, so both arms of
     # `reshard_pull` stay measurable on the geometry each one is meant to win.
     "reshard_rowwise": (1, 1, 1024, 1024),
+    # Refinement 5 (P1/P2/P4/P5) adds the PADDED path. Four shapes, each chosen so
+    # its padded tile grid EQUALS an existing row's, which is what makes the pad
+    # body's cost readable straight off the comparison instead of against a new
+    # baseline:
+    #   padded_h_tail    == square's grid; H tail only -> 4 boundary blocks of 256
+    #   padded_w_tail    == square's grid; W tail only -> a boundary block in EVERY
+    #                       one of the 64 tile-rows (pays most often)
+    #   padded_noop      == square exactly; already tile-aligned + a pad argument,
+    #                       so the plan DISARMS (`pad_enabled == 0`). This row must
+    #                       equal `square` to the noise band — the "a degenerate pad
+    #                       is not slower" gate, measured rather than asserted.
+    #   padded_row_vector== wide_short's grid; the FILL-DOMINATED regime and the pad
+    #                       real models ask for (one logical row up to a tile row).
+    #                       Same tiles out, 1/32 of the bytes in, and 31 of every 32
+    #                       rows written by the fill instead of by the NoC.
+    "padded_h_tail": (1, 1, 2046, 2048),
+    "padded_w_tail": (1, 1, 2048, 2046),
+    "padded_noop": (1, 1, 2048, 2048),
+    "padded_row_vector": (1, 1, 1, 16384),
 }
 
 
@@ -164,6 +183,21 @@ _MEM_BY_SHAPE = {
 
 def _mem_for(shape_name):
     return _MEM_BY_SHAPE.get(shape_name, (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG))
+
+
+# R5: per-shape PAD request, same shape as `_MEM_BY_SHAPE` — one source of truth,
+# read by the `_dispatch` call below. A shape absent here asks for no padding at
+# all and is the Track A path verbatim (`pad_plan` returns None).
+_PAD_BY_SHAPE = {
+    "padded_h_tail": dict(pad_value=-18.5),
+    "padded_w_tail": dict(pad_value=-18.5),
+    "padded_noop": dict(pad_value=-18.5),
+    "padded_row_vector": dict(pad_value=-18.5),
+}
+
+
+def _pad_for(shape_name):
+    return _PAD_BY_SHAPE.get(shape_name, {})
 
 
 # arm name -> the kwargs handed to `_dispatch`. `base` is the shipped
@@ -300,8 +334,9 @@ def test_bench(device):
         shape = SHAPES[shape_name]
         in_mem, out_mem = _mem_for(shape_name)
         tt_input = _bench_input(shape, device, memory_config=in_mem)
+        pad_kwargs = _pad_for(shape_name)
         for arm in arm_names:
-            kwargs = ARMS[arm]
+            kwargs = dict(ARMS[arm], **pad_kwargs)
             run_fn = lambda kw=kwargs, t=tt_input, om=out_mem: _dispatch(t, om, use_multicore=True, **kw)
             ns = _measure_ns(device, run_fn)
             assert ns is not None, f"profiler produced no data for {shape_name}/{arm}"

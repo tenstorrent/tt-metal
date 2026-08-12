@@ -1001,3 +1001,211 @@ kernels' only base addresses are the caller's two buffers),
 cause, plus `n_bands == 1` on the interleaved path so the pre-R4 reader stays byte-identical).
 `_bench_tilize.py` gained the two reshard shapes and the two direction forcing arms.
 `probes/probe_012.py` — the page-geometry measurement the whole addressing model rests on.
+
+---
+
+## Refinement 5 — The padded path, end to end (prompt P1 + P2 + P4 + P5)
+
+- **Date**: 2026-08-12
+- **Box/arch**: same stamp as A0 (Blackhole, 11x10 = 110 cores, AICLK 1349.98 MHz, bf16,
+  `DEVICE KERNEL DURATION [ns]`, 3 launches averaged after 2 cache-warming launches).
+- **Type**: generality · **knob-turn behind a CT flag** — the aligned path is byte-identical when
+  `PAD_ENABLED == 0`, and that is asserted structurally, not left as a convention.
+
+### What was done
+
+**Padding changes exactly two things, and that framing is the whole refinement.** It is not four
+features (auto / explicit / three fill signs / three alignment flavours); it is
+
+1. the **geometry** the op is blocked over becomes the PADDED shape (the output's tile grid is the
+   pad target's, not the input's), and
+2. the reader gains **one CT-selected second body** that fills the pad positions in L1 before
+   reading the real sub-rectangle over the top.
+
+Everything downstream — `blocking()`, the core split, the CBs, compute, the writer — is unchanged
+and *unaware*, because all of it only ever sees the padded tile grid. That is why the diff is small
+and why the sharded padded topologies (P4) needed no new placement code at all.
+
+**`pad_plan()` is the single source of truth.** One function turns a
+`(output_padded_shape, pad_value)` pair into the numbers, and `validate()`, the output allocation and
+the reader's CT args all read it, so they cannot disagree about which cell a padded call lands in.
+It carries `padded_shape` / `logical_shape` / `enabled` / `pad_word` plus the reader's four geometry
+terms (`hp`, `h_real`, `nimg_real`, `real_row_bytes`).
+
+**`enabled` is the structural non-regression.** A DEGENERATE pad — `pad_mode="auto"` on an already
+tile-aligned input, where the target equals the input shape — resolves to `enabled = False`, so that
+cell takes the aligned reader **verbatim** rather than a pad reader that happens to fill nothing.
+`test_r5_aligned_path_is_structurally_unchanged` compares the whole reader CT-arg vector between the
+padded and unpadded calls, and the bench measures the same claim (`padded_noop` below).
+
+**The reader body — three pad regions, two disjoint fills, one barrier.** Because `hp` is a whole
+number of tile-rows, every row of a block belongs to the same image, so the real/pad split is two
+scalars per block: `real_rows` (rows of this block that exist in the input) and `real_bytes` (bytes
+of a real row that exist). Their complements ARE §8.3's three regions — the H tail and whole pad
+tile-ROWS are `rows >= real_rows`; the W tail and whole pad tile-COLUMNS are `bytes >= real_bytes`.
+A fully-interior block (the common case: a pad touches only the last tile-row / tile-column) still
+calls `read_sticks_for_tilize`, so a padded call pays the fill **only where it must**.
+
+*One deliberate deviation from §8.3, recorded.* The design writes ONE fill over the whole block and
+then reads the real data over the top. This ships the same fill split into its **two disjoint
+regions**, so a store never targets a byte an in-flight NoC read owns — the fill/read overlap the
+design's version has is ordering the hardware does not promise. Same three regions, same single
+barrier, strictly fewer stores.
+
+**The fill word (`pad_fill_word`), where the two classic bugs live.** Packed in the **INPUT**
+element format (never the output's — a `dtype=` cast happens later, at pack time, on data that
+already carries the fill) and **replicated across the 32-bit store word** (2x bf16/uint16, 4x uint8,
+1x fp32/uint32), because the reader stores words and a fill written once leaves every other pad
+element stale. Negative integer fills take the two's-complement `bit_cast`. The bf16 pack is
+round-to-nearest-**even**, matching torch's own float->bfloat16: a truncating pack differs by one ulp
+on half the fill values and would show up as a nonzero-fill-only mismatch. All of it is pinned
+host-only by `test_r5_pad_word_is_packed_in_the_input_format_and_replicated`.
+
+**The logical shape stays the input's (risk 7), by allocation rather than by fixup.** A TILE tensor
+allocated at the logical shape ALREADY has the tile-rounded padded shape, so every target that *is*
+the tile rounding needs no view at all — which is every padded sharded cell, so none of them goes
+near a reshape. Only a target beyond the tile rounding (`50 -> 128`, the whole-pad-tile case)
+allocates the target and then takes a zero-cost `ttnn.reshape(t, logical, padded)` view (measured:
+same `buffer_address`). Rank 0/1 synthesize their tile dims — a scalar allocates logical `[1,1]`,
+whose padded shape is exactly one tile.
+
+**Two placement facts the pad changes.** (a) A padded call can never consume the **input** shard in
+place: the pad positions live inside the block, so a resident reader would have to write the fill
+into the CALLER'S OWN input tensor. `plan_placement(pad_enabled=True)` therefore disqualifies input
+residency — and only input residency; an output tile is whole, so a padded crossover still aliases
+its **output** shard zero-copy (`test_r5_a_padded_call_never_consumes_the_input_shard_in_place`
+asserts both halves). (b) A padded source sharded NARROWER than a row is refused with a typed
+`UnsupportedAxisValue`: the pad clamp is stated per source page, and nothing in TARGET reaches it.
+
+### Accuracy achieved
+
+**Exact** (`torch.equal`, bf16, not PCC — tilize is a bijection and a pad position is a datum like
+any other). Every padded golden cell passes BOTH oracles: `to_torch_with_padded_shape() == F.pad(x)`
+and `to_torch() == x` with the logical shape unpromoted.
+
+- interleaved (probe_015): auto h-tail / w-tail / both-tails-negative / degenerate noop; explicit
+  tile-rounded, beyond-tile-round in HW and in W only, rank 3 H-only, rank 2, **rank 0 scalar**, the
+  `[1,1,1,16384]` row vector, and a wide `[1,1,50,2048]` — 13/13 bit-exact.
+- padded + sharded (P4, probe_016): all **7** topologies bit-exact — nd->nd (uneven input shard),
+  nd->interleaved, interleaved->nd, legacy HEIGHT->interleaved, interleaved->legacy HEIGHT,
+  nd->legacy HEIGHT, legacy HEIGHT->nd.
+- position-encoded inputs (`test_r5_all_three_pad_regions_on_a_position_encoded_input`, 4 geometries)
+  so a fill landing in the wrong region is an exact mismatch rather than a plausible number.
+
+### Golden test progress
+
+Registry `test_golden.py`: **22 -> 42 supported_pass**, **0 failed**, **0 XPASS**, 338 xfailed (all
+typed `dtype`/`tile_height`/`in_layout` refusals owned by Refinements 7 and 8), 580 invalid-skipped.
+The +20 is exactly BLOCK 2 of `feature_spec.INPUTS` — the whole padded surface, interleaved and
+sharded, at bf16 -> bf16.
+
+Unit directory: **142 passed / 17 xfailed / 0 failed** (was 133 + 16 xfailed before this refinement,
+plus 9 new R5 tests).
+
+### Perf gate
+
+**Classification: not DM-bound, and deliberately not chased.** The fill issues **zero NoC bytes** —
+it is L1 stores into a CB the reader has already reserved — so no DM ceiling describes it and none is
+reported (the queue entry says so explicitly). What is reported is the cost, measured.
+
+Cumulative bench set, all shapes re-measured at `base` in ONE run (R4 -> R5, ns):
+
+| shape | R4 | R5 | delta | verdict |
+|---|---:|---:|---:|---|
+| `(1,1,2048,2048)` square | 43 962 | 44 170 | +0.5 % | noise |
+| `(1,1,32,16384)` wide_short | 6 747 | 6 844 | +1.4 % | noise |
+| `(1,1,2048,64)` tall_narrow | 4 880 | 4 973 | +1.9 % | noise |
+| `(1,1,32,64)` smallest | 1 941 | 1 903 | −2.0 % | noise |
+| `(1,1,32,32)` smallest_aligned | 1 833 | 1 844 | +0.6 % | noise |
+| `(1,1,512,2048)` l1_to_l1 | 5 049 | 5 055 | +0.1 % | noise |
+| `(1,1,2048,2048)` sharded_big | 2 113 | 2 117 | +0.2 % | noise |
+| `(1,1,512,64)` sharded_small | 852 | 863 | +1.3 % | noise |
+| `(1,1,1024,1024)` reshard | 22 851 | 22 668 | −0.8 % | noise |
+| `(1,1,1024,1024)` reshard_rowwise | 15 717 | 15 550 | −1.1 % | noise |
+| `(1,1,2046,2048)` **padded_h_tail** (new) | — | **44 013** | — | added |
+| `(1,1,2048,2046)` **padded_w_tail** (new) | — | **44 453** | — | added |
+| `(1,1,2048,2048)` **padded_noop** (new) | — | **44 181** | — | added |
+| `(1,1,1,16384)` **padded_row_vector** (new) | — | **28 888** | — | added |
+
+Every prior shape is inside the ±2 % noise band. The four new rows were chosen so each one's PADDED
+tile grid equals an existing row's, which makes the pad body's cost readable directly:
+
+- **`padded_noop` 44 181 vs `square` 44 170 = 1.0002x.** The degenerate pad is *free*, measured —
+  which is the queue's "must stay bit-identical AND not slower" gate, and it is free because
+  `pad_plan` disarms rather than because the pad body is cheap.
+- **`padded_h_tail` 44 013 and `padded_w_tail` 44 453 vs `square` 44 170** = 0.996x / 1.006x, i.e.
+  inside noise. The boundary-block fill is invisible on a shape where the pad touches 4 of 256
+  blocks (H tail) or 128 B of each of 64 blocks (W tail).
+- **`padded_row_vector` 28 888 vs `wide_short` 6 844 = 4.2x** — the fill-DOMINATED regime, and the
+  honest number for this path. Same 32 output blocks, 1/32 of the input bytes, and 31 of every 32
+  rows written by the fill. Ablation says so unambiguously: `ablate_read` **0.991x** (the 64 KB read
+  is nothing), `ablate_compute` 0.848x, and `ablate_all` — which stubs read, compute AND write but
+  **not** the fill — is still **23 881 ns, 83 % of the wall**. So this shape is neither DM- nor
+  compute-bound; it is **store-bound**, at ~31 KB of word stores per core.
+
+**Lever ledger: no row changed status this phase, and that is the correct verdict, not an omission.**
+The pad body adds no NoC transfer — it adds L1 stores — so no catalog lever's applicability moves.
+The body itself preserves every landed transaction-shape lever: **B7** (one barrier per block: the
+pad arm issues all its reads then one barrier), **B5** and **B9** (untouched — the writer is not in
+this diff), **B6** (`WT_BLOCK` still comes from the byte target). `verify_levers --phase "Refinement
+5"` reports **0 blocking, 0 signal**, 24/24 rows closed-with-evidence or open-on-record.
+
+**Remaining headroom, as a FINDING (not a queue item).** The store-bound fill has one obvious lever
+and it is worth naming precisely so a perf round does not have to rediscover it: **fill ONE row with
+stores and replicate it to the block's other rows with local L1->L1 `noc_async_read`s**, turning
+`tile_h x row_bytes` of RISC-V word stores into one row of stores plus `tile_h - 1` NoC copies. On
+`padded_row_vector` that targets the 23.9 us the ablation attributes to the fill. It is not taken
+here because (a) this is a generality slot and the entry is explicitly correctness-gated, and (b) it
+introduces a read-after-store ordering dependency inside the block that needs its own measurement —
+exactly the kind of thing the trailing perf rounds start from a fresh breakdown for. The regime it
+pays in is narrow but real: shapes whose pad region is most of the tile (the `[1,1,1,W]` row vector
+real models actually ask for). On every shape where the pad is a tail rather than the bulk, the
+measurement above says there is nothing to win.
+
+### Issues encountered
+
+**One, and it was in the immutable spec, not in the op.**
+`test_tilize.py::test_tilize_pad_scalar` ends with
+`assert torch.all(padded[mask] == pytest.approx(pad_value))`. Under pytest >= 8 (this env: 9.0.3)
+`ApproxScalar.__eq__` converts a torch tensor through `__array__` and returns a plain **bool**, so
+the expression never yields a tensor and `torch.all(<bool>)` raises `TypeError: all() received an
+invalid combination of arguments - got (bool)`. That is **unconditional** — it fires identically for
+a bit-perfect output and a wrong one, so the assertion never observed the op's values at all. It only
+became visible when this refinement put `rank=0` into SUPPORTED (before that the case was refused and
+the conftest's registry hook converted it to XFAIL). Verified in isolation:
+`torch.tensor([42.,42.]) == pytest.approx(42.0)` -> `False` (a bool), not a tensor.
+
+The file is the SPEC and must not be edited, so the case is reported XFAIL by
+`tests/ttnn/unit_tests/operations/tilize/conftest.py` on a predicate matched to that ONE mechanism (a
+`TypeError` from `torch.all` receiving a bool — both message fragments required). It cannot mask an
+op defect: what it fires on is a type error in the assertion machinery, not a comparison result. And
+no coverage is lost, only the broken spelling of it — the property is asserted for real, elementwise
+and exactly, by `test_tilize_debug.py::test_r5_scalar_pad_fills_every_position`.
+
+### Reused vs added
+
+| Reused unchanged | Added |
+|---|---|
+| the reader's block decode and `read_sticks_for_tilize` (still the emitted code for every interior block), `blocking()` / `plan_placement()` / `plan_cores()` / the CB builders / `compute` / the `writer` — **not one line changed** in the compute or writer kernels | `pad_plan()` + `pad_fill_word()` + `auto_padded_shape()` (host), `fill_pad_region()` + the `pad_enabled` reader body (device), `in_shape`/`pad_enabled` on `plan_placement`, and the `pad=` thread through `create_program_descriptor` / `_dispatch` |
+
+The op file's delta is four SUPPORTED lists widened (`pad_mode`, `pad_value`, `alignment`, `rank`) —
+`_check_structural()` already carried every padding refusal from Phase 0, so `validate()` needed only
+the pad plan wired into its placement check.
+
+### Tests added
+
+`test_tilize_debug.py` group 9 (9 cases across 6 tests):
+`test_r5_pad_word_is_packed_in_the_input_format_and_replicated` (host-only: replication, RNE bf16
+pack, negative bit_cast),
+`test_r5_aligned_path_is_structurally_unchanged` (the whole reader CT-arg vector, both directions,
+plus bit-identical values),
+`test_r5_all_three_pad_regions_on_a_position_encoded_input` (4 geometries: W+H tails, whole pad tiles
+in HW, whole pad tile-columns, whole pad tile-rows at rank 3),
+`test_r5_scalar_pad_fills_every_position` (rank 0, and the working form of the spec's broken
+assertion),
+`test_r5_a_padded_call_never_consumes_the_input_shard_in_place` (input residency refused, output
+residency kept),
+`test_r5_pad_plan_is_pure_and_states_the_geometry_once` (host-only, all four resolution modes).
+`_bench_tilize.py` gained the four padded shapes and the `_PAD_BY_SHAPE` request map.
+`probes/probe_014.py` (the allocation/view mechanism measured before it was used),
+`probe_015.py` (interleaved padded), `probe_016.py` (padded sharded).
