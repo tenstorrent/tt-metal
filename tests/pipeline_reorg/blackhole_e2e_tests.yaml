@@ -194,21 +194,6 @@
   owner_id: U094PKWHNJ0 # Petar Milojevic
   team: models
 
-- id: bh-lb-deepseek-prefill-perf
-  name: bh_lb_DeepSeek_PREFILL_PERF
-  model-name: deepseek_prefill
-  cmd: |
-    exit_code=0
-    export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/huggingface/hub/models--deepseek-ai--DeepSeek-R1-0528
-    # pytest models/demos/deepseek_v3_d_p/tests/perf/test_dispatch_combine_perf.py -m models_device_performance_bare_metal -vvv --tb=short --timeout=900 || exit_code=$? Commented out until problems with various results on different runners is resolved Issue https://github.com/tenstorrent/tt-metal/issues/47287
-    pytest models/demos/deepseek_v3_d_p/tests/perf/test_moe_perf.py -vvv --tb=short || exit_code=$?
-    exit $exit_code
-  skus:
-    bh_loudbox:
-      timeout: 35
-  owner_id: U09LK84G4TF # Nikola Milicevic
-  team: models
-
 - id: bh-qb-deepseek-prefill
   name: bh_qb_DeepSeek_PREFILL
   model-name: deepseek_prefill
