@@ -1039,6 +1039,7 @@
       --mesh-graph-descriptor "${MGD}" \
       --hosts "${RESOLVED_HOSTS}" \
       --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+      -- \
       python3 -m pytest --timeout 10000 "${PERF_TEST}" -k "bh_4x32 and 720p and t2v"
     python3 "${TTRUN_PY}" \
       --skip-executable-check \
@@ -1046,6 +1047,7 @@
       --mesh-graph-descriptor "${MGD}" \
       --hosts "${RESOLVED_HOSTS}" \
       --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+      -- \
       python3 -m pytest --timeout 10000 "${PIPE_TEST}" -k "4x32sp1tp0nl2_ring_is_fsdp0 and resolution_720p"
   model: wan-2.2-t2v
   model_family: Wan
@@ -1079,6 +1081,7 @@
       --mesh-graph-descriptor "${MGD}" \
       --hosts "${RESOLVED_HOSTS}" \
       --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+      -- \
       python3 -m pytest --timeout 10000 "${PERF_TEST}" -k "bh_4x32 and 720p and i2v"
     python3 "${TTRUN_PY}" \
       --skip-executable-check \
@@ -1086,6 +1089,7 @@
       --mesh-graph-descriptor "${MGD}" \
       --hosts "${RESOLVED_HOSTS}" \
       --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+      -- \
       python3 -m pytest --timeout 10000 "${PIPE_TEST}" -k "4x32sp1tp0nl2_ring_is_fsdp0 and resolution_720p"
   model: wan-2.2-i2v
   model_family: Wan
