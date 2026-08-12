@@ -25,6 +25,8 @@ from models.demos.gemma4.tt.dram_sharded import (
     interleaved_o_proj_prefill_config,
     interleaved_prefill_config,
     matmul_rows,
+    prefill_linear_above_cutoff,
+    should_prefill_long_2d,
 )
 
 from .weights import AttentionWeights
@@ -744,6 +746,13 @@ def apply_output_projection(tensor, weights: AttentionWeights, memory_config=Non
     program_config, tuned_out_memcfg, compute_kernel_config = interleaved_o_proj_prefill_config(
         rows, int(tensor.shape[-1]), int(weights.o_proj.shape[-1])
     )
+    # Above the tuned-prefill band, auto loses to cutoff-reshape 2D (see
+    # ``prefill_linear_above_cutoff``). GEMMA4_OPROJ_TUNED is a different lever
+    # (M<=cutoff block-sharded out) and stays off.
+    if program_config is None and should_prefill_long_2d(rows):
+        out = prefill_linear_above_cutoff(tensor, weights.o_proj, out_memory_config=memory_config)
+        tensor.deallocate(True)
+        return out
     # Decode: land the projection in L1 instead of DRAM. Bit-exact (the matmul
     # keeps its program config, only the writeback target changes) and measured
     # 38.9 -> 33.8 us in isolation (sweeps/mm_l1_progcfg.py ARM=l1, "in0 DRAM,

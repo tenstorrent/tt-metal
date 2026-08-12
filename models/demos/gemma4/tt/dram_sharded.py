@@ -96,6 +96,22 @@ def in_prefill_l1_matmul_band(m: int) -> bool:
     return TILE_SIZE < m <= _PREFILL_CUTOFF
 
 
+def prefill_long_2d_enabled() -> bool:
+    """Above-cutoff 2D reshape path. Opt out with ``GEMMA4_PREFILL_LONG_2D=0``."""
+    return os.environ.get("GEMMA4_PREFILL_LONG_2D", "1").lower() not in ("0", "false", "no")
+
+
+def should_prefill_long_2d(m: int) -> bool:
+    """True when interleaved down/o_proj should use cutoff-sized 2D CBs instead of auto.
+
+    Requires ``M % cutoff == 0`` so the reshape path can size CBs to the cutoff.
+    Non-multiples stay on auto — pinning ``prefill_progcfg`` at full M is what the
+    cutoff exists to avoid. Production pads (1024, 2048, 4096, …) all divide.
+    """
+    m = int(m)
+    return prefill_long_2d_enabled() and m > _PREFILL_CUTOFF and m % _PREFILL_CUTOFF == 0
+
+
 # Fallback per-call row cap for the (rare) M not divisible by the cutoff.
 _PREFILL_M_CHUNK = prefill_grid_default()[1] * 8 * TILE_SIZE
 
@@ -332,6 +348,56 @@ def prefill_progcfg(m, k, n, grid_size=None, max_cols=None, fused_activation=Non
     )
 
 
+def _prefill_hifi2_ckc():
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+
+
+def prefill_linear_above_cutoff(x, weight, *, out_memory_config=None):
+    """``ttnn.linear`` with cutoff-sized 2D CBs when M exceeds ``_PREFILL_CUTOFF``.
+
+    Isolation (``test_prefill_matmul_2048_isolate``, WH 1x8, HiFi2, bfp8):
+    down 2048×2688×5376 auto 1672µs → reshape 1198µs (1.42x); o_proj 2048×1024×5376
+    646µs → 576µs (1.12x). gate_up / QKV: auto already wins — do not call this.
+
+    Reshape is metadata-only (tile-aligned). CBs stay sized to the cutoff so this
+    is safe under a full layer, unlike pinning ``prefill_progcfg`` at full M.
+    Block-sharded L1 in0 lost to the I2S tax on every shape.
+
+    Caller must pass interleaved in0. Output is DRAM interleaved unless
+    ``out_memory_config`` says otherwise. M not divisible by the cutoff falls
+    back to auto (no program config).
+    """
+    out_mc = out_memory_config if out_memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
+    x_shape = [int(x.shape[i]) for i in range(len(x.shape))]
+    orig_leading = x_shape[:-1]
+    n_in = x_shape[-1]
+    m = matmul_rows(x)
+    n_out = int(weight.shape[-1])
+    flat = [1, 1, m, n_in]
+    x_work = x if x_shape == flat else ttnn.reshape(x, flat)
+
+    def _restore(out):
+        want = (*orig_leading, int(out.shape[-1]))
+        got = tuple(int(out.shape[i]) for i in range(len(out.shape)))
+        return out if got == want else ttnn.reshape(out, want)
+
+    if m <= _PREFILL_CUTOFF or m % _PREFILL_CUTOFF != 0:
+        return _restore(ttnn.linear(x_work, weight, memory_config=out_mc))
+
+    batch = m // _PREFILL_CUTOFF
+    x_r = ttnn.reshape(x_work, (1, batch, _PREFILL_CUTOFF, n_in))
+    pc = prefill_progcfg(_PREFILL_CUTOFF, n_in, n_out)
+    out_r = ttnn.linear(
+        x_r, weight, program_config=pc, compute_kernel_config=_prefill_hifi2_ckc(), memory_config=out_mc
+    )
+    return _restore(ttnn.reshape(out_r, (1, 1, m, int(out_r.shape[-1]))))
+
+
 def l1_block_sharded_memcfg(rows, cols, grid=None):
     """L1 BLOCK_SHARDED memory config for a 2D activation/output ``(rows, cols)``.
 
@@ -553,7 +619,9 @@ def interleaved_down_proj_prefill_config(m, k, n):
 
     Same ``_PREFILL_CUTOFF`` band as ``interleaved_gate_up_prefill_config``:
     hoist in0 to L1 interleaved when still in DRAM (GeGLU ``mul`` leaves it
-    there). Above the cutoff (and decode ``M<=32``) return ``None``.
+    there). Above the cutoff, ``SharedMLP._down_proj_linear`` uses
+    ``prefill_linear_above_cutoff`` (reshape to cutoff-sized 2D CBs) instead of
+    auto — isolation 1.42x at M=2048. Decode ``M<=32`` still returns ``None``.
     """
     if not TILE_SIZE < m <= _PREFILL_CUTOFF:
         return None, None, None

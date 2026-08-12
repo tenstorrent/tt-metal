@@ -81,8 +81,15 @@ def _tracy_device_sampling_params(generator):
 
 
 def build_prefill_trace_fixtures(batch_size, prefill_len, vocab_size):
-    """Build tokens, page table, and seq-len limits for one (batch, ISL) bucket."""
+    """Build tokens, page table, and seq-len limits for one (batch, ISL) bucket.
+
+    ``_build_tokens`` keeps a short natural-language prompt (parity vs HF). For
+    Tracy that made every ``prefill_N`` capture run the 96-row kernel. Profiling
+    fills ``prompt_lens`` to the padded kernel so matmuls/SDPA/CCL match the
+    requested ISL.
+    """
     tokens, prompt_lens, kernel_len = _build_tokens(batch_size, prefill_len, vocab_size)
+    prompt_lens = prompt_lens.new_full(prompt_lens.shape, kernel_len)
     max_new_tokens = 32
     max_seq_len = max(prefill_len + max_new_tokens, 4096)
     paged_cfg = _page_params(batch_size, prefill_len, max_new_tokens)
