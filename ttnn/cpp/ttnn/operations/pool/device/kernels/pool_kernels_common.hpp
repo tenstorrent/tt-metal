@@ -8,6 +8,7 @@
 #pragma once
 
 #include <api/dataflow/dataflow_api.h>
+#include "api/dataflow/dataflow_buffer.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 #define ALWI inline __attribute__((always_inline))
@@ -41,59 +42,50 @@ ALWI bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val, bool unco
 }
 
 template <uint32_t cb_id, uint32_t clear_value_cb_id>
-ALWI void clear_out_tiles(Noc noc, experimental::CB cb, experimental::CB clear_cb) {
+ALWI void clear_out_tiles(Noc noc, DataflowBuffer dfb, DataflowBuffer clear_dfb) {
     constexpr uint32_t tile_size = get_tile_size(cb_id);
     const uint32_t num_pages = get_local_cb_interface(cb_id).fifo_num_pages;
     const uint32_t num_tiles = get_local_cb_interface(cb_id).fifo_page_size / tile_size;
 
     UnicastEndpoint self_ep;
-    const auto src = experimental::local_addr(clear_cb.get_read_ptr(), noc.get_noc_id());
+    const auto src = experimental::local_addr(clear_dfb.get_read_ptr(), noc.get_noc_id());
 
     for (uint32_t i = 0; i < num_tiles * num_pages; ++i) {
-        noc.async_read(self_ep, cb, tile_size, src, {.offset_bytes = i * tile_size});
+        noc.async_read(self_ep, dfb, tile_size, src, {.offset_bytes = i * tile_size});
     }
     noc.async_read_barrier();
 }
 
 template <uint32_t clear_value_cb_id>
-ALWI void clear_out_tiles(
-    Noc noc, experimental::CB dst_cb, experimental::CB clear_value_cb, uint32_t num_tiles) {
+ALWI void clear_out_tiles(Noc noc, DataflowBuffer dst_dfb, DataflowBuffer clear_value_dfb, uint32_t num_tiles) {
     constexpr uint32_t tile_size = get_tile_size(clear_value_cb_id);
 
     UnicastEndpoint self_ep;
-    const auto src = experimental::local_addr(clear_value_cb.get_read_ptr(), noc.get_noc_id());
+    const auto src = experimental::local_addr(clear_value_dfb.get_read_ptr(), noc.get_noc_id());
 
     for (uint32_t i = 0; i < num_tiles; ++i) {
-        noc.async_read(self_ep, dst_cb, tile_size, src, {.offset_bytes = i * tile_size});
+        noc.async_read(self_ep, dst_dfb, tile_size, src, {.offset_bytes = i * tile_size});
     }
     noc.async_read_barrier();
 }
 
 // Zero out all tiles for a given circular buffer.
 template <uint32_t cb_id>
-ALWI void zero_out_tiles(Noc noc, experimental::CB cb) {
+ALWI void zero_out_tiles(Noc noc, DataflowBuffer dfb) {
     constexpr uint32_t tile_size = get_tile_size(cb_id);
     const uint32_t num_tiles = get_local_cb_interface(cb_id).fifo_num_pages;
-    const uint32_t num_zeros_reads = (tile_size / MEM_ZEROS_SIZE) * num_tiles;
-
-    constexpr uint32_t packet_size = MEM_ZEROS_SIZE;
-
-    experimental::set_read_state<packet_size>(noc, MEM_ZEROS_BASE);
-
-    for (uint32_t i = 0; i < num_zeros_reads; ++i) {
-        experimental::read_with_state(noc, cb, MEM_ZEROS_BASE, {.offset_bytes = i * packet_size});
-    }
-    noc.async_read_barrier();
+    noc.async_write_zeros(dfb, tile_size * num_tiles);
+    noc.write_zeros_l1_barrier();
 }
 
 template <uint32_t config_dram_addr, uint32_t config_page_size, uint32_t tensor_args_index, uint32_t cb_reader_index>
-ALWI void load_config_tensor_if_in_dram(Noc noc, experimental::CB reader_cb, uint32_t core_index) {
+ALWI void load_config_tensor_if_in_dram(Noc noc, DataflowBuffer reader_dfb, uint32_t core_index) {
     constexpr auto config_tensor_args = TensorAccessorArgs<tensor_args_index>();
     const auto config_accessor = TensorAccessor(config_tensor_args, config_dram_addr);
 
-    noc.async_read(config_accessor, reader_cb, config_page_size, {.page_id = core_index}, {});
+    noc.async_read(config_accessor, reader_dfb, config_page_size, {.page_id = core_index}, {});
     noc.async_read_barrier();
-    reader_cb.push_back(1);
+    reader_dfb.push_back(1);
 }
 
 template <
@@ -103,7 +95,7 @@ template <
     bool split_reader,
     uint32_t multi_buffering_factor>
 ALWI void fill_scalar(
-    experimental::CB scalar_cb,
+    DataflowBuffer scalar_dfb,
     uint32_t& scalar_start,
     uint32_t& scalar_end,
     uint32_t& scalar_value,
@@ -111,7 +103,7 @@ ALWI void fill_scalar(
     uint32_t& counter,
     volatile uint16_t* config_ptr) {
     constexpr uint32_t num_readers = split_reader ? 2 : 1;
-    scalar_cb.reserve_back(1);
+    scalar_dfb.reserve_back(1);
 
     while (counter >= scalar_end && scalar_end < reader_nindices) {
         scalar_index++;
@@ -126,30 +118,15 @@ ALWI void fill_scalar(
         // Fill only the first FACE_WIDTH, since we set reload_srcB = true in unpack_tilizeA_B_block, meaning the values
         // for the remaining faces will be reused from the first one. This is safe here because there’s no difference
         // between the first and second face.
-        fill_with_val(scalar_cb.get_write_ptr(), FACE_WIDTH, scalar_value, false);
+        fill_with_val(scalar_dfb.get_write_ptr(), FACE_WIDTH, scalar_value, false);
     }
     counter += num_readers;
 
-    scalar_cb.push_back(1);
+    scalar_dfb.push_back(1);
 }
 
-ALWI void zero_out_page(Noc noc, experimental::CB cb) {
-    const uint32_t page_size = get_local_cb_interface(cb.get_cb_id()).fifo_page_size;
-    const uint32_t num_zeros_reads = page_size / MEM_ZEROS_SIZE;
-    const uint32_t remainder_bytes = page_size % MEM_ZEROS_SIZE;
-    constexpr uint32_t packet_size = MEM_ZEROS_SIZE;
-
-    experimental::set_read_state<packet_size>(noc, MEM_ZEROS_BASE);
-    for (uint32_t i = 0; i < num_zeros_reads; ++i) {
-        experimental::read_with_state(noc, cb, MEM_ZEROS_BASE, {.offset_bytes = i * packet_size});
-    }
-    if (remainder_bytes > 0) {
-        UnicastEndpoint self_ep;
-        noc.async_read(
-            self_ep,
-            cb,
-            remainder_bytes,
-            experimental::local_addr(MEM_ZEROS_BASE, noc.get_noc_id()),
-            {.offset_bytes = num_zeros_reads * packet_size});
-    }
+ALWI void zero_out_page(Noc noc, DataflowBuffer dfb) {
+    const uint32_t page_size = get_local_cb_interface(dfb.get_id()).fifo_page_size;
+    noc.async_write_zeros(dfb, page_size);
+    noc.write_zeros_l1_barrier();
 }

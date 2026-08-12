@@ -3,6 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/tensor/noc_traits.h"
 
 #include <cstdint>
 
@@ -12,8 +16,8 @@ void kernel_main() {
     const uint32_t index_tensor_buffer_addr = get_arg_val<uint32_t>(1);
     const uint32_t coordinator_core_physical_coord_x = get_arg_val<uint32_t>(2);
     const uint32_t coordinator_core_physical_coord_y = get_arg_val<uint32_t>(3);
-    const uint32_t coordinator_to_cores_semaphore_id = get_semaphore(get_arg_val<uint32_t>(4));
-    const uint32_t cores_to_coordinator_semaphore_id = get_semaphore(get_arg_val<uint32_t>(5));
+    const uint32_t coordinator_to_cores_semaphore_arg = get_arg_val<uint32_t>(4);
+    const uint32_t cores_to_coordinator_ready_semaphore_arg = get_arg_val<uint32_t>(5);
 
     // Compile time args
     constexpr uint32_t input_tensor_cb_index = get_compile_time_arg_val(0);
@@ -28,20 +32,37 @@ void kernel_main() {
     constexpr auto input_tensor_args = TensorAccessorArgs<8>();
     constexpr auto index_tensor_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();
 
+    constexpr uint32_t rm_base = index_tensor_args.next_compile_time_args_offset();
+    constexpr bool is_row_major = get_compile_time_arg_val(rm_base) == 1;
+    constexpr uint32_t rm_input_value_dfb_index = get_compile_time_arg_val(rm_base + 1);
+    constexpr uint32_t rm_input_index_dfb_index = get_compile_time_arg_val(rm_base + 2);
+    constexpr uint32_t W_tile_bytes = get_compile_time_arg_val(rm_base + 3);
+    constexpr uint32_t W_index_bytes = get_compile_time_arg_val(rm_base + 4);
+    // UINT16 input mode: the reader software-converts raw UInt16 tiles from
+    // DRAM to Float32 before pushing them to input_tensor_dfb (which is now
+    // Float32 for UINT16 inputs).  Same design as the SingleCore reader.
+    constexpr bool is_uint16_fp32_mode = get_compile_time_arg_val(rm_base + 5) == 1;
+    constexpr uint32_t uint16_input_stage_cb_index = get_compile_time_arg_val(rm_base + 6);
+
     constexpr uint32_t one_tile = 1;
+    constexpr uint32_t TILE_H = 32;
+    constexpr uint32_t ELEMENTS_PER_TILE = 1024;  // 32×32
 
-    // Input tensor config
     const auto input_tensor_addr_gen = TensorAccessor(input_tensor_args, input_tensor_buffer_addr);
-
-    // Index tensor config
     const auto index_tensor_addr_gen = TensorAccessor(index_tensor_args, index_tensor_buffer_addr);
 
+    Noc noc;
+    DataflowBuffer input_tensor_dfb(input_tensor_cb_index);
+    DataflowBuffer index_tensor_dfb(index_tensor_cb_index);
+    DataflowBuffer rm_input_value_dfb(rm_input_value_dfb_index);
+    DataflowBuffer rm_input_index_dfb(rm_input_index_dfb_index);
+    constexpr uint32_t input_tensor_tile_size = get_tile_size(input_tensor_cb_index);
+    constexpr uint32_t index_tensor_tile_size = get_tile_size(index_tensor_cb_index);
+
     // Semaphore setup
-    volatile tt_l1_ptr uint32_t* semaphore_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(coordinator_to_cores_semaphore_id);
-    noc_semaphore_set(semaphore_ptr, VALID);  // Reset the semaphore (Valid - we wait for 0)
-    const uint64_t coordinator_core_addr = get_noc_addr(
-        coordinator_core_physical_coord_x, coordinator_core_physical_coord_y, cores_to_coordinator_semaphore_id);
+    Semaphore<> coordinator_to_cores_sem(coordinator_to_cores_semaphore_arg);
+    Semaphore<> cores_to_coordinator_ready_sem(cores_to_coordinator_ready_semaphore_arg);
+    coordinator_to_cores_sem.set(VALID);  // Reset the semaphore (Valid - we wait for 0)
 
     for (uint32_t h = 0; h < Ht; h++) {
         // Get core start value
@@ -49,10 +70,10 @@ void kernel_main() {
             get_absolute_logical_y() * compute_with_storage_grid_size_x + get_absolute_logical_x();
 
         // Indicate to the coordinator that the core is ready
-        noc_semaphore_inc(coordinator_core_addr, 1);
-        noc_async_atomic_barrier();
-        noc_semaphore_wait(semaphore_ptr, 0);     // Wait for coordinator to signal to start
-        noc_semaphore_set(semaphore_ptr, VALID);  // Reset the semaphore
+        cores_to_coordinator_ready_sem.up(noc, coordinator_core_physical_coord_x, coordinator_core_physical_coord_y, 1);
+        noc.async_atomic_barrier();
+        coordinator_to_cores_sem.wait(0);     // Wait for coordinator to signal to start
+        coordinator_to_cores_sem.set(VALID);  // Reset the semaphore
 
         // Processing each row
         uint32_t stages = 0;
@@ -65,8 +86,8 @@ void kernel_main() {
                 uint32_t sub_dist = 1 << (sub - 1);
 
                 // Wait for coordinator
-                noc_semaphore_wait(semaphore_ptr, 0);
-                noc_semaphore_set(semaphore_ptr, VALID);  // Reset the semaphore
+                coordinator_to_cores_sem.wait(0);
+                coordinator_to_cores_sem.set(VALID);  // Reset the semaphore
 
                 uint16_t pair_id = 0;
                 uint32_t processing_pair_id = core_start;
@@ -78,32 +99,205 @@ void kernel_main() {
                             // Get indexes of tiles to compare
                             const uint32_t left_tile_id = i;
                             const uint32_t right_tile_id = j;
+                            const uint32_t row_base = h * TILE_H;
 
-                            // Read input value data
-                            cb_reserve_back(input_tensor_cb_index, one_tile);
-                            const uint32_t l1_input_left_tile = get_write_ptr(input_tensor_cb_index);
-                            noc_async_read_tile(h * Wt + left_tile_id, input_tensor_addr_gen, l1_input_left_tile);
-                            noc_async_read_barrier();
-                            cb_push_back(input_tensor_cb_index, one_tile);
+                            if constexpr (is_row_major) {
+                                // Construct TILE_H pair-rows: each CB page holds one
+                                // "row" of BOTH tiles' data concatenated (left half
+                                // + right half).  This matches what tilize_block(cb, 2)
+                                // expects — TILE_H rows of 2*TILE_W elements each.
+                                //
+                                // For each row we do two half-DMAs into the same
+                                // reserved page: left tile's half at offset 0, right
+                                // tile's half at offset W_tile_bytes (raw dtype half
+                                // width).  For UINT16, the raw DMAs land in a UInt16
+                                // staging CB page (pair-width sized) and we convert
+                                // both halves to Float32 into the c_6 page.
+                                if constexpr (is_uint16_fp32_mode) {
+                                    DataflowBuffer uint16_stage_dfb(uint16_input_stage_cb_index);
+                                    constexpr uint32_t W_elements_pair = 2 * W_tile_bytes / sizeof(uint16_t);
+                                    for (uint32_t row = 0; row < TILE_H; row++) {
+                                        uint16_stage_dfb.reserve_back(one_tile);
+                                        noc.async_read(
+                                            input_tensor_addr_gen,
+                                            uint16_stage_dfb,
+                                            W_tile_bytes,
+                                            {.page_id = row_base + row,
+                                             .offset_bytes = static_cast<uint32_t>(left_tile_id * W_tile_bytes)},
+                                            {.offset_bytes = 0});
+                                        noc.async_read(
+                                            input_tensor_addr_gen,
+                                            uint16_stage_dfb,
+                                            W_tile_bytes,
+                                            {.page_id = row_base + row,
+                                             .offset_bytes = static_cast<uint32_t>(right_tile_id * W_tile_bytes)},
+                                            {.offset_bytes = W_tile_bytes});
+                                        noc.async_read_barrier();
+                                        uint16_stage_dfb.push_back(one_tile);
 
-                            cb_reserve_back(input_tensor_cb_index, one_tile);
-                            const uint32_t l1_input_right_tile = get_write_ptr(input_tensor_cb_index);
-                            noc_async_read_tile(h * Wt + right_tile_id, input_tensor_addr_gen, l1_input_right_tile);
-                            noc_async_read_barrier();
-                            cb_push_back(input_tensor_cb_index, one_tile);
+                                        uint16_stage_dfb.wait_front(one_tile);
+                                        rm_input_value_dfb.reserve_back(one_tile);
 
-                            // Read index data
-                            cb_reserve_back(index_tensor_cb_index, one_tile);
-                            const uint32_t l1_index_left_tile = get_write_ptr(index_tensor_cb_index);
-                            noc_async_read_tile(h * Wt + left_tile_id, index_tensor_addr_gen, l1_index_left_tile);
-                            noc_async_read_barrier();
-                            cb_push_back(index_tensor_cb_index, one_tile);
+                                        volatile tt_l1_ptr uint16_t* src =
+                                            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
+                                                uint16_stage_dfb.get_read_ptr());
+                                        volatile tt_l1_ptr uint32_t* dst =
+                                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                                                rm_input_value_dfb.get_write_ptr());
 
-                            cb_reserve_back(index_tensor_cb_index, one_tile);
-                            const uint32_t l1_index_right_tile = get_write_ptr(index_tensor_cb_index);
-                            noc_async_read_tile(h * Wt + right_tile_id, index_tensor_addr_gen, l1_index_right_tile);
-                            noc_async_read_barrier();
-                            cb_push_back(index_tensor_cb_index, one_tile);
+                                        for (uint32_t i = 0; i < W_elements_pair; i++) {
+                                            float fval = static_cast<float>(static_cast<uint32_t>(src[i]));
+                                            uint32_t bits;
+                                            __builtin_memcpy(&bits, &fval, sizeof(bits));
+                                            dst[i] = bits;
+                                        }
+                                        __sync_synchronize();
+
+                                        uint16_stage_dfb.pop_front(one_tile);
+                                        rm_input_value_dfb.push_back(one_tile);
+                                    }
+                                } else {
+                                    // Stage all TILE_H pair-rows under one reserve and drain them
+                                    // with a single barrier. A barrier per row serialises a full
+                                    // DRAM round-trip for every pair-row page; batching lets the
+                                    // 2 * TILE_H half-row reads overlap instead.
+                                    //
+                                    // This costs no pipelining: the CB holds exactly TILE_H pages
+                                    // and the compute kernel consumes them as one
+                                    // wait_front(TILE_H)/pop_front(TILE_H), so it could never start
+                                    // on a partially-filled run anyway. Entries form a contiguous
+                                    // run from the write pointer because the entry count is a
+                                    // multiple of TILE_H (a CB pointer resets only on exact
+                                    // equality with the limit, so a block never straddles the end);
+                                    // consecutive entries are get_stride_size() apart, which is the
+                                    // entry size on tt-1xx but not necessarily under a strided
+                                    // multi-producer layout, hence the query.
+                                    ASSERT(rm_input_value_dfb.get_total_num_entries() % TILE_H == 0);
+                                    const uint32_t value_stride = rm_input_value_dfb.get_stride_size();
+                                    rm_input_value_dfb.reserve_back(TILE_H);
+                                    for (uint32_t row = 0; row < TILE_H; row++) {
+                                        noc.async_read(
+                                            input_tensor_addr_gen,
+                                            rm_input_value_dfb,
+                                            W_tile_bytes,
+                                            {.page_id = row_base + row,
+                                             .offset_bytes = static_cast<uint32_t>(left_tile_id * W_tile_bytes)},
+                                            {.offset_bytes = row * value_stride});
+                                        noc.async_read(
+                                            input_tensor_addr_gen,
+                                            rm_input_value_dfb,
+                                            W_tile_bytes,
+                                            {.page_id = row_base + row,
+                                             .offset_bytes = static_cast<uint32_t>(right_tile_id * W_tile_bytes)},
+                                            {.offset_bytes = row * value_stride + W_tile_bytes});
+                                    }
+                                    noc.async_read_barrier();
+                                    rm_input_value_dfb.push_back(TILE_H);
+                                }
+                                // Same batching as the value pair-rows above.
+                                ASSERT(rm_input_index_dfb.get_total_num_entries() % TILE_H == 0);
+                                const uint32_t index_stride = rm_input_index_dfb.get_stride_size();
+                                rm_input_index_dfb.reserve_back(TILE_H);
+                                for (uint32_t row = 0; row < TILE_H; row++) {
+                                    noc.async_read(
+                                        index_tensor_addr_gen,
+                                        rm_input_index_dfb,
+                                        W_index_bytes,
+                                        {.page_id = row_base + row,
+                                         .offset_bytes = static_cast<uint32_t>(left_tile_id * W_index_bytes)},
+                                        {.offset_bytes = row * index_stride});
+                                    noc.async_read(
+                                        index_tensor_addr_gen,
+                                        rm_input_index_dfb,
+                                        W_index_bytes,
+                                        {.page_id = row_base + row,
+                                         .offset_bytes = static_cast<uint32_t>(right_tile_id * W_index_bytes)},
+                                        {.offset_bytes = row * index_stride + W_index_bytes});
+                                }
+                                noc.async_read_barrier();
+                                rm_input_index_dfb.push_back(TILE_H);
+                            } else {
+                                if constexpr (is_uint16_fp32_mode) {
+                                    // UINT16 TILE path: DMA raw UInt16 tile into staging CB, then
+                                    // convert element-by-element to Float32 and push to input_tensor_dfb.
+                                    DataflowBuffer uint16_stage_dfb(uint16_input_stage_cb_index);
+                                    constexpr uint32_t uint16_stage_tile_size =
+                                        get_tile_size(uint16_input_stage_cb_index);
+                                    for (const uint32_t tile_id : {left_tile_id, right_tile_id}) {
+                                        uint16_stage_dfb.reserve_back(one_tile);
+                                        noc.async_read(
+                                            input_tensor_addr_gen,
+                                            uint16_stage_dfb,
+                                            uint16_stage_tile_size,
+                                            {.page_id = h * Wt + tile_id, .offset_bytes = 0},
+                                            {.offset_bytes = 0});
+                                        noc.async_read_barrier();
+                                        uint16_stage_dfb.push_back(one_tile);
+
+                                        uint16_stage_dfb.wait_front(one_tile);
+                                        input_tensor_dfb.reserve_back(one_tile);
+
+                                        volatile tt_l1_ptr uint16_t* src =
+                                            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
+                                                uint16_stage_dfb.get_read_ptr());
+                                        volatile tt_l1_ptr uint32_t* dst =
+                                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                                                input_tensor_dfb.get_write_ptr());
+
+                                        for (uint32_t i = 0; i < ELEMENTS_PER_TILE; i++) {
+                                            float fval = static_cast<float>(static_cast<uint32_t>(src[i]));
+                                            uint32_t bits;
+                                            __builtin_memcpy(&bits, &fval, sizeof(bits));
+                                            dst[i] = bits;
+                                        }
+                                        // Drain store buffer before the compute kernel reads this tile.
+                                        __sync_synchronize();
+
+                                        uint16_stage_dfb.pop_front(one_tile);
+                                        input_tensor_dfb.push_back(one_tile);
+                                    }
+                                } else {
+                                    input_tensor_dfb.reserve_back(one_tile);
+                                    noc.async_read(
+                                        input_tensor_addr_gen,
+                                        input_tensor_dfb,
+                                        input_tensor_tile_size,
+                                        {.page_id = h * Wt + left_tile_id, .offset_bytes = 0},
+                                        {.offset_bytes = 0});
+                                    noc.async_read_barrier();
+                                    input_tensor_dfb.push_back(one_tile);
+
+                                    input_tensor_dfb.reserve_back(one_tile);
+                                    noc.async_read(
+                                        input_tensor_addr_gen,
+                                        input_tensor_dfb,
+                                        input_tensor_tile_size,
+                                        {.page_id = h * Wt + right_tile_id, .offset_bytes = 0},
+                                        {.offset_bytes = 0});
+                                    noc.async_read_barrier();
+                                    input_tensor_dfb.push_back(one_tile);
+                                }
+
+                                index_tensor_dfb.reserve_back(one_tile);
+                                noc.async_read(
+                                    index_tensor_addr_gen,
+                                    index_tensor_dfb,
+                                    index_tensor_tile_size,
+                                    {.page_id = h * Wt + left_tile_id, .offset_bytes = 0},
+                                    {.offset_bytes = 0});
+                                noc.async_read_barrier();
+                                index_tensor_dfb.push_back(one_tile);
+
+                                index_tensor_dfb.reserve_back(one_tile);
+                                noc.async_read(
+                                    index_tensor_addr_gen,
+                                    index_tensor_dfb,
+                                    index_tensor_tile_size,
+                                    {.page_id = h * Wt + right_tile_id, .offset_bytes = 0},
+                                    {.offset_bytes = 0});
+                                noc.async_read_barrier();
+                                index_tensor_dfb.push_back(one_tile);
+                            }
 
                             processing_pair_id += number_of_available_cores;
                         }  // if pair_id == processing_pair_id

@@ -15,7 +15,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import is_blackhole, is_wormhole_b0, nearest_32
+from models.common.utility_functions import hf_cache_to_legacy, is_blackhole, is_wormhole_b0, nearest_32
 from models.tt_transformers.tt.common import (
     Mode,
     calculate_hidden_dim,
@@ -24,6 +24,9 @@ from models.tt_transformers.tt.common import (
     encode_prompt_hf,
     get_base_model_name,
     get_out_subblock_w,
+    get_rope_local_base_freq,
+    get_rope_scaling,
+    get_rope_theta,
     nearest_multiple,
     num_to_core_range_set,
     rope_scaling_model_factory,
@@ -47,6 +50,18 @@ from models.tt_transformers.tt.prefetcher import Prefetcher
 # file names for performance and accuracy mode override files
 PERFORMANCE_DECODER_CONFIG_FILENAME = "performance_decoder_config.json"
 ACCURACY_DECODER_CONFIG_FILENAME = "accuracy_decoder_config.json"
+
+# Repository root used to resolve bundled model parameter directories. Prefers
+# TT_METAL_RUNTIME_ROOT (the runtime-root convention set by tt-run / honored by
+# tt_metal/llrt/rtoptions.cpp), falling back to the traditional TT_METAL_HOME.
+# Resolving these paths against the repo root makes LOCAL_LLAMA_PARAMS /
+# LOCAL_HF_PARAMS independent of the caller's current working directory, which
+# matters when tt-run scripts cd into an example directory before launching.
+_REPO_ROOT = Path(
+    os.environ.get("TT_METAL_RUNTIME_ROOT")
+    or os.environ.get("TT_METAL_HOME")
+    or str(Path(__file__).resolve().parents[3])
+)
 
 
 class TensorGroup(Enum):
@@ -93,8 +108,7 @@ def should_pad_sampling_logits_to_power_of_2(
 ) -> bool:
     # Enable optional sampling padding for models that regress to single-core TopK. More info at issue #40399
     if sampling_splits < 1:
-        logger.warning(f"Sampling_splits must be >= 1, got {sampling_splits}")
-        return False
+        raise ValueError(f"sampling_splits must be >= 1, got {sampling_splits}")
 
     per_device_vocab = padded_vocab_size // sampling_splits
     return per_device_vocab > 0 and (per_device_vocab & (per_device_vocab - 1)) != 0
@@ -107,6 +121,7 @@ class MathFidelitySetting(Enum):
     HIFI2_FP16 = "hifi2fp16"  # fp16 specified `fp32_dest_acc_en=False` in compute kernel config
     HIFI2_NOL1ACC = "hifi2nol1acc"  # fp32_dest_acc_en=True but packer_l1_acc=False (issue #36378)
     HIFI4 = "hifi4"
+    HIFI4_FP16 = "hifi4fp16"  # fp16 specified `fp32_dest_acc_en=False` in compute kernel config
     HIFI4_FP32 = "hifi4fp32"
 
 
@@ -241,7 +256,8 @@ class ModelOptimizations:
             + self._names["OpFidelity"]
             + "}"
         )
-        # NOTE: self.__name__ is used as section header in PERF.md; It is also used by, for example test_llama_accuracy.py to look for comparative results in PERF.md
+        # NOTE: self.__name__ is used by test/demo flows to distinguish performance vs accuracy
+        # mode when selecting centralized targets from models/model_targets.yaml.
         self.__name__ = self._full_name
 
         # TODO: maybe we could warn about some unwanted settings here
@@ -455,37 +471,47 @@ class ModelArgs:
     )
 
     LOCAL_LLAMA_PARAMS = {
-        "LLAMA3_2_1B_PARAMS": "models/tt_transformers/model_params/Llama-3.2-1B-Instruct",
-        "LLAMA3_2_3B_PARAMS": "models/tt_transformers/model_params/Llama-3.2-3B-Instruct",
-        "LLAMA3_1_8B_PARAMS": "models/tt_transformers/model_params/Llama-3.1-8B-Instruct",
-        "LLAMA3_2_11B_PARAMS": "models/tt_transformers/model_params/Llama-3.2-11B-Vision-Instruct",
-        "LLAMA3_1_70B_PARAMS": "models/tt_transformers/model_params/Llama-3.1-70B-Instruct",
-        "LLAMA3_2_90B_PARAMS": "models/tt_transformers/model_params/Llama-3.2-90B-Vision-Instruct",
+        k: str(_REPO_ROOT / v)
+        for k, v in {
+            "LLAMA3_2_1B_PARAMS": "models/tt_transformers/model_params/Llama-3.2-1B-Instruct",
+            "LLAMA3_2_3B_PARAMS": "models/tt_transformers/model_params/Llama-3.2-3B-Instruct",
+            "LLAMA3_1_8B_PARAMS": "models/tt_transformers/model_params/Llama-3.1-8B-Instruct",
+            "LLAMA3_2_11B_PARAMS": "models/tt_transformers/model_params/Llama-3.2-11B-Vision-Instruct",
+            "LLAMA3_1_70B_PARAMS": "models/tt_transformers/model_params/Llama-3.1-70B-Instruct",
+            "LLAMA3_2_90B_PARAMS": "models/tt_transformers/model_params/Llama-3.2-90B-Vision-Instruct",
+        }.items()
     }
 
     LOCAL_HF_PARAMS = {
-        "Llama-3.1-8B-Instruct": "models/tt_transformers/model_params/Llama-3.1-8B-Instruct",
-        "Llama-3.1-70B-Instruct": "models/tt_transformers/model_params/Llama-3.1-70B-Instruct",
-        "Llama-3.2-1B-Instruct": "models/tt_transformers/model_params/Llama-3.2-1B-Instruct",
-        "Llama-3.2-3B-Instruct": "models/tt_transformers/model_params/Llama-3.2-3B-Instruct",
-        "Llama-3.2-11B-Instruct": "models/tt_transformers/model_params/Llama-3.2-11B-Vision-Instruct",
-        "Llama-3.2-11B-Vision-Instruct": "models/tt_transformers/model_params/Llama-3.2-11B-Vision-Instruct",
-        "Llama-3.2-90B-Instruct": "models/tt_transformers/model_params/Llama-3.2-90B-Vision-Instruct",
-        "Llama-3.2-90B-Vision-Instruct": "models/tt_transformers/model_params/Llama-3.2-90B-Vision-Instruct",
-        "Mistral-7B-Instruct-v0.3": "models/tt_transformers/model_params/Mistral-7B-Instruct-v0.3",
-        "Qwen2.5-VL-3B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-3B-Instruct",
-        "Qwen2.5-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-32B-Instruct",
-        "Phi-4": "models/tt_transformers/model_params/phi-4",
-        "Qwen2.5-VL-72B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-72B-Instruct",
-        "Qwen3-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen3-VL-32B-Instruct",
-        "Qwen3-32B": "models/tt_transformers/model_params/Qwen3-32B",
-        "Qwen2.5-72B-Instruct": "models/tt_transformers/model_params/Qwen2.5-72B-Instruct",
-        "Qwen2.5-32B-Instruct": "models/tt_transformers/model_params/Qwen2.5-32B-Instruct",
-        "Meta-Llama-3-8B": "models/tt_transformers/model_params/Meta-Llama-3-8B",
-        "Meta-Llama-3-8B-Instruct": "models/tt_transformers/model_params/Meta-Llama-3-8B",
+        k: str(_REPO_ROOT / v)
+        for k, v in {
+            "Llama-3.1-8B-Instruct": "models/tt_transformers/model_params/Llama-3.1-8B-Instruct",
+            "Llama-3.1-70B-Instruct": "models/tt_transformers/model_params/Llama-3.1-70B-Instruct",
+            "Llama-3.2-1B-Instruct": "models/tt_transformers/model_params/Llama-3.2-1B-Instruct",
+            "Llama-3.2-3B-Instruct": "models/tt_transformers/model_params/Llama-3.2-3B-Instruct",
+            "Llama-3.2-11B-Instruct": "models/tt_transformers/model_params/Llama-3.2-11B-Vision-Instruct",
+            "Llama-3.2-11B-Vision-Instruct": "models/tt_transformers/model_params/Llama-3.2-11B-Vision-Instruct",
+            "Llama-3.2-90B-Instruct": "models/tt_transformers/model_params/Llama-3.2-90B-Vision-Instruct",
+            "Llama-3.2-90B-Vision-Instruct": "models/tt_transformers/model_params/Llama-3.2-90B-Vision-Instruct",
+            "Mistral-7B-Instruct-v0.3": "models/tt_transformers/model_params/Mistral-7B-Instruct-v0.3",
+            "Qwen2.5-VL-3B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-3B-Instruct",
+            "Qwen2.5-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-32B-Instruct",
+            "Phi-4": "models/tt_transformers/model_params/phi-4",
+            "Qwen2.5-VL-72B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-72B-Instruct",
+            "Qwen3-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen3-VL-32B-Instruct",
+            "Qwen3-32B": "models/tt_transformers/model_params/Qwen3-32B",
+            "Qwen2.5-72B-Instruct": "models/tt_transformers/model_params/Qwen2.5-72B-Instruct",
+            "Qwen2.5-32B-Instruct": "models/tt_transformers/model_params/Qwen2.5-32B-Instruct",
+            "Meta-Llama-3-8B": "models/tt_transformers/model_params/Meta-Llama-3-8B",
+            "Meta-Llama-3-8B-Instruct": "models/tt_transformers/model_params/Meta-Llama-3-8B",
+            "Qwen3.6-27B": "models/tt_transformers/model_params/Qwen3.6-27B",
+        }.items()
     }
 
     MAX_QKV_MM_SEQ_LEN = 2048
+
+    # Opt-in: False so TP > n_kv_heads stays a hard error unless a subclass implements KV replication.
+    SUPPORTS_KV_REPLICATION = False
 
     def __init__(
         self,
@@ -537,6 +563,19 @@ class ModelArgs:
 
         self.rms_norm_add_unit_offset = False
         self.embed_scale = None
+        # Final logit soft-capping (Gemma-2). None => disabled, so no effect on other models.
+        # Attention-score softcapping (HF attn_logit_softcapping=50.0) is intentionally
+        # not stored or applied: ttnn SDPA has no softcap hook, and HF documents that
+        # omitting attn softcap at inference has only minor effect. See final-logit
+        # application in Transformer._apply_final_logit_softcapping.
+        self.final_logit_softcapping = None
+        self.model_type = None
+        # Decode-SDPA tuning. Architecture-specific overrides are applied once in
+        # _set_model_specific_params(); these defaults preserve existing behaviour for
+        # every model (q/k chunk 0 => op auto-selects, forced framework compute config).
+        self.sdpa_decode_q_chunk_size = 0
+        self.sdpa_decode_k_chunk_size = 0
+        self.sdpa_decode_use_default_compute_config = False
         self.use_hf_rope = use_hf_rope
 
         assert not os.getenv(
@@ -595,6 +634,18 @@ class ModelArgs:
 
         # Set the max number of tokens for each prefill chunk based on the model and device
         self.max_prefill_chunk_size = self.get_max_prefill_chunk_size()
+        # TODO: Enable batched_prefill once this is fixed: https://github.com/tenstorrent/tt-metal/issues/47238
+        # Prefill logits are batch-variant on multi-chip Blackhole: the
+        # float-reduction order in the prefill matmul/attention depends on the
+        # batched-token count, so identical same-seed requests that land in
+        # different-sized prefill batches get slightly different logits. Seeded
+        # sampling under concurrency then diverges (tt-inference-server#4004,
+        # test_non_uniform_seeding). Forcing per-user batch-1 prefill removes the
+        # variance. Workaround until the prefill kernels are batch-invariant.
+        # Disabled for Qwen3-32B (P150x4) and Llama-3.1-8B (P300/P150x4/P150x8).
+        self.disable_batched_prefill = (self.base_model_name == "Qwen3-32B" and self.device_name == "P150x4") or (
+            self.base_model_name == "Llama-3.1-8B" and self.device_name in ("P150", "P300", "P150x4", "P150x8")
+        )
 
         if (
             self.base_model_name
@@ -654,10 +705,22 @@ class ModelArgs:
                 self.n_heads % self.cluster_shape[1] == 0
             ), f"n_heads must be divisible by num_devices: {self.n_heads} % {self.cluster_shape[1]}"
 
-            assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
+            # KV heads normally split one-or-more per device. SUPPORTS_KV_REPLICATION models
+            # instead replicate a head across the devices holding its GQA query group, so they
+            # only need TP to be a whole multiple of n_kv_heads (e.g. 4 KV heads on TP=8 -> each
+            # head shared by a device pair). n_local_kv_heads is then 1, hence the max() below.
+            if self.SUPPORTS_KV_REPLICATION and self.cluster_shape[1] > self.n_kv_heads:
+                assert self.cluster_shape[1] % self.n_kv_heads == 0, (
+                    f"with KV replication, num_devices must be a multiple of n_kv_heads: "
+                    f"{self.cluster_shape[1]} % {self.n_kv_heads}"
+                )
+            else:
+                assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
             self.n_local_heads = self.n_heads // self.cluster_shape[1]
             self.qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_heads)
-            self.min_kv_prefill_shard_seqlen = (ttnn.TILE_SIZE * 8 * 8) / (self.n_kv_heads // self.cluster_shape[1])
+            self.min_kv_prefill_shard_seqlen = (ttnn.TILE_SIZE * 8 * 8) / max(
+                1, self.n_kv_heads // self.cluster_shape[1]
+            )
 
             # All Gather Matmul for Dense Out (DO) - computed flag stored as instance attribute
             # NOTE: Fused all gather matmul only supports a core grid of size num_devices x 1
@@ -767,6 +830,12 @@ class ModelArgs:
                 math_fidelity=ttnn.MathFidelity.HiFi4,
                 math_approx_mode=False,
                 fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
+            self.compute_kernel_config_hifi4_fp16 = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
                 packer_l1_acc=True,
             )
             self.compute_kernel_config_hifi4_fp32 = ttnn.WormholeComputeKernelConfig(
@@ -1037,7 +1106,9 @@ class ModelArgs:
                 "rs_memory_config": ttnn.DRAM_MEMORY_CONFIG,
             }
             default_sampling_force_argmax = {
-                "allow_force_argmax": False,
+                # Single-chip only: the argmax fast-path speeds up greedy decode on P150
+                # (~22 -> ~38 t/s/u), but multi-chip meshes are faster on the top-k path.
+                "allow_force_argmax": self.num_devices == 1,
                 "num_links": 1,
                 "chunks_per_sync": 10,
                 "num_workers_per_link": 2,
@@ -1514,7 +1585,16 @@ class ModelArgs:
 
     @lru_cache(maxsize=None)
     def get_attn_sdpa_decode_program_config(self, prefetcher: Prefetcher = None):
-        """Get the SDPA program config for decode mode."""
+        """Get the SDPA program config for decode mode.
+
+        The KV chunk sizes come from self.sdpa_decode_{q,k}_chunk_size (default 0,
+        i.e. the op auto-selects). Architectures that need an explicit small chunk
+        set these in _set_model_specific_params(); e.g. Gemma-2 (head_dim=256), where
+        the auto chunk drives the flash-decode op into a multi-chunk path whose
+        cross-chunk reduction is numerically wrong for head_dim=256, producing a
+        sharp accuracy cliff once the context exceeds one chunk.
+        """
+        q_chunk, k_chunk = self.sdpa_decode_q_chunk_size, self.sdpa_decode_k_chunk_size
         if prefetcher is not None:
             sdpa_grid_size = (8, 8)
             start_core = ttnn.CoreCoord(1, 0)
@@ -1525,15 +1605,15 @@ class ModelArgs:
                     start_core, num_sdpa_cores, prefetcher.all_worker_cores_range_set, row_wise=True
                 ),
                 exp_approx_mode=False,
-                q_chunk_size=0,
-                k_chunk_size=0,
+                q_chunk_size=q_chunk,
+                k_chunk_size=k_chunk,
             )
         else:
             return ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
                 exp_approx_mode=False,
-                q_chunk_size=0,
-                k_chunk_size=0,
+                q_chunk_size=q_chunk,
+                k_chunk_size=k_chunk,
             )
 
     @lru_cache(maxsize=None)
@@ -1625,16 +1705,12 @@ class ModelArgs:
                     in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
                     out_subblock_h=1,  # Must be divisible by per_core_M
                     out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                    per_core_M=7
-                    if self.device_name == "P100"
-                    else (
-                        max(  # NOTE: P100 runs OOM in L1 with 8 per_core_M
-                            1,
-                            8
-                            if seq_len >= self.MAX_QKV_MM_SEQ_LEN
-                            else math.ceil(seq_len / ttnn.TILE_SIZE / 8),  # 8 rows
-                        )
-                    ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+                    # This branch is only reached when use_minimal_qkv_prefill_matmul() is False,
+                    # i.e. seq_len <= 128, so the former `8 if seq_len >= MAX_QKV_MM_SEQ_LEN` arm
+                    # (MAX_QKV_MM_SEQ_LEN == 2048) was unreachable and has been removed. At every
+                    # reachable seq_len the max(1, ...) floor makes this 1.
+                    # NOTE: P100 runs OOM in L1 with a larger per_core_M (workaround for issue #50656).
+                    per_core_M=1 if self.device_name == "P100" else max(1, math.ceil(seq_len / ttnn.TILE_SIZE / 8)),
                     per_core_N=math.ceil(
                         self.qkv_size / self.cluster_shape[1] / 32 / self.dram_shard_grid_width
                     ),  # N / TILE_WIDTH / grid width
@@ -2370,6 +2446,25 @@ class ModelArgs:
                 "Qwen3-Embedding-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Phi-4": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Mistral-Small-3.1-24B": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "gemma-2-2b": {
+                    "N150": 32,
+                    "N300": 32,
+                    "T3K": 32,
+                    "TG": 32,
+                    "P100": 32,
+                    "P150": 32,
+                    "P150x4": 32,
+                },
+                "gemma-2-9b": {
+                    # No N150 entry: the full 42-layer model exhausts single-chip DRAM
+                    # during weight caching, so gemma-2-9b is not supported on N150.
+                    "N300": 32,
+                    "T3K": 32,
+                    "TG": 32,
+                    "P100": 32,
+                    "P150": 32,
+                    "P150x4": 32,
+                },
                 "gemma-3-1b": {"N150": 32, "N300": 32, "T3K": 32, "TG": 32, "P150x4": 32},
                 "gemma-3-4b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "medgemma-4b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
@@ -2603,7 +2698,21 @@ class ModelArgs:
         return activation_map.get(hidden_activation, ttnn.UnaryOpType.SILU)
 
     def _set_model_specific_params(self):
-        return
+        # Gemma-family text models (gemma, gemma2) store RMSNorm weights as (1 + w)
+        # and scale input embeddings by sqrt(hidden_size). Gemma-3 keeps this in its
+        # own ModelArgs subclass; enabling it here (config-gated) brings up Gemma-2
+        # text models via HF_MODEL without touching any non-Gemma model.
+        if self.model_type is not None and str(self.model_type).lower() in ("gemma", "gemma2"):
+            self.rms_norm_add_unit_offset = True
+            self.embed_scale = self.dim**0.5
+            # head_dim=256 decode-attention fix: pin a small KV chunk and use the
+            # flash-decode op's default compute config. Matches the known-good Gemma-3
+            # decode SDPA (models/demos/gemma4/tt/attention/decode.py); the framework's
+            # auto chunk + forced fp32-accum compute config corrupt the cross-chunk
+            # online-softmax reduction for head_dim=256.
+            self.sdpa_decode_q_chunk_size = 32
+            self.sdpa_decode_k_chunk_size = 64
+            self.sdpa_decode_use_default_compute_config = True
 
     def _set_params_from_dict(self, config):
         eos_token_id = config.get("eos_token_id", None)
@@ -2613,6 +2722,10 @@ class ModelArgs:
         text_config = config.get("text_config", config)
         self.eos_token_id = None if isinstance(eos_token_id, int) else eos_token_id
         layer_types = text_config["layer_types"] if "layer_types" in text_config else None
+
+        # Architecture family (e.g. "gemma2", "gemma3", "llama"). Used to enable
+        # architecture-specific behaviour without affecting other models.
+        self.model_type = text_config.get("model_type", config.get("model_type", None))
 
         # Common params with different names between Meta and HF
         self.dim = text_config.get("dim", text_config.get("hidden_size"))
@@ -2642,6 +2755,7 @@ class ModelArgs:
             self.padded_vocab_size = compute_padded_vocab_size(self.vocab_size, self.num_devices)
         self.head_dim = text_config.get("head_dim", self.dim // self.n_heads) or self.dim // self.n_heads
         self.num_experts_per_tok = text_config.get("num_experts_per_tok", 0)
+        self.num_local_experts = text_config.get("num_local_experts", 0)
         self.max_context_len = text_config.get("max_position_embeddings")
 
         # Handle different MLP dimension specifications
@@ -2722,9 +2836,23 @@ class ModelArgs:
         # Sliding window attention
         self.sliding_window = text_config.get("sliding_window", None)
 
-        # RoPE params
-        self.rope_theta = text_config.get("rope_theta")
-        self.rope_theta_local = text_config.get("rope_local_base_freq", None)
+        # Gemma-2 alternates local (sliding-window) and global attention. Upstream
+        # Gemma2Config.__post_init__ already fills `layer_types` before to_dict(), so
+        # for a real HF checkpoint this block is usually a no-op; keep it as a
+        # defensive fallback for dict-style configs that omit the list.
+        # Pattern: even layers = sliding (matches HF is_sliding = not bool(layer_idx % 2)).
+        if (
+            self.model_type is not None
+            and str(self.model_type).lower().startswith("gemma2")
+            and self.sliding_window is not None
+            and self.layer_types is None
+        ):
+            self.layer_types = ["sliding_attention" if (i % 2 == 0) else "full_attention" for i in range(self.n_layers)]
+            self.sliding_window_pattern = [lt == "sliding_attention" for lt in self.layer_types]
+
+        # RoPE params (transformers 5.x nests these under `rope_parameters`)
+        self.rope_theta = get_rope_theta(text_config)
+        self.rope_theta_local = get_rope_local_base_freq(text_config)
         self.use_sliding_window = text_config.get("use_sliding_window", None)
         if (
             self.sliding_window is not None
@@ -2733,7 +2861,7 @@ class ModelArgs:
         ):  # For interleaved attention
             self.rope_theta_local = self.rope_theta
 
-        rope_scaling_params = text_config.get("rope_scaling", None)
+        rope_scaling_params = get_rope_scaling(text_config)
         self.original_max_context_len = text_config.get("original_max_position_embeddings", None)
         self.rope_scaling = (
             rope_scaling_model_factory(rope_scaling_params, original_max_context_len=self.original_max_context_len)
@@ -2742,6 +2870,11 @@ class ModelArgs:
         )
 
         self.query_pre_attn_scalar = text_config.get("query_pre_attn_scalar", None)
+
+        # Final logit soft-capping (Gemma-2): logits -> tanh(logits / cap) * cap.
+        # Attn-score softcapping is not applied (see __init__ comment); only the
+        # final-logit cap is consumed, via Transformer._apply_final_logit_softcapping.
+        self.final_logit_softcapping = text_config.get("final_logit_softcapping", None)
 
         # Configurable MLP activation type
         self.mlp_activation_type = self._get_hidden_activation_type(text_config)
@@ -2810,7 +2943,7 @@ class ModelArgs:
         # Common vision parameters for all models
         intermediate_size = vision_config.get("intermediate_size", self.vision_dim * 4)
         self.vision_image_size = vision_config.get("image_size", 1540)
-        self.vision_rope_theta = vision_config.get("rope_theta", 10000.0)
+        self.vision_rope_theta = get_rope_theta(vision_config, default=10000.0)
         self.image_token_index = vision_config.get("image_token_index", 10)
 
         self.vision_mlp_ratio = intermediate_size // self.vision_dim
@@ -2924,7 +3057,6 @@ class ModelArgs:
         This function is used to determine if trace should be enabled for the prefill.
         Tracing is used only for certain sequence lengths, because for bigger sequence lengths, op2op gaps are already small, so we don't need tracing.
         # TODO: Support chunked prefill with tracing - https://github.com/tenstorrent/tt-metal/issues/32056
-        # TODO: Support prefix caching with tracing
         """
 
         allowed_seq_lens = self.trace_prefill_supported_seq_lens
@@ -2933,7 +3065,6 @@ class ModelArgs:
             prefill_seq_len in allowed_seq_lens
             and prefill_seq_len <= self.max_prefill_chunk_size
             and prefill_seq_len <= self.max_seq_len
-            and num_cached_tokens == 0
         )
 
     def is_llama_vision(self):
@@ -2997,12 +3128,14 @@ class ModelArgs:
         return self.model_config
 
     def get_hf_model_cls(self):
-        from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoModelForVision2Seq
+        from transformers import AutoModelForCausalLM, AutoModelForImageTextToText
 
         if not self.is_multimodal:
             return AutoModelForCausalLM
 
-        for model_cls in (AutoModelForVision2Seq, AutoModelForImageTextToText):
+        # AutoModelForVision2Seq was removed in transformers 5.x; its model mapping
+        # was folded into AutoModelForImageTextToText (available since 4.46).
+        for model_cls in (AutoModelForImageTextToText,):
             if type(self.hf_config) in model_cls._model_mapping:
                 return model_cls
 
@@ -3103,7 +3236,11 @@ class ModelArgs:
                 state_dict.pop(k)
         if getattr(self, "is_mixture_of_experts", False):
             self.moe = True
-            self.num_experts = max([int(item[-11]) + 1 for item in keys_dict if "block_sparse_moe.experts" in item])
+            # transformers 5.x fused Mixtral experts into batched params (mlp.experts.*),
+            # dropping the per-expert block_sparse_moe.experts.{i} keys. Derive the count
+            # from those keys when present (<5.x), else fall back to the config value.
+            expert_indices = [int(item[-11]) + 1 for item in keys_dict if "block_sparse_moe.experts" in item]
+            self.num_experts = max(expert_indices) if expert_indices else self.num_local_experts
         return state_dict
 
     # =========================================================================
@@ -3491,6 +3628,7 @@ class ModelArgs:
             "Phi-3-mini-128k-instruct": "microsoft/Phi-3-mini-128k-instruct",
             "gemma-3-4b": "google/gemma-3-4b-it",
             "gemma-3-27b": "google/gemma-3-27b-it",
+            "Qwen3.6-27B": "Qwen/Qwen3.6-27B",
         }
 
         logger.info(f"Tokenizer path: {self.TOKENIZER_PATH}")
@@ -3622,19 +3760,24 @@ class ModelArgs:
                 config.num_layers = self.n_layers
                 config.num_hidden_layers = self.n_layers
 
-            try:
-                # .from_pretrained + _init_weights works faster than .from_config
-                model = model_cls.from_pretrained(
-                    self.CKPT_DIR,
-                    config=config,
-                    torch_dtype="auto",
-                    trust_remote_code=self.trust_remote_code_hf,
-                    local_files_only=True,
-                )
-                model.apply(model._init_weights)
-            except Exception as e:
-                logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
+            if os.getenv("CI") == "true":
+                # In CI, from_pretrained on NFS can spend ~54s scanning before failing for models
+                # that don't have clean checkpoint artifacts. Skip straight to from_config.
                 model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+            else:
+                try:
+                    # .from_pretrained + _init_weights works faster than .from_config
+                    model = model_cls.from_pretrained(
+                        self.CKPT_DIR,
+                        config=config,
+                        torch_dtype="auto",
+                        trust_remote_code=self.trust_remote_code_hf,
+                        local_files_only=True,
+                    )
+                    model.apply(model._init_weights)
+                except Exception as e:
+                    logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
+                    model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
             # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
         else:
             model_cls = self.get_hf_model_cls()
@@ -3654,19 +3797,26 @@ class ModelArgs:
                     config.num_layers = self.n_layers
                     config.num_hidden_layers = self.n_layers
 
-                try:
-                    # .from_pretrained + _init_weights works faster than .from_config
-                    model = model_cls.from_pretrained(
-                        self.CKPT_DIR,
-                        config=config,
-                        torch_dtype="auto",
-                        trust_remote_code=self.trust_remote_code_hf,
-                        local_files_only=True,
-                    )
-                    model.apply(model._init_weights)
-                except Exception as e:
-                    logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
+                if os.getenv("CI") == "true":
+                    # In CI, from_pretrained on NFS can spend ~54s scanning before failing for models
+                    # that don't have clean checkpoint artifacts. Skip straight to from_config.
                     model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+                else:
+                    try:
+                        # .from_pretrained + _init_weights works faster than .from_config
+                        model = model_cls.from_pretrained(
+                            self.CKPT_DIR,
+                            config=config,
+                            torch_dtype="auto",
+                            trust_remote_code=self.trust_remote_code_hf,
+                            local_files_only=True,
+                        )
+                        model.apply(model._init_weights)
+                    except Exception as e:
+                        logger.info(
+                            f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}"
+                        )
+                        model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
                 # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
             else:
                 if self.cache_hf_flag and self.cached_hf_model is None:
@@ -3688,10 +3838,14 @@ class ModelArgs:
                         local_files_only=os.getenv("CI") == "true",
                     )
 
-        # HACK: Assume that we want the language model layers only
-        if hasattr(model, "language_model"):
+        # HACK: Assume that we want the language model layers only.
+        # transformers 5.x nests the text model under model.model.language_model for
+        # multimodal models (e.g. Mllama); <5 exposed model.language_model directly.
+        if hasattr(model, "language_model"):  # transformers <5 multimodal
             model.model = model.language_model
             # We keep language_model because transformers don't let us change or delete it
+        elif hasattr(model.model, "language_model"):  # transformers >=5 multimodal
+            model.model = model.model.language_model
         model.model.layers = model.model.layers[: self.n_layers]
         if wrap:
             wrapper = HfModelWrapper(model, self.head_dim, config=self.hf_config, use_hf_rope=self.use_hf_rope)
@@ -3701,14 +3855,17 @@ class ModelArgs:
 
     def reference_vision_multi_modal(self):
         model = self.reference_vision_transformer(wrap=False)
-        layer = model.multi_modal_projector
+        # transformers 5.x nests multi_modal_projector under model.model
+        layer = getattr(model, "multi_modal_projector", None) or model.model.multi_modal_projector
         layer._load_state_dict = layer.load_state_dict
         layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_vision_rms_norm(self):
         model = self.reference_vision_transformer(wrap=False)
-        layer = model.multi_modal_projector.mm_soft_emb_norm
+        # transformers 5.x nests multi_modal_projector under model.model
+        mmp = getattr(model, "multi_modal_projector", None) or model.model.multi_modal_projector
+        layer = mmp.mm_soft_emb_norm
         layer._load_state_dict = layer.load_state_dict
         layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
@@ -3740,19 +3897,24 @@ class ModelArgs:
                 config.num_layers = self.n_layers
                 config.num_hidden_layers = self.n_layers
 
-            try:
-                # .from_pretrained + _init_weights works faster than .from_config
-                model = model_cls.from_pretrained(
-                    self.CKPT_DIR,
-                    config=config,
-                    torch_dtype="auto",
-                    trust_remote_code=self.trust_remote_code_hf,
-                    local_files_only=True,
-                )
-                model.apply(model._init_weights)
-            except Exception as e:
-                logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
+            if os.getenv("CI") == "true":
+                # In CI, from_pretrained on NFS can spend ~54s scanning before failing for models
+                # that don't have clean checkpoint artifacts. Skip straight to from_config.
                 model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+            else:
+                try:
+                    # .from_pretrained + _init_weights works faster than .from_config
+                    model = model_cls.from_pretrained(
+                        self.CKPT_DIR,
+                        config=config,
+                        torch_dtype="auto",
+                        trust_remote_code=self.trust_remote_code_hf,
+                        local_files_only=True,
+                    )
+                    model.apply(model._init_weights)
+                except Exception as e:
+                    logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
+                    model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
             # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
         else:
             if self.cached_hf_model is None:
@@ -3784,9 +3946,9 @@ class ModelArgs:
         model = self.reference_vision_transformer(wrap=False)
         if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
             # Mistral-Small-3.1-24B-Instruct-2503 has a different structure
-            layer = model.vision_tower
+            layer = self._get_vision_tower(model)
         else:
-            layer = model.vision_tower.vision_model
+            layer = self._get_vision_tower(model).vision_model
         layer._load_state_dict = layer.load_state_dict
         layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
@@ -3804,21 +3966,21 @@ class ModelArgs:
 
     def reference_siglip_patch_embed(self):
         model = self.reference_vision_transformer(wrap=False)
-        layer = model.vision_tower.vision_model.embeddings.patch_embedding
+        layer = self._get_vision_tower(model).vision_model.embeddings.patch_embedding
         # layer._load_state_dict = layer.load_state_dict
         # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_vision_pos_embedding(self):
         model = self.reference_vision_transformer(wrap=False)
-        layer = model.vision_tower.vision_model.embeddings.position_embedding
+        layer = self._get_vision_tower(model).vision_model.embeddings.position_embedding
         # layer._load_state_dict = layer.load_state_dict
         # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_vision_embedding(self):
         model = self.reference_vision_transformer(wrap=False)
-        layer = model.vision_tower.vision_model.embeddings
+        layer = self._get_vision_tower(model).vision_model.embeddings
         # layer._load_state_dict = layer.load_state_dict
         # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
@@ -3826,11 +3988,11 @@ class ModelArgs:
     def reference_vision_layernorm(self, layer_name="layer_norm1"):
         model = self.reference_vision_transformer(wrap=False)
         if layer_name == "layer_norm1":
-            layer = model.vision_tower.vision_model.encoder.layers[0].layer_norm1
+            layer = self._get_vision_tower(model).vision_model.encoder.layers[0].layer_norm1
         elif layer_name == "layer_norm2":
-            layer = model.vision_tower.vision_model.encoder.layers[0].layer_norm2
+            layer = self._get_vision_tower(model).vision_model.encoder.layers[0].layer_norm2
         else:
-            layer = model.vision_tower.vision_model.post_layernorm
+            layer = self._get_vision_tower(model).vision_model.post_layernorm
         # layer._load_state_dict = layer.load_state_dict
         # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
@@ -3848,7 +4010,7 @@ class ModelArgs:
 
     def reference_vision_encoder_block(self):
         model = self.reference_vision_transformer(wrap=False)
-        layer = model.vision_tower.vision_model.encoder.layers[0]
+        layer = self._get_vision_tower(model).vision_model.encoder.layers[0]
         # layer._load_state_dict = layer.load_state_dict
         # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
@@ -4045,7 +4207,7 @@ class ModelArgs:
 
 
 class HfAttentionWrapper:
-    def __init__(self, attention, head_dim, rotary_emb, use_hf_rope=False):
+    def __init__(self, attention, head_dim, rotary_emb, use_hf_rope=False, rope_layer_type=None):
         from transformers import DynamicCache
 
         super().__init__()
@@ -4054,6 +4216,10 @@ class HfAttentionWrapper:
         self.head_dim = head_dim
         self.rotary_emb = rotary_emb
         self.use_hf_rope = use_hf_rope
+        # transformers 5.x Gemma3 rotary picks `{layer_type}_inv_freq`. When the caller chose a
+        # specific rope module (e.g. global vs local), pin the layer_type to match it instead of
+        # the attention layer's own type; otherwise fall back to the attention's layer_type.
+        self.rope_layer_type = rope_layer_type
 
     def forward(self, x, start_pos, freqs_cis_i, mask=None):
         position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
@@ -4062,22 +4228,42 @@ class HfAttentionWrapper:
             while len(mask.shape) < 4:
                 mask = mask.unsqueeze(0)
 
+        # transformers 5.x renamed the attention cache kwarg past_key_value -> past_key_values.
+        # Passing the wrong name lets it fall into **kwargs (ignored), so the cache is never
+        # populated. Pick the name present in the attention's signature.
+        cache_kw = (
+            "past_key_values"
+            if "past_key_values" in inspect.signature(self.attention.forward).parameters
+            else "past_key_value"
+        )
         if self.rotary_emb is not None:
-            position_embeddings = self.rotary_emb(x, position_ids)
+            # transformers 5.x Gemma3 uses per-layer-type RoPE: the rotary forward takes a
+            # `layer_type` and selects `{layer_type}_inv_freq` (layer_type=None -> AttributeError
+            # 'None_inv_freq'). Pass the wrapped attention's own layer_type when the rotary accepts
+            # it (the authoritative type for this layer); <5 / non-Gemma3 rotaries don't take it.
+            _layer_type = (
+                self.rope_layer_type
+                if self.rope_layer_type is not None
+                else getattr(self.attention, "layer_type", None)
+            )
+            if _layer_type is not None and "layer_type" in inspect.signature(self.rotary_emb.forward).parameters:
+                position_embeddings = self.rotary_emb(x, position_ids, layer_type=_layer_type)
+            else:
+                position_embeddings = self.rotary_emb(x, position_ids)
             output, *_ = self.attention(
                 x,
                 position_embeddings=position_embeddings,
-                past_key_value=self.past_key_value,
                 use_cache=True,
                 attention_mask=mask,
+                **{cache_kw: self.past_key_value},
             )
         else:
             output, _, self.past_key_value = self.attention(
                 x,
-                past_key_value=self.past_key_value,
                 use_cache=True,
                 position_ids=position_ids,
                 attention_mask=mask,
+                **{cache_kw: self.past_key_value},
             )
         return output
 
@@ -4098,7 +4284,7 @@ class HfAttentionWrapper:
 
     @property
     def cache_k(self):
-        [(k, v)] = self.past_key_value.to_legacy_cache()
+        [(k, v)] = [(kk, vv) for (kk, vv) in hf_cache_to_legacy(self.past_key_value) if kk is not None]
         hf_k = k.permute(0, 2, 1, 3)  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
 
         if self.use_hf_rope:
@@ -4121,7 +4307,7 @@ class HfAttentionWrapper:
 
     @property
     def cache_v(self):
-        [(k, v)] = self.past_key_value.to_legacy_cache()
+        [(k, v)] = [(kk, vv) for (kk, vv) in hf_cache_to_legacy(self.past_key_value) if kk is not None]
         return v.permute(0, 2, 1, 3)  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
 
 
@@ -4138,36 +4324,69 @@ class HfDecoderWrapper:
 
     def forward(self, x, start_pos, freqs_cis_i, mask=None):
         position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
+        # transformers 5.x consolidated Gemma3 RoPE into a module that selects `{layer_type}_inv_freq`
+        # (layer_type=None -> AttributeError 'None_inv_freq'). Pass the matching layer_type when the
+        # rotary forward accepts it (global rotary -> full_attention, local -> sliding_attention);
+        # pre-5.x / non-Gemma3 rotaries don't take the kwarg.
         position_embeddings = None
         if self.rotary_emb is not None:
-            position_embeddings = self.rotary_emb(x, position_ids)
+            if "layer_type" in inspect.signature(self.rotary_emb.forward).parameters:
+                position_embeddings = self.rotary_emb(x, position_ids, layer_type="full_attention")
+            else:
+                position_embeddings = self.rotary_emb(x, position_ids)
 
         if mask is not None:
             while len(mask.shape) < 4:
                 mask = mask.unsqueeze(0)
 
+        # transformers 5.x renamed the decoder-layer cache kwarg past_key_value -> past_key_values.
+        cache_kw = (
+            "past_key_values"
+            if "past_key_values" in inspect.signature(self.decoder.forward).parameters
+            else "past_key_value"
+        )
         if self.rotary_emb_local is not None:
-            position_embeddings_local = self.rotary_emb_local(x, position_ids)
+            # transformers <5 Gemma3 decoder layer takes split global/local rope and selects via
+            # is_sliding internally; pass both (global=full_attention, local=sliding_attention).
+            if "layer_type" in inspect.signature(self.rotary_emb_local.forward).parameters:
+                position_embeddings_local = self.rotary_emb_local(x, position_ids, layer_type="sliding_attention")
+            else:
+                position_embeddings_local = self.rotary_emb_local(x, position_ids)
             result = self.decoder.forward(
                 x,
                 position_embeddings_global=position_embeddings,
                 position_embeddings_local=position_embeddings_local,
-                past_key_value=self.past_key_values,
                 use_cache=True,
                 position_ids=position_ids,
                 attention_mask=mask,
+                **{cache_kw: self.past_key_values},
             )
         else:
+            # transformers 5.x Gemma3 decoder layer takes a single `position_embeddings` and expects
+            # the CALLER to supply the rope for this layer's type (the model picks full_attention vs
+            # sliding_attention per layer). Layer 0 is sliding, so computing global rope here (as the
+            # default above does) feeds the wrong rope and the reference diverges from the TT decoder
+            # (which applies the correct per-layer rope). Recompute with this layer's own layer_type.
+            _layer_type = getattr(getattr(self.decoder, "self_attn", None), "layer_type", None)
+            if (
+                self.rotary_emb is not None
+                and _layer_type is not None
+                and "layer_type" in inspect.signature(self.rotary_emb.forward).parameters
+            ):
+                position_embeddings = self.rotary_emb(x, position_ids, layer_type=_layer_type)
             result = self.decoder.forward(
                 x,
                 position_embeddings=position_embeddings,
-                past_key_value=self.past_key_values,
                 use_cache=True,
                 position_ids=position_ids,
                 attention_mask=mask,
+                **{cache_kw: self.past_key_values},
             )
 
-        output = result[0]
+        # transformers 5.x decoder layers return the hidden-states tensor directly instead of a
+        # (hidden_states, ...) tuple; only unwrap [0] when it's actually a tuple, otherwise result[0]
+        # would index the batch dim and drop a leading dimension (e.g. [1,1,dim] -> [1,dim]).
+        output = result[0] if isinstance(result, tuple) else result
         return output
 
     def __call__(self, *args, **kwargs):
@@ -4186,7 +4405,7 @@ class HfDecoderWrapper:
 
     @property
     def cache_k(self):
-        [(k, v)] = self.past_key_values.to_legacy_cache()
+        [(k, v)] = [(kk, vv) for (kk, vv) in hf_cache_to_legacy(self.past_key_values) if kk is not None]
         hf_k = k.permute(0, 2, 1, 3)  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
 
         if self.use_hf_rope:
@@ -4209,7 +4428,7 @@ class HfDecoderWrapper:
 
     @property
     def cache_v(self):
-        [(k, v)] = self.past_key_values.to_legacy_cache()
+        [(k, v)] = [(kk, vv) for (kk, vv) in hf_cache_to_legacy(self.past_key_values) if kk is not None]
         return v.permute(0, 2, 1, 3)  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
 
 
@@ -4261,7 +4480,7 @@ class HfModelWrapper:
 
     @property
     def cache_k(self):
-        kvs = self.past_key_values.to_legacy_cache()
+        kvs = hf_cache_to_legacy(self.past_key_values)
         meta_ks = []
         for k, v in kvs:
             hf_k = k.permute(
@@ -4291,7 +4510,7 @@ class HfModelWrapper:
 
     @property
     def cache_v(self):
-        kvs = self.past_key_values.to_legacy_cache()
+        kvs = hf_cache_to_legacy(self.past_key_values)
         return [
             v.permute(0, 2, 1, 3) for k, v in kvs
         ]  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
@@ -4385,6 +4604,7 @@ class DecodersPrecision:
             MathFidelitySetting.HIFI2_FP16: configuration.compute_kernel_config_hifi2_fp16,
             MathFidelitySetting.HIFI2_NOL1ACC: configuration.compute_kernel_config_hifi2_nol1acc,
             MathFidelitySetting.HIFI4: configuration.compute_kernel_config_hifi4,
+            MathFidelitySetting.HIFI4_FP16: configuration.compute_kernel_config_hifi4_fp16,
             MathFidelitySetting.HIFI4_FP32: configuration.compute_kernel_config_hifi4_fp32,
         }
         return math_fidelity_setting_lookup[self.decoder_optimizations[decoder_id].op_fidelity_settings[op]]

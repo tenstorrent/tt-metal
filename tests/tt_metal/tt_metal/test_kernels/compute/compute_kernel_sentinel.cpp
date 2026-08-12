@@ -13,8 +13,7 @@
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
-#include "api/compute/transpose_wh.h"
-#include "api/compute/untilize.h"
+#include "api/compute/transpose.h"
 #include "api/debug/assert.h"
 
 void kernel_main() {
@@ -28,6 +27,11 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_in0, cb_in1, cb_out0);
 
+    // This sentinel deliberately exercises the deprecated eltwise-binary inits to verify their
+    // reconfig-tracking behaviour for as long as the shims exist. Suppress the deprecation warning
+    // locally so it does not clobber the build logs (the shims are tracked in .github/deprecations.json).
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
     binary_op_init_common(cb_in0, cb_in1, cb_out0);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_NOTHING_CHANGED));
     binary_op_init_common(cb_in1, cb_in1, cb_out0);
@@ -41,17 +45,24 @@ void kernel_main() {
 
     binary_dest_reuse_tiles_init(cb_in2);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
+#pragma GCC diagnostic pop
 
-    mm_init(cb_in0, cb_in1, cb_out1);
+    state_configure<Operand::PACK>(cb_out1, __builtin_LINE());
+    matmul_init(cb_in0, cb_in1);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB | RECONFIG_CHANGED_PACK));
 
-    mm_block_init_short(cb_in1, cb_in0);
+    matmul_block_init(cb_in1, cb_in0);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB));
 
-    mm_block_init(cb_in0, cb_in1, cb_out0);
+    state_configure<Operand::PACK>(cb_out0, __builtin_LINE());
+    matmul_block_init(cb_in0, cb_in1);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB | RECONFIG_CHANGED_PACK));
 
-    init_bcast<ELWADD, BroadcastType::NONE>(cb_in2, cb_in1, cb_out1);
+// Deliberately exercise the deprecated broadcast inits (reconfig-tracking test); suppress the
+// deprecation warnings so they don't clobber CI logs.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+    init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::NONE>(cb_in2, cb_in1, cb_out1);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB | RECONFIG_CHANGED_PACK));
 
     add_bcast_rows_init_short(cb_in1, cb_in2);
@@ -72,7 +83,8 @@ void kernel_main() {
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB));
     sub_tiles_bcast_scalar_init_short(cb_in0, cb_in1);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB));
-    binary_tiles_init<false, ELWADD>(cb_in2, cb_in2);
+#pragma GCC diagnostic pop
+    binary_tiles_init<false, EltwiseBinaryType::ELWADD>(cb_in2, cb_in2);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB));
 
     pack_untilize_dest_init<1>(cb_out0);
@@ -81,19 +93,20 @@ void kernel_main() {
     pack_untilize_init(cb_in0, cb_out1);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_PACK));
 
+    reconfig_data_format(cb_in0, cb_in1);
+    // REDUCE_ROW+SUM swaps operands: state_configure(icb_scaler=cb_in0, icb=cb_in1, cb_out0)
+    // SrcA stays cb_in0 (unchanged from pack_untilize_init above), SrcB and Pack change.
     reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_in1, cb_in0, cb_out0);
-    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB | RECONFIG_CHANGED_PACK));
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCB | RECONFIG_CHANGED_PACK));
+    reduce_uninit();
 
     tilize_init(cb_in0, 1, cb_out1);
-    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_PACK));
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_PACK));
 
     fast_tilize_init(cb_in2, 1, cb_out0);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_PACK));
 
-    transpose_wh_init_short(cb_in1);
-    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
-
-    untilize_init(cb_in2);
+    transpose_init(cb_in1);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
 
     unary_op_init_common(cb_in0, cb_out0);
@@ -102,12 +115,12 @@ void kernel_main() {
     unary_op_init_common(cb_in1, cb_out1);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_PACK));
 
-    transpose_wh_init(cb_in0, cb_out0);
-    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_PACK));
+    transpose_init(cb_in0);
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
 
     copy_tile_to_dst_init_short(cb_in2);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
 
-    tilizeA_B_reduce_init<false, true>(cb_in0, cb_in1, 1, cb_out1);
-    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB | RECONFIG_CHANGED_PACK));
+    tilizeA_B_reduce_init<false, true>(cb_in0, cb_in1, 1);
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
 }

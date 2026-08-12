@@ -431,6 +431,14 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
             i,
             sender_channels_producer_terminate_connection_address[i],
             eth_word_l1_alignment);
+        // Load-bearing: the producer reads this block as a whole SenderChannelProducerCursor in a
+        // single NOC read at connection open, so it must be aligned, not merely 4B aligned.
+        TT_FATAL(
+            (sender_channels_buffer_index_semaphore_address[i] % eth_word_l1_alignment == 0),
+            "sender_channels_buffer_index_semaphore_address[{}] {} must be aligned to {} bytes",
+            i,
+            sender_channels_buffer_index_semaphore_address[i],
+            eth_word_l1_alignment);
     }
     TT_FATAL(
         std::unordered_set<size_t>(
@@ -544,7 +552,7 @@ void append_worker_to_fabric_edm_sender_rt_args(
         static_cast<uint32_t>(sender_worker_flow_control_semaphore_id),
         static_cast<uint32_t>(sender_worker_terminate_semaphore_id),
         static_cast<uint32_t>(sender_worker_buffer_index_semaphore_id)};
-    args_out.reserve(args_out.size() + (values.size() / sizeof(size_t)));
+    args_out.reserve(args_out.size() + values.size());
     std::ranges::copy(values, std::back_inserter(args_out));
 }
 
@@ -557,7 +565,7 @@ void append_worker_to_fabric_edm_sender_rt_args(
         eth_channel,
         static_cast<uint32_t>(sender_worker_terminate_semaphore_id),
         static_cast<uint32_t>(sender_worker_buffer_index_semaphore_id)};
-    args_out.reserve(args_out.size() + (values.size() / sizeof(size_t)));
+    args_out.reserve(args_out.size() + values.size());
     std::ranges::copy(values, std::back_inserter(args_out));
 }
 
@@ -572,7 +580,7 @@ void append_worker_to_fabric_edm_sender_rt_args(
     chan_id_t eth_channel =
         tt::tt_metal::MetalContext::instance()
             .get_cluster()
-            .get_logical_ethernet_core_from_virtual(chip_id, CoreCoord(connection.edm_noc_x, connection.edm_noc_y))
+            .get_logical_ethernet_core_from_virtual(chip_id, tt::tt_metal::CoreCoord(connection.edm_noc_x, connection.edm_noc_y))
             .y;
 
     // copy "only" connections[eth_channel] to L1, not the whole tensix_fabric_connections_l1_info_t
@@ -588,6 +596,10 @@ void append_worker_to_fabric_edm_sender_rt_args(
     connection_info.edm_worker_location_info_addr = connection.edm_worker_location_info_addr;
     connection_info.buffer_size_bytes = connection.buffer_size_bytes;
     connection_info.buffer_index_semaphore_id = connection.buffer_index_semaphore_id;
+    // This non-device-init path is the local worker-style VC0 contract, so preserve
+    // the standard sender-channel-0 free-slots stream id when rewriting the entry.
+    connection_info.worker_free_slots_stream_id =
+        StreamRegAssignments::IncrementOnWrite::sender_channel_0_free_slots_stream_id;
     // NOTE: valid_connections_mask is not copied to L1 from performance reason
     //       because this callstack will be deprecated and not used in WorkerToFabricEdmSenderImpl yet
     //       we want to reduce the number of write_core calls
@@ -596,9 +608,9 @@ void append_worker_to_fabric_edm_sender_rt_args(
     size_t connection_offset = offsetof(tt::tt_fabric::tensix_fabric_connections_l1_info_t, read_only) +
                                (eth_channel * sizeof(tt::tt_fabric::fabric_connection_info_t));
     // Write to Tensix cores
-    std::vector<CoreCoord> worker_core_coords = corerange_to_cores(worker_cores, std::nullopt, true);
+    std::vector<tt::tt_metal::CoreCoord> worker_core_coords = corerange_to_cores(worker_cores, std::nullopt, true);
     for (const auto& logical_core : worker_core_coords) {
-        CoreCoord tensix_core =
+        tt::tt_metal::CoreCoord tensix_core =
             tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
                 chip_id, logical_core, CoreType::WORKER);
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
@@ -614,7 +626,7 @@ void append_worker_to_fabric_edm_sender_rt_args(
         eth_channel,
         static_cast<uint32_t>(sender_worker_terminate_semaphore_id),
         static_cast<uint32_t>(sender_worker_buffer_index_semaphore_id)};
-    args_out.reserve(args_out.size() + (values.size() / sizeof(size_t)));
+    args_out.reserve(args_out.size() + values.size());
     std::ranges::copy(values, std::back_inserter(args_out));
 }
 
@@ -643,7 +655,7 @@ size_t log_worker_to_fabric_edm_sender_rt_args(
 }
 
 FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
-    const CoreCoord& my_eth_core_logical,
+    const tt::tt_metal::CoreCoord& my_eth_core_logical,
     size_t my_noc_x,
     size_t my_noc_y,
     const FabricNodeId& local_fabric_node_id,
@@ -1027,6 +1039,25 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
                                           ? actual_sender_channels_per_vc_.value()[2]
                                           : config.num_used_sender_channels_per_vc[2];
 
+    auto should_force_internal_sender_skip = [&](size_t channel_id) -> bool {
+        if (channel_id >= num_sender_channels || channel_trimming_overrides_.has_value()) {
+            return false;
+        }
+
+        if (!this->is_sender_channel_serviced_[risc_id][channel_id]) {
+            return false;
+        }
+
+        const size_t worker_channel = get_worker_connected_sender_channel();
+        const size_t vc2_start = actual_sender_channels_vc0 + actual_sender_channels_vc1;
+        const size_t vc2_end = vc2_start + actual_sender_channels_vc2;
+        const bool is_worker_channel = channel_id == worker_channel;
+        const bool is_vc2_channel = channel_id >= vc2_start && channel_id < vc2_end;
+        const bool has_static_peer = this->sender_channel_connection_liveness_check_disable_array[channel_id];
+
+        return !is_worker_channel && !is_vc2_channel && !has_static_peer;
+    };
+
     const auto& builder_context = fabric_context.get_builder_context();
     const auto& global_overrides = builder_context.get_channel_trimming_global_overrides();
     const bool router_has_real_capture_entry = has_real_channel_trimming_capture_entry(
@@ -1045,11 +1076,6 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     // peer that makes the speedy receiver path safe on this link.
     const bool vc0_is_terminal_or_source_only_after_trim =
         vc0_trim_fast_path_info_.has_value() && vc0_trim_fast_path_info_->terminal_or_source_only;
-    const bool vc0_is_worker_only_nonforwarding_after_trim =
-        vc0_trim_fast_path_info_.has_value() && vc0_trim_fast_path_info_->worker_only_nonforwarding;
-    const bool vc0_enable_terminal_speedy_rx_after_trim =
-        vc0_trim_fast_path_info_.has_value() && vc0_trim_fast_path_info_->enable_terminal_speedy_rx;
-
     const bool base_enable_deadlock_avoidance = fabric_context.need_deadlock_avoidance_support(this->direction_);
     const bool final_enable_deadlock_avoidance =
         base_enable_deadlock_avoidance && !vc0_is_terminal_or_source_only_after_trim;
@@ -1059,9 +1085,10 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     // shape, and optionally enable a terminal-only speedy receiver when the
     // host has already proven that the exact peer on this link is the
     // matching worker-only source router.
-    const bool enable_speedy_vc0 = (actual_sender_channels_vc0 == 1 && !base_enable_deadlock_avoidance) ||
-                                   vc0_is_worker_only_nonforwarding_after_trim ||
-                                   vc0_enable_terminal_speedy_rx_after_trim;
+    const bool enable_speedy_vc0 = vc0_speedy_path_enabled(
+        actual_sender_channels_vc0,
+        base_enable_deadlock_avoidance,
+        vc0_trim_fast_path_info_.value_or(Vc0TrimFastPathInfo{}));
 
     // ===== Build named compile-time args (all non-pool/channel-mapping args) =====
     std::unordered_map<std::string, uint32_t> named_args;
@@ -1240,7 +1267,14 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
 
     // --- Sender channel per-channel arrays (always emit MAX entries; 0 for unused) ---
     for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {
+        const bool has_static_peer =
+            (i < num_sender_channels) ? this->sender_channel_connection_liveness_check_disable_array[i] : false;
         named_args[fmt::format("SENDER_CH_{}_LIVE_CHECK_SKIP", i)] =
+            (i < num_sender_channels) ? static_cast<uint32_t>(has_static_peer || should_force_internal_sender_skip(i))
+                                      : 0;
+    }
+    for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {
+        named_args[fmt::format("SENDER_CH_{}_WAIT_STATIC_CONNECTION", i)] =
             (i < num_sender_channels)
                 ? static_cast<uint32_t>(this->sender_channel_connection_liveness_check_disable_array[i])
                 : 0;
@@ -1347,6 +1381,24 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
             uint32_t sender_slots = static_cast<uint32_t>(static_alloc->get_sender_channel_number_of_slots(0));
             receiver_amort_freq = std::max<uint32_t>(std::min<uint32_t>(4u, receiver_slots / 2), 1);
             sender_amort_freq = std::max<uint32_t>(std::min<uint32_t>(2u, sender_slots / 2), 1);
+
+            if (vc0_trim_fast_path_info_.has_value()) {
+                // Intentionally use the default payload here, rather than the configured
+                // maximum packet size. The original packet-count cadence was tuned for
+                // this byte budget; using an override-aware maximum would make the cap a no-op.
+                const uint32_t reference_packet_size_bytes =
+                    static_cast<uint32_t>(FabricEriscDatamoverBuilder::default_packet_payload_size_bytes) +
+                    static_cast<uint32_t>(fabric_context.get_fabric_packet_header_size_bytes());
+                sender_amort_freq = limit_credit_amortization_frequency_by_packet_size(
+                    sender_amort_freq,
+                    reference_packet_size_bytes,
+                    vc0_trim_fast_path_info_->local_sender_max_packet_size_bytes,
+                    !vc0_trim_fast_path_info_->terminal_only_nonforwarding);
+                receiver_amort_freq = limit_credit_amortization_frequency_by_packet_size(
+                    receiver_amort_freq,
+                    reference_packet_size_bytes,
+                    vc0_trim_fast_path_info_->peer_sender_max_packet_size_bytes);
+            }
         }
     }
     named_args["SENDER_CREDIT_AMORTIZATION_FREQUENCY"] = sender_amort_freq;
@@ -1359,7 +1411,11 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     auto* static_alloc_ptr = dynamic_cast<FabricStaticSizedChannelsAllocator*>(config.channel_allocator.get());
     TT_FATAL(static_alloc_ptr != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator");
     static_alloc_ptr->emit_channel_allocations_ct_args(
-        ct_args, actual_sender_channels_vc0, actual_sender_channels_vc1, num_receiver_channels);
+        ct_args,
+        actual_sender_channels_vc0,
+        actual_sender_channels_vc1,
+        actual_sender_channels_vc2,
+        num_receiver_channels);
 
     // Emit remote channel allocations
     ct_args.push_back(0xabaddad6);
@@ -1461,7 +1517,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
 FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     tt::tt_metal::IDevice* device,
     tt::tt_metal::Program& program,
-    const CoreCoord& ethernet_core,
+    const tt::tt_metal::CoreCoord& ethernet_core,
     ChipId local_physical_chip_id,
     ChipId peer_physical_chip_id,
     const FabricEriscDatamoverConfig& config,
@@ -1503,7 +1559,7 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
 FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     tt::tt_metal::IDevice* device,
     tt::tt_metal::Program& /*program*/,
-    const CoreCoord& ethernet_core,
+    const tt::tt_metal::CoreCoord& ethernet_core,
     const FabricNodeId& local_fabric_node_id,
     const FabricNodeId& peer_fabric_node_id,
     const FabricEriscDatamoverConfig& config,
@@ -1717,7 +1773,7 @@ void FabricEriscDatamoverBuilder::setup_downstream_vc_connection(
     auto* adapter_ptr = this->receiver_channel_to_downstream_adapter.get();
     TT_FATAL(adapter_ptr != nullptr, "Adapter is not set. Failed to build TT-Fabric router. Internal error.");
     adapter_ptr->add_downstream_connection(
-        adapter_spec, upstream_vc_idx, absolute_channel_id, ds_dir, CoreCoord(ds_noc_x, ds_noc_y), is_2D_routing);
+        adapter_spec, upstream_vc_idx, absolute_channel_id, ds_dir, tt::tt_metal::CoreCoord(ds_noc_x, ds_noc_y), is_2D_routing);
 }
 
 size_t FabricEriscDatamoverBuilder::get_configured_risc_count() const { return this->config.risc_configs.size(); }
@@ -1739,7 +1795,7 @@ void FabricEriscDatamoverBuilder::teardown_from_host(
     std::vector<uint32_t> val(1, termination_signal);
     tt::tt_metal::detail::WriteToDeviceL1(
         d,
-        d->logical_core_from_ethernet_core(CoreCoord(this->noc_x_, this->noc_y_)),
+        d->logical_core_from_ethernet_core(tt::tt_metal::CoreCoord(this->noc_x_, this->noc_y_)),
         config.termination_signal_address,
         val,
         CoreType::ETH);

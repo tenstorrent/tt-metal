@@ -29,10 +29,7 @@ void kernel_main() {
 #endif
 
         const uint32_t offset = i * static_cast<uint32_t>(sizeof(uint32_t));
-        DPRINT << "Reading " << sizeof(uint32_t) << " bytes from DRAM address " << dram_src_address + offset
-               << " in bank " << dram_src_bank_id << " and writing it to L1 address " << l1_dst_address + offset
-               << ENDL();
-        DEVICE_PRINT(
+        DPRINT(
             "Reading {} bytes from DRAM address {} in bank {} and writing it to L1 address {}\n",
             sizeof(uint32_t),
             dram_src_address + offset,
@@ -43,6 +40,6 @@ void kernel_main() {
             src_dram, l1_buf, sizeof(uint32_t), {.bank_id = dram_src_bank_id, .addr = dram_src_address + offset}, {});
         noc.async_read_barrier();
 
-        sem.up(1);
+        sem.set(i + 1);
     }
 }

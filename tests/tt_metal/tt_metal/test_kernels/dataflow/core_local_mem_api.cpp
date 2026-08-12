@@ -14,14 +14,21 @@ template <bool use_legacy_api>
 void access_memory(uint32_t src_addr, uint32_t end_addr, uint32_t num_iterations, volatile uint64_t* results) {
     uint64_t start = c_tensix_core::read_wall_clock();
     for (uint32_t i = 0; i < num_iterations; i++) {
+        // Unroll both inner loops so per-byte loop overhead (pointer advance + branch) is
+        // amortized 8x. Without it, the legacy and new-API loops compile to byte-identical
+        // 4-instruction bodies, but I-cache warmup of the second loop biases speedup by
+        // ~0.05–0.1% — right at this test's tolerance, so it flakes. Unrolling drops
+        // overhead from ~50% to ~10% of the loop and brings the ratio inside tolerance.
         if constexpr (use_legacy_api) {
             volatile uint32_t* data = reinterpret_cast<volatile uint32_t*>(src_addr);
+#pragma GCC unroll 8
             while (data < reinterpret_cast<volatile uint32_t*>(end_addr)) {
                 [[maybe_unused]] volatile uint32_t word = data[0];
                 data++;
             }
         } else {
             CoreLocalMem<std::uint32_t> mem(src_addr);
+#pragma GCC unroll 8
             while (mem.get_address() < end_addr) {
                 [[maybe_unused]] volatile uint32_t word = mem[0];
                 mem++;
@@ -71,7 +78,7 @@ void kernel_main() {
     // Try sending with NoC API
     Noc noc;
     UnicastEndpoint unicast_endpoint;
-    noc.async_write(
+    noc.async_write<NocOptions::CUSTOM_VC>(
         mem,
         unicast_endpoint,
         num_bytes,
@@ -81,7 +88,7 @@ void kernel_main() {
             .noc_y = neighbor_worker_core_y,
             .addr = src_addr,
         },
-        0);
+        NocOptVals{.vc = 0});
     noc.async_write_barrier();
 
     // Try clear data here before reading from neighbor core

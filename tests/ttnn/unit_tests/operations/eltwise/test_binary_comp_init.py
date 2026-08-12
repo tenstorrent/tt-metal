@@ -172,6 +172,7 @@ def test_binary_comp_ops_scalar(input_shapes, scalar, out_dtype, mem_configs, tt
     (ttnn.eq, ttnn.ne),
 )
 def test_binary_comp_uint16_ops(input_shapes, mem_configs, ttnn_function, device):
+    torch.manual_seed(0)
     in_data = torch.randint(0, 100, input_shapes, dtype=torch.int32)
     in_data[-1] = 65535
     # Make a copy of in_data so 50% of values are the same

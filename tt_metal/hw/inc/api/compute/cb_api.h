@@ -6,7 +6,7 @@
 
 #include "api/compute/common_globals.h"
 #ifdef ARCH_QUASAR
-#include "api/debug/assert.h"
+#include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_interface.h"
 #endif
 #ifdef TRISC_PACK
 #include "llk_io_pack.h"
@@ -37,7 +37,7 @@ namespace ckernel {
  *
  * | Argument  | Description                          | Type     | Valid Range                                                                                       | Required |
  * |-----------|--------------------------------------|----------|---------------------------------------------------------------------------------------------------|----------|
- * | cb_id     | The index of the circular buffer (CB)| uint32_t | 0 to 31                                                                                           | True     |
+ * | cbid      | The index of the circular buffer (CB)| uint32_t | 0 to 31                                                                                           | True     |
  * | ntiles    | The number of tiles to wait for      | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) | True     |
  * */
 // clang-format on
@@ -69,7 +69,7 @@ ALWI void cb_wait_front(uint32_t cbid, uint32_t ntiles) { UNPACK((llk_wait_tiles
  *
  * | Argument  | Description                          | Type     | Valid Range                                                                                       | Required |
  * |-----------|--------------------------------------|----------|---------------------------------------------------------------------------------------------------|----------|
- * | cb_id     | The index of the circular buffer (CB)| uint32_t | 0 to 31                                                                                           | True     |
+ * | cbid      | The index of the circular buffer (CB)| uint32_t | 0 to 31                                                                                           | True     |
  * | ntiles    | The number of tiles to be popped     | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) | True     |
  */
 // clang-format on
@@ -85,7 +85,7 @@ ALWI void cb_pop_front(uint32_t cbid, uint32_t ntiles) { UNPACK((llk_pop_tiles(c
  *
  * | Argument  | Description                          | Type     | Valid Range                                                                                       | Required |
  * |-----------|--------------------------------------|----------|---------------------------------------------------------------------------------------------------|----------|
- * | cb_id     | The index of the circular buffer (CB)| uint32_t | 0 to 31                                                                                           | True     |
+ * | cbid      | The index of the circular buffer (CB)| uint32_t | 0 to 31                                                                                           | True     |
  * | ntiles    | The number of free tiles to wait for | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) | True     |
  */
 // clang-format on
@@ -123,7 +123,7 @@ ALWI void cb_reserve_back(uint32_t cbid, uint32_t ntiles) {
  *
  * | Argument  | Description                          | Type     | Valid Range                                                                                       | Required |
  * |-----------|--------------------------------------|----------|---------------------------------------------------------------------------------------------------|----------|
- * | cb_id     | The index of the circular buffer (CB)| uint32_t | 0 to 31                                                                                           | True     |
+ * | cbid      | The index of the circular buffer (CB)| uint32_t | 0 to 31                                                                                           | True     |
  * | ntiles    | The number of tiles to be pushed     | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) | True     |
  */
 // clang-format on
@@ -134,6 +134,24 @@ ALWI void cb_push_back(uint32_t cbid, uint32_t ntiles) {
     PACK((llk_push_tiles(cbid, ntiles)));
 #endif
 }
+
+#ifdef TRISC_UNPACK
+// Returns the L1 byte address of element 0 of `tile_index` within `operand_id`'s buffer.
+// Shared by get_tile_address and read_tile_value; only valid on the UNPACK thread.
+ALWI uint32_t get_tile_l1_byte_address(uint32_t operand_id, uint32_t tile_index) {
+#ifdef ARCH_QUASAR
+    LocalDFBInterface& local_dfb = get_local_dfb_interface(operand_id);
+    const auto& slot = local_dfb.tc_slots[local_dfb.tc_idx];
+    uint32_t base_address = slot.base_addr + dfb_slot_cursor_offset_units(local_dfb, slot, slot.rd_entry_idx);
+    // Per-tile spacing is stride_size, not entry_size (matches pop_front/push_back).
+    uint32_t offset_address = static_cast<uint32_t>(local_dfb.stride_size) * tile_index;
+#else
+    uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr;
+    uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size * tile_index;
+#endif
+    return (base_address + offset_address) << 4;  // Convert to byte address
+}
+#endif
 
 // clang-format off
 /**
@@ -152,14 +170,10 @@ ALWI void cb_push_back(uint32_t cbid, uint32_t ntiles) {
  */
 // clang-format on
 ALWI uint32_t get_tile_address(uint32_t cb_id, uint32_t tile_index) {
-#ifndef ARCH_QUASAR
     uint32_t address = 0;
 
     UNPACK({
-        uint32_t operand_id = get_operand_id(cb_id);
-        uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr;
-        uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size * tile_index;
-        address = (base_address + offset_address) << 4;  // Convert to byte address
+        address = get_tile_l1_byte_address(get_operand_id(cb_id), tile_index);
 
         mailbox_write(ckernel::ThreadId::MathThreadId, address);
         mailbox_write(ckernel::ThreadId::PackThreadId, address);
@@ -169,10 +183,6 @@ ALWI uint32_t get_tile_address(uint32_t cb_id, uint32_t tile_index) {
     PACK(address = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
 
     return address;
-#else
-    ASSERT(false && "get_tile_address is not implemented for ARCH_QUASAR");
-    return 0;
-#endif  // TODO: AM; add Quasar implementation
 }
 
 // clang-format off
@@ -190,14 +200,10 @@ ALWI uint32_t get_tile_address(uint32_t cb_id, uint32_t tile_index) {
  */
 // clang-format on
 ALWI uint32_t read_tile_value(uint32_t cb_id, uint32_t tile_index, uint32_t element_offset) {
-#ifndef ARCH_QUASAR
     uint32_t value = 0;
 
     UNPACK({
-        uint32_t operand_id = get_operand_id(cb_id);
-        uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr;
-        uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size * tile_index;
-        uint32_t byte_address = (base_address + offset_address) << 4;  // Convert to byte address
+        uint32_t byte_address = get_tile_l1_byte_address(get_operand_id(cb_id), tile_index);
 
         value = reinterpret_cast<volatile uint32_t*>(byte_address)[element_offset];
 
@@ -209,10 +215,6 @@ ALWI uint32_t read_tile_value(uint32_t cb_id, uint32_t tile_index, uint32_t elem
     PACK(value = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
 
     return value;
-#else
-    ASSERT(false && "read_tile_value is not implemented for ARCH_QUASAR");
-    return 0;
-#endif  // TODO: AM; add Quasar implementation
 }
 
 }  // namespace ckernel

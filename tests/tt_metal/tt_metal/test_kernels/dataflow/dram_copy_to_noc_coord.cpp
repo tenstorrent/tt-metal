@@ -7,11 +7,6 @@
 #include "api/core_local_mem.h"
 #include "api/dataflow/endpoints.h"
 #include "internal/firmware_common.h"
-#include "api/compile_time_args.h"
-#include "internal/hw_thread.h"
-#if defined(ARCH_QUASAR)
-#include "experimental/kernel_args.h"
-#endif
 #if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
 #include "internal/ethernet/tunneling.h"
 #endif
@@ -22,41 +17,6 @@
  * APIs explicit flushes need to be used since the calls are non-blocking
  * */
 void kernel_main() {
-#if defined(COMPILE_FOR_DM)
-    uint32_t thread_idx = internal_::get_hw_thread_idx();
-
-#if defined(TEST_MULTI_DM_SANITIZE_RACE)
-    // Having explicit sync barrier helps stress test CAS in sanitize.h since
-    // testing showed DM0 (which wakes other DMs) most likely wins without a barrier
-    constexpr uint32_t num_dms = get_arg(args::num_dms);
-    constexpr uint32_t multi_dm_base_addr = get_arg(args::multi_dm_base_addr);
-    constexpr uint32_t multi_dm_base_size = get_arg(args::multi_dm_base_size);
-    constexpr uint32_t l1_sync_addr = get_arg(args::l1_sync_addr);
-    uint64_t* l1_ptr = reinterpret_cast<uint64_t*>(l1_sync_addr);
-    __atomic_add_fetch(l1_ptr, 1, __ATOMIC_RELAXED);
-    while (__atomic_load_n(l1_ptr, __ATOMIC_ACQUIRE) != num_dms) {
-    }
-#else
-    // Single DM test: only specified dm_id executes, others exit early
-    constexpr uint32_t dm_id = get_arg(args::dm_id);
-    if (thread_idx != dm_id) {
-        return;
-    }
-#endif
-#endif
-#if defined(ARCH_QUASAR)
-    std::uint32_t local_buffer_addr = get_arg(args::local_buffer_addr);
-
-    std::uint32_t buffer_src_addr = get_arg(args::buffer_src_addr);
-    std::uint32_t src_noc_x = get_arg(args::src_noc_x);
-    std::uint32_t src_noc_y = get_arg(args::src_noc_y);
-
-    std::uint32_t buffer_dst_addr = get_arg(args::buffer_dst_addr);
-    std::uint32_t dst_noc_x = get_arg(args::dst_noc_x);
-    std::uint32_t dst_noc_y = get_arg(args::dst_noc_y);
-
-    std::uint32_t buffer_size = get_arg(args::buffer_size);
-#else
     std::uint32_t local_buffer_addr = get_arg_val<uint32_t>(0);
 
     std::uint32_t buffer_src_addr = get_arg_val<uint32_t>(1);
@@ -68,23 +28,7 @@ void kernel_main() {
     std::uint32_t dst_noc_y = get_arg_val<uint32_t>(6);
 
     std::uint32_t buffer_size = get_arg_val<uint32_t>(7);
-#endif
 
-#if defined(COMPILE_FOR_DM) && defined(TEST_MULTI_DM_SANITIZE_RACE)
-    buffer_dst_addr = (multi_dm_base_addr | static_cast<uint32_t>(thread_idx));
-    buffer_size = (multi_dm_base_size | static_cast<uint32_t>(thread_idx));
-#endif
-
-#if defined(ARCH_QUASAR)
-    bool use_inline_dw_write = static_cast<bool>(get_arg(args::use_inline_dw_write));
-    bool bad_linked_transaction = static_cast<bool>(get_arg(args::bad_linked_transaction));
-    std::uint32_t l1_overflow_addr = get_arg(args::l1_overflow_addr);
-    std::uint32_t eth_src_overflow_addr = get_arg(args::eth_src_overflow_addr);
-    std::uint32_t eth_dest_overflow_addr = get_arg(args::eth_dest_overflow_addr);
-    bool use_multicast_semaphore_inc = static_cast<bool>(get_arg(args::use_multicast_semaphore_inc));
-    std::uint32_t mcast_dst_end_x = get_arg(args::mcast_dst_end_x);
-    std::uint32_t mcast_dst_end_y = get_arg(args::mcast_dst_end_y);
-#else
     bool use_inline_dw_write = static_cast<bool>(get_arg_val<uint32_t>(8));
     bool bad_linked_transaction = static_cast<bool>(get_arg_val<uint32_t>(9));
     std::uint32_t l1_overflow_addr = get_arg_val<uint32_t>(10);
@@ -93,7 +37,6 @@ void kernel_main() {
     bool use_multicast_semaphore_inc = static_cast<bool>(get_arg_val<uint32_t>(13));
     std::uint32_t mcast_dst_end_x = get_arg_val<uint32_t>(14);
     std::uint32_t mcast_dst_end_y = get_arg_val<uint32_t>(15);
-#endif
 
     // We will assert later. This kernel will hang.
     // Need to signal completion to dispatcher before hanging so that
@@ -101,9 +44,8 @@ void kernel_main() {
     // Device Close () requires fast dispatch kernels to finish.
     volatile tt_l1_ptr go_msg_t* go_message_in = GET_MAILBOX_ADDRESS_DEV(go_messages[0]);
     // Signal completion to dispatcher before assert hangs the kernel
-    // SD signaling: IDLE_ERISC (all archs) and Quasar DM require RUN_MSG_DONE
-    // TODO: Remove COMPILE_FOR_DM once FD is enabled on Quasar
-#if defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_DM)
+    // SD signaling: IDLE_ERISC (all archs) requires RUN_MSG_DONE
+#if defined(COMPILE_FOR_IDLE_ERISC)
     go_message_in->signal = RUN_MSG_DONE;
 #else
     uint64_t dispatch_addr = calculate_dispatch_addr(go_message_in);

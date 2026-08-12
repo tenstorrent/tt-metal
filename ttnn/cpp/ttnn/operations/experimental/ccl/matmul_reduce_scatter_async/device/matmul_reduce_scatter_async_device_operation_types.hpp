@@ -45,8 +45,8 @@ struct MatmulReduceScatterAsyncResult {
 };
 
 struct MatmulReduceScatterAsyncResultSpec {
-    TensorSpec mm;
-    TensorSpec reduce_scatter;
+    tt::tt_metal::TensorSpec mm;
+    tt::tt_metal::TensorSpec reduce_scatter;
 };
 
 struct MatmulReduceScatterAsyncInputs {

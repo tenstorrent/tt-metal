@@ -30,19 +30,30 @@ on:
         description: "Model tier to filter tests (1, 2, or 3)"
     outputs:
       matrix:
-        description: "Filtered matrix of legs that ran (consumed by ai_summary/run for INFRA_FAILURE reconciliation)."
+        description: "Filtered matrix of single-host legs that ran (consumed by ai_summary/run for INFRA_FAILURE reconciliation)."
         value: ${{ jobs.load-test-matrix.outputs.matrix }}
+      matrix_multihost:
+        description: "Filtered matrix of exabox multihost legs that ran."
+        value: ${{ jobs.load-test-matrix.outputs.matrix_multihost }}
+
+# Default to read-only. Only the multihost job needs id-token, which it grants on the job itself.
+# Single-host legs pull the dev container image, so packages: read is the default.
+permissions:
+  contents: read
+  packages: read
 
 jobs:
   load-test-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.apply-filters.outputs.matrix }}
+      matrix_multihost: ${{ steps.apply-filters.outputs.matrix_multihost }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/models_unit_tests.yaml
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           sparse-checkout: |
             .github
@@ -57,7 +68,8 @@ jobs:
           python3 .github/scripts/utils/verify_time_budget.py \
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
-            "unit"
+            "unit" \
+            "${{ inputs.tier }}"
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
         run: |
@@ -67,22 +79,46 @@ jobs:
             ./.github/sku_config.yaml
       - name: Apply tier and model filters
         id: apply-filters
+        # Pass values via env rather than inline ${{ }} so arbitrary cmd content in the matrix
+        # (apostrophes, parentheses, etc.) cannot break the shell quoting of the assignment.
+        env:
+          MATRIX: ${{ steps.build-matrix.outputs.matrix }}
+          TIER: ${{ inputs.tier }}
+          MODEL: ${{ inputs.model }}
+          SKUS: ${{ inputs.enabled-skus }}
         run: |
-          MATRIX='${{ steps.build-matrix.outputs.matrix }}'
           # Filter by tier
-          FILTERED=$(echo "$MATRIX" | jq -c --argjson tier ${{ inputs.tier }} '[.[] | select(.tier == $tier)]')
-          # Filter by model (substring match, case-insensitive)
-          if [ "${{ inputs.model }}" != "all" ]; then
-            FILTERED=$(echo "$FILTERED" | jq -c --arg m "${{ inputs.model }}" '[.[] | select(.model | test($m; "i"))]')
+          FILTERED=$(echo "$MATRIX" | jq -c --argjson tier "$TIER" '[.[] | select(.tier == $tier)]')
+          # Filter by model (substring match, case-insensitive; comma-separated OR-list)
+          if [ "$MODEL" != "all" ]; then
+            FILTERED=$(echo "$FILTERED" | jq -c --arg m "$MODEL" '
+              ($m | ascii_downcase | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))) as $toks
+              | [ .[] | select((.model | ascii_downcase) as $mm | any($toks[]; . as $t | $mm | contains($t))) ]')
           fi
-          if [ "$FILTERED" = "[]" ]; then
-            echo "::warning::No tests found for tier=${{ inputs.tier }}, model=${{ inputs.model }}. Pipeline will be skipped."
-            echo "matrix=[]" >> $GITHUB_OUTPUT
-          else
-            echo "matrix<<EOF" >> $GITHUB_OUTPUT
-            echo "$FILTERED" >> $GITHUB_OUTPUT
-            echo "EOF" >> $GITHUB_OUTPUT
+          # Split into single-host (container) and multihost (exabox) legs. Multihost legs are
+          # tagged with "multihost": true by prepare_test_matrix.py when the SKU runs_on
+          # includes an exabox-multihost* label (e.g. exabox-multihost-ci-sc4).
+          SINGLE=$(echo "$FILTERED" | jq -c '[.[] | select(.multihost != true)]')
+          MULTI=$(echo "$FILTERED" | jq -c '[.[] | select(.multihost == true)]')
+          emit() {  # $1 = output name, $2 = compact JSON array
+            if [ -z "$2" ] || [ "$2" = "[]" ]; then
+              echo "$1=[]" >> $GITHUB_OUTPUT
+            else
+              {
+                echo "$1<<EOF"
+                echo "$2"
+                echo "EOF"
+              } >> $GITHUB_OUTPUT
+            fi
+          }
+          if [ "$SINGLE" = "[]" ] && [ "$MULTI" = "[]" ]; then
+            # No leg matched the requested SKU(s). Common when a dispatch picks an exabox SKU
+            # (e.g. bh_sc4/bh_sc16) that no test entry defines yet: both jobs skip silently
+            # otherwise, so name the SKUs to make the empty dispatch actionable.
+            echo "::warning::No tests found for tier=${TIER}, model=${MODEL}, skus=[${SKUS}]. No test entry declares any of these SKUs; both single-host and multihost jobs will be skipped."
           fi
+          emit matrix "$SINGLE"
+          emit matrix_multihost "$MULTI"
 
   models-unit-tests:
     needs: load-test-matrix
@@ -99,22 +135,34 @@ jobs:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
-        HF_HUB_OFFLINE: 1
+        # Only the per-runner BH cache modes (local-disk, lfc) need HF online
+        # so first-use can populate the cache. Shared NFS modes (cloud-mlperf
+        # for BH and the implicit WH mount) keep HF offline — those are :ro
+        # and HF would try to write metadata (refs/main, .no_exist markers)
+        # on every HEAD call even when the cache already has the model,
+        # crashing with `OSError [Errno 30] Read-only file system`.
+        HF_HUB_OFFLINE: ${{ (matrix.test-group['weights-cache-mode'] == 'local-disk' || matrix.test-group['weights-cache-mode'] == 'lfc') && '0' || '1' }}
         HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
+        HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
         LOGURU_LEVEL: INFO
         GTEST_OUTPUT: xml:/work/generated/test_reports/
+        MLPERF_READ_ONLY: ${{ inputs.mlperf-read-only }} # used by GPT-OSS 120B to toggle --skip-model-load
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        # bh_p150 / bh_loudbox / bh_galaxy[_perf] and the WH SKUs run on machines
-        # that host the canonical HF / tt_cache layout under /mnt/MLPerf, so the
-        # standard mount works as-is. bh_quietbox_2 is a local-disk BH runner
-        # whose equivalent layout lives at /localdev/blackhole_demos/huggingface_data
-        # — map that host path onto /mnt/MLPerf/huggingface inside the container
-        # so a single test cmd referencing /mnt/MLPerf/... resolves on both
-        # cache modes.
-        - ${{ matrix.test-group.sku == 'bh_quietbox_2' && format('/localdev/blackhole_demos/huggingface_data:/mnt/MLPerf/huggingface{0}', inputs.mlperf-read-only && ':ro' || ':rw') || format('/mnt/MLPerf:/mnt/MLPerf{0}', inputs.mlperf-read-only && ':ro' || ':rw') }}
-      options: "--device /dev/tenstorrent --privileged -v /sys:/sys"
+        # Mount the HF / tt_cache root so it always appears inside the container
+        # at /mnt/MLPerf/huggingface, regardless of which BH cache mode the
+        # runner uses. Host source comes from matrix.test-group['weights-cache-mode']
+        # (populated from the weights-cache-mode field in .github/sku_config.yaml by prepare_test_matrix.py):
+        #   cloud-mlperf            → host /mnt/MLPerf/huggingface (shared NFS)
+        #   local-disk / lfc        → host /localdev/blackhole_demos/huggingface_data (per-runner)
+        #   yyz4-mnt-models         → host /mnt/models/huggingface (YYZ4 Exabox nfs storage mount)
+        #   (no mode → WH SKU)      → host /mnt/MLPerf (whole tree; preserves access to
+        #                             /mnt/MLPerf/tt_dnn-models still used by one WH entry)
+        # rw-ness: per-runner caches are :rw so first-use HF downloads can populate them;
+        # shared NFS honors mlperf-read-only.
+        - ${{ matrix.test-group['weights-cache-mode'] == 'cloud-mlperf' && format('/mnt/MLPerf/huggingface:/mnt/MLPerf/huggingface{0}', inputs.mlperf-read-only && ':ro' || ':rw') || (matrix.test-group['weights-cache-mode'] == 'yyz4-mnt-models' && format('/mnt/models/huggingface:/mnt/MLPerf/huggingface{0}', inputs.mlperf-read-only && ':ro' || ':rw')) || (matrix.test-group['weights-cache-mode'] == 'local-disk' || matrix.test-group['weights-cache-mode'] == 'lfc') && '/localdev/blackhole_demos/huggingface_data:/mnt/MLPerf/huggingface:rw' || format('/mnt/MLPerf:/mnt/MLPerf{0}', inputs.mlperf-read-only && ':ro' || ':rw') }}
+      options: "--device /dev/tenstorrent --privileged -v /sys:/sys -e TT_GH_CI_INFRA"
     defaults:
       run:
         shell: bash
@@ -122,6 +170,7 @@ jobs:
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -131,22 +180,15 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          enable-watcher: true
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
-        run: |
-          mkdir -p generated/test_reports generated/test_logs
-
-          # Mirror the matrix command's combined stdout+stderr to a per-leg
-          # log file so ai-summary can read it later. The brace group lets
-          # the cmd be multiple statements; PIPESTATUS forwards the real
-          # exit code that piping through tee would otherwise mask.
-          SAFE_NAME=$(echo "${{ matrix.test-group.name }}" | tr ' /' '__')
-          LOG_FILE="generated/test_logs/${SAFE_NAME}_${{ job.check_run_id }}.log"
-
-          {
+        uses: ./docker-job/.github/actions/run-with-log
+        with:
+          log-file: generated/test_logs/${{ matrix.test-group.name }}.log
+          run: |
+            mkdir -p generated/test_reports
             ${{ matrix.test-group.cmd }}
-          } 2>&1 | tee "$LOG_FILE"
-          exit "${PIPESTATUS[0]}"
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
@@ -172,3 +214,25 @@ jobs:
           job-name: ${{ matrix.test-group.name }}
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
+
+  # Multihost (exabox) model-unit tests. Extracted into its own reusable workflow so the exabox
+  # lifecycle lives in one file (candidate to de-dup against demo-sp / models-e2e multihost impls)
+  # without touching the single-host pipeline. Legs are selected by SKU: an entry is routed here
+  # when prepare_test_matrix.py marks it "multihost": true (SKU runs_on contains an
+  # exabox-multihost* label) and load-test-matrix collects into matrix_multihost.
+  models-unit-tests-multihost:
+    needs: load-test-matrix
+    if: ${{ needs.load-test-matrix.outputs.matrix_multihost != '[]' }}
+    # OIDC may be required by the multihost-ci runner chart; grant it here rather than workflow-wide.
+    # Job-level permissions replace inherited defaults, so restate reads too.
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
+    secrets: inherit
+    uses: ./.github/workflows/models-unit-tests-multihost-impl.yaml
+    with:
+      docker-image: ${{ inputs.docker-image }}
+      build-artifact-name: ${{ inputs.build-artifact-name }}
+      wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      matrix: ${{ needs.load-test-matrix.outputs.matrix_multihost }}

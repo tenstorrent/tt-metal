@@ -20,7 +20,7 @@ def vit_patch_embeddings(config, pixel_values, *, parameters, unittest_check=Fal
     stride_w = 1
 
     pixel_values = ttnn.reshape(pixel_values, (batch_size, img_h, img_w // patch_size, 4 * patch_size))
-    pixel_values = ttnn.fold(pixel_values, stride_h, stride_w)
+    pixel_values = ttnn.fold(pixel_values, stride_h, stride_w, collapse_output=True)
     pixel_values = ttnn.to_layout(pixel_values, layout=ttnn.TILE_LAYOUT)
 
     if unittest_check:
@@ -239,7 +239,7 @@ def vit(
         config,
         embeddings_output,
         attention_mask=attention_mask,
-        parameters=parameters.vit.encoder,
+        parameters=parameters.vit.encoder if "encoder" in parameters.vit else parameters.vit.layers,
     )
 
     # Final LayerNorm

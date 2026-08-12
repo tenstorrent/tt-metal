@@ -3,8 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 // ------------------------------------------------------------------
 // 1) unflatten_index<RANK>:
@@ -52,35 +56,35 @@ void kernel_main() {
     // ------------------------------------------------------------------------
     // 0) Read compile-time constants
     // ------------------------------------------------------------------------
-    constexpr uint32_t element_size = get_named_compile_time_arg_val("element_size");
-    constexpr uint32_t cb_id_out0 = get_named_compile_time_arg_val("output_cb_index");
-    constexpr uint32_t output_H = get_named_compile_time_arg_val("output_H");
-    constexpr uint32_t H = get_named_compile_time_arg_val("H");
-    constexpr uint32_t W = get_named_compile_time_arg_val("W");
-    constexpr uint32_t TILE_HEIGHT = get_named_compile_time_arg_val("tile_height");
-    constexpr uint32_t TILE_WIDTH = get_named_compile_time_arg_val("tile_width");
-    constexpr uint32_t FACE_HEIGHT = get_named_compile_time_arg_val("face_height");
-    constexpr uint32_t FACE_WIDTH = get_named_compile_time_arg_val("face_width");
-    constexpr bool needs_padding = (get_named_compile_time_arg_val("needs_padding") == 1);
-    constexpr uint32_t RANK = get_named_compile_time_arg_val("rank");
-    constexpr uint32_t permuted_input_h_index = get_named_compile_time_arg_val("h_in_dest");
-    constexpr auto dst_args = TensorAccessorArgs<0>();
+    constexpr uint32_t element_size = get_arg(args::element_size);
+    // output_cb_index (legacy magic CB index carried by a named CTA) is now the dfb::cb_out binding.
+    constexpr uint32_t output_H = get_arg(args::output_H);
+    constexpr uint32_t H = get_arg(args::H);
+    constexpr uint32_t W = get_arg(args::W);
+    constexpr uint32_t TILE_HEIGHT = get_arg(args::tile_height);
+    constexpr uint32_t TILE_WIDTH = get_arg(args::tile_width);
+    constexpr uint32_t FACE_HEIGHT = get_arg(args::face_height);
+    constexpr uint32_t FACE_WIDTH = get_arg(args::face_width);
+    // needs_padding is promoted to the NEEDS_PADDING preprocessor define (gates the conditional cb_pad DFB).
+    constexpr uint32_t RANK = get_arg(args::rank);
+    constexpr uint32_t permuted_input_h_index = get_arg(args::h_in_dest);
 
     // ------------------------------------------------------------------------
     // 1) Read runtime arguments
     // ------------------------------------------------------------------------
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t start_tile = get_arg_val<uint32_t>(1);
-    uint32_t end_tile = get_arg_val<uint32_t>(2);
-    uint32_t start_padding_tile_idx = get_arg_val<uint32_t>(3);
-    uint32_t end_padding_tile_idx = get_arg_val<uint32_t>(4);
+    uint32_t start_tile = get_arg(args::start_tile);
+    uint32_t end_tile = get_arg(args::end_tile);
+#ifdef NEEDS_PADDING
+    uint32_t start_padding_tile_idx = get_arg(args::start_padding_tile_idx);
+    uint32_t end_padding_tile_idx = get_arg(args::end_padding_tile_idx);
+#endif
 
-    // input_shape, perm, output_shape
-    uint32_t array_start_offset = 5;  // input shape starts at arg #5
+    // input_shape, perm (rank-length; count = RANK, a CTA) delivered as runtime varargs:
+    // input_shape in varargs [0, RANK), perm in [RANK, 2*RANK). output_shape derived below.
     uint32_t input_shape[RANK], perm[RANK], output_shape[RANK];
     for (uint32_t i = 0; i < RANK; i++) {
-        input_shape[i] = get_arg_val<uint32_t>(i + array_start_offset);
-        perm[i] = get_arg_val<uint32_t>(i + array_start_offset + RANK);
+        input_shape[i] = get_vararg(i);
+        perm[i] = get_vararg(i + RANK);
     }
     for (uint32_t i = 0; i < RANK; i++) {
         output_shape[i] = input_shape[perm[i]];
@@ -106,11 +110,9 @@ void kernel_main() {
     // For sub-tile writes
     constexpr uint32_t SUBTILE_LINE_BYTES = FACE_WIDTH * element_size;
 
-    // Address generator
-    const uint32_t tile_bytes = get_tile_size(cb_id_out0);
-
-    const auto s = TensorAccessor(dst_args, dst_addr);
-    CircularBuffer cb_out(cb_id_out0);
+    const auto s = TensorAccessor(tensor::output);
+    Noc noc;
+    DataflowBuffer dfb_out(dfb::cb_out);
 
     // ------------------------------------------------------------------------
     // 3) Height dimension remainder logic
@@ -226,8 +228,8 @@ void kernel_main() {
         uint32_t base_output_face_line_offset_bytes = output_face_line_offset * element_size;
 
         // 6d) Wait for data block
-        cb_out.wait_front(1);
-        uint32_t base_l1_read_addr = cb_out.get_read_ptr();
+        dfb_out.wait_front(1);
+        uint32_t base_l1_read_addr = dfb_out.get_read_ptr();
 
         // 6e) Loop over faces in the height dimension
         for (uint8_t face_h = 0; face_h < num_faces_h; ++face_h) {
@@ -262,29 +264,33 @@ void kernel_main() {
                     // Where data goes in the *output* tile
                     uint32_t output_tile_offset_bytes = base_output_face_line_offset_bytes + face_w_offset_bytes;
 
-                    // Build final output address
-                    uint64_t write_noc_base_addr = s.get_noc_addr(output_tile_idx, output_tile_offset_bytes);
-
                     // Build final input read address
                     uint32_t final_addr = base_l1_read_addr + face_h_offset_bytes + face_w_offset_bytes +
                                           (sub_tile_line * SUBTILE_LINE_BYTES);
 
                     // 6h) Asynchronous write
-                    noc_async_write(final_addr, write_noc_base_addr, SUBTILE_LINE_BYTES);
+                    CoreLocalMem<uint32_t> src(final_addr);
+                    noc.async_write(
+                        src,
+                        s,
+                        SUBTILE_LINE_BYTES,
+                        {.offset_bytes = 0},
+                        {.page_id = output_tile_idx, .offset_bytes = output_tile_offset_bytes});
                 }
             }
         }
-        noc_async_write_barrier();
-        cb_out.pop_front(1);
+        noc.async_write_barrier();
+        dfb_out.pop_front(1);
     }
 
     // ------------------------------------------------------------------------
     // 7) Handle padding if needed
     // ------------------------------------------------------------------------
-    if constexpr (needs_padding) {
-        CircularBuffer cb1(tt::CBIndex::c_1);
-        cb1.wait_front(1);
-        uint32_t l1_read_ptr = cb1.get_read_ptr();
+#ifdef NEEDS_PADDING
+    {
+        DataflowBuffer dfb1(dfb::cb_pad);
+        dfb1.wait_front(1);
+        uint32_t l1_read_ptr = dfb1.get_read_ptr();
 
         // We'll reuse 'dest_multi_idx' for tile indexing
         constexpr uint32_t x_t = output_H_tiled - 1;
@@ -322,15 +328,20 @@ void kernel_main() {
                     for (uint8_t sub_tile_line = sub_tile_line_start; sub_tile_line < FACE_HEIGHT; ++sub_tile_line) {
                         uint32_t offset = (face_offset + (sub_tile_line * FACE_WIDTH)) * element_size;
 
-                        uint64_t write_noc_base_addr = s.get_noc_addr(linear_idx, offset);
-
                         // Perform asynchronous write
-                        noc_async_write(l1_read_ptr, write_noc_base_addr, SUBTILE_LINE_BYTES);
+                        CoreLocalMem<uint32_t> pad_src(l1_read_ptr);
+                        noc.async_write(
+                            pad_src,
+                            s,
+                            SUBTILE_LINE_BYTES,
+                            {.offset_bytes = 0},
+                            {.page_id = linear_idx, .offset_bytes = offset});
                     }
                 }
             }
         }
-        noc_async_write_barrier();
-        cb1.pop_front(1);
+        noc.async_write_barrier();
+        dfb1.pop_front(1);
     }
+#endif
 }

@@ -38,21 +38,22 @@ void kernel_main() {
 #endif
 
 #ifndef BCAST_OP_INIT
-    init_bcast<BCAST_LLKOP, BCAST_DIM>(icb0, icb1, ocb);
+    compute_kernel_hw_startup(icb0, icb1, ocb);
+    bcast_init<BCAST_LLKOP, BCAST_DIM>(icb0, icb1);
 #else
-    binary_op_init_common(icb0, icb1, ocb);
+    compute_kernel_hw_startup(icb0, icb1, ocb);
     BCAST_OP_INIT(icb0, icb1);
 #endif
 
 #ifdef ARCH_QUASAR
     dfb1.wait_front(onetile);
     dfb_out.reserve_back(onetile);
-    acquire_dst();
+    tile_regs_acquire();
     dfb0.wait_front(onetile);
 #else
     cb1.wait_front(onetile);
     cb16.reserve_back(onetile);
-    acquire_dst();
+    tile_regs_acquire();
     cb0.wait_front(onetile);
 #endif
 
@@ -74,16 +75,19 @@ void kernel_main() {
 #endif
 #endif
 
+    tile_regs_commit();
+    tile_regs_wait();
+
     pack_tile(0, ocb);
 
 #ifdef ARCH_QUASAR
     dfb0.pop_front(onetile);
-    release_dst();
+    tile_regs_release();
     dfb_out.push_back(onetile);
     dfb1.pop_front(onetile);
 #else
     cb0.pop_front(onetile);
-    release_dst();
+    tile_regs_release();
     cb16.push_back(onetile);
     cb1.pop_front(onetile);
 #endif

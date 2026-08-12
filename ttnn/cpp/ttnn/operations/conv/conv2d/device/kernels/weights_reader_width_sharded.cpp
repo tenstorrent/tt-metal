@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include <api/dataflow/dataflow_api.h>
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/debug/dprint.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
@@ -44,8 +45,8 @@ void kernel_main() {
         fuse_bias ? get_tile_size(bias_cb_id) : 0;  // dummy but valid value in case bias is not enabled
     const auto s_bias = TensorAccessor(s_bias_args, bias_addr_dram_base);
 
-    experimental::CB weight_cb(cb_id_weight);
-    experimental::CB bias_cb(bias_cb_id);
+    DataflowBuffer weight_dfb(cb_id_weight);
+    DataflowBuffer bias_dfb(bias_cb_id);
     Noc noc;
 
     bool to_load_bias = true;
@@ -66,7 +67,7 @@ void kernel_main() {
             // Stride = in_channels*out_channels*sizeof(elem)/num_cores.
             for (uint32_t remote_weight_block_index = 0; remote_weight_block_index < remote_weight_height_blocks;
                  remote_weight_block_index++) {
-                weight_cb.reserve_back(weight_block_num_tiles);
+                weight_dfb.reserve_back(weight_block_num_tiles);
                 if (is_active) {
                     uint32_t weight_current_block_start_tile_id = weight_block_start_tile_id;
 
@@ -86,7 +87,7 @@ void kernel_main() {
                                  ++weight_tile_w_i) {
                                 noc.async_read(
                                     s_weight,
-                                    weight_cb,
+                                    weight_dfb,
                                     weight_tile_nbytes,
                                     {.page_id = weight_tile_id},
                                     {.offset_bytes = weight_write_offset});
@@ -99,18 +100,18 @@ void kernel_main() {
                     }
                     noc.async_read_barrier();
                 }
-                weight_cb.push_back(weight_block_num_tiles);
+                weight_dfb.push_back(weight_block_num_tiles);
                 weight_block_start_tile_id += weight_next_block_other_core_stride_h;
             }
             weight_start_tile_id += weight_next_block_this_core_stride_h;
             if (to_load_bias) {
                 if constexpr (fuse_bias) {
-                    bias_cb.reserve_back(weight_block_width_ntiles);
+                    bias_dfb.reserve_back(weight_block_width_ntiles);
                     uint32_t bias_write_offset = 0;
                     for (uint32_t weight_tile_w_i = 0; weight_tile_w_i < weight_block_width_ntiles; ++weight_tile_w_i) {
                         noc.async_read(
                             s_bias,
-                            bias_cb,
+                            bias_dfb,
                             bias_pagesize,
                             {.page_id = bias_start_tile_id},
                             {.offset_bytes = bias_write_offset});
@@ -118,7 +119,7 @@ void kernel_main() {
                         bias_start_tile_id += 1;
                     }
                     noc.async_read_barrier();
-                    bias_cb.push_back(weight_block_width_ntiles);
+                    bias_dfb.push_back(weight_block_width_ntiles);
                 }
                 to_load_bias = false;
             }

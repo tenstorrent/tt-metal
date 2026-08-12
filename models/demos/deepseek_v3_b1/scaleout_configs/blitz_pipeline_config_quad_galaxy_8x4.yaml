@@ -1,0 +1,24 @@
+# Maps each 8x4 stage to one host-local full-galaxy contribution.
+# Each stage consumes all four canonical 2x4 slices on the host.
+
+stage_to_mesh_host_mapping:
+  0:
+    0:
+      host: bh-glx-110-c07u08
+      slices: [0, 1, 2, 3]
+  1:
+    0:
+      host: bh-glx-110-c07u02
+      slices: [0, 1, 2, 3]
+  2:
+    0:
+      host: bh-glx-110-c08u02
+      slices: [0, 1, 2, 3]
+  3:
+    0:
+      host: bh-glx-110-c08u08
+      slices: [0, 1, 2, 3]
+
+mesh_graph_desc_path: models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_quad_galaxy_8x4_mesh_graph_descriptor.textproto
+rank_binding_file: blitz_decode_pipeline_rank_binding_quad_galaxy_8x4.yaml
+rank_file: blitz_decode_pipeline_rank_file_quad_galaxy_8x4

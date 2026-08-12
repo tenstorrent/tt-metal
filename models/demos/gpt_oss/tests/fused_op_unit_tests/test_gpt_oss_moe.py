@@ -30,6 +30,7 @@ from models.common.utility_functions import comp_pcc, profiler, skip_for_blackho
 from models.demos.gpt_oss.tests.test_factory import TestFactory
 from models.demos.gpt_oss.tt.mlp import MLP
 from models.demos.gpt_oss.utils.general_utils import throughput_experts_supported_on_arch
+from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
 DEVICE_PERF_ENV_VAR = "GPT_OSS_MOE_DEVICE_PERF"
@@ -350,7 +351,7 @@ def _skip_single_device_ccl():
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-            "trace_region_size": 30000000,
+            TRACE_MODEL_KEY_PARAM: "gpt-oss-20b",
         }
     ],
     indirect=True,
@@ -433,7 +434,7 @@ def test_gpt_oss_moe(
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-            "trace_region_size": 30000000,
+            TRACE_MODEL_KEY_PARAM: "gpt-oss-20b",
         }
     ],
     indirect=True,

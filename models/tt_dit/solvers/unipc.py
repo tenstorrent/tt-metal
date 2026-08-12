@@ -7,16 +7,17 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING
-
-from diffusers.schedulers import UniPCMultistepScheduler
+from typing import TYPE_CHECKING, Any
 
 import ttnn
 
 from .base import Solver
+from .schedule import Schedule
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+    from diffusers.schedulers import UniPCMultistepScheduler
 
 
 @dataclass(frozen=True)
@@ -37,38 +38,38 @@ class UniPCVariant(Enum):
 
 
 class UniPCSolver(Solver):
-    def __init__(self, scheduler: UniPCMultistepScheduler | None = None) -> None:
-        """Wrap a diffusers scheduler for on-device UniPC stepping."""
-        if scheduler is None:
-            scheduler = UniPCMultistepScheduler(use_flow_sigmas=True, prediction_type="flow_prediction")
-
-        if not isinstance(scheduler, UniPCMultistepScheduler):
-            msg = f"scheduler must be a UniPCMultistepScheduler, got {type(scheduler).__name__}"
-            raise ValueError(msg)
-
-        if not scheduler.config.use_flow_sigmas:
-            msg = "Only UniPCMultistepScheduler configured with use_flow_sigmas=True is supported"
-            raise ValueError(msg)
-
-        order = scheduler.config.solver_order
+    def __init__(self, *, order: int, variant: UniPCVariant, scheduler: UniPCMultistepScheduler) -> None:
         if order not in (1, 2):
             msg = f"only order 1 and 2 are supported, got {order}"
             raise ValueError(msg)
 
-        super().__init__(scheduler)
-        self.order = order
-        self.variant = UniPCVariant(scheduler.config.solver_type)
-        self._state = None
+        super().__init__(scheduler=scheduler)
 
-    def set_schedule(self, num_inference_steps: int | None = None, *, device: object = None, **kwargs: object) -> None:
-        super().set_schedule(num_inference_steps, device=device, **kwargs)
+        self.order = order
+        self.variant = variant
+        self._state = None
+        self._default_shift = scheduler.config.flow_shift
+
+    def set_schedule(
+        self, num_inference_steps: int | None = None, *, shift: float | None = None, **kwargs: Any
+    ) -> None:
+        """Derive and adopt the schedule for one denoising run.
+
+        Args:
+            num_inference_steps: Number of denoising steps.
+            shift: Flow shift for this run only; the scheduler's construction-time value
+                is used when omitted.
+            kwargs: Forwarded to the scheduler's `set_timesteps`.
+        """
+        # UniPC reads the shift from its config rather than from set_timesteps.
+        self._scheduler.register_to_config(flow_shift=self._default_shift if shift is None else shift)
+        self._schedule = Schedule.from_scheduler(self._scheduler, num_inference_steps, **kwargs)
+
         if self._state is not None:
             self._state = _State(self._state.clean_preds, self._state.corrected, 0)
 
     def step(self, *, step: int, latent: ttnn.Tensor, velocity_pred: ttnn.Tensor) -> ttnn.Tensor:
-        self._assert_schedule()
-
-        clean_pred = latent - self._sigmas[step] * velocity_pred
+        clean_pred = latent - self.sigmas[step] * velocity_pred
 
         state = self._state or _State(
             tuple(ttnn.empty_like(latent) for _ in range(self.order)),
@@ -78,7 +79,7 @@ class UniPCSolver(Solver):
 
         if step != 0:
             corrected = self._correct(
-                order=_taper(self.order, step - 1, len(self._sigmas) - 1),
+                order=_taper(self.order, step - 1, len(self.sigmas) - 1),
                 latent=state.corrected,
                 step=step - 1,
                 clean_preds=(*clean_preds, clean_pred),
@@ -95,7 +96,7 @@ class UniPCSolver(Solver):
         del clean_pred
 
         predicted = self._predict(
-            order=_taper(self.order, step, len(self._sigmas) - 1),
+            order=_taper(self.order, step, len(self.sigmas) - 1),
             latent=state.corrected,
             step=step,
             clean_preds=clean_preds,
@@ -107,8 +108,8 @@ class UniPCSolver(Solver):
     def _predict(
         self, *, order: int, latent: ttnn.Tensor, step: int, clean_preds: Sequence[ttnn.Tensor]
     ) -> ttnn.Tensor:
-        sigma_curr, sigma_next = self._sigmas[step : step + 2]
-        alpha_curr, alpha_next = self._alphas[step : step + 2]
+        sigma_curr, sigma_next = self.sigmas[step : step + 2]
+        alpha_curr, alpha_next = self.alphas[step : step + 2]
 
         lam_curr = _log(alpha_curr) - _log(sigma_curr)
         lam_next = _log(alpha_next) - _log(sigma_next)
@@ -122,7 +123,7 @@ class UniPCSolver(Solver):
         if order == 1:
             return latent
 
-        lam_prev = _log(self._alphas[step - 1]) - _log(self._sigmas[step - 1])
+        lam_prev = _log(self.alphas[step - 1]) - _log(self.sigmas[step - 1])
         r = (lam_curr - lam_prev) / h
         w = alpha_next * self.variant.b(h) * 0.5 / r
 
@@ -131,8 +132,8 @@ class UniPCSolver(Solver):
     def _correct(
         self, *, order: int, latent: ttnn.Tensor, step: int, clean_preds: Sequence[ttnn.Tensor]
     ) -> ttnn.Tensor:
-        sigma_curr, sigma_next = self._sigmas[step : step + 2]
-        alpha_curr, alpha_next = self._alphas[step : step + 2]
+        sigma_curr, sigma_next = self.sigmas[step : step + 2]
+        alpha_curr, alpha_next = self.alphas[step : step + 2]
 
         lam_curr = _log(alpha_curr) - _log(sigma_curr)
         lam_next = _log(alpha_next) - _log(sigma_next)
@@ -151,7 +152,7 @@ class UniPCSolver(Solver):
         # UniC-2: solve 2x2 system
         exp_neg_h = math.expm1(-h)
 
-        lam_prev = _log(self._alphas[step - 1]) - _log(self._sigmas[step - 1])
+        lam_prev = _log(self.alphas[step - 1]) - _log(self.sigmas[step - 1])
         r_1 = (lam_curr - lam_prev) / h
 
         g1 = (h + exp_neg_h) / h**2

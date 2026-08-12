@@ -6,48 +6,43 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/common.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t i = 0;
-    // buffers
-    uint32_t dst_addr = get_arg_val<uint32_t>(i++);
-
     // output
-    uint32_t output_size_c_without_padding = get_arg_val<uint32_t>(i++);
-    uint32_t output_size_d_without_padding = get_arg_val<uint32_t>(i++);
-    uint32_t output_size_h_without_padding = get_arg_val<uint32_t>(i++);
-    uint32_t output_size_w_without_padding = get_arg_val<uint32_t>(i++);
-    uint32_t output_noc_id_stride_n = get_arg_val<uint32_t>(i++);
-    uint32_t output_noc_id_stride_c = get_arg_val<uint32_t>(i++);
-    uint32_t output_noc_id_stride_d = get_arg_val<uint32_t>(i++);
-    uint32_t output_noc_id_stride_h = get_arg_val<uint32_t>(i++);
-    uint32_t output_num_stick_width = get_arg_val<uint32_t>(i++);
+    uint32_t output_size_c_without_padding = get_arg(args::output_size_c_without_padding);
+    uint32_t output_size_d_without_padding = get_arg(args::output_size_d_without_padding);
+    uint32_t output_size_h_without_padding = get_arg(args::output_size_h_without_padding);
+    uint32_t output_size_w_without_padding = get_arg(args::output_size_w_without_padding);
+    uint32_t output_noc_id_stride_n = get_arg(args::output_noc_id_stride_n);
+    uint32_t output_noc_id_stride_c = get_arg(args::output_noc_id_stride_c);
+    uint32_t output_noc_id_stride_d = get_arg(args::output_noc_id_stride_d);
+    uint32_t output_noc_id_stride_h = get_arg(args::output_noc_id_stride_h);
+    uint32_t output_num_stick_width = get_arg(args::output_num_stick_width);
 
     // etc
-    uint32_t start_id = get_arg_val<uint32_t>(i++);
-    uint32_t num_sticks = get_arg_val<uint32_t>(i++);
-    uint32_t stick_size = get_arg_val<uint32_t>(i++);
-    uint32_t element_size = get_arg_val<uint32_t>(i++);
-    uint32_t num_elements_per_alignment = get_arg_val<uint32_t>(i++);
-    uint32_t num_alignment_width = get_arg_val<uint32_t>(i++);
+    uint32_t start_id = get_arg(args::start_id);
+    uint32_t num_sticks = get_arg(args::num_sticks);
+    uint32_t stick_size = get_arg(args::stick_size);
+    uint32_t element_size = get_arg(args::element_size);
+    uint32_t num_elements_per_alignment = get_arg(args::num_elements_per_alignment);
+    uint32_t num_alignment_width = get_arg(args::num_alignment_width);
 
-    constexpr uint32_t cb_id_out0 = tt::CBIndex::c_0;
-    constexpr uint32_t cb_id_out1 = tt::CBIndex::c_17;
-
-    constexpr auto dst_args = TensorAccessorArgs<0>();
-    const auto s0 = TensorAccessor(dst_args, dst_addr);
+    const auto s0 = TensorAccessor(tensor::s0);
 
 #define NOC_MINIMUM_READ_SIZE 32
 
     Noc noc;
-    CircularBuffer cb_out0_obj(cb_id_out0);
-    CircularBuffer cb_out1_obj(cb_id_out1);
+    // out0 is the buffer the reader staged each selected element in; out1 is where this kernel
+    // assembles one aligned run of them before writing that run out to the output tensor.
+    DataflowBuffer dfb_out0_obj(dfb::out0);
+    DataflowBuffer dfb_out1_obj(dfb::out1);
 
-    uint32_t l1_read_addr0 = cb_out0_obj.get_read_ptr();
-    uint32_t l1_read_addr1 = cb_out1_obj.get_read_ptr();
+    uint32_t l1_read_addr0 = dfb_out0_obj.get_read_ptr();
+    uint32_t l1_read_addr1 = dfb_out1_obj.get_read_ptr();
 
     uint32_t end_id = start_id + num_sticks;
     for (uint32_t i = start_id; i < end_id; ++i) {
@@ -80,7 +75,7 @@ void kernel_main() {
 
         uint32_t j = 0;
         for (uint32_t w = w_start; w < w_end; w++, j++) {
-            cb_out0_obj.wait_front(1);
+            dfb_out0_obj.wait_front(1);
 
             if (element_size == 4) {
                 volatile tt_l1_ptr uint32_t* index_l1_ptr0 =
@@ -98,11 +93,11 @@ void kernel_main() {
                 index_l1_ptr1[j] = index_l1_ptr0[0];
             }
 
-            cb_out0_obj.pop_front(1);
+            dfb_out0_obj.pop_front(1);
         }
 
         noc.async_write(
-            cb_out1_obj,
+            dfb_out1_obj,
             s0,
             NOC_MINIMUM_READ_SIZE,
             {.offset_bytes = 0},

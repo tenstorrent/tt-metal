@@ -54,8 +54,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     ckernel::unpack::_set_dst_write_addr_<ckernel::trisc::DstTileShape::Tile32x32>(0);
 
     // Program MOP and unpack all tiles of operand B to Dest
-    _llk_unpack_unary_operand_init_<p_unpacr::UNP_DEST, false, is_fp32_dest_acc_en>(buf_desc_id_dest, num_tiles);
-    _llk_unpack_unary_operand_<p_unpacr::UNP_DEST>(0);
+    _llk_unpack_unary_operand_init_<p_unpacr::UNP_DEST, false, is_fp32_dest_acc_en>(buf_desc_id_dest, ckernel::DEFAULT_TENSOR_SHAPE, num_tiles);
+    _llk_unpack_unary_operand_<p_unpacr::UNP_DEST>(0, ckernel::DEFAULT_TENSOR_SHAPE);
 
     _llk_unpack_dest_dvalid_section_done_<dest_sync>();
 }
@@ -78,7 +78,7 @@ void run_kernel(RUNTIME_PARAMETERS /*params*/)
 #include "cmath_common.h"
 #include "csfpu_common.h"
 #include "llk_math_common.h"
-#include "llk_math_eltwise_unary_sfpu_common.h"
+#include "llk_math_eltwise_sfpu_common.h"
 #include "llk_srcs.h"
 #include "params.h"
 
@@ -142,7 +142,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     td_pack.buf_desc_id     = buf_desc_id_pack;
     td_pack.reg_data_format = static_cast<std::uint8_t>(formats.pack_S_src);
     _configure_buf_desc_table_(td_pack.buf_desc_id, td_pack.buf_desc);
-    _llk_pack_hw_configure_<p_pacr::PACK1>(td_pack);
+    _llk_pack_hw_configure_<p_pacr::PACK1, false>(td_pack, ckernel::ReluConfig::none());
 
     // Implied math format disable for SrcS and sfpmem mod selection
     cfg[DISABLE_IMPLIED_SRCS_FORMAT_ADDR32 + ckernel::isolate_sfpu::TRISC_ID] = !IMPLIED_MATH_FORMAT;

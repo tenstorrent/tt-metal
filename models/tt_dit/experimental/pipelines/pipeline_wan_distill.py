@@ -26,13 +26,19 @@ from __future__ import annotations
 
 import contextlib
 import os
+from typing import TYPE_CHECKING
 
 import torch
 
+import ttnn
 from models.tt_dit.experimental.utils.lightx2v_loader import load_lightx2v_state_dict
-from models.tt_dit.pipelines.wan.pipeline_wan import TorchWanTransformer3DModel, WanPipeline
+from models.tt_dit.models.transformers.wan2_2.transformer_wan import TorchWanTransformer3DModel
+from models.tt_dit.pipelines.wan.pipeline_wan import WanPipelineConfig
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import WanPipelineI2V
 from models.tt_dit.utils import cache
+
+if TYPE_CHECKING:
+    from diffusers.schedulers import SchedulerMixin
 
 # Hard-coded config for Wan2.2-I2V-A14B-Diffusers transformer subfolders. Used
 # only in random_weights mode so we don't have to fetch transformer/config.json
@@ -90,22 +96,27 @@ class WanDistillPipelineI2V(WanPipelineI2V):
     LIGHTX2V_REPO = "lightx2v/Wan2.2-Distill-Models"
     HIGH_NOISE_FILE = "wan2.2_i2v_A14b_high_noise_lightx2v_4step.safetensors"
     LOW_NOISE_FILE = "wan2.2_i2v_A14b_low_noise_lightx2v_4step.safetensors"
-    BASE_DIFFUSERS_REPO = "Wan-AI/Wan2.2-I2V-A14B-Diffusers"
     CACHE_NAMESPACE = "Wan2.2-Distill-lightx2v-4step"
     RANDOM_CACHE_NAMESPACE = "Wan2.2-Distill-random"
     DISTILL_BOUNDARY_RATIO = 0.5
 
+    @classmethod
+    def _config_overrides(cls) -> dict[str, object]:
+        # The 4-step distill splits 2 high-noise + 2 low-noise steps.
+        return {**super()._config_overrides(), "boundary_ratio": cls.DISTILL_BOUNDARY_RATIO}
+
     def __init__(
         self,
-        *args,
+        *,
+        device: ttnn.MeshDevice,
+        config: WanPipelineConfig,
         lightx2v_local_dir: str | None = None,
         allow_download: bool | None = None,
         random_weights: bool | None = None,
-        **kwargs,
-    ):
-        kwargs["checkpoint_name"] = kwargs.get("checkpoint_name") or self.BASE_DIFFUSERS_REPO
-        kwargs["boundary_ratio"] = self.DISTILL_BOUNDARY_RATIO
-
+        scheduler: SchedulerMixin | None = None,
+        run_warmup: bool = True,
+        lora_enabled: bool = False,
+    ) -> None:
         if allow_download is None:
             allow_download = os.environ.get("TT_DIT_ALLOW_HF_DOWNLOAD") == "1"
         if lightx2v_local_dir is None:
@@ -119,7 +130,9 @@ class WanDistillPipelineI2V(WanPipelineI2V):
 
         ctx = _patch_torch_transformer_random() if random_weights else contextlib.nullcontext()
         with ctx:
-            super().__init__(*args, **kwargs)
+            super().__init__(
+                device=device, config=config, scheduler=scheduler, run_warmup=run_warmup, lora_enabled=lora_enabled
+            )
 
     def prepare_text_conditioning(self, tt_model, prompt_embeds, buffer, traced=False):
         # When CFG is baked in (guidance_scale=1.0), encode_prompt returns
@@ -133,29 +146,31 @@ class WanDistillPipelineI2V(WanPipelineI2V):
         return super().prepare_text_conditioning(tt_model, prompt_embeds, buffer, traced)
 
     def _prepare_transformer(self, idx: int):
+        state = self.transformer_states[idx]
         if self._random_weights:
-            # Use the random-init torch model's state_dict directly. Cache under
-            # a separate namespace so a real-weights run doesn't reuse it.
-            state = self.transformer_states[idx]
+            # Use the (random) state_dict the WanCheckpoint loaded under the
+            # _patch_torch_transformer_random monkey-patch. Cache under a
+            # separate namespace so a real-weights run doesn't reuse it.
             cache.load_model(
                 state.model,
                 model_name=self.RANDOM_CACHE_NAMESPACE,
-                subfolder=state.subfolder,
+                subfolder=state.checkpoint.subfolder,
                 parallel_config=self.parallel_config,
                 mesh_shape=tuple(self.mesh_device.shape),
+                mesh_device=self.mesh_device,
                 is_fsdp=self.is_fsdp,
-                get_torch_state_dict=lambda s=state: s.torch_model.state_dict(),
+                get_torch_state_dict=lambda s=state: s.checkpoint.state_dict(),
             )
             return
 
-        state = self.transformer_states[idx]
         filename = self.HIGH_NOISE_FILE if idx == 0 else self.LOW_NOISE_FILE
         cache.load_model(
             state.model,
             model_name=self.CACHE_NAMESPACE,
-            subfolder=state.subfolder,
+            subfolder=state.checkpoint.subfolder,
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
+            mesh_device=self.mesh_device,
             is_fsdp=self.is_fsdp,
             get_torch_state_dict=lambda f=filename: load_lightx2v_state_dict(
                 self.LIGHTX2V_REPO,
@@ -164,8 +179,3 @@ class WanDistillPipelineI2V(WanPipelineI2V):
                 local_dir=self._lightx2v_local_dir,
             ),
         )
-
-    @staticmethod
-    def create_pipeline(*args, **kwargs):
-        kwargs["checkpoint_name"] = kwargs.get("checkpoint_name") or WanDistillPipelineI2V.BASE_DIFFUSERS_REPO
-        return WanPipeline.create_pipeline(*args, pipeline_class=WanDistillPipelineI2V, **kwargs)

@@ -5,6 +5,8 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "ttnn/operations/data_movement/reshape_view/device/hostdevcommon/common.hpp"
@@ -34,14 +36,17 @@ void kernel_main() {
     const auto input_addr_gen = TensorAccessor(input_args, input_addr);
     const auto map_addr_gen = TensorAccessor(map_args, map_addr);
 
+    Noc noc;
+    CircularBuffer cb_mapping(mapping_cb_id);
+    CircularBuffer cb_input(input_cb_id);
     bool first = true;
     for (uint32_t out_page_idx = start_output_page_idx; out_page_idx < end_output_page_idx; ++out_page_idx) {
-        cb_reserve_back(mapping_cb_id, One_Tile_Reserve);
+        cb_mapping.reserve_back(One_Tile_Reserve);
         const uint64_t map_noc_addr = map_addr_gen.get_noc_addr(out_page_idx);
-        const uint32_t map_addr = get_write_ptr(mapping_cb_id);
-        enhanced_noc_async_read<Max_Map_Size_Bytes, true>(map_noc_addr, map_addr, Max_Map_Size_Bytes);
-        noc_async_read_barrier();
-        cb_push_back(mapping_cb_id, 1);
+        const uint32_t map_addr = cb_mapping.get_write_ptr();
+        enhanced_noc_async_read<Max_Map_Size_Bytes, true>(noc, map_noc_addr, map_addr, Max_Map_Size_Bytes);
+        noc.async_read_barrier();
+        cb_mapping.push_back(1);
 
         auto map_ptr = reinterpret_cast<volatile tt_l1_ptr SegmentMapData*>(map_addr);
         uint32_t previous_input_page_idx = std::numeric_limits<uint32_t>::max();
@@ -60,13 +65,13 @@ void kernel_main() {
                 }
             }
 
-            cb_reserve_back(input_cb_id, One_Tile_Reserve);
-            const uint32_t input_write_addr = get_write_ptr(input_cb_id);
+            cb_input.reserve_back(One_Tile_Reserve);
+            const uint32_t input_write_addr = cb_input.get_write_ptr();
             const uint64_t input_page_noc_addr = input_addr_gen.get_noc_addr(input_page_idx);
-            enhanced_noc_async_read<Tile_Size_Bytes, true>(input_page_noc_addr, input_write_addr, Tile_Size_Bytes);
+            enhanced_noc_async_read<Tile_Size_Bytes, true>(noc, input_page_noc_addr, input_write_addr, Tile_Size_Bytes);
             previous_input_page_idx = input_page_idx;
-            noc_async_read_barrier();
-            cb_push_back(input_cb_id, 1);
+            noc.async_read_barrier();
+            cb_input.push_back(1);
         }
     }
 }

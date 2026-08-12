@@ -4,6 +4,7 @@
 
 #include "mesh_partition_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tuple>
 #include <vector>
 #include "ttnn/distributed/types.hpp"
@@ -11,6 +12,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
+#include <tt-metalium/host_api.hpp>
 
 namespace ttnn::operations::ccl {
 namespace detail {
@@ -123,17 +125,15 @@ MeshPartitionDeviceOperation::MeshPartition::create_at(
 
     SliceOp::validate_on_program_cache_miss(slice_attrs, slice_tensor_args);
     auto program_factory = SliceOp::select_program_factory(slice_attrs, slice_tensor_args);
-    auto program_and_shared_variables = std::visit(
-        [&](auto&& factory) -> std::pair<Program, SliceSharedVariables> {
-            auto cached_program = factory.create(slice_attrs, slice_tensor_args, tensor_return_value);
-            return {std::move(cached_program.program), std::move(cached_program.shared_variables)};
+    Program program = std::visit(
+        [&](auto&& factory) -> Program {
+            using Factory = std::decay_t<decltype(factory)>;
+            auto descriptor = Factory::create_descriptor(slice_attrs, slice_tensor_args, tensor_return_value);
+            return Program{descriptor};
         },
         program_factory);
 
-    shared_variables_t vars{
-        .slice_program_factory = program_factory,
-        .slice_shared_variables = std::move(program_and_shared_variables.second)};
-    return {std::move(program_and_shared_variables.first), std::move(vars)};
+    return {std::move(program), shared_variables_t{.slice_program_factory = program_factory}};
 }
 
 void MeshPartitionDeviceOperation::MeshPartition::override_runtime_arguments(
@@ -149,18 +149,11 @@ void MeshPartitionDeviceOperation::MeshPartition::override_runtime_arguments(
         auto [slice_attrs, slice_tensor_args] =
             compute_slice_parameters(operation_attributes, tensor_args, mesh_coordinate);
 
-        // Visit the program factory variant and use std::get to extract the matching shared_variables
-        std::visit(
-            [&](auto&& program_factory) {
-                using Factory = std::decay_t<decltype(program_factory)>;
-                using SharedVars = typename Factory::shared_variables_t;
-
-                auto& slice_shared_vars = std::get<SharedVars>(shared_variables.slice_shared_variables);
-                auto cached_proxy_program = Factory::cached_program_t::proxy(program, slice_shared_vars);
-                program_factory.override_runtime_arguments(
-                    cached_proxy_program, slice_attrs, slice_tensor_args, tensor_return_value);
-            },
-            shared_variables.slice_program_factory);
+        // Re-apply this coord's per-dispatch state to the cached Program, through the same patch the
+        // slice op uses -- addresses only. CB total_size/page_size are not re-applied on a hit, so any
+        // sizing that varies across calls must be in compute_program_hash().
+        ttnn::prim::patch_slice_program_addresses(
+            program, shared_variables.slice_program_factory, slice_attrs, slice_tensor_args, tensor_return_value);
     }
 }
 

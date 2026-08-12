@@ -7,7 +7,7 @@ import torch
 import ttnn
 import models.experimental.bloom.bloom_utils as bloom_utils
 import models.experimental.bloom.tt.bloom_gelu_forward as bloom_gelu_forward
-from models.common.utility_functions import pad_by_zero
+from models.common.utility_functions import torch2tt_tensor
 
 
 class TtBloomMLP(torch.nn.Module):
@@ -32,8 +32,8 @@ class TtBloomMLP(torch.nn.Module):
         self.tt_weight_mlp_4hh = bloom_utils.torch2tt_tensor(self.tt_weight_mlp_4hh, device)
 
         # Load biases
-        self.tt_bias_mlp_h4h = pad_by_zero(state_dict[f"{base_address}.dense_h_to_4h.bias"], device)[0]
-        self.tt_bias_mlp_4hh = pad_by_zero(state_dict[f"{base_address}.dense_4h_to_h.bias"], device)[0]
+        self.tt_bias_mlp_h4h = torch2tt_tensor(state_dict[f"{base_address}.dense_h_to_4h.bias"], device)
+        self.tt_bias_mlp_4hh = torch2tt_tensor(state_dict[f"{base_address}.dense_4h_to_h.bias"], device)
 
         # self.gelu_impl = bloom_gelu_forward.tt_bloom_gelu_forward
         # self.gelu_impl = bloom_gelu_forward.bloom_gelu_forward

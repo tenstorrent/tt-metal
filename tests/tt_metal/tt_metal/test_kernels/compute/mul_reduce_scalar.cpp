@@ -30,7 +30,7 @@ void kernel_main() {
     tile_regs_acquire();
 
     // Perform fused multiply + reduce scalar
-    ckernel::mul_reduce_scalar_tile<REDUCE_OP>(tt::CBIndex::c_0, tt::CBIndex::c_1, num_tiles);
+    ckernel::mul_reduce_scalar_tile<REDUCE_OP>(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16, num_tiles);
 
     tile_regs_commit();
     tile_regs_wait();

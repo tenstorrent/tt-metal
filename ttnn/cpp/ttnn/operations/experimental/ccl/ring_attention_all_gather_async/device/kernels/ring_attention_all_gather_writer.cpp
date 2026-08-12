@@ -3,12 +3,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+#include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+#include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/metadata_scalar_read.hpp"
+#include "ring_attention_all_gather_metadata.hpp"
 #include <cstdint>
 #include <utility>
 
@@ -33,10 +40,24 @@ constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(10)
 constexpr uint32_t contig_pages_advanced = get_compile_time_arg_val(11);
 constexpr uint32_t num_inputs = get_compile_time_arg_val(12);
 constexpr bool direction = get_compile_time_arg_val(13);  // 1 is forward, 0 is backward
+constexpr uint32_t unicast_route_arg0 = get_compile_time_arg_val(14);
+constexpr uint32_t unicast_route_arg1 = get_compile_time_arg_val(15);
+// Trace-safe metadata path: when set, the writer recomputes the gather extent (valid_pages) on-device
+// from kv_actual_isl[0] (a 1-element uint32 DRAM tensor) so it stays matched to the reader's on-device
+// recompute (else they desync under a placeholder host logical_n). When false neither this nor the
+// metadata accessor is emitted.
+constexpr bool has_metadata = get_compile_time_arg_val(16);
+constexpr uint32_t cb_meta_id = get_compile_time_arg_val(17);
 
 void kernel_main() {
-    constexpr uint32_t page_size_base_idx = 14;
+    constexpr uint32_t page_size_base_idx = 18;
     constexpr auto outputs_args = make_tensor_accessor_args_tuple<num_inputs, page_size_base_idx + num_inputs>();
+    // Metadata accessor follows the output accessors (metadata path only); fall back to a valid (unused)
+    // accessor offset when absent so TensorAccessorArgs<> never names a non-accessor compile arg.
+    constexpr uint32_t kMetaArgsOffset = has_metadata
+                                             ? std::get<num_inputs - 1>(outputs_args).next_compile_time_args_offset()
+                                             : (page_size_base_idx + num_inputs);
+    constexpr auto meta_args = TensorAccessorArgs<kMetaArgsOffset>();
 
     ///////////////////////////////////////////////////
     // ARGS
@@ -64,11 +85,47 @@ void kernel_main() {
         input_batch_head_count[input_idx] = get_arg_val<uint32_t>(arg_idx++);
         input_tile_id_start[input_idx] = get_arg_val<uint32_t>(arg_idx++);
         input_tile_id_end[input_idx] = get_arg_val<uint32_t>(arg_idx++);
+        // input_batch_base: reader-only (phase-1 input offset). The writer always targets output
+        // slot 0, so it reads the arg here only for alignment.
+        (void)get_arg_val<uint32_t>(arg_idx++);
+        // valid_pages_per_batch_head (slot 8): clamp the gather to the logical_n-valid slab prefix (must
+        // match the reader's clamp so cb_output producer/consumer page counts stay aligned). Default
+        // (full input) leaves the range unchanged.
+        const uint32_t valid_pages = get_arg_val<uint32_t>(arg_idx++);
+        if (valid_pages < input_tile_id_end[input_idx]) {
+            input_tile_id_end[input_idx] = valid_pages;
+        }
     }
 
     auto outputs_tuple = make_tensor_accessor_tuple(outputs_args, arg_idx);
     arg_idx += num_inputs;
     auto output_addrgens = make_abstract_tensor_accessor_wrappers(outputs_tuple);
+
+    // Trace-safe metadata path: recompute the gather extent (valid_pages) on-device from kv_actual_isl[0]
+    // so it matches the reader's recompute even when the host logical_n is a placeholder. The
+    // kv_actual_isl DRAM address and chunk_local_tiles are the next two runtime args (after the
+    // output-buffer addrs, before the fabric args). Identical formula to the all-gather reader / host
+    // compute_gather_valid_Ht.
+    if constexpr (has_metadata) {
+        // kv_actual_isl is a 1-element uint32 DRAM tensor (was metadata[1]); read its page 0.
+        const uint32_t kv_actual_isl_addr = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t chunk_local_tiles = get_arg_val<uint32_t>(arg_idx++);
+        Noc meta_noc;
+        CircularBuffer cb_meta(cb_meta_id);
+        // Shared read protocol (async_read page 0 -> barrier -> invalidate_l1_cache -> volatile load). The
+        // invalidate is required, not cosmetic: this tensor is at a fixed DRAM address the host refreshes in
+        // place between trace replays, so a cached L1 line would return the prior chunk's kv_actual_isl and
+        // silently clamp the gather to the wrong prefix.
+        const uint32_t kv_actual = trace_metadata::read_metadata_scalar_u32(
+            meta_noc, meta_args, kv_actual_isl_addr, cb_meta.get_write_ptr());  // kv_actual_isl (tile-aligned)
+        // Same formula the reader uses -- both MUST clamp to the same slab prefix or the cb_output
+        // producer/consumer page counts drift (see the header's KEEP IN SYNC note).
+        const uint32_t gather_valid_Ht =
+            ring_attention_all_gather::compute_gather_valid_Ht(kv_actual, chunk_local_tiles, ring_size);
+        ring_attention_all_gather::clamp_input_ranges_to_gather_extent(
+            gather_valid_Ht, input_tensor_Ht, input_tensor_Wt, input_tile_id_end);
+    }
+
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
     /* Args for overlapped all gather */
@@ -79,17 +136,25 @@ void kernel_main() {
         op_signaler_sender = OpSignaler(arg_idx);
     }
 
+    Noc noc_obj;
+    CircularBuffer cb_packet_header(reserved_packet_header_cb_id);
+    CircularBuffer cb_output(cb_output_id);
+
     // packet header cb
-    cb_reserve_back(reserved_packet_header_cb_id, 1);
-    auto packet_header_buffer_addr = get_write_ptr(reserved_packet_header_cb_id);
-    cb_push_back(reserved_packet_header_cb_id, 1);
-    cb_reserve_back(reserved_packet_header_cb_id, 1);
-    auto packet_header_buffer_seminc = get_write_ptr(reserved_packet_header_cb_id);
-    cb_push_back(reserved_packet_header_cb_id, 1);
+    cb_packet_header.reserve_back(1);
+    auto packet_header_buffer_addr = cb_packet_header.get_write_ptr();
+    cb_packet_header.push_back(1);
+    cb_packet_header.reserve_back(1);
+    auto packet_header_buffer_seminc = cb_packet_header.get_write_ptr();
+    cb_packet_header.push_back(1);
 
     // pre-populate packet headers
+    constexpr ccl_routing_utils::line_unicast_route_info_t unicast_route_info = {
+        .dst_mesh_id = static_cast<uint16_t>(unicast_route_arg0),
+        .dst_chip_id = static_cast<uint16_t>(unicast_route_arg1)};
+
     volatile PACKET_HEADER_TYPE* pkt_hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr);
-    fabric_set_unicast_route<false>(pkt_hdr, 1);
+    ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr, unicast_route_info);
 
     fabric_connection.open();
 
@@ -127,8 +192,8 @@ void kernel_main() {
         for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; bh_idx++) {
             while (tiles_read < tiles_to_read) {
                 uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
-                cb_wait_front(cb_output_id, packet_size_in_pages);
-                const size_t l1_read_addr_base = get_read_ptr(cb_output_id);
+                cb_output.wait_front(packet_size_in_pages);
+                const size_t l1_read_addr_base = cb_output.get_read_ptr();
                 size_t l1_read_addr = l1_read_addr_base;
 
                 // for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
@@ -175,7 +240,7 @@ void kernel_main() {
                 }
 
                 tiles_read += num_pages_to_read;
-                cb_pop_front(cb_output_id, packet_size_in_pages);
+                cb_output.pop_front(packet_size_in_pages);
             }
             tile_id_start += output_tensor_Wt[input_idx] * output_tensor_Ht[input_idx];
             tiles_read = input_tile_id_start[input_idx];
@@ -185,7 +250,7 @@ void kernel_main() {
         }
     }
 
-    noc_async_write_barrier();
+    noc_obj.async_write_barrier();
     // increment locally
     if constexpr (fuse_op && direction == 1) {
         /**
@@ -204,10 +269,12 @@ void kernel_main() {
     pkt_hdr_sem_inc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
         out_ready_sem_noc_addr_in_pkt, static_cast<uint32_t>(1)});  // increment 1
 
-    // Write the unicast packet
+    // Write the unicast packet. num_hops=1 is correct under both topologies: 1D ring-AG always
+    // targets the immediate neighbor; 2D ignores num_hops (HybridMesh::to_chip_unicast is a no-op
+    // and route_info carries the 2D destination).
     if constexpr (num_targets_in_direction) {
         fabric_direction_connection->wait_for_empty_write_slot();
-        fabric_set_unicast_route<false>(pkt_hdr_sem_inc, 1);
+        ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_sem_inc, unicast_route_info);
         fabric_direction_connection->send_payload_flush_blocking_from_address(
             packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
     }
@@ -225,6 +292,12 @@ void kernel_main() {
         } else {
             writes_expected = num_targets_forward_direction - 1;
         }
+    }
+
+    // On an even ring the terminal relayed slice
+    const bool split_forwarding_enabled = (topology == Topology::Ring) && (ring_size % 2 == 0) && (ring_size > 2);
+    if (split_forwarding_enabled && direction == 1) {
+        writes_expected++;
     }
 
     while (slice_writes < writes_expected) {
@@ -248,6 +321,7 @@ void kernel_main() {
             slice_chip_id = my_chip_id - slice_writes - 1;
             actual_slice_chip_id = (slice_chip_id < 0) ? ring_size + slice_chip_id : slice_chip_id;
         }
+        const bool is_split_forwarded_slice = split_forwarding_enabled && (slice_writes == writes_expected - 1);
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             uint32_t tiles_read = input_tile_id_start[input_idx];
             uint32_t tiles_to_read = input_tile_id_end[input_idx];
@@ -263,47 +337,63 @@ void kernel_main() {
             } else {
                 tile_id_start = actual_slice_chip_id * input_tensor_Ht[input_idx] * input_tensor_Wt[input_idx];
             }
+
+            // Packet-aligned midpoint of this input's per-batch-head page range
+            const uint32_t total_pages = tiles_to_read - input_tile_id_start[input_idx];
+            const uint32_t num_packets = (total_pages + packet_size_in_pages - 1) / packet_size_in_pages;
+            const uint32_t first_half_pages = (num_packets / 2) * packet_size_in_pages;
+            const bool split_this_input = is_split_forwarded_slice;
+
             for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; bh_idx++) {
                 while (tiles_read < tiles_to_read) {
                     uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
-                    cb_wait_front(cb_output_id, packet_size_in_pages);
-                    size_t l1_read_addr = get_read_ptr(cb_output_id);
+                    uint32_t page_in_bh = tiles_read - input_tile_id_start[input_idx];
+                    bool relay_this_packet =
+                        !split_this_input ||
+                        (direction == 0 ? (page_in_bh < first_half_pages) : (page_in_bh >= first_half_pages));
+
                     uint32_t first_tile_id = tile_id_start + row_offset + pages_read_in_row;
                     pages_read_in_row++;
                     if (pages_read_in_row >= slice_Wt) {
                         row_offset += stride_Wt;
                         pages_read_in_row = 0;
                     }
-
+                    uint32_t second_tile_id = 0;
                     if (num_pages_to_read == 2) {
-                        uint32_t second_tile_id = tile_id_start + row_offset + pages_read_in_row;
+                        second_tile_id = tile_id_start + row_offset + pages_read_in_row;
                         pages_read_in_row++;
                         if (pages_read_in_row >= slice_Wt) {
                             row_offset += stride_Wt;
                             pages_read_in_row = 0;
                         }
+                    }
 
-                        scatter_fabric_write_unidir(
-                            first_tile_id,
-                            second_tile_id,
-                            output_addrgens[input_idx],
-                            pkt_hdr,
-                            *fabric_direction_connection,
-                            l1_read_addr,
-                            output_page_size);
-                    } else {
-                        ASSERT(num_pages_to_read == 1);
-                        fabric_write_unidir(
-                            first_tile_id,
-                            output_addrgens[input_idx],
-                            pkt_hdr,
-                            *fabric_direction_connection,
-                            l1_read_addr,
-                            output_page_size);
+                    if (relay_this_packet) {
+                        cb_output.wait_front(packet_size_in_pages);
+                        size_t l1_read_addr = cb_output.get_read_ptr();
+                        if (num_pages_to_read == 2) {
+                            scatter_fabric_write_unidir(
+                                first_tile_id,
+                                second_tile_id,
+                                output_addrgens[input_idx],
+                                pkt_hdr,
+                                *fabric_direction_connection,
+                                l1_read_addr,
+                                output_page_size);
+                        } else {
+                            ASSERT(num_pages_to_read == 1);
+                            fabric_write_unidir(
+                                first_tile_id,
+                                output_addrgens[input_idx],
+                                pkt_hdr,
+                                *fabric_direction_connection,
+                                l1_read_addr,
+                                output_page_size);
+                        }
+                        cb_output.pop_front(packet_size_in_pages);
                     }
 
                     tiles_read += num_pages_to_read;
-                    cb_pop_front(cb_output_id, packet_size_in_pages);
                 }
                 tile_id_start += output_tensor_Wt[input_idx] * output_tensor_Ht[input_idx];
                 tiles_read = input_tile_id_start[input_idx];
@@ -314,16 +404,19 @@ void kernel_main() {
             }
         }
 
-        // 2. unicast output ready semaphore forward
+        // 2. unicast output ready semaphore forward — route was set once on pkt_hdr_sem_inc
+        // before the writes loop above; unicast_route_info is constexpr, so no need to
+        // re-set it each iteration.
         fabric_direction_connection->wait_for_empty_write_slot();
-        fabric_set_unicast_route<false>(pkt_hdr_sem_inc, 1);
         fabric_direction_connection->send_payload_flush_blocking_from_address(
             packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
 
         slice_writes++;
     }
-    fabric_connection.close();
 
-    noc_async_atomic_barrier();
-    noc_async_write_barrier();
+    // Drain in-flight writes BEFORE closing the EDM connections.
+    noc_obj.async_atomic_barrier();
+    noc_obj.async_write_barrier();
+
+    fabric_connection.close();
 }

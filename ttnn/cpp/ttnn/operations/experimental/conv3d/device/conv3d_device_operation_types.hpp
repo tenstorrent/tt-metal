@@ -24,7 +24,7 @@ struct Conv3dConfig {
         uint32_t C_in_block_ = 0,
         std::array<uint32_t, 3> dilation_ = {1, 1, 1},
         uint32_t alignment_ = 32,
-        CoreCoord compute_with_storage_grid_size_ = {1, 1}) :
+        tt::tt_metal::CoreCoord compute_with_storage_grid_size_ = {1, 1}) :
         weights_dtype(weights_dtype_),
         output_layout(output_layout_),
         T_out_block(T_out_block_),
@@ -45,7 +45,7 @@ struct Conv3dConfig {
     uint32_t C_in_block;
     std::array<uint32_t, 3> dilation;
     uint32_t alignment;
-    CoreCoord compute_with_storage_grid_size;
+    tt::tt_metal::CoreCoord compute_with_storage_grid_size;
 
     static constexpr auto attribute_names = std::make_tuple(
         "weights_dtype",
@@ -86,12 +86,22 @@ struct Conv3dParams {
     std::array<uint32_t, 3> dilation;
     std::string padding_mode;
     uint32_t groups;
+    // Logical-pad masking (opt-in)
+    // 0 == disabled.
+    uint32_t logical_h_mask = 0;
+    uint32_t logical_w_mask = 0;
+    // Padded-output mode (opt-in)
+    // 0 == compact output.
+    uint32_t output_pad_h = 0;
+    uint32_t output_pad_w = 0;
 };
 
 struct Conv3dInputs {
     Tensor input_tensor;
     Tensor weight_tensor;
     std::optional<const Tensor> bias_tensor;
+    std::optional<const Tensor> halo_buffer;
+    std::optional<const Tensor> pad_offset_tensor;
 };
 
 namespace detail {

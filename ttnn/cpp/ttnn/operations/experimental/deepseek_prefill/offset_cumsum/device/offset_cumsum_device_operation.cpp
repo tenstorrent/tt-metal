@@ -35,9 +35,9 @@ OffsetCumsumDeviceOperation::spec_return_value_t OffsetCumsumDeviceOperation::co
         tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
         tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM});
 
-    auto offsets_spec = TensorSpec(ttnn::Shape({1, W}), layout);
-    auto totals_spec = TensorSpec(ttnn::Shape({1, W}), layout);
-    auto expert_region_spec = TensorSpec(ttnn::Shape({1, W}), layout);
+    auto offsets_spec = tt::tt_metal::TensorSpec(ttnn::Shape({1, W}), layout);
+    auto totals_spec = tt::tt_metal::TensorSpec(ttnn::Shape({1, W}), layout);
+    auto expert_region_spec = tt::tt_metal::TensorSpec(ttnn::Shape({1, W}), layout);
     return {offsets_spec, totals_spec, expert_region_spec};
 }
 
@@ -63,14 +63,6 @@ OffsetCumsumDeviceOperation::topology_return_value_t OffsetCumsumDeviceOperation
     auto expert_region_topology = tt::tt_metal::TensorTopology(dist_shape, placements, input_topology.mesh_coords());
 
     return {offsets_topology, totals_topology, expert_region_topology};
-}
-
-tt::stl::hash::hash_t OffsetCumsumDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& input_tensor) {
-    const auto& input_shape = input_tensor.padded_shape();
-    tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<OffsetCumsumDeviceOperation>(
-        args, input_tensor.dtype(), input_tensor.memory_config(), input_shape);
-    return hash;
 }
 
 OffsetCumsumDeviceOperation::tensor_return_value_t OffsetCumsumDeviceOperation::create_output_tensors(

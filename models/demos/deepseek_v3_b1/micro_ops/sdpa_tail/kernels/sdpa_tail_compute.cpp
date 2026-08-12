@@ -35,9 +35,9 @@ void kernel_main() {
     constexpr bool dense = get_compile_time_arg_val(10);
     constexpr bool untilize = get_compile_time_arg_val(11);
 
-    constexpr int vector_mode = VectorMode::RC_custom;
+    constexpr VectorMode vector_mode = VectorMode::RC_custom;
 
-    binary_op_init_common(cb_l1, cb_l1, cb_l_out);
+    compute_kernel_hw_startup(cb_l1, cb_l1, cb_l_out);
     exp_tile_init<EXP_APPROX_MODE>();
 
     sdpa_tail<EXP_APPROX_MODE, final_reduction, block_size, num_blocks, scale_fp32, vector_mode, dense, untilize>(

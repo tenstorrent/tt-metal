@@ -23,7 +23,6 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/tt_metal_profiler.hpp>
 #include "command_queue_fixture.hpp"
 #include <tt-metalium/kernel_types.hpp>
 #include "dispatch_test_utils.hpp"
@@ -485,7 +484,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceFixture, TensixTestSubDeviceCQOwnership) {
         // On sub device 1.
         tt_metal::CreateKernel(
             program,
-            "tt_metal/kernels/dataflow/blank.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
             CoreRangeSet(CoreRange({0, 0}, {2, 2})),
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
@@ -497,7 +496,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceFixture, TensixTestSubDeviceCQOwnership) {
         // On sub device 2.
         tt_metal::CreateKernel(
             program,
-            "tt_metal/kernels/dataflow/blank.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
             CoreRangeSet(CoreRange({3, 3}, {3, 3})),
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});

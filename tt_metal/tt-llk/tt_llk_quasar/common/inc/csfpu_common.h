@@ -6,15 +6,12 @@
 #include <cstdint>
 
 #include "ckernel_trisc_common.h"
+#include "cmath_common.h"
 
 namespace ckernel::isolate_sfpu
 {
 
 constexpr static std::uint32_t TRISC_ID = 3;
-
-// SFPU register-file base addresses: dest region vs SrcS (used by SFPU load/store)
-constexpr static unsigned int SFPU_DEST_BASE_ADDR = 0x0;
-constexpr static unsigned int SFPU_SRCS_BASE_ADDR = 0x400;
 
 // Identifies which SFPU-addressable register file an operand lives in.
 // Used as a compile-time tag for SfpuSlice<REG>
@@ -54,41 +51,14 @@ struct SfpuSlice
     {
         if constexpr (REG == SfpuReg::Dest)
         {
-            return SFPU_DEST_BASE_ADDR + slot * ydim;
+            return ckernel::math::SFPU_DEST_BASE_ADDR + slot * ydim;
         }
         else
         {
-            return SFPU_SRCS_BASE_ADDR + slot * ydim;
+            return ckernel::math::SFPU_SRCS_BASE_ADDR + slot * ydim;
         }
     }
 };
-
-// SrcS register tile geometry (HW-defined for Quasar SrcS).
-// A 32x32 tile is produced/consumed across SLICE_COUNT SrcS slices, where one slice
-// holds XDIM * YDIM * ZDIM datums. YDIM halves in 32-bit element mode because the
-// SrcS columns are 16-bit wide in HW.
-struct srcs_dims
-{
-    static constexpr std::uint32_t XDIM      = 16; // datums per row of SrcS slice
-    static constexpr std::uint32_t ZDIM      = 1;
-    static constexpr std::uint32_t YDIM_BASE = 8; // rows per slice when SrcS is in 16-bit mode
-
-    static constexpr std::uint32_t ydim(bool srcs_32bit_mode)
-    { // TODO for metal bringup: make programmable based on tensor_shape for tiny tile support
-        return srcs_32bit_mode ? (YDIM_BASE / 2) : YDIM_BASE;
-    }
-
-    static constexpr std::uint32_t slice_count(bool srcs_32bit_mode)
-    {
-        return (ckernel::TILE_R_DIM * ckernel::TILE_C_DIM) / (XDIM * ydim(srcs_32bit_mode) * ZDIM);
-    }
-};
-
-// SrcS runs in 32-bit element mode when the UNP_S destination format is 32-bit wide.
-inline constexpr bool _is_srcs_32bit_mode_(const DataFormat unpack_S_dst_format)
-{
-    return unpack_S_dst_format == DataFormat::Float32 || unpack_S_dst_format == DataFormat::Int32;
-}
 
 /**
  * @brief Sets destination register base address for the ISOLATE_SFPU thread (SEC3).

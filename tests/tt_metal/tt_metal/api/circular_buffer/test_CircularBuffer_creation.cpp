@@ -19,7 +19,7 @@
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/tensor/tensor_types.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
 #include "gtest/gtest.h"
 #include <tt-metalium/hal_types.hpp>
 #include "hostdevcommon/kernel_structs.h"
@@ -120,9 +120,9 @@ TEST_F(MeshDeviceFixture, TensixTestCreateCircularBufferAtValidIndices) {
 
     CreateCircularBuffer(program_, cr_set, actual_config);
 
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        distributed::EnqueueMeshWorkload(this->devices_.at(id)->mesh_command_queue(), workload, false);
-        EXPECT_TRUE(test_cb_config_written_to_core(workload, this->devices_.at(id), cr_set, golden_cb_config));
+    for (auto& device : this->devices_) {
+        distributed::EnqueueMeshWorkload(device->mesh_command_queue(), workload, false);
+        EXPECT_TRUE(test_cb_config_written_to_core(workload, device, cr_set, golden_cb_config));
     }
 }
 
@@ -205,8 +205,8 @@ TEST_F(MeshDeviceFixture, TensixTestCreateCircularBufferWithTooManyPages) {
 }
 
 TEST_F(MeshDeviceFixture, TensixTestCreateCircularBufferOnOutOfRangeCores) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        auto& cq = devices_.at(id)->mesh_command_queue();
+    for (auto& device : this->devices_) {
+        auto& cq = device->mesh_command_queue();
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -214,7 +214,7 @@ TEST_F(MeshDeviceFixture, TensixTestCreateCircularBufferOnOutOfRangeCores) {
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
 
-        auto grid_size = devices_.at(id)->compute_with_storage_grid_size();
+        auto grid_size = device->compute_with_storage_grid_size();
         // Extend one column beyond the compute grid into dispatch core territory
         CoreRange cr({0, 0}, {grid_size.x, grid_size.y - 1});
         CoreRangeSet cr_set({cr});

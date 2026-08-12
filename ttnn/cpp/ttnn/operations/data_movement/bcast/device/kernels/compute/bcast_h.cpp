@@ -4,37 +4,45 @@
 
 #include <cstdint>
 #include "api/compute/bcast.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    constexpr uint32_t onetile = 1;
-    uint32_t B = get_arg_val<uint32_t>(0);
-    uint32_t Ht = get_arg_val<uint32_t>(1);
-    uint32_t Wt = get_arg_val<uint32_t>(2);
-    init_bcast<BCAST_LLKOP, BCAST_DIM>(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+    constexpr std::uint32_t onetile = 1;
 
-    for (uint32_t b = 0; b < B; b++) {
-        for (uint32_t h = 0; h < Ht; h++) {
-            for (uint32_t w = 0; w < Wt; w++) {
+    DataflowBuffer dfb_a(dfb::in0);
+    DataflowBuffer dfb_b(dfb::in1);
+    DataflowBuffer dfb_out(dfb::out);
+
+    auto B = get_arg(args::B);
+    auto Ht = get_arg(args::Ht);
+    auto Wt = get_arg(args::Wt);
+    compute_kernel_hw_startup(dfb::in0, dfb::in1, dfb::out);
+    bcast_init<BCAST_LLKOP, BCAST_DIM>(dfb::in0, dfb::in1);
+
+    for (std::uint32_t b = 0; b < B; b++) {
+        for (std::uint32_t h = 0; h < Ht; h++) {
+            for (std::uint32_t w = 0; w < Wt; w++) {
                 // For this bcast-h op the reader will wrap the RHS source tile around at Wt
                 // so here we just linearly read 2 parallel arrays and apply bcast op per tile
                 // (bcast_h propagates the op down the H dimension, so it can be though of as bcast to H)
-                cb_wait_front(tt::CBIndex::c_1, onetile);
+                dfb_b.wait_front(onetile);
+                dfb_a.wait_front(onetile);
 
-                cb_reserve_back(tt::CBIndex::c_16, onetile);
+                tile_regs_acquire();
+                BCAST_OP<BroadcastType::ROW>(dfb::in0, dfb::in1, 0, 0, 0);
+                tile_regs_commit();
 
-                acquire_dst();
+                dfb_a.pop_front(onetile);
+                dfb_b.pop_front(onetile);
 
-                cb_wait_front(tt::CBIndex::c_0, onetile);
+                dfb_out.reserve_back(onetile);
 
-                BCAST_OP<BroadcastType::ROW>(tt::CBIndex::c_0, tt::CBIndex::c_1, 0, 0, 0);
-                pack_tile(0, tt::CBIndex::c_16);
+                tile_regs_wait();
+                pack_tile(0, dfb::out);
+                tile_regs_release();
 
-                cb_pop_front(tt::CBIndex::c_0, onetile);
-
-                release_dst();
-
-                cb_push_back(tt::CBIndex::c_16, onetile);
-                cb_pop_front(tt::CBIndex::c_1, onetile);
+                dfb_out.push_back(onetile);
             }
         }
     }

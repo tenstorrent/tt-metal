@@ -93,8 +93,15 @@ void UpdateKVCacheOperation::validate_on_program_cache_miss(
             args.batch_idx,
             cache_tensor.padded_shape()[0]);
         TT_FATAL(
-            input_tensor.padded_shape()[-2] <= cache_tensor.padded_shape()[-2],
-            "Input tensor height ({}) must be <= cache tensor height ({})",
+            args.update_idx % TILE_HEIGHT == 0,
+            "Fill update_idx ({}) must be a multiple of TILE_HEIGHT ({})",
+            args.update_idx,
+            TILE_HEIGHT);
+        TT_FATAL(
+            args.update_idx <= cache_tensor.padded_shape()[-2] &&
+                input_tensor.padded_shape()[-2] <= cache_tensor.padded_shape()[-2] - args.update_idx,
+            "Fill update_idx ({}) + input tensor height ({}) must be <= cache tensor height ({})",
+            args.update_idx,
             input_tensor.padded_shape()[-2],
             cache_tensor.padded_shape()[-2]);
     } else if (args.op_type == UpdateCacheOpType::UPDATE) {
@@ -138,7 +145,7 @@ void UpdateKVCacheOperation::validate_on_program_cache_miss(
     }
 }
 
-TensorSpec UpdateKVCacheOperation::compute_output_specs(
+tt::tt_metal::TensorSpec UpdateKVCacheOperation::compute_output_specs(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     // Do nothing because it's an in-place operation. Cache Tensor is the output tensor.
     return tensor_args.cache.tensor_spec();

@@ -2,38 +2,42 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <array>
+
 #include "moreh_getitem_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/tilize_utils.hpp>
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 struct IndexInfo {
     bool is_defined{};
-    uint32_t address{};
+    const ttnn::Tensor* tensor{};
     uint32_t unit_size{};
-    tt::tt_metal::TensorAccessorArgs args;
 };
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
 namespace ttnn::operations::moreh::moreh_getitem {
-MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOperation::MorehGetItemRmFactory::create(
+
+ttnn::device_operation::ProgramArtifacts MorehGetItemOperation::MorehGetItemRmFactory::create_program_artifacts(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
     using namespace tt;
     using namespace tt::tt_metal;
+    using namespace tt::tt_metal::experimental;
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
-    auto input = tensor_args.input;
-    auto index_tensors = tensor_args.index_tensors;
+    const auto& input = tensor_args.input;
+    const auto& index_tensors = tensor_args.index_tensors;
     const auto& output = output_tensor;
     auto index_dims = operation_attributes.index_dims;
-    auto memory_config = operation_attributes.memory_config;
-    // auto core_range = operation_attributes.core_range;
     auto* device = input.device();
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange allCores({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
@@ -71,8 +75,7 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
         const auto& index = index_tensors[i];
 
         index_info[dim].is_defined = true;
-        index_info[dim].address = index_tensors[i].buffer()->address();
-        index_info[dim].args = tt::tt_metal::TensorAccessorArgs(index_tensors[i].buffer());
+        index_info[dim].tensor = &index_tensors[i];
         index_info[dim].unit_size = index.padded_shape()[-1] * index.element_size();
     }
 
@@ -89,59 +92,163 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
     auto [num_cores, all_cores, core_group_1, core_group_2, num_units_per_core_group_1, num_units_per_core_group_2] =
         split_work_to_cores_wt_core_range(core_range, num_units);
 
-    Program program = Program();
+    // ---- Program-scope resource names (these drive the generated dfb:: / tensor:: tokens) ----
+    // Declared function-local: this file and moreh_getitem_tilized_factory.cpp land in the same
+    // unity-build translation unit, so no anonymous-namespace constants are introduced.
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    // in0 stages one input stick: the reader fills it, the writer drains it to the output tensor.
+    const DFBSpecName IN0{"in0"};
+    // One DFB per index dimension the reader stages a stick of, indexed by 5-D-normalized dimension.
+    // Dimension 4 has no entry: the reader's dimension loop runs 3 … 0 and never touches one.
+    const std::array<DFBSpecName, 4> INDEX_DFB{
+        DFBSpecName{"in1"}, DFBSpecName{"in2"}, DFBSpecName{"in3"}, DFBSpecName{"in4"}};
+    const TensorParamName INPUT{"input"};
+    const TensorParamName OUTPUT{"output"};
+    const std::array<TensorParamName, 5> INDEX{
+        TensorParamName{"index0"},
+        TensorParamName{"index1"},
+        TensorParamName{"index2"},
+        TensorParamName{"index3"},
+        TensorParamName{"index4"}};
+    constexpr std::array<const char*, 5> INDEX_ACCESSOR{"index0", "index1", "index2", "index3", "index4"};
+    constexpr std::array<const char*, 4> INDEX_DFB_ACCESSOR{"in1", "in2", "in3", "in4"};
+    constexpr std::array<const char*, 5> INDEX_DEFINE{
+        "HAS_INDEX0", "HAS_INDEX1", "HAS_INDEX2", "HAS_INDEX3", "HAS_INDEX4"};
 
-    // create circular buffers
+    ProgramSpec spec;
+    spec.name = "moreh_getitem_rm";
+
+    // ---- Dataflow buffers ----
     auto src_cb_data_format = datatype_to_dataformat_converter(input.dtype());
     auto index_cb_data_format = datatype_to_dataformat_converter(index_tensors[0].dtype());
-    auto output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
 
-    auto src_cb_index = CBIndex::c_0;
     auto rounded_input_page_size = round_up_to_mul32(input_unit_size);
-    auto cb_src0_config = CircularBufferConfig(rounded_input_page_size, {{src_cb_index, src_cb_data_format}})
-                              .set_page_size(src_cb_index, rounded_input_page_size);
-    CreateCircularBuffer(program, all_cores, cb_src0_config);
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = IN0,
+        .entry_size = rounded_input_page_size,
+        .num_entries = 1,
+        .data_format_metadata = src_cb_data_format,
+    });
 
-    for (uint32_t dim = 0; dim < 5; dim++) {
+    // ---- Reader kernel ----
+    Group<DFBBinding> reader_dfb_bindings = {
+        DFBBinding{
+            .dfb_spec_name = IN0,
+            .accessor_name = "in0",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        },
+    };
+    Group<TensorBinding> reader_tensor_bindings = {
+        TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "s0"},
+    };
+    KernelSpec::CompilerOptions::Defines reader_defines;
+
+    spec.tensor_parameters.push_back(TensorParameter{.unique_id = INPUT, .spec = input.tensor_spec()});
+    spec.tensor_parameters.push_back(TensorParameter{.unique_id = OUTPUT, .spec = output.tensor_spec()});
+
+    // The index tensors are optional: only the dimensions the caller supplied exist in a given
+    // instantiation. An absent index has no tensor to bind, so its binding is omitted entirely and the
+    // matching HAS_INDEX<dim> define gates the kernel's references to the accessor and the DFB.
+    for (uint32_t dim = 0; dim < INDEX_DFB.size(); dim++) {
         if (!index_info[dim].is_defined) {
             continue;
         }
 
-        auto src1_cb_index = CBIndex::c_1 + dim;
+        spec.tensor_parameters.push_back(
+            TensorParameter{.unique_id = INDEX[dim], .spec = index_info[dim].tensor->tensor_spec()});
+        reader_tensor_bindings.push_back(
+            TensorBinding{.tensor_parameter_name = INDEX[dim], .accessor_name = INDEX_ACCESSOR[dim]});
+        reader_defines.emplace(INDEX_DEFINE[dim], "1");
+
         auto index_page_size = round_up_to_mul32(index_info[dim].unit_size);
-        auto cb_index_config = CircularBufferConfig(index_page_size, {{src1_cb_index, index_cb_data_format}})
-                                   .set_page_size(src1_cb_index, index_page_size);
-        CreateCircularBuffer(program, all_cores, cb_index_config);
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = INDEX_DFB[dim],
+            .entry_size = index_page_size,
+            .num_entries = 1,
+            .data_format_metadata = index_cb_data_format,
+        });
+        // The reader runs the whole FIFO cycle on an index DFB by itself — reserve_back, push_back,
+        // wait_front, pop_front — so it is the buffer's only endpoint and binds both roles.
+        reader_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = INDEX_DFB[dim],
+            .accessor_name = INDEX_DFB_ACCESSOR[dim],
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+        reader_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = INDEX_DFB[dim],
+            .accessor_name = INDEX_DFB_ACCESSOR[dim],
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
     }
 
-    auto out_cb_index = CBIndex::c_16;
-    auto cb_out0_config = CircularBufferConfig(rounded_input_page_size, {{out_cb_index, output_cb_data_format}})
-                              .set_page_size(out_cb_index, rounded_input_page_size);
-    CreateCircularBuffer(program, all_cores, cb_out0_config);
+    spec.kernels.push_back(KernelSpec{
+        .unique_id = READER,
+        .source = "ttnn/cpp/ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_kernels/reader_moreh_getitem.cpp",
+        .compiler_options = {.defines = std::move(reader_defines)},
+        .dfb_bindings = std::move(reader_dfb_bindings),
+        .tensor_bindings = std::move(reader_tensor_bindings),
+        .runtime_arg_schema =
+            {.runtime_arg_names =
+                 {
+                     // input
+                     "input_stick_idx_stride_n",
+                     "input_stick_idx_stride_c",
+                     "input_stick_idx_stride_d",
+                     "input_stick_idx_stride_h",
 
-    // create read/write kernel
-    std::map<std::string, std::string> reader_defines;
-    std::map<std::string, std::string> writer_defines;
+                     "input_size_n",
+                     "input_size_c",
+                     "input_size_d",
+                     "input_size_h",
+                     "input_size_w",
 
-    std::vector<uint32_t> reader_compile_time_args;
-    tt::tt_metal::TensorAccessorArgs(input_5d.buffer()).append_to(reader_compile_time_args);
-    for (auto& dim : index_info) {
-        dim.args.append_to(reader_compile_time_args);
-    }
-    auto reader_kernel_id = CreateReadKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_kernels/reader_moreh_getitem.cpp",
-        all_cores,
-        reader_compile_time_args,
-        reader_defines);
-    std::vector<uint32_t> writer_compile_time_args;
-    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
-    auto writer_kernel_id = CreateWriteKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_kernels/writer_moreh_getitem.cpp",
-        all_cores,
-        writer_compile_time_args,
-        writer_defines);
+                     // index
+                     "index0_is_defined",
+                     "index1_is_defined",
+                     "index2_is_defined",
+                     "index3_is_defined",
+                     "index4_is_defined",
+                     "index0_stick_size",
+                     "index1_stick_size",
+                     "index2_stick_size",
+                     "index3_stick_size",
+                     "index4_stick_size",
+                     "index_size",
+                     "index_start_dim",
+                     "index_end_dim",
+
+                     // output
+                     "output_size_n",
+                     "output_size_c",
+                     "output_size_d",
+                     "output_size_h",
+                     "output_size_w",
+
+                     // etc
+                     "start_id",
+                     "num_sticks",
+                     "stick_size",
+                 }},
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+    });
+
+    // ---- Writer kernel ----
+    spec.kernels.push_back(KernelSpec{
+        .unique_id = WRITER,
+        .source = "ttnn/cpp/ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_kernels/writer_moreh_getitem.cpp",
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = IN0,
+            .accessor_name = "out",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        }},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "s0"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"output_stick_size", "start_id", "num_sticks"}},
+        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+    });
+
+    // ---- Work unit (placement) ----
+    spec.work_units.push_back(WorkUnitSpec{.name = "main", .kernels = {READER, WRITER}, .target_nodes = all_cores});
 
     uint32_t input_stick_idx_stride_h = 1;
     uint32_t input_stick_idx_stride_d = input_stick_idx_stride_h * input_5d_shape[3];
@@ -154,124 +261,86 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
 
     uint32_t g1_numcores = core_group_1.num_cores();
 
+    ProgramRunArgs run_args;
+    KernelRunArgs reader_run_args{.kernel = READER};
+    KernelRunArgs writer_run_args{.kernel = WRITER};
+
     uint32_t start_id = 0;
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {(i / core_h) + core_x_offset, (i % core_h) + core_y_offset};
         uint32_t num_units_per_core = i < g1_numcores ? num_units_per_core_group_1 : num_units_per_core_group_2;
 
-        std::vector<uint32_t> reader_args = {
-            // buffers
-            input_5d.buffer()->address(),
-            index_info[0].address,
-            index_info[1].address,
-            index_info[2].address,
-            index_info[3].address,
-            index_info[4].address,
+        AddRuntimeArgsForNode(
+            reader_run_args.runtime_arg_values,
+            core,
+            {
+                // input
+                {"input_stick_idx_stride_n", input_stick_idx_stride_n},
+                {"input_stick_idx_stride_c", input_stick_idx_stride_c},
+                {"input_stick_idx_stride_d", input_stick_idx_stride_d},
+                {"input_stick_idx_stride_h", input_stick_idx_stride_h},
 
-            // input
-            input_stick_idx_stride_n,
-            input_stick_idx_stride_c,
-            input_stick_idx_stride_d,
-            input_stick_idx_stride_h,
+                {"input_size_n", input_5d_shape[0]},
+                {"input_size_c", input_5d_shape[1]},
+                {"input_size_d", input_5d_shape[2]},
+                {"input_size_h", input_5d_shape[3]},
+                {"input_size_w", input_5d_shape[4]},
 
-            input_5d_shape[0],
-            input_5d_shape[1],
-            input_5d_shape[2],
-            input_5d_shape[3],
-            input_5d_shape[4],
+                // index
+                {"index0_is_defined", static_cast<uint32_t>(index_info[0].is_defined)},
+                {"index1_is_defined", static_cast<uint32_t>(index_info[1].is_defined)},
+                {"index2_is_defined", static_cast<uint32_t>(index_info[2].is_defined)},
+                {"index3_is_defined", static_cast<uint32_t>(index_info[3].is_defined)},
+                {"index4_is_defined", static_cast<uint32_t>(index_info[4].is_defined)},
+                {"index0_stick_size", index_info[0].unit_size},
+                {"index1_stick_size", index_info[1].unit_size},
+                {"index2_stick_size", index_info[2].unit_size},
+                {"index3_stick_size", index_info[3].unit_size},
+                {"index4_stick_size", index_info[4].unit_size},
+                {"index_size", index_size},
+                {"index_start_dim", index_start_dim},
+                {"index_end_dim", index_end_dim},
 
-            // index
-            index_info[0].is_defined,
-            index_info[1].is_defined,
-            index_info[2].is_defined,
-            index_info[3].is_defined,
-            index_info[4].is_defined,
-            index_info[0].unit_size,
-            index_info[1].unit_size,
-            index_info[2].unit_size,
-            index_info[3].unit_size,
-            index_info[4].unit_size,
-            index_size,
-            index_start_dim,
-            index_end_dim,
+                // output
+                {"output_size_n", output_5d_shape[0]},
+                {"output_size_c", output_5d_shape[1]},
+                {"output_size_d", output_5d_shape[2]},
+                {"output_size_h", output_5d_shape[3]},
+                {"output_size_w", output_5d_shape[4]},
 
-            // output
-            output_5d_shape[0],
-            output_5d_shape[1],
-            output_5d_shape[2],
-            output_5d_shape[3],
-            output_5d_shape[4],
+                // etc
+                {"start_id", start_id},
+                {"num_sticks", num_units_per_core},
+                {"stick_size", input_unit_size},
+            });
 
-            // etc
-            start_id,
-            num_units_per_core,
-            input_unit_size,
-        };
+        AddRuntimeArgsForNode(
+            writer_run_args.runtime_arg_values,
+            core,
+            {
+                // output
+                {"output_stick_size", output_unit_size},
 
-        std::vector<uint32_t> writer_args = {
-            // buffer
-            output.buffer()->address(),
-
-            // output
-            output_unit_size,
-
-            // etc
-            start_id,
-            num_units_per_core,
-        };
-
-        SetRuntimeArgs(program, reader_kernel_id, core, reader_args);
-        SetRuntimeArgs(program, writer_kernel_id, core, writer_args);
+                // etc
+                {"start_id", start_id},
+                {"num_sticks", num_units_per_core},
+            });
 
         start_id += num_units_per_core;
     }
 
-    return {std::move(program), {reader_kernel_id, writer_kernel_id, num_cores, core_h, index_dims, input_dim_offset}};
-}
+    run_args.kernel_run_args.push_back(std::move(reader_run_args));
+    run_args.kernel_run_args.push_back(std::move(writer_run_args));
 
-void MorehGetItemOperation::MorehGetItemRmFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    using namespace CMAKE_UNIQUE_NAMESPACE;
-    auto& program = cached_program.program;
-    auto& reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
-    auto& writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
-    auto num_cores = cached_program.shared_variables.num_cores;
-    auto core_h = cached_program.shared_variables.core_h;
-    auto index_dims = cached_program.shared_variables.index_dims;
-    auto input_dim_offset = cached_program.shared_variables.input_dim_offset;
-
-    auto* src_buffer = tensor_args.input.buffer();
-    auto* dst_buffer = tensor_return_value.buffer();
-    auto index_tensors = tensor_args.index_tensors;
-    IndexInfo index_info[5] = {{false}};
-
-    for (uint32_t i = 0; i < index_dims.size(); i++) {
-        auto dim = index_dims[i] + input_dim_offset;
-        const auto& index_buffer = index_tensors[i];
-
-        index_info[dim].address = index_buffer.buffer()->address();
-    }
-
-    for (uint32_t icore = 0; icore < num_cores; icore++) {
-        CoreCoord core = {icore / core_h, icore % core_h};
-
-        {
-            auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = src_buffer->address();
-            runtime_args[1] = index_info[0].address;
-            runtime_args[2] = index_info[1].address;
-            runtime_args[3] = index_info[2].address;
-            runtime_args[4] = index_info[3].address;
-            runtime_args[5] = index_info[4].address;
-        }
-
-        {
-            auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-            runtime_args[0] = dst_buffer->address();
+    run_args.tensor_args.emplace(INPUT, TensorArgument{input.mesh_tensor()});
+    run_args.tensor_args.emplace(OUTPUT, TensorArgument{output.mesh_tensor()});
+    for (uint32_t dim = 0; dim < INDEX_DFB.size(); dim++) {
+        if (index_info[dim].is_defined) {
+            run_args.tensor_args.emplace(INDEX[dim], TensorArgument{index_info[dim].tensor->mesh_tensor()});
         }
     }
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
+
 }  // namespace ttnn::operations::moreh::moreh_getitem

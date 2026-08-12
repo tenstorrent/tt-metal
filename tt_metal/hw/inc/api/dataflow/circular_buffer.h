@@ -135,9 +135,8 @@ public:
     [[nodiscard]] auto scoped_lock() {
 #ifndef COMPILE_FOR_TRISC
         auto& iface = get_local_cb_interface(cb_id_);
-        uint32_t base_16b = iface.fifo_limit - iface.fifo_size;
-        uint32_t addr = base_16b << 4;
-        uint32_t num_bytes = iface.fifo_size << 4;
+        uint32_t addr = iface.fifo_limit - iface.fifo_size;
+        uint32_t num_bytes = iface.fifo_size;
         RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::CB_LOCK, addr, num_bytes);
         return Lock([this, addr, num_bytes]() {
             RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::CB_UNLOCK, addr, num_bytes);
@@ -255,5 +254,12 @@ private:
         }
     }
 };
+
+#ifdef ARCH_QUASAR
+#include "internal/tt-2xx/noc_zero_l1.inl"
+#else
+#include "internal/tt-1xx/noc_zero_l1.inl"
+#endif
+#include "internal/noc_zero_dram.inl"
 
 #endif  // !COMPILE_FOR_TRISC

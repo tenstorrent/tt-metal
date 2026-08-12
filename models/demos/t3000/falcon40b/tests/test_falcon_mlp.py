@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 from pathlib import Path
 
 import pytest
@@ -10,7 +9,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import FalconForCausalLM
+from models.demos.t3000.falcon40b.tests.test_utils import load_falcon_reference_model
 from models.demos.t3000.falcon40b.tt.falcon_ccl import TT_CCL
 from models.demos.t3000.falcon40b.tt.falcon_mlp import TtFalconMLP
 from models.demos.t3000.falcon40b.tt.model_config import get_model_config
@@ -42,10 +41,7 @@ def run_test_FalconMLP_inference(
     model_config,
     tt_cache_path,
 ):
-    hugging_face_reference_model = FalconForCausalLM.from_pretrained(
-        model_version, local_files_only=os.getenv("CI") == "true", low_cpu_mem_usage=True, num_hidden_layers=1
-    )
-    hugging_face_reference_model.eval()
+    hugging_face_reference_model = load_falcon_reference_model(model_version, num_hidden_layers=1)
     configuration = hugging_face_reference_model.config
     state_dict = hugging_face_reference_model.state_dict()
 

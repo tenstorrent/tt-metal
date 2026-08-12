@@ -17,7 +17,7 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
 )
-from helpers.stimuli_config import StimuliConfig, UnpackTarget
+from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (
     apply_log_uniform_magnitudes,
     compute_safe_input_magnitude_range,
@@ -78,7 +78,6 @@ def test_sfpu_dest_srcs_add_quasar(formats_dest_acc_implied_math_input_dims):
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
-        sfpu=True,
     )
 
     min_magnitude, max_magnitude = compute_safe_input_magnitude_range(
@@ -148,11 +147,12 @@ def test_sfpu_dest_srcs_add_quasar(formats_dest_acc_implied_math_input_dims):
             tile_count_B=tile_cnt_A,
             tile_count_res=tile_cnt_A,
             num_faces=num_faces,
+            # A is unpacked via UNP_S (SrcS layout), B via UNP_DEST (full-tile
+            # layout), and the result is packed from SrcS via PACK1.
+            srcs_layout_operands=frozenset({"A", "Res"}),
         ),
         unpack_to_srcs=True,
         unpack_to_dest=True,
-        unpack_target_A=UnpackTarget.SrcS,
-        unpack_target_B=UnpackTarget.Dest,
         dest_acc=dest_acc,
         disable_format_inference=formats.input_format.is_mx_format(),
     )

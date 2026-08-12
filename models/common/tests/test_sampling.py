@@ -1,14 +1,60 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+from types import SimpleNamespace
+
 import pytest
 import torch
 import torch.nn.functional as F
 
 import ttnn
-from models.common.sampling import LogProbsCalculator
+from models.common.sampling import (
+    LogProbsCalculator,
+    SamplingGenerator,
+    SamplingParams,
+    SeedManager,
+    broadcast_sampling_params,
+    format_sampling_params,
+    scatter_sampling_params_to_slots,
+)
+from models.common.sampling.generator import _mark_trace_buffers_corruptible
 from models.common.sampling.tt_log_probs import MAX_TOP_LOGPROBS, LogProbsResult
 from models.common.utility_functions import comp_pcc
+
+
+def test_sampling_trace_buffer_reuse_is_bucket_only(monkeypatch):
+    marked = []
+    monkeypatch.setattr(ttnn, "mark_corruptible", marked.append, raising=False)
+
+    _mark_trace_buffers_corruptible(None, ["default"])
+    _mark_trace_buffers_corruptible(1, ["input", None, ("output",)])
+
+    assert marked == ["input", "output"]
+
+
+def test_sampling_trace_bucket_isolation():
+    """Default users keep one flat namespace; Qwen bucket widths get distinct slots."""
+    sampling = SamplingGenerator.__new__(SamplingGenerator)
+    sampling._trace_states = {}
+    sampling._active_trace_bucket = None
+
+    default_key, default_slot = sampling._trace_slot(False, False, True)
+    assert default_key.bucket is None
+    assert sampling._trace_slot(False, False, True)[1] is default_slot
+
+    sampling.set_trace_bucket(1)
+    width1_key, width1_slot = sampling._trace_slot(False, False, True)
+    sampling.set_trace_bucket(8)
+    width8_key, width8_slot = sampling._trace_slot(False, False, True)
+
+    assert width1_key.bucket == 1 and width8_key.bucket == 8
+    assert width1_slot is not default_slot
+    assert width8_slot is not default_slot
+    assert width8_slot is not width1_slot
+
+    sampling.set_trace_bucket(None)
+    assert sampling._trace_slot(False, False, True)[1] is default_slot
+    assert len(sampling._trace_states) == 3
 
 
 # ---------------------------------------------------------------------------
@@ -59,6 +105,112 @@ TG_SUB_CORE_GRIDS = ttnn.CoreRangeSet(
     ]
 )
 TG_NUM_TP_DEVICES = 8  # TP dimension for Galaxy
+
+
+def _make_host_only_seed_manager(max_batch_size=4):
+    return SeedManager(SimpleNamespace(_sampling_dp=1), max_batch_size=max_batch_size)
+
+
+def test_seed_manager_seed_params_do_not_fallback_to_slot_zero():
+    seed_manager = _make_host_only_seed_manager()
+
+    assert seed_manager._seed_from_slot_params([11], 0) == 11
+    assert seed_manager._seed_from_slot_params([11], 1) is None
+    assert seed_manager._seed_from_slot_params(torch.tensor([22]), 1) is None
+    assert seed_manager._seed_from_slot_params(33, 3) == 33
+
+
+def test_seed_counter_position_alignment_skips_out_of_bounds_slots():
+    seed_manager = _make_host_only_seed_manager()
+
+    seed_manager.align_seed_counters_to_positions([101, None, 303], [0, 2], [5], offset=1)
+
+    assert seed_manager.seed_counters == [6, 0, 0, 0]
+
+
+def test_slot_remap_condense_relabels_destination_and_vacates_source():
+    """A condense map moves the source slot's RNG state to its new slot and leaves
+    the vacated source unseeded.
+
+    vLLM's condense moves the highest live request down into the lowest empty slot
+    (``InputBatch.condense``: ``_slot_remap[empty_index] = _slot_remap[last_req_index]``),
+    so a source that is not itself a destination has genuinely been vacated.
+    """
+    seed_manager = _make_host_only_seed_manager(max_batch_size=4)
+    seed_manager.reset_seed([42, 99], [0, 3])  # slot0=42, slot3=99
+    assert seed_manager.seeds == [42, None, None, 99]
+
+    # Condense: the request in slot3 moves into empty slot1. remap[1]=3; indices
+    # 0/2/3 keep their identity values (the map does not mark slot3 as empty).
+    seed_manager.apply_slot_remap(torch.tensor([0, 3, 2, 3], dtype=torch.int32))
+
+    assert seed_manager.seeds[1] == 99  # relabelled into its new slot
+    assert seed_manager.seeds[3] is None  # source vacated
+    assert seed_manager.seed_counters[3] == 0
+    assert seed_manager.seeds[0] == 42  # untouched slot keeps its seed
+    assert seed_manager._seed_active is True
+
+
+def test_slot_remap_identity_is_a_noop():
+    """The steady state is an identity map (vLLM pops the remap and resets it to
+    identity every step, and lane-DP never condenses at all), which must not touch
+    any slot's RNG state."""
+    seed_manager = _make_host_only_seed_manager(max_batch_size=4)
+    seed_manager.reset_seed([42, 43], [0, 1])
+
+    identity = torch.tensor([0, 1, 2, 3], dtype=torch.int32)
+    for _ in range(50):
+        seed_manager.apply_slot_remap(identity)
+
+    assert seed_manager.seeds == [42, 43, None, None]
+    assert seed_manager._seed_active is True
+
+
+def test_broadcast_sampling_params_preserves_none_list_fields():
+    params = SamplingParams(temperature=[1.0, 1.0], top_k=[1, 1], top_p=[1.0, 1.0], seed=[None, 42])
+
+    broadcast = broadcast_sampling_params(params, 0, slot_len=4)
+
+    assert broadcast.seed == [None, None, None, None]
+
+
+def test_format_sampling_params_uses_device_argmax_sentinel_for_greedy_rows():
+    params = format_sampling_params(
+        SamplingParams(temperature=0.0, top_k=32, top_p=0.95),
+        max_batch_size=32,
+    )
+
+    assert params.temperature[0] == 1.0
+    assert params.top_k[0] == 1
+    assert params.top_p[0] == 0.0
+
+
+def test_scatter_sampling_params_to_slots_moves_params_to_their_slot_row():
+    """A batched prefill samples slot row s with the params of the request there."""
+    params = SamplingParams(temperature=[0.1, 0.2, 0.3], top_k=[1, 2, 3], top_p=[0.5, 0.6, 0.7], seed=[7, 8, 9])
+
+    scattered = scatter_sampling_params_to_slots(params, [2, 0, 5], slot_len=8)
+
+    assert scattered.temperature[2] == 0.1 and scattered.temperature[0] == 0.2
+    assert scattered.temperature[5] == 0.3
+    assert scattered.top_k[2] == 1 and scattered.top_k[0] == 2 and scattered.top_k[5] == 3
+    assert scattered.top_p[2] == 0.5 and scattered.top_p[0] == 0.6 and scattered.top_p[5] == 0.7
+    # Unoccupied rows carry the last request's values, so they stay valid instead of
+    # sampling from a formatter default.
+    assert scattered.temperature[1] == 0.3
+    # SeedManager.reset_seed is given the slot list separately and maps seeds itself.
+    assert scattered.seed == [7, 8, 9]
+    # The input is never mutated.
+    assert params.temperature == [0.1, 0.2, 0.3]
+
+
+def test_scatter_sampling_params_to_slots_is_identity_for_dense_slots():
+    params = format_sampling_params(SamplingParams(temperature=[0.5, 0.5], top_k=[4, 4], top_p=[0.9, 0.9]), 32)
+
+    scattered = scatter_sampling_params_to_slots(params, list(range(2)), slot_len=32)
+
+    assert scattered.temperature[:2] == params.temperature[:2]
+    assert scattered.top_k[:2] == params.top_k[:2]
 
 
 def _skip_if_not_galaxy(mesh_device):
@@ -158,6 +310,87 @@ def test_log_probs_calculation(shape, mesh_device):
     print(f"pcc={pcc}")
 
     assert passing, f"Assertion failed, PCC={pcc}"
+
+
+def _shard_logits_2d_mesh(logits_host, mesh_device):
+    """Shard vocab along mesh TP axis (matches test_sampling_1d._make_logits_tt)."""
+    cluster_shape = tuple(mesh_device.shape)
+    if cluster_shape[-1] >= cluster_shape[-2]:
+        shard_dims = (None, -1)
+    else:
+        shard_dims = (-1, None)
+    return ttnn.from_torch(
+        logits_host,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=cluster_shape),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=["device_params"],
+    ids=["fabric_linear"],
+)
+def test_log_probs_calculation_shard_tensor_2d_mesh_1x8(mesh_device):
+    """LogProbsCalculator with ShardTensor2dMesh on 1×8 — the path Sampling1D uses.
+
+    test_log_probs_calculation shards via ShardTensorToMesh(dim=-1), which does not
+    exercise the 1×N _all_gather_cluster_axis bug fixed in tt_log_probs.py.
+    """
+    if mesh_device.get_num_devices() != 8:
+        pytest.skip(f"Test targets 1×8 mesh, got {mesh_device.get_num_devices()} devices")
+
+    batch_size = 32
+    vocab_size = 32768
+    shape = [1, 1, batch_size, vocab_size]
+
+    torch.manual_seed(42)
+    log_probs_calculator = LogProbsCalculator(mesh_device)
+
+    torch_tensor = torch.randn(shape, dtype=torch.bfloat16)
+    for i in range(batch_size):
+        torch_tensor[:, :, i, :] = torch_tensor[:, :, i, torch.randperm(vocab_size)]
+
+    # Pin a few batch slots to tokens on different chips (4096 tokens/chip on 1×8).
+    pinned_tokens = [(0, 100), (1, 20000), (2, 30000), (3, 5000)]  # chips 0, 4, 7, 1
+    for batch_idx, token_id in pinned_tokens:
+        torch_tensor[:, :, batch_idx, token_id] = 10.0
+
+    argmax_tensor = torch.argmax(torch_tensor.float(), dim=-1, keepdim=True)
+    for batch_idx, token_id in pinned_tokens:
+        assert argmax_tensor[0, 0, batch_idx, 0].item() == token_id
+    indices_tensor = argmax_tensor.reshape(
+        argmax_tensor.shape[0], argmax_tensor.shape[1], argmax_tensor.shape[-1], argmax_tensor.shape[-2]
+    )
+
+    logits_tensor = _shard_logits_2d_mesh(torch_tensor, mesh_device)
+    ttnn_indices_tensor = ttnn.from_torch(
+        indices_tensor,
+        device=mesh_device,
+        dtype=ttnn.int32,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    log_probs_calculator.set_log_probs_mode(True)
+    tt_log_probs = log_probs_calculator.calculate_log_probs(logits_tensor, ttnn_indices_tensor)
+    assert tt_log_probs is not None
+
+    log_probs_tt_host = ttnn.to_torch(tt_log_probs, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3))
+    log_probs_tt_host = log_probs_tt_host[:, :, :1, :batch_size]
+
+    log_probs_torch = F.log_softmax(torch_tensor.float(), dim=-1)
+    log_probs_torch_argmax = torch.gather(log_probs_torch, dim=-1, index=argmax_tensor)
+    log_probs_torch_argmax = log_probs_torch_argmax.reshape(1, 1, 1, batch_size)
+
+    passing, pcc = comp_pcc(log_probs_torch_argmax, log_probs_tt_host, pcc=0.99)
+    assert passing, f"logprobs PCC below threshold: {pcc}"
 
 
 @pytest.mark.parametrize(

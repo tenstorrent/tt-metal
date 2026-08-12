@@ -55,7 +55,11 @@ uint64_t get_static_tlb_size() { return 4ULL * (1ULL << 30); }
 }  // namespace quasar
 
 void configure_static_tlbs(
-    tt::ARCH arch, tt::ChipId mmio_device_id, const metal_SocDescriptor& sdesc, tt::umd::Cluster& device_driver) {
+    tt::ARCH arch,
+    tt::ChipId mmio_device_id,
+    const metal_SocDescriptor& sdesc,
+    tt::umd::Cluster& device_driver,
+    bool include_dram_tlbs) {
     using get_static_tlb_size_ptr = uint64_t (*)();
     get_static_tlb_size_ptr get_static_tlb_size;
 
@@ -86,8 +90,14 @@ void configure_static_tlbs(
     for (const  tt::umd::CoreCoord& core : sdesc.get_cores(tt::CoreType::ETH, tt::CoordSystem::TRANSLATED)) {
         device_driver.configure_tlb(mmio_device_id, core, get_static_tlb_size(), address, tt::umd::tlb_data::Strict);
     }
+    // Setup static TLBs for dispatch-engine cores (Quasar soc dispatch tiles). Required for FetchQ
+    // writes via get_static_tlb_window in SD/FD prefetch paths once prefetch runs on CoreType::DISPATCH.
+    for (const tt::umd::CoreCoord& core : sdesc.get_cores(tt::CoreType::DISPATCH, tt::CoordSystem::TRANSLATED)) {
+        device_driver.configure_tlb(mmio_device_id, core, get_static_tlb_size(), address, tt::umd::tlb_data::Strict);
+    }
 
-    if (arch == tt::ARCH::BLACKHOLE && sdesc.get_num_dram_channels() == blackhole::NUM_DRAM_CHANNELS) {
+    if (arch == tt::ARCH::BLACKHOLE && sdesc.get_num_dram_channels() == blackhole::NUM_DRAM_CHANNELS &&
+        include_dram_tlbs) {
         uint32_t dram_addr = 0;
         for (std::uint32_t dram_channel = 0; dram_channel < blackhole::NUM_DRAM_CHANNELS; dram_channel++) {
             tt::umd::CoreCoord dram_core =

@@ -5,18 +5,17 @@
 from typing import List, Tuple
 
 import torch
+from fuser.base_fpu import Fpu
 from fuser.block_data import BlockData
-from fuser.fused_fpu import Fpu
-from fuser.fused_loop import FusedLoop, LoopTileByTile
-from fuser.fused_math import ComputeNode
-from fuser.fused_operation import FusedOperation
+from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
-from helpers.golden_generators import DataCopyGolden, get_golden_generator
-from helpers.llk_params import BroadcastType, DataFormat
+from fuser.l1_operation import L1Operation
+from fuser.tile_loop import LoopTileByTile, TileLoop
+from helpers.llk_params import DataFormat
 
 
 class DatacopyFpu(Fpu):
-    loop: FusedLoop = LoopTileByTile()
+    loop: TileLoop = LoopTileByTile()
 
     def get_headers(self) -> List[str]:
         return [
@@ -29,37 +28,25 @@ class DatacopyFpu(Fpu):
         tensor_a: torch.Tensor,
         tensor_b: torch.Tensor,
         tensor_dst: torch.Tensor,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        if compute_unit.broadcast_type != BroadcastType.None_:
-            source_tensor = tensor_b
-        else:
-            source_tensor = tensor_a
-
-        golden_generator = get_golden_generator(DataCopyGolden)
-        golden_tensor = golden_generator(
-            source_tensor,
-            operation.output.data_format,
-            num_faces=operation.output.tile_shape.total_num_faces(),
-            input_dimensions=compute_unit.src_a.dimensions,
-            face_r_dim=operation.output.tile_shape.face_r_dim,
+        return self.datacopy_golden(
+            tensor_a, tensor_b, tensor_dst, config, operation, compute_unit
         )
-
-        return (tensor_a, tensor_b, golden_tensor)
 
     def init(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         dest_acc = config.dest_acc.cpp_enum_value
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
         data_copy_type = compute_unit.data_copy_type.cpp_enum_value
-        num_faces = operation.output.tile_shape.total_num_faces()
+        num_faces = operation.tile_shape.total_num_faces()
         _int_fpu_formats = {DataFormat.Int8, DataFormat.UInt8, DataFormat.Int32}
         is_int_fpu_en = (
             "true"
@@ -84,19 +71,19 @@ class DatacopyFpu(Fpu):
 
     def calculate(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        stage = operation.stage_id
+        dest_sync = operation.dest_sync.cpp_enum_value
         dest_acc = config.dest_acc.cpp_enum_value
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
         unpack_to_dest = compute_unit.unpack_to_dest.cpp_enum_value
         data_copy_type = f"DataCopyType::{compute_unit.data_copy_type.name}"
 
         code = (
-            f"    _llk_math_eltwise_unary_datacopy_<{data_copy_type}, dest_sync{stage}, {dest_acc}, {broadcast_type}, {unpack_to_dest}>(\n"
+            f"    _llk_math_eltwise_unary_datacopy_<{data_copy_type}, {dest_sync}, {dest_acc}, {broadcast_type}, {unpack_to_dest}>(\n"
             f"        {block.tile_id_block}, {config.sentinel.math_format}, {config.sentinel.math_format}\n"
             f"    );\n"
         )
@@ -105,9 +92,9 @@ class DatacopyFpu(Fpu):
 
     def uninit(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         unpack_to_dest = compute_unit.unpack_to_dest.cpp_enum_value

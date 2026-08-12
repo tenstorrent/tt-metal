@@ -9,7 +9,7 @@ import pathlib
 import re
 from abc import ABC, abstractmethod
 
-from .constants import parse_hardware_suffix, parse_mesh_suffix, strip_grouping_suffix
+from .constants import parse_hardware_suffix, parse_mesh_suffix, strip_grouping_suffix, strip_mesh_suffix
 from .matrix_runner_config import (
     GENERATION_MANIFEST_FILENAME,
     SUPPORTED_VECTOR_GROUPING_MODES,
@@ -121,7 +121,19 @@ class VectorExportSource(VectorSource):
             if _env_dir:
                 self.export_dir = pathlib.Path(_env_dir)
                 if not self.export_dir.is_absolute():
-                    self.export_dir = pathlib.Path(__file__).parent.parent / self.export_dir.name
+                    # Resolve the path AS WRITTEN first. Collapsing straight to .name was
+                    # fine while the only values were flat siblings of vectors_export
+                    # (vectors_export_col/_row), but it silently rewrites a nested path like
+                    # vectors_export_by_device/mesh4x8_col_2d to sweep_framework/mesh4x8_col_2d,
+                    # which does not exist -- so a device-key batch dir would never be found.
+                    # The bare-name form is kept last so existing callers still work.
+                    _sweep_root = pathlib.Path(__file__).parent.parent
+                    _candidates = [
+                        pathlib.Path.cwd() / self.export_dir,
+                        _sweep_root / self.export_dir,
+                        _sweep_root / self.export_dir.name,
+                    ]
+                    self.export_dir = next((c for c in _candidates if c.is_dir()), _sweep_root / self.export_dir.name)
             else:
                 # Default to vectors_export directory relative to this file
                 self.export_dir = pathlib.Path(__file__).parent.parent / "vectors_export"
@@ -202,11 +214,17 @@ class VectorExportSource(VectorSource):
 
     @staticmethod
     def _get_grouping_kind(module_name: str) -> str | None:
-        """Classify a manifest module name by shared suffix parsing rules."""
+        """Classify a manifest module name by shared suffix parsing rules.
+        When both hw and mesh suffixes are present (e.g. .hw_..._1c.mesh_4x8),
+        return 'hw' since that is the primary grouping mode. The mesh suffix
+        is a sub-grouping within the hw group.
+        """
+        # Check hw first: strip_mesh_suffix removes .mesh_NxM so parse_hardware_suffix
+        # can find the .hw_ pattern that was hidden behind the mesh suffix.
+        if parse_hardware_suffix(strip_mesh_suffix(module_name)) is not None:
+            return "hw"
         if parse_mesh_suffix(module_name) is not None:
             return "mesh"
-        if parse_hardware_suffix(module_name) is not None:
-            return "hw"
         return None
 
     def _manifest_entry_matches_module(
@@ -527,7 +545,11 @@ class VectorExportSource(VectorSource):
                 "but no owned mesh shapes were configured for that lane."
             )
 
-        hardware_rules = capability_profile.get("hardware_rules", ())
+        # capability_profile is None when no TEST_GROUP_NAME is set and none can be
+        # inferred from the machine (common for local single-/sub-mesh runs); guard
+        # so vector loading degrades to "no hardware rules" instead of crashing with
+        # AttributeError on None.
+        hardware_rules = (capability_profile or {}).get("hardware_rules", ())
         if filter_policy["enforce_hardware_capability"] and not hardware_rules:
             logger.warning(
                 f"Manifest grouping mode is 'hw' for module '{module_name}', but no hardware capability profile "
@@ -594,6 +616,20 @@ class VectorExportSource(VectorSource):
                                         f"test_group_name='{test_group_name}'"
                                     )
                                     machine_mismatch_count += 1
+                                    continue
+
+                            # Explicit MESH_DEVICE_SHAPE filter: when set by mesh-split
+                            # batches, reject vectors whose traced mesh doesn't match.
+                            _mesh_env = os.environ.get("MESH_DEVICE_SHAPE", "").strip()
+                            if _mesh_env and "x" in _mesh_env and traced_machine_entries:
+                                _target = tuple(int(x) for x in _mesh_env.split("x"))
+                                _has_mesh_match = any(
+                                    tuple(e.get("mesh_device_shape", [])) == _target
+                                    for e in traced_machine_entries
+                                    if isinstance(e.get("mesh_device_shape"), (list, tuple))
+                                )
+                                if not _has_mesh_match:
+                                    filtered_count += 1
                                     continue
 
                             # Apply mesh filtering when manifest grouping mode says ownership is by mesh.

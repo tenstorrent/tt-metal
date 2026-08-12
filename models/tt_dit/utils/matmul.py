@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 from typing import NamedTuple
 
 from loguru import logger
@@ -128,6 +129,18 @@ grid_11_10_configs = {
     (9472, 3456, 5120): (16, 3, 4, (1, 4)),
     (14400, 384, 1152): (16, 3, 8, (2, 2)),
     (14400, 384, 384): (8, 3, 4, (2, 2)),
+    # LTX Gemma encoder + connectors (seq=1024, swept on 110 cores; M_block=4 beats the 8x8x8
+    # default by ~10-13% on the FFN/proj shapes; the FE aggregate is compute-bound, ~flat).
+    (1024, 3840, 3840): (4, 8, 8, (1, 4)),
+    (1024, 4096, 4096): (4, 8, 12, (1, 4)),
+    (1024, 3840, 2048): (4, 8, 8, (1, 4)),
+    (1024, 4096, 960): (4, 8, 4, (1, 4)),
+    (1024, 15360, 960): (4, 8, 4, (1, 4)),
+    (1024, 4096, 1024): (4, 8, 12, (1, 4)),
+    (1024, 188160, 4096): (4, 8, 12, (1, 4)),
+    # FE aggregate after column-parallel sharding on TP=4: video 4096/4=1024, audio 2048/4=512.
+    (1024, 188160, 1024): (4, 8, 8, (1, 4)),
+    (1024, 188160, 512): (4, 8, 4, (1, 4)),
 }
 
 
@@ -154,6 +167,23 @@ grid_12_9_configs = {
     (2368, 5120, 3456): (7, 5, 12, (1, 2)),
     (9472, 5120, 3840): (7, 5, 16, (1, 2)),
     (2368, 5120, 3840): (7, 5, 16, (1, 2)),
+    (1216, 4096, 32): (8, 8, 1, (4, 1)),
+    (1216, 4096, 3072): (4, 8, 12, (1, 4)),
+    (1216, 4096, 1024): (4, 8, 4, (1, 4)),
+    (1216, 4096, 512): (4, 8, 2, (2, 2)),
+    (1216, 2048, 1024): (4, 8, 4, (1, 4)),
+    (1216, 4096, 4096): (4, 8, 16, (1, 4)),
+    (4864, 4096, 32): (20, 8, 1, (4, 1)),
+    (4864, 4096, 3072): (10, 4, 12, (1, 4)),
+    (4864, 4096, 1024): (16, 8, 4, (4, 1)),
+    (4864, 4096, 512): (8, 8, 2, (4, 1)),
+    (4864, 2048, 1024): (5, 8, 4, (1, 4)),
+    (4864, 4096, 4096): (5, 8, 16, (1, 4)),
+    (256, 2048, 1024): (2, 8, 4, (1, 4)),
+    (32, 2048, 32): (1, 8, 1, (1, 1)),
+    (32, 2048, 1536): (1, 4, 16, (1, 4)),
+    (32, 2048, 512): (1, 8, 2, (1, 2)),
+    (32, 2048, 2048): (1, 4, 12, (1, 4)),
 }
 
 
@@ -226,13 +256,20 @@ class FusedMMRSConfig(NamedTuple):
     subblock_w: int
     num_buffers_per_channel: int | None
     chunk_width_in_mm_blocks: int
+    # Optional explicit reduce-scatter worker count
+    num_workers_per_link: int | None = None
 
     def get_params(self, core_grid, num_links):
-        rs_zone_capacity = (core_grid.y - self.compute_with_storage_grid_size.y) * core_grid.x
-        num_workers_per_link = rs_zone_capacity // (2 * num_links) - 1
         config_dict = self._asdict()
         num_buffers_per_channel = config_dict.pop("num_buffers_per_channel")
         chunk_width_in_mm_blocks = config_dict.pop("chunk_width_in_mm_blocks")
+        num_workers_override = config_dict.pop("num_workers_per_link")
+
+        if num_workers_override is not None:
+            num_workers_per_link = num_workers_override
+        else:
+            rs_zone_capacity = (core_grid.y - self.compute_with_storage_grid_size.y) * core_grid.x
+            num_workers_per_link = rs_zone_capacity // (2 * num_links) - 1
 
         # Order is important. Guaranteed for python 3.7+
         return {
@@ -254,6 +291,8 @@ fused_mmrs_configs = {
     ttnn.CoreCoord(12, 10): {
         (9472, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 8, 4, 8, 2, 1, None, 1),
         (9472 // 4, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 4, 8, 2, 2, None, 1),
+        # LTX video FFN ff2 (RowParallel): per-device [4864,4096]@[4096,4096]
+        (4864, 4096, 4096): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 7, 5, 6, 1, 3, None, 1, 3),
     },
 }
 
@@ -322,3 +361,66 @@ def register_fused_mmrs_configs(configs: dict) -> None:
     """
     for core_grid, entries in configs.items():
         fused_mmrs_configs.setdefault(core_grid, {}).update(entries)
+
+
+# ===================================================================== Fabric-bound all-gather-matmul
+class FabricAGMMConfig(NamedTuple):
+    mm_core_grid: ttnn.CoreCoord
+    ag_core_grid_offset: tuple
+    M_block_size: int
+    K_block_size: int
+    N_block_size: int
+    subblock_h: int
+    subblock_w: int
+    num_workers_per_link: int
+    num_buffers_per_channel: int
+
+
+# Keyed by device core-grid (``ttnn.CoreCoord``) then ``(K, N, chunks)``
+fabric_agmm_configs: dict[ttnn.CoreCoord, dict[tuple, FabricAGMMConfig]] = {
+    ttnn.CoreCoord(12, 10): {
+        # (K, N, chunks) -> FabricAGMMConfig
+        (4096, 1024, 1): FabricAGMMConfig(ttnn.CoreCoord(12, 8), (0, 8), 16, 8, 4, 2, 2, 3, 8),
+        # --------------------------------------------------------------------------------------- Remaining
+        (4096, 32, 1): FabricAGMMConfig(ttnn.CoreCoord(12, 8), (0, 8), 16, 8, 1, 2, 1, 3, 8),
+        # audio to_gate_logits: per-device N = num_heads/tp = 8, tile-padded to 32 (1 tile)
+        (4096, 512, 1): FabricAGMMConfig(ttnn.CoreCoord(12, 8), (0, 8), 16, 8, 2, 2, 2, 3, 8),
+        # audio a_kv (chunks=1 in the op test): K = audio_dim = 2048, N = 1024
+    },
+}
+
+
+def get_fabric_agmm_config(K, N, chunks, device_core_grid) -> FabricAGMMConfig | None:
+    """Return the tuned fabric-bound strided-AGMM config for this shape, or ``None``.
+
+    ``None`` means the shape is not (known to be) fabric-bound; the caller keeps the current
+    ``all_gather_minimal_matmul_async`` path. Keyed on ``(K, N, chunks)`` only (M-independent).
+
+    A/B switch: set ``DISABLE_FABRIC_AGMM=1`` to force a miss for every shape, routing the whole
+    model back onto the old ``all_gather_minimal_matmul_async`` op. Used to get an apples-to-apples
+    old-agmm-vs-strided-sagmm baseline under the same trace/fabric config.
+    """
+    if os.environ.get("DISABLE_FABRIC_AGMM") in ("1", "true", "True"):
+        return None
+    return fabric_agmm_configs.get(device_core_grid, {}).get((K, N, chunks))
+
+
+def register_fabric_agmm_configs(configs: dict) -> None:
+    """Register additional fabric-bound strided-AGMM configs from external models.
+
+    Args:
+        configs: Mapping from ``ttnn.CoreCoord`` (device core-grid) to dict of
+            ``(K, N, chunks)`` -> :class:`FabricAGMMConfig`.
+
+    Example::
+
+        register_fabric_agmm_configs({
+            ttnn.CoreCoord(12, 10): {
+                (4096, 1024, 1): FabricAGMMConfig(
+                    ttnn.CoreCoord(12, 8), (0, 8), 16, 8, 4, 2, 2, 3, 8
+                ),
+            },
+        })
+    """
+    for core_grid, entries in configs.items():
+        fabric_agmm_configs.setdefault(core_grid, {}).update(entries)

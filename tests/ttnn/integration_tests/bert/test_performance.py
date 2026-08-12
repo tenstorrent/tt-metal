@@ -97,9 +97,7 @@ def test_performance(device, model_name, sequence_size, bert):
 
     parameters = preprocess_model_parameters(
         model_name=tt_model_name,
-        initialize_model=lambda: transformers.BertForQuestionAnswering.from_pretrained(
-            model_name, torchscript=False
-        ).eval(),
+        initialize_model=lambda: transformers.BertForQuestionAnswering.from_pretrained(model_name).eval(),
         custom_preprocessor=bert.custom_preprocessor,
         device=device,
     )

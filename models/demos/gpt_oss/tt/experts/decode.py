@@ -58,7 +58,12 @@ def decode_forward(
 
     # EP-specific routing remap for sparsity
     if ep > 1:
-        sparsity = ttnn.moe_routing_remap(ttnn.reshape(sparsity, (1, sparsity.shape[-1])), 4, 4, 0)
+        sparsity = ttnn.moe_routing_remap(
+            ttnn.reshape(sparsity, (1, sparsity.shape[-1])),
+            config.num_experts_per_tok,
+            ep,
+            mesh_config.ep_axis,
+        )
         routing_weights = ttnn.tilize_with_zero_padding(sparsity, use_multicore=True)
 
     num_experts_per_tok = config.num_experts_per_tok // ep
@@ -69,7 +74,14 @@ def decode_forward(
         hidden_states,
         weights.gate_proj,
         sparsity=sparsity,
-        nnz=num_experts_per_tok,
+        # nnz intentionally omitted (None -> inferred at runtime). Passing a static
+        # nnz makes the sparse_matmul in0-mcast receivers loop a fixed count while the
+        # sender only mcasts for the *actual* non-zero `sparsity` entries. The decode
+        # routing weights (softmax over top-k, scattered) frequently have <k non-zeros
+        # on Blackhole (small weights flush to 0), so a static nnz != actual count and
+        # the receivers deadlock in noc_semaphore_wait. Inferring the count is robust.
+        # See tenstorrent/tt-metal#45943 (op deadlock) / #45052 (gpt-oss hang).
+        nnz=None,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         output_tile=output_tile,
         program_config=program_config.get_decode_gate_up_config(
@@ -88,7 +100,14 @@ def decode_forward(
         hidden_states,
         weights.up_proj,
         sparsity=sparsity,
-        nnz=num_experts_per_tok,
+        # nnz intentionally omitted (None -> inferred at runtime). Passing a static
+        # nnz makes the sparse_matmul in0-mcast receivers loop a fixed count while the
+        # sender only mcasts for the *actual* non-zero `sparsity` entries. The decode
+        # routing weights (softmax over top-k, scattered) frequently have <k non-zeros
+        # on Blackhole (small weights flush to 0), so a static nnz != actual count and
+        # the receivers deadlock in noc_semaphore_wait. Inferring the count is robust.
+        # See tenstorrent/tt-metal#45943 (op deadlock) / #45052 (gpt-oss hang).
+        nnz=None,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         output_tile=output_tile,
         program_config=program_config.get_decode_gate_up_config(
@@ -113,7 +132,14 @@ def decode_forward(
         down_input,
         weights.down_proj,
         sparsity=sparsity,
-        nnz=num_experts_per_tok,
+        # nnz intentionally omitted (None -> inferred at runtime). Passing a static
+        # nnz makes the sparse_matmul in0-mcast receivers loop a fixed count while the
+        # sender only mcasts for the *actual* non-zero `sparsity` entries. The decode
+        # routing weights (softmax over top-k, scattered) frequently have <k non-zeros
+        # on Blackhole (small weights flush to 0), so a static nnz != actual count and
+        # the receivers deadlock in noc_semaphore_wait. Inferring the count is robust.
+        # See tenstorrent/tt-metal#45943 (op deadlock) / #45052 (gpt-oss hang).
+        nnz=None,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         output_tile=output_tile,
         is_input_a_sparse=True,

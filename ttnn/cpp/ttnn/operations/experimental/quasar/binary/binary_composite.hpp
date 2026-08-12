@@ -1,0 +1,275 @@
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <array>
+#include <optional>
+#include <vector>
+
+#include <tt_stl/span.hpp>
+
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/experimental/quasar/binary/binary.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/types.hpp"
+#include <tt-metalium/sub_device_types.hpp>
+
+namespace ttnn::operations::experimental::quasar::binary {
+
+/**
+ * @brief Performs element-wise power operation on the input with the exponent.
+ * When exponent is Tensor, the supported dtypes are float32 and bfloat16.
+ * The tested range for the input is (-30,30) and for the exponent is (-20, 20).
+ *
+ * @param input The input tensor, i.e the base.
+ * @param exponent The exponent
+ * @return The result tensor
+ */
+Tensor pow(
+    const Tensor& input,
+    int32_t exponent,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
+    const std::optional<Tensor>& output_tensor = std::nullopt);
+
+Tensor pow(
+    const Tensor& input_a,
+    float exponent,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
+    const std::optional<Tensor>& output_tensor = std::nullopt);
+
+Tensor pow(
+    float input_a,
+    const Tensor& exponent,
+    const std::optional<const DataType>& dtype = std::nullopt,
+    const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {});
+
+Tensor pow(
+    const Tensor& input,
+    const Tensor& exponent,
+    const std::optional<const DataType>& dtype = std::nullopt,
+    const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {});
+
+Tensor div(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    bool fast_and_approximate_mode = false,
+    const std::optional<std::string>& rounding_mode = std::nullopt,
+    const std::optional<const DataType>& output_dtype = std::nullopt,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
+    const std::optional<Tensor>& output_tensor = std::nullopt,
+    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
+    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
+    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
+
+Tensor div(
+    const Tensor& input,
+    operations::unary::ScalarVariant value,
+    bool fast_and_approximate_mode = false,
+    const std::optional<std::string>& rounding_mode = std::nullopt,
+    const std::optional<const DataType>& output_dtype = std::nullopt,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
+    const std::optional<Tensor>& output_tensor = std::nullopt,
+    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
+    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
+    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
+
+Tensor bias_gelu(
+    const Tensor& input_tensor_a_arg,
+    const Tensor& input_tensor_b_arg,
+    const std::optional<const DataType>& output_dtype = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
+
+Tensor bias_gelu(
+    const ttnn::Tensor& input_tensor_a,
+    operations::unary::ScalarVariant bias,
+    const std::optional<const DataType>& dtype = std::nullopt,
+    const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
+
+Tensor fmod(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
+
+Tensor fmod(
+    const Tensor& input,
+    operations::unary::ScalarVariant scalar,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
+
+Tensor remainder(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const std::optional<const DataType>& output_dtype = std::nullopt,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
+
+Tensor remainder(
+    const Tensor& input,
+    operations::unary::ScalarVariant scalar,
+    const std::optional<const DataType>& output_dtype = std::nullopt,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
+
+Tensor lcm(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const DataType>& output_dtype = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {});
+
+Tensor gcd(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const DataType>& output_dtype = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {});
+
+Tensor maximum(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const DataType>& output_dtype = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {});
+
+Tensor maximum(
+    const Tensor& input_a,
+    operations::unary::ScalarVariant value,
+    const std::optional<const DataType>& output_dtype = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {});
+
+Tensor minimum(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const DataType>& output_dtype = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {});
+
+Tensor minimum(
+    const Tensor& input_a,
+    operations::unary::ScalarVariant value,
+    const std::optional<const DataType>& output_dtype = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {});
+
+Tensor prelu(
+    const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+
+Tensor prelu(
+    const Tensor& input,
+    const std::array<float, 1>& weight,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+
+Tensor prelu(
+    const Tensor& input,
+    operations::unary::ScalarVariant weight,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+
+Tensor rsub(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const DataType>& output_dtype = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {});
+
+Tensor rsub(
+    const Tensor& input_tensor_a,
+    operations::unary::ScalarVariant input_b,
+    const std::optional<const DataType>& output_dtype = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {});
+
+Tensor atan2(
+    const Tensor& input_b, const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+
+Tensor nextafter(
+    const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+
+Tensor div_no_nan(
+    const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+
+Tensor div_no_nan(
+    const Tensor& input_a,
+    operations::unary::ScalarVariant value,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+
+Tensor floor_div(
+    const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+
+Tensor floor_div(
+    const Tensor& input_a,
+    operations::unary::ScalarVariant value,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+
+Tensor outer(
+    const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+
+Tensor polyval(
+    const Tensor& input_a,
+    const std::vector<float>& coeffs,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+
+}  // namespace ttnn::operations::experimental::quasar::binary

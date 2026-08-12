@@ -24,15 +24,16 @@ from tracy import signpost
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_ep_mesh_mapper
 from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, TtMoEGateConfig, TtMoEGatePrefill
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_intermediates import TtMoEIntermediates
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import TtMoERoutingSetup
 from models.demos.deepseek_v3_d_p.tt.moe.tt_reduce import TtReduceModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import TtSharedExpert
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
 
 class TtMoe(LightweightModule):
@@ -88,10 +89,11 @@ class TtMoe(LightweightModule):
         if gate_weights:
             from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import TtMoEGateConfig, TtMoEGatePrefill
 
-            # Create minimal config for caching
-            gate_config = TtMoEGateConfig()
-            gate_config.dim = emb_dim
-            gate_config.n_routed_experts = gate_weights["weight"].shape[0]
+            # Minimal config for caching
+            gate_config = TtMoEGateConfig(
+                dim=emb_dim,
+                n_routed_experts=gate_weights["weight"].shape[0],
+            )
 
             TtMoEGatePrefill.build_ttnn_cache(
                 torch_weight=gate_weights["weight"],
@@ -138,8 +140,11 @@ class TtMoe(LightweightModule):
         max_dispatch_buffer_token_size: int,
         seq_len_per_chip: int,
         gate_weights: dict,
-        emb_dim: int = DeepSeekV3Config.EMB_SIZE,
-        hidden_dim: int = DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,
+        emb_dim: int,
+        hidden_dim: int,
+        n_expert_groups: int,
+        n_limited_groups: int,
+        route_scale: float,
         num_links: Union[int, tuple[int, int]] = 1,
         topology: Union[ttnn.Topology, tuple[ttnn.Topology, ttnn.Topology]] = ttnn.Topology.Linear,
         routed_expert_weights: list[dict] = None,
@@ -152,6 +157,8 @@ class TtMoe(LightweightModule):
         weight_cache_path: Optional[Path] = None,
         layer_idx: int = 0,
         overlap_shared_expert_with_dispatch: bool = True,
+        routing_use_l1_small_for_semaphores: bool = False,
+        is_balanced: bool = False,
     ):
         """
         Initialize TtMoe module.
@@ -188,9 +195,14 @@ class TtMoe(LightweightModule):
             overlap_shared_expert_with_dispatch: If True, run the shared expert and dispatch
                 on disjoint sub-devices so they overlap on-chip. If False, skip sub-device
                 setup and run them sequentially on the full Tensix grid.
+            is_balanced: If True, uses zigzag sequence placement for padding awareness.
+                Should match the is_balanced flag used in MLA/transformer.
         """
         super().__init__()
         self.mesh_device = mesh_device
+        # Shared per-mesh CCL singleton: persistent global semaphores for the TP all-gather of x,
+        # so all_gather_async reuses them instead of leaking fresh L1 semaphores every layer.
+        self.tt_ccl = get_tt_ccl(mesh_device)
         self.dispatch_group_size = dispatch_group_size
         self.num_dispatch_groups = num_dispatch_groups
         self.experts_per_chip = experts_per_chip
@@ -199,7 +211,6 @@ class TtMoe(LightweightModule):
         self.seq_len_per_chip = seq_len_per_chip
         self.emb_dim = emb_dim
         self.hidden_dim = hidden_dim
-        self.overlap_shared_expert_with_dispatch = overlap_shared_expert_with_dispatch
 
         # Unpack row/col CCL config
         if isinstance(num_links, tuple):
@@ -212,18 +223,51 @@ class TtMoe(LightweightModule):
         else:
             self.row_topology = self.col_topology = topology
 
+        self.overlap_shared_expert_with_dispatch = overlap_shared_expert_with_dispatch
+        # Optional SubDeviceTraceController (capture phase): the shared-expert/dispatch overlap's
+        # sub-device load/clear go through it so the trace can be split at those boundaries instead of
+        # resetting worker state mid-capture. None => load/clear the mesh device directly.
+        self._trace_controller = None
+
+        # The shared expert, WHEN OVERLAPPED with dispatch, runs on disjoint Tensix sub-devices that
+        # still SHARE the EDM fabric routers. In that case its TP-axis reduce-scatter must stay Linear
+        # even when the TP axis is a ring: a *ring* reduce-scatter concurrent with dispatch makes the
+        # two ops' wrap-link traffic form a cyclic EDM buffer-credit dependency and deadlocks (the
+        # shared-expert reduce_scatter wedges on its batch_ready_sem barrier at
+        # ring_reduce_scatter_minimal_async_writer.cpp). This mirrors the proven FABRIC_2D_TORUS_Y
+        # path, where the overlapped shared expert is Linear (col axis unwrapped) while dispatch
+        # rings on SP. The forcing is gated on the overlap flag: with overlap disabled the reduce-
+        # scatter runs alone (no concurrent dispatch on the shared routers), so Ring is safe and kept.
+        # Every other TP-axis collective (MLA, dense FFN, gate, pre-dispatch all-gather, post-combine
+        # reduce) is never overlapped and keeps col_topology (Ring).
+        force_shared_expert_linear = (
+            self.overlap_shared_expert_with_dispatch and self.col_topology == ttnn.Topology.Ring
+        )
+        self.shared_expert_topology = ttnn.Topology.Linear if force_shared_expert_linear else self.col_topology
+        if force_shared_expert_linear:
+            logger.info(
+                "TtMoe: shared-expert reduce-scatter forced to Linear (overlapped with dispatch on a "
+                "TP-ring fabric) to avoid an EDM deadlock; other TP collectives keep Ring"
+            )
+
         # Always create dispatch table at init (static tensor) - needed by gate and dispatch module
         expert_dispatch_table = ExpertMapping.create_dispatch_table(
             num_routed_experts, dispatch_group_size, num_dispatch_groups
         )
 
         # Build gate internally
-        gate_config = TtMoEGateConfig()
-        gate_config.dim = emb_dim
-        gate_config.sp_dim = seq_len_per_chip
-        gate_config.n_routed_experts = num_routed_experts
-        gate_config.n_activated_experts = num_experts_per_tok
+        gate_config = TtMoEGateConfig(
+            dim=emb_dim,
+            sp_dim=seq_len_per_chip,
+            n_routed_experts=num_routed_experts,
+            n_activated_experts=num_experts_per_tok,
+            n_expert_groups=n_expert_groups,
+            n_limited_groups=n_limited_groups,
+            route_scale=route_scale,
+        )
         gate_config.ccl_config["NUM_LINKS"] = self.col_num_links if isinstance(num_links, tuple) else num_links
+        # The gate all-reduce runs on the TP axis (cluster_axis=TP_AXIS), so it follows col_topology.
+        gate_config.ccl_config["TOPOLOGY"] = self.col_topology
 
         # Handle cache-only case (gate_weights=None)
         if gate_weights is not None:
@@ -237,13 +281,20 @@ class TtMoe(LightweightModule):
         self.gate = TtMoEGatePrefill(
             gate_config,
             mesh_device,
-            dispatch_table=expert_dispatch_table,
-            experts_per_chip=experts_per_chip,
             weight=gate_weight,
             bias=gate_bias,
             fallback_mode=gate_fallback_mode,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.gate",
+            is_balanced=is_balanced,
+        )
+
+        self.routing_setup = TtMoERoutingSetup(
+            mesh_device,
+            expert_dispatch_table,
+            num_links=gate_config.ccl_config["NUM_LINKS"],
+            experts_per_chip=experts_per_chip,
+            use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
         )
         logger.debug(f"Initializing TtMoe")
         logger.debug(f"  mesh_device.shape={mesh_device.shape}")
@@ -265,7 +316,7 @@ class TtMoe(LightweightModule):
         # When overlap is disabled, both ops run sequentially on the full grid and no
         # sub-device manager is created.
         # ========================================
-        if overlap_shared_expert_with_dispatch:
+        if self.overlap_shared_expert_with_dispatch:
             dispatch_sd_rows = 1
             grid = mesh_device.compute_with_storage_grid_size()
             grid_x, grid_y = grid.x, grid.y
@@ -323,7 +374,7 @@ class TtMoe(LightweightModule):
             cluster_axis=0,
             num_links=self.row_num_links,
             topology=self.row_topology,
-            init_zeros=True,
+            init_zeros=False,
         )
 
         # Build (group, chip, local_expert) -> global expert id table, sharded
@@ -357,6 +408,7 @@ class TtMoe(LightweightModule):
             weights_dtype=routed_expert_weights_dtype,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.routed_expert",
+            activation=ttnn.RoutedExpertActivation.Silu,
         )
 
         # Initialize shared expert (col axis: axis 1)
@@ -366,7 +418,7 @@ class TtMoe(LightweightModule):
             hidden_dim=hidden_dim,
             torch_weights=shared_expert_weights,
             num_links=self.col_num_links,
-            topology=self.col_topology,
+            topology=self.shared_expert_topology,
             activations_dtype=shared_expert_activations_dtype,
             weights_dtype=shared_expert_weights_dtype,
             weight_cache_path=weight_cache_path,
@@ -391,10 +443,28 @@ class TtMoe(LightweightModule):
 
         logger.debug("TtMoe initialization complete")
 
+    def set_trace_controller(self, controller):
+        """Attach (or clear with None) a SubDeviceTraceController. While set, the shared-expert/
+        dispatch overlap routes its sub-device load/clear through the controller so a ttnn trace can
+        be split at those boundaries (see utils/sub_device_trace.py)."""
+        self._trace_controller = controller
+
+    def release_sub_device_manager(self):
+        """Remove the overlap sub-device manager this MoE created (no-op if overlap is off). Call
+        before closing the mesh device — leaving managers registered at close has been observed to
+        segfault the teardown. Idempotent."""
+        if getattr(self, "sd_manager_id", None) is not None:
+            self.mesh_device.remove_sub_device_manager(self.sd_manager_id)
+            self.sd_manager_id = None
+
     def forward(
         self,
         x: ttnn.Tensor,
         return_intermediates: bool = False,
+        actual_isl: int = None,
+        padding_side: str = "right",
+        actual_start: Optional[int] = None,
+        metadata: Optional[tuple] = None,
     ) -> tuple[ttnn.Tensor, Optional[TtMoEIntermediates]]:
         """
         Forward pass through the full MoE pipeline.
@@ -404,23 +474,99 @@ class TtMoe(LightweightModule):
                - For 2D mesh: sharded dims=(0, -1) - dim 0 across axis 0, dim -1 across axis 1
                - Shape per device: (dispatch_group_size/axis0, seq_len_per_chip, emb_dim/axis1)
             return_intermediates: If True, return intermediate tensors for debugging
+            actual_isl: Actual ISL of the sequence (None = no padding). Doubles as the padding-config
+                GUARD: not-None enables padding awareness. On the traced path (`metadata` set) that is
+                its ONLY role — pass the full chunk, since the real per-chunk bound is read on-device
+                from the metadata tensors and this value is unused.
+            padding_side: Padding side of the sequence
+            actual_start: chunked-prefill absolute KV position of this chunk's first real token
+                (None/0 = single-shot, sequential SP layout). Required for correct per-chip real-token
+                counts: chunked prefill feeds the KV-pad-aware ROTATED block-cyclic layout, where a
+                chip's real rows are NOT its slice of the natural sequence. See build_padding_config.
+            metadata: the traced path's (slot_id, actual_start, actual_end) tuple of 1-element uint32
+                device tensors. When given, the padding config is built ON DEVICE from them
+                (build_padding_config_device) instead of on host — the host builder's from_torch is
+                illegal inside a trace capture, and a config baked in at capture time would be wrong
+                for every later chunk. Ignored unless padding awareness is active (actual_isl set and
+                a DEVICE_FP32 gate).
 
         Returns:
             Tuple of (final_output, intermediates):
             - final_output: MoE output with same sharding as input
             - intermediates: TtMoEIntermediates if return_intermediates=True, else None
         """
+        signpost(header="MoE_START")
         logger.debug(f"[TtMoe.forward] INPUT SHAPES:")
         logger.debug(f"  x.shape={x.shape}")
 
         # ========================================
         # Gate: compute weights/indices/offsets/counts from x
         # ========================================
-        # Reshape 3D -> 2D for gate: (batch, seq, emb) -> (batch*seq, emb)
+        # Padding awareness is only validated/safe for RIGHT padding. With right padding,
+        # real tokens have the lowest indices, so they are packed first in every expert
+        # region and stay within the shortened FFN/dispatch bound. For left padding the
+        # real tokens land at the tail of each region while padded tokens (in non-sentinel
+        # gate modes) are dispatched first, so a shortened bound could drop real tokens.
+        # Disable padding awareness for left padding and process the full (always-correct)
+        # token range by clearing actual_isl for the rest of this forward.
+        #
+        # Under trace this stays ON: the captured (metadata) forward always passes the FULL chunk as
+        # actual_isl, so build_padding_config yields a single full-range config that the memoization
+        # below builds once during warm-up — the replayed command stream contains no host transfer.
+        # Only the eager/scalar paths pass a partial actual_isl, and that is the rotated-padded path
+        # #51440 fixed.
+        if actual_isl is not None and padding_side != "right":
+            logger.warning(
+                "[TtMoe.forward] padding-aware MoE is only supported for right padding; "
+                f"got padding_side={padding_side!r}. Falling back to the full token range."
+            )
+            actual_isl = None
 
-        scores, indices, gate_logits, tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets = self.gate(
-            ttnn.view(x, (x.shape[0] * x.shape[1], x.shape[2]))
+        # Build the per-device [local_real_tokens, pad_side] config once and share the
+        # SAME tensor between the gate topk (sentinel-marks padded rows) and the dispatch
+        # op (bounds its token loop). This is only valid in DEVICE_FP32, where the gate
+        # actually sentinel-marks padded tokens so routing_setup/combine stay consistent
+        # with a shortened dispatch loop. In other gate modes padded tokens keep real
+        # expert indices, so dispatch must process the full range -> padding_config=None.
+        #
+        # NOTE on `actual_isl` in this guard: it plays two DIFFERENT roles depending on the path.
+        #   * eager/scalar: it is BOTH the guard (not-None => padding awareness on) AND the actual
+        #     bound handed to the host builder below.
+        #   * traced (metadata set): it is ONLY the guard. The real per-chunk bound is read on-device
+        #     from the metadata tensors, so the caller passes the FULL chunk here (see
+        #     TtPrefillRuntime._forward_traced, actual_isl=chunk_size) purely to say "padding
+        #     awareness is ON" — its VALUE is deliberately unused. That is what keeps the guard
+        #     itself trace-safe: it is a static, capture-time decision (one captured program either
+        #     has the padding-aware ops or it does not), while the values that change per chunk stay
+        #     on-device. A caller that wanted padding awareness OFF under trace would pass
+        #     actual_isl=None and get a capture with no padding-aware path at all.
+        padding_config = None
+        if actual_isl is not None and self.gate.fallback_mode == GateComputeMode.DEVICE_FP32:
+            if metadata is not None:
+                # Traced path: the per-chunk scalars live on-device in the metadata tensors, so build
+                # the config with the device op. The host builder's from_torch cannot run inside a
+                # capture, and a config baked in at capture time would be wrong for every later chunk.
+                # `actual_isl` is NOT forwarded here — only the guard above consumed it; the op derives
+                # the real bound from actual_start/actual_end itself.
+                # Raises for is_balanced=True (not expressible in the op's closed form).
+                padding_config = self.gate.build_padding_config_device(metadata, padding_side)
+            else:
+                padding_config = self.gate.build_padding_config(actual_isl, padding_side, actual_start or 0)
+
+        scores, indices, gate_logits = self.gate(
+            ttnn.view(x, (x.shape[0] * x.shape[1], x.shape[2])),
+            actual_isl=actual_isl,
+            padding_side=padding_side,
+            padding_config=padding_config,
+            actual_start=actual_start or 0,
         )
+
+        tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets, _ = self.routing_setup(
+            ttnn_top_k_experts_indices=indices,
+            num_routed_experts=self.num_routed_experts,
+            num_experts_per_tok=self.num_experts_per_tok,
+        )
+
         gate_logits = (
             ttnn.to_memory_config(gate_logits, ttnn.DRAM_MEMORY_CONFIG)
             if return_intermediates
@@ -439,17 +585,8 @@ class TtMoe(LightweightModule):
             _offsets_host = ttnn.to_torch(_offsets_4d, mesh_composer=_ep_composer).squeeze(2)
             logger.info(f"[TtMoe.forward] expert_region_offsets: {_offsets_host.flatten().tolist()}")
 
-        # Gate outputs uint16 indices; dispatch requires int32.
-        # this should be aligned in the further PR.
-        # Typecast in TILE_LAYOUT to avoid alignment issues, then convert to ROW_MAJOR.
-        if indices.dtype != ttnn.int32:
-            indices = ttnn.to_layout(indices, ttnn.TILE_LAYOUT)
-            indices = ttnn.typecast(indices, ttnn.int32)
-            indices = ttnn.to_layout(indices, ttnn.ROW_MAJOR_LAYOUT)
-        else:
-            indices = ttnn.to_layout(indices, ttnn.ROW_MAJOR_LAYOUT)
-        #
         # Ensure ROW_MAJOR layout for dispatch compatibility
+        indices = ttnn.to_layout(indices, ttnn.ROW_MAJOR_LAYOUT)
         scores = ttnn.to_layout(scores, ttnn.ROW_MAJOR_LAYOUT)
 
         # Reshape back to 3D: (batch*seq, topk) -> (batch, seq, topk)
@@ -468,10 +605,12 @@ class TtMoe(LightweightModule):
         # Both shared_expert and dispatch need full emb_dim, so all-gather first
         # Only needed if there are multiple devices in TP axis (axis 1)
         if self.mesh_device.shape[1] > 1:
-            x = ttnn.all_gather(
+            x = ttnn.experimental.all_gather_async(
                 x,
                 dim=-1,  # Gather along emb_dim
                 cluster_axis=1,  # Gather across axis 1 (TP axis)
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=1),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=1),
                 num_links=self.col_num_links,
                 topology=self.col_topology,
             )
@@ -479,7 +618,10 @@ class TtMoe(LightweightModule):
 
         signpost("shared_expert_and_dispatch_start")
         if self.overlap_shared_expert_with_dispatch:
-            self.mesh_device.load_sub_device_manager(self.sd_manager_id)
+            if self._trace_controller is not None:
+                self._trace_controller.sub_device_load(self.sd_manager_id)
+            else:
+                self.mesh_device.load_sub_device_manager(self.sd_manager_id)
 
         # ========================================
         # Step 1: Shared expert (enabled)
@@ -502,9 +644,17 @@ class TtMoe(LightweightModule):
             indices,
             tt_expert_offsets,
             self.tt_expert_dispatch_table,
+            padding_config=padding_config,
         )
         if self.overlap_shared_expert_with_dispatch:
-            self.mesh_device.clear_loaded_sub_device_manager()
+            if self._trace_controller is not None:
+                self._trace_controller.sub_device_clear()
+            else:
+                self.mesh_device.clear_loaded_sub_device_manager()
+        # NOTE: padding_config is memoized + owned by the gate (build_padding_config caches it per
+        # actual_isl so a captured trace's replay reuses the same device tensor instead of re-issuing a
+        # host from_torch). Do NOT deallocate it here — it is reused across forwards/replays; freeing it
+        # would leave the cache holding a deallocated tensor (next forward's cache hit fails is_allocated()).
         x = ttnn.deallocate(x)
         scores = ttnn.to_memory_config(scores, ttnn.DRAM_MEMORY_CONFIG)
         indices = ttnn.to_memory_config(indices, ttnn.DRAM_MEMORY_CONFIG)
@@ -519,28 +669,15 @@ class TtMoe(LightweightModule):
         # Routed expert expects (experts_per_chip, max_tokens, emb_dim)
         # Squeeze the first two dimensions
 
-        # Convert dispatched_buffer to TILE_LAYOUT for routed experts
-        dispatched_buffer_tiled = ttnn.to_layout(
-            ttnn.squeeze(ttnn.squeeze(dispatched_buffer, dim=0), dim=0),
-            ttnn.TILE_LAYOUT,
-            dtype=self.routed_expert.activations_dtype,
-        )
-
-        # Free the original ROW_MAJOR DRAM buffer before entering routed_expert for clear state.
-        # When return_intermediates=True, keep it so the PCC check can compare against the
-        # bfloat16 torch reference (the tiled buffer may be bfloat8_b).
+        # TtRoutedExpert.forward owns the per-arch layout/dtype prep: Blackhole
+        # consumes the ROW_MAJOR bf16 buffer and returns a fresh output; Wormhole
+        # tiles it internally for the extract loop. Either way the ROW_MAJOR input
+        # is independent of the result and can be freed here, unless the PCC check
+        # needs it to compare against the bfloat16 torch reference.
+        squeezed_dispatch = ttnn.squeeze(ttnn.squeeze(dispatched_buffer, dim=0), dim=0)
+        expert_outputs = self.routed_expert(squeezed_dispatch, tt_expert_token_counts, tt_expert_region_offsets)
         if not return_intermediates:
             dispatched_buffer = ttnn.deallocate(dispatched_buffer)
-
-        logger.debug(f"[TtMoe.forward] dispatched_buffer_tiled shape: {dispatched_buffer_tiled.shape}")
-
-        # NOTE: expert_outputs aliases dispatched_buffer_tiled — TtRoutedExpert.forward sets
-        # expert_outputs = dispatched_buffer and then writes per-expert FFN results back
-        # in-place via deepseek_prefill.insert. The two names point at the same device buffer.
-        # Therefore we must NOT call ttnn.deallocate(dispatched_buffer_tiled) here; doing so
-        # would free the storage that expert_outputs still depends on, and the subsequent
-        # ttnn.unsqueeze / combine_module calls would raise "Tensor is not allocated".
-        expert_outputs = self.routed_expert(dispatched_buffer_tiled, tt_expert_token_counts, tt_expert_region_offsets)
         logger.debug(f"[TtMoe.forward] expert_outputs shape: {expert_outputs.shape}")
 
         # Add back the batch dimensions for combine
@@ -657,4 +794,5 @@ class TtMoe(LightweightModule):
                 expert_token_counts=tt_expert_token_counts,
             )
 
+        signpost(header="MoE_END")
         return final_output, intermediates

@@ -2,10 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <array>
 #include <bit>
+#include <cmath>
 #include <optional>
 
 #include "moreh_adamw_device_operation.hpp"
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -21,6 +24,36 @@ static constexpr const char* WRITER_KERNEL_PATH =
     "ttnn/cpp/ttnn/operations/moreh/moreh_adamw/device/kernels/writer_moreh_adamw.cpp";
 static constexpr const char* COMPUTE_KERNEL_PATH =
     "ttnn/cpp/ttnn/operations/moreh/moreh_adamw/device/kernels/moreh_adamw.cpp";
+
+namespace {
+
+// Work split used by create_descriptor to derive the core list and group membership.
+struct AdamwWorkSplit {
+    uint32_t num_cores = 0;
+    uint32_t num_cores_y = 0;
+    CoreRangeSet all_cores;
+    CoreRangeSet core_group_1;
+    CoreRangeSet core_group_2;
+    uint32_t num_units_per_core_group_1 = 0;
+    uint32_t num_units_per_core_group_2 = 0;
+};
+
+AdamwWorkSplit compute_adamw_work_split(const Tensor& param_in) {
+    auto grid = param_in.device()->compute_with_storage_grid_size();
+    uint32_t num_units = param_in.physical_volume() / tt::constants::TILE_HW;
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_units_per_core_group_1, num_units_per_core_group_2] =
+        split_work_to_cores(grid, num_units);
+    return {
+        num_cores,
+        grid.y,
+        all_cores,
+        core_group_1,
+        core_group_2,
+        num_units_per_core_group_1,
+        num_units_per_core_group_2};
+}
+
+}  // namespace
 
 ProgramDescriptor MorehAdamWDeviceOperation::create_descriptor(
     const operation_attributes_t& operation_attributes,
@@ -39,8 +72,6 @@ ProgramDescriptor MorehAdamWDeviceOperation::create_descriptor(
     uint32_t step = operation_attributes.step;
     bool amsgrad = operation_attributes.amsgrad;
 
-    uint32_t num_units = param_in.physical_volume() / tt::constants::TILE_HW;
-
     const std::optional<Tensor>& max_exp_avg_sq_in = tensor_args.max_exp_avg_sq_in;
 
     // It's guarantee that param_out, exp_avg_out, exp_avg_sq_out are created.
@@ -54,12 +85,14 @@ ProgramDescriptor MorehAdamWDeviceOperation::create_descriptor(
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    IDevice* device = param_in.device();
-    auto grid = device->compute_with_storage_grid_size();
-    const auto num_cores_y = grid.y;
-
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_units_per_core_group_1, num_units_per_core_group_2] =
-        split_work_to_cores(grid, num_units);
+    const auto
+        [num_cores,
+         num_cores_y,
+         all_cores,
+         core_group_1,
+         core_group_2,
+         num_units_per_core_group_1,
+         num_units_per_core_group_2] = compute_adamw_work_split(param_in);
 
     auto arch = param_in.device()->arch();
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
@@ -237,14 +270,15 @@ ProgramDescriptor MorehAdamWDeviceOperation::create_descriptor(
     auto* const grad_buf = grad.buffer();
     auto* const exp_avg_in_buf = exp_avg_in.buffer();
     auto* const exp_avg_sq_in_buf = exp_avg_sq_in.buffer();
-    const uint32_t max_exp_avg_sq_in_addr =
-        max_exp_avg_sq_in.has_value() ? max_exp_avg_sq_in.value().buffer()->address() : 0u;
+    // Register max_exp_avg_sq as a BufferBinding so the framework patches its address on
+    // cache hit. A raw Buffer::address() write here would go stale across cache hits because
+    // the program hash zeros out step+lr, so the same cached program is reused with new tensors.
+    auto* const max_exp_avg_sq_in_buf = max_exp_avg_sq_in.has_value() ? max_exp_avg_sq_in.value().buffer() : nullptr;
 
     auto* const param_out_buf = param_out.buffer();
     auto* const exp_avg_out_buf = exp_avg_out.buffer();
     auto* const exp_avg_sq_out_buf = exp_avg_sq_out.buffer();
-    const uint32_t max_exp_avg_sq_out_addr =
-        max_exp_avg_sq_out.has_value() ? max_exp_avg_sq_out.value().buffer()->address() : 0u;
+    auto* const max_exp_avg_sq_out_buf = max_exp_avg_sq_out.has_value() ? max_exp_avg_sq_out.value().buffer() : nullptr;
     float beta1_exponent = std::pow(beta1, step);
     float beta2_exponent = std::pow(beta2, step);
 
@@ -274,7 +308,7 @@ ProgramDescriptor MorehAdamWDeviceOperation::create_descriptor(
              grad_buf,
              exp_avg_in_buf,
              exp_avg_sq_in_buf,
-             max_exp_avg_sq_in_addr,
+             max_exp_avg_sq_in_buf,
              f2u_lr,
              f2u_beta1,
              f2u_beta2,
@@ -292,7 +326,7 @@ ProgramDescriptor MorehAdamWDeviceOperation::create_descriptor(
             {param_out_buf,
              exp_avg_out_buf,
              exp_avg_sq_out_buf,
-             max_exp_avg_sq_out_addr,
+             max_exp_avg_sq_out_buf,
              num_tiles_per_core,
              tile_offset});
 
@@ -314,6 +348,83 @@ ProgramDescriptor MorehAdamWDeviceOperation::create_descriptor(
     }
 
     return desc;
+}
+
+void MorehAdamWDeviceOperation::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // attribute_names excludes lr and step, so those two plus the beta exponents derived from step and
+    // the buffer addresses are all that vary per dispatch; the work split is keyed by the shapes.
+    const auto& param_in = tensor_args.param_in;
+    const auto& max_exp_avg_sq_in = tensor_args.max_exp_avg_sq_in;
+    auto& param_out = tensor_return_value.at(0).value();
+    auto& exp_avg_out = tensor_return_value.at(1).value();
+    auto& exp_avg_sq_out = tensor_return_value.at(2).value();
+    // create_descriptor drops this output when amsgrad is off; the hit path has to match or it patches
+    // an address the miss path never baked.
+    const std::optional<Tensor> max_exp_avg_sq_out =
+        operation_attributes.amsgrad ? tensor_return_value.at(3) : std::nullopt;
+
+    constexpr uint32_t kReaderKernelIdx = 0, kWriterKernelIdx = 1, kComputeKernelIdx = 2;
+    constexpr uint32_t kLrIdx = 5, kBeta1ExpIdx = 10, kBeta2ExpIdx = 11, kReaderStepIdx = 12;
+
+    const std::array<uint32_t, 5> reader_addrs{
+        param_in.buffer()->address(),
+        tensor_args.grad.buffer()->address(),
+        tensor_args.exp_avg_in.buffer()->address(),
+        tensor_args.exp_avg_sq_in.buffer()->address(),
+        max_exp_avg_sq_in.has_value() ? max_exp_avg_sq_in->buffer()->address() : 0u};
+    const std::array<uint32_t, 4> writer_addrs{
+        param_out.buffer()->address(),
+        exp_avg_out.buffer()->address(),
+        exp_avg_sq_out.buffer()->address(),
+        max_exp_avg_sq_out.has_value() ? max_exp_avg_sq_out->buffer()->address() : 0u};
+
+    const uint32_t step = operation_attributes.step;
+    const uint32_t f2u_lr = std::bit_cast<uint32_t>(operation_attributes.lr);
+    const uint32_t f2u_beta1_exponent =
+        std::bit_cast<uint32_t>(static_cast<float>(std::pow(operation_attributes.beta1, step)));
+    const uint32_t f2u_beta2_exponent =
+        std::bit_cast<uint32_t>(static_cast<float>(std::pow(operation_attributes.beta2, step)));
+
+    for (auto& col : tt::tt_metal::GetRuntimeArgs(program, kReaderKernelIdx)) {
+        for (auto& a : col) {
+            if (a.size() <= kReaderStepIdx) {
+                continue;
+            }
+            for (uint32_t i = 0; i < reader_addrs.size(); ++i) {
+                a[i] = reader_addrs[i];
+            }
+            a[kLrIdx] = f2u_lr;
+            a[kBeta1ExpIdx] = f2u_beta1_exponent;
+            a[kBeta2ExpIdx] = f2u_beta2_exponent;
+            a[kReaderStepIdx] = step;
+        }
+    }
+    for (auto& col : tt::tt_metal::GetRuntimeArgs(program, kWriterKernelIdx)) {
+        for (auto& a : col) {
+            for (uint32_t i = 0; i < writer_addrs.size() && i < a.size(); ++i) {
+                a[i] = writer_addrs[i];
+            }
+        }
+    }
+
+    // step also feeds the compute kernel(s); the second one exists only when the split has a remainder
+    // group, so reuse create_descriptor's own work-split helper rather than rebuilding the descriptor.
+    const auto split = compute_adamw_work_split(param_in);
+    const uint32_t num_compute_kernels = split.core_group_2.ranges().empty() ? 1u : 2u;
+    for (uint32_t k = 0; k < num_compute_kernels; ++k) {
+        for (auto& col : tt::tt_metal::GetRuntimeArgs(program, kComputeKernelIdx + k)) {
+            for (auto& a : col) {
+                if (a.size() > 0) {
+                    a[0] = step;
+                }
+            }
+        }
+    }
 }
 
 }  // namespace ttnn::operations::moreh::moreh_adamw

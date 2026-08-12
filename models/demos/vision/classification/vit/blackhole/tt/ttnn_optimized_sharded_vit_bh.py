@@ -161,7 +161,14 @@ def update_model_config(config, batch_size):
     # properties are not in the output of config.to_dict() but can be used later in the model
     # e.g. https://github.com/huggingface/transformers/blob/v4.53.0/src/transformers/configuration_utils.py#L368-L378
     property_names = [name for name, value in inspect.getmembers(config.__class__) if isinstance(value, property)]
-    properties = {name: getattr(config, name) for name in property_names}
+    properties = {}
+    for _prop_name in property_names:
+        try:
+            properties[_prop_name] = getattr(config, _prop_name)
+        except AttributeError:
+            # transformers 5.x adds properties (e.g. rope_scaling -> rope_parameters) that
+            # raise on configs without rope (e.g. ViTConfig); skip them.
+            pass
 
     return DotAccessDict(
         dict(
@@ -186,7 +193,7 @@ def vit_patch_embeddings(config, pixel_values, *, parameters, unittest_check=Fal
     stride_h = patch_size
     stride_w = 1
 
-    folded_pixel_values = ttnn.fold(pixel_values, stride_h, stride_w)  # 1568, 1024
+    folded_pixel_values = ttnn.fold(pixel_values, stride_h, stride_w, collapse_output=True)  # 1568, 1024
     ttnn.deallocate(pixel_values)
     folded_pixel_values = ttnn.to_memory_config(folded_pixel_values, memory_config=ttnn.L1_MEMORY_CONFIG)
     # Convert back to interleaved or otherwise to_layout will fail
@@ -454,7 +461,8 @@ def vit_encoder(
     )
     ttnn.deallocate(embeddings)
 
-    for index, encoder_parameters in enumerate(parameters.layer):
+    encoder_layers = parameters.layer if hasattr(parameters, "layer") else parameters
+    for index, encoder_parameters in enumerate(encoder_layers):
         encoder_output = vit_layer(
             config,
             encoder_input,
@@ -477,7 +485,7 @@ def vit(
     hidden_states = vit_encoder(
         config,
         embeddings_output,
-        parameters=parameters.vit.encoder,
+        parameters=parameters.vit.encoder if "encoder" in parameters.vit else parameters.vit.layers,
     )
 
     # Final LayerNorm

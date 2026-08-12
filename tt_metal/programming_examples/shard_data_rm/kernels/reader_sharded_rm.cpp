@@ -1,12 +1,12 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-#include "api/debug/device_print.h"
+#include "api/debug/dprint.h"
 #include <stdint.h>
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 
-// export TT_METAL_DPRINT_CORES='(0,0)-(0,3)' in order to see DEVICE_PRINT messages
+// export TT_METAL_DPRINT_CORES='(0,0)-(0,3)' in order to see DPRINT messages
 
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -21,21 +21,21 @@ void kernel_main() {
     cb_reserve_back(cb_id_in0, stick_size);
     uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
 
-    DEVICE_PRINT("Core ({},{}): ", get_absolute_logical_x(), get_absolute_logical_y());
+    DPRINT("Core ({},{}): ", get_absolute_logical_x(), get_absolute_logical_y());
     constexpr uint32_t element_per_stick = 2;  // Each stick contains two bfloat16 values
     const uint32_t n_sticks = stick_size / element_per_stick;
     for (uint32_t i = 0; i < n_sticks; i++) {
-        uint64_t src_noc_addr = get_noc_addr(stick_id, s0);
+        uint64_t src_noc_addr = s0.get_noc_addr(stick_id);
         // Read a tick at a time from the source address and write it to the L1 write address.
         noc_async_read(src_noc_addr, l1_write_addr, stick_size);
         noc_async_read_barrier();  // wait for the read to finish
         // We are reading 32 bits at a time, so we can read two bfloat16 values and print
         uint16_t* read_ptr_bf16 = (uint16_t*)l1_write_addr;
-        DEVICE_PRINT("{} {} ", bf16_t(read_ptr_bf16[0]), bf16_t(read_ptr_bf16[1]));
+        DPRINT("{} {} ", bf16_t(read_ptr_bf16[0]), bf16_t(read_ptr_bf16[1]));
         stick_id++;
         l1_write_addr += padded_offset_bytes;
     }
-    DEVICE_PRINT("\n");
+    DPRINT("\n");
     cb_push_back(cb_id_in0, stick_size);
 
     // At this point we have read all the sticks into the circular buffer. Computation and proceed knowing

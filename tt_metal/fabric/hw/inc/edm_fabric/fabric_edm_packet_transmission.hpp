@@ -22,22 +22,13 @@ FORCE_INLINE void print_pkt_hdr_routing_fields(volatile tt::tt_fabric::PacketHea
 #ifdef DEBUG_PRINT_ENABLED
     switch (packet_start->chip_send_type) {
         case tt::tt_fabric::CHIP_UNICAST: {
-            DPRINT << "C_UNI: dist:"
-                   << (uint32_t)(packet_start->routing_fields.value & tt::tt_fabric::RoutingFields::HOP_DISTANCE_MASK)
-                   << "\n";
-            DEVICE_PRINT(
+            DPRINT(
                 "C_UNI: dist:{}\n",
                 (uint32_t)(packet_start->routing_fields.value & tt::tt_fabric::RoutingFields::HOP_DISTANCE_MASK));
             break;
         }
         case tt::tt_fabric::CHIP_MULTICAST: {
-            DPRINT << "C_MCST: dist:"
-                   << (uint32_t)(packet_start->routing_fields.value & tt::tt_fabric::RoutingFields::HOP_DISTANCE_MASK)
-                   << ", rng:"
-                   << (uint32_t)((packet_start->routing_fields.value & tt::tt_fabric::RoutingFields::RANGE_MASK) >>
-                                 tt::tt_fabric::RoutingFields::START_DISTANCE_FIELD_BIT_WIDTH)
-                   << "\n";
-            DEVICE_PRINT(
+            DPRINT(
                 "C_MCST: dist:{}, rng:{}\n",
                 (uint32_t)(packet_start->routing_fields.value & tt::tt_fabric::RoutingFields::HOP_DISTANCE_MASK),
                 (uint32_t)((packet_start->routing_fields.value & tt::tt_fabric::RoutingFields::RANGE_MASK) >>
@@ -50,8 +41,7 @@ FORCE_INLINE void print_pkt_hdr_routing_fields(volatile tt::tt_fabric::PacketHea
 
 FORCE_INLINE void print_pkt_hdr_routing_fields(volatile tt::tt_fabric::LowLatencyPacketHeader* const packet_start) {
 #ifdef DEBUG_PRINT_ENABLED
-    DPRINT << "ROUTE:" << packet_start->routing_fields.value << "\n";
-    DEVICE_PRINT("ROUTE:{}\n", packet_start->routing_fields.value);
+    DPRINT("ROUTE:{}\n", packet_start->routing_fields.value);
 #endif
 }
 
@@ -60,13 +50,10 @@ FORCE_INLINE void print_pkt_header_noc_fields(volatile T* const packet_start) {
 #ifdef DEBUG_PRINT_ENABLED
     switch (packet_start->noc_send_type) {
         case tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE: {
-            DPRINT << "N_WR addr:" << (uint64_t)packet_start->command_fields.unicast_write.noc_address << "\n";
-            DEVICE_PRINT("N_WR addr:{}\n", (uint64_t)packet_start->command_fields.unicast_write.noc_address);
+            DPRINT("N_WR addr:{}\n", (uint64_t)packet_start->command_fields.unicast_write.noc_address);
         } break;
         case tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC: {
-            DPRINT << "N_WR addr:" << (uint64_t)packet_start->command_fields.unicast_seminc.noc_address
-                   << ", val:" << (uint32_t)packet_start->command_fields.unicast_seminc.val << "\n";
-            DEVICE_PRINT(
+            DPRINT(
                 "N_WR addr:{}, val:{}\n",
                 (uint64_t)packet_start->command_fields.unicast_seminc.noc_address,
                 (uint32_t)packet_start->command_fields.unicast_seminc.val);
@@ -82,11 +69,7 @@ FORCE_INLINE void print_pkt_header_noc_fields(volatile T* const packet_start) {
 FORCE_INLINE void print_pkt_header(volatile tt::tt_fabric::PacketHeader* const packet_start) {
 #ifdef DEBUG_PRINT_ENABLED
     auto const& header = *packet_start;
-    DPRINT << "PKT: nsnd_t:" << (uint32_t)packet_start->noc_send_type
-           << ", csnd_t:" << (uint32_t)packet_start->chip_send_type
-           << ", src_chip:" << (uint32_t)packet_start->src_ch_id
-           << ", payload_size_bytes:" << (uint32_t)packet_start->payload_size_bytes << "\n";
-    DEVICE_PRINT(
+    DPRINT(
         "PKT: nsnd_t:{} csnd_t:{} src_chip:{} payload_size_bytes:{}\n",
         (uint32_t)packet_start->noc_send_type,
         (uint32_t)packet_start->chip_send_type,
@@ -100,10 +83,7 @@ FORCE_INLINE void print_pkt_header(volatile tt::tt_fabric::PacketHeader* const p
 FORCE_INLINE void print_pkt_header(volatile tt::tt_fabric::LowLatencyPacketHeader* const packet_start) {
 #ifdef DEBUG_PRINT_ENABLED
     auto const& header = *packet_start;
-    DPRINT << "PKT: nsnd_t:" << (uint32_t)packet_start->noc_send_type
-           << ", src_chip:" << (uint32_t)packet_start->src_ch_id
-           << ", payload_size_bytes:" << (uint32_t)packet_start->payload_size_bytes << "\n";
-    DEVICE_PRINT(
+    DPRINT(
         "PKT: nsnd_t:{} src_chip:{} payload_size_bytes:{}\n",
         (uint32_t)packet_start->noc_send_type,
         (uint32_t)packet_start->src_ch_id,
@@ -166,6 +146,30 @@ FORCE_INLINE
     constexpr bool update_counter = false;
 
     channel_trimming_usage_recorder.set_noc_send_type_used(rx_channel_id, noc_send_type);
+    // NOC_SPARSE_MCAST_WRITE (enum value 8) sits above the contiguous standard range. Handling it as
+    // an early, unlikely branch keeps the standard switch below bounded to the dense
+    // 0..NOC_UNICAST_SCATTER_WRITE range, so its jump table is unchanged.
+    if (noc_send_type == tt::tt_fabric::NocSendType::NOC_SPARSE_MCAST_WRITE) [[unlikely]] {
+        // chip_idx/write_idx select this chip's page group; the router advances both before
+        // forwarding, so the values read here are guaranteed to be this chip's (see
+        // receiver_forward_packet). The same payload is written to each of this chip's pages.
+        const auto& sparse = header.command_fields.sparse_mcast_write;
+        const uint8_t count = sparse.counts[sparse.chip_idx];
+        const uint8_t base = sparse.write_idx;
+        for (uint8_t j = 0; j < count; j++) {
+            noc_async_write_one_packet_with_trid<update_counter, false>(
+                payload_start_address,
+                sparse.noc_address[base + j],
+                payload_size_bytes,
+                transaction_id,
+                tt::tt_fabric::local_chip_data_cmd_buf,
+                tt::tt_fabric::edm_to_local_chip_noc,
+                tt::tt_fabric::forward_and_local_write_noc_vc);
+        }
+        return;
+    }
+    // Standard local-write types are 0..NOC_UNICAST_SCATTER_WRITE; nothing above that range reaches this
+    // point (sparse returned above, and the gap types between it and sparse never hit the local-write path).
     if (noc_send_type > tt::tt_fabric::NocSendType::NOC_SEND_TYPE_LAST) {
         __builtin_unreachable();
     }

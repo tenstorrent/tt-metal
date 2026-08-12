@@ -8,6 +8,8 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "tt_stl/assert.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_utils.hpp"
+#include "ttnn/operations/reduction/reduce_op_validation.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 #include <cmath>
 #include <map>
@@ -68,10 +70,10 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     const auto& args = operation_attributes;
     auto& output_tensors = tensor_return_value;
     // Tensor references
-    const auto& input_tensor = tensor_args.input;
-    const auto& input_indices_tensor = tensor_args.indices;
-    const auto& value_tensor = std::get<0>(output_tensors);
-    const auto& index_tensor = std::get<1>(output_tensors);
+    const auto& input_tensor = tensor_args.input.mesh_tensor();
+    const auto& input_indices_tensor = as_optional_mesh_tensor(tensor_args.indices);
+    const auto& value_tensor = std::get<0>(output_tensors).mesh_tensor();
+    const auto& index_tensor = std::get<1>(output_tensors).mesh_tensor();
 
     ProgramDescriptor desc;
 
@@ -84,6 +86,10 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     // Use bf16 for compute intermediate buffers to avoid precision loss from bfp8/bfp4
     // shared-exponent grouping during sort (e.g. a single inf in a block makes all other
     // elements in that block encode to 0, corrupting the sort result).
+    // fp32 is kept full-width (no downcast): with fp32_dest_acc_en + UnpackToDestFp32 the value CBs
+    // stay fp32 and the sort's default SFPLOAD mode resolves to FP32, so the inter-core transfer
+    // and compute buffers stay fp32.
+    const bool is_fp32_input = input_cb_data_format == tt::DataFormat::Float32;
     const tt::DataFormat compute_cb_data_format =
         (input_cb_data_format == tt::DataFormat::Bfp8_b || input_cb_data_format == tt::DataFormat::Bfp4_b)
             ? tt::DataFormat::Float16_b
@@ -98,13 +104,7 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     const uint32_t index_tile_size = tile_size(index_cb_data_format);
     const uint32_t compute_tile_size = tile_size(compute_cb_data_format);
 
-    // DRAM buffer pointers for kernel runtime arguments
-    auto* const input_buffer = input_tensor.buffer();
-    auto* const values_buffer = value_tensor.buffer();
-    auto* const index_buffer = index_tensor.buffer();
-    auto* const input_indices_buffer = input_indices_tensor.has_value() ? input_indices_tensor->buffer() : nullptr;
-
-    const auto* device = input_tensor.device();
+    const auto* device = &input_tensor.mutable_device();
 
     const auto input_shape = input_tensor.padded_shape();
     const uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
@@ -142,6 +142,14 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     // Combined core set for shared circular buffer allocation
     auto all_cores_range_set = local_cores_range_set;
     all_cores_range_set = all_cores_range_set.merge(final_cores_range_set);
+
+    validate_reduce_op_program_grid(
+        "TopK multi-core",
+        all_cores_range_set,
+        device->compute_with_storage_grid_size(),
+        &first_core_range_set,
+        false,
+        {});
 
     // Calculate processing dimensions in tile units
     const uint32_t Wt_local = local_topk_input_size / tile_width;  // Width tiles per local core
@@ -338,8 +346,8 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
         Wt_local,                      // Width tiles per local core
         input_shape[-1] / tile_width,  // Total width tiles (Wt)
     };
-    tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_local_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(input_indices_buffer).append_to(reader_local_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor).append_to(reader_local_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_indices_tensor).append_to(reader_local_compile_time_args);
     const std::map<std::string, std::string> reader_specialization_defines_map = {
         {"GENERATE_INDICES", tensor_args.indices.has_value() ? "0" : "1"},
     };
@@ -416,8 +424,8 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
         Ht,                   // Height tiles to write
         Kt                    // TopK tiles per height row
     };
-    tt::tt_metal::TensorAccessorArgs(values_buffer).append_to(writer_final_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(index_buffer).append_to(writer_final_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(value_tensor).append_to(writer_final_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(index_tensor).append_to(writer_final_compile_time_args);
 
     KernelDescriptor writer_final_desc;
     writer_final_desc.kernel_source =
@@ -445,7 +453,17 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
         static_cast<std::uint32_t>(std::log2(Wt_local)),  // log2(width) for merge iterations
         static_cast<std::uint32_t>(args.largest),         // Sort direction (largest=1, smallest=0)
         static_cast<std::uint32_t>(args.sorted),          // Output sorting requirement
+        static_cast<std::uint32_t>(args.stable),          // Stable sort: ties keep the lowest index
     };
+
+    // fp32: unpack the value-holding CBs straight to fp32 dest (fp32 dest acc) so the sort's
+    // default SFPLOAD mode resolves to FP32 and reads full-precision values.
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_local(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (is_fp32_input) {
+        unpack_local[input_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_local[input_transposed_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
 
     KernelDescriptor compute_local_desc;
     compute_local_desc.kernel_source = "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk_local.cpp";
@@ -453,7 +471,9 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     compute_local_desc.core_ranges = local_cores_range_set;  // Runs on all local processing cores
     compute_local_desc.compile_time_args = compute_args;
     compute_local_desc.config = ComputeConfigDescriptor{
+        .fp32_dest_acc_en = is_fp32_input,
         .dst_full_sync_en = false,
+        .unpack_to_dest_mode = unpack_local,
     };
 
     // Final compute - Global TopK Bitonic Merge
@@ -474,7 +494,16 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
         static_cast<std::uint32_t>(std::log2(Wt_final)),  // log2(final_width) for merge iterations
         static_cast<std::uint32_t>(args.largest),         // Sort direction (largest=1, smallest=0)
         static_cast<std::uint32_t>(args.sorted),          // Output sorting requirement
+        static_cast<std::uint32_t>(args.stable),          // Stable sort: ties keep the lowest index
     };
+
+    // Final-core value CBs (gathered input + final workspace) also unpack to fp32 dest.
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_final(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (is_fp32_input) {
+        unpack_final[gathered_values_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_final[final_values_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
 
     KernelDescriptor compute_final_desc;
     compute_final_desc.kernel_source = "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk_final.cpp";
@@ -482,7 +511,9 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     compute_final_desc.core_ranges = final_cores_range_set;  // Runs only on final aggregation core
     compute_final_desc.compile_time_args = compute_args_final;
     compute_final_desc.config = ComputeConfigDescriptor{
+        .fp32_dest_acc_en = is_fp32_input,
         .dst_full_sync_en = false,
+        .unpack_to_dest_mode = unpack_final,
     };
 
     uint32_t core_id = 0;            // Width offset counter for core assignment
@@ -494,12 +525,15 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
         reader_local_desc.emplace_runtime_args(
             core,
             {
-                input_buffer,                          // DRAM address of input values tensor
+                input_tensor,                          // DRAM address of input values tensor
                 0u,                                    // Height offset (no height parallelism currently)
                 core_id * Wt_local,                    // Width offset for this core's chunk
                 static_cast<uint32_t>(is32_bit_data),  // Flag indicating if data is 32-bit
-                input_indices_tensor.has_value() ? input_indices_buffer->address()
-                                                 : 0u,  // DRAM address of input indices tensor (if provided)
+                input_indices_tensor.has_value()
+                    ? std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>{std::cref(*input_indices_tensor)}
+                    : std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>{0u},  // DRAM address of input
+                                                                                             // indices tensor (if
+                                                                                             // provided)
             });
 
         // Local writer
@@ -524,8 +558,8 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     writer_final_desc.emplace_runtime_args(
         final_core,
         {
-            values_buffer,  // DRAM address for TopK values output tensor
-            index_buffer,   // DRAM address for TopK indices output tensor
+            value_tensor,  // DRAM address for TopK values output tensor
+            index_tensor,  // DRAM address for TopK indices output tensor
         });
 
     desc.kernels.push_back(std::move(reader_local_desc));

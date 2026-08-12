@@ -3,21 +3,32 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/moreh/moreh_softmax/device/moreh_softmax_device_operation.hpp"
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
-#include <string>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <ttnn/metal_v2_artifacts.hpp>
+
 #include <cstdint>
+#include <string>
 
 namespace ttnn::operations::moreh::moreh_softmax {
 
-MorehSoftmaxOperation::MorehSoftmaxHSmallFactory::cached_program_t
-MorehSoftmaxOperation::MorehSoftmaxHSmallFactory::create(
+using namespace tt::tt_metal::experimental;
+
+ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxHSmallFactory::create_program_artifacts(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
-    log_info(tt::LogTest, "Large tensor algorithm selected");
+    using namespace tt;
+    using namespace tt::tt_metal;
+
+    log_info(tt::LogTest, "Small tensor algorithm selected");
     const auto& input = tensor_args.input;
+    const auto& input_mt = input.mesh_tensor();
+    const auto& output_mt = output.mesh_tensor();
     const auto op = operation_attributes.op;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
 
@@ -28,13 +39,12 @@ MorehSoftmaxOperation::MorehSoftmaxHSmallFactory::create(
     auto shape = input.padded_shape();
     auto H = shape[-2];
     auto W = shape[-1];
-
     auto Ht = H / tt::constants::TILE_HEIGHT;
     auto Wt = W / tt::constants::TILE_WIDTH;
 
     auto num = input.physical_volume() / H / W;
-    uint32_t num_cols_tiles = num * Wt;
-    uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
+    std::uint32_t num_cols_tiles = num * Wt;
+    std::uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         split_work_to_cores_wt_core_range(core_range, num_cols_tiles);
@@ -49,86 +59,221 @@ MorehSoftmaxOperation::MorehSoftmaxHSmallFactory::create(
             "compute kernel configuration.");
     }
 
-    Program program = Program();
-
     // create circular buffers
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
+    const std::uint32_t tile_size_data = tile_size(data_format);
+    const std::uint32_t tile_size_intermed = tile_size(intermed_data_format);
 
-    CreateCircularBuffer(
-        program,
-        all_cores,
-        data_format,
-        {
-            {tt::CBIndex::c_0, Ht},                         // input
-            {tt::CBIndex::c_1, 1},                          // mask
-            {tt::CBIndex::c_2, 1},                          // max scaler
-            {tt::CBIndex::c_3, 1},                          // sum scaler
-            {tt::CBIndex::c_16, Ht},                        // output
-            {tt::CBIndex::c_24, Ht, intermed_data_format},  // exp(x)
-            {tt::CBIndex::c_25, 1, intermed_data_format},   // reduce
-            {tt::CBIndex::c_26, 1, intermed_data_format},   // max
-            {tt::CBIndex::c_27, Ht, intermed_data_format},  // x - max
-            {tt::CBIndex::c_28, 1, intermed_data_format}    // tmp
-        });
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE_G1{"compute_g1"};
+    const KernelSpecName COMPUTE_G2{"compute_g2"};
+
+    const TensorParamName SRC{"src"};
+    const TensorParamName DST{"dst"};
+
+    const DFBSpecName IN{"in"};
+    const DFBSpecName MASK{"mask"};
+    const DFBSpecName MAX_SCALER{"max_scaler"};
+    const DFBSpecName SUM_SCALER{"sum_scaler"};
+    const DFBSpecName OUT{"out"};
+    const DFBSpecName EXPS{"exps"};
+    const DFBSpecName RECIP{"recip_sum_exps"};
+    const DFBSpecName MAX{"max"};
+    const DFBSpecName X_MINUS_MAX{"x_minus_max"};
+    const DFBSpecName TMP{"tmp"};
+
+    Group<DataflowBufferSpec> dfbs = {
+        DataflowBufferSpec{
+            .unique_id = IN, .entry_size = tile_size_data, .num_entries = Ht, .data_format_metadata = data_format},
+        DataflowBufferSpec{
+            .unique_id = MASK, .entry_size = tile_size_data, .num_entries = 1, .data_format_metadata = data_format},
+        DataflowBufferSpec{
+            .unique_id = MAX_SCALER,
+            .entry_size = tile_size_data,
+            .num_entries = 1,
+            .data_format_metadata = data_format},
+        DataflowBufferSpec{
+            .unique_id = SUM_SCALER,
+            .entry_size = tile_size_data,
+            .num_entries = 1,
+            .data_format_metadata = data_format},
+        DataflowBufferSpec{
+            .unique_id = OUT, .entry_size = tile_size_data, .num_entries = Ht, .data_format_metadata = data_format},
+        DataflowBufferSpec{
+            .unique_id = EXPS,
+            .entry_size = tile_size_intermed,
+            .num_entries = Ht,
+            .data_format_metadata = intermed_data_format},
+        // reduce output
+        DataflowBufferSpec{
+            .unique_id = RECIP,
+            .entry_size = tile_size_intermed,
+            .num_entries = 1,
+            .data_format_metadata = intermed_data_format},
+        DataflowBufferSpec{
+            .unique_id = MAX,
+            .entry_size = tile_size_intermed,
+            .num_entries = 1,
+            .data_format_metadata = intermed_data_format},
+        DataflowBufferSpec{
+            .unique_id = X_MINUS_MAX,
+            .entry_size = tile_size_intermed,
+            .num_entries = Ht,
+            .data_format_metadata = intermed_data_format},
+        DataflowBufferSpec{
+            .unique_id = TMP,
+            .entry_size = tile_size_intermed,
+            .num_entries = 1,
+            .data_format_metadata = intermed_data_format},
+    };
 
     // create read/write kernel
+    KernelSpec reader{
+        .unique_id = READER,
+        .source = "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/reader_moreh_softmax_h.cpp",
+        .dfb_bindings =
+            {DFBBinding{.dfb_spec_name = IN, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER},
+             DFBBinding{.dfb_spec_name = MASK, .accessor_name = "mask", .endpoint_type = DFBEndpointType::PRODUCER},
+             DFBBinding{
+                 .dfb_spec_name = MAX_SCALER,
+                 .accessor_name = "max_scaler",
+                 .endpoint_type = DFBEndpointType::PRODUCER},
+             DFBBinding{
+                 .dfb_spec_name = SUM_SCALER,
+                 .accessor_name = "sum_scaler",
+                 .endpoint_type = DFBEndpointType::PRODUCER}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = SRC, .accessor_name = "src"}},
+        .compile_time_args = {{"is_fp32", static_cast<std::uint32_t>(input.dtype() == DataType::FLOAT32)}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_rows", "tile_offset", "Ht", "Wt", "mask_h"}},
+        .hw_config = ttnn::create_reader_datamovement_config(arch),
+    };
 
-    std::map<std::string, std::string> reader_defines;
-    std::map<std::string, std::string> writer_defines;
+    KernelSpec writer{
+        .unique_id = WRITER,
+        .source = "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/writer_moreh_softmax_h.cpp",
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = OUT, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = DST, .accessor_name = "dst"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_rows", "tile_offset", "Ht", "Wt"}},
+        .hw_config = ttnn::create_writer_datamovement_config(arch),
+    };
 
-    std::vector<uint32_t> reader_ct_args = {static_cast<uint32_t>(input.dtype() == DataType::FLOAT32)};
-    TensorAccessorArgs(*input.buffer()).append_to(reader_ct_args);
-    auto reader_kernel_id = CreateReadKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/reader_moreh_softmax_h.cpp",
-        all_cores,
-        reader_ct_args,
-        reader_defines);
-    std::vector<uint32_t> writer_ct_args = {};
-    TensorAccessorArgs(*output.buffer()).append_to(writer_ct_args);
-    auto writer_kernel_id = CreateWriteKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/writer_moreh_softmax_h.cpp",
-        all_cores,
-        writer_ct_args,
-        writer_defines);
-
-    std::map<std::string, std::string> compute_defines;
+    KernelSpec::CompilerOptions::Defines compute_defines;
     if (op == MorehSoftmaxOp::SOFTMAX || op == MorehSoftmaxOp::LOGSOFTMAX) {
         compute_defines["SOFTMAX"] = "1";
     } else {
         compute_defines["SOFTMIN"] = "1";
     }
-
     if (op == MorehSoftmaxOp::LOGSOFTMAX) {
         compute_defines["LOG"] = "1";
     }
-
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
     // create compute kernel
-    CreateComputeKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/moreh_softmax_h.cpp",
-        {
-            {core_group_1, num_tiles_per_core_group_1, {num_tiles_per_core_group_1, Ht}},
-            {core_group_2, num_tiles_per_core_group_2, {num_tiles_per_core_group_2, Ht}},
-        },
-        compute_defines,
-        math_fidelity,
-        fp32_dest_acc_en,
-        math_approx_mode);
+    auto make_compute_hw = [&]() {
+        auto hw = ttnn::to_compute_hardware_config(arch, compute_kernel_config);
+        if (fp32_dest_acc_en) {
+            std::get<ComputeGen1Config>(hw).unpack_modes = {
+                {IN, tt::tt_metal::UnpackMode::UnpackToSrc},
+                {MASK, tt::tt_metal::UnpackMode::UnpackToSrc},
+                {MAX_SCALER, tt::tt_metal::UnpackMode::UnpackToSrc},
+                {SUM_SCALER, tt::tt_metal::UnpackMode::UnpackToSrc},
+                {EXPS, tt::tt_metal::UnpackMode::UnpackToSrc},
+                {RECIP, tt::tt_metal::UnpackMode::UnpackToSrc},
+                {MAX, tt::tt_metal::UnpackMode::UnpackToSrc},
+                {X_MINUS_MAX, tt::tt_metal::UnpackMode::UnpackToSrc},
+                {TMP, tt::tt_metal::UnpackMode::UnpackToSrc},
+            };
+        }
+        return hw;
+    };
+
+    auto compute_dfb_bindings = [&]() {
+        return Group<DFBBinding>{
+            DFBBinding{.dfb_spec_name = IN, .accessor_name = "in0", .endpoint_type = DFBEndpointType::CONSUMER},
+            DFBBinding{.dfb_spec_name = MASK, .accessor_name = "mask", .endpoint_type = DFBEndpointType::CONSUMER},
+            DFBBinding{
+                .dfb_spec_name = MAX_SCALER, .accessor_name = "max_scaler", .endpoint_type = DFBEndpointType::CONSUMER},
+            DFBBinding{
+                .dfb_spec_name = SUM_SCALER, .accessor_name = "sum_scaler", .endpoint_type = DFBEndpointType::CONSUMER},
+            DFBBinding{.dfb_spec_name = OUT, .accessor_name = "out0", .endpoint_type = DFBEndpointType::PRODUCER},
+            DFBBinding{.dfb_spec_name = EXPS, .accessor_name = "exps", .endpoint_type = DFBEndpointType::PRODUCER},
+            DFBBinding{.dfb_spec_name = EXPS, .accessor_name = "exps", .endpoint_type = DFBEndpointType::CONSUMER},
+            DFBBinding{
+                .dfb_spec_name = RECIP, .accessor_name = "recip_sum_exps", .endpoint_type = DFBEndpointType::PRODUCER},
+            DFBBinding{
+                .dfb_spec_name = RECIP, .accessor_name = "recip_sum_exps", .endpoint_type = DFBEndpointType::CONSUMER},
+            DFBBinding{.dfb_spec_name = MAX, .accessor_name = "max", .endpoint_type = DFBEndpointType::PRODUCER},
+            DFBBinding{.dfb_spec_name = MAX, .accessor_name = "max", .endpoint_type = DFBEndpointType::CONSUMER},
+            DFBBinding{
+                .dfb_spec_name = X_MINUS_MAX,
+                .accessor_name = "x_minus_max",
+                .endpoint_type = DFBEndpointType::PRODUCER},
+            DFBBinding{
+                .dfb_spec_name = X_MINUS_MAX,
+                .accessor_name = "x_minus_max",
+                .endpoint_type = DFBEndpointType::CONSUMER},
+            DFBBinding{.dfb_spec_name = TMP, .accessor_name = "tmp", .endpoint_type = DFBEndpointType::PRODUCER},
+            DFBBinding{.dfb_spec_name = TMP, .accessor_name = "tmp", .endpoint_type = DFBEndpointType::CONSUMER},
+        };
+    };
+
+    auto make_compute = [&](const KernelSpecName& id, std::uint32_t N) {
+        return KernelSpec{
+            .unique_id = id,
+            .source = "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/moreh_softmax_h.cpp",
+            .compiler_options = {.defines = compute_defines, .opt_level = tt::tt_metal::KernelBuildOptLevel::O3},
+            .dfb_bindings = compute_dfb_bindings(),
+            .compile_time_args = {{"N", N}, {"Ht", Ht}},
+            .hw_config = make_compute_hw(),
+        };
+    };
+
+    bool has_core_group_2 = !core_group_2.ranges().empty();
+
+    Group<KernelSpec> kernels = {reader, writer, make_compute(COMPUTE_G1, num_tiles_per_core_group_1)};
+    if (has_core_group_2) {
+        kernels.push_back(make_compute(COMPUTE_G2, num_tiles_per_core_group_2));
+    }
+
+    Group<WorkUnitSpec> work_units;
+    work_units.push_back(
+        WorkUnitSpec{.name = "wu_g1", .kernels = {READER, WRITER, COMPUTE_G1}, .target_nodes = core_group_1});
+    if (has_core_group_2) {
+        work_units.push_back(
+            WorkUnitSpec{.name = "wu_g2", .kernels = {READER, WRITER, COMPUTE_G2}, .target_nodes = core_group_2});
+    }
+
+    ProgramSpec spec{
+        .name = "moreh_softmax_h_small",
+        .kernels = std::move(kernels),
+        .dataflow_buffers = std::move(dfbs),
+        .tensor_parameters =
+            {TensorParameter{.unique_id = SRC, .spec = input.tensor_spec()},
+             TensorParameter{.unique_id = DST, .spec = output.tensor_spec()}},
+        .work_units = std::move(work_units),
+    };
 
     // Set Runtime Args
+    ProgramRunArgs run_args;
+    KernelRunArgs reader_ra{.kernel = READER};
+    KernelRunArgs writer_ra{.kernel = WRITER};
+
     auto core_x_offset = core_range.start_coord.x;
     auto core_y_offset = core_range.start_coord.y;
 
-    for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
+    std::uint32_t mask_h = input.logical_shape()[-2] % tt::constants::TILE_HEIGHT;
+    if (mask_h == 0) {
+        mask_h = tt::constants::TILE_HEIGHT;
+    }
+
+    for (std::uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
         CoreCoord core = {(i / core_h) + core_x_offset, (i % core_h) + core_y_offset};
-        uint32_t num_tiles_per_core;
+        std::uint32_t num_tiles_per_core;
         if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
         } else if (core_group_2.contains(core)) {
@@ -137,51 +282,26 @@ MorehSoftmaxOperation::MorehSoftmaxHSmallFactory::create(
             TT_THROW("Core not in specified core ranges");
         }
 
-        float scaler = 1.0f;
-        uint32_t mask_h = input.logical_shape()[-2] % tt::constants::TILE_HEIGHT;
-        if (mask_h == 0) {
-            mask_h = tt::constants::TILE_HEIGHT;
-        }
-        std::vector<uint32_t> reader_args = {
-            input.buffer()->address(),
-            num_tiles_per_core,
-            tile_offset,
-            Ht,
-            Wt,
-            *reinterpret_cast<uint32_t*>(&scaler),
-            mask_h};
-
-        std::vector<uint32_t> writer_args = {output.buffer()->address(), num_tiles_per_core, tile_offset, Ht, Wt};
-
-        SetRuntimeArgs(program, reader_kernel_id, core, reader_args);
-        SetRuntimeArgs(program, writer_kernel_id, core, writer_args);
+        AddRuntimeArgsForNode(
+            reader_ra.runtime_arg_values,
+            core,
+            {{"num_rows", num_tiles_per_core},
+             {"tile_offset", tile_offset},
+             {"Ht", Ht},
+             {"Wt", Wt},
+             {"mask_h", mask_h}});
+        AddRuntimeArgsForNode(
+            writer_ra.runtime_arg_values,
+            core,
+            {{"num_rows", num_tiles_per_core}, {"tile_offset", tile_offset}, {"Ht", Ht}, {"Wt", Wt}});
 
         tile_offset += num_tiles_per_core;
     }
 
-    return {std::move(program), {reader_kernel_id, writer_kernel_id, num_cores, core_h}};
-}
+    run_args.kernel_run_args = {std::move(reader_ra), std::move(writer_ra)};
+    run_args.tensor_args.emplace(SRC, input_mt);
+    run_args.tensor_args.emplace(DST, output_mt);
 
-void MorehSoftmaxOperation::MorehSoftmaxHSmallFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
-    auto& program = cached_program.program;
-    auto& reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
-    auto& writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
-    auto& num_cores = cached_program.shared_variables.num_cores;
-    auto& num_cores_y = cached_program.shared_variables.num_cores_y;
-    for (uint32_t i = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        {
-            auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = tensor_args.input.buffer()->address();
-        }
-        {
-            auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-            runtime_args[0] = output.buffer()->address();
-        }
-    }
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 }  // namespace ttnn::operations::moreh::moreh_softmax

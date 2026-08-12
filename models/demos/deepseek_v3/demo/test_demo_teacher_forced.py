@@ -195,8 +195,11 @@ def test_demo_teacher_forcing_accuracy(
         enable_trace=True,
         force_recalculate=force_recalculate_weight_config,
         stop_at_eos=False,
-        sample_on_device=False,
+        sample_on_device=True,
         max_users_per_row=max_users_per_row,
+        sampling_temperature=0.0,
+        sampling_top_k=1,
+        sampling_top_p=1.0,
     )
 
     generations = results.get("generations", [])
@@ -290,7 +293,7 @@ def test_demo_teacher_forcing_accuracy(
         total_top5,
     )
 
-    min_expected_top1 = 0.87
+    min_expected_top1 = 0.89
     min_expected_top5 = 0.99
     assert total_top1 >= min_expected_top1, (
         f"Aggregate top-1 accuracy {total_top1:.4f} is below minimum {min_expected_top1:.2f} "

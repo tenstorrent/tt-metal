@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "chlkc_list.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
@@ -32,7 +33,7 @@ using namespace ckernel::unpacker;
  * - Scaler values are 1.0 and are contained inside F0 of the scaler tile
  * - The scaler doesn't change for the duration of the whole block operation
  * - Operand and scaler data format is bfloat16_b
- * - Operand tile size is 32x32
+ * - Operand tile is num_faces faces (4 for a 32x32 tile, 2 for a 16x32 tiny tile)
  * - Can work on both 16-bit or 32-bit DEST register modes based on is_fp32_dest_acc_en flag
  * - Does only MAX pool on ROW dimension
  *
@@ -41,12 +42,15 @@ using namespace ckernel::unpacker;
  * with hardware semaphore synchronization, allowing better pipelining and avoiding a more costly circular buffer
  * synchronization. The same value has to be passed to init, execute and uninit functions for this to take effect.
  *
+ * num_faces selects the operand tile geometry (4 for a 32x32 tile, 2 for a 16x32 tiny tile).
+ *
  * This function should NOT be used as a substitute for native llk_unpack_AB_reduce_init LLK.
  * Use the standard llk_unpack_AB_reduce_init<ReduceDim::REDUCE_ROW> for general-purpose reduction.
  */
 template <bool is_fp32_dest_acc_en = false>
-inline void llk_unpack_AB_reduce_block_max_row_init_runtime(uint32_t block_ct_dim, bool respect_trigger = false) {
-    _llk_unpack_AB_reduce_block_max_row_init_runtime_<is_fp32_dest_acc_en>(block_ct_dim, respect_trigger);
+inline void llk_unpack_AB_reduce_block_max_row_init_runtime(
+    std::uint32_t block_ct_dim, bool respect_trigger, const ckernel::TensorShape& tensor_shape) {
+    _llk_unpack_AB_reduce_block_max_row_init_runtime_<is_fp32_dest_acc_en>(block_ct_dim, respect_trigger, tensor_shape);
 }
 
 /**
@@ -72,7 +76,8 @@ inline void llk_unpack_AB_reduce_block_max_row_runtime(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
     const std::uint32_t row_start_index,
-    bool respect_trigger = false) {
+    bool respect_trigger = false,
+    bool overlap_first_half = false) {
     std::uint32_t operandA_id = get_operand_id(operandA);
     std::uint32_t operandB_id = get_operand_id(operandB);
     std::uint32_t base_address_a = get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;
@@ -85,7 +90,7 @@ inline void llk_unpack_AB_reduce_block_max_row_runtime(
     // with this and does not want to plumb through the value.
     LLK_ASSERT(cb_access_within_bounds(operandA_id, row_start_index, 1), "Indexed tile read exceeds CB boundary");
 
-    _llk_unpack_AB_reduce_block_max_row_runtime_(address_a, base_address_b, respect_trigger);
+    _llk_unpack_AB_reduce_block_max_row_runtime_(address_a, base_address_b, respect_trigger, overlap_first_half);
 }
 
 /**
@@ -108,6 +113,7 @@ inline void llk_unpack_AB_reduce_block_max_row_runtime(
  * This function should NOT be used as a substitute for native llk_unpack_AB_reduce_init LLK.
  * Use standard LLK cleanup procedures for general-purpose operations.
  */
-inline void llk_unpack_AB_reduce_block_max_row_uninit_runtime(bool respect_trigger = false) {
-    _llk_unpack_AB_reduce_block_max_row_uninit_runtime_(FACE_R_DIM, FACE_R_DIM, respect_trigger);
+inline void llk_unpack_AB_reduce_block_max_row_uninit_runtime(
+    bool respect_trigger = false, bool overlap_first_half = false) {
+    _llk_unpack_AB_reduce_block_max_row_uninit_runtime_(respect_trigger, overlap_first_half);
 }

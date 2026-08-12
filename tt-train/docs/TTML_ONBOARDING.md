@@ -425,15 +425,15 @@ The script produces a YAML file containing `tokenizer_vocab_size`, `data_length`
 
 ### **Example 2: NanoGPT Training**
 
-[Full Python nanogpt training example](/tt-train/sources/examples/nano_gpt/train_nanogpt.py).
+[Full Python nanogpt training example](/tt-train/sources/examples/train/train.py).
 
 To run the nanogpt Python training example:
 ```bash
 # Character tokenization (small vocab, quick experiment)
-python3 tt-train/sources/examples/nano_gpt/train_nanogpt.py -c training_shakespeare_nanogpt_char.yaml
+python3 tt-train/sources/examples/train/train.py -c training_shakespeare_nanogpt_char.yaml
 
 # BPE tokenization (full 50k vocab, realistic parameter counts)
-python3 tt-train/sources/examples/nano_gpt/train_nanogpt.py -c training_shakespeare_nanogpt_bpe.yaml
+python3 tt-train/sources/examples/train/train.py -c training_shakespeare_nanogpt_bpe.yaml
 ```
 
 [Full C++ nanogpt training example](/tt-train/sources/examples/nano_gpt/main.cpp).
@@ -1078,7 +1078,7 @@ See [MEMORY_TRACKING.md](./MEMORY_TRACKING.md) for detailed memory tracking guid
 Track training performance:
 
 ```python
-from ttml.common.utils import PerformanceMeter
+from ttml.common.performance import PerformanceMeter
 
 meter = PerformanceMeter(cfg)
 # ... training loop ...

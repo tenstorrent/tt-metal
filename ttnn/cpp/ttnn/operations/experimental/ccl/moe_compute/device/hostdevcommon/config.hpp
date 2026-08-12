@@ -9,6 +9,6 @@
 namespace ttnn::experimental::prim::detail {
 
 // Activation function types for MoE operations
-enum class MoEActivationFunction : uint8_t { SILU = 0, SWIGLU = 1 };
+enum class MoEActivationFunction : uint8_t { SILU = 0, SWIGLU = 1, GELU = 2 };
 
 }  // namespace ttnn::experimental::prim::detail

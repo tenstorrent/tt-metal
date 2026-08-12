@@ -475,6 +475,7 @@ There are few custom `pytest` command line arguments exposed that enable alterin
 | `--no-debug-symbols` | Compile elfs without debug symbols (`-g` sfpi flag) to save disk space |
 | `--logging-level [TRACE \| DEBUG \| INFO \| WARNING \| ERROR \| CRITICAL]` | Sets loguru log level. Overrides `LOGURU_LEVEL` env var. Default: INFO |
 | `--detailed-artefacts` | Adds `-save-temps=obj -fdump-tree-all -fdump-rtl-all -v` compilation flags when compiling kernel elfs, allowing generation of compiler level debug information, used when debugging compiler bugs |
+| `--op=OP` | Run only tests for the given op(s), matched by `MathOperation` name (case-insensitive, exact). Repeatable: `--op=exp --op=log` |
 
 ## Usage examples
 
