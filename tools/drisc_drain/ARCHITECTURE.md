@@ -148,7 +148,9 @@ dwarfs everything else it does, while a mover's largest phase is the socket **cr
 named phase differs by three orders of magnitude between the roles (54 ns of DRAM ring room on a filler
 against 2.7 us of host FIFO credit on a mover), which is why one number for "the drainer" never meant anything.
 
-**The sampler triggers on discovered WORK, not on sweep number**, because both roles are >99% idle (a filler
+**Superseded by full tracing (FINDINGS §N+41): `DRISC_ZONES=1` traces every sweep in one contiguous
+window at sweep level, which measured CHEAPER than sampling because the per-sweep publish, not the markers,
+was the cost. The sampler is described below for why it existed.** It triggered on discovered WORK, not on sweep number, because both roles are >99% idle (a filler
 moves frames in ~114 of ~25,000 sweeps, a mover in ~350 of ~230,000). A sweep-number rule captured 1 working
 sweep out of 55 on a filler and 11 of 64 on a mover. A mover arms before issuing its DRAM read, so its busy
 visit is captured whole; a filler arms at the end of the first batch with live cores, so that sweep's earlier

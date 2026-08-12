@@ -3727,7 +3727,7 @@ movers extend **+2.5 and +2.9 ms past it** -- which is not misalignment but the 
 thing you would want to see. An idle drainer's poll cost is still visible WITHIN a captured sweep: a mover's
 empty-peer READ zone and a filler's per-batch zones over cores with nothing live ARE the idle cost, in context.
 
-### The sampler: work-triggered, retroactively armed, rewindable
+### The sampler: work-triggered, retroactively armed, rewindable  **[SUPERSEDED -- see "Full tracing" below]**
 
 A "sample every Nth sweep" rule was written first and is **refuted by the sweep distribution**: a filler moves
 frames in ~114 of ~25,000 sweeps (0.5%) and a mover in ~350 of ~230,000 (0.15%). Measured with that rule:
@@ -3925,7 +3925,7 @@ CSV covers 1-14 more sweeps than the counters and is larger by the right amount 
 CSV credit-wait 60.7 us vs counter 60.2 us over 22 of 30 sweeps -- the 8 extra are idle samples, which have no
 credit wait).
 
-### This is a SAMPLER, and the sweeps you can see are the ones you perturbed
+### Why the sampler was replaced: the sweeps you could see were the ones you perturbed  **[SUPERSEDED]**
 
 Coverage, measured (`TT_METAL_PERF_DEBUG_DRISC_ZONES=200`):
 
@@ -3974,6 +3974,65 @@ a filler's egress) and ~250 KB (0.7% of a mover's)** -- not the tens of thousand
 Continuous coverage of the window is affordable, and it makes the bias UNIFORM rather than selective, which is
 the ordinary profiler trade and is analysable. A biased 4% subset is not. The publish and short-frame
 optimisations remain worth having, but as cost reductions, not as prerequisites.
+
+### Full tracing replaced the sampler, and costs LESS
+
+`TT_METAL_PERF_DEBUG_DRISC_ZONES=1` now traces **every** sweep in one contiguous window at sweep level
+(detail 0); the child phases stay available behind `TT_METAL_PERF_DEBUG_DRISC_ZONE_DETAIL=1`. The
+rate-limit / retroactive-arm / rewind / abandon / truncate machinery above is gone.
+
+**It is cheaper than the sampler it replaced**, which is the counterintuitive part:
+
+| at SD delay 15, 120 cores | producer stalls |
+|---|---|
+| sampled (`DRISC_ZONES=200`) | 49-171 across 29-47 cores |
+| **full trace (`DRISC_ZONES=1`)** | **0 across 0 of 120** |
+| OFF | 0 |
+
+**The cost was never the markers, it was the per-sweep PUBLISH.** Detail 0 emits ~4 markers/sweep against
+~100, and one frame now carries ~63 sweeps instead of one, so the 10,560 B publish amortises 63:1. The sampler
+paid a publish per captured sweep, which is why capturing 4% of sweeps cost more than capturing all of them.
+That also retires the measurement-bias problem rather than mitigating it: the window is now uniformly
+instrumented, so its numbers are comparable to each other.
+
+Measured, both dispatch modes (0 producer stalls, 0 ts regressions at publish and consume in both):
+
+| | SWEEP | PACE | window covered | largest gap | cost of egress |
+|---|---|---|---|---|---|
+| SD d15 filler 0-3 | 12.1-13.6 us | 2.7-4.2 us | 96.1-97.5% | 0.33-1.14 us | 0.11-0.23% |
+| SD d15 mover 4-5 | 5.1-6.1 us | **none** | 96.1-96.8% | 0.94-1.14 us | 0.11-0.23% |
+| FD d60 filler 0-3 | 14.2-16.5 us | **20.9-22.2 us** | **98.8%** | <= 0.33 us | 0.10-0.17% |
+| FD d60 mover 4-5 | 7.6-7.7 us | **none** | 97.4% | -- | 0.10-0.17% |
+
+**`DRISC-PACE` is 1:1 with `DRISC-SWEEP` on every filler and ABSENT on both movers** (117/138/142/139 of each
+on the four fillers; 817 and 982 SWEEPs with zero PACE on the movers). The absence IS the measurement:
+`if constexpr (kFillPct != 0 && kRole != kRoleMover)` excludes movers from the fill-ratio controller, so their
+gap is always 0. With 96-99% of each window inside a zone there is no whitespace left to misread as idle.
+
+**Under FAST DISPATCH a filler spends more time PACED than SWEEPING** -- 20.9-22.2 us of pace against a
+14.2-16.5 us sweep, ~58% of its wall time, where slow dispatch is the reverse (~25%). Same knob, opposite
+balance: FD delivers markers in harder bursts, spans come back fuller, so the fill-ratio controller widens the
+gap. Consistent with filler PROC rising to 1,223-1,274 ns/batch under FD. The controller working as designed,
+now visible as a colour block instead of inferred from a `pace-gap ... cyc` log line.
+
+Zone colours are per-ROLE as well as per-zone (filler SWEEP blue / mover SWEEP teal, PACE recessive grey),
+because the two roles share zone NAMES but not meanings -- one colour across both invites reading one row's
+scale onto the other, and a filler's CREDIT-WAIT is 54 ns of DRAM ring room where a mover's is us-scale host
+FIFO credit.
+
+### The tail flush could never fire, and every counter read clean
+
+The post-loop flush was gated on `self_on`, which is cleared at the END of every sweep -- so the condition was
+never true when it was tested. A filler wrote 945 words of its own trace and shipped **504**, silently losing
+its last 55 sweeps. Nothing reported it: the frame counters, `staged == moved`, drops and regressions were all
+clean, because the lost words never became frames. The only visible symptom was one drainer's Tracy row being
+1.0 ms where its siblings were 2.4 ms -- and that was first misread as "fillers finish early once producers
+are drained", which is also a real effect.
+
+Fixed by flushing on `self_tail != self_head` (state, not intent), and `out[87]` now carries words-shipped so
+the host warns on any shortfall. **Same failure class as §N+29's impossible-head read and the 4-DRISC
+teardown garbage: a silent loss whose only tell was a number that looked plausible.** A counter that cannot
+distinguish "nothing to send" from "failed to send" is not a check.
 
 ### No silent truncation
 
