@@ -205,6 +205,45 @@ FP32_LOSSLESS_IDENTITY = 1
 # (`data_format.cpp:271-283` — UInt16 has its own early branch, UInt8 does not).
 FP32_DEST_ACC_8BIT = 1
 
+# --- Knob: per-core NoC virtual channel (R9 / master.md B10) ---------------
+# Readers (and writers) that share a NoC route serialize first-come-first-serve
+# on one virtual channel. The DRAM-adjacent-read microbenchmark
+# (`tests/tt_metal/tt_metal/perf_microbenchmark/8_dram_adjacent_core_read`)
+# assigns each core a VC and then perturbs it so that **no two cores in the same
+# NoC row share one** — that is the recipe master.md B10 records, and
+# `per_core_vc` below is its shape-independent form: `(x + y) & 3` cycles the
+# four unicast VCs along every row AND every column of the grid, so no two
+# neighbours on a shared link agree, whatever core subset the placement picked.
+#
+# 1 = assign per-core VCs on both halves (reader request VC + writer VC),
+# 0 = every core on the arch default (read VC 1, write `NOC_UNICAST_WRITE_VC`),
+# which is the pre-R9 program byte-for-byte.
+PER_CORE_VC = 0
+# Unicast VCs are 0..3 (`dataflow_api.h`'s read/write `vc` argument doc); 4/5 are
+# the multicast and dispatch-multicast channels and are NOT ours to take.
+NUM_UNICAST_VCS = 4
+
+# --- Knob: block -> core mapping order (R9 / master.md A3) -----------------
+# A3 asks for a reader adjacent to its DRAM bank. On this op the *core set* is
+# not free once the grid is full (the square uses 110 of 110), so the only
+# placement degree left is WHICH blocks a core gets — and that is a pure
+# host-side relabelling of the linear block index.
+#
+#   0 = `b = wchunk * nt_h + r` (Phase 0): a core's consecutive blocks walk
+#       DOWN a tile-column chunk, so it touches `nb * tile_h` DISTINCT source
+#       pages (96 on the square) and never revisits one.
+#   1 = `b = r * n_wchunks + wchunk`: a core's consecutive blocks walk ACROSS
+#       one tile-row, so its blocks re-read the SAME `tile_h` source pages at
+#       different byte offsets — `n_wchunks` visits each, i.e. the same source
+#       rows (hence the same DRAM banks) stay hot for the whole assignment.
+#       That is as close to "one reader <-> one bank" as a bijection whose every
+#       block spans all `num_banks` banks can get (see the R9 test).
+#
+# Gated to the streamed path with NO distinct tail width: compute runs the core's
+# `n_full` blocks at `WT_BLOCK` and then `n_tail` at `WT_TAIL`, which is only
+# order-independent while the two widths are equal.
+BLOCK_ORDER_ROW_MAJOR = 0
+
 TILE_WIDTH = 32  # a tile is ALWAYS 32 wide; only its height varies
 # The tile HEIGHT the op uses when the caller passes no `tile=`. Defined ONCE
 # here and imported by the op file so the taggers, validate(), the entry point
@@ -326,6 +365,20 @@ DEFAULT_LEVERS = {
     # exists so the COST of alignment-correctness is a measured number rather
     # than an unknown.
     "stage_reads": None,
+    # R9 (master.md B10): per-core unicast VC on BOTH NoC halves — the reader's
+    # request VC and the writer's write VC. `None` = the shipped default
+    # (`PER_CORE_VC`), 1 = force per-core VCs on any shape, 0 = the arch defaults
+    # (read VC 1 / write `NOC_UNICAST_WRITE_VC`), which is the pre-R9 program
+    # byte-for-byte. Per master.md B0 it adds a fixed per-core setup (one extra
+    # command-buffer register write per kernel), so its off-arm is measured on
+    # the smallest regimes too.
+    "per_core_vc": None,
+    # R9 (master.md A3, the residual degree): the block -> core mapping order.
+    # `None` = the shipped default (`BLOCK_ORDER_ROW_MAJOR`), 1 = row-major
+    # (a core walks ACROSS one tile-row, re-reading the same source pages),
+    # 0 = the Phase-0 column-major linearization. Only reachable on the streamed
+    # path with a single block width; a value of 1 elsewhere stays column-major.
+    "block_order": None,
     "stub_read": 0,  # ablation: drop the NoC read payload
     "stub_compute": 0,  # ablation: drop the tilize math
     "stub_write": 0,  # ablation: drop the NoC write payload
@@ -1247,6 +1300,36 @@ def placement_defaults(in_memory_config, out_memory_config):
     }
 
 
+def per_core_vc(core) -> int:
+    """The unicast VC this core uses on both NoC halves (R9 / master.md B10).
+
+    `(x + y) & 3` over the four unicast VCs. Stated on the core's own GRID
+    COORDINATES rather than on its index in the assignment list, so it holds the
+    property B10 wants — *no two cores that share a NoC row (or column) agree* —
+    under every placement this op can make (packed, spread, a shard's own core
+    set), instead of only under the row-wise enumeration.
+
+    Pure (a CoreCoord in, an int out) so the mapping is unit-testable and has one
+    source of truth for the reader and the writer alike.
+    """
+    return (int(core.x) + int(core.y)) & (NUM_UNICAST_VCS - 1)
+
+
+def block_order_row_major(*, mode: str, wt_block: int, wt_tail: int, knob) -> int:
+    """Whether the block index is linearized row-major (R9 / master.md A3), 1/0.
+
+    The reader and writer decode `b` into `(wchunk, r)`; the compute kernel does
+    not see `b` at all — it runs `n_full` blocks at `WT_BLOCK` then `n_tail` at
+    `WT_TAIL`. So a re-ordering is invisible to compute exactly while those two
+    widths are EQUAL, which is the gate here (plus the streamed path, the only
+    one whose assignments come from `plan_cores` rather than the shard spec).
+
+    Pure (strings + ints) so the gate is unit-testable without a device.
+    """
+    want = BLOCK_ORDER_ROW_MAJOR if knob is None else int(knob)
+    return int(bool(want) and mode == MODE_STREAMED and wt_block == wt_tail)
+
+
 def read_bank_period(num_banks: int, tile_height: int, is_dram_interleaved: bool) -> int:
     """Source pages per bank cycle for the R6 stateful-read arm, or 0 = off.
 
@@ -1749,6 +1832,11 @@ def create_program_descriptor(
     )
 
     # ---------- 6. kernels ----------
+    # R9 (master.md B10 + A3), resolved once so the reader, the writer and the
+    # per-core runtime args cannot disagree about either knob.
+    vc_mode = int(PER_CORE_VC if lv["per_core_vc"] is None else lv["per_core_vc"])
+    block_order = block_order_row_major(mode=plan["mode"], wt_block=wt_block, wt_tail=wt_tail, knob=lv["block_order"])
+
     # CT args: scalar args first, TensorAccessorArgs appended LAST (master.md
     # D18). RT args carry only buffer addresses + the per-core block range
     # (D19), so a second call with the same spec hits the program cache.
@@ -1794,6 +1882,10 @@ def create_program_descriptor(
         src_tile_bytes,  # bytes per SOURCE tile page
         retile_stage_stride,  # DRAM-aligned stride between staged source tiles
         Wt,  # tile-columns: the source tile grid's width is the output's
+        # R9 (B10 + A3): the per-core VC arm and the block-order decode. Both
+        # default to 0, which emits the Refinement-8 reader byte-for-byte.
+        vc_mode,
+        block_order,
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
@@ -1819,6 +1911,10 @@ def create_program_descriptor(
         (pad["real_row_bytes"] // elem_size) if pad_enabled else TILE_WIDTH,
         tile_height,
         out_elem_size,
+        # R9 (B10 + A3): the writer TWIN of the reader's two knobs — a dataflow
+        # lever applied to one NoC half only moves the bottleneck across the CB.
+        vc_mode,
+        block_order,
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
@@ -1886,8 +1982,12 @@ def create_program_descriptor(
             n_full = num_blocks
         n_tail = num_blocks - n_full
 
-        reader_rt[core.x][core.y] = [in_addr, block_start, num_blocks]
-        writer_rt[core.x][core.y] = [out_addr, block_start, num_blocks]
+        # R9 (B10): the core's own VC, from its grid coordinates. A RUNTIME arg
+        # (it is the one per-core value in the program) and the same number on
+        # both halves, so a core's read and write streams take matching lanes.
+        vc = per_core_vc(core)
+        reader_rt[core.x][core.y] = [in_addr, block_start, num_blocks, vc]
+        writer_rt[core.x][core.y] = [out_addr, block_start, num_blocks, vc]
         # `num_blocks * wt_block` is the page count BOTH dataflow kernels use on
         # the resident path — stated once here so the fold cannot disagree with
         # the kernels it replaces.

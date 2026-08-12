@@ -397,6 +397,24 @@ ARMS = {
     # WRONG on the shapes that arm it (that is the defect), measured only for
     # what alignment-correctness costs.
     "lever_b11_stage_off": dict(levers=dict(stage_reads=0)),
+    # R9 (master.md B10) — the per-core unicast VC, on BOTH NoC halves (the
+    # reader's request VC and the writer's write VC, one number per core). A
+    # per-core-overhead lever (one extra command-buffer register write per
+    # kernel), so per master.md B0 both arms are measured on the smallest
+    # regimes as well as on the square it targets.
+    "lever_r9_vc_force": dict(levers=dict(per_core_vc=1)),
+    "lever_r9_vc_off": dict(levers=dict(per_core_vc=0)),
+    # R9 (master.md A3, the residual degree) — the block -> core MAPPING order.
+    # Row-major makes a core's consecutive blocks walk ACROSS one tile-row, so
+    # it re-reads the same source pages (same DRAM banks) at successive byte
+    # offsets instead of touching `nb * tile_h` distinct pages. This is the only
+    # placement freedom left once the grid is full (`spread_cores` is inert at
+    # 110 of 110 cores).
+    "lever_r9_block_row": dict(levers=dict(block_order=1)),
+    "lever_r9_block_col": dict(levers=dict(block_order=0)),
+    # The pair — levers compose, and a flat single-lever measurement is usually
+    # a co-binding stage rather than a dead lever.
+    "lever_r9_vc_and_block_row": dict(levers=dict(per_core_vc=1, block_order=1)),
     # ---- ablation arms (classification; output wrong by design) ---------
     "ablate_compute": dict(levers=dict(stub_compute=1)),
     "ablate_read": dict(levers=dict(stub_read=1)),

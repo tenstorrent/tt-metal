@@ -92,7 +92,12 @@ void kernel_main() {
     constexpr uint32_t pad_real_cols = get_compile_time_arg_val(15);  // REAL datum columns per row
     constexpr uint32_t tile_h = get_compile_time_arg_val(16);         // rows per tile
     constexpr uint32_t out_elem = get_compile_time_arg_val(17);       // OUTPUT element bytes
-    constexpr auto dst_args = TensorAccessorArgs<18>();
+    // R9: the reader's two knobs, applied to the WRITE half — master.md B10
+    // (this core's unicast VC) and A3 (the block-order decode). Both 0 by
+    // default, which emits Refinement 8's writer byte-for-byte.
+    constexpr uint32_t vc_mode = get_compile_time_arg_val(18);      // lever R9/B10 (1 = per-core VC)
+    constexpr uint32_t block_order = get_compile_time_arg_val(19);  // lever R9/A3 (1 = row-major)
+    constexpr auto dst_args = TensorAccessorArgs<20>();
 
     // B5 off-arm granularity: a tile is four faces, so the non-coalesced arm
     // issues one write per face instead of one per page.
@@ -102,6 +107,11 @@ void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     const uint32_t b0 = get_arg_val<uint32_t>(1);
     const uint32_t nb = get_arg_val<uint32_t>(2);
+    // R9/B10: this core's unicast VC — the SAME number the reader got, so a
+    // core's two streams take matching lanes. Unlike the read side, the write
+    // API honours it per call (`ncrisc_noc_fast_write` always programs
+    // NOC_CMD_STATIC_VC), so it is passed straight to `noc_async_write`.
+    const uint32_t write_vc = (vc_mode == 1) ? get_arg_val<uint32_t>(3) : NOC_UNICAST_WRITE_VC;
 
     // A3/C14 zero-copy: `cb_output_tiles` is ALIASED onto this core's own output
     // shard, so compute packed the tiles straight into their final L1 home —
@@ -164,8 +174,10 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < nb; ++i) {
         const uint32_t b = b0 + i;
-        const uint32_t wchunk = b / nt_h;      // column-block index
-        const uint32_t r = b - wchunk * nt_h;  // global tile-row index
+        // R9/A3: the same decode the reader uses — the two kernels walk one
+        // block space, so the order is a shared compile-time constant.
+        const uint32_t wchunk = (block_order == 1) ? (b % n_wchunks) : (b / nt_h);
+        const uint32_t r = (block_order == 1) ? (b / n_wchunks) : (b - wchunk * nt_h);
         const uint32_t w = (wchunk == n_wchunks - 1) ? wt_tail : wt_block;  // tiles this block
         const uint32_t c0 = wchunk * wt_block;                              // first tile-column
 
@@ -181,11 +193,15 @@ void kernel_main() {
             }
             if constexpr (stub_write == 0) {
                 if constexpr (coalesce_writes == 1) {
-                    noc_async_write(l1_addr, dst.get_noc_addr(first_page + t), out_tile_bytes);
+                    noc_async_write(l1_addr, dst.get_noc_addr(first_page + t), out_tile_bytes, noc_index, write_vc);
                 } else {
                     for (uint32_t f = 0; f < FACES_PER_TILE; ++f) {
                         noc_async_write(
-                            l1_addr + f * face_bytes, dst.get_noc_addr(first_page + t, f * face_bytes), face_bytes);
+                            l1_addr + f * face_bytes,
+                            dst.get_noc_addr(first_page + t, f * face_bytes),
+                            face_bytes,
+                            noc_index,
+                            write_vc);
                     }
                 }
             }

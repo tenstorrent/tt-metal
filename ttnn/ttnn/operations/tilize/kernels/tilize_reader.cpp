@@ -196,7 +196,11 @@ void kernel_main() {
     constexpr uint32_t src_tile_bytes = get_compile_time_arg_val(28);       // bytes per SOURCE tile page
     constexpr uint32_t retile_stage_stride = get_compile_time_arg_val(29);  // aligned stride in the scratch
     constexpr uint32_t Wt = get_compile_time_arg_val(30);                   // tile-columns (source grid width)
-    constexpr auto src_args = TensorAccessorArgs<31>();
+    // R9: master.md B10 (per-core read request VC) and A3 (the block-order
+    // decode). Both are 0 by default and the whole file is then Refinement 8's.
+    constexpr uint32_t vc_mode = get_compile_time_arg_val(31);      // lever R9/B10 (1 = per-core VC)
+    constexpr uint32_t block_order = get_compile_time_arg_val(32);  // lever R9/A3 (1 = row-major)
+    constexpr auto src_args = TensorAccessorArgs<33>();
 
     // The largest transfer this kernel can issue. `one_packet` NoC state is only
     // legal at or below the part's burst size, so the arch decides which
@@ -206,6 +210,7 @@ void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t b0 = get_arg_val<uint32_t>(1);
     const uint32_t nb = get_arg_val<uint32_t>(2);
+    const uint32_t read_vc = get_arg_val<uint32_t>(3);  // R9/B10: this core's unicast VC
 
     // A3/C14 zero-copy: `cb_input_sticks` is ALIASED onto this core's own input
     // shard, so the block is already in L1 and there is nothing to fetch — the
@@ -221,10 +226,35 @@ void kernel_main() {
 
     const auto src = TensorAccessor(src_args, src_addr);
 
+    // R9 (master.md B10) — THIS CORE'S READ REQUEST VC, programmed ONCE.
+    //
+    // `noc_async_read`'s `read_req_vc` argument is a no-op in the mode this
+    // kernel runs in: `ncrisc_noc_fast_read` only writes NOC_CTRL (the register
+    // that carries NOC_CMD_STATIC_VC) under `DM_DYNAMIC_NOC`, and a plain
+    // dataflow kernel is `DM_DEDICATED_NOC`, where `noc_init` set NOC_CTRL once
+    // to static VC 1 for every core. `ncrisc_noc_read_set_state<..., use_vc>`
+    // is the one entry point that programs it unconditionally — which is
+    // exactly how the DRAM-adjacent-read microbenchmark assigns per-core VCs.
+    //
+    // Everything else `set_state` writes (TARG_ADDR_MID/COORDINATE, AT_LEN_BE)
+    // is overwritten by the very next `noc_async_read`, and NOC_CTRL is not — so
+    // ONE call here re-lanes every subsequent read of this kernel, INCLUDING the
+    // `read_sticks_for_tilize` helper's. That is the point: B10 is applied
+    // without substituting the helper or perturbing the issue path at all.
+    if constexpr (vc_mode == 1) {
+        noc_async_read_one_packet_set_state<true /* use_vc */>(src.get_noc_addr(0), tile_row_bytes, read_vc);
+    }
+
     for (uint32_t i = 0; i < nb; ++i) {
         const uint32_t b = b0 + i;
-        const uint32_t wchunk = b / nt_h;      // column-block index
-        const uint32_t r = b - wchunk * nt_h;  // global tile-row index
+        // R9 (master.md A3): the block -> (tile-row, column-block) decode. At
+        // `block_order == 0` this is Phase 0's column-major linearization; at 1
+        // a core's consecutive blocks walk ACROSS one tile-row, so they re-read
+        // the same `tile_h` source pages (the same DRAM banks) at successive
+        // byte offsets. The host only ever arms 1 where the two block widths are
+        // equal, because compute runs the widths in `n_full`/`n_tail` order.
+        const uint32_t wchunk = (block_order == 1) ? (b % n_wchunks) : (b / nt_h);
+        const uint32_t r = (block_order == 1) ? (b / n_wchunks) : (b - wchunk * nt_h);
 
         // The tail column-block is the last one; its width is WT_TAIL (== WT_BLOCK
         // when Wt divides evenly), so the reader's per-block page count matches
