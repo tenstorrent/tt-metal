@@ -1,0 +1,70 @@
+{
+  "run_utc": "2026-08-12T16:10:42.817466+00:00",
+  "fallback_policy": "throw_exception_on_fallback=true (asserted by runner)",
+  "command_environment": "TTNN_CONFIG_OVERRIDES={throw_exception_on_fallback:true}",
+  "mesh": "4x Blackhole p300c, 1x4 FABRIC_1D_RING, TP4",
+  "weights": "real Falcon3 LM head BFP4, LoFi compute, BFP8 output",
+  "fixed_geometry": "32-core inherited residual shard; K=96 tiles, 3 K tiles/core; N=1024 tiles, 32 N tiles/core",
+  "grid_constraint": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig exposes no grid or output-subblock fields; changing the 32-core grid would require resharding the preserved inter-layer residual at the terminal boundary",
+  "iterations": 64,
+  "candidates": [
+    {
+      "in0_block_w": 1,
+      "model_trace_ms_per_token": 0.6443810852942988,
+      "token_out_ms_per_token": 1.4392391021829098,
+      "generated_tokens": [
+        95671,
+        80947
+      ]
+    },
+    {
+      "in0_block_w": 3,
+      "model_trace_ms_per_token": 0.5164007161511108,
+      "token_out_ms_per_token": 1.3124226679792628,
+      "generated_tokens": [
+        95671,
+        80947
+      ]
+    }
+  ],
+  "winner": {
+    "in0_block_w": 3,
+    "model_trace_ms_per_token": 0.5164007161511108,
+    "token_out_ms_per_token": 1.3124226679792628,
+    "generated_tokens": [
+      95671,
+      80947
+    ]
+  },
+  "adapted_terminal_layout_candidates": [
+    {
+      "cores": 8,
+      "grid": [
+        8,
+        1
+      ],
+      "in0_block_w": 12,
+      "per_core_n": 128,
+      "includes_terminal_reshard": true,
+      "result": "blocked",
+      "exact_error": "TT_THROW @ /home/mvasiljevic/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception\ninfo:\nStatically allocated circular buffers on core range [0-0 - 7-0] grow to 2192192 B which is beyond max L1 size of 1572864 B"
+    },
+    {
+      "cores": 16,
+      "grid": [
+        8,
+        2
+      ],
+      "in0_block_w": 6,
+      "per_core_n": 64,
+      "includes_terminal_reshard": true,
+      "token_out_ms_per_token": 1.3328876666491851,
+      "generated_tokens": [
+        95671,
+        80947
+      ],
+      "result": "measured"
+    }
+  ],
+  "passed": true
+}

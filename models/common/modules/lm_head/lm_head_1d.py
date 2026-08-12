@@ -125,6 +125,9 @@ class LMHead1D(LightweightModule):
         self.load_device_weights()
         x = _load_input_device_tensor(x, self.config)
         cfg = self.config
+        converted_input = cfg.input_memcfg is not None and x.memory_config() != cfg.input_memcfg
+        if converted_input:
+            x = ttnn.to_memory_config(x, cfg.input_memcfg)
 
         outputs = []
         for weight, pc in zip(self.output_weights, cfg.program_configs):
@@ -150,10 +153,14 @@ class LMHead1D(LightweightModule):
                 )
                 outputs.append(output)
 
-        # Concatenate splits
-        output = ttnn.concat(outputs, dim=-1, memory_config=cfg.output_memcfg)
+        if converted_input:
+            ttnn.deallocate(x, True)
 
-        return output
+        # A one-split head already has the requested output contract.  Avoid a
+        # redundant concat in the traced token path.
+        if len(outputs) == 1:
+            return outputs[0]
+        return ttnn.concat(outputs, dim=-1, memory_config=cfg.output_memcfg)
 
     # [INFO] this is the entry point for TTTv1 model_config.py and will retire with TTTv1
     @classmethod

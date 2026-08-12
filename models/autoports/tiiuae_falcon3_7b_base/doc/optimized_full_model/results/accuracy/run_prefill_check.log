@@ -1,0 +1,7 @@
+command: TTNN_CONFIG_OVERRIDES='{"throw_exception_on_fallback": true}' python -m models.common.readiness_check.run_prefill_check --model-dir models/autoports/tiiuae_falcon3_7b_base --reference models/autoports/tiiuae_falcon3_7b_base/doc/full_model/results/aime24_plain_100.refpt --mesh-device P300X2 --fabric-config FABRIC_1D_RING
+run_utc: 2026-08-12T15:39:57Z
+exit_code: 0
+entry[0]             top1=0.920 (92/100)  top5=1.000 (100/100)  top100=1.000 (100/100)
+AGGREGATE            top1=0.920 (92/100)  top5=1.000 (100/100)  top100=1.000 (100/100)
+fallback_policy: throw_exception_on_fallback=true
+result: PASS

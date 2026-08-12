@@ -49,6 +49,7 @@ def _measure_depth(
     *,
     layers: int,
     iterations: int,
+    max_context_len: int,
     weight_cache_path: str,
 ) -> dict:
     mesh = None
@@ -60,7 +61,7 @@ def _measure_depth(
             model_dir,
             mesh,
             override_num_layers=layers,
-            max_context_len=256,
+            max_context_len=max_context_len,
             weight_cache_path=weight_cache_path,
         )
         generated = generator.generate(prompt, 2, sampling_mode="device", enable_trace=True)
@@ -119,12 +120,15 @@ def collect(
     *,
     depths: list[int],
     iterations: int,
+    max_context_len: int,
     weight_cache_path: str,
 ) -> dict:
     if len(depths) < 3 or depths != sorted(set(depths)) or depths[0] < 1 or depths[-1] > 28:
         raise ValueError("depths must contain at least three unique ascending values in [1,28]")
     if iterations < 16 or 128 + iterations > 256:
         raise ValueError("iterations must be in [16,128]")
+    if max_context_len < 256 or max_context_len > 32768:
+        raise ValueError("max_context_len must be in [256,32768]")
     reference = load_reference(reference_path)
     prompt = reference.entries[0].prompt_tokens[0].tolist()[:128]
     points = [
@@ -133,6 +137,7 @@ def collect(
             prompt,
             layers=depth,
             iterations=iterations,
+            max_context_len=max_context_len,
             weight_cache_path=weight_cache_path,
         )
         for depth in depths
@@ -141,6 +146,7 @@ def collect(
     result = {
         "mesh": "4x Blackhole p300c, 1x4 FABRIC_1D_RING, TP4",
         "prompt_tokens": len(prompt),
+        "max_context_len": max_context_len,
         "depths": depths,
         "points": points,
         "model_trace_linear_fit": fit,
@@ -167,6 +173,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--depths", default="1,4,8,16,28")
     parser.add_argument("--iterations", type=int, default=64)
+    parser.add_argument("--max-context-len", type=int, default=32768)
     parser.add_argument("--weight-cache-path", default="/tmp/falcon3-full-model-cache")
     args = parser.parse_args()
     depths = [int(value) for value in args.depths.split(",") if value]
@@ -176,6 +183,7 @@ def main() -> None:
         args.output,
         depths=depths,
         iterations=args.iterations,
+        max_context_len=args.max_context_len,
         weight_cache_path=args.weight_cache_path,
     )
     if not result["passed"]:

@@ -55,7 +55,11 @@ DEFAULT_MAX_BATCH_SIZE = 1
 DEFAULT_TRACE_REGION_SIZE = 512_000_000
 DEFAULT_NUM_BLOCKS = MAX_CONTEXT // DEFAULT_PAGE_BLOCK_SIZE
 DEFAULT_PREFILL_CHUNK_SIZE = 2048
-LM_HEAD_COLUMNS_PER_DEVICE = 8192
+DEFAULT_ROPE_CACHE_LEN = 256
+# A single local-vocabulary projection avoids three extra matmul launches and
+# sharded-to-interleaved conversions in every decode replay.  The local vocab
+# is tile aligned on TP4, so no additional padding is required.
+LM_HEAD_COLUMNS_PER_DEVICE = 32768
 
 
 def _validate_mesh(mesh_device) -> None:
@@ -123,6 +127,7 @@ class Falcon3Model:
         self.padded_vocab_size = math.ceil(self.vocab_size / (32 * TENSOR_PARALLEL_SIZE)) * (32 * TENSOR_PARALLEL_SIZE)
         self.local_vocab_size = self.padded_vocab_size // TENSOR_PARALLEL_SIZE
         self.weight_cache_path = Path(weight_cache_path) if weight_cache_path is not None else None
+        self.rope_cache_len = min(DEFAULT_ROPE_CACHE_LEN, self.max_cache_len)
         self.tt_ccl = get_tt_ccl(mesh_device)
 
         self.embedding = self._build_embedding(state_dict)
@@ -242,6 +247,7 @@ class Falcon3Model:
                 attention_activation_dtype=ttnn.bfloat8_b,
                 mlp_activation_dtype=ttnn.bfloat8_b,
                 page_block_size=self.page_block_size,
+                rope_cache_len=self.rope_cache_len,
                 rope_cache=rope_cache,
                 persistent_ccl_resources=persistent_ccl_resources,
             )
@@ -253,6 +259,47 @@ class Falcon3Model:
             if callable(clear_cache):
                 clear_cache()
         return layers
+
+    def ensure_rope_capacity(self, required_len: int) -> bool:
+        """Grow the shared device RoPE table to the active request horizon."""
+        required_len = int(required_len)
+        if required_len <= self.rope_cache_len:
+            return False
+        if required_len > self.max_cache_len:
+            raise ValueError(f"RoPE capacity {required_len} exceeds context {self.max_cache_len}")
+        capacity = min(self.max_cache_len, math.ceil(required_len / 256) * 256)
+        rope_parameters = getattr(self.hf_config, "rope_parameters", None) or {}
+        rope_theta = getattr(self.hf_config, "rope_theta", None) or rope_parameters.get("rope_theta")
+        positions = torch.arange(capacity, dtype=torch.float32)
+        inv_freq = 1.0 / (
+            float(rope_theta)
+            ** (torch.arange(0, self.layers[0].head_dim, 2, dtype=torch.float32) / self.layers[0].head_dim)
+        )
+        angles = torch.outer(positions, inv_freq)
+        angles = torch.cat([angles, angles], dim=-1)
+        new_cache = (
+            _replicated_device_tensor(
+                angles.cos(),
+                mesh_device=self.mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            ),
+            _replicated_device_tensor(
+                angles.sin(),
+                mesh_device=self.mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            ),
+        )
+        old_cache = (self.layers[0].cos_cache, self.layers[0].sin_cache)
+        for layer in self.layers:
+            layer.cos_cache, layer.sin_cache = new_cache
+        for tensor in old_cache:
+            ttnn.deallocate(tensor, True)
+        self.rope_cache_len = capacity
+        return True
 
     def _build_final_norm(self, state_dict: Mapping[str, torch.Tensor]):
         return _mesh_weight(

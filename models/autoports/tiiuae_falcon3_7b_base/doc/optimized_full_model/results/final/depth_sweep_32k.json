@@ -1,0 +1,56 @@
+{
+  "mesh": "4x Blackhole p300c, 1x4 FABRIC_1D_RING, TP4",
+  "prompt_tokens": 128,
+  "max_context_len": 32768,
+  "depths": [
+    1,
+    14,
+    28
+  ],
+  "points": [
+    {
+      "layers": 1,
+      "iterations": 64,
+      "model_trace_ms_per_token": 0.6850319623481482,
+      "sampling_trace_ms_per_token": 0.7941046933410689,
+      "device_only_pair_ms_per_token": 1.480723309214227,
+      "device_only_pair_t_s_u": 675.345619115477,
+      "caller_visible_pair_ms_per_token": 1.5286083944374695,
+      "caller_visible_pair_t_s_u": 654.1897870239039,
+      "caller_token_readbacks": 66,
+      "token_feedback_mode": "sampling-trace output copied directly to model-trace input"
+    },
+    {
+      "layers": 14,
+      "iterations": 64,
+      "model_trace_ms_per_token": 6.584433343959972,
+      "sampling_trace_ms_per_token": 0.7943503151182085,
+      "device_only_pair_ms_per_token": 7.381519651971757,
+      "device_only_pair_t_s_u": 135.47345900960642,
+      "caller_visible_pair_ms_per_token": 7.430499492329545,
+      "caller_visible_pair_t_s_u": 134.58045465614973,
+      "caller_token_readbacks": 66,
+      "token_feedback_mode": "sampling-trace output copied directly to model-trace input"
+    },
+    {
+      "layers": 28,
+      "iterations": 64,
+      "model_trace_ms_per_token": 12.944258764036931,
+      "sampling_trace_ms_per_token": 0.7938540366012603,
+      "device_only_pair_ms_per_token": 13.739359681494534,
+      "device_only_pair_t_s_u": 72.78359568291195,
+      "caller_visible_pair_ms_per_token": 13.79376111435704,
+      "caller_visible_pair_t_s_u": 72.49654330747865,
+      "caller_token_readbacks": 66,
+      "token_feedback_mode": "sampling-trace output copied directly to model-trace input"
+    }
+  ],
+  "model_trace_linear_fit": {
+    "slope_ms_per_layer": 0.45404835236529084,
+    "intercept_ms": 0.22988163954584806,
+    "r_squared": 0.9999999098427153
+  },
+  "isolated_selected_decoder_ms": 0.286596501,
+  "policy": "unchanged BFP4/LoFi weights, BFP8 attention/MLP/CCL/KV, BF16 sharded residual",
+  "passed": true
+}

@@ -1,0 +1,13 @@
+command: TT_METAL_WATCHER=1 TT_METAL_WATCHER_DISABLE_ETH=1 TTNN_CONFIG_OVERRIDES='{"throw_exception_on_fallback": true}' python models/autoports/tiiuae_falcon3_7b_base/tests/full_model_evidence.py --model-dir models/autoports/tiiuae_falcon3_7b_base --reference models/autoports/tiiuae_falcon3_7b_base/doc/full_model/results/aime24_plain_100.refpt --output models/autoports/tiiuae_falcon3_7b_base/doc/optimized_full_model/results/final/full_model_watcher.json --weight-cache-path /tmp/falcon3-full-model-cache
+run_utc: 2026-08-12T15:51:53Z
+exit_code: 0
+watcher_console_phases: generator_ready, cold_prefill_complete, warm_prefill_complete, sampler_comparison_complete, five_token_trace_complete, page_table_replay_complete, device_only_pair_complete, caller_visible_pair_complete, teacher_forcing_pair_complete, split_trace_timing_complete
+watcher_source_log: generated/watcher/watcher.log
+watcher_source_log_size_bytes: 18577140
+watcher_source_log_sha256: 8818e39c59a4eebb38b743dfaafc9d0bc948fac4d6dd32a90ce0aedff13b5e5b
+watcher_source_final_dump: Dump #226 completed at 231.872s
+watcher_source_final_state: detached devices 0,1,2,3 normally
+error_audit_command: rg -n "ASSERT|NOC|corrupt|ERROR|Exception|Watcher.*error" generated/watcher/watcher.log
+error_audit_result: no runtime error match; the sole NOC match is the watcher field-format legend on line 14
+full_model_watcher_json_passed: true
+result: PASS

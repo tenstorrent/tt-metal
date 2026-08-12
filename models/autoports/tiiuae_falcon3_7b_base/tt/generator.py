@@ -279,6 +279,7 @@ class Falcon3Generator(Generator):
             raise ValueError("prompt exceeds the supported context")
 
         self._release_decode_traces_before_allocating_prefill()
+        self.model.ensure_rope_capacity(max(prompt_lens))
         caches = self._ensure_kv_cache() if kv_cache is None else kv_cache
         page_host = self._normalise_page_table(page_table, active_batch)
         self._copy_host(page_host, self._prefill_page_table, dtype=ttnn.int32)
@@ -834,6 +835,8 @@ class Falcon3Generator(Generator):
         horizon = len(prompt_token_ids) + max_new_tokens - 1
         if horizon > self.model.max_cache_len:
             raise ValueError("prompt plus requested output exceeds the supported context")
+        self._release_decode_traces_before_allocating_prefill()
+        self.model.ensure_rope_capacity(horizon)
         if sampling_mode == "host":
             return self._generate_host_compat(
                 prompt_token_ids,

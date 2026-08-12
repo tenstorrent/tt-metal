@@ -34,6 +34,8 @@
     "all_layers_both_kv_caches_bytes_per_device": 499122176,
     "bf16_residual_bytes_per_device": 201326592,
     "bf16_rotary_cache_bytes_per_device": 33554432,
+    "optimized_active_rope_initial_bytes_per_device": 262144,
+    "rope_capacity_policy": "shared across all layers; grows in 256-token increments to the active request horizon before trace capture",
     "all_layers_two_phase_projection_and_norm_bytes_per_device": 1937080320,
     "decode_mlp_padding_bytes_per_device": 55738368,
     "trace_region_config_bytes_per_bank": 512000000,
@@ -62,8 +64,11 @@
     "artifacts": [
       "models/autoports/tiiuae_falcon3_7b_base/doc/full_model/results/full_model_evidence.json",
       "models/autoports/tiiuae_falcon3_7b_base/doc/full_model/results/full_context_coverage.json",
+      "models/autoports/tiiuae_falcon3_7b_base/doc/optimized_full_model/results/final/full_model_evidence_dynamic_rope.json",
+      "models/autoports/tiiuae_falcon3_7b_base/doc/optimized_full_model/results/final/full_context_coverage.json",
       "models/autoports/tiiuae_falcon3_7b_base/doc/optimized_multichip_decoder/results/final_correctness/max_context_batch1.json"
     ],
+    "optimized_rope_note": "Short requests no longer pay 32K-row RoPE lookup cost in every layer. The table remains absolute-position indexed and grows to the complete 32K table for the maximum-context gate; no context capability is reduced.",
     "explanation": "TP4 stores one of four KV heads per device. BFP8 cache accounting uses the physical 1,088-byte 32x32 tile: 1,024 pages x 1 head x 1 sequence tile x 8 head-dimension tiles = 8,192 tiles for each K or V cache per layer, or 499,122,176 bytes/device for K+V across 28 layers. With every full-model weight, embedding, final norm, TP-vocabulary LM-head, runtime buffer, and all 28 full-context caches resident, the frozen-source allocator run measured 2,730,875,392 bytes/device and 27,351,855,616 free bytes/device. The configured 512,000,000-byte trace region is reserved in each of eight DRAM banks before those allocator totals, or 4,096,000,000 bytes/device. Adding a separate 512 MiB transient reserve leaves 26,814,984,704 measured allocatable bytes/device. The public generator executed all 28 layers for a non-aligned 32,767-token request, owned padding to 32,768, filled sixteen 2,048-token chunks and all 1,024 logical pages, sampled two tokens, and replayed traced decode at position 32,767. The gate checked the final K and V page on every one of four ranks for every layer (224 device tensors), advanced both persistent position tensors to 32,768, and measured a 2,734,023,168-byte execution peak with 27,348,707,840 bytes/device free."
   },
   "notes": "The full model preserves the Hugging Face 32,768-token context at batch 1. No capability reduction is needed: complete model state plus full-context KV is 2.731 GB of the measured 30.08 GB/device allocatable after the 4.096 GB/device trace reservation. The 512 MiB transient reserve is additional. BFP8 rank-local paged KV, BFP4/LoFi TP4 projections, BFP8 attention/MLP and asynchronous CCL payloads, two shared persistent CCL buffers, and the replicated-mesh BF16 32-core L1 width-sharded inter-layer residual are unchanged. Batch 32 is serving-contract validated for mixed short prompts and heterogeneous decode positions, but full-context batch 32 is not advertised.",

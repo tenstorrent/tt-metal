@@ -186,6 +186,7 @@ class MultichipDecoder(LightweightModule):
         prefill_grid_x_limit: int = 11,
         prefill_l1_inputs: bool = False,
         page_block_size: int = DEFAULT_PAGE_BLOCK_SIZE,
+        rope_cache_len: int | None = None,
         rope_cache: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
         persistent_ccl_resources: tuple[object, object, object, object] | None = None,
     ) -> "MultichipDecoder":
@@ -246,6 +247,7 @@ class MultichipDecoder(LightweightModule):
         rms_norm_eps = float(_config_value(hf_config, "rms_norm_eps"))
         max_position_embeddings = int(_config_value(hf_config, "max_position_embeddings"))
         max_cache_len = max_position_embeddings if max_cache_len is None else int(max_cache_len)
+        rope_cache_len = max_cache_len if rope_cache_len is None else int(rope_cache_len)
         if max_cache_len <= 0:
             raise ValueError("max_cache_len must be positive")
         expected = (3072, 28, 12, 4, 256, 23040)
@@ -258,6 +260,8 @@ class MultichipDecoder(LightweightModule):
             raise ValueError(f"Expected rms_norm_eps=1e-6, got {rms_norm_eps}")
         if max_cache_len > max_position_embeddings:
             raise ValueError(f"max_cache_len={max_cache_len} exceeds HF context {max_position_embeddings}")
+        if not 1 <= rope_cache_len <= max_cache_len:
+            raise ValueError(f"rope_cache_len must be in [1,{max_cache_len}], got {rope_cache_len}")
         if not 0 <= layer_idx < num_layers:
             raise ValueError(f"layer_idx={layer_idx} is outside [0,{num_layers})")
         if num_heads % TENSOR_PARALLEL_SIZE or num_kv_heads % TENSOR_PARALLEL_SIZE:
@@ -486,7 +490,7 @@ class MultichipDecoder(LightweightModule):
             raise ValueError("Falcon3 multichip decoder requires the emitted default RoPE contract")
         self.owns_rope_cache = rope_cache is None
         if rope_cache is None:
-            positions = torch.arange(max_cache_len, dtype=torch.float32)
+            positions = torch.arange(rope_cache_len, dtype=torch.float32)
             inv_freq = 1.0 / (float(rope_theta) ** (torch.arange(0, head_dim, 2, dtype=torch.float32) / head_dim))
             angles = torch.outer(positions, inv_freq)
             angles = torch.cat([angles, angles], dim=-1)
@@ -510,8 +514,8 @@ class MultichipDecoder(LightweightModule):
             self.cos_cache, self.sin_cache = rope_cache
             for name, cache in (("cos_cache", self.cos_cache), ("sin_cache", self.sin_cache)):
                 shape = tuple(int(value) for value in cache.shape)
-                if len(shape) != 2 or shape[0] < max_cache_len or shape[1] != head_dim:
-                    raise ValueError(f"Shared {name} shape {shape} must cover at least ({max_cache_len}, {head_dim})")
+                if len(shape) != 2 or shape[0] < rope_cache_len or shape[1] != head_dim:
+                    raise ValueError(f"Shared {name} shape {shape} must cover at least ({rope_cache_len}, {head_dim})")
                 if cache.get_dtype() != ttnn.bfloat16 or cache.get_layout() != ttnn.TILE_LAYOUT:
                     raise ValueError(f"Shared {name} must be BF16 TILE_LAYOUT")
                 if len(ttnn.get_device_tensors(cache)) != TENSOR_PARALLEL_SIZE:
