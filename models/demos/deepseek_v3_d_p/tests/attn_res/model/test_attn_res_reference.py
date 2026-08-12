@@ -13,9 +13,8 @@ the rung above it worth trusting:
   * `hf_attn_res` is upstream's own `_apply_attn_res`, vendored byte-identical. It is
     the only rung not written here, and the only evidence that the equation the naive
     form transcribes from the published definition is the equation upstream runs.
-  * `attn_res_reference.read` is that definition in fp64, materializing the normalized
-    keys. Folding is exact, so the folded form has to reproduce it to fp64 rather than
-    to a tolerance.
+  * `attn_res_reference.read` is that definition spelled out, materializing the
+    normalized keys and keeping the two weight vectors as separate factors.
   * `attn_res_inter_block` + `attn_res_merge` are the split the device op is structured
     around. Splitting is a reassociation of the same softmax, so it has to reproduce the
     direct form too.
@@ -42,15 +41,13 @@ from models.demos.deepseek_v3_d_p.reference.attn_res.attn_res import (
 )
 from models.demos.deepseek_v3_d_p.reference.attn_res.hf_attn_res import hf_attn_res
 
-# fp64 throughout, so what survives is the algebra rather than the rounding. The residual
-# slack is the two forms' different multiply order over `d`, which lands a few ULPs apart.
-TOL = 1e-12
-
-# Upstream widens with `.float()`, so it computes in fp32 whatever it is handed and this
-# one rung cannot be held to fp64. Absolute, not relative: the read is a convex
-# combination, so an output row that happens to cancel to near zero carries a large
-# relative error at fp32 rounding while every algebra error shows up at O(0.1) or more.
-UPSTREAM_TOL = 1e-5
+# fp32, the widest the device ever computes in, and the width upstream forces anyway by
+# widening with `.float()`. Every rung here is an exact rewrite, so the only difference
+# left is the forms' multiply order over `d`; measured, that is under 1.2e-6 across all
+# four. Absolute, not relative: the read is a convex combination, so an output row that
+# happens to cancel to near zero carries a large relative error at fp32 rounding.
+DTYPE = torch.float32
+TOL = 1e-5
 
 NUM_TOKENS = 64
 HIDDEN_SIZE = 256
@@ -65,9 +62,9 @@ BLOCK_SIZE = 2
 
 
 def _case(num_sealed, seed=0):
-    """One read's inputs in fp64, with the query still in its two unfolded factors."""
+    """One read's inputs, with the query still in its two unfolded factors."""
     generator = torch.Generator().manual_seed(seed)
-    randn = lambda *shape: torch.randn(*shape, generator=generator, dtype=torch.float64)
+    randn = lambda *shape: torch.randn(*shape, generator=generator, dtype=DTYPE)
     return (
         randn(NUM_TOKENS, HIDDEN_SIZE),
         randn(NUM_TOKENS, num_sealed, HIDDEN_SIZE),
@@ -92,12 +89,12 @@ def test_naive_matches_upstream(num_sealed):
     """
     prefix_sum, block_residual, norm_weight, proj_weight = _case(num_sealed)
 
-    want = ref.read(prefix_sum, block_residual, norm_weight, proj_weight, EPS)
+    want = ref.read(prefix_sum, block_residual, norm_weight, proj_weight, EPS, dtype=DTYPE)
     got = hf_attn_res(prefix_sum, block_residual, norm_weight, proj_weight, EPS)
 
     assert got.shape == want.shape, f"{got.shape} != {want.shape}"
     delta = _max_abs(got, want)
-    assert delta <= UPSTREAM_TOL, f"S={num_sealed}: the naive form differs from upstream by {delta:.3e}"
+    assert delta <= TOL, f"S={num_sealed}: the naive form differs from upstream by {delta:.3e}"
 
 
 @pytest.mark.parametrize("num_sealed", [0, 1, 8])
@@ -107,11 +104,12 @@ def test_folded_matches_naive(num_sealed):
     `res_norm` scales `v` by `norm_weight` after normalizing and `res_proj` contracts the
     result with `proj_weight`, so the two weights only ever meet as a product against `v`
     — folding them is associativity. `rsqrt(mean(v²) + eps)` is a per-(token, candidate)
-    scalar, so pulling it out of the dot is distributivity. Neither is a tolerance claim.
+    scalar, so pulling it out of the dot is distributivity. Neither changes the value, so
+    what is left for the gate to measure is the rounding on a reordered multiply.
     """
     prefix_sum, block_residual, norm_weight, proj_weight = _case(num_sealed)
 
-    want = ref.read(prefix_sum, block_residual, norm_weight, proj_weight, EPS)
+    want = ref.read(prefix_sum, block_residual, norm_weight, proj_weight, EPS, dtype=DTYPE)
     got = attn_res(prefix_sum, block_residual, fold_query(norm_weight, proj_weight), EPS)
 
     assert got.shape == want.shape, f"{got.shape} != {want.shape}"
@@ -153,7 +151,7 @@ def _stack_case(seed=0):
     where the reads and seals land rather than what the layers compute.
     """
     generator = torch.Generator().manual_seed(seed)
-    randn = lambda *shape: torch.randn(*shape, generator=generator, dtype=torch.float64)
+    randn = lambda *shape: torch.randn(*shape, generator=generator, dtype=DTYPE)
     query = lambda: (1.0 + 0.1 * randn(HIDDEN_SIZE), PROJ_STD * randn(1, HIDDEN_SIZE))
 
     q_pre = [query() for _ in range(NUM_LAYERS)]
@@ -178,7 +176,9 @@ def test_stack_matches_naive():
     """
     hidden_states, q_pre, q_post, q_out, attn_fns, mlp_fns = _stack_case()
 
-    want = ref.stack(hidden_states, q_pre, q_post, q_out, attn_fns, mlp_fns, block_size=BLOCK_SIZE, eps=EPS)
+    want = ref.stack(
+        hidden_states, q_pre, q_post, q_out, attn_fns, mlp_fns, block_size=BLOCK_SIZE, eps=EPS, dtype=DTYPE
+    )
     got = attn_res_stack(
         hidden_states,
         [fold_query(*q) for q in q_pre],

@@ -11,9 +11,11 @@ here, and so the only evidence that the definition below was read correctly. It
 widens with ``.float()`` and therefore computes in fp32 whatever it is handed,
 which is why it anchors the ladder rather than heading it.
 
-``attn_res_reference.py`` is the naive fp64 ground truth, written from the
-published definition and deliberately taking none of the algebraic shortcuts the
-implementations take.
+``attn_res_reference.py`` is the naive ground truth, written from the published
+definition and deliberately taking none of the algebraic shortcuts the
+implementations take. It never narrows an input and takes the working precision
+as an argument, so it can measure an implementation at that implementation's own
+width.
 
 ``attn_res.py`` is the folded torch form the device modules mirror: one query
 carrying ``res_norm.weight * res_proj.weight``, ``rsqrt`` pulled out of the dot.
