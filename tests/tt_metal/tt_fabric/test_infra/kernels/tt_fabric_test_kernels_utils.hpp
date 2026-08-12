@@ -871,13 +871,36 @@ constexpr uint32_t SYNC_DBG_TAG_NOCXY = 0xC2;
 constexpr uint32_t SYNC_DBG_TAG_RFREE = 0xC3;
 constexpr uint32_t SYNC_DBG_TAG_RGATE = 0xC4;
 
+// [SAME-REGISTER PROOF] The stream id the target router is actually polling, read at the wedge.
+// Everything claiming "both sides use stream 22" so far came from the pre-HUNG host dump, aggregated
+// across devices. If this is not 22, the two sides are reading DIFFERENT registers and there is no
+// register-visibility question at all -- just a mismatch.
+constexpr uint32_t SYNC_DBG_TAG_RSTREAM = 0xC5;
+
+// [LIVENESS AT THE WEDGE] The router's heartbeat, sampled on each probe pass. This is the measurement
+// that can collapse the whole premise: if the router is FROZEN, then its recorded free-slots value is
+// simply a stale snapshot from before the packet arrived, and there is no disagreement between two
+// readers -- just a stopped core. phase=0x11 cannot distinguish these; a frozen core reads identically
+// to a looping one. Compare this value across the probe passes:
+//   changes  -> router is executing its main loop, so its free-slots record is fresh -> premise holds
+//   constant -> router is stopped; the "32" is stale and the investigation moves to why it stopped
+constexpr uint32_t SYNC_DBG_TAG_RHB = 0xC6;
+
+// [SAME-INSTANT PAIRING] The worker's own read of the register, taken inside the probe rather than
+// back in global_sync_start, so RDOOR and RFREE describe the same moment. Offset 192 keeps it clear
+// of the 128-byte slot copy at the start of the scratch region.
+constexpr uint32_t SYNC_DBG_TAG_RDOOR = 0xC7;
+constexpr uint32_t ERISC_DBG_DOORBELL_SCRATCH_OFF = 192;
+
 // MUST track MEM_AERISC_RESUME_PHASE_BASE in dev_mem_map.h. The region grows DOWNWARD from
 // MEM_ERISC_FABRIC_ROUTER_RESERVED_BASE, so enlarging MEM_AERISC_RESUME_PHASE_SIZE MOVES this base.
 // The host-side SLOT dump hardcodes the same value with the same warning (test_tt_fabric.cpp).
 constexpr uint32_t ERISC_DBG_SLOT_BASE = 0x6F1F8;
 constexpr uint32_t ERISC_DBG_SLOT_BYTES = 104;  // MEM_AERISC_RESUME_PHASE_SIZE
 constexpr uint32_t ERISC_DBG_WORD_PHASE = 0;
+constexpr uint32_t ERISC_DBG_WORD_HB = 14;  // MEM_AERISC_RX_HEARTBEAT_ADDR (base + 56)
 constexpr uint32_t ERISC_DBG_WORD_GATE = 16;
+constexpr uint32_t ERISC_DBG_WORD_STREAMID = 24;  // MEM_AERISC_POLLED_STREAM_ID_ADDR (base + 96)
 constexpr uint32_t ERISC_DBG_WORD_FREE = 25;
 
 // NOC ALIGNMENT. 0x6F1F8 is only 8-byte aligned and 104 is not a multiple of the NOC alignment, so
@@ -1079,14 +1102,36 @@ struct LineSyncConfig {
         auto* w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst + ERISC_DBG_READ_SKEW);
 
         // Which core, and is a router alive on it? word[0] is 0x5E5E00xx when one is running, 0 if not.
+        // Coordinate packing: eth cores sit at x=24..31, y=25, so 4 bits per axis TRUNCATES. Earlier
+        // probe output read "(13,9)" when the real core was (29,25). 5 bits each, phase in the low 6.
+        // The device id is not packed -- the watcher attributes each ring buffer to its own core, and
+        // the router is on the same device as the sync core, so it is recoverable from the log.
         const uint32_t phase = w[ERISC_DBG_WORD_PHASE];
         sync_dbg_push(
             SYNC_DBG_TAG_NOCXY,
             sync_iter,
-            (static_cast<uint32_t>(conn->edm_noc_x) << 12) | (static_cast<uint32_t>(conn->edm_noc_y) << 8) |
-                (phase & 0xFF));
+            ((static_cast<uint32_t>(conn->edm_noc_x) & 0x1F) << 11) |
+                ((static_cast<uint32_t>(conn->edm_noc_y) & 0x1F) << 6) | (phase & 0x3F));
         sync_dbg_push(SYNC_DBG_TAG_RFREE, sync_iter, w[ERISC_DBG_WORD_FREE]);
         sync_dbg_push(SYNC_DBG_TAG_RGATE, sync_iter, w[ERISC_DBG_WORD_GATE]);
+        sync_dbg_push(SYNC_DBG_TAG_RSTREAM, sync_iter, w[ERISC_DBG_WORD_STREAMID]);
+        sync_dbg_push(SYNC_DBG_TAG_RHB, sync_iter, w[ERISC_DBG_WORD_HB]);
+
+        // [SAME-INSTANT PAIRING] Read the register ourselves right here, microseconds after reading the
+        // router's record of it. The existing 0xC1 probe fires back in global_sync_start, so comparing
+        // it against the router's value compares two different moments. This pairs them: RDOOR is what
+        // the WORKER sees and RFREE is what the ROUTER saw, taken back to back on the same core.
+        const uint32_t available_addr = static_cast<uint32_t>(conn->edm_buffer_remote_free_slots_update_addr) +
+                                        STREAM_UPDATE_TO_AVAILABLE_BYTE_OFFSET;
+        const uint64_t doorbell_noc_addr = get_noc_addr(conn->edm_noc_x, conn->edm_noc_y, available_addr, noc);
+        const uint32_t door_dst = debug_scratch_addr + ERISC_DBG_DOORBELL_SCRATCH_OFF;
+        noc_async_read(doorbell_noc_addr, door_dst, sizeof(uint32_t), noc);
+        noc_async_read_barrier(noc);
+        invalidate_l1_cache();
+        sync_dbg_push(
+            SYNC_DBG_TAG_RDOOR,
+            sync_iter,
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(door_dst) & STREAM_FREE_SLOTS_MASK);
     }
 
     void global_sync_finish(uint8_t sync_iter, uint32_t debug_scratch_addr = 0) {
@@ -1096,6 +1141,15 @@ struct LineSyncConfig {
         // already satisfied and we skip out without spending ring entries.
         const uint32_t target = line_sync_val * (sync_iter + 1);
         if (debug_scratch_addr != 0) {
+            // [HEALTHY CONTROL] Probe unconditionally on entry, every round. Round 0 completes quickly
+            // and the delayed probes below never fire for it, so without this we only ever observe the
+            // two read paths in the BROKEN case -- which leaves "NoC reads of overlay register space
+            // don't return the live counter" untestable. Sampling the same code point in a round that
+            // works tells us whether worker-read and router-read agree when nothing is wrong.
+            // Ring-buffer eviction is not a concern: the watcher dumps every ~5s, so round-0 entries are
+            // captured in earlier snapshots even though later rounds overwrite them.
+            probe_router(sync_iter, debug_scratch_addr);
+
             uint32_t delay = 1u << 24;
             for (uint32_t p = 0; p < 2; p++) {
                 uint32_t spins = 0;

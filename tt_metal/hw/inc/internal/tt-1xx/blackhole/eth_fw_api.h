@@ -786,6 +786,30 @@ inline void fabric_dbg_track_min_free_since_tx([[maybe_unused]] uint32_t free_sl
 #endif
 }
 
+// [SELF-LOOPBACK PROBE -- issue #45872] word[23], repurposed from the min-free latch above (whose
+// conclusion has since been superseded).
+//
+// Established so far: the worker's REMOTE NOC read of stream 22 index 297 returns 31 while the router's
+// LOCAL read of that same address returns 32, at the same instant, on the same live core, 19/20
+// connections, 3/3 runs. One indirection remains in that comparison: the "router's value" is read out of
+// this debug slot rather than executed on the ERISC at an instant of our choosing.
+//
+// This probe removes the second endpoint entirely. The ERISC reads its OWN register back through the
+// NOC and latches it here, in the same loop iteration in which it did the local read that lands in
+// word[25]. Two access paths, one core, one iteration, no worker involved:
+//
+//   word[23] loopback != word[25] local  -> the two paths genuinely disagree on one register
+//   word[23] loopback == word[25] local  -> both local paths agree; the divergence is specific to
+//                                           access arriving from another core, which is a different bug
+//
+// Layout: [31:20] sample counter (proves the probe fired and kept firing), [16:0] the value read back.
+inline void fabric_dbg_latch_loopback([[maybe_unused]] uint32_t loopback_val, [[maybe_unused]] uint32_t sample_idx) {
+#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
+    *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_SYNC_MIN_FREE_ADDR) =
+        ((sample_idx & 0xFFF) << 20) | (loopback_val & 0x1FFFF);
+#endif
+}
+
 // Reset the min-free latch: a packet just went out, so start a fresh window.
 inline void fabric_dbg_reset_min_free_latch() {
 #if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
