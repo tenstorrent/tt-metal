@@ -169,8 +169,11 @@ class TPAttention:
         self.scale = self.HD**-0.5
         self.rope_dim = args.rope_head_dim
         self.compute_cfg = tpc.COMPUTE_HIFI2
-        # bf8 SDPA (QWEN_SDPA_BF8=1): bf8 Q + bf8 KV; keeps HiFi2 (HiFi4 was slower)
-        self._sdpa_bf8 = os.environ.get("QWEN_SDPA_BF8", "0") == "1"
+        # bf8 SDPA: bf8 Q + bf8 KV; keeps HiFi2 (HiFi4 was slower). Default ON for Wormhole N300,
+        # override with QWEN_SDPA_BF8=0/1 — see tp_common.sdpa_bf8_enabled for the measurements.
+        # Must agree with model.py's allocate_kv_caches (same helper), which sets the paged cache's
+        # dtype to match what this flag casts K/V to before the fill.
+        self._sdpa_bf8 = tpc.sdpa_bf8_enabled(args)
         # Must match load_attention_weights_tp gates
         self._dram_sharded = getattr(args, "attn_qg_weight_memcfg", None) is not None
         self._wo_sharded = getattr(args, "attn_wo_weight_memcfg", None) is not None
@@ -223,7 +226,12 @@ class TPAttention:
                 out_memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         else:
-            qkv = self._col_proj(x, tw["wqkv_fused"], self.args.attn_qkv_fused_progcfg)
+            qkv = self._col_proj(
+                x,
+                tw["wqkv_fused"],
+                self.args.attn_qkv_fused_progcfg,
+                prefill_progcfg_fn=getattr(self.args, "attn_qkv_fused_prefill_progcfg", None),
+            )
         # Fused weight is [q|k|v|gate] (prepare_attn_qkv_deint): the q|k|v block is contiguous, so
         # return it whole (no gate wedged between q and k → no re-concat in _make_heads*). Gate is
         # the trailing block. Sentinel: vp=None flags the fused/contiguous layout to _make_heads*.
@@ -238,8 +246,15 @@ class TPAttention:
         ttnn.deallocate(qkv)
         return qkv3, gate, None
 
-    def _col_proj(self, x, weight, decode_progcfg):
-        """Column-parallel projection; DRAM-sharded decode matmul when enabled."""
+    def _col_proj(self, x, weight, decode_progcfg, prefill_progcfg_fn=None):
+        """Column-parallel projection; DRAM-sharded decode matmul when enabled.
+
+        prefill_progcfg_fn: WH-only one-K-pass override for the PREFILL branch only (paired with
+        COMPUTE_HIFI2_NO_FP32_ACC, mirroring gdn/tp.py's _col_proj); None keeps the shared halved-block
+        self.args.prefill_progcfg + self.compute_cfg, unchanged from before. Decode is unaffected
+        either way — decode_progcfg/self.compute_cfg keep going through sharded_decode_matmul's M<=32
+        branch untouched.
+        """
         if not self._dram_sharded:
             return ttnn.linear(x, weight, compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return tpc.sharded_decode_matmul(
@@ -248,9 +263,39 @@ class TPAttention:
             self.compute_cfg,
             decode_progcfg,
             self.args.act_shard_hidden,
-            self.args.prefill_progcfg,
+            prefill_progcfg_fn or self.args.prefill_progcfg,
             self.args.dim,
+            # LoFi (not HiFi2) on the kpass1 path: the BFP8 weight's mantissa already dominates this
+            # matmul's error, so HiFi2's extra math passes bought ~7e-5 of PCC for 12% of the op.
+            # See tp_common.COMPUTE_LOFI_NO_FP32_ACC for the measurements.
+            prefill_compute_cfg=tpc.COMPUTE_LOFI_NO_FP32_ACC if prefill_progcfg_fn is not None else None,
         )
+
+    def _qk_norm(self, x, weight, memory_config):
+        """RMS q/k-norm then scale by (1+weight) -- tw["q_norm"]/tw["k_norm"] are pre-offset, so this
+        is the HF zero-centered convention.
+
+        WORMHOLE ONLY: fuses the scale into ttnn.rms_norm's own weight argument -- mathematically
+        the same op (rms_norm already documents its weight as a post-normalize multiply, and
+        models/common/rmsnorm.py's framework RMSNorm already calls it this way) -- instead of a
+        separate ttnn.multiply, removing one op per q/k-norm call. MEASURED (device kernel duration,
+        N150, S=2048, HD=256, prefill head-count shapes):
+            q (NH=8) unfused 182.0us -> fused 78.3us  (-57%, -104us)
+            k (NH=2) unfused  55.1us -> fused 25.1us  (-54%, -30us)
+        Matches the profile's BinaryNg costs for these ops (~105us/~34us) almost exactly. Output
+        differs from the unfused sequence by bf16 rounding only (max abs diff 0.0625 on a
+        N(0,1)-scale input) -- the same class of noise already accepted for the matmul kpass1
+        changes above, not a new source of error.
+
+        Kept as the original two-op sequence on Blackhole: unverified on that hardware from this
+        host and out of scope here, so it stays untouched -- is_blackhole() gates it exactly like
+        the matmul progcfg overrides above.
+        """
+        if tpc.is_blackhole():
+            return ttnn.multiply(
+                ttnn.rms_norm(x, epsilon=1e-6, memory_config=memory_config), weight, memory_config=memory_config
+            )
+        return ttnn.rms_norm(x, weight=weight, epsilon=1e-6, memory_config=memory_config)
 
     def _wo_proj(self, x, weight):
         """Row-parallel output projection: DRAM-sharded decode/prefill matmul (K=attn_out_dim_tp),
@@ -269,17 +314,34 @@ class TPAttention:
                 # Prefill: FPU-tuned 2D config beats ttnn-auto's 1x1 stall; L1 output (gated stays DRAM)
                 # feeds the separate RS. max_cols = device width (11 on BH): wide grid (~10-wide) + the
                 # existing L1-out. See test_mlp_matmul_sweep_prefill.
-                pc = tpc.create_prefill_mlp_matmul_program_config(
-                    x.shape[-2],
-                    weight.shape[-2],
-                    weight.shape[-1],
-                    max_cols=getattr(self.args, "decode_grid_w", 8),
-                    tuning=getattr(self.args, "prefill_tuning", None),
-                )
+                #
+                # WORMHOLE ONLY: attn_wo_prefill_progcfg (None on BH) swaps in the one-K-pass factory,
+                # same fix as the fused-QKV in-proj above. At K=attn_out_dim_tp=2048, N=dim=4096, 8
+                # cols -> per_core_N=16: fp32 dest acc on caps out_subblock_w at 4 (16%4==0, blk_w=8,
+                # TWO K passes); off, the cap rises to 8 (16%8==0, blk_w=16) -- ONE pass.
+                # MEASURED (N300, M=2048 K=2048 N=4096; tests/perf/test_attn_qkv_inproj_sweep.py):
+                #     baseline fp32T/pkT in0=DRAM   558.6us   <- today (matches the 531-536us layer profile)
+                #     kpass1   fp32F/pkT in0=DRAM   517.2us   -7.4%   pcc=0.99993 (vs 0.99997 baseline)
+                # in0=L1 measured within noise (-0.6pp more), not worth the added CB-clash risk for it.
+                _wo_kpass1 = getattr(self.args, "attn_wo_prefill_progcfg", None)
+                if _wo_kpass1 is not None:
+                    pc = _wo_kpass1(x.shape[-2], weight.shape[-2], weight.shape[-1])
+                    # LoFi: with a BFP8 weight AND (post-bf8-SDPA) a BFP8 activation, HiFi2 was worth
+                    # ~6e-5 PCC for 18% of the op. See tp_common.COMPUTE_LOFI_NO_FP32_ACC.
+                    ck = tpc.COMPUTE_LOFI_NO_FP32_ACC
+                else:
+                    pc = tpc.create_prefill_mlp_matmul_program_config(
+                        x.shape[-2],
+                        weight.shape[-2],
+                        weight.shape[-1],
+                        max_cols=getattr(self.args, "decode_grid_w", 8),
+                        tuning=getattr(self.args, "prefill_tuning", None),
+                    )
+                    ck = self.compute_cfg
                 return ttnn.linear(
                     x,
                     weight,
-                    compute_kernel_config=self.compute_cfg,
+                    compute_kernel_config=ck,
                     program_config=pc,
                     # L1 while it fits; DRAM once the [seq,dim] output would crowd out this matmul's
                     # own circular buffers on WH (see tp_common.prefill_out_memory_config).
@@ -459,16 +521,8 @@ class TPAttention:
 
         q, gate_flat, k, v = self._make_heads(qg, kp, vp, S)
 
-        q = ttnn.multiply(
-            ttnn.rms_norm(q, epsilon=1e-6, memory_config=ttnn.L1_MEMORY_CONFIG),
-            tw["q_norm"],
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-        k = ttnn.multiply(
-            ttnn.rms_norm(k, epsilon=1e-6, memory_config=ttnn.L1_MEMORY_CONFIG),
-            tw["k_norm"],
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
+        q = self._qk_norm(q, tw["q_norm"], ttnn.L1_MEMORY_CONFIG)
+        k = self._qk_norm(k, tw["k_norm"], ttnn.L1_MEMORY_CONFIG)
         q = apply_partial_rope_prefill(q, cos_tt, sin_tt, NH, self.rope_dim)
         k = apply_partial_rope_prefill(k, cos_tt, sin_tt, NKV, self.rope_dim)
 
@@ -509,6 +563,15 @@ class TPAttention:
         ttnn.deallocate(gate_flat)
         partial = self._wo_proj(gated, tw["wo"])
         ttnn.deallocate(gated)
+        # PREFILL CCL tuning (chunks_per_sync/num_workers_per_link): mlp.py's and gdn/tp.py's
+        # reduce-scatters already pass tpc.prefill_ccl_tuning() here; this call site never did --
+        # an oversight, not an architecture split (that helper's tuning already ships unconditionally
+        # on both WH and BH for MLP/GDN). See tp_common.prefill_ccl_tuning for the measurements
+        # (~-230us on this op's mean, and it tightens the run-to-run spread ~6x).
+        _ccl_kw = {}
+        if S > tpc.TILE_SIZE:
+            _cps, _wpl = tpc.prefill_ccl_tuning()
+            _ccl_kw = {"chunks_per_sync": _cps, "num_workers_per_link": _wpl}
         return tt_all_reduce(
             partial,
             self.mesh,
@@ -517,6 +580,7 @@ class TPAttention:
             dim=3,
             topology=self.args.ccl_topology(),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            **_ccl_kw,
         )
 
     def _kv_shard_cfg(self, B):
@@ -585,8 +649,8 @@ class TPAttention:
             ttnn.deallocate(vp)
 
         # QK norm — (1+w), matching prefill/HF (the prior "flat" no-+1 decode band-aided the reshape scramble).
-        q = ttnn.multiply(ttnn.rms_norm(q, epsilon=1e-6, memory_config=_L1), tw["q_norm"], memory_config=_L1)
-        k = ttnn.multiply(ttnn.rms_norm(k, epsilon=1e-6, memory_config=_L1), tw["k_norm"], memory_config=_L1)
+        q = self._qk_norm(q, tw["q_norm"], _L1)
+        k = self._qk_norm(k, tw["k_norm"], _L1)
 
         q = apply_partial_rope_decode(q, cos_tt, sin_tt, NH, B, self.rope_dim)
         k = apply_partial_rope_decode(k, cos_tt, sin_tt, NKV, B, self.rope_dim)
@@ -748,16 +812,8 @@ class TPAttention:
 
         q, gate_flat, k, v = self._make_heads(qg, kp, vp, S)
 
-        q = ttnn.multiply(
-            ttnn.rms_norm(q, epsilon=1e-6, memory_config=ttnn.L1_MEMORY_CONFIG),
-            tw["q_norm"],
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-        k = ttnn.multiply(
-            ttnn.rms_norm(k, epsilon=1e-6, memory_config=ttnn.L1_MEMORY_CONFIG),
-            tw["k_norm"],
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
+        q = self._qk_norm(q, tw["q_norm"], ttnn.L1_MEMORY_CONFIG)
+        k = self._qk_norm(k, tw["k_norm"], ttnn.L1_MEMORY_CONFIG)
         q = apply_partial_rope_prefill(q, cos_tt, sin_tt, NH, self.rope_dim)
         k = apply_partial_rope_prefill(k, cos_tt, sin_tt, NKV, self.rope_dim)
 
@@ -789,7 +845,12 @@ class TPAttention:
         ttnn.deallocate(v)
 
         # Chunked SDPA over paged cache; keep Q bf16 unless bf8 mode (QWEN_SDPA_BF8=1), which also
-        # makes the KV cache bf8 -> full bf8 matmul
+        # makes the KV cache bf8 -> full bf8 matmul. TESTED mixed dtype (bf16 Q against the bf8
+        # cache/K/V): PASSES correctness (PCC actually a hair better, 0.99979 vs 0.99969) but SDPA
+        # itself measures ~24us SLOWER (507us vs 483-485us) — full bf8 both operands is faster on
+        # this hardware, matching the same BF16-activation-vs-BFP8-both pattern seen on the other
+        # matmuls (e.g. wo_proj). Keeping the typecast: it's a one-time ~46us cost per chunk against
+        # a per-call SDPA win, not a wash to remove.
         if self._sdpa_bf8:
             q8 = ttnn.typecast(q, dtype=ttnn.bfloat8_b)
             ttnn.deallocate(q)
@@ -811,21 +872,18 @@ class TPAttention:
             k_chunk_size=qk_chunk,
         )
 
-        # Pad page table to cover Q+offset and satisfy stick-size % 32 (extra blocks masked by causality)
+        # Pad page table to cover Q+offset and satisfy stick-size % 32 (extra blocks masked by causality).
+        # ttnn.pad instead of zeros+concat: same result (verified via ttnn.to_torch, byte-identical),
+        # 1 program dispatch instead of 4 -- ttnn's ROW_MAJOR concat path for this shape decomposes
+        # into a Concat plus TWO internal Permute-kernel dispatches (visible in the build log as
+        # writer/reader_permute_interleaved_rm_blocked_generic), which is exactly where the profile's
+        # tiny PermuteDeviceOperation/ConcatDeviceOperation rows on the INT32 page table came from.
         sdpa_page_table = page_table
         needed_blocks = (S + chunk_start_idx + block_size - 1) // block_size
         target_blocks = max(needed_blocks, page_table.shape[-1])
         target_blocks = ((target_blocks + 31) // 32) * 32
         if page_table.shape[-1] < target_blocks:
-            zeros_pad = ttnn.zeros(
-                (page_table.shape[0], target_blocks - page_table.shape[-1]),
-                dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.mesh,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            sdpa_page_table = ttnn.concat([page_table, zeros_pad], dim=-1)
-            ttnn.deallocate(zeros_pad)
+            sdpa_page_table = ttnn.pad(page_table, [(0, 0), (0, target_blocks - page_table.shape[-1])], value=0)
 
         if chunk_start_idx_tensor is not None:
             attn = ttnn.transformer.chunked_scaled_dot_product_attention(
@@ -862,6 +920,15 @@ class TPAttention:
         ttnn.deallocate(gate_flat)
         partial = self._wo_proj(gated, tw["wo"])
         ttnn.deallocate(gated)
+        # PREFILL CCL tuning (chunks_per_sync/num_workers_per_link): mlp.py's and gdn/tp.py's
+        # reduce-scatters already pass tpc.prefill_ccl_tuning() here; this call site never did --
+        # an oversight, not an architecture split (that helper's tuning already ships unconditionally
+        # on both WH and BH for MLP/GDN). See tp_common.prefill_ccl_tuning for the measurements
+        # (~-230us on this op's mean, and it tightens the run-to-run spread ~6x).
+        _ccl_kw = {}
+        if S > tpc.TILE_SIZE:
+            _cps, _wpl = tpc.prefill_ccl_tuning()
+            _ccl_kw = {"chunks_per_sync": _cps, "num_workers_per_link": _wpl}
         return tt_all_reduce(
             partial,
             self.mesh,
@@ -870,4 +937,5 @@ class TPAttention:
             dim=3,
             topology=self.args.ccl_topology(),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            **_ccl_kw,
         )
