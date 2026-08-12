@@ -27,13 +27,14 @@
 static std::vector<std::string> trace;
 static void T(const std::string& s) { trace.push_back(s); }
 static std::string n(int v) { return std::to_string(v); }
+static std::string n(uint32_t v) { return std::to_string(v); }
 static void T2(const std::string& s) { trace.push_back(s); }
 
 // ---- CB protocol -----------------------------------------------------------
-inline void cb_reserve_back(int cb, int p) { T("cb_reserve_back(cb" + n(cb) + "," + n(p) + ")"); }
-inline void cb_push_back(int cb, int p) { T("cb_push_back   (cb" + n(cb) + "," + n(p) + ")"); }
-inline void cb_wait_front(int cb, int p) { T("cb_wait_front  (cb" + n(cb) + "," + n(p) + ")"); }
-inline void cb_pop_front(int cb, int p) { T("cb_pop_front   (cb" + n(cb) + "," + n(p) + ")"); }
+inline void cb_reserve_back(uint32_t cb, uint32_t p) { T("cb_reserve_back(cb" + n(cb) + "," + n(p) + ")"); }
+inline void cb_push_back(uint32_t cb, uint32_t p) { T("cb_push_back   (cb" + n(cb) + "," + n(p) + ")"); }
+inline void cb_wait_front(uint32_t cb, uint32_t p) { T("cb_wait_front  (cb" + n(cb) + "," + n(p) + ")"); }
+inline void cb_pop_front(uint32_t cb, uint32_t p) { T("cb_pop_front   (cb" + n(cb) + "," + n(p) + ")"); }
 
 // ---- NOC -------------------------------------------------------------------
 inline void noc_async_read() { T("noc_async_read()"); }
@@ -47,58 +48,58 @@ inline void tile_regs_acquire() { T("  tile_regs_acquire"); }
 inline void tile_regs_commit() { T("  tile_regs_commit"); }
 inline void tile_regs_wait() { T("  tile_regs_wait"); }
 inline void tile_regs_release() { T("  tile_regs_release"); }
-inline void copy_tile(int cb, int tile, int dst) {
+inline void copy_tile(uint32_t cb, uint32_t tile, uint32_t dst) {
     T("    copy_tile(cb" + n(cb) + ",tile=" + n(tile) + " -> dst" + n(dst) + ")");
 }
-inline void pack_tile(int dst, int cb) { T("  pack_tile(dst" + n(dst) + " -> cb" + n(cb) + ")"); }
+inline void pack_tile(uint32_t dst, uint32_t cb) { T("  pack_tile(dst" + n(dst) + " -> cb" + n(cb) + ")"); }
 inline void add_binary_tile_init() {}
-inline void add_binary_tile(int a, int b, int o) {
+inline void add_binary_tile(uint32_t a, uint32_t b, uint32_t o) {
     T("    add_binary_tile(dst" + n(a) + ",dst" + n(b) + " -> dst" + n(o) + ")");
 }
 inline void exp_tile_init() {}
-inline void exp_tile(int o) { T("    exp_tile (dst" + n(o) + ")"); }
+inline void exp_tile(uint32_t o) { T("    exp_tile (dst" + n(o) + ")"); }
 inline void relu_tile_init() {}
-inline void relu_tile(int o) { T("    relu_tile(dst" + n(o) + ")"); }
+inline void relu_tile(uint32_t o) { T("    relu_tile(dst" + n(o) + ")"); }
 }  // namespace ckernel
 
-inline void compute_init(int, int) {}
-inline uint32_t get_write_ptr(int) { return 0; }
-inline uint32_t get_read_ptr(int) { return 0; }
-inline uint32_t cb_page_bytes(int) { return 2048; }
+inline void compute_init(uint32_t, uint32_t) {}
+inline uint32_t get_write_ptr(uint32_t) { return 0; }
+inline uint32_t get_read_ptr(uint32_t) { return 0; }
+inline uint32_t cb_page_bytes(uint32_t) { return 2048; }
 
 // Stand-ins for TensorAccessorArgs / TensorAccessor, under metal's own names so
 // the harness presents the same surface the device binding does.
 struct FakeArgs {
-    int id;
+    uint32_t id;
 };
 struct TensorAccessor {
-    int id;
+    uint32_t id;
     constexpr TensorAccessor(FakeArgs a, uint32_t) : id(a.id) {}
     // encode (tensor, page) into the fake address so traces stay readable
     uint64_t get_noc_addr(uint32_t page) const { return (uint64_t(id) << 32) | page; }
 };
 inline void noc_async_read(uint64_t src, uint32_t, uint32_t) {
-    T2("noc_async_read (t" + n(int(src >> 32)) + ",page=" + n(int(src & 0xffffffffu)) + ")");
+    T2("noc_async_read (t" + n(uint32_t(src >> 32)) + ",page=" + n(uint32_t(src & 0xffffffffu)) + ")");
 }
 inline void noc_async_write(uint32_t, uint64_t dst, uint32_t) {
-    T2("noc_async_write(t" + n(int(dst >> 32)) + ",page=" + n(int(dst & 0xffffffffu)) + ")");
+    T2("noc_async_write(t" + n(uint32_t(dst >> 32)) + ",page=" + n(uint32_t(dst & 0xffffffffu)) + ")");
 }
 inline uint64_t get_noc_addr(uint32_t x, uint32_t y, uint32_t addr) {
-    T2("get_noc_addr(" + n(int(x)) + "," + n(int(y)) + ")");
+    T2("get_noc_addr(" + n(x) + "," + n(y) + ")");
     return addr;
 }
 inline void noc_async_read_barrier() { T2("noc_async_read_barrier()"); }
 inline void noc_async_writes_flushed() { T2("noc_async_writes_flushed()"); }
 inline void noc_async_write_barrier() { T2("noc_async_write_barrier()"); }
-inline void relu_from_pack(int base, int count) {
+inline void relu_from_pack(uint32_t base, uint32_t count) {
     T("  relu_from_pack(dst" + n(base) + "..dst" + n(base + count - 1) + ")  [replaces tile_regs_wait]");
 }
 namespace ckernel {
-inline void matmul_block(int in0, int in1, int h, int w, int kt) {
+inline void matmul_block(uint32_t in0, uint32_t in1, uint32_t h, uint32_t w, uint32_t kt) {
     T("    matmul_block(cb" + n(in0) + ",cb" + n(in1) + " h=" + n(h) + " w=" + n(w) + " kt=" + n(kt) + " -> dst0..dst" +
       n(h * w - 1) + ")");
 }
-inline void pack_block(int dst, int cb, int count) {
+inline void pack_block(uint32_t dst, uint32_t cb, uint32_t count) {
     T("  pack_block(dst" + n(dst) + ".." + n(dst + count - 1) + " -> cb" + n(cb) + ")");
 }
 }  // namespace ckernel

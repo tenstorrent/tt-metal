@@ -27,6 +27,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <type_traits>
 #include <utility>
 
@@ -43,13 +44,13 @@ class ComputeBlock;
 // ---------------------------------------------------------------------------
 
 struct Coord {
-    int y;
-    int x;
+    uint32_t y;
+    uint32_t x;
 };
 
 struct Shape {
-    int h;
-    int w;
+    uint32_t h;
+    uint32_t w;
 };
 
 struct Mcast {
@@ -62,7 +63,7 @@ struct Mcast {
 // ---------------------------------------------------------------------------
 
 struct Storage {
-    Storage(int cb_id, int num_tiles) : cb_id(cb_id), num_tiles(num_tiles) {}
+    Storage(uint32_t cb_id, uint32_t num_tiles) : cb_id(cb_id), num_tiles(num_tiles) {}
 
     Storage(Storage&&) = delete;
     Storage(const Storage&) = delete;
@@ -74,8 +75,8 @@ struct Storage {
     template <typename Node>
     Block store(const Node& node);
 
-    int cb_id;
-    int num_tiles;  // This could eventually be N dimensional (maybe via template params?)
+    uint32_t cb_id;
+    uint32_t num_tiles;  // This could eventually be N dimensional (maybe via template params?)
 };
 
 // ---------------------------------------------------------------------------
@@ -88,7 +89,7 @@ struct Storage {
 
 struct Block {
     explicit Block(const Storage& storage);
-    Block(int cb_id, int num_tiles);
+    Block(uint32_t cb_id, uint32_t num_tiles);
 
     Block(const Block&) = delete;
     Block& operator=(const Block&) = delete;
@@ -99,8 +100,8 @@ struct Block {
     Block(Block&& o);
     Block& operator=(Block&& o);
 
-    int cb_id;
-    int num_tiles;  // This could eventually be N dimensional (maybe via template params?)
+    uint32_t cb_id;
+    uint32_t num_tiles;  // This could eventually be N dimensional (maybe via template params?)
 };
 
 // ---------------------------------------------------------------------------
@@ -117,14 +118,14 @@ public:
     ComputeBlock(ComputeBlock&&) = delete;
     ComputeBlock& operator=(ComputeBlock&&) = delete;
 
-    int get_cb_id() const { return cb_id; }
-    int get_num_tiles() const { return num_tiles; }
+    uint32_t get_cb_id() const { return cb_id; }
+    uint32_t get_num_tiles() const { return num_tiles; }
 
     expr::Un<ExpOp, TileSource> exp() const;
 
 private:
-    int cb_id;
-    int num_tiles;  // This could eventually be N dimensional (maybe via template params?)
+    uint32_t cb_id;
+    uint32_t num_tiles;  // This could eventually be N dimensional (maybe via template params?)
 };
 
 // ---------------------------------------------------------------------------
@@ -160,7 +161,7 @@ auto matmul(const ComputeBlock& a, const ComputeBlock& b);
 template <int thread>
 struct NocAsyncReadTx {
     explicit NocAsyncReadTx(const Storage& storage);
-    NocAsyncReadTx(int cb_id, int num_tiles);
+    NocAsyncReadTx(uint32_t cb_id, uint32_t num_tiles);
 
     NocAsyncReadTx(const NocAsyncReadTx&) = delete;
     NocAsyncReadTx& operator=(const NocAsyncReadTx&) = delete;
@@ -174,8 +175,8 @@ struct NocAsyncReadTx {
     // Completes the read and publishes the destination.
     Block wait() const;
 
-    int cb_id;
-    int num_tiles;  // This could eventually be N dimensional (maybe via template params?)
+    uint32_t cb_id;
+    uint32_t num_tiles;  // This could eventually be N dimensional (maybe via template params?)
 
 #if defined(IS_DM_THREAD) && IS_DM_THREAD && defined(ASSERT_ENABLED) && ASSERT_ENABLED
     mutable bool waited = false;
@@ -185,7 +186,7 @@ struct NocAsyncReadTx {
 template <int thread>
 struct NocAsyncWriteTx {
     explicit NocAsyncWriteTx(const Storage& storage);
-    NocAsyncWriteTx(int cb_id, int num_tiles);
+    NocAsyncWriteTx(uint32_t cb_id, uint32_t num_tiles);
 
     NocAsyncWriteTx(const NocAsyncWriteTx&) = delete;
     NocAsyncWriteTx& operator=(const NocAsyncWriteTx&) = delete;
@@ -198,8 +199,8 @@ struct NocAsyncWriteTx {
     // Optional: block until the data has LANDED at the destination.
     void wait() const;
 
-    int cb_id;
-    int num_tiles;  // This could eventually be N dimensional (maybe via template params?)
+    uint32_t cb_id;
+    uint32_t num_tiles;  // This could eventually be N dimensional (maybe via template params?)
 };
 
 // A core-to-core copy has both halves: a local source Block to release and a
@@ -223,10 +224,10 @@ struct NocAsyncCopyTx {
 
     Block wait() const;
 
-    int dst_cb;
-    int dst_tiles;
-    int src_cb;
-    int src_tiles;
+    uint32_t dst_cb;
+    uint32_t dst_tiles;
+    uint32_t src_cb;
+    uint32_t src_tiles;
 
 #if defined(IS_DM_THREAD) && IS_DM_THREAD && defined(ASSERT_ENABLED) && ASSERT_ENABLED
     mutable bool waited = false;
@@ -241,14 +242,14 @@ struct NocAsyncCopyTx {
 // Reads `storage.num_tiles` pages into the buffer, starting at page
 // `block_idx * storage.num_tiles`. The returned handle publishes them.
 template <int thread, typename Accessor>
-NocAsyncReadTx<thread> noc_load(const Storage& storage, const Accessor& acc, int block_idx);
+NocAsyncReadTx<thread> noc_load(const Storage& storage, const Accessor& acc, uint32_t block_idx);
 
 template <int thread, typename Accessor>
-Block noc_load_mcast(const Storage& storage, Mcast mcast, const Accessor& acc, int block_idx);
+Block noc_load_mcast(const Storage& storage, Mcast mcast, const Accessor& acc, uint32_t block_idx);
 
 // Drains a Block to a tensor. Takes the Block by value: this call consumes it.
 template <int thread, typename Accessor>
-NocAsyncWriteTx<thread> noc_store(Block block, const Accessor& acc, int block_idx);
+NocAsyncWriteTx<thread> noc_store(Block block, const Accessor& acc, uint32_t block_idx);
 
 // ---------------------------------------------------------------------------
 // Core-to-core movement: pull a peer's block into this core's Storage
@@ -262,10 +263,12 @@ NocAsyncWriteTx<thread> noc_store(Block block, const Accessor& acc, int block_id
 // ---------------------------------------------------------------------------
 
 template <int thread>
-NocAsyncCopyTx<thread, /*SrcIsLocal=*/false> noc_read(const Storage& storage, Block block, Coord coord, int offset);
+NocAsyncCopyTx<thread, /*SrcIsLocal=*/false> noc_read(
+    const Storage& storage, Block block, Coord coord, uint32_t offset);
 
 template <int thread>
-NocAsyncCopyTx<thread, /*SrcIsLocal=*/true> noc_write(const Storage& storage, Block block, Coord coord, int offset);
+NocAsyncCopyTx<thread, /*SrcIsLocal=*/true> noc_write(
+    const Storage& storage, Block block, Coord coord, uint32_t offset);
 
 }  // namespace unified
 }  // namespace tt

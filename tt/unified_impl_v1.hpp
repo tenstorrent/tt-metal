@@ -29,7 +29,7 @@ Block Storage::store(const Node& node) {
 
 inline Block::Block(const Storage& storage) : cb_id(storage.cb_id), num_tiles(storage.num_tiles) {}
 
-inline Block::Block(int cb_id, int num_tiles) : cb_id(cb_id), num_tiles(num_tiles) {}
+inline Block::Block(uint32_t cb_id, uint32_t num_tiles) : cb_id(cb_id), num_tiles(num_tiles) {}
 
 inline Block::Block(Block&& o) {
     cb_id = o.cb_id;
@@ -84,7 +84,7 @@ template <int thread>
 NocAsyncReadTx<thread>::NocAsyncReadTx(const Storage& storage) : cb_id(storage.cb_id), num_tiles(storage.num_tiles) {}
 
 template <int thread>
-NocAsyncReadTx<thread>::NocAsyncReadTx(int cb_id, int num_tiles) : cb_id(cb_id), num_tiles(num_tiles) {}
+NocAsyncReadTx<thread>::NocAsyncReadTx(uint32_t cb_id, uint32_t num_tiles) : cb_id(cb_id), num_tiles(num_tiles) {}
 
 #if defined(IS_DM_THREAD) && IS_DM_THREAD && defined(ASSERT_ENABLED) && ASSERT_ENABLED
 template <int thread>
@@ -115,7 +115,7 @@ template <int thread>
 NocAsyncWriteTx<thread>::NocAsyncWriteTx(const Storage& storage) : cb_id(storage.cb_id), num_tiles(storage.num_tiles) {}
 
 template <int thread>
-NocAsyncWriteTx<thread>::NocAsyncWriteTx(int cb_id, int num_tiles) : cb_id(cb_id), num_tiles(num_tiles) {}
+NocAsyncWriteTx<thread>::NocAsyncWriteTx(uint32_t cb_id, uint32_t num_tiles) : cb_id(cb_id), num_tiles(num_tiles) {}
 
 template <int thread>
 NocAsyncWriteTx<thread>::~NocAsyncWriteTx() {
@@ -186,15 +186,15 @@ Block NocAsyncCopyTx<thread, SrcIsLocal>::wait() const {
 // ---------------------------------------------------------------------------
 
 template <int thread, typename Accessor>
-NocAsyncReadTx<thread> noc_load(const Storage& storage, const Accessor& acc, int block_idx) {
+NocAsyncReadTx<thread> noc_load(const Storage& storage, const Accessor& acc, uint32_t block_idx) {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
         cb_reserve_back(storage.cb_id, storage.num_tiles);
         uint32_t l1 = get_write_ptr(storage.cb_id);
         const uint32_t bytes = cb_page_bytes(storage.cb_id);
-        const uint32_t first = static_cast<uint32_t>(block_idx * storage.num_tiles);
-        for (int p = 0; p < storage.num_tiles; ++p) {
-            noc_async_read(acc.get_noc_addr(first + static_cast<uint32_t>(p)), l1, bytes);
+        const uint32_t first = block_idx * storage.num_tiles;
+        for (uint32_t p = 0; p < storage.num_tiles; ++p) {
+            noc_async_read(acc.get_noc_addr(first + p), l1, bytes);
             l1 += bytes;
         }
     }
@@ -206,15 +206,15 @@ NocAsyncReadTx<thread> noc_load(const Storage& storage, const Accessor& acc, int
 }
 
 template <int thread, typename Accessor>
-NocAsyncWriteTx<thread> noc_store(Block block, const Accessor& acc, int block_idx) {
+NocAsyncWriteTx<thread> noc_store(Block block, const Accessor& acc, uint32_t block_idx) {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
         cb_wait_front(block.cb_id, block.num_tiles);
         uint32_t l1 = get_read_ptr(block.cb_id);
         const uint32_t bytes = cb_page_bytes(block.cb_id);
-        const uint32_t first = static_cast<uint32_t>(block_idx * block.num_tiles);
-        for (int p = 0; p < block.num_tiles; ++p) {
-            noc_async_write(l1, acc.get_noc_addr(first + static_cast<uint32_t>(p)), bytes);
+        const uint32_t first = block_idx * block.num_tiles;
+        for (uint32_t p = 0; p < block.num_tiles; ++p) {
+            noc_async_write(l1, acc.get_noc_addr(first + p), bytes);
             l1 += bytes;
         }
     }
@@ -230,17 +230,15 @@ NocAsyncWriteTx<thread> noc_store(Block block, const Accessor& acc, int block_id
 // ---------------------------------------------------------------------------
 
 template <int thread>
-NocAsyncCopyTx<thread, /*SrcIsLocal=*/false> noc_read(const Storage& storage, Block block, Coord coord, int offset) {
+NocAsyncCopyTx<thread, /*SrcIsLocal=*/false> noc_read(
+    const Storage& storage, Block block, Coord coord, uint32_t offset) {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
         cb_wait_front(block.cb_id, block.num_tiles);
         cb_reserve_back(storage.cb_id, storage.num_tiles);
         const uint32_t bytes = cb_page_bytes(storage.cb_id);
-        const uint64_t src = get_noc_addr(
-            static_cast<uint32_t>(coord.x),
-            static_cast<uint32_t>(coord.y),
-            get_read_ptr(block.cb_id) + static_cast<uint32_t>(offset));
-        noc_async_read(src, get_write_ptr(storage.cb_id), bytes * static_cast<uint32_t>(storage.num_tiles));
+        const uint64_t src = get_noc_addr(coord.x, coord.y, get_read_ptr(block.cb_id) + offset);
+        noc_async_read(src, get_write_ptr(storage.cb_id), bytes * storage.num_tiles);
     }
 #else
     (void)coord;
@@ -250,17 +248,15 @@ NocAsyncCopyTx<thread, /*SrcIsLocal=*/false> noc_read(const Storage& storage, Bl
 }
 
 template <int thread>
-NocAsyncCopyTx<thread, /*SrcIsLocal=*/true> noc_write(const Storage& storage, Block block, Coord coord, int offset) {
+NocAsyncCopyTx<thread, /*SrcIsLocal=*/true> noc_write(
+    const Storage& storage, Block block, Coord coord, uint32_t offset) {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
         cb_wait_front(block.cb_id, block.num_tiles);
         cb_reserve_back(storage.cb_id, storage.num_tiles);
         const uint32_t bytes = cb_page_bytes(storage.cb_id);
-        const uint64_t dst = get_noc_addr(
-            static_cast<uint32_t>(coord.x),
-            static_cast<uint32_t>(coord.y),
-            get_write_ptr(storage.cb_id) + static_cast<uint32_t>(offset));
-        noc_async_write(get_read_ptr(block.cb_id), dst, bytes * static_cast<uint32_t>(block.num_tiles));
+        const uint64_t dst = get_noc_addr(coord.x, coord.y, get_write_ptr(storage.cb_id) + offset);
+        noc_async_write(get_read_ptr(block.cb_id), dst, bytes * block.num_tiles);
     }
 #else
     (void)coord;
