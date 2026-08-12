@@ -15,7 +15,7 @@
 # Blackhole Galaxy DeepSeek Prefill tests
 - name: "Blaze - MoE Gate"
   cmd: |
-    export DEEPSEEK_V3_HF_MODEL=/mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized/
+    export DEEPSEEK_V3_HF_MODEL=/mnt/models/DeepSeek-R1-0528-fp8-4236a6af/
     export DEEPSEEK_V3_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/CI
     export TT_DS_PREFILL_TTNN_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Cache-prefill_secure
     export TT_DS_PREFILL_HOST_REF_CACHE=/mnt/models/deepseek-prefill-cache/golden/
@@ -37,7 +37,7 @@
 
 - name: "Blaze - MLA"
   cmd: |
-    export DEEPSEEK_V3_HF_MODEL=/mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized/
+    export DEEPSEEK_V3_HF_MODEL=/mnt/models/DeepSeek-R1-0528-fp8-4236a6af/
     export DEEPSEEK_V3_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/CI
     export TT_DS_PREFILL_TTNN_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Cache-prefill_secure
     export TT_DS_PREFILL_HOST_REF_CACHE=/mnt/models/deepseek-prefill-cache/golden/
@@ -64,20 +64,54 @@
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "maxedge-1u and cpu and 8x4 and fabric2d" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "maxedge-1u and cpu and 8x4 and fabric2d and (dsv3 or kimi) and no_determinism" -vvv --tb=short
     '
   test_type: mla_chunked
   test_group: module
   skus:
     bh_sc1:
-      timeout: 10
+      timeout: 8
+  owner_id: U07N3CUUN05  # Iva Potkonjak
+  team: models
+  sp_config: sc1
+
+- name: "Blaze - K3 MLA"
+  cmd: |
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "k3 and 8x4 and fabric2d and scalar and ((maxedge-1u and cpu and no_determinism) or (plain-5k and func and with_determinism))" -vvv --tb=short
+    '
+  test_type: k3_mla
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 6
+  owner_id: U07N3CUUN05  # Iva Potkonjak
+  team: models
+  sp_config: sc1
+
+- name: "Blaze - K3 MLA perf"
+  cmd: |
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_perf_check -k "k3 and 8x4 and fabric2d" -vvv --tb=short
+    '
+  test_type: k3_mla_perf
+  test_group: module
+  skus:
+    bh_sc1_high_power:
+      timeout: 5
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
   sp_config: sc1
 
 - name: "Blaze - KV cache table"
   cmd: |
-    export DEEPSEEK_V3_HF_MODEL=/mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized/
+    export DEEPSEEK_V3_HF_MODEL=/mnt/models/DeepSeek-R1-0528-fp8-4236a6af/
     export DEEPSEEK_V3_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/CI
     export TT_DS_PREFILL_TTNN_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Cache-prefill_secure
     export TT_DS_PREFILL_HOST_REF_CACHE=/mnt/models/deepseek-prefill-cache/golden/
@@ -101,7 +135,7 @@
 
 - name: "Blaze - Prefill Block"
   cmd: |
-    export DEEPSEEK_V3_HF_MODEL=/mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized/
+    export DEEPSEEK_V3_HF_MODEL=/mnt/models/DeepSeek-R1-0528-fp8-4236a6af/
     export DEEPSEEK_V3_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/CI
     export TT_DS_PREFILL_TTNN_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Cache-prefill_secure
     export TT_DS_PREFILL_HOST_REF_CACHE=/mnt/models/deepseek-prefill-cache/golden/
@@ -166,7 +200,7 @@
     bh_sc1:
       # Measured 5.2 min at L61/mid15k — cheaper than its untraced twin because the traced mode asserts
       # KV PCC only (a host readback cannot live inside a capture). ~2.3x headroom.
-      timeout: 12
+      timeout: 14
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
   sp_config: sc1
@@ -190,7 +224,7 @@
 
 - name: "Blaze - DSA MLA (V3.2)"
   cmd: |
-    export DEEPSEEK_V3_HF_MODEL=/mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized/
+    export DEEPSEEK_V3_HF_MODEL=/mnt/models/DeepSeek-R1-0528-fp8-4236a6af/
     export DEEPSEEK_V32_MLA_REF_CACHE=/tmp/deepseek_v32_mla_ref_cache
     export DS_SPARSE_FABRIC=fabric2d
 
@@ -310,7 +344,7 @@
 
 - name: "Blaze - Prefill Block Determinism"
   cmd: |
-    export DEEPSEEK_V3_HF_MODEL=/mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized/
+    export DEEPSEEK_V3_HF_MODEL=/mnt/models/DeepSeek-R1-0528-fp8-4236a6af/
     export DEEPSEEK_V3_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/CI
     export TT_DS_PREFILL_TTNN_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Cache-prefill_secure
     export TT_DS_PREFILL_HOST_REF_CACHE=/mnt/models/deepseek-prefill-cache/golden/
@@ -334,7 +368,7 @@
 
 - name: "Blaze - Transformer Determinism"
   cmd: |
-    export DEEPSEEK_V3_HF_MODEL=/mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized/
+    export DEEPSEEK_V3_HF_MODEL=/mnt/models/DeepSeek-R1-0528-fp8-4236a6af/
     export DEEPSEEK_V3_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/CI
     export TT_DS_PREFILL_TTNN_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Cache-prefill_secure
     export TT_DS_PREFILL_HOST_REF_CACHE=/mnt/models/deepseek-prefill-cache/golden/
@@ -357,7 +391,7 @@
 # Ring joint SDPA math-utilization perf checks (1 WAN, 1 MLA-100k, 1 Kimi chunked ring_mla).
 # Uses real-time device program records, so it runs on the plain build without ENABLE_TRACY.
 # sp/tp are auto-selected by MeshConfig.detect() on Galaxy (sp=8, tp=4).
-- name: "Blaze - Ring Joint SDPA perf checks"
+- name: "Blaze - Ring Joint SDPA checks"
   # Run both perf checks unconditionally (so both report numbers) but fail the step if either
   # fails - the harness only propagates the last command's exit code, so aggregate it ourselves.
   cmd: |
@@ -368,14 +402,15 @@
       rc=0
       python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_perf_check -svv || rc=1
       python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_perf_check -svv || rc=1
+      python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_accuracy -k "kimi_k3" -svv || rc=1
+      python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_determinism -k "kimi_k3" -svv || rc=1
       exit $rc
     '
   test_type: ring_joint_sdpa_perf
   test_group: sdpa_perf
   skus:
     bh_sc1_high_power:
-      # Both perf checks run in ~5.6 min; 23 leaves headroom for Galaxy variance.
-      timeout: 23
+      timeout: 20
   owner_id: U08RL15T4N8
   team: models
   sp_config: sc1
@@ -538,6 +573,7 @@
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
+      export TT_METAL_OPERATION_TIMEOUT_SECONDS=300  # 5 min; the runner idles up to 111s in the H2D recv
       python3 -m pytest models/demos/common/prefill/tests/test_producer_runner_e2e.py::test_producer_runner_pcc -k single_user_full_depth -vvv --tb=short --timeout=1800
     '
   test_type: prefill_runner
@@ -582,6 +618,9 @@
 
 # MiniMax-M3 full-model chunked-prefill throughput regression (same harness as KV PCC, PCC skipped).
 # Gates whole-sequence tok/s against PREFILL_EXPECTED_TPS +/- PREFILL_PERF_MARGIN on high-power Galaxy.
+# Allowed range: ~4185–4815 tok/s (4500 +/- 7%).
+# If this test fails: first check whether it is a true regression or a performance improvement.
+# If neither (CI noise), widen this range or comment out this test due to CI instability.
 - name: "Blaze - MiniMax-M3 Prefill Perf"
   cmd: |
     export LOGURU_LEVEL=INFO
@@ -596,9 +635,9 @@
     export PREFILL_TPS_ITERS=5
     export PREFILL_SKIP_PCC=1
     export PREFILL_REQUIRE_HIGH_POWER=1
-    export PREFILL_EXPECTED_TPS=3600
-    export PREFILL_PERF_MARGIN=0.05
-    mpirun --pernode --tag-output bash -lc '
+    export PREFILL_EXPECTED_TPS=4500
+    export PREFILL_PERF_MARGIN=0.07
+    mpirun --bind-to none --pernode --tag-output bash -lc '
       python3 models/demos/minimax_m3/tests/galaxy_prefill_kv_pcc.py
     '
   test_type: minimax_prefill_perf

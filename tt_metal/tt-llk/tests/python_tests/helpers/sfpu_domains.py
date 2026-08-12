@@ -16,9 +16,9 @@ import copy
 import math
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable, Dict, List, Optional, Tuple, Union
+from typing import Callable, Dict, FrozenSet, List, Optional, Tuple, Union
 
-from .format_config import DataFormat
+from .format_config import MX_FORMAT_MAX_NORMAL, DataFormat
 from .llk_params import MathOperation
 from .stimuli_generator import DistributionKind, StimuliSpec
 
@@ -52,6 +52,47 @@ class OperandSpecs:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Picking which format bounds the domain
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Largest finite magnitude each format can hold. Only formats with a narrower
+# exponent field than bfloat16 need an entry; every other format shares
+# bfloat16's ceiling and is therefore never the binding constraint.
+#
+# The MX rows come from MX_FORMAT_MAX_NORMAL rather than being restated here: the two
+# fp8 encodings are easy to transpose by hand, and a transposed pair silently *widens*
+# a domain instead of failing. MxFp8R is E5M2 (ceiling 57344, the wide one) and MxFp8P
+# is E4M3 (ceiling 448, the narrow one) -- which is the polarity the builders below
+# already assume, e.g. _square_spec caps MxFp8P at +-20 and groups MxFp8R with Float16.
+_FORMAT_MAX_MAGNITUDE: Dict[DataFormat, float] = {
+    **MX_FORMAT_MAX_NORMAL,  # MxFp4 (e2m1) 6, MxFp8P (e4m3) 448, MxFp8R (e5m2) 57344
+    DataFormat.Float16: 65504.0,  # e5m10
+    # Plain E4M3 with no per-block scale to lift it, so the same 448 ceiling as MxFp8P.
+    DataFormat.Fp8_e4m3: 448.0,
+}
+
+_BF16_MAX_MAGNITUDE = 3.3895314e38
+
+
+def narrowest_range_format(*formats: Optional[DataFormat]) -> DataFormat:
+    """Return whichever of *formats* has the smallest representable magnitude.
+
+    A safe input domain is bounded by the narrowest float format anywhere in the
+    pipeline, not just the input one. exp over (-100, 80) peaks at ~5.5e34: fine
+    into a Float32 output, saturates a Float16 one. Passing a single format keeps
+    the previous input-only behaviour, and ties resolve to the first argument, so
+    callers should pass the input format first.
+    """
+    candidates = [fmt for fmt in formats if fmt is not None]
+    if not candidates:
+        raise ValueError("narrowest_range_format() requires at least one format")
+    return min(
+        candidates,
+        key=lambda fmt: _FORMAT_MAX_MAGNITUDE.get(fmt, _BF16_MAX_MAGNITUDE),
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Format-specific domain builders
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -66,6 +107,10 @@ def _exp_spec(fmt: DataFormat) -> OperandSpecs:
         # the lower bound is intentionally pushed to -100.0 so we cross the SFPU's negative-side
         # sanitization boundary near x ≈ -88.5 (where InputClamping::ClampToNegative saturates inputs
         # in the fast/approx exp path).
+        #
+        # The positive side is bounded by range, not accuracy: exp overflows an 8-bit
+        # exponent near x = 88.7, and 80 leaves margin below it. Narrower output formats
+        # pull this in through for_op_pipeline.
         spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-100.0, high=80.0)
     return OperandSpecs(spec_A=spec)
 
@@ -74,19 +119,18 @@ def _exp_with_base_spec(fmt: DataFormat) -> OperandSpecs:
     """Input range for exp_with_base, which computes exp(0.5*x).
 
     Keep the negative reach of _exp_spec (low=-100 crosses the SFPU's negative-side
-    sanitization boundary near x ~ -88.5), but cap the positive side tighter than
-    plain exp. exp's relative condition number equals its argument, so with the 0.5
-    scale a high of 32 keeps the argument <= 16 -- small enough that the shared exp
-    approximation's error stays within the default rtol even on the fp32 (dest_acc=Yes)
-    path. At the reused high=80 the argument reaches ~40, and that ~40x amplification
-    pushes the largest-output elements past 10% relative error (PCC still fine).
+    sanitization boundary near x ~ -88.5). The 0.5 scale halves the argument, so the
+    positive side is double _exp_spec's to put the argument under the same overflow
+    ceiling.
     """
     if fmt == DataFormat.MxFp8P:
         spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
     elif fmt in (DataFormat.Float16, DataFormat.MxFp8R):
         spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
     else:
-        spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-100.0, high=32.0)
+        spec = StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-100.0, high=160.0
+        )
     return OperandSpecs(spec_A=spec)
 
 
@@ -97,9 +141,36 @@ def _exp2_spec(fmt: DataFormat) -> OperandSpecs:
     elif fmt in (DataFormat.Float16, DataFormat.MxFp8R):
         spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-14.0, high=14.0)
     else:
+        # 2^100 still fits an 8-bit exponent, so the positive side is not range-bound
+        # the way _exp_spec is; the negative side matches its reach past the clamp.
         spec = StimuliSpec(
             distribution=DistributionKind.UNIFORM, low=-100.0, high=100.0
         )
+    return OperandSpecs(spec_A=spec)
+
+
+# Block-float formats: a group of 16 elements shares one exponent, so an element's
+# usable precision depends on how far below its block maximum it sits, not just on
+# the mantissa width.
+_BLOCK_FLOAT_FORMATS = (DataFormat.Bfp8_b, DataFormat.Bfp4_b, DataFormat.Bfp2_b)
+
+
+def _reciprocal_spec(fmt: DataFormat) -> OperandSpecs:
+    """Safe input range for 1/x, tightened for block-float inputs.
+
+    A 1000:1 ratio inside a 16-element block quantizes the smallest elements to
+    zero, sending the golden to inf. How tight the ratio has to be scales with the
+    mantissa width: 10:1 suffices for Bfp8_b's 7 bits, but at Bfp4_b's 3 bits ~6% of
+    that window still lands below the block's representable step and collapses to
+    zero. 4:1 keeps every element representable with margin (the smallest survivor
+    at 10:1 is 16.0, so the floor is not placed right on the boundary).
+    """
+    if fmt == DataFormat.Bfp4_b:
+        spec = StimuliSpec.uniform(intervals=[(-100.0, -25.0), (25.0, 100.0)])
+    elif fmt in _BLOCK_FLOAT_FORMATS:
+        spec = StimuliSpec.uniform(intervals=[(-100.0, -10.0), (10.0, 100.0)])
+    else:
+        spec = StimuliSpec.uniform(intervals=[(-100.0, -0.1), (0.1, 100.0)])
     return OperandSpecs(spec_A=spec)
 
 
@@ -253,10 +324,9 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Neg: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
     ),
-    # reciprocal: domain x != 0; avoid a small band around 0 and cover both signs
-    MathOperation.Reciprocal: OperandSpecs(
-        spec_A=StimuliSpec.uniform(intervals=[(-100.0, -0.1), (0.1, 100.0)])
-    ),
+    # reciprocal: domain x != 0; avoid a small band around 0 and cover both signs.
+    # Format-sensitive: block-float inputs need a tighter ratio, see _reciprocal_spec.
+    MathOperation.Reciprocal: _reciprocal_spec,
     # relu / relu_max / relu_min / threshold: include negatives (zero branch)
     MathOperation.Relu: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
@@ -508,6 +578,26 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Round: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
     ),
+    # floor/ceil/trunc/frac: defined for all reals, but each of floor and ceil differs
+    # from trunc on one side only -- floor on the negative side (floor(-1.5) = -2 vs
+    # trunc's -1), ceil on the positive side (ceil(1.5) = 2 vs trunc's 1) -- so the
+    # domain has to span both signs to tell the three apart at all. Same range as round
+    # for the same reason: enough integer knees inside the interval that the random
+    # sweep lands near several of them.
+    MathOperation.Floor: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
+    ),
+    MathOperation.Ceil: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
+    ),
+    MathOperation.Trunc: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
+    ),
+    # frac keeps the sign of x (frac(x) = x - trunc(x)), so the negative half is a
+    # distinct branch rather than a mirror of the positive one.
+    MathOperation.Frac: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
+    ),
     # sqrt: domain x >= 0
     MathOperation.Sqrt: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=100.0)
@@ -516,6 +606,13 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Square: _square_spec,
     # tanh: cover saturation regions (saturates near ±1 for |x| > ~3)
     MathOperation.Tanh: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
+    # tanhshrink(x) = x - tanh(x): odd function, so the negative half exercises a
+    # distinct sign path. Same range as tanh — past |x| ~ 3 tanh saturates and the
+    # result degenerates to x, while near 0 the subtraction cancels down to ~x^3/3
+    # (small absolute values, covered by atol rather than rtol).
+    MathOperation.Tanhshrink: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
     ),
     # topk family: operation sorts/merges; any values are valid
@@ -560,17 +657,30 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.SfpuElwrsub: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-1.0, high=1.0)
     ),
-    # pow: srcA is the base (must be non-negative for non-integer exponents);
-    # srcB is the exponent (non-negative to keep output finite)
+    # pow: srcA is the base (non-negative for non-integer exponents); srcB is the
+    # exponent (non-negative to keep output finite).
+    #
+    # Both bounds are set by accuracy, not representable range. a**b is evaluated as
+    # exp(b * ln a), so the error tracks the product b * ln(a) -- the argument to the
+    # shared exp approximation (see the exp entry). The registry cannot express a joint
+    # constraint, so cap each operand so the worst-case product stays accurate:
+    # 3 * ln 3 = 3.30. Measured at Float16_b against the default 5% rtol, 3.30 is clean
+    # while 4.61 (A<=10, B<=2) and above go outside.
     MathOperation.SfpuElwpow: OperandSpecs(
-        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=5.0),
-        spec_B=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=5.0),
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=3.0),
+        spec_B=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=3.0),
     ),
     # xlogy: computes x * log(y) element-wise
     # srcA (x): x >= 0 so xlogy(0, y) = 0 is well-defined
     # srcB (y): y > 0 so log(y) is finite; log-uniform spans several decades
+    #
+    # x's ceiling is an absolute-accuracy bound: the error is dominated by
+    # x * abs_err(ln y), so it grows with x while the 16-bit-float atol stays at 0.05.
+    # x <= 4 keeps margin (4 * 0.012 = 0.048); x <= 5 sits on the tolerance and x <= 8
+    # goes outside. y keeps its full log-uniform span -- narrowing it made the failures
+    # worse, not better.
     MathOperation.SfpuXlogy: OperandSpecs(
-        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=10.0),
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=4.0),
         spec_B=StimuliSpec(
             distribution=DistributionKind.LOG_UNIFORM, low=1e-4, high=10.0
         ),
@@ -671,6 +781,58 @@ def for_op(
     return result
 
 
+def _spec_span(spec: StimuliSpec) -> float:
+    """Total measure of the values *spec* is allowed to draw."""
+    if spec.intervals:
+        return sum(high - low for low, high in spec.intervals)
+    return spec.high - spec.low
+
+
+def _tighter_spec(a: StimuliSpec, b: StimuliSpec) -> StimuliSpec:
+    """Whichever of *a* / *b* draws from the smaller domain; ties keep *a*."""
+    if a == b:
+        return a
+    return a if _spec_span(a) <= _spec_span(b) else b
+
+
+def for_op_pipeline(
+    op: MathOperation,
+    input_format: DataFormat,
+    output_format: Optional[DataFormat] = None,
+    **kwargs,
+) -> OperandSpecs:
+    """Return safe input domains for *op* over a whole input->output pipeline.
+
+    Two different constraints pick two different formats, and resolving against
+    either one alone drops the other:
+
+    * **Range** is bounded by the narrowest exponent range anywhere in the
+      pipeline. exp over (-100, 80) is fine into a Float32 output and saturates
+      a Float16 one, so the *output* format has to be able to narrow the domain.
+    * **Precision** is a property of the *input* format alone. A block-float
+      input has already spent its relative precision by the time the op runs,
+      and a wider output cannot give it back. Resolving Bfp8_b -> Float16
+      against Float16 alone restores reciprocal's 1000:1 interval — the exact
+      spread _reciprocal_spec exists to avoid, which quantizes small block
+      elements to zero and sends the golden to inf.
+
+    So resolve against both formats and keep whichever spec is tighter per
+    operand. Both constraints only ever *narrow* a domain, so the tighter of the
+    two satisfies both. Ops with a format-independent registry entry resolve
+    identically either way and are unaffected.
+    """
+    by_input = for_op(op, input_format, **kwargs)
+    range_format = narrowest_range_format(input_format, output_format)
+    if range_format == input_format:
+        return by_input
+
+    by_range = for_op(op, range_format, **kwargs)
+    return OperandSpecs(
+        spec_A=_tighter_spec(by_input.spec_A, by_range.spec_A),
+        spec_B=_tighter_spec(by_input.spec_B, by_range.spec_B),
+    )
+
+
 def _validate_distribution_override(
     distribution: Union[DistributionKind, Callable],
     spec: StimuliSpec,
@@ -718,6 +880,97 @@ def _validate_distribution_override(
 # ─────────────────────────────────────────────────────────────────────────────
 # Undefined-region subtraction
 # ─────────────────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Which family each registered op belongs to
+#
+# _OP_DOMAIN_REGISTRY is keyed by MathOperation and mixes the unary SFPU ops with the
+# binary ones, the FPU eltwise ops and the reduce family. That is fine for for_op(), but it
+# means a suite cannot ask "is my op list complete?" -- the unary sweep can check that no op
+# sits in two of its profiles and that every op it drives has a domain, but not that every
+# unary op is actually driven, so an op added to the registry and to no test goes untested
+# silently.
+#
+# Recording the family closes that. Each family is named positively, one set per
+# arity/engine, and the unary family is whatever is left over -- so an op registered
+# without being classified here lands in sfpu_unary_ops() and trips the unary sweep's
+# exhaustiveness assert, which is the prompt to put it in the right set below.
+#
+# They are flat sets rather than a field on OperandSpecs because several entries are shared
+# with the perf sweeps and the accuracy harness, and those consumers do not want an arity
+# opinion imposed on them.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Eltwise binary run on the FPU rather than the SFPU (test_eltwise_binary.py).
+_FPU_ELTWISE_OPS: FrozenSet[MathOperation] = frozenset(
+    {
+        MathOperation.Elwadd,
+        MathOperation.Elwmul,
+        MathOperation.Elwsub,
+    }
+)
+
+# Applied by the packer (STACC_RELU), not the SFPU. Relu is the entry that looks like it
+# should be a unary SFPU op: it has a domain, but `relu` is not a member of SfpuType at
+# all, so driving it through the unary test fails to compile.
+_PACKER_OPS: FrozenSet[MathOperation] = frozenset({MathOperation.Relu})
+
+# Binary SFPU ops (test_sfpu_binary.py). Registered ones only -- that suite also drives
+# ~30 int, comparison and bitwise ops that have no domain entry and so cannot be keys
+# here; they are declared in its own _UNREGISTERED_BINARY_OPS instead.
+_SFPU_BINARY_OPS: FrozenSet[MathOperation] = frozenset(
+    {
+        MathOperation.SfpuAddTopRow,
+        MathOperation.SfpuElwadd,
+        MathOperation.SfpuElwsub,
+        MathOperation.SfpuElwmul,
+        MathOperation.SfpuElwdiv,
+        MathOperation.SfpuElwpow,
+        MathOperation.SfpuElwrsub,
+        MathOperation.SfpuXlogy,
+        MathOperation.SfpuElwLeftShift,
+        MathOperation.SfpuElwRightShift,
+        MathOperation.SfpuElwLogicalRightShift,
+    }
+)
+
+# Ternary SFPU ops (test_sfpu_ternary.py). Empty because no ternary op has a domain entry
+# yet: OperandSpecs carries A and B only, so that suite builds its own per-operand specs
+# and reuses B for C. The set exists so the first registered ternary op lands here rather
+# than silently in sfpu_unary_ops().
+_SFPU_TERNARY_OPS: FrozenSet[MathOperation] = frozenset()
+
+# Reduce family (test_sfpu_reduce*.py).
+_REDUCE_OPS: FrozenSet[MathOperation] = frozenset(
+    {
+        MathOperation.ReduceColumn,
+        MathOperation.ReduceRow,
+        MathOperation.ReduceScalar,
+    }
+)
+
+# Ops with no unary SFPU kernel, so they must not appear in the unary sweep.
+_NON_SFPU_UNARY_OPS: FrozenSet[MathOperation] = (
+    _FPU_ELTWISE_OPS | _PACKER_OPS | _SFPU_BINARY_OPS | _SFPU_TERNARY_OPS | _REDUCE_OPS
+)
+
+# Unary SFPU ops that are registered but deliberately not in the correctness sweep.
+_UNARY_OPS_NOT_SWEPT: Dict[MathOperation, str] = {
+    MathOperation.TopKLocalSort: "perf-only; whole-op topk is covered by test_topk.py",
+    MathOperation.TopKMerge: "perf-only; whole-op topk is covered by test_topk.py",
+    MathOperation.TopKRebuild: "perf-only; whole-op topk is covered by test_topk.py",
+}
+
+
+def sfpu_unary_ops() -> FrozenSet[MathOperation]:
+    """Every registered op that has a unary SFPU kernel.
+
+    Everything registered that is not claimed by one of the family sets above. The unary
+    sweep drives exactly this set minus _UNARY_OPS_NOT_SWEPT, so a newly registered op is
+    swept by default and only escapes by being classified into a family or exempted.
+    """
+    return frozenset(_OP_DOMAIN_REGISTRY) - _NON_SFPU_UNARY_OPS
+
 
 _SFPU_UNDEFINED_RANGES: Dict[
     MathOperation,

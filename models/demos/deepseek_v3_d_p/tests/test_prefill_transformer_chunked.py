@@ -40,7 +40,13 @@ from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
-from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank, num_full_indexer_layers, resolve_has_indexer
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
+    full_indexer_rank,
+    get_fused_ring_host_timing,
+    num_full_indexer_layers,
+    reset_fused_ring_host_timing,
+    resolve_has_indexer,
+)
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     blockcyclic_cache_host,
     blockcyclic_positions,
@@ -964,7 +970,7 @@ _PADDED_MODES = ["notrace", "traced"]
                 # semaphores there (use_l1_small_for_semaphores) instead of pinning the main-L1 floor.
                 # Kept minimal: L1_SMALL is carved from the top of L1, so a large value would shift the
                 # main-L1 buffer floor down and could re-introduce the clash.
-                "l1_small_size": 512,
+                "l1_small_size": 768,
                 # Needed only by mode="traced"; device_params is a separate parametrize axis so it
                 # cannot be conditioned on `mode`. Reserving it for every mode costs DRAM headroom the
                 # non-traced modes do not use — harmless here (the traced L61/full55k case, which has
@@ -985,7 +991,7 @@ _PADDED_MODES = ["notrace", "traced"]
                 "fabric_config": ttnn.FabricConfig.FABRIC_2D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
                 "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-                "l1_small_size": 512,
+                "l1_small_size": 768,
                 "trace_region_size": 256 * 1024 * 1024,
             },
             2,
@@ -1057,9 +1063,8 @@ def test_kimi_prefill_transformer_chunked_padded(
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE),
-                # Small L1_SMALL region for the MoE routing all-gather's global semaphores
-                # (use_l1_small_for_semaphores); see the Kimi chunked test for the rationale.
-                "l1_small_size": 512,
+                # Routing consumes 512 B; leave 256 B for sparse-MLA high-bandwidth-gather semaphores.
+                "l1_small_size": 768,
             },
             2,
             ttnn.Topology.Linear,
@@ -1512,6 +1517,7 @@ def run_chunked_transformer_updated(
             # forward with return_intermediates=False: nothing is cloned to host, no PCC. Chunked
             # prefill is full-chunk (all positions real) so actual_end is kv_actual + CHUNK; forward
             # uses self.indexed_rope. The small (first_token) return is discarded.
+            reset_fused_ring_host_timing()
             transformer.forward(
                 tt_tokens,
                 tt_kvpe_cache,
@@ -1523,8 +1529,16 @@ def run_chunked_transformer_updated(
                 index_kv_cache=tt_index_kv_cache,
             )
             ttnn.synchronize_device(mesh_device)
+            fused_host_calls, fused_host_seconds = get_fused_ring_host_timing()
             ttnn.deallocate(tt_tokens)
-            chunk_times.append(time.time() - chunk_start)
+            chunk_seconds = time.time() - chunk_start
+            chunk_times.append(chunk_seconds)
+            if fused_host_calls:
+                logger.info(
+                    f"[fused-indexer host timing] iter={it} chunk={c} calls={fused_host_calls} "
+                    f"host_submit={fused_host_seconds * 1000:.2f} ms "
+                    f"({fused_host_seconds / chunk_seconds * 100:.1f}% of {chunk_seconds * 1000:.2f} ms chunk)"
+                )
         iter_total = time.time() - iter_start
         iteration_chunk_times.append(chunk_times)
         logger.info(f"iter {it} done ({n_chunks} chunks) in {iter_total:.3f} seconds")
@@ -1696,7 +1710,7 @@ def run_chunked_transformer_updated(
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
                 # L1_SMALL region for the MoE routing all-gather's semaphores (see TtMoERoutingSetup).
-                "l1_small_size": 512,
+                "l1_small_size": 768,
                 # Required by mode="traced": without it conftest logs "No trace region size" and the
                 # captured trace buffers come out of general DRAM instead of a reserved region —
                 # unbounded, and trace_bytes() then reports 0.00 MB because the TRACE pool is empty.
@@ -1792,7 +1806,7 @@ def test_kimi_prefill_transformer_chunked_perf(
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
                 # L1_SMALL region for the MoE routing all-gather's semaphores (see TtMoERoutingSetup).
-                "l1_small_size": 512,
+                "l1_small_size": 768,
                 # Required by mode="traced": without it conftest logs "No trace region size" and the
                 # captured trace buffers come out of general DRAM instead of a reserved region —
                 # unbounded, and trace_bytes() then reports 0.00 MB because the TRACE pool is empty.
@@ -1950,9 +1964,8 @@ def test_ds_prefill_transformer_chunked_no_pcc(
                 "fabric_config": ttnn.FabricConfig.FABRIC_2D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE),
                 "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-                # Small L1_SMALL region for the MoE routing all-gather's global semaphores
-                # (use_l1_small_for_semaphores); see test_glm_prefill_transformer_chunked.
-                "l1_small_size": 512,
+                # Routing consumes 512 B; leave 256 B for sparse-MLA high-bandwidth-gather semaphores.
+                "l1_small_size": 768,
             },
             2,
             ttnn.Topology.Linear,

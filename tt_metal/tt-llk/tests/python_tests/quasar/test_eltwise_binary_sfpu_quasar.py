@@ -15,6 +15,7 @@ from helpers.golden_generators import (
 from helpers.llk_params import (
     DataCopyType,
     DestAccumulation,
+    DstRoundingMode,
     ImpliedMathFormat,
     MathOperation,
     PerfRunType,
@@ -48,6 +49,7 @@ from helpers.test_variant_parameters import (
     NUM_FACES,
     PERF_RUN_TYPE,
     SFPU_BINARY_OP,
+    SFPU_DST_ROUNDING_MODE,
     SFPU_TILE_INDICES,
     SIGN_MAGNITUDE_FORMAT,
     TEST_FACE_DIMS,
@@ -118,6 +120,7 @@ def _run_sfpu_binary_llk_golden(
     loop_factor=1,
     is_perf=False,
     perf_report=None,
+    dst_rounding_mode=DstRoundingMode.Default,
 ):
     """Shared driver for the unpack-to-dest, LLK-golden binary SFPU ops.
 
@@ -165,6 +168,7 @@ def _run_sfpu_binary_llk_golden(
             DEST_SYNC(),
             # 2's-complement datapath (default); only the quant family reads this.
             SIGN_MAGNITUDE_FORMAT(False),
+            SFPU_DST_ROUNDING_MODE(dst_rounding_mode),
             # The shared unary-SFPU dispatch in sfpu_operations_quasar.h has a typecast
             # branch that references the non-dependent globals TYPECAST_IN_FORMAT /
             # TYPECAST_OUT_FORMAT, so every build that includes it must define them.
@@ -420,6 +424,42 @@ def test_eltwise_binary_sfpu_float_quasar(
     )
 
 
+_BF16_ADD_SUB_OPS = [
+    ("ADD", MathOperation.SfpuElwadd),
+    ("SUB", MathOperation.SfpuElwsub),
+]
+
+
+@pytest.mark.quasar
+@pytest.mark.parametrize(
+    "binary_op, mathop", _BF16_ADD_SUB_OPS, ids=[op for op, _ in _BF16_ADD_SUB_OPS]
+)
+@pytest.mark.parametrize("tile_indices", _TILE_INDEX_VARIANTS)
+def test_eltwise_binary_sfpu_bf16_rne_quasar(
+    tile_indices,
+    binary_op,
+    mathop,
+):
+    """Binary SFPU ADD/SUB with NearestEven rounding on bfloat16 inputs.
+
+    RNE narrowing only applies when DEST holds bf16 (fp32 dest accumulation
+    disabled), so this test is scoped to Float16_b with DestAccumulation.No.
+    """
+    formats = InputOutputFormat(
+        input_format=DataFormat.Float16_b, output_format=DataFormat.Float16_b
+    )
+    _run_sfpu_binary_llk_golden(
+        formats,
+        DestAccumulation.No,
+        ImpliedMathFormat.No,
+        tile_indices,
+        mathop,
+        binary_op,
+        prepare_stimuli=_prepare_float_stimuli,
+        dst_rounding_mode=DstRoundingMode.NearestEven,
+    )
+
+
 # ===========================================================================
 # Family 3 — max / min (float + Int32). Ported from test_binary_max_min_quasar.py.
 # Layout in0=Dest[0], in1=Dest[1], out=Dest[2]; dual unpack path; torch golden.
@@ -606,6 +646,7 @@ def _run_max_min(
             DEST_SYNC(),
             # 2's-complement datapath (default); only the quant family reads this.
             SIGN_MAGNITUDE_FORMAT(False),
+            SFPU_DST_ROUNDING_MODE(),
             # The shared unary-SFPU dispatch in sfpu_operations_quasar.h has a typecast
             # branch that references the non-dependent globals TYPECAST_IN_FORMAT /
             # TYPECAST_OUT_FORMAT, so every build that includes it must define them.
@@ -856,6 +897,7 @@ def _run_quant(binary_op, tile_indices, sign_magnitude=False):
             DEST_SYNC(),
             PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
             SIGN_MAGNITUDE_FORMAT(sign_magnitude),
+            SFPU_DST_ROUNDING_MODE(),
             TYPECAST_FORMATS(),
         ],
         runtimes=[

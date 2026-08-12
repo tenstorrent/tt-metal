@@ -201,7 +201,7 @@ b. **Bias Broadcasting Mechanism**
 
     .. code-block:: cpp
 
-        add_bcast_rows_init_short();
+        add_bcast_rows_init();
         for (uint32_t i = 0, j = 0; j < out_subblock_h; j++) {
             uint32_t bcast_tile_idx = in1_index_subblock_offset;
             for (uint32_t k = 0; k < out_subblock_w; k++, i++) {
