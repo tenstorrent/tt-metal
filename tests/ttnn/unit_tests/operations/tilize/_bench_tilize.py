@@ -58,7 +58,7 @@ import torch
 
 import ttnn
 from ttnn.operations.tilize.tilize import _dispatch
-from ttnn.operations.tilize.tilize_program_descriptor import blocking, plan_cores
+from ttnn.operations.tilize.tilize_program_descriptor import blocking, placement_defaults, plan_cores
 
 _DURATION_KEY = "DEVICE KERNEL DURATION [ns]"
 
@@ -144,6 +144,27 @@ ARMS = {
     "lever_b6_read_2048": dict(levers=dict(target_read_bytes=2048)),
     "lever_b6_read_4096": dict(levers=dict(target_read_bytes=4096)),
     "lever_b7_barrier_per_read": dict(levers=dict(barrier_per_block=0)),
+    # ---- pipeline-depth lever (R3): blocks per core == overlap depth --------
+    # `min_blocks_per_core=1` is the OFF-ARM (the Phase-0 split: as many cores as
+    # blocks, so a low-block shape gets one block per core and no overlap). The
+    # rest of the arms are the co-tuning sweep the refinement asks for — pipeline
+    # depth against block size (`target_read_bytes` -> WT_BLOCK -> block count).
+    "lever_r3_pipeline_off": dict(levers=dict(min_blocks_per_core=1)),
+    "lever_r3_pipeline3": dict(levers=dict(min_blocks_per_core=3)),
+    "lever_r3_pipeline4": dict(levers=dict(min_blocks_per_core=4)),
+    "lever_r3_pipeline2_read512": dict(levers=dict(min_blocks_per_core=2, target_read_bytes=512)),
+    "lever_r3_pipeline4_read512": dict(levers=dict(min_blocks_per_core=4, target_read_bytes=512)),
+    "lever_r3_pipeline2_read2048": dict(levers=dict(min_blocks_per_core=2, target_read_bytes=2048)),
+    "lever_r3_gridfill_read512_off": dict(levers=dict(min_blocks_per_core=1, target_read_bytes=512)),
+    # ---- placement lever (R3 / master.md A1+A3): spread vs packed cores -----
+    # Only observable when active_cores < grid_cores (the fill-deficit regime).
+    "lever_r3_spread_on": dict(levers=dict(spread_cores=1)),
+    "lever_r3_spread_on_pipeline_off": dict(levers=dict(spread_cores=1, min_blocks_per_core=1)),
+    "lever_r3_spread_on_colmajor": dict(levers=dict(spread_cores=1, row_wise=0)),
+    # The co-tuning corners: placement x pipeline depth x block size.
+    "lever_r3_spread_read512": dict(levers=dict(spread_cores=1, target_read_bytes=512)),
+    "lever_r3_spread_read512_pipe1": dict(levers=dict(spread_cores=1, target_read_bytes=512, min_blocks_per_core=1)),
+    "lever_r3_spread_pipeline3": dict(levers=dict(spread_cores=1, min_blocks_per_core=3)),
     "lever_b5_face_writes": dict(levers=dict(coalesce_writes=0)),
     "lever_b9_noc_swap": dict(levers=dict(noc_split=0)),
     # ---- buffering lever (C16) ------------------------------------------
@@ -241,14 +262,19 @@ def test_bench(device):
     for shape_name in shape_names:
         shape = SHAPES[shape_name]
         blk = blocking(list(shape), 32, 2)
-        in_mem, _out_mem = _mem_for(shape_name)
+        in_mem, out_mem = _mem_for(shape_name)
         if in_mem.is_sharded():
             # A shard's cores are fixed by its spec (master.md A2), and the shard
             # hands you the block width — so neither comes from `plan_cores`.
             cores = list(range(in_mem.shard_spec.grid.num_cores()))
             blk = dict(blk, wt_block=in_mem.shard_spec.shape[1] // 32, total_blocks=len(cores))
+            per_core = [blk["total_blocks"] // max(1, len(cores))]
         else:
-            cores, _all_cores, _per_core = plan_cores(device, blk["total_blocks"], use_multicore=True)
+            # Report the SHIPPED geometry, so the header's core count and pipeline
+            # depth are the ones `base` actually ran with (R3's cap included).
+            cores, _all_cores, per_core = plan_cores(
+                device, blk["total_blocks"], use_multicore=True, **placement_defaults(in_mem, out_mem)
+            )
         elem_bytes = 2
         total_bytes = 2 * torch.tensor(shape).prod().item() * elem_bytes  # read + write
         base = results.get((shape_name, "base"))
@@ -256,7 +282,8 @@ def test_bench(device):
             "",
             f"  {shape_name} {tuple(shape)}: nt_h={blk['nt_h']} Wt={blk['Wt']} "
             f"WT_BLOCK={blk['wt_block']} n_wchunks={blk['n_wchunks']} "
-            f"blocks={blk['total_blocks']} cores={len(cores)} dram_bytes={total_bytes}",
+            f"blocks={blk['total_blocks']} cores={len(cores)} "
+            f"blocks/core={max(per_core) if per_core else 0} dram_bytes={total_bytes}",
             f"    {'arm':<28} {'ns':>12} {'vs base':>9} {'GB/s':>8}",
         ]
         for arm in arm_names:

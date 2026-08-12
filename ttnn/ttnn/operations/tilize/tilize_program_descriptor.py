@@ -57,6 +57,48 @@ CB_OUTPUT_TILES = 16  # compute -> writer : tiled output pages
 # 1024 B is the joint optimum and regresses no benched regime.
 TARGET_READ_BYTES = 1024
 
+# --- Knob: pipeline depth (minimum blocks per core) ------------------------
+# Blocks-per-core IS the pipeline depth: a core's reader, compute and writer
+# overlap only across DIFFERENT blocks (one block's `tile_h` sticks must all land
+# before its tiles can be tilized, and its tiles must all be tilized before they
+# can be written), so a core holding exactly ONE block runs
+# read -> compute -> write strictly serially.
+#
+# `total_blocks` is a function of the SHAPE and of `WT_BLOCK`, so on a shape with
+# few blocks the default "spread over as many cores as there are blocks" split
+# hands every core a single block and forfeits all overlap. This knob trades grid
+# fill for pipeline depth: cores are capped at `total_blocks //
+# min_blocks_per_core`. 1 is the trivial value (byte-identical to the Phase-0
+# split), and the cap only ever BINDS when
+# `total_blocks < grid_cores * MIN_BLOCKS_PER_CORE` — the grid-fill-deficit
+# regime, never on a shape that already fills the grid with depth to spare
+# (`pipeline_capped_cores` is that gate, stated once).
+#
+# Measured (R3, BH 11x10, DEVICE KERNEL DURATION, off-arm = min_blocks_per_core=1):
+#   l1_to_l1  [1,1,512,2048]   64 cores x 1 blk 6 722 ns -> 32 x 2 **5 091 ns (1.32x)**
+#   wide_short[1,1,32,16384]   32 cores x 1 blk 7 184 ns -> 16 x 2   7 156 ns (1.00x)
+#   tall_narrow[1,1,2048,64]   64 cores x 1 blk 4 931 ns -> 32 x 2   4 930 ns (1.00x)
+# i.e. hiding compute behind DM only pays where DM is FAST ENOUGH for compute to
+# be co-binding, which is R1's measured L1<->L1 profile (ablate_compute 0.596x)
+# and NOT the DRAM profile (ablate_compute 0.994x on the square). Hence the
+# regime gate in `placement_defaults` rather than a global default.
+MIN_BLOCKS_PER_CORE = 2
+
+# --- Knob: placement of a partially-filled grid (master.md A1/A3) -----------
+# Whether the active cores are SPREAD over the grid or packed into its first
+# rows. Only observable when `active_cores < grid_cores`.
+#
+# Measured (R3, off-arm = spread_cores=0, both at 32 cores x 1 block):
+#   wide_short [1,1,32,16384]  packed 7 184 / 7 275 ns -> spread **6 873 / 6 808 ns (1.05x)**
+#   tall_narrow[1,1,2048,64]   packed 4 968 ns          -> spread   4 913 ns (1.01x, noise)
+#   l1_to_l1   [1,1,512,2048]  packed 5 091 ns          -> spread   5 479 ns (**0.93x, a regression**)
+# Opposite signs, and the mechanism is A3: DRAM banks sit in a few columns, so
+# route diversity is what a packed slab of DRAM readers lacks — whereas an
+# L1-interleaved operand's "banks" ARE the worker cores, so spreading the
+# consumers lengthens their L1 routes instead of shortening them. Gated on the
+# operands' buffer type in `placement_defaults`, never applied globally.
+SPREAD_CORES = 1
+
 TILE_WIDTH = 32  # a tile is ALWAYS 32 wide; only its height varies
 # The tile HEIGHT the op uses when the caller passes no `tile=`. Defined ONCE
 # here and imported by the op file so the taggers, validate(), the entry point
@@ -75,6 +117,25 @@ DEFAULT_LEVERS = {
     "width_split": 1,  # A0/A1: 2-D linearization (b = wchunk*nt_h + r) vs height-only
     "row_wise": 1,  # A1: spread cores across the DRAM-facing (row) axis
     "target_read_bytes": TARGET_READ_BYTES,  # B6/B7: read transaction size -> WT_BLOCK
+    # R3 (A0/B0/C16): the PIPELINE-DEPTH knob — the minimum number of blocks a
+    # core is given, enforced by capping the core count at `total_blocks //
+    # min_blocks_per_core`. Blocks per core is exactly the number of
+    # read/compute/write stages that can overlap in a core's own CB pipeline, so
+    # a core holding ONE block runs read -> compute -> write strictly serially
+    # (measured: on `[1,1,32,16384]` the three ablation stage costs SUM to 104 %
+    # of the removable wall, vs 72 % on the square). 1 = the trivial off-arm and
+    # byte-identical to Phase 0's split. `None` = "take the regime default"
+    # (`placement_defaults`), which is what the SHIPPED path does — an explicit
+    # value forces the knob on ANY shape, so both arms stay measurable everywhere.
+    "min_blocks_per_core": None,
+    # R3 (A1/A3): PLACEMENT of a partially-filled grid. `grid_to_cores(n)` returns
+    # the first n cores of the row-major enumeration — a solid slab in the first
+    # rows — so a shape whose block count is below the grid size reaches DRAM over
+    # a handful of shared links. 1 spreads the same n cores uniformly over the
+    # whole grid (same count, same block assignment, different cores); 0 is the
+    # packed Phase-0 placement. Structurally a no-op once n == grid_cores.
+    # `None` = the regime default (`placement_defaults`), as above.
+    "spread_cores": None,
     "coalesce_writes": 1,  # B5: whole-tile-page writes vs per-face writes
     "barrier_per_block": 1,  # B7: one barrier per block vs one per transaction
     "noc_split": 1,  # B9: reader NoC0 / writer NoC1 vs swapped
@@ -473,7 +534,102 @@ def shard_grid_cores(device, tensor):
     return list(cores), all_cores
 
 
-def plan_cores(device, total_blocks: int, *, use_multicore: bool, row_wise: bool = True, max_cores=None):
+def placement_defaults(in_memory_config, out_memory_config):
+    """Regime-selected defaults for the two R3 placement knobs.
+
+    Pure (memory configs only, no device, no tensors) so the gate is unit-testable.
+    Both knobs are measured to have OPPOSITE signs on the two interleaved data
+    paths (numbers next to `MIN_BLOCKS_PER_CORE` / `SPREAD_CORES`), so neither is
+    applied globally:
+
+      both operands DRAM  -> spread the cores (route diversity to the DRAM banks),
+                             no pipeline cap: DM is the wall and compute is
+                             already overlap-hidden, so trading cores for depth
+                             buys nothing.
+      both operands L1    -> cap for pipeline depth (L1 DM is ~1.7x faster, so
+                             compute is CO-BINDING and worth hiding), packed
+                             placement: an L1-interleaved operand's banks ARE the
+                             worker cores.
+      anything else       -> the Phase-0 placement verbatim. A mixed direction is
+                             half of each regime and is NOT measured here, so it
+                             keeps the shipped behaviour rather than inheriting a
+                             guess.
+
+    A sharded side never reaches this: its cores are fixed by the shard spec
+    (`shard_grid_cores`), and `plan_cores` is not called at all.
+    """
+    types = (in_memory_config.buffer_type, out_memory_config.buffer_type)
+    sharded = in_memory_config.is_sharded() or out_memory_config.is_sharded()
+    all_dram = not sharded and all(t == ttnn.BufferType.DRAM for t in types)
+    all_l1 = not sharded and all(t == ttnn.BufferType.L1 for t in types)
+    return {
+        "min_blocks_per_core": MIN_BLOCKS_PER_CORE if all_l1 else 1,
+        "spread_cores": SPREAD_CORES if all_dram else 0,
+    }
+
+
+def pipeline_capped_cores(total_blocks: int, grid_cores: int, min_blocks_per_core: int):
+    """The pipeline-depth cap on the core count, or None when it does not bind.
+
+    Returns None whenever the cap would not reduce the core count the plain split
+    already uses — which is the whole gate: on a shape that already fills the grid
+    with `>= min_blocks_per_core` blocks per core (the square, `l1_to_l1`) this is
+    a no-op and the default split is used unchanged. It binds only in the
+    grid-fill-deficit regime (`total_blocks < grid_cores * min_blocks_per_core`),
+    where the default split would hand a core a pipeline it cannot overlap.
+    """
+    if min_blocks_per_core <= 1:
+        return None
+    cap = max(1, total_blocks // min_blocks_per_core)
+    default_cores = min(grid_cores, total_blocks)
+    return cap if cap < default_cores else None
+
+
+def spread_core_list(split_grid, num_cores: int, row_wise: bool):
+    """`num_cores` cores spread UNIFORMLY over the grid, not packed into a corner.
+
+    master.md A1/A3: DRAM banks sit in a few columns, so the NoC routes a set of
+    readers takes depends on WHERE those readers are. `grid_to_cores(n, ...)`
+    returns the FIRST n cores of the row-major enumeration — for a partially
+    filled grid that is a solid block in the first few rows, i.e. every one of
+    those cores reaches DRAM over the same handful of links. Taking every
+    `grid/num_cores`-th core of the same enumeration instead keeps the identical
+    core COUNT and block assignment and only changes which cores they are.
+
+    A no-op (returns the packed list) once `num_cores == grid`, which is why a
+    grid-filling shape cannot be perturbed by this lever.
+    """
+    grid_total = split_grid.x * split_grid.y
+    all_cores = ttnn.grid_to_cores(grid_total, split_grid.x, split_grid.y, row_wise)
+    if num_cores >= grid_total:
+        return list(all_cores[:num_cores])
+    return [all_cores[(k * grid_total) // num_cores] for k in range(num_cores)]
+
+
+def _materialize_cores(split_grid, num_cores: int, row_wise: bool, spread_cores: bool, per_core_blocks):
+    """Turn a core COUNT + per-core block counts into (cores, all_cores, counts).
+
+    The one place a count becomes a core list, so the packed and spread placements
+    cannot drift apart in how they build `all_cores`.
+    """
+    if spread_cores:
+        cores = spread_core_list(split_grid, num_cores, row_wise)
+    else:
+        cores = list(ttnn.grid_to_cores(num_cores, split_grid.x, split_grid.y, row_wise))
+    all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
+    return cores, all_cores, per_core_blocks
+
+
+def plan_cores(
+    device,
+    total_blocks: int,
+    *,
+    use_multicore: bool,
+    row_wise: bool = True,
+    max_cores=None,
+    min_blocks_per_core: int = 1,
+    spread_cores: bool = False,
+):
     """Core assignment: `grid_cores` is a PARAMETER whose trivial value is 1.
 
     Returns (cores, all_cores, per_core_blocks) where per_core_blocks[i] is the
@@ -484,16 +640,23 @@ def plan_cores(device, total_blocks: int, *, use_multicore: bool, row_wise: bool
     grid = device.compute_with_storage_grid_size()
     split_grid = grid if use_multicore else ttnn.CoreCoord(1, 1)
 
+    # R3: pipeline depth. Fold the cap into `max_cores` so there is exactly ONE
+    # place that turns a core count into an assignment. `None` when it does not
+    # bind, which keeps the grid-filling shapes on the default split verbatim.
+    pipeline_cap = pipeline_capped_cores(total_blocks, split_grid.x * split_grid.y, min_blocks_per_core)
+    if pipeline_cap is not None:
+        max_cores = pipeline_cap if max_cores is None else min(max_cores, pipeline_cap)
+
     if max_cores is not None:
-        # Counterfactual arm only (the height-only-split off-arm caps the core
-        # count at nt_h). The production path always goes through
-        # ttnn.split_work_to_cores below.
+        # A capped core count: either the R3 pipeline-depth cap above (production)
+        # or the height-only-split off-arm (which caps at nt_h). An even
+        # base/remainder split over `num_cores` cores — the same distribution
+        # ttnn.split_work_to_cores makes, just over a smaller core count than the
+        # block count would give.
         num_cores = max(1, min(max_cores, total_blocks, split_grid.x * split_grid.y))
-        cores = ttnn.grid_to_cores(num_cores, split_grid.x, split_grid.y, row_wise)
         base, rem = divmod(total_blocks, num_cores)
         per_core_blocks = [base + (1 if k < rem else 0) for k in range(num_cores)]
-        all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
-        return cores, all_cores, per_core_blocks
+        return _materialize_cores(split_grid, num_cores, row_wise, spread_cores, per_core_blocks)
 
     (
         num_cores,
@@ -506,7 +669,13 @@ def plan_cores(device, total_blocks: int, *, use_multicore: bool, row_wise: bool
 
     cores = ttnn.grid_to_cores(num_cores, split_grid.x, split_grid.y, row_wise)
     per_core_blocks = [blocks_per_core_g1 if core_group_1.contains(core) else blocks_per_core_g2 for core in cores]
-    return cores, all_cores, per_core_blocks
+    if not spread_cores or num_cores >= split_grid.x * split_grid.y:
+        # The Phase-0 path, byte-identical: the split's own core list and its own
+        # CoreRangeSet (contiguous ranges, cheaper to dispatch than singletons).
+        return cores, all_cores, per_core_blocks
+    # The block COUNTS the split produced are kept and re-attached positionally to
+    # the spread core list — same counts, same order, different cores.
+    return _materialize_cores(split_grid, num_cores, row_wise, spread_cores, per_core_blocks)
 
 
 def create_program_descriptor(
@@ -631,12 +800,20 @@ def create_program_descriptor(
     # collapses a wide-short tensor onto min(nt_h, grid) cores — the exact
     # regression the 2-D linearization exists to prevent.
     if plan["mode"] == MODE_STREAMED:
+        # R3: the two placement knobs default to their REGIME value (measured, and
+        # of opposite sign on the DRAM and L1 paths); an explicit lever value
+        # forces the knob on any shape so both arms stay measurable everywhere.
+        placement = placement_defaults(input_tensor.memory_config(), output_tensor.memory_config())
         cores, all_cores, per_core_blocks = plan_cores(
             device,
             total_blocks,
             use_multicore=use_multicore and bool(lv["multicore"]),
             row_wise=bool(lv["row_wise"]),
             max_cores=None if lv["width_split"] else nt_h,
+            min_blocks_per_core=int(
+                placement["min_blocks_per_core"] if lv["min_blocks_per_core"] is None else lv["min_blocks_per_core"]
+            ),
+            spread_cores=bool(placement["spread_cores"] if lv["spread_cores"] is None else lv["spread_cores"]),
         )
         assignments = []
         block_start = 0
