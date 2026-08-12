@@ -88,7 +88,10 @@ void SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID,
     const uint32_t mcast_dests = loopback ? num_dests_incl_ : num_dests_excl_;
     send_data_(src_l1, dst_l1, size, loopback, mcast_dests);
     signal_ready_(loopback, mcast_dests);  // the signal rides the same mode as the data
-    fence_();
+    // The post-signal fence is also the source-L1 lifetime guard. For remote-only traffic, SENT is
+    // sufficient because each receiver's signal wait proves arrival. A real loopback copy has no
+    // sender-side receive/wait, so its destination must be ACKED before send() returns.
+    fence_(loopback);
     // Rotating sender: put our own flag cell back to INVALID now that the broadcast is flushed (the
     // fence above proved the cell is done as the set_multicast source). Otherwise this core's next
     // RECEIVER turn would wait(VALID) on the stale VALID we just left and return before the new
@@ -110,7 +113,7 @@ void SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID,
         return;  // nobody to signal
     }
     signal_ready_(/*loopback=*/false, num_dests_excl_);
-    fence_();
+    fence_(/*loopback=*/false);
 }
 
 template <
@@ -173,11 +176,22 @@ template <
     uint32_t CONSUMER_READY_SEM_ID,
     DataReadySignal DATA_READY_SIGNAL,
     bool ROTATING_SENDER>
-void SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, ROTATING_SENDER>::fence_() {
-    noc_.async_writes_flushed();  // SENT — source L1 safe to reuse. The signal proves arrival.
+void SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, ROTATING_SENDER>::fence_(
+    bool loopback) {
+    // Drain the linked data+signal chain together. This preserves both their ordering and the
+    // source-L1 lifetime contract on every architecture; no architecture-specific intermediate
+    // flush is needed between them.
+    if (loopback) {
+        // The sender never calls receive() on itself, so it has no data-ready wait that proves its
+        // destination arrived before a same-core consumer observes the caller's publication.
+        noc_.async_write_barrier();
+    } else {
+        // Remote receivers wait for the linked signal, which proves payload arrival.
+        noc_.async_writes_flushed();
+    }
     if constexpr (DATA_READY_SIGNAL == DataReadySignal::Counter) {
         // inc_multicast is a NON-POSTED multicast atomic: it expects num_dests acks that the flush
-        // above does not drain, so the Counter path additionally waits the atomic barrier.
+        // or write barrier above does not drain, so the Counter path additionally waits the atomic barrier.
         noc_.async_atomic_barrier();
     }
 }
