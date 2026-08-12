@@ -728,4 +728,8 @@ class LTXDistilledPipeline(LTXPipeline):
             export_video_audio(video_pixels, output_path, fps=fps, audio=audio_obj)
         logger.info(f"Video export: {time.time() - t0:.1f}s")
         logger.info(f"Total (compute): {sum(s for _, s in timings):.1f}s | Output: {output_path}")
+        # Every trace this pipeline takes is captured by now, so the encoder can start tracing: its
+        # capture is last and nothing left will reclaim its activation region.
+        if self._traced and not self.dynamic_load:
+            self.gemma_encoder_pair.open_trace_gate()
         return output_path
