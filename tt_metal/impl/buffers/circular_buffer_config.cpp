@@ -295,11 +295,10 @@ CircularBufferConfig::CircularBufferConfig(
 CircularBufferConfig::CircularBufferConfig(uint32_t total_size) :
     pimpl_(std::make_unique<CircularBufferConfigImpl>(total_size)) {}
 
-CircularBufferConfig::CircularBufferConfig(std::unique_ptr<CircularBufferConfigImpl> impl) : pimpl_(std::move(impl)) {
-    TT_FATAL(pimpl_ != nullptr, "CircularBufferConfig requires a non-null impl");
-}
+CircularBufferConfig::CircularBufferConfig(CircularBufferConfigImpl impl) :
+    pimpl_(std::make_unique<CircularBufferConfigImpl>(std::move(impl))) {}
 
-CircularBufferConfig make_circular_buffer_config(std::unique_ptr<CircularBufferConfigImpl> impl) {
+CircularBufferConfig make_circular_buffer_config(CircularBufferConfigImpl impl) {
     return CircularBufferConfig(std::move(impl));
 }
 

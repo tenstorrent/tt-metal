@@ -58,7 +58,7 @@ public:
     std::tuple<CoreRangeSet, BufferType> attribute_values() const;
 
     // Internal constructor (internal use only)
-    GlobalSemaphore(GlobalSemaphoreImpl&& impl);
+    explicit GlobalSemaphore(GlobalSemaphoreImpl impl);
 
     GlobalSemaphoreImpl& impl();
     const GlobalSemaphoreImpl& impl() const;

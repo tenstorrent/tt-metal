@@ -438,7 +438,8 @@ GlobalCircularBuffer::GlobalCircularBuffer(
     BufferType buffer_type) :
     impl_(std::make_shared<GlobalCircularBufferImpl>(device, sender_receiver_core_mapping, size, buffer_type)) {}
 
-GlobalCircularBuffer::GlobalCircularBuffer(std::shared_ptr<GlobalCircularBufferImpl> impl) : impl_(std::move(impl)) {}
+GlobalCircularBuffer::GlobalCircularBuffer(GlobalCircularBufferImpl impl) :
+    impl_(std::make_shared<GlobalCircularBufferImpl>(std::move(impl))) {}
 
 const Buffer& GlobalCircularBuffer::cb_buffer() const { return impl_->cb_buffer(); }
 
@@ -492,13 +493,8 @@ GlobalCircularBuffer GlobalCircularBufferDramSenderInternals::make_dram_sender(
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
     BufferType buffer_type) {
-    // Not std::make_shared: GlobalCircularBufferImpl's DRAM-sender constructor and DramSenderTag
-    // are both private, accessible only to this friend struct. A `new` expression written here
-    // (in friend code) can call them directly; std::make_shared's placement-new lives inside
-    // library-internal code that friendship does not reach.
-    std::shared_ptr<GlobalCircularBufferImpl> impl(new GlobalCircularBufferImpl(
+    return GlobalCircularBuffer(GlobalCircularBufferImpl(
         mesh_device, sender_receiver_core_mapping, size, buffer_type, GlobalCircularBufferImpl::DramSenderTag{}));
-    return GlobalCircularBuffer(std::move(impl));
 }
 
 SenderCoreType GlobalCircularBufferDramSenderInternals::sender_core_type(const GlobalCircularBuffer& gcb) {

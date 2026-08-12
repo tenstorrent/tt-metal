@@ -125,7 +125,7 @@ GlobalSemaphore::GlobalSemaphore(
     IDevice* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type) :
     GlobalSemaphore(GlobalSemaphoreImpl(device, std::move(cores), initial_value, buffer_type)) {}
 
-GlobalSemaphore::GlobalSemaphore(GlobalSemaphoreImpl&& impl) :
+GlobalSemaphore::GlobalSemaphore(GlobalSemaphoreImpl impl) :
     pimpl_(std::make_unique<GlobalSemaphoreImpl>(std::move(impl))) {}
 
 GlobalSemaphore::GlobalSemaphore(const GlobalSemaphore& other) :

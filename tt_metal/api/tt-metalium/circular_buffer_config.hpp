@@ -34,7 +34,7 @@ public:
     CircularBufferConfig(uint32_t total_size);
 
     // Internal constructor (internal use only)
-    explicit CircularBufferConfig(std::unique_ptr<CircularBufferConfigImpl> impl);
+    explicit CircularBufferConfig(CircularBufferConfigImpl impl);
 
     CircularBufferConfig(const CircularBufferConfig& other);
     CircularBufferConfig& operator=(const CircularBufferConfig& other);

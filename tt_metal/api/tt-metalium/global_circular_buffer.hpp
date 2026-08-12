@@ -59,7 +59,7 @@ public:
     GlobalCircularBuffer& operator=(GlobalCircularBuffer&&) noexcept = default;
 
     // Internal constructor (internal use only)
-    explicit GlobalCircularBuffer(std::shared_ptr<GlobalCircularBufferImpl> impl);
+    explicit GlobalCircularBuffer(GlobalCircularBufferImpl impl);
 
     const Buffer& cb_buffer() const;
 
