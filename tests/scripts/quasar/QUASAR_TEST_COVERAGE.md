@@ -123,17 +123,17 @@ Runs: metal_unit_test_emu_quasar (Zebu/Aether emulator) — all configs present 
 | Requirement | Watched rows | Lists | Reaches Jira today |
 |---|---|---|---|
 | AIIPSW-2 | 8 | `quasar_regression_tests.yaml`, `quasar_sim_regresion_tests.yaml` | yes |
-| AIIPSW-3 | 0 | — | **no** — 18 Quasar LLK tests in the tt-llk repo (tests/python_tests/quasar/); separate CI, not gated here |
+| AIIPSW-3 | 0 | — | **no** — tests exist, none wired: 23 Quasar YOLO op tests in models/experimental/ops/quasar/tests/yolo_ops/, plus the consolidated LLK Quasar suite in tt_metal/tt-llk/tests/python_tests/quasar/ (track 2) |
 | AIIPSW-9 | 0 | — | **no** — Horizon environment, not Quasar -- out of scope for this gate |
 | AIIPSW-4 | 11 | `quasar_local_tests.yaml` | **no** — emulator-only path |
 | AIIPSW-6 | 13 | `quasar_regression_tests.yaml`, `quasar_sim_regresion_tests.yaml` | yes |
-| AIIPSW-8 | 0 | — | **no** — no named Quasar sim test -- owning team to name it |
-| AIIPSW-12 | 0 | — | **no** — no named Quasar sim test -- owning team to name it |
+| AIIPSW-8 | 0 | — | **no** — tests exist, not wired: MxInt8 / INT8->INT32 reduce in tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py + sources/quasar/reduce_quasar_test.cpp (PR #49390), track 2 |
+| AIIPSW-12 | 0 | — | **no** — 8 tests in models/experimental/panoptic_deeplab/tests/ (pcc/* plus test_device_perf_pdl.py) but no Quasar variant; 0 PRs in the v0.75/v0.76 window |
 | AIIPSW-13 | 3 | `quasar_local_tests.yaml` | **no** — emulator-only path |
-| AIIPSW-14 | 0 | — | **no** — no named Quasar sim test -- owning team to name it |
-| AIIPSW-15 | 0 | — | **no** — UMD-side; no tt-metal Quasar yaml row |
-| AIIPSW-7 | 0 | — | **no** — 45 op tests + module tests under models/experimental/llama32_1b_quasar/tests/, none wired into a Quasar yaml yet |
-| AIIPSW-16 | 0 | — | **no** — the conv2d/pool/linear ops that do not pass on Quasar yet |
+| AIIPSW-14 | 0 | — | **no** — tests exist, not wired: the quant/requant/dequant family in tt_metal/tt-llk/tests/python_tests/quasar/test_eltwise_binary_sfpu_quasar.py + sources/quasar/eltwise_binary_sfpu_quasar_test.cpp (PR #48208), track 2 |
+| AIIPSW-15 | 0 | — | **no** — UMD-side; Quasar appears in tt_metal/third_party/umd/tests (soc_descs/quasar_simulation_1x1.yaml, simulation/test_simulation_device.cpp) but no test maps to the higher-level-layer requirement -- NOT fully verified, owner to confirm |
+| AIIPSW-7 | 0 | — | **no** — 45 op tests in models/experimental/llama32_1b_quasar/tests/ops/ plus 7 module suites; none wired |
+| AIIPSW-16 | 0 | — | **no** — the conv2d/pool/linear subset of the 51 ResNet op tests -- present but not passing on Quasar yet, so unwired |
 
 ## Relevance-map entries that never win a match
 
