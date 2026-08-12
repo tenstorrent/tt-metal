@@ -20,12 +20,12 @@ void kernel_main() {
     constexpr uint32_t output_cb = 5;
     const uint32_t mt_count = get_arg_val<uint32_t>(0);
 
+    compute_kernel_hw_startup(act_rm_cb, act_tile_cb);
     DataflowBuffer activation(act_tile_cb);
     DataflowBuffer weights(weights_cb);
     DataflowBuffer partial_a(partial_a_cb);
     DataflowBuffer partial_b(partial_b_cb);
     DataflowBuffer output(output_cb);
-    binary_op_init_common(act_tile_cb, weights_cb, partial_a_cb);
     silu_tile_init();
 
     if constexpr (num_blocks == 1) {
