@@ -56,6 +56,59 @@ COMPUTE_HIFI2_NO_FP32_ACC = ttnn.WormholeComputeKernelConfig(
 )
 
 
+# LoFi + no fp32 dest acc. For the two ATTENTION prefill matmuls (QKV in-proj, wo out-proj) on
+# Wormhole, paired with create_prefill_kpass1_matmul_program_config exactly like
+# COMPUTE_HIFI2_NO_FP32_ACC is (the one-K-pass blocking still requires fp32_dest_acc_en=False).
+#
+# WHY LoFi IS FREE HERE. HiFi2 costs ~2x LoFi's math passes per tile, and it was buying almost
+# nothing on these two shapes because both take a BFLOAT8_B *weight*, whose 8-bit mantissa already
+# dominates the product's error -- HiFi2 was paying for precision the operands cannot represent.
+# MEASURED (device kernel duration + PCC vs an fp32 torch reference, N300, M=2048, one K pass,
+# tests/perf/test_all_matmuls_sweep.py):
+#     qkv 2048x4096x5120  HiFi2 1007.8us pcc=0.99992  ->  LoFi 887.3us pcc=0.99985   -12.0%
+#     wo  2048x2048x4096  HiFi2  402.6us pcc=0.99987  ->  LoFi 328.9us pcc=0.99981   -18.3%
+# i.e. ~7e-5 of PCC for 12-18% of the op. The same sweep confirms 8 columns is already the best grid
+# width for both (fewer columns loses more in cores than it gains in subblock), so grid is not a
+# further lever here.
+#
+# Kept SEPARATE from COMPUTE_HIFI2_NO_FP32_ACC rather than changing it: that constant is also the
+# GDN in-projection's, whose accuracy budget was tuned at HiFi2 and is NOT covered by this sweep.
+COMPUTE_LOFI_NO_FP32_ACC = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.LoFi,
+    math_approx_mode=True,
+    fp32_dest_acc_en=False,
+    packer_l1_acc=True,
+)
+
+
+def sdpa_bf8_enabled(args):
+    """QWEN_SDPA_BF8: bf8 Q/K/V + bf8 paged KV cache for chunked-prefill SDPA (faster, slightly
+    lower precision). Single source of truth for both attention/tp.py's TPAttention._sdpa_bf8 and
+    model.py's allocate_kv_caches — they must agree, since the cache dtype the KV is filled into has
+    to match what forward_prefill_paged casts K/V to before the fill.
+
+    Default ON for Wormhole N300 only. MEASURED (device kernel duration, N300, single full-attention
+    decoder layer, S=2048, Qwen3.5-9B, on top of the kpass1 matmul + fused-qk-norm changes above):
+        SDPA                    770us -> 494us   -36%
+        wo_proj matmul         515us -> 404us   -21.6%  (cascades: attn output narrows to bf8 too)
+        PagedFillCache x2      19+19us -> 11+10us
+        NLPConcatHeads           64us ->   41us
+        new Q/K/V typecast x3        -> +70us   (the cost of casting into this path)
+    Net effect on that layer's total device time: -600us or so, stacking with the other WH-only
+    fixes to a combined 12,457us -> 10,909us (-12.4%) for this profile.
+
+    Off by default everywhere else (unvalidated on N150/T3K/P150x4/Blackhole from this host — the
+    model_config.py comment this replaces called it out explicitly: "validate PCC at long ctx").
+
+    The env var still overrides in EITHER direction if set: QWEN_SDPA_BF8=0 forces it off on N300,
+    QWEN_SDPA_BF8=1 forces it on anywhere else (at the user's own risk/validation).
+    """
+    env = os.environ.get("QWEN_SDPA_BF8")
+    if env is not None:
+        return env == "1"
+    return not is_blackhole() and getattr(args, "device_name", None) == "N300"
+
+
 # Grid helpers
 def prefill_grid_default():
     """BH P150: (8,10); WH: (8,8). y capped at 10 on BH (grid_x=10 breaks matmul)."""
@@ -331,7 +384,15 @@ def prefill_kpass_width(n, grid_size=None, max_waste=0.20):
 
 
 def create_prefill_matmul_program_config(
-    m, k, n, grid_size=None, fused_activation=None, tuning=None, out_block_w=None, halve_out_block=False
+    m,
+    k,
+    n,
+    grid_size=None,
+    fused_activation=None,
+    tuning=None,
+    out_block_w=None,
+    halve_out_block=False,
+    max_subblock_hw=None,
 ):
     """2D prefill matmul progcfg (DRAM-interleaved).
 
@@ -343,7 +404,11 @@ def create_prefill_matmul_program_config(
     halve_out_block: auto-derive a safe halved out_block_w (see _safe_half_out_block_w) instead of
     passing one explicitly. Needed on grids that are already at their physical max (WH tops out at
     8x8=64 cores vs BH's 8x10=80, with a smaller per-core L1 budget besides), where per_core_M/N can't
-    be shrunk further by adding more cores."""
+    be shrunk further by adding more cores.
+    max_subblock_hw: out_subblock_h*out_subblock_w ceiling. Defaults to the conservative
+    DST_TILES_FP32_ACC (4), which is correct for the fp32-dest-acc COMPUTE_HIFI2 most callers pass.
+    Callers using a compute config with fp32_dest_acc_en=False may pass DST_TILES (8) to get the
+    wider output subblock their DST budget actually allows — see _get_out_subblock_w."""
     if grid_size is None:
         grid_size = prefill_grid_default()
     tuning = tuning or _PREFILL_TUNING[4]
@@ -351,7 +416,9 @@ def create_prefill_matmul_program_config(
     per_core_N = max(1, math.ceil(n / TILE_SIZE / grid_size[0]))
 
     out_subblock_h = 1
-    out_subblock_w = _get_out_subblock_w(per_core_N, out_subblock_h)
+    out_subblock_w = _get_out_subblock_w(
+        per_core_N, out_subblock_h, max_hw=max_subblock_hw if max_subblock_hw is not None else DST_TILES_FP32_ACC
+    )
 
     k_tiles = math.ceil(k / TILE_SIZE)
     cap = tuning["in0_block_w_cap"]
@@ -469,7 +536,7 @@ def _best_prefill_cols(n, max_cols):
 
 
 def create_prefill_mlp_matmul_program_config(
-    m, k, n, fused_activation=None, max_cols=None, tuning=None, halve_out_block=False
+    m, k, n, fused_activation=None, max_cols=None, tuning=None, halve_out_block=False, max_subblock_hw=None
 ):
     """FPU-tuned 2D prefill progcfg for MLP matmuls: picks the grid width that maximizes the output
     subblock (drives prefill FPU) instead of the default full width.
@@ -483,7 +550,11 @@ def create_prefill_mlp_matmul_program_config(
     is replaced by "take the width, clamped to PREFILL_MAX_COLS_PORTABLE" -- measured device time at
     TP=8 falls monotonically with column count, so trading cores for a wider subblock loses.
     halve_out_block: see create_prefill_matmul_program_config — pass on grids already at their
-    physical core-count max (WH) where the full per_core_N-wide output/intermediate CB overflows L1."""
+    physical core-count max (WH) where the full per_core_N-wide output/intermediate CB overflows L1.
+    max_subblock_hw: see create_prefill_matmul_program_config. NOTE this is deliberately NOT fed into
+    _best_prefill_cols below: the grid-width choice stays on the conservative cap so raising the
+    subblock ceiling cannot silently move the grid too (an unswept axis). It only widens the subblock
+    at the column count production already uses."""
     grid = prefill_grid_default()
     tuning = tuning or _PREFILL_TUNING[4]
     limit = max_cols or grid[0]
@@ -502,6 +573,7 @@ def create_prefill_mlp_matmul_program_config(
         fused_activation=fused_activation,
         tuning=tuning,
         halve_out_block=halve_out_block,
+        max_subblock_hw=max_subblock_hw,
     )
 
 
