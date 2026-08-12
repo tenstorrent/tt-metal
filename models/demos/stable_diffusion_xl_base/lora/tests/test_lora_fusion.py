@@ -193,7 +193,7 @@ def test_text_encoder_lora_fusion_pcc(mesh_device, te_lora_path):
         "text_encoder / text_encoder_2 to exercise this path."
     )
 
-    tt_pipeline.fuse_lora(lora_scale=1.0)
+    tt_pipeline.fuse_lora(lora_scale=1.0, clip_scale=1.0)
     assert tt_pipeline.get_lora_status()["text_encoder"] is True, "text-encoder LoRA was not marked fused"
 
     # PEFT reference: fuse the same LoRA into the text encoders of a fresh pipeline
@@ -224,7 +224,7 @@ def test_text_encoder_lora_fusion_pcc(mesh_device, te_lora_path):
     # adapters after merging, so there is no adapter left to detect a second merge — only
     # the manager's own fused flag prevents the delta being applied twice. A regression
     # here is silent, which is why it is asserted against the same reference weights.
-    tt_pipeline.fuse_lora(lora_scale=1.0)
+    tt_pipeline.fuse_lora(lora_scale=1.0, clip_scale=1.0)
     assert (
         tt_pipeline.get_lora_status()["text_encoder"] is True
     ), "text-encoder LoRA lost its fused status after a repeat fuse_lora()"
@@ -234,3 +234,68 @@ def test_text_encoder_lora_fusion_pcc(mesh_device, te_lora_path):
         for name, ref_tensor in reference_weights[component].items():
             assert name in refused_sd, f"{component}: fused weight {name} vanished after a repeat fuse_lora()"
             assert_with_pcc(ref_tensor, refused_sd[name], pcc=0.999)
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {},
+    ],
+    indirect=True,
+)
+@pytest.mark.skipif(
+    get_device_name() not in ["n150", "p150"],
+    reason="test_lora_fusion runs only on n150 and p150",
+)
+@torch.no_grad()
+def test_text_encoder_lora_zero_clip_scale_skips_fusion(mesh_device, te_lora_path):
+    """A clip_scale of 0.0 must skip the text-encoder fuse rather than merge a zero delta.
+
+    Covers the per-component scaling contract this PR adds: the UNet still fuses at its
+    own scale while the text encoders are left alone. The skip has to leave the fused
+    flag False as well, so status reporting stays honest and a later fuse cannot merge
+    on top of weights that were never touched.
+    """
+    # Loaded before the TT pipeline mutates anything, to compare the CLIP weights
+    # against pristine base weights.
+    reference_pipeline = DiffusionPipeline.from_pretrained(
+        "stabilityai/stable-diffusion-xl-base-1.0",
+        torch_dtype=torch.float32,
+        use_safetensors=True,
+    )
+    torch_pipeline_for_tt = DiffusionPipeline.from_pretrained(
+        "stabilityai/stable-diffusion-xl-base-1.0",
+        torch_dtype=torch.float32,
+        use_safetensors=True,
+    )
+
+    pipeline_config = TtSDXLPipelineConfig(
+        num_inference_steps=50,
+        guidance_scale=5.0,
+        is_galaxy=is_galaxy(),
+        encoders_on_device=True,  # TE LoRA is only applied when encoders run on device.
+    )
+    tt_pipeline = TtSDXLPipeline(mesh_device, torch_pipeline_for_tt, pipeline_config)
+
+    tt_pipeline.load_lora_weights(te_lora_path)
+    components = tt_pipeline._lora_weights_manager.adapter_state()["text_encoder_components"]
+    assert components, (
+        "Chosen LoRA does not impact any text encoder; pick a LoRA that trains "
+        "text_encoder / text_encoder_2 to exercise this path."
+    )
+
+    tt_pipeline.fuse_lora(lora_scale=1.0, clip_scale=0.0)
+
+    status = tt_pipeline.get_lora_status()
+    assert status["text_encoder"] is False, "text-encoder LoRA reported fused despite a clip scale of 0.0"
+    assert status["unet"] is True, "UNet should still fuse at its own scale when the clip scale is 0.0"
+
+    # Byte-for-byte, not PCC: a skipped fuse must not perturb the weights at all.
+    for component in components:
+        base_sd = getattr(reference_pipeline, component).state_dict()
+        live_sd = getattr(tt_pipeline.torch_pipeline, component).state_dict()
+        for name, base_tensor in base_sd.items():
+            assert name in live_sd, f"{component}: weight {name} disappeared"
+            assert torch.equal(
+                base_tensor, live_sd[name]
+            ), f"{component}: {name} was modified despite a clip scale of 0.0"

@@ -267,8 +267,15 @@ class TtLoRAWeightsManager:
         The caller is responsible for establishing the mesh-mapper context for the UNet
         device work — see TtSDXLPipeline.fuse_lora.
         """
+        # Callers that pass an optional scale positionally hand us None when it is unset
+        # (e.g. tt-inference-server's SDXL runners). Treat that as "full strength" rather
+        # than letting it reach the delta arithmetic as None.
+        if lora_scale is None:
+            lora_scale = 1.0
         if clip_scale is None:
             clip_scale = lora_scale
+
+        logger.info(f"Fusing LoRA weights (unet scale={lora_scale}, clip scale={clip_scale})...")
 
         if self.has_lora_adapter():
             self._fuse_unet_lora(lora_scale)

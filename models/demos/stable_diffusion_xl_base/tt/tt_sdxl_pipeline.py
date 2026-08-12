@@ -188,27 +188,16 @@ class TtSDXLPipeline(LightweightModule):
         )
         return shape
 
-    def fuse_lora(self, lora_scale_unet=1.0, lora_scale_clip=None, lora_scale=None):
-        # Backward compat: a single lora_scale (positional or keyword) applies to both.
-        if lora_scale is not None:
-            lora_scale_unet = lora_scale
-            if lora_scale_clip is None:
-                lora_scale_clip = lora_scale
-        # Callers that pass an optional scale positionally hand us None when it is unset
-        # (e.g. tt-inference-server's SDXL runners). Treat that as "full strength" rather
-        # than letting it reach the delta arithmetic as None.
-        if lora_scale_unet is None:
-            lora_scale_unet = 1.0
-        if lora_scale_clip is None:
-            lora_scale_clip = lora_scale_unet
-
-        logger.info(f"Fusing LoRA weights (unet scale={lora_scale_unet}, clip scale={lora_scale_clip})...")
+    def fuse_lora(self, lora_scale=1.0, clip_scale=None):
+        # Scale resolution (None handling, clip defaulting to the UNet scale) lives in the
+        # manager, which owns every other piece of LoRA logic.
+        #
         # The manager's from_torch calls pass no mesh_mapper, so the replicate context
         # must be established here. The text-encoder step runs inside it too: every
         # from_torch on the encoder reload path passes mesh_mapper explicitly, so the
         # ambient context cannot reach it (see models/tt_dit/utils/tensor.py).
         with ttnn.distribute(ttnn.ReplicateTensorToMesh(self.ttnn_device)):
-            self._lora_weights_manager.fuse_lora(lora_scale_unet, clip_scale=lora_scale_clip)
+            self._lora_weights_manager.fuse_lora(lora_scale, clip_scale=clip_scale)
 
     def load_lora_weights(self, lora_path):
         self._lora_weights_manager.load_lora_weights(lora_path)
