@@ -120,26 +120,16 @@ class CCLManager:
             1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(barrier_n_sems)],
         }
 
-        # Separate semaphores for fused NP+Conv3d path to avoid state conflicts when standalone NP and fused ops
-        self.np_fused_ping_pong_semaphores = {
-            0: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(np_n_sems)],
-            1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(np_n_sems)],
-        }
-        self.barrier_fused_semaphores = {
-            0: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(barrier_n_sems)],
-            1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(barrier_n_sems)],
-        }
-
-        # Per-(region,link) progress sems for fused NP+Conv3d overlap: 4 face regions {H-top, H-bot, W-left
+        # Separate semaphores for fused NP+Conv3d path to avoid state conflicts when standalone NP and fused ops.
+        # Per-(region,link) progress sems cover 4 face regions {H-top, H-bot, W-left, W-right} per link.
+        # These three pools allocate on first use: nothing selects the fused path yet, and a global
+        # semaphore is a device resource held for the lifetime of every CCLManager.
+        self._np_fused_n_sems = np_n_sems
+        self._barrier_fused_n_sems = barrier_n_sems
         self._np_region_n_sems = 4 * self.num_links
-        self.np_region_progress_semaphores = {
-            0: [
-                ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(self._np_region_n_sems)
-            ],
-            1: [
-                ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(self._np_region_n_sems)
-            ],
-        }
+        self.np_fused_ping_pong_semaphores = None
+        self.barrier_fused_semaphores = None
+        self.np_region_progress_semaphores = None
 
     def get_rs_ping_pong_buffer(self, shape, dim, mesh_axis):
         """
@@ -391,16 +381,27 @@ class CCLManager:
         self.np_ping_pong_idx[mesh_axis] = (cur_idx + 1) % 2
         return self.np_ping_pong_semaphores[mesh_axis][cur_idx]
 
+    def _make_semaphore_pool(self, n_sems):
+        """Allocate a per-axis bank of `n_sems` global semaphores."""
+        return {
+            axis: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(n_sems)]
+            for axis in (0, 1)
+        }
+
     def get_np_fused_ping_pong_semaphore(self, mesh_axis):
         """
         Get semaphores for fused NP+Conv3d operations (separate pool from standalone NP).
         """
+        if self.np_fused_ping_pong_semaphores is None:
+            self.np_fused_ping_pong_semaphores = self._make_semaphore_pool(self._np_fused_n_sems)
         cur_idx = self.np_fused_ping_pong_idx[mesh_axis]
         self.np_fused_ping_pong_idx[mesh_axis] = (cur_idx + 1) % 2
         return self.np_fused_ping_pong_semaphores[mesh_axis][cur_idx]
 
     def get_barrier_fused_semaphore(self, mesh_axis):
         """Get barrier semaphore for fused NP+Conv3d (separate pool from standalone NP)."""
+        if self.barrier_fused_semaphores is None:
+            self.barrier_fused_semaphores = self._make_semaphore_pool(self._barrier_fused_n_sems)
         cur_idx = self.barrier_fused_idx[mesh_axis]
         self.barrier_fused_idx[mesh_axis] = (cur_idx + 1) % 2
         return self.barrier_fused_semaphores[mesh_axis][cur_idx]
@@ -416,6 +417,8 @@ class CCLManager:
 
     def get_np_region_progress_semaphores(self, mesh_axis):
         """Get the 4*num_links per-(region,link) progress sems (static, single bank), indexed [region*num_links + link]."""
+        if self.np_region_progress_semaphores is None:
+            self.np_region_progress_semaphores = self._make_semaphore_pool(self._np_region_n_sems)
         return self.np_region_progress_semaphores[mesh_axis]
 
     def get_np_halo_buffer(self, input_shape, dim, padding, dtype=ttnn.bfloat16, dim2=None, padding2=0):
@@ -722,18 +725,21 @@ class CCLManager:
         for axis in [0, 1]:
             for sem in self.np_ping_pong_semaphores[axis]:
                 ttnn.reset_global_semaphore_value(sem, 0)
-            for sem in self.np_fused_ping_pong_semaphores[axis]:
-                ttnn.reset_global_semaphore_value(sem, 0)
-            for sem in self.barrier_fused_semaphores[axis]:
-                ttnn.reset_global_semaphore_value(sem, 0)
             for sem in self.sr_ping_pong_semaphores[axis]:
                 ttnn.reset_global_semaphore_value(sem, 0)
             for sem in self.rs_ping_pong_semaphores[axis]:
                 ttnn.reset_global_semaphore_value(sem, 0)
             for sem in self.ag_ping_pong_semaphores[axis]:
                 ttnn.reset_global_semaphore_value(sem, 0)
-            for sem in self.np_region_progress_semaphores[axis]:
-                ttnn.reset_global_semaphore_value(sem, 0)
+            # Lazily-allocated fused NP+Conv3d pools; skipped entirely until something asks for them.
+            for pool in (
+                self.np_fused_ping_pong_semaphores,
+                self.barrier_fused_semaphores,
+                self.np_region_progress_semaphores,
+            ):
+                if pool is not None:
+                    for sem in pool[axis]:
+                        ttnn.reset_global_semaphore_value(sem, 0)
 
     def all_gather_persistent_buffer(
         self, tensor: ttnn.Tensor, /, *, dim: int, mesh_axis: int | None, use_hyperparams: bool = False
