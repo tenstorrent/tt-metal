@@ -13,6 +13,7 @@ from helpers.golden_generators import (
     quantize_mx_stimuli,
 )
 from helpers.llk_params import (
+    ApproximationMode,
     DataCopyType,
     DestAccumulation,
     DstRoundingMode,
@@ -41,6 +42,7 @@ from helpers.stimuli_generator import (
 )
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
+    APPROX_MODE,
     DATA_COPY_TYPE,
     DEST_INDEX,
     DEST_SYNC,
@@ -116,6 +118,7 @@ def _run_sfpu_binary_llk_golden(
     prepare_stimuli,
     post_check=None,
     *,
+    approx_mode=ApproximationMode.No,
     run_types=(PerfRunType.L1_TO_L1,),
     loop_factor=1,
     is_perf=False,
@@ -162,6 +165,7 @@ def _run_sfpu_binary_llk_golden(
         "formats": formats,
         "templates": [
             SFPU_BINARY_OP(binary_op),
+            APPROX_MODE(approx_mode),
             IMPLIED_MATH_FORMAT(implied_math_format),
             DATA_COPY_TYPE(DataCopyType.A2D),
             UNPACKER_ENGINE_SEL(UnpackerEngine.UnpDest),
@@ -380,17 +384,20 @@ def _check_div_special_cases(res_tensor):
 
 
 _FLOAT_OPS = [
-    ("ADD", MathOperation.SfpuElwadd),
-    ("SUB", MathOperation.SfpuElwsub),
-    ("MUL", MathOperation.SfpuElwmul),
-    ("DIV", MathOperation.SfpuElwdiv),
-    ("ATAN2", MathOperation.SfpuAtan2),
+    ("ADD", MathOperation.SfpuElwadd, ApproximationMode.No),
+    ("SUB", MathOperation.SfpuElwsub, ApproximationMode.No),
+    ("MUL", MathOperation.SfpuElwmul, ApproximationMode.No),
+    ("DIV", MathOperation.SfpuElwdiv, ApproximationMode.No),
+    ("ATAN2", MathOperation.SfpuAtan2, ApproximationMode.No),
+    ("ATAN2", MathOperation.SfpuAtan2, ApproximationMode.Yes),
 ]
 
 
 @pytest.mark.quasar
 @pytest.mark.parametrize(
-    "binary_op, mathop", _FLOAT_OPS, ids=[op for op, _ in _FLOAT_OPS]
+    "binary_op, mathop, approx_mode",
+    _FLOAT_OPS,
+    ids=[f"{op}_{approx.name}" for op, _, approx in _FLOAT_OPS],
 )
 @parametrize(
     formats_dest_acc=_get_valid_float_formats_dest_acc(),
@@ -405,6 +412,7 @@ def test_eltwise_binary_sfpu_float_quasar(
     tile_indices,
     binary_op,
     mathop,
+    approx_mode,
     *,
     run_types=(PerfRunType.L1_TO_L1,),
     loop_factor=1,
@@ -425,6 +433,7 @@ def test_eltwise_binary_sfpu_float_quasar(
         binary_op,
         prepare_stimuli=_prepare_float_stimuli,
         post_check=post_check,
+        approx_mode=approx_mode,
         run_types=run_types,
         loop_factor=loop_factor,
         is_perf=is_perf,

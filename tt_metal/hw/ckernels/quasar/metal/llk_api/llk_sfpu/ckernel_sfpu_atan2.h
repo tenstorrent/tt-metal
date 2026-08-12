@@ -23,9 +23,10 @@ namespace sfpu {
  * the quadrant back in from the operand signs. IEEE corner cases (|x| == |y|, both zero,
  * negative-signed x including -0.0, and NaN in either operand) are handled explicitly.
  *
- * @tparam APPROXIMATION_MODE: Force the low-order polynomial and LUT-only reciprocal.
- * @tparam is_fp32_dest_acc_en: 32-bit Dest; selects the 7-term polynomial, the
- *         Newton-refined reciprocal, and skips the final bf16 round.
+ * @tparam APPROXIMATION_MODE: Use the LUT-only reciprocal. Polynomial degree and
+ *         final rounding continue to follow the Dest mode.
+ * @tparam is_fp32_dest_acc_en: 32-bit Dest; selects the 7-term polynomial and skips
+ *         the final bf16 round. Its precise mode also uses a Newton-refined reciprocal.
  * @param y: Numerator operand; its sign is copied onto the result.
  * @param x: Denominator operand; a negative sign reflects the result into the
  *        second/third quadrant.

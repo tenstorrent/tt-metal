@@ -368,12 +368,14 @@ constexpr ckernel::sfpu::QuantVariant quant_variant_of()
  *         atan2 uses it to select the reciprocal variant its polynomial expects.
  * @tparam SIGN_MAGNITUDE_FORMAT Quant family only: if true, treat int32 Dest as SMAG32
  *         and skip the sign-magnitude<->2's-complement casts. Must match the calculate step.
+ * @tparam APPROXIMATION_MODE Whether to use the operation's approximate path. Must match the
+ *         calculate step; atan2 uses it to select the LUT-only reciprocal path.
  * @param zero_point fp32 bit-pattern of the zero-point loaded once by the quant
  *        family init (DEQUANT expects the bits of -zero_point); ignored by the
  *        other ops, which have no runtime init argument.
  * @note Pair with @ref call_binary_sfpu_operation_quasar for the calculate step.
  */
-template <ckernel::BinaryOp OP, bool is_fp32_dest_acc_en, bool SIGN_MAGNITUDE_FORMAT = false>
+template <ckernel::BinaryOp OP, bool is_fp32_dest_acc_en = false, bool SIGN_MAGNITUDE_FORMAT = false, bool APPROXIMATION_MODE = false>
 void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point = 0)
 {
     if constexpr (OP == BinaryOp::MUL)
@@ -398,7 +400,7 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
         // Programs the Newton-Raphson reciprocal constant. is_fp32_dest_acc_en must be the
         // same value the calculate step uses — it picks both the minimax degree and the
         // reciprocal variant.
-        calculate_sfpu_atan2_init<false /*APPROX*/, is_fp32_dest_acc_en>();
+        calculate_sfpu_atan2_init<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
     }
     // ADD / SUB / GT / LT / LE / GE are stateless — no init.
 }
@@ -415,6 +417,8 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
  * @tparam ITERATIONS Number of SFPU loop iterations.
  * @tparam SIGN_MAGNITUDE_FORMAT Quant family only: if true, treat int32 Dest as SMAG32
  *         and skip the sign-magnitude<->2's-complement casts. Must match the init step.
+ * @tparam APPROXIMATION_MODE Whether to use the operation's approximate path. Must match the
+ *         init step; atan2 uses it to select the LUT-only reciprocal path.
  * @param src0_tile,src1_tile,dst_tile Operand / result tile indices.
  * @param math_format Dest math format (Int32 vs float path for MUL and max/min).
  * @note Must be preceded by @ref init_binary_sfpu_operation_quasar for the same op.
@@ -425,7 +429,8 @@ template <
     bool is_fp32_dest_acc_en,
     ckernel::DstRoundingMode dst_rounding_mode = ckernel::DstRoundingMode::Default,
     int ITERATIONS                             = SFPU_ITERATIONS,
-    bool SIGN_MAGNITUDE_FORMAT                 = false>
+    bool SIGN_MAGNITUDE_FORMAT                 = false,
+    bool APPROXIMATION_MODE                    = false>
 void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t src1_tile, std::uint32_t dst_tile, [[maybe_unused]] DataFormat math_format)
 {
     if constexpr (OP == BinaryOp::ADD)
@@ -519,7 +524,7 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
             DST_SYNC,
             is_fp32_dest_acc_en,
             calculate_sfpu_atan2,
-            (false /*APPROX*/, ITERATIONS, is_fp32_dest_acc_en),
+            (APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en),
             src0_tile,
             src1_tile,
             dst_tile,
