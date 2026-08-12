@@ -8,7 +8,7 @@
 // and mismatches. TileOffset::Set requires a Bulk-family lifecycle (CopyTile static_assert), so uses Bulk.
 
 #include <cstdint>
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_in = tt::CBIndex::c_0;
@@ -21,7 +21,7 @@ void kernel_main() {
 
     using namespace compute_kernel_lib;
     eltwise_chain(
-        EltwiseShape::tiles(n),
+        IterationShape::tiles(n),
         CopyTile<
             input(
                 cb_in,
