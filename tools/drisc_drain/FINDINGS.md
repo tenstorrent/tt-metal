@@ -3949,11 +3949,31 @@ and the worst sweep is invisible unless it happens to be one of the few captured
 | at the knee (SD delay 15) | 49-140 producer stalls vs 0 -- one late sweep blocks dozens of lossless producers at 472-488/512 occupancy |
 | off the knee (delay 60, SD and FD) | **0 stalls, 4/4 reps each** |
 
-So a captured sweep is inflated ~15%: this is a **measurement bias**, not merely overhead. Lowering
-`DRISC_ZONES` to gather more samples buys tighter statistics on progressively more-perturbed sweeps -- the
-opposite of what more samples is supposed to do. If coverage must rise, cut the per-captured-sweep cost first;
-the publish (~1-2 us) is dearer than the markers (~0.7 us), so publishing every 2nd captured sweep (200 words
-means two sweeps fit one ring) and the 592-word/37-page short frame are the levers, NOT a smaller N.
+So a captured sweep is inflated ~15% while an uncaptured one is inflated ~5%: SELECTIVE sampling means the
+sweeps you can see are perturbed differently from the ones you cannot. That is a measurement bias, not merely
+overhead.
+
+**CORRECTION to the conclusion first drawn from this.** It said raising coverage was the wrong lever because
+more samples would mean more perturbed sweeps. That reasoned from a cost estimate built on the wrong window.
+The sweep totals above (167k-946k) are dominated by sweeps OUTSIDE the workload: the drainer is resident from
+device open to teardown while the workload is ~1.93 ms, and once fill reads 0 the pacing controller creeps its
+gap to the ceiling, so it polls emptily for the rest of the process. Inside the active window the sweeps are
+almost all BUSY. Reconciled against a filler's own counters:
+
+| | busy sweeps | x sweep time | active window | frames | words | fill |
+|---|---|---|---|---|---|---|
+| filler 0 | 115 | 13.6-14.2 us | ~1.6 ms (~80% of the 1.93 ms worker window) | 1,756 | 3,000,974 | 1,709/2,560 = **66.8%** |
+
+and `1,756 / 115` = **15.3 frames per busy sweep** -- one sweep walks all 27-30 cores and ships a frame for
+every core with live data, which is why there are ~115 busy sweeps and not ~1,200. (5,000 zones x 30 cores x 5
+RISCs x 2 words = 3,000,000 predicted words: exact. 66.8% fill against the controller's 70% target: within 3
+points, so the controller is landing.)
+
+Full coverage of the active window is therefore ~150 filler sweeps and ~500 mover sweeps -- **~630 KB (3.6% of
+a filler's egress) and ~250 KB (0.7% of a mover's)** -- not the tens of thousands the raw sweep counts imply.
+Continuous coverage of the window is affordable, and it makes the bias UNIFORM rather than selective, which is
+the ordinary profiler trade and is analysable. A biased 4% subset is not. The publish and short-frame
+optimisations remain worth having, but as cost reductions, not as prerequisites.
 
 ### No silent truncation
 
