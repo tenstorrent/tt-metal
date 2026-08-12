@@ -31,6 +31,8 @@
 # tests/models/minimax_h3/test_vision_conditioner_minimax_h3.py.
 # =============================================================================
 
+import time
+
 import pytest
 import torch
 import transformers
@@ -276,18 +278,39 @@ def test_tower_on_device(reference, mesh_device, submesh_shape, tp_axis, sp_axis
     assert cu_seqlens[0] == 0 and cu_seqlens[-1] == total, f"cu_seqlens must span [0, {total}]: {cu_seqlens}"
 
     tower = _tower(reference, submesh, *_parallel_args(submesh, tp_axis, sp_axis, num_links))
-    print("Prepare Vision Rope")
-    cos, sin = tower.prepare_rope(grid)
-    pos = tower.prepare_pos_embeds(grid)
-    # Inputs shard on rows under SP; the tower's outputs come back gathered and replicated.
-    print("Tower Forward")
-    tokens, deepstack = tower.forward(
-        _shard(patches, submesh, sp_axis),
-        pos_embeds=_shard(pos, submesh, sp_axis),
-        rope=(_shard(cos, submesh, sp_axis), _shard(sin, submesh, sp_axis)),
-        cu_seqlens=cu_seqlens,
-    )
-    print("Tower Done")
+    # `perf` runs the whole iteration twice: the first pass compiles/caches kernels, the second is the
+    # measured steady-state run. `check` runs once -- the golden PCC needs no warmup. Idiom:
+    # test_transformer_qwenimage.py. Each iteration is timed in two parts, split by a device sync:
+    #   prep = per-request host build (rope + position tables) + the host->device upload of every input
+    #   op   = the tower forward itself
+    # `patches` stays outside (it is the fixed test input feeding the golden, i.e. "pixels already in
+    # host memory"); everything else a real request rebuilds per call lives inside the timed region.
+    n_iters = 1 if check_pcc else 2
+    for iteration in range(n_iters):
+        print(f"Tower Forward ({iteration + 1}/{n_iters})")
+        ttnn.synchronize_device(submesh)  # device idle before timing
+        t_start = time.time()
+
+        # --- prep: host build + host->device upload ---
+        cos, sin = tower.prepare_rope(grid)
+        pos = tower.prepare_pos_embeds(grid)
+        tt_patches = _shard(patches, submesh, sp_axis)
+        tt_pos = _shard(pos, submesh, sp_axis)
+        tt_cos, tt_sin = _shard(cos, submesh, sp_axis), _shard(sin, submesh, sp_axis)
+        ttnn.synchronize_device(submesh)  # uploads landed on device
+        t_prep_done = time.time()
+
+        # --- op: the tower forward ---
+        tokens, deepstack = tower.forward(tt_patches, pos_embeds=tt_pos, rope=(tt_cos, tt_sin), cu_seqlens=cu_seqlens)
+        ttnn.synchronize_device(submesh)  # forward complete
+        t_end = time.time()
+
+        print(
+            f"iter {iteration + 1}/{n_iters}: "
+            f"prep {(t_prep_done - t_start) * 1000:8.1f} ms (host build + H2D) | "
+            f"op {(t_end - t_prep_done) * 1000:8.1f} ms (tower.forward) | "
+            f"e2e {(t_end - t_start) * 1000:8.1f} ms"
+        )
 
     merged = total // SPATIAL_MERGE_SIZE**2
     actual_tokens = tensor.to_torch(tokens, mesh_axes=[None, None])
