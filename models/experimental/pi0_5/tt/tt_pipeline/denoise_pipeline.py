@@ -786,13 +786,25 @@ class TTNNPi05DenoiseStreamedPipeline:
                 ttnn.copy_host_to_device_tensor(ttnn.from_torch(pk, dtype=kvd, layout=ttnn.TILE_LAYOUT), pk_dev)
                 ttnn.copy_host_to_device_tensor(ttnn.from_torch(pv, dtype=kvd, layout=ttnn.TILE_LAYOUT), pv_dev)
 
-    def rerun(self, x_t_init):
-        """Re-seed the noise buffer and replay the captured loop (build-once reuse)."""
+    def stage_noise_host(self, x_t_init):
+        """Tilize a noise draw into a HOST tensor matching _x_t's spec, so a chunk's
+        reseed is a bare H2D write. Call this OUTSIDE the timed loop."""
+        return from_torch_pi05(x_t_init, dtype=ttnn.float32)
+
+    def rerun(self, x_t_init, noise_host=None):
+        """Re-seed the noise buffer and replay the captured loop (build-once reuse).
+
+        noise_host is a tensor from stage_noise_host(): passing it keeps the host
+        tilize, the device allocation and the eager ttnn.copy off the hot path and
+        leaves only the H2D write."""
         assert self._loop_tids is not None, "call stream_euler(capture=True) once before rerun()"
-        ttnn.copy(
-            from_torch_pi05(x_t_init, dtype=ttnn.float32, device=self._stage0_mesh, memory_config=_L1),
-            self._x_t,
-        )
+        if noise_host is not None:
+            ttnn.copy_host_to_device_tensor(noise_host, self._x_t)
+        else:
+            ttnn.copy(
+                from_torch_pi05(x_t_init, dtype=ttnn.float32, device=self._stage0_mesh, memory_config=_L1),
+                self._x_t,
+            )
         return self.replay()
 
     # ──────────── Single-root capture support (caller-owned trace) ──────────
