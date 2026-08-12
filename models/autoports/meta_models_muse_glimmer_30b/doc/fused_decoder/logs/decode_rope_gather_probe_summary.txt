@@ -1,6 +1,7 @@
 # decode RoPE cos/sin gather: the shipped two gathers vs one packed table
 # python -m tracy -r -p -v bench/decode_rope_gather_probe.py; 16 reps each,
 # preceded by one correctness call of each form (bit-identical outputs).
+# Regenerate with: python bench/summarize_rope_gather_probe.py
 # 204 profiled ops
 
 shipped (2 gathers)         13.92 us/call   (6 ops)

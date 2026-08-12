@@ -1,4 +1,4 @@
-# /tmp/k1.csv
+# models/autoports/meta_models_muse_glimmer_30b/doc/fused_decoder/tracy/probes/kblock_device_ops.csv.gz
 # 416 'MinimalMatmul' rows in 52 groups
 === rows=8192 wqkv  default median 2133.7 us (24 rows) ===
     M8_K13_N8                     2159.8 us   -1.21 %

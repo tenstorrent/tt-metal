@@ -266,7 +266,8 @@ All eight are decode, where the fused graph's accuracy gain is smallest: decode
 keeps `ttnn.linear` (a decode step is 32 rows, below the `minimal_matmul`
 crossover), so only the RoPE, norm and activation rewrites apply there. Across
 the whole suite decode spans 0.998152-0.999693 and prefill — which switches
-matmul kernel at and above 3072 rows — spans 0.998648-0.999786.
+matmul kernel at and above 3072 rows — spans 0.998729-0.999786 (that floor is
+`fused prefill[full] batch=32 user=28 seq_len=3036` in `logs/pcc_summary.txt`).
 
 ## Performance
 
@@ -487,7 +488,13 @@ it is why `minimal_matmul(fuse_swiglu=True)` — which would have needed a secon
    (`logs/dense_compute_kernel_probe.log`).
 
    **The RMSNorms are the one exception, and the only fidelity change in this
-   stage.** They run on `HiFi4 / math_approx_mode=False /
+   stage.** (`rope_compute_kernel_config` also hands `rotary_embedding_hf` an
+   explicit config, but it is inert: its `math_fidelity` and
+   `fp32_dest_acc_en` equal that op's own default
+   (`rotary_embedding_hf.cpp:46`), and the one field that differs,
+   `math_approx_mode`, is unpacked by both of that op's program factories and
+   never reaches the `ComputeDescriptor` — so it has no numeric or timing
+   effect.) They run on `HiFi4 / math_approx_mode=False /
    fp32_dest_acc_en=True / packer_l1_acc=True`, where `ttnn.rms_norm`'s own
    default — what the functional layer used, since it passed no config — is
    `HiFi4 / approx=True / fp32_dest_acc_en=False / packer_l1_acc=False`
@@ -525,7 +532,8 @@ it is why `minimal_matmul(fuse_swiglu=True)` — which would have needed a secon
    and gather once — was built and measured: it produces **bit-identical**
    cos/sin (`torch.equal` on both) and is a **wash**, 14.08 vs 13.92 us,
    because the two width slices needed to split the halves apart again
-   (5.23 us) cost more than the saved `embedding` + `transpose` (3.09 us).
+   (5.23 us) cost more than the saved `embedding` + `transpose` (5.09 us:
+   11.69 -> 6.60 us across those two ops).
    See `logs/decode_rope_gather_probe*` and
    `tracy/probes/decode_rope_gather_ops.csv`. Two
    `TilizeWithValPaddingDeviceOperation` (5.6 us each) live *inside*
@@ -535,6 +543,12 @@ it is why `minimal_matmul(fuse_swiglu=True)` — which would have needed a secon
    `test_fused_graph_uses_fused_ops` traps the *Python-level*
    `ttnn.tilize`/`to_layout`/`untilize` calls, which are zero — it cannot see
    inside another op's kernel, so this pair is disclosed rather than asserted.
+   Two smaller decode items are recorded here rather than left silent: the
+   `SliceDeviceOperation` that trims the head-concat output back to `batch`
+   (2.08 us, 0.08 % of the step), and the fact that asking
+   `nlp_create_qkv_heads_decode` for an interleaved output would remove two of
+   the four QK-norm reshards (~1.1 us) — neither was pursued, both are under
+   0.1 % of a decode step.
    The rest of the gather is two `EmbeddingsDeviceOperation` (1.1 us each), two
    `TransposeDeviceOperation` (2.1 us) and two
    `InterleavedToShardedDeviceOperation` (0.6 us each): the transpose is real data movement,
@@ -639,7 +653,13 @@ it is why `minimal_matmul(fuse_swiglu=True)` — which would have needed a secon
    `q_filler` concat and a 301.2 us trim for the sliding-window tail, 2.48 %). Disclosed rather than fixed: removing it means changing
    the chunking contract itself, which the functional stage owns and every later
    stage inherits.
-13. **Scope.** BF16 everywhere, DRAM interleaved weights, no quantisation, no
+13. **`MINIMAL_MATMUL_BLOCKS`'s `o_proj` entry is gated at `min_rows = 8192`
+   and measured only there.** `from_state_dict` accepts a `prefill_chunk_size`
+   up to 16384, so a caller that raised the chunk would apply that config at a
+   height it was never measured at (and it inverts by ~6 % below 8192). Not
+   reachable at the shipped default chunk, which is 8192 and is what every test
+   and capture uses.
+14. **Scope.** BF16 everywhere, DRAM interleaved weights, no quantisation, no
    multi-device. Weight dtype/fidelity policy, DRAM-sharded decode matmuls and
    multi-chip are explicitly *not* this stage. The matmul path pins the
    baseline's fidelity exactly; the RMSNorms are the single knob this stage did
