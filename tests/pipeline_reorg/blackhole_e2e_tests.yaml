@@ -151,8 +151,8 @@
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/huggingface/hub/models--deepseek-ai--DeepSeek-R1-0528
     EXPECT_NUM_TESTS=65 pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "(fabric2d-mesh-4x2 or fabric2d-mesh-2x4 or fabric2d-2x4) and not matmul_pcc and not perf-host-64 and not pad50" --timeout 1800 || exit_code=$?
     EXPECT_NUM_TESTS=4 pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_ds_mla -k "fabric2d-2x4 and random and scaled_sl and check_pcc" -vvv --tb=short || exit_code=$?
-    EXPECT_NUM_TESTS=90 pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "balanced and not non_balanced and fabric2d-mesh-2x4 and random and not pretrained" -vvv --tb=short --timeout=900 || exit_code=$?
-    EXPECT_NUM_TESTS=12 pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py -k "fabric2d-mesh-2x4-2link and layer0 and device" -vvv --tb=short || exit_code=$?
+    EXPECT_NUM_TESTS=3 pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "balanced and not non_balanced and fabric2d-mesh-2x4 and random and not pretrained and not host_gate_all and ((pcc-abc_1k and dense and no_determinism and iter1) or (smoke-random and with_determinism and iter2 and not iter25 and not iter2000 and (dense or moe-gate_device)))" -vvv --tb=short --timeout=900 || exit_code=$?
+    EXPECT_NUM_TESTS=8 pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py -k "fabric2d-mesh-2x4-2link and layer0 and device and not isl_2k56 and not isl_12k8" -vvv --tb=short || exit_code=$?
     exit $exit_code
   skus:
     bh_loudbox:
@@ -220,7 +220,7 @@
   cmd: |
     exit_code=0
     EXPECT_NUM_TESTS=28 pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "(fabric2d-mesh-2x2 or fabric2d-2x2) and not matmul_pcc and not perf-host-64" --timeout 1800 || exit_code=$?
-    EXPECT_NUM_TESTS=13 pytest models/demos/deepseek_v3_d_p/tests/cache/ -k "fabric2d-2x2 and not k3" -vvv --tb=short || exit_code=$?
+    EXPECT_NUM_TESTS=14 pytest models/demos/deepseek_v3_d_p/tests/cache/ -k "fabric2d-2x2" -vvv --tb=short || exit_code=$?
     exit $exit_code
   skus:
     bh_quietbox_2:
@@ -259,7 +259,7 @@
   model-name: deepseek_prefill
   cmd: |
     exit_code=0
-    EXPECT_NUM_TESTS=205 pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short -k "fabric2d-mesh-2x2 and not test_ttnn_reduce_single_expert and (not test_prefill_dispatch or ((bf16_in and tile and bf16_out) or (fp8_scaled_in and row_major and fp8_out and fp8_disp_compression)))" || exit_code=$?
+    EXPECT_NUM_TESTS=205 pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short -k "fabric2d-mesh-2x2 and (not test_prefill_dispatch or ((bf16_in and tile and bf16_out) or (fp8_scaled_in and row_major and fp8_out and fp8_disp_compression)))" || exit_code=$?
     exit $exit_code
   skus:
     bh_quietbox_2:

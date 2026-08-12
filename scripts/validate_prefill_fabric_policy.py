@@ -63,17 +63,36 @@ def _attribute_name(node: ast.Attribute) -> str | None:
     return node.attr
 
 
+def _literal_command_text(node: ast.Constant | ast.JoinedStr) -> str:
+    if isinstance(node, ast.Constant):
+        return node.value if isinstance(node.value, str) else ""
+    return "".join(
+        value.value if isinstance(value, ast.Constant) and isinstance(value.value, str) else "{}"
+        for value in node.values
+    )
+
+
 def audit_python_references() -> list[str]:
     errors = []
     for relative_root in PYTHON_ROOTS:
         for path in sorted((REPO_ROOT / relative_root).rglob("*.py")):
             relative_path = path.relative_to(REPO_ROOT)
             try:
-                tree = ast.parse(path.read_text(), filename=str(relative_path))
+                source_text = path.read_text()
+                tree = ast.parse(source_text, filename=str(relative_path))
             except (OSError, SyntaxError) as error:
                 errors.append(f"{relative_path}: could not audit Python source: {error}")
                 continue
             for node in ast.walk(tree):
+                if isinstance(node, (ast.Constant, ast.JoinedStr)):
+                    source = _literal_command_text(node)
+                    if "pytest" in source and "-k" in source:
+                        match = PYTEST_SELECTOR.search(source)
+                        if match is not None and (ambiguous := AMBIGUOUS_SELECTOR.search(match.group("selector"))):
+                            errors.append(
+                                f"{relative_path}:{node.lineno}: ambiguous embedded pytest selector "
+                                f"{ambiguous.group(0)!r}; use an exact Fabric2D or torus-xy profile id"
+                            )
                 if isinstance(node, ast.Attribute):
                     enum_name = _attribute_name(node)
                     if enum_name is not None and (relative_path, enum_name) not in ALLOWED_FABRIC1D_REFERENCES:

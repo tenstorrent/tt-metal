@@ -43,7 +43,9 @@ def _require_certified_torus_xy():
 # this reason (13_947_233 vs a 7_118_649 baseline that matches one forward within 2%). The metadata
 # axis came in with 3d3c65f985b (#51624), predating both K3 commits. Fix is to pin 'and scalar'
 # there too and keep 7_118_649; left alone here so this change doesn't touch another CI baseline.
-_CMD_K3_CHUNKED_8X4 = f"pytest {_CHUNKED_TEST_PATH} -k 'deep-50k+5k and k3 and func and 8x4 and fabric2d and scalar'"
+_CMD_K3_CHUNKED_8X4 = (
+    f"pytest {_CHUNKED_TEST_PATH} " "-k 'deep-50k+5k and k3 and func and torus-xy-8x4 and scalar and no_determinism'"
+)
 
 
 @pytest.mark.timeout(0)
@@ -127,6 +129,7 @@ def test_kimi_k3_mla_chunked_perf_galaxy():
     RingJointSDPADeviceOperation, and its op sets do not know about g_proj or its all-gather, so the
     extrapolation would read optimistic. This is a ground-truth 8x4 measurement instead.
     """
+    _require_certified_torus_xy()
     if not _is_galaxy_env():
         pytest.skip("This test requires 8x4 mesh - galaxy. (set MESH_DEVICE=TG)")
 
@@ -134,11 +137,9 @@ def test_kimi_k3_mla_chunked_perf_galaxy():
 
     run_model_device_perf_test_with_merge(
         command=_CMD_K3_CHUNKED_8X4,
-        # Measured 2026-08-04 on bh-glx-b06u08 (8x4, FABRIC_2D, DDR 14000); replaces a 9_966_109
-        # estimate that read 16% low. Two runs agreed to 0.02%. Not inflated by the sub-nominal DDR:
-        # K2.6 scalar-only on this box reads 6_984_119 vs its committed 7_118_649, i.e. 1.9% faster
-        # than the box those baselines came from.
-        expected_device_perf_ns_per_iteration=11_562_468,
+        # Record-only until recalibrated on certified TorusXY; 11,562,468 ns was measured on
+        # unwrapped Fabric2D and is not a valid Ring/Ring production threshold.
+        expected_device_perf_ns_per_iteration=None,
         subdir="kimi_k3_mla",
         model_name="kimi_k3_mla_chunked_glx_8x4",
         num_iterations=1,

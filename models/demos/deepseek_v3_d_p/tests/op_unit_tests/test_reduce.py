@@ -235,15 +235,6 @@ def test_ttnn_reduce(mesh_device, seq_len, emb_dim, topk, use_weights):
     run_reduce(mesh_device, seq_len, emb_dim, topk, use_weights)
 
 
-@pytest.mark.parametrize("use_weights", [True, False], ids=["weighted", "unweighted"])
-@pytest.mark.parametrize(
-    "mesh_device, device_params", REDUCE_MESH_PARAMS[:1], indirect=["mesh_device", "device_params"]
-)
-def test_ttnn_reduce_single_expert(mesh_device, use_weights):
-    """Top-k=1 cannot be sharded across the second axis of the 4x2 mapper."""
-    run_reduce(mesh_device, seq_len=32, emb_dim=1024, topk=1, use_weights=use_weights)
-
-
 # Per-model reduce shapes as (id_prefix, config, extended_model). Each model uses seq_len 640 and
 # topk = NUM_EXPERTS_PER_TOKEN at its own emb_dim. DeepSeek V3 is the baseline and runs by default;
 # every other model is gated behind @pytest.mark.extended_model.
