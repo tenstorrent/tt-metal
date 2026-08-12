@@ -10,6 +10,7 @@
 #include "device.hpp"
 #include "mesh_device.hpp"
 #include "mesh_device_impl.hpp"
+#include "mesh_event_impl.hpp"
 #include "mesh_trace.hpp"
 #include "mesh_workload_impl.hpp"
 #include "tt-metalium/program.hpp"
@@ -132,9 +133,10 @@ void EventSynchronize(const MeshEvent& event) {
     if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
         return;
     }
-    for (const auto& coord : event.device_range()) {
+    for (const auto& coord : event.impl().device_range()) {
         auto* physical_device = event.device()->impl().get_device(coord);
-        while (physical_device->sysmem_manager().get_last_completed_event(event.mesh_cq_id()) < event.id()) {
+        while (physical_device->sysmem_manager().get_last_completed_event(event.impl().mesh_cq_id()) <
+               event.impl().id()) {
             ;
         }
     }
@@ -145,9 +147,10 @@ bool EventQuery(const MeshEvent& event) {
         return true;
     }
     bool event_completed = true;
-    for (const auto& coord : event.device_range()) {
+    for (const auto& coord : event.impl().device_range()) {
         auto* physical_device = event.device()->impl().get_device(coord);
-        event_completed &= physical_device->sysmem_manager().get_last_completed_event(event.mesh_cq_id()) >= event.id();
+        event_completed &=
+            physical_device->sysmem_manager().get_last_completed_event(event.impl().mesh_cq_id()) >= event.impl().id();
     }
     return event_completed;
 }

@@ -9,6 +9,7 @@
 
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
+#include "mesh_event_impl.hpp"
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/experimental/core_subset_write/buffer_write.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
@@ -349,15 +350,15 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
 
     auto sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, {});
     auto& sysmem_manager = this->reference_sysmem_manager();
-    auto event =
-        MeshEvent(sysmem_manager.get_next_event(id_), mesh_device_, id_, MeshCoordinateRange(mesh_device_->shape()));
+    auto event = make_mesh_event(
+        sysmem_manager.get_next_event(id_), mesh_device_, id_, MeshCoordinateRange(mesh_device_->shape()));
 
     // Issue commands to clear expected_num_workers_completed counter(s) on the dispatcher
     for (auto* device : mesh_device_->get_devices()) {
         event_dispatch::issue_record_event_commands(
             mesh_device_,
             device->id(),
-            event.id(),
+            event.impl().id(),
             id_,
             mesh_device_->num_hw_cqs(),
             device->sysmem_manager(),
@@ -373,7 +374,9 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
 
     // Block after clearing counter(s) on dispatcher
     completion_queue_reads_.push(std::make_shared<MeshCompletionReaderVariant>(
-        std::in_place_type<MeshReadEventDescriptor>, ReadEventDescriptor(event.id()), event.device_range()));
+        std::in_place_type<MeshReadEventDescriptor>,
+        ReadEventDescriptor(event.impl().id()),
+        event.impl().device_range()));
     this->increment_num_entries_in_completion_queue();
     std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);
     this->wait_for_outstanding_reads(lock);
@@ -897,14 +900,14 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_helper(
     if (this->get_target_device_type() == tt::TargetDevice::Mock ||
         this->get_target_device_type() == tt::TargetDevice::Emule) {
         // Return a dummy event for mock devices
-        return MeshEvent(0, mesh_device_, id_, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
+        return make_mesh_event(0, mesh_device_, id_, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
     }
 
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Event Synchronization is not supported during trace capture.");
 
     auto& sysmem_manager = this->reference_sysmem_manager();
-    auto event = MeshEvent(
+    auto event = make_mesh_event(
         sysmem_manager.get_next_event(id_),
         mesh_device_,
         id_,
@@ -915,7 +918,7 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_helper(
         event_dispatch::issue_record_event_commands(
             mesh_device_,
             mesh_device_->impl().get_device(coord)->id(),
-            event.id(),
+            event.impl().id(),
             id_,
             mesh_device_->num_hw_cqs(),
             mesh_device_->impl().get_device(coord)->sysmem_manager(),
@@ -924,7 +927,7 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_helper(
             notify_host);
     };
 
-    for_each_local(mesh_device_, event.device_range(), [&](const auto& coord) {
+    for_each_local(mesh_device_, event.impl().device_range(), [&](const auto& coord) {
         dispatch_thread_pool_->enqueue(
             [&dispatch_lambda, coord]() { dispatch_lambda(coord); }, mesh_device_->impl().get_device(coord)->id());
     });
@@ -940,7 +943,7 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event(
     MeshEvent event = this->enqueue_record_event_helper(sub_device_ids, /*notify_host=*/false, device_range);
     for (const auto& sub_device_id : buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids)) {
         auto& sub_device_entry = sub_device_cq_owner[*sub_device_id];
-        sub_device_entry.recorded_event(event.id(), event.mesh_cq_id());
+        sub_device_entry.recorded_event(event.impl().id(), event.impl().mesh_cq_id());
     }
     return event;
 }
@@ -949,12 +952,14 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_to_host_nolock(
     ttsl::Span<const SubDeviceId> sub_device_ids, const std::optional<MeshCoordinateRange>& device_range) {
     auto event = this->enqueue_record_event_helper(sub_device_ids, /*notify_host=*/true, device_range);
     completion_queue_reads_.push(std::make_shared<MeshCompletionReaderVariant>(
-        std::in_place_type<MeshReadEventDescriptor>, ReadEventDescriptor(event.id()), event.device_range()));
+        std::in_place_type<MeshReadEventDescriptor>,
+        ReadEventDescriptor(event.impl().id()),
+        event.impl().device_range()));
     this->increment_num_entries_in_completion_queue();
     auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
     for (const auto& sub_device_id : buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids)) {
         auto& sub_device_entry = sub_device_cq_owner[*sub_device_id];
-        sub_device_entry.recorded_event(event.id(), event.mesh_cq_id());
+        sub_device_entry.recorded_event(event.impl().id(), event.impl().mesh_cq_id());
     }
     return event;
 }
@@ -969,13 +974,16 @@ void FDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent& sync_event) {
     auto lock = lock_api_function_();
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Event Synchronization is not supported during trace capture.");
-    for_each_local(mesh_device_, sync_event.device_range(), [&](const auto& coord) {
+    for_each_local(mesh_device_, sync_event.impl().device_range(), [&](const auto& coord) {
         event_dispatch::issue_wait_for_event_commands(
-            id_, sync_event.mesh_cq_id(), mesh_device_->impl().get_device(coord)->sysmem_manager(), sync_event.id());
+            id_,
+            sync_event.impl().mesh_cq_id(),
+            mesh_device_->impl().get_device(coord)->sysmem_manager(),
+            sync_event.impl().id());
     });
     auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
     for (auto& sub_device_entry : sub_device_cq_owner) {
-        sub_device_entry.waited_for_event(sync_event.id(), sync_event.mesh_cq_id(), this->id_);
+        sub_device_entry.waited_for_event(sync_event.impl().id(), sync_event.impl().mesh_cq_id(), this->id_);
     }
 }
 

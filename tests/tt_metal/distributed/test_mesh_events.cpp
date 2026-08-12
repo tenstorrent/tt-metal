@@ -21,6 +21,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_event.hpp>
+#include "tt_metal/distributed/mesh_event_impl.hpp"
 #include <tt-metalium/shape2d.hpp>
 #include <tt_stl/span.hpp>
 #include "tests/tt_metal/distributed/utils.hpp"
@@ -335,7 +336,7 @@ TEST_F(MeshEventsTestSuite, EventQuery) {
         }
     }
     // Create a dummy event from the future that has not been issued yet.
-    auto event = MeshEvent(0xffff, mesh_device_.get(), 0, MeshCoordinateRange(mesh_device_->shape()));
+    auto event = make_mesh_event(0xffff, mesh_device_.get(), 0, MeshCoordinateRange(mesh_device_->shape()));
     EXPECT_FALSE(EventQuery(event));  // Querying an event that has not been issued should return false.
 }
 

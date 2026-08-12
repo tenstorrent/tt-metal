@@ -5,34 +5,38 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <ostream>
 
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_device.hpp>
-
 namespace tt::tt_metal::distributed {
+
 class MeshDevice;
-}  // namespace tt::tt_metal::distributed
-
-namespace tt::tt_metal::distributed {
+class MeshEventImpl;
+class MeshCoordinateRange;
 
 class MeshEvent {
 public:
-    MeshEvent(uint32_t id, MeshDevice* device, uint32_t mesh_cq_id, const MeshCoordinateRange& device_range);
+    MeshEvent(const MeshEvent& other);
+    MeshEvent& operator=(const MeshEvent& other);
+    MeshEvent(MeshEvent&& other) noexcept;
+    MeshEvent& operator=(MeshEvent&& other) noexcept;
+    ~MeshEvent();
 
-    // Returns references to the event data.
-    uint32_t id() const;
     MeshDevice* device() const;
-    uint32_t mesh_cq_id() const;
-    const MeshCoordinateRange& device_range() const;
+
+    // debug/test/internal usage.
+    MeshEventImpl& impl();
+    const MeshEventImpl& impl() const;
 
     friend std::ostream& operator<<(std::ostream& os, const MeshEvent& event);
 
 private:
-    uint32_t id_ = 0;
-    MeshDevice* device_ = nullptr;
-    uint32_t mesh_cq_id_ = 0;
-    MeshCoordinateRange device_range_;
+    explicit MeshEvent(std::unique_ptr<MeshEventImpl> impl);
+
+    std::unique_ptr<MeshEventImpl> pimpl_;
+
+    friend MeshEvent make_mesh_event(
+        uint32_t id, MeshDevice* device, uint32_t mesh_cq_id, const MeshCoordinateRange& device_range);
 };
 
 }  // namespace tt::tt_metal::distributed

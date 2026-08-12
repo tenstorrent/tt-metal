@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <sys/types.h>
 #include <tt-metalium/distributed.hpp>
+#include "tt_metal/distributed/mesh_event_impl.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <functional>
@@ -241,8 +242,8 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsEventSynchronizeSanity)
                 auto event = sync_events[i].emplace_back(cqs[i].get().enqueue_record_event_to_host());
                 distributed::EventSynchronize(event);
                 // Can check events fields after prev sync w/ async CQ.
-                EXPECT_EQ(event.mesh_cq_id(), cqs[i].get().id());
-                EXPECT_EQ(event.id(), cmds_issued_per_cq[i] + 1);
+                EXPECT_EQ(event.impl().mesh_cq_id(), cqs[i].get().id());
+                EXPECT_EQ(event.impl().id(), cmds_issued_per_cq[i] + 1);
                 cmds_issued_per_cq[i] += num_cmds_per_cq;
             }
         }
@@ -280,8 +281,8 @@ TEST_F(UnitMeshMultiCQSingleDeviceEventFixture, TestEventsEventSynchronizeSanity
             auto event = sync_events[i].emplace_back(cqs[i].get().enqueue_record_event_to_host());
             distributed::EventSynchronize(event);
             // Can check events fields after prev sync w/ async CQ.
-            EXPECT_EQ(event.mesh_cq_id(), cqs[i].get().id());
-            EXPECT_EQ(event.id(), cmds_issued_per_cq[i] + 1);
+            EXPECT_EQ(event.impl().mesh_cq_id(), cqs[i].get().id());
+            EXPECT_EQ(event.impl().id(), cmds_issued_per_cq[i] + 1);
             cmds_issued_per_cq[i] += num_cmds_per_cq;
         }
     }
@@ -316,8 +317,8 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsEnqueueWaitForEventSani
                 log_debug(
                     tt::LogTest, "j : {} Recording and Device Syncing on event for CQ ID: {}", j, cqs[i].get().id());
                 auto event = cqs[i].get().enqueue_record_event();
-                EXPECT_EQ(event.mesh_cq_id(), cqs[i].get().id());
-                EXPECT_EQ(event.id(), events_issued_per_cq[i] + 1);
+                EXPECT_EQ(event.impl().mesh_cq_id(), cqs[i].get().id());
+                EXPECT_EQ(event.impl().id(), events_issued_per_cq[i] + 1);
                 cqs[i].get().enqueue_wait_for_event(event);
                 events_issued_per_cq[i] += num_events_per_cq;
             }
@@ -356,8 +357,8 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsEnqueueWaitForEventCros
                     cqs[cq_idx_record].get().id(),
                     cqs[cq_idx_wait].get().id());
                 auto event = cqs[cq_idx_record].get().enqueue_record_event();
-                EXPECT_EQ(event.mesh_cq_id(), cqs[cq_idx_record].get().id());
-                EXPECT_EQ(event.id(), cmds_issued_per_cq[i] + 1);
+                EXPECT_EQ(event.impl().mesh_cq_id(), cqs[cq_idx_record].get().id());
+                EXPECT_EQ(event.impl().id(), cmds_issued_per_cq[i] + 1);
                 cqs[cq_idx_wait].get().enqueue_wait_for_event(event);
 
                 // Note: Removed host sync here since MeshCommandQueue::enqueue_record_event creates device-only events

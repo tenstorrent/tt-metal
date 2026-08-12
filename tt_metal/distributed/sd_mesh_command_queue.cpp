@@ -9,6 +9,7 @@
 #include "tt_metal/impl/program/program_impl.hpp"
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
+#include "mesh_event_impl.hpp"
 #include <tt-metalium/experimental/core_subset_write/buffer_write.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
@@ -340,13 +341,13 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
 MeshEvent SDMeshCommandQueue::enqueue_record_event(
     ttsl::Span<const SubDeviceId>, const std::optional<MeshCoordinateRange>& device_range) {
     // No synchronization is needed for slow dispatch, returning a dummy value
-    return MeshEvent(0, mesh_device_, id_, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
+    return make_mesh_event(0, mesh_device_, id_, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
 }
 
 MeshEvent SDMeshCommandQueue::enqueue_record_event_to_host_nolock(
     ttsl::Span<const SubDeviceId>, const std::optional<MeshCoordinateRange>& device_range) {
     // No synchronization is needed for slow dispatch, returning a dummy value
-    return MeshEvent(0, mesh_device_, id_, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
+    return make_mesh_event(0, mesh_device_, id_, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
 }
 
 MeshEvent SDMeshCommandQueue::enqueue_record_event_to_host(
