@@ -23,6 +23,7 @@ from models.tt_dit.pipelines.ltx.pipeline_ltx_distilled import LTXDistilledPipel
 from models.tt_dit.utils.ltx import (
     DEFAULT_LTX_PROMPT,
     STEADY_STATE_LTX_PROMPT,
+    STEADY_STATE_REPLAY_LTX_PROMPT,
     default_ltx_checkpoint,
     default_ltx_gemma,
     print_ltx_timing_table,
@@ -293,11 +294,15 @@ def test_pipeline_distilled(
     if no_prompt:
         seed = int(os.environ.get("SEED", "10"))
         run(prompt=prompt, number=0, seed=seed)
-        # Traced: gen #0 captures (lazily, on first step of each stage); gen #1 is pure
-        # replay — its Stage 1/2 denoise times are the steady-state measurement.
+        # Traced: gen #0 captures the denoise/VAE/audio traces (lazily, on first step of each stage).
         if traced:
-            logger.info("=== traced steady-state pass (gen #1, pure replay) ===")
+            # Gen #1 captures the encode trace (the pipeline opens that gate once its own captures
+            # are done), so gen #2 is the first pass where every trace replays — the one whose
+            # timings are the steady state.
+            logger.info("=== gen #1: encode trace capture ===")
             run(prompt=steady_state_prompt, number=1, seed=seed)
+            logger.info("=== traced steady-state pass (gen #2, pure replay) ===")
+            run(prompt=STEADY_STATE_REPLAY_LTX_PROMPT, number=2, seed=seed)
             check_output_with_clip(steady_state_prompt, 1)
             check_output_with_vbench(steady_state_prompt, 1, seed=seed)
         else:

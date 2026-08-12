@@ -39,6 +39,14 @@ STEADY_STATE_LTX_PROMPT = (
     "Audio: faint birdsong through glass, a quiet purr, soft room tone."
 )
 
+# Third prompt, for the pass after the encode trace is captured: a second unseen prompt is what makes
+# that pass replay every trace rather than capture one.
+STEADY_STATE_REPLAY_LTX_PROMPT = (
+    "A red paper boat drifts across a still pond at dusk, ripples spreading behind it. "
+    "The camera holds a low steady shot near the waterline as the light fades. "
+    "Audio: gentle water laps, distant crickets, soft evening air."
+)
+
 
 def ceil_to(x: int, multiple: int) -> int:
     """Smallest multiple of ``multiple`` that is >= ``x``."""
