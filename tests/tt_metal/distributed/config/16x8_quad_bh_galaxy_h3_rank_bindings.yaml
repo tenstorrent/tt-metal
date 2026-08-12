@@ -1,0 +1,31 @@
+# 16x8 quad Blackhole Galaxy (128 chips, 4 hosts in a 2x2 host grid) for MiniMax-H3.
+#
+# The alternative to 32x4 for this cluster, and the only way to give H3 TP=8. On a (4, 32) mesh TP is
+# pinned to 4 because axis 0 is 4, which leaves 56/4 = 14 local heads -- above the
+# `B*NQH <= sdpa_grid_y` (10) assert in `exp_ring_joint_scaled_dot_product_attention`, the op Wan
+# added specifically for its 4x32 bring-up. A 16x8 descriptor supports an (8, 16) logical mesh, where
+# 56/8 = 7 local heads clears that bar and `5376 % (32*8) == 0` keeps the distributed norms legal.
+#
+# `global_env` rather than `-x` in --mpi-args, for the reason spelled out in the 32x4 sibling file:
+# tt-run builds a fixed per-rank environment and `-x` reaches only the first MPMD app context.
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+
+  - rank: 1
+    mesh_id: 0
+
+  - rank: 2
+    mesh_id: 0
+
+  - rank: 3
+    mesh_id: 0
+
+global_env:
+  TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS: "120000"
+  TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES: "0"
+  TT_DIT_CACHE_DIR: "/data/kevinmi/tt_dit_cache"
+  MINIMAX_H3_DIFFUSERS_DIR: "/data/cglagovich/MiniMax-H3-diffusers"
+  MINIMAX_H3_ARTIFACT_DIR: "/data/kevinmi/h3_8x16_artifacts"
+
+mesh_graph_desc_path: "tt_metal/fabric/mesh_graph_descriptors/16x8_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"

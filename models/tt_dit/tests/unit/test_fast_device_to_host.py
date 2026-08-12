@@ -2,13 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for fast_device_to_host with Wan 2.2 VAE output shapes.
+"""Tests for fast_device_to_host.
 
-Parametrized resolutions:
-  720p: BCTHW = (1, 3, 81, 720, 1280)
-  480p: BCTHW = (1, 3, 81, 480, 832)
+Two sharding schemes, because the host-side reassembly is a different problem for each:
 
-Sharding: H (dim 3) on TP axis (mesh axis 0), W (dim 4) on SP axis (mesh axis 1).
+  * Wan 2.2 VAE output — BCTHW, H (dim 3) on the TP axis (mesh axis 0) and W (dim 4) on the SP
+    axis (mesh axis 1).  Two *distinct* tensor dims, one per mesh axis.
+    Parametrized 720p (1, 3, 81, 720, 1280) and 480p (1, 3, 81, 480, 832).
+
+  * MiniMax-H3 VAE waves — a single dim fractured row-major over the whole mesh by
+    `ShardTensorToMesh(dim=0)`, i.e. `concat_dims=[0, 0]`.  Both mesh axes name the *same*
+    tensor dim, which is not two independent concats but one linearised block index.
 
 Run with:
     pytest models/tt_dit/tests/unit/test_fast_device_to_host.py -k "bh_4x32" --timeout=300
@@ -216,3 +220,104 @@ class TestFastDeviceToHost:
             print(f"  Iterations:    {n_iters}")
             print(f"  Average time:  {avg_s * 1000:.1f} ms")
             print(f"  Throughput:    {throughput_gbs:.2f} GB/s")
+
+
+# ---------------------------------------------------------------------------
+# One dim fractured over the whole mesh: `concat_dims=[0, 0]`
+# ---------------------------------------------------------------------------
+# The MiniMax-H3 VAEs are data-parallel over work units with replicated weights: a wave is
+# `wave_size = num_devices` units concatenated on dim 0 and handed out one per device by
+# `ShardTensorToMesh(dim=0)`, whose mapper flattens the mesh row-major and gives unit `i` to
+# device `(i // cols, i % cols)`.  Reading that back is not two per-axis concats, and getting it
+# wrong reorders *whole video frames* while leaving every individual shard numerically perfect -- a
+# per-shard PCC suite passes and only an end-to-end prompt-alignment score catches it.  So these
+# assert on an index list, not a PCC.
+#
+# The reference is a ramp whose value *is* its unit index.  bf16 represents integers exactly up
+# to 256, so this stays exact at 128 units.
+_LINEARISED_MESHES = [
+    [(4, 32), 2, ring_params, ttnn.Topology.Ring],
+    [(4, 8), 2, line_params, ttnn.Topology.Linear],
+]
+
+
+def _unit_index_ramp(num_units: int, *rest: int) -> torch.Tensor:
+    return torch.arange(num_units, dtype=torch.bfloat16).reshape(num_units, *([1] * len(rest))).repeat(1, *rest)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, num_links, device_params, topology",
+    _LINEARISED_MESHES,
+    ids=["bh_4x32", "bh_4x8"],
+    indirect=["mesh_device", "device_params"],
+)
+class TestLinearisedShardReadback:
+    def test_unit_order(self, mesh_device, num_links, device_params, topology):
+        """Unit `i` must come back at position `i`, and match the composer bit for bit."""
+        num_units = mesh_device.get_num_devices()
+        ref = _unit_index_ramp(num_units, 32, 32)
+        tt_tensor = ttnn.from_torch(
+            ref,
+            dtype=ttnn.bfloat16,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        )
+        ccl_manager = CCLManager(mesh_device, num_links=num_links, topology=topology)
+
+        result = fast_device_to_host(tt_tensor, mesh_device, [0, 0], ccl_manager=ccl_manager)
+
+        assert result is not None
+        assert result.shape == ref.shape, f"shape {tuple(result.shape)} != {tuple(ref.shape)}"
+        recovered = [int(v) for v in result[:, 0, 0].float().tolist()]
+        assert recovered == list(range(num_units)), (
+            f"unit order broken: got {recovered[:16]}... expected 0..{num_units - 1}. "
+            "A leading run of high indices followed by zeros means the row index was dropped."
+        )
+        torch.testing.assert_close(result, ref, rtol=0, atol=0)
+
+        # `ConcatMeshToTensor` is correct on any mesh -- on multi-host `MeshToTensor::compose`
+        # MPI-broadcasts the shards this host does not own -- just slow.  It is a bit-exact oracle for
+        # the fast path and the fallback the VAE keeps for the no-CCL case, so pinning them together
+        # keeps the two from drifting.
+        slow = ttnn.to_torch(tt_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+        torch.testing.assert_close(result, slow, rtol=0, atol=0)
+
+    def test_decode_wave_shape(self, mesh_device, num_links, device_params, topology):
+        """The real MiniMax-H3 768p decode-wave payload: (1, 1824, 3072) bf16 per unit.
+
+        Worth its own case rather than folding into the shape above: 3072 is tile-aligned, so
+        the multi-host path keeps TILE layout through `repeat` and `mesh_partition` instead of
+        dropping to ROW_MAJOR, and 1.44 GB per wave at 128 units is the allocation this has to
+        survive in production.
+        """
+        num_units = mesh_device.get_num_devices()
+        ref = _unit_index_ramp(num_units, 1824, 3072)
+        tt_tensor = ttnn.from_torch(
+            ref,
+            dtype=ttnn.bfloat16,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        )
+        ccl_manager = CCLManager(mesh_device, num_links=num_links, topology=topology)
+
+        start = time.perf_counter()
+        result = fast_device_to_host(tt_tensor, mesh_device, [0, 0], ccl_manager=ccl_manager)
+        elapsed = time.perf_counter() - start
+
+        assert result is not None
+        assert result.shape == ref.shape, f"shape {tuple(result.shape)} != {tuple(ref.shape)}"
+        recovered = [int(v) for v in result[:, 0, 0].float().tolist()]
+        assert recovered == list(range(num_units)), f"unit order broken: got {recovered[:16]}..."
+        # Spot-check interior columns too: a per-row transposition would keep column 0 intact if
+        # the ramp were broadcast rather than read.
+        torch.testing.assert_close(result[:, -1, -1], ref[:, -1, -1], rtol=0, atol=0)
+
+        rank = int(ttnn.distributed_context_get_rank()) if ttnn.using_distributed_env() else 0
+        if rank == 0:
+            megabytes = ref.numel() * ref.element_size() / 1e6
+            print(
+                f"\n--- H3 decode wave readback: {num_units} units, {megabytes:.0f} MB, "
+                f"{elapsed * 1000:.1f} ms ({megabytes / 1e3 / elapsed:.2f} GB/s) ---"
+            )

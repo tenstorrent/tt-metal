@@ -1,0 +1,35 @@
+# 32x4 quad Blackhole Galaxy (128 chips, 4 hosts) for the MiniMax-H3 tt_dit tests.
+#
+# Identical to 32x4_quad_bh_galaxy_rank_bindings.yaml except for `global_env`, which is the point:
+# tt-run builds a *fixed* per-rank environment (TT_MESH_ID, TT_METAL_HOME, PYTHONPATH, ...) and does
+# not forward arbitrary variables from the launching shell. `-x FOO=bar` inside `--mpi-args` lands in
+# the first MPMD app context only, so it reaches rank 0 and no one else.
+#
+# That asymmetry is not cosmetic. With TT_DIT_CACHE_DIR set on rank 0 alone, rank 0 hits the prompt
+# embedding cache and returns early while ranks 1-3 run the text encoder, and the run deadlocks --
+# rank 0 waits in the DiT while its peers wait in a collective rank 0 will never join. Anything the
+# model branches on must be identical on every rank, so it belongs here rather than in --mpi-args.
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+
+  - rank: 1
+    mesh_id: 0
+
+  - rank: 2
+    mesh_id: 0
+
+  - rank: 3
+    mesh_id: 0
+
+global_env:
+  # 128-node control-plane init is slow; the default timeout trips before fabric is up.
+  TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS: "120000"
+  TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES: "0"
+  # Weight and prompt-embedding caches. Keyed by mesh shape and, on multi-host, by this host's
+  # coordinate bounding box, so one shared path serves all four ranks without collision.
+  TT_DIT_CACHE_DIR: "/data/kevinmi/tt_dit_cache"
+  MINIMAX_H3_DIFFUSERS_DIR: "/data/cglagovich/MiniMax-H3-diffusers"
+  MINIMAX_H3_ARTIFACT_DIR: "/data/kevinmi/h3_4x32_artifacts"
+
+mesh_graph_desc_path: "tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"

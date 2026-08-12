@@ -19,6 +19,7 @@ from ..layers.module import Module, Parameter
 from ..parallel.config import AudioTCParallelConfig, AudioTParallelConfig, ParallelFactor
 from ..parallel.manager import CCLManager
 from ..utils.conv3d import _ntuple, aligned_channels, get_conv3d_config
+from ..utils.tensor import local_device_to_torch
 
 # Per-mesh cache of constant zeros buffers, keyed by id(mesh_device).
 _ZEROS_CACHE: dict = {}
@@ -242,7 +243,11 @@ def prepare_conv3d_weight_state(
         prepared = ttnn.experimental.prepare_conv3d_weights(
             weight_tensor=weight_tt, C_in_block=conv_config.C_in_block, device=mesh_device
         )
-        return ttnn.to_torch(ttnn.get_device_tensors(prepared)[0])
+        # The prepared weight is identical on every device, but slicing one coordinate out of the
+        # device storage keeps the parent's distribution metadata, so on a multi-host mesh
+        # `ttnn.to_torch` refuses it: "Can't convert a tensor distributed on MeshShape([4, 32]) mesh
+        # to row-major logical tensor". `local_device_to_torch` reads a shard this host owns.
+        return local_device_to_torch(prepared)
 
     if split:
         w_hi = w_5d.float().bfloat16().float()

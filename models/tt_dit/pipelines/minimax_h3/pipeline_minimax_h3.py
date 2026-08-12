@@ -18,7 +18,8 @@ frame of conditioning rows pinned at `t = 0.999` for every denoising step.
 What runs where
 ---------------
 The packed sequence holds all three modalities at once and is denoised by one 50-layer stack on
-the mesh (TP=4 x SP=8). Everything that decides *which* row gets which treatment is host-side and
+the mesh (TP=4 on axis 0, SP on axis 1 -- 8 on a Galaxy, 32 on a quad; see `_PRESETS_BH`).
+Everything that decides *which* row gets which treatment is host-side and
 already gated bit-exact against the reference --- the layout, the fp64 rotary grid, the per-row
 timestep plan, both schedulers. That split is deliberate: those values are checkpoint contracts
 where a reassociation is a silent desync between audio and video, and they cost nothing on host.
@@ -73,7 +74,7 @@ from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, Paralle
 from ...parallel.manager import CCLManager
 from ...utils import cache
 from ...utils.conv3d import conv3d_blocking_hash
-from ...utils.tensor import bf16_tensor, from_torch
+from ...utils.tensor import bf16_tensor, from_torch, local_device_to_torch
 from .adaln_precompute import precompute_adaln_table, request_step_timesteps
 from .conditioning import MINIMAX_H3_PIXEL_MEAN as _MINIMAX_H3_PIXEL_MEAN
 from .conditioning import MINIMAX_H3_PIXEL_STD as _MINIMAX_H3_PIXEL_STD
@@ -134,6 +135,57 @@ AUDIO_SHIFT = 3.0
 # Cache namespace under TT_DIT_CACHE_DIR. `utils.cache` keys each entry on this plus the subfolder,
 # the parallel config, the mesh shape, the dtype and the FSDP flag.
 MODEL_NAME = "minimax-h3"
+
+# Per-mesh-shape defaults, following `pipelines/wan/pipeline_wan.py`'s `_PRESETS_BH`. A table rather
+# than bare keyword defaults because these are *measured per shape*, and a shape absent from it is a
+# shape nobody has run -- better a named error than silently ring-collectiving over a line fabric.
+#
+# The invariant that makes 4x32 work at all: **TP stays on axis 0 at factor 4 and SP absorbs every
+# extra device.** TP does a per-layer AllGather/ReduceScatter and has to be cheap, and on the quad
+# galaxy axis 0 is intra-host while axis 1 spans all four hosts; SP hides its KV all-gather inside
+# ring attention, so it is the axis that tolerates the inter-host hop. TP=4 is also what the shapes
+# want: 56 heads // 4 = 14, and 5376 % (32 * 4) == 0 for the distributed norms. Going 4x8 -> 4x32
+# changes exactly one number, sp 8 -> 32, and every model reads it off `mesh_device.shape`.
+_PRESETS_BH: dict[tuple[int, ...], dict] = {
+    # One Blackhole Galaxy. The measured working point for everything in MiniMaxH3.md.
+    (4, 8): {"tp_axis": 0, "sp_axis": 1, "num_links": 2, "topology": ttnn.Topology.Ring},
+    # Quad Blackhole Galaxy, 4 MPI hosts x 32 chips. Same axes, same links, same topology -- SP goes
+    # 8 -> 32. The consequence to remember is that the SP alignment becomes 32 * TILE_SIZE = 1024
+    # instead of 256, so every packed length and therefore every program in the 50-block stack is
+    # re-keyed; see the padding contract in `__call__`.
+    # `trace_denoise` is the one key unique to the quad, mirroring Wan's `traced = mesh_shape ==
+    # (4, 32)`. At SP=32 a step is dispatch-bound rather than compute-bound, so the trace is what
+    # makes the extra devices pay; at 4x8 there is enough work per chip that it is not needed, and
+    # leaving it off there keeps the measured working point exactly as it was.
+    (4, 32): {
+        "tp_axis": 0,
+        "sp_axis": 1,
+        "num_links": 2,
+        "topology": ttnn.Topology.Ring,
+        "trace_denoise": True,
+        # No `audio_t_factor`: the plumbing is complete and factor 4 on the TP axis is the
+        # configuration `test_audio_minimax_h3.py` gates at 4x8 (`FACTORS` entry `(4, 0)`), but on the
+        # quad all four ranks hang together in
+        # `_all_gather_t -> get_ag_ping_pong_buffer -> synchronize_device` -- a CCL hang rather than
+        # rank divergence, since it is the same frame on every rank. The difference from the passing
+        # 4x8 case is the fabric: `FABRIC_1D`/Linear there, `FABRIC_1D_RING`/Ring here. Audio decode
+        # is 5.2 s of a 110.9 s generation. Set the key to 4 to reproduce.
+    },
+}
+
+
+def resolve_mesh_preset(mesh_device: ttnn.MeshDevice) -> dict:
+    """The measured defaults for this mesh shape."""
+    shape = tuple(mesh_device.shape)
+    preset = _PRESETS_BH.get(shape)
+    if preset is None:
+        known = ", ".join(str(s) for s in _PRESETS_BH)
+        msg = (
+            f"no MiniMax-H3 preset for mesh shape {shape}; known shapes are {known}. Pass tp_axis, "
+            "sp_axis, num_links and topology explicitly to run an untuned shape."
+        )
+        raise ValueError(msg)
+    return preset
 
 
 def draw_request_latents(
@@ -207,15 +259,35 @@ class MiniMaxH3Pipeline:
         *,
         mesh_device: ttnn.MeshDevice,
         weights_dir: str | os.PathLike,
-        tp_axis: int = 0,
-        sp_axis: int = 1,
-        num_links: int = 2,
-        topology: ttnn.Topology = ttnn.Topology.Ring,
+        tp_axis: int | None = None,
+        sp_axis: int | None = None,
+        num_links: int | None = None,
+        topology: ttnn.Topology | None = None,
         coresident: bool | None = None,
         task: str = "t2va",
     ) -> None:
         self.mesh_device = mesh_device
         self.weights_dir = Path(weights_dir)
+        # Anything left unset comes from the per-shape preset; anything passed wins over it, so a
+        # test can still sweep an untuned configuration on a known shape.
+        preset = resolve_mesh_preset(mesh_device)
+        tp_axis = preset["tp_axis"] if tp_axis is None else tp_axis
+        sp_axis = preset["sp_axis"] if sp_axis is None else sp_axis
+        num_links = preset["num_links"] if num_links is None else num_links
+        topology = preset["topology"] if topology is None else topology
+        self.trace_denoise = preset.get("trace_denoise", False)
+        # T-parallelism for the audio decoder, or None to run it replicated. The vocoder is otherwise
+        # single-device work duplicated on every chip, which costs the same on 128 as on 32 -- 5.2 s of
+        # a 110.9 s quad generation. Factor 4 on the TP axis is the configuration
+        # `test_audio_minimax_h3.py` gates (`FACTORS`/`KNOWN_BROKEN`: `(4, 0)` passes, `(8, 1)` is
+        # xfail with a real numerics bug), and axis 0 is 4 on both the Galaxy and the quad.
+        audio_t_factor = preset.get("audio_t_factor")
+        self.audio_t_parallel = ParallelFactor(factor=audio_t_factor, mesh_axis=tp_axis) if audio_t_factor else None
+        self.audio_cache_parallel_config = VAEParallelConfig(
+            tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=audio_t_factor or 1)
+        )
+        # Denoise generations completed. Tracing engages only after one untraced pass; see `_denoise`.
+        self._generations_run = 0
         # One repository holds both partitions -- `transformer/` for t2va/fl2va and
         # `transformer_ref/` for ref2va -- with byte-identical `config.json`, so only the
         # weights differ. Fixed at construction because each is 62 GB and switching would
@@ -295,13 +367,17 @@ class MiniMaxH3Pipeline:
         *,
         mesh_device: ttnn.MeshDevice,
         weights_dir: str | os.PathLike | None = None,
-        tp_axis: int = 0,
-        sp_axis: int = 1,
-        num_links: int = 2,
-        topology: ttnn.Topology = ttnn.Topology.Ring,
+        tp_axis: int | None = None,
+        sp_axis: int | None = None,
+        num_links: int | None = None,
+        topology: ttnn.Topology | None = None,
         task: str = "t2va",
     ) -> "MiniMaxH3Pipeline":
-        """`task="t2va"` serves both t2va and fl2va; `task="ref2va"` loads `transformer_ref/`."""
+        """`task="t2va"` serves both t2va and fl2va; `task="ref2va"` loads `transformer_ref/`.
+
+        The parallel configuration defaults to this mesh shape's entry in `_PRESETS_BH`; pass any of
+        `tp_axis`/`sp_axis`/`num_links`/`topology` to override it.
+        """
         weights_dir = weights_dir or os.environ.get("MINIMAX_H3_DIFFUSERS_DIR")
         if not weights_dir:
             raise ValueError(
@@ -317,6 +393,25 @@ class MiniMaxH3Pipeline:
             topology=topology,
             task=task,
         )
+
+    @staticmethod
+    def _ranks_agree(local: bool) -> bool:
+        """Whether *every* rank sees `local` as true. A collective; all ranks must call it.
+
+        A per-rank filesystem check must not gate collective work. `Path.is_file()` on a cache shared
+        over NFS can disagree between hosts -- negative-lookup caching is enough on its own -- and a
+        rank that takes a cached early return skips every collective the others are still waiting in,
+        which deadlocks rather than failing. On the quad that presents as rank 0 in `_denoise` while
+        ranks 1-3 block in the text encoder's all-gather.
+
+        Same rule `utils/cache.py` follows for the weight cache, where every branch -- both early
+        returns included -- ends in `distributed_context_barrier()`. Unanimity rather than rank 0's
+        answer, so a partially populated cache costs a recompute instead of a hang and the decision
+        needs no broadcast of the payload.
+        """
+        if not ttnn.using_distributed_env():
+            return local
+        return all(ttnn.distributed_context_allgather_int(1 if local else 0))
 
     def _read_config(self, subfolder: str) -> dict:
         path = self.weights_dir / subfolder / "config.json"
@@ -667,7 +762,8 @@ class MiniMaxH3Pipeline:
             raise ValueError("keyframes (fl2va) and references (ref2va) are different tasks; pass one or neither")
 
         cache_path = self._embed_cache_path(prompt, keyframes, references)
-        if use_cache and cache_path.is_file():
+        # Unanimous, not per-rank: everything below this return runs collectives (see `_ranks_agree`).
+        if self._ranks_agree(use_cache and cache_path.is_file()):
             logger.info(f"prompt embeddings from cache: {cache_path}")
             embeds, tags = torch.load(cache_path, weights_only=False)
             return embeds, tags
@@ -798,12 +894,25 @@ class MiniMaxH3Pipeline:
             pos_embeds=(bf16_tensor(cos, device=self.mesh_device), bf16_tensor(sin, device=self.mesh_device)),
             **vision_kwargs,
         )
-        # Replicated across the mesh: read one replica rather than composing all 32 and discarding 31.
-        embeds = ttnn.to_torch(ttnn.get_device_tensors(taps[0])[0]).float()
+        # Replicated across the mesh: read one replica rather than composing all of them and
+        # discarding the rest. Via `utils.tensor.to_torch`, not `ttnn.to_torch(get_device_tensors(t)[0])`:
+        # slicing one coordinate out of the device storage keeps the parent's distribution metadata, so
+        # on a 4x32 mesh the bare call fails with "Can't convert a tensor distributed on
+        # MeshShape([4, 32]) mesh to row-major logical tensor". The helper builds an all-replicated
+        # composer instead, which is the same one-replica read expressed in a way the converter accepts.
+        embeds = local_device_to_torch(taps[0]).float()
 
         if use_cache:
-            torch.save((embeds, tags), cache_path)
-            logger.info(f"cached prompt embeddings to {cache_path}")
+            # Rank 0 writes; the rest wait for it. Every rank computed the same replicated embeds, so
+            # letting all of them write the same path races on a shared filesystem and can leave a
+            # torn file that the *next* run then half-reads. The barrier is what makes the file whole
+            # by the time any rank could observe it, mirroring `utils/cache.py`'s save path.
+            is_distributed = ttnn.using_distributed_env()
+            if not is_distributed or int(ttnn.distributed_context_get_rank()) == 0:
+                torch.save((embeds, tags), cache_path)
+                logger.info(f"cached prompt embeddings to {cache_path}")
+            if is_distributed:
+                ttnn.distributed_context_barrier()
         return embeds, tags
 
     # ------------------------------------------------------------------ denoiser
@@ -906,7 +1015,10 @@ class MiniMaxH3Pipeline:
         )
 
         path = self._adaln_cache_path(num_inference_steps)
-        if path.is_file():
+        # Both branches are host-only and converge on the same `table`, so a split decision here does
+        # not skew the collective count the way the prompt cache does. Agreed anyway: a rank that
+        # reads a half-written table would diverge *numerically*, silently, which is worse.
+        if self._ranks_agree(path.is_file()):
             logger.info(f"AdaLN table from cache: {path}")
             table = torch.load(path, weights_only=False)
         else:
@@ -923,7 +1035,11 @@ class MiniMaxH3Pipeline:
                 freq_dim=self.transformer_config["freq_dim"],
             )
             logger.info(f"AdaLN table built in {time.time() - t0:.1f}s ({table.nbytes() / 1e9:.3f} GB); caching")
-            torch.save(table, path)
+            is_distributed = ttnn.using_distributed_env()
+            if not is_distributed or int(ttnn.distributed_context_get_rank()) == 0:
+                torch.save(table, path)
+            if is_distributed:
+                ttnn.distributed_context_barrier()
 
         self._adaln_cache = MiniMaxH3AdalnCache(
             table,
@@ -1033,7 +1149,14 @@ class MiniMaxH3Pipeline:
         want_encoder = encode_shape is not None
         if self._vae is None:
             logger.info("building the video VAE")
-            self._vae = MiniMaxH3Vae(self.vae_config, mesh_device=self.mesh_device, weight_loader=self._cache_submodel)
+            # `ccl_manager` is only used for the wave readback. It is what keeps the video decode
+            # off the MPI path on a multi-host mesh; the VAE's forward runs no collectives.
+            self._vae = MiniMaxH3Vae(
+                self.vae_config,
+                mesh_device=self.mesh_device,
+                weight_loader=self._cache_submodel,
+                ccl_manager=self.ccl_manager,
+            )
             state = self._read_safetensors("vae")
             self._vae.load_decoder_state(state)
             if want_encoder:
@@ -1147,6 +1270,8 @@ class MiniMaxH3Pipeline:
                 resblock_kernel_sizes=tuple(config["resblock_kernel_sizes"]),
                 resblock_dilation_sizes=tuple(tuple(d) for d in config["resblock_dilation_sizes"]),
                 mesh_device=self.mesh_device,
+                ccl_manager=self.ccl_manager,
+                parallel_config=self.audio_t_parallel,
             )
 
             def read_state() -> dict[str, torch.Tensor]:
@@ -1165,7 +1290,11 @@ class MiniMaxH3Pipeline:
                 decoder,
                 model_name=MODEL_NAME,
                 subfolder="audio_decoder",
-                parallel_config=self.vae_parallel_config,
+                # Keyed on the audio T factor, not `vae_parallel_config`'s factor 1. Sharding T
+                # changes the per-shard conv3d shape, and `prepare_conv3d_weights` lays the weight out
+                # for a specific `C_in_block` from that shape's blocking -- so a factor-4 run must not
+                # load a factor-1 cache entry. Silent wrong numerics otherwise, not a failure.
+                parallel_config=self.audio_cache_parallel_config,
                 mesh_shape=tuple(self.mesh_device.shape),
                 mesh_device=self.mesh_device,
                 dtype="fp32",
@@ -1279,7 +1408,7 @@ class MiniMaxH3Pipeline:
         )
 
         # 2. Text (plus the vision block, for fl2va).
-        cached = use_prompt_cache and self._embed_cache_path(prompt, keyframes).is_file()
+        cached = self._ranks_agree(use_prompt_cache and self._embed_cache_path(prompt, keyframes).is_file())
         t0 = time.time()
         prompt_embeds, text_token_tags = self.encode_prompt(prompt, keyframes=keyframes, use_cache=use_prompt_cache)
         t_encode = time.time() - t0
@@ -1416,7 +1545,7 @@ class MiniMaxH3Pipeline:
         )
 
         # 2. Text, plus one vision block per image reference and one per merged frame pair of a video.
-        cached = use_prompt_cache and self._embed_cache_path(prompt, (), prepared).is_file()
+        cached = self._ranks_agree(use_prompt_cache and self._embed_cache_path(prompt, (), prepared).is_file())
         t0 = time.time()
         prompt_embeds, text_token_tags = self.encode_prompt(prompt, references=prepared, use_cache=use_prompt_cache)
         t_encode = time.time() - t0
@@ -1727,6 +1856,24 @@ class MiniMaxH3Pipeline:
 
         timesteps = scheduler.timesteps
         audio_timesteps = audio_scheduler.timesteps
+
+        # Trace the per-step forward where the preset asks for it, as Wan does on the quad only
+        # (`traced = mesh_shape == (4, 32)` in its perf test). At SP=32 each device holds a quarter of
+        # the rows it held at SP=8, so a step is dominated by dispatching 50 blocks from host across
+        # four MPI ranks rather than by the matmuls, and a trace replaces that dispatch with one
+        # replay. Capture also allocates the CCL persistent buffers once instead of on the first step
+        # of every generation: 1231 -> 645 ms/step and first step 59.5 -> 4.3 s at 768P/5s.
+        #
+        # Requires the precomputed-AdaLN path, which owns `timestep`; see `traced_step`.
+        # Not on the first generation. A capture can neither compile a program nor allocate a buffer:
+        # it fails as "Cannot load new binaries during trace capture", then "Writes are not supported
+        # during trace capture" from `CCLManager`'s lazy `from_torch(torch.empty(...))` persistent
+        # buffers. Both are host work a complete untraced generation does exactly once, so the first
+        # pass through this loop runs untraced and every pass after it is traced -- the same shape as
+        # Wan, whose perf test warms the whole pipeline before anything is captured.
+        traced = self.trace_denoise and adaln_cache is not None and self._generations_run > 0
+        if traced:
+            transformer.traced_adaln_cache = adaln_cache
         t_preamble = time.time() - t_preamble
         t_first = t_steady = 0.0
         for i, t in enumerate(timesteps):
@@ -1762,24 +1909,42 @@ class MiniMaxH3Pipeline:
             tt_adaln = self._row_indices(adaln_indices(layout.token_tags, step_row_index), padded_len)
             tt_tsi = self._row_indices(step_row_index, padded_len)
 
-            video_velocity, audio_velocity = transformer(
-                video_1BVC=tt_video,
-                audio_1BAC=tt_audio,
-                prompt_1BLP=tt_prompt,
-                condition_blocks=tt_cond,
-                timestep=tt_timestep,
-                adaln_indices=tt_adaln,
-                timestep_indices=tt_tsi,
-                rope_cos=rope_cos,
-                rope_sin=rope_sin,
-                adaln_cache=adaln_cache,
-            )
+            if traced:
+                video_velocity, audio_velocity = transformer.traced_step(
+                    video_1BVC=tt_video,
+                    audio_1BAC=tt_audio,
+                    prompt_1BLP=tt_prompt,
+                    condition_blocks=tt_cond,
+                    adaln_indices=tt_adaln,
+                    timestep_indices=tt_tsi,
+                    rope_cos=rope_cos,
+                    rope_sin=rope_sin,
+                    traced=True,
+                )
+            else:
+                video_velocity, audio_velocity = transformer(
+                    video_1BVC=tt_video,
+                    audio_1BAC=tt_audio,
+                    prompt_1BLP=tt_prompt,
+                    condition_blocks=tt_cond,
+                    timestep=tt_timestep,
+                    adaln_indices=tt_adaln,
+                    timestep_indices=tt_tsi,
+                    rope_cos=rope_cos,
+                    rope_sin=rope_sin,
+                    adaln_cache=adaln_cache,
+                )
 
             # Replicated after the model's SP gather: read one replica. The model returns the *target*
             # rows only, so reshape to the row width rather than to `video_rows.shape`, which still
             # counts the condition rows.
-            v = ttnn.to_torch(ttnn.get_device_tensors(video_velocity)[0]).reshape(-1, video_rows.shape[-1]).float()
-            a = ttnn.to_torch(ttnn.get_device_tensors(audio_velocity)[0]).reshape(-1, audio_rows.shape[-1]).float()
+            # `local_device_to_torch`, not `utils.tensor.to_torch`: that helper composes, and a
+            # composer on a multi-host mesh runs `host_ccl::all_gather`. This is the per-step hot path
+            # -- two reads x 49 forwards -- where a collective costs MPI round trips the 4x8 path
+            # never paid and wedges the run if any rank leaves the loop first. The tensor is
+            # replicated after the model's SP gather, so one local shard is the whole answer.
+            v = local_device_to_torch(video_velocity).reshape(-1, video_rows.shape[-1]).float()
+            a = local_device_to_torch(audio_velocity).reshape(-1, audio_rows.shape[-1]).float()
 
             # tt_dit's scheduler returns the next sample directly; only the diffusers one wraps it.
             # Each stream steps its own schedule -- shift 12.0 for video, 3.0 for audio.
@@ -1797,6 +1962,7 @@ class MiniMaxH3Pipeline:
             if i % 10 == 0 or i == len(timesteps) - 1:
                 logger.info(f"  step {i + 1}/{len(timesteps)} t={float(t):.4f}")
 
+        self._generations_run += 1
         steady_steps = max(len(timesteps) - 1, 1)
         logger.info(
             f"denoise breakdown: preamble {t_preamble:.1f}s (rope {t_rope:.1f}s) | "

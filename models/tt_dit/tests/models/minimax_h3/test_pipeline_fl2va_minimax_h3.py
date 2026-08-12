@@ -55,11 +55,10 @@ import torch
 from loguru import logger
 from PIL import Image
 
-import ttnn
-
 from ....pipelines.minimax_h3.packing import align_num_frames, prepare_keyframe_image
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
 from ..wan2_2.common import check_output_sanity
+from .common import MESH_PARAMS
 from .common_av import (
     check_audio_sanity,
     check_av_sync,
@@ -101,18 +100,6 @@ ARTIFACT_ENV = "MINIMAX_H3_ARTIFACT_DIR"
 # directory must not silently turn the keyframe source into a missing file.
 T2VA_ARTIFACT_ENV = "MINIMAX_H3_T2VA_ARTIFACT_DIR"
 
-# Ring collectives, so the fabric must be FABRIC_1D_RING -- same as the t2va gate.
-MESH_4X8 = [
-    pytest.param(
-        (4, 8),
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-            "require_exact_physical_num_devices": True,
-            "l1_small_size": 65536,
-        },
-        id="4x8",
-    )
-]
 
 # Set from measurement, not inherited. The wan2_2 analogue ships a provisional 0.3 with a note to
 # tighten it once real values are observed; these are the observed values, all three cases:
@@ -197,7 +184,7 @@ def _first_frame(path: Path) -> Image.Image:
 
 
 @pytest.mark.timeout(7200)
-@pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize(("mesh_device", "device_params"), MESH_PARAMS, indirect=["mesh_device", "device_params"])
 @pytest.mark.parametrize(
     ("anchors", "case"),
     [
@@ -326,7 +313,7 @@ def test_fl2va_end_to_end(mesh_device, anchors, case, reset_seeds):
 
 
 @pytest.mark.timeout(7200)
-@pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize(("mesh_device", "device_params"), MESH_PARAMS, indirect=["mesh_device", "device_params"])
 def test_fl2va_follows_the_keyframe(mesh_device, reset_seeds):
     """The keyframe *drives* the generation -- it is not merely consistent with it.
 
