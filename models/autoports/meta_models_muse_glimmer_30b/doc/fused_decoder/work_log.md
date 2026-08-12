@@ -184,14 +184,20 @@ and 11x{1,2,4}, i.e. every grid height that divides all three `K` values
 (6656 / 4096 / 19968) over 32 — were built for each of the four projections;
 **all 28 exceed the L1 circular-buffer budget** (`program.cpp:1722`).
 `MinimalMatmulConfig` block sizes were then swept on the winning kernel
-(`M_block x K_block x N_block` in tiles, over the full 11x10 grid): the best
-explicit config (`M8 K4 N8`) is still 0.6-11.8 % worse than the op's own choice
-(2.376 vs 2.328 ms wqkv, 10.349 vs 10.283 mlp gate, 10.729 vs 9.594 mlp down)
-and every other tried block shape is worse again, which is why the shipped
-`_dense` passes no `config=` at all.  The sweep varied `M_block`/`N_block` and
-only `K_block in {2, 4}` tiles; larger legal `K_block` divisors (8, 13, 16, 26)
-are an open hard-check gap.  Both
-sweeps are in `logs/prefill_matmul_probe.log`.
+(`M_block x K_block x N_block` in tiles, over the full 11x10 grid).  This first
+sweep concluded that no explicit config beats the op's own choice — the best of
+its six shapes (`M8 K4 N8`) measured 0.6-11.8 % worse (2.376 vs 2.328 ms wqkv,
+10.349 vs 10.283 mlp gate, 10.729 vs 9.594 mlp down) — but it varied only
+`K_block in {2, 4}` tiles against a default of **8**, so it could not have
+beaten the default on the K axis, and it was measured on host wall-clock, which
+§3.3 L later shows cannot resolve gaps this size at all.
+
+**That conclusion is superseded by §3.3 L**, which reopened the sweep over the
+whole legal `K_block` range on device kernel time and found configs that do win
+on two of the five shapes.  The shipped `_dense` passes `config=` for those two
+and nothing for the other three.  Both first-pass sweeps are kept in
+`logs/prefill_matmul_probe.log` as the record of how the question was first
+asked.
 
 `minimal_matmul` also exposes a pack-time `fused_activation`, so the
 "activation on the matmul" rejection (§3.3 I/J) was re-tested on the kernel
@@ -237,7 +243,7 @@ rather than from a grid-shape argument.
 
 | # | rewrite | effect |
 | --- | --- | --- |
-| D | decode residual stream stays **width-sharded in L1** for the whole layer | the two residual adds become sharded element-wise ops and all four hidden-size norms consume/produce the sharded layout, so `LayerNorm` goes 447 -> 59 us/step. It does *not* remove the reshards: a decode step still runs 8 `InterleavedToShardedDeviceOperation` + 6 `ShardedToInterleavedDeviceOperation`, six of them on the hidden-size stream (`residual`, `attn_out`, `mlp_out` in; `normed`, `mlp_in`, `out` out). They cost 19.2 us of a 2,712 us step (that count is the `sliding` graph; a `full` step is 6 + 6, without the two RoPE table reshards), and §4.1 records why the two matmul-side ones cannot be merged away |
+| D | decode residual stream stays **width-sharded in L1** for the whole layer | the two residual adds become sharded element-wise ops and all four hidden-size norms consume/produce the sharded layout, so `LayerNorm` goes 447 -> 59 us/step. It does *not* remove the reshards: a decode step still runs 8 `InterleavedToShardedDeviceOperation` + 6 `ShardedToInterleavedDeviceOperation`, six of them on the hidden-size stream (`residual`, `attn_out`, `mlp_out` in; `normed`, `mlp_in`, `out` out). They cost 19.2 us of a 2,710 us step (that count is the `sliding` graph; a `full` step is 6 + 6, without the two RoPE table reshards), and §4.1 records why the two matmul-side ones cannot be merged away |
 | E | prefill RoPE tables stored **pre-tilized**; at `start_pos == 0` the persistent table is handed to the op directly | removes 2 `TilizeDeviceOperation` + 2 `SliceDeviceOperation` per chunk (`rotary_embedding_hf` only requires `cos_seq_len >= seq_len`) |
 | F | decode RoPE tables gathered **straight into** the height-sharded `[1, batch, 1, dim]` decode layout | removes 4 `ttnn.repeat` broadcasts and their untilize/tilize round trips (16 ops -> 6) |
 | G | decode Q stays height-sharded from `nlp_create_qkv_heads_decode` through RoPE into the SDPA kernel | removes a DRAM round trip for Q |
@@ -292,8 +298,8 @@ caller-level continuations.  Measured on the real op at the offsets an
 
 512 does not fit L1 there either, and 320 is unusable at that site at all: it
 must divide `chunk_start_idx`, which is a multiple of the 8192 prefill chunk.
-End to end this is worth 1.60-1.62x wall-clock on a two-chunk (16384-token)
-prefill against the functional baseline, and 2.00-2.04x of device time — see `logs/multichunk_prefill_ab.log` and the
+End to end this is worth 1.59-1.61x wall-clock on a two-chunk (16384-token)
+prefill against the functional baseline, and 1.99-2.03x of device time — see `logs/multichunk_prefill_ab.log` and the
 `prefill_16384` Tracy windows.
 
 256 is shipped as a single constant.  A length-dependent rule was considered and
@@ -320,7 +326,7 @@ still improving as K grew.  Reopening it:
   against the shipped default inside one interleaved loop and measured the
   default against *itself* as a control: the control reports -0.5 % to -10.8 %.
   Host wall-clock cannot resolve this question at all.
-* `bench/prefill_matmul_kblock_device{,2,3,4}.py` therefore measure **device
+* `bench/prefill_matmul_kblock_device{,2,3,4,5}.py` therefore measure **device
   kernel duration** under Tracy — the metric the committed perf reports use —
   with 8 reps per group and the default re-measured between every candidate.
   Default groups reproduce to +-0.1 %, and the answer is stable across the two
@@ -329,13 +335,16 @@ still improving as K grew.  Reopening it:
 The result is per-shape, and three of the five shapes want nothing: `wqkv`
 (best candidate -2.6 %), the attention gate (-0.01 %, i.e. its best candidate is
 the default kernel) and `mlp_down` (-0.1 %).  The attention gate is its own
-dispatch worth 1,869 us of the 49,357 us `sliding` window — the same order as
+dispatch worth 1,868 us of the 49,294 us `sliding` window — the same order as
 `o_proj`, the shape a config *was* worth +2.80 % on — so it was swept over the
 same K range rather than assumed (`bench/prefill_matmul_kblock_device4.py`).  It is also
 per-*height*: `o_proj`'s config wins by 2.80 % at the full 8192-row chunk and
 loses 6.0-6.3 % at 4096 and 6144 rows, so `MINIMAL_MATMUL_BLOCKS` carries a
 minimum row count per entry and `o_proj` keeps the op default on tail chunks.
-The MLP config wins at every height and has none.
+The MLP config wins at every height that reaches `minimal_matmul` at all and so
+carries the crossover threshold itself — measured, not extrapolated, at all four
+points: +2.61 % at 3072 (`..._device5`), +0.92 % at 4096, +1.49 % at 6144 and
++2.92 % at 8192.
 `test_minimal_matmul_block_config` pins the table, the row gate and the
 subblock rule, so dropping the blocking fails the suite instead of quietly
 costing 2-3 %.
@@ -352,7 +361,8 @@ same HF reference), **all six prefill comparisons improve** (+3.2e-4 to
 `test_fused_vs_functional_equivalence` is exactly zero.  Five of the six decode
 comparisons improve (the largest, `sliding` at 12345, by +1.3e-3) and one drifts
 by **-4.3e-4**.  Decode does *not* change matmul kernel — a step is 32 rows,
-below the `minimal_matmul` crossover — so its rewrites only re-associate BF16
+below the `minimal_matmul` crossover — so apart from the norm-fidelity uplift
+(§3.5) its rewrites only re-associate BF16
 rounding rather than changing precision, and the result can land either side of
 the baseline's.
 
@@ -377,6 +387,60 @@ shipped `dense_compute_kernel_config` therefore pins HiFi2 /
 reports in the functional stage's perf tables — and the more-accurate default is
 recorded here for the optimized-decoder stage, which owns precision policy.
 
+### 3.5 The one fidelity change: the RMSNorm compute-kernel config
+
+The paragraph above is true of the *matmuls*.  It is not true of the norms, and
+that has to be stated plainly because the accuracy gain above is partly theirs.
+
+`ttnn.rms_norm`'s default compute-kernel config is
+`HiFi4 / math_approx_mode=True / fp32_dest_acc_en=False / packer_l1_acc=False`
+(`rmsnorm.cpp:16-20`), and the functional layer got it by passing no config at
+all.  Every RMSNorm in the fused layer instead runs
+`HiFi4 / approx=False / fp32_dest_acc_en=True / packer_l1_acc=True`
+(`norm_compute_kernel_config()`), i.e. the same math fidelity with the
+approximate reciprocal-sqrt off and FP32 destination accumulation on, for a
+6656-wide BF16 reduction.
+
+Measured in isolation against a **float64** reference
+(`bench/norm_fidelity_probe.py`, `logs/norm_fidelity_probe.log.gz`):
+
+| shape | op default | uplifted | PCC vs f64 | max relative error |
+| --- | --- | --- | --- | --- |
+| prefill, 8192x6656 interleaved | 978.27 us | 991.78 us | 0.999928684 -> 0.999998467 | 6.5e-2 -> 4.2e-3 |
+| decode, 32x6656 width-sharded 4x2 | 15.53 us | **14.92 us** | 0.999993993 -> 0.999998450 | 1.0e-2 -> 4.8e-3 |
+
+It is *free* in decode — the sharded kernel is 3.9 % faster with FP32
+accumulation on — and costs 13.5 us per prefill norm, so 81 us of a 49,294 us
+prefill window: **0.16 %** for a 15x smaller worst-case error on the op that
+feeds every matmul in the layer.
+
+What it is worth at the model level is measured too, because otherwise §3.4's
+"+3.2e-4 at 100 tokens, where no matmul kernel changes" would be attributed to
+the RoPE/norm/activation *topology* rewrites when most of it is this.
+`logs/norm_fidelity_control.log` is the identical graph with both norm configs
+set to `None`:
+
+| control | shipped | norms on the op default |
+| --- | --- | --- |
+| prefill[sliding] 100 | +0.000357 | **-0.000008** |
+| prefill[full] 100 | +0.000320 | **+0.000000** |
+| prefill[sliding] 4097 | +0.000926 | +0.000603 |
+| prefill[full] 12345 | +0.001076 | +0.000794 |
+
+So at 100 tokens the topology rewrites alone are a wash, and the whole gain
+there is the norm fidelity; at 4097+ the remaining +6e-4 to +8e-4 is
+`minimal_matmul`'s like-for-like kernel accuracy.  Note the first row: with the
+norms on the op default the zero-tolerance prefill assertion **fails** by 8e-6,
+which is the sharpest statement of what this knob is doing.
+
+Why keep it rather than pin the baseline: it is free in decode, 0.16 % in
+prefill, and it makes the layer's most reduction-sensitive op an order of
+magnitude more accurate — and the alternative, pinning it, would trade real
+accuracy for a tidier one-line story about the stage.  What matters is that it
+is *disclosed and measured* rather than smuggled in, which is what
+`test_norm_compute_kernel_config_is_the_documented_uplift` and
+`test_every_norm_takes_the_uplifted_config` now enforce.
+
 ## 4. Rewrites assessed and rejected
 
 The first group was **implemented and measured** on device — the candidate
@@ -395,14 +459,14 @@ all; each row names the contract.
 | candidate | why it lost |
 | --- | --- |
 | **`ttnn.linear(..., activation="silu"/"sigmoid")`** (matmul pack-time activation) | Does not fuse on this build for these shapes: the profiler still shows a separate 2,128 us `UnaryDeviceOperation` alongside the activation-carrying matmul. Isolated on the same shape: 23.964 -> 26.461 ms (`logs/op_merge_probes.log`). Strictly worse than doing nothing. (The in-graph matmul row also reads 786 us slower, but that shape shows ~770 us of capture-to-capture spread in the functional baseline itself, so the rejection rests on the surviving unary op and the isolated measurement.) Evidence: `logs/rejected/prefill_perf_report_matmul_activation_{sliding,full}.txt`. Replaced by the binary input-activation form (I, J). |
-| **`ttnn.experimental.paged_fused_update_cache`** | The op asserts its two update tensors are on disjoint cores (`paged_fused_update_cache_device_operation.cpp:341-348`). `nlp_create_qkv_heads_decode` emits V on Q's grid unconditionally and can only move **K** off it via `overlap_qk_coregrid=False` — which the frontend *drops* for an interleaved input (`nlp_create_qkv_heads_decode.cpp:23`: `input_tensor.is_sharded() ? overlap_qk_coregrid.value_or(true) : true`) and which the device op then constrains to a shard holding the full height on one core with `head_dim % shard_width == 0` (`..._device_operation.cpp:56-72`), i.e. to a **WIDTH_SHARDED** QKV (measured: with this layer's L1-interleaved QKV the flag changes nothing — identical Q/K/V grids at batch 1/4/32), a shard width dividing `head_dim=128` (36 cores for the 4608-wide QKV), and `num_cores >= 2*num_users` (not binding here: the op already hard-caps `num_users` at 32 and this grid has 110 cores). This layer's decode QKV is L1 *interleaved* (what the op needs after the #16667 workaround), so the only reachable form here is a manual V reshard — measured 2.737 vs 2.734 ms/token sliding (worse) and 2.704 vs 2.707 full (better) — ~0.1 % either way, sign-flipping between the two layer kinds, so the reshard costs what the saved dispatch is worth. `logs/kv_coregrid_probe.log` has the grid dumps, the `must not overlap` rejection at every batch, and the WIDTH_SHARDED control where the disjoint grids *do* appear. |
-| **Shared-LHS packing of `wqkv` + attention gate** | One matmul over `concat([wqkv, w_gate], -1)` plus two slices. Decode, which reproduces to +-0.001 ms/token, is a consistent loss on both kinds: 2.737 vs 2.734 (sliding) and 2.709 vs 2.707 (full). Prefill wall-clock agrees (65.62 vs 65.41 sliding, 65.69 vs 64.48 full) but is not what the decision rests on: that A/B has a +-2 % round spread, so it can only say "not faster". The slices cost what the dispatch saves, and decode matmuls are weight-bandwidth bound so packing moves no bytes. |
-| **Shared-LHS packing of the MLP gate/up** | 2.757 vs 2.734 ms/token, 67.28 vs 65.41 ms prefill (sliding). Same reason, and the slices are on a 19968-wide tensor. |
-| **`ttnn.swiglu` on a packed `[up \| gate]` projection** | A *composite*: two slices + swish + multiply, so it adds ops. 2.768 vs 2.734 ms/token, 68.38 vs 65.41 ms prefill (sliding). |
+| **`ttnn.experimental.paged_fused_update_cache`** | The op asserts its two update tensors are on disjoint cores (`paged_fused_update_cache_device_operation.cpp:341-348`). `nlp_create_qkv_heads_decode` emits V on Q's grid unconditionally and can only move **K** off it via `overlap_qk_coregrid=False` — which the frontend *drops* for an interleaved input (`nlp_create_qkv_heads_decode.cpp:23`: `input_tensor.is_sharded() ? overlap_qk_coregrid.value_or(true) : true`) and which the device op then constrains to a shard holding the full height on one core with `head_dim % shard_width == 0` (`..._device_operation.cpp:56-72`), i.e. to a **WIDTH_SHARDED** QKV (measured: with this layer's L1-interleaved QKV the flag changes nothing — identical Q/K/V grids at batch 1/4/32), a shard width dividing `head_dim=128` (36 cores for the 4608-wide QKV), and `num_cores >= 2*num_users` (not binding here: the op already hard-caps `num_users` at 32 and this grid has 110 cores). This layer's decode QKV is L1 *interleaved* (what the op needs after the #16667 workaround), so the only reachable form here is a manual V reshard — measured 2.736 vs 2.734 ms/token sliding (worse) and 2.704 vs 2.708 full (better) — ~0.1 % either way, sign-flipping between the two layer kinds, so the reshard costs what the saved dispatch is worth. A **per-kind** selection (ship it for `full` only) was considered, since the `full` win reproduces across every round of a tighter 5-round / 256-iteration A/B (`logs/kv_update_ab.log`: 2.704 vs 2.707) and across two independent chain runs. It was not taken: the fused op does not remove work — it replaces two `PagedUpdateCache` dispatches (3.58 us each) with one fused write plus a `to_memory_config` reshard (~1.4 us), so device-side it is a wash and the +-0.003 ms/token is dispatch/DRAM overlap, which is exactly why it flips sign between two graphs that differ elsewhere. Forking the paged cache write by layer kind — the variant hand-builds a disjoint core grid for V — for +0.11 % on one kind and -0.07 % on the other is not a trade worth making in the most correctness-sensitive part of the decoder. `logs/kv_coregrid_probe.log` has the grid dumps, the `must not overlap` rejection at every batch, and the WIDTH_SHARDED control where the disjoint grids *do* appear. |
+| **Shared-LHS packing of `wqkv` + attention gate** | One matmul over `concat([wqkv, w_gate], -1)` plus two slices. Decode, which reproduces to +-0.001 ms/token, is a consistent loss on both kinds: 2.738 vs 2.734 (sliding) and 2.709 vs 2.708 (full). Prefill wall-clock agrees (65.81 vs 64.78 sliding, 65.59 vs 65.06 full) but is not what the decision rests on: that A/B has a +-2 % round spread, so it can only say "not faster". The slices cost what the dispatch saves, and decode matmuls are weight-bandwidth bound so packing moves no bytes. |
+| **Shared-LHS packing of the MLP gate/up** | 2.758 vs 2.734 ms/token, 67.11 vs 64.78 ms prefill (sliding). Same reason, and the slices are on a 19968-wide tensor. |
+| **`ttnn.swiglu` on a packed `[up \| gate]` projection** | A *composite*: two slices + swish + multiply, so it adds ops. 2.768 vs 2.734 ms/token, 68.34 vs 64.78 ms prefill (sliding). |
 | **`minimal_matmul(..., fuse_swiglu=True)`** | Genuinely one kernel for gate+up+silu+mul, and faster: 24.682 vs 25.718 ms at 8192 rows. But it needs the gate/up weight in a tile-pair-interleaved layout the decode path cannot use — at 32 rows it is 2.593 ms vs the shipped decode MLP's 1.406 ms, an 84 % decode regression — so the layer would have to carry **both** layouts: +531 MB per layer, i.e. +27 GB over 52 layers on a 32 GB part. Rejected on capacity, with the 1.04 ms (2.1 % of prefill) cost recorded. `logs/op_merge_probes.log`. |
 | **`minimal_matmul(..., fused_activation=SILU)`** | The pack-time activation retried on the kernel prefill actually uses. It does fuse, but costs 12.101 vs 10.283 ms on the MLP gate shape and 2.688 vs 2.328 on wqkv (`logs/prefill_matmul_probe.log`). |
 | **Explicit 2D matmul program configs** | Seven rectangles per projection (8x{1,2,4,8}, 11x{1,2,4} — every grid height dividing all three K values), 28 attempts, **all** rejected by the L1 circular-buffer budget at `program.cpp:1722` (`logs/prefill_matmul_probe.log`). |
-| **Explicit `MinimalMatmulConfig` on `wqkv` and `mlp_down`** | Both are fastest on the op's own default (`M=K=N=8`). Best candidate on `wqkv` is 2.6 % worse, on `mlp_down` 0.1 % worse. The other two shapes *do* take a config — see §3.3 L, which is where the rest of this sweep went. |
+| **Explicit `MinimalMatmulConfig` on `wqkv`, the attention gate and `mlp_down`** | All three are fastest on the op's own default (`M=K=N=8`). Best candidate is 2.6 % worse on `wqkv`, 0.01 % on the attention gate (whose best candidate *is* the default: `M8 K8 N8` re-measures to -0.01 %, and `K` 7/9/14 are 0.8-4.4 % worse while 18 and up are L1-blocked) and 0.1 % on `mlp_down`. The remaining two of the five shapes *do* take a config — see §3.3 L. |
 | **Writing the decode `o_proj` / `mlp_down` output straight into the sharded residual** | Would remove the two `InterleavedToShardedDeviceOperation` that follow them. `ttnn.linear` accepts the width-sharded memory config but **ignores its grid**: it keeps its own 110-core program config and returns `{[0-0 - 10-8], [0-9 - 4-9]}` where the norm needs `{[0-0 - 3-1]}`, and the sharded LayerNorm then refuses it (`shard_spec_validation.cpp:46`: *"shard_spec.grid size 11x10 does not fit within program_config grid 4x2"*). Adapted and retried: forcing the matmul onto the norm's 4x2 grid with an explicit `MatmulMultiCoreReuseMultiCast1DProgramConfig` works once `in0_block_w` is small enough to fit L1 (the full-K value overflows at 7.19 MB / 34.6 MB against 1.57 MB), and it costs 222.1 us against the shipped pair's 149.4 on `o_proj` and 1071.5 against 700.9 on `mlp_down` — i.e. the shipped pair is 32.8 % / 34.6 % faster, and the 8-core matmul alone is about 1.5x the 110-core one it replaces — both figures already including the 2.48 / 2.47 us reshard the merge would have removed. Eight cores cannot replace 110. `logs/decode_sharded_out_probe*`. |
 | **Non-rectangular 13/26/52/104-core sharded decode RMSNorm** | Legal (`layernorm_device_operation.cpp:185-215`) and correct, but slower than 8 cores at every count: 25.3 / 28.0 / 37.7 / 57.6 vs 22.8 us (`logs/norm_shard_probe.log`). |
 | **SDPA `q_chunk == 320`** | Fits L1 and wins in a two-point band around 4k, loses at 7 of 9 swept lengths including the 8192-token internal chunk (8.600 vs 8.155 ms). See §3.3 K. |
@@ -415,6 +479,7 @@ all; each row names the contract.
 | **`ttnn.rms_norm(..., residual_input_tensor=...)`** | Computes `norm(x + residual)`. Muse-Glimmer is *post-norm*: `x = residual + post_norm(sublayer(x))`, so the op cannot express it. The one add-then-norm site that does match its shape — `hidden = add(residual, attn_normed)` then `pre_feedforward_layernorm(hidden)` — is still a no-win, because `hidden` itself is consumed again by the final residual add, so the separate `add` cannot be removed and the fused form would only add a second read of `residual`. |
 | **`ttnn.experimental.rotary_embedding_llama` / `_fused_qk`** | Meta odd/even-interleaved convention (`get_rot_transformation_mat` maps `x -> [-x1, x0, -x3, x2, ...]`), so both the Q/K weight columns and the cos/sin tables would need permuting; `_fused_qk` additionally needs `overlap_qk_coregrid=False` plus `[1, 2*batch, 32, dim]` cos/sin, i.e. two extra shard ops to save one ~2 us dispatch. `rotary_embedding_hf` is the same math with no permutation. |
 | **`ttnn.transformer.concatenate_heads`** vs `ttnn.experimental.nlp_concat_heads` | Same op behind two names — `concatenate_heads.cpp:45-47` is literally `ttnn::prim::nlp_concat_heads(...)` followed by a `squeeze`. No change. |
+| **`ttnn.experimental.matmul_decode`** | A dedicated decode matmul — exactly the op class that is 93 % of the decode step — but it requires **both** operands `WIDTH_SHARDED` (`matmul_decode_device_operation.cpp:32-39`), i.e. the weights resident in L1. This layer streams 968 MB of BF16 weights per decode step from DRAM; L1 is 1.5 MB per core. Unreachable at this weight dtype and placement, and re-checkable in one line if a later stage shrinks the weights. |
 | **`ttnn.transformer.split_query_key_value_and_split_heads`** | Assumes `num_kv_heads == num_heads`; this layer is GQA (32 Q / 2 KV). `nlp_create_qkv_heads` is the GQA-capable dedicated op and was already in use. |
 | **`ttnn.fused_rms_minimal`, `ttnn.experimental.dit_fused_distributed_rmsnorm`, `rms_norm_pre/post_all_gather`** | Distributed norms: they require a multi-device mesh and a global semaphore. This is the single-chip stage. |
 | **`ttnn.experimental.dit_rms_norm_unary_fused`** | Fuses `unary(rms_norm(x))`. No norm in this layer is followed by a unary — they are all followed by a matmul or an add. |
@@ -441,11 +506,11 @@ python $D/bench/prefill_matmul_probe.py        # logs/prefill_matmul_probe.log
 # device-kernel-time rounds that actually decide it (run under the profiler)
 python $D/bench/prefill_matmul_kblock_probe.py    # logs/prefill_matmul_kblock_probe.log
 python $D/bench/prefill_matmul_kblock_confirm.py  # logs/prefill_matmul_kblock_confirm.log
-for r in "" 2 3 4; do          # 4 is the attention-gate shape
+for r in "" 2 3 4 5; do        # 4 = attention gate, 5 = the 3072-row + K14/18 gaps
   python -m tracy -r -p -v $D/bench/prefill_matmul_kblock_device$r.py \
       > $D/logs/prefill_matmul_kblock_device$r.log 2>&1
 done   # then slice each ops CSV back into named groups:
-for r in "" 2 3 4; do
+for r in "" 2 3 4 5; do
   cp "$(ls -t generated/profiler/reports/*/ops_perf_results_*.csv | head -1)" \
       $D/tracy/probes/kblock_device$r"_ops.csv"    # (done per run, newest first)
   python $D/bench/summarize_device_probe.py $D/logs/prefill_matmul_kblock_device$r.log \
@@ -462,6 +527,19 @@ gzip -9 $D/tracy/probes/kblock_device{,4}_ops.csv
 python $D/bench/summarize_pcc.py               # logs/pcc_summary.txt
 python $D/bench/refresh_context_contract.py    # ../context_contract.json
 python $D/bench/refresh_context_contract.py --check
+
+# the one fidelity change: RMSNorm compute-kernel config, isolated against a
+# float64 reference (run under the profiler; the log is gzipped afterwards)
+python -m tracy -r -p -v $D/bench/norm_fidelity_probe.py \
+    > $D/logs/norm_fidelity_probe.log 2>&1 && gzip -9 $D/logs/norm_fidelity_probe.log
+# ...and its stage-level control: the same graph with both norm configs set to
+# None, which is how logs/norm_fidelity_control.log was produced
+#   (temporarily edit norm_compute_kernel_config to return None, then)
+#   python -m pytest $T::test_fused_vs_functional_equivalence
+
+# the paged_fused_update_cache variant, tighter (5 rounds x 256 iters)
+python $D/bench/ab_latency.py --impl fused,fused_kv_update --rounds 5 \
+    --decode-iters 256 --tag kvupdate    # logs/kv_update_ab.log
 
 # decode sharded-output matmul merge (rejected; run under the profiler)
 python -m tracy -r -p -v $D/bench/decode_sharded_out_probe.py \
@@ -482,7 +560,7 @@ python $D/bench/dense_compute_kernel_probe.py  # logs/dense_compute_kernel_probe
 bash $D/bench/run_evidence_chain.sh     # ~45 min; progress in logs/chain.log
 
 # full fused suite
-python -m pytest $T -q --no-header --junitxml=$D/test_results.xml   # 91 passed
+python -m pytest $T -q --no-header --junitxml=$D/test_results.xml   # 94 passed
 
 # watcher (18 node ids; a separate run from any profiling, and it moves/gzips
 # the log itself because the repo ignores any "generated" path component and the
@@ -504,19 +582,19 @@ limitations. Headline, all measured with the Tracy device profiler and
 | kind | window | ops/iter | device time / iter | speedup |
 | --- | --- | --- | --- | --- |
 | sliding | prefill 8192 (1 chunk) | 42 -> 24 | 101.23 -> **49.29 ms** | 2.05x |
-| full | prefill 8192 (1 chunk) | 24 -> 22 | 99.38 -> **47.98 ms** | 2.07x |
-| sliding | prefill 16384 (2 chunks) | 95 -> 61 | 213.02 -> **104.70 ms** | 2.04x |
-| full | prefill 16384 (2 chunks) | 51 -> 47 | 222.29 -> **111.12 ms** | 2.00x |
-| sliding | traced decode @ 2048 | 64 -> 44 | 3.163 -> **2.712 ms/token** | 1.17x |
-| sliding | traced decode @ 131071 | 64 -> 44 | 3.160 -> **2.708 ms/token** | 1.17x |
+| full | prefill 8192 (1 chunk) | 24 -> 22 | 99.38 -> **48.00 ms** | 2.07x |
+| sliding | prefill 16384 (2 chunks) | 95 -> 61 | 212.50 -> **104.65 ms** | 2.03x |
+| full | prefill 16384 (2 chunks) | 51 -> 47 | 221.61 -> **111.15 ms** | 1.99x |
+| sliding | traced decode @ 2048 | 64 -> 44 | 3.163 -> **2.710 ms/token** | 1.17x |
+| sliding | traced decode @ 131071 | 64 -> 44 | 3.160 -> **2.710 ms/token** | 1.17x |
 | full | traced decode @ 2048 | 32 -> 34 | 3.080 -> **2.685 ms/token** | 1.15x |
-| full | traced decode @ 131071 | 32 -> 34 | 3.575 -> **3.181 ms/token** | 1.12x |
+| full | traced decode @ 131071 | 32 -> 34 | 3.575 -> **3.182 ms/token** | 1.12x |
 
 The 16384 rows are the multi-chunk regime a long prompt actually runs, and the
 only windows in which a `full` layer touches the paged
 `chunked_scaled_dot_product_attention` at all; their baselines were captured the
 same way and are committed as `tracy/<kind>/prefill_16384_baseline_*`.
-Correctness: **91 passed**, 214 asserted PCC checks (202 HF-vs-TTNN, worst
+Correctness: **94 passed**, 214 asserted PCC checks (202 HF-vs-TTNN, worst
 **0.998077** against a 0.995 bar; 12 fused-vs-unfused, worst 0.996940) plus 12
 accuracy controls: all six prefill comparisons improve (+3.2e-4 to +1.1e-3),
 five of six decode comparisons improve and one drifts by -4.3e-4 (BF16
@@ -524,14 +602,14 @@ re-association; decode never changes matmul kernel).  The functional stage's wor
 0.997422, so the accuracy floor moved up.
 
 Watcher: 18 tests passed under `TT_METAL_WATCHER=10` in a run with no profiler
-attached (`bash $D/bench/run_watcher.sh`, 185 s), covering both kinds'
+attached (`bash $D/bench/run_watcher.sh`, 184 s), covering both kinds'
 multi-chunk prefill, decode, continuation prefill, traced replay, batch 13
 (fallback head-concat) and batch 32, the non-zero cache slot, the awkward
 page-count prefill that is the only case exercising the *halved* paged-SDPA
 chunk, the graph audit, the norm-config shapes, the fused-vs-unfused comparison
 and the 64-step stress soak.  `watcher/watcher.log.gz` contains **zero** occurrences of
 `Watcher detected`, `tripped`, `sanitize`, `TT_ASSERT`, `DEBUG_ASSERT`,
-`out of bounds`, `fault` or `Error` in 20486 lines with 38 periodic dumps.
+`out of bounds`, `fault` or `Error` in 20501 lines with 38 periodic dumps.
 Console log: `logs/watcher_run.log`.
 
 Stress: `test_repeated_run_stress` replays a captured decode trace 64 times per
@@ -542,8 +620,8 @@ stream needed and that no single-shot test provides.
 
 Where the remaining time goes: decode is **93 % the BF16 weight-streaming
 roofline** (968 MB of weights at the 383 GB/s the six matmuls achieve =
-2.528 ms of a 2.712 ms step; everything else in the layer is 0.18 ms).  Prefill
-is 65 % six `MinimalMatmul` ops at 228.9-255.4 TFLOPs (`full`: 229.0-255.6), none of which
+2.526 ms of a 2.710 ms step; everything else in the layer is 0.18 ms).  Prefill
+is 65 % six `MinimalMatmul` ops at 228.9-255.6 TFLOPs (`full`: 228.9-255.6), none of which
 `tt-perf-report` marks `SLOW` any more, and both the op's block-size config and
 28 explicit 2D matmul grids were swept without finding anything better.  Both
 remaining levers are precision/matmul-config, i.e. the optimized-decoder stage.
@@ -588,7 +666,7 @@ the failure mode this paragraph exists to catch.
 The *probe* logs are a separate class from the evidence chain: they are not
 regenerated with it, because each one backs a shipped constant rather than a
 reported result, and re-running them would only re-measure a decision already
-made.  Fourteen of the fifteen never construct a `FusedDecoder` at all — they measure
+made.  Sixteen of the nineteen never construct a `FusedDecoder` at all — they measure
 raw TTNN ops at this layer's shapes, so a change to the module cannot invalidate
 them — and each backs a constant that has not changed since it was taken:
 
@@ -600,14 +678,18 @@ them — and each backs a constant that has not changed since it was taken:
   `MINIMAL_MATMUL_MIN_ROWS`
 * `logs/prefill_matmul_kblock_*` and `tracy/probes/kblock_device*_ops.csv`
   (rounds 1, 2 and 4 gzipped for the 500 KB file hook) ->
-  `MINIMAL_MATMUL_BLOCKS`, including round 4's attention-gate sweep
+  `MINIMAL_MATMUL_BLOCKS`, including round 4's attention-gate sweep and
+  round 5's 3072-row and non-power-of-two `K_block` gaps
+* `logs/norm_fidelity_probe.log.gz` -> `norm_compute_kernel_config()` (§3.5)
 * `logs/decode_sharded_out_probe*` + `tracy/probes/decode_sharded_out_ops.csv`
   -> the sharded-output matmul rejection
 * `logs/op_merge_probes.log` and `logs/kv_coregrid_probe.log` -> the activation
   and KV-cache rejections
 
-The one exception, `logs/dense_compute_kernel_probe.log`, *does* build a
-`FusedDecoder`, and it predates `MINIMAL_MATMUL_BLOCKS` — so its shipped side is
+Three do build a `FusedDecoder`.  Two of them — `logs/norm_fidelity_control.log`
+and `logs/kv_update_ab.log` — were taken against the final module and are the
+controls §3.5 and §4.1 quote.  The third,
+`logs/dense_compute_kernel_probe.log`, predates `MINIMAL_MATMUL_BLOCKS` — so its shipped side is
 now about 0.57 ms/chunk faster than when it was taken.  It is quoted only for
 the *sign and rough size* of the delta between two compute-kernel configs, and
 `logs/minimal_matmul_sweep.log` confirms that sign independently at the op level

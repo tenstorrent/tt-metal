@@ -1,313 +1,313 @@
-2026-08-12 01:34:22.928 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+2026-08-12 02:45:24.257 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
 Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
 ============================= test session starts ==============================
-collecting ... collected 91 items
+collecting ... collected 94 items
 
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_pcc[1-sliding] 2026-08-12 01:34:24.460 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
-2026-08-12 01:34:24.460 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
-2026-08-12 01:34:24.460 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
-2026-08-12 01:34:24.460 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
-2026-08-12 01:34:24.472 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
-2026-08-12 01:34:24.472 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
-2026-08-12 01:34:24.549 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
-2026-08-12 01:34:24.550 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
-2026-08-12 01:34:24.550 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
-2026-08-12 01:34:24.550 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
-2026-08-12 01:34:24.551 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
-2026-08-12 01:34:24.746 | warning  |             UMD | AICLK settled at 1343 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (tt_device.cpp:322)
-2026-08-12 01:34:24.844 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
-2026-08-12 01:34:24.967 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
-2026-08-12 01:34:24.967 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
-2026-08-12 01:34:24.967 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
-2026-08-12 01:34:24.968 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
-2026-08-12 01:34:24.968 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
-2026-08-12 01:34:25.006 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
-2026-08-12 01:34:33.566 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] seq_len=1: 0.9997860553774389
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_pcc[1-sliding] 2026-08-12 02:45:25.778 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-12 02:45:25.778 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-12 02:45:25.778 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-12 02:45:25.778 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-12 02:45:25.789 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-12 02:45:25.790 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-12 02:45:25.867 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-12 02:45:25.867 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-12 02:45:25.867 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-12 02:45:25.867 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-12 02:45:25.869 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-12 02:45:25.973 | warning  |             UMD | AICLK settled at 1337 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (tt_device.cpp:322)
+2026-08-12 02:45:26.160 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-12 02:45:26.282 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-12 02:45:26.282 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-12 02:45:26.282 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-12 02:45:26.282 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-12 02:45:26.282 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-12 02:45:26.320 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-12 02:45:34.914 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] seq_len=1: 0.9997860553774389
 PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_pcc[1-full] 2026-08-12 01:34:36.184 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] seq_len=1: 0.9997378866945477
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_pcc[1-full] 2026-08-12 02:45:37.564 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] seq_len=1: 0.9997378866945477
 PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_pcc[100-sliding] 2026-08-12 01:34:36.450 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] seq_len=100: 0.9994651984895122
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_pcc[100-sliding] 2026-08-12 02:45:37.825 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] seq_len=100: 0.9994651984895122
 PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_pcc[100-full] 2026-08-12 01:34:36.701 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] seq_len=100: 0.9993834380271817
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_pcc[100-full] 2026-08-12 02:45:38.074 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] seq_len=100: 0.9993834380271817
 PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_pcc[128-sliding] 2026-08-12 01:34:36.960 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] seq_len=128: 0.9994255259632101
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_pcc[128-sliding] 2026-08-12 02:45:38.327 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] seq_len=128: 0.9994255259632101
 PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_pcc[128-full] 2026-08-12 01:34:37.226 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] seq_len=128: 0.9993435390339203
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_pcc[128-full] 2026-08-12 02:45:38.576 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] seq_len=128: 0.9993435390339203
 PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_pcc[2048-sliding] 2026-08-12 01:34:38.514 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] seq_len=2048: 0.9988852336169147
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_pcc[2048-sliding] 2026-08-12 02:45:39.893 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] seq_len=2048: 0.9988852336169147
 PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_pcc[2048-full] 2026-08-12 01:34:39.758 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] seq_len=2048: 0.9987423444241018
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_pcc[2048-full] 2026-08-12 02:45:41.162 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] seq_len=2048: 0.9987423444241018
 PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_pcc[2049-sliding] 2026-08-12 01:34:41.114 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] seq_len=2049: 0.9988900885544243
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_pcc[2049-sliding] 2026-08-12 02:45:42.476 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] seq_len=2049: 0.9988900885544243
 PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_pcc[2049-full] 2026-08-12 01:34:42.374 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] seq_len=2049: 0.9987436023673103
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_pcc[2049-full] 2026-08-12 02:45:43.774 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] seq_len=2049: 0.9987436023673103
 PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_pcc[4097-sliding] 2026-08-12 01:34:45.158 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] seq_len=4097: 0.999440577635178
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_pcc[4097-sliding] 2026-08-12 02:45:46.593 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] seq_len=4097: 0.999440577635178
 PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_pcc[4097-full] 2026-08-12 01:34:47.711 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] seq_len=4097: 0.9993818901975958
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_pcc[4097-full] 2026-08-12 02:45:49.203 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] seq_len=4097: 0.9993818901975958
 PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_pcc[8192-sliding] 2026-08-12 01:34:53.334 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] seq_len=8192: 0.9994273356626326
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_pcc[8192-sliding] 2026-08-12 02:45:55.028 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] seq_len=8192: 0.9994273356626326
 PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_pcc[8192-full] 2026-08-12 01:34:58.380 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] seq_len=8192: 0.9993381080944027
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_pcc[8192-full] 2026-08-12 02:46:00.173 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] seq_len=8192: 0.9993381080944027
 PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_pcc[8193-sliding] 2026-08-12 01:35:04.323 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] seq_len=8193: 0.9994260080793507
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_pcc[8193-sliding] 2026-08-12 02:46:06.166 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] seq_len=8193: 0.9994260080793507
 PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_pcc[8193-full] 2026-08-12 01:35:09.588 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] seq_len=8193: 0.9993413480445098
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_pcc[8193-full] 2026-08-12 02:46:11.471 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] seq_len=8193: 0.9993413480445098
 PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_pcc[12345-sliding] 2026-08-12 01:35:19.466 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] seq_len=12345: 0.999421607615373
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_pcc[12345-sliding] 2026-08-12 02:46:21.445 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] seq_len=12345: 0.999421607615373
 PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_pcc[12345-full] 2026-08-12 01:35:27.806 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] seq_len=12345: 0.9993098185147422
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_pcc[12345-full] 2026-08-12 02:46:29.674 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] seq_len=12345: 0.9993098185147422
 PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_decode_pcc[100-sliding] 2026-08-12 01:35:28.119 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[sliding] prompt=100 pos=100: 0.9993468226793067
-2026-08-12 01:35:28.150 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[sliding] prompt=100 pos=101: 0.9993185593974137
-2026-08-12 01:35:28.182 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[sliding] prompt=100 pos=102: 0.9991804565144572
-2026-08-12 01:35:28.213 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[sliding] prompt=100 pos=103: 0.9993920184000452
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_decode_pcc[100-sliding] 2026-08-12 02:46:29.988 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[sliding] prompt=100 pos=100: 0.9993468226793067
+2026-08-12 02:46:30.019 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[sliding] prompt=100 pos=101: 0.9993185593974137
+2026-08-12 02:46:30.049 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[sliding] prompt=100 pos=102: 0.9991804565144572
+2026-08-12 02:46:30.079 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[sliding] prompt=100 pos=103: 0.9993920184000452
 PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_decode_pcc[100-full] 2026-08-12 01:35:28.490 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[full] prompt=100 pos=100: 0.9992112231279933
-2026-08-12 01:35:28.520 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[full] prompt=100 pos=101: 0.9992183499730545
-2026-08-12 01:35:28.549 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[full] prompt=100 pos=102: 0.9992701010691194
-2026-08-12 01:35:28.578 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[full] prompt=100 pos=103: 0.9991593437683197
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_decode_pcc[100-full] 2026-08-12 02:46:30.366 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[full] prompt=100 pos=100: 0.9992112231279933
+2026-08-12 02:46:30.395 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[full] prompt=100 pos=101: 0.9992183499730545
+2026-08-12 02:46:30.425 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[full] prompt=100 pos=102: 0.9992701010691194
+2026-08-12 02:46:30.454 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[full] prompt=100 pos=103: 0.9991593437683197
 PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_decode_pcc[2048-sliding] 2026-08-12 01:35:29.745 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[sliding] prompt=2048 pos=2048: 0.9984692391501748
-2026-08-12 01:35:29.778 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[sliding] prompt=2048 pos=2049: 0.9984856314441619
-2026-08-12 01:35:29.811 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[sliding] prompt=2048 pos=2050: 0.9987524033256914
-2026-08-12 01:35:29.846 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[sliding] prompt=2048 pos=2051: 0.9990256785704394
-PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_decode_pcc[2048-full] 2026-08-12 01:35:30.986 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[full] prompt=2048 pos=2048: 0.9986693310648262
-2026-08-12 01:35:31.018 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[full] prompt=2048 pos=2049: 0.9981734722360969
-2026-08-12 01:35:31.050 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[full] prompt=2048 pos=2050: 0.998932363723844
-2026-08-12 01:35:31.083 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[full] prompt=2048 pos=2051: 0.998284736576832
-PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_decode_pcc[3000-sliding] 2026-08-12 01:35:32.871 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[sliding] prompt=3000 pos=3000: 0.9989420206065276
-2026-08-12 01:35:32.904 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[sliding] prompt=3000 pos=3001: 0.9989499283750432
-2026-08-12 01:35:32.936 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[sliding] prompt=3000 pos=3002: 0.9988304737609318
-2026-08-12 01:35:32.971 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[sliding] prompt=3000 pos=3003: 0.9984238149085207
-PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_decode_pcc[3000-full] 2026-08-12 01:35:34.630 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[full] prompt=3000 pos=3000: 0.9983183056839603
-2026-08-12 01:35:34.660 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[full] prompt=3000 pos=3001: 0.9983359072344483
-2026-08-12 01:35:34.691 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[full] prompt=3000 pos=3002: 0.9983835085340257
-2026-08-12 01:35:34.722 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[full] prompt=3000 pos=3003: 0.9982986150524844
-PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_decode_pcc_vs_fp32_reference[sliding] 2026-08-12 01:35:40.473 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] vs FP32 HF reference seq_len=2049: 0.9989338395892053
-2026-08-12 01:35:40.553 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[sliding] vs FP32 HF reference pos=2049: 0.998660809111115
-PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_decode_pcc_vs_fp32_reference[full] 2026-08-12 01:35:46.208 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] vs FP32 HF reference seq_len=2049: 0.9987711626661945
-2026-08-12 01:35:46.270 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[full] vs FP32 HF reference pos=2049: 0.99844936848525
-PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_seq_len_equals_max_and_chunk[sliding] 2026-08-12 01:35:51.565 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] seq_len==max_seq_len==chunk==4096 attempt=0: 0.9994396646833236
-2026-08-12 01:35:54.015 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] seq_len==max_seq_len==chunk==4096 attempt=1: 0.9994430391328438
-PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_seq_len_equals_max_and_chunk[full] 2026-08-12 01:35:59.189 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] seq_len==max_seq_len==chunk==4096 attempt=0: 0.9993793124758178
-2026-08-12 01:36:01.441 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] seq_len==max_seq_len==chunk==4096 attempt=1: 0.9993837504280477
-PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_multi_chunk_prefill_page_table_bound[sliding] 2026-08-12 01:36:13.618 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] max_seq_len==seq_len==12416 (194 pages, 2 chunks): 0.999419782960677
-PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_multi_chunk_prefill_page_table_bound[full] 2026-08-12 01:36:24.344 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] max_seq_len==seq_len==12416 (194 pages, 2 chunks): 0.9993071240986988
-PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_continuation_prefill_pcc[4096-3000-sliding] 2026-08-12 01:36:32.040 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused continuation prefill[sliding] 4096+3000: 0.9991886808798743
-2026-08-12 01:36:36.024 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode after continuation prefill[sliding] pos=7096: 0.9988275066217351
-PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_continuation_prefill_pcc[4096-3000-full] 2026-08-12 01:36:43.029 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused continuation prefill[full] 4096+3000: 0.9991027428744661
-2026-08-12 01:36:46.398 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode after continuation prefill[full] pos=7096: 0.9983428828184205
-PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_continuation_prefill_pcc[1024-1024-sliding] 2026-08-12 01:36:47.741 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused continuation prefill[sliding] 1024+1024: 0.9988900012545957
-2026-08-12 01:36:48.633 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode after continuation prefill[sliding] pos=2048: 0.9993080519739739
-PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_continuation_prefill_pcc[1024-1024-full] 2026-08-12 01:36:49.888 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused continuation prefill[full] 1024+1024: 0.9987540679947328
-2026-08-12 01:36:50.740 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode after continuation prefill[full] pos=2048: 0.9990017047752022
-PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_continuation_prefill_pcc[64-100-sliding] 2026-08-12 01:36:51.034 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused continuation prefill[sliding] 64+100: 0.9994226557574025
-2026-08-12 01:36:51.130 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode after continuation prefill[sliding] pos=164: 0.9992098984107556
-PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_continuation_prefill_pcc[64-100-full] 2026-08-12 01:36:51.408 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused continuation prefill[full] 64+100: 0.9993350695762255
-2026-08-12 01:36:51.489 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode after continuation prefill[full] pos=164: 0.9990223131489652
-PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_continuation_prefill_requires_sliding_tail 2026-08-12 01:36:51.698 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] ValueError message="sliding_kv_tail"
-2026-08-12 01:36:51.698 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] ValueError message="sliding_kv_tail"
-PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_batched_prefill_decode_pcc[4-sliding] 2026-08-12 01:36:55.540 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=4 user=0 seq_len=2000: 0.9989031986977256
-2026-08-12 01:36:56.733 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=4 user=1 seq_len=2037: 0.998891865674005
-2026-08-12 01:36:57.928 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=4 user=2 seq_len=2074: 0.9988948314868585
-2026-08-12 01:36:59.126 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=4 user=3 seq_len=2111: 0.9988925588312365
-2026-08-12 01:36:59.252 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[sliding] batch=4 ragged positions: 0.9986262142713458
-PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_batched_prefill_decode_pcc[4-full] 2026-08-12 01:37:03.028 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=4 user=0 seq_len=2000: 0.998739868162986
-2026-08-12 01:37:04.095 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=4 user=1 seq_len=2037: 0.9987548386835278
-2026-08-12 01:37:05.158 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=4 user=2 seq_len=2074: 0.9987424881305222
-2026-08-12 01:37:06.232 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=4 user=3 seq_len=2111: 0.9987498613350934
-2026-08-12 01:37:06.351 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[full] batch=4 ragged positions: 0.998559872049897
-PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_batched_prefill_decode_pcc[13-sliding] 2026-08-12 01:37:10.115 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=13 user=0 seq_len=2000: 0.9989031986977256
-2026-08-12 01:37:11.214 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=13 user=1 seq_len=2037: 0.998891865674005
-2026-08-12 01:37:12.369 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=13 user=2 seq_len=2074: 0.9988948314868585
-2026-08-12 01:37:13.503 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=13 user=3 seq_len=2111: 0.9988925588312365
-2026-08-12 01:37:14.675 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=13 user=4 seq_len=2148: 0.9988867169898344
-2026-08-12 01:37:15.930 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=13 user=5 seq_len=2185: 0.9988897321869277
-2026-08-12 01:37:17.157 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=13 user=6 seq_len=2222: 0.9988462259072942
-2026-08-12 01:37:18.446 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=13 user=7 seq_len=2259: 0.9988451864987867
-2026-08-12 01:37:19.693 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=13 user=8 seq_len=2296: 0.9988334740888895
-2026-08-12 01:37:20.904 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=13 user=9 seq_len=2333: 0.9988374390227833
-2026-08-12 01:37:22.186 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=13 user=10 seq_len=2370: 0.998841038233418
-2026-08-12 01:37:23.636 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=13 user=11 seq_len=2407: 0.9988374218313372
-2026-08-12 01:37:24.997 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=13 user=12 seq_len=2444: 0.9988335102409973
-2026-08-12 01:37:25.377 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[sliding] batch=13 ragged positions: 0.9985247213755323
-PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_batched_prefill_decode_pcc[13-full] 2026-08-12 01:37:29.144 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=13 user=0 seq_len=2000: 0.998739868162986
-2026-08-12 01:37:30.211 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=13 user=1 seq_len=2037: 0.9987548386835278
-2026-08-12 01:37:31.260 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=13 user=2 seq_len=2074: 0.9987424881305222
-2026-08-12 01:37:32.304 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=13 user=3 seq_len=2111: 0.9987498613350934
-2026-08-12 01:37:33.349 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=13 user=4 seq_len=2148: 0.9987449773775089
-2026-08-12 01:37:34.472 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=13 user=5 seq_len=2185: 0.9987328792232916
-2026-08-12 01:37:35.594 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=13 user=6 seq_len=2222: 0.9986815435255327
-2026-08-12 01:37:36.728 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=13 user=7 seq_len=2259: 0.9986908835552019
-2026-08-12 01:37:37.878 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=13 user=8 seq_len=2296: 0.998680863510052
-2026-08-12 01:37:39.000 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=13 user=9 seq_len=2333: 0.9986782709389196
-2026-08-12 01:37:40.233 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=13 user=10 seq_len=2370: 0.998690183166728
-2026-08-12 01:37:41.587 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=13 user=11 seq_len=2407: 0.9986745180720045
-2026-08-12 01:37:42.878 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=13 user=12 seq_len=2444: 0.9986701327331426
-2026-08-12 01:37:43.234 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[full] batch=13 ragged positions: 0.9984274504307129
-PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_batched_prefill_decode_pcc[32-sliding] 2026-08-12 01:37:47.083 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=0 seq_len=2000: 0.9989031986977256
-2026-08-12 01:37:48.159 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=1 seq_len=2037: 0.998891865674005
-2026-08-12 01:37:49.288 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=2 seq_len=2074: 0.9988948314868585
-2026-08-12 01:37:50.403 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=3 seq_len=2111: 0.9988925588312365
-2026-08-12 01:37:51.479 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=4 seq_len=2148: 0.9988867169898344
-2026-08-12 01:37:52.695 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=5 seq_len=2185: 0.9988897321869277
-2026-08-12 01:37:53.867 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=6 seq_len=2222: 0.9988462259072942
-2026-08-12 01:37:55.095 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=7 seq_len=2259: 0.9988451864987867
-2026-08-12 01:37:56.332 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=8 seq_len=2296: 0.9988334740888895
-2026-08-12 01:37:57.544 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=9 seq_len=2333: 0.9988374390227833
-2026-08-12 01:37:58.842 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=10 seq_len=2370: 0.998841038233418
-2026-08-12 01:38:00.314 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=11 seq_len=2407: 0.9988374218313372
-2026-08-12 01:38:01.690 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=12 seq_len=2444: 0.9988335102409973
-2026-08-12 01:38:03.082 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=13 seq_len=2481: 0.9988277051421156
-2026-08-12 01:38:04.490 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=14 seq_len=2518: 0.998834785028292
-2026-08-12 01:38:06.107 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=15 seq_len=2555: 0.99883452955362
-2026-08-12 01:38:07.547 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=16 seq_len=2592: 0.9988343532899985
-2026-08-12 01:38:09.054 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=17 seq_len=2629: 0.9988266324288475
-2026-08-12 01:38:10.681 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=18 seq_len=2666: 0.998831660275791
-2026-08-12 01:38:12.242 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=19 seq_len=2703: 0.9988274317703701
-2026-08-12 01:38:13.762 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=20 seq_len=2740: 0.9988252569952728
-2026-08-12 01:38:15.306 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=21 seq_len=2777: 0.9988341503481509
-2026-08-12 01:38:16.942 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=22 seq_len=2814: 0.9988192089063187
-2026-08-12 01:38:18.607 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=23 seq_len=2851: 0.9988267689954944
-2026-08-12 01:38:20.299 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=24 seq_len=2888: 0.9988329944292395
-2026-08-12 01:38:22.013 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=25 seq_len=2925: 0.9988224964113235
-2026-08-12 01:38:23.713 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=26 seq_len=2962: 0.998821800394812
-2026-08-12 01:38:25.423 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=27 seq_len=2999: 0.9988228923946061
-2026-08-12 01:38:27.156 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=28 seq_len=3036: 0.9988205633617565
-2026-08-12 01:38:29.022 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=29 seq_len=3073: 0.9994536112635427
-2026-08-12 01:38:30.836 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=30 seq_len=3110: 0.9994498270485156
-2026-08-12 01:38:32.946 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=31 seq_len=3147: 0.9994472579321458
-2026-08-12 01:38:33.867 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[sliding] batch=32 ragged positions: 0.9986990317972456
-PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_batched_prefill_decode_pcc[32-full] 2026-08-12 01:38:37.721 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=0 seq_len=2000: 0.998739868162986
-2026-08-12 01:38:38.833 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=1 seq_len=2037: 0.9987548386835278
-2026-08-12 01:38:39.936 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=2 seq_len=2074: 0.9987424881305222
-2026-08-12 01:38:41.038 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=3 seq_len=2111: 0.9987498613350934
-2026-08-12 01:38:42.158 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=4 seq_len=2148: 0.9987449773775089
-2026-08-12 01:38:43.339 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=5 seq_len=2185: 0.9987328792232916
-2026-08-12 01:38:44.486 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=6 seq_len=2222: 0.9986815435255327
-2026-08-12 01:38:45.678 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=7 seq_len=2259: 0.9986908835552019
-2026-08-12 01:38:46.853 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=8 seq_len=2296: 0.998680863510052
-2026-08-12 01:38:48.001 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=9 seq_len=2333: 0.9986782709389196
-2026-08-12 01:38:49.224 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=10 seq_len=2370: 0.998690183166728
-2026-08-12 01:38:50.579 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=11 seq_len=2407: 0.9986745180720045
-2026-08-12 01:38:51.852 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=12 seq_len=2444: 0.9986701327331426
-2026-08-12 01:38:53.180 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=13 seq_len=2481: 0.9986802362673436
-2026-08-12 01:38:54.569 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=14 seq_len=2518: 0.9986714878514464
-2026-08-12 01:38:56.107 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=15 seq_len=2555: 0.9986727787866545
-2026-08-12 01:38:57.457 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=16 seq_len=2592: 0.9986623630437066
-2026-08-12 01:38:58.889 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=17 seq_len=2629: 0.998665654874857
-2026-08-12 01:39:00.384 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=18 seq_len=2666: 0.998669121211081
-2026-08-12 01:39:01.823 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=19 seq_len=2703: 0.998661917200555
-2026-08-12 01:39:03.208 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=20 seq_len=2740: 0.9986653402479271
-2026-08-12 01:39:04.617 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=21 seq_len=2777: 0.9986716190904812
-2026-08-12 01:39:06.075 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=22 seq_len=2814: 0.9986626426239243
-2026-08-12 01:39:07.590 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=23 seq_len=2851: 0.9986690995091554
-2026-08-12 01:39:09.119 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=24 seq_len=2888: 0.9986605644293542
-2026-08-12 01:39:10.662 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=25 seq_len=2925: 0.9986582963681945
-2026-08-12 01:39:12.183 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=26 seq_len=2962: 0.9986479787568854
-2026-08-12 01:39:13.754 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=27 seq_len=2999: 0.9986608328127471
-2026-08-12 01:39:15.318 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=28 seq_len=3036: 0.9986539356848076
-2026-08-12 01:39:17.011 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=29 seq_len=3073: 0.999399180713986
-2026-08-12 01:39:18.682 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=30 seq_len=3110: 0.9993926775692745
-2026-08-12 01:39:20.635 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=31 seq_len=3147: 0.9993993454946543
-2026-08-12 01:39:21.498 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[full] batch=32 ragged positions: 0.998508420475419
-PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_multi_chunk_prefill_nonzero_user[sliding] 2026-08-12 01:39:34.056 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused multi-chunk prefill[sliding] user_id=2 seq_len=12345: 0.9994208750590992
-2026-08-12 01:39:34.113 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[sliding] user_id=2 pos=12345: 0.9989075346221583
-PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_multi_chunk_prefill_nonzero_user[full] 2026-08-12 01:39:44.839 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused multi-chunk prefill[full] user_id=2 seq_len=12345: 0.9993058962978181
-2026-08-12 01:39:44.899 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[full] user_id=2 pos=12345: 0.9987344678725173
-PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_full_context_prefill_tail_pcc[131072-sliding] 2026-08-12 01:39:54.219 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] full-context seq_len=131072 (interior @65536 32 rows): 0.9994182119921792
-2026-08-12 01:39:56.195 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] full-context seq_len=131072 (last 32 rows): 0.9993690708252618
-PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_full_context_prefill_tail_pcc[131072-full] 2026-08-12 01:40:07.628 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] full-context seq_len=131072 (interior @65536 32 rows): 0.998976729427646
-2026-08-12 01:40:10.058 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] full-context seq_len=131072 (last 32 rows): 0.9989410846218074
-PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_full_context_prefill_tail_pcc[130073-sliding] 2026-08-12 01:40:18.110 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] full-context seq_len=130073 (last 32 rows): 0.9994391417672508
-PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_full_context_prefill_tail_pcc[130073-full] 2026-08-12 01:40:28.534 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] full-context seq_len=130073 (last 32 rows): 0.9989973773709422
-PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_full_context_decode_pcc[sliding] 2026-08-12 01:40:35.796 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[sliding] full-context pos=131071: 0.9991325337411172
-PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_full_context_decode_pcc[full] 2026-08-12 01:40:43.826 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[full] full-context pos=131071: 0.9990037816626486
-PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_real_weights_prefill_decode_pcc[sliding] 2026-08-12 01:40:47.578 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused real-weights prefill[sliding] seq_len=2049: 0.9991078604812349
-2026-08-12 01:40:47.612 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused real-weights decode[sliding] pos=2049: 0.9995248561869676
-PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_real_weights_prefill_decode_pcc[full] 2026-08-12 01:40:51.403 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused real-weights prefill[full] seq_len=2049: 0.9991734132541471
-2026-08-12 01:40:51.434 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused real-weights decode[full] pos=2049: 0.9991616441861311
-PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_fused_vs_functional_equivalence[100-sliding] 2026-08-12 01:40:55.575 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused vs unfused prefill[sliding] seq_len=100: 0.9987860281772244
-2026-08-12 01:40:55.577 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_vs_functional_equivalence:649 - accuracy vs HF prefill[sliding] seq_len=100: unfused=0.999102 fused=0.999459 delta=+0.000357
-2026-08-12 01:40:55.577 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused vs unfused decode[sliding] seq_len=100: 0.9986170550952377
-2026-08-12 01:40:55.577 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_vs_functional_equivalence:649 - accuracy vs HF decode[sliding] seq_len=100: unfused=0.999049 fused=0.999405 delta=+0.000356
-PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_fused_vs_functional_equivalence[100-full] 2026-08-12 01:40:59.736 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused vs unfused prefill[full] seq_len=100: 0.9987009992694419
-2026-08-12 01:40:59.737 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_vs_functional_equivalence:649 - accuracy vs HF prefill[full] seq_len=100: unfused=0.999076 fused=0.999396 delta=+0.000320
-2026-08-12 01:40:59.738 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused vs unfused decode[full] seq_len=100: 0.9985972562709605
-2026-08-12 01:40:59.738 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_vs_functional_equivalence:649 - accuracy vs HF decode[full] seq_len=100: unfused=0.998999 fused=0.999288 delta=+0.000288
-PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_fused_vs_functional_equivalence[4097-sliding] 2026-08-12 01:41:06.461 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused vs unfused prefill[sliding] seq_len=4097: 0.9981719130558159
-2026-08-12 01:41:07.002 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_vs_functional_equivalence:649 - accuracy vs HF prefill[sliding] seq_len=4097: unfused=0.998519 fused=0.999445 delta=+0.000926
-2026-08-12 01:41:07.003 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused vs unfused decode[sliding] seq_len=4097: 0.9969400065843946
-2026-08-12 01:41:07.003 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_vs_functional_equivalence:649 - accuracy vs HF decode[sliding] seq_len=4097: unfused=0.998843 fused=0.998410 delta=-0.000433
-PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_fused_vs_functional_equivalence[4097-full] 2026-08-12 01:41:13.703 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused vs unfused prefill[full] seq_len=4097: 0.9979203160723846
-2026-08-12 01:41:14.283 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_vs_functional_equivalence:649 - accuracy vs HF prefill[full] seq_len=4097: unfused=0.998327 fused=0.999382 delta=+0.001055
-2026-08-12 01:41:14.284 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused vs unfused decode[full] seq_len=4097: 0.9970111473249321
-2026-08-12 01:41:14.284 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_vs_functional_equivalence:649 - accuracy vs HF decode[full] seq_len=4097: unfused=0.998342 fused=0.998808 delta=+0.000467
-PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_fused_vs_functional_equivalence[12345-sliding] 2026-08-12 01:41:28.308 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused vs unfused prefill[sliding] seq_len=12345: 0.9981251493899366
-2026-08-12 01:41:29.888 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_vs_functional_equivalence:649 - accuracy vs HF prefill[sliding] seq_len=12345: unfused=0.998480 fused=0.999423 delta=+0.000944
-2026-08-12 01:41:29.889 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused vs unfused decode[sliding] seq_len=12345: 0.9973117121131576
-2026-08-12 01:41:29.889 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_vs_functional_equivalence:649 - accuracy vs HF decode[sliding] seq_len=12345: unfused=0.997622 fused=0.998954 delta=+0.001333
-PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_fused_vs_functional_equivalence[12345-full] 2026-08-12 01:41:42.361 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused vs unfused prefill[full] seq_len=12345: 0.9977770651718303
-2026-08-12 01:41:43.979 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_vs_functional_equivalence:649 - accuracy vs HF prefill[full] seq_len=12345: unfused=0.998233 fused=0.999310 delta=+0.001076
-2026-08-12 01:41:43.980 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused vs unfused decode[full] seq_len=12345: 0.9976656313962907
-2026-08-12 01:41:43.980 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_vs_functional_equivalence:649 - accuracy vs HF decode[full] seq_len=12345: unfused=0.998569 fused=0.998701 delta=+0.000132
-PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_fused_graph_uses_fused_ops[2048-sliding] 2026-08-12 01:41:46.895 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_graph_uses_fused_ops:771 - fused prefill[sliding] op trace: {'experimental.rotary_embedding_hf': 2, 'mul': 2}
-2026-08-12 01:41:46.895 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_graph_uses_fused_ops:772 - fused decode[sliding] op trace: {'interleaved_to_sharded': 5, 'sharded_to_interleaved': 4, 'experimental.rotary_embedding_hf': 2, 'mul': 2}
-PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_fused_graph_uses_fused_ops[2048-full] 2026-08-12 01:41:47.155 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_graph_uses_fused_ops:771 - fused prefill[full] op trace: {'mul': 2}
-2026-08-12 01:41:47.155 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_graph_uses_fused_ops:772 - fused decode[full] op trace: {'interleaved_to_sharded': 3, 'sharded_to_interleaved': 4, 'mul': 2}
-PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_fused_graph_uses_fused_ops[3000-sliding] 2026-08-12 01:41:47.452 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_graph_uses_fused_ops:771 - fused prefill[sliding] op trace: {'experimental.rotary_embedding_hf': 2, 'mul': 2}
-2026-08-12 01:41:47.452 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_graph_uses_fused_ops:772 - fused decode[sliding] op trace: {'interleaved_to_sharded': 5, 'sharded_to_interleaved': 4, 'experimental.rotary_embedding_hf': 2, 'mul': 2}
-PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_fused_graph_uses_fused_ops[3000-full] 2026-08-12 01:41:47.740 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_graph_uses_fused_ops:771 - fused prefill[full] op trace: {'mul': 2}
-2026-08-12 01:41:47.740 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_graph_uses_fused_ops:772 - fused decode[full] op trace: {'interleaved_to_sharded': 3, 'sharded_to_interleaved': 4, 'mul': 2}
-PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_fused_graph_uses_fused_ops[12345-sliding] 2026-08-12 01:41:48.399 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_graph_uses_fused_ops:771 - fused prefill[sliding] op trace: {'experimental.minimal_matmul': 12, 'experimental.rotary_embedding_hf': 4, 'mul': 4}
-2026-08-12 01:41:48.399 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_graph_uses_fused_ops:772 - fused decode[sliding] op trace: {'interleaved_to_sharded': 5, 'sharded_to_interleaved': 4, 'experimental.rotary_embedding_hf': 2, 'mul': 2}
-PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_fused_graph_uses_fused_ops[12345-full] 2026-08-12 01:41:49.058 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_graph_uses_fused_ops:771 - fused prefill[full] op trace: {'experimental.minimal_matmul': 12, 'mul': 4}
-2026-08-12 01:41:49.059 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_graph_uses_fused_ops:772 - fused decode[full] op trace: {'interleaved_to_sharded': 3, 'sharded_to_interleaved': 4, 'mul': 2}
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_decode_pcc[2048-sliding] 2026-08-12 02:46:31.611 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[sliding] prompt=2048 pos=2048: 0.9984692391501748
+2026-08-12 02:46:31.644 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[sliding] prompt=2048 pos=2049: 0.9984856314441619
+2026-08-12 02:46:31.676 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[sliding] prompt=2048 pos=2050: 0.9987524033256914
+2026-08-12 02:46:31.708 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[sliding] prompt=2048 pos=2051: 0.9990256785704394
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_decode_pcc[2048-full] 2026-08-12 02:46:32.817 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[full] prompt=2048 pos=2048: 0.9986693310648262
+2026-08-12 02:46:32.847 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[full] prompt=2048 pos=2049: 0.9981734722360969
+2026-08-12 02:46:32.878 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[full] prompt=2048 pos=2050: 0.998932363723844
+2026-08-12 02:46:32.908 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[full] prompt=2048 pos=2051: 0.998284736576832
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_decode_pcc[3000-sliding] 2026-08-12 02:46:34.649 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[sliding] prompt=3000 pos=3000: 0.9989420206065276
+2026-08-12 02:46:34.683 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[sliding] prompt=3000 pos=3001: 0.9989499283750432
+2026-08-12 02:46:34.715 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[sliding] prompt=3000 pos=3002: 0.9988304737609318
+2026-08-12 02:46:34.748 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[sliding] prompt=3000 pos=3003: 0.9984238149085207
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_decode_pcc[3000-full] 2026-08-12 02:46:36.412 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[full] prompt=3000 pos=3000: 0.9983183056839603
+2026-08-12 02:46:36.443 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[full] prompt=3000 pos=3001: 0.9983359072344483
+2026-08-12 02:46:36.476 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[full] prompt=3000 pos=3002: 0.9983835085340257
+2026-08-12 02:46:36.510 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[full] prompt=3000 pos=3003: 0.9982986150524844
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_decode_pcc_vs_fp32_reference[sliding] 2026-08-12 02:46:42.181 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] vs FP32 HF reference seq_len=2049: 0.9989338395892053
+2026-08-12 02:46:42.257 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[sliding] vs FP32 HF reference pos=2049: 0.998660809111115
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_decode_pcc_vs_fp32_reference[full] 2026-08-12 02:46:47.948 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] vs FP32 HF reference seq_len=2049: 0.9987711626661945
+2026-08-12 02:46:48.015 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[full] vs FP32 HF reference pos=2049: 0.99844936848525
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_seq_len_equals_max_and_chunk[sliding] 2026-08-12 02:46:53.266 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] seq_len==max_seq_len==chunk==4096 attempt=0: 0.9994396646833236
+2026-08-12 02:46:55.649 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] seq_len==max_seq_len==chunk==4096 attempt=1: 0.9994430391328438
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_seq_len_equals_max_and_chunk[full] 2026-08-12 02:47:00.704 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] seq_len==max_seq_len==chunk==4096 attempt=0: 0.9993793124758178
+2026-08-12 02:47:02.955 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] seq_len==max_seq_len==chunk==4096 attempt=1: 0.9993837504280477
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_multi_chunk_prefill_page_table_bound[sliding] 2026-08-12 02:47:15.198 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] max_seq_len==seq_len==12416 (194 pages, 2 chunks): 0.999419782960677
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_multi_chunk_prefill_page_table_bound[full] 2026-08-12 02:47:26.073 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] max_seq_len==seq_len==12416 (194 pages, 2 chunks): 0.9993071240986988
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_continuation_prefill_pcc[4096-3000-sliding] 2026-08-12 02:47:33.778 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused continuation prefill[sliding] 4096+3000: 0.9991886808798743
+2026-08-12 02:47:37.773 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode after continuation prefill[sliding] pos=7096: 0.9988275066217351
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_continuation_prefill_pcc[4096-3000-full] 2026-08-12 02:47:45.019 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused continuation prefill[full] 4096+3000: 0.9991027428744661
+2026-08-12 02:47:48.527 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode after continuation prefill[full] pos=7096: 0.9983428828184205
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_continuation_prefill_pcc[1024-1024-sliding] 2026-08-12 02:47:49.900 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused continuation prefill[sliding] 1024+1024: 0.9988900012545957
+2026-08-12 02:47:50.816 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode after continuation prefill[sliding] pos=2048: 0.9993080519739739
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_continuation_prefill_pcc[1024-1024-full] 2026-08-12 02:47:52.103 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused continuation prefill[full] 1024+1024: 0.9987540679947328
+2026-08-12 02:47:52.993 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode after continuation prefill[full] pos=2048: 0.9990017047752022
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_continuation_prefill_pcc[64-100-sliding] 2026-08-12 02:47:53.291 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused continuation prefill[sliding] 64+100: 0.9994226557574025
+2026-08-12 02:47:53.373 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode after continuation prefill[sliding] pos=164: 0.9992098984107556
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_continuation_prefill_pcc[64-100-full] 2026-08-12 02:47:53.651 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused continuation prefill[full] 64+100: 0.9993350695762255
+2026-08-12 02:47:53.733 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode after continuation prefill[full] pos=164: 0.9990223131489652
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_continuation_prefill_requires_sliding_tail 2026-08-12 02:47:53.946 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] ValueError message="sliding_kv_tail"
+2026-08-12 02:47:53.946 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] ValueError message="sliding_kv_tail"
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_batched_prefill_decode_pcc[4-sliding] 2026-08-12 02:47:57.768 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=4 user=0 seq_len=2000: 0.9989031986977256
+2026-08-12 02:47:58.896 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=4 user=1 seq_len=2037: 0.998891865674005
+2026-08-12 02:48:00.071 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=4 user=2 seq_len=2074: 0.9988948314868585
+2026-08-12 02:48:01.279 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=4 user=3 seq_len=2111: 0.9988925588312365
+2026-08-12 02:48:01.404 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[sliding] batch=4 ragged positions: 0.9986262142713458
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_batched_prefill_decode_pcc[4-full] 2026-08-12 02:48:05.162 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=4 user=0 seq_len=2000: 0.998739868162986
+2026-08-12 02:48:06.226 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=4 user=1 seq_len=2037: 0.9987548386835278
+2026-08-12 02:48:07.348 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=4 user=2 seq_len=2074: 0.9987424881305222
+2026-08-12 02:48:08.492 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=4 user=3 seq_len=2111: 0.9987498613350934
+2026-08-12 02:48:08.613 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[full] batch=4 ragged positions: 0.998559872049897
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_batched_prefill_decode_pcc[13-sliding] 2026-08-12 02:48:12.491 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=13 user=0 seq_len=2000: 0.9989031986977256
+2026-08-12 02:48:13.624 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=13 user=1 seq_len=2037: 0.998891865674005
+2026-08-12 02:48:14.829 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=13 user=2 seq_len=2074: 0.9988948314868585
+2026-08-12 02:48:16.020 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=13 user=3 seq_len=2111: 0.9988925588312365
+2026-08-12 02:48:17.187 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=13 user=4 seq_len=2148: 0.9988867169898344
+2026-08-12 02:48:18.477 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=13 user=5 seq_len=2185: 0.9988897321869277
+2026-08-12 02:48:19.756 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=13 user=6 seq_len=2222: 0.9988462259072942
+2026-08-12 02:48:21.091 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=13 user=7 seq_len=2259: 0.9988451864987867
+2026-08-12 02:48:22.396 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=13 user=8 seq_len=2296: 0.9988334740888895
+2026-08-12 02:48:23.679 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=13 user=9 seq_len=2333: 0.9988374390227833
+2026-08-12 02:48:25.004 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=13 user=10 seq_len=2370: 0.998841038233418
+2026-08-12 02:48:26.445 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=13 user=11 seq_len=2407: 0.9988374218313372
+2026-08-12 02:48:27.843 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=13 user=12 seq_len=2444: 0.9988335102409973
+2026-08-12 02:48:28.221 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[sliding] batch=13 ragged positions: 0.9985247213755323
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_batched_prefill_decode_pcc[13-full] 2026-08-12 02:48:32.036 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=13 user=0 seq_len=2000: 0.998739868162986
+2026-08-12 02:48:33.145 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=13 user=1 seq_len=2037: 0.9987548386835278
+2026-08-12 02:48:34.245 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=13 user=2 seq_len=2074: 0.9987424881305222
+2026-08-12 02:48:35.337 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=13 user=3 seq_len=2111: 0.9987498613350934
+2026-08-12 02:48:36.412 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=13 user=4 seq_len=2148: 0.9987449773775089
+2026-08-12 02:48:37.595 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=13 user=5 seq_len=2185: 0.9987328792232916
+2026-08-12 02:48:38.769 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=13 user=6 seq_len=2222: 0.9986815435255327
+2026-08-12 02:48:40.006 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=13 user=7 seq_len=2259: 0.9986908835552019
+2026-08-12 02:48:41.208 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=13 user=8 seq_len=2296: 0.998680863510052
+2026-08-12 02:48:42.370 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=13 user=9 seq_len=2333: 0.9986782709389196
+2026-08-12 02:48:43.617 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=13 user=10 seq_len=2370: 0.998690183166728
+2026-08-12 02:48:45.038 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=13 user=11 seq_len=2407: 0.9986745180720045
+2026-08-12 02:48:46.397 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=13 user=12 seq_len=2444: 0.9986701327331426
+2026-08-12 02:48:46.757 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[full] batch=13 ragged positions: 0.9984274504307129
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_batched_prefill_decode_pcc[32-sliding] 2026-08-12 02:48:50.663 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=0 seq_len=2000: 0.9989031986977256
+2026-08-12 02:48:51.826 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=1 seq_len=2037: 0.998891865674005
+2026-08-12 02:48:53.024 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=2 seq_len=2074: 0.9988948314868585
+2026-08-12 02:48:54.217 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=3 seq_len=2111: 0.9988925588312365
+2026-08-12 02:48:55.418 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=4 seq_len=2148: 0.9988867169898344
+2026-08-12 02:48:56.645 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=5 seq_len=2185: 0.9988897321869277
+2026-08-12 02:48:57.901 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=6 seq_len=2222: 0.9988462259072942
+2026-08-12 02:48:59.216 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=7 seq_len=2259: 0.9988451864987867
+2026-08-12 02:49:00.506 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=8 seq_len=2296: 0.9988334740888895
+2026-08-12 02:49:01.784 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=9 seq_len=2333: 0.9988374390227833
+2026-08-12 02:49:03.140 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=10 seq_len=2370: 0.998841038233418
+2026-08-12 02:49:04.616 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=11 seq_len=2407: 0.9988374218313372
+2026-08-12 02:49:06.010 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=12 seq_len=2444: 0.9988335102409973
+2026-08-12 02:49:07.416 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=13 seq_len=2481: 0.9988277051421156
+2026-08-12 02:49:08.913 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=14 seq_len=2518: 0.998834785028292
+2026-08-12 02:49:10.585 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=15 seq_len=2555: 0.99883452955362
+2026-08-12 02:49:12.025 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=16 seq_len=2592: 0.9988343532899985
+2026-08-12 02:49:13.561 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=17 seq_len=2629: 0.9988266324288475
+2026-08-12 02:49:15.226 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=18 seq_len=2666: 0.998831660275791
+2026-08-12 02:49:16.835 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=19 seq_len=2703: 0.9988274317703701
+2026-08-12 02:49:18.439 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=20 seq_len=2740: 0.9988252569952728
+2026-08-12 02:49:20.047 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=21 seq_len=2777: 0.9988341503481509
+2026-08-12 02:49:21.692 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=22 seq_len=2814: 0.9988192089063187
+2026-08-12 02:49:23.387 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=23 seq_len=2851: 0.9988267689954944
+2026-08-12 02:49:25.117 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=24 seq_len=2888: 0.9988329944292395
+2026-08-12 02:49:26.836 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=25 seq_len=2925: 0.9988224964113235
+2026-08-12 02:49:28.584 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=26 seq_len=2962: 0.998821800394812
+2026-08-12 02:49:30.383 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=27 seq_len=2999: 0.9988228923946061
+2026-08-12 02:49:32.175 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=28 seq_len=3036: 0.9988205633617565
+2026-08-12 02:49:34.071 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=29 seq_len=3073: 0.9994536112635427
+2026-08-12 02:49:35.949 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=30 seq_len=3110: 0.9994498270485156
+2026-08-12 02:49:38.091 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] batch=32 user=31 seq_len=3147: 0.9994472579321458
+2026-08-12 02:49:39.002 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[sliding] batch=32 ragged positions: 0.9986990317972456
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_batched_prefill_decode_pcc[32-full] 2026-08-12 02:49:42.890 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=0 seq_len=2000: 0.998739868162986
+2026-08-12 02:49:44.010 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=1 seq_len=2037: 0.9987548386835278
+2026-08-12 02:49:45.146 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=2 seq_len=2074: 0.9987424881305222
+2026-08-12 02:49:46.232 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=3 seq_len=2111: 0.9987498613350934
+2026-08-12 02:49:47.371 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=4 seq_len=2148: 0.9987449773775089
+2026-08-12 02:49:48.604 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=5 seq_len=2185: 0.9987328792232916
+2026-08-12 02:49:49.806 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=6 seq_len=2222: 0.9986815435255327
+2026-08-12 02:49:51.043 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=7 seq_len=2259: 0.9986908835552019
+2026-08-12 02:49:52.284 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=8 seq_len=2296: 0.998680863510052
+2026-08-12 02:49:53.505 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=9 seq_len=2333: 0.9986782709389196
+2026-08-12 02:49:54.793 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=10 seq_len=2370: 0.998690183166728
+2026-08-12 02:49:56.213 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=11 seq_len=2407: 0.9986745180720045
+2026-08-12 02:49:57.564 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=12 seq_len=2444: 0.9986701327331426
+2026-08-12 02:49:58.947 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=13 seq_len=2481: 0.9986802362673436
+2026-08-12 02:50:00.390 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=14 seq_len=2518: 0.9986714878514464
+2026-08-12 02:50:01.959 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=15 seq_len=2555: 0.9986727787866545
+2026-08-12 02:50:03.413 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=16 seq_len=2592: 0.9986623630437066
+2026-08-12 02:50:04.930 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=17 seq_len=2629: 0.998665654874857
+2026-08-12 02:50:06.594 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=18 seq_len=2666: 0.998669121211081
+2026-08-12 02:50:08.159 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=19 seq_len=2703: 0.998661917200555
+2026-08-12 02:50:09.673 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=20 seq_len=2740: 0.9986653402479271
+2026-08-12 02:50:11.184 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=21 seq_len=2777: 0.9986716190904812
+2026-08-12 02:50:12.762 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=22 seq_len=2814: 0.9986626426239243
+2026-08-12 02:50:14.428 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=23 seq_len=2851: 0.9986690995091554
+2026-08-12 02:50:16.119 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=24 seq_len=2888: 0.9986605644293542
+2026-08-12 02:50:17.820 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=25 seq_len=2925: 0.9986582963681945
+2026-08-12 02:50:19.527 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=26 seq_len=2962: 0.9986479787568854
+2026-08-12 02:50:21.228 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=27 seq_len=2999: 0.9986608328127471
+2026-08-12 02:50:22.927 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=28 seq_len=3036: 0.9986539356848076
+2026-08-12 02:50:24.704 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=29 seq_len=3073: 0.999399180713986
+2026-08-12 02:50:26.478 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=30 seq_len=3110: 0.9993926775692745
+2026-08-12 02:50:28.511 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] batch=32 user=31 seq_len=3147: 0.9993993454946543
+2026-08-12 02:50:29.373 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[full] batch=32 ragged positions: 0.998508420475419
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_multi_chunk_prefill_nonzero_user[sliding] 2026-08-12 02:50:41.722 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused multi-chunk prefill[sliding] user_id=2 seq_len=12345: 0.9994208750590992
+2026-08-12 02:50:41.778 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[sliding] user_id=2 pos=12345: 0.9989075346221583
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_multi_chunk_prefill_nonzero_user[full] 2026-08-12 02:50:52.763 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused multi-chunk prefill[full] user_id=2 seq_len=12345: 0.9993058962978181
+2026-08-12 02:50:52.826 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[full] user_id=2 pos=12345: 0.9987344678725173
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_full_context_prefill_tail_pcc[131072-sliding] 2026-08-12 02:51:02.297 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] full-context seq_len=131072 (interior @65536 32 rows): 0.9994182119921792
+2026-08-12 02:51:04.407 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] full-context seq_len=131072 (last 32 rows): 0.9993690708252618
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_full_context_prefill_tail_pcc[131072-full] 2026-08-12 02:51:15.910 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] full-context seq_len=131072 (interior @65536 32 rows): 0.998976729427646
+2026-08-12 02:51:18.409 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] full-context seq_len=131072 (last 32 rows): 0.9989410846218074
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_full_context_prefill_tail_pcc[130073-sliding] 2026-08-12 02:51:26.637 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[sliding] full-context seq_len=130073 (last 32 rows): 0.9994391417672508
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_full_context_prefill_tail_pcc[130073-full] 2026-08-12 02:51:36.978 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused prefill[full] full-context seq_len=130073 (last 32 rows): 0.9989973773709422
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_full_context_decode_pcc[sliding] 2026-08-12 02:51:44.162 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[sliding] full-context pos=131071: 0.9991325337411172
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_full_context_decode_pcc[full] 2026-08-12 02:51:52.192 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused decode[full] full-context pos=131071: 0.9990037816626486
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_real_weights_prefill_decode_pcc[sliding] 2026-08-12 02:51:56.015 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused real-weights prefill[sliding] seq_len=2049: 0.9991078604812349
+2026-08-12 02:51:56.048 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused real-weights decode[sliding] pos=2049: 0.9995248561869676
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_real_weights_prefill_decode_pcc[full] 2026-08-12 02:51:59.806 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused real-weights prefill[full] seq_len=2049: 0.9991734132541471
+2026-08-12 02:51:59.837 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused real-weights decode[full] pos=2049: 0.9991616441861311
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_fused_vs_functional_equivalence[100-sliding] 2026-08-12 02:52:04.017 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused vs unfused prefill[sliding] seq_len=100: 0.9987860281772244
+2026-08-12 02:52:04.019 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_vs_functional_equivalence:650 - accuracy vs HF prefill[sliding] seq_len=100: unfused=0.999102 fused=0.999459 delta=+0.000357
+2026-08-12 02:52:04.019 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused vs unfused decode[sliding] seq_len=100: 0.9986170550952377
+2026-08-12 02:52:04.019 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_vs_functional_equivalence:650 - accuracy vs HF decode[sliding] seq_len=100: unfused=0.999049 fused=0.999405 delta=+0.000356
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_fused_vs_functional_equivalence[100-full] 2026-08-12 02:52:08.240 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused vs unfused prefill[full] seq_len=100: 0.9987009992694419
+2026-08-12 02:52:08.242 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_vs_functional_equivalence:650 - accuracy vs HF prefill[full] seq_len=100: unfused=0.999076 fused=0.999396 delta=+0.000320
+2026-08-12 02:52:08.242 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused vs unfused decode[full] seq_len=100: 0.9985972562709605
+2026-08-12 02:52:08.242 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_vs_functional_equivalence:650 - accuracy vs HF decode[full] seq_len=100: unfused=0.998999 fused=0.999288 delta=+0.000288
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_fused_vs_functional_equivalence[4097-sliding] 2026-08-12 02:52:15.035 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused vs unfused prefill[sliding] seq_len=4097: 0.9981719130558159
+2026-08-12 02:52:15.592 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_vs_functional_equivalence:650 - accuracy vs HF prefill[sliding] seq_len=4097: unfused=0.998519 fused=0.999445 delta=+0.000926
+2026-08-12 02:52:15.592 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused vs unfused decode[sliding] seq_len=4097: 0.9969400065843946
+2026-08-12 02:52:15.592 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_vs_functional_equivalence:650 - accuracy vs HF decode[sliding] seq_len=4097: unfused=0.998843 fused=0.998410 delta=-0.000433
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_fused_vs_functional_equivalence[4097-full] 2026-08-12 02:52:22.181 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused vs unfused prefill[full] seq_len=4097: 0.9979203160723846
+2026-08-12 02:52:22.737 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_vs_functional_equivalence:650 - accuracy vs HF prefill[full] seq_len=4097: unfused=0.998327 fused=0.999382 delta=+0.001055
+2026-08-12 02:52:22.737 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused vs unfused decode[full] seq_len=4097: 0.9970111473249321
+2026-08-12 02:52:22.737 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_vs_functional_equivalence:650 - accuracy vs HF decode[full] seq_len=4097: unfused=0.998342 fused=0.998808 delta=+0.000467
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_fused_vs_functional_equivalence[12345-sliding] 2026-08-12 02:52:36.779 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused vs unfused prefill[sliding] seq_len=12345: 0.9981251493899366
+2026-08-12 02:52:38.379 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_vs_functional_equivalence:650 - accuracy vs HF prefill[sliding] seq_len=12345: unfused=0.998480 fused=0.999423 delta=+0.000944
+2026-08-12 02:52:38.380 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused vs unfused decode[sliding] seq_len=12345: 0.9973117121131576
+2026-08-12 02:52:38.380 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_vs_functional_equivalence:650 - accuracy vs HF decode[sliding] seq_len=12345: unfused=0.997622 fused=0.998954 delta=+0.001333
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_fused_vs_functional_equivalence[12345-full] 2026-08-12 02:52:50.776 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused vs unfused prefill[full] seq_len=12345: 0.9977770651718303
+2026-08-12 02:52:52.355 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_vs_functional_equivalence:650 - accuracy vs HF prefill[full] seq_len=12345: unfused=0.998233 fused=0.999310 delta=+0.001076
+2026-08-12 02:52:52.356 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused vs unfused decode[full] seq_len=12345: 0.9976656313962907
+2026-08-12 02:52:52.356 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_vs_functional_equivalence:650 - accuracy vs HF decode[full] seq_len=12345: unfused=0.998569 fused=0.998701 delta=+0.000132
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_fused_graph_uses_fused_ops[2048-sliding] 2026-08-12 02:52:55.290 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_graph_uses_fused_ops:772 - fused prefill[sliding] op trace: {'experimental.rotary_embedding_hf': 2, 'mul': 2}
+2026-08-12 02:52:55.290 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_graph_uses_fused_ops:773 - fused decode[sliding] op trace: {'interleaved_to_sharded': 5, 'sharded_to_interleaved': 4, 'experimental.rotary_embedding_hf': 2, 'mul': 2}
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_fused_graph_uses_fused_ops[2048-full] 2026-08-12 02:52:55.560 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_graph_uses_fused_ops:772 - fused prefill[full] op trace: {'mul': 2}
+2026-08-12 02:52:55.560 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_graph_uses_fused_ops:773 - fused decode[full] op trace: {'interleaved_to_sharded': 3, 'sharded_to_interleaved': 4, 'mul': 2}
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_fused_graph_uses_fused_ops[3000-sliding] 2026-08-12 02:52:55.882 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_graph_uses_fused_ops:772 - fused prefill[sliding] op trace: {'experimental.rotary_embedding_hf': 2, 'mul': 2}
+2026-08-12 02:52:55.882 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_graph_uses_fused_ops:773 - fused decode[sliding] op trace: {'interleaved_to_sharded': 5, 'sharded_to_interleaved': 4, 'experimental.rotary_embedding_hf': 2, 'mul': 2}
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_fused_graph_uses_fused_ops[3000-full] 2026-08-12 02:52:56.202 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_graph_uses_fused_ops:772 - fused prefill[full] op trace: {'mul': 2}
+2026-08-12 02:52:56.202 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_graph_uses_fused_ops:773 - fused decode[full] op trace: {'interleaved_to_sharded': 3, 'sharded_to_interleaved': 4, 'mul': 2}
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_fused_graph_uses_fused_ops[12345-sliding] 2026-08-12 02:52:56.887 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_graph_uses_fused_ops:772 - fused prefill[sliding] op trace: {'experimental.minimal_matmul': 12, 'experimental.rotary_embedding_hf': 4, 'mul': 4}
+2026-08-12 02:52:56.887 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_graph_uses_fused_ops:773 - fused decode[sliding] op trace: {'interleaved_to_sharded': 5, 'sharded_to_interleaved': 4, 'experimental.rotary_embedding_hf': 2, 'mul': 2}
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_fused_graph_uses_fused_ops[12345-full] 2026-08-12 02:52:57.566 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_graph_uses_fused_ops:772 - fused prefill[full] op trace: {'experimental.minimal_matmul': 12, 'mul': 4}
+2026-08-12 02:52:57.567 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_fused_graph_uses_fused_ops:773 - fused decode[full] op trace: {'interleaved_to_sharded': 3, 'sharded_to_interleaved': 4, 'mul': 2}
 PASSED
 models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_no_host_fallback_in_forward[3000-sliding] PASSED
 models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_no_host_fallback_in_forward[3000-full] PASSED
@@ -315,67 +315,70 @@ models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_
 models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_no_host_fallback_in_forward[12345-full] PASSED
 models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_determinism_repeated_inputs[sliding] PASSED
 models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_determinism_repeated_inputs[full] PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_repeated_run_stress[sliding] 2026-08-12 01:41:52.161 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused stress decode[sliding] step=0 pos=1024: 0.9986965556127185
-2026-08-12 01:41:52.633 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused stress decode[sliding] step=16 pos=1040: 0.9989948171112715
-2026-08-12 01:41:53.104 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused stress decode[sliding] step=32 pos=1056: 0.9987168290837758
-2026-08-12 01:41:53.575 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused stress decode[sliding] step=48 pos=1072: 0.9989131909031888
-2026-08-12 01:41:54.018 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused stress decode[sliding] step=63 pos=1087: 0.9985728215683648
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_repeated_run_stress[sliding] 2026-08-12 02:53:00.803 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused stress decode[sliding] step=0 pos=1024: 0.9986965556127185
+2026-08-12 02:53:01.271 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused stress decode[sliding] step=16 pos=1040: 0.9989948171112715
+2026-08-12 02:53:01.736 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused stress decode[sliding] step=32 pos=1056: 0.9987168290837758
+2026-08-12 02:53:02.201 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused stress decode[sliding] step=48 pos=1072: 0.9989131909031888
+2026-08-12 02:53:02.637 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused stress decode[sliding] step=63 pos=1087: 0.9985728215683648
 PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_repeated_run_stress[full] 2026-08-12 01:41:54.621 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused stress decode[full] step=0 pos=1024: 0.9985477943647725
-2026-08-12 01:41:55.084 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused stress decode[full] step=16 pos=1040: 0.9982165561808828
-2026-08-12 01:41:55.553 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused stress decode[full] step=32 pos=1056: 0.9980813694031889
-2026-08-12 01:41:56.016 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused stress decode[full] step=48 pos=1072: 0.9986208803152324
-2026-08-12 01:41:56.451 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused stress decode[full] step=63 pos=1087: 0.9986826691715296
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_repeated_run_stress[full] 2026-08-12 02:53:03.248 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused stress decode[full] step=0 pos=1024: 0.9985477943647725
+2026-08-12 02:53:03.717 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused stress decode[full] step=16 pos=1040: 0.9982165561808828
+2026-08-12 02:53:04.179 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused stress decode[full] step=32 pos=1056: 0.9980813694031889
+2026-08-12 02:53:04.641 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused stress decode[full] step=48 pos=1072: 0.9986208803152324
+2026-08-12 02:53:05.074 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused stress decode[full] step=63 pos=1087: 0.9986826691715296
 PASSED
 models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_decode_norm_config_shapes[sliding] PASSED
 models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_decode_norm_config_shapes[full] PASSED
 models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_sdpa_chunk_sizes[sliding] PASSED
 models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_sdpa_chunk_sizes[full] PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_norm_compute_kernel_config_is_the_documented_uplift PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_every_norm_takes_the_uplifted_config[sliding] PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_every_norm_takes_the_uplifted_config[full] PASSED
 models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_minimal_matmul_block_config[sliding] PASSED
 models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_minimal_matmul_block_config[full] PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_traced_decode_pcc[sliding] 2026-08-12 01:41:58.713 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused traced decode[sliding] pos=2048: 0.9986609455501948
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_traced_decode_pcc[sliding] 2026-08-12 02:53:07.971 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused traced decode[sliding] pos=2048: 0.9986609455501948
 PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_traced_decode_pcc[full] 2026-08-12 01:41:59.801 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused traced decode[full] pos=2048: 0.9980773240715505
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_traced_decode_pcc[full] 2026-08-12 02:53:09.141 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused traced decode[full] pos=2048: 0.9980773240715505
 PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_traced_decode_advances_positions[sliding] 2026-08-12 01:42:00.405 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused traced decode replay[sliding] pos=1024: 0.9980776144704826
-2026-08-12 01:42:00.436 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused traced decode replay[sliding] pos=1025: 0.9981786677694897
-2026-08-12 01:42:00.466 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused traced decode replay[sliding] pos=1026: 0.9988964380012536
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_traced_decode_advances_positions[sliding] 2026-08-12 02:53:09.754 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused traced decode replay[sliding] pos=1024: 0.9980776144704826
+2026-08-12 02:53:09.785 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused traced decode replay[sliding] pos=1025: 0.9981786677694897
+2026-08-12 02:53:09.814 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused traced decode replay[sliding] pos=1026: 0.9988964380012536
 PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_traced_decode_advances_positions[full] 2026-08-12 01:42:01.068 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused traced decode replay[full] pos=1024: 0.9985019954168572
-2026-08-12 01:42:01.098 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused traced decode replay[full] pos=1025: 0.998625221510652
-2026-08-12 01:42:01.127 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused traced decode replay[full] pos=1026: 0.9988485435648922
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_traced_decode_advances_positions[full] 2026-08-12 02:53:10.446 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused traced decode replay[full] pos=1024: 0.9985019954168572
+2026-08-12 02:53:10.477 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused traced decode replay[full] pos=1025: 0.998625221510652
+2026-08-12 02:53:10.506 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - fused traced decode replay[full] pos=1026: 0.9988485435648922
 PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_prefill[8192-sliding] 2026-08-12 01:42:01.720 | INFO     | tracy:signpost:49 - PERF_PREFILL
-2026-08-12 01:42:01.785 | INFO     | tracy:signpost:49 - PERF_PREFILL_END
-2026-08-12 01:42:01.785 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_perf_prefill:1159 - fused prefill perf window done: kind=sliding seq_len=8192 shape=(1, 1, 8192, 6656)
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_prefill[8192-sliding] 2026-08-12 02:53:11.121 | INFO     | tracy:signpost:49 - PERF_PREFILL
+2026-08-12 02:53:11.187 | INFO     | tracy:signpost:49 - PERF_PREFILL_END
+2026-08-12 02:53:11.187 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_perf_prefill:1198 - fused prefill perf window done: kind=sliding seq_len=8192 shape=(1, 1, 8192, 6656)
 PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_prefill[8192-full] 2026-08-12 01:42:02.374 | INFO     | tracy:signpost:49 - PERF_PREFILL
-2026-08-12 01:42:02.438 | INFO     | tracy:signpost:49 - PERF_PREFILL_END
-2026-08-12 01:42:02.438 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_perf_prefill:1159 - fused prefill perf window done: kind=full seq_len=8192 shape=(1, 1, 8192, 6656)
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_prefill[8192-full] 2026-08-12 02:53:11.806 | INFO     | tracy:signpost:49 - PERF_PREFILL
+2026-08-12 02:53:11.871 | INFO     | tracy:signpost:49 - PERF_PREFILL_END
+2026-08-12 02:53:11.871 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_perf_prefill:1198 - fused prefill perf window done: kind=full seq_len=8192 shape=(1, 1, 8192, 6656)
 PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_prefill[16384-sliding] 2026-08-12 01:42:03.447 | INFO     | tracy:signpost:49 - PERF_PREFILL
-2026-08-12 01:42:03.593 | INFO     | tracy:signpost:49 - PERF_PREFILL_END
-2026-08-12 01:42:03.593 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_perf_prefill:1159 - fused prefill perf window done: kind=sliding seq_len=16384 shape=(1, 1, 16384, 6656)
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_prefill[16384-sliding] 2026-08-12 02:53:12.933 | INFO     | tracy:signpost:49 - PERF_PREFILL
+2026-08-12 02:53:13.077 | INFO     | tracy:signpost:49 - PERF_PREFILL_END
+2026-08-12 02:53:13.077 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_perf_prefill:1198 - fused prefill perf window done: kind=sliding seq_len=16384 shape=(1, 1, 16384, 6656)
 PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_prefill[16384-full] 2026-08-12 01:42:04.609 | INFO     | tracy:signpost:49 - PERF_PREFILL
-2026-08-12 01:42:04.765 | INFO     | tracy:signpost:49 - PERF_PREFILL_END
-2026-08-12 01:42:04.765 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_perf_prefill:1159 - fused prefill perf window done: kind=full seq_len=16384 shape=(1, 1, 16384, 6656)
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_prefill[16384-full] 2026-08-12 02:53:14.133 | INFO     | tracy:signpost:49 - PERF_PREFILL
+2026-08-12 02:53:14.289 | INFO     | tracy:signpost:49 - PERF_PREFILL_END
+2026-08-12 02:53:14.289 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_perf_prefill:1198 - fused prefill perf window done: kind=full seq_len=16384 shape=(1, 1, 16384, 6656)
 PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_decode_traced[2048-sliding] 2026-08-12 01:42:05.049 | INFO     | tracy:signpost:49 - PERF_DECODE
-2026-08-12 01:42:05.071 | INFO     | tracy:signpost:49 - PERF_DECODE_END
-2026-08-12 01:42:05.071 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_perf_decode_traced:1197 - fused decode perf window done: kind=sliding context=2048 iters=8 shape=(1, 1, 1, 6656)
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_decode_traced[2048-sliding] 2026-08-12 02:53:14.589 | INFO     | tracy:signpost:49 - PERF_DECODE
+2026-08-12 02:53:14.611 | INFO     | tracy:signpost:49 - PERF_DECODE_END
+2026-08-12 02:53:14.611 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_perf_decode_traced:1236 - fused decode perf window done: kind=sliding context=2048 iters=8 shape=(1, 1, 1, 6656)
 PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_decode_traced[2048-full] 2026-08-12 01:42:05.356 | INFO     | tracy:signpost:49 - PERF_DECODE
-2026-08-12 01:42:05.378 | INFO     | tracy:signpost:49 - PERF_DECODE_END
-2026-08-12 01:42:05.378 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_perf_decode_traced:1197 - fused decode perf window done: kind=full context=2048 iters=8 shape=(1, 1, 1, 6656)
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_decode_traced[2048-full] 2026-08-12 02:53:14.908 | INFO     | tracy:signpost:49 - PERF_DECODE
+2026-08-12 02:53:14.930 | INFO     | tracy:signpost:49 - PERF_DECODE_END
+2026-08-12 02:53:14.930 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_perf_decode_traced:1236 - fused decode perf window done: kind=full context=2048 iters=8 shape=(1, 1, 1, 6656)
 PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_decode_traced[131071-sliding] 2026-08-12 01:42:08.303 | INFO     | tracy:signpost:49 - PERF_DECODE
-2026-08-12 01:42:08.325 | INFO     | tracy:signpost:49 - PERF_DECODE_END
-2026-08-12 01:42:08.325 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_perf_decode_traced:1197 - fused decode perf window done: kind=sliding context=131071 iters=8 shape=(1, 1, 1, 6656)
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_decode_traced[131071-sliding] 2026-08-12 02:53:17.954 | INFO     | tracy:signpost:49 - PERF_DECODE
+2026-08-12 02:53:17.976 | INFO     | tracy:signpost:49 - PERF_DECODE_END
+2026-08-12 02:53:17.976 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_perf_decode_traced:1236 - fused decode perf window done: kind=sliding context=131071 iters=8 shape=(1, 1, 1, 6656)
 PASSED
-models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_decode_traced[131071-full] 2026-08-12 01:42:11.185 | INFO     | tracy:signpost:49 - PERF_DECODE
-2026-08-12 01:42:11.211 | INFO     | tracy:signpost:49 - PERF_DECODE_END
-2026-08-12 01:42:11.211 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_perf_decode_traced:1197 - fused decode perf window done: kind=full context=131071 iters=8 shape=(1, 1, 1, 6656)
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_decode_traced[131071-full] 2026-08-12 02:53:20.953 | INFO     | tracy:signpost:49 - PERF_DECODE
+2026-08-12 02:53:20.979 | INFO     | tracy:signpost:49 - PERF_DECODE_END
+2026-08-12 02:53:20.979 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_perf_decode_traced:1236 - fused decode perf window done: kind=full context=131071 iters=8 shape=(1, 1, 1, 6656)
 PASSED
 
 =============================== warnings summary ===============================
@@ -393,31 +396,31 @@ PASSED
 ==================================== PASSES ====================================
 - generated xml file: /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/fused_decoder/test_results.xml -
 ============================= slowest 25 durations =============================
-50.43s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_batched_prefill_decode_pcc[32-sliding]
-47.43s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_batched_prefill_decode_pcc[32-full]
-18.82s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_batched_prefill_decode_pcc[13-sliding]
-17.65s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_batched_prefill_decode_pcc[13-full]
-15.41s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_fused_vs_functional_equivalence[12345-sliding]
-13.88s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_fused_vs_functional_equivalence[12345-full]
-13.66s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_full_context_prefill_tail_pcc[131072-full]
-12.41s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_multi_chunk_prefill_nonzero_user[sliding]
-11.98s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_multi_chunk_prefill_page_table_bound[sliding]
-11.47s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_continuation_prefill_pcc[4096-3000-sliding]
-11.12s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_full_context_prefill_tail_pcc[131072-sliding]
-10.58s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_multi_chunk_prefill_nonzero_user[full]
-10.53s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_multi_chunk_prefill_page_table_bound[full]
-10.20s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_full_context_prefill_tail_pcc[130073-full]
-10.17s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_continuation_prefill_pcc[4096-3000-full]
-9.67s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_pcc[12345-sliding]
-8.13s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_pcc[12345-full]
-7.86s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_full_context_prefill_tail_pcc[130073-sliding]
-7.82s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_full_context_decode_pcc[full]
-7.49s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_seq_len_equals_max_and_chunk[sliding]
-7.36s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_batched_prefill_decode_pcc[4-sliding]
-7.22s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_seq_len_equals_max_and_chunk[full]
-7.08s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_fused_vs_functional_equivalence[4097-full]
-7.07s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_full_context_decode_pcc[sliding]
-7.07s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_fused_vs_functional_equivalence[4097-sliding]
+52.03s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_batched_prefill_decode_pcc[32-sliding]
+50.16s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_batched_prefill_decode_pcc[32-full]
+19.40s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_batched_prefill_decode_pcc[13-sliding]
+18.33s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_batched_prefill_decode_pcc[13-full]
+15.43s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_fused_vs_functional_equivalence[12345-sliding]
+13.79s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_full_context_prefill_tail_pcc[131072-full]
+13.77s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_fused_vs_functional_equivalence[12345-full]
+12.20s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_multi_chunk_prefill_nonzero_user[sliding]
+12.05s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_multi_chunk_prefill_page_table_bound[sliding]
+11.50s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_continuation_prefill_pcc[4096-3000-sliding]
+11.41s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_full_context_prefill_tail_pcc[131072-sliding]
+10.85s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_multi_chunk_prefill_nonzero_user[full]
+10.67s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_multi_chunk_prefill_page_table_bound[full]
+10.55s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_continuation_prefill_pcc[4096-3000-full]
+10.12s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_full_context_prefill_tail_pcc[130073-full]
+9.78s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_pcc[12345-sliding]
+8.03s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_full_context_prefill_tail_pcc[130073-sliding]
+8.02s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_pcc[12345-full]
+7.83s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_full_context_decode_pcc[full]
+7.37s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_seq_len_equals_max_and_chunk[sliding]
+7.26s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_batched_prefill_decode_pcc[4-sliding]
+7.14s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_fused_vs_functional_equivalence[4097-sliding]
+7.10s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_seq_len_equals_max_and_chunk[full]
+7.00s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_batched_prefill_decode_pcc[4-full]
+6.97s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_full_context_decode_pcc[sliding]
 =========================== short test summary info ============================
 PASSED models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_pcc[1-sliding]
 PASSED models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_pcc[1-full]
@@ -496,6 +499,9 @@ PASSED models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py
 PASSED models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_decode_norm_config_shapes[full]
 PASSED models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_sdpa_chunk_sizes[sliding]
 PASSED models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_prefill_sdpa_chunk_sizes[full]
+PASSED models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_norm_compute_kernel_config_is_the_documented_uplift
+PASSED models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_every_norm_takes_the_uplifted_config[sliding]
+PASSED models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_every_norm_takes_the_uplifted_config[full]
 PASSED models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_minimal_matmul_block_config[sliding]
 PASSED models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_minimal_matmul_block_config[full]
 PASSED models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_traced_decode_pcc[sliding]
@@ -510,16 +516,16 @@ PASSED models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py
 PASSED models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_decode_traced[2048-full]
 PASSED models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_decode_traced[131071-sliding]
 PASSED models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_decode_traced[131071-full]
-================== 91 passed, 3 warnings in 468.09s (0:07:48) ==================
+================== 94 passed, 3 warnings in 476.54s (0:07:56) ==================
 sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
 nanobind: leaked 7 instances!
- - leaked instance 0x7dc772485308 of type "ttnn._ttnn.types.CoreGrid"
- - leaked instance 0x7dc7c9b00098 of type "ttnn._ttnn.multi_device.MeshCoordinate"
- - leaked instance 0x7dc7724852a8 of type "ttnn._ttnn.types.CoreGrid"
- - leaked instance 0x7dc7c9b00278 of type "ttnn._ttnn.multi_device.MeshCoordinate"
- - leaked instance 0x7dc7797f5328 of type "ttnn._ttnn.tensor.MemoryConfig"
- - leaked instance 0x7dc772485488 of type "ttnn._ttnn.tensor.CoreCoord"
- - leaked instance 0x7dc779e394e8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x72b6b5edffb8 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x72b6629b5328 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x72b65b64cee8 of type "ttnn._ttnn.types.CoreGrid"
+ - leaked instance 0x72b6b5efc1d8 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x72b662fe1428 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x72b65b64d188 of type "ttnn._ttnn.tensor.CoreCoord"
+ - leaked instance 0x72b65b64d068 of type "ttnn._ttnn.types.CoreGrid"
 nanobind: leaked 28 types!
  - leaked type "MathFidelity"
  - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
@@ -533,22 +539,22 @@ nanobind: leaked 28 types!
  - leaked type "Arch"
  - ... skipped remainder
 nanobind: leaked 297 functions!
- - leaked function "to_json"
- - leaked function "experimental_per_core_buffer_address"
- - leaked function ""
- - leaked function "get_device_id"
+ - leaked function "clear_program_cache"
+ - leaked function "__hash__"
  - leaked function ""
  - leaked function ""
- - leaked function "unpad"
+ - leaked function "get_tile"
+ - leaked function ""
+ - leaked function "is_allocated"
+ - leaked function "__getitem__"
  - leaked function ""
  - leaked function ""
- - leaked function "buffer_aligned_page_size"
  - ... skipped remainder
 nanobind: this is likely caused by a reference counting issue in the binding code.
-See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-12 01:42:13.355 | info     |    BuildKernels | JIT cache stats: 2472/2472 hits (100.0%) [2472 cached, 2338 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
-2026-08-12 01:42:13.355 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
-2026-08-12 01:42:13.382 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
-2026-08-12 01:42:13.382 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
-2026-08-12 01:42:13.782 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
-2026-08-12 01:42:13.782 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
-2026-08-12 01:42:13.782 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-12 02:53:23.124 | info     |    BuildKernels | JIT cache stats: 2472/2472 hits (100.0%) [2472 cached, 2338 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-12 02:53:23.124 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-12 02:53:23.151 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-12 02:53:23.151 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-12 02:53:23.607 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-12 02:53:23.607 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-12 02:53:23.607 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

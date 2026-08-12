@@ -18,7 +18,7 @@
       10
     ],
     "visible_devices": 4,
-    "note": "The functional decoder stage runs on a single Blackhole chip (1x1 mesh) as required by the skill."
+    "note": "The fused decoder stage, like the functional one, runs on a single Blackhole chip (1x1 mesh) as required by the skill."
   },
   "implementation": {
     "dtype_layout_memory": "BFLOAT16 weights/activations, TILE layout, DRAM interleaved (unchanged by the fusing stage); the decode residual stream is width-sharded in L1 across the layer so the hidden-size RMSNorms run multi-core, and the prefill dense projections use ttnn.experimental.minimal_matmul at or above 3072 rows (MINIMAL_MATMUL_MIN_ROWS) and ttnn.linear below, which is the measured crossover for the whole six-matmul chunk",
@@ -155,18 +155,18 @@
   "performance": {
     "note": "Warmed, signposted Tracy windows; Device Time column from tt-perf-report --csv, microseconds. 8 trace replays per decode window; all ten committed captures (eight fused windows plus the two multi-chunk functional baselines) are free of dropped profiler markers. 'baseline' is the functional decoder measured the same way.",
     "prefill_8192_tokens_batch1_ms": {
-      "sliding": 49.285,
-      "full": 47.980
+      "sliding": 49.294,
+      "full": 47.996
     },
     "prefill_8192_tokens_batch1_ms_baseline": {
       "sliding": 101.23,
       "full": 99.38
     },
     "traced_decode_ms_per_token": {
-      "sliding@2048": 2.712,
-      "sliding@131071": 2.708,
+      "sliding@2048": 2.710,
+      "sliding@131071": 2.710,
       "full@2048": 2.685,
-      "full@131071": 3.181
+      "full@131071": 3.182
     },
     "traced_decode_ms_per_token_baseline": {
       "sliding@2048": 3.163,
@@ -191,20 +191,20 @@
       "decode_full": 32
     },
     "context_scaling": "sliding decode is context-independent (SDPA reads at most the 2048 window); full (NoPE) decode SDPA goes 36 us -> 529 us between 2048 and 131071.",
-    "decode_roofline": "One decode step streams 967,835,648 B of BF16 weights; at the 383 GB/s the six matmuls achieve that is 2.528 ms, i.e. 93 % of the 2.712 ms fused decode step. Further decode gains require moving fewer bytes (weight dtype) or a higher-efficiency matmul config.",
-    "fidelity_policy": "Unchanged from the functional stage: the prefill dense projections pin the same HiFi2 / fp32_dest_acc_en=False / packer_l1_acc=True compute-kernel config that ttnn.linear selects by default for BF16, so the before/after is a pure topology comparison. minimal_matmul's own default is more accurate (PCC 0.999994 vs 0.999947 vs FP32) and 2.3-2.5 ms slower per 8192-token prefill; that choice belongs to the optimized-decoder stage.",
+    "decode_roofline": "One decode step streams 967,835,648 B of BF16 weights; at the 383 GB/s the six matmuls achieve that is 2.526 ms, i.e. 93 % of the 2.710 ms fused decode step. Further decode gains require moving fewer bytes (weight dtype) or a higher-efficiency matmul config.",
+    "fidelity_policy": "Unchanged from the functional stage: the prefill dense projections pin the same HiFi2 / fp32_dest_acc_en=False / packer_l1_acc=True compute-kernel config that ttnn.linear selects by default for BF16, so the before/after is a pure topology comparison. minimal_matmul's own default is more accurate (PCC 0.999994 vs 0.999947 vs FP32) and 2.3-2.5 ms slower per 8192-token prefill; that choice belongs to the optimized-decoder stage. ONE fidelity knob was turned: every RMSNorm runs HiFi4/math_approx_mode=False/fp32_dest_acc_en=True/packer_l1_acc=True instead of ttnn.rms_norm's own default (HiFi4/approx=True/fp32_acc=False/l1_acc=False, rmsnorm.cpp:16-20). Measured against float64: prefill norm 978.27 -> 991.78 us with max relative error 6.5e-2 -> 4.2e-3; sharded decode norm 15.53 -> 14.92 us (faster) and 1.0e-2 -> 4.8e-3. Cost 81 us of a 49,294 us prefill window (0.16 %), nothing in decode; worth ~+3.5e-4 of the accuracy gain where no matmul kernel changes (doc/fused_decoder/logs/norm_fidelity_control.log).",
     "prefill_16384_tokens_batch1_ms": {
-      "sliding": 104.696,
-      "full": 111.121
+      "sliding": 104.648,
+      "full": 111.146
     },
     "prefill_16384_tokens_batch1_ms_baseline": {
-      "sliding": 213.021,
-      "full": 222.291
+      "sliding": 212.502,
+      "full": 221.614
     }
   },
   "tests": {
-    "total": 91,
-    "passed": 91,
+    "total": 94,
+    "passed": 94,
     "asserted_pcc_checks": 214,
     "hf_vs_ttnn_checks": 202,
     "min_pcc_vs_hf": 0.998077,

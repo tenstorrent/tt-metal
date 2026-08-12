@@ -1,0 +1,10 @@
+# models/autoports/meta_models_muse_glimmer_30b/doc/fused_decoder/tracy/probes/kblock_device5_ops.csv
+# 118 'MinimalMatmul' rows in 21 groups
+=== rows=3072 mlp_gate  default median 3680.9 us (32 rows) ===
+    M8_K4_N16                     3587.1 us   +2.61 %
+    M8_K6_N16                     3641.2 us   +1.09 %
+    M8_K8_N8                      3686.3 us   -0.15 %
+=== rows=8192 attn_gate  default median 1866.6 us (32 rows) ===
+    M8_K14_N8                     1951.4 us   -4.35 %
+    M8_K7_N8                      1882.2 us   -0.83 %
+    M8_K9_N8                      1952.1 us   -4.38 %

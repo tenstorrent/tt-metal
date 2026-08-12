@@ -7,8 +7,15 @@
 :class:`~models.autoports.meta_models_muse_glimmer_30b.tt.functional_decoder.FunctionalDecoder`:
 identical public contract (``from_state_dict`` / ``prefill_forward`` /
 ``decode_forward`` / ``sliding_kv_tail_len`` / ``forward`` / ``kv_cache``),
-identical paged-KV semantics, identical accepted shapes — a numerically
-equivalent op graph with fewer, larger, more specialised device ops.
+identical paged-KV semantics — a numerically equivalent op graph with fewer,
+larger, more specialised device ops.
+
+Two deliberate departures, both measured and both recorded in the README's
+limitations: ``_decode_rope_tables`` takes the documented ``[1, batch]``
+``rope_pos_ids`` only, where the functional layer also tolerated a tile-padded
+one; and every RMSNorm runs on a higher-fidelity compute-kernel config than the
+op's default (see ``norm_compute_kernel_config`` below).  Everything else in
+this module is a topology change at unchanged precision.
 
 What is fused, relative to the functional layer
 -----------------------------------------------
@@ -283,6 +290,49 @@ def _dense(
     return ttnn.linear(x, weight, dtype=dtype, memory_config=memory_config)
 
 
+def norm_compute_kernel_config(arch):
+    """Compute-kernel config for every RMSNorm in this layer.
+
+    **This is the one place the fused layer changes numerical fidelity rather
+    than topology**, and it is a deliberate, measured choice rather than a
+    default that came along for the ride.
+
+    ``ttnn.rms_norm``'s own default is
+    ``HiFi4 / math_approx_mode=True / fp32_dest_acc_en=False /
+    packer_l1_acc=False`` (``rmsnorm.cpp:16-20``), which is what the functional
+    layer used because it passed no config at all.  This turns the approximate
+    reciprocal-sqrt off and FP32 destination accumulation on for a 6656-wide
+    BF16 reduction.  Measured in isolation against a float64 reference
+    (``doc/fused_decoder/bench/norm_fidelity_probe.py``):
+
+    ========  ==========  ==========  ==================  ==============
+    shape     op default  this one    PCC vs f64          max rel. err
+    ========  ==========  ==========  ==================  ==============
+    prefill   978.27 us   991.78 us   .999928 -> .999998  6.5e-2 -> 4.2e-3
+    decode     15.53 us    14.92 us   .999994 -> .999998  1.0e-2 -> 4.8e-3
+    ========  ==========  ==========  ==================  ==============
+
+    So it is **free in decode** (the sharded kernel is 3.9 % *faster* with it)
+    and costs 13.5 us per prefill norm -- 81 us of a 49,285 us prefill window,
+    0.16 % -- for a 15x smaller worst-case error on the op that feeds every
+    matmul in the layer.
+
+    It is also worth about **+3.5e-4** of the fused graph's HF-vs-unfused
+    accuracy gain at short prefill lengths, where no matmul kernel changes.
+    ``doc/fused_decoder/logs/norm_fidelity_control.log`` is the same graph with
+    the norms on the op default: the 100-token prefill controls go to -8e-6 and
+    +0.0 there, against +3.6e-4 and +3.2e-4 shipped.  That control is why the
+    README does not claim the accuracy gain is topology alone.
+    """
+    return ttnn.init_device_compute_kernel_config(
+        arch,
+        math_fidelity=ttnn.MathFidelity.HiFi4,  # the op's default fidelity, unchanged
+        math_approx_mode=False,  # op default: True
+        fp32_dest_acc_en=True,  # op default: False
+        packer_l1_acc=True,  # op default: False
+    )
+
+
 def _norm_subblock_w(block_w: int) -> int:
     """Largest divisor of ``block_w`` that is ``<= MAX_NORM_SUBBLOCK_W``."""
     for candidate in range(min(MAX_NORM_SUBBLOCK_W, block_w), 0, -1):
@@ -492,13 +542,7 @@ class FusedDecoder(FunctionalDecoder):
         )
         if getattr(self.mlp, "compute_kernel_config", None) is None:
             self.mlp.compute_kernel_config = self.dense_compute_kernel_config
-        self.norm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
+        self.norm_compute_kernel_config = norm_compute_kernel_config(self.mesh_device.arch())
         grid = self.mesh_device.compute_with_storage_grid_size()
         self.decode_norm_grid = choose_decode_norm_grid(self.config.hidden_size, grid)
         self._decode_norm_cache: dict[int, tuple[Any, ttnn.MemoryConfig]] = {}
@@ -587,13 +631,7 @@ class FusedDecoder(FunctionalDecoder):
             prefill_chunk_size=prefill_chunk_size,
         )
 
-        norm_ck = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
+        norm_ck = norm_compute_kernel_config(mesh_device.arch())
 
         def norm(name: str, eps: float) -> _FusedNorm:
             weight = _get_layer_tensor(state_dict, layer_idx, f"{name}.weight").to(torch.float32)

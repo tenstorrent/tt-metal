@@ -63,6 +63,7 @@ from models.autoports.meta_models_muse_glimmer_30b.tt.fused_decoder import (
     PREFILL_SDPA_CHUNK,
     FusedDecoder,
     _minimal_matmul_config,
+    norm_compute_kernel_config,
 )
 from models.common.utility_functions import comp_pcc
 
@@ -994,6 +995,44 @@ def test_prefill_sdpa_chunk_sizes(mesh_device, decoder_cache, kind):
     tight_blocks = 12416 // PAGE_BLOCK_SIZE
     assert decoder.chunked_sdpa_chunk_size(8192, 4224, tight_blocks) == 128
     assert 8192 + 4224 <= tight_blocks * PAGE_BLOCK_SIZE
+
+
+def test_norm_compute_kernel_config_is_the_documented_uplift(mesh_device):
+    """The one fidelity change in this layer is the one that was measured.
+
+    ``ttnn.rms_norm``'s default is ``HiFi4 / approx=True / fp32_dest_acc_en=False``
+    (``rmsnorm.cpp:16-20``); this layer turns the approximation off and FP32
+    accumulation on, which is worth ~+3.5e-4 of the prefill accuracy gain at
+    short lengths and is free in decode. It is a deliberate departure from the
+    functional layer's "no config at all", so it is asserted here rather than
+    left to a code reading — and it must reach *every* norm, since the accuracy
+    controls in ``test_fused_vs_functional_equivalence`` are measured with it on.
+    """
+    ck = norm_compute_kernel_config(mesh_device.arch())
+    assert ck.math_fidelity == ttnn.MathFidelity.HiFi4
+    assert ck.math_approx_mode is False
+    assert ck.fp32_dest_acc_en is True
+    assert ck.packer_l1_acc is True
+
+
+@pytest.mark.parametrize("kind", LAYER_KINDS)
+def test_every_norm_takes_the_uplifted_config(mesh_device, decoder_cache, kind):
+    """All four hidden-size norms and the two QK norms carry it."""
+    decoder = build_fused(mesh_device, decoder_cache, kind)
+    expected = norm_compute_kernel_config(mesh_device.arch())
+    norms = [
+        decoder.input_layernorm,
+        decoder.post_attention_layernorm,
+        decoder.pre_feedforward_layernorm,
+        decoder.post_feedforward_layernorm,
+    ]
+    for norm in norms:
+        assert norm.compute_kernel_config is not None
+        assert norm.compute_kernel_config.fp32_dest_acc_en == expected.fp32_dest_acc_en
+        assert norm.compute_kernel_config.math_approx_mode == expected.math_approx_mode
+    # the per-head QK norms go through the decoder's own handle
+    assert decoder.norm_compute_kernel_config.fp32_dest_acc_en == expected.fp32_dest_acc_en
+    assert decoder.norm_compute_kernel_config.math_approx_mode == expected.math_approx_mode
 
 
 @pytest.mark.parametrize("kind", LAYER_KINDS)
