@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import torch
 
+from models.autoports.tiiuae_falcon3_7b_base.tt import generator_vllm as generator_vllm_module
 from models.autoports.tiiuae_falcon3_7b_base.tt.generator import Falcon3Generator
 from models.autoports.tiiuae_falcon3_7b_base.tt.generator_vllm import Falcon3ForCausalLM
 
@@ -52,7 +53,7 @@ def test_steady_async_decode_ignores_stale_tokens_and_positions(monkeypatch):
 
     assert captured["tokens"] is None
     assert captured["start_pos"] is None
-    assert captured["page_table"] is page_table
+    assert captured["page_table"] is None
     assert captured["kv_cache"] is kv_cache
     assert captured["sampling_mode"] == "device"
     assert captured["enable_trace"] is True
@@ -88,6 +89,62 @@ def test_new_batch_forwards_current_tokens_positions_and_page_table(monkeypatch)
     assert captured["start_pos"] is positions
     assert captured["page_table"] is page_table
     assert captured["kv_cache"] is kv_cache
+
+
+def test_changed_page_table_is_forwarded_when_scheduler_resets_batch(monkeypatch):
+    adapter = _adapter_without_hardware()
+    captured = {}
+
+    monkeypatch.setattr(Falcon3ForCausalLM, "set_sampling_params", lambda self, **kwargs: None)
+
+    def fake_decode(self, tokens, start_pos, **kwargs):
+        captured.update(tokens=tokens, start_pos=start_pos, **kwargs)
+        return object()
+
+    monkeypatch.setattr(Falcon3Generator, "decode_forward", fake_decode)
+    changed_page_table = torch.tensor([[9, 11, 13, -1]], dtype=torch.int32)
+
+    adapter.decode_forward(
+        torch.tensor([[77]], dtype=torch.int32),
+        page_table=changed_page_table,
+        kv_cache=object(),
+        start_pos=torch.tensor([65], dtype=torch.int32),
+        sampling_params=_sampling_params(1),
+        reset_batch=True,
+    )
+
+    assert captured["page_table"] is changed_page_table
+    assert captured["tokens"].item() == 77
+    assert captured["start_pos"].item() == 65
+
+
+def test_async_decode_read_submits_only_one_replicated_token_shard(monkeypatch):
+    adapter = _adapter_without_hardware()
+    adapter.mesh_device = object()
+    calls = []
+
+    class FakeShard:
+        def cpu(self, *, blocking):
+            calls.append(("cpu", blocking))
+            return "pending-host-token"
+
+    class DistributedOutput:
+        def cpu(self, **kwargs):
+            raise AssertionError("distributed output must not be copied")
+
+    shards = [FakeShard(), FakeShard(), FakeShard(), FakeShard()]
+    monkeypatch.setattr(generator_vllm_module.ttnn, "get_device_tensors", lambda output: shards)
+    monkeypatch.setattr(
+        generator_vllm_module.ttnn,
+        "record_event",
+        lambda mesh, queue: calls.append(("event", mesh, queue)) or "ready-event",
+    )
+
+    host, events = adapter.read_decode_output(DistributedOutput(), async_read=True)
+
+    assert host == "pending-host-token"
+    assert events == ["ready-event"]
+    assert calls == [("cpu", False), ("event", adapter.mesh_device, 0)]
 
 
 def test_steady_async_decode_rejects_live_slot_remap(monkeypatch):

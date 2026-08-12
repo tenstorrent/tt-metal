@@ -1,0 +1,21 @@
+{
+  "workload": {
+    "profile": "single_user_decode",
+    "prompt_len": 128,
+    "gen_len": 128,
+    "batch": 1,
+    "max_num_seqs": 32,
+    "max_model_len": 32768,
+    "mesh": [1, 4],
+    "sampling": "greedy_on_device_split"
+  },
+  "ttft_ms": 183.68077371269464,
+  "decode_ms_per_token_e2e": 16.036981452755104,
+  "decode_ms_per_token_device": null,
+  "roofline_ms_per_token_estimate": null,
+  "named_limitations": [
+    "vllm_serving_profiler_disabled_to_protect_hardware",
+    "mean TPOT includes request-boundary timing; median steady ITL is 14.5732332020998 ms",
+    "boundary cleanup reproduced within noise and is not claimed as a speedup"
+  ]
+}

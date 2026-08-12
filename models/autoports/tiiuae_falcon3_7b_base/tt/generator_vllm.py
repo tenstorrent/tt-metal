@@ -200,6 +200,13 @@ class Falcon3ForCausalLM(Falcon3Generator):
                     raise ValueError("Falcon3 steady async decode cannot remap live slots")
             tokens = None
             start_pos = None
+            # The TT async-scheduling contract guarantees that the page table
+            # is unchanged while this steady-overlap fast path is active.  Do
+            # not normalize and compare its full fixed-width host tensor every
+            # token; the persistent device page-table input captured at reset
+            # remains authoritative.  Scheduler changes leave steady mode and
+            # refresh (or recapture) the trace through the reset path below.
+            page_table = None
         self._vllm_active_batch = active_batch
         return super().decode_forward(
             tokens,
@@ -216,7 +223,11 @@ class Falcon3ForCausalLM(Falcon3Generator):
             return (tt_out, []) if async_read else tt_out
         if not async_read:
             return tt_out.cpu()
-        host = tt_out.cpu(blocking=False)
+        # Sampling writes the same token vector to every rank.  Read one
+        # replica, matching the canonical full-model token-out boundary;
+        # copying the distributed tensor reads all four identical replicas.
+        shards = ttnn.get_device_tensors(tt_out)
+        host = (shards[0] if shards else tt_out).cpu(blocking=False)
         return host, [ttnn.record_event(self.mesh_device, 0)]
 
     def process_decode_output_host(self, tt_out, is_tokens=True):

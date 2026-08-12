@@ -1,0 +1,123 @@
+{
+  "contract": {
+    "max_batch_size": 32,
+    "active_batch": 1,
+    "max_context_len": 32768,
+    "page_block_size": 32,
+    "external_cache_blocks": 4128,
+    "iterations": 128
+  },
+  "physical_shapes": {
+    "token": [
+      1,
+      1,
+      1,
+      32
+    ],
+    "position": [
+      32
+    ],
+    "rotary_position": [
+      32
+    ],
+    "page_table": [
+      32,
+      1024
+    ],
+    "sampled_token": [
+      1,
+      1,
+      1,
+      32
+    ],
+    "decoder_residual": [
+      1,
+      1,
+      32,
+      3072
+    ],
+    "kv_cache_per_layer": [
+      [
+        4128,
+        1,
+        32,
+        256
+      ],
+      [
+        4128,
+        1,
+        32,
+        256
+      ]
+    ]
+  },
+  "timings": {
+    "model_trace_ms_per_token": 13.816343911457807,
+    "sampling_trace_ms_per_token": 0.7620962423970923,
+    "pair_ms_per_token": 14.685023554193322,
+    "pair_t_s_u": 68.0965880857882,
+    "caller_visible_ms_per_token": 14.731768394995015,
+    "caller_visible_t_s_u": 67.88051326816549
+  },
+  "trace_stats": {
+    "captures": 1,
+    "replays": 256,
+    "releases": 0,
+    "decode_warmups": 1,
+    "token_host_copies": 4,
+    "token_device_copies": 0,
+    "position_host_copies": 4,
+    "rotary_position_host_copies": 4,
+    "page_table_host_copies": 4,
+    "sampling_param_host_copies": 0,
+    "caller_token_readbacks": 128,
+    "explicit_synchronizations": 7,
+    "resets": 0,
+    "rng_checkpoints": 0,
+    "rng_restores": 0,
+    "ccl_capture_epoch_resets": 1
+  },
+  "precision_summary": {
+    "config_path": "/home/mvasiljevic/tt-metal/models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/selected_precision_config.json",
+    "config_id": "all_bfp4_lofi_bf16_kv",
+    "weight_groups": {
+      "attention": "bfloat4_b",
+      "mlp_gate_up": "bfloat4_b",
+      "mlp_down": "bfloat4_b",
+      "lm_head": "bfloat4_b",
+      "embedding": "bfloat16",
+      "norms": "bfloat16"
+    },
+    "layer_exceptions": [],
+    "compute_fidelities": {
+      "attention": "LoFi",
+      "mlp": "LoFi",
+      "lm_head": "LoFi"
+    },
+    "activation_dtype": "DataType.BFLOAT8_B",
+    "residual_dtype": "bfloat16",
+    "ccl_dtype": "DataType.BFLOAT8_B",
+    "kv_cache_dtype": "DataType.BFLOAT16",
+    "logits_dtype": "bfloat8_b",
+    "sampling_dtype_assumptions": {
+      "local_topk_values": "bfloat16",
+      "packed_rank_candidates": "float32",
+      "token_ids": "uint32",
+      "mode": "Sampling1D split trace"
+    },
+    "decoder_runtime_policy": {
+      "attention": "DataType.BFLOAT4_B",
+      "mlp_gate_up": "DataType.BFLOAT4_B",
+      "mlp_down": "DataType.BFLOAT4_B",
+      "kv_cache": "DataType.BFLOAT16",
+      "attention_fidelity": "MathFidelity.LoFi",
+      "mlp_fidelity": "MathFidelity.LoFi"
+    },
+    "lm_head_compute_fidelity": "LoFi",
+    "lm_head_geometry": {
+      "columns_per_device": 32768,
+      "in0_block_w": 3,
+      "source": "derived_from_lm_head_weight_dtype"
+    }
+  }
+}
