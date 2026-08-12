@@ -143,12 +143,76 @@ python3 scanner.py /tmp/tt-llk-build/<test>/<hash>/elf/*.elf
 
 ## Metal
 
-Not supported. Metal rewrites all three TRISC binaries into L1 from a host-side
-`ll_api::memory` on *every* slow-dispatch launch, with no "already configured"
-guard, so an L1 poke is erased before the kernel runs. The host image is not
-reachable from Python and is cached by path for the life of the process, so
-editing the ELF on disk does nothing either. Supporting Metal needs a C++ change
-in the metal tree — the smallest being an env-gated skip of the binary rewrite in
-`ComputeKernel::configure`, or a patch hook in `LaunchProgram` between configure
-and the go signal. The cave and detour arithmetic here is already backend
-agnostic; only `Perturber.run`/`recover` in `ttnop_plugin.py` are LLK specific.
+`./metal.sh` points the same sweep at a **ttnn op test**. The scan, sites, fillers
+and cave arithmetic are shared because they are Tensix-level; two things differ.
+
+**Where the poke lands.** The LLK harness loads each ELF once, so poking L1 sticks.
+Metal rewrites all three TRISC binaries into L1 from a host-side `ll_api::memory`
+on *every* slow-dispatch launch, with no "already configured" guard, so an L1 poke
+is erased before the kernel runs — and there is no host-visible seam between
+"binaries written" and GO. So the Metal backend pokes the **host image** and lets
+metal re-apply the perturbation on each launch, through the ctypes seam in
+`libttnop_metal.so`. A variant stays a few word writes: no JIT recompile, no device
+reopen.
+
+**Where the cave lives.** A metal kernel's `.text` is XIPified — linked at 0 and
+packed into a rotating kernel-config ring — so there is no stable gap after it and
+no `_etext`. `main.ld` therefore reserves the cave *inside* `.text`, which is
+strictly better: both jumps of the detour are PC-relative within the image, so
+nothing has to resolve `kernel_config_base`, the ring slot stops mattering, and
+every core running the op gets the same perturbation.
+
+```bash
+make metal_cave                 # reserve the cave, once
+./metal.sh path/to/test_op.py
+TTNOP_SITES=unpack:3 TTNOP_DELAYS=40-60 TTNOP_REPEATS=200 \
+    ./metal.sh 'path/to/test_op.py::test_case[params]'
+```
+
+`make metal_cave` regenerates the six WH/BH TRISC linker scripts with
+`TTNOP_CAVE_BYTES` defined and drops the JIT kernel cache — the kernel hash is
+`build_key + hlk_desc + compute_hash`, so it cannot see a linker change and stale
+kernels would otherwise be reused. Re-run it after rebuilding the `hw_toolchain`
+target, which regenerates those scripts without the cave. `make metal_cave_disable`
+puts them back. Nothing is reserved in a normal build.
+
+| variable | meaning |
+| --- | --- |
+| `TTNOP_METAL` | set by `metal.sh`; selects the Metal backend |
+| `TTNOP_METAL_KERNEL` | regex picking the compute kernel, e.g. `eltwise_sfpu` |
+
+The default kernel is the compute kernel with the most recently written XIP dump,
+which is the op that just ran. Set `TTNOP_METAL_KERNEL` whenever a test drives more
+than one op, or the wrong kernel gets perturbed.
+
+### Differences worth knowing before reading a report
+
+- **Slow dispatch is required** (`metal.sh` sets it). Fast dispatch stages the image
+  into a DRAM `kernels_buffer` on the first enqueue and relays it from there, so
+  later host-image writes are invisible. It is the mode you want anyway: it removes
+  command-queue overlap, so a `(site, delay)` pair measures kernel timing rather
+  than host scheduling. A perturbation is the *same size* as the original image, so
+  the fast-dispatch port is a DRAM re-write plus a prefetcher invalidate rather than
+  a re-pack — but those hooks live in tt-metal and do not exist yet.
+- **A hang is not recoverable in-process.** It takes the dispatcher with it, not
+  just the Tensix, so the LLK soft-reset has no equivalent. The sweep records the
+  finding and stops; reset with `tt-smi -r` before continuing.
+- **A site is a site × the whole core grid.** One image serves every core running
+  the op, so all of them are perturbed identically. That is usually what you want,
+  but it means a sweep cannot move *relative* timing between two cores.
+- **`.xip.elf` must exist.** The scan reads the post-XIP dump metal writes beside
+  each kernel ELF, because XIPify rewrites text-targeting `LUI` into `AUIPC` — the
+  pre-XIP words would both mis-report site contents and let a now-PC-relative
+  instruction past the relocatability filter. Do not set
+  `TT_METAL_DISABLE_XIP_DUMP`.
+
+Binding refuses to proceed if it *constructed* an image rather than reusing
+metal's — `get_risc_binary` keys its cache on the path string, so a mismatched
+spelling would build a second image nobody launches and the sweep would read 0%
+everywhere. Constructing one rewrites the `.xip.elf`, so its mtime settles it;
+`Injector.arm` then checks each site word as it patches. The address arithmetic
+has an offline check that needs no device:
+
+```bash
+python3 metal.py
+```

@@ -23,6 +23,13 @@ MARKDOWN = "report.md"
 
 
 def _sfpi_bin() -> Path:
+    # A metal sweep resolves kernel ELFs with metal's own copy of the toolchain;
+    # LLK_HOME is not set there, and HERE is inside the vendored tt-llk tree.
+    metal_home = os.environ.get("TT_METAL_HOME")
+    if metal_home:
+        metal_sfpi = Path(metal_home) / "runtime" / "sfpi" / "compiler" / "bin"
+        if metal_sfpi.is_dir():
+            return metal_sfpi
     llk_home = os.environ.get("LLK_HOME") or str(HERE.parents[3])
     return Path(llk_home) / "tests" / "sfpi" / "compiler" / "bin"
 
@@ -67,11 +74,12 @@ def _run(*command) -> str:
         return ""
 
 
-def environment(arch: str, site_mode: str, filler: str) -> dict:
+def environment(arch: str, site_mode: str, filler: str, backend: str = "llk") -> dict:
     sfpi_version = _sfpi_bin().parents[1] / "sfpi.version"
     boards = sorted(Path("/sys/class/tenstorrent").glob("*/device/device"))
     return {
         "arch": arch,
+        "backend": backend,
         "site_mode": site_mode,
         "filler_policy": filler,
         "commit": _run("git", "-C", str(HERE), "rev-parse", "--short", "HEAD"),
@@ -101,6 +109,7 @@ def load(report_dir: Path) -> list:
 
 def reproduce_command(record: dict, delays=()) -> str:
     """Re-run just this site, at just the counts that broke it, as a failure rate."""
+    metal = record.get("backend") == "metal"
     env = {
         "CHIP_ARCH": record["arch"],
         "TTNOP_SITE_MODE": record["site_mode"],
@@ -110,8 +119,13 @@ def reproduce_command(record: dict, delays=()) -> str:
         "TTNOP_DELAYS": as_ranges(delays or [record["delay"]], ","),
         "TTNOP_REPEATS": "50",
     }
+    if metal:
+        # A site index is a position in this kernel's site list, so the same kernel
+        # has to be picked again for it to mean the same instruction.
+        env["TTNOP_METAL_KERNEL"] = shlex.quote(record.get("kernel") or "")
     assignments = " ".join(f"{key}={value}" for key, value in env.items())
-    return f"{assignments} ./focus.sh {shlex.quote(record['case'])}"
+    entry = "./metal.sh" if metal else "./focus.sh"
+    return f"{assignments} {entry} {shlex.quote(record['case'])}"
 
 
 def as_ranges(values, separator: str = ", ") -> str:

@@ -1,3 +1,6 @@
 scan
+libttnop_metal.so
 reports/
 __pycache__/
+# TEMP: metal.py host-image ELF dumps (NOP inspection)
+temp_elf_dumps/

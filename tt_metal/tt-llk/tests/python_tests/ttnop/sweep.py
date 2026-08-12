@@ -61,11 +61,13 @@ class Config:
     selector: str = ""
     repeats: int = 1
     arch: str = "wormhole"
+    metal: bool = False
     report_dir: Path = field(default_factory=lambda: HERE / "reports")
 
     @classmethod
     def from_env(cls):
         config = cls(
+            metal=os.environ.get("TTNOP_METAL", "") not in ("", "0"),
             site_mode=os.environ.get("TTNOP_SITE_MODE", "sync").strip().lower(),
             threads=tuple(
                 part.strip()

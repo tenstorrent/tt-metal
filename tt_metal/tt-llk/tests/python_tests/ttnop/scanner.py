@@ -29,6 +29,7 @@ class Site:
 class Scan:
     elf: str
     mode: str
+    text_start: int
     body_start: int
     body_end: int
     body_source: str
@@ -69,6 +70,7 @@ def scan(elf: str, mode: str = "sync") -> Scan:
     result = Scan(
         elf=elf,
         mode=raw["mode"],
+        text_start=raw["text"]["start"],
         body_start=raw["body"]["start"],
         body_end=raw["body"]["end"],
         body_source=raw["body"]["source"],
