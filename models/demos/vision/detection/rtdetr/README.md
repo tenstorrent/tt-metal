@@ -2,6 +2,8 @@
 
 TTNN inference implementation of RT-DETR and RT-DETRv2 with a ResNet-50-vd backbone, hybrid encoder, and deformable-attention decoder. The implementation currently targets batch size 1 and supports the `PekingU/rtdetr_r50vd` and `PekingU/rtdetr_v2_r50vd` checkpoints.
 
+P150a correctness and performance results, setup details, and reproducible commands are recorded in [VALIDATION.md](VALIDATION.md).
+
 ## Demos
 
 Run inference on the default COCO image:
@@ -36,6 +38,7 @@ Run tests by category:
 
 ```bash
 pytest tests/pcc.py -s
-pytest tests/detection.py -s
+COCO_VAL2017_IMAGES=<path-to-val2017> \
+pytest tests/validate_detection.py -s
 pytest tests/latency.py -s
 ```

@@ -57,43 +57,6 @@ def log_latencies(model_version, latency_name, latencies):
     logger.info(f"RT-DETR v{model_version} {latency_name} median latency: {statistics.median(latencies_ms):.2f} ms")
 
 
-def run_rtdetr_batch_1_model_latency(device, model_version):
-    _, _, pixel_values, tt_model = prepare_latency_test(device, model_version)
-
-    tt_pixel_values = ttnn.from_torch(
-        pixel_values[0],
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-    )
-    tt_outputs = tt_model(tt_pixel_values)
-    ttnn.synchronize_device(device)
-    del tt_outputs
-    del tt_pixel_values
-
-    latencies = []
-    for run, torch_pixel_values in enumerate(pixel_values[1:], start=1):
-        tt_pixel_values = ttnn.from_torch(
-            torch_pixel_values,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-        )
-        ttnn.synchronize_device(device)
-
-        start = time.perf_counter()
-        tt_outputs = tt_model(tt_pixel_values)
-        ttnn.synchronize_device(device)
-        latency = time.perf_counter() - start
-        latencies.append(latency)
-
-        logger.info(f"RT-DETR v{model_version} run {run}: {latency * 1000:.2f} ms")
-        del tt_outputs
-        del tt_pixel_values
-
-    log_latencies(model_version, "batch 1 model", latencies)
-
-
 def run_rtdetr_batch_1_trace_latency(device, model_version):
     _, _, pixel_values, tt_model = prepare_latency_test(device, model_version)
     host_inputs = [
@@ -189,16 +152,6 @@ def run_rtdetr_batch_1_e2e_latency(device, model_version):
         del trace_outputs
 
     log_latencies(model_version, "batch 1 traced end-to-end", latencies)
-
-
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_rtdetr_batch_1_model_latency(device):
-    run_rtdetr_batch_1_model_latency(device, model_version=1)
-
-
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_rtdetr_v2_batch_1_model_latency(device):
-    run_rtdetr_batch_1_model_latency(device, model_version=2)
 
 
 @pytest.mark.parametrize(
