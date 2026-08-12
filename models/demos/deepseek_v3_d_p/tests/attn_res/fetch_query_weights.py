@@ -3,12 +3,15 @@
 
 """Pull Kimi K3's AttnRes query weights out of the published checkpoint, and nothing else.
 
-    python models/demos/deepseek_v3_d_p/tests/attn_res/fetch_query_weights.py k3_attn_res.pt
-    export TT_K3_ATTN_RES_WEIGHTS=$PWD/k3_attn_res.pt
+    python models/demos/deepseek_v3_d_p/tests/attn_res/fetch_query_weights.py $PWD/k3_subset
+    export KIMI_K3_CKPT=$PWD/k3_subset
 
-Run by hand, never from a test — `tests/attn_res/model/test_attn_res.py` reads the file if
-that variable names one and generates random queries if it does not, so CI never reaches
-the network.
+Run by hand, never from a test — the suites read the checkpoint if that variable names one
+and generate random queries if it does not, so CI never reaches the network.
+
+What lands is an indexed checkpoint subset rather than a tensor dump, so it is the same
+thing every other K3 module reads and shards written by other fetches merge into the same
+index instead of colliding with it.
 
 The 374 tensors this wants are 14 kB each and scattered one or two per shard across a
 1.5 TB checkpoint, so downloading the shards that hold them costs ~200 GB to keep 5 MB.
@@ -20,13 +23,16 @@ import argparse
 import collections
 import json
 import struct
+from pathlib import Path
 
 import torch
 from huggingface_hub import HfFileSystem, hf_hub_download
+from safetensors.torch import save_file
 
 from models.demos.deepseek_v3_d_p.reference.attn_res.weights import query_weight_names
 
 REPO = "moonshotai/Kimi-K3"
+SHARD_NAME = "attn_res.safetensors"
 
 # Safetensors names its dtypes itself; only the ones K3 stores these vectors in are listed.
 DTYPES = {"BF16": torch.bfloat16, "F16": torch.float16, "F32": torch.float32}
@@ -56,15 +62,31 @@ def fetch(names):
     return out
 
 
+def stage(weights, checkpoint_dir):
+    """Write one shard and fold it into the directory's index, keeping any other shards."""
+    checkpoint_dir = Path(checkpoint_dir)
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    save_file(weights, checkpoint_dir / SHARD_NAME)
+
+    index_path = checkpoint_dir / "model.safetensors.index.json"
+    index = json.loads(index_path.read_text()) if index_path.is_file() else {}
+    weight_map = index.get("weight_map", {})
+    weight_map.update({name: SHARD_NAME for name in weights})
+    index["weight_map"] = weight_map
+    # `total_size` is the whole subset's, not this shard's, so a merge cannot shrink it.
+    index["metadata"] = {"total_size": sum(path.stat().st_size for path in checkpoint_dir.glob("*.safetensors"))}
+    index_path.write_text(json.dumps(index, indent=2, sort_keys=True))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("out", help="path to write the tensor dict to")
+    parser.add_argument("out", help="checkpoint directory to stage the shard and index in")
     args = parser.parse_args()
 
     weights = fetch(query_weight_names())
-    torch.save(weights, args.out)
+    stage(weights, args.out)
     total = sum(t.numel() * t.element_size() for t in weights.values())
-    print(f"saved {len(weights)} tensors, {total / 1024:.1f} kB -> {args.out}")
+    print(f"staged {len(weights)} tensors, {total / 1024:.1f} kB -> {args.out}/{SHARD_NAME}")
 
 
 if __name__ == "__main__":

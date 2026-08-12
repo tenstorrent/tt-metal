@@ -84,6 +84,10 @@ class TtAttnRes(LightweightModule):
         eps: `rms_norm_eps`.
         torch_queries: optional sequence of `[d]` folded queries (see
             `reference.attn_res.attn_res.fold_query`). Exposed as `self.queries`.
+        weights: optional `tt.attn_res.weights.AttnResWeights` — the whole stack's
+            queries already on device, from a checkpoint or a `.tensorbin` cache.
+            Mutually exclusive with `torch_queries`, and `self.queries` then holds
+            them in the order the walk issues them.
         dtype: device dtype for queries and intermediates.
         sp_axis, tp_axis: mesh axes the sequence and the hidden dim are sharded
             across. `sp_axis` is placement only — the op never communicates on it,
@@ -132,6 +136,7 @@ class TtAttnRes(LightweightModule):
         hidden_size=HIDDEN_SIZE,
         eps=EPS,
         torch_queries=None,
+        weights=None,
         dtype=ttnn.bfloat16,
         sp_axis=0,
         tp_axis=1,
@@ -207,7 +212,20 @@ class TtAttnRes(LightweightModule):
         # its queries so an address cannot be recycled under the key.
         self._column_by_query_id = {}
         self._stack_by_query_ids = {}
-        self.queries = [self.to_query(q) for q in torch_queries] if torch_queries is not None else []
+        assert torch_queries is None or weights is None, "pass folded queries or placed weights, not both"
+        self.weights = weights
+        if weights is not None:
+            assert weights.tensor_parallel_axis == tp_axis, (
+                f"weights are sharded on mesh axis {weights.tensor_parallel_axis}, "
+                f"this op reduces over axis {tp_axis}"
+            )
+            # Cached queries skip `to_query`, so their columns are transposed here for the
+            # same reason it transposes there: after capture starts there is no free point.
+            self.queries = weights.walk_order()
+            for row in self.queries:
+                self._query_column(row)
+        else:
+            self.queries = [self.to_query(q) for q in torch_queries] if torch_queries is not None else []
 
     def to_query(self, torch_query):
         """Place one folded `[d]` query as `[1, 1, 1, d/tp_factor]` on device.
