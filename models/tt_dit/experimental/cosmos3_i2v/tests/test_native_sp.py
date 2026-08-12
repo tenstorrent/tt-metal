@@ -683,11 +683,10 @@ def test_native_transformer_real_sp(
     tt_und_view = ttnn.to_torch(ttnn.get_device_tensors(tt_und)[0]).reshape(_REAL_N_UND, _REAL_HIDDEN)
     tt_gen_view = ttnn.to_torch(ttnn.get_device_tensors(tt_gen)[0]).reshape(_REAL_N_GEN, _REAL_HIDDEN)
 
-    # Log PCC explicitly so we see the depth->PCC curve even if asserts pass.
-    # No PCC assertion here — the point is to find the depth at which PCC collapses,
-    # not to gate. Failing on assertion would mask the trend.
-    assert_quality(ref_und, tt_und_view, pcc=0.5)
-    assert_quality(ref_gen, tt_gen_view, pcc=0.5)
+    # Gate just under the measured depth curve on BH Galaxy sp2_tp8:
+    # L1 0.9997 -> L2 0.9990 -> L16 0.9986 (bf16 accumulation decay).
+    assert_quality(ref_und, tt_und_view, pcc=0.99)
+    assert_quality(ref_gen, tt_gen_view, pcc=0.99)
 
 
 @pytest.mark.parametrize(
@@ -888,10 +887,10 @@ def test_native_decoder_layer_real_weights_sp(
     und_view = ttnn.to_torch(ttnn.get_device_tensors(tt_und_out)[0]).reshape(n_und, hidden)
     gen_view = _gather_sp_sharded(tt_gen_out, mesh_device, sp_axis=0, n_logical=n_gen, hidden=hidden)
 
-    # Loose 0.5 PCC threshold — we want to SEE the number, not gate. If real
-    # weights expose the SP bug it'll be obvious in the printed PCC.
-    assert_quality(ref_und, und_view, pcc=0.5)
-    assert_quality(ref_gen, gen_view, pcc=0.5)
+    # Gate just under measured: real-weight single-layer SP parity measures
+    # PCC 0.9998 (und) / 0.999997 (gen) on BH Galaxy sp2_tp8.
+    assert_quality(ref_und, und_view, pcc=0.995)
+    assert_quality(ref_gen, gen_view, pcc=0.995)
 
 
 @pytest.mark.parametrize(
@@ -1019,8 +1018,10 @@ def test_native_transformer_real_weights_sp(
     tt_und_view = ttnn.to_torch(ttnn.get_device_tensors(tt_und)[0]).reshape(_REAL_N_UND, hidden)
     tt_gen_view = ttnn.to_torch(ttnn.get_device_tensors(tt_gen)[0]).reshape(_REAL_N_GEN, hidden)
 
-    assert_quality(ref_und, tt_und_view, pcc=0.5)
-    assert_quality(ref_gen, tt_gen_view, pcc=0.5)
+    # Gate just under measured: L16 real-weight trunk parity is 0.9986/0.9990
+    # on BH Galaxy sp2_tp8 (deepest point of the measured depth curve).
+    assert_quality(ref_und, tt_und_view, pcc=0.99)
+    assert_quality(ref_gen, tt_gen_view, pcc=0.99)
 
 
 # (1, 8) submesh: TP=8 only, NO SP. Direct comparison point against

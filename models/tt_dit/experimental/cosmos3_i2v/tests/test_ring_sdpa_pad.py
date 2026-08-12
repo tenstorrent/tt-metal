@@ -220,7 +220,13 @@ def test_ring_sdpa_zero_k_pad_at_cosmos3_shape(mesh_device: ttnn.MeshDevice, sub
     _os.makedirs(_dump_dir, exist_ok=True)
     torch.save(out_gen.detach().cpu(), f"{_dump_dir}/ring_sp{sp_factor}_out.pt")
     torch.save(gt_gen.detach().cpu(), f"{_dump_dir}/torch_ref_out.pt")
-    assert pcc_val > 0.5, f"Ring SDPA PCC at cosmos3 shape = {pcc_val:.4f}, expected near 0.999"
+    # Characterization, not a correctness gate: this variant pre-pads und to
+    # k_chunk, which hides logical L from the ring kernel and lets joint K-pad
+    # rows through softmax unmasked — measured PCC 0.7002 on BH Galaxy (sp2 and
+    # sp4 identically). Production uses the unpadded-und path, gated at 0.99 in
+    # test_ring_sdpa_unpadded_und_at_cosmos3_shape. The band-assert keeps the
+    # documented failure mode from silently changing shape.
+    assert 0.65 < pcc_val < 0.75, f"pre-padded-und ring SDPA PCC = {pcc_val:.4f}, expected ~0.70 (see comment)"
 
 
 @pytest.mark.parametrize(

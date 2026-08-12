@@ -183,12 +183,18 @@ def test_dup_up_3d_on_device_pcc(
 
 
 _DOWN_CONFIGS = [
-    # encoder residual down levels (Cosmos3 base_dim×dim_mult: [256, 512, 1024, 1024])
-    pytest.param(256, 512, 1, 2, id="enc_lvl0_s2"),
-    pytest.param(512, 1024, 2, 2, id="enc_lvl1_st2"),
-    pytest.param(1024, 1024, 2, 2, id="enc_lvl2_st2"),
+    # Encoder residual down levels at the REAL encoder channels (model_config
+    # base_dim=160, dim_mult=(1,2,4,4) -> 160/320/640/640). The decoder uses its
+    # own decoder_base_dim=256 set, covered below for the shared primitive.
+    pytest.param(160, 320, 1, 2, id="enc_lvl0_s2"),
+    pytest.param(320, 640, 2, 2, id="enc_lvl1_st2"),
+    pytest.param(640, 640, 2, 2, id="enc_lvl2_st2"),
     # identity-shortcut at the bottom (down_flag=False) — exercised via factor=1
-    pytest.param(1024, 1024, 1, 1, id="enc_lvl3_id"),
+    pytest.param(640, 640, 1, 1, id="enc_lvl3_id"),
+    # Decoder-channel transitions (decoder_base_dim=256 set) on the same primitive.
+    pytest.param(256, 512, 1, 2, id="dec_ch_s2"),
+    pytest.param(512, 1024, 2, 2, id="dec_ch_st2"),
+    pytest.param(1024, 1024, 1, 1, id="dec_ch_id"),
 ]
 
 
