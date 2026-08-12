@@ -30,7 +30,7 @@ from helpers.param_config import (
     parametrize,
     runtime,
 )
-from helpers.perf import create_test_or_perf_config
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (
     StimuliSpec,

@@ -511,6 +511,9 @@ class ModelArgs:
 
     MAX_QKV_MM_SEQ_LEN = 2048
 
+    # Opt-in: False so TP > n_kv_heads stays a hard error unless a subclass implements KV replication.
+    SUPPORTS_KV_REPLICATION = False
+
     def __init__(
         self,
         mesh_device,
@@ -703,10 +706,22 @@ class ModelArgs:
                 self.n_heads % self.cluster_shape[1] == 0
             ), f"n_heads must be divisible by num_devices: {self.n_heads} % {self.cluster_shape[1]}"
 
-            assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
+            # KV heads normally split one-or-more per device. SUPPORTS_KV_REPLICATION models
+            # instead replicate a head across the devices holding its GQA query group, so they
+            # only need TP to be a whole multiple of n_kv_heads (e.g. 4 KV heads on TP=8 -> each
+            # head shared by a device pair). n_local_kv_heads is then 1, hence the max() below.
+            if self.SUPPORTS_KV_REPLICATION and self.cluster_shape[1] > self.n_kv_heads:
+                assert self.cluster_shape[1] % self.n_kv_heads == 0, (
+                    f"with KV replication, num_devices must be a multiple of n_kv_heads: "
+                    f"{self.cluster_shape[1]} % {self.n_kv_heads}"
+                )
+            else:
+                assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
             self.n_local_heads = self.n_heads // self.cluster_shape[1]
             self.qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_heads)
-            self.min_kv_prefill_shard_seqlen = (ttnn.TILE_SIZE * 8 * 8) / (self.n_kv_heads // self.cluster_shape[1])
+            self.min_kv_prefill_shard_seqlen = (ttnn.TILE_SIZE * 8 * 8) / max(
+                1, self.n_kv_heads // self.cluster_shape[1]
+            )
 
             # All Gather Matmul for Dense Out (DO) - computed flag stored as instance attribute
             # NOTE: Fused all gather matmul only supports a core grid of size num_devices x 1

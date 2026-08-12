@@ -7,8 +7,10 @@ isn't position-general, so prefill is model-owned (masked-bucket for short promp
 trace for long, via prefill_dispatch) while Generator drives decode only. GDN + KV state is
 model-bound, so the kv_cache contract param is accepted but unused.
 """
+
 import math
 import os
+from collections import defaultdict
 from typing import Mapping, Optional
 
 import torch
@@ -23,7 +25,7 @@ from vllm.multimodal import MULTIMODAL_REGISTRY
 
 import ttnn
 from models.demos.blackhole.qwen36.tt.common import create_tt_model
-from models.demos.blackhole.qwen36.tt.generator_interface import prefill_dispatch
+from models.demos.blackhole.qwen36.tt.generator_interface import prefill_dispatch, warmup_decode_buckets
 from models.tt_transformers.tt.generator import Generator
 
 _PREFILL_WARMUP_CHUNK = 2048
@@ -46,6 +48,10 @@ class TT_Qwen3_5ProcessingInfo(Qwen3_5ProcessingInfo):
 class Qwen36ForCausalLM(Generator, SupportsMultiModal):
     """vLLM-compatible wrapper for Qwen3.5-9B on Blackhole P150."""
 
+    # Decode bucketing keeps several traces live and refreshes the selected
+    # bucket's inputs before replay, so their I/O buffers may safely overlap.
+    _tt_allow_decode_trace_buffer_reuse = True
+
     # supports_async_decode=False: async decode assumes on-device token/position continuity, which
     # corrupts Qwen's GDN scan. supports_sample_on_device=True: on-device sampling is decode-only.
     model_capabilities = {
@@ -53,6 +59,21 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         "supports_async_decode": False,
         "supports_sample_on_device": True,
     }
+
+    def _validate_device_sampling_request(self, requested):
+        if not requested:
+            return
+        for model in self.model:
+            if model.sampling is not None:
+                continue
+            mesh_shape = tuple(int(dim) for dim in model.mesh_device.shape)
+            logits_per_device = math.ceil(model.args.vocab_size / model.num_devices)
+            raise RuntimeError(
+                "Qwen3.6 on-device sampling requires a certified TP topology (1x4 or 1x8) "
+                f"with at most 65536 logits/device; got mesh={mesh_shape}, "
+                f"vocab={model.args.vocab_size}, logits/device={logits_per_device}. "
+                "Unset sample_on_device_mode for host sampling."
+            )
 
     @classmethod
     def get_max_tokens_all_users(
@@ -183,11 +204,8 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         """All prefill is model-owned (Generator drives decode only)."""
         model = self.model[0]
         if model.num_devices > 1 and model.args.max_batch_size > 1:
-            # Batched serving (max_num_seqs > 1): prefill each request in this step into its decode
-            # slot. Text-only — multimodal is single-sequence (get_supported_mm_limits: B=1). Check
-            # for REAL visual data (not just non-None): vLLM passes an empty pixel_values placeholder
-            # on text requests to a multimodal-registered model, which a bare `is None` check would
-            # misflag and crash the engine on every text request.
+            # Batched text prefill into decode slots (MM is B=1). Require real visual data, not a
+            # non-None empty pixel_values placeholder from vLLM on text requests.
             assert not self._has_visual(kwargs, "pixel_values") and not self._has_visual(
                 kwargs, "pixel_values_videos"
             ), (
@@ -291,6 +309,57 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             slot_remap = kwargs.get("slot_remap")
             if slot_remap is not None:
                 model._remap_gdn_slots(slot_remap)
+        # Decode bucketing (default on; TT_DECODE_BUCKETING=0 off): slice host inputs to the
+        # smallest power-of-2 width >= active prefix [0:num_active) before the base forward.
+        # No runner edit / output re-pad — plugin reads unpadded_batch_size in slot order.
+        # Each width keeps its own trace metadata, inputs, and output.
+        args = list(args)
+
+        def _read(name, pos):
+            if name in kwargs:
+                return kwargs[name]
+            return args[pos] if pos < len(args) else None
+
+        def _write(name, pos, val):
+            if name in kwargs:
+                kwargs[name] = val
+            elif pos < len(args):
+                args[pos] = val
+
+        tokens = _read("tokens", 0)
+        if os.environ.get("TT_DECODE_BUCKETING", "1") == "1" and tokens is not None:
+            start_pos = _read("start_pos", 1)
+            width = int(tokens.shape[0])
+            num_active = int((start_pos != -1).sum()) if start_pos is not None else width
+            num_active = max(1, min(num_active, width))
+            bucket = min(width, 1 << max(0, (num_active - 1).bit_length()))  # smallest pow2 >= num_active
+            # Keep full width when slot_remap is set: remap indexes the full slot space (tokens /
+            # GDN). Rare (row moves only); bucketing resumes next step. Check kw + positional #10.
+            if _read("slot_remap", 10) is not None:
+                bucket = width
+            if bucket < width:
+                _write("tokens", 0, tokens[:bucket])
+                if start_pos is not None:
+                    _write("start_pos", 1, start_pos[:bucket])
+                page_table = _read("page_table", 2)
+                if page_table is not None:
+                    _write("page_table", 2, page_table[:bucket])
+                tokens = tokens[:bucket]
+
+        if tokens is not None:
+            B = int(tokens.shape[0])
+            store = getattr(self, "_bucket_trace_store", None)
+            if store is None:
+                store = self._bucket_trace_store = {}
+            if B not in store:
+                store[B] = (defaultdict(lambda: None), defaultdict(lambda: None), defaultdict(lambda: None))
+            self.trace_ids_decode, self.trace_inputs_decode, self.trace_output_decode = store[B]
+            # Key the sampling trace by bucket width too: Generator binds it to one logits tensor
+            # by identity, and each decode-bucket width has its own.
+            for _m in self.model:
+                _sm = getattr(_m, "sampling", None)
+                if _sm is not None and hasattr(_sm, "set_trace_bucket"):
+                    _sm.set_trace_bucket(B)
         return super().decode_forward(*args, **kwargs)
 
     def warmup_model_prefill(self, kv_cache, enable_trace, *args, **kwargs):
@@ -330,7 +399,8 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
                 model._unbind_gdn_prefill_scratch(prev)
 
     def warmup_model_decode(self, *args, **kwargs):
-        # Defer to WarmupForwardMixin, which captures the paged-SDPA + GDN decode trace at pos 0.
+        # Defer to WarmupForwardMixin, which warms the paged-SDPA + GDN decode path at pos 0.
         # Drop stale `non_greedy_decoding_on_device` from the old vLLM plugin; no-op for Qwen.
         kwargs.pop("non_greedy_decoding_on_device", None)
-        return super().warmup_model_decode(*args, **kwargs)
+        self._validate_device_sampling_request(kwargs.get("can_sample_on_device", False))
+        return warmup_decode_buckets(self, super().warmup_model_decode, *args, **kwargs)

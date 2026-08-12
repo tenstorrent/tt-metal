@@ -194,6 +194,7 @@
     pytest --timeout 90 models/demos/blackhole/qwen36/tests/test_gdn_tp.py
     pytest --timeout 60 models/demos/blackhole/qwen36/tests/test_mlp_tp.py
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_model_tp.py
+    pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_decode_bucketing.py -k "test_bucket_warmup_compiles_all_widths_before_capture or test_all_buckets_fit_trace_region or test_bucket_trace_teardown_releases_all_stores"
     pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_mlp.py
     pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_patch_merger.py
     pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_vision_attention.py
@@ -1086,6 +1087,22 @@
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
+
+- name: TT-DiT Stable Diffusion 3.5 Large unit tests
+  cmd: |
+    unset TT_METAL_WATCHER  # blocked by #50886
+    unset HF_HUB_OFFLINE
+    pytest --timeout 300 models/tt_dit/tests/models/sd35/test_vae_sd35.py
+    pytest --timeout 300 models/tt_dit/tests/models/sd35/test_attention_sd35.py
+    pytest --timeout 300 models/tt_dit/tests/models/sd35/test_transformer_sd35.py::test_sd35_transformer_block
+  model: sd35
+  model_family: Stable Diffusion
+  skus:
+    wh_llmbox:
+      timeout: 10
+      tier: 3
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
 
 # ============================================================================
 # Multihost (exabox) model-unit tests
