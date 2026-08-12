@@ -1012,10 +1012,10 @@ def load_gate_weights_from_hf(
         dtype: Target dtype for the returned weight
         key_prefix_template: HF key prefix with a ``{layer_idx}`` placeholder. Defaults to the
             DeepSeek/Kimi-K2.x layout; pass ``GATE_KEY_PREFIX_KIMI_K3`` for Kimi-K3.
-        bias_dtype: Target dtype for ``e_score_correction_bias``; defaults to ``dtype``. The
-            checkpoints store it as fp32 and the device gate accepts an fp32 bias, so pass
-            ``torch.float32`` to keep the routing correction at full precision -- it matters more as
-            the expert count grows, since the bias only affects which experts win top-k.
+        bias_dtype: Target dtype for the returned ``e_score_correction_bias``; defaults to ``dtype``.
+            ``TtMoEGatePrefill`` currently converts both its device bias and host-fallback copy to
+            bf16, so an override does not widen that gate path. It is available only for direct host
+            consumers that deliberately retain the returned tensor's dtype.
 
     Returns dict matching MoEGate / ``create_gate_weights`` format:
         "weight": (n_routed_experts, dim) — HF convention

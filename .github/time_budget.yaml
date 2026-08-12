@@ -405,8 +405,8 @@ models:
     bh_galaxy: 470
     # blaze_models_prefill_tests.yaml sum of bh_sc1 job timeouts (tightened from 840).
     # The prior jobs summed to 435 under a 437 budget (2 minutes slack). Kimi-K3 adds the 26-minute
-    # PCC row and raises "Blaze - MoE Gate" 8 -> 14 (+6), producing the exact 467-minute sum.
-    bh_sc1: 467
+    # PCC row and raises "Blaze - MoE Gate" 8 -> 17 (+9), producing the exact 470-minute sum.
+    bh_sc1: 470
     # The prior jobs summed to 141 under a 143 budget (2 minutes slack). The new 22-minute
     # "Blaze - Kimi K3 MoE perf" row produces the exact 163-minute sum; it is split onto this SKU
     # because the profiler needs a clock-stable box.

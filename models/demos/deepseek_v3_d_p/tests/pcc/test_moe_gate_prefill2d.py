@@ -120,11 +120,10 @@ _REAL_GATE_SOURCES = {
         # real weights, otherwise the existing seeded-weight fallback remains hermetic.
         hf_repo=None,
         key_prefix_template=GATE_KEY_PREFIX_KIMI_K3,
-        # Keep the routing correction in fp32. Only decides which of 896 experts win top-16, so
-        # precision there matters more the more experts there are. Scoped to K3: under HOST_ALL this
-        # widens one side of the comparison, so it needs K3's own threshold calibration, not
-        # DeepSeek-V3's.
-        bias_dtype=torch.float32,
+        # Match the TtMoEGatePrefill path, which stores both the device bias and its host-fallback
+        # copy in bf16. The independent reference is also converted to bf16 below, keeping both
+        # sides aligned at the 16-of-896 top-k boundary.
+        bias_dtype=None,
     ),
 }
 

@@ -33,13 +33,14 @@
   test_group: module
   skus:
     bh_sc1:
-      # Raised 8 -> 14 when the kimi_k3 cases joined this selector. K3's host_all path builds its
+      # Raised 8 -> 17 when the kimi_k3 cases joined this selector. K3's host_all path builds its
       # reference gate over 896 experts x 25600 tokens on CPU and measures 158s warm (device_fp32 is
       # 9s) -- ~2.8 min added to a stage that previously fit 16 tests in 8; this row now owns 18.
       # Cold-JIT runs are substantially slower: a config change made the same pair take 475s and
       # tripped pytest.ini's 300s per-test timeout on host_all. This row therefore raises that
-      # per-test cap to 600s; the 14-minute job timeout bounds the complete 18-case invocation.
-      timeout: 14
+      # per-test cap to 600s. The 17-minute job timeout covers the prior 8-minute bound plus the
+      # measured 7m55s cold pair with about one minute of invocation-level margin.
+      timeout: 17
   owner_id: U08RL15T4N8
   team: models
   sp_config: sc1
@@ -400,6 +401,8 @@
     # one-time weight-load tilize/typecast in TtMoe's constructor dominates process wall time but is
     # not per-token cost.
     export TT_MESH_GRAPH_DESC_PATH=$PWD/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto
+    export PREFILL_TORUS_XY_CERTIFIED=1
+    export MESH_DEVICE=TG
     mpirun --bind-to none --pernode --tag-output bash -lc '
       set -e
       export OMP_NUM_THREADS=$(nproc)
