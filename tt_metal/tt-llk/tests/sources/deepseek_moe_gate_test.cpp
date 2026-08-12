@@ -188,7 +188,8 @@ static inline void run_gate()
 // (tt-metal#52699); deepseek_moe_gate is the predecessor primitive and shares the defect.
 //
 // The gate's answer is row 0, columns 0..7 of the SCORES and IDS tiles -- exactly what
-// test_deepseek_moe_gate.py::_assert_gate_output reads (regions[SCORES][0, :8], regions[IDS][0, :8]).
+// test_deepseek_moe_gate.py reads: it slices output_torch[:, 0, :8] and output_indices_torch[:, 0, :8]
+// (test_deepseek_moe_gate), and result_indices[:, 0, :8] (test_deepseek_moe_gate_uint16_high_bit).
 // The sort and the sum_top2 "replicate down the column" broadcast SFPSTORE full 32-lane rows whose
 // non-rank lanes were never written this run, so every other packed lane holds residue. That residue
 // is a fixed point once warm, so run 0 (cold) differs from runs 1..N and the bit-exact check flags the
@@ -206,8 +207,9 @@ static inline void run_gate()
 // whatever produced it. Keep only the answer and zero every other DEST row the packer ships.
 // Validated on both arches at 500 runs -- BH run 31594272654, WH run 31598446222.
 //
-// MODE_GATE only: run_move's output is read cell-by-cell across rows 0..7 (see the step0/step1/step2
-// assertions in the python test), so it must not be sanitized.
+// MODE_GATE only: run_kernel invokes this from the MODE_GATE branch alone. MODE_MOVE and MODE_BINARY
+// are separate branches and are deliberately left untouched -- only the GATE path confines its result
+// to row 0, cols 0..7, so it is the only mode whose scratch can be safely zeroed.
 static inline void dmg_sanitize_scratch()
 {
     // Address everything through sfpi dst_reg -- the mapping generalized_moe_gate proved lands on the
