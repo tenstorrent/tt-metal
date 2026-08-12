@@ -8,7 +8,12 @@ from typing import List
 import pytest
 import torch
 from helpers.format_config import DataFormat, InputOutputFormat
-from helpers.golden_generators import UnarySFPUGolden, get_golden_generator
+from helpers.golden_generators import (
+    TilizeGolden,
+    UnarySFPUGolden,
+    UntilizeGolden,
+    get_golden_generator,
+)
 from helpers.llk_params import (
     ApproximationMode,
     DataCopyType,
@@ -425,6 +430,12 @@ def prepare_cumsum_inputs(
     """
     u = src_A.to(torch.float32)  # uniform [0, 1] from the uniform stimuli spec
     return (-1.0 + 2.0 * u).to(format_dict[input_format])
+
+
+# Ops whose result depends on where in the tile a datum sits, so L1 has to hold a real tilized tile.
+# Every other op in this suite is element-wise and cannot tell a tilized buffer from a row-major one,
+# which is why the suite has always written the latter.
+LAYOUT_SENSITIVE_OPS = (MathOperation.Cumsum,)
 
 
 def prepare_unary_inputs(
@@ -896,6 +907,19 @@ def test_eltwise_unary_sfpu_quasar(
                 op_res, dtype=format_dict[formats.output_format]
             )
 
+    # A layout-sensitive op reads the tile's face structure, so it gets the tilized buffer tt-metal
+    # would feed it, and its result is read back through the matching untilize. UnarySFPUGolden
+    # already models the logical -> Dest -> logical round trip, so the golden above stays on the
+    # logical tensor and only what crosses to L1 and back is converted.
+    is_layout_sensitive = mathop in LAYOUT_SENSITIVE_OPS
+    device_src_A = (
+        get_golden_generator(TilizeGolden)(
+            src_A, input_dimensions, formats.input_format
+        )
+        if is_layout_sensitive
+        else src_A
+    )
+
     unpack_to_dest = quasar_unpack_to_dest(formats, dest_acc, is_typecast)
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")
@@ -933,7 +957,7 @@ def test_eltwise_unary_sfpu_quasar(
             LOOP_FACTOR(loop_factor),
         ],
         "variant_stimuli": StimuliConfig(
-            src_A,
+            device_src_A,
             formats.input_format,
             src_B,
             formats.input_format,
@@ -972,6 +996,11 @@ def test_eltwise_unary_sfpu_quasar(
 
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+
+    if is_layout_sensitive:
+        res_tensor = get_golden_generator(UntilizeGolden)(
+            res_tensor, formats.output_format, input_dimensions
+        )
 
     assert passed_test(
         golden_tensor,
