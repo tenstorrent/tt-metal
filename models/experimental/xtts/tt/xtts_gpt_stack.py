@@ -1,14 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""TTNN implementation of the full XTTS-v2 GPT decoder stack.
-
-Mirrors ``reference/xtts_gpt_stack.py``: 30 identical GPT-2 decoder blocks
-(each a :class:`~models.experimental.xtts.tt.xtts_gpt_block.TtXttsGptBlock`)
-followed by a final LayerNorm (``ln_f``). Output is the decoder's final
-layer-normed hidden states, before the text/mel heads.
-"""
-
 import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -28,22 +20,14 @@ class TtXttsGptStack(LightweightModule):
         super().__init__()
         self.device = device
         self.num_layers = num_layers
-
-        # One TtXttsGptBlock per repeating layer, each loading its own weights.
         self.blocks = [TtXttsGptBlock(state_dict, device, layer_idx=i) for i in range(num_layers)]
-
-        # Final LayerNorm (ln_f) applied after the last block.
         self.ln_f_weight = _to_device(state_dict["gpt.gpt.ln_f.weight"], device)
         self.ln_f_bias = _to_device(state_dict["gpt.gpt.ln_f.bias"], device)
-
-        # Static-KV decode support (trace-compatible; see forward_decode_static). Sized only
-        # when max_seq is given so the concat-based path is unaffected.
         self.max_seq = 0
         if max_seq:
             self.init_static(max_seq)
 
     def init_static(self, max_seq):
-        """Build the persistent column-index arange used by forward_decode_static (idempotent)."""
         self.max_seq = max_seq
         self.arange = ttnn.from_torch(
             torch.arange(max_seq, dtype=torch.float32).reshape(1, 1, 1, max_seq),
@@ -53,51 +37,23 @@ class TtXttsGptStack(LightweightModule):
         )
 
     def forward_decode(self, x, kv, pos, write_idx=None):
-        """DECODE — one-token decode over FIXED-size caches (the stack's decode forward).
-
-        ``kv`` is the per-layer ``[(k_cache, v_cache), ...]`` list of ``[1, heads, max_seq,
-        head_dim]`` caches; ``pos`` is a ``[1, 1, 1, max_seq]`` tensor filled with the current
-        absolute cache position. Builds the additive attention mask ONCE (shared across layers) from
-        ``pos`` + the persistent arange. ``write_idx`` (eager int) routes the cache write through the
-        O(1) ``ttnn.update_cache``; when None (traced) it builds the one-hot select the blocks use.
-        Returns the ``ln_f`` hidden (caches updated in place); all shapes static."""
-        # add_mask: 0 for cached positions (arange <= pos), -inf ahead. gt(arange, pos) is 1 exactly
-        # on the future positions, so one typecast + one scale gives the mask in 3 ops (vs the old
-        # le -> (1-le) -> *NEG_INF, 5 ops); mathematically identical.
-        # NOTE: add_mask must stay in DRAM — ttnn SDPA hard-asserts the attention mask is DRAM-resident
-        # (sdpa_device_operation.cpp: mask.buffer_type() == DRAM), so it can't be moved to L1.
-        # NOTE: add_mask must stay in DRAM — ttnn SDPA hard-asserts the attention mask is DRAM-resident
-        # (sdpa_device_operation.cpp: mask.buffer_type() == DRAM). These small per-step mask tensors are
-        # left interleaved/DRAM: moving them to L1 gives no measurable win (they're tiny + decode is
-        # latency-bound) and breaks trace capture of the one-hot write path.
-        gt = ttnn.typecast(
-            ttnn.gt(self.arange, pos), ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG
-        )  # [1,1,1,MAX] 1 for future positions
-        add_mask = ttnn.multiply(gt, NEG_INF, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # 0 cached, -inf ahead
+        # add_mask must stay DRAM (SDPA asserts DRAM mask).
+        gt = ttnn.typecast(ttnn.gt(self.arange, pos), ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+        add_mask = ttnn.multiply(gt, NEG_INF, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         onehot = None
-        if write_idx is None:  # traced path needs the data-driven one-hot write selector
-            onehot_row = ttnn.typecast(
-                ttnn.eq(self.arange, pos), ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG
-            )  # [1,1,1,MAX] 1 at col=pos
-            onehot = ttnn.reshape(
-                onehot_row, (1, 1, self.max_seq, 1), memory_config=ttnn.L1_MEMORY_CONFIG
-            )  # [1,1,MAX,1]
+        if write_idx is None:
+            onehot_row = ttnn.typecast(ttnn.eq(self.arange, pos), ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+            onehot = ttnn.reshape(onehot_row, (1, 1, self.max_seq, 1), memory_config=ttnn.L1_MEMORY_CONFIG)
         for block, (k, v) in zip(self.blocks, kv):
-            x = block.forward_decode(x, k, v, onehot, add_mask, write_idx)  # k, v updated in place
-        y = sharded_decode_ln(x, self.ln_f_weight, self.ln_f_bias, self.device)  # width-sharded decode ln_f
-        return y
+            x = block.forward_decode(x, k, v, onehot, add_mask, write_idx)
+        return sharded_decode_ln(x, self.ln_f_weight, self.ln_f_bias, self.device)
 
     def forward(self, x):
-        """Full teacher-forced pass (no cache kept). Routes through each block's PREFILL
-        forward and discards the returned K/V — the block has no separate full-forward."""
         for block in self.blocks:
-            x, _, _ = block.forward_prefill(x)  # full causal block; drop the prompt K/V
-        y = sharded_prefill_ln(x, self.ln_f_weight, self.ln_f_bias, self.device)
-        return y
+            x, _, _ = block.forward_prefill(x)
+        return sharded_prefill_ln(x, self.ln_f_weight, self.ln_f_bias, self.device)
 
     def forward_prefill(self, x):
-        """Prefill the prompt. Returns ``(ln_f(hidden), kv)`` where ``kv`` is the
-        per-layer ``[(k, v), ...]`` list that seeds the decode KV cache."""
         kv = []
         for block in self.blocks:
             x, k, v = block.forward_prefill(x)
