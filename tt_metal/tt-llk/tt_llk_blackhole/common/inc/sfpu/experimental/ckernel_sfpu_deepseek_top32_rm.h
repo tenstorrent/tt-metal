@@ -21,42 +21,6 @@ namespace sfpu
 {
 
 template <bool is_fp32_dest_acc_en>
-inline void bitonic_top32_load8(std::uint32_t offset, std::uint32_t dist)
-{
-    constexpr std::uint32_t dst_indices_offset  = 128; // 2 tile x 64 rows per tile
-    constexpr InstrModLoadStore instr_mod_index = is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
-
-    std::uint32_t face_offset = offset >> 4;
-    std::uint32_t ld_offset   = (offset & 0xF) + face_offset * 32;
-
-    // Load 16 consecutive numbers
-    TT_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, ld_offset);
-    TT_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_7, ld_offset + dist);
-
-    // Load 16 consecutive indices
-    TT_SFPLOAD(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_7, dst_indices_offset + ld_offset);
-    TT_SFPLOAD(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_7, dst_indices_offset + ld_offset + dist);
-}
-
-template <bool is_fp32_dest_acc_en>
-inline void bitonic_top32_store8(std::uint32_t offset, std::uint32_t dist)
-{
-    constexpr std::uint32_t dst_indices_offset  = 128; // 2 tile x 64 rows per tile
-    constexpr InstrModLoadStore instr_mod_index = is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
-
-    std::uint32_t face_offset = offset >> 4;
-    std::uint32_t ld_offset   = (offset & 0xF) + face_offset * 32;
-
-    // Load 16 consecutive numbers
-    TT_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_7, ld_offset);
-    TT_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_7, ld_offset + dist);
-
-    // Load 16 consecutive indices
-    TT_SFPSTORE(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_7, dst_indices_offset + ld_offset + 0);
-    TT_SFPSTORE(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_7, dst_indices_offset + ld_offset + dist);
-}
-
-template <bool is_fp32_dest_acc_en>
 inline void bitonic_top32_load16(std::uint32_t dist0, std::uint32_t dist1)
 {
     constexpr std::uint32_t dst_indices_offset  = 128; // 2 tile x 64 rows per tile
@@ -260,9 +224,6 @@ inline void bitonic_top32_inc_x4_dest(std::uint32_t inc, bool cr)
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void _bitonic_top32_phases_steps_(const int idir)
 {
-    const int i_end_phase   = 4;
-    const int i_start_phase = 0;
-
     bool dir = idir;
     // produce bitonic sequences len=16
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
@@ -278,12 +239,9 @@ inline void _bitonic_top32_phases_steps_(const int idir)
     }
 
     // produce bitonic sequences len=32
-    std::uint32_t num_steps               = 5; // log(32)
-    std::uint32_t start_step              = num_steps;
-    std::uint32_t end_step                = 4;
-    std::uint32_t sorted_seq_length       = 1 << num_steps; // 32
-    std::uint32_t datums_compared         = 0;
-    std::uint32_t total_datums_to_compare = 64;
+    std::uint32_t num_steps  = 5; // log(32)
+    std::uint32_t start_step = num_steps;
+    std::uint32_t end_step   = 4;
     for (std::uint32_t ss = start_step; ss > end_step; ss--)
     {
         // Steps N to 5
@@ -474,7 +432,6 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void _bitonic_top32_of_1024_rm_pre_sorted_final_(std::uint32_t dst_index)
 {
     constexpr bool decreasing              = false;
-    constexpr bool increasing              = true;
     constexpr std::uint32_t odd_col_offset = 2;
     const std::uint32_t tile_offset        = dst_index << DstTileSizeLog2[DstTileShape::Tile32x32];
 
