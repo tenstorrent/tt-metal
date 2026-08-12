@@ -494,7 +494,15 @@ GlobalCircularBuffer::GlobalCircularBuffer(
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
     BufferType buffer_type) :
-    impl_(std::make_unique<GlobalCircularBufferImpl>(device, sender_receiver_core_mapping, size, buffer_type)) {}
+    GlobalCircularBuffer(GlobalCircularBufferImpl(device, sender_receiver_core_mapping, size, buffer_type)) {}
+
+GlobalCircularBuffer CreateGlobalCircularBuffer(
+    distributed::MeshDevice& device,
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
+    uint32_t size,
+    BufferType buffer_type) {
+    return GlobalCircularBuffer(GlobalCircularBufferImpl(device, sender_receiver_core_mapping, size, buffer_type));
+}
 
 GlobalCircularBuffer::GlobalCircularBuffer(GlobalCircularBufferImpl impl) :
     impl_(std::make_unique<GlobalCircularBufferImpl>(std::move(impl))) {}
@@ -512,6 +520,14 @@ GlobalCircularBuffer& GlobalCircularBuffer::operator=(const GlobalCircularBuffer
 GlobalCircularBuffer::GlobalCircularBuffer(GlobalCircularBuffer&& other) noexcept = default;
 GlobalCircularBuffer& GlobalCircularBuffer::operator=(GlobalCircularBuffer&& other) noexcept = default;
 GlobalCircularBuffer::~GlobalCircularBuffer() = default;
+
+GlobalCircularBuffer CreateGlobalCircularBuffer(
+    IDevice* device,
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
+    uint32_t size,
+    BufferType buffer_type) {
+    return GlobalCircularBuffer(GlobalCircularBufferImpl(device, sender_receiver_core_mapping, size, buffer_type));
+}
 
 GlobalCircularBufferImpl& GlobalCircularBuffer::impl() {
     TT_FATAL(impl_ != nullptr, "GlobalCircularBuffer is in a moved-from state.");
