@@ -3009,3 +3009,48 @@ def test_pc_untilize_codegen(device, tensor_shape):
             base_count = device.cache_entries_counter.total
         else:
             assert device.cache_entries_counter.total == base_count, "program cache entries differ on same configs"
+
+
+# The sub_core_grids factory shares its writer kernel
+# (writer_unary_stick_layout_split_rows_interleaved_parallel_columns) with the
+# parallelize-column factory. That kernel consumes (num_sticks / TILE_HEIGHT) *
+# num_tiles_per_core tiles via wait_front, but reader/compute only push
+# num_tiles_per_core tiles per core. ntiles_per_column > 1 violates this
+# producer/consumer contract, so validate_on_program_cache_miss must reject it.
+@pytest.mark.parametrize(
+    "input_shape, num_cores",
+    [
+        ([1, 1, 64, 1024], 8),  # ntiles_per_column=2
+        ([1, 1, 96, 512], 8),  # ntiles_per_column=3
+    ],
+)
+def test_untilize_sub_core_grids_multi_tile_height_rejected(device, input_shape, num_cores, expect_error):
+    """Tall tensors (ntiles_per_column > 1) with sub_core_grids must be rejected, not hung."""
+    torch.manual_seed(0)
+    input_torch = torch.randn(input_shape, dtype=torch.bfloat16)
+    input_ttnn = ttnn.from_torch(
+        input_torch,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    sub_core_grids = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
+    with expect_error(RuntimeError, "sub_core_grid untilize only supports"):
+        ttnn.untilize(input_ttnn, use_multicore=True, sub_core_grids=sub_core_grids)
+
+
+def test_untilize_sub_core_grids_single_tile_height(device):
+    """Single-tile-height tensor (ntiles_per_column == 1) with sub_core_grids still works."""
+    torch.manual_seed(0)
+    input_shape = [1, 1, 32, 1024]  # height=32 = one tile row → ntiles_per_column=1
+    num_cores = 8
+    input_torch = torch.randn(input_shape, dtype=torch.bfloat16)
+    input_ttnn = ttnn.from_torch(
+        input_torch,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    sub_core_grids = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
+    output = ttnn.untilize(input_ttnn, use_multicore=True, sub_core_grids=sub_core_grids)
+    assert_equal(input_torch, ttnn.to_torch(output))
