@@ -24,19 +24,30 @@ def sharded_norm_enabled() -> bool:
     return os.environ.get("GEMMA4_SHARDED_NORM", "1").lower() not in ("0", "false", "no")
 
 
-def prefill_mlp_island_enabled(padded_height: int, *, batch_size: int = 1, enable_moe: bool = False) -> bool:
-    """Width-sharded AR→LN→MLP island for short prefill (post-attn through MLP).
+# Prefill island I2S's residual onto the LN width-shard *before* input LN.
+# That live shard plus LN CBs fits at M<=128 (demo warmup 96/128) and clashes
+# in the full-model L1 budget at M>=512 (warmup 512 pads to 1024). Isolated
+# layer PCC at 1024 is not a sufficient gate.
+_PREFILL_ISLAND_MAX_HEIGHT = 128
 
-    Keeps post-attn / pre-MLP / post-MLP norm outputs width-sharded so gate_up
-    can consume sharded in0 without S2I→DRAM between norms. Does *not* extend
-    across SDPA (input LN still S2I's to interleaved for QKV). Disabled for MoE
-    and batched prefill (reshape is interleaved-only).
+
+def prefill_mlp_island_enabled(padded_height: int, *, batch_size: int = 1, enable_moe: bool = False) -> bool:
+    """Width-sharded AR→LN island for short prefill (post-attn through post-MLP LN).
+
+    Keeps post-attn / pre-MLP / post-MLP norm outputs width-sharded so residual
+    adds stay in L1. Does *not* extend across SDPA (input LN still S2I's to
+    interleaved for QKV). Only heights ``<= 128`` (Tracy 96/128); demo warmup
+    M=512/1024 stays on the interleaved LN path. Disabled for MoE and batched
+    prefill (reshape is interleaved-only). ``GEMMA4_PREFILL_ISLAND=0`` opts out
+    without touching the decode island.
     """
     if enable_moe or batch_size > 1:
         return False
+    if os.environ.get("GEMMA4_PREFILL_ISLAND", "1").lower() in ("0", "false", "no"):
+        return False
     if not sharded_norm_enabled() or not norm_keep_sharded_enabled():
         return False
-    return 1 <= int(padded_height) <= _SHARDED_NORM_MAX_HEIGHT
+    return 1 <= int(padded_height) <= _PREFILL_ISLAND_MAX_HEIGHT
 
 
 def norm_keep_sharded_enabled() -> bool:

@@ -18,12 +18,12 @@ Forward flow (matching HF exactly):
   residual = x
   x = input_layernorm(x)                  # S2I out — QKV wants interleaved
   x = self_attn(x)                        # TP all-reduce may gather width-sharded
-  x = post_attention_layernorm(x)         # keep width-sharded (decode, dense)
+  x = post_attention_layernorm(x)         # keep width-sharded (decode + short prefill)
   x = residual + x                        # residual I2S onto LN layout when needed
 
   residual = x
   x = pre_feedforward_layernorm(x)        # already_sharded in → keep out
-  x = mlp(x)                              # gate_up S2I→L1 from keep-sharded LN
+  x = mlp(x)                              # WH prefill: S2I→L1 before gate_up (CB clash)
 
   if enable_moe_block:
     x_1 = post_feedforward_layernorm_1(x)
@@ -51,6 +51,7 @@ from models.demos.gemma4.tt.rms_norm import (
     align_to_sharded,
     maybe_interleave,
     norm_keep_sharded_enabled,
+    prefill_mlp_island_enabled,
     sharded_norm_enabled,
     width_shard_input_memcfg,
 )
@@ -297,20 +298,24 @@ class Gemma4DecoderLayer:
             hidden_states: [1, 1, seq_len, hidden_size] on device
         """
         # 1. Attention block: norm -> attn -> post_attn_norm -> residual add
-        # Width-sharded AR→LN→MLP island (decode, dense only): after the attn
-        # all-reduce the gather may already be LN's width-shard layout. Keep
-        # post-attn LN, residual, pre-MLP LN, and (via SharedMLP) gate_up in that
-        # domain — drops the post-LN S2I→DRAM that otherwise runs on every sharded
-        # norm. input_layernorm still S2I's out: QKV needs interleaved. MoE routers
-        # / experts are not yet sharded-safe, so the island is dense-only.
+        # Width-sharded AR→LN island (decode, and short dense prefill): after the
+        # attn all-reduce the gather may already be LN's width-shard layout. Keep
+        # post-attn LN, residual, pre-MLP LN, and post-MLP LN in that domain —
+        # drops the post-LN S2I→DRAM that otherwise runs on every sharded norm.
+        # input_layernorm still S2I's out: QKV needs interleaved. Prefill gate_up
+        # also S2I's (WH 1D CBs clash with sharded in0); decode gate_up on BH
+        # consumes the shard via DramShardedLinear. MoE is not sharded-safe.
         padded_h = ((int(hidden_states.shape[-2]) + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
         keep_island_decode = norm_keep_sharded_enabled() and not self.enable_moe_block and is_decode
-        keep_island = keep_island_decode
+        keep_island_prefill = (not is_decode) and prefill_mlp_island_enabled(
+            padded_h, batch_size=batch_size, enable_moe=self.enable_moe_block
+        )
+        keep_island = keep_island_decode or keep_island_prefill
         residual = hidden_states
         # Prefetch the residual onto the LN width-shard layout *before* input_LN so
         # one I2S serves both the norm (already_sharded) and the post-attn residual
         # add. Batch>1 reshape of the residual is interleaved-only; skip it there.
-        if keep_island_decode and sharded_norm_enabled() and batch_size <= 1:
+        if keep_island and sharded_norm_enabled() and batch_size <= 1:
             ln_memcfg = width_shard_input_memcfg(self.mesh_device, int(hidden_states.shape[-1]), padded_h)
             if ln_memcfg is not None:
                 aligned, owned = align_to_memcfg(hidden_states, ln_memcfg)
@@ -382,6 +387,9 @@ class Gemma4DecoderLayer:
         # 2. MLP + MoE block
         residual = hidden_states
         normed = self.pre_feedforward_layernorm.forward(hidden_states, keep_sharded=keep_island)
+        # Prefill island is capped at M<=128. Raising `_PREFILL_ISLAND_MAX_HEIGHT`
+        # without parking residual+LN to DRAM before gate_up reopens the WH 1D
+        # CB clash at demo warmup M>=512 (input LN, then gate_up).
         mlp_output = self.shared_mlp(normed)
         normed.deallocate(True)
 

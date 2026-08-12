@@ -230,9 +230,9 @@ class SharedMLP:
             return self.gate_up_proj(hidden_states)
 
         # Interleaved-weight prefill: pin 1D progcfg + L1 interleaved out + HiFi2.
-        # When upstream LN kept width-sharded L1 out, rebuild the 1D config on that
-        # core grid (typically 56 on WH / hidden=5376) and skip S2I entirely —
-        # the AR→LN→MLP island's main remaining conversion.
+        # Decode (M<=TILE) may consume a width-sharded LN out on that core grid
+        # and skip S2I. Prefill-sized 1D CBs on the same shard clash on Wormhole,
+        # so M>TILE always S2I's to the tuned interleaved config.
         m = matmul_rows(hidden_states)
         k = int(hidden_states.shape[-1])
         n = int(self.gate_up_proj.shape[-1])
@@ -246,7 +246,14 @@ class SharedMLP:
         if out_memcfg is None and m <= TILE_SIZE:
             out_memcfg = ttnn.L1_MEMORY_CONFIG
         if program_config is not None and hidden_states.is_sharded():
-            matched = prefill_progcfg_1d_for_width_sharded_in0(m, k, n, hidden_states.memory_config())
+            # Decode (M<=TILE) keep-sharded island is proven. Prefill-sized 1D
+            # CBs on the LN width-shard clash with the rest of the layer on
+            # Wormhole — S2I to the tuned interleaved config instead.
+            matched = (
+                prefill_progcfg_1d_for_width_sharded_in0(m, k, n, hidden_states.memory_config())
+                if m <= TILE_SIZE
+                else None
+            )
             if matched is not None:
                 program_config = matched
             else:
