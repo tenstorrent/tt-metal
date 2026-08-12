@@ -20,15 +20,15 @@ import math
 import torch
 import ttnn
 
-from models.experimental.xtts.reference.xtts_gpt_block import (
+from models.experimental.xtts.config import (  # noqa: F401 — re-exported for callers
+    FFN_SIZE,
     HEAD_DIM,
     HIDDEN_SIZE,
     LAYER_NORM_EPS,
+    NEG_INF,  # additive attention-mask fill for masked-out (future) positions
     NUM_HEADS,
 )
 from models.common.lightweightmodule import LightweightModule
-
-NEG_INF = -1e30  # additive attention-mask fill for masked-out (future) positions
 
 # Per-weight block-float width for the decode matmuls (memory-bound: fewer weight bytes = faster).
 # bfloat4_b (4-bit) halves the DRAM stream vs bfloat8_b but is lower precision — only the weights
@@ -88,6 +88,29 @@ def _to_device_bias(torch_tensor, device):
 
 
 _LN_SHARD_CACHE = {}  # device-id -> (sharded memory_config, sharded LN program_config)
+_PREFILL_LN_CACHE = {}  # (device-id, Mt) -> (sharded memory_config, sharded LN program_config)
+_PREFILL_MLP_CPROJ_CACHE = {}  # (device-id, M) -> (in_mc over FFN, out_mc over hidden, 1D matmul PC)
+
+# Prefill LN width-shards hidden over `_PREFILL_LN_MAX_CORES`. Interleaved LN only parallelizes
+# over Mt (= ceil(seq/32)), so at the demo prompt (seq=64 -> Mt=2) it stuck on 2 cores / ~20 us.
+# Width@16 (8x2) is within ~0.1 us of width@32 and — critically — matches the mlp c_proj output
+# shard grid, so the FFN residual can stay sharded into the next LN and skip that ITS.
+# Block-sharding can hit ~9 us but needs nr|Mt so it is not seq-length-portable.
+_PREFILL_LN_MAX_CORES = 16
+
+# Prefill mlp c_proj: width-shard the 4096-wide GELU activation over 16 cores (ITS + 1D mcast),
+# and emit the hidden activation already width-sharded on those same 16 cores (LN layout). The
+# residual add then accepts interleaved residual + sharded mlp out -> sharded, so the next LN
+# (ln_f / next-layer ln_1) skips its ITS. Tracy (c_proj->add->LN): current 39.6 us -> 38.6 us.
+_PREFILL_MLP_CPROJ_CORES = 16
+
+
+def _fit_core_grid(nc, max_x, max_y):
+    """Largest-x rectangle holding exactly ``nc`` cores inside the device compute grid."""
+    for gx in range(min(nc, max_x), 0, -1):
+        if nc % gx == 0 and nc // gx <= max_y:
+            return gx, nc // gx
+    return None
 
 
 def _decode_ln_cfg(device):
@@ -111,6 +134,44 @@ def _decode_ln_cfg(device):
     return _LN_SHARD_CACHE[key]
 
 
+def _prefill_ln_cfg(device, mt):
+    """Width-sharded PREFILL layer-norm config for seq tile-rows ``mt``: hidden split over
+    ``_PREFILL_LN_MAX_CORES`` (falling back if the device grid cannot host that many). Cached per
+    (device, mt) because shard height = mt*32. Must be populated by an eager warmup before any
+    trace capture — ``create_sharded_memory_config`` is host-side, but the first call still has to
+    happen outside the capture."""
+    key = (id(device), mt)
+    if key not in _PREFILL_LN_CACHE:
+        grid = device.compute_with_storage_grid_size()
+        nc = _PREFILL_LN_MAX_CORES
+        placed = _fit_core_grid(nc, grid.x, grid.y)
+        if placed is None:
+            # Device smaller than `_PREFILL_LN_MAX_CORES`: walk down the divisors of Kt.
+            for cand in (8, 4, 2, 1):
+                placed = _fit_core_grid(cand, grid.x, grid.y)
+                if placed is not None:
+                    nc = cand
+                    break
+        gx, gy = placed
+        bw = (HIDDEN_SIZE // 32) // nc  # width tiles per core
+        mc = ttnn.create_sharded_memory_config(
+            shape=(mt * 32, HIDDEN_SIZE // nc),
+            core_grid=ttnn.CoreGrid(x=gx, y=gy),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        pc = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=[gx, gy],
+            subblock_w=min(bw, 4),  # sharded LN caps subblock_w at 4 in fp32-dest mode
+            block_h=mt,
+            block_w=bw,
+            inplace=False,
+        )
+        _PREFILL_LN_CACHE[key] = (mc, pc)
+    return _PREFILL_LN_CACHE[key]
+
+
 def sharded_decode_ln(x, weight, bias, device):
     """Width-sharded DECODE layer-norm (single token, M padded to one tile): reshard the L1
     activation to width-sharded, run the sharded LN kernel, reshard the result back to interleaved
@@ -124,6 +185,70 @@ def sharded_decode_ln(x, weight, bias, device):
     out = ttnn.to_memory_config(h, L1)
     ttnn.deallocate(h)
     return out
+
+
+def sharded_prefill_ln(x, weight, bias, device):
+    """Width-sharded PREFILL layer-norm over seq ``x`` ``[1, S, 1024]``. Skips the interleaved->
+    sharded copy when ``x`` is already on the LN shard layout (FFN residual path). Always returns
+    interleaved L1. Does not consume ``x`` (caller still owns it)."""
+    mt = -(-x.shape[-2] // 32)
+    mc, pc = _prefill_ln_cfg(device, mt)
+    if x.is_sharded() and x.memory_config() == mc:
+        h = ttnn.layer_norm(x, weight=weight, bias=bias, epsilon=LAYER_NORM_EPS, program_config=pc, memory_config=mc)
+    else:
+        xs = ttnn.to_memory_config(x, mc)
+        h = ttnn.layer_norm(xs, weight=weight, bias=bias, epsilon=LAYER_NORM_EPS, program_config=pc, memory_config=mc)
+        ttnn.deallocate(xs)
+    out = ttnn.to_memory_config(h, L1)
+    ttnn.deallocate(h)
+    return out
+
+
+def _prefill_mlp_cproj_cfg(device, m):
+    """Width-sharded PREFILL mlp ``c_proj`` config for activation rows ``m``.
+
+    Returns ``(in_mc, out_mc, pc)``: FFN width-sharded over 16 cores for the matmul input, hidden
+    width-sharded on the same grid (matches ``_prefill_ln_cfg``) for the matmul output so the
+    residual add can feed the next LN without an ITS. Cached per (device, m); populate eagerly
+    before any trace capture."""
+    key = (id(device), m)
+    if key not in _PREFILL_MLP_CPROJ_CACHE:
+        grid = device.compute_with_storage_grid_size()
+        nc = _PREFILL_MLP_CPROJ_CORES
+        placed = _fit_core_grid(nc, grid.x, grid.y)
+        if placed is None:
+            for cand in (8, 4, 2, 1):
+                placed = _fit_core_grid(cand, grid.x, grid.y)
+                if placed is not None:
+                    nc = cand
+                    break
+        gx, gy = placed
+        in_mc = ttnn.create_sharded_memory_config(
+            shape=(m, FFN_SIZE // nc),
+            core_grid=ttnn.CoreGrid(x=gx, y=gy),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        # Same grid / strategy as prefill LN so residual output is LN-ready (skip ITS).
+        out_mc, _ = _prefill_ln_cfg(device, math.ceil(m / 32))
+        mt, kt, nt = math.ceil(m / 32), FFN_SIZE // 32, HIDDEN_SIZE // 32
+        pcn = math.ceil(nt / (gx * gy))
+        ibw = next(b for b in (8, 4, 2, 1) if kt % b == 0)
+        osw = next(w for w in (4, 2, 1) if pcn % w == 0)
+        pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(gx, gy),
+            in0_block_w=ibw,
+            out_subblock_h=1,
+            out_subblock_w=osw,
+            per_core_M=mt,
+            per_core_N=pcn,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+        _PREFILL_MLP_CPROJ_CACHE[key] = (in_mc, out_mc, pc)
+    return _PREFILL_MLP_CPROJ_CACHE[key]
 
 
 def _mm_1d_config(device, m, k, n, fused_activation=None):
@@ -169,11 +294,43 @@ def _mm_1d_config(device, m, k, n, fused_activation=None):
             fused_activation=fused_activation,
             mcast_in0=True,
         )
-    # PREFILL (M = seq len): compute-bound. A 2D-multicast config (split BOTH M and N across the full
-    # grid) is far faster than the 1D full-grid layout at realistic prompt lengths — a sweep at M=416
-    # measured 23-63% per matmul (c_attn -31%, c_proj -50%, mlp_c_fc -23%, mlp_c_proj -63%),
-    # output-neutral (PCC identical). The old 1D layout under-parallelized the M dimension.
-    ibw = next(b for b in (4, 2, 1) if kt % b == 0)  # K-block (tiles); divides Kt in {32, 128}
+    # PREFILL (M = seq len). When Mt is small, a 2D mcast only activates Mt rows of the grid
+    # (e.g. Mt=2 -> 24 cores on c_attn) and leaves most of the chip idle. Prefer 1D whenever Mt
+    # cannot fill the grid Y; keep the prior full-grid 2D when it can (long prompts, M~416).
+    #
+    # GELU-aware aggressive sweep at M=64 (1D/2D interleaved + width/height/block-sharded):
+    #   c_attn     64x1024x3072: max-N + ibw=8 (96c) — prior sweep
+    #   attn_c_proj 64x1024x1024: max-N + ibw=8 (32c)
+    #   mlp_c_fc   64x1024x4096 + fused GELU: 64c / pcn=2 / ibw=8 / osw=2 (~26.6 us). A no-GELU
+    #     sweep's 32c/pcn=4/ibw=4 winner is a trap — with fused GELU it regresses to ~32.5-33 us.
+    #     Sharded paths were slower or rejected.
+    #   mlp_c_proj 64x4096x1024: interleaved max-N + ibw=8 is ~27.6 us; the prefill path in
+    #     ``_mlp`` instead width-shards + ITS onto 16 cores (~24.9 + 1.2 ITS = ~26.1 us net).
+    ibw = next(b for b in (8, 4, 2, 1) if kt % b == 0)  # K-block (tiles); Kt in {32, 128}
+    if mt < gy:
+        # Maximize cores along N: smallest pcn whose ceil(Nt/pcn) rectangle fits the device grid.
+        cx = cy = pcn = None
+        for trial_pcn in (1, 2, 3, 4, 6, 8, 12, 16):
+            ncols = math.ceil(nt / trial_pcn)
+            placed = _fit_core_grid(ncols, gx, gy)
+            if placed is None:
+                continue
+            cx, cy = placed
+            pcn = math.ceil(nt / (cx * cy))
+            break
+        if cx is not None:
+            osw = next(w for w in (4, 2, 1) if pcn % w == 0)
+            return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=(cx, cy),
+                in0_block_w=ibw,
+                out_subblock_h=1,
+                out_subblock_w=osw,
+                per_core_M=mt,
+                per_core_N=pcn,
+                fuse_batch=True,
+                fused_activation=fused_activation,
+                mcast_in0=True,
+            )
     pcm = max(1, math.ceil(mt / gy))
     pcn = max(1, math.ceil(nt / gx))
     osw = next(w for w in (4, 2, 1) if pcn % w == 0)  # out_subblock_w divides per_core_N, <=4
@@ -228,11 +385,12 @@ class TtXttsGptBlock(LightweightModule):
 
     def _qkv(self, x):  # [b, s, hidden] -> q, k, v each [b, heads, s, head_dim]
         # Split the [b, s, 3*hidden] c_attn output (GPT-2 [Q|K|V] block layout) into per-head Q, K, V.
-        # ttnn.experimental.nlp_create_qkv_heads is measurably faster than the transformer-namespace
-        # split_query_key_value_and_split_heads wrapper (~43 vs ~63 us/call at decode shape, identical
-        # output) — it wants a 4D [b, 1, s, 3*hidden] input, so add the leading singleton dim (a
-        # metadata reshape). transpose_k_heads=False keeps K as [b, heads, s, head_dim] (SDPA + the
-        # decode KV cache expect that layout, not K^T).
+        # Interleaved nlp_create_qkv_heads parallelizes only over Mt (= ceil(S/32)), so at the demo
+        # prompt (S=64) it uses 2 cores — there is no core-count knob on this op. The sharded
+        # factory can use 16 cores but needs width-sharded input + S<=32 per call, which forces
+        # Slice/ITS/STI/Concat around it; we keep the single-op path instead. reshape to 4D
+        # [b,1,s,3H] is metadata for the op. transpose_k_heads=False keeps K as
+        # [b, heads, s, head_dim] (SDPA + decode KV cache expect that layout, not K^T).
         qkv = ttnn.linear(
             x,
             self.attn_c_attn_weight,
@@ -242,25 +400,65 @@ class TtXttsGptBlock(LightweightModule):
         )
         b, s, three_h = qkv.shape
         qkv = ttnn.reshape(qkv, (b, 1, s, three_h))
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads(qkv, num_heads=NUM_HEADS, transpose_k_heads=False)
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            qkv, num_heads=NUM_HEADS, transpose_k_heads=False, memory_config=L1
+        )
         ttnn.deallocate(qkv)
         return q, k, v
 
-    def _attn_out(self, attn):  # [b, heads, s, head_dim] -> [b, s, hidden]
+    def _attn_out(self, attn, shard_out=False):
+        """``[b, heads, s, head_dim] -> [b, s, hidden]``. Prefill ``shard_out=True`` writes the
+        projection onto the prefill-LN width-sharded layout so the attention residual add can feed
+        ``ln_2`` without an ITS. The matmul program_config must use that same core grid —
+        otherwise ttnn overrides the output shard spec and a Reshard sneaks back in."""
         out = ttnn.transformer.concatenate_heads(attn, memory_config=L1)  # fused permute + reshape
         ttnn.deallocate(attn)
+        m, k, n = out.shape[-2], out.shape[-1], self.attn_c_proj_weight.shape[-1]
+        if shard_out:
+            grid = self.device.compute_with_storage_grid_size()
+            mt = math.ceil(m / 32)
+            if mt < int(grid.y):
+                mem, _ = _prefill_ln_cfg(self.device, mt)
+                nc = _PREFILL_LN_MAX_CORES
+                placed = _fit_core_grid(nc, int(grid.x), int(grid.y))
+                gx, gy = placed
+                nt = math.ceil(n / 32)
+                pcn = math.ceil(nt / (gx * gy))
+                kt = math.ceil(k / 32)
+                ibw = next(b for b in (8, 4, 2, 1) if kt % b == 0)
+                osw = next(w for w in (4, 2, 1) if pcn % w == 0)
+                pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=(gx, gy),
+                    in0_block_w=ibw,
+                    out_subblock_h=1,
+                    out_subblock_w=osw,
+                    per_core_M=mt,
+                    per_core_N=pcn,
+                    fuse_batch=True,
+                    fused_activation=None,
+                    mcast_in0=True,
+                )
+                proj = ttnn.linear(
+                    out, self.attn_c_proj_weight, bias=self.attn_c_proj_bias, program_config=pc, memory_config=mem
+                )
+                ttnn.deallocate(out)
+                return proj
         proj = ttnn.linear(
             out,
             self.attn_c_proj_weight,
             bias=self.attn_c_proj_bias,
-            program_config=_mm_1d_config(self.device, out.shape[-2], out.shape[-1], self.attn_c_proj_weight.shape[-1]),
+            program_config=_mm_1d_config(self.device, m, k, n),
             memory_config=L1,
         )
         ttnn.deallocate(out)
         return proj
 
-    def _mlp(self, x):
-        """c_fc (+ GELU fused into the matmul epilogue) -> c_proj. Consumes ``x``."""
+    def _mlp(self, x, decode=False):
+        """c_fc (+ GELU fused into the matmul epilogue) -> c_proj. Consumes ``x``.
+
+        Prefill ``c_proj`` width-shards the 4096-wide activation (ITS + 16-core 1D mcast) and
+        emits the hidden activation already width-sharded on the prefill-LN layout so the
+        residual add can skip the next LN's ITS. Decode stays interleaved (``_mm_1d_config``)."""
         # c_fc fuses BOTH bias and GELU into the matmul epilogue via the program_config's
         # fused_activation. (GELU, False) == the old activation="gelu" (string "gelu" maps to
         # UnaryOpType.GELU with param False), so the math is unchanged (validated by PCC).
@@ -278,6 +476,28 @@ class TtXttsGptBlock(LightweightModule):
             memory_config=L1,
         )
         ttnn.deallocate(x)
+        if decode:
+            out = ttnn.linear(
+                h,
+                self.mlp_c_proj_weight,
+                bias=self.mlp_c_proj_bias,
+                program_config=_mm_1d_config(self.device, h.shape[-2], h.shape[-1], self.mlp_c_proj_weight.shape[-1]),
+                memory_config=L1,
+            )
+            ttnn.deallocate(h)
+            return out
+        # Prefill: only worth it while Mt still uses the 1D path (same regime as _mm_1d_config).
+        grid = self.device.compute_with_storage_grid_size()
+        mt = math.ceil(h.shape[-2] / 32)
+        if mt < int(grid.y):
+            in_mc, out_mc, pc = _prefill_mlp_cproj_cfg(self.device, h.shape[-2])
+            hs = ttnn.to_memory_config(h, in_mc)
+            ttnn.deallocate(h)
+            out = ttnn.linear(
+                hs, self.mlp_c_proj_weight, bias=self.mlp_c_proj_bias, program_config=pc, memory_config=out_mc
+            )
+            ttnn.deallocate(hs)
+            return out
         out = ttnn.linear(
             h,
             self.mlp_c_proj_weight,
@@ -292,18 +512,23 @@ class TtXttsGptBlock(LightweightModule):
         """DECODE layer-norm via the shared width-sharded kernel (``sharded_decode_ln``). Consumes ``x``."""
         return sharded_decode_ln(x, weight, bias, self.device)
 
-    def _residual_ffn(self, x, sharded=False):
+    def _residual_ffn(self, x, decode=False):
         """Shared post-attention half: ``x + mlp(ln_2(x))``. Consumes and replaces ``x``.
-        ``sharded`` routes ln_2 through the width-sharded decode kernel (see ``_ln``)."""
+        ``decode=True`` routes ln_2 through the width-sharded decode kernel (8 cores, M=1);
+        prefill uses the max-core width-sharded prefill kernel (see ``sharded_prefill_ln``).
+
+        Prefill: mlp ``c_proj`` returns width-sharded hidden; the residual add keeps that layout
+        (interleaved ``x`` + sharded ``m`` -> sharded) so the next LN skips its ITS."""
         h = (
             self._ln(x, self.ln_2_weight, self.ln_2_bias)
-            if sharded
-            else ttnn.layer_norm(
-                x, weight=self.ln_2_weight, bias=self.ln_2_bias, epsilon=LAYER_NORM_EPS, memory_config=L1
-            )
+            if decode
+            else sharded_prefill_ln(x, self.ln_2_weight, self.ln_2_bias, self.device)
         )
-        m = self._mlp(h)  # consumes h
-        y = ttnn.add(x, m, memory_config=L1)
+        m = self._mlp(h, decode=decode)  # consumes h
+        if decode or not m.is_sharded():
+            y = ttnn.add(x, m, memory_config=L1)
+        else:
+            y = ttnn.add(x, m, memory_config=m.memory_config())
         ttnn.deallocate(x)
         ttnn.deallocate(m)
         return y
@@ -315,13 +540,13 @@ class TtXttsGptBlock(LightweightModule):
         ``[b, heads, seq, head_dim]``) used to seed the decode KV cache. K/V are kept
         (returned for the cache); every other intermediate is deallocated. Also serves the
         full teacher-forced pass (callers that want only the hidden state take ``[0]``)."""
-        h = ttnn.layer_norm(x, weight=self.ln_1_weight, bias=self.ln_1_bias, epsilon=LAYER_NORM_EPS, memory_config=L1)
+        h = sharded_prefill_ln(x, self.ln_1_weight, self.ln_1_bias, self.device)
         q, k, v = self._qkv(h)
         ttnn.deallocate(h)
         attn = ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=True, memory_config=L1)
         ttnn.deallocate(q)  # k, v kept for the cache
-        ao = self._attn_out(attn)
-        xa = ttnn.add(x, ao, memory_config=L1)
+        ao = self._attn_out(attn, shard_out=True)  # LN-layout WS so ln_2 skips ITS
+        xa = ttnn.add(x, ao, memory_config=ao.memory_config() if ao.is_sharded() else L1)
         ttnn.deallocate(x)
         ttnn.deallocate(ao)
         return self._residual_ffn(xa), k, v
@@ -363,4 +588,4 @@ class TtXttsGptBlock(LightweightModule):
         xa = ttnn.add(x, ao, memory_config=L1)
         ttnn.deallocate(x)
         ttnn.deallocate(ao)
-        return self._residual_ffn(xa, sharded=True)  # decode: width-sharded ln_2
+        return self._residual_ffn(xa, decode=True)  # decode: width-sharded ln_2

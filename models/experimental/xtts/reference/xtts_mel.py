@@ -15,15 +15,16 @@ filterbank ``[257, 64]``. Output is the linear (power) mel ``[B, 64, T]``; the l
 import torch
 import torch.nn.functional as F
 
-SAMPLE_RATE = 16000
-N_FFT = 512
-HOP_LENGTH = 160
-WIN_LENGTH = 400
-N_MELS = 64
-POWER = 2.0
-PREEMPH = 0.97
-
-_PREFIX = "hifigan_decoder.speaker_encoder.torch_spec."
+from models.experimental.xtts.config import (  # noqa: F401 — re-exported for callers
+    SPK_FRONTEND_PREFIX as _PREFIX,
+    SPK_HOP_LENGTH as HOP_LENGTH,
+    SPK_N_FFT as N_FFT,
+    SPK_N_MELS as N_MELS,
+    SPK_POWER as POWER,
+    SPK_PREEMPH as PREEMPH,
+    SPK_SAMPLE_RATE as SAMPLE_RATE,
+    SPK_WIN_LENGTH as WIN_LENGTH,
+)
 
 
 class MelFrontend(torch.nn.Module):

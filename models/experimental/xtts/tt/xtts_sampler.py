@@ -28,7 +28,7 @@ the same one-int-per-step read greedy already needs (``pick_dev`` keeps even tha
 import torch
 import ttnn
 
-NEG_INF = -1e30
+from models.experimental.xtts.config import NEG_INF  # noqa: F401 — re-exported for callers
 
 
 class TtSampler:

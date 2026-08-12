@@ -49,6 +49,12 @@ import torch
 from loguru import logger
 from transformers.cache_utils import DynamicCache
 
+from models.experimental.xtts.config import (
+    COQUI_CLIP_RE,
+    REFERENCE_DEMO,
+    SENTENCE_FINAL_PUNCT_RE,
+    SENTENCE_SPLIT_RE,
+)
 from models.experimental.xtts.reference.xtts_conditioning import (
     GPT_COND_CHUNK_SEC,
     GPT_COND_LEN_SEC,
@@ -58,21 +64,19 @@ from models.experimental.xtts.reference.xtts_conditioning import (
     load_reference_audio,
     wav_to_mel,
 )
-from models.experimental.xtts.reference.xtts_gpt_block import MAX_TEXT_POS, load_xtts_state_dict
+from models.experimental.xtts.reference.xtts_gpt_block import load_xtts_state_dict
 from models.experimental.xtts.reference.xtts_gpt_generate import START_AUDIO_TOKEN, STOP_AUDIO_TOKEN, wrap_text_ids
 from models.experimental.xtts.reference.xtts_hifi_decoder import OUTPUT_SAMPLE_RATE
 from models.experimental.xtts.reference.xtts_inference import XttsReference
 from models.experimental.xtts.reference.xtts_mel import SAMPLE_RATE as SPK_SR
 from models.experimental.xtts.reference.xtts_text_embedding import preprocess_text
 
-COQUI_CLIP_RE = re.compile(r"^LJ\d{3}-\d{4}\.wav$")  # coqui-ai/TTS tests/data/ljspeech/wavs
+_COQUI_CLIP_RE = re.compile(COQUI_CLIP_RE)  # coqui-ai/TTS tests/data/ljspeech/wavs
 
-# Single-pass budgets. Unlike the device demo these are NOT L1 limits — on CPU the only walls are
-# the checkpoint's learned position tables: text_pos_embedding (404 rows) and mel_pos_embedding
-# (608 rows, i.e. gpt_max_audio_tokens=605 codes). Both are left with headroom.
-MAX_TEXT_IDS = MAX_TEXT_POS - 52  # 352 wrapped text ids
-MAX_PASS_CODES = 560  # below the 605-code mel budget, with margin for sampler overshoot
-CODES_PER_ID = 156 / 71.0  # measured: 71 text ids -> 156 audio codes
+# Single-pass budgets and every other default come from config.REFERENCE_DEMO.
+MAX_TEXT_IDS = REFERENCE_DEMO.max_text_ids
+MAX_PASS_CODES = REFERENCE_DEMO.max_pass_codes
+CODES_PER_ID = REFERENCE_DEMO.codes_per_id
 
 
 def _load_audio_22k(ref_audio, max_seconds):
@@ -92,7 +96,7 @@ def _load_audio_22k(ref_audio, max_seconds):
         audio = audio[: MEL_SR * max_seconds]
         return torch.from_numpy(audio.astype("float32")).unsqueeze(0)
     clips = ref_audio.split("+")
-    if all(COQUI_CLIP_RE.match(c) for c in clips):
+    if all(_COQUI_CLIP_RE.match(c) for c in clips):
         return load_coqui_test_audio(samples=clips, max_seconds=max_seconds)
     return load_reference_audio(sample=ref_audio, max_seconds=max_seconds)
 
@@ -106,13 +110,13 @@ def _split_into_chunks(text, lang):
     """
 
     def ids_of(t):
-        return preprocess_text(re.sub(r"[.!?]+\s*$", "", t), lang=lang).shape[-1]
+        return preprocess_text(re.sub(SENTENCE_FINAL_PUNCT_RE, "", t), lang=lang).shape[-1]
 
     whole = text.strip()
     if ids_of(whole) <= MAX_TEXT_IDS and ids_of(whole) * CODES_PER_ID <= MAX_PASS_CODES:
         return [whole]
 
-    parts = [p.strip() for p in re.split(r"(?<=[.!?])\s+", whole) if p.strip()]
+    parts = [p.strip() for p in re.split(SENTENCE_SPLIT_RE, whole) if p.strip()]
     for p in parts:
         if ids_of(p) > MAX_TEXT_IDS or ids_of(p) * CODES_PER_ID > MAX_PASS_CODES:
             logger.warning(
@@ -134,15 +138,15 @@ def _split_into_chunks(text, lang):
     return chunks
 
 
-def _postprocess(wav_np):
+def _postprocess(wav_np, cfg=REFERENCE_DEMO.audio_post):
     """Fix the abrupt ("crimped") onset: short raised-cosine fade in/out + leading/trailing
     silence (the vocoder starts at the first content code with no natural lead-in)."""
-    fade_n = min(int(0.015 * OUTPUT_SAMPLE_RATE), wav_np.shape[0] // 2)  # ~15 ms
+    fade_n = min(int(cfg.fade_seconds * OUTPUT_SAMPLE_RATE), wav_np.shape[0] // 2)
     if fade_n > 0:
         ramp = 0.5 * (1.0 - np.cos(np.linspace(0.0, np.pi, fade_n, dtype=wav_np.dtype)))
         wav_np[:fade_n] *= ramp
         wav_np[-fade_n:] *= ramp[::-1]
-    pad = np.zeros(int(0.06 * OUTPUT_SAMPLE_RATE), dtype=wav_np.dtype)  # ~60 ms lead-in/out
+    pad = np.zeros(int(cfg.pad_seconds * OUTPUT_SAMPLE_RATE), dtype=wav_np.dtype)
     return np.concatenate([pad, wav_np, pad])
 
 
@@ -338,55 +342,51 @@ def synthesize(reference, wrapped, cond_latents, g, args):
 
 def main():
     ap = argparse.ArgumentParser(description="XTTS-v2 CPU reference text-to-speech demo")
-    ap.add_argument(
-        "--text",
-        default="Voice synthesis has come a long way, and modern systems can already generate natural sounding speech with remarkable accuracy. Hey how are you doing?.",
-    )
+    cfg, gen = REFERENCE_DEMO, REFERENCE_DEMO.generation
+    ap.add_argument("--text", default=cfg.text)
     ap.add_argument(
         "--ref-audio",
-        # DOWNLOADABLE by default (cached under torch.hub), so the demo runs on a fresh checkout with
-        # no local audio: four single-speaker coqui-ai/TTS LJSpeech clips joined to 32.6 s, clipped to
-        # gpt_cond_len (30 s) = 8 conditioning windows. Same default as the device demo, so the two
-        # are A/B-comparable. The single HF samples (en_sample.wav) are ~3 s, i.e. ONE window.
-        default="LJ001-0001.wav+LJ001-0003.wav+LJ001-0004.wav+LJ001-0005.wav",
+        default=cfg.ref_audio,
         help="voice to clone: local WAV path, coqui-ai/TTS test clip name (LJ001-0001.wav, or "
         "'LJ001-0001.wav+LJ001-0003.wav+...' to concatenate clips into a longer reference), "
         "or HF sample name (en_sample.wav).",
     )
-    ap.add_argument("--output", default="generated/xtts_reference_demo/xtts_reference_demo.wav")
-    ap.add_argument("--lang", default="en")
-    ap.add_argument("--max-tokens", type=int, default=400, help="cap on generated audio codes (STOP ends it earlier)")
+    ap.add_argument("--output", default=cfg.output)
+    ap.add_argument("--lang", default=cfg.language)
+    ap.add_argument(
+        "--max-tokens", type=int, default=gen.max_tokens, help="cap on generated audio codes (STOP ends it earlier)"
+    )
     ap.add_argument(
         "--min-tokens",
         type=int,
-        default=0,
+        default=gen.min_tokens,
         help="STOP-suppression floor in audio codes. 0 (default) = disabled, matches HF. "
         "-1 = auto (~2x the wrapped text length). Raise it if a LONG prompt is only partly spoken.",
     )
-    ap.add_argument("--temperature", type=float, default=0.65, help="0 = greedy/deterministic")
-    ap.add_argument("--top-k", type=int, default=50)
-    ap.add_argument("--top-p", type=float, default=0.85)
-    ap.add_argument("--repetition-penalty", type=float, default=5.0)
-    ap.add_argument("--seed", type=int, default=None, help="torch seed for reproducible sampling")
-    ap.add_argument("--ref-seconds", type=int, default=GPT_COND_LEN_SEC, help="conditioning window (gpt_cond_len)")
+    ap.add_argument("--temperature", type=float, default=gen.temperature, help="0 = greedy/deterministic")
+    ap.add_argument("--top-k", type=int, default=gen.top_k)
+    ap.add_argument("--top-p", type=float, default=gen.top_p)
+    ap.add_argument("--repetition-penalty", type=float, default=gen.repetition_penalty)
+    ap.add_argument("--seed", type=int, default=gen.seed, help="torch seed for reproducible sampling")
+    ap.add_argument("--ref-seconds", type=int, default=cfg.ref_seconds, help="conditioning window (gpt_cond_len)")
     ap.add_argument(
         "--spk-seconds",
         type=int,
-        default=GPT_COND_LEN_SEC,
+        default=cfg.spk_seconds,
         help="speaker-embedding window. Defaults to the whole reference (coqui max_ref_length); "
         "pass 8 to match the on-device demo, which is capped by L1.",
     )
     ap.add_argument(
         "--threads",
         type=int,
-        default=4,
+        default=cfg.threads,
         help="torch CPU threads for the big-tensor stages (0 = leave torch's default, i.e. one per "
         "core — which oversubscribes and thrashes on a shared host)",
     )
     ap.add_argument(
         "--decode-threads",
         type=int,
-        default=2,
+        default=cfg.decode_threads,
         help="torch CPU threads for the autoregressive loop only. A single-token step is many tiny "
         "GEMMs, so it is launch-bound: fewer threads is much faster (0 = use --threads)",
     )
@@ -431,7 +431,7 @@ def main():
     chunk_texts = _split_into_chunks(args.text, args.lang)
     chunks = [
         (clean, wrap_text_ids(preprocess_text(clean, lang=args.lang)))
-        for clean in (re.sub(r"[.!?]+\s*$", "", ct.strip()) for ct in chunk_texts)
+        for clean in (re.sub(SENTENCE_FINAL_PUNCT_RE, "", ct.strip()) for ct in chunk_texts)
     ]
     if len(chunks) == 1:
         logger.info(f"text fits ONE pass ({chunks[0][1].shape[1]} tokens): {chunks[0][0]!r}")
@@ -443,7 +443,7 @@ def main():
     # STOP-suppression floor. Auto (-1) scales with the longest chunk (~2x its wrapped length),
     # clamped under the code budget; 0 disables it (HF default, right for short prompts).
     longest = max(w.shape[1] for _, w in chunks)
-    floor = int(2.0 * longest) if args.min_tokens < 0 else args.min_tokens
+    floor = int(gen.min_tokens_auto_factor * longest) if args.min_tokens < 0 else args.min_tokens
     args.min_tokens_resolved = max(0, min(floor, args.max_tokens - 1))
     logger.info(f"min audio codes before STOP allowed: {args.min_tokens_resolved} (0 = disabled)")
 
@@ -462,7 +462,7 @@ def main():
     spk_g = reference.decoder_full.speaker_embedding(spk_wav)  # [1, 512, 1]
     t_cond = time.time() - t0
 
-    gap = np.zeros(int(0.12 * OUTPUT_SAMPLE_RATE), dtype="float32")  # ~120 ms between passes
+    gap = np.zeros(int(cfg.audio_post.chunk_gap_seconds * OUTPUT_SAMPLE_RATE), dtype="float32")  # between passes
     pieces, code_parts = [], []
     stages = {"conditioning + speaker": t_cond, "gpt decode": 0.0, "vocoder": 0.0}
     t_gen0 = time.time()

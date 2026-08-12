@@ -28,11 +28,16 @@ from models.common.lightweightmodule import LightweightModule
 from models.experimental.xtts.reference.xtts_gpt_block import (
     HEAD_DIM,
     HIDDEN_SIZE,
-    LAYER_NORM_EPS,
     NUM_HEADS,
     NUM_LAYERS,
 )
-from models.experimental.xtts.tt.xtts_gpt_block import _mm_1d_config, _to_device, _to_device_w8, sharded_decode_ln
+from models.experimental.xtts.tt.xtts_gpt_block import (
+    _mm_1d_config,
+    _to_device,
+    _to_device_w8,
+    sharded_decode_ln,
+    sharded_prefill_ln,
+)
 from models.experimental.xtts.tt.xtts_gpt_stack import TtXttsGptStack
 
 TILE = 32
@@ -130,14 +135,7 @@ class TtXttsGptModel(LightweightModule):
             enc_stripped = ttnn.slice(enc, [0, offset, 0], [enc.shape[0], enc.shape[1], HIDDEN_SIZE])  # strip prompt
             ttnn.deallocate(enc)
             enc = enc_stripped
-        enc_n = ttnn.layer_norm(
-            enc,
-            weight=self.final_norm_weight,
-            bias=self.final_norm_bias,
-            epsilon=LAYER_NORM_EPS,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-        ttnn.deallocate(enc)
+        enc_n = sharded_prefill_ln(enc, self.final_norm_weight, self.final_norm_bias, self.device)
 
         b = enc_n.shape[0]
         text_part = ttnn.slice(enc_n, [0, 0, 0], [b, text_len, HIDDEN_SIZE])

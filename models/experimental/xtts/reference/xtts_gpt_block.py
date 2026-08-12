@@ -27,30 +27,21 @@ from torch import nn
 from transformers.models.gpt2.configuration_gpt2 import GPT2Config
 from transformers.models.gpt2.modeling_gpt2 import GPT2Block
 
-HF_REPO_ID = "coqui/XTTS-v2"
-CHECKPOINT_FILE = "model.pth"
-# Pinned so the PCC/perf numbers in README.md stay reproducible: unpinned downloads follow the
-# repo's default branch, and an upstream re-upload would move them silently. Every download from
-# HF_REPO_ID (checkpoint, vocab.json, samples/*.wav) passes this.
-HF_REVISION = "6c2b0d75eae4b7047358e3b6bd9325f857d43f77"
-
-# GPT-2 backbone hyper-parameters, read from coqui/XTTS-v2 config.json
-# (model_args.gpt_layers / gpt_n_model_channels / gpt_n_heads).
-NUM_LAYERS = 30
-HIDDEN_SIZE = 1024
-NUM_HEADS = 16
-HEAD_DIM = HIDDEN_SIZE // NUM_HEADS  # 64
-FFN_SIZE = 4 * HIDDEN_SIZE  # 4096 (GPT2 n_inner default)
-LAYER_NORM_EPS = 1e-5
-
-# Real sequence-length limits, read off the checkpoint's learned position
-# embeddings (gpt.text_pos_embedding=404, gpt.mel_pos_embedding=608). At inference
-# the GPT runs on the concatenated [text] + [mel] stream, so coqui sizes the GPT-2
-# causal backbone to n_positions = text + mel.
-MAX_TEXT_POS = 404  # gpt_max_text_tokens (402) + 2
-MAX_MEL_POS = 608  # gpt_max_audio_tokens (605) + 3
-MAX_GPT_SEQ_LEN = MAX_TEXT_POS + MAX_MEL_POS  # 1012 — full GPT context
-MAX_POSITIONS = MAX_GPT_SEQ_LEN  # sizes the causal mask; must cover any tested seq_len
+from models.experimental.xtts.config import (  # noqa: F401 — re-exported for callers
+    CHECKPOINT_FILE,
+    FFN_SIZE,
+    HEAD_DIM,
+    HF_REPO_ID,
+    HF_REVISION,
+    HIDDEN_SIZE,
+    LAYER_NORM_EPS,
+    MAX_GPT_SEQ_LEN,
+    MAX_MEL_POS,
+    MAX_POSITIONS,
+    MAX_TEXT_POS,
+    NUM_HEADS,
+    NUM_LAYERS,
+)
 
 
 # ---------------------------------------------------------------------------

@@ -25,7 +25,8 @@ from models.experimental.xtts.reference.xtts_hifi_decoder import (
 )
 from models.experimental.xtts.tt.xtts_hifigan import TtHifiganGenerator
 
-TILE = 32
+from models.experimental.xtts.config import TILE  # noqa: F401 — re-exported for callers
+
 # Tuned resample-matmul config (test_hifi_decoder_matmul_sweep.py, Blackhole): a 2D-multicast
 # config with per_core_N=3 (N=1024 -> gx=11) + M spread over rows, HiFi2, fp32_dest_acc off, and
 # an L1 BLOCK_SHARDED output — 4.80us -> 1.44us on the profiled L=32 shape. That sweep re-confirmed

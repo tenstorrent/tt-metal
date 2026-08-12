@@ -26,13 +26,14 @@ from models.experimental.xtts.reference.xtts_hifigan import build_reference_wave
 from models.experimental.xtts.reference.xtts_mel import build_reference_mel_frontend
 from models.experimental.xtts.reference.xtts_speaker_encoder import build_reference_speaker_encoder
 
-# HifiDecoder hyper-parameters (coqui/XTTS-v2).
-AR_MEL_LENGTH_COMPRESSION = 1024
-OUTPUT_HOP_LENGTH = 256
-INPUT_SAMPLE_RATE = 22050
-OUTPUT_SAMPLE_RATE = 24000
-LATENT_SCALE = AR_MEL_LENGTH_COMPRESSION / OUTPUT_HOP_LENGTH  # 4.0
-SR_SCALE = OUTPUT_SAMPLE_RATE / INPUT_SAMPLE_RATE  # 160/147 ≈ 1.08844
+from models.experimental.xtts.config import (  # noqa: F401 — re-exported for callers
+    AR_MEL_LENGTH_COMPRESSION,
+    INPUT_SAMPLE_RATE,
+    LATENT_SCALE,
+    OUTPUT_HOP_LENGTH,
+    OUTPUT_SAMPLE_RATE,
+    SR_SCALE,
+)
 
 
 def build_linear_interp_matrix(length_in: int, scale_factor: float) -> torch.Tensor:

@@ -135,21 +135,18 @@ import ttnn
 from ttnn.operations.normalization import dram_group_norm_virtual_columns
 
 from models.common.lightweightmodule import LightweightModule
-from models.experimental.xtts.reference.xtts_gpt_block import HIDDEN_SIZE
-from models.experimental.xtts.reference.xtts_conditioning import (
+from models.experimental.xtts.config import (  # noqa: F401 — re-exported for callers
+    ENC_HEAD_DIM,
+    GROUP_NORM_EPS,
+    GROUP_NORM_GROUPS,
+    HIDDEN_SIZE,
     NUM_ATTN_HEADS,
     NUM_LATENTS,
     PERCEIVER_DEPTH,
     PERCEIVER_HEAD_DIM,
     PERCEIVER_HEADS,
+    PERCEIVER_INNER,
 )
-
-# What the reference's ``normalization()`` rule returns at HIDDEN_SIZE channels (its 32/16/8
-# ladder is channel-dependent; every group norm in this path is 1024-wide).
-GROUP_NORM_GROUPS = 32
-GROUP_NORM_EPS = 1e-5
-ENC_HEAD_DIM = HIDDEN_SIZE // NUM_ATTN_HEADS  # 64
-PERCEIVER_INNER = PERCEIVER_HEADS * PERCEIVER_HEAD_DIM  # 512
 
 L1 = ttnn.L1_MEMORY_CONFIG
 

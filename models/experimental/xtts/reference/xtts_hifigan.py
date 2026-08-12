@@ -26,16 +26,17 @@ from torch.nn import Conv1d, ConvTranspose1d
 from torch.nn.utils.parametrizations import weight_norm
 from torch.nn.utils.parametrize import remove_parametrizations
 
-# XTTS-v2 waveform_decoder hyper-parameters (coqui/XTTS-v2 config, model_args).
-DECODER_INPUT_DIM = 1024  # GPT latent dim fed to conv_pre
-UPSAMPLE_INITIAL_CHANNEL = 512
-UPSAMPLE_RATES = [8, 8, 2, 2]  # product = 256 = output_hop_length
-UPSAMPLE_KERNEL_SIZES = [16, 16, 4, 4]
-RESBLOCK_KERNEL_SIZES = [3, 7, 11]
-RESBLOCK_DILATION_SIZES = [[1, 3, 5], [1, 3, 5], [1, 3, 5]]
-COND_CHANNELS = 512  # d_vector_dim (speaker embedding)
-OUT_CHANNELS = 1
-LRELU_SLOPE = 0.1
+from models.experimental.xtts.config import (  # noqa: F401 — re-exported for callers
+    COND_CHANNELS,
+    DECODER_INPUT_DIM,
+    LRELU_SLOPE,
+    OUT_CHANNELS,
+    RESBLOCK_DILATION_SIZES,
+    RESBLOCK_KERNEL_SIZES,
+    UPSAMPLE_INITIAL_CHANNEL,
+    UPSAMPLE_KERNEL_SIZES,
+    UPSAMPLE_RATES,
+)
 
 
 def get_padding(k: int, d: int) -> int:

@@ -24,7 +24,7 @@ from torch import nn
 from models.experimental.xtts.reference.xtts_gpt_block import HF_REPO_ID, HF_REVISION, HIDDEN_SIZE, MAX_TEXT_POS
 from models.experimental.xtts.reference.xtts_gpt_model import NUM_TEXT_TOKENS
 
-VOCAB_FILE = "vocab.json"  # XTTS-v2 BPE tokenizer, alongside model.pth in the HF repo
+from models.experimental.xtts.config import DEFAULT_LANGUAGE, VOCAB_FILE  # noqa: F401 — re-exported
 
 
 @functools.lru_cache(maxsize=1)
@@ -41,7 +41,7 @@ def _load_tokenizer():
     return Tokenizer.from_file(hf_hub_download(repo_id=HF_REPO_ID, filename=VOCAB_FILE, revision=HF_REVISION))
 
 
-def preprocess_text(text, lang="en"):
+def preprocess_text(text, lang=DEFAULT_LANGUAGE):
     """XTTS text preprocessing: prepend the ``[lang]`` tag, convert spaces to the explicit
     ``[SPACE]`` token, then BPE-tokenize — matching coqui ``VoiceBpeTokenizer.encode``.
 

@@ -189,7 +189,8 @@ PCC tests compare against.
 models/experimental/xtts/
 ├── README.md
 ├── demo/
-│   └── xtts_demo.py              # CLI: text + reference audio -> WAV (traced by default)
+│   ├── xtts_demo.py              # CLI: text + reference audio -> WAV (traced by default)
+│   └── xtts_reference_demo.py    # same CLI, pure-PyTorch reference, CPU only (no ttnn/device)
 ├── eval/
 │   ├── __init__.py
 │   └── xtts_eval.py               # objective TTS metrics: CER (Whisper-large-v3), UTMOS, SECS (ECAPA2)
@@ -403,6 +404,45 @@ circular-buffer allocation collision, not a clean size limit).
 
 The demo logs a Coqui/HF-style perf summary per take (wall time, RTF, time-to-first-chunk); see
 [Performance](#performance) for what a real run measured.
+
+### CPU reference demo — `demo/xtts_reference_demo.py`
+
+The host-only twin of the demo above: the same pipeline through the pure-PyTorch modules in
+`reference/`, with no `ttnn` import and no device opened. Use it as the A/B ground truth for a
+device run, or to hear XTTS-v2 on a machine with no accelerator attached.
+
+```bash
+export PYTHONPATH=$(pwd)   # no TT_METAL_HOME / ARCH_NAME needed
+
+python models/experimental/xtts/demo/xtts_reference_demo.py            # -> generated/xtts_reference_demo/
+python models/experimental/xtts/demo/xtts_reference_demo.py --temperature 0   # greedy / deterministic
+```
+
+Differences from the device demo, all of them deliberate:
+
+- **Everything is a flag** (`--output`, `--max-tokens`, `--temperature`, `--top-k`, `--top-p`,
+  `--repetition-penalty`, `--seed`, `--lang`, `--ref-seconds`, `--spk-seconds`), since there are no
+  L1 budgets to protect. Defaults match the device demo's tuned recipe except `--max-tokens` (400,
+  as the loop really does stop at STOP instead of replaying a fixed trace) and `--spk-seconds`
+  (the whole reference, coqui's `max_ref_length`; pass `8` to match the device demo's L1 cap).
+- **Single-pass budget** is set by the checkpoint's position tables (404 text / 605 mel), not by
+  L1, so ~560 codes fit one pass and only genuinely long text is split at sentence boundaries.
+- **Decode uses a KV cache** (`generate_cached`), verified to produce identical codes and latents
+  within 4e-5 of `reference.xtts_gpt_generate.greedy_generate`; `--no-kv-cache` runs the naive
+  full-recompute loop instead (~3× slower even at 12 codes).
+- **Sampling mirrors `tt/xtts_sampler.py`** (repetition penalty → temperature → top-k → nucleus
+  over the top-k window → STOP suppression), so both demos shape the same distribution — though
+  token sequences still differ, since the two RNGs do.
+- **Thread counts are split**: a single-token decode step is 120 tiny GEMMs and is launch-bound,
+  so `--decode-threads` (default 2) applies to the AR loop only while `--threads` (default 4)
+  covers the conditioning encoder and vocoder. Handing the loop all 16 cores of the dev host
+  measured **1013 ms/code**, versus **78 ms** at 2 threads.
+
+Measured on the 16-core dev host (default text, 89 wrapped text tokens → 181 codes → 8.5 s of
+audio; Whisper-base.en CER **0.000**): conditioning + speaker 4.4 s, GPT decode 19.2 s
+(106 ms/code), vocoder 7.1 s → **26.4 s wall, RTF 3.09**, 36.6 s end-to-end including the
+5.7 s weight load. The device path is ~20× faster wall-clock (RTF 0.18); this is the readable
+baseline, not a performance target.
 
 ## Test cases
 
