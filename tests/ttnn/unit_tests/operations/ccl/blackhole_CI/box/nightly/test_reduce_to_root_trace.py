@@ -91,7 +91,9 @@ def compute_reference_reduce_to_root(
 @pytest.mark.parametrize(
     "device_params",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 225280}),
+        # The warmup (15 iters) and perf (30 iters) traces are both live at end_trace_capture,
+        # which needs 36864 B per bank; 225280 only budgets 32768 B per bank.
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 524288}),
     ],
     indirect=["device_params"],
     ids=["fabric_1d_linear_trace"],
