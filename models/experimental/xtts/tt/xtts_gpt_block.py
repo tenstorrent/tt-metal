@@ -45,8 +45,6 @@ def _to_device_bias(torch_tensor, device):
 _LN_SHARD_CACHE = {}
 _PREFILL_LN_CACHE = {}
 _PREFILL_MLP_CPROJ_CACHE = {}
-_PREFILL_LN_MAX_CORES = 16  # matches mlp/attn c_proj shard grid (skip post-residual ITS)
-_PREFILL_MLP_CPROJ_CORES = 16
 
 
 def _fit_core_grid(nc, max_x, max_y):
@@ -54,6 +52,12 @@ def _fit_core_grid(nc, max_x, max_y):
         if nc % gx == 0 and nc // gx <= max_y:
             return gx, nc // gx
     return None
+
+
+def _prefill_shard_cores(mt):
+    # 16-core width LN is block_w=2; at short Mt that drops decode-latent PCC (ISL 64).
+    # 8-core (block_w=4) restores it, but FFN shards CB-clash around Mt>=9 — use 16 there.
+    return 8 if mt <= 4 else 16
 
 
 def _decode_ln_cfg(device):
@@ -79,7 +83,7 @@ def _prefill_ln_cfg(device, mt):
     key = (id(device), mt)
     if key not in _PREFILL_LN_CACHE:
         grid = device.compute_with_storage_grid_size()
-        nc = _PREFILL_LN_MAX_CORES
+        nc = _prefill_shard_cores(mt)
         placed = _fit_core_grid(nc, grid.x, grid.y)
         if placed is None:
             for cand in (8, 4, 2, 1):
@@ -103,7 +107,7 @@ def _prefill_ln_cfg(device, mt):
             block_w=bw,
             inplace=False,
         )
-        _PREFILL_LN_CACHE[key] = (mc, pc)
+        _PREFILL_LN_CACHE[key] = (mc, pc, nc, gx, gy)
     return _PREFILL_LN_CACHE[key]
 
 
@@ -119,7 +123,7 @@ def sharded_decode_ln(x, weight, bias, device):
 
 def sharded_prefill_ln(x, weight, bias, device):
     mt = -(-x.shape[-2] // 32)
-    mc, pc = _prefill_ln_cfg(device, mt)
+    mc, pc, _, _, _ = _prefill_ln_cfg(device, mt)
     if x.is_sharded() and x.memory_config() == mc:
         h = ttnn.layer_norm(x, weight=weight, bias=bias, epsilon=LAYER_NORM_EPS, program_config=pc, memory_config=mc)
     else:
@@ -134,16 +138,8 @@ def sharded_prefill_ln(x, weight, bias, device):
 def _prefill_mlp_cproj_cfg(device, m):
     key = (id(device), m)
     if key not in _PREFILL_MLP_CPROJ_CACHE:
-        grid = device.compute_with_storage_grid_size()
-        nc = _PREFILL_MLP_CPROJ_CORES
-        placed = _fit_core_grid(nc, grid.x, grid.y)
-        if placed is None:
-            for cand in (8, 4, 2, 1):
-                placed = _fit_core_grid(cand, grid.x, grid.y)
-                if placed is not None:
-                    nc = cand
-                    break
-        gx, gy = placed
+        mt = math.ceil(m / 32)
+        out_mc, _, nc, gx, gy = _prefill_ln_cfg(device, mt)
         in_mc = ttnn.create_sharded_memory_config(
             shape=(m, FFN_SIZE // nc),
             core_grid=ttnn.CoreGrid(x=gx, y=gy),
@@ -151,8 +147,7 @@ def _prefill_mlp_cproj_cfg(device, m):
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
-        out_mc, _ = _prefill_ln_cfg(device, math.ceil(m / 32))
-        mt, kt, nt = math.ceil(m / 32), FFN_SIZE // 32, HIDDEN_SIZE // 32
+        kt, nt = FFN_SIZE // 32, HIDDEN_SIZE // 32
         pcn = math.ceil(nt / (gx * gy))
         ibw = next(b for b in (8, 4, 2, 1) if kt % b == 0)
         osw = next(w for w in (4, 2, 1) if pcn % w == 0)
@@ -199,8 +194,9 @@ def _mm_1d_config(device, m, k, n, fused_activation=None):
             fused_activation=fused_activation,
             mcast_in0=True,
         )
-    # Prefill: keep ibw=8 with fused GELU (ibw=4 regresses).
-    ibw = next(b for b in (8, 4, 2, 1) if kt % b == 0)
+    # Prefill: ibw=4 matches pre-5b00f99 accumulation; ibw=8 is faster but drops e2e
+    # spectrogram PCC (~0.984 vs ~0.993 on teacher-forced hello-world).
+    ibw = next(b for b in (4, 2, 1) if kt % b == 0)
     if mt < gy:
         cx = cy = pcn = None
         for trial_pcn in (1, 2, 3, 4, 6, 8, 12, 16):
@@ -296,10 +292,7 @@ class TtXttsGptBlock(LightweightModule):
             grid = self.device.compute_with_storage_grid_size()
             mt = math.ceil(m / 32)
             if mt < int(grid.y):
-                mem, _ = _prefill_ln_cfg(self.device, mt)
-                nc = _PREFILL_LN_MAX_CORES
-                placed = _fit_core_grid(nc, int(grid.x), int(grid.y))
-                gx, gy = placed
+                mem, _, _, gx, gy = _prefill_ln_cfg(self.device, mt)
                 nt = math.ceil(n / 32)
                 pcn = math.ceil(nt / (gx * gy))
                 kt = math.ceil(k / 32)
