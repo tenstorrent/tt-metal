@@ -164,3 +164,52 @@ Every later phase re-measures **all** of these, not only the shape it targets:
 number, **334 us**. The multi-core value of the same parameter is wired, correctness-tested
 and measured (44.6 us, 7.49x) — refinement A1 flips one SUPPORTED entry and changes no kernel
 code. The 44.6 us row is the number A1's gate inherits.
+
+---
+
+## [x] Phase 0 — verifier pass (review + golden/registry gate + precision baseline)
+
+- **Date**: 2026-08-12
+- **What was done**: independent verification of the A0 implementation — code review against
+  `op_design.md` and `eval/prompts/tilize.txt` §Rules, registry-conformance and INVALID audit, the
+  golden suite + `eval.verify_supported` gate, a precision baseline, and the refinement queue.
+  Full write-up: `verification_report.md`; queue: `op_requirements.md`.
+- **SUPPORTED at Phase 0** (unchanged by this pass — no drift to fix): dtype=[bfloat16],
+  output_dtype=[bfloat16], use_multicore=[False], double_buffer=[True], shard_api=["none"],
+  out_scheme=["interleaved"], buffer=["dram_to_dram"], rank=[4], pad_mode=["none"],
+  pad_value=["none"], alignment=["tile_aligned"], orientation=["none"], tile_height=[32],
+  in_layout=[ROW_MAJOR], in_tile_height=["none"].
+- **Accuracy achieved**: PCC=1.000000, max_abs_err=0.0, mean_abs_err=0.0, rms_err=0.0,
+  got/true ratio median=1.000000 spread=0.0 — **bit-identical** on all 4 shapes
+  ((1,1,32,32), (1,1,64,128), (1,1,32,512), (1,1,512,512)) via
+  `test_tilize_precision_baseline.py`. Correct for a byte bijection; no precision refinement exists
+  to file, and the scale-bug signature (tight ratio cluster at a non-1.0 constant) is ruled out.
+- **Golden suite at Phase 0**: **1 / 1 reachable cell passing** — `supported_pass=1`,
+  `xfail_expected=379`, `invalid_skipped=580`, and all three loud categories **0**
+  (`supported_fail`, `xpass_drift`, `xfail_wrong_mode`), per `verifier_report.json`. The 946
+  `no_axes_found` rows are the non-registry files in the same directory (external grader,
+  regression, translated, trace); their 216 failures were audited individually and are **all** typed
+  support refusals — zero non-refusal failures, zero hangs.
+- **Issues encountered / fixed in place**:
+  1. The "padding is never implicit" structural check measured a **TILE-layout** (retile-path) input's
+     H against the *requested output* tile height, so a legal retile (`H=16, in_tile_height=16 →
+     tile 32`) raised a bogus `ValueError` instead of the honest `in_layout` support refusal. Gated on
+     `layout != TILE_LAYOUT`. Effect: 5 `test_translated` retile cells moved from hard failure to
+     xfail; the golden directory's hard-failure count went **221 → 216** and non-refusal failures to 0.
+  2. DRY: the default tile height `32` was restated at 7 sites across the op file and the descriptor.
+     Now `DEFAULT_TILE_HEIGHT`, defined once next to `TILE_WIDTH` and imported — Refinement 8 turns
+     exactly this knob.
+  3. `_cb_budget_bytes` probed a non-existent `ttnn.get_device_info` and so **always** used the
+     400 KiB fallback, i.e. the depth-2 "use only if it fits" rule was gated on a magic number. Now
+     queries `ttnn.get_max_worker_l1_unreserved_size()` (1 532 160 B here) × a named 0.5 fraction, with
+     the constant kept as fallback. No behaviour change today (the op spends a constant 128 KiB/core);
+     load-bearing from Refinement 2 onward.
+- **Perf re-measured after the fixes** (same bench, DEVICE KERNEL DURATION): square
+  `[1,1,2048,2048]` **44 153 ns / 380 GB/s / 110 cores**; wide_short `[1,1,32,16384]`
+  **7 227 ns / 290 GB/s / 32 cores** — both within noise of the A0 record, so the three fixes are
+  perf-neutral as intended.
+- **Tests added**: `tests/ttnn/unit_tests/operations/tilize/test_tilize_precision_baseline.py`
+  (4 shapes + a table-emitting test; asserts bit-identity, PCC, abs/RMS error and the got/true ratio
+  spread). No other tests added — the acceptance suite, the debug/blocking-model pins, the golden
+  registry suite and the perf bench already cover the Phase-0 surface; further coverage belongs to
+  the refinements.

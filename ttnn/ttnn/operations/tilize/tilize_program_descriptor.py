@@ -57,6 +57,10 @@ CB_OUTPUT_TILES = 16  # compute -> writer : tiled output pages
 TARGET_READ_BYTES = 1024
 
 TILE_WIDTH = 32  # a tile is ALWAYS 32 wide; only its height varies
+# The tile HEIGHT the op uses when the caller passes no `tile=`. Defined ONCE
+# here and imported by the op file so the taggers, validate(), the entry point
+# and the descriptor can never disagree about what "the default tile" is.
+DEFAULT_TILE_HEIGHT = 32
 
 # --- Lever knobs (the perf-gate counterfactual surface) --------------------
 # Every performance lever this op lands is a NAMED knob here, so its off-arm is
@@ -92,9 +96,13 @@ def resolve_levers(levers=None) -> dict:
 
 
 # Fallback per-core CB budget (bytes) used only when the device cannot be
-# queried for its real CB limit. Depth-2 auto-falls back to depth-1 rather than
-# OOMing (master.md C16 / the ttnn.concat precedent).
+# queried for its real unreserved-L1 size. Depth-2 auto-falls back to depth-1
+# rather than OOMing (master.md C16 / the ttnn.concat precedent).
 _CB_BUDGET_FALLBACK_BYTES = 400 * 1024
+# Share of the per-core unreserved L1 this op is willing to spend on CBs. Not
+# 1.0: on the sharded paths the same L1 also holds the shard buffers, and the
+# output tensor itself when the caller asks for L1 interleaved.
+_CB_BUDGET_L1_FRACTION = 0.5
 
 
 def _round_up(value: int, multiple: int) -> int:
@@ -116,19 +124,20 @@ def wt_block_max(elem_size: int, target_read_bytes: int = TARGET_READ_BYTES) -> 
     return max(2, target_read_bytes // (TILE_WIDTH * elem_size))
 
 
-def _cb_budget_bytes(device) -> int:
+def _cb_budget_bytes() -> int:
     """Per-core L1 bytes this op may spend on CBs.
 
-    Queried from the device when the build exposes a device-info binding; the
-    module constant is the fallback. Only ever used to decide whether depth-2
-    fits (never to size a CB), so a conservative value degrades to depth-1
-    rather than to a wrong CB.
+    Queried from the device (`ttnn.get_max_worker_l1_unreserved_size`, scaled by
+    `_CB_BUDGET_L1_FRACTION`); the module constant is the fallback when the
+    binding is absent. Only ever used to decide whether depth-2 fits (never to
+    size a CB), so a conservative value degrades to depth-1 rather than to a
+    wrong CB.
     """
-    info = getattr(ttnn, "get_device_info", None)
-    if info is not None:
+    unreserved = getattr(ttnn, "get_max_worker_l1_unreserved_size", None)
+    if unreserved is not None:
         try:
-            return int(info(device).cb_limit)
-        except Exception:  # pragma: no cover - device info is best-effort
+            return int(int(unreserved()) * _CB_BUDGET_L1_FRACTION)
+        except Exception:  # pragma: no cover - the query is best-effort
             pass
     return _CB_BUDGET_FALLBACK_BYTES
 
@@ -211,7 +220,7 @@ def create_program_descriptor(
     *,
     use_multicore: bool = True,
     use_double_buffer: bool = True,
-    tile_height: int = 32,
+    tile_height: int = DEFAULT_TILE_HEIGHT,
     levers=None,
 ) -> ttnn.ProgramDescriptor:
     device = input_tensor.device()
@@ -239,7 +248,7 @@ def create_program_descriptor(
 
     # ---------- 2. CB depth knob (a distinct knob from block factor) ----------
     depth2_bytes = 2 * wt_block * (in_tile_bytes + out_tile_bytes)
-    depth2_fits_l1 = depth2_bytes <= _cb_budget_bytes(device)
+    depth2_fits_l1 = depth2_bytes <= _cb_budget_bytes()
     want_depth2 = use_double_buffer and bool(lv["double_buffer"])
     cb_depth = 2 if (want_depth2 and depth2_fits_l1) else 1
     cb_pages = cb_depth * wt_block  # >= wt_block >= wt_tail: no reader deadlock

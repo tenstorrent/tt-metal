@@ -23,7 +23,11 @@ from __future__ import annotations
 import ttnn
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
-from .tilize_program_descriptor import TILE_WIDTH, create_program_descriptor
+from .tilize_program_descriptor import (
+    DEFAULT_TILE_HEIGHT,
+    TILE_WIDTH,
+    create_program_descriptor,
+)
 
 # ---------------------------------------------------------------------------
 # scenario helpers — the one place a MemoryConfig is projected onto a spec dict
@@ -168,7 +172,7 @@ def tag_alignment(inputs, axes):
     shape = s["input_shape"]
     if len(shape) < 2:
         return "hw_non_aligned"  # both tile dims are synthesized by the pad
-    tile_h = int(s.get("tile_height", 32))
+    tile_h = int(s.get("tile_height", DEFAULT_TILE_HEIGHT))
     h_aligned = shape[-2] % tile_h == 0
     w_aligned = shape[-1] % TILE_WIDTH == 0
     if h_aligned and w_aligned:
@@ -190,7 +194,7 @@ def tag_orientation(inputs, axes):
 
 
 def tag_tile_height(inputs, axes):
-    return int(inputs[0].get("tile_height", 32))
+    return int(inputs[0].get("tile_height", DEFAULT_TILE_HEIGHT))
 
 
 def tag_in_layout(inputs, axes):
@@ -203,7 +207,7 @@ def tag_in_tile_height(inputs, axes):
     s = inputs[0]
     if s.get("in_layout", ttnn.ROW_MAJOR_LAYOUT) != ttnn.TILE_LAYOUT:
         return "none"
-    return int(s.get("in_tile_height", 32))
+    return int(s.get("in_tile_height", DEFAULT_TILE_HEIGHT))
 
 
 INPUT_TAGGERS = {
@@ -246,7 +250,7 @@ SUPPORTED = {
     "pad_value": ["none"],
     "alignment": ["tile_aligned"],
     "orientation": ["none"],
-    "tile_height": [32],
+    "tile_height": [DEFAULT_TILE_HEIGHT],
     "in_layout": [ttnn.ROW_MAJOR_LAYOUT],
     "in_tile_height": ["none"],
 }
@@ -317,8 +321,14 @@ def _check_structural(input_tensor, scenario, output_padded_shape, pad_value):
             "output_padded_shape, or pass a ROW_MAJOR input."
         )
 
-    # Padding is never implicit.
-    if pad_mode == "none":
+    # Padding is never implicit — a ROW_MAJOR-input contract only. A TILE input
+    # (the retile path) carries its OWN tile geometry and is tile-aligned in it
+    # by construction; measuring it against the REQUESTED output tile height
+    # would turn a legal retile (e.g. H=16 at in_tile_height=16, retiled to 32)
+    # into a bogus "you must ask for padding" ValueError, hiding the honest
+    # refusal (`in_layout` is not in SUPPORTED yet). feature_spec INVALID rule 4
+    # says the same thing: a TILE input can be neither padded nor non-aligned.
+    if pad_mode == "none" and input_tensor.layout != ttnn.TILE_LAYOUT:
         tile_h = scenario["tile_height"]
         if len(shape) < 2:
             raise ValueError(
@@ -366,7 +376,7 @@ def validate(
     contract: SUPPORTED per-axis, then EXCLUSIONS cell-level."""
     out_memory_config = memory_config if memory_config is not None else input_tensor.memory_config()
     out_dtype = dtype if dtype is not None else input_tensor.dtype
-    tile_shape = list(tile.tile_shape) if tile is not None else [32, TILE_WIDTH]
+    tile_shape = list(tile.tile_shape) if tile is not None else [DEFAULT_TILE_HEIGHT, TILE_WIDTH]
     if tile_shape[1] != TILE_WIDTH:
         raise ValueError(f"tilize: tile width must be {TILE_WIDTH}, got {tile_shape[1]}")
     tile_height = int(tile_shape[0])
@@ -461,7 +471,7 @@ def _dispatch(
     device = input_tensor.device()
     out_memory_config = memory_config if memory_config is not None else input_tensor.memory_config()
     out_dtype = dtype if dtype is not None else input_tensor.dtype
-    tile_height = int(list(tile.tile_shape)[0]) if tile is not None else 32
+    tile_height = int(list(tile.tile_shape)[0]) if tile is not None else DEFAULT_TILE_HEIGHT
 
     output_tensor = ttnn.allocate_tensor_on_device(
         ttnn.Shape(list(input_tensor.shape)),
