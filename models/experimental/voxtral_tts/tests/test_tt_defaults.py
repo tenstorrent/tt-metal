@@ -258,20 +258,39 @@ def test_kv_cache_uses_two_writes_not_the_fused_one():
     assert not hasattr(gpt, "_V_SHARD"), "_V_SHARD is back; it has no consumer without the fused op"
 
 
-def test_block2_uses_the_fused_head_split_and_sdpa():
-    """Block 2's interior is 2 ops, not 13. A small op costs 3.4x more here (67.7 us against the
-    N150's ~20), so op count dominates and both 6.31's 9-op hand-rolled split and 6.37's
-    rejection of sdpa reverse -- together worth 6.586 ms/frame. The fused split is accuracy-
-    IDENTICAL; sdpa is 1.57x the velocity error (against the 6.48x that got it rejected on the
-    N150) with the acoustic codes unmoved. STATUS.md 6.45."""
+def test_block2_hand_rolls_the_head_split_and_keeps_sdpa():
+    """Block 2 splits heads with NINE ops and attends with sdpa.
+
+    6.45 shipped the fused `nlp_create_qkv_heads` because a small op cost 67.7 us; 6.65 traced
+    that launch cost away, and traced the fused op is 90.5 us against the hand-roll's 48.6 --
+    -0.775 ms/frame, bit-exact over 45 utterances. sdpa is untouched by that and stays. 6.72.
+
+    THE memory_config IS PART OF THE CHANGE, not decoration: without it the slices and permutes
+    land in DRAM, which measures 58.2 us/split against 48.6 and moves q/k/v out of L1 with no
+    error. 6.31 is the session that got a head-split A/B backwards on exactly this."""
     import inspect
 
-    src = inspect.getsource(flow.TtVoxtralFlow._block)
-    assert "nlp_create_qkv_heads" in src, "hand-rolled 9-op split is back -- 6.45"
-    assert "scaled_dot_product_attention" in src, "hand-rolled attention interior is back -- 6.45"
-    assert "scale=1.0" in src, (
+    blk = inspect.getsource(flow.TtVoxtralFlow._block)
+    assert "_split_heads" in blk, "the head split left _block -- 6.72"
+    assert "scaled_dot_product_attention" in blk, "hand-rolled attention interior is back -- 6.45"
+    assert "scale=1.0" in blk, (
         "sdpa MUST take scale=1.0 -- SCALE is folded into wqkv's q rows ([flow-09]), so the "
         "default applies 1/sqrt(d) twice: 3.8e-01 relative error (6.37)")
+
+    # ast, not a `#`-strip: this function NAMES the op it does not call, in its docstring, and the
+    # elsewhere-idiomatic comment strip leaves docstrings behind. Dropping the docstring node and
+    # unparsing leaves executable code only.
+    import ast, textwrap
+
+    fn = ast.parse(textwrap.dedent(inspect.getsource(flow._split_heads))).body[0]
+    if ast.get_docstring(fn):
+        fn.body = fn.body[1:]
+    code = ast.unparse(fn)
+    assert "nlp_create_qkv_heads" not in code, "the fused split is back -- 6.72 measured it slower"
+    assert code.count("memory_config=_L1") == 2, (
+        "both the slice and the permute must pin _L1: DRAM outputs cost 9.6 us/split and "
+        "silently undo [flow-02]")
+    assert "HANDSPLIT" not in code, "the A/B env switch is back; this branch ships one path (6.72)"
     assert not hasattr(flow, "REP"), "the GQA row fold is back; sdpa handles GQA natively"
 
 

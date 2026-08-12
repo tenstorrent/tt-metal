@@ -28,12 +28,12 @@ was rejected, the numbers behind both, and the traps that cost real time.
 ## Where the remaining headroom is
 
 Read this before hunting for optimizations, because most of the obvious surface is already closed
-and the notes below say why. **On the p150: 27.7 ms/frame, RTF 0.365** (STATUS.md §6.67), split:
+and the notes below say why. **On the p150: 26.9 ms/frame, RTF 0.357** (STATUS.md §6.72), split:
 
 | | ms/frame | state |
 |---|---|---|
 | Block 1, decode | ~15.9 | six linears, bandwidth-bound; a frame uses **49% of the p150's 367 GB/s** (§6.53) |
-| Block 2, 7 Euler steps + head | ~15.0 | five weight matmuls at their weight-read floor |
+| Block 2, 7 Euler steps + head | ~14.2 | five weight matmuls at their weight-read floor |
 | host | ~2 | embed gather, FSQ tail, the copies the trace cannot absorb |
 | Block 3, codec | ~0.2 | 0.4% of wall warm; effectively closed |
 
@@ -978,7 +978,26 @@ the scare measures divergence from the shipped config, not error — §6.25's tr
                 # columns change), which is exactly why the code counts were measured.
 ```
 
-### [flow-10] `_block` — the FUSED head split ships on Blackhole; §6.31 reverses
+### [flow-10] `_split_heads` — the HAND-ROLLED 9-op split ships; §6.45 reverses back
+
+**CURRENT ANSWER: STATUS.md §6.72.** `_split_heads` is nine ops — three `slice` + `reshape` +
+`permute`, all pinned to `_L1` — and NOT `nlp_create_qkv_heads`. Traced, the fused op costs
+**90.5 µs** against the hand-roll's **48.6**, worth **−0.775 ms/frame, BIT-EXACT** (45 utterances,
+0 frame counts moved, every quality metric identical to the last digit).
+
+**Both `memory_config=_L1` kwargs are load-bearing.** At the default the slices and permutes land
+in DRAM and the split costs 58.2 µs instead of 48.6 — and §6.31 is the session that read this
+comparison backwards by timing default-mc slices against a fused op given L1.
+
+**Why §6.45 was right and stopped being right:** it chose the fused op because a small op cost
+67.7 µs of launch, and §6.65's trace removed that cost. §6.68 swept for exactly this class of
+stale rejection and **missed this one**, because it measured `nlp_create_qkv_heads_DECODE` —
+Block 1's op — for a decision about Block 2's. See §6.72.
+
+---
+
+**§6.45 RECORD BELOW — superseded, kept for the accuracy numbers, which still stand: the two forms
+are numerically identical, so this reversal costs nothing.**
 
 **REVERSED. STATUS.md §6.45.** `nlp_create_qkv_heads` replaces the 9-op hand-rolled split, worth
 > **READ THE DENOMINATOR (STATUS.md §6.54).** Every `n/288` in this file is **8 real prompts ×

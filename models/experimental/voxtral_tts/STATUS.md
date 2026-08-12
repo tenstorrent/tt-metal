@@ -52,7 +52,7 @@ Branch: `lserbedzija/voxtral-tts-ttnn_p150` (pushed). All work is under
 | Block 3 — codec decoder on TTNN | **CLOSED**, 242x real-time, see §4 |
 | Block 1 — 3.4B AR backbone on TTNN | **done — OURS** (`tt/ttnn_voxtral_gpt.py`), the default |
 | Block 2 — flow-matching transformer on TTNN | **done** — velocity PCC 0.9999989 |
-| **End-to-end on device** (text ids + voice → 24 kHz wav) | **works** — **27.7 ms/frame, RTF 0.365**, long-form WER **0 of 596**, MOS long-form 4.61 (§6.67) |
+| **End-to-end on device** (text ids + voice → 24 kHz wav) | **works** — **26.9 ms/frame, RTF 0.357**, long-form WER **0 of 894**, MOS long-form 4.61 (§6.72) |
 | Codec **encoder** | **impossible** — weights absent from the public release |
 
 **Block 1 now runs on our own implementation, not `tt_transformers`.** The wrapper is DELETED, not
@@ -525,11 +525,13 @@ verdict, so you can jump rather than read 3,900 lines.
 - **§6.65** — the frame loop is TRACED: −4.244 ms/frame, RTF 0.4931 → 0.4514, every quality metric identical
 - **§6.66** — review pass after §6.65: four defects, three of them on paths no test reaches
 - **§6.67** — the sharded decode norm REVERSES BACK: +5.399 ms/frame, RTF 0.4415 → 0.3647, WER 1 → 0
-- **§6.68** — the stale-rejection sweep comes back EMPTY, and that is the useful result
+- **§6.68** — the stale-rejection sweep comes back EMPTY  ⟵ **its INVENTORY is wrong, see §6.72**
 - **§6.69** — there is no prefill length limit; utterance length is `max_seq_len` and costs DRAM,
   not RTF ⟵ **corrects a "~1024 tokens" claim that appeared in three places and was never measured**
 - **§6.70** — runs on tt-metal main +777 commits with **no source changes** and the same speed;
   acoustic codes 45→40 (kernel rounding, toward the reference)
+- **§6.72** — the head split reverses BACK, −0.775 ms/frame bit-exact. §6.68 counted one op
+  short: its 6.2 µs was Block 1's op, and Block 2's is 90.5
 - **§6.71** — the headline REPRODUCED on a clean tree: 27.664 ms/frame, RTF 0.3656, WER 0 of 894.
   Plus the first decode gate on §6.67's norm, and a listening sampler that exists at last
 
@@ -4355,6 +4357,10 @@ back with §6.67. But the unshard it would eliminate costs **2.7 µs**, so 102 o
 **0.28 ms/frame** — and §6.28 had already measured the DRAM-sharded matmul itself as slower than
 the ordinary one. The prize does not cover the known cost.
 
+**⚠ THE STREAK DID NOT END HERE — §6.72 is the sixth, and this section missed it by measuring
+Block 1's `nlp_create_qkv_heads_decode` for a decision about Block 2's `nlp_create_qkv_heads`.
+The rule below stands; the inventory does not.**
+
 **THE STREAK ENDS HERE, AND THE REASON GENERALISES.** §6.47, §6.49, §6.26, §6.62 and §6.39 all
 reversed because a cost their reasoning depended on had been removed. Every one of those costs was
 **per-op launch**, and §6.65 removed essentially all of it at once. There is no sixth: the
@@ -4508,6 +4514,67 @@ is how `SAMPLER_p150_HEAD.wav` came to sit beside a HEAD that had moved twice un
 three deliberately adversarial prompts (10, 11, 14) as such — it used to name them by voice alone,
 which invites a listener to read §3.2's known model limitation as a port defect.
 
+### 6.72 — the head split reverses BACK: −0.775 ms/frame, bit-exact. §6.68 counted one op short
+
+**There IS a sixth reversal, and §6.68 said there could not be.** It closed the stale-rejection
+sweep with *"the remaining op-count arguments have nothing left to be wrong about, because the ops
+now cost 3-22 µs instead of 38-71"*, and reinforced §6.45 on this line:
+
+> §6.45, the hand-rolled 9-op head split. … It is the opposite: the fused op costs **6.2 µs
+> traced**, and nine ops doing the same work would cost roughly nine times that.
+
+**That 6.2 µs is `nlp_create_qkv_heads_DECODE` — Block 1's op.** §6.45 is about **Block 2**, which
+calls the non-decode `nlp_create_qkv_heads` on a `[2,1,3,6144]` input. `traced_ops.py` only ever
+measured the decode variant; the other one was never measured at all. Measured now
+(`traced_headsplit.py`, §6.67's injection method, base 240.3 µs for one Block 2 attention half):
+
+| arm | traced µs/split | ms/frame ×21 |
+|---|---|---|
+| `nlp_create_qkv_heads` (was shipping) | **90.5** | 1.901 |
+| **hand-rolled 9 ops, outputs L1 ← SHIPS** | **48.6** | **1.020** |
+| hand-rolled 9 ops, DEFAULT memory config | 58.2 | 1.222 |
+
+**90.5, not 6.2 — 14.6× the number the closure rested on.** Nine ops at 48.6 µs beat one at 90.5.
+
+**GATED AND SHIPPED.** Paired `--tier audio`, 3 seeds, 45 utterances, both arms from the SAME tree
+in one session (an env switch, since deleted), decision rule fixed before the data existed —
+ship only on >0.390 ms (§6.63's repeatability floor) with no quality metric worse:
+
+| | fused | hand-rolled | |
+|---|---|---|---|
+| **ms/frame** | 27.703 | **26.928** | **−0.775**, 2.0× the bar |
+| **RTF** | 0.3675 | **0.3567** | −0.0108 |
+| frame counts, all 45 utterances | — | — | **0 differ — BIT-EXACT** |
+| WER / MOS / codes / clicks / every PCC | — | — | **identical to the last digit** |
+
+`--compare` reads **0 metrics worse, 21 within tolerance**. Bit-exactness is what makes this free:
+45 utterances of ~500 autoregressive steps landing on identical termination frames (§6.32's gate at
+full strength) means the codes never move, so WER and MOS *cannot* have.
+
+**THE `memory_config` IS PART OF THE CHANGE.** The hand-rolled arm was first written with its
+slices and permutes at the default, which lands q/k/v in DRAM against the fused op's `_L1` — 58.2
+against 48.6 µs, and 0.2 ms/frame of the win thrown away. That is §6.31's error in mirror image:
+there, default-mc slices were timed against an L1 fused op and read 1.086× faster when they were
+not. **Check `t.memory_config().buffer_type` on both arms before believing any head-split number.**
+`test_block2_hand_rolls_the_head_split_and_keeps_sdpa` now pins both kwargs.
+
+**THE SCREEN WAS RIGHT FOR ONCE, and the reason is worth keeping.** Traced injection predicted
+−0.881 ms/frame; the frame delivered −0.775, i.e. 88% of it. Against §6.62 (−2.124 on the blocks,
+**0** on the frame) and §6.47 (a 48× miss), that is the exception — and it matches §6.20's
+observation about *which* changes transfer: removing a launch is **layout-neutral**, so nothing
+downstream re-optimises around it, while grid and blocking changes alter how every consumer
+receives its data. Screens still do not decide; but a screen that only deletes an op is a better
+predictor than one that moves data.
+
+**WHAT §6.68 GETS RIGHT, AND WHAT IT DOES NOT.** Its *rule* stands, and is now better evidenced:
+a rejection is stale when its premise is a cost someone has since removed. What was wrong is its
+*inventory* — it swept three rejections and cleared all three, but checked §6.45 against an op
+Block 2 does not call. **The lesson is narrower than "re-open everything" and sharper: when a
+section cites a measured cost, check that the measurement is of the op the decision is about.**
+§6.44 (fused KV write) and §6.28 (DRAM-sharded matmul) were re-checked here and both still stand.
+
+**New headline: 26.928 ms/frame, RTF 0.3567**, Block 2 ~14.2 ms.
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.
@@ -4519,9 +4586,9 @@ which invites a listener to read §3.2's known model limitation as a port defect
 
 ## 7. Suggested order when resuming
 
-**Current, §6.67:** **27.7 ms/frame, RTF 0.365** — Block 1 ~15.9 ms, Block 2 ~15.0, host ~2.
-Long-form WER **0 of 596**, MOS long-form 4.61, 132 tests. Real time is 80 ms/frame, so this is
-~2.9x faster than playback. `N_DECODING_STEPS` is 7 and the port reproduces the fp32 reference.
+**Current, §6.72:** **26.9 ms/frame, RTF 0.357** — Block 1 ~15.9 ms, Block 2 ~14.2, host ~2.
+Long-form WER **0 of 894**, MOS long-form 4.61, 132 tests. Real time is 80 ms/frame, so this is
+~3.0x faster than playback. `N_DECODING_STEPS` is 7 and the port reproduces the fp32 reference.
 
 ### Read these four things and you can work
 

@@ -36,14 +36,35 @@ from models.experimental.voxtral_tts.reference.voxtral_common_ref import (
 CFG_ALPHA = 1.2
 N_DECODING_STEPS = 7
 SCALE = FM_HEAD_DIM**-0.5
-# Fused q++k++v width, GQA-aware. (The sub-widths were the hand-rolled split's slice
-# offsets until 6.45 replaced it with the fused op; they now only build _QKV_WIDTH.)
+# Fused q++k++v width, GQA-aware. The sub-widths are _split_heads' slice offsets, and every
+# boundary is a multiple of 32, so all three slices land on tile boundaries -- NOTES.md [flow-10].
 _Q_WIDTH = FM_N_HEADS * FM_HEAD_DIM
 _KV_WIDTH = FM_N_KV_HEADS * FM_HEAD_DIM
 _QKV_WIDTH = _Q_WIDTH + 2 * _KV_WIDTH
 
 # NOTES.md [flow-02] -- EVERY INTERMEDIATE INSIDE `_block` LIVES IN L1, not DRAM...
 _L1 = ttnn.L1_MEMORY_CONFIG
+
+
+def _split_heads(qkv, B):
+    """[1,B*3,6144] -> q [B,32,3,128], k/v [B,8,3,128]. NOTES.md [flow-10].
+
+    Nine ops, not the fused `nlp_create_qkv_heads`: traced, that op costs 90.5 us against this
+    form's 48.6, worth -0.775 ms/frame BIT-EXACT. STATUS.md 6.72.
+    """
+    t = ttnn.reshape(qkv, [B, 1, 3, _QKV_WIDTH])
+
+    def take(lo, hi, nh):
+        # memory_config IS LOAD-BEARING on both. Dropping it lands q/k/v in DRAM, which measures
+        # 58.2 us/split against 48.6 -- and 6.31 is the session that read a head-split A/B wrong
+        # by comparing default-mc slices against a fused op given L1.
+        s = ttnn.slice(t, [0, 0, 0, lo], [B, 1, 3, hi], memory_config=_L1)
+        return ttnn.permute(ttnn.reshape(s, [B, 3, nh, FM_HEAD_DIM]), (0, 2, 1, 3),
+                            memory_config=_L1)
+
+    return (take(0, _Q_WIDTH, FM_N_HEADS),
+            take(_Q_WIDTH, _Q_WIDTH + _KV_WIDTH, FM_N_KV_HEADS),
+            take(_Q_WIDTH + _KV_WIDTH, _QKV_WIDTH, FM_N_KV_HEADS))
 
 # NOTES.md [flow-03] -- Math fidelity for the VELOCITY NETWORK...
 COMPUTE_CONFIG = ttnn.WormholeComputeKernelConfig(
@@ -124,12 +145,10 @@ class TtVoxtralFlow:
         # NOTES.md [flow-23] -- same dims as Block 1, one tile of rows, so its configs apply
         qkv = ttnn.linear(h, w["wqkv"], program_config=DECODE_PRG["wqkv"],
                           compute_kernel_config=COMPUTE_CONFIG)
-        # NOTES.md [flow-10] -- FUSED head split. 6.31 hand-rolled this into 9 ops and won
-        # 1.233 ms/frame on the N150; on Blackhole a small op costs 3.4x more (67.7 us against
-        # ~20), so trading 9 ops for 1 wins 3.836 ms/frame here at IDENTICAL accuracy. 6.45.
-        qh, kh, vh = ttnn.experimental.nlp_create_qkv_heads(
-            ttnn.reshape(qkv, [B, 1, 3, _QKV_WIDTH]), num_heads=FM_N_HEADS,
-            num_kv_heads=FM_N_KV_HEADS, transpose_k_heads=False, memory_config=_L1)
+        # NOTES.md [flow-10] -- HAND-ROLLED 9-op split. 6.45 replaced it with the fused op on the
+        # grounds that ops cost 67.7 us each; 6.65 traced that launch cost away, and traced the
+        # fused op is 90.5 us against nine ops' 48.6. -0.775 ms/frame, bit-exact. 6.72.
+        qh, kh, vh = _split_heads(qkv, B)
         # NOTES.md [flow-11] -- sdpa for the interior: 4 ops -> 1, worth 2.555 ms/frame. It handles
         # GQA natively, so the row fold and REP are unnecessary. scale=1.0 IS MANDATORY -- SCALE is
         # folded into wqkv's q rows ([flow-09]), and the default would apply 1/sqrt(d) twice.
