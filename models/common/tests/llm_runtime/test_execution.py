@@ -649,6 +649,7 @@ def test_prefill_replay_emits_structured_serving_evidence(monkeypatch):
         source_rows = tuple(range(15))
         padded_batch_size = 16
         padded_sequence_length = 128
+        chunks = ("step",)
 
     monkeypatch.setattr(execution_module, "PrefillRequest", Request)
     signature = SimpleNamespace(
@@ -665,7 +666,6 @@ def test_prefill_replay_emits_structured_serving_evidence(monkeypatch):
     persistent = object()
     prefill = _runtime(
         PrefillRuntime,
-        trace_replay_steps=lambda request: ("step",),
         refresh_trace=lambda request, hidden_inputs, workspace, chunk: None,
         finish_trace=lambda request, hidden, workspace: PrefillInvocationResult(hidden, ()),
         assemble=lambda results, **kwargs: next(iter(results))[1],

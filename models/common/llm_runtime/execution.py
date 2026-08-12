@@ -539,7 +539,7 @@ class TracedExecutor:
             if canonical_workspace
             else record.artifact.persistent_inputs.values
         )
-        steps = prefill.trace_replay_steps(prepared) if hasattr(prepared, "request") else (None,)
+        steps = prepared.request.chunks if hasattr(prepared, "request") else (None,)
         hidden = None
         for chunk in steps:
             hidden = self.trace_compiler.replay(

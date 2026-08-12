@@ -22,8 +22,8 @@ from models.common.llm_runtime.prefill.plan import _plan_prefill_requests
 from models.common.llm_runtime.prefill.runtime import (
     InvocationResult,
     PrefillDeviceInputs,
+    PrefillHiddenPersistentInputs,
     PrefillHostInputs,
-    PrefillPersistentInputs,
     PrefillPositionInputs,
     PrefillReplayWorkspace,
     PrefillRuntime,
@@ -266,8 +266,7 @@ def test_trace_finish_reuses_trace_owned_sample_output(monkeypatch):
         sampling_params=SamplingParams(temperature=1.0, top_k=32, top_p=0.08),
         sampling_path="topk",
     )
-    persistent = PrefillPersistentInputs(
-        device_inputs=object(),
+    workspace = PrefillReplayWorkspace(
         position_inputs=PrefillPositionInputs("start", "end", "row"),
         kpt=("k", "p", "temperature"),
         sampled_output="persistent-output",
@@ -288,7 +287,7 @@ def test_trace_finish_reuses_trace_owned_sample_output(monkeypatch):
 
     monkeypatch.setattr(runtime, "_finish_regular_prefill", finish_regular_prefill)
 
-    result = runtime.finish_trace(prepared, "hidden", persistent)
+    result = runtime.finish_trace(prepared, "hidden", workspace)
 
     assert result.value == ("tokens", None)
     assert result.owned == ()
@@ -304,8 +303,10 @@ def test_trace_refresh_skips_unchanged_position_and_sampling_inputs(monkeypatch)
         sampling,
         runtime._sampling_output_rows(prepared),
     )
-    persistent = PrefillPersistentInputs(
+    persistent = PrefillHiddenPersistentInputs(
         device_inputs=PrefillDeviceInputs("tokens", "cos", "sin", "page", None, "positions", None),
+    )
+    workspace = PrefillReplayWorkspace(
         position_inputs=PrefillPositionInputs("start", "end", "row"),
         kpt=("k", "p", "temperature"),
         position_signature=[79],
@@ -334,7 +335,7 @@ def test_trace_refresh_skips_unchanged_position_and_sampling_inputs(monkeypatch)
     monkeypatch.setattr(runtime, "_prepare_position_inputs_host", fail_position_refresh)
     monkeypatch.setattr(runtime, "_refresh_kpt", fail_sampling_refresh)
 
-    runtime.refresh_trace(prepared, persistent)
+    runtime.refresh_trace(prepared, persistent, workspace)
 
     assert copied == [("host-tokens", "tokens"), ("host-page", "page")]
 
@@ -343,8 +344,10 @@ def test_trace_refresh_skips_dynamic_position_inputs_for_static_single_logits(mo
     runtime = _runtime()
     request = _plan(prompt_length=80)[0]
     prepared = SimpleNamespace(request=request, sampling_params=None, sampling_path="logits")
-    persistent = PrefillPersistentInputs(
+    persistent = PrefillHiddenPersistentInputs(
         device_inputs=PrefillDeviceInputs("tokens", "cos", "sin", "page", None, "positions", None),
+    )
+    workspace = PrefillReplayWorkspace(
         position_inputs=PrefillPositionInputs("start", "end", "row"),
         kpt=None,
         position_signature=[0],
@@ -367,7 +370,7 @@ def test_trace_refresh_skips_dynamic_position_inputs_for_static_single_logits(mo
         lambda *args: pytest.fail("position refreshed"),
     )
 
-    runtime.refresh_trace(prepared, persistent)
+    runtime.refresh_trace(prepared, persistent, workspace)
 
     assert copied == [("host-tokens", "tokens"), ("host-page", "page")]
 
@@ -962,11 +965,7 @@ def test_active_15_and_16_share_complete_program_and_trace_signatures(monkeypatc
         "_run_hidden_body",
         lambda request, device_inputs, *, fill_rows=None: fills.append(fill_rows) or "hidden",
     )
-    persistent = PrefillPersistentInputs(
-        device_inputs="device-inputs",
-        position_inputs=PrefillPositionInputs("start", "end", "row"),
-        kpt=None,
-    )
+    persistent = PrefillHiddenPersistentInputs(device_inputs="device-inputs")
     partial_plan = runtime.capture_plan(partial)
     full_plan = runtime.capture_plan(full)
     assert partial_plan.schema_fingerprint == full_plan.schema_fingerprint
@@ -1149,15 +1148,12 @@ def test_fixed_chunk_trace_family_exposes_host_replay_steps_and_dynamic_capture_
     assert prepared.trace_signature is not None
     assert prepared.trace_signature.operation_variant == "chunked"
     assert prepared.trace_signature.padded_sequence_length == 2048
-    assert runtime.trace_replay_steps(prepared) == prepared.request.chunks
-    assert len(runtime.trace_replay_steps(prepared)) == 2
+    assert len(prepared.request.chunks) == 2
     assert len(prepared.program_signatures) == 1
     assert torch.all(prepared.request.page_table >= 0)
 
-    persistent = PrefillPersistentInputs(
-        device_inputs=PrefillDeviceInputs("tokens", "cos", "sin", "page", "chunk-page", "positions", "start"),
-        position_inputs=PrefillPositionInputs("slice-start", "slice-end", "row"),
-        kpt=None,
+    persistent = PrefillHiddenPersistentInputs(
+        device_inputs=PrefillDeviceInputs("tokens", "cos", "sin", "page", "chunk-page", "positions", "start")
     )
     captured = []
     runtime.config.model.prefill_forward = lambda *args, **kwargs: captured.append(kwargs) or "hidden"
@@ -1203,13 +1199,16 @@ def test_chunk_trace_refresh_updates_token_start_tables_rotary_and_preserves_b6_
     )
     released = []
     monkeypatch.setattr(runtime, "_release_or_retain_transient", lambda value: released.append(value) or [])
-    persistent = PrefillPersistentInputs(
-        device_inputs=PrefillDeviceInputs("tokens", "cos", "sin", "page", "chunk-page", "positions", "start"),
+    persistent = PrefillHiddenPersistentInputs(
+        device_inputs=PrefillDeviceInputs("tokens", "cos", "sin", "page", "chunk-page", "positions", "start")
+    )
+    workspace = PrefillReplayWorkspace(
         position_inputs=PrefillPositionInputs("slice-start", "slice-end", "row"),
         kpt=None,
+        position_signature=[32],
     )
 
-    runtime.refresh_trace(prepared, persistent, chunk)
+    runtime.refresh_trace(prepared, persistent, workspace, chunk)
 
     assert host_calls[0][2]["start_pos"] == 4096
     assert host_calls[0][2]["chunk_start_idx"] == 4096
@@ -2422,11 +2421,7 @@ def test_trace_capture_uses_hidden_body_without_eager_sequence(monkeypatch):
         empty_slots=[0],
         start_pos=start_pos,
     )[0]
-    persistent = PrefillPersistentInputs(
-        device_inputs="device-inputs",
-        position_inputs=PrefillPositionInputs("start", "end", "row"),
-        kpt=None,
-    )
+    persistent = PrefillHiddenPersistentInputs(device_inputs="device-inputs")
     seen = []
     monkeypatch.setattr(
         runtime,

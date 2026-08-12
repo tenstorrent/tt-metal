@@ -7,8 +7,9 @@ from models.common.llm_runtime import tensor_resources
 from models.common.llm_runtime.decode import DecodeDeviceInputs, DecodePersistentInputs
 from models.common.llm_runtime.prefill.runtime import (
     PrefillDeviceInputs,
-    PrefillPersistentInputs,
+    PrefillHiddenPersistentInputs,
     PrefillPositionInputs,
+    PrefillReplayWorkspace,
 )
 
 
@@ -30,7 +31,8 @@ def test_owned_runtime_containers_release_aliased_tensors_once(monkeypatch):
         DecodePersistentInputs(decode_inputs, (shared, other, shared)),
         prefill_inputs,
         positions,
-        PrefillPersistentInputs(prefill_inputs, positions, (shared, other, shared), shared),
+        PrefillHiddenPersistentInputs(prefill_inputs),
+        PrefillReplayWorkspace(positions, (shared, other, shared), shared),
     )
 
     assert tensor_resources.best_effort_deallocate_owned_tensors(values) == []

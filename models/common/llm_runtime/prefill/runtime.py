@@ -176,19 +176,6 @@ class PrefillReplayOwnership:
 
 
 @dataclass(frozen=True)
-class PrefillPersistentInputs:
-    device_inputs: PrefillDeviceInputs
-    position_inputs: PrefillPositionInputs
-    kpt: tuple[Any, Any, Any] | None
-    sampled_output: Any | None = None
-    position_signature: list[int] | None = None
-    kpt_signature: list[Any] | None = None
-
-    def owned_tensor_values(self) -> tuple[Any, ...]:
-        return self.device_inputs.model_values(), self.position_inputs.values(), self.kpt, self.sampled_output
-
-
-@dataclass(frozen=True)
 class PrefillHiddenPersistentInputs:
     """Canonical trace-owned model inputs; deliberately sampling-free."""
 
@@ -409,34 +396,12 @@ class PrefillRuntime:
     def refresh_trace(
         self,
         prepared: PreparedPrefill,
-        persistent: PrefillHiddenPersistentInputs | PrefillPersistentInputs,
-        workspace: PrefillReplayWorkspace | None = None,
+        persistent: PrefillHiddenPersistentInputs,
+        workspace: PrefillReplayWorkspace,
         chunk: PrefillChunk | None = None,
     ) -> None:
         """Refresh borrowed persistent inputs for one replay."""
 
-        legacy_chunk_workspace = isinstance(workspace, PrefillChunk) and chunk is None
-        if legacy_chunk_workspace:
-            chunk = workspace
-            workspace = None
-        if workspace is None:
-            if not isinstance(persistent, PrefillPersistentInputs):
-                raise TypeError("workspace is required with canonical hidden persistent inputs")
-            position_signature = persistent.position_signature
-            if legacy_chunk_workspace and position_signature is None:
-                final_chunk = prepared.request.chunks[-1]
-                relative_last = (
-                    prepared.request.last_token_indices[0] - final_chunk.chunk_start_idx
-                ) % final_chunk.chunk_size
-                position_signature = [relative_last]
-            workspace = PrefillReplayWorkspace(
-                position_inputs=persistent.position_inputs,
-                kpt=persistent.kpt,
-                sampled_output=persistent.sampled_output,
-                position_signature=position_signature,
-                kpt_signature=persistent.kpt_signature,
-            )
-            persistent = PrefillHiddenPersistentInputs(persistent.device_inputs)
         request = prepared.request
         if request.uses_chunked_prefill:
             if chunk is None:
@@ -504,18 +469,10 @@ class PrefillRuntime:
         self,
         prepared: PreparedPrefill,
         hidden: Any,
-        workspace: PrefillReplayWorkspace | PrefillPersistentInputs,
+        workspace: PrefillReplayWorkspace,
     ) -> InvocationResult:
         """Post-process a replayed hidden-state tensor into a normal result."""
 
-        if isinstance(workspace, PrefillPersistentInputs):
-            workspace = PrefillReplayWorkspace(
-                position_inputs=workspace.position_inputs,
-                kpt=workspace.kpt,
-                sampled_output=workspace.sampled_output,
-                position_signature=workspace.position_signature,
-                kpt_signature=workspace.kpt_signature,
-            )
         replay_local: list[Any] = []
         output = self._finish_regular_prefill(
             prepared,
@@ -541,13 +498,6 @@ class PrefillRuntime:
             ),
         )
         return InvocationResult(value=output, owned=caller_owned, replay_ownership=ownership)
-
-    def trace_replay_steps(self, prepared: PreparedPrefill) -> tuple[PrefillChunk, ...]:
-        """Return the host-orchestrated replay sequence for one prepared item."""
-
-        if prepared.trace_signature is None:
-            raise ValueError("prepared prefill request has no configured trace family")
-        return prepared.request.chunks
 
     def assemble(
         self,
@@ -1032,25 +982,6 @@ class PrefillRuntime:
             kpt_signature=[kpt_signature],
         )
 
-    def _prepare_persistent_inputs(self, prepared: PreparedPrefill) -> PrefillPersistentInputs:
-        """Compatibility helper returning the former combined persistent view."""
-
-        hidden = self._prepare_hidden_persistent_inputs(prepared)
-        try:
-            workspace = self._prepare_replay_workspace(prepared)
-        except BaseException as primary:
-            failures = self._release_or_retain_transient(hidden)
-            attach_cleanup_failures(primary, failures)
-            raise
-        return PrefillPersistentInputs(
-            device_inputs=hidden.device_inputs,
-            position_inputs=workspace.position_inputs,
-            kpt=workspace.kpt,
-            sampled_output=workspace.sampled_output,
-            position_signature=workspace.position_signature,
-            kpt_signature=workspace.kpt_signature,
-        )
-
     def _refresh_chunk_trace_inputs(
         self,
         prepared: PreparedPrefill,
@@ -1318,33 +1249,6 @@ class PrefillRuntime:
             position_indices=raw_inputs[1],
             chunk_start_idx=raw_inputs[4],
         )
-
-    def _stage_inputs_and_kpt(
-        self,
-        host_inputs: PrefillHostInputs,
-        sampling_params: SamplingParams | None,
-        batch_size: int,
-        *,
-        relative_last: int,
-        sequence_length: int,
-        force_topk: bool,
-    ) -> tuple[PrefillDeviceInputs, PrefillPositionInputs, tuple[Any, Any, Any] | None]:
-        device_inputs = None
-        position_inputs = None
-        kpt = None
-        try:
-            device_inputs = self._stage_device_inputs(host_inputs)
-            position_values = _copy_host_to_device(
-                self._prepare_position_inputs_host(relative_last, sequence_length).values(),
-                mesh_device=self.config.mesh_device,
-            )
-            position_inputs = PrefillPositionInputs(*position_values)
-            kpt = self._make_device_kpt(sampling_params, batch_size, force_topk)
-        except BaseException as primary:
-            failures = self._release_or_retain_transient((device_inputs, position_inputs, kpt))
-            attach_cleanup_failures(primary, failures)
-            raise
-        return device_inputs, position_inputs, kpt
 
     def _sampling_batch_size(self, request: PrefillRequest) -> int:
         if self.config.device_sampling_enabled:

@@ -12,8 +12,9 @@ import ttnn
 from models.common.llm_runtime.decode import DecodeDeviceInputs, DecodePersistentInputs
 from models.common.llm_runtime.prefill.runtime import (
     PrefillDeviceInputs,
-    PrefillPersistentInputs,
+    PrefillHiddenPersistentInputs,
     PrefillPositionInputs,
+    PrefillReplayWorkspace,
 )
 from models.common.llm_runtime.program_compiler import ProgramCompiler
 from models.common.llm_runtime.trace_compiler import InputRefreshPolicy, TraceCapturePlan, TraceCompiler
@@ -422,13 +423,13 @@ def test_cleanup_releases_operation_owned_persistent_dataclasses_once(monkeypatc
     class OwnedTensor:
         pass
 
-    values = [OwnedTensor() for _ in range(19)]
+    values = [OwnedTensor() for _ in range(20)]
     decode = DecodePersistentInputs(
         DecodeDeviceInputs(*values[:4]),
         tuple(values[4:7]),
     )
-    prefill = PrefillPersistentInputs(
-        PrefillDeviceInputs(*values[7:14]),
+    prefill = PrefillHiddenPersistentInputs(PrefillDeviceInputs(*values[7:14]))
+    prefill_workspace = PrefillReplayWorkspace(
         PrefillPositionInputs(*values[14:17]),
         (values[17], values[17], values[17]),
         values[18],
@@ -444,7 +445,15 @@ def test_cleanup_releases_operation_owned_persistent_dataclasses_once(monkeypatc
         TraceCapturePlan(programs[0].key, _Signature("trace", 1), "decode", lambda: decode, lambda _: values[0])
     )
     trace.register_capture_plan(
-        TraceCapturePlan(programs[1].key, _Signature("trace", 2), "prefill", lambda: prefill, lambda _: values[18])
+        TraceCapturePlan(
+            programs[1].key,
+            _Signature("trace", 2),
+            "prefill",
+            lambda: prefill,
+            lambda _: values[19],
+            prepare_workspace=lambda: prefill_workspace,
+            workspace_fingerprint=("prefill-workspace",),
+        )
     )
 
     trace.capture_all()
