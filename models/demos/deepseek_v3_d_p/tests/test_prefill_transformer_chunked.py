@@ -1685,7 +1685,9 @@ def run_chunked_transformer_updated(
 @pytest.mark.parametrize("use_trace", [False, True], ids=["notrace", "traced"])
 @pytest.mark.parametrize("perf_margin", [DEFAULT_PERF_MARGIN], ids=["margin5pct"])
 @pytest.mark.parametrize(
-    "num_iters", [1, 2, 10, 20, 25], ids=["iters1", "two_iters", "ten_iters", "iters20", "iters25"]
+    "num_iters",
+    [1, 2, 10, 20, 25, 600],
+    ids=["iters1", "two_iters", "ten_iters", "iters20", "iters25", "iters600"],
 )
 @pytest.mark.parametrize(
     "n_chunks",
@@ -1784,7 +1786,9 @@ def test_kimi_prefill_transformer_chunked_perf(
 @pytest.mark.parametrize("use_trace", [False, True], ids=["notrace", "traced"])
 @pytest.mark.parametrize("perf_margin", [DEFAULT_PERF_MARGIN], ids=["margin5pct"])
 @pytest.mark.parametrize(
-    "num_iters", [1, 2, 10, 20, 25], ids=["iters1", "two_iters", "ten_iters", "iters20", "iters25"]
+    "num_iters",
+    [1, 2, 10, 20, 25, 600],
+    ids=["iters1", "two_iters", "ten_iters", "iters20", "iters25", "iters600"],
 )
 @pytest.mark.parametrize(
     "n_chunks",
@@ -1875,7 +1879,9 @@ def test_kimi_prefill_transformer_chunked(
 # (DeepSeekV3Config fabric payload, no L1_SMALL routing semaphores). Used to compare DeepSeek vs Kimi
 # chunked-prefill perf at matched ISL (n_chunks x CHUNK) and num_layers.
 @pytest.mark.parametrize(
-    "num_iters", [1, 2, 10, 20, 25], ids=["iters1", "two_iters", "ten_iters", "iters20", "iters25"]
+    "num_iters",
+    [1, 2, 10, 20, 25, 600],
+    ids=["iters1", "two_iters", "ten_iters", "iters20", "iters25", "iters600"],
 )
 @pytest.mark.parametrize(
     "n_chunks",
@@ -1939,7 +1945,9 @@ def test_ds_prefill_transformer_chunked_no_pcc(
 # routing semaphores, exactly like test_glm_prefill_transformer_chunked. glm_5_2 additionally exercises the
 # DSA cross-layer indexer reuse per chunk. Requires the GLM TTNN weight cache (set the variant's cache env).
 @pytest.mark.parametrize(
-    "num_iters", [1, 2, 10, 20, 25], ids=["iters1", "two_iters", "ten_iters", "iters20", "iters25"]
+    "num_iters",
+    [1, 2, 10, 20, 25, 600],
+    ids=["iters1", "two_iters", "ten_iters", "iters20", "iters25", "iters600"],
 )
 @pytest.mark.parametrize(
     "n_chunks",
