@@ -25,8 +25,9 @@
 // compute intrinsic is only ever called from inside a `#if IS_COMPUTE_THREAD`
 // region (in fusion.hpp's Strategy and op guards), and every data-movement
 // intrinsic only from inside a `#if IS_DM_THREAD` region (in unified.hpp's
-// noc_*). So each projection needs to declare only its own half. `compute_init`
-// is the single exception: kernels call it unconditionally.
+// noc_*). So each projection declares only its own half. Two exceptions, both
+// because kernels name them on a shared path: `compute_init` (data movement
+// needs a no-op) and `make_accessor` (compute needs one returning NullAccessor).
 
 #pragma once
 
@@ -133,6 +134,17 @@ inline void sfpu_relu_dst(int src, int out) {
     (void)src;  // == out
     ckernel::relu_tile_init();
     ckernel::relu_tile(static_cast<uint32_t>(out));
+}
+
+// The full TensorAccessor does not compile on a TRISC: it wants NOC_INDEX and
+// redeclares get_common_arg_addr against api/compute/common.h. Compute never
+// dereferences an accessor -- it only carries one through a statement it shares
+// with the data-movement projections -- so a stub is enough.
+struct NullAccessor {};
+
+template <typename Args>
+inline NullAccessor make_accessor(Args, uint32_t) {
+    return NullAccessor{};
 }
 
 // TODO: the FPU pack-side epilogue is not bound to metal yet. Declared without a

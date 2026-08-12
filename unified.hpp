@@ -190,15 +190,12 @@ auto matmul(const ComputeBlock& a, const ComputeBlock& b) {
 // Reads `storage.num_tiles` pages into the buffer, starting at page
 // `block_idx * storage.num_tiles`, then pushes.
 //
-// Takes TensorAccessorArgs plus a base address rather than a constructed
-// accessor: the full accessor does not compile on a TRISC, so it is built here,
-// inside the data-movement region, from args the shared source can name on any
-// projection.
-template <int thread, typename Args>
-Block noc_load(const Storage& storage, Args args, uint32_t base_addr, int block_idx) {
+// The accessor comes from make_accessor(); on the compute projection that is a
+// NullAccessor, since a real one cannot be built on a TRISC.
+template <int thread, typename Accessor>
+Block noc_load(const Storage& storage, const Accessor& acc, int block_idx) {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
-        const auto acc = make_accessor(args, base_addr);
         cb_reserve(storage.cb_id, storage.num_tiles);
         uint32_t l1 = cb_write_addr(storage.cb_id);
         const uint32_t bytes = cb_page_bytes(storage.cb_id);
@@ -211,19 +208,17 @@ Block noc_load(const Storage& storage, Args args, uint32_t base_addr, int block_
         cb_push(storage.cb_id, storage.num_tiles);
     }
 #else
-    (void)args;
-    (void)base_addr;
+    (void)acc;
     (void)block_idx;
 #endif
     return Block(storage);
 }
 
 // Drains a Block to a tensor. Takes the Block by value: this call consumes it.
-template <int thread, typename Args>
-void noc_store(Block block, Args args, uint32_t base_addr, int block_idx) {
+template <int thread, typename Accessor>
+void noc_store(Block block, const Accessor& acc, int block_idx) {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
-        const auto acc = make_accessor(args, base_addr);
         cb_wait(block.cb_id, block.num_tiles);
         uint32_t l1 = cb_read_addr(block.cb_id);
         const uint32_t bytes = cb_page_bytes(block.cb_id);
@@ -237,14 +232,13 @@ void noc_store(Block block, Args args, uint32_t base_addr, int block_idx) {
     }
 #else
     (void)block;
-    (void)args;
-    (void)base_addr;
+    (void)acc;
     (void)block_idx;
 #endif
 }
 
-template <int thread, typename Args>
-Block noc_load_mcast(const Storage& storage, Mcast mcast, Args args, uint32_t base_addr, int block_idx);
+template <int thread, typename Accessor>
+Block noc_load_mcast(const Storage& storage, Mcast mcast, const Accessor& acc, int block_idx);
 
 // ---------------------------------------------------------------------------
 // Core-to-core movement.

@@ -109,31 +109,34 @@ namespace unified {
 // INPUT + INTERMED + OUTPUT: two DRAM loads, an SFPU add into an intermediate,
 // a second add, then a DRAM store.
 void example_eltwise() {
-    FakeArgs t0{0}, t1{1}, t2{2};
+    auto t0 = make_accessor(FakeArgs{0}, 0);
+    auto t1 = make_accessor(FakeArgs{1}, 0);
+    auto t2 = make_accessor(FakeArgs{2}, 0);
     Storage lhs_storage(0, 2);
     Storage rhs_storage(1, 2);
     Storage tmp_storage(2, 2);
     Storage out_storage(3, 2);
 
     for (int i = 0; i < 1; ++i) {
-        ComputeBlock lhs = noc_load<0>(lhs_storage, t0, 0, i);
-        ComputeBlock rhs = noc_load<1>(rhs_storage, t1, 0, i);
+        ComputeBlock lhs = noc_load<0>(lhs_storage, t0, i);
+        ComputeBlock rhs = noc_load<1>(rhs_storage, t1, i);
 
         ComputeBlock tmp = tmp_storage.store(lhs + rhs);
 
         Block result = out_storage.store(tmp + lhs);
-        noc_store<0>(std::move(result), t2, 0, i);
+        noc_store<0>(std::move(result), t2, i);
     }
 }
 
 // A unary chain: out = exp(in). Exercises Un<> and the in-place SFPU path.
 void example_unary() {
-    FakeArgs t0{0}, t2{2};
+    auto t0 = make_accessor(FakeArgs{0}, 0);
+    auto t2 = make_accessor(FakeArgs{2}, 0);
     Storage in_storage(0, 2);
     Storage out_storage(3, 2);
 
-    ComputeBlock x = noc_load<1>(in_storage, t0, 0, 0);
-    noc_store<0>(out_storage.store(x.exp()), t2, 0, 0);
+    ComputeBlock x = noc_load<1>(in_storage, t0, 0);
+    noc_store<0>(out_storage.store(x.exp()), t2, 0);
 }
 
 // NOTE: the two-stage reduction with a core-to-core hop is deferred until
@@ -143,7 +146,9 @@ void example_unary() {
 // The FPU path: matmul with a fused relu epilogue, then the SFPU path consuming
 // its result out of an intermediate Storage.
 void example_matmul_relu() {
-    FakeArgs t0{0}, t1{1}, t2{2};
+    auto t0 = make_accessor(FakeArgs{0}, 0);
+    auto t1 = make_accessor(FakeArgs{1}, 0);
+    auto t2 = make_accessor(FakeArgs{2}, 0);
     Storage a_storage(0, 1);
     Storage b_storage(1, 1);
     Storage mm_storage(2, 1);
@@ -152,14 +157,14 @@ void example_matmul_relu() {
     // out_subblock 2x2 = 4 DST tiles, k-dim 2, 2 inner blocks
     using Geom = MatmulGeometry</*h=*/2, /*w=*/2, /*in0_block_w=*/2, /*num_blocks=*/2>;
 
-    ComputeBlock a = noc_load<0>(a_storage, t0, 0, 0);
-    ComputeBlock b = noc_load<1>(b_storage, t1, 0, 0);
+    ComputeBlock a = noc_load<0>(a_storage, t0, 0);
+    ComputeBlock b = noc_load<1>(b_storage, t1, 0);
 
     // relu folds into the matmul's pack-side epilogue rather than wrapping it
     ComputeBlock mm = mm_storage.store(relu(matmul<Geom>(a, b)));
 
     // ... and the SFPU path picks it up from there
-    noc_store<0>(out_storage.store(mm + a), t2, 0, 0);
+    noc_store<0>(out_storage.store(mm + a), t2, 0);
 }
 
 }  // namespace unified
