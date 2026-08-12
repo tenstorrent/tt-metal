@@ -98,9 +98,9 @@ TEST_F(UnitMeshFixture, MatmulSingleTileBfp8b) {
         program,
         mm_reader_kernel,
         core,
-        {src0_dram_buffer->address(),
+        {(uint32_t)src0_dram_buffer->address(),
          0,
-         src1_dram_buffer->address(),
+         (uint32_t)src1_dram_buffer->address(),
          0,
          1,
          1,
@@ -108,7 +108,7 @@ TEST_F(UnitMeshFixture, MatmulSingleTileBfp8b) {
          1 * single_tile_size,
          1 * single_tile_size});
 
-    SetRuntimeArgs(program, unary_writer_kernel, core, {dst_dram_buffer->address(), 0, num_tiles});
+    SetRuntimeArgs(program, unary_writer_kernel, core, {(uint32_t)dst_dram_buffer->address(), 0, num_tiles});
 
     slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
 

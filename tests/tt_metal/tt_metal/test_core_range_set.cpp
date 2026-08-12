@@ -180,7 +180,10 @@ TEST_F(UnitMeshFixture, CoreRangeSet) {
             program,
             unary_writer_kernel,
             core,
-            {dst_l1_buffer->address(), (std::uint32_t)l1_dst_noc_xy.x, (std::uint32_t)l1_dst_noc_xy.y, num_tiles});
+            {(std::uint32_t)dst_l1_buffer->address(),
+             (std::uint32_t)l1_dst_noc_xy.x,
+             (std::uint32_t)l1_dst_noc_xy.y,
+             num_tiles});
     }
 
     slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);

@@ -160,9 +160,13 @@ void write_program_runtime_args_to_device(
         program,
         reader_kernel_id,
         core,
-        {src0_dram_buffer.address(), (uint32_t)0, src1_dram_buffer.address(), (uint32_t)0, num_tiles});
+        {(uint32_t)src0_dram_buffer.address(),
+         (uint32_t)0,
+         (uint32_t)src1_dram_buffer.address(),
+         (uint32_t)0,
+         num_tiles});
 
-    SetRuntimeArgs(program, writer_kernel_id, core, {dst_dram_buffer.address(), (uint32_t)0, num_tiles});
+    SetRuntimeArgs(program, writer_kernel_id, core, {(uint32_t)dst_dram_buffer.address(), (uint32_t)0, num_tiles});
 }
 
 }  // namespace

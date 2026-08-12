@@ -78,12 +78,15 @@ TEST_F(UnitMeshFixture, DatacopyOutputInL1) {
         create_random_vector_of_bfloat16(buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
     slow_dispatch::WriteToBuffer(*src_dram_buffer, src_vec);
 
-    SetRuntimeArgs(program, unary_reader_kernel, core, {src_dram_buffer->address(), 0, num_tiles});
+    SetRuntimeArgs(program, unary_reader_kernel, core, {(std::uint32_t)src_dram_buffer->address(), 0, num_tiles});
     SetRuntimeArgs(
         program,
         unary_writer_kernel,
         core,
-        {dst_l1_buffer->address(), (std::uint32_t)l1_dst_noc_xy.x, (std::uint32_t)l1_dst_noc_xy.y, num_tiles});
+        {(std::uint32_t)dst_l1_buffer->address(),
+         (std::uint32_t)l1_dst_noc_xy.x,
+         (std::uint32_t)l1_dst_noc_xy.y,
+         num_tiles});
 
     slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
 
