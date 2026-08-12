@@ -281,13 +281,6 @@ class LTXCausalConv3d(Module):
         h_pad_needed = self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1
         w_pad_needed = self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1
 
-        # H-row masking (zeroing rows at/beyond logical_h) is fused into neighbor_pad via logical_h on the standalone
-        h_mask_active = (
-            h_pad_needed
-            and logical_h > 0
-            and x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h
-        )
-
         # Pre-conv pad masking
         wf = self.parallel_config.width_parallel.factor
         hf = self.parallel_config.height_parallel.factor
