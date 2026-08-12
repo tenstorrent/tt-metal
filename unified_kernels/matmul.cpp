@@ -65,7 +65,13 @@ void kernel_main() {
     const auto in1 = TensorAccessor(in1_args, in1_addr);
     const auto out = TensorAccessor(out_args, out_addr);
 
+#if defined(MM_ACC_L1)
+    // L1: the packer sums into acc_storage, so DST only ever holds one block's
+    // product and a per-step chain sees that contribution alone.
+    u::Accumulator<u::AccumulatorMode::L1> acc(acc_storage, out_storage);
+#else
     u::Accumulator<u::AccumulatorMode::Dst> acc(acc_storage, out_storage);
+#endif
     acc.clear();
 
     for (uint32_t k = 0; k < Geom::num_blocks; ++k) {

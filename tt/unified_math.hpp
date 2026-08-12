@@ -270,6 +270,23 @@ inline void matmul_init(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint3
 #endif
 }
 
+// How a multi-block FPU fusion carries its running total.
+//
+//   Dst -- the partial is reloaded from a separate buffer into DST before each
+//          matmul, which then accumulates on top. Costs a DST round-trip and two
+//          format reconfigs per block. DST holds the *running total*, so a
+//          finish-only epilogue is meaningful and a per-step chain sees the
+//          total so far.
+//
+//   L1  -- the packer accumulates into L1 instead. No reload, and DST only ever
+//          holds one block's product -- so a per-step chain sees that block's
+//          contribution alone, but a finish-only epilogue is impossible, since
+//          the total never sits in DST.
+enum class AccumulatorMode {
+    Dst,
+    L1,
+};
+
 // ---------------------------------------------------------------------------
 // Driver strategies
 //
@@ -325,7 +342,7 @@ struct Strategy<FPUFusion> {
     // touched, so passing the destination for both is safe.
     template <typename Node>
     static void run(const Node& node, uint32_t cb_id, uint32_t /*num_tiles*/) {
-        run(node, /*acc_cb=*/cb_id, /*out_cb=*/cb_id, /*reload=*/false, /*finish=*/true);
+        run<AccumulatorMode::Dst>(node, /*acc_cb=*/cb_id, /*out_cb=*/cb_id, /*reload=*/false, /*finish=*/true);
     }
 
     // `Node::chain` is the PER-STEP chain: it runs on every call. `EpilogueChain`
@@ -334,14 +351,14 @@ struct Strategy<FPUFusion> {
     //     accumulate(relu(mm), finish)                   -> per-step
     //     accumulate(mm, finish, [](auto n){return relu(n);}) -> finish only
     //
-    // NOTE for Dst mode: the reload happens before the matmul, so by the time
-    // either chain runs, DST holds the running total rather than this block's
-    // contribution alone. A per-step chain therefore sees f(total-so-far), not
-    // f(this contribution). Isolating the contribution would need a second
-    // rt*ct-sized scratch region to hold the reloaded partial, which does not
-    // fit; L1 mode gets it for free, since there the packer accumulates and DST
-    // only ever holds one block's product.
-    template <typename Node, typename EpilogueChain = expr::UnaryChain<>>
+    // What a per-step chain sees differs by mode. In Dst mode the reload happens
+    // before the matmul, so DST already holds the running total and the chain
+    // sees f(total-so-far), not f(this contribution) -- isolating the
+    // contribution would need a second rt*ct-sized scratch region, which does
+    // not fit. L1 mode gets it for free: the packer does the summing, so DST
+    // only ever holds one block's product and a per-step chain is a true
+    // per-contribution f.
+    template <AccumulatorMode Mode, typename Node, typename EpilogueChain = expr::UnaryChain<>>
     static void run(const Node& node, uint32_t acc_cb, uint32_t out_cb, bool reload, bool finish, EpilogueChain = {}) {
         using G = typename Node::geometry;
         constexpr uint32_t kAccTiles = G::out_subblock_num_tiles;
@@ -353,17 +370,20 @@ struct Strategy<FPUFusion> {
 
         ckernel::tile_regs_acquire();
 
-        if (reload) {
-            // Partials L1 -> DST, then restore the state matmul_block needs.
-            ckernel::copy_tile_to_dst_init_short_with_dt(node.in1_cb, acc_cb);
-            cb_wait_front(acc_cb, kAccTiles);
-            ckernel::copy_block(acc_cb, 0, 0, kAccTiles);
-            cb_pop_front(acc_cb, kAccTiles);
-            ckernel::reconfig_data_format_srca(acc_cb, node.in1_cb);
-            ckernel::matmul_block_init(node.in0_cb, node.in1_cb, kTranspose, G::ct_dim, G::rt_dim, G::kt_dim);
+        if constexpr (Mode == AccumulatorMode::Dst) {
+            if (reload) {
+                // Partials L1 -> DST, then restore the state matmul_block needs.
+                ckernel::copy_tile_to_dst_init_short_with_dt(node.in1_cb, acc_cb);
+                cb_wait_front(acc_cb, kAccTiles);
+                ckernel::copy_block(acc_cb, 0, 0, kAccTiles);
+                cb_pop_front(acc_cb, kAccTiles);
+                ckernel::reconfig_data_format_srca(acc_cb, node.in1_cb);
+                ckernel::matmul_block_init(node.in0_cb, node.in1_cb, kTranspose, G::ct_dim, G::rt_dim, G::kt_dim);
+            }
         }
 
-        // Accumulate this k-block on top of whatever DST already holds.
+        // This block's product. In Dst mode it lands on top of the reloaded
+        // partial; in L1 mode DST holds it alone.
         uint32_t in0_index = 0;
         uint32_t in1_index = 0;
         for (uint32_t k = 0; k < G::kt_dim; ++k) {
@@ -388,24 +408,90 @@ struct Strategy<FPUFusion> {
             }
         }
 
-        // Epilogue chain: the finishing call only, when the accumulator is
-        // complete. Both fold into the accumulator slots in place on the SFPU.
-        if constexpr (!EpilogueChain::empty) {
-            if (finish) {
-                for (uint32_t t = 0; t < kAccTiles; ++t) {
-                    EpilogueChain::apply_in_place(t);
+        // Epilogue chain: the finishing call only, against the completed total.
+        // In L1 mode the total is not in DST yet, so it runs in the copy-out
+        // stage below instead.
+        if constexpr (Mode == AccumulatorMode::Dst) {
+            if constexpr (!EpilogueChain::empty) {
+                if (finish) {
+                    for (uint32_t t = 0; t < kAccTiles; ++t) {
+                        EpilogueChain::apply_in_place(t);
+                    }
                 }
             }
         }
 
         ckernel::tile_regs_commit();
 
-        const uint32_t dest = finish ? out_cb : acc_cb;
-        cb_reserve_back(dest, kAccTiles);
-        ckernel::tile_regs_wait();
-        ckernel::pack_block(0, dest, kAccTiles);
-        ckernel::tile_regs_release();
-        cb_push_back(dest, kAccTiles);
+        if constexpr (Mode == AccumulatorMode::Dst) {
+            const uint32_t dest = finish ? out_cb : acc_cb;
+            cb_reserve_back(dest, kAccTiles);
+            ckernel::tile_regs_wait();
+            ckernel::pack_block(0, dest, kAccTiles);
+            ckernel::tile_regs_release();
+            cb_push_back(dest, kAccTiles);
+        } else {
+            // L1: the packer adds this block's product into what is already at
+            // the destination, so the running total lives in L1 and never
+            // occupies DST.
+            //
+            // The push/pop pair is load-bearing, not bookkeeping. pack_block
+            // advances the CB's fifo_wr_tile_ptr itself and cb_push_back is the
+            // only thing that resets it (llk_io_pack.h), so a pack without a
+            // matching push lands one block further along each round instead of
+            // on top of the previous one. Pushing then popping a CB sized to
+            // exactly one block wraps both pointers back to the base address --
+            // which still holds the partial, since a pop does not erase.
+            cb_reserve_back(acc_cb, kAccTiles);
+            ckernel::tile_regs_wait();
+            ckernel::pack_reconfig_l1_acc(reload ? 1 : 0);
+            ckernel::pack_block(0, acc_cb, kAccTiles);
+            ckernel::tile_regs_release();
+            cb_push_back(acc_cb, kAccTiles);
+            ckernel::pack_reconfig_l1_acc(0);  // leave the packer as we found it
+
+            if (!finish) {
+                cb_wait_front(acc_cb, kAccTiles);
+                cb_pop_front(acc_cb, kAccTiles);
+            } else {
+                // Move the completed total into the output buffer. Copying it
+                // through DST rather than letting the DM writer drain acc_cb
+                // keeps one popper per CB -- compute owns acc_cb, the writer
+                // owns out_cb -- and gives the finish-only epilogue the whole
+                // total in DST, exactly as in Dst mode.
+                ckernel::tile_regs_acquire();
+                ckernel::copy_tile_to_dst_init_short_with_dt(node.in1_cb, acc_cb);
+                cb_wait_front(acc_cb, kAccTiles);
+                ckernel::copy_block(acc_cb, 0, 0, kAccTiles);
+                cb_pop_front(acc_cb, kAccTiles);
+
+                if constexpr (!EpilogueChain::empty) {
+                    for (uint32_t t = 0; t < kAccTiles; ++t) {
+                        EpilogueChain::apply_in_place(t);
+                    }
+                }
+
+                ckernel::tile_regs_commit();
+                cb_reserve_back(out_cb, kAccTiles);
+                ckernel::tile_regs_wait();
+                ckernel::pack_block(0, out_cb, kAccTiles);
+                ckernel::tile_regs_release();
+                cb_push_back(out_cb, kAccTiles);
+
+                // Restore the state matmul_block needs, so the accumulator can
+                // be cleared and driven again for the next output block.
+                ckernel::reconfig_data_format_srca(acc_cb, node.in1_cb);
+                ckernel::matmul_block_init(node.in0_cb, node.in1_cb, kTranspose, G::ct_dim, G::rt_dim, G::kt_dim);
+            }
+            ckernel::tile_regs_wait();
+            ckernel::pack_reconfig_l1_acc(reload ? 1 : 0);
+            ckernel::pack_block(0, out_cb, kAccTiles);
+            ckernel::tile_regs_release();
+            if (finish) {
+                ckernel::pack_reconfig_l1_acc(0);  // leave the packer as we found it
+                cb_push_back(out_cb, kAccTiles);
+            }
+        }
 #else
         (void)node;
         (void)acc_cb;

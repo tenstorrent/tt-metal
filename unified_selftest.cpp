@@ -127,6 +127,7 @@ inline void matmul_block(
     T("    matmul_block(cb" + n(in0) + "[" + n(in0_tile) + "],cb" + n(in1) + "[" + n(in1_tile) + "] -> dst" + n(idst) +
       ".." + n(idst + rt * ct - 1) + ")");
 }
+inline void pack_reconfig_l1_acc(uint32_t en) { T("  pack_reconfig_l1_acc(" + n(en) + ")"); }
 inline void pack_block(uint32_t dst, uint32_t cb, uint32_t count) {
     T("  pack_block(dst" + n(dst) + ".." + n(dst + count - 1) + " -> cb" + n(cb) + ")");
 }
