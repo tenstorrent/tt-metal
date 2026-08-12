@@ -1,8 +1,9 @@
 // Compile + trace harness for the unified programming model.
 //
-//   unified_expr.hpp  -- domain-free expression tree + DST register allocator
-//   fusion.hpp        -- leaves, ops, fusion kinds, driver strategies
-//   unified.hpp       -- core API (Storage / Block / ComputeBlock / noc_*)
+//   tt/unified_expr.hpp    -- domain-free expression tree + DST allocator
+//   tt/unified_math.hpp    -- leaves, ops, fusion kinds, driver strategies
+//   tt/unified_api.h       -- core API (Storage / Block / ComputeBlock / noc_*)
+//   tt/unified_impl_v1.hpp -- its definitions
 //
 // Those headers are a design sketch: the CB / NOC / Tensix intrinsics they call
 // come from the metal kernel headers in a real build. This file supplies traced
@@ -108,7 +109,7 @@ inline void pack_block(int dst, int cb, int count) {
 #endif
 
 #define TT_UNIFIED_CUSTOM_BINDING 1
-#include "unified.hpp"
+#include <tt/unified>
 
 namespace tt {
 namespace unified {
