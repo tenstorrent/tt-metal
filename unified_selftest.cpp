@@ -39,52 +39,60 @@ inline void noc_async_read() { T("noc_async_read()"); }
 inline void noc_async_write() { T("noc_async_write()"); }
 
 // ---- Tensix compute --------------------------------------------------------
+// The model calls these as ckernel::* straight from fusion.hpp, so the harness
+// fakes metal's namespace rather than a shim of its own.
+namespace ckernel {
 inline void tile_regs_acquire() { T("  tile_regs_acquire"); }
 inline void tile_regs_commit() { T("  tile_regs_commit"); }
 inline void tile_regs_wait() { T("  tile_regs_wait"); }
 inline void tile_regs_release() { T("  tile_regs_release"); }
-inline void copy_tile_to_dst(int cb, int tile, int dst) {
+inline void copy_tile(int cb, int tile, int dst) {
     T("    copy_tile(cb" + n(cb) + ",tile=" + n(tile) + " -> dst" + n(dst) + ")");
 }
-inline void pack_dst_tile(int dst, int cb) { T("  pack_tile(dst" + n(dst) + " -> cb" + n(cb) + ")"); }
-inline void sfpu_add_dst(int a, int b, int o) {
-    T("    sfpu_add (dst" + n(a) + ",dst" + n(b) + " -> dst" + n(o) + ")");
+inline void pack_tile(int dst, int cb) { T("  pack_tile(dst" + n(dst) + " -> cb" + n(cb) + ")"); }
+inline void add_binary_tile_init() {}
+inline void add_binary_tile(int a, int b, int o) {
+    T("    add_binary_tile(dst" + n(a) + ",dst" + n(b) + " -> dst" + n(o) + ")");
 }
-inline void sfpu_relu_dst(int a, int o) { T("    sfpu_relu(dst" + n(a) + " -> dst" + n(o) + ")"); }
-inline void sfpu_exp_dst(int a, int o) { T("    sfpu_exp (dst" + n(a) + " -> dst" + n(o) + ")"); }
+inline void exp_tile_init() {}
+inline void exp_tile(int o) { T("    exp_tile (dst" + n(o) + ")"); }
+inline void relu_tile_init() {}
+inline void relu_tile(int o) { T("    relu_tile(dst" + n(o) + ")"); }
+}  // namespace ckernel
+
 inline void compute_init(int, int) {}
-inline uint32_t cb_write_addr(int) { return 0; }
-inline uint32_t cb_read_addr(int) { return 0; }
+inline uint32_t get_write_ptr(int) { return 0; }
+inline uint32_t get_read_ptr(int) { return 0; }
 inline uint32_t cb_page_bytes(int) { return 2048; }
 
-// Stand-in for TensorAccessorArgs / TensorAccessor. The model only names the
-// args on a shared path; the accessor itself is built inside data-movement
-// regions, so a trivial one is enough here.
+// Stand-ins for TensorAccessorArgs / TensorAccessor, under metal's own names so
+// the harness presents the same surface the device binding does.
 struct FakeArgs {
     int id;
 };
-struct FakeAccessor {
+struct TensorAccessor {
     int id;
+    constexpr TensorAccessor(FakeArgs a, uint32_t) : id(a.id) {}
+    // encode (tensor, page) into the fake address so traces stay readable
+    uint64_t get_noc_addr(uint32_t page) const { return (uint64_t(id) << 32) | page; }
 };
-inline FakeAccessor make_accessor(FakeArgs a, uint32_t) { return FakeAccessor{a.id}; }
-inline void noc_read_page(const FakeAccessor& a, uint32_t page, uint32_t, uint32_t) {
-    T2("noc_read_page (t" + n(a.id) + ",page=" + n(static_cast<int>(page)) + ")");
+inline void noc_async_read(uint64_t src, uint32_t, uint32_t) {
+    T2("noc_async_read (t" + n(int(src >> 32)) + ",page=" + n(int(src & 0xffffffffu)) + ")");
 }
-inline void noc_write_page(const FakeAccessor& a, uint32_t page, uint32_t, uint32_t) {
-    T2("noc_write_page(t" + n(a.id) + ",page=" + n(static_cast<int>(page)) + ")");
+inline void noc_async_write(uint32_t, uint64_t dst, uint32_t) {
+    T2("noc_async_write(t" + n(int(dst >> 32)) + ",page=" + n(int(dst & 0xffffffffu)) + ")");
 }
-inline uint64_t noc_addr_on_core(int x, int y, uint32_t addr) {
-    T2("noc_addr_on_core(" + n(x) + "," + n(y) + ")");
+inline uint64_t get_noc_addr(uint32_t x, uint32_t y, uint32_t addr) {
+    T2("get_noc_addr(" + n(int(x)) + "," + n(int(y)) + ")");
     return addr;
 }
-inline void noc_read_from(uint64_t, uint32_t, uint32_t) { T2("noc_read_from()"); }
-inline void noc_write_to(uint32_t, uint64_t, uint32_t) { T2("noc_write_to()"); }
-inline void noc_read_barrier() { T2("noc_read_barrier()"); }
-inline void noc_writes_flushed() { T2("noc_writes_flushed()"); }
-inline void noc_write_barrier() { T2("noc_write_barrier()"); }
+inline void noc_async_read_barrier() { T2("noc_async_read_barrier()"); }
+inline void noc_async_writes_flushed() { T2("noc_async_writes_flushed()"); }
+inline void noc_async_write_barrier() { T2("noc_async_write_barrier()"); }
 inline void relu_from_pack(int base, int count) {
     T("  relu_from_pack(dst" + n(base) + "..dst" + n(base + count - 1) + ")  [replaces tile_regs_wait]");
 }
+namespace ckernel {
 inline void matmul_block(int in0, int in1, int h, int w, int kt) {
     T("    matmul_block(cb" + n(in0) + ",cb" + n(in1) + " h=" + n(h) + " w=" + n(w) + " kt=" + n(kt) + " -> dst0..dst" +
       n(h * w - 1) + ")");
@@ -92,6 +100,7 @@ inline void matmul_block(int in0, int in1, int h, int w, int kt) {
 inline void pack_block(int dst, int cb, int count) {
     T("  pack_block(dst" + n(dst) + ".." + n(dst + count - 1) + " -> cb" + n(cb) + ")");
 }
+}  // namespace ckernel
 
 #if defined(ASSERT_ENABLED) && ASSERT_ENABLED
 #include <cassert>
@@ -115,9 +124,9 @@ namespace unified {
 // INPUT + INTERMED + OUTPUT: two DRAM loads, an SFPU add into an intermediate,
 // a second add, then a DRAM store.
 void example_eltwise() {
-    auto t0 = make_accessor(FakeArgs{0}, 0);
-    auto t1 = make_accessor(FakeArgs{1}, 0);
-    auto t2 = make_accessor(FakeArgs{2}, 0);
+    auto t0 = TensorAccessor(FakeArgs{0}, 0);
+    auto t1 = TensorAccessor(FakeArgs{1}, 0);
+    auto t2 = TensorAccessor(FakeArgs{2}, 0);
     Storage lhs_storage(0, 2);
     Storage rhs_storage(1, 2);
     Storage tmp_storage(2, 2);
@@ -136,8 +145,8 @@ void example_eltwise() {
 
 // A unary chain: out = exp(in). Exercises Un<> and the in-place SFPU path.
 void example_unary() {
-    auto t0 = make_accessor(FakeArgs{0}, 0);
-    auto t2 = make_accessor(FakeArgs{2}, 0);
+    auto t0 = TensorAccessor(FakeArgs{0}, 0);
+    auto t2 = TensorAccessor(FakeArgs{2}, 0);
     Storage in_storage(0, 2);
     Storage out_storage(3, 2);
 
@@ -149,8 +158,8 @@ void example_unary() {
 // right (see the TODO in unified.hpp) -- this only checks that the local half of
 // the protocol balances and that the handle's two halves fire.
 void example_peer_hop() {
-    auto t0 = make_accessor(FakeArgs{0}, 0);
-    auto t2 = make_accessor(FakeArgs{2}, 0);
+    auto t0 = TensorAccessor(FakeArgs{0}, 0);
+    auto t2 = TensorAccessor(FakeArgs{2}, 0);
     Coord peer{0, 0};
     Storage in_storage(0, 2);
     Storage hop_storage(1, 2);
@@ -165,9 +174,9 @@ void example_peer_hop() {
 // The FPU path: matmul with a fused relu epilogue, then the SFPU path consuming
 // its result out of an intermediate Storage.
 void example_matmul_relu() {
-    auto t0 = make_accessor(FakeArgs{0}, 0);
-    auto t1 = make_accessor(FakeArgs{1}, 0);
-    auto t2 = make_accessor(FakeArgs{2}, 0);
+    auto t0 = TensorAccessor(FakeArgs{0}, 0);
+    auto t1 = TensorAccessor(FakeArgs{1}, 0);
+    auto t2 = TensorAccessor(FakeArgs{2}, 0);
     Storage a_storage(0, 1);
     Storage b_storage(1, 1);
     Storage mm_storage(2, 1);
