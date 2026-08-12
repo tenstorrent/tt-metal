@@ -74,7 +74,7 @@ from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, Paralle
 from ...parallel.manager import CCLManager
 from ...utils import cache
 from ...utils.conv3d import conv3d_blocking_hash
-from ...utils.tensor import bf16_tensor, from_torch
+from ...utils.tensor import bf16_tensor, from_torch, to_torch
 from .adaln_precompute import precompute_adaln_table, request_step_timesteps
 from .conditioning import MINIMAX_H3_PIXEL_MEAN as _MINIMAX_H3_PIXEL_MEAN
 from .conditioning import MINIMAX_H3_PIXEL_STD as _MINIMAX_H3_PIXEL_STD
@@ -363,6 +363,26 @@ class MiniMaxH3Pipeline:
             topology=topology,
             task=task,
         )
+
+    @staticmethod
+    def _ranks_agree(local: bool) -> bool:
+        """Whether *every* rank sees `local` as true. A collective; all ranks must call it.
+
+        A per-rank filesystem check must never gate collective work. `Path.is_file()` on a cache
+        shared over NFS can disagree between hosts -- negative-lookup caching alone is enough -- and
+        a rank that takes a cached early return skips every collective the other ranks are still
+        waiting in. That deadlocks rather than failing: measured on the quad, rank 0 read the prompt
+        embeddings from disk and ran ahead into `_denoise` while ranks 1-3 sat in the text encoder's
+        all-gather forever.
+
+        This is the same rule `utils/cache.py` follows for the weight cache, where every branch --
+        including both early returns -- ends in `distributed_context_barrier()`. Unanimity rather
+        than rank 0's answer, so that a partially-populated cache costs a recompute instead of a
+        hang, and so the decision needs no broadcast of the payload itself.
+        """
+        if not ttnn.using_distributed_env():
+            return local
+        return all(ttnn.distributed_context_allgather_int(1 if local else 0))
 
     def _read_config(self, subfolder: str) -> dict:
         path = self.weights_dir / subfolder / "config.json"
@@ -713,7 +733,8 @@ class MiniMaxH3Pipeline:
             raise ValueError("keyframes (fl2va) and references (ref2va) are different tasks; pass one or neither")
 
         cache_path = self._embed_cache_path(prompt, keyframes, references)
-        if use_cache and cache_path.is_file():
+        # Unanimous, not per-rank: everything below this return runs collectives (see `_ranks_agree`).
+        if self._ranks_agree(use_cache and cache_path.is_file()):
             logger.info(f"prompt embeddings from cache: {cache_path}")
             embeds, tags = torch.load(cache_path, weights_only=False)
             return embeds, tags
@@ -844,12 +865,25 @@ class MiniMaxH3Pipeline:
             pos_embeds=(bf16_tensor(cos, device=self.mesh_device), bf16_tensor(sin, device=self.mesh_device)),
             **vision_kwargs,
         )
-        # Replicated across the mesh: read one replica rather than composing all 32 and discarding 31.
-        embeds = ttnn.to_torch(ttnn.get_device_tensors(taps[0])[0]).float()
+        # Replicated across the mesh: read one replica rather than composing all of them and
+        # discarding the rest. Via `utils.tensor.to_torch`, not `ttnn.to_torch(get_device_tensors(t)[0])`:
+        # slicing one coordinate out of the device storage keeps the parent's distribution metadata, so
+        # on a 4x32 mesh the bare call fails with "Can't convert a tensor distributed on
+        # MeshShape([4, 32]) mesh to row-major logical tensor". The helper builds an all-replicated
+        # composer instead, which is the same one-replica read expressed in a way the converter accepts.
+        embeds = to_torch(taps[0]).float()
 
         if use_cache:
-            torch.save((embeds, tags), cache_path)
-            logger.info(f"cached prompt embeddings to {cache_path}")
+            # Rank 0 writes; the rest wait for it. Every rank computed the same replicated embeds, so
+            # letting all of them write the same path races on a shared filesystem and can leave a
+            # torn file that the *next* run then half-reads. The barrier is what makes the file whole
+            # by the time any rank could observe it, mirroring `utils/cache.py`'s save path.
+            is_distributed = ttnn.using_distributed_env()
+            if not is_distributed or int(ttnn.distributed_context_get_rank()) == 0:
+                torch.save((embeds, tags), cache_path)
+                logger.info(f"cached prompt embeddings to {cache_path}")
+            if is_distributed:
+                ttnn.distributed_context_barrier()
         return embeds, tags
 
     # ------------------------------------------------------------------ denoiser
@@ -952,7 +986,10 @@ class MiniMaxH3Pipeline:
         )
 
         path = self._adaln_cache_path(num_inference_steps)
-        if path.is_file():
+        # Both branches are host-only and converge on the same `table`, so a split decision here does
+        # not skew the collective count the way the prompt cache does. Agreed anyway: a rank that
+        # reads a half-written table would diverge *numerically*, silently, which is worse.
+        if self._ranks_agree(path.is_file()):
             logger.info(f"AdaLN table from cache: {path}")
             table = torch.load(path, weights_only=False)
         else:
@@ -969,7 +1006,11 @@ class MiniMaxH3Pipeline:
                 freq_dim=self.transformer_config["freq_dim"],
             )
             logger.info(f"AdaLN table built in {time.time() - t0:.1f}s ({table.nbytes() / 1e9:.3f} GB); caching")
-            torch.save(table, path)
+            is_distributed = ttnn.using_distributed_env()
+            if not is_distributed or int(ttnn.distributed_context_get_rank()) == 0:
+                torch.save(table, path)
+            if is_distributed:
+                ttnn.distributed_context_barrier()
 
         self._adaln_cache = MiniMaxH3AdalnCache(
             table,
@@ -1332,7 +1373,7 @@ class MiniMaxH3Pipeline:
         )
 
         # 2. Text (plus the vision block, for fl2va).
-        cached = use_prompt_cache and self._embed_cache_path(prompt, keyframes).is_file()
+        cached = self._ranks_agree(use_prompt_cache and self._embed_cache_path(prompt, keyframes).is_file())
         t0 = time.time()
         prompt_embeds, text_token_tags = self.encode_prompt(prompt, keyframes=keyframes, use_cache=use_prompt_cache)
         t_encode = time.time() - t0
@@ -1469,7 +1510,7 @@ class MiniMaxH3Pipeline:
         )
 
         # 2. Text, plus one vision block per image reference and one per merged frame pair of a video.
-        cached = use_prompt_cache and self._embed_cache_path(prompt, (), prepared).is_file()
+        cached = self._ranks_agree(use_prompt_cache and self._embed_cache_path(prompt, (), prepared).is_file())
         t0 = time.time()
         prompt_embeds, text_token_tags = self.encode_prompt(prompt, references=prepared, use_cache=use_prompt_cache)
         t_encode = time.time() - t0
@@ -1831,6 +1872,12 @@ class MiniMaxH3Pipeline:
             # Replicated after the model's SP gather: read one replica. The model returns the *target*
             # rows only, so reshape to the row width rather than to `video_rows.shape`, which still
             # counts the condition rows.
+            # `get_device_tensors(...)[0]`, deliberately, and *not* `utils.tensor.to_torch`: that
+            # helper composes, and a composer on a multi-host mesh runs `host_ccl::all_gather`. This
+            # is the per-step hot path -- two reads x 49 forwards -- so a collective here costs MPI
+            # round trips the 4x8 path never paid, and it wedges the whole run if any rank leaves the
+            # loop first. The tensor is replicated after the model's SP gather, so one local shard is
+            # the whole answer and no collective is needed to get it.
             v = ttnn.to_torch(ttnn.get_device_tensors(video_velocity)[0]).reshape(-1, video_rows.shape[-1]).float()
             a = ttnn.to_torch(ttnn.get_device_tensors(audio_velocity)[0]).reshape(-1, audio_rows.shape[-1]).float()
 
