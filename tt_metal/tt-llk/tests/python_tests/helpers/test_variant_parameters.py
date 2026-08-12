@@ -1475,7 +1475,7 @@ class TYPECAST_FORMATS(TemplateParameter):
 class MAX_POOL_CONFIG(TemplateParameter):
     """Compile-time reduction window and Dest layout for max_pool_with_indices."""
 
-    num_rows: int
+    max_pool_num_rows: int
     row_major: bool
     accumulate: bool = False
 
@@ -1484,7 +1484,7 @@ class MAX_POOL_CONFIG(TemplateParameter):
         accumulate = str(self.accumulate).lower()
         return "\n".join(
             [
-                f"constexpr int MAX_POOL_NUM_ROWS = {self.num_rows};",
+                f"constexpr int MAX_POOL_NUM_ROWS = {self.max_pool_num_rows};",
                 f"constexpr auto MAX_POOL_LAYOUT = ckernel::DataLayout::{layout};",
                 f"constexpr bool MAX_POOL_ACCUMULATE = {accumulate};",
             ]
