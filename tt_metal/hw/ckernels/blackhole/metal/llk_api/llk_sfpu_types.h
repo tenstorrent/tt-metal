@@ -176,4 +176,5 @@ enum class SfpuType {
     rsqrt_compat,
     expm1_cw,
     softcap,
+    situ_glu,
 };

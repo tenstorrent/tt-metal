@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Standalone device test for the fused situ_glu binary SFPU op (situ_glu_sfpu.h).
+"""Standalone device test for the fused situ_glu binary SFPU op (api/compute/situ_glu.h).
 
 Drives the op through ttnn.generic_op with a minimal binary test kernel (no
 production op wired), reaching both dst-accumulator modes, and compares against
@@ -118,7 +118,7 @@ def _run(device, gate_t, up_t, in_dtype, page_bytes, fp32_dest):
         ttnn.KernelDescriptor(
             kernel_source="tests/tt_metal/tt_metal/test_kernels/compute/situ_glu.cpp",
             core_ranges=core,
-            compile_time_args=[num_tiles, int(fp32_dest)],
+            compile_time_args=[num_tiles],
             runtime_args=[],
             config=ttnn.ComputeConfigDescriptor(fp32_dest_acc_en=fp32_dest),
         ),

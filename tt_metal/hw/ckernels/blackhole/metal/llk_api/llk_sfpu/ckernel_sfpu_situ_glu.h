@@ -4,39 +4,28 @@
 
 #pragma once
 
-//=============================================================================
-// SiTU-GLU activation for SFPU (fused binary op).
+#include <cstdint>
+
+#include "cmath_common.h"
+#include "ckernel_sfpu_exp.h"
+#include "ckernel_sfpu_softcap.h"
+#include "ckernel_sfpu_tanh.h"
+
+// SiTU-GLU activation, a fused binary SFPU op:
 //
 //   situ_a  = beta_gate * tanh(gate / beta_gate) * sigmoid(gate)
 //   up_half = beta_up   * tanh(up   / beta_up)
 //   result  = situ_a * up_half
 //
-// gate and up are pinned in dst simultaneously, so the activation runs in one pass
-// with no intermediate materialized to L1/DRAM.
+// gate and up are pinned in dst simultaneously, so the activation runs in one pass with no
+// intermediate materialized to L1/DRAM. See api/compute/situ_glu.h for the kernel-facing API.
 //
-// Usage:
-//   PACK((llk_math_eltwise_binary_sfpu_situ_glu_init()));
-//   PACK((llk_math_eltwise_binary_sfpu_situ_glu<false>(gate, up, out)));           // Kimi betas
-//   PACK((llk_math_eltwise_binary_sfpu_situ_glu<false, MyConfig>(gate, up, out))); // custom
-//
-// Init: tanh_init claims all three vConstFloatPrgm registers, so the sigmoid half
-// cannot use the stock reciprocal -- see _situ_glu_reciprocal_ below.
-//=============================================================================
-
-#if defined(TRISC_PACK) || defined(TRISC_MATH)
-
-// _sfpu_softcap_ has no Wormhole counterpart.
-#if !defined(ARCH_BLACKHOLE)
-#error "situ_glu_sfpu.h is implemented for Blackhole only"
-#endif
-
-#include "ckernel_sfpu_exp.h"
-#include "ckernel_sfpu_softcap.h"
-#include "ckernel_sfpu_tanh.h"
-#include "llk_math_eltwise_binary_sfpu_macros.h"
+// Init: tanh_init claims all three vConstFloatPrgm registers, so the sigmoid half cannot use
+// the stock reciprocal -- see _situ_glu_reciprocal_ below.
 
 namespace ckernel::sfpu {
 
+// Betas are compile-time so the kernel never divides and no LReg holds them.
 struct SituGluConfigKimi {
     static constexpr float beta_gate = 4.0f;
     static constexpr float beta_up = 25.0f;
@@ -110,27 +99,3 @@ inline void situ_glu_init() {
 }
 
 }  // namespace ckernel::sfpu
-
-namespace ckernel {
-
-inline void llk_math_eltwise_binary_sfpu_situ_glu_init() {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::unused>(ckernel::sfpu::situ_glu_init);
-}
-
-template <bool is_fp32_dest_acc_en = false, class Config = ckernel::sfpu::SituGluConfigKimi>
-inline void llk_math_eltwise_binary_sfpu_situ_glu(
-    uint gate_tile, uint32_t up_tile, uint32_t out_tile, VectorMode vector_mode = VectorMode::RC) {
-    SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_situ_glu,
-        (is_fp32_dest_acc_en, 8 /*ITERATIONS*/, Config),
-        gate_tile,
-        up_tile,
-        out_tile,
-        vector_mode);
-}
-
-}  // namespace ckernel
-
-#endif  // TRISC_PACK || TRISC_MATH

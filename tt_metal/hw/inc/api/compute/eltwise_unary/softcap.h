@@ -5,6 +5,12 @@
 #pragma once
 
 #include "api/compute/common_globals.h"
+
+// ckernel_sfpu_softcap.h and the SfpuType entry it needs exist only under
+// hw/ckernels/blackhole, so the API is declared for Blackhole only. Including this header
+// on another arch is harmless; calling softcap_tile there fails to compile.
+#if defined(ARCH_BLACKHOLE)
+
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_softcap.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
@@ -52,3 +58,5 @@ ALWI void softcap_tile(uint32_t idst, uint32_t beta, uint32_t beta_recip) {
 ALWI void softcap_tile_init() { MATH(SFPU_UNARY_INIT(softcap)); }
 
 }  // namespace ckernel
+
+#endif  // ARCH_BLACKHOLE
