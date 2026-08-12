@@ -103,10 +103,16 @@ ALWI void generalized_moe_gate_relocate_run() {
         VectorMode::RC_custom)));
 }
 
+// ungrouped_top8: REQUIRED path select, NO default on purpose. true = ungrouped global top-k (every
+// non-DeepSeek model); false = grouped DeepSeek gate (8 groups x 32 -> top-2-sum -> top-4 groups -> top-8).
+// It used to be the GMG_UNGROUPED_TOP8 compile define with a silent grouped fallthrough, which is wrong
+// for every non-DeepSeek model — a defaultless template parameter keeps the choice explicit at every
+// call site with no preprocessor coupling.
 // produce_run: for the multi-block (>256) path, end the ungrouped pipeline at merge16_to_run (a
 // re-mergeable top-8 RUN at {run_store_lo, run_store_hi}, idx += idx_offset) and SKIP normalize+step2.
 // Default (produce_run=false) = the single-256 path: finalize (merge + normalize) + step2.
 template <
+    bool ungrouped_top8,
     bool enable_sigmoid = false,
     bool is_32bit = false,
     bool produce_run = false,
@@ -155,96 +161,89 @@ ALWI void generalized_moe_gate(uint32_t icb0, uint32_t icb1, uint32_t eps, uint3
     // Transpose dest step 0 (FPU) — always runs; puts each group g at DEST row g.
     MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step0_init<is_32bit>()));
     MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step0<DST_ACCUM_MODE, is_32bit>()));
-    // Path select — REQUIRED, NO silent default. The including kernel (.cpp) must define GMG_UNGROUPED_TOP8
-    // to 1 (ungrouped top-k — every non-DeepSeek model) or 0 (grouped DeepSeek gate). Leaving it undefined is
-    // a hard compile error on purpose: it used to fall through to the grouped path with no diagnostic, which
-    // is wrong for every non-DeepSeek model. (Note `#if`, not `#ifdef`: `=0` selects grouped, `=1` ungrouped.)
-#if !defined(GMG_UNGROUPED_TOP8)
-#error \
-    "generalized_moe_gate(): define GMG_UNGROUPED_TOP8 (to 1 = ungrouped top-k, or 0 = grouped DeepSeek) in the including kernel before this header — the silent grouped default was removed to avoid selecting the wrong HW sequence."
-#endif
-#if GMG_UNGROUPED_TOP8
-    // TRUE GLOBAL TOP-8 over all 256 experts (ungrouped). post-step0: group g at DEST row g.
-    // SFPU merges stay in rows 0-7 (only rows 0-7 are SFPU-addressable); FPU copy4rows (a plain
-    // MOVD2B->MOVB2D copy) stashes 4-row blocks in rows 8-15. topA -> {0,2} (rows 0-3), topB -> {4,6}
-    // (rows 4-7): row-disjoint. Each copy4rows uses a DISJOINT SrcB scratch window (16/20/24/28) so a
-    // later MOVB2D can't read a previous (back-to-back) copy's SrcB leftover.
-    //
-    // save groups 4-7 source (rows 4-7) -> rows 8-11 (step1<0> below clobbers rows 0-7).
-    MATH((llk_math_generalized_moe_gate_copy4rows_init<4, 8, is_32bit, 16>()));
-    MATH((llk_math_generalized_moe_gate_copy4rows<DST_ACCUM_MODE, is_32bit>()));
-    // topA = top8(groups 0-3): step1<d2b_dst=0> -> run at rows 0-7 -> merge -> topA at {0,2}.
-    MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_init<0, 0, is_32bit>()));
-    MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi<DST_ACCUM_MODE, is_32bit>()));
-    MATH((SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        generalized_moe_gate_merge4_top8,
-        (APPROX, DST_ACCUM_MODE, 0, 0, 2),
-        0,
-        VectorMode::RC_custom)));
-    // park topA (rows 0-3) -> rows 12-15; restore groups 4-7 (rows 8-11) -> rows 4-7.
-    MATH((llk_math_generalized_moe_gate_copy4rows_init<0, 12, is_32bit, 20>()));
-    MATH((llk_math_generalized_moe_gate_copy4rows<DST_ACCUM_MODE, is_32bit>()));
-    MATH((llk_math_generalized_moe_gate_copy4rows_init<8, 4, is_32bit, 24>()));
-    MATH((llk_math_generalized_moe_gate_copy4rows<DST_ACCUM_MODE, is_32bit>()));
-    // topB = top8(groups 4-7): step1_hi<d2b_dst=4> -> run at rows 0-7 -> merge -> topB at {4,6}.
-    MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_init<4, 0, is_32bit>()));
-    MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi<DST_ACCUM_MODE, is_32bit>()));
-    MATH((SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        generalized_moe_gate_merge4_top8,
-        (APPROX, DST_ACCUM_MODE, 0, 4, 6),
-        0,
-        VectorMode::RC_custom)));
-    // restore topA (rows 12-15) -> rows 0-3; now topA@{0,2} (rows 0-3), topB@{4,6} (rows 4-7).
-    MATH((llk_math_generalized_moe_gate_copy4rows_init<12, 0, is_32bit, 28>()));
-    MATH((llk_math_generalized_moe_gate_copy4rows<DST_ACCUM_MODE, is_32bit>()));
-    if constexpr (produce_run) {
-        // Multi-block: emit this block's top-8 as a re-mergeable RUN at {run_store_lo, run_store_hi}
-        // (idx += idx_offset for global ids). No normalize/step2 here — the combine does that.
+    // Path select — the defaultless ungrouped_top8 template parameter (see the doc above the template).
+    if constexpr (ungrouped_top8) {
+        // TRUE GLOBAL TOP-8 over all 256 experts (ungrouped). post-step0: group g at DEST row g.
+        // SFPU merges stay in rows 0-7 (only rows 0-7 are SFPU-addressable); FPU copy4rows (a plain
+        // MOVD2B->MOVB2D copy) stashes 4-row blocks in rows 8-15. topA -> {0,2} (rows 0-3), topB -> {4,6}
+        // (rows 4-7): row-disjoint. Each copy4rows uses a DISJOINT SrcB scratch window (16/20/24/28) so a
+        // later MOVB2D can't read a previous (back-to-back) copy's SrcB leftover.
+        //
+        // save groups 4-7 source (rows 4-7) -> rows 8-11 (step1<0> below clobbers rows 0-7).
+        MATH((llk_math_generalized_moe_gate_copy4rows_init<4, 8, is_32bit, 16>()));
+        MATH((llk_math_generalized_moe_gate_copy4rows<DST_ACCUM_MODE, is_32bit>()));
+        // topA = top8(groups 0-3): step1<d2b_dst=0> -> run at rows 0-7 -> merge -> topA at {0,2}.
+        MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_init<0, 0, is_32bit>()));
+        MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi<DST_ACCUM_MODE, is_32bit>()));
         MATH((SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
-            generalized_moe_gate_merge16_to_run,
-            (APPROX, DST_ACCUM_MODE, run_store_lo, run_store_hi, idx_offset),
+            generalized_moe_gate_merge4_top8,
+            (APPROX, DST_ACCUM_MODE, 0, 0, 2),
             0,
             VectorMode::RC_custom)));
-    } else {
-        // Single ≤256 block: full bitonic sort of topA{0,2}+topB{4,6} -> global top-8, then keep top-`topk`
-        // (zero ranks >= topk before normalize) + normalize over those (softmax over the kept if output_softmax).
+        // park topA (rows 0-3) -> rows 12-15; restore groups 4-7 (rows 8-11) -> rows 4-7.
+        MATH((llk_math_generalized_moe_gate_copy4rows_init<0, 12, is_32bit, 20>()));
+        MATH((llk_math_generalized_moe_gate_copy4rows<DST_ACCUM_MODE, is_32bit>()));
+        MATH((llk_math_generalized_moe_gate_copy4rows_init<8, 4, is_32bit, 24>()));
+        MATH((llk_math_generalized_moe_gate_copy4rows<DST_ACCUM_MODE, is_32bit>()));
+        // topB = top8(groups 4-7): step1_hi<d2b_dst=4> -> run at rows 0-7 -> merge -> topB at {4,6}.
+        MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_init<4, 0, is_32bit>()));
+        MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi<DST_ACCUM_MODE, is_32bit>()));
         MATH((SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
-            generalized_moe_gate_finalize_ungrouped,
-            (APPROX, DST_ACCUM_MODE, topk, output_softmax),
+            generalized_moe_gate_merge4_top8,
+            (APPROX, DST_ACCUM_MODE, 0, 4, 6),
+            0,
+            VectorMode::RC_custom)));
+        // restore topA (rows 12-15) -> rows 0-3; now topA@{0,2} (rows 0-3), topB@{4,6} (rows 4-7).
+        MATH((llk_math_generalized_moe_gate_copy4rows_init<12, 0, is_32bit, 28>()));
+        MATH((llk_math_generalized_moe_gate_copy4rows<DST_ACCUM_MODE, is_32bit>()));
+        if constexpr (produce_run) {
+            // Multi-block: emit this block's top-8 as a re-mergeable RUN at {run_store_lo, run_store_hi}
+            // (idx += idx_offset for global ids). No normalize/step2 here — the combine does that.
+            MATH((SFPU_UNARY_CALL(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                generalized_moe_gate_merge16_to_run,
+                (APPROX, DST_ACCUM_MODE, run_store_lo, run_store_hi, idx_offset),
+                0,
+                VectorMode::RC_custom)));
+        } else {
+            // Single ≤256 block: full bitonic sort of topA{0,2}+topB{4,6} -> global top-8, then keep top-`topk`
+            // (zero ranks >= topk before normalize) + normalize over those (softmax over the kept if output_softmax).
+            MATH((SFPU_UNARY_CALL(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                generalized_moe_gate_finalize_ungrouped,
+                (APPROX, DST_ACCUM_MODE, topk, output_softmax),
+                0,
+                VectorMode::RC_custom,
+                eps,
+                scale)));
+        }
+    } else {
+        // Grouped DeepSeek gate: sort_top4 selects top-4 groups, step1 lays them out, top8 merges.
+        MATH((SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            generalized_moe_gate_sort_top4_groups,
+            (APPROX, DST_ACCUM_MODE),
+            0,
+            VectorMode::RC_custom)));
+        MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step1_init<is_32bit>()));
+        MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step1<DST_ACCUM_MODE, is_32bit>()));
+        MATH((SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            generalized_moe_gate_top8,
+            (APPROX, DST_ACCUM_MODE),
             0,
             VectorMode::RC_custom,
             eps,
             scale)));
     }
-#else
-    // Grouped DeepSeek gate: sort_top4 selects top-4 groups, step1 lays them out, top8 merges.
-    MATH((SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        generalized_moe_gate_sort_top4_groups,
-        (APPROX, DST_ACCUM_MODE),
-        0,
-        VectorMode::RC_custom)));
-    MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step1_init<is_32bit>()));
-    MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step1<DST_ACCUM_MODE, is_32bit>()));
-    MATH((SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        generalized_moe_gate_top8,
-        (APPROX, DST_ACCUM_MODE),
-        0,
-        VectorMode::RC_custom,
-        eps,
-        scale)));
-#endif  // GMG_UNGROUPED_TOP8
     // Transpose dest step 2 (FPU) — final output layout. Skipped in produce_run mode (the run stays
     // in the SFPU run layout for the combine; step2 runs once after the combine instead).
     if constexpr (!produce_run) {
