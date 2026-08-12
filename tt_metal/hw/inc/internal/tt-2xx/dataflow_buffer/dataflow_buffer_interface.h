@@ -112,12 +112,11 @@ struct LocalDFBInterface {
     uint8_t num_entries_per_txn_id_per_tc;
     uint8_t num_txn_ids;
     uint8_t broadcast_tc;  // DM-DM ALL producer: post to all TCs instead of round-robin
-    uint8_t _pad19;        // pads bytes [8,20) to 12B so the 3-u32 scalar store covers exactly that span
+    uint8_t _tc_align_pad;  // pad bytes [8,20) → 20B so tc_slots[] stays 4B-aligned
 
     uint16_t num_entries;
-    uint16_t block_size;   // BLOCKED block size for this RISC's side (>=1); implicit commit advances
-                           // tc_idx per-BLOCK (every block_size entries). Non-BLOCKED sides use 1.
-                           // uint16 (bounded by capacity); outside the [8,20) span, stored separately.
+    uint16_t block_size;   // how many entries this RISC moves in one NoC transaction: a whole block
+                           // when this side is BLOCKED and its entries are adjacent, otherwise 1.
 
     DFBTCSlot tc_slots[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
 };

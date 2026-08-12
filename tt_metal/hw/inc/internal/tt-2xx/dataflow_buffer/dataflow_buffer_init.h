@@ -75,7 +75,9 @@ struct dfb_init_entry_hdr_t {
     uint8_t broadcast_tc;         // DM pack byte 22 → iface.broadcast_tc (DM unpack only)
     uint8_t remapper_pair_index;  // TRISC byte 22; DM pack byte 23
     uint8_t intra_shadow_tc_id;   // TRISC byte 23: intra-tensix ClientR shadow TC; 0xFF / unused on DM
-    uint16_t block_size;          // wire bytes 28-29: BLOCKED block size (>=1); TRISC unused (1)
+    uint16_t block_size;          // bytes 28-29: how many entries this hart moves in one NoC
+                                  // transaction. 1 unless this hart is BLOCKED and its entries are
+                                  // adjacent, in which case block_size. Always 1 on TRISC.
 };
 static_assert(sizeof(dfb_init_entry_hdr_t) == 32, "dfb_init_entry_hdr_t must match the 32B wire header");
 static_assert(alignof(dfb_init_entry_hdr_t) == 4, "dfb_init_entry_hdr_t alignment should follow uint32_t");
@@ -99,12 +101,12 @@ static_assert(alignof(dfb_init_entry_hdr_t) == 4, "dfb_init_entry_hdr_t alignmen
 // Shared unpack helper: TRISC blob w3–w6 (legacy SoA byte layout).
 template <typename PtrT>
 FORCE_INLINE dfb_init_entry_hdr_t dfb_unpack_entry_header(PtrT s) {
-    const uint32_t w0 = s[0], w1 = s[1], w2 = s[2], w3 = s[3], w4 = s[4], w5 = s[5], w6 = s[6], w7 = s[7];
+    const uint32_t w0 = s[0], w1 = s[1], w2 = s[2], w3 = s[3], w4 = s[4], w5 = s[5], w6 = s[6];
     dfb_init_entry_hdr_t h;
     h.logical_dfb_id             = static_cast<uint8_t>(w0);
     h.num_tcs                    = static_cast<uint8_t>(w0 >> 8);
     h.flags = static_cast<uint8_t>(w0 >> 16);
-    h.block_size = 1;  // TRISC: block-aware advance is DM-only (w7 byte 28 is DM's)
+    h.block_size                 = 1;  // TRISC always moves one entry at a time
     h.entry_size                 = w1;
     h.stride_size_precomp        = w2;
     h.stride_size_tiles          = static_cast<uint8_t>(w3);
@@ -134,8 +136,7 @@ FORCE_INLINE dfb_init_entry_hdr_t dfb_unpack_entry_header_dm(PtrT s) {
     h.logical_dfb_id             = static_cast<uint8_t>(w0);
     h.num_tcs                    = static_cast<uint8_t>(w0 >> 8);
     h.flags = static_cast<uint8_t>(w0 >> 16);
-    // 0 is never written by the host, but normalise anyway -- the device computes % block_size
-    h.block_size = static_cast<uint16_t>(w7) ? static_cast<uint16_t>(w7) : uint16_t{1};  // bytes 28-29
+    h.block_size = static_cast<uint16_t>(w7) ? static_cast<uint16_t>(w7) : uint16_t{1};
     h.entry_size                 = w1;
     h.stride_size_precomp        = w2;
     h.stride_size_tiles          = 0;

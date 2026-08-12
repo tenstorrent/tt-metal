@@ -3,18 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Metal 2.0 (declarative API) BLOCKED DFB consumer.
-//
-// Parallel to dfb_consumer_2_0.cpp, but for the BLOCKED access pattern: each
-// thread waits on a contiguous block of `block_size` entries at a time, drains
-// the whole block in a single NoC burst (block_size * entry_size bytes), then
-// strides by block_size * num_consumers to its next block. Credits are popped
-// block-at-a-time.
-//
-// Bindings/CTAs (set by host KernelSpec):
-//   dfb::in                   — CONSUMER
-//   num_entries_per_consumer  — total entries this thread consumes
-//   block_size                — tiles per block
-//   chunk_offset / entries_per_core (RTAs)
+// Parallel to dfb_consumer_2_0.cpp, but waits on and drains block_size contiguous entries
+// per NoC transaction, then strides by block_size * num_consumers.
 
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
@@ -40,25 +30,24 @@ void kernel_main() {
 
     const uint32_t num_blocks = num_entries_per_consumer / block_size;
     for (uint32_t b = 0; b < num_blocks; ++b) {
-        // This thread's b-th block: contiguous run of block_size pages, blocks
-        // interleaved across consumers by block_size * num_consumers.
+        // This thread's b-th block: block_size contiguous pages, blocks interleaved across consumers.
         const uint32_t block_base_page = chunk_offset + (b * num_consumers + consumer_idx) * block_size;
         if (block_base_page >= chunk_offset + entries_per_core) {
             break;
         }
         if constexpr (implicit_sync) {
 #ifdef ARCH_QUASAR
-            // Implicit sync is single-entry (txn-id per tile), so drain the block one tile at a
-            // time. The block-ness lives in the page sequence and the per-thread contiguous
-            // sub-ring; the ISR batches credits.
-            for (uint32_t j = 0; j < block_size; ++j) {
-                noc.async_write<NocOptions::TXN_ID>(dfb, tensor_accessor, {}, {.page_id = block_base_page + j});
+            // block_size when this thread's entries are adjacent in L1, else 1. Don't pass an explicit
+            // size -- that picks the generic Noc::async_write, which posts no credits.
+            const uint32_t entries_per_txn = dfb.get_entries_per_txn();
+            for (uint32_t j = 0; j < block_size; j += entries_per_txn) {
+                noc.async_write<NocOptions::TXN_ID>(
+                    dfb, tensor_accessor, {}, {.page_id = block_base_page + j});
             }
 #endif
         } else {
             dfb.wait_front(block_size);
-            // Single NoC burst: write the block's contiguous L1 region out to block_size
-            // contiguous DRAM pages (dfb read pointer is the block base).
+            // One transaction for the whole block; the read pointer is already the block base.
             noc.async_write(dfb, tensor_accessor, block_size * entry_size, {}, {.page_id = block_base_page});
             noc.async_write_barrier();
             dfb.pop_front(block_size);

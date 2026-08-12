@@ -112,14 +112,6 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
         }
     }
 
-    // Reject configs that build fine but would hang once running. LaunchProgram covers slow
-    // dispatch; this covers the fast-dispatch and SD-mesh paths, which reach the device without
-    // going through it. Deliberately at enqueue rather than compile_and_allocate: merely BUILDING
-    // such a config is legal and several tests do it to inspect descriptors without running.
-    for (auto& [device_range, program] : programs) {
-        program.impl().validate_dataflow_buffers_for_launch();
-    }
-
     auto& ctx = tt::tt_metal::MetalContext::instance();
     if (ctx.rtoptions().get_fast_dispatch()) {
         mesh_workload.impl().compile(mesh_cq.device());

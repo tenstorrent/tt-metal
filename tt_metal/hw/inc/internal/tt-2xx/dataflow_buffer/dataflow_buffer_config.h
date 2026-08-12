@@ -196,7 +196,7 @@ struct dfb_hart_init_entry_t {
     uint8_t  logical_dfb_id;
     uint8_t  num_tcs;
     uint8_t  flags;                          // DFB_HART_FLAG_* bits above; bits3:0 = tensix_trisc_mask
-    uint8_t _reserved0;                      // kept zeroed for layout stability
+    uint8_t _reserved0;                      // kept zeroed for 32B layout stability
     uint32_t entry_size;                     // raw bytes; device applies >> cb_addr_shift
     // Host precomputes the ready-to-copy stride_size per hart type:
     //   DM harts:    stride_size_precomp = entry_size_raw * stride_in_entries  (raw bytes)
@@ -215,17 +215,18 @@ struct dfb_hart_init_entry_t {
                                              // reclaims this byte for remapper_pair_index.
     uint16_t num_entries;                    // bytes 24-25; ring entry count (main update_size path)
     uint16_t capacity;  // bytes 26-27; producer: TC capacity; consumer: 0
-    uint16_t dm_block_size;                  // bytes 28-29: DM BLOCKED block size (>=1; 1 when the ring is
-                                             // not BLOCKED). TRISC unused. uint16 because block_size is
-                                             // bounded by capacity, which is itself uint16 (see #52117).
-    uint8_t  _pad3[2];                       // bytes 30-31: pad header to 32B → 4B-aligned TC arrays follow
+    uint16_t dm_block_size;                  // bytes 28-29: how many entries this DM hart moves in one NoC
+                                             // transaction. 1 unless this hart is BLOCKED and its entries
+                                             // are adjacent, in which case block_size.
+    uint8_t  _pad3[2];                       // bytes 30-31: pad the header to 32B so the TC arrays
+                                             // after it start 4B-aligned
 } __attribute__((packed));
 static_assert(sizeof(dfb_hart_init_entry_t) == 32, "dfb_hart_init_entry_t must be 32B");
 static_assert(offsetof(dfb_hart_init_entry_t, capacity) == 26, "capacity must occupy former pad bytes 26-27");
 static_assert(offsetof(dfb_hart_init_entry_t, num_entries) == 24, "num_entries must stay at bytes 24-25");
 
 // DM only: bytes [12,24) of the init entry header mirror LocalDFBInterface bytes [8,20)
-// (num_tcs_to_rr through block_size). Host writes this 12B span in DTCM order; device
+// (num_tcs_to_rr through _tc_align_pad). Host writes this 12B span in DTCM order; device
 // unpacks w3–w5 in dfb_unpack_entry_header_dm and stores via dfb_write_dm_iface_scalars_from_hdr.
 // Byte 13 carries producer_signal_bit for init decode (device sets tc_idx=0 after scalar write).
 constexpr uint32_t DFB_INIT_ENTRY_DM_SCALAR_PACK_BYTE_OFF = 12u;
