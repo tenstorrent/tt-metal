@@ -60,6 +60,16 @@ inline void exp_tile_init() {}
 inline void exp_tile(uint32_t o) { T("    exp_tile (dst" + n(o) + ")"); }
 inline void relu_tile_init() {}
 inline void relu_tile(uint32_t o) { T("    relu_tile(dst" + n(o) + ")"); }
+inline void copy_tile_to_dst_init_short_with_dt(uint32_t old_cb, uint32_t new_cb) {
+    T("  copy_tile_to_dst_init_short_with_dt(cb" + n(old_cb) + " -> cb" + n(new_cb) + ")");
+}
+inline void copy_block(uint32_t cb, uint32_t start_tile, uint32_t start_dst, uint32_t n_tiles) {
+    T("  copy_block(cb" + n(cb) + "[" + n(start_tile) + "] -> dst" + n(start_dst) + ".." + n(start_dst + n_tiles - 1) +
+      ")  [reload]");
+}
+inline void reconfig_data_format_srca(uint32_t old_cb, uint32_t new_cb) {
+    T("  reconfig_data_format_srca(cb" + n(old_cb) + " -> cb" + n(new_cb) + ")");
+}
 inline void init_sfpu(uint32_t icb, uint32_t ocb) { T("  init_sfpu(cb" + n(icb) + " -> cb" + n(ocb) + ")"); }
 }  // namespace ckernel
 
@@ -91,9 +101,6 @@ inline uint64_t get_noc_addr(uint32_t x, uint32_t y, uint32_t addr) {
 inline void noc_async_read_barrier() { T2("noc_async_read_barrier()"); }
 inline void noc_async_writes_flushed() { T2("noc_async_writes_flushed()"); }
 inline void noc_async_write_barrier() { T2("noc_async_write_barrier()"); }
-inline void relu_from_pack(uint32_t base, uint32_t count) {
-    T("  relu_from_pack(dst" + n(base) + "..dst" + n(base + count - 1) + ")  [replaces tile_regs_wait]");
-}
 namespace ckernel {
 enum class SrcOrder { Regular, Reverse };
 template <SrcOrder order = SrcOrder::Regular>
@@ -194,28 +201,49 @@ void example_peer_hop() {
     noc_store<0>(out_storage.store(y.exp()), t2, 0);
 }
 
-// The FPU path: matmul with a fused relu epilogue, then the SFPU path consuming
-// its result out of an intermediate Storage.
-void example_matmul_relu() {
+// Single-shot matmul: one k-block straight through Storage::store(), no
+// accumulation buffer.
+void example_matmul_single() {
     auto t0 = TensorAccessor(FakeArgs{0}, 0);
     auto t1 = TensorAccessor(FakeArgs{1}, 0);
     auto t2 = TensorAccessor(FakeArgs{2}, 0);
-    Storage a_storage(0, 1);
-    Storage b_storage(1, 1);
-    Storage mm_storage(2, 1);
-    Storage out_storage(3, 1);
+    using Geom = MatmulGeometry</*rt=*/2, /*ct=*/2, /*kt=*/2>;
 
-    // out_subblock 2x2 = 4 DST tiles, k-dim 2, 2 inner blocks
-    using Geom = MatmulGeometry</*h=*/2, /*w=*/2, /*in0_block_w=*/2, /*num_blocks=*/2>;
+    Storage a_storage(0, 4);
+    Storage b_storage(1, 4);
+    Storage out_storage(3, 4);
 
-    ComputeBlock a = noc_load<0>(a_storage, t0, 0).wait();
+    ComputeBlock a = noc_load<1>(a_storage, t0, 0).wait();
     ComputeBlock b = noc_load<1>(b_storage, t1, 0).wait();
+    noc_store<0>(out_storage.store(matmul<Geom>(a, b)), t2, 0);
+}
 
-    // relu folds into the matmul's pack-side epilogue rather than wrapping it
-    ComputeBlock mm = mm_storage.store(relu(matmul<Geom>(a, b)));
+// The FPU path: a two-k-block matmul accumulated through a separate buffer,
+// with a DST-side relu epilogue on the final block.
+void example_matmul_acc() {
+    auto t0 = TensorAccessor(FakeArgs{0}, 0);
+    auto t1 = TensorAccessor(FakeArgs{1}, 0);
+    auto t2 = TensorAccessor(FakeArgs{2}, 0);
 
-    // ... and the SFPU path picks it up from there
-    noc_store<0>(out_storage.store(mm + a), t2, 0);
+    using Geom = MatmulGeometry</*rt=*/2, /*ct=*/2, /*kt=*/2, /*num_blocks=*/2>;
+
+    Storage a_storage(0, 4);
+    Storage b_storage(1, 4);
+    Storage acc_storage(24, 4);  // running total -- a different CB from out
+    Storage out_storage(3, 4);
+
+    Accumulator<AccumulatorMode::Dst> acc(acc_storage, out_storage);
+    acc.clear();
+
+    for (uint32_t k = 0; k < Geom::num_blocks; ++k) {
+        const bool finish = (k == Geom::num_blocks - 1);
+        ComputeBlock a = noc_load<1>(a_storage, t0, k).wait();
+        ComputeBlock b = noc_load<1>(b_storage, t1, k).wait();
+        Block result = acc.accumulate(relu(matmul<Geom>(a, b)), finish);
+        if (finish) {
+            noc_store<0>(std::move(result), t2, 0);
+        }
+    }
 }
 
 }  // namespace unified
@@ -271,8 +299,10 @@ int main() {
     ok &= report("eltwise");
     tt::unified::example_unary();
     ok &= report("unary");
-    tt::unified::example_matmul_relu();
-    ok &= report("matmul_relu");
+    tt::unified::example_matmul_single();
+    ok &= report("matmul_single");
+    tt::unified::example_matmul_acc();
+    ok &= report("matmul_acc");
     tt::unified::example_peer_hop();
     ok &= report("peer_hop");
     printf("\n%s: %s\n", TT_LABEL, ok ? "ALL BALANCED" : "FAILURES PRESENT");
