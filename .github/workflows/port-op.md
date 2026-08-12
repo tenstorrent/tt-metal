@@ -436,6 +436,23 @@ What that changes about how you work:
 Because the build happens elsewhere, a compiler diagnostic names the file as `/work/...` while you
 edit it under the workspace root. Same file, different prefix.
 
+### Three things about this build you cannot find out except by failing
+
+Each of these has already cost a whole build cycle in an earlier run of this workflow, and none of
+them is discoverable from the source you are reading.
+
+- **`-Werror` is on.** An unused parameter or an unused local is a hard error, not a warning. If you
+  leave a parameter unused because the path that needed it is not written yet, omit the name or cast
+  it to `void`.
+- **This library is compiled as unity blobs**, so your `.cpp` is concatenated with unrelated ones
+  before it is compiled. A file-local helper with external linkage will collide with an identically
+  named helper somewhere you have never looked, and the error will say `redefinition` and point at
+  your line. Put every helper that is not declared in a header inside an anonymous namespace.
+- **You are guessing at signatures you could be reading.** The whole source tree is on disk and you
+  can open any of it. Before calling a method on a tt-metal type, open the header and look, rather
+  than recalling what it probably takes -- two runs have now been spent on calls that do not exist
+  with the arguments given.
+
 ## Where things are
 
 All paths below are relative to your working directory.
