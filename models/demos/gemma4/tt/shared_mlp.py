@@ -237,6 +237,14 @@ class SharedMLP:
         k = int(hidden_states.shape[-1])
         n = int(self.gate_up_proj.shape[-1])
         program_config, out_memcfg, compute_kernel_config = interleaved_gate_up_prefill_config(m, k, n)
+        # Decode (M<=TILE): the tuned prefill config declines, so the output would
+        # follow the op default (DRAM) and the whole GeGLU group — 2x slice + the
+        # gelu*mul — would run against DRAM at 3.6/3.6/6.9 us. The tensor is
+        # [1,1,32,2*inter/tp] bf16 = 344 KB, i.e. 5 KB/core, so keep the group on
+        # L1. (The prefill-sized rejection of an L1 GeGLU intermediate above is a
+        # seq=4096 L1-budget result and does not apply at M=32.)
+        if out_memcfg is None and m <= TILE_SIZE:
+            out_memcfg = ttnn.L1_MEMORY_CONFIG
         if program_config is not None and hidden_states.is_sharded():
             matched = prefill_progcfg_1d_for_width_sharded_in0(m, k, n, hidden_states.memory_config())
             if matched is not None:
@@ -274,6 +282,10 @@ class SharedMLP:
         k = int(hidden.shape[-1])
         n = int(self.down_proj.shape[-1])
         program_config, out_memcfg, compute_kernel_config = interleaved_down_proj_prefill_config(m, k, n)
+        # Decode: L1 writeback, same lever (and same bit-exactness) as o_proj —
+        # 82.9 -> 78.7 us in isolation. Consumer is the all-reduce.
+        if out_memcfg is None and m <= TILE_SIZE:
+            out_memcfg = ttnn.L1_MEMORY_CONFIG
         act, owned = self._prepare_prefill_act(hidden, program_config)
         output = ttnn.linear(
             act,
@@ -298,21 +310,30 @@ class SharedMLP:
         gate_up = self._gate_up_linear(hidden_states)
         shard = self._inter_per_device
         s = gate_up.shape[-2]
-        up = ttnn.slice(gate_up, [0, 0, 0, 0], [1, 1, s, shard])
-        gate = ttnn.slice(gate_up, [0, 0, 0, shard], [1, 1, s, 2 * shard])
+        # Keep the split halves wherever gate_up landed (L1 at decode, DRAM at
+        # prefill) so the group does not bounce.
+        geglu_mc = gate_up.memory_config() if not gate_up.is_sharded() else None
+        up = ttnn.slice(gate_up, [0, 0, 0, 0], [1, 1, s, shard], memory_config=geglu_mc)
+        gate = ttnn.slice(gate_up, [0, 0, 0, shard], [1, 1, s, 2 * shard], memory_config=geglu_mc)
         gate_up.deallocate(True)
 
-        # NOTE: keeping this GeGLU intermediate in L1 (so down_proj reads its
-        # input from L1) was measured and rejected: the gain on down_proj was
-        # ~3 us of a 124 us op, inside the run-to-run noise band, while the
-        # intermediate is [seq, intermediate_size/tp] — at tp=1/tp=2 that is
-        # 4-8x wider than tp=8 and OOMs L1 (176 MB at tp=1 seq=4096). Leave it
-        # in DRAM; the op default follows the input.
+        # NOTE: in PREFILL this GeGLU intermediate stays in DRAM. Keeping it in
+        # L1 (so down_proj reads its input from L1) was measured and rejected
+        # there: the gain on down_proj was ~3 us of a 124 us op, inside the
+        # run-to-run noise band, while the intermediate is
+        # [seq, intermediate_size/tp] — at tp=1/tp=2 that is 4-8x wider than
+        # tp=8 and OOMs L1 (176 MB at tp=1 seq=4096).
+        # DECODE is the opposite case and does use L1 (see _gate_up_linear):
+        # seq is one tile, so the whole group is 344 KB, and the win is not the
+        # down_proj read but the gate_up WRITE — 8.98 -> 8.67 ms/step over 60
+        # layers by not pushing its output through DRAM. ``geglu_mc`` inherits
+        # whichever the matmul picked, so neither case is hard-coded here.
         # Fuse gelu(gate)*up into one BinaryNg: GELU param 1.0 == fast tanh approx.
         hidden = ttnn.mul(
             gate,
             up,
             input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 1.0)],
+            memory_config=geglu_mc,
         )
         gate.deallocate(True)
         up.deallocate(True)
