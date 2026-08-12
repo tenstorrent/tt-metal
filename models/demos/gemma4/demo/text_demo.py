@@ -648,8 +648,9 @@ def _run_generation_via_generator(
             f"GEMMA4_CHUNKED_PREFILL_TRACE=1 to override."
         )
 
-    # Default host sample — see text_demo_v2 (device sample + decode trace hazard).
-    force_host = os.environ.get("GEMMA4_HOST_SAMPLE", "1").lower() in ("1", "true", "yes")
+    # Device sample by default — see text_demo_v2 for the measurement that flipped
+    # this default (GEMMA4_HOST_SAMPLE=1 restores the host path).
+    force_host = os.environ.get("GEMMA4_HOST_SAMPLE", "0").lower() in ("1", "true", "yes")
     can_sample = (not force_host) and model_can_sample_on_device(generator.model[0])
     # Generator long-context path is greedy-only today.
     device_sampling_params = build_device_sampling_params({"temperature": 0}, can_sample=can_sample)
