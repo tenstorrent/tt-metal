@@ -123,12 +123,37 @@ class _TtHCABase(LightweightModule):
             "thr": self._f32(((torch.arange(seq_global) + 1) // rate).float().view(1, 1, seq_global, 1), shard),
             "ic": self._f32(torch.arange(seq_global).float().view(1, 1, seq_global, 1), shard),
             "w": self._f32(torch.arange(width).float().view(1, 1, 1, width)),
+            "ec": self._scalar_buffer(ttnn.float32),
+            "rl": self._scalar_buffer(ttnn.float32),
         }
 
-    def _scalar(self, v: float):
-        """1-element float32 on device. The only thing forward pushes from host, 4 bytes, the same shape
-        MLA's per-chunk metadata uses (tt_prefill_runtime.py:481)."""
-        return self._f32(torch.full((1, 1, 1, 1), float(v)))
+    def _scalar_buffer(self, dtype, shape=(1, 1, 1, 1), layout=ttnn.TILE_LAYOUT):
+        """Persistent 1-element buffer for a per-chunk scalar. Refreshed in place by ``_push_scalar``, so
+        forward allocates nothing -- the same shape MLA's per-chunk metadata uses
+        (tt_prefill_runtime.py:481), and the only form that could later be trace-safe."""
+        return ttnn.from_torch(
+            torch.zeros(*shape, dtype=torch.int32),
+            device=self.device,
+            dtype=dtype,
+            layout=layout,
+            memory_config=self.memory_config if layout == ttnn.TILE_LAYOUT else None,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device) if self.is_mesh else None,
+        )
+
+    def _push_scalar(self, buf, v):
+        """Write one value into an existing device buffer. 4 bytes, and the only thing forward still sends
+        from host: the chunk's real length is known nowhere else."""
+        host_dtype = torch.float32 if buf.dtype == ttnn.float32 else torch.int32
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(
+                torch.full(tuple(buf.shape), v, dtype=host_dtype),
+                dtype=buf.dtype,
+                layout=buf.layout,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device) if self.is_mesh else None,
+            ),
+            buf,
+        )
+        return buf
 
     def _mask_block(self, seq: int, width: int, first_window_position: int, seq_len_actual: int):
         """The mask's compressed columns, built on device: 0 where a query may attend an entry, -inf else.
@@ -149,8 +174,8 @@ class _TtHCABase(LightweightModule):
         c = self._mask_consts
         if c is None or c["seq"] != seq_global or c["width"] != width:
             c = self._mask_consts = self._build_mask_consts(seq_global, width)
-        within = ttnn.lt(c["w"], ttnn.add(c["thr"], self._scalar(first_window_position // rate)))
-        live = ttnn.lt(c["ic"], self._scalar(seq_len_actual))  # pad query rows attend nothing
+        within = ttnn.lt(c["w"], ttnn.add(c["thr"], self._push_scalar(c["ec"], first_window_position // rate)))
+        live = ttnn.lt(c["ic"], self._push_scalar(c["rl"], seq_len_actual))  # pad query rows attend nothing
         return ttnn.typecast(ttnn.log(ttnn.multiply(within, live)), self.dtype)
 
     def _build_rope_table(self, count: int, stride: int):
@@ -198,28 +223,12 @@ class _TtHCABase(LightweightModule):
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=mapper,
         )
-        base = ttnn.from_torch(
-            torch.zeros(1, 1, dtype=torch.int32),
-            device=self.device,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device) if self.is_mesh else None,
-        )
-        return const, base
+        return const, self._scalar_buffer(ttnn.uint32, shape=(1, 1), layout=ttnn.ROW_MAJOR_LAYOUT)
 
     def _rope_index(self, index_base, base: int):
         """This chunk's gather index, built on device from the constant half plus a 4-byte base."""
         const, buf = index_base
-        ttnn.copy_host_to_device_tensor(
-            ttnn.from_torch(
-                torch.full((1, 1), int(base), dtype=torch.int32),
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device) if self.is_mesh else None,
-            ),
-            buf,
-        )
-        return ttnn.add(const, buf)
+        return ttnn.add(const, self._push_scalar(buf, base))
 
     def _rope_gather(self, table, index):
         """Pick this chunk's rows out of the replicated table. ttnn.embedding addresses rows BY INDEX, so
@@ -547,6 +556,7 @@ class TtHCA(_TtHCABase):
         self._mask = None  # persistent additive mask; forward overwrites only the moving columns
         self._mask_col = None
         self._carry_cols = None
+        self._kv_pad = None  # zero rows that bring Sk up to a tile multiple; constant, so built once
 
     def _build_masks(self, seq_global: int, cap: int):
         """Two persistent additive masks over the key layout ``[carry | chunk | compressed | pad]``. The
@@ -582,6 +592,10 @@ class TtHCA(_TtHCABase):
             )
         self._mask = ttnn.concat(parts, dim=3)
         self._mask_col = raw
+        # SDPA tile-pads a non-aligned Sk with zeros and a provided mask reads those columns as 0 (= attend),
+        # so the kv side gets explicit zero rows and the mask -infs their columns. Constant, hence built here.
+        sk = raw + cap
+        self._kv_pad = self._from_torch(torch.zeros(1, 1, sk_pad - sk, self.head_dim)) if sk_pad > sk else None
 
         # ONE mask, not two: the first chunk differs only in its carry columns, whose positions do not exist
         # yet, so both variants of that [seq, carry] slab are kept and forward writes the right one. Building
@@ -818,8 +832,8 @@ class TtHCA(_TtHCABase):
         sk = carry_len + seq_len + compressed_kv.shape[2]
         sk_pad = ((sk + 31) // 32) * 32
         parts = [sliding_kv, compressed_kv] if carry is None else [carry, sliding_kv, compressed_kv]
-        if sk_pad > sk:
-            parts.append(self._from_torch(torch.zeros(batch, 1, sk_pad - sk, self.head_dim)))
+        if self._kv_pad is not None:
+            parts.append(self._kv_pad)
         kv = ttnn.concat(parts, dim=2)
 
         # Only the compressed columns move between chunks, and their column range is fixed, so the mask is
