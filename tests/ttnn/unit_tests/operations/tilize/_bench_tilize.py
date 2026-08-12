@@ -402,7 +402,11 @@ ARMS = {
     # per-core-overhead lever (one extra command-buffer register write per
     # kernel), so per master.md B0 both arms are measured on the smallest
     # regimes as well as on the square it targets.
-    "lever_r9_vc_force": dict(levers=dict(per_core_vc=1)),
+    # The mask is per-half (1 = reader, 2 = writer, 3 = both) because the two
+    # halves do NOT behave alike — see the R9 table.
+    "lever_r9_vc_force": dict(levers=dict(per_core_vc=3)),
+    "lever_r9_vc_reader": dict(levers=dict(per_core_vc=1)),
+    "lever_r9_vc_writer": dict(levers=dict(per_core_vc=2)),
     "lever_r9_vc_off": dict(levers=dict(per_core_vc=0)),
     # R9 (master.md A3, the residual degree) — the block -> core MAPPING order.
     # Row-major makes a core's consecutive blocks walk ACROSS one tile-row, so
@@ -414,7 +418,7 @@ ARMS = {
     "lever_r9_block_col": dict(levers=dict(block_order=0)),
     # The pair — levers compose, and a flat single-lever measurement is usually
     # a co-binding stage rather than a dead lever.
-    "lever_r9_vc_and_block_row": dict(levers=dict(per_core_vc=1, block_order=1)),
+    "lever_r9_vc_and_block_row": dict(levers=dict(per_core_vc=3, block_order=1)),
     # ---- ablation arms (classification; output wrong by design) ---------
     "ablate_compute": dict(levers=dict(stub_compute=1)),
     "ablate_read": dict(levers=dict(stub_read=1)),

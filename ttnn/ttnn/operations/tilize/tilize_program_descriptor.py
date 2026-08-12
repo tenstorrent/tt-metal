@@ -215,10 +215,13 @@ FP32_DEST_ACC_8BIT = 1
 # four unicast VCs along every row AND every column of the grid, so no two
 # neighbours on a shared link agree, whatever core subset the placement picked.
 #
-# 1 = assign per-core VCs on both halves (reader request VC + writer VC),
-# 0 = every core on the arch default (read VC 1, write `NOC_UNICAST_WRITE_VC`),
-# which is the pre-R9 program byte-for-byte.
+# A BITMASK over the two NoC halves, because they are separately measurable and
+# measured to behave differently: bit 0 = the reader's read-request VC, bit 1 =
+# the writer's write VC. 0 = every core on the arch default (read VC 1, write
+# `NOC_UNICAST_WRITE_VC`), i.e. the pre-R9 program byte-for-byte; 3 = both.
 PER_CORE_VC = 0
+VC_READER = 1
+VC_WRITER = 2
 # Unicast VCs are 0..3 (`dataflow_api.h`'s read/write `vc` argument doc); 4/5 are
 # the multicast and dispatch-multicast channels and are NOT ours to take.
 NUM_UNICAST_VCS = 4
@@ -365,13 +368,13 @@ DEFAULT_LEVERS = {
     # exists so the COST of alignment-correctness is a measured number rather
     # than an unknown.
     "stage_reads": None,
-    # R9 (master.md B10): per-core unicast VC on BOTH NoC halves — the reader's
-    # request VC and the writer's write VC. `None` = the shipped default
-    # (`PER_CORE_VC`), 1 = force per-core VCs on any shape, 0 = the arch defaults
-    # (read VC 1 / write `NOC_UNICAST_WRITE_VC`), which is the pre-R9 program
-    # byte-for-byte. Per master.md B0 it adds a fixed per-core setup (one extra
-    # command-buffer register write per kernel), so its off-arm is measured on
-    # the smallest regimes too.
+    # R9 (master.md B10): per-core unicast VC, as a BITMASK over the two NoC
+    # halves — 1 = the reader's read-request VC, 2 = the writer's write VC,
+    # 3 = both. `None` = the shipped default (`PER_CORE_VC`), 0 = the arch
+    # defaults (read VC 1 / write `NOC_UNICAST_WRITE_VC`), which is the pre-R9
+    # program byte-for-byte. The mask exists because the halves measure with
+    # different signs, and per master.md B0 the lever adds a fixed per-core cost,
+    # so every arm is also measured on the smallest regimes.
     "per_core_vc": None,
     # R9 (master.md A3, the residual degree): the block -> core mapping order.
     # `None` = the shipped default (`BLOCK_ORDER_ROW_MAJOR`), 1 = row-major
@@ -1834,7 +1837,9 @@ def create_program_descriptor(
     # ---------- 6. kernels ----------
     # R9 (master.md B10 + A3), resolved once so the reader, the writer and the
     # per-core runtime args cannot disagree about either knob.
-    vc_mode = int(PER_CORE_VC if lv["per_core_vc"] is None else lv["per_core_vc"])
+    vc_mask = int(PER_CORE_VC if lv["per_core_vc"] is None else lv["per_core_vc"])
+    reader_vc_mode = int(bool(vc_mask & VC_READER))
+    writer_vc_mode = int(bool(vc_mask & VC_WRITER))
     block_order = block_order_row_major(mode=plan["mode"], wt_block=wt_block, wt_tail=wt_tail, knob=lv["block_order"])
 
     # CT args: scalar args first, TensorAccessorArgs appended LAST (master.md
@@ -1884,7 +1889,7 @@ def create_program_descriptor(
         Wt,  # tile-columns: the source tile grid's width is the output's
         # R9 (B10 + A3): the per-core VC arm and the block-order decode. Both
         # default to 0, which emits the Refinement-8 reader byte-for-byte.
-        vc_mode,
+        reader_vc_mode,
         block_order,
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
@@ -1913,7 +1918,9 @@ def create_program_descriptor(
         out_elem_size,
         # R9 (B10 + A3): the writer TWIN of the reader's two knobs — a dataflow
         # lever applied to one NoC half only moves the bottleneck across the CB.
-        vc_mode,
+        # The two halves carry SEPARATE mask bits because they measure with very
+        # different signs (see the R9 changelog table).
+        writer_vc_mode,
         block_order,
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
