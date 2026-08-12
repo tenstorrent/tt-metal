@@ -3,8 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Tenstorrent Bounty #18287: Bring up microsoft/phi-1 on Wormhole (N150/N300)
-# Modular implementation inheriting design patterns from tt_transformers
+# Architecture: PhiForCausalLM (HuggingFace transformers >= 4.37)
+#   - 24 decoder layers, parallel residual connections
+#   - Partial RoPE: rotary_dim=32 out of head_dim=64 (num_attention_heads=32)
+#   - NewGELU activation (gelu_new / tanh-approximate GELU)
+#   - Modular implementation following tt_transformers patterns
 
+import math
 import typing
 
 import torch
@@ -12,11 +17,89 @@ import torch
 import ttnn
 
 
-class TTPhi1Attention:
+def precompute_freqs(rotary_dim: int, max_seq_len: int, base: float = 10000.0) -> torch.Tensor:
+    """Precompute the frequency tensor for RoPE (sin/cos caches).
+
+    Returns cos and sin tensors of shape [1, 1, max_seq_len, rotary_dim].
     """
-    Multi-Head Attention block for Phi-1 (`microsoft/phi-1`).
-    Supports Partial RoPE (Rotary Position Embedding applied to a fraction of head dimensions)
-    and routes through ttnn.scaled_dot_product_attention (SDPA) for hardware acceleration on Tensix cores.
+    inv_freq = 1.0 / (base ** (torch.arange(0, rotary_dim, 2, dtype=torch.float32) / rotary_dim))
+    t = torch.arange(max_seq_len, dtype=torch.float32)
+    freqs = torch.einsum("i,j->ij", t, inv_freq)  # [max_seq_len, rotary_dim/2]
+    # Duplicate each frequency for the interleaved [cos, cos, cos, ...] pattern
+    emb = torch.cat([freqs, freqs], dim=-1)  # [max_seq_len, rotary_dim]
+    cos_cache = emb.cos().unsqueeze(0).unsqueeze(0)  # [1, 1, max_seq_len, rotary_dim]
+    sin_cache = emb.sin().unsqueeze(0).unsqueeze(0)  # [1, 1, max_seq_len, rotary_dim]
+    return cos_cache, sin_cache
+
+
+class TTPhi1RoPE:
+    """Rotary Position Embedding setup for Phi-1 on Tenstorrent hardware.
+
+    Precomputes cos/sin caches and provides methods to retrieve position-sliced
+    rotation matrices for both prefill and decode modes.
+
+    Uses ttnn.experimental.rotary_embedding (standard HF RoPE kernel).
+    """
+
+    def __init__(
+        self,
+        device: ttnn.Device,
+        head_dim: int = 64,
+        rotary_dim: int = 32,
+        max_seq_len: int = 2048,
+        base: float = 10000.0,
+        dtype: ttnn.DataType = ttnn.bfloat16,
+    ):
+        self.device = device
+        self.head_dim = head_dim
+        self.rotary_dim = rotary_dim
+        self.max_seq_len = max_seq_len
+        self.dtype = dtype
+
+        # Precompute cos/sin on CPU then transfer to device DRAM
+        cos_cache_torch, sin_cache_torch = precompute_freqs(rotary_dim, max_seq_len, base)
+
+        self.cos_cache = ttnn.from_torch(
+            cos_cache_torch.to(torch.bfloat16),
+            dtype=self.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self.sin_cache = ttnn.from_torch(
+            sin_cache_torch.to(torch.bfloat16),
+            dtype=self.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def get_rot_mats(self, start_pos: int, seq_len: int):
+        """Get position-sliced cos/sin matrices for the given sequence range.
+
+        Returns (cos_slice, sin_slice) tensors ready for ttnn.experimental.rotary_embedding.
+        """
+        cos_slice = ttnn.slice(
+            self.cos_cache,
+            [0, 0, start_pos, 0],
+            [1, 1, start_pos + seq_len, self.rotary_dim],
+        )
+        sin_slice = ttnn.slice(
+            self.sin_cache,
+            [0, 0, start_pos, 0],
+            [1, 1, start_pos + seq_len, self.rotary_dim],
+        )
+        return cos_slice, sin_slice
+
+
+class TTPhi1Attention:
+    """Multi-Head Attention block for Phi-1 (microsoft/phi-1).
+
+    Architecture:
+        - num_attention_heads = 32, head_dim = 64 (hidden_size=2048)
+        - Partial RoPE: rotary_dim=32 out of head_dim=64
+        - Uses ttnn.transformer.scaled_dot_product_attention (SDPA) for HW acceleration
+        - RoPE applied via ttnn.experimental.rotary_embedding on the first 32 dims of Q/K
     """
 
     def __init__(
@@ -24,40 +107,41 @@ class TTPhi1Attention:
         device: ttnn.Device,
         state_dict: typing.Dict[str, torch.Tensor],
         base_address: str,
-        n_heads: int = 16,
+        n_heads: int = 32,
         hidden_size: int = 2048,
-        rotary_dim: int = 32,  # Phi-1 uses partial RoPE (e.g. 32 out of 128 head_dim)
+        rotary_dim: int = 32,
         dtype: ttnn.DataType = ttnn.bfloat16,
     ):
         self.device = device
         self.n_heads = n_heads
         self.hidden_size = hidden_size
-        self.head_dim = hidden_size // n_heads
+        self.head_dim = hidden_size // n_heads  # 2048 // 32 = 64
         self.rotary_dim = rotary_dim
         self.dtype = dtype
 
-        # Load Wqkv combined or separate projection weights
+        # Load Wqkv combined projection weights (MixFormer format)
         if f"{base_address}.self_attn.Wqkv.weight" in state_dict:
             wqkv_weight = state_dict[f"{base_address}.self_attn.Wqkv.weight"]
             wqkv_bias = state_dict[f"{base_address}.self_attn.Wqkv.bias"]
+        elif f"{base_address}.mixer.Wqkv.weight" in state_dict:
+            wqkv_weight = state_dict[f"{base_address}.mixer.Wqkv.weight"]
+            wqkv_bias = state_dict[f"{base_address}.mixer.Wqkv.bias"]
         elif f"{base_address}.self_attn.q_proj.weight" in state_dict:
-            q_w = state_dict[f"{base_address}.self_attn.q_proj.weight"].view(
-                self.n_heads, self.head_dim, self.hidden_size
-            )
-            k_w = state_dict[f"{base_address}.self_attn.k_proj.weight"].view(
-                self.n_heads, self.head_dim, self.hidden_size
-            )
-            v_w = state_dict[f"{base_address}.self_attn.v_proj.weight"].view(
-                self.n_heads, self.head_dim, self.hidden_size
-            )
-            wqkv_weight = torch.cat([q_w, k_w, v_w], dim=1).view(3 * self.hidden_size, self.hidden_size)
+            # Native HF PhiForCausalLM: separate q/k/v projections
+            q_w = state_dict[f"{base_address}.self_attn.q_proj.weight"]
+            k_w = state_dict[f"{base_address}.self_attn.k_proj.weight"]
+            v_w = state_dict[f"{base_address}.self_attn.v_proj.weight"]
+            wqkv_weight = torch.cat([q_w, k_w, v_w], dim=0)  # [3*hidden, hidden]
 
-            q_b = state_dict[f"{base_address}.self_attn.q_proj.bias"].view(self.n_heads, self.head_dim)
-            k_b = state_dict[f"{base_address}.self_attn.k_proj.bias"].view(self.n_heads, self.head_dim)
-            v_b = state_dict[f"{base_address}.self_attn.v_proj.bias"].view(self.n_heads, self.head_dim)
-            wqkv_bias = torch.cat([q_b, k_b, v_b], dim=1).view(3 * self.hidden_size)
+            q_b = state_dict[f"{base_address}.self_attn.q_proj.bias"]
+            k_b = state_dict[f"{base_address}.self_attn.k_proj.bias"]
+            v_b = state_dict[f"{base_address}.self_attn.v_proj.bias"]
+            wqkv_bias = torch.cat([q_b, k_b, v_b], dim=0)  # [3*hidden]
         else:
-            raise KeyError(f"Could not find Wqkv or q_proj/k_proj/v_proj in state_dict for {base_address}.self_attn")
+            raise KeyError(
+                f"Could not find QKV projection weights in state_dict for {base_address}. "
+                f"Checked: self_attn.Wqkv, mixer.Wqkv, self_attn.q_proj"
+            )
 
         self.wqkv = ttnn.from_torch(
             wqkv_weight.T.contiguous(),
@@ -74,42 +158,59 @@ class TTPhi1Attention:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # Output projection (`out_proj` vs `dense`)
-        if f"{base_address}.self_attn.out_proj.weight" in state_dict:
-            out_weight = state_dict[f"{base_address}.self_attn.out_proj.weight"]
-            out_bias = state_dict[f"{base_address}.self_attn.out_proj.bias"]
-        elif f"{base_address}.self_attn.dense.weight" in state_dict:
-            out_weight = state_dict[f"{base_address}.self_attn.dense.weight"]
-            out_bias = state_dict[f"{base_address}.self_attn.dense.bias"]
-        else:
-            raise KeyError(f"Could not find out_proj or dense in state_dict for {base_address}.self_attn")
+        # Output projection (out_proj for MixFormer / dense for native HF)
+        out_w_key, out_b_key = None, None
+        for prefix in [
+            f"{base_address}.self_attn.out_proj",
+            f"{base_address}.mixer.out_proj",
+            f"{base_address}.self_attn.dense",
+        ]:
+            if f"{prefix}.weight" in state_dict:
+                out_w_key = f"{prefix}.weight"
+                out_b_key = f"{prefix}.bias"
+                break
+        if out_w_key is None:
+            raise KeyError(f"Could not find output projection weights for {base_address}")
 
         self.out_proj = ttnn.from_torch(
-            out_weight.T.contiguous(),
+            state_dict[out_w_key].T.contiguous(),
             dtype=self.dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         self.bout_proj = ttnn.from_torch(
-            out_bias.reshape(1, 1, 1, -1).contiguous(),
+            state_dict[out_b_key].reshape(1, 1, 1, -1).contiguous(),
             dtype=self.dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def __call__(self, x: ttnn.Tensor, rotary_pos_emb: typing.Optional[ttnn.Tensor] = None) -> ttnn.Tensor:
+    def __call__(
+        self,
+        x: ttnn.Tensor,
+        cos_cache: typing.Optional[ttnn.Tensor] = None,
+        sin_cache: typing.Optional[ttnn.Tensor] = None,
+    ) -> ttnn.Tensor:
+        """Forward pass for Phi-1 attention with Partial RoPE.
+
+        Args:
+            x: Input tensor [batch, seq_len, hidden_size]
+            cos_cache: Cosine rotation matrix [1, 1, seq_len, rotary_dim]
+            sin_cache: Sine rotation matrix [1, 1, seq_len, rotary_dim]
+        """
         # Project Q, K, V
         qkv = ttnn.linear(x, self.wqkv, bias=self.bqkv, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        # Ensure exact rank 3 (`[batch, seq_len, 3*hidden_size]`) required by split_query_key_value_and_split_heads C++ kernel
+        # Ensure rank-3 for split_query_key_value_and_split_heads kernel
         if len(qkv.shape) == 4 and qkv.shape[1] == 1:
             qkv_new = ttnn.reshape(qkv, (qkv.shape[0], qkv.shape[2], qkv.shape[3]))
             ttnn.deallocate(qkv)
             qkv = qkv_new
 
-        # Split QKV into separate tensors or heads
+        # Split QKV -> separate Q, K, V with heads split
+        # Output shapes: [batch, n_heads, seq_len, head_dim]
         q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
             qkv,
             memory_config=ttnn.L1_MEMORY_CONFIG,
@@ -117,32 +218,40 @@ class TTPhi1Attention:
         )
         ttnn.deallocate(qkv)
 
-        # Apply Partial RoPE if provided
-        if rotary_pos_emb is not None:
-            # Slicing along the head_dim which is at dim 3
+        # Apply Partial RoPE: only first rotary_dim=32 dimensions of Q and K
+        if cos_cache is not None and sin_cache is not None:
+            # Slice Q into rotary portion [0:32] and pass-through portion [32:64]
             q_rot = ttnn.slice(q, [0, 0, 0, 0], [q.shape[0], q.shape[1], q.shape[2], self.rotary_dim])
-            q_pass = ttnn.slice(q, [0, 0, 0, self.rotary_dim], [q.shape[0], q.shape[1], q.shape[2], q.shape[3]])
-            q_rot_new = ttnn.apply_rotary_position_embedding(q_rot, rotary_pos_emb, memory_config=ttnn.L1_MEMORY_CONFIG)
+            q_pass = ttnn.slice(q, [0, 0, 0, self.rotary_dim], [q.shape[0], q.shape[1], q.shape[2], self.head_dim])
+
+            # Apply RoPE to the rotary portion using the real cos/sin caches
+            q_rot_emb = ttnn.experimental.rotary_embedding(
+                q_rot, cos_cache, sin_cache, memory_config=ttnn.L1_MEMORY_CONFIG
+            )
             ttnn.deallocate(q_rot)
 
-            q_new = ttnn.concat([q_rot_new, q_pass], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG)
-            ttnn.deallocate(q_rot_new)
+            # Concatenate rotated + pass-through
+            q_new = ttnn.concat([q_rot_emb, q_pass], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(q_rot_emb)
             ttnn.deallocate(q_pass)
             ttnn.deallocate(q)
             q = q_new
 
+            # Same for K
             k_rot = ttnn.slice(k, [0, 0, 0, 0], [k.shape[0], k.shape[1], k.shape[2], self.rotary_dim])
-            k_pass = ttnn.slice(k, [0, 0, 0, self.rotary_dim], [k.shape[0], k.shape[1], k.shape[2], k.shape[3]])
-            k_rot_new = ttnn.apply_rotary_position_embedding(k_rot, rotary_pos_emb, memory_config=ttnn.L1_MEMORY_CONFIG)
+            k_pass = ttnn.slice(k, [0, 0, 0, self.rotary_dim], [k.shape[0], k.shape[1], k.shape[2], self.head_dim])
+            k_rot_emb = ttnn.experimental.rotary_embedding(
+                k_rot, cos_cache, sin_cache, memory_config=ttnn.L1_MEMORY_CONFIG
+            )
             ttnn.deallocate(k_rot)
 
-            k_new = ttnn.concat([k_rot_new, k_pass], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG)
-            ttnn.deallocate(k_rot_new)
+            k_new = ttnn.concat([k_rot_emb, k_pass], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(k_rot_emb)
             ttnn.deallocate(k_pass)
             ttnn.deallocate(k)
             k = k_new
 
-        # Hardware-accelerated Scaled Dot Product Attention (`ttnn.transformer.scaled_dot_product_attention`)
+        # Hardware-accelerated SDPA on Tensix cores
         attn_out = ttnn.transformer.scaled_dot_product_attention(
             q,
             k,
@@ -151,38 +260,39 @@ class TTPhi1Attention:
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
-        # Deallocate intermediate Q, K, V activations to prevent Tensix L1 memory exhaustion
+        # Free intermediate Q, K, V from L1
         ttnn.deallocate(q)
         ttnn.deallocate(k)
         ttnn.deallocate(v)
 
-        # Concatenate heads back to `hidden_size`
-        attn_out_concatenated = ttnn.transformer.concatenate_heads(
+        # Concatenate heads back: [batch, n_heads, seq_len, head_dim] -> [batch, seq_len, hidden_size]
+        attn_out_concat = ttnn.transformer.concatenate_heads(
             attn_out,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(attn_out)
 
-        # Ensure rank matches input before final linear projection
-        if len(attn_out_concatenated.shape) == 4 and attn_out_concatenated.shape[1] == 1:
-            attn_out_conc_new = ttnn.reshape(
-                attn_out_concatenated,
-                (attn_out_concatenated.shape[0], attn_out_concatenated.shape[2], attn_out_concatenated.shape[3]),
+        # Fix rank if concatenate_heads returns rank-4
+        if len(attn_out_concat.shape) == 4 and attn_out_concat.shape[1] == 1:
+            attn_out_3d = ttnn.reshape(
+                attn_out_concat,
+                (attn_out_concat.shape[0], attn_out_concat.shape[2], attn_out_concat.shape[3]),
             )
-            ttnn.deallocate(attn_out_concatenated)
-            attn_out_concatenated = attn_out_conc_new
+            ttnn.deallocate(attn_out_concat)
+            attn_out_concat = attn_out_3d
 
-        # Final linear projection
-        output = ttnn.linear(
-            attn_out_concatenated, self.out_proj, bias=self.bout_proj, memory_config=ttnn.L1_MEMORY_CONFIG
-        )
-        ttnn.deallocate(attn_out_concatenated)
+        # Output linear projection
+        output = ttnn.linear(attn_out_concat, self.out_proj, bias=self.bout_proj, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(attn_out_concat)
         return output
 
 
 class TTPhi1MLP:
-    """
-    MLP block for Phi-1 (`fc1` -> NewGELU / GELU -> `fc2`).
+    """MLP block for Phi-1: fc1 -> NewGELU -> fc2.
+
+    Architecture:
+        - intermediate_size = 8192 (4x expansion of hidden_size=2048)
+        - Activation: NewGELU (tanh-approximate GELU, `hidden_act="gelu_new"`)
     """
 
     def __init__(
@@ -197,36 +307,44 @@ class TTPhi1MLP:
         self.device = device
         self.dtype = dtype
 
-        if f"{base_address}.mlp.fc1.weight" in state_dict:
-            fc1_weight = state_dict[f"{base_address}.mlp.fc1.weight"]
-            fc1_bias = state_dict[f"{base_address}.mlp.fc1.bias"]
-            fc2_weight = state_dict[f"{base_address}.mlp.fc2.weight"]
-            fc2_bias = state_dict[f"{base_address}.mlp.fc2.bias"]
-        elif f"{base_address}.mlp.c_fc.weight" in state_dict:
-            fc1_weight = state_dict[f"{base_address}.mlp.c_fc.weight"]
-            fc1_bias = state_dict[f"{base_address}.mlp.c_fc.bias"]
-            fc2_weight = state_dict[f"{base_address}.mlp.c_proj.weight"]
-            fc2_bias = state_dict[f"{base_address}.mlp.c_proj.bias"]
-        else:
-            raise KeyError(f"Could not find fc1/fc2 or c_fc/c_proj in state_dict for {base_address}.mlp")
+        # Resolve fc1/fc2 keys across naming conventions
+        fc1_w_key, fc1_b_key, fc2_w_key, fc2_b_key = None, None, None, None
+        for fc1_prefix, fc2_prefix in [
+            (f"{base_address}.mlp.fc1", f"{base_address}.mlp.fc2"),
+            (f"{base_address}.mlp.c_fc", f"{base_address}.mlp.c_proj"),
+        ]:
+            if f"{fc1_prefix}.weight" in state_dict:
+                fc1_w_key = f"{fc1_prefix}.weight"
+                fc1_b_key = f"{fc1_prefix}.bias"
+                fc2_w_key = f"{fc2_prefix}.weight"
+                fc2_b_key = f"{fc2_prefix}.bias"
+                break
+        if fc1_w_key is None:
+            raise KeyError(f"Could not find MLP projection weights for {base_address}")
 
         self.fc1 = ttnn.from_torch(
-            fc1_weight.T.contiguous(), dtype=self.dtype, layout=ttnn.TILE_LAYOUT, device=self.device
+            state_dict[fc1_w_key].T.contiguous(), dtype=self.dtype, layout=ttnn.TILE_LAYOUT, device=self.device
         )
         self.bfc1 = ttnn.from_torch(
-            fc1_bias.reshape(1, 1, 1, -1).contiguous(), dtype=self.dtype, layout=ttnn.TILE_LAYOUT, device=self.device
+            state_dict[fc1_b_key].reshape(1, 1, 1, -1).contiguous(),
+            dtype=self.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
         )
         self.fc2 = ttnn.from_torch(
-            fc2_weight.T.contiguous(), dtype=self.dtype, layout=ttnn.TILE_LAYOUT, device=self.device
+            state_dict[fc2_w_key].T.contiguous(), dtype=self.dtype, layout=ttnn.TILE_LAYOUT, device=self.device
         )
         self.bfc2 = ttnn.from_torch(
-            fc2_bias.reshape(1, 1, 1, -1).contiguous(), dtype=self.dtype, layout=ttnn.TILE_LAYOUT, device=self.device
+            state_dict[fc2_b_key].reshape(1, 1, 1, -1).contiguous(),
+            dtype=self.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
         )
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        # fc1 projection + GELU activation
+        # fc1 projection + NewGELU activation (tanh-approximate GELU)
         h = ttnn.linear(x, self.fc1, bias=self.bfc1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        h_act = ttnn.gelu(h, memory_config=ttnn.L1_MEMORY_CONFIG)
+        h_act = ttnn.gelu(h, fast_and_approximate_mode=True, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(h)
         # fc2 projection
         out = ttnn.linear(h_act, self.fc2, bias=self.bfc2, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -235,10 +353,13 @@ class TTPhi1MLP:
 
 
 class TTPhi1DecoderLayer:
-    """
-    Single Transformer Layer for Phi-1 (`microsoft/phi-1`).
-    Crucial Architecture Note: Phi-1 uses parallel residual connections:
-      output = input + attn(input_norm) + mlp(input_norm)
+    """Single Transformer Decoder Layer for Phi-1.
+
+    Architecture: Parallel residual connections:
+        output = input + attn(LayerNorm(input)) + mlp(LayerNorm(input))
+
+    Both attention and MLP operate on the same layer-normed input in parallel,
+    then their results are summed with the residual identity.
     """
 
     def __init__(
@@ -247,11 +368,14 @@ class TTPhi1DecoderLayer:
         state_dict: typing.Dict[str, torch.Tensor],
         base_address: str,
         layer_num: int,
+        n_heads: int = 32,
+        hidden_size: int = 2048,
+        rotary_dim: int = 32,
         dtype: ttnn.DataType = ttnn.bfloat16,
     ):
         self.device = device
 
-        # Resolve exact base address for this decoder layer across HF naming variations
+        # Resolve layer address across HF naming variants
         candidates = [
             f"{base_address}.layers.{layer_num}",
             f"model.layers.{layer_num}",
@@ -268,36 +392,59 @@ class TTPhi1DecoderLayer:
 
         self.base_address = resolved_address
 
-        # Input LayerNorm (`input_layernorm` vs `ln_1`)
-        if f"{self.base_address}.input_layernorm.weight" in state_dict:
-            ln_weight = state_dict[f"{self.base_address}.input_layernorm.weight"]
-            ln_bias = state_dict[f"{self.base_address}.input_layernorm.bias"]
-        elif f"{self.base_address}.ln_1.weight" in state_dict:
-            ln_weight = state_dict[f"{self.base_address}.ln_1.weight"]
-            ln_bias = state_dict[f"{self.base_address}.ln_1.bias"]
-        else:
-            raise KeyError(f"Could not find input_layernorm or ln_1 in state_dict for {self.base_address}")
+        # Input LayerNorm (input_layernorm / ln / ln_1)
+        ln_w_key, ln_b_key = None, None
+        for ln_prefix in [
+            f"{self.base_address}.input_layernorm",
+            f"{self.base_address}.ln",
+            f"{self.base_address}.ln_1",
+        ]:
+            if f"{ln_prefix}.weight" in state_dict:
+                ln_w_key = f"{ln_prefix}.weight"
+                ln_b_key = f"{ln_prefix}.bias"
+                break
+        if ln_w_key is None:
+            raise KeyError(f"Could not find LayerNorm weights for {self.base_address}")
 
         self.ln_weight = ttnn.from_torch(
-            ln_weight.reshape(1, 1, 1, -1).contiguous(), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
+            state_dict[ln_w_key].reshape(1, 1, 1, -1).contiguous(),
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
         )
         self.ln_bias = ttnn.from_torch(
-            ln_bias.reshape(1, 1, 1, -1).contiguous(), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
+            state_dict[ln_b_key].reshape(1, 1, 1, -1).contiguous(),
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
         )
 
-        self.self_attn = TTPhi1Attention(device, state_dict, self.base_address, dtype=dtype)
-        self.mlp = TTPhi1MLP(device, state_dict, self.base_address, dtype=dtype)
+        self.self_attn = TTPhi1Attention(
+            device,
+            state_dict,
+            self.base_address,
+            n_heads=n_heads,
+            hidden_size=hidden_size,
+            rotary_dim=rotary_dim,
+            dtype=dtype,
+        )
+        self.mlp = TTPhi1MLP(device, state_dict, self.base_address, hidden_size=hidden_size, dtype=dtype)
 
-    def __call__(self, x: ttnn.Tensor, rotary_pos_emb: typing.Optional[ttnn.Tensor] = None) -> ttnn.Tensor:
+    def __call__(
+        self,
+        x: ttnn.Tensor,
+        cos_cache: typing.Optional[ttnn.Tensor] = None,
+        sin_cache: typing.Optional[ttnn.Tensor] = None,
+    ) -> ttnn.Tensor:
         # Layer Normalization
         normed_x = ttnn.layer_norm(x, weight=self.ln_weight, bias=self.ln_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        # Parallel Attention & MLP evaluation
-        attn_out = self.self_attn(normed_x, rotary_pos_emb=rotary_pos_emb)
+        # Parallel Attention & MLP on the same normed input
+        attn_out = self.self_attn(normed_x, cos_cache=cos_cache, sin_cache=sin_cache)
         mlp_out = self.mlp(normed_x)
         ttnn.deallocate(normed_x)
 
-        # Parallel Residual Sum: x + attn_out + mlp_out
+        # Parallel Residual: x + attn_out + mlp_out
         residual_sum = ttnn.add(attn_out, mlp_out, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(attn_out)
         ttnn.deallocate(mlp_out)
@@ -308,9 +455,10 @@ class TTPhi1DecoderLayer:
 
 
 class TTPhi1Model:
-    """
-    Core Phi-1 Transformer backbone (`num_hidden_layers=24`).
+    """Core Phi-1 Transformer backbone (num_hidden_layers=24).
+
     Stacks token embeddings, 24 TTPhi1DecoderLayers, and final LayerNorm.
+    Initializes RoPE cache (TTPhi1RoPE) for real cos/sin position embeddings.
     """
 
     def __init__(
@@ -319,6 +467,10 @@ class TTPhi1Model:
         state_dict: typing.Dict[str, torch.Tensor],
         base_address: str = "model",
         num_hidden_layers: int = 24,
+        n_heads: int = 32,
+        hidden_size: int = 2048,
+        rotary_dim: int = 32,
+        max_position_embeddings: int = 2048,
         dtype: ttnn.DataType = ttnn.bfloat16,
     ):
         self.device = device
@@ -330,6 +482,7 @@ class TTPhi1Model:
         embed_key = None
         for candidate in [
             f"{base_address}.embed_tokens.weight",
+            "transformer.embd.wte.weight",
             "transformer.wte.weight",
             f"{base_address}.wte.weight",
             "model.embed_tokens.weight",
@@ -338,9 +491,7 @@ class TTPhi1Model:
                 embed_key = candidate
                 break
         if embed_key is None:
-            raise KeyError(
-                f"Could not find token embedding matrix in state_dict. Checked candidates for {base_address}.embed_tokens"
-            )
+            raise KeyError(f"Could not find token embedding matrix in state_dict for {base_address}")
 
         self.embed_tokens_torch = state_dict[embed_key]
         self.embed_tokens_device = ttnn.from_torch(
@@ -351,21 +502,38 @@ class TTPhi1Model:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # 2. Stack Decoder Layers (0 to num_hidden_layers - 1)
+        # 2. RoPE Cache (real cos/sin, not dummies)
+        self.rope = TTPhi1RoPE(
+            device=device,
+            head_dim=hidden_size // n_heads,
+            rotary_dim=rotary_dim,
+            max_seq_len=max_position_embeddings,
+            dtype=dtype,
+        )
+
+        # 3. Stack Decoder Layers
         self.layers = []
         for layer_num in range(num_hidden_layers):
             self.layers.append(
                 TTPhi1DecoderLayer(
-                    device=device, state_dict=state_dict, base_address=base_address, layer_num=layer_num, dtype=dtype
+                    device=device,
+                    state_dict=state_dict,
+                    base_address=base_address,
+                    layer_num=layer_num,
+                    n_heads=n_heads,
+                    hidden_size=hidden_size,
+                    rotary_dim=rotary_dim,
+                    dtype=dtype,
                 )
             )
 
-        # 3. Final LayerNorm (`final_layernorm` vs `norm` vs `ln_f`)
+        # 4. Final LayerNorm
         norm_w_key, norm_b_key = None, None
         for candidate_prefix in [
             f"{base_address}.final_layernorm",
             f"{base_address}.norm",
             "transformer.ln_f",
+            "transformer.ln",
             "model.final_layernorm",
         ]:
             if f"{candidate_prefix}.weight" in state_dict and f"{candidate_prefix}.bias" in state_dict:
@@ -373,39 +541,56 @@ class TTPhi1Model:
                 norm_b_key = f"{candidate_prefix}.bias"
                 break
 
-        if norm_w_key is None or norm_b_key is None:
-            raise KeyError("Could not find final_layernorm weights (`weight`/`bias`) in state_dict.")
+        if norm_w_key is None:
+            raise KeyError("Could not find final LayerNorm weights in state_dict.")
 
-        norm_w = state_dict[norm_w_key].reshape(1, 1, 1, -1).contiguous()
-        norm_b = state_dict[norm_b_key].reshape(1, 1, 1, -1).contiguous()
-        self.final_norm_weight = ttnn.from_torch(norm_w, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
-        self.final_norm_bias = ttnn.from_torch(norm_b, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        self.final_norm_weight = ttnn.from_torch(
+            state_dict[norm_w_key].reshape(1, 1, 1, -1).contiguous(),
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+        self.final_norm_bias = ttnn.from_torch(
+            state_dict[norm_b_key].reshape(1, 1, 1, -1).contiguous(),
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
 
     def __call__(
-        self, x: typing.Union[ttnn.Tensor, torch.Tensor], rotary_pos_emb: typing.Optional[ttnn.Tensor] = None
+        self,
+        x: typing.Union[ttnn.Tensor, torch.Tensor],
+        start_pos: int = 0,
     ) -> ttnn.Tensor:
-        # Handle input embedding if raw torch tensor or token ids are passed
+        """Forward pass through the Phi-1 backbone.
+
+        Args:
+            x: Token IDs (torch.long) or pre-embedded hidden states
+            start_pos: Starting position for RoPE cache slicing (for decode mode)
+        """
+        # Handle input embedding
         if isinstance(x, torch.Tensor):
             if x.dtype in [torch.long, torch.int, torch.int64, torch.int32]:
-                # On-device embedding to prevent PCIe bottleneck
                 x_device = ttnn.from_torch(x.to(torch.uint32), device=self.device)
                 hidden_state = ttnn.embedding(x_device, self.embed_tokens_device, memory_config=ttnn.L1_MEMORY_CONFIG)
                 ttnn.deallocate(x_device)
+                seq_len = x.shape[-1]
             else:
-                embedded = x.to(torch.bfloat16)
                 hidden_state = ttnn.from_torch(
-                    embedded,
+                    x.to(torch.bfloat16),
                     dtype=self.dtype,
                     layout=ttnn.TILE_LAYOUT,
                     device=self.device,
                     memory_config=ttnn.L1_MEMORY_CONFIG,
                 )
+                seq_len = x.shape[-2] if x.dim() >= 2 else x.shape[0]
             can_deallocate = True
         else:
             hidden_state = x
+            seq_len = x.shape[-2] if len(x.shape) >= 3 else x.shape[-1]
             can_deallocate = False
 
-        # Ensure hidden_state is strictly rank 3 (`[batch, seq_len, hidden_size]`) across all decoder layers
+        # Ensure rank-3 [batch, seq_len, hidden_size]
         if len(hidden_state.shape) == 4 and hidden_state.shape[1] == 1:
             hidden_state_new = ttnn.reshape(
                 hidden_state, (hidden_state.shape[0], hidden_state.shape[2], hidden_state.shape[3])
@@ -415,25 +600,35 @@ class TTPhi1Model:
             hidden_state = hidden_state_new
             can_deallocate = True
 
-        # Sequential evaluation across all stacked decoder layers
+        # Get RoPE cos/sin caches for this sequence
+        cos_cache, sin_cache = self.rope.get_rot_mats(start_pos, seq_len)
+
+        # Forward through all decoder layers
         for i, layer in enumerate(self.layers):
             prev_hidden_state = hidden_state
-            hidden_state = layer(hidden_state, rotary_pos_emb=rotary_pos_emb)
+            hidden_state = layer(hidden_state, cos_cache=cos_cache, sin_cache=sin_cache)
             if (i > 0 or can_deallocate) and isinstance(prev_hidden_state, ttnn.Tensor):
                 ttnn.deallocate(prev_hidden_state)
 
-        # Apply final LayerNorm
+        # Free RoPE slices
+        ttnn.deallocate(cos_cache)
+        ttnn.deallocate(sin_cache)
+
+        # Final LayerNorm
         output = ttnn.layer_norm(
-            hidden_state, weight=self.final_norm_weight, bias=self.final_norm_bias, memory_config=ttnn.L1_MEMORY_CONFIG
+            hidden_state,
+            weight=self.final_norm_weight,
+            bias=self.final_norm_bias,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(hidden_state)
         return output
 
 
 class TTPhi1ForCausalLM:
-    """
-    Top-level Causal LM model for microsoft/phi-1.
-    Wraps TTPhi1Model backbone and applies LM Head projection to vocabulary (`vocab_size=51200`).
+    """Top-level Causal LM model for microsoft/phi-1.
+
+    Wraps TTPhi1Model backbone and applies LM Head projection to vocabulary (vocab_size=51200).
     """
 
     def __init__(
@@ -442,6 +637,10 @@ class TTPhi1ForCausalLM:
         state_dict: typing.Dict[str, torch.Tensor],
         base_address: str = "model",
         num_hidden_layers: int = 24,
+        n_heads: int = 32,
+        hidden_size: int = 2048,
+        rotary_dim: int = 32,
+        max_position_embeddings: int = 2048,
         dtype: ttnn.DataType = ttnn.bfloat16,
     ):
         self.device = device
@@ -451,10 +650,14 @@ class TTPhi1ForCausalLM:
             state_dict=state_dict,
             base_address=base_address,
             num_hidden_layers=num_hidden_layers,
+            n_heads=n_heads,
+            hidden_size=hidden_size,
+            rotary_dim=rotary_dim,
+            max_position_embeddings=max_position_embeddings,
             dtype=dtype,
         )
 
-        # LM Head (`lm_head.weight` & `.bias` or `lm_head.linear.weight`)
+        # LM Head (lm_head.linear for MixFormer, lm_head for native HF)
         lm_w_key, lm_b_key = None, None
         for candidate_prefix in ["lm_head.linear", "lm_head", "model.lm_head"]:
             if f"{candidate_prefix}.weight" in state_dict:
@@ -464,8 +667,8 @@ class TTPhi1ForCausalLM:
                 break
 
         if lm_w_key is None:
-            # Fallback check if weight sharing with embed_tokens is used
-            for cand in ["model.embed_tokens.weight", "transformer.wte.weight"]:
+            # Fallback: tied embeddings
+            for cand in ["model.embed_tokens.weight", "transformer.embd.wte.weight"]:
                 if cand in state_dict:
                     lm_w_key = cand
                     break
@@ -473,22 +676,30 @@ class TTPhi1ForCausalLM:
         if lm_w_key is None:
             raise KeyError("Could not find lm_head weight matrix in state_dict.")
 
-        lm_w = state_dict[lm_w_key]  # shape: (vocab_size, hidden_size) e.g. (51200, 2048)
-        lm_w_transposed = lm_w.T.contiguous()
-        self.lm_head_weight = ttnn.from_torch(lm_w_transposed, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        lm_w = state_dict[lm_w_key]  # [vocab_size, hidden_size] e.g. [51200, 2048]
+        self.lm_head_weight = ttnn.from_torch(lm_w.T.contiguous(), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
         if lm_b_key is not None and lm_b_key in state_dict:
-            lm_b = state_dict[lm_b_key].reshape(1, 1, 1, -1).contiguous()
-            self.lm_head_bias = ttnn.from_torch(lm_b, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+            self.lm_head_bias = ttnn.from_torch(
+                state_dict[lm_b_key].reshape(1, 1, 1, -1).contiguous(),
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+            )
         else:
             self.lm_head_bias = None
 
     def __call__(
-        self, x: typing.Union[ttnn.Tensor, torch.Tensor], rotary_pos_emb: typing.Optional[ttnn.Tensor] = None
+        self,
+        x: typing.Union[ttnn.Tensor, torch.Tensor],
+        start_pos: int = 0,
     ) -> ttnn.Tensor:
-        hidden_states = self.model(x, rotary_pos_emb=rotary_pos_emb)
+        hidden_states = self.model(x, start_pos=start_pos)
         logits = ttnn.linear(
-            hidden_states, self.lm_head_weight, bias=self.lm_head_bias, memory_config=ttnn.L1_MEMORY_CONFIG
+            hidden_states,
+            self.lm_head_weight,
+            bias=self.lm_head_bias,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(hidden_states)
         return logits
