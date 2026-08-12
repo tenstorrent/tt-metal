@@ -664,7 +664,7 @@ transaction-shape change on a path the design rules out of the DM budget.
 
 ---
 
-### [ ] Refinement 9 — Per-dtype / per-geometry perf re-target and the square's residual
+### [x] Refinement 9 — Per-dtype / per-geometry perf re-target and the square's residual
 
 **Type**: perf
 
@@ -686,6 +686,33 @@ records it measured **~2.4× slower on this very op**, and the design refutes it
 device-ns recorded with `achieved`; any placement/VC lever that lands shows a measured device-ns win
 on the square; no regression across the full cumulative bench set (all shapes × the dtypes now
 supported).
+
+**Outcome**: both parts landed, and the two named levers are now measured out of contention for the
+square while **B10 ships gated and wins elsewhere**. (a) Per-dtype targets were rebuilt from each
+dtype's own transaction shape (the output tile *is* the page: 1024 B uint8 / 1088 B bf8b / 2048 B
+bf16 / 4096 B fp32) plus its own ablated read/write streams: measured 44 389 (bf16), 87 229 (fp32),
+23 620 (uint8), 36 123 ns (bf8b); against the flat 412 GB/s byte target that reads 0.92 / 0.93 /
+0.86 / 0.86, against the per-dtype target **1.00 / 1.02 / 1.06 / 0.93**. So Refinement 7's recorded
+uint8 "deficit" was the page size and is retired; the one real per-dtype gap left is **bfloat8_b at
+0.93, and it is OVERLAP** (φ 0.825 vs 0.726–0.768 — the most unequal stream pair of the four).
+`noc_estimate` brackets recorded per dtype; **no tt-npe pin** — it is an external non-vendored repo,
+absent here, Blackhole WIP — that gap is stated rather than papered over. (b) **A3's residual**: on a
+full grid `spread_cores` is inert, so the only freedom left is the block→core mapping; the new
+`block_order` knob measured a **null** (square 0.992x, and 0.99–1.01x on every multi-core regime) and
+is parked byte-identical, while A3's *first* degree ("one reader ↔ one bank") is structurally
+unreachable — a block spans all 7 banks — and is now pinned by a test. **B10** is built on both NoC
+halves and measured **1.15–2.87x WORSE at full grid** (four static VCs fragment per-VC buffering on
+routes that stay shared — B10 without A3, exactly as master.md's pairing note implies), so it ships
+gated to where it *does* pay: reader VC on a partially-filled DRAM grid (`wide_short` 1.041x/1.017x,
+`tall_narrow` 1.031x/1.011x) and writer VC on the all-L1 path (`l1_to_l1` 1.076x/1.056x), off on one
+core (B0). Cumulative bench: 3 shapes faster, none regressed. The square's residual ~9 % is now
+attributed by measurement rather than by candidate list: read and write already overlap to 0.768 of
+their serial sum and share one DRAM at 84 % of theoretical peak, inside the tech report's 82–90 %
+band for real workloads. Not chased further because the remaining candidate is *fewer DRAM bytes*
+(a caller-side layout choice), which is not a lever this kernel holds. Also recorded: a
+device-state hazard worth knowing — a programmed read VC survives the program (`noc_init` runs only
+on a NoC-mode change), so both arms restore NOC_CTRL at kernel end; before that fix a byte-identical
+control arm read 1.14x and nearly produced a false verdict on `block_order`.
 
 ---
 

@@ -1770,3 +1770,227 @@ puts outside the DM budget.
   also asserts R7's staging rule and the B13/D21 issue levers are disarmed on this path.
 - `::test_r8_block_float_below_a_16_row_face_is_declared_excluded` — pins the four EXCLUSIONS and,
   equally, that `tile_height=16` stays **claimed**.
+
+---
+
+## Refinement 9 — Per-dtype / per-geometry perf re-target and the square's residual
+
+- **Date**: 2026-08-12
+
+### What was done
+
+A perf-only refinement: **no SUPPORTED change, no new capability**, two named levers built with
+both arms, and the per-dtype ceiling recomputed against each dtype's own transaction shape rather
+than inherited from bf16's byte rate.
+
+| Reused unchanged | Added |
+|---|---|
+| the lever/CT-arg/bench-arm machinery, the block model, the placement plan, `read_sticks_for_tilize` on every read path (B10 needed **no** helper substitution), the CB geometry, compute (not one line) | `per_core_vc()` / `per_core_vc_default()` / `block_order_row_major()` (pure, unit-testable), 2 reader + 2 writer CT args, 1 runtime arg, 7 bench arms, 4 structural pins |
+
+### (b) The square's residual — both named candidates measured, neither can claim it
+
+**master.md B10 — per-reader VC — is BUILT and ships REGIME-GATED.** Two implementation facts the
+row did not anticipate, both found by reading the arch code and then measured:
+
+1. **`noc_async_read`'s `read_req_vc` argument is a no-op in the mode a dataflow kernel runs in.**
+   `ncrisc_noc_fast_read` writes NOC_CTRL (the register holding `NOC_CMD_STATIC_VC`) only under
+   `DM_DYNAMIC_NOC`; a plain kernel is `DM_DEDICATED_NOC`, where `noc_init` programmed static VC 1
+   once for every core. The one entry point that programs it unconditionally is
+   `ncrisc_noc_read_set_state<…, use_vc=true>` — which is exactly what the DRAM-adjacent-read
+   microbenchmark (`perf_microbenchmark/8_dram_adjacent_core_read`) uses. So the reader arm is **one
+   `set_state` before the block loop**: every later read of the kernel, *including the
+   `read_sticks_for_tilize` helper's*, inherits the VC, and the issue path is byte-identical.
+2. **A VC, once programmed, outlives the program.** `brisc.cc` calls `noc_init` only when the NoC
+   *mode* changes between launches, so nothing resets NOC_CTRL. Measured as a **byte-identical
+   control arm reading 1.14x** purely because it ran after a VC arm on the same cores — and the
+   first `block_order` measurement (1.166x "worse") was that same contamination, not the lever. Both
+   halves now hand the register back at kernel end; three byte-identical control arms in one run
+   then measure **44 216 / 44 145 / 43 985 ns**, i.e. the bench has no position effect.
+
+Per-regime, off/on (`levers=dict(per_core_vc=0)`; mask bit 1 = reader, 2 = writer):
+
+| regime | cores | reader VC | writer VC |
+|---|---:|---:|---:|
+| `square` DRAM `[1,1,2048,2048]` | 110 | **1.148x WORSE** | **2.464x WORSE** |
+| `dtype_fp32` DRAM, same shape | 110 | 1.090x WORSE | 2.869x WORSE |
+| `dtype_uint8` DRAM, same shape | 110 | 1.286x WORSE | 1.403x WORSE |
+| `wide_short` DRAM `[1,1,32,16384]` | 32 | **0.948x** (1.041x / 1.017x off/on, two runs) | 0.994x |
+| `tall_narrow` DRAM `[1,1,2048,64]` | 64 | **0.980x** (1.031x / 1.011x off/on) | 0.998x |
+| `l1_to_l1` L1 `[1,1,512,2048]` | 32 | 0.993x | **0.937x** (1.076x / 1.056x off/on) |
+| `smallest` / `smallest_aligned` | 1 | inert | inert |
+
+**The sign flips on grid fill, and master.md says why.** B10 breaks FCFS serialization *when readers
+share a route*; A3 — its stated partner, "the tech report applies them together" — is what makes the
+routes disjoint. With all 110 cores round-robining all 7 DRAM banks no VC assignment separates
+anything, and four *static* VCs merely fragment the per-VC buffering on links that stay shared: a
+1.15–2.87x loss. Below full grid the assignment has room to help on the **read** half; on the all-L1
+path — where the interleaved "banks" *are* the worker cores — it is the **write** half that pays.
+Shipped mask (`per_core_vc_default`, pure and pinned): reader VC on interleaved DRAM with
+`1 < active_cores < grid_cores`, writer VC on the all-L1 path, **0** everywhere else. master.md B0:
+the single-core case is excluded — one reader has no peer to serialize against, and while armed it
+cost +2.2 % on `[1,1,32,32]` and +2.6 % on `[1,1,32,64]`; excluded, both are back inside noise.
+
+**master.md A3's residual degree — the block → core mapping — is a MEASURED NULL, and its first
+degree is structurally absent.** On a full grid `spread_cores` is inert (110 of 110), so the only
+placement freedom left is *which blocks* a core gets. The new `block_order` knob relabels the
+linearization from `b = wchunk*nt_h + r` (a core walks **down** a tile-column chunk, touching
+`nb*tile_h` distinct source pages) to `b = r*n_wchunks + wchunk` (a core walks **across** one
+tile-row, re-reading the same `tile_h` source pages — hence the same banks — at successive byte
+offsets), which is as close to "one reader ↔ one bank" as this op can get. Measured: square
+**0.992x**, fp32 square 0.993x, uint8 square 0.997x, `wide_short` 0.990x, `tall_narrow` 1.006x,
+`l1_to_l1` 0.996x — a null everywhere it is a placement choice. (The two 1-core shapes show a
+consistent 0.955–0.959x, which is kernel-binary/dispatch and *not* placement: with one block both
+decodes fold to the same constants.) Parked at `BLOCK_ORDER_ROW_MAJOR = 0`, byte-identical to Phase
+0, both arms live.
+
+A3's **first** degree cannot be reached by any mapping: an interleaved page `p` lives on bank
+`p % 7`, and a block is 32 consecutive sticks (read side) or `wt_block` consecutive tile pages
+(write side), so *every* block touches *every* bank. Pinned by
+`test_r9_no_block_to_core_mapping_can_give_a_reader_its_own_dram_bank`.
+
+**So what IS the square's residual?** Not placement and not VCs. Ablation, 110 cores: the read
+stream alone is 25.9 µs, the write stream alone 31.9 µs, their sum 57.8 µs and the measured wall
+44.4 µs — the two streams already overlap to 0.768 of the serial sum, and they cannot overlap
+further because they share the same DRAM, not the same NoC. 16.78 MB in 44.4 µs is **378 GB/s = 84 %
+of this part's 448 GB/s theoretical peak**, which is inside the 82–90 % band the DRAM tech report
+gives for real workloads. The residual is DRAM controller efficiency, and the two levers the queue
+named are now measured out of contention for it.
+
+### (a) Per-dtype re-target — the 0.86 "deficit" is the output PAGE, not a deficit
+
+`noc_estimate` (`--arch BLACKHOLE --memory DRAM_INTERLEAVED`, per-core transfer counts from the
+kernel at each dtype's own `WT_BLOCK`, CB depth 2 → `max` not `sum`):
+
+| dtype | reads/core | writes/core | per-core NoC bound (no-contention … full-contention) |
+|---|---|---|---|
+| bf16 | 96 × 1024 B | 48 × 2048 B | 3.02 … 45.49 µs |
+| fp32 | 160 × 1024 B | 40 × 4096 B | 5.03 … 75.82 µs |
+| uint8 | 64 × 1024 B | 64 × 1024 B | 2.01 … 30.33 µs |
+
+As at Phase 0, the full-contention keys are pessimistic on this part and the DRAM aggregate is what
+binds. **No tt-npe pin is recorded**: tt-npe is an external, non-vendored repo (not installed here)
+and its Blackhole support is WIP, so the `noc_estimate` bracket above plus the per-direction
+ablation below is the pin. That is a gap in the evidence, not a claim.
+
+The dtypes differ in exactly one measurable way — the **output page size** (the tile *is* the page:
+1024 B at uint8, 1088 B at bfloat8_b, 2048 B at bf16, 4096 B at fp32) — and `noc_estimate`'s own
+curve prices it: a 1024 B write runs at 32.5 GB/s per core against 47.4 / 47.8 GB/s at 2048 / 4096 B
+(0.687). On device, with the streams isolated by ablation:
+
+| dtype | out page | read stream | write stream | read GB/s | write GB/s | φ = measured/(r+w) |
+|---|---|---:|---:|---:|---:|---:|
+| bf16 | 2048 B | 25 866 ns | 31 942 ns | 324 | **263** | 0.768 |
+| fp32 | 4096 B | 50 612 ns | 64 798 ns | 332 | **259** | 0.756 |
+| uint8 | 1024 B | 14 741 ns | 17 788 ns | 285 | **236** | 0.726 |
+| bf8b | 1088 B | 25 641 ns | 18 139 ns | 327 | **246** | 0.825 |
+
+So the two dtypes with a sub-2 KB output page write at 236 / 246 GB/s where the other two write at
+259 / 263 — the *direction* the model predicts, at 0.90 rather than 0.687 (at 110 cores the aggregate
+is DRAM-limited, so the per-core issue penalty is partly absorbed). Applying **bf16's overlap
+efficiency to each dtype's own two streams** gives each dtype a target of its own:
+
+| dtype | flat 412 GB/s target | achieved vs flat | **per-dtype target** | measured | **achieved vs per-dtype** |
+|---|---:|---:|---:|---:|---:|
+| `square` bf16 | 40 706 ns | 0.92 | 44 389 ns (reference) | 44 389 | 1.00 |
+| `dtype_fp32` | 81 411 ns | 0.93 | 88 619 ns | 87 229 | **1.02** |
+| `dtype_uint8` | 20 353 ns | 0.86 | 24 978 ns | 23 620 | **1.06** |
+| `dtype_bf16_to_bf8b` | 31 165 ns | 0.86 | 33 617 ns | 36 123 | **0.93** |
+
+**Refinement 7's recorded uint8/bf8b "0.86–0.87 deficit" is retired for uint8 and resized for
+bf8b.** uint8 is not off a shared bound — it is at 1.06 of a target built from its own transaction
+shape, and its shape is fixed by the tile (a 32×32 uint8 tile *is* 1024 B; consecutive output tile
+pages land on different banks in an interleaved buffer, so there is no multi-page write to
+coalesce). What survives as a real gap is **bfloat8_b at 0.93**, and it is an *overlap* gap, not a
+page gap: its two streams are the most unequal of the four (8.39 MB in, 4.46 MB out) and it has the
+worst φ (0.825 vs 0.726–0.768), i.e. the block-float pack is the one dtype where the write half does
+not hide as well behind the read half.
+
+### Accuracy achieved
+
+Unchanged and exact — this refinement moves no value. Both levers verified **bit-exact**
+(`torch.equal`) at every setting on `[1,1,256,512]` bf16, `[1,1,128,96]` bf16 (`Wt=3`, the
+tail-width case), `[1,1,64,2048]` uint8 and `[1,1,128,256]` fp32 L1→L1 (probe 045).
+
+### Golden test progress
+
+Unit dir **191 passed / 1 xfailed** (the pre-existing `pytest.approx` × torch defect). Golden slices
+on the paths this refinement touches: `dram_to_l1 or l1_to_l1` **174 passed / 0 failed** (the writer
+VC arm), `sharded` **94 passed / 0 failed** (the paths where the gate is off but the new runtime arg
+still ships). No SUPPORTED change, so the registry count is Refinement 8's **374/374**.
+
+### Perf — cumulative bench, all 23 shapes re-measured at `base`
+
+Shipped-vs-off (`lever_r9_vc_off`) on every shape, one run:
+
+| shape | R8 | R9 base | vs R8 | off-arm | note |
+|---|---:|---:|---:|---:|---|
+| `square` | 44 158 | 44 389 | +0.5 % | 44 057 | gate off (full grid) |
+| `wide_short` | ~6 786 | **6 603** | **−2.7 %** | 6 871 | reader VC |
+| `tall_narrow` | 4 797 | **4 681** | **−2.4 %** | 4 826 | reader VC |
+| `l1_to_l1` | 5 032 | **4 722** | **−6.2 %** | 5 082 | writer VC |
+| `smallest` | 1 915 | 1 904 | −0.6 % | 1 899 | gate off (1 core) |
+| `smallest_aligned` | 1 836 | 1 838 | +0.1 % | 1 873 | gate off (1 core) |
+| `smallest_padded` | 1 879 | 1 903 | +1.3 % | 1 924 | noise floor of a 1.9 µs call |
+| `sharded_big` | 2 122 | 2 110 | −0.6 % | 2 132 | gate off (sharded) |
+| `sharded_small` | 829 | 834 | +0.6 % | 845 | gate off (sharded) |
+| `reshard` | 22 685 | 22 837 | +0.7 % | 22 701 | |
+| `reshard_rowwise` | 15 582 | 15 899 | +2.0 % | 15 882 | |
+| `padded_h_tail` | 44 353 | 44 138 | −0.5 % | 44 193 | |
+| `padded_w_tail` | 44 311 | 44 520 | +0.5 % | 44 342 | |
+| `padded_noop` | 44 328 | 44 295 | −0.1 % | 44 222 | |
+| `padded_row_vector` | 28 873 | 28 985 | +0.4 % | 28 971 | |
+| `dtype_fp32` | 87 135 | 87 229 | +0.1 % | 87 339 | |
+| `dtype_uint8` | 23 647 | 23 620 | −0.1 % | 23 764 | |
+| `dtype_uint8_narrow` | 148 669 | 149 361 | +0.5 % | 149 722 | |
+| `dtype_bf16_to_bf8b` | 35 834 | 36 246 | +1.1 % | 36 115 | |
+| `tile_16` | 44 441 | 44 121 | −0.7 % | 44 561 | |
+| `tile_1` | 101 585 | 104 629 | +3.0 % | 103 791 | gate off; run-to-run on an 8192-block shape |
+| `retile_shrink` | 72 213 | 72 173 | −0.1 % | 72 742 | |
+| `retile_grow` | 83 863 | 84 021 | −0.1 % | 83 694 | |
+
+Three shapes got faster (the gated B10 wins), nothing regressed outside the noise band.
+
+### Issues encountered
+
+- **A measurement hazard, not a kernel bug, and it nearly produced a false verdict.** The first
+  lever run reported `block_order` 1.166x *worse* on the square. It was the preceding VC arm's
+  NOC_CTRL surviving into the next program (see above). Caught only because a *byte-identical*
+  control arm (`lever_r9_vc_off` ≡ `base`) was in the same run and read 1.14x — which is precisely
+  why every lever here ships with an explicit off-arm rather than being compared against `base`
+  across runs. Fixed at the source (both halves restore the register), then re-measured.
+- Two `base` numbers in early runs looked 8–28 % apart across runs (`dtype_uint8` 23.9 vs 30.5 µs).
+  Same cause: a VC arm earlier in the run. After the fix, `dtype_uint8` base is 23.6 / 23.8 µs across
+  runs and three identical control arms agree to 0.5 %.
+
+### Tests added
+
+- `test_r9_per_core_vc_gate_arms_only_where_it_measured_positive` — the regime gate as a pure
+  function (full grid → 0, partial DRAM grid → reader, all-L1 → writer, single core → 0, mixed → 0).
+- `test_r9_per_core_vc_is_wired_to_both_kernels_and_is_a_live_knob` — the gate reaches both kernels'
+  CT args on a real descriptor, the square is gated **off**, and `(x+y)&3` really does give every
+  core in a row a different VC.
+- `test_r9_block_order_is_a_live_knob_parked_at_the_phase0_order` — parked at 0 on both halves, and
+  the `wt_block == wt_tail` / streamed gate that makes the relabelling invisible to compute.
+- `test_r9_no_block_to_core_mapping_can_give_a_reader_its_own_dram_bank` — the structural pin behind
+  A3's "first degree is unavailable" claim, asserted against the device's real bank count.
+- `_bench_tilize.py`: 7 arms (`lever_r9_vc_force` / `_vc_reader` / `_vc_writer` / `_vc_off`,
+  `lever_r9_block_row` / `_block_col`, `lever_r9_vc_and_block_row`).
+- Probe 045 (both levers, four dtype/geometry cases, `torch.equal`).
+
+### Remaining headroom, as a FINDING (not a queue item)
+
+1. **The square is at 84 % of theoretical DRAM peak and the remaining ~9 % is DRAM controller
+   efficiency**, not NoC placement: the read and write streams already overlap to 0.768 of their
+   serial sum and share one DRAM, and both levers the queue named for that slice are now measured
+   (A3 residual: null; B10: negative at full grid, and its first degree structurally unreachable).
+   The candidate that is left is *fewer DRAM bytes*, i.e. a caller-side layout choice, not a lever
+   this kernel holds.
+2. **bfloat8_b is the one dtype with a real per-dtype gap (0.93)**, and it is overlap, not page
+   size: φ = 0.825 against 0.726–0.768 for the others, on the most unequal stream pair (2 B in,
+   1.06 B out). The candidate is giving the shorter write stream more to hide behind — a deeper
+   output CB or a larger `WT_BLOCK` on block-float output only — which is a blocking-factor change
+   and belongs to a round that starts from a fresh whole-op breakdown.
+3. **B10 is gated OFF on the full grid, but its own mechanism says why**: it is A3-dependent. If a
+   future refinement ever makes a core's traffic bank-local (which would require a different
+   block↔page mapping than a bijection over 32-stick blocks allows), the VC arm is already built and
+   one bench row away from being re-measured there.
