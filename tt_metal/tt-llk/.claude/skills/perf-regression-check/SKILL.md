@@ -14,7 +14,7 @@ description: >
 Compares **current** = the branch's HEAD against **baseline** = `git merge-base origin/main HEAD`
 (the exact main commit the branch was cut from). Runs the same perf test on both, N iterations
 each, takes the median per point, and flags points where current is slower by more than the
-threshold. Self-contained: uses only the vendored `perf_regression_compare.py` in this folder, so
+threshold. Self-contained: uses only `perf_regression_compare.py` (in `.claude/scripts/`), so
 it works on any branch whether or not the perf infra is merged.
 
 ## Inputs to collect from the user (ask if not given)
@@ -33,7 +33,11 @@ it works on any branch whether or not the perf infra is merged.
    `git stash pop` if you stashed). Treat this as mandatory cleanup.
 
 ## Procedure
-Let `SKILL_DIR` be this skill's folder and `WORK=/tmp/perf-regression-check` (mkdir -p).
+Let `WORK=/tmp/perf-regression-check` (mkdir -p) and the compare script be resolved from the repo
+root (cwd-independent):
+```bash
+SCRIPT="$(git rev-parse --show-toplevel)/tt_metal/tt-llk/.claude/scripts/perf_regression_compare.py"
+```
 
 **0. Determine commits.**
 ```bash
@@ -69,7 +73,7 @@ baseline to compare — report that and stop.
 
 **3. Compare + report.**
 ```bash
-python "$SKILL_DIR/perf_regression_compare.py" \
+python "$SCRIPT" \
   --current  "$WORK/current_run_*.csv" \
   --baseline "$WORK/baseline_run_*.csv" \
   --threshold <threshold> \

@@ -1,15 +1,20 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the vendored regression compare. Run: pytest test_perf_regression_compare.py"""
+"""Tests for the perf-regression-check compare script (lives in .claude/scripts).
+
+Run: pytest test_perf_regression_compare.py
+"""
 
 import pathlib
 import sys
 
 import pandas as pd
 
-sys.path.insert(0, str(pathlib.Path(__file__).parent))
+# The script lives in the skill's scripts dir, not on the test path; add it.
+_SCRIPTS = pathlib.Path(__file__).parents[2] / ".claude" / "scripts"
+sys.path.insert(0, str(_SCRIPTS))
 from perf_regression_compare import compare_runs  # noqa: E402
 
 
