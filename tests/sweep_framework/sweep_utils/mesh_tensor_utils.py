@@ -362,6 +362,100 @@ if _orig_set_fabric_config is not None:
     ttnn.set_fabric_config = _guarded_set_fabric_config
 
 
+# ── Fabric configuration: match the device setup the traced model used ────────
+# The fabric is part of a mesh device's configuration, not a global default, and the model
+# tests treat it that way: conftest.py's mesh_device fixture pops fabric_config /
+# reliability_mode / fabric_tensix_config out of device_params, calls set_fabric BEFORE
+# open_mesh_device, and reset_fabric after. Every galaxy model behind our traced configs
+# relies on it -- llama3_70b_galaxy/demo/text_demo.py sets "fabric_config": True, and
+# deepseek_v3/demo/demo.py calls set_fabric_config(get_fabric_config(), RELAXED_INIT) with
+# DISABLED at teardown.
+#
+# This path used to skip it entirely. Only ccl_common (the CCL modules) configured fabric, so
+# every other module opened a 32-chip mesh with whatever fabric state the process happened to
+# carry -- replaying llama/gpt_oss/deepseek ops under a device configuration the model never
+# used. Beyond being wrong on its own terms, it correlated with the intermittent Galaxy hangs:
+# the generic-path 2D batches (p1, p2, mesh8x4_col_2d, rms_norm_pre/post_all_gather) hung in
+# four separate lead-model runs and ran clean across two runs with this in place, including a
+# same-box rematch (p1 hung on j09glx02 and completed 542/542 on j09glx02 hours later).
+# It does NOT address the CCL path (which already configured fabric) or the 1D path; both still
+# hang intermittently and need hang recovery rather than a configuration change.
+#
+# The tracer records only machine_info + pytest_args + source -- no device_params -- so the
+# value cannot be read back from a trace and is derived from the mesh, matching the rule
+# all_gather_async_model_traced already applies. Ring is deliberately not inferred: topology is
+# a per-op property this path cannot know.
+#
+# Kill switch: TTNN_SWEEP_FABRIC=off restores the previous behaviour exactly.
+# Explicit override: TTNN_SWEEP_FABRIC=1d | 2d.
+_FABRIC_ENV = "TTNN_SWEEP_FABRIC"
+
+
+def _fabric_mode() -> str:
+    return os.environ.get(_FABRIC_ENV, "auto").strip().lower()
+
+
+def fabric_config_for_mesh(mesh_shape):
+    """The FabricConfig a model test would have set for `mesh_shape`, or None to leave
+    the fabric alone (single device, or disabled by env).
+
+    Mirrors all_gather_async_model_traced: a line mesh gets FABRIC_1D, a genuinely 2D mesh
+    gets FABRIC_2D. Ring (FABRIC_1D_RING) is deliberately not inferred -- topology is a
+    per-op property the generic path cannot know."""
+    mode = _fabric_mode()
+    if mode in ("", "off", "0", "false", "no", "disabled"):
+        return None
+    if _orig_set_fabric_config is None:
+        return None
+    try:
+        rows, cols = int(mesh_shape[0]), int(mesh_shape[1])
+    except (TypeError, ValueError, IndexError):
+        return None
+    if rows * cols <= 1:
+        return None
+    if mode == "1d":
+        return ttnn.FabricConfig.FABRIC_1D
+    if mode == "2d":
+        return ttnn.FabricConfig.FABRIC_2D
+    return ttnn.FabricConfig.FABRIC_1D if (rows == 1 or cols == 1) else ttnn.FabricConfig.FABRIC_2D
+
+
+# True between a successful _apply_fabric_config and its matching reset. Gates the reset so we
+# only ever clear a fabric WE configured -- ccl_common manages its own and must not be disturbed.
+_FABRIC_APPLIED = False
+
+
+def _apply_fabric_config(mesh_shape) -> None:
+    """Set the fabric for an imminent open. DISABLED first, mirroring ccl_common: metal
+    rejects a transition straight from one live config to another."""
+    global _FABRIC_APPLIED
+    cfg = fabric_config_for_mesh(mesh_shape)
+    if cfg is None:
+        return
+    logger.info(f"SWEEPS: setting fabric {cfg} for mesh {tuple(mesh_shape)} before open")
+    _orig_set_fabric_config(ttnn.FabricConfig.DISABLED)
+    _orig_set_fabric_config(cfg)
+    _FABRIC_APPLIED = True
+
+
+def _reset_fabric_config() -> None:
+    """The reset_fabric() half of the model fixture's contract: leave the process with the
+    fabric DISABLED so nothing inherits a configuration it never asked for.
+
+    No-ops unless we are the ones who set it (_FABRIC_APPLIED), so a fabric configured by
+    ccl_common survives. Uses the UNGUARDED setter: callers run after the device is already
+    closed, and the guarded one would call back into close_job_device."""
+    global _FABRIC_APPLIED
+    if not _FABRIC_APPLIED or _orig_set_fabric_config is None:
+        return
+    try:
+        _orig_set_fabric_config(ttnn.FabricConfig.DISABLED)
+    except Exception:
+        logger.exception("SWEEPS: failed to reset the fabric config after closing the mesh device")
+    finally:
+        _FABRIC_APPLIED = False
+
+
 _orig_open_mesh_device = ttnn.open_mesh_device
 
 # Full-host mesh orientations a 2D submesh can be carved out of, per host device count.
@@ -485,13 +579,23 @@ def _close_mesh_and_parent(device, *args, **kwargs):
     always quiesced before closing a carved parent."""
     entry = _SUBMESH_PARENTS.pop(id(device), None)
     if entry is None:
-        return _orig_close_mesh_device(device, *args, **kwargs)
+        result = _orig_close_mesh_device(device, *args, **kwargs)
+        # Reset here, not only in close_job_device: create_mesh_device deliberately bypasses
+        # the job-device cache (caching disabled, or an unkeyable config), and those devices are
+        # closed straight through this path -- close_job_device would early-return on
+        # _JOB_DEVICE is None and never reset, leaving the process-global fabric enabled for
+        # whatever opens next. _reset_fabric_config only acts if WE set it, so a fabric
+        # configured by ccl_common is left alone.
+        _reset_fabric_config()
+        return result
     parent = entry[1]
     try:
         parent.quiesce_devices()
     except Exception:
         logger.exception("SWEEPS: quiesce_devices before closing the carved parent mesh failed")
-    return _orig_close_mesh_device(parent, *args, **kwargs)
+    result = _orig_close_mesh_device(parent, *args, **kwargs)
+    _reset_fabric_config()
+    return result
 
 
 def _guarded_open_mesh_device(*args, **kwargs):
@@ -517,6 +621,60 @@ def _guarded_open_mesh_device(*args, **kwargs):
 
 
 ttnn.open_mesh_device = _guarded_open_mesh_device
+
+
+def device_canary(device) -> Tuple[bool, str]:
+    """Ask the device a question we already know the answer to: is 2 + 2 still 4, on every chip?
+
+    Returns (healthy, detail). Never raises -- a throw IS a failed canary.
+
+    Why this exists. Wedge detection is otherwise REACTIVE: the runner pattern-matches the
+    exception text a vector produced, so a device that returns plausible-looking garbage is
+    indistinguishable from an op that computed the wrong answer. Lead-models run 31295900210
+    is the case in point -- after a device timeout, `add`, `linear` and
+    `nlp_create_qkv_heads_decode` each came back at PCC exactly 0.0 (an all-zeros readback)
+    and were booked as three separate test failures. All three pass in other runs on other
+    boxes. A health probe answers the question directly instead of inferring it from prose.
+
+    The tensor is SHARDED over the whole mesh, not run on one chip: a batch's vectors span
+    every device in its mesh, so a probe that only exercises chip 0 would miss exactly the
+    per-chip corruption this is meant to catch. Scatter + compute + gather all participate.
+
+    Exact equality, not PCC: 2.0 and 4.0 are exactly representable in bfloat16, so any
+    deviation at all is corruption rather than precision.
+    """
+    try:
+        num_devices = device.get_num_devices() if hasattr(device, "get_num_devices") else 1
+    except Exception as e:
+        return False, f"canary: could not query device count ({e})"
+
+    try:
+        rows = 32 * max(int(num_devices), 1)
+        torch_in = torch.full((rows, 32), 2.0, dtype=torch.float32)
+        if hasattr(device, "get_num_devices") and num_devices > 1:
+            mapper = ttnn.ShardTensorToMesh(device, dim=0)
+            tt_in = ttnn.from_torch(
+                torch_in, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=mapper
+            )
+            out = ttnn.to_torch(ttnn.add(tt_in, tt_in), mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0))
+        else:
+            tt_in = ttnn.from_torch(torch_in, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            out = ttnn.to_torch(ttnn.add(tt_in, tt_in))
+    except Exception as e:
+        return False, f"canary: 2+2 raised on a {num_devices}-device mesh ({type(e).__name__}: {str(e)[:160]})"
+
+    try:
+        if tuple(out.shape) != (rows, 32):
+            return False, f"canary: 2+2 returned shape {tuple(out.shape)}, expected {(rows, 32)}"
+        bad = int((out != 4.0).sum().item())
+        if bad:
+            return False, (
+                f"canary: 2+2 != 4 in {bad}/{out.numel()} elements on a {num_devices}-device mesh "
+                f"(first value {out.flatten()[0].item()}) -- the device is returning corrupt data"
+            )
+    except Exception as e:
+        return False, f"canary: could not verify the 2+2 result ({e})"
+    return True, f"canary: 2+2 == 4 across {num_devices} device(s)"
 
 
 def clear_job_device_program_cache() -> None:
@@ -552,10 +710,28 @@ def close_job_device() -> bool:
         return False
     _JOB_DEVICE = None
     _JOB_DEVICE_KEY = None
+    # reset_fabric() half of the model fixture's contract: leave the process with the
+    # fabric DISABLED so the next open starts from a known state and nothing inherits a
+    # config it never asked for.
+    _reset_fabric_config()
     return True
 
 
-def _create_mesh_device_uncached(
+def _create_mesh_device_uncached(*args, **kwargs) -> ttnn.MeshDevice:
+    """Open a mesh device, resetting the fabric if the open fails.
+
+    Wraps _open_mesh_device_configured so a fabric we set on the way in never outlives a failed
+    open: without this, an exception between _apply_fabric_config and a returned device would
+    leave the process-global fabric enabled for whatever opens next (the same leak as an
+    uncached close, see _close_mesh_and_parent)."""
+    try:
+        return _open_mesh_device_configured(*args, **kwargs)
+    except BaseException:
+        _reset_fabric_config()
+        raise
+
+
+def _open_mesh_device_configured(
     mesh_shape: Tuple[int, int],
     device_ids: Optional[list] = None,
     l1_small_size: int = 79104,
@@ -594,6 +770,11 @@ def _create_mesh_device_uncached(
     # 7x10 grids); on blackhole just open with the default dispatch core config
     # — which blackhole supports — and skip it entirely. This also overrides any
     # explicit dispatch_core_axis a caller passes, since blackhole can't honor it.
+    # Match the model-test fixture: fabric is configured BEFORE the mesh is opened.
+    # Callers guarantee no live cached device here (create_mesh_device closes it first),
+    # which is what makes a fabric transition legal.
+    _apply_fabric_config(mesh_shape)
+
     _arch = os.environ.get("ARCH_NAME", "").lower()
     if not _arch:
         try:

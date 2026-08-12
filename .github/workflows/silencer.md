@@ -158,7 +158,6 @@ safe-outputs:
       - models-t3-unit-tests
 
       - perf-device-models
-      - perf-models
       - single-card-ttnn-models-frequent-tests
       - single-card-demo-tests
       - tt-metal-l2-nightly

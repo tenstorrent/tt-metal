@@ -20,15 +20,15 @@
 #include <tt_stl/span.hpp>
 
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
-#include <tt-metalium/experimental/tensor/host_tensor.hpp>
-#include <tt-metalium/experimental/tensor/tensor_apis.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/tensor_apis.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
-#include <tt-metalium/experimental/tensor/tensor_types.hpp>
-#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/tensor/spec/layout/page_config.hpp>
 
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
@@ -288,11 +288,11 @@ TEST_F(DeviceVectorConversionTest, RoundtripWithMemoryConfig) {
     MemoryConfig mem_cfg{TensorMemoryLayout::INTERLEAVED, BufferType::L1};
 
     auto host = HostTensor::from_vector(input, spec);
-    auto mesh = enqueue_write_tensor(mesh_device_->mesh_command_queue(), host, *mesh_device_, mem_cfg);
+    auto mesh = mesh_device_->mesh_command_queue().enqueue_write_tensor(host, mem_cfg);
 
     EXPECT_TRUE(mesh.memory_config().is_l1());
 
-    auto readback = enqueue_read_tensor(mesh_device_->mesh_command_queue(), mesh);
+    auto readback = mesh_device_->mesh_command_queue().enqueue_read_tensor(mesh);
 
     EXPECT_THAT(readback.to_vector<float>(), Pointwise(Eq(), input));
 }
@@ -311,12 +311,12 @@ TEST_F(DeviceVectorConversionTest, RoundtripInt8) {
     MemoryConfig mem_cfg{TensorMemoryLayout::INTERLEAVED, BufferType::L1};
 
     auto host = HostTensor::from_vector(input, spec);
-    auto mesh = enqueue_write_tensor(mesh_device_->mesh_command_queue(), host, *mesh_device_, mem_cfg);
+    auto mesh = mesh_device_->mesh_command_queue().enqueue_write_tensor(host, mem_cfg);
 
     EXPECT_TRUE(mesh.memory_config().is_l1());
     EXPECT_EQ(mesh.dtype(), DataType::INT8);
 
-    auto readback = enqueue_read_tensor(mesh_device_->mesh_command_queue(), mesh);
+    auto readback = mesh_device_->mesh_command_queue().enqueue_read_tensor(mesh);
 
     EXPECT_THAT(readback.to_vector<int8_t>(), Pointwise(Eq(), input));
 }
