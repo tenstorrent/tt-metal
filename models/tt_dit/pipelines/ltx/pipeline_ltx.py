@@ -22,7 +22,7 @@ from loguru import logger
 
 import ttnn
 
-from ...encoders.gemma.encoder_pair import GemmaTokenizerEncoderPair
+from ...encoders.gemma3.encoder_pair import GemmaTokenizerEncoderPair
 from ...experimental.lora.ltx_adapter_loader import LTXAdapterHandle, iter_lora_modules, load_ltx_adapter_into
 from ...models.audio_vae.audio_decoder_ltx import LTXAudioDecoderAdapter
 from ...models.transformers.ltx.rope_ltx import prepare_audio_rope, prepare_av_cross_pe, prepare_video_rope

@@ -20,7 +20,7 @@ from loguru import logger
 from safetensors import safe_open
 
 import ttnn
-from models.tt_dit.encoders.gemma.embeddings_connector import EmbeddingsConnector
+from models.tt_dit.encoders.gemma3.embeddings_connector import EmbeddingsConnector
 from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.check import assert_quality
