@@ -141,6 +141,41 @@ def test_scatter_partial(
 
 
 @pytest.mark.parametrize(
+    "input_shape, dim, index, source, input_dtype",
+    [
+        # Regression for tt-mlir#9210: a single-element index/source (rank-1
+        # shape {1}) silently dropped the write — pre_scatter_transform_tensor
+        # early-returned Shape{1} tensors, leaving a rank-1 index/source next
+        # to the 4-D-transformed input; the kernel's per-dimension shape
+        # varargs then read past the provided values and skipped the scatter.
+        ([3], 0, [0], [7], ttnn.uint32),
+        ([3], 0, [2], [7], ttnn.uint32),
+        ([3], 0, [0], [7], ttnn.bfloat16),
+        # Controls: the 2-index case always worked.
+        ([3], 0, [0, 2], [7, 8], ttnn.uint32),
+        ([3], 0, [0, 2], [7, 8], ttnn.bfloat16),
+    ],
+)
+def test_scatter_single_element_index(input_shape, dim, index, source, input_dtype, device):
+    torch_dtype = select_torch_dtype(input_dtype)
+    torch_input = torch.zeros(input_shape, dtype=torch_dtype)
+    ttnn_input = ttnn.from_torch(torch_input, dtype=input_dtype, layout=ttnn.Layout.ROW_MAJOR, device=device)
+
+    torch_index = torch.tensor(index, dtype=torch.long)
+    ttnn_index = ttnn.from_torch(torch_index, dtype=ttnn.uint32, layout=ttnn.Layout.ROW_MAJOR, device=device)
+
+    torch_src = torch.tensor(source, dtype=torch_dtype)
+    ttnn_src = ttnn.from_torch(torch_src, dtype=input_dtype, layout=ttnn.Layout.ROW_MAJOR, device=device)
+
+    torch_result = torch.scatter(torch_input, dim, index=torch_index, src=torch_src)
+    ttnn_result = ttnn.scatter(ttnn_input, dim, ttnn_index, ttnn_src)
+
+    torch_result_from_ttnn = ttnn.to_torch(ttnn_result)
+    assert torch_result_from_ttnn.shape == torch_result.shape
+    assert_allclose(torch_result_from_ttnn, torch_result)
+
+
+@pytest.mark.parametrize(
     "input_shape, dim, index_and_source_shape, input_dtype, index_dtype, layout, expected_num_cache_entries",
     [
         ([100], -1, [80], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.TILE, 5),
