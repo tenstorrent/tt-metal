@@ -62,7 +62,7 @@ struct TileSource {
 
     void emit(int dst, int tile) const {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
-        copy_tile(cb_id, tile, dst);
+        copy_tile_to_dst(cb_id, tile, dst);
 #else
         (void)dst;
         (void)tile;
@@ -73,7 +73,7 @@ struct TileSource {
 struct AddOp {
     static void apply(int lhs, int rhs, int out) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
-        sfpu_add(lhs, rhs, out);
+        sfpu_add_dst(lhs, rhs, out);
 #else
         (void)lhs;
         (void)rhs;
@@ -82,18 +82,21 @@ struct AddOp {
     }
 };
 
-// TODO: this reduces *within* a tile. A cross-tile reduction accumulates across
-// the tile loop and packs once -- a third Strategy, not an op.
-struct SumOp {
+struct ExpOp {
     static void apply(int src, int out) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
-        sfpu_sum(src, out);
+        sfpu_exp_dst(src, out);
 #else
         (void)src;
         (void)out;
 #endif
     }
+    static void apply_in_place(int slot) { apply(slot, slot); }
 };
+
+// NOTE: a cross-tile reduction is deliberately absent. It is not an op -- it
+// accumulates across the tile loop and packs once, so it wants a third
+// Strategy alongside SFPUFusion/FPUFusion.
 
 // A unary usable in either kind. The two entry points are genuinely different
 // hardware paths: `apply`/`apply_in_place` run on the SFPU during math, while
@@ -103,7 +106,7 @@ struct SumOp {
 struct ReluOp {
     static void apply(int src, int out) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
-        sfpu_relu(src, out);
+        sfpu_relu_dst(src, out);
 #else
         (void)src;
         (void)out;
@@ -112,6 +115,9 @@ struct ReluOp {
 
     static void apply_in_place(int slot) { apply(slot, slot); }
 
+    // Templated so it is only instantiated when an FPU chain actually uses it;
+    // the pack-side epilogue is not yet bound to metal (see unified_metal.hpp).
+    template <int = 0>
     static void apply_from_pack(int base, int count) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
         relu_from_pack(base, count);
@@ -182,6 +188,11 @@ auto relu(const N& n) {
     return expr::Un<ReluOp, N>{n};
 }
 
+template <typename N, typename = std::enable_if_t<expr::is_expr<N>::value>>
+auto exp_(const N& n) {
+    return expr::Un<ExpOp, N>{n};
+}
+
 template <typename Geometry, typename Chain>
 auto relu(const MatmulNode<Geometry, Chain>& m) {
     return MatmulNode<Geometry, expr::chain_append_t<Chain, ReluOp>>{m.in0_cb, m.in1_cb};
@@ -229,16 +240,16 @@ struct Strategy<SFPUFusion> {
             "SFPU expression needs more DST slots than the hardware has; "
             "split it across an intermediate Storage");
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
-        cb_reserve(cb_id);
+        cb_reserve(cb_id, num_tiles);
         for (int i = 0; i < num_tiles; ++i) {
             tile_regs_acquire();
             expr::emit(node, i);
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(expr::result_slot_v<Node>, cb_id);
+            pack_dst_tile(expr::result_slot_v<Node>, cb_id);
             tile_regs_release();
         }
-        cb_push(cb_id);
+        cb_push(cb_id, num_tiles);
 #else
         (void)node;
         (void)cb_id;
@@ -267,7 +278,7 @@ struct Strategy<FPUFusion> {
             matmul_block(node.in0_cb, node.in1_cb, G::out_subblock_h, G::out_subblock_w, G::in0_block_w);
             tile_regs_commit();
             if (last_out) {
-                cb_reserve(cb_id);
+                cb_reserve(cb_id, G::out_subblock_num_tiles);
                 if constexpr (Chain::empty) {
                     tile_regs_wait();
                 } else {
@@ -275,7 +286,7 @@ struct Strategy<FPUFusion> {
                     Chain::apply_from_pack(0, G::out_subblock_num_tiles);
                 }
                 pack_block(0, cb_id, G::out_subblock_num_tiles);
-                cb_push(cb_id);
+                cb_push(cb_id, G::out_subblock_num_tiles);
             } else {
                 tile_regs_wait();
                 // TODO: real kernels spill/reload partials through an
