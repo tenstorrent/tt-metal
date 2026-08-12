@@ -58,7 +58,7 @@ inline void llk_math_reduce_block_max_row_mop_config_runtime(
 template <bool is_fp32_dest_acc_en = false>
 inline void llk_math_reduce_block_max_row_runtime(
     const std::uint32_t dst_index, const ckernel::TensorShape& tensor_shape) {
-    LLK_ASSERT((dst_index < get_dest_max_tiles<DST_SYNC_MODE, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "");
+    LLK_ASSERT((dst_index < get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>(LLK_ASSERT_DEST_ACC_MODE())), "");
 
     _llk_math_reduce_block_max_row_runtime_<is_fp32_dest_acc_en>(dst_index, tensor_shape);
 }
