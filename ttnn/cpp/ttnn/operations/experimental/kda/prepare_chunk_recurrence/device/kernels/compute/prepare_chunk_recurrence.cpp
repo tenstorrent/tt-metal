@@ -45,7 +45,7 @@ inline void POP(uint32_t cb, uint32_t n) { CircularBuffer(cb).pop_front(n); }
 
 // out[Mt,Nt] = A[Mt,Kt] @ (tr ? B[Nt,Kt]^T : B[Kt,Nt]). Inputs must be available.
 void mm(uint32_t a, uint32_t b, uint32_t o, uint32_t Mt, uint32_t Kt, uint32_t Nt, bool tr) {
-    cb_reserve_back(o, Mt * Nt);
+    CircularBuffer(o).reserve_back(Mt * Nt);
     pack_reconfig_data_format(o);  // mixed bf16/fp32 CBs: set packer to this output's format
     // matmul_tiles(a,b): in0=a->srcB, in1=b->srcA. Reconfig unpack src formats to match (the op
     // init only asserts formats, it does not set them), else fp32/bf16 CBs are read at the wrong
@@ -65,12 +65,12 @@ void mm(uint32_t a, uint32_t b, uint32_t o, uint32_t Mt, uint32_t Kt, uint32_t N
             tile_regs_release();
         }
     }
-    cb_push_back(o, Mt * Nt);
+    CircularBuffer(o).push_back(Mt * Nt);
 }
 
 // out = A (op) B elementwise, n tiles. op: 0 add, 1 sub, 2 mul.
 void ew(uint32_t a, uint32_t b, uint32_t o, uint32_t n, int op) {
-    cb_reserve_back(o, n);
+    CircularBuffer(o).reserve_back(n);
     pack_reconfig_data_format(o);
     reconfig_data_format(a, b);  // binary(a,b): a->srcA, b->srcB
     if (op == 0) {
@@ -94,12 +94,12 @@ void ew(uint32_t a, uint32_t b, uint32_t o, uint32_t n, int op) {
         pack_tile(0, o, i);
         tile_regs_release();
     }
-    cb_push_back(o, n);
+    CircularBuffer(o).push_back(n);
 }
 
 // Square through SFPU destination-register multiply; avoids occupying the matrix FPU used by prep.
 void square_sfpu(uint32_t in, uint32_t o, uint32_t n) {
-    cb_reserve_back(o, n);
+    CircularBuffer(o).reserve_back(n);
     pack_reconfig_data_format(o);
     reconfig_data_format_srca(in);
     copy_tile_to_dst_init_short(in);
@@ -114,11 +114,11 @@ void square_sfpu(uint32_t in, uint32_t o, uint32_t n) {
         pack_tile(0, o, i);
         tile_regs_release();
     }
-    cb_push_back(o, n);
+    CircularBuffer(o).push_back(n);
 }
 
 void expc(uint32_t in, uint32_t o, uint32_t n) {
-    cb_reserve_back(o, n);
+    CircularBuffer(o).reserve_back(n);
     pack_reconfig_data_format(o);
     reconfig_data_format_srca(in);  // unary: in->srcA
     copy_tile_to_dst_init_short(in);
@@ -132,11 +132,11 @@ void expc(uint32_t in, uint32_t o, uint32_t n) {
         pack_tile(0, o, i);
         tile_regs_release();
     }
-    cb_push_back(o, n);
+    CircularBuffer(o).push_back(n);
 }
 
 void halfc(uint32_t in, uint32_t o, uint32_t n) {
-    cb_reserve_back(o, n);
+    CircularBuffer(o).reserve_back(n);
     pack_reconfig_data_format(o);
     reconfig_data_format_srca(in);
     copy_tile_to_dst_init_short(in);
@@ -150,12 +150,12 @@ void halfc(uint32_t in, uint32_t o, uint32_t n) {
         pack_tile(0, o, i);
         tile_regs_release();
     }
-    cb_push_back(o, n);
+    CircularBuffer(o).push_back(n);
 }
 
 // out[Mt,Nt] = A[Mt,Nt] * col[Mt,1]  (broadcast the single column of `col` across N)
 void bcast_cols_mul(uint32_t a, uint32_t col, uint32_t o, uint32_t Mt, uint32_t Nt) {
-    cb_reserve_back(o, Mt * Nt);
+    CircularBuffer(o).reserve_back(Mt * Nt);
     pack_reconfig_data_format(o);
     reconfig_data_format(a, col);  // bcast(a,col): a->srcA, col->srcB
     mul_bcast_cols_init_short(a, col);
@@ -169,12 +169,12 @@ void bcast_cols_mul(uint32_t a, uint32_t col, uint32_t o, uint32_t Mt, uint32_t 
             tile_regs_release();
         }
     }
-    cb_push_back(o, Mt * Nt);
+    CircularBuffer(o).push_back(Mt * Nt);
 }
 
 // out[Mt,Nt] = A[Mt,Nt] - row[1,Nt]  (broadcast the single row of `row` across M)
 void bcast_rows_sub(uint32_t a, uint32_t row, uint32_t o, uint32_t Mt, uint32_t Nt) {
-    cb_reserve_back(o, Mt * Nt);
+    CircularBuffer(o).reserve_back(Mt * Nt);
     pack_reconfig_data_format(o);
     reconfig_data_format(a, row);  // bcast(a,row): a->srcA, row->srcB
     sub_bcast_rows_init_short(a, row);
@@ -188,12 +188,12 @@ void bcast_rows_sub(uint32_t a, uint32_t row, uint32_t o, uint32_t Mt, uint32_t 
             tile_regs_release();
         }
     }
-    cb_push_back(o, Mt * Nt);
+    CircularBuffer(o).push_back(Mt * Nt);
 }
 
 // out[0] = copy of src[src_tile] (single 32x32 tile). src must be available.
 void cpy_t(uint32_t src, uint32_t src_tile, uint32_t o) {
-    cb_reserve_back(o, 1);
+    CircularBuffer(o).reserve_back(1);
     pack_reconfig_data_format(o);
     reconfig_data_format_srca(src);
     copy_tile_to_dst_init_short(src);
@@ -203,7 +203,7 @@ void cpy_t(uint32_t src, uint32_t src_tile, uint32_t o) {
     tile_regs_wait();
     pack_tile(0, o, 0);
     tile_regs_release();
-    cb_push_back(o, 1);
+    CircularBuffer(o).push_back(1);
 }
 
 // Invert (I-N) for a strictly-lower 32x32 N using the exact nilpotent product
@@ -255,7 +255,7 @@ void invert_doubling(uint32_t src, uint32_t tile, uint32_t out) {
 
 // out[1,Ct] row-form = transpose of col[Ct,1]; produces Ct tiles (each row0 = a 32-chunk of col).
 void transpose_col(uint32_t in, uint32_t o, uint32_t Ct) {
-    cb_reserve_back(o, Ct);
+    CircularBuffer(o).reserve_back(Ct);
     pack_reconfig_data_format(o);
     reconfig_data_format_srca(in);  // unary: in->srcA
     transpose_init(in);
@@ -267,7 +267,7 @@ void transpose_col(uint32_t in, uint32_t o, uint32_t Ct) {
         pack_tile(0, o, i);
         tile_regs_release();
     }
-    cb_push_back(o, Ct);
+    CircularBuffer(o).push_back(Ct);
 }
 
 // Exact fp32 row sum for q/k L2 normalization. The shared SFPU reducer avoids four full-tile
@@ -288,7 +288,7 @@ void rowsum_k(uint32_t Mt, uint32_t Kt) {
 // out is the per-row inverse-L2 factor (optionally pre-scaled, for folding q's scale into the norm).
 // eps/scale arrive as fp32-bit-cast uint32 compile args.
 void inv_rms(uint32_t in, uint32_t o, uint32_t n, uint32_t eps_bits, uint32_t scale_bits, bool do_scale) {
-    cb_reserve_back(o, n);
+    CircularBuffer(o).reserve_back(n);
     pack_reconfig_data_format(o);
     reconfig_data_format_srca(in);
     copy_tile_to_dst_init_short(in);
@@ -308,7 +308,7 @@ void inv_rms(uint32_t in, uint32_t o, uint32_t n, uint32_t eps_bits, uint32_t sc
         pack_tile(0, o, i);
         tile_regs_release();
     }
-    cb_push_back(o, n);
+    CircularBuffer(o).push_back(n);
 }
 
 }  // namespace
@@ -398,7 +398,7 @@ void kernel_main() {
         expc(cb_ointer, cb_decay, ck);  // exp(G-anchor); cumsum has already released this full-size CB.
         WAIT(cb_decay, ck);
 
-        cb_reserve_back(cb_decayfac, ck);
+        CircularBuffer(cb_decayfac).reserve_back(ck);
         pack_reconfig_data_format(cb_decayfac);
         reconfig_data_format_srca(cb_ointer);
         copy_tile_to_dst_init_short(cb_ointer);
@@ -414,7 +414,7 @@ void kernel_main() {
             pack_tile(0, cb_decayfac, i);
             tile_regs_release();
         }
-        cb_push_back(cb_decayfac, ck);  // exp(anchor-G)
+        CircularBuffer(cb_decayfac).push_back(ck);  // exp(anchor-G)
         WAIT(cb_decayfac, ck);
         POP(cb_ointer, ck);
 
@@ -474,7 +474,7 @@ void kernel_main() {
         ew(cb_scr1, cb_supd, cb_scr2, ck, 2);
         WAIT(cb_scr2, ck);
         POP(cb_scr1, ck);
-        cb_reserve_back(cb_kdec_t, Kt * Ct);
+        CircularBuffer(cb_kdec_t).reserve_back(Kt * Ct);
         pack_reconfig_data_format(cb_kdec_t);
         reconfig_data_format_srca(cb_scr2);
         transpose_init(cb_scr2);
@@ -486,11 +486,11 @@ void kernel_main() {
             pack_tile(0, cb_kdec_t, ki);
             tile_regs_release();
         }
-        cb_push_back(cb_kdec_t, Kt);
+        CircularBuffer(cb_kdec_t).push_back(Kt);
         POP(cb_scr2, ck);
 
         // dl [K,1] is the transpose of any replicated exp(G_last) row.
-        cb_reserve_back(cb_dl, Kt);
+        CircularBuffer(cb_dl).reserve_back(Kt);
         pack_reconfig_data_format(cb_dl);
         reconfig_data_format_srca(cb_decay);
         transpose_init(cb_decay);
@@ -502,7 +502,7 @@ void kernel_main() {
             pack_tile(0, cb_dl, ki);
             tile_regs_release();
         }
-        cb_push_back(cb_dl, Kt);
+        CircularBuffer(cb_dl).push_back(Kt);
         POP(cb_supd, ck);
         POP(cb_decay, ck);
         // v_beta, kd, q_decay, intra, k_dec_t, dl, T_inv stay pushed for the writer.
