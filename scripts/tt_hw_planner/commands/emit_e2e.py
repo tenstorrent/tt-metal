@@ -1148,7 +1148,6 @@ def _is_overflow_detail(detail):
 
 
 _TT_ONLY_CONTRACT = """
-================ STRICT TT-ONLY CONTRACT — gate WILL auto-fail on violation ================
 
 The TT pipeline MUST be a pure TTNN forward path. The following are FORBIDDEN in the
 pipeline's HOT path (run_*, __call__, forward, _apply_*, decode_step, decode_prefill,
@@ -1228,7 +1227,6 @@ ALLOWED HF USAGE (SETUP / REFERENCE ONLY — NOT the forward path):
   4. HF calls inside <stage>_trace_setup(inputs) — seeding fixed-value
      persistent buffers BEFORE trace capture begins, so trace has stable
      inputs. The trace_step itself must be pure TT.
-============================================================================================
 """
 
 
@@ -1696,7 +1694,6 @@ def _parallelism_prompt_block(pc) -> str:
         return ""
     return f"""
 
-================ CHIP PLACEMENT — {pc.chips}-CHIP MESH (TP={pc.tp} x DP={pc.dp}) ================
 The tool has selected this parallelism split for `{pc.chips}` chips by checking per-TP kernel
 viability (largest kernel-viable TP degree that divides the mesh; the remaining chips become
 data-parallel replicas). Place the pipeline on the mesh accordingly:
@@ -1721,7 +1718,6 @@ data-parallel replicas). Place the pipeline on the mesh accordingly:
 
 
 _TRACE_PROMPT_BLOCK = """
-================ COMMAND 3 — TRACE CONTRACT (host-free full pipeline) ================
 AFTER Gates 1-3 pass (correct + on-device), make the pipeline trace-capturable per
 STAGE. Derive the stages from the HF reference config (Source A) — architectures /
 is_encoder_decoder / sub-configs give the phases (ForCausalLM -> [prefill, decode];
@@ -1769,6 +1765,24 @@ so optimize now PROVES the knob works by capping and re-measuring the work signa
 INERT when the op count does not move. Accepting `layers` is what makes that check pass rather than
 merely be survived. `trace_capture_selftest` and the demo entry MUST build through this same factory
 so there is ONE build surface.
+
+EVERY STACK MUST BE DISCOVERABLE, or the tool cannot see it to size, cap or attribute it. Hold each
+repeated block as a plain Python list (or nn.ModuleList) of SAME-TYPED elements; where graduated
+stubs must differ per layer, give them a COMMON BASE so the elements still share a type. No specific
+base class is required -- the walk reads "any same-typed object with __dict__" and runs against the
+object your factory RETURNS, so the shape is all that matters.
+
+Requiring a particular base (LightweightModule, nn.Module) was the old approach and it was a
+whitelist: two shapes were recognised, and the third model to arrive -- Voxtral-Mini-3B, whose
+blocks subclass neither -- was invisible. Its run reported full_blocks=0, climbed the 2/4/8/16
+ladder to recover a depth the markers give free, and sized ONE depth for a three-section model. A
+fourth shape would have been next. What the tool needs is a discoverable STRUCTURE, not a declared
+ancestry.
+
+The HF reference is the authority on how many sections a model has and how deep each is: walking a
+built Voxtral pipeline finds hf.model.audio_tower.layers (32) and hf.model.language_model.layers
+(30) directly, with no convention on the TT side at all. Keep that reference reachable from the
+built object -- it is ground truth for section structure, and cheaper than any marker.
 
 Expose trace_capture_selftest(device): for EACH stage in PIPELINE_STAGES, capture ONE step in
 ttnn.begin_trace_capture / end_trace_capture, execute_trace it, then RELEASE the trace before the
@@ -1872,7 +1886,6 @@ sibling model under models/demos/<other-model>/:
       - _captured/<name>/{{args,kwargs,output}}.pt   (HF golden tensors)
       - tests/pcc/            (per-component PCC tests)
 
-================ COMMAND 1 — ACT AS PLANNER ================
 Based on Group A and Group B information ONLY, act as a planner and create a
 sketch plan (mental model) that produces a task_heads JSON with: what "pass"
 means, which graduated stubs go where, the validation metric, behavioral
@@ -1881,7 +1894,6 @@ modules from Source B and does not leave any graduated module out. Correctly
 VERIFY that the graduated modules are listed correctly so none are wasted.
 Write the plan to {demo_dir}/e2e_plan.json.
 
-================ COMMAND 2 — ORCHESTRATE THE BUILD ================
 Based on that plan and only information from the plan, fire parallel agents
 working on Call 1, Call 2, … Call N (the task heads) separately if there is no
 dependency between them; if two calls share a graduated module, use only ONE
