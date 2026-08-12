@@ -139,21 +139,33 @@ Zone tree per drainer row: `DRISC-SWEEP` (depth 0) with `DRISC-READ`, `DRISC-REA
 
 | role | SWEEP | READ | READ-WAIT | PROC | CREDIT-WAIT | WRITE | WR-BARRIER |
 |---|---|---|---|---|---|---|---|
-| FILLER | 14.8-15.0 us | 128 ns | 69 ns | **667-682 ns** | 53 ns | 141 ns | 62-86 ns |
-| MOVER  |  6.4-6.5 us | 990-1,059 ns | - | - | **1,611-1,839 ns** | 769-909 ns | 487-610 ns |
+| FILLER | 16.4-17.0 us | 128 ns | 67-69 ns | **825-864 ns** | 54 ns | 138-140 ns | 64-120 ns |
+| MOVER  | 11.5-11.9 us | 1,425-1,774 ns | - | - | **2,698-2,781 ns** | 831-1,065 ns | 359-525 ns |
 
 The two roles are bottlenecked on different things and their own zones say so: a filler's per-batch PROC
 dwarfs everything else it does, while a mover's largest phase is the socket **credit wait** -- the quantity
-§N+38 identified as setting the knee, now visible per occurrence.
+§N+38 identified as setting the knee, now visible per occurrence, and ~1.6x its next-largest phase. The same
+named phase differs by three orders of magnitude between the roles (54 ns of DRAM ring room on a filler
+against 2.7 us of host FIFO credit on a mover), which is why one number for "the drainer" never meant anything.
 
 **The sampler triggers on discovered WORK, not on sweep number**, because both roles are >99% idle (a filler
 moves frames in ~114 of ~25,000 sweeps, a mover in ~350 of ~230,000). A sweep-number rule captured 1 working
 sweep out of 55 on a filler and 11 of 64 on a mover. A mover arms before issuing its DRAM read, so its busy
 visit is captured whole; a filler arms at the end of the first batch with live cores, so that sweep's earlier
-batches are not recovered. Idle samples get their own eighth of the frame budget, an instrumented sweep that
-turns out idle is rewound or abandoned for free, and a captured sweep is bounded to one ring (past that it is
-truncated, counted, and excluded from the counter cross-check). Cost: **0.23-1.00% of a drainer's egress**,
-+4% on a filler's sweep time, 0 producer stalls at delay 60 and 49-140 at delay 15 (a knee crossing).
+batches are not recovered. An instrumented sweep that turns out idle is rewound or abandoned for free, and a
+captured sweep is bounded to one ring (past that it is truncated, counted, and excluded from the counter
+cross-check). Cost: **0.28-0.52% of a drainer's egress**, +4% on a filler's sweep time, 0 producer stalls at
+delay 60 and 49-140 at delay 15 (a knee crossing).
+
+**Sampling IDLE sweeps is off by default and should stay off** unless the question is specifically what an idle
+poll costs. A drainer is resident from device open, so its idle sweeps span the whole process (~190 ms measured)
+while a workload is a ~1.9 ms sliver: sampling them puts DRISC zones 187 ms before the first worker zone and
+makes the rows unreadable. They are also not inert -- a filler's self frame is a real frame in its DRAM ring, so
+its mover ships it, manufacturing mover credit-wait/write zones outside the workload window (measured: all 13
+such zones followed a peer filler's publish by 1.7-2.4 us) and diluting the mover's credit-wait figure from
+2.70-2.78 us down to 1.6-1.8. Work-triggered only, all six drainers start within 8-67 us of the first worker
+zone; the fillers end just before the last one and the movers trail it by 2.5-2.9 ms, which is the ring's drain
+tail.
 
 ## Measured costs and occupancy
 

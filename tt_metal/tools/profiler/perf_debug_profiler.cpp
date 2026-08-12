@@ -378,6 +378,23 @@ uint32_t drisc_zones() {
     return v;
 }
 
+// Sparse IDLE-sweep samples, OFF by default. Turning them on scatters DRISC zones across the drainer's whole
+// residency (~190 ms) while the workload is a ~1.9 ms sliver, and -- because a filler's self frame is a real
+// frame its mover must ship -- manufactures mover credit-wait/write zones outside the workload window
+// entirely. Only useful when the question is specifically "what does an IDLE drainer cost per poll".
+// Returns the sweep period, or 0 for off.
+uint32_t drisc_zone_idle_every() {
+    static const uint32_t v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_DRISC_ZONE_IDLE");
+        if (s == nullptr || *s == '\0' || *s == '0') {
+            return 0u;
+        }
+        const uint32_t n = static_cast<uint32_t>(std::strtoul(s, nullptr, 10));
+        return n != 0 ? n : drisc_zones() * 32u;  // "=1" means "use the default spacing", not "every sweep"
+    }();
+    return v;
+}
+
 // Frames of self capture per DRISC. A self frame is a whole 10,560 B slot of which only ring 0 is live, and
 // one instrumented busy filler sweep fills roughly two of them, so this is what stops the instrument from
 // out-shipping the payload. 64 frames is 676 KB against a filler's ~18.5 MB, i.e. ~3.6%, and still ~8k zones.
@@ -1793,7 +1810,8 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
                 drisc_zones(),
                 (static_cast<uint32_t>(ctx.drisc_virtual[d].x) & 0xFFFFu) |
                     ((static_cast<uint32_t>(ctx.drisc_virtual[d].y) & 0xFFFFu) << 16),
-                self_frames_cap};
+                self_frames_cap,
+                drisc_zone_idle_every()};
             const std::string kdrain = "tt_metal/tools/profiler/kernels/drisc_profiler_drain.cpp";
             auto drain_id =
                 tensix_drain ? CreateKernel(
@@ -2034,7 +2052,7 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
             tt::LogMetal,
             "[perf-debug profiler] Device {}: DRISC SELF-PROFILING on -- {} drainer cores get lanes [{},{}) "
             "and their own Tracy rows | capture spacing >= {} sweeps, budget {} frames/DRISC ({:.0f} KB, "
-            "{} zones max) | a drainer's staging slot count drops {} -> {} to make room",
+            "{} zones max) | idle-sweep samples {} | a drainer's staging slot count drops {} -> {} to make room",
             device_id,
             ctx.n_drisc,
             self_core0 * kNRisc,
@@ -2043,6 +2061,9 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
             drisc_zone_frames(),
             drisc_zone_frames() * slot_bytes_all / 1024.0,
             drisc_zone_frames() * (kernel_profiler::PROFILER_L1_VECTOR_SIZE / 4),
+            drisc_zone_idle_every() != 0
+                ? fmt::format("every {} sweeps <<< these land OUTSIDE the workload window", drisc_zone_idle_every())
+                : std::string("OFF (every capture is work-triggered, so they line up with the cores)"),
             nstage_report,
             nstage_report > 0 ? nstage_report - 1 : 0);
     }
