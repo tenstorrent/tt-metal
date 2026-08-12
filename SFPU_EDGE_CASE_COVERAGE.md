@@ -103,7 +103,7 @@ The same happened to approximate `exp` in the unary suite (4 XPASS → 4 pass). 
 
 ## 2. What is still NOT tested
 
-Ordered by how much coverage each item is worth. This is the list to work from; §2 of the plan
+Ordered by how much coverage each item is worth. This is the list to work from; §1 of the plan
 sequences it.
 
 ### 2.1 Cat B — IEEE specials for the other 87 unary ops (still the largest gap)
@@ -118,7 +118,7 @@ ones — `Neg(NaN) → +inf` and `Log(NaN) → +inf` are the golden mangling NaN
 path, and `Neg(+0) → -0` and `Reciprocal(-inf) → -0` are cases where the *hardware* is IEEE-correct and
 the golden is not. Enrolling an op whose golden is wrong would launder a test bug into a permanent
 "known hardware divergence". The full per-probe table is in `_SPECIALS_NEXT_TRANCHE` and the plan's
-§3.2.
+§2.1, which also gives the order to fix them in.
 
 **87 unary ops remain, and 47 of them are smooth everywhere** (§4.2), so cat B is still their entire
 edge story. Measured cost from the first tranche: of 10 ops attempted, 5 were already correct, 2
@@ -222,13 +222,15 @@ mechanism currently prevents this rather than enabling it. Untouched since the o
 | # | Finding | Status |
 |---|---|---|
 | 1 | Unary float sweep is positive-only (`uniform(0.1, 1.1)`, no `spec_A`) | ✅ **fixed.** The sweep defaults `spec_A` to the op's registered signed domain, bounded by the narrowest format in the pipeline (`for_op_pipeline` + `exclude_undefined`), and a missing registry entry is a hard `KeyError`. 31 ops gained their `x<0` branch |
-| 2 | Binary / ternary / scalar suites never import `sfpu_domains.py` | 🟡 **closed for binary.** 11 of 43 binary ops now have a registered domain; the other 32 keep the format default. Ternary and scalar have the per-operand plumbing but **no registry entries at all** — see §2.2 |
-| 3 | IEEE specials injected for exactly one op family | 🟡 **measured, deliberately not enabled.** The safe `(format, dest_acc)` surface is now data (§6) rather than assumption, pinned by 107 host-side tests. Injection is off because the *goldens* fail, not the pipeline — §2.1 |
+| 2 | Binary / ternary / scalar suites never import `sfpu_domains.py` | 🟡 **closed for binary and for the ternary pole.** 11 of 43 binary ops have a registered domain; the other 32 keep the format default. Ternary now reaches the registry for the operand that matters — `OperandSpecs.spec_C` and `Operand.C` exist, and `addcdiv` / `snake_beta` carry a registered pole (§4.6). Still open: no ternary op has a registered *domain*, and scalar has the plumbing but nothing to read |
+| 3 | IEEE specials injected for exactly one op family | 🟡 **enabled for 6 families of op, gated per op.** No longer "measured and switched off": `SPECIALS_READY_OPS` holds `Identity`, `Abs`, `Exp`, `Sin`, `Cos` alongside the five predicates, all green on Blackhole. The safe `(format, dest_acc)` surface is data (§6) pinned by 107 host-side tests. The remaining 87 ops are gated on their *goldens*, not on the pipeline — §2.1 |
 | 4 | Integer sign/extreme edges structurally excluded (`_get_integer_bounds` returns `min+1`) | 🟡 **closed where the kernels allow it.** Extremes go through a raw `src_A_override`; `test_sfpu_binary_int_extremes` drives `{INT32_MIN+1, -1, 0, 1, INT32_MAX}²` over the 5 ops that claim the full range. The other 12 are out of scope by kernel design — §2.6 |
 
-**#3 and #4 both moved, but neither to a plain "fixed", and for the same reason:** the mechanism was
-the easy part and something outside the test infra bounds how far it can go. For #3 it is the
-goldens; for #4 it is the kernels' own documented ranges.
+**None of #2–#4 reaches a plain "fixed", and for the same reason each time:** the mechanism was the
+easy part and something outside the test infra bounds how far it can go. For #2 it is the absence of
+registered ternary and scalar domains, for #3 the goldens, for #4 the kernels' own documented ranges.
+#3 is the one that moved most in revision 7 — from zero ops injecting specials to six families — and
+it moved by fixing goldens, which is exactly what the pattern predicted.
 
 ---
 
