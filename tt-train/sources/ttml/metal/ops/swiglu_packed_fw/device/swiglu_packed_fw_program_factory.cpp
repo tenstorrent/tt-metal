@@ -44,26 +44,28 @@ void assign_per_core_runtime_args(
     const tt::tt_metal::Buffer* output_buffer,
     uint32_t num_cores,
     uint32_t num_cores_y,
-    uint32_t num_rows_per_core_group_1,
-    uint32_t num_rows_per_core_group_2,
+    uint32_t num_blocks_per_core_group_1,
+    uint32_t num_blocks_per_core_group_2,
     const tt::tt_metal::CoreRangeSet& core_group_1,
     const tt::tt_metal::CoreRangeSet& core_group_2) {
-    for (uint32_t i = 0, num_rows_written = 0; i < num_cores; i++) {
+    for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++) {
         const tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
-        uint32_t num_rows_per_core = 0;
+        uint32_t num_blocks_per_core = 0;
         if (core_group_1.contains(core)) {
-            num_rows_per_core = num_rows_per_core_group_1;
+            num_blocks_per_core = num_blocks_per_core_group_1;
         } else if (core_group_2.contains(core)) {
-            num_rows_per_core = num_rows_per_core_group_2;
+            num_blocks_per_core = num_blocks_per_core_group_2;
         } else {
             TT_FATAL(false, "Core not in specified core ranges");
         }
 
-        SetRuntimeArgs(program, kernels.reader, core, {packed_buffer->address(), num_rows_per_core, num_rows_written});
-        SetRuntimeArgs(program, kernels.writer, core, {output_buffer->address(), num_rows_per_core, num_rows_written});
+        SetRuntimeArgs(
+            program, kernels.reader, core, {packed_buffer->address(), num_blocks_per_core, num_blocks_written});
+        SetRuntimeArgs(
+            program, kernels.writer, core, {output_buffer->address(), num_blocks_per_core, num_blocks_written});
 
-        num_rows_written += num_rows_per_core;
+        num_blocks_written += num_blocks_per_core;
     }
 }
 
@@ -90,8 +92,11 @@ SwigluPackedFwProgramFactory::cached_program_t SwigluPackedFwProgramFactory::cre
     // Largest block <=4 dividing Wt (=4 for real MLP widths, where I/32 is a multiple of 8).
     const uint32_t block_size = get_block_size(Wt, 4U);
 
-    const auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_g1, num_rows_g2] =
-        tt::tt_metal::split_work_to_cores(grid_size, total_rows);
+    const uint32_t blocks_per_row = Wt / block_size;
+    const uint32_t total_blocks = total_rows * blocks_per_row;
+
+    const auto [num_cores, all_cores, core_group_1, core_group_2, num_blocks_g1, num_blocks_g2] =
+        tt::tt_metal::split_work_to_cores(grid_size, total_blocks);
 
     const uint32_t twice_block = 2U * block_size;
     create_circular_buffer(program, all_cores, kGateCbIndex, data_format, tile_size_bytes, twice_block);
@@ -108,16 +113,16 @@ SwigluPackedFwProgramFactory::cached_program_t SwigluPackedFwProgramFactory::cre
     tt::tt_metal::TensorAccessorArgs(packed_buf).append_to(reader_ct_args);
     kernels.reader = create_reader_kernel(program, all_cores, reader_ct_args, {}, kReaderKernelPath);
 
-    std::vector<uint32_t> writer_ct_args{block_size, Wt};
+    std::vector<uint32_t> writer_ct_args{block_size};
     tt::tt_metal::TensorAccessorArgs(output_buf).append_to(writer_ct_args);
     kernels.writer = create_writer_kernel(program, all_cores, writer_ct_args, {}, kWriterKernelPath);
 
-    std::vector<uint32_t> compute_g1_args = {num_rows_g1, block_size, Wt};
+    std::vector<uint32_t> compute_g1_args = {num_blocks_g1, block_size};
     kernels.compute_group_1 =
         create_compute_kernel(program, core_group_1, compute_g1_args, {}, kComputeKernelPath, true);
 
     if (!core_group_2.ranges().empty()) {
-        std::vector<uint32_t> compute_g2_args = {num_rows_g2, block_size, Wt};
+        std::vector<uint32_t> compute_g2_args = {num_blocks_g2, block_size};
         kernels.compute_group_2 =
             create_compute_kernel(program, core_group_2, compute_g2_args, {}, kComputeKernelPath, true);
     }
@@ -129,8 +134,8 @@ SwigluPackedFwProgramFactory::cached_program_t SwigluPackedFwProgramFactory::cre
         output_buf,
         num_cores,
         num_cores_y,
-        num_rows_g1,
-        num_rows_g2,
+        num_blocks_g1,
+        num_blocks_g2,
         core_group_1,
         core_group_2);
 
