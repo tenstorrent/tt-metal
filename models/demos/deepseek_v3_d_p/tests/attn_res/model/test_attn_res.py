@@ -26,10 +26,12 @@ the single reads cannot.
 inert rather than failing on a runner that cannot hold it — single-card Blackhole SKUs
 collect it and skip. CI runs it on `bh_loudbox`.
 
-Queries are random by default. Point `KIMI_K3_CKPT` at a checkpoint holding the stack's
-`res_norm`/`res_proj` weights — `tests/attn_res/fetch_query_weights.py` stages one — to run
-every gate below on the real queries, placed through the same `.tensorbin` cache the block
-gives every other module. That fetch is a by-hand step and CI never takes it.
+Queries are random unless something on the box names real ones, and every gate below runs
+on whatever it gets. `TT_KIMI_K3_PREFILL_TTNN_CACHE` pointing at a complete tensorbin cache
+is enough on its own, which is the state a brought-up model ships in; `KIMI_K3_CKPT` naming
+a checkpoint that holds the stack's `res_norm`/`res_proj` weights builds that cache first.
+`tests/attn_res/fetch_query_weights.py` stages such a checkpoint, by hand — CI sets neither
+variable and takes the random arm.
 """
 
 import pytest
@@ -111,14 +113,26 @@ def _make_case(num_tokens, num_sealed, seed=0):
     return randn(num_tokens, HIDDEN_SIZE), randn(num_tokens, num_sealed, HIDDEN_SIZE)
 
 
-def _queries(checkpoint_dir, seed=0):
+def _queries(op, checkpoint_dir, seed=0):
     """Every folded query the stack holds: 93 pre-attention, 93 post-attention, one final.
 
-    The checkpoint's own when there is one, random otherwise. Either way the sites do not
-    share a query, which is what makes `merge`'s site index observable.
+    The checkpoint's own when there is one; otherwise whatever the op holds, read back off
+    device so a published tensorbin cache with no checkpoint beside it still has an oracle.
+    Read back the reference is the op's own bf16 query rather than the fp32 fold of it, so
+    that arm gates the read arithmetic alone. Either way the sites do not share a query,
+    which is what makes `merge`'s site index observable.
     """
     if checkpoint_dir is not None:
         return fold_queries(load_attn_res_state_dict(checkpoint_dir, LAYERS), LAYERS)
+
+    if op.weights is not None:
+        # Composing a TP-sharded row also stacks the SP copies of it; they are identical.
+        compose = lambda q: ttnn.to_torch(q, mesh_composer=op.stream_composer).reshape(-1, HIDDEN_SIZE)[0].float()
+        return (
+            [compose(q) for q in op.weights.pre],
+            [compose(q) for q in op.weights.post],
+            compose(op.weights.output),
+        )
 
     generator = torch.Generator().manual_seed(seed)
     randn = lambda *shape: torch.randn(*shape, generator=generator)
@@ -127,19 +141,21 @@ def _queries(checkpoint_dir, seed=0):
 
 
 def _make_op(mesh_device, checkpoint_dir):
-    """The op, holding the checkpoint's queries through the tensorbin cache when there is one.
+    """The op, holding real queries whenever anything on the box names some.
 
-    First run writes the cache and later ones read it. At 5 MB of `[d]` vectors that saves
-    no measurable time — it is here so the real-weight path is the one the block hands
-    every other module, rather than one this op alone would need special-casing for.
+    A complete tensorbin cache is enough on its own — that is the state a brought-up model
+    ships in, and it reads with no checkpoint present. A checkpoint without one builds it
+    first. Neither costs measurable time at 5 MB of `[d]` vectors; the cache is here so the
+    real-weight path is the one the block hands every other module, rather than one this op
+    alone would need special-casing for.
     """
     build = lambda **kwargs: TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS, tp_axis=TP_AXIS, **kwargs)
-    if checkpoint_dir is None:
-        return build()
-
-    cache_path = attn_res_tensor_cache_path(checkpoint_dir, mesh_device, TP_AXIS)
+    cache_path = attn_res_tensor_cache_path(mesh_device, TP_AXIS, checkpoint_dir)
     cache_args = dict(num_layers=LAYERS, tensor_parallel_axis=TP_AXIS)
+
     if not AttnResWeights.check_cache_complete(cache_path, CACHE_PREFIX, num_layers=LAYERS):
+        if checkpoint_dir is None:
+            return build()
         AttnResWeights.build_ttnn_cache(
             load_attn_res_state_dict(checkpoint_dir, LAYERS), cache_path, CACHE_PREFIX, mesh_device, **cache_args
         )
@@ -216,7 +232,7 @@ def test_read_matches_reference(mesh_device, num_sealed, device_params, kimi_k3_
     assert op.shard_width == HIDDEN_SIZE // op.tp_factor
 
     prefix_sum, block_residual = _make_case(num_tokens, num_sealed)
-    host = _queries(kimi_k3_checkpoint_dir)
+    host = _queries(op, kimi_k3_checkpoint_dir)
     queries = _walk_sites(*host[:2])[:READ_SITES]
     tt_queries = _walk_sites(*_device_queries(op, host)[:2])[:READ_SITES]
     tt_prefix, tt_block = _to_device(op, prefix_sum, block_residual)
@@ -251,7 +267,7 @@ def test_sequence_axis_communicates_nothing(mesh_device, device_params, kimi_k3_
     op = _make_op(mesh_device, kimi_k3_checkpoint_dir)
     num_tokens = PER_CHIP_TOKENS * op.sp_factor
     prefix_sum, block_residual = _make_case(num_tokens, 8)
-    host = _queries(kimi_k3_checkpoint_dir)
+    host = _queries(op, kimi_k3_checkpoint_dir)
     tt_query = _walk_sites(*_device_queries(op, host)[:2])[0]
 
     # `stream_mapper` shards dim 2 on the SP axis; dropping that entry replicates it.
@@ -294,7 +310,7 @@ def _make_stack(op, checkpoint_dir, seed=0):
     """Everything the walk consumes, on host: the embeddings and all 187 folded queries."""
     generator = torch.Generator().manual_seed(seed)
     hidden_states = torch.randn(PER_CHIP_TOKENS * op.sp_factor, HIDDEN_SIZE, generator=generator)
-    return (hidden_states, *_queries(checkpoint_dir, seed))
+    return (hidden_states, *_queries(op, checkpoint_dir, seed))
 
 
 @on_placements

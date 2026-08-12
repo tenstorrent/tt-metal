@@ -65,17 +65,24 @@ def load_attn_res_state_dict(
 
 
 def attn_res_tensor_cache_path(
-    checkpoint_dir: Path,
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int = 1,
-) -> Path:
-    """The cache root for one mesh placement.
+    checkpoint_dir: Path | None = None,
+) -> Path | None:
+    """The cache root for one mesh placement, or `None` when nothing names one.
+
+    `TT_KIMI_K3_PREFILL_TTNN_CACHE` is the whole model's cache root and wins outright, so
+    tensorbins published with the model load with no checkpoint anywhere on the box. A
+    checkpoint without that variable caches beside itself, which is what a first fetch gets.
 
     Placement is the directory rather than the stem because a query sharded four ways is
     a different tensorbin from the same query sharded eight ways, under the same name.
     """
+    root = os.getenv(KimiK3Adapter.ttnn_cache_env)
+    if root is None and checkpoint_dir is None:
+        return None
+
     mesh_shape = tuple(mesh_device.shape)
     sequence_parallel_axis = 1 - tensor_parallel_axis
     layout = f"sp{mesh_shape[sequence_parallel_axis]}_tp{mesh_shape[tensor_parallel_axis]}"
-    root = os.getenv(KimiK3Adapter.ttnn_cache_env)
     return (Path(root) if root else Path(checkpoint_dir) / "ttnn_cache") / layout

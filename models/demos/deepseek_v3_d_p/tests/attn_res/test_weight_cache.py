@@ -8,15 +8,22 @@ two geometries would either collide on one file or miss each other's, and both r
 cache that simply works. Nothing here touches a device.
 """
 
+from types import SimpleNamespace
+
 import ttnn
+from models.demos.deepseek_v3_d_p.tests.attn_res.checkpoint_utils import attn_res_tensor_cache_path
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import (
     AttnResWeights,
     _cache_artifact_names,
     _cache_stem,
     _serialized_path,
 )
+from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3 import KimiK3Adapter
 
 LAYERS = 4
+
+# The resolver reads a shape and nothing else, so no device has to be opened for it.
+MESH_2X4 = SimpleNamespace(shape=(2, 4))
 
 
 def test_cache_stem_uses_only_the_caller_owned_namespace():
@@ -47,6 +54,18 @@ def test_incomplete_cache_is_not_reported_complete(tmp_path):
     assert AttnResWeights.check_cache_complete(tmp_path, "attn_res", num_layers=LAYERS)
     # Same files, other dtype: a hit here would hand the op weights it did not ask for.
     assert not AttnResWeights.check_cache_complete(tmp_path, "attn_res", num_layers=LAYERS, dtype=ttnn.float32)
+
+
+def test_cache_root_takes_the_env_var_over_a_checkpoint(monkeypatch, tmp_path):
+    """The published cache has to win, or a box holding both would rebuild what it shipped."""
+    monkeypatch.delenv(KimiK3Adapter.ttnn_cache_env, raising=False)
+    assert attn_res_tensor_cache_path(MESH_2X4) is None
+    assert attn_res_tensor_cache_path(MESH_2X4, 1, tmp_path) == tmp_path / "ttnn_cache" / "sp2_tp4"
+
+    monkeypatch.setenv(KimiK3Adapter.ttnn_cache_env, str(tmp_path / "published"))
+    assert attn_res_tensor_cache_path(MESH_2X4, 1, tmp_path) == tmp_path / "published" / "sp2_tp4"
+    # Same weights, other placement: distinct roots, because the shards differ.
+    assert attn_res_tensor_cache_path(MESH_2X4, 0).name == "sp4_tp2"
 
 
 def test_walk_order_skips_layer_zeros_pre_read():
