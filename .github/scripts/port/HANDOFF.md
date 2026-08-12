@@ -79,6 +79,40 @@ afterwards. Globbing from `port-inputs` closes it for now, since the agent's sna
 that directory, but the ordering is the real defect and the guard should run before anything from
 the tree is executed.
 
+**With that fixed, the bands ran, and the harness returned its first graded verdict on a real port:
+`back-to-translate`.** Dispatched by hand from a laptop on the agent's compiling tree, over the fixed
+base -- run 31630655137, about 20 minutes. Every step of `verify` now has evidence behind it:
+`report_verify`, `gate.json`, the correctness band over all 208 cases and the wall and device bands
+over 24. The numbers, for the record:
+
+| | |
+| --- | --- |
+| Correctness | 112 of 112 in-scope cases fail; 96 out-of-scope pass |
+| Routing | **0 violations, 0 unverified** -- the predicate is right |
+| Golden | `native`, as expected for this op |
+| Wall clock | median ratio 0.787 over 24 cases, one regression (`codegen_untilize[206]`) |
+| Device | `device_vs_native` 2.09 at its best |
+| Demotions | none |
+
+The routing result is the one to keep. `supported_by_codegen()` had to reject non-tile-aligned
+`bfloat8_b` while accepting non-tile-aligned `bfloat16`, which is the genuinely hard part of this
+port and the thing the emitted test exists to catch -- and the agent got it exactly right across all
+96 cases.
+
+Every in-scope failure is one cause, and it is one missing file: `writer_untilize_interleaved.cpp`
+includes `rm_shard_split.h`, which lives in the generator at `common/templates/` and was never
+vendored into the port. The agent did this correctly for `sequencers.h` -- it sits beside the kernels
+and resolves -- and missed the second one. So the fix is to copy that header in beside the others,
+and the perf figures above should be re-read afterwards, since nothing in-scope has actually
+executed yet.
+
+**The lesson worth carrying to the third op: a green build says nothing about kernel includes.**
+Kernels are JIT-compiled on the device at first use, so a missing kernel header cannot fail the CI
+build -- it failed all 112 in-scope cases at runtime instead, on a tree that had compiled cleanly
+twice. This is the first defect the build/verify split cannot shift left, and it is a good candidate
+for the build-facts list in the prompt: shared headers under the generator's `common/templates/` must
+be vendored beside the kernels that include them.
+
 The second run, the same afternoon, got further and failed for a sibling reason. The agent wrote the
 port, started exactly one build -- the start/collect split working -- and then re-dispatched a
 byte-identical tree rather than reading the compiler diagnostics, because a non-zero exit reaches it
@@ -455,10 +489,10 @@ Two things that were guesses are now settled: the `/codegen` volume mounts and i
 
 What that leaves genuinely untested:
 
-- **The bands themselves.** `verify` mode now runs -- `report_verify` and `gate.json` both exercised
-  on 2026-08-12 -- but it blocked on the write-path guard, which sits in front of the measurement, so
-  correctness and performance have still never been graded on a real port. The next `verify` is the
-  first one that can produce a number, and it is the highest-value thing left to probe.
+- **A passing verdict.** The bands now run and grade: `verify` returned `back-to-translate` on a real
+  port on 2026-08-12, with real numbers behind every band. What no run has produced is a `win` -- so
+  the demotion path, the per-stratum grading under a passing correctness band, and the PR body built
+  from real figures are all still unexercised. They stay that way until an in-scope case executes.
 - **The agent acting on a result.** It has now been handed two -- a failed build and a "still
   going" -- and misread both, because both arrived framed as tool errors. Whether it reads them
   correctly now that they arrive as content is the single open question, and the cheapest thing to
@@ -488,10 +522,17 @@ Cheapest first, so each failure costs the least it can. Steps 1 to 4 are done.
 5. ~~Push to `ebanerjee/port-op-dryrun` to trigger `port-op` itself, and watch the first `wait`.~~
    Done 2026-08-12, run 3: the agent read exit 4 as "call again", read a build failure, edited, and
    reached a compiling tree. `verify` ran on it and blocked on the write-path guard.
-6. Next: a `verify` that reaches the bands. The guard defect is fixed and asserted, so this is the
-   first run that can produce a correctness or performance number. It needs no new rehearsal --
-   dispatch a `verify` on a tree that already compiles, from a laptop, and read `gate.json`. Cheaper
-   than a full agent session and it settles the last unexercised report path.
+6. ~~A `verify` that reaches the bands.~~ Done 2026-08-12, run 31630655137: `back-to-translate` in
+   about 20 minutes, routing clean, all 112 in-scope cases failing on one missing kernel header.
+7. Next: vendor `rm_shard_split.h` beside the port's kernels and re-verify. That is the cheapest run
+   in the whole sequence -- one file, one dispatch -- and it is the only thing between here and the
+   first verdict where an in-scope case has actually run. The perf numbers from run 31630655137 are
+   not yet meaningful, because nothing in scope executed to produce them.
+
+The agent's compiling tree is preserved locally at tag `port-run3-compiling-tree` (commit
+`42487b776557`), independent of the run and its swept scratch refs. Every port file in it was
+hash-compared against the worktree before the verify above, so it is a faithful copy of what the
+agent wrote.
 
 Measured per-cycle wall times, which the budget argument rests on: a `build` is 8.5 minutes and a
 `baseline` 19, both well inside the 20 and 35-45 the design assumed. A `verify` is still unmeasured,
