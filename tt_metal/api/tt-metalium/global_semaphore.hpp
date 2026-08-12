@@ -14,10 +14,9 @@
 #include <tt-metalium/hal_types.hpp>
 #include <ostream>
 
-// forward declarations
 namespace tt::tt_metal {
+
 class IDevice;
-class GlobalSemaphore;
 class GlobalSemaphoreImpl;
 namespace distributed {
 class MeshDevice;
@@ -42,9 +41,7 @@ public:
         uint32_t initial_value,
         BufferType buffer_type = BufferType::L1);
 
-    // Internal constructor (internal use only)
     explicit GlobalSemaphore(GlobalSemaphoreImpl impl);
-
     GlobalSemaphore(const GlobalSemaphore& other);
     GlobalSemaphore& operator=(const GlobalSemaphore& other);
 

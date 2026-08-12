@@ -15,6 +15,7 @@
 #include "host_api/helpers.hpp"
 #include <global_circular_buffer.hpp>
 #include <global_semaphore.hpp>
+#include "impl/buffers/global_semaphore_impl.hpp"
 #include <host_api.hpp>
 #include <experimental/dispatch_context.hpp>
 #include <enchantum/enchantum.hpp>
@@ -1858,7 +1859,7 @@ uint32_t CreateSemaphore(
 
 GlobalSemaphore CreateGlobalSemaphore(
     distributed::MeshDevice& device, CoreRangeSet cores, uint32_t initial_value, BufferType buffer_type) {
-    return GlobalSemaphore(device, std::move(cores), initial_value, buffer_type);
+    return GlobalSemaphore(GlobalSemaphoreImpl(device, std::move(cores), initial_value, buffer_type));
 }
 
 std::shared_ptr<Buffer> CreateBuffer(const BufferConfig& config) {
