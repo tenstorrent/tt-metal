@@ -141,22 +141,45 @@ public:
     // Fold one k-block into the running total. `finish` selects the pack
     // target: the accumulation buffer, or the output buffer on the last block.
     //
-    // An epilogue rides on the node itself -- relu(matmul<Geom>(a, b)) appends
-    // to the node's chain, and the chain is applied in place on DST on the final
-    // block, when the accumulator is complete. No separate argument needed.
+    // The two ways of attaching SFPU work mean DIFFERENT things:
+    //
+    //   accumulate(relu(mm), finish)                            per-step: relu
+    //     runs on every k-block, so the accumulator carries the transformed
+    //     value forward.
+    //
+    //   accumulate(mm, finish, [](auto n){ return relu(n); })   finish-only:
+    //     relu runs once, on the completed accumulator.
+    //
+    // The lambda receives the node and returns one with a longer chain; only the
+    // ops *it* adds are deferred to the finishing call. See the note on
+    // Strategy<FPUFusion>::run for what "per-step" sees in Dst mode.
     //
     // Only the Block returned on the finishing call is meaningful; earlier ones
     // describe the accumulation buffer, which the next call re-consumes.
-    template <typename Node>
-    Block accumulate(const Node& node, bool finish) {
+    template <typename Node, typename Epilogue = std::nullptr_t>
+    Block accumulate(const Node& node, bool finish, Epilogue epilogue = nullptr) {
         static_assert(is_fpu_fusion<Node>::value, "Accumulator drives FPU fusions");
-        static_assert(
-            Mode == AccumulatorMode::Dst || Node::chain::empty,
-            "an epilogue chain is only available in Dst mode; in L1 mode the result is assembled "
-            "by the packer and never sits complete in DST for the chain to fold into");
         static_assert(Mode == AccumulatorMode::Dst, "AccumulatorMode::L1 is not implemented yet");
 
-        Strategy<expr::kind_of_t<Node>>::run(node, acc_storage.cb_id, out_storage.cb_id, reload, finish);
+        if constexpr (std::is_same_v<Epilogue, std::nullptr_t>) {
+            check_chain<Node>();
+            Strategy<expr::kind_of_t<Node>>::run(node, acc_storage.cb_id, out_storage.cb_id, reload, finish);
+        } else {
+            // Apply the epilogue to a bare-chain node of the same geometry to
+            // recover just the ops it adds; those are the finish-only ones. The
+            // node's own chain stays per-step.
+            using Bare = MatmulNode<typename Node::geometry, expr::UnaryChain<>>;
+            using Fused = decltype(epilogue(std::declval<Bare>()));
+            static_assert(
+                is_fpu_fusion<Fused>::value,
+                "an epilogue must return an FPU fusion node -- it receives the matmul node and should "
+                "extend its chain, e.g. [](auto mm) { return relu(mm); }");
+            check_chain<Node>();
+            check_chain<Fused>();
+            Strategy<expr::kind_of_t<Node>>::run(
+                node, acc_storage.cb_id, out_storage.cb_id, reload, finish, typename Fused::chain{});
+        }
+
         reload = !finish;
         return finish ? Block(out_storage) : Block(acc_storage);
     }
@@ -164,6 +187,16 @@ public:
     // Reset between output blocks.
     void clear() { reload = false; }
 
+private:
+    template <typename Node>
+    static constexpr void check_chain() {
+        static_assert(
+            Mode == AccumulatorMode::Dst || Node::chain::empty,
+            "an epilogue chain is only available in Dst mode; in L1 mode the result is assembled "
+            "by the packer and never sits complete in DST for the chain to fold into");
+    }
+
+public:
 private:
     const Storage& acc_storage;
     const Storage& out_storage;
