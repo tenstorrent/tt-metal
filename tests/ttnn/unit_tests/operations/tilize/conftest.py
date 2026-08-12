@@ -49,14 +49,40 @@ Two things live here:
      a supported cell (`eval/classify_failures.py`), which is red there.
 
    So this is a reporting convention, not a capability claim: it adds nothing to
-   `SUPPORTED`. As of Refinement 2b the axes still refused — and therefore still
-   XFAIL here — are `dtype`/`output_dtype` beyond bfloat16 (Refinement 7),
-   `pad_mode`/`pad_value`/`alignment`/`rank=0` (Refinement 5) and
+   `SUPPORTED`. As of Refinement 5 the axes still refused — and therefore still
+   XFAIL here — are `dtype`/`output_dtype` beyond bfloat16 (Refinement 7) and
    `tile_height`/`in_layout` (Refinement 8).
+
+3. **One `pytest.approx` × torch incompatibility in the immutable spec.**
+   `test_tilize.py::test_tilize_pad_scalar` ends with
+
+       assert torch.all(padded[mask] == pytest.approx(pad_value))
+
+   Under pytest >= 8 (this env: 9.0.3) `ApproxScalar.__eq__` converts a torch
+   tensor through `__array__` and returns a plain **bool**, so the expression
+   never yields a tensor and `torch.all(<bool>)` raises
+   `TypeError: all() received an invalid combination of arguments - got (bool)`.
+   That is unconditional: it fires for a bit-perfect output exactly as it fires
+   for a wrong one, so the assertion never observed the op's values at all. It
+   only became visible when Refinement 5 put `rank=0` into SUPPORTED — before
+   that the case was refused and converted by (2) above.
+
+   The file is the SPEC and must not be edited, so the case is reported XFAIL
+   here on a predicate matched to that ONE mechanism (a `TypeError` from
+   `torch.all` receiving a bool). It cannot mask an op defect: the expression it
+   fires on is a type error in the assertion machinery, not a comparison result.
+   The property the spec meant to assert is asserted for real, elementwise and
+   exactly, by
+   `test_tilize_debug.py::test_r5_scalar_pad_fills_every_position`, so no
+   coverage is lost — only the broken spelling of it.
 """
 import pytest
 
 from ttnn.operations._op_contract import SupportRefusal
+
+# The exact signature of the pytest-approx-vs-torch defect described above. Both
+# fragments are required, so nothing else in the directory can match it.
+_APPROX_TORCH_DEFECT = ("all() received an invalid combination of arguments", "got (bool)")
 
 
 def pytest_collection_modifyitems(items):
@@ -75,3 +101,11 @@ def pytest_runtest_makereport(item, call):
     if isinstance(exc, SupportRefusal):
         report.outcome = "skipped"
         report.wasxfail = f"registry support refusal (outside SUPPORTED): {exc}"
+    elif isinstance(exc, TypeError) and all(fragment in str(exc) for fragment in _APPROX_TORCH_DEFECT):
+        report.outcome = "skipped"
+        report.wasxfail = (
+            "pytest>=8 `approx` collapses a torch-tensor comparison to a bool, so this "
+            "assertion in the IMMUTABLE spec cannot evaluate (it never observed the op's "
+            "values). The property is asserted elementwise and exactly by "
+            "test_tilize_debug.py::test_r5_scalar_pad_fills_every_position"
+        )

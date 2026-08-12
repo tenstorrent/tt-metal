@@ -52,8 +52,11 @@ from ttnn.operations.tilize.tilize_program_descriptor import (
     blocking,
     cb_budget_bytes,
     cb_depth_for,
+    auto_padded_shape,
     create_program_descriptor,
     l1_bytes_per_core,
+    pad_fill_word,
+    pad_plan,
     pipeline_capped_cores,
     placement_defaults,
     plan_cores,
@@ -478,6 +481,9 @@ _WRITER_RESIDENT_CT = 9
 # ... and of Refinement 4's source-page-grid args on the reader.
 _READER_N_BANDS_CT = 11
 _READER_BAND_BYTES_CT = 12
+# ... and of Refinement 5's pad body selector + fill word.
+_READER_PAD_ENABLED_CT = 13
+_READER_PAD_WORD_CT = 14
 
 
 def _crs(*ranges):
@@ -1119,3 +1125,185 @@ def test_r4_same_spec_still_takes_the_zero_copy_path(device):
     # the band count is the trivial 1, which emits the helper call and nothing else.
     interleaved, _, _ = _descriptor_for(device, (1, 1, 64, 128), ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG)
     assert interleaved.kernels[0].compile_time_args[_READER_N_BANDS_CT] == 1
+
+
+# ---------------------------------------------------------------------------
+# 9. Refinement 5 (P1 + P2 + P4 + P5) — the padded path
+#
+# The pad is ONE CT-selected reader body, not four features, so these tests are
+# split the same way: the host-side fill word (where a sub-word fill is written
+# once instead of replicated), the STRUCTURAL non-regression of the aligned path
+# (`pad_enabled == 0` must emit the Phase-0 reader byte-for-byte), the three pad
+# regions on a position-encoded input (so a mis-placed fill is visible rather
+# than "close but wrong"), and the two placement facts the pad changes.
+# ---------------------------------------------------------------------------
+
+
+def _padded_descriptor_for(device, shape, padded_shape, pad_value, in_mem, out_mem):
+    """The real program descriptor for a PADDED call (mirrors `_dispatch`)."""
+    torch.manual_seed(0)
+    source = torch.randn(shape).bfloat16() if len(shape) else torch.randn(()).bfloat16()
+    tt_input = ttnn.from_torch(
+        source, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_mem
+    )
+    pad = pad_plan(list(shape), 32, padded_shape, pad_value, ttnn.bfloat16, 2)
+    alloc = (
+        pad["padded_shape"]
+        if auto_padded_shape(pad["logical_shape"], 32) != pad["padded_shape"]
+        else pad["logical_shape"]
+    )
+    tt_output = ttnn.allocate_tensor_on_device(ttnn.Shape(alloc), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, out_mem)
+    return create_program_descriptor(tt_input, tt_output, pad=pad), tt_input, tt_output
+
+
+def test_r5_pad_word_is_packed_in_the_input_format_and_replicated():
+    """op_design.md §8.3, risks 5 and 6 — host-only, so both are pinned without
+    a device. A sub-word fill written ONCE per 32-bit store word leaves every
+    other pad element stale (invisible at 0.0, garbage on any nonzero fill), and
+    a fill packed in the OUTPUT format is garbage whenever a cast is asked for.
+    """
+    # bf16 (2 bytes) -> the SAME halfword twice. 1.0 = 0x3F80.
+    assert pad_fill_word(1.0, ttnn.bfloat16, 2) == 0x3F803F80
+    # ... and the pack is round-to-nearest-EVEN, matching torch's own
+    # float->bfloat16 (a truncating pack differs by one ulp on half the values).
+    assert pad_fill_word(10.2, ttnn.bfloat16, 2) == 0x41234123  # bf16(10.2) == 10.1875
+    # fp32 (4 bytes) -> one word, no replication.
+    assert pad_fill_word(1.0, ttnn.float32, 4) == 0x3F800000
+    # uint8 (1 byte) -> four copies.
+    assert pad_fill_word(7, ttnn.uint8, 1) == 0x07070707
+    # A negative integer fill is the signed->unsigned bit_cast, then replicated.
+    assert pad_fill_word(-2, ttnn.uint16, 2) == 0xFFFEFFFE
+    assert pad_fill_word(-1, ttnn.uint32, 4) == 0xFFFFFFFF
+    # A negative float keeps its sign bit through the same path.
+    assert pad_fill_word(-18.0, ttnn.bfloat16, 2) >> 15 & 1 == 1
+
+
+def test_r5_aligned_path_is_structurally_unchanged(device):
+    """`PAD_ENABLED == 0` must ERASE the pad body, so Track A cannot regress
+    structurally (op_design.md §8.3) rather than by convention.
+
+    Two claims: a call with no pad argument emits `pad_enabled == 0`, and the
+    DEGENERATE pad — `pad_mode="auto"` on an already-aligned input, whose target
+    equals the input shape — resolves to the same 0, so it takes the aligned
+    reader verbatim instead of a pad reader that happens to fill nothing. The
+    whole reader arg vector is compared, not just the flag."""
+    shape = (1, 1, 64, 64)
+    plain, _, _ = _descriptor_for(device, shape, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG)
+    degenerate, _, _ = _padded_descriptor_for(
+        device, shape, None, 0.0, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG
+    )
+    assert plain.kernels[0].compile_time_args[_READER_PAD_ENABLED_CT] == 0
+    assert degenerate.kernels[0].compile_time_args[_READER_PAD_ENABLED_CT] == 0
+    assert list(degenerate.kernels[0].compile_time_args) == list(plain.kernels[0].compile_time_args)
+
+    # ... and a real pad DOES arm the body, with the fill word on it.
+    padded, _, _ = _padded_descriptor_for(
+        device, (1, 1, 50, 50), None, -18.0, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG
+    )
+    assert padded.kernels[0].compile_time_args[_READER_PAD_ENABLED_CT] == 1
+    assert padded.kernels[0].compile_time_args[_READER_PAD_WORD_CT] == pad_fill_word(-18.0, ttnn.bfloat16, 2)
+
+    # The degenerate pad is also bit-identical in VALUE to the unpadded call.
+    torch.manual_seed(7)
+    x = torch.randn(shape).bfloat16()
+    assert torch.equal(
+        ttnn.to_torch(tilize(_to_device(x, device))),
+        ttnn.to_torch(tilize(_to_device(x, device), pad_value=0.0)),
+    )
+
+
+@pytest.mark.parametrize(
+    "shape, padded_shape",
+    [
+        pytest.param((1, 1, 50, 50), [1, 1, 64, 64], id="w_tail+h_tail"),
+        pytest.param((1, 1, 50, 50), [1, 1, 128, 128], id="+whole_pad_tiles_hw"),
+        pytest.param((1, 1, 32, 50), [1, 1, 32, 128], id="+whole_pad_tile_columns"),
+        pytest.param((2, 50, 32), [2, 128, 32], id="+whole_pad_tile_rows_rank3"),
+    ],
+)
+def test_r5_all_three_pad_regions_on_a_position_encoded_input(device, shape, padded_shape):
+    """Every element encodes its own position, so a fill that lands in the wrong
+    region (or a real datum that lands in a pad position) is visible as an exact
+    mismatch rather than as a plausible number. The three regions are the W tail
+    of a real row, the H tail rows of the last real tile-row, and the whole pad
+    tiles a target beyond the tile rounding creates."""
+    pad_value = -18.5
+    n = 1
+    for d in shape:
+        n *= d
+    x = (torch.arange(n).reshape(shape) % 1000).bfloat16()
+
+    out = tilize(_to_device(x, device), output_padded_shape=padded_shape, pad_value=pad_value)
+
+    got = out.cpu().to_torch_with_padded_shape()
+    expected = torch.full(padded_shape, pad_value, dtype=torch.bfloat16)
+    expected[..., : shape[-2], : shape[-1]] = x
+    assert torch.equal(got, expected), f"{(got != expected).sum().item()} positions differ"
+    # The logical view is untouched — only the PADDED shape grew (risk 7).
+    assert list(out.shape) == list(shape)
+    assert torch.equal(ttnn.to_torch(out), x)
+
+
+def test_r5_scalar_pad_fills_every_position(device):
+    """rank 0 (P5): a scalar has no tile dims of its own, so the pad target
+    supplies them and the whole tile is fill except position (0,0).
+
+    This is also the working form of the acceptance spec's
+    `test_tilize_pad_scalar` assertion, whose
+    `torch.all(tensor == pytest.approx(scalar))` cannot evaluate under pytest 9
+    (approx collapses a tensor comparison to a plain bool, and `torch.all` of a
+    bool is a TypeError) — see this directory's conftest."""
+    torch.manual_seed(42)
+    x = torch.randn(()).bfloat16()
+    pad_value = 42.0
+
+    out = tilize(_to_device(x, device), output_padded_shape=[32, 32], pad_value=pad_value)
+
+    padded = out.cpu().to_torch_with_padded_shape()
+    assert list(padded.shape) == [32, 32]
+    expected = torch.full((32, 32), pad_value, dtype=torch.bfloat16)
+    expected[0, 0] = x
+    assert torch.equal(padded, expected)
+
+
+def test_r5_a_padded_call_never_consumes_the_input_shard_in_place(device):
+    """The pad positions live INSIDE the block, so a resident input would have
+    to write the fill into the CALLER'S OWN input tensor to place them. Padding
+    therefore disqualifies input residency — and only input residency: an output
+    tile is whole, so the output shard stays a zero-copy alias."""
+    shape = (3, 100, 64)
+    out_mem = _legacy_mem(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _crs(((0, 0), (0, 1))), (192, 64))
+    in_mem = _legacy_mem(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _crs(((0, 0), (0, 1))), (150, 64))
+    _skip_if_grid_too_small(device, out_mem)
+
+    padded, _, _ = _padded_descriptor_for(device, shape, [3, 128, 64], 10.2, in_mem, out_mem)
+    reader, writer, _compute = padded.kernels
+    cb_in, cb_out = padded.cbs
+    assert reader.compile_time_args[_READER_RESIDENT_CT] == 0, "a padded call must not alias the input shard"
+    assert not cb_in.has_buffer()
+
+    # ... and the same output spec fed from DRAM still aliases the OUTPUT shard,
+    # so the refusal above is about the input side only, not about padding.
+    crossover, _, _ = _padded_descriptor_for(device, shape, [3, 128, 64], 10.2, ttnn.DRAM_MEMORY_CONFIG, out_mem)
+    assert crossover.kernels[1].compile_time_args[_WRITER_RESIDENT_CT] == 1
+    assert crossover.cbs[1].has_buffer()
+
+
+def test_r5_pad_plan_is_pure_and_states_the_geometry_once():
+    """Host-only: the pad plan is the single source of truth every consumer
+    (validate, the output allocation, the reader args) reads."""
+    # auto tile-rounds the last two dims and leaves the rest alone.
+    auto = pad_plan([2, 50, 96], 32, None, 0.0, ttnn.bfloat16, 2)
+    assert auto["padded_shape"] == [2, 64, 96] and auto["enabled"]
+    assert (auto["hp"], auto["h_real"], auto["nimg_real"], auto["real_row_bytes"]) == (64, 50, 2, 192)
+    # explicit may exceed the tile rounding — that is the whole-pad-tile case.
+    explicit = pad_plan([1, 1, 50, 50], 32, [1, 1, 128, 128], 3.5, ttnn.bfloat16, 2)
+    assert explicit["padded_shape"] == [1, 1, 128, 128] and explicit["hp"] == 128
+    # rank 0/1 SYNTHESIZE their tile dims rather than rounding them.
+    scalar = pad_plan([], 32, [32, 32], 42.0, ttnn.bfloat16, 2)
+    assert scalar["logical_shape"] == [1, 1] and scalar["nimg_real"] == 1 and scalar["real_row_bytes"] == 2
+    assert auto_padded_shape([], 32) == [32, 32] and auto_padded_shape([100], 32) == [32, 128]
+    # no pad argument at all -> no plan (Track A never sees any of this).
+    assert pad_plan([1, 1, 64, 64], 32, None, None, ttnn.bfloat16, 2) is None
+    # ... and an ALIGNED input with a pad argument resolves to a disarmed plan.
+    assert pad_plan([1, 1, 64, 64], 32, None, 0.0, ttnn.bfloat16, 2)["enabled"] is False
