@@ -23,7 +23,7 @@ public:
     ~MeshEvent();
 
     // Internal constructor (internal use only)
-    explicit MeshEvent(std::unique_ptr<MeshEventImpl> impl);
+    explicit MeshEvent(MeshEventImpl impl);
 
     MeshDevice* device() const;
 

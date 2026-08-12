@@ -85,7 +85,7 @@ CircularBufferConfig from_flatbuffer(
         return result;
     };
 
-    auto impl = std::make_unique<CircularBufferConfigImpl>(
+    CircularBufferConfigImpl impl(
         config_fb->total_size(),
         globally_allocated_address,
         data_formats,
@@ -98,7 +98,7 @@ CircularBufferConfig from_flatbuffer(
         config_fb->dynamic_cb(),
         config_fb->max_size(),
         config_fb->buffer_size());
-    impl->set_shadow_global_buffer(shadow_global_buffer);
+    impl.set_shadow_global_buffer(shadow_global_buffer);
 
     return make_circular_buffer_config(std::move(impl));
 }

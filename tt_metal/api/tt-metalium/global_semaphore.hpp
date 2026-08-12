@@ -43,7 +43,7 @@ public:
         BufferType buffer_type = BufferType::L1);
 
     // Internal constructor (internal use only)
-    GlobalSemaphore(GlobalSemaphoreImpl&& impl);
+    explicit GlobalSemaphore(GlobalSemaphoreImpl impl);
 
     GlobalSemaphore(const GlobalSemaphore& other);
     GlobalSemaphore& operator=(const GlobalSemaphore& other);

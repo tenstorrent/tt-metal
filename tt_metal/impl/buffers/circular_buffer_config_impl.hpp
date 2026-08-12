@@ -120,7 +120,7 @@ private:
 bool operator==(const CircularBufferConfigImpl& lhs, const CircularBufferConfigImpl& rhs);
 bool operator!=(const CircularBufferConfigImpl& lhs, const CircularBufferConfigImpl& rhs);
 
-// Defined in circular_buffer_config.cpp (friends CircularBufferConfig's private Impl ctor).
-CircularBufferConfig make_circular_buffer_config(std::unique_ptr<CircularBufferConfigImpl> impl);
+// Defined in circular_buffer_config.cpp.
+CircularBufferConfig make_circular_buffer_config(CircularBufferConfigImpl impl);
 
 }  // namespace tt::tt_metal
