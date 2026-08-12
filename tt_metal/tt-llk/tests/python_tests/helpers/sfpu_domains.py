@@ -46,6 +46,7 @@ class Operand(str, Enum):
 
     A = "spec_A"
     B = "spec_B"
+    C = "spec_C"
 
 
 @dataclass
@@ -55,14 +56,31 @@ class OperandSpecs:
     For binary ops where operands need different domains (e.g. divisor avoids
     zero), spec_A and spec_B differ; unary ops need only spec_A.
     spec_B defaults to a copy of spec_A when "None".
+
+    *spec_C* exists for the ternary family and defaults to a copy of *spec_B*, mirroring
+    how spec_B defaults to a copy of spec_A. It is the third operand of ``addcdiv``,
+    ``addcmul``, ``lerp`` and ``snake_beta`` -- and for two of those it is a **divisor**, so
+    it is the operand that carries the pole. Before it existed, `_ternary_default_specs`
+    reused B for C with a comment saying so, which meant a ternary singularity had nowhere
+    to be registered and the ``c -> 0`` pole was unreachable by construction.
+
+    Defaulting rather than requiring it keeps every existing consumer working unchanged:
+    a unary or binary entry that names only spec_A still resolves to three identical specs.
     """
 
     spec_A: StimuliSpec
     spec_B: Optional[StimuliSpec] = None
+    spec_C: Optional[StimuliSpec] = None
 
     def __post_init__(self) -> None:
         if self.spec_B is None:
             self.spec_B = copy.deepcopy(self.spec_A)
+        if self.spec_C is None:
+            self.spec_C = copy.deepcopy(self.spec_B)
+
+    def spec_for(self, operand: "Operand") -> Optional[StimuliSpec]:
+        """The spec for *operand*, so callers can select one without a chain of ifs."""
+        return getattr(self, operand.value)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -754,27 +772,37 @@ _OP_DOMAIN_REGISTRY: Dict[
     # pow: srcA is the base (non-negative for non-integer exponents); srcB is the
     # exponent (non-negative to keep output finite).
     #
-    # Both bounds are set by accuracy, not representable range. a**b is evaluated as
-    # exp(b * ln a), so the error tracks the product b * ln(a) -- the argument to the
-    # shared exp approximation (see the exp entry). The registry cannot express a joint
-    # constraint, so cap each operand so the worst-case product stays accurate:
-    # 3 * ln 3 = 3.30. Measured at Float16_b against the default 5% rtol, 3.30 is clean
-    # while 4.61 (A<=10, B<=2) and above go outside.
+    # Bounded by accuracy rather than by representable range, but **no longer by the
+    # default tolerance**: a**b is evaluated as exp(b * ln a), and measuring the error
+    # across four candidate domains on Blackhole showed the *relative* error is ~flat in
+    # the operands (10.0% at b*ln a = 3.30, 13.4% at 8.32, 10.3% at 11.09) rather than
+    # growing with them. So what capped this domain at 3 was the fixed 5% rtol, not the op.
+    # BINARY_CUSTOM_TOLERANCES gives it rtol=0.15 and the domain widens to the range bound:
+    # A <= 8, B <= 4 puts the worst-case product at 4 * ln 8 = 8.32, 2.5x the old reach.
+    #
+    # A <= 16 is deliberately not taken. It is accurate (10.3%), but drives |a**b| to
+    # 6.2e4, within a factor of 1.06 of Float16's 65504 ceiling -- an overflow test dressed
+    # up as an accuracy one. See BINARY_CUSTOM_TOLERANCES for the full measurement.
     MathOperation.SfpuElwpow: OperandSpecs(
-        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=3.0),
-        spec_B=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=3.0),
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=8.0),
+        spec_B=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=4.0),
     ),
     # xlogy: computes x * log(y) element-wise
     # srcA (x): x >= 0 so xlogy(0, y) = 0 is well-defined
     # srcB (y): y > 0 so log(y) is finite; log-uniform spans several decades
     #
     # x's ceiling is an absolute-accuracy bound: the error is dominated by
-    # x * abs_err(ln y), so it grows with x while the 16-bit-float atol stays at 0.05.
-    # x <= 4 keeps margin (4 * 0.012 = 0.048); x <= 5 sits on the tolerance and x <= 8
-    # goes outside. y keeps its full log-uniform span -- narrowing it made the failures
-    # worse, not better.
+    # x * abs_err(ln y), so it grows with x while a fixed atol does not. Measured on
+    # Blackhole, max absolute error is exactly linear in x -- 0.25 / 0.50 / 1.00 / 2.00 at
+    # x <= 4 / 8 / 16 / 32 in Float16_b -- which confirms that model and is why no fixed
+    # atol can hold. BINARY_CUSTOM_TOLERANCES gives it atol=0.6, so x doubles to 8.
+    #
+    # Most of the Float16_b number is *output quantization*, not the kernel: at |golden| ~ 72
+    # a bfloat16 ULP is already 0.5. The Float32 column is the kernel's own error and is 4x
+    # smaller (0.058 / 0.116 / 0.232 / 0.464). y keeps its full log-uniform span -- narrowing
+    # it made the failures worse, not better.
     MathOperation.SfpuXlogy: OperandSpecs(
-        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=4.0),
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=8.0),
         spec_B=StimuliSpec(
             distribution=DistributionKind.LOG_UNIFORM, low=1e-4, high=10.0
         ),
@@ -1496,6 +1524,13 @@ _OP_SINGULARITIES: Dict[
     # singularity here instead is free, because this table never touches the draw path.
     MathOperation.SfpuBinaryFmod: {Operand.B: ((0.0, _BOTH),)},
     MathOperation.SfpuBinaryRemainder: {Operand.B: ((0.0, _BOTH),)},
+    # Ternary: the pole is on the *third* operand, which is why OperandSpecs grew a spec_C.
+    # addcdiv is a + value * b / c and snake_beta is a + sin(b*a)^2 / c, so c = 0 is a
+    # genuine pole for both. _ternary_default_specs holds c in uniform(1, 2) for exactly
+    # this reason, which means the random sweep can never reach it -- the edge sweep is the
+    # only thing that does.
+    MathOperation.SfpuAddcdiv: {Operand.C: ((0.0, _BOTH),)},
+    MathOperation.SfpuSnakeBeta: {Operand.C: ((0.0, _BOTH),)},
 }
 
 
@@ -1777,9 +1812,35 @@ _OP_EDGE_POINTS: Dict[MathOperation, Tuple[float, ...]] = {
 }
 
 
-def op_edge_points(op: MathOperation) -> Tuple[float, ...]:
-    """Discrete edges of *op* that are not already a domain boundary; () if none."""
-    return _OP_EDGE_POINTS.get(op, ())
+# Cat D for an operand other than A. _OP_EDGE_POINTS describes the op's own input, which
+# for a unary op is the only operand and for a binary op is the one whose knees are the
+# op's knees. A ternary op breaks that: lerp is a + c * (b - a), so its interesting values
+# are properties of the *weight*, operand C, and nothing about A or B.
+#
+# Kept as a second, per-operand table rather than by generalising _OP_EDGE_POINTS to a
+# nested dict: 43 of the 44 entries have no per-operand structure, and paying a dict layer
+# on all of them to express one op's would make every existing entry noisier to read.
+_OP_OPERAND_EDGE_POINTS: Dict[MathOperation, Dict[Operand, Tuple[float, ...]]] = {
+    # lerp interpolates at c = 0 (result is exactly a), reaches b at c = 1, and
+    # *extrapolates* beyond it for c > 1 -- three different behaviours of one kernel, none
+    # of which the default uniform(-1, 1) weight lands on. 2.0 is the extrapolating probe;
+    # -1.0 extrapolates the other way, which is the same branch and a different sign.
+    MathOperation.SfpuLerp: {Operand.C: (-1.0, 0.0, 1.0, 2.0)},
+}
+
+
+def op_edge_points(
+    op: MathOperation, operand: Operand = Operand.A
+) -> Tuple[float, ...]:
+    """Discrete edges of *op* for *operand* that are not already a domain boundary.
+
+    Operand A reads _OP_EDGE_POINTS, the op's own knees. Any other operand reads
+    _OP_OPERAND_EDGE_POINTS, which today holds only lerp's weight boundaries. Returns ()
+    when there is nothing to probe.
+    """
+    if operand == Operand.A:
+        return _OP_EDGE_POINTS.get(op, ())
+    return _OP_OPERAND_EDGE_POINTS.get(op, {}).get(operand, ())
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1840,7 +1901,87 @@ _SPECIALS_CARRYING_INPUTS: FrozenSet[DataFormat] = frozenset(
 # here once its golden defines a result at +inf, -inf, NaN, +0.0 and -0.0, carrying the
 # reason it is ready; the sweeps then inject specials for that op alone. That turns the
 # remaining cat-B work into a series of one-op commits rather than one that cannot land.
-SPECIALS_READY_OPS: Dict[MathOperation, str] = {}
+#
+# The first tranche, ordered by how unambiguous the answer is rather than by how interesting
+# the op is: the trivially-defined ops come first so that a failure there is the *harness*
+# and not the semantics, and only then the ops whose specials compose with a pole.
+#
+# Eight of the ten needed no golden change at all -- their goldens already route through
+# torch and torch is IEEE-correct at every special. Verified host-side before enrolling any
+# of them, which is the check to repeat for the next tranche:
+#
+#   Identity   +inf -> +inf   -inf -> -inf   NaN -> NaN
+#   Neg        +inf -> -inf   -inf -> +inf   NaN -> NaN
+#   Abs        +inf -> +inf   -inf -> +inf   NaN -> NaN
+#   Sqrt       +inf -> +inf   -inf -> NaN    +/-0 -> 0
+#   Rsqrt      +inf -> 0      -inf -> NaN    +0 -> +inf   -0 -> -inf
+#   Reciprocal +inf -> 0      -inf -> 0      +0 -> +inf   -0 -> -inf
+#   Exp        +inf -> +inf   -inf -> 0      +/-0 -> 1
+#   Log        +inf -> +inf   -inf -> NaN    +/-0 -> -inf
+#
+# Sin and Cos needed one: their goldens called math.sin / math.cos, which *raise*
+# ValueError("math domain error") on a non-finite input rather than returning anything, on
+# the recorded assumption that the input is "never not finite". Cat B is exactly what breaks
+# that assumption. Both now route through torch, which gives NaN.
+#
+# Note what this does NOT claim. The *sign of a zero result* is a separate question, and one
+# the ISA already answers: SFPMAD flushes negative zero to positive zero on Wormhole and
+# preserves it on Blackhole. Neg(+0) -> -0 and Reciprocal(-inf) -> -0 therefore depend on the
+# arch, not on the golden, and are covered by the same measurement that arch-gated the binary
+# suite's negative-zero class.
+SPECIALS_READY_OPS: Dict[MathOperation, str] = {
+    MathOperation.Identity: "Pass-through: every special maps to itself. Green on "
+    "Blackhole across all safe triples.",
+    MathOperation.Abs: "Magnitude: |+/-inf| = +inf, |NaN| = NaN, |+/-0| = 0. Green on "
+    "Blackhole.",
+    MathOperation.Exp: "IEEE: exp(+inf) = +inf, exp(-inf) = 0, exp(+/-0) = 1. Green on "
+    "Blackhole.",
+    MathOperation.Sin: "sin(+/-inf) = NaN, sin(NaN) = NaN, sin(+/-0) = +/-0. Golden moved "
+    "off math.sin, which *raised* on a non-finite input rather than returning one. Green "
+    "on Blackhole.",
+    MathOperation.Cos: "cos(+/-inf) = NaN, cos(NaN) = NaN, cos(+/-0) = 1. Golden moved off "
+    "math.cos for the same reason as Sin. Green on Blackhole.",
+}
+
+# The next tranche, measured on Blackhole and deliberately NOT enrolled yet.
+#
+# Driving specials through these five found real divergences -- but a majority of them are
+# *golden* defects, and enrolling an op whose golden is wrong would record a kernel xfail for
+# a test-side bug. Each needs its golden settled first, which is exactly the per-op work cat
+# B was always going to be. Measured per probe (Float32 input, the only specials-carrying
+# input format on Blackhole):
+#
+#   Neg        NaN -> golden +inf, hw -inf   (dest_acc=No: the *golden* mangles NaN)
+#              +0  -> golden +0,   hw -0     (dest_acc=Yes: the HARDWARE is IEEE-correct
+#                                             here and the golden is not)
+#   Reciprocal NaN -> golden +inf/NaN, hw +0 (NaN is not propagated by the kernel)
+#              -inf -> golden +0,  hw -0     (hardware IEEE-correct, golden is not)
+#   Sqrt       -0  -> golden +0,   hw NaN    (dest_acc=Yes)
+#   Rsqrt      -0  -> golden -inf, hw NaN    (dest_acc=Yes)
+#   Log        +inf -> golden +inf, hw 88.5  (~ln(FLT_MAX): the kernel clamps a non-finite
+#              -inf -> golden NaN,  hw 84.3   input to the format maximum and takes the log
+#              NaN  -> golden NaN,  hw 89.1   of that, so no non-finite input survives)
+#
+# Two conclusions worth keeping separate from the op list:
+#
+#  1. **Log saturates its input.** Every non-finite input comes back as a finite number near
+#     ln(FLT_MAX). That is a kernel behaviour, not a golden one, and it is the single largest
+#     cat-B finding so far -- worth raising with kernel owners alongside RsqrtCompat(0).
+#  2. **-0.0 delivery is now answered.** At dest_acc=No, Reciprocal, Rsqrt and Sqrt all treat
+#     -0 *exactly* as +0 (1/-0 -> +inf, rsqrt(-0) -> +inf, sqrt(-0) -> +0). At dest_acc=Yes
+#     with a 32-bit input they do not (sqrt(-0) -> NaN, rsqrt(-0) -> NaN). That is the
+#     unpack_to_dest split, measured independently of the signbit/sign/heaviside partition it
+#     was inferred from -- see the coverage audit. The probe genuinely is not delivered on the
+#     datacopy path.
+_SPECIALS_NEXT_TRANCHE: FrozenSet[MathOperation] = frozenset(
+    {
+        MathOperation.Neg,
+        MathOperation.Reciprocal,
+        MathOperation.Sqrt,
+        MathOperation.Rsqrt,
+        MathOperation.Log,
+    }
+)
 
 
 def _dest_acc_flag(dest_acc: Union[bool, Enum]) -> bool:
@@ -1971,10 +2112,11 @@ def edge_values(
             step_fmt=step_fmt,
         )
     )
-    if operand == Operand.A:
-        # _OP_EDGE_POINTS describes the op's own input, i.e. operand A. A binary op's
-        # B-side knees, where they exist, are domain boundaries and come from cat A.
-        vals += list(op_edge_points(op))
+    # Cat D, per operand. For operand A this is _OP_EDGE_POINTS, the op's own knees. A
+    # binary op's B-side knees, where they exist, are domain boundaries and come from cat A
+    # instead -- but a *ternary* op's third operand can have real knees of its own (lerp's
+    # weight), so op_edge_points() is asked about every operand rather than only A.
+    vals += list(op_edge_points(op, operand))
     if specials:
         # Specials are an exponent-range property, so they key off range_fmt: it is what
         # decides integer extremes vs IEEE non-finites, and what clip_to_format honours.
@@ -2061,8 +2203,9 @@ def edge_counterparts(
         specs = for_op(op, fmt)
     except KeyError:
         return list(_EDGE_COUNTERPARTS)
-    spec = specs.spec_A if operand == Operand.A else specs.spec_B
-    return [v for v in _EDGE_COUNTERPARTS if _in_spec_domain(spec, v)]
+    return [
+        v for v in _EDGE_COUNTERPARTS if _in_spec_domain(specs.spec_for(operand), v)
+    ]
 
 
 def edge_pair_values(

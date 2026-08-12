@@ -2623,7 +2623,10 @@ class UnarySFPUGolden:
         return self._torch_unary(x, torch.acosh)
 
     def _cos(self, x):
-        return math.cos(x)
+        # torch rather than math: math.cos raises ValueError("math domain error") on a
+        # non-finite input, so a cat-B special reached this as an exception rather than as
+        # a result. IEEE gives NaN for cos(+/-inf) and for cos(NaN), which torch.cos does.
+        return self._torch_unary(x, torch.cos)
 
     def _log(self, x):
         return self._torch_unary(x, torch.log)
@@ -2644,8 +2647,12 @@ class UnarySFPUGolden:
         return self._torch_unary(x, torch.reciprocal)
 
     def _sin(self, x):
-        # Never not finite, values range from [-1, 1]
-        return math.sin(x)
+        # The result is always in [-1, 1] for a finite input, but the *input* need not be
+        # finite once cat-B specials are injected, and math.sin raises
+        # ValueError("math domain error") there rather than returning anything. torch.sin
+        # gives NaN for sin(+/-inf) and sin(NaN), which is what IEEE requires. Same change
+        # and same reason as _cos.
+        return self._torch_unary(x, torch.sin)
 
     def _relu(self, x):
         return max(0.0, x)

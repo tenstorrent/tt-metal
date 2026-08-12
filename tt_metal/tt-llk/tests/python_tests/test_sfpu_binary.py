@@ -92,6 +92,54 @@ _FACES_PER_TILE = 4
 _ELEMENTS_PER_TILE = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
 
 
+# Per-op (atol, rtol) overrides for the binary suite, mirroring CUSTOM_TOLERANCES in
+# test_sfpu_unary.py. `None` in either slot keeps the format default (0.05 / 0.05 for the
+# float formats).
+#
+# Only two ops belong here, and for the same reason: their error is a property of the op's
+# own *composition* rather than of the stimuli, so it grows with the operands no matter how
+# the domain is drawn. Both were previously kept accurate by capping the registry domain
+# instead — pow at 3 and xlogy's x at 4 — which bought a passing test by never evaluating
+# the op where it is interesting. A tolerance that describes the real error is the honest
+# trade: the domain widens, and the number below says how much error that costs.
+#
+#   pow   evaluates a**b as exp(b * ln a), so the error tracks the product b * ln(a) handed
+#         to the shared exp approximation. Measured on Blackhole (see the plan's item 4).
+#   xlogy computes x * log(y), so the *absolute* error scales with x while a fixed atol
+#         does not. Measured the same way.
+#
+# Every number here is measured, not chosen. Re-measure before widening either domain
+# further; the harness is described in the plan.
+#
+# Measured on Blackhole p150b over the widened domains, max across Float16_b and Float32
+# at dest_acc=Yes, ~32k elements per cell:
+#
+#   pow, relative error (the thing that bounds it):
+#     A<=3  B<=3  (b*ln a = 3.30)   max_rel  10.00%
+#     A<=8  B<=3  (6.24)            max_rel  10.24%
+#     A<=8  B<=4  (8.32)            max_rel  13.35%   <- the domain now registered
+#     A<=16 B<=4  (11.09)           max_rel  10.34%
+#   The relative error is ~flat in the operands rather than growing with them, so what
+#   had been capping the domain was the fixed 5% rtol and not the op. rtol=0.15 clears the
+#   measured 13.35% with margin. A<=16 was rejected for a different reason: it drives
+#   |golden| to 6.2e4, which is within a factor of 1.06 of Float16's ceiling.
+#
+#   xlogy, absolute error (relative is meaningless — xlogy(0, y) = 0, so any error there
+#   is an infinite relative error):
+#     x<=4   max_abs 0.25 (Float16_b) / 0.058 (Float32)
+#     x<=8   max_abs 0.50            / 0.116            <- the domain now registered
+#     x<=16  max_abs 1.00            / 0.232
+#     x<=32  max_abs 2.00            / 0.464
+#   Exactly linear in x, which is the documented model (error ~ x * abs_err(ln y)) and is
+#   why a fixed atol could never hold. Float16_b dominates because at |golden| ~ 72 a
+#   bfloat16 ULP is already 0.5, so most of that number is output quantization rather than
+#   the kernel. atol=0.6 covers x<=8 with 20% margin.
+BINARY_CUSTOM_TOLERANCES = {
+    MathOperation.SfpuElwpow: (None, 0.15),
+    MathOperation.SfpuXlogy: (0.6, None),
+}
+
+
 def _build_paired_tile_override(pairs, dtype):
     """Two-tile raw override from a list of (A, B) pairs: tile 0 holds every A, tile 1
     every B, paired by index (tilize pairs them that way).
@@ -577,8 +625,16 @@ def sfpu_binary(
         golden_tensor
     ), "Result tensor and golden tensor are not of the same length"
 
+    # Per-op tolerances, for the two ops whose error is a property of the op's own
+    # composition rather than of the stimuli. See BINARY_CUSTOM_TOLERANCES.
+    custom_atol, custom_rtol = BINARY_CUSTOM_TOLERANCES.get(mathop, (None, None))
+
     assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
+        golden_tensor,
+        res_tensor,
+        formats.output_format,
+        custom_atol=custom_atol,
+        custom_rtol=custom_rtol,
     ), "Assert against golden failed"
 
 
@@ -1140,8 +1196,14 @@ def _classify_edge_pair(mathop, a, b):
     if a == 0.0 and b == 0.0:
         return _EDGE_CLASS_BOTH_ZERO
 
-    golden = get_golden_generator(BinarySFPUGolden)
-    result = float(golden.ops[mathop](torch.tensor(a), torch.tensor(b)))
+    # Instantiate BinarySFPUGolden directly rather than through get_golden_generator: the
+    # harness swaps in a DummyGoldenGenerator during --compile-producer, and that stub has
+    # no `ops` mapping, so the classification raises AttributeError there. This function
+    # runs at *stimulus-build* time, which happens in both phases, so it cannot use the
+    # proxy. Same reasoning (and the same fix) as helpers/compressed_utils.py's matmul
+    # golden. Without this the whole edge sweep is unrunnable under the two-phase flow that
+    # CI uses -- it only ever worked when pytest was invoked directly.
+    result = float(BinarySFPUGolden().ops[mathop](torch.tensor(a), torch.tensor(b)))
     if math.isnan(result):
         return _EDGE_CLASS_NAN
     if result == 0.0 and math.copysign(1.0, result) < 0.0:
@@ -1345,6 +1407,23 @@ assert all(
     cls in _EDGE_CLASSES for classes in _BINARY_EDGE_REASON.values() for cls in classes
 ), "_BINARY_EDGE_REASON names an edge class that _classify_edge_pair never returns"
 
+# Edge classes whose divergence is a *Wormhole* limitation, so on Blackhole the case is
+# asserted rather than tolerated.
+#
+# This is the prediction the non-strict xfails existed to settle, and it resolved in favour
+# of the ISA. `SFPMAD` flushes a negative-zero result to positive zero on Wormhole and to
+# sign-preserved zero on Blackhole, and Blackhole's page lists "improved edge-case handling
+# of NaNs and of negative zero" among its upgrades. Measured on a Blackhole p150b, the
+# negative-zero class XPASSed on **all 16** cells it is claimed for — every one of div,
+# xlogy, fmod and remainder, at both dest_acc values — and nothing else XPASSed.
+#
+# So the sign of a zero result is now *checked* on Blackhole. A regression there fails
+# rather than quietly returning to XFAIL, which is the coverage this arch-gate buys. The
+# indeterminate-form classes (both_zero, nan_golden) are deliberately NOT gated: they are
+# the kernels' own reciprocal composition, unexplained by the ISA, and they still diverge on
+# Blackhole.
+_WORMHOLE_ONLY_EDGE_CLASSES = frozenset({_EDGE_CLASS_NEGATIVE_ZERO})
+
 
 @pytest.mark.nightly
 @parametrize(
@@ -1364,10 +1443,21 @@ def test_sfpu_binary_edges(request, formats, dest_acc, mathop, edge_class):
     _skip_fp32_no_dest_acc(formats, dest_acc)
     _skip_bh_float16_no_dest_acc(formats, dest_acc)
 
+    # A Wormhole-only class is asserted on Blackhole, not tolerated — see
+    # _WORMHOLE_ONLY_EDGE_CLASSES for the measurement that established which those are.
+    arch_fixed = (
+        edge_class in _WORMHOLE_ONLY_EDGE_CLASSES
+        and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+    )
+
     reason = _BINARY_EDGE_REASON.get(mathop, {}).get(edge_class)
-    if reason is not None and (
-        (formats.input_format, formats.output_format, dest_acc)
-        in _BINARY_EDGE_COMBINATIONS[mathop]
+    if (
+        reason is not None
+        and not arch_fixed
+        and (
+            (formats.input_format, formats.output_format, dest_acc)
+            in _BINARY_EDGE_COMBINATIONS[mathop]
+        )
     ):
         request.node.add_marker(pytest.mark.xfail(reason=reason, strict=False))
 

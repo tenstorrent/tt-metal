@@ -361,6 +361,22 @@ _APPROX_EXP_ACCURACY_XFAIL = {
     (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
 }
 
+# ...and it is a **Wormhole** limit. Measured on a Blackhole p150b: the two combinations of the
+# three that Blackhole can reach both XPASSed — (Float16, Float16_b, Yes) and
+# (Float32, Float16_b, Yes), each at both tile shapes, 4 XPASS in total and no other unary
+# XPASS. The third has a Float16 input at dest_acc=No, which
+# _skip_bh_unsupported_float_combo excludes before any marker applies.
+#
+# So Blackhole's exp approximation holds the default 5% rtol where Wormhole's overshoots by
+# ~5.7%. Blackhole therefore *asserts* approximate exp's accuracy rather than tolerating it,
+# and a regression there fails instead of quietly returning to XFAIL. Same reasoning, and the
+# same shape of gate, as _WORMHOLE_ONLY_EDGE_CLASSES in test_sfpu_binary.py.
+#
+# Kept as a set-plus-gate rather than by deleting the entries: the limit is real on Wormhole
+# and the numbers behind it are recorded above, so the arch is the discriminator, not the
+# measurement's validity.
+_APPROX_EXP_XFAIL_IS_WORMHOLE_ONLY = True
+
 
 @pytest.mark.nightly
 @pytest.mark.parametrize(
@@ -391,6 +407,10 @@ def test_eltwise_unary_sfpu(
         and approx_mode == ApproximationMode.Yes
         and (formats.input_format, formats.output_format, dest_acc)
         in _APPROX_EXP_ACCURACY_XFAIL
+        and not (
+            _APPROX_EXP_XFAIL_IS_WORMHOLE_ONLY
+            and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+        )
     ):
         # Marked dynamically rather than skipped so the case still executes: if the
         # approximation tightens, this reports XPASS instead of quietly staying green.

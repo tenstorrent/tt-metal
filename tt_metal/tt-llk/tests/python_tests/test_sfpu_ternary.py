@@ -18,7 +18,13 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import input_output_formats, parametrize
-from helpers.sfpu_domains import _OP_DOMAIN_REGISTRY, exclude_undefined_pair, for_op
+from helpers.sfpu_domains import (
+    _OP_DOMAIN_REGISTRY,
+    Operand,
+    edge_spec,
+    exclude_undefined_pair,
+    for_op,
+)
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
@@ -187,6 +193,99 @@ def test_sfpu_ternary(formats, dest_acc, mathop):
         pytest.skip("Bfp8_b is only supported for addcmul")
 
     _run_sfpu_ternary(formats, dest_acc, mathop)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Deliberate edge values on the third operand
+#
+# The random sweep above holds c in uniform(1, 2) for addcdiv and snake_beta precisely
+# because both divide by it — so the pole is unreachable by construction, not by accident.
+# This drives it.
+#
+# What made this possible is OperandSpecs gaining spec_C: before that the registry could
+# not express a third operand at all, `_ternary_default_specs` reused B for C, and there was
+# nowhere to register the singularity. Now `edge_spec(op, ..., operand=Operand.C)` resolves
+# through the same metadata every other family uses:
+#
+#   addcdiv    a + value * b / c    -> _OP_SINGULARITIES C = (0.0, BOTH)
+#   snake_beta a + sin(b*a)^2 / c   -> _OP_SINGULARITIES C = (0.0, BOTH)
+#   lerp       a + c * (b - a)      -> _OP_OPERAND_EDGE_POINTS C = (-1, 0, 1, 2)
+#   addcmul    a + value * b * c    -> nothing; a multiply has no pole, so edge_spec is None
+#
+# Only operand C is given edge values. A and B keep their random domains: the interesting
+# behaviour is what the *divisor* does, and pinning all three would test one point instead
+# of a spread against it.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_TERNARY_EDGE_OPS = [
+    MathOperation.SfpuAddcdiv,
+    MathOperation.SfpuAddcmul,
+    MathOperation.SfpuLerp,
+    MathOperation.SfpuSnakeBeta,
+]
+
+# Ops that divide by c, and therefore need a numerator held away from zero.
+#
+# Driving c = 0 with an unconstrained numerator mixes two different questions into one
+# variant. The interesting one is what the kernel does at the pole with a nonzero numerator:
+# 4064 of 4096 elements land on c = 0 (custom() zero-fills the remainder of each face), and
+# every one of them should be ±inf. The other is 0/0, whose golden is NaN and whose hardware
+# result is inf — the *indeterminate form*, which is a property of the kernels' reciprocal
+# composition rather than of the pole, and which is already recorded against div, fmod,
+# remainder and xlogy in test_sfpu_binary's _BINARY_EDGE_REASON.
+#
+# Measured on Blackhole: with the numerator unconstrained, addcdiv and snake_beta fail on
+# only the handful of elements where the golden is NaN, and agree on every ±inf. So keeping
+# the numerator off zero turns a tolerated xfail into a real assertion about the pole, and
+# loses nothing that is not already covered. If the 0/0 form is ever worth driving here it
+# wants its own variant and its own xfail, the way the binary suite splits edge classes.
+_TERNARY_DIVIDES_BY_C = frozenset(
+    {MathOperation.SfpuAddcdiv, MathOperation.SfpuSnakeBeta}
+)
+
+# |x| >= 0.5 on both a and b. For addcdiv the numerator is value * b, so b alone decides it;
+# for snake_beta it is sin(b*a)^2, which vanishes only when b*a is an exact multiple of pi,
+# so holding both operands off zero keeps it away from that too (|b*a| <= 1 < pi).
+_TERNARY_NONZERO = StimuliSpec.uniform(intervals=[(-1.0, -0.5), (0.5, 1.0)], seed=0)
+
+
+@pytest.mark.nightly
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    mathop=_TERNARY_EDGE_OPS,
+)
+def test_sfpu_ternary_edges(formats, dest_acc, mathop):
+    """Drive each ternary op's operand-C pole or knee, where it has one."""
+    if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
+        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+
+    spec_C = edge_spec(
+        mathop,
+        formats.input_format,
+        formats.output_format,
+        operand=Operand.C,
+        dest_acc=dest_acc,
+    )
+    if spec_C is None:
+        # addcmul: c is a multiplicand, so it has no pole and no knee, and cat B is gated on
+        # SPECIALS_READY_OPS. The random sweep already covers everything a probe could add.
+        pytest.skip(
+            reason=f"{mathop.name} has no operand-C edge (no pole, no knee) for this "
+            "pipeline"
+        )
+
+    # Keep the numerator off zero for the dividing ops, so the variant asserts the pole
+    # rather than the 0/0 indeterminate form. See _TERNARY_DIVIDES_BY_C.
+    nonzero = mathop in _TERNARY_DIVIDES_BY_C
+    _run_sfpu_ternary(
+        formats,
+        dest_acc,
+        mathop,
+        spec_A=_TERNARY_NONZERO if nonzero else None,
+        spec_B=_TERNARY_NONZERO if nonzero else None,
+        spec_C=spec_C,
+    )
 
 
 @parametrize(
