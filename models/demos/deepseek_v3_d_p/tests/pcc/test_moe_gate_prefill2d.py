@@ -85,12 +85,6 @@ class _RealGateSource(NamedTuple):
     fallbacks: tuple[str, ...]
     hf_repo: str | None
     key_prefix_template: str
-    # dtype for e_score_correction_bias; None means "same as the weight dtype". Per-source rather than
-    # global because it is NOT inert: under HOST_ALL the gate feeds torch_bias straight into the
-    # reference router without a downcast, while this test's own baseline does .to(bfloat16) -- so
-    # widening the bias for one model would put the two sides on different precisions at exactly the
-    # top-k tie-break the recall thresholds were calibrated against.
-    bias_dtype: object | None = None
 
 
 # Models for which real router weights can be loaded. Anything absent from this map falls back to
@@ -105,10 +99,6 @@ _REAL_GATE_SOURCES = {
         ),
         hf_repo="deepseek-ai/DeepSeek-V3",
         key_prefix_template=GATE_KEY_PREFIX_DEEPSEEK,
-        # Deliberately left at the weight dtype: this path was passing before K3 existed and its
-        # thresholds are calibrated for a bf16 bias on both sides. Do not widen it here as a
-        # side-effect of a K3 change.
-        bias_dtype=None,
     ),
     # K3's router is the one MoE tensor group the checkpoint leaves unquantized, so it can be read
     # directly. ~12.8 MB out of 1.5 TB via a prefix-filtered safe_open.
@@ -120,10 +110,6 @@ _REAL_GATE_SOURCES = {
         # real weights, otherwise the existing seeded-weight fallback remains hermetic.
         hf_repo=None,
         key_prefix_template=GATE_KEY_PREFIX_KIMI_K3,
-        # Match the TtMoEGatePrefill path, which stores both the device bias and its host-fallback
-        # copy in bf16. The independent reference is also converted to bf16 below, keeping both
-        # sides aligned at the 16-of-896 top-k boundary.
-        bias_dtype=None,
     ),
 }
 
@@ -157,7 +143,6 @@ def _try_load_real_gate_weights(gate_model: str, n_routed_experts: int, dim: int
             layer_idx=_MOE_LAYER_IDX,
             dtype=torch.bfloat16,
             key_prefix_template=source.key_prefix_template,
-            bias_dtype=source.bias_dtype,
         )
         gate_w["weight"] = gate_w["weight"][:n_routed_experts, :dim]
         gate_w["e_score_correction_bias"] = gate_w["e_score_correction_bias"][:n_routed_experts]
