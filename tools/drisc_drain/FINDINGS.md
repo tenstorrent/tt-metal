@@ -3801,7 +3801,7 @@ Two further changes were needed on top of the guards:
   knee-crossing, not a general cost: that config sits at 472-488 of 512 ring words, where one late sweep blocks
   dozens of lossless producers at once.
 
-### FAST DISPATCH, delay 60: clean, and the mover is MORE credit-bound than under slow dispatch
+### FAST DISPATCH, delay 60: clean, and the mover's credit wait is BIMODAL (not a raised floor)
 
 Self-profiling was built and tuned against the slow-dispatch reference, so it was re-run under fast dispatch.
 The role split works there unchanged -- the drain kernels are launched with `force_slow_dispatch=true` onto DRAM
@@ -3840,8 +3840,33 @@ Perturbation, and the interesting part is which role moves:
 Filler cost is the same +4% idle / +5.6% busy / +15% worst-sweep shape as slow dispatch. The mover columns are
 NOISE, not improvement: its worst sweep spans 50.5-106.0 us with the feature off and 37.1-118.6 with it on.
 
-**What the zones say that the counters did not: fast dispatch makes the mover far more credit-bound.**
-Per busy sweep, from the self zones' own cross-check totals:
+**What the zones say that the counters did not: the mover's credit wait is BIMODAL.** The per-sweep means
+below were the first read of this, and the framing they suggested -- "fast dispatch makes the mover more
+credit-bound" -- is WRONG, because a mean over two separate populations describes neither. A later trace
+(`tracy_captures/drisc_selfzones_fd60.tracy`, same config) gives the per-occurrence distribution:
+
+| | n | p50 | under 1 us | >= 5 us | max | mean |
+|---|---|---|---|---|---|---|
+| FILLER (DRAM ring room) | 27 | 52 ns | **100%** | 0% | 75 ns | 54 ns |
+| MOVER 4 (host FIFO credit) | 25 | **66 ns** | 52% | **40%** | 9,324 ns | 3,568 ns |
+| MOVER 5 (host FIFO credit) | 28 | **67 ns** | 54% | **29%** | 14,296 ns | 2,912 ns |
+
+**The median push waits ~66 ns -- essentially free -- and roughly a third of them cost 9-14 us, with nothing
+in between.** So the socket does not run a higher credit floor under fast dispatch; it momentarily runs OUT of
+credit a fraction of the time, and each such event costs ~9-14 us. That is what makes a worst sweep 50-106 us
+against a ~16 us mean busy sweep: a worst sweep is one that caught one or more tail events. Optimising a
+"higher floor" would have been chasing something that does not exist -- the target is the frequency and depth
+of the credit-exhaustion events.
+
+The FILLER row is the control, and it is the §N+39 prediction landing: DRAM ring room is dead flat
+(51-75 ns, 100% under 1 us), so 64 MiB of runway never binds. Same phase name, two different quantities,
+~50x apart.
+
+Also measured from that trace: filler PROC rose to **1,223-1,274 ns/batch** under FD against 825-864 ns under
+SD, because producers burst harder so more cores are live per batch. FD therefore costs the filler in SCAN and
+the mover in CREDIT-WAIT TAIL -- different phases, one cause.
+
+The per-busy-sweep means that produced the original (wrong) framing, kept for the record:
 
 | | mover credit-wait per busy sweep | mover read | mover write |
 |---|---|---|---|
@@ -3850,9 +3875,11 @@ Per busy sweep, from the self zones' own cross-check totals:
 
 and the OFF-path worst-sweep credit wait agrees independently (53.0 us mean under FD against 32.5 us under SD
 at the tighter delay). Fast dispatch removes the host round trip between ops, so producers fill their rings in
-harder bursts; the drainer's egress is unchanged, so the extra burstiness lands entirely on the socket credit
-wait -- the one phase §N+38 identified as setting the knee. **The two movers also differ by 1.6x from each
-other** (7.7 vs 12.7 us), which a single aggregate figure would have hidden entirely.
+harder bursts; the drainer's egress is unchanged, so the extra burstiness lands on the socket credit wait --
+the one phase §N+38 identified as setting the knee. **The two movers also differ by 1.6x from each other**
+(7.7 vs 12.7 us), which a single aggregate figure would have hidden entirely -- and per the distribution above,
+that 1.6x is a difference in TAIL FREQUENCY (40% vs 29% of pushes >= 5 us), not in their typical cost, which is
+identical at 66-67 ns.
 
 ### Cross-check: the zones agree with the counters
 
