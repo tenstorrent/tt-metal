@@ -59,7 +59,7 @@ Two environments, deliberately separate. They do not share packages and should n
 | tt-metal `python_env` | running the model on device, PCC/perf tests |
 | `cosyvoice_env` | the PyTorch reference: goldens, baseline audio, WER/SIM scoring |
 
-The reference pins its own `torch` and `transformers` — see `requirements-cosyvoice.txt`,
+The reference pins its own `torch` and `transformers` — see `requirements-reference.txt`,
 which records why each pin is where it is. Forcing those into the tt-metal environment
 would risk the tt-metal build for no benefit, since the reference never runs on device.
 
@@ -67,7 +67,7 @@ would risk the tt-metal build for no benefit, since the reference never runs on 
 
 ```bash
 uv venv --python 3.10 /root/tt/cosyvoice_env
-VIRTUAL_ENV=/root/tt/cosyvoice_env uv pip install -r requirements-cosyvoice.txt
+VIRTUAL_ENV=/root/tt/cosyvoice_env uv pip install -r requirements-reference.txt
 
 git clone --recursive https://github.com/FunAudioLLM/CosyVoice.git /root/tt/CosyVoice
 git -C /root/tt/CosyVoice checkout 074ca6dc9e80a2f424f1f74b48bdd7d3fea531cc
@@ -219,7 +219,7 @@ PCC ≈ 0.3.
 ```
 models/demos/cosyvoice/
 ├── README.md                    this file
-├── requirements-cosyvoice.txt   reference-environment pins (CPU)
+├── requirements-reference.txt   reference-environment pins (CPU)
 ├── scripts/
 │   ├── download_model.py        stdlib-only, resumable checkpoint fetch
 │   ├── gen_golden.py            capture per-module goldens from the reference

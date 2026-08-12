@@ -1,7 +1,12 @@
-# CosyVoice CPU-only requirements — derived from FunAudioLLM/CosyVoice@074ca6d requirements.txt
+# CosyVoice REFERENCE-ONLY requirements, host CPU
+# derived from FunAudioLLM/CosyVoice@074ca6d requirements.txt
 #
-# This builds the *reference* venv only: golden capture, weight export, WER/SIM scoring.
-# None of it is installed to run the model on device — see docs/security.md for that split.
+# NOTHING IN THIS FILE IS INSTALLED TO RUN THE MODEL. It builds `cosyvoice_env`, a
+# host-only venv with exactly three jobs: capturing the PyTorch goldens, exporting
+# weights, and WER/SIM scoring. The on-device model, the demo and every test under
+# tests/ run in tt-metal's own python_env and import only torch, numpy, ttnn and
+# loguru — all of which tt-metal already ships. Merging this demo installs nothing
+# from here. docs/security.md documents that boundary and the advisory disposition.
 #
 # Deltas from upstream, forced by "no NVIDIA GPU on this host":
 #   1. torch/torchaudio pulled from the CPU wheel index with an explicit +cpu local
@@ -32,17 +37,22 @@
 #      Dropping gradio and onnx is where most of the reduction comes from, and it moves
 #      no version the goldens depend on. docs/security.md carries the tally.
 #
-#   7. Bumped, because these ARE imported, to the lowest version clearing their
-#      advisories: diffusers (matcha's decoder needs get_activation), lightning
-#      (matcha.utils.pylogger drags it in), modelscope, gdown, pyarrow (a module-level
-#      pyarrow.parquet in cosyvoice/dataset/processor.py), protobuf, transformers
-#      (one symbol: Qwen2ForCausalLM), torch/torchaudio.
+#   7. Bumped, because these ARE imported, to a version clearing their advisories:
+#      diffusers (matcha's decoder needs get_activation), lightning (matcha.utils.pylogger
+#      drags it in), modelscope, gdown, pyarrow (a module-level pyarrow.parquet in
+#      cosyvoice/dataset/processor.py), protobuf, transformers, torch/torchaudio.
+#
+#      transformers goes to 5.5.0, clearing all eight of its advisories. The reference
+#      touches two corners of it -- Qwen2ForCausalLM in cosyvoice/llm/llm.py, and
+#      AutoFeatureExtractor/WavLMForXVector in scripts/eval_wer_sim.py -- and both import
+#      and run unchanged on 5.x. An earlier pass here concluded 5.x had dropped top-level
+#      Qwen2ForCausalLM; that was a confounded test. It was measured in an environment
+#      that also carried torch 2.9.1, and torch 2.9.1 breaks that same import on its own
+#      (see below) -- transformers 4.53.0 fails identically there. On torch 2.6.0, 5.5.0
+#      is clean and reproduces the goldens bit-for-bit against 4.53.0.
 #
 # What is deliberately still outstanding, and why:
 #
-#   transformers  3 open (CVE-2026-5241, CVE-2026-4372 HIGH; CVE-2026-1839 MED). All
-#                 need 5.x, where Qwen2ForCausalLM is no longer importable from the
-#                 top-level namespace and cosyvoice/llm/llm.py fails at import.
 #   torch         3 open, all MEDIUM local-DoS. CVE-2025-2998 has no fixed version at
 #                 all. 2.8.0/2.9.1 would clear the other two but break this venv twice
 #                 over: torch>=2.8's inductor imports triton.backends, which the triton
@@ -90,6 +100,6 @@ rich==13.7.1
 soundfile==0.12.1
 torch==2.6.0+cpu
 torchaudio==2.6.0+cpu
-transformers==4.53.0
+transformers==5.5.0
 wetext==0.0.4
 wget==3.2
