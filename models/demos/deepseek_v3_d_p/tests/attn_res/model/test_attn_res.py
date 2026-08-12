@@ -43,6 +43,12 @@ REL_ERR_GATE = 2e-2
 HIDDEN_SIZE = 7168
 PER_CHIP_TOKENS = 640
 READ_SITES = 24
+
+# On a unit-RMS stream the scores are `N(0, ‖q‖₂²)`, so the folded query's norm is the
+# softmax's temperature and the only thing about the weights this op can be sensitive to.
+# This lands at `‖q‖₂ ≈ 1.7`; K3's own query weights run 0.07 to 0.23 over a block, which
+# is a near-uniform softmax and a milder shift for the online rescale to carry. The scale
+# here is kept above the checkpoint's deliberately — it is the harder of the two.
 PROJ_STD = 0.02
 
 # Layer 0 has no sealed snapshot so its pre-attention read is skipped, which is why 93

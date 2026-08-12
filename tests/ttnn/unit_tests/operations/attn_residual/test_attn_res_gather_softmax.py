@@ -36,7 +36,9 @@ PCC = 0.9999
 
 HIDDEN_SIZE = 7168
 INV_HIDDEN_SIZE = 1.0 / HIDDEN_SIZE
-EPS = 1e-6
+# `rms_norm_eps` from the K3 checkpoint's own config, so the op is exercised at the
+# magnitude the model hands it rather than at one that never reaches the kernel.
+EPS = 1e-5
 PER_CHIP_TOKENS = 640
 
 TP_AXIS = 1
