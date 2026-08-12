@@ -59,7 +59,7 @@ runs:
       shell: bash
       run: |
         sudo mkdir -p /home/user/tt-metal
-        sudo chown "$(id -u):$(id -g)" /home/user
+        sudo chown -R "$(id -u):$(id -g)" /home/user
 
     - name: Download Build Artifact
       uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -107,9 +107,9 @@ runs:
 
         # Workers + runner local copy for runtime (local disk).
         cp -r "$GITHUB_WORKSPACE" /ci/tt-metal
-        cp -r "$GITHUB_WORKSPACE" /home/user/tt-metal
-        cp -r "${BUILD_ARCHIVE}" /ci/tt-metal/ 
-        cp -r "${ttnn_wheels[0]}" /ci/tt-metal/
+        cp -r "$GITHUB_WORKSPACE" /home/user/
+        cp "${BUILD_ARCHIVE}" /ci/tt-metal/ 
+        cp "${ttnn_wheels[0]}" /ci/tt-metal/
         tar --zstd -xf "${BUILD_ARCHIVE}" -C /home/user/tt-metal
 
         mpirun --pernode bash -lc 'cp -r /ci/tt-metal /home/user/'
