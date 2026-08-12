@@ -297,15 +297,20 @@ def fast_device_to_host_yuv(
             the planar buffer on host (Y -> top ``logical_h`` rows; Cb/Cr ->
             top ``logical_h/2`` rows).  Must be even and ``<= H``.  Defaults to
             ``None`` (no trim).
+        logical_w: Optional logical (un-padded) width of the output, trimming
+            the right columns of each plane exactly as ``logical_h`` trims the
+            bottom rows.  Must be even and ``<= W``.  Defaults to ``None``.
 
     Returns:
-        ``np.ndarray`` of shape ``(T, H'*W + 2*(H'/2 * W/2))``, dtype uint8,
-        where ``H' = logical_h if logical_h is not None else H``.
+        ``np.ndarray`` of shape ``(T, H'*W' + 2*(H'/2 * W'/2))``, dtype uint8,
+        where ``H'``/``W'`` are ``logical_h``/``logical_w`` when set and
+        ``H``/``W`` otherwise.
         Returns ``None`` for non-root ranks when ``root`` is set.
 
     Raises:
         AssertionError: if ``B != 1``, ``C != 3``, or H/W are not even.
-        ValueError: if ``logical_h`` is set and is greater than ``H`` or odd.
+        ValueError: if ``logical_h``/``logical_w`` is non-positive, odd, or
+            exceeds ``H``/``W``.
     """
     if coefficients is None:
         coefficients = _bt601_yuv_coefficients()
@@ -318,6 +323,23 @@ def fast_device_to_host_yuv(
 
     TP, SP = mesh_shape
     H, W = h_per * TP, w_per * SP
+
+    # The shards only ever cover HxW, so an oversized crop leaves the tail rows/columns
+    # of the planar buffer untouched; an odd one halves to a chroma plane that no longer
+    # matches its luma plane. Both surface far downstream, as corrupt video or an opaque
+    # reshape failure.
+    for name, value, bound_name, bound in (
+        ("logical_h", logical_h, "H", H),
+        ("logical_w", logical_w, "W", W),
+    ):
+        if value is None:
+            continue
+        if value <= 0 or value % 2 != 0:
+            msg = f"{name} must be positive and even for 4:2:0, got {value}"
+            raise ValueError(msg)
+        if value > bound:
+            msg = f"{name}={value} exceeds the assembled {bound_name}={bound}"
+            raise ValueError(msg)
 
     if debug:
         print(f"  [yuv-d2h] input per-shard: {list(tt_video_BCTHW.shape)}")
