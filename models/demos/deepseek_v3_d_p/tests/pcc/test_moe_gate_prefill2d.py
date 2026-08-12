@@ -83,7 +83,7 @@ class _RealGateSource(NamedTuple):
 
     env_var: str
     fallbacks: tuple[str, ...]
-    hf_repo: str
+    hf_repo: str | None
     key_prefix_template: str
     # dtype for e_score_correction_bias; None means "same as the weight dtype". Per-source rather than
     # global because it is NOT inert: under HOST_ALL the gate feeds torch_bias straight into the
@@ -115,7 +115,10 @@ _REAL_GATE_SOURCES = {
     "kimi_k3": _RealGateSource(
         env_var="KIMI_K3_HF_MODEL",
         fallbacks=(str(KIMI_K3_CHECKPOINT),),
-        hf_repo="moonshotai/Kimi-K3",
+        # The router is small, but Hugging Face resolves it through a 16.6 GB checkpoint shard.
+        # Do not start that download from a local synthetic test: mounted/explicit checkpoints use
+        # real weights, otherwise the existing seeded-weight fallback remains hermetic.
+        hf_repo=None,
         key_prefix_template=GATE_KEY_PREFIX_KIMI_K3,
         # Keep the routing correction in fp32. Only decides which of 896 experts win top-16, so
         # precision there matters more the more experts there are. Scoped to K3: under HOST_ALL this
@@ -126,11 +129,11 @@ _REAL_GATE_SOURCES = {
 }
 
 
-def _resolve_model_id(source: _RealGateSource) -> str:
+def _resolve_model_id(source: _RealGateSource) -> str | None:
     """Resolve a model identifier (local dir or HF repo ID) for gate weight loading.
 
-    Checks the model's env var and its known local paths first; falls back to the HF repo ID so that
-    ``load_hf_state_dict_filtered`` can resolve from the HF cache.
+    Checks the model's env var and known local paths first. Sources that allow remote resolution may
+    fall back to an HF repo ID; sources without one return ``None`` for seeded local weights.
     """
     env_path = os.getenv(source.env_var)
     if env_path and (Path(env_path) / "model.safetensors.index.json").exists():
@@ -147,6 +150,8 @@ def _try_load_real_gate_weights(gate_model: str, n_routed_experts: int, dim: int
     if source is None:
         return None
     model_id = _resolve_model_id(source)
+    if model_id is None:
+        return None
     try:
         gate_w = load_gate_weights_from_hf(
             model_id,
