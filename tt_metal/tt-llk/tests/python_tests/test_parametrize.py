@@ -2,8 +2,17 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+from types import SimpleNamespace
+
 import pytest
+from conftest import (
+    _collapse_runtime_only_variants,
+    _group_runtime_variants_by_compile_key,
+    pytest_collection_modifyitems,
+)
 from helpers.param_config import (
+    RUNTIME_AXES_MARK,
     CircularDependencyError,
     UnknownDependenciesError,
     _compute_dependency_map,
@@ -12,7 +21,33 @@ from helpers.param_config import (
     _param_dependencies,
     _params_solve_dependencies,
     _verify_dependency_map,
+    compile_item_key,
+    parametrize,
+    runtime,
 )
+from helpers.test_config import BuildMode, TestConfig
+
+
+class _FakeItem:
+    def __init__(self, nodeid, params=None, marker=None):
+        self.nodeid = nodeid
+        self.callspec = SimpleNamespace(params=params) if params is not None else None
+        self._marker = marker
+
+    def get_closest_marker(self, name):
+        if self._marker is not None and self._marker.name == name:
+            return self._marker
+        return None
+
+
+def _runtime_axes_marker(**params):
+    def test_case(**kwargs):
+        pass
+
+    decorated = parametrize(**params)(test_case)
+    return next(
+        marker for marker in decorated.pytestmark if marker.name == RUNTIME_AXES_MARK
+    )
 
 
 def test_param_dependencies_constant():
@@ -401,3 +436,196 @@ def test_params_solve_dependencies_multiple_chain_constraints_shuffled():
 
     assert len(result) == len(expected)
     assert set(result) == set(expected)
+
+
+def test_compile_item_key_keeps_normal_axes_and_drops_runtime_axes():
+    marker = _runtime_axes_marker(
+        compile_axis=["first", "second"], runtime_axis=runtime([10, 20])
+    )
+
+    first = _FakeItem(
+        "test_module.py::test_case[first-10]",
+        {"compile_axis": "first", "runtime_axis": 10},
+        marker,
+    )
+    same_compile = _FakeItem(
+        "test_module.py::test_case[first-20]",
+        {"compile_axis": "first", "runtime_axis": 20},
+        marker,
+    )
+    other_compile = _FakeItem(
+        "test_module.py::test_case[second-10]",
+        {"compile_axis": "second", "runtime_axis": 10},
+        marker,
+    )
+
+    assert compile_item_key(first) == compile_item_key(same_compile)
+    assert compile_item_key(first) != compile_item_key(other_compile)
+
+
+def test_compile_item_key_uses_resolved_callable_dependencies():
+    marker = _runtime_axes_marker(
+        source=[1, 2],
+        derived=lambda source: source * 10,
+        sample=runtime(["a", "b"]),
+    )
+
+    first = _FakeItem(
+        "test_module.py::test_case[first]",
+        {"source": 1, "derived": 10, "sample": "a"},
+        marker,
+    )
+    same_compile = _FakeItem(
+        "test_module.py::test_case[second]",
+        {"source": 1, "derived": 10, "sample": "b"},
+        marker,
+    )
+    other_compile = _FakeItem(
+        "test_module.py::test_case[third]",
+        {"source": 2, "derived": 20, "sample": "a"},
+        marker,
+    )
+
+    assert compile_item_key(first) == compile_item_key(same_compile)
+    assert compile_item_key(first) != compile_item_key(other_compile)
+
+
+def test_compile_item_key_drops_only_runtime_parts_of_tuple_axis():
+    marker = _runtime_axes_marker(
+        combo=[
+            ("compile-a", runtime("run-1")),
+            ("compile-a", runtime("run-2")),
+            ("compile-b", runtime("run-1")),
+        ]
+    )
+
+    first = _FakeItem(
+        "test_module.py::test_case[first]", {"combo": ("compile-a", "run-1")}, marker
+    )
+    same_compile = _FakeItem(
+        "test_module.py::test_case[second]",
+        {"combo": ("compile-a", "run-2")},
+        marker,
+    )
+    other_compile = _FakeItem(
+        "test_module.py::test_case[third]", {"combo": ("compile-b", "run-1")}, marker
+    )
+
+    assert compile_item_key(first) == compile_item_key(same_compile)
+    assert compile_item_key(first) != compile_item_key(other_compile)
+
+
+def test_compile_item_key_ignores_items_without_runtime_metadata():
+    item = _FakeItem("test_module.py::test_case[value]", {"axis": "value"})
+
+    assert compile_item_key(item) is None
+
+
+def test_producer_collapse_keeps_one_item_per_compile_key():
+    marker = _runtime_axes_marker(compile_axis=["a", "b"], runtime_axis=runtime([1, 2]))
+    items = [
+        _FakeItem(
+            "test_module.py::test_case[a-1]",
+            {"compile_axis": "a", "runtime_axis": 1},
+            marker,
+        ),
+        _FakeItem(
+            "test_module.py::test_case[a-2]",
+            {"compile_axis": "a", "runtime_axis": 2},
+            marker,
+        ),
+        _FakeItem(
+            "test_module.py::test_case[b-1]",
+            {"compile_axis": "b", "runtime_axis": 1},
+            marker,
+        ),
+    ]
+    deselected = []
+    config = SimpleNamespace(
+        hook=SimpleNamespace(pytest_deselected=lambda items: deselected.extend(items))
+    )
+
+    _collapse_runtime_only_variants(config, items)
+
+    assert [item.nodeid for item in items] == [
+        "test_module.py::test_case[a-1]",
+        "test_module.py::test_case[b-1]",
+    ]
+    assert [item.nodeid for item in deselected] == ["test_module.py::test_case[a-2]"]
+
+
+def test_consumer_grouping_is_stable_within_each_test_function():
+    marker = _runtime_axes_marker(compile_axis=["a", "b"], runtime_axis=runtime([1, 2]))
+
+    def item(function, item_id, compile_axis, runtime_axis):
+        return _FakeItem(
+            f"test_module.py::{function}[{item_id}]",
+            {"compile_axis": compile_axis, "runtime_axis": runtime_axis},
+            marker,
+        )
+
+    items = [
+        item("test_first", "a-1", "a", 1),
+        item("test_first", "b-1", "b", 1),
+        item("test_first", "a-2", "a", 2),
+        _FakeItem("test_module.py::test_unmarked[value]", {"axis": "value"}),
+        item("test_second", "b-1", "b", 1),
+        item("test_second", "a-1", "a", 1),
+        item("test_second", "b-2", "b", 2),
+    ]
+
+    _group_runtime_variants_by_compile_key(items)
+
+    assert [item.nodeid for item in items] == [
+        "test_module.py::test_first[a-1]",
+        "test_module.py::test_first[a-2]",
+        "test_module.py::test_first[b-1]",
+        "test_module.py::test_unmarked[value]",
+        "test_module.py::test_second[b-1]",
+        "test_module.py::test_second[b-2]",
+        "test_module.py::test_second[a-1]",
+    ]
+
+
+def test_explicit_order_file_takes_precedence_over_consumer_grouping(
+    monkeypatch, tmp_path
+):
+    marker = _runtime_axes_marker(compile_axis=["a", "b"], runtime_axis=runtime([1, 2]))
+    items = [
+        _FakeItem(
+            "test_module.py::test_case[a-1]",
+            {"compile_axis": "a", "runtime_axis": 1},
+            marker,
+        ),
+        _FakeItem(
+            "test_module.py::test_case[b-1]",
+            {"compile_axis": "b", "runtime_axis": 1},
+            marker,
+        ),
+        _FakeItem(
+            "test_module.py::test_case[a-2]",
+            {"compile_axis": "a", "runtime_axis": 2},
+            marker,
+        ),
+    ]
+    requested_order = [
+        "test_module.py::test_case[b-1]",
+        "test_module.py::test_case[a-2]",
+        "test_module.py::test_case[a-1]",
+    ]
+    order_file = tmp_path / "order.json"
+    order_file.write_text(
+        json.dumps({"runner": [{"test": nodeid} for nodeid in requested_order]})
+    )
+
+    options = {
+        "--op": [],
+        "--test-order-file": str(order_file),
+        "--rewind-runner": "runner",
+    }
+    config = SimpleNamespace(getoption=lambda name, **kwargs: options[name])
+    monkeypatch.setattr(TestConfig, "BUILD_MODE", BuildMode.CONSUME)
+
+    pytest_collection_modifyitems(config, items)
+
+    assert [item.nodeid for item in items] == requested_order

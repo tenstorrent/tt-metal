@@ -23,6 +23,22 @@ from .llk_params import BlocksCalculationAlgorithm, DestAccumulation, DestSync
 RUNTIME_AXES_MARK = "runtime_axes"
 
 
+def compile_item_key(item):
+    """Return a deterministic compile identity for a parametrized pytest item.
+
+    ``None`` means the item has no ``runtime()`` metadata and therefore does not
+    participate in producer collapse or consumer grouping.
+    """
+    marker = item.get_closest_marker(RUNTIME_AXES_MARK)
+    callspec = getattr(item, "callspec", None)
+    if marker is None or callspec is None:
+        return None
+
+    compile_key_fn = marker.kwargs["compile_key_fn"]
+    test_function = item.nodeid.split("[", 1)[0]
+    return test_function, repr(compile_key_fn(callspec.params))
+
+
 class _RuntimeMarker:
     """Wrapper that tags a parameter value as runtime only."""
 
@@ -620,6 +636,29 @@ def generate_unary_input_dimensions(dest_acc, dest_sync=DestSync.Half, tile_shap
         for row in range(1, max_tiles_in_dest + 1)
         for column in range(1, (max_tiles_in_dest // row) + 1)
     ]
+
+
+def generate_perf_input_dimensions(dest_acc, tile_dimensions=None):
+    """Generate SyncHalf perf shapes for fixed overhead and dest synchronization.
+
+    The first shape is one tile. The remaining wide/tall pairs contain exactly
+    one, two, or three destination-register fills so each block is full and
+    multi-block cases cross deterministic synchronization boundaries.
+    """
+    tile_rows, tile_cols = tile_dimensions or TILE_DIMENSIONS
+    capacity_divisor = 2 if dest_acc == DestAccumulation.Yes else 1
+    tiles_per_fill = DEST_SYNC_TILE_LIMITS[DestSync.Half] // capacity_divisor
+
+    dimensions = [[tile_rows, tile_cols]]
+    for fill_count in (1, 2, 3):
+        tile_count = tiles_per_fill * fill_count
+        dimensions.extend(
+            [
+                [tile_rows, tile_cols * tile_count],
+                [tile_rows * tile_count, tile_cols],
+            ]
+        )
+    return dimensions
 
 
 def get_num_blocks_and_num_tiles_in_block(

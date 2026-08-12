@@ -839,20 +839,27 @@ class PerfConfig(TestConfig):
 
 
 def create_test_or_perf_config(
-    *, is_perf: bool, run_types: list[PerfRunType], test_config_kwargs: dict
+    *,
+    is_perf: bool,
+    run_types: list[PerfRunType],
+    test_config_kwargs: dict,
+    boot_mode: BootMode | None = None,
 ) -> TestConfig:
     """Create the common functional or performance configuration.
 
     The configuration is returned without running it so callers can apply
-    operation-specific format adjustments before execution.
+    operation-specific format adjustments before execution. ``boot_mode`` is
+    functional-only because ``PerfConfig`` owns its fixed performance boot mode.
     """
     if is_perf:
         return PerfConfig(run_types=list(run_types), **test_config_kwargs)
 
-    return TestConfig(
-        **{
-            **test_config_kwargs,
-            "templates": test_config_kwargs["templates"]
-            + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
-        }
-    )
+    functional_kwargs = {
+        **test_config_kwargs,
+        "templates": test_config_kwargs["templates"]
+        + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
+    }
+    if boot_mode is not None:
+        functional_kwargs["boot_mode"] = boot_mode
+
+    return TestConfig(**functional_kwargs)
