@@ -347,15 +347,20 @@ public:
     //   - Flag any NOC write into the locked entries as WRITE_TO_LOCKED_DFB.
     //   - On Quasar, invalidate the L2 cache range on acquire.
     // In addition, scoped_write_lock also flushes on release.
+    //
+    // get_ptr() hands out the UNCACHED alias on Quasar DM, matching get_write_ptr()/get_read_ptr(), so
+    // CPU accesses through the lock reach TL1 directly.
     [[nodiscard]] auto scoped_write_lock(uint16_t num_entries = 1) {
         const ScopedLockRegion region = lock_acquire_impl<true>(num_entries);
-        return make_dfb_scoped_lock<true>(
-            region.start, [this, region, num_entries]() { lock_release_impl<true>(region, num_entries); });
+        return make_dfb_scoped_lock<true>(region.start + L1_UNCACHED_OFFSET, [this, region, num_entries]() {
+            lock_release_impl<true>(region, num_entries);
+        });
     }
     [[nodiscard]] auto scoped_read_lock(uint16_t num_entries = 1) {
         const ScopedLockRegion region = lock_acquire_impl<false>(num_entries);
-        return make_dfb_scoped_lock<false>(
-            region.start, [this, region, num_entries]() { lock_release_impl<false>(region, num_entries); });
+        return make_dfb_scoped_lock<false>(region.start + L1_UNCACHED_OFFSET, [this, region, num_entries]() {
+            lock_release_impl<false>(region, num_entries);
+        });
     }
 
 private:
