@@ -2,29 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Host-only gate for the MiniMax-H3 AdaLN precompute.
-
-Precomputing lets the 13B AdaLN parameters -- 40% of the checkpoint -- stay off
-the device entirely, which the model card explicitly licenses. At the real
-shapes the table is 1.416 GB against the 26.0 GB of ``adaln_proj`` parameters
-it replaces, i.e. 0.354 vs 6.50 GB per device at TP=4. The risk it buys
-is numerical: the table has to be what the reference would have computed at that
-step, or every block is modulated slightly wrong at every step in the same
-direction.
-
-Two batch-size effects are asserted here because they pull in opposite directions
-and the design depends on both:
-
-- ``adaln_proj`` **is** batch-stable, so a step's rows can be projected together.
-- ``time_embedder`` is **not**, so ``temb`` must be computed per step. Batching it
-  over all 98 distinct levels shifts it ~5e-6 and the bf16 projection amplifies
-  that to about one ULP on ~0.7% of values.
-
-The full 26 GB build against the real checkpoint was verified once by a one-off
-builder script (recoverable from git history: ``tools/build_adaln_table.py``):
-0 mismatches over 196 (step, layer) projections and all 49 final-layer rows.
-These tests use a small synthetic checkpoint so they run without it.
-"""
+"""Host-only gate for the MiniMax-H3 AdaLN precompute, on a small synthetic checkpoint.
+The design rests on ``adaln_proj`` being batch-stable while ``time_embedder`` is not. The full
+26 GB build was verified once against the real checkpoint (git history: tools/build_adaln_table.py)."""
 
 import pytest
 import torch
@@ -56,7 +36,6 @@ def _step_timesteps(steps=STEPS):
 
 @pytest.fixture
 def synthetic_checkpoint(tmp_path):
-    """A shape-faithful miniature of the FL2VA transformer's AdaLN surface."""
     torch.manual_seed(0)
     tensors = {
         "time_embedder.proj_in.weight": torch.randn(HIDDEN, FREQ_DIM),
@@ -88,7 +67,6 @@ def _table(checkpoint, steps=STEPS):
 
 
 def test_frequency_embedding_is_cosine_then_sine():
-    """Matches ``Timesteps(flip_sin_to_cos=True, downscale_freq_shift=0)``."""
     diffusers_embeddings = pytest.importorskip("diffusers.models.embeddings")
     timesteps = torch.tensor([0.0, 0.02, 0.5, 0.999, 1.0], dtype=torch.float32)
     ours = ap.timestep_frequency_embedding(timesteps, 256)
@@ -97,11 +75,7 @@ def test_frequency_embedding_is_cosine_then_sine():
 
 
 def test_silu_must_run_before_the_bfloat16_cast():
-    """Activating in bf16 instead of fp32 shifts modulation ~7.8e-3.
-
-    That bias is identical for every block at every step, so it accumulates
-    coherently down the trajectory instead of averaging out.
-    """
+    """bf16 activation shifts modulation ~7.8e-3, coherently across every block and step."""
     torch.manual_seed(1)
     weight = torch.randn(6 * HIDDEN * 3, TIME_EMBED_DIM).bfloat16()
     bias = torch.randn(6 * HIDDEN * 3).bfloat16()
@@ -116,10 +90,6 @@ def test_silu_must_run_before_the_bfloat16_cast():
 
 
 def test_adaln_projection_is_batch_stable():
-    """Projecting a row alone or alongside others must be bitwise identical.
-
-    This is what allows a step's two or three levels to be projected together.
-    """
     torch.manual_seed(2)
     weight = torch.randn(6 * HIDDEN * 3, TIME_EMBED_DIM).bfloat16()
     bias = torch.randn(6 * HIDDEN * 3).bfloat16()
@@ -132,12 +102,7 @@ def test_adaln_projection_is_batch_stable():
 
 
 def test_time_embedding_is_not_batch_stable(synthetic_checkpoint):
-    """The reason ``temb`` is computed per step rather than once.
-
-    If a torch or BLAS update ever made this stable, the table could be built over
-    the global distinct set and shrink by ~a third -- so this asserts the current
-    behaviour rather than silently depending on it.
-    """
+    """Why ``temb`` is computed per step, asserted rather than silently depended on."""
     _, tensors = synthetic_checkpoint
     args = (
         tensors["time_embedder.proj_in.weight"],
@@ -152,7 +117,6 @@ def test_time_embedding_is_not_batch_stable(synthetic_checkpoint):
     per_step = ap.time_embedding(steps[0], *args, freq_dim=FREQ_DIM)
     rows = [int((everything == value).nonzero()[0, 0]) for value in steps[0]]
 
-    # Same values, same weights; only the batch shape differs.
     assert torch.allclose(batched[rows], per_step, atol=1e-4)
 
 
@@ -165,16 +129,10 @@ def test_step_timesteps_pin_conditioning_at_the_noise_aug_floor():
 
 
 def test_table_matches_per_step_recompute(synthetic_checkpoint):
-    """The gate: every table row equals what that step would have computed.
-
-    The table's layout -- shape, dtype, offsets, per-step levels -- is asserted here too, on the way
-    to the bitwise comparison that consumes it, rather than in separate tests.
-    """
     checkpoint, tensors = synthetic_checkpoint
     steps = _step_timesteps()
     table = _table(checkpoint)
 
-    # The layout the bitwise walk below relies on.
     total_rows = sum(int(levels.numel()) for levels in steps)
     assert len(steps) == _schedules()[0].num_inference_steps
     assert table.num_layers == NUM_LAYERS
@@ -199,8 +157,6 @@ def test_table_matches_per_step_recompute(synthetic_checkpoint):
     )
 
     for step, levels in enumerate(steps):
-        # A step carries its two or three distinct levels, sorted, as torch.unique guarantees and
-        # the layout assumes.
         assert levels.numel() in (2, 3)
         assert bool((levels[1:] > levels[:-1]).all())
         assert torch.equal(table.step_timesteps(step), levels)
@@ -243,8 +199,7 @@ def test_adaln_indices_address_timestep_and_modality(synthetic_checkpoint):
             (offset + 0) * 3 + 0,
             (offset + 0) * 3 + 2,
             (offset + 1) * 3 + 1,
-            # Padding rows carry tag -1 and clamp to the video slot; their output
-            # is discarded either way.
+            # tag -1 padding rows clamp to the video slot; their output is discarded
             (offset + 1) * 3 + 0,
         ]
     )

@@ -2,60 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""MiniMax-H3 ``ref2va`` end to end: omni-reference conditioning on the 4x8 mesh.
-
-ONE combined perf + quality e2e, on the ``mixed`` case -- the largest shape (padded_len 89856
-against 46080 for one image and 81664 for a sounded video) and the only one carrying all three
-modalities at once, in an order that exercises the per-modality row cursors of
-``split_condition_blocks``. ``one_image`` and ``video_with_sound`` need no e2e of their own --
-their failure modes are gated where they live: per-modality encode parity is the device PCC
-gate in ``test_references_minimax_h3.py`` (``test_encode_references_matches_reference``), the
-packed layout is bit-exact host-gated there per case, and "the conditioning reaches the output"
-is ``test_ref2va_conditioning_is_not_a_no_op`` below. Reference order likewise: it is bit-exact
-host-gated there (``nine_mixed_reversed``), and the no-op discriminator proves layout differences
-reach the output.
-
-The e2e carries both the fully-warm latency measurement and the quality gates on one weight load:
-warmup at the real shape with the real references, then time the measured generation and gate its
-output. The timed Encoder row is a real device encode, vision tower included -- there is no
-prompt-embedding cache. The timing method is ``pipelines/ltx``'s -- prepares and export
-excluded, ``Total (compute)`` = the sum of ``pipeline.last_timings`` rows -- so the number is
-comparable to the t2va and fl2va rows. A cold total says almost nothing about the loop: at 81664
-padded rows the shape probe measured a cold forward of 114 s against a warm 3.26 s, the
-difference being kernel compilation. There is no tuned perf target for ref2va; the timing is
-logged, not gated.
-
-A separate file from the ``t2va`` / ``fl2va`` e2e gates so it defaults to its own
-process: a ref2va request is 1.2x-3.0x t2va's packed length, and one process
-holding DiT programs plus CCL buffers at several of those lengths is a memory risk.
-
-WHY THE fl2va QUALITY GATE DOES NOT TRANSFER
-
-``fl2va``'s keyframe is pinned to frame 0 of the output, so "decoded frame 0 correlates
-with the keyframe" has a floor to hold to. A ``ref2va`` reference is not pinned to any
-output row -- it conditions, it is not copied -- so no similarity number is one a correct
-implementation must reach, and an absolute bar would be invented rather than derived.
-
-The gate is built from a measured floor instead:
-
-1. Two generations from the same prompt, seed and reference give the run-to-run floor.
-   Measured: exactly 0.000000, the pipeline being bit-reproducible.
-2. A third with a different reference of the same size. The packed layout is then identical
-   row for row and every noise draw has the same shape in the same order, so the noise is
-   bit-identical and the two requests differ in reference content alone.
-3. An implementation that ignored its reference would score exactly the floor. Measured:
-   0.128143.
-
-What this gate does not assert: that each output resembles the reference it was given more
-than the one it was not. No instrument is known to measure that here -- whole-frame
-luminance correlation is positional where conditioning is not, and CLIP image-image
-similarity separates the two outputs rather than the two references. Those numbers are
-logged only.
-
-**Look at the frames.** Seams and flicker are what whole-tensor metrics average away, and
-both are parallelism bugs. Artifacts land in ``MINIMAX_H3_REF2VA_ARTIFACT_DIR``, written
-before any quality check so a failing check still leaves them behind.
-"""
+"""MiniMax-H3 ``ref2va`` e2e on the ``mixed`` case (largest shape, all three reference modalities).
+``test_ref2va_conditioning_is_not_a_no_op`` is the discriminating gate, judged against a measured run-to-run floor.
+Separate file so it runs in its own process: ref2va padded lengths are 1.2-3.0x t2va's, a memory risk."""
 
 from __future__ import annotations
 
@@ -88,30 +37,13 @@ from .common_av import (
 
 ARTIFACT_ENV = "MINIMAX_H3_REF2VA_ARTIFACT_DIR"
 
-# The working point. Fixed: changing it invalidates the numbers below.
 WIDTH, HEIGHT, NUM_FRAMES, STEPS, SEED = 1344, 768, 124, 50, 0
 FPS = 24
 
 PROMPT = "a slow push-in through a quiet room as afternoon light moves across the floor"
 
-# Quality bars for REFERENCE-DRIVEN content, set below the minimum measured across the three shapes
-# and NOT inherited from t2va, three of whose six bars ref2va does not meet:
-#
-#   dimension               one_image  video+sound  mixed  | min     t2va bar
-#   CLIP prompt alignment      29.05      29.97     29.38  | 29.05   33.0
-#   subject_consistency       0.9631     0.9344    0.9587  | 0.9344  0.95
-#   background_consistency    0.9569     0.9249    0.9397  | 0.9249  0.95
-#   motion_smoothness         0.9957     0.9952    0.9959  | 0.9952  0.97
-#   dynamic_degree            1.0000     1.0000    1.0000  | 1.0     1.0
-#   imaging_quality           0.4826     0.6575    0.5826  | 0.4826  0.64
-#
-# None of the three shortfalls is a defect. CLIP tracks prompt specificity, and ref2va's prompt is
-# one clause against t2va's dialogue scene. The consistency pair penalises change over time while
-# `dynamic_degree` is 1.0 everywhere, so the lowest pair belongs to the case conditioned on a moving
-# clip. `imaging_quality` is no-reference IQA and spreads 0.17 on one pipeline; 0.4884 was recorded
-# on a visually perfect scene. Headroom follows t2va's convention: its 33.0 sits ~4 under a measured
-# 37.05.
-REF2VA_CLIP_THRESHOLD = 25.0
+# Bars set below the minimum measured across the three ref2va cases; t2va's bars do NOT transfer.
+REF2VA_CLIP_THRESHOLD = 25.0  # min measured 29.05
 REF2VA_VBENCH_THRESHOLDS = {
     "subject_consistency": 0.90,
     "background_consistency": 0.89,
@@ -120,15 +52,10 @@ REF2VA_VBENCH_THRESHOLDS = {
     "imaging_quality": 0.44,
 }
 
-# 16384 rather than the 65536 the t2va/fl2va gates use. A video reference goes through the video
-# VAE's taps=3 encoder, whose static circular buffers clash with L1 at 65536 and at 32768; 16384 is
-# the first value that fits. t2va and fl2va never reach that encoder. One process holds
-# every stage, so this value also has to serve the audio decode.
+# 16384, not the other gates' 65536: the video VAE's taps=3 encoder (only ref2va reaches it) clashes with L1 above it.
 _L1_SMALL = int(os.environ.get("MINIMAX_H3_L1_SMALL", 16384))
 
-# The same ring params the t2va and fl2va e2e gates use: the DiT attends in a ring on the SP axis,
-# and a LINE fabric config fails its CCL ops with `fabric.cpp:174 forwarding_direction.has_value()`.
-# Only `l1_small_size` differs.
+# Ring collectives require FABRIC_1D_RING; only `l1_small_size` differs from the other gates.
 MESH_4X8 = [
     pytest.param(
         (4, 8),
@@ -150,24 +77,13 @@ def reference_video() -> Path:
 
 
 def ref2va_references(case: str) -> list[MiniMaxH3Reference]:
-    """The reference set per e2e case.
-
-    ``one_image`` and ``mixed`` condition on a Mandelbrot fractal: for a shape-and-sanity gate the
-    useful property is a reference nothing in the prompt could produce. It is also the most
-    adversarial of the three and sits at the bottom of the quality table above -- 0.4826
-    imaging_quality is this case, not ref2va generally, which reaches 0.6575 on a photographic
-    reference. The discriminator uses real photographs instead.
-    """
+    """The reference set per e2e case (a fractal: content nothing in the prompt could produce)."""
     if case == "one_image":
         return [MiniMaxH3Reference(image=create_fractal_image(1024, 1024))]
     if case == "video_with_sound":
         return [reference_from_video_file(reference_video())]
     if case == "mixed":
-        # One of each, and in an order that is not the natural one: the image first,
-        # then a SILENT video, then a standalone audio reference. So the request
-        # exercises a video block with no soundtrack rows of its own next to an audio
-        # block with no video rows, which is where the per-modality row cursors of
-        # `split_condition_blocks` can disagree with the layout.
+        # image, then SILENT video, then bare audio: stresses split_condition_blocks' per-modality row cursors.
         sounded = reference_from_video_file(reference_video())
         return [
             MiniMaxH3Reference(image=create_fractal_image(1024, 1024)),
@@ -178,7 +94,6 @@ def ref2va_references(case: str) -> list[MiniMaxH3Reference]:
 
 
 def _real_frame_image() -> Image.Image:
-    """One decoded frame of the real clip, as a photographic image reference."""
     from ....pipelines.minimax_h3.packing_ref2va import decode_reference_video
 
     frames, _, _ = decode_reference_video(reference_video())
@@ -186,22 +101,11 @@ def _real_frame_image() -> Image.Image:
 
 
 def _inverted(image: Image.Image) -> Image.Image:
-    """The same photograph with its colours inverted: the discriminator's second reference.
-
-    Holds size constant, so the packed layout and the noise stream are unchanged, along with
-    texture and edge statistics. Only the palette differs, which is both transferable and
-    measurable. A synthetic pattern would leave nothing for a direction check to find, being
-    content the model cannot render for the prompt.
-    """
+    """Colour-inverted copy: same size, so the packed layout and noise stream are unchanged."""
     return Image.fromarray(255 - np.asarray(image.convert("RGB")))
 
 
 def _clip_resemblance(output, image: Image.Image, num_frames: int = 8) -> float:
-    """Mean CLIP image-image cosine similarity between sampled output frames and a reference.
-
-    Semantic rather than positional: a reference conditions what the output is of, not which
-    pixel goes where. `open_clip` is the instrument the t2va gate uses.
-    """
     from ...dataset_eval.clip_encoder import CLIPEncoder
 
     encoder = CLIPEncoder()
@@ -221,28 +125,17 @@ def _clip_resemblance(output, image: Image.Image, num_frames: int = 8) -> float:
 
 
 def _colour_distance(output, image: Image.Image) -> float:
-    """Euclidean distance between an output's mean RGB and a reference's, over [0, 1].
-
-    The interpretable companion to the CLIP number: with an inverted-colour reference pair it
-    measures directly whether the palette carried across. Logged, not asserted -- see the
-    module docstring on why no direction check is a gate here.
-    """
+    """Euclidean distance between mean RGBs, over [0, 1]. Logged only, never asserted."""
     output_mean = to_uint8_frames(output).reshape(-1, 3).mean(axis=0) / 255.0
     reference_mean = np.asarray(image.convert("RGB")).reshape(-1, 3).mean(axis=0) / 255.0
     return float(np.linalg.norm(output_mean - reference_mean))
 
 
 def _divergence(a: torch.Tensor, b: torch.Tensor) -> float:
-    """Mean absolute per-pixel difference between two outputs, over [0, 1] pixels."""
     return float((a.float() - b.float()).abs().mean())
 
 
 def _write(output, stem: str) -> dict:
-    """Frames and audio for a human to look at: four sampled PNGs, a wav, and a muxed mp4.
-
-    The mp4 comes from the shared `write_artifacts` the t2va and fl2va gates use, so VBench
-    scores every task from the same kind of file and the numbers stay comparable.
-    """
     directory = artifact_dir(ARTIFACT_ENV, "h3_ref2va_artifacts")
     frames = to_uint8_frames(output)
     for index in (0, 17, NUM_FRAMES // 2, NUM_FRAMES - 1):
@@ -253,65 +146,32 @@ def _write(output, stem: str) -> dict:
 
 
 def _record_quality(frames: np.ndarray, paths: dict, case: str) -> None:
-    """Record CLIP prompt alignment and the five VBench dimensions.
-
-    Asserted against bars derived from these same measurements. t2va's bars do not
-    transfer to reference-driven content: `imaging_quality` scored 0.4884 on a visually perfect
-    night scene against a 0.64 bar, and the seam ratio gave a false failure at 2.29x.
-    """
+    """CLIP prompt alignment and the five VBench dimensions, against the ref2va-calibrated bars."""
     gate_clip(frames, PROMPT, REF2VA_CLIP_THRESHOLD, f"QUALITY ref2va[{case}]")
-    # A missing muxed mp4 skips rather than fails here: unlike t2va, this gate's own ffmpeg step is
-    # allowed to be absent on the host.
+    # A missing muxed mp4 skips rather than fails here, unlike t2va.
     gate_vbench(paths, PROMPT, REF2VA_VBENCH_THRESHOLDS, f"QUALITY ref2va[{case}]", skip_without_mp4=True)
 
 
 def _pipeline(mesh_device) -> MiniMaxH3Pipeline:
-    """A pipeline bound to the `transformer_ref` partition.
-
-    Fixed at construction rather than per call: each partition is 62 GB, so switching inside
-    one process would mean a full reload. No default snapshot path: ref2va runs against the
-    `transformer_ref` partition, which the shared `weights_dir` helper requires explicitly.
-    """
+    """Pipeline bound to the `transformer_ref` partition (62 GB, fixed at construction; no default snapshot)."""
     return MiniMaxH3Pipeline.create_pipeline(
         mesh_device=mesh_device, weights_dir=weights_dir("transformer_ref", default=""), task="ref2va"
     )
 
 
-# The gated e2e case and the padded packed length it runs at, MEASURED end to end and asserted
-# below so the case cannot silently drift onto a shape the full-depth probe did not cover.
-# `mixed` is 89856, not the 90112 a host-only estimate predicts from a guessed presentation length --
-# the real presentation tokenizes shorter. The other ref2va shapes measure 46080 (`one_image`) and
-# 81664 (`video_with_sound`); `padded_len` is what every program in the 50-block stack is keyed on,
-# so it is the identity of the measurement too.
 CASE = "mixed"
-EXPECTED_PADDED_LEN = 89856
+EXPECTED_PADDED_LEN = 89856  # measured e2e (a host estimate says 90112); asserted so the case cannot drift off the probed shape
 
 
 @pytest.mark.timeout(10800)
 @pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8, indirect=["mesh_device", "device_params"])
 def test_ref2va_end_to_end(mesh_device, reset_seeds):
-    """A full ref2va generation on the ``mixed`` request: video plus its synchronized soundtrack.
-
-    Gates that every path a reference touches agrees on geometry: the conditioner's vision
-    blocks, the VAE encode, the packed layout, the rotary clock and both decoders. A mismatch
-    surfaces as a wrong shape, a failed assert or a desynchronized soundtrack. The same timed
-    generation carries the fully-warm latency measurement (see the module docstring).
-    """
+    """Full ``mixed`` generation: geometry agreement across every reference path, plus warm latency."""
     case = CASE
     references = ref2va_references(case)
     pipeline = _pipeline(mesh_device)
 
-    # ---- fully-warm latency, `pipelines/ltx`'s method via `run_warm_generation`. The same two
-    # warmth conditions as the fl2va gate, sharpened for ref2va:
-    # 1. The warmup must be ref2va-shaped, with the SAME references: `padded_len` depends on the
-    #    number and resolution of the references, so warming with different ones warms nothing.
-    # 2. The warmup must run at the same prompt length, which for ref2va means the same
-    #    presentation -- a 2048 px image reference contributes ~4096 vision tokens and a video
-    #    reference ~1008 per merged frame pair. Asserted by the helper via `last_padded_len`.
-    # The measured run pays the full device conditioner encode -- vision tower included -- inside
-    # the timed Encoder row: there is no prompt-embedding cache. No reference number is recorded
-    # for the ref2va encode (t2va's text-only encode measures ~2.8 s; the vision tower adds to
-    # that here), and the warmup already compiled the encoder path at this presentation.
+    # Warmup must use the SAME references: `padded_len` depends on them, and the helper asserts agreement.
     output = run_warm_generation(
         pipeline,
         PROMPT,
@@ -326,19 +186,15 @@ def test_ref2va_end_to_end(mesh_device, reset_seeds):
     assert output.video.shape == (1, 3, NUM_FRAMES, HEIGHT, WIDTH), tuple(output.video.shape)
     assert output.video.min() >= 0.0 and output.video.max() <= 1.0, "decoded video must be in [0, 1]"
     assert torch.isfinite(output.video).all() and torch.isfinite(output.audio).all()
-    # A drift here means the case differs from the request that was probed, so the shape probe's
-    # memory verdict does not cover it.
     assert (
         pipeline.last_padded_len == EXPECTED_PADDED_LEN
     ), f"{case} ran at padded_len {pipeline.last_padded_len}, not the probed {EXPECTED_PADDED_LEN}"
 
     frames = to_uint8_frames(output)
-    # Artifacts before the checks: a check that fires first leaves no frames to inspect, and the
-    # frames are what a seam reading has to be judged against.
+    # Artifacts before the checks, so a failing check still leaves frames to inspect.
     paths = _write(output, f"ref2va_{case}")
 
     num_forwards = STEPS - 1
-    # No tuned perf target for ref2va: the timing is logged, not gated (no `expected_total_s`).
     log_timing_table(
         pipeline,
         f"ref2va[{case}]",
@@ -354,37 +210,18 @@ def test_ref2va_end_to_end(mesh_device, reset_seeds):
         output.audio, sampling_rate=output.sampling_rate, expected_seconds=NUM_FRAMES / FPS, tolerance_seconds=0.05
     )
     check_av_sync(frames, output.audio, sampling_rate=output.sampling_rate, fps=FPS)
-    # Separate bars per axis. Vertical keeps t2va's 2.0 (measured 1.20-1.32). Horizontal is 3.0:
-    # `video_with_sound` reads 2.29x there and it is scene content, not a seam -- the elevation
-    # spans ~9 rows where a decoder seam occupies 1-2, and the frame's largest vertical gradient
-    # (16.06 at y=306) is not at a tile boundary at all. The ratio is content-sensitive
-    # in both directions -- a false pass from the same property is on record -- so it triggers
-    # an inspection of the frames rather than standing in for one.
+    # Horizontal bar is 3.0: `video_with_sound` measures 2.29x there from scene content, not a seam.
     check_spatial_seams(frames, vertical_boundaries=(448, 896), horizontal_boundaries=(), max_ratio=2.0)
     check_spatial_seams(frames, vertical_boundaries=(), horizontal_boundaries=(384,), max_ratio=3.0)
 
-    # Prompt alignment and the five VBench dimensions, on reference-driven content. Last, because it is
-    # the most expensive check and the cheap structural ones above localise a failure better.
     _record_quality(frames, paths, case)
 
 
 @pytest.mark.timeout(9000)
 @pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8, indirect=["mesh_device", "device_params"])
 def test_ref2va_conditioning_is_not_a_no_op(mesh_device, reset_seeds):
-    """The discriminator, against a floor measured in this same test.
-
-    Three generations at the smallest ref2va shape:
-
-    ``A``  a real decoded frame as the reference, seed 0
-    ``A'`` the same request again, which measures the run-to-run floor
-    ``B``  the same frame colour-inverted, seed 0
-
-    Both references are the same size -- a 16:9 frame resolves to 2048x3584 at the 2048 px
-    short edge -- so the packed layout is identical row for row and every noise draw has the
-    same shape in the same order. The noise is therefore bit-identical and the two requests
-    differ only in reference content, so an implementation that ignored the reference would
-    score ``A`` against ``B`` as close as ``A`` against ``A'``.
-    """
+    """Discriminator: a same-size inverted reference keeps the noise bit-identical, so any output
+    divergence above the measured run-to-run floor is attributable to reference content alone."""
     pipeline = _pipeline(mesh_device)
     normal = _real_frame_image()
     inverted = _inverted(normal)
@@ -421,17 +258,9 @@ def test_ref2va_conditioning_is_not_a_no_op(mesh_device, reset_seeds):
     for stem, output in (("discriminate_normal", a), ("discriminate_inverted", b)):
         _write(output, stem)
 
-    # 1. The same request twice must be reproducible. If it is not, the floor is
-    #    meaningless and so is everything measured against it, so this fails loudly
-    #    rather than silently widening the bar.
     assert floor < 0.02, f"the same request twice diverged by {floor:.6f}; the pipeline is not reproducible"
 
-    # 2. THE GATE THE NULL HYPOTHESIS FAILS. Both references are the same size, so the
-    #    packed layout is identical row for row and every noise draw has the same shape
-    #    in the same order -- the noise is bit-identical. An implementation that ignored
-    #    the reference would therefore score `signal == floor` exactly. Measured against
-    #    a floor of 0, so any nonzero signal is attributable to reference content alone;
-    #    the absolute size is reported so a *shrinking* effect is visible too.
+    # The null hypothesis (reference ignored) scores signal == floor exactly, the noise being bit-identical.
     assert signal > 10 * floor, (
         f"swapping the reference moved the output by {signal:.6f} against a run-to-run floor of "
         f"{floor:.6f}: the reference is not conditioning the output"
@@ -441,12 +270,7 @@ def test_ref2va_conditioning_is_not_a_no_op(mesh_device, reset_seeds):
         "the effect is present but too small to call conditioning"
     )
 
-    # Recorded, not asserted. No instrument is known to measure "resembles its own reference
-    # more than the other one" here: CLIP image-image similarity separates the two
-    # OUTPUTS rather than the two references -- measured, one output scored higher against
-    # both references with the gap equal to within 0.0013 -- and mean-RGB distance splits,
-    # correct for one output and wrong for the other by the same 0.011. Asserting a direction
-    # on either would be asserting a metric that cannot fail.
+    # Direction is logged, not asserted: no known instrument here can fail on a correct pipeline only.
     logger.info(
         f"ref2va direction (recorded, not asserted): CLIP own-vs-other "
         f"A {to_normal[0]:.4f} vs {to_inverted[0]:.4f}, B {to_inverted[1]:.4f} vs {to_normal[1]:.4f}; "

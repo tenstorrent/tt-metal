@@ -2,23 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-# =============================================================================
-# How vision reaches the Qwen3-VL decoder. Two mechanisms, both at the vision
-# token positions and both easy to confuse:
-#
-#   - the tower's merged tokens REPLACE the embeddings of the `<|image_pad|>`
-#     rows, before the block stack;
-#   - the tower's deepstack features are ADDED to those same rows, after each of
-#     the first `len(deepstack_features)` decoder layers.
-#
-# Replace vs add is not interchangeable, and the deepstack layer index is keyed
-# off the list position rather than the vision layer the feature came from. Both
-# are asserted below.
-#
-# The vision rows are contiguous runs -- MiniMax-H3 emits a `"<Picture i>: "`
-# label, `<|vision_start|>`, one run of `<|image_pad|>`, `<|vision_end|>` -- so
-# the port slices and concatenates rather than doing a masked scatter.
-# =============================================================================
+# How vision reaches the Qwen3-VL decoder: the tower's merged tokens REPLACE the
+# <|image_pad|> row embeddings before the block stack; its deepstack features are
+# ADDED to those same rows after each of the first len(deepstack) decoder layers.
 
 import pytest
 import torch
@@ -38,17 +24,13 @@ IMAGE_TOKEN_ID = 151655  # <|image_pad|>
 HIDDEN = 128
 SEQ = 64
 
-# --------------------------------------------------------------------------- host
-
 
 def test_vision_token_runs_finds_one_run_per_image():
-    """A `"<Picture i>: "` label between two images keeps them as separate runs."""
     ids = torch.tensor([[1, 2, 3] + [IMAGE_TOKEN_ID] * 4 + [9, 9] + [IMAGE_TOKEN_ID] * 6 + [7]])
     assert vision_token_runs(ids, IMAGE_TOKEN_ID) == [(3, 4), (9, 6)]
 
 
 def test_vision_token_runs_handles_the_edges():
-    """A run at the very start or end of the sequence still terminates correctly."""
     assert vision_token_runs(torch.tensor([[IMAGE_TOKEN_ID] * 3 + [1, 2]]), IMAGE_TOKEN_ID) == [(0, 3)]
     assert vision_token_runs(torch.tensor([[1, 2] + [IMAGE_TOKEN_ID] * 3]), IMAGE_TOKEN_ID) == [(2, 3)]
     assert vision_token_runs(torch.tensor([[1, 2, 3]]), IMAGE_TOKEN_ID) == []
@@ -59,8 +41,6 @@ def test_vision_token_runs_rejects_a_batch(expect_error):
     with expect_error(ValueError, "expected a single sequence"):
         vision_token_runs(torch.zeros(2, 8, dtype=torch.long), IMAGE_TOKEN_ID)
 
-
-# ------------------------------------------------------------------------- device
 
 _MESH = [pytest.param((1, 1), (1, 1), id="single")]
 
@@ -76,11 +56,6 @@ def test_scatter_rows_rejects_a_row_count_mismatch(mesh_device, submesh_shape, e
 
 
 def _reference_text_model(layers):
-    """A tiny HF decoder stack, only so the port has real weights to load.
-
-    The port's parameters have no data until `load_torch_state_dict` runs, and these tests are about
-    where vision lands rather than numeric parity, so a random init is enough -- but it has to exist.
-    """
     config = transformers.Qwen3VLTextConfig(
         vocab_size=256,
         hidden_size=HIDDEN,
@@ -117,11 +92,6 @@ def _encoder(submesh, *, layers, activation_layers):
 
 @pytest.mark.parametrize(("mesh_device", "submesh_shape"), _MESH, indirect=["mesh_device"])
 def test_text_only_path_is_unchanged(mesh_device, submesh_shape):
-    """Omitting the vision arguments and passing them explicitly as None are bit-identical.
-
-    This is the guarantee the Ideogram4 callers depend on: they never pass vision arguments, so the
-    text-only path must not depend on their presence.
-    """
     submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     torch.manual_seed(0)
     enc = _encoder(submesh, layers=4, activation_layers=(3,))
@@ -160,12 +130,6 @@ def test_vision_arguments_must_be_paired(mesh_device, submesh_shape, expect_erro
 
 @pytest.mark.parametrize(("mesh_device", "submesh_shape"), _MESH, indirect=["mesh_device"])
 def test_deepstack_is_applied_at_the_leading_layers(mesh_device, submesh_shape):
-    """Each deepstack feature lands after its own layer, indexed by list position.
-
-    Checked by effect rather than by inspection: a feature supplied for layer 0 only, versus for layers
-    0 and 1, must give different output -- and both must differ from no deepstack at all. A port that
-    applied them all at one layer, or dropped the tail, would pass a shape check.
-    """
     submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     torch.manual_seed(0)
     enc = _encoder(submesh, layers=4, activation_layers=(3,))
@@ -194,32 +158,9 @@ def test_deepstack_is_applied_at_the_leading_layers(mesh_device, submesh_shape):
     assert not torch.allclose(one, two, atol=1e-2), "the second deepstack feature had no effect"
 
 
-# --------------------------------------------------------------------------- tile boundaries
+HIDDEN_REAL = 5120  # real conditioner width
 
-# The real conditioner width, used by the production cases below so nothing about the row slicing is
-# being measured at a toy hidden size.
-HIDDEN_REAL = 5120
-
-# The two row geometries `fl2va` actually presents, plus the two edge placements. A keyframe is put
-# onto the target canvas before the processor sees it, so 1344x768 -> grid [1, 48, 84] -> 1008
-# `<|image_pad|>` slots, and the presentation is `"<Picture i>: "` (5 tokens) + the vision block + the
-# prompt. One anchor is seq 1054 with one run; `first`+`last` is seq 2067 with two.
-#
-# Both cross tile boundaries -- 31 and 63 of them. That is the hazard these cases exist for: a run
-# that fits inside one 32-row tile block never exercises it, so only production-length runs gate it.
-#
-# Why this is worth its own gate rather than an assumption: TILE row granularity is 32, an unaligned
-# cut there *asserted* in the DiT's packed-sequence path (fixed by assembling in ROW_MAJOR and
-# converting once), and `_scatter_rows` slices a TILE_LAYOUT tensor at arbitrary row offsets -- the
-# same hazard in a different module.
-#
-# The width is the real 5120 too, and the shapes are production-only: 448x448 is excluded because it
-# is not a canvas `resolve_canvas_size` produces, and a single-tile `seq=19` control is excluded
-# because it cannot exercise the boundary hazard -- what such a control does establish is recorded in
-# the `add` docstring below rather than re-run forever.
-#
-# The two `edge_*` geometries -- a run starting at row 0 and a run ending at the last row -- are the
-# slicing edge cases (no prefix / no suffix to concatenate), gated at bit-exact strength like the rest.
+# production keyframe runs cross 31/63 tile boundaries; runs inside one 32-row tile never exercise the slicing hazard
 _TILE_RUNS = [
     pytest.param(1054, [(5, 1008)], HIDDEN_REAL, id="production_keyframe_crosses_31"),
     pytest.param(2067, [(5, 1008), (1018, 1008)], HIDDEN_REAL, id="production_two_keyframes"),
@@ -231,18 +172,7 @@ _TILE_RUNS = [
 @pytest.mark.parametrize(("mesh_device", "submesh_shape"), _MESH, indirect=["mesh_device"])
 @pytest.mark.parametrize(("seq", "runs", "hidden"), _TILE_RUNS)
 def test_scatter_rows_is_exact_across_tile_boundaries(mesh_device, submesh_shape, seq, runs, hidden):
-    """`_scatter_rows` is BIT-EXACT for a replace, at every row geometry `fl2va` produces plus the
-    edge placements.
-
-    Gated on `torch.equal`, not PCC. A replace is pure data movement: it selects rows and concatenates
-    them, so there is no arithmetic to lose precision in and no numerical excuse for a mismatch. A PCC
-    bar on a data movement would pass a scatter that placed a few rows one tile off, which is exactly
-    the failure mode tile boundaries invite -- at these row counts even pcc=0.999 tolerates ~1 row in
-    1000 being wrong.
-
-    Inputs are pre-rounded to bf16 so the comparison is against what the device was actually given;
-    otherwise this would be measuring the host's fp32 -> bf16 cast, not the scatter.
-    """
+    """Replace is pure data movement, so torch.equal, not PCC (PCC would tolerate rows landing a tile off)."""
     submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     total = sum(length for _, length in runs)
     assert all(
@@ -250,8 +180,7 @@ def test_scatter_rows_is_exact_across_tile_boundaries(mesh_device, submesh_shape
     ), "every run should be unaligned on at least one end, or this gates nothing"
 
     torch.manual_seed(0)
-    # Pre-rounded through bf16: the device holds exactly these values, so any difference on readback is
-    # the scatter's and not the cast's.
+    # pre-rounded through bf16 so the comparison measures the scatter, not the host's fp32 -> bf16 cast
     base = torch.randn(1, seq, hidden).bfloat16().float()
     values = torch.randn(1, total, hidden).bfloat16().float()
 
@@ -267,8 +196,6 @@ def test_scatter_rows_is_exact_across_tile_boundaries(mesh_device, submesh_shape
 
     if not torch.equal(golden, actual):
         wrong = (golden != actual).any(dim=-1).nonzero().flatten().tolist()
-        # Report which tile row-block the damage starts in -- that is the diagnostic that separates
-        # "wrong rows selected" from "rows landed one tile off".
         raise AssertionError(
             f"{len(wrong)} of {seq} rows differ; first 10 at {wrong[:10]} "
             f"(tile row-blocks {sorted({r // ttnn.TILE_SIZE for r in wrong[:10]})}), runs={runs}"
@@ -278,24 +205,7 @@ def test_scatter_rows_is_exact_across_tile_boundaries(mesh_device, submesh_shape
 @pytest.mark.parametrize(("mesh_device", "submesh_shape"), _MESH, indirect=["mesh_device"])
 @pytest.mark.parametrize(("seq", "runs", "hidden"), _TILE_RUNS)
 def test_scatter_rows_add_is_exact_across_tile_boundaries(mesh_device, submesh_shape, seq, runs, hidden):
-    """The deepstack path (`add=True`) at the same geometries.
-
-    Untouched rows must be bit-exact -- they are a pure pass-through and an `add` has no business
-    perturbing them.
-
-    The written rows are compared at the bf16 floor instead, because they are not a data movement:
-    `ttnn.add` and torch do not round a bf16 sum identically. Two tempting stricter bars are both wrong
-    for the same reason; do not re-derive them: a 2**-8 relative tolerance is *half* a bf16 ulp (7
-    stored mantissa bits put the spacing at 2**-7 relative), and bit-exactness against a bf16-rounded
-    golden assumes both sides round the same way. Measured during bringup: a single-tile `seq=19`
-    control (an invented shape, so not in the suite) failed exactly as hard as the 2067-row case, which
-    a tile-boundary defect cannot do -- pinning the mismatch on rounding mode, not tiling.
-
-    A ~50 % differing fraction is expected for a rounding-mode difference, so unlike the rope-table
-    gate there is no bound on *how many* entries differ. The systematic-bias check below is what
-    replaces it: truncation instead of round-to-nearest would show up as a mean error of ~half an ulp
-    with a consistent sign, which a per-element magnitude bar alone would wave through.
-    """
+    """add=True: untouched rows bit-exact; written rows within 2 unbiased bf16 ulps (ttnn.add rounds differently)."""
     submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     total = sum(length for _, length in runs)
 
@@ -320,8 +230,7 @@ def test_scatter_rows_add_is_exact_across_tile_boundaries(mesh_device, submesh_s
         f"{int((~written).sum())} untouched rows differ"
     )
     expected, got = golden[:, written], actual[:, written]
-    # One bf16 ulp is 2**-7 of the value's binade; allow two so an entry sitting on a rounding
-    # boundary can fall either way.
+    # one bf16 ulp = 2**-7 of the binade; 2 ulps lets boundary entries fall either way
     ulp = torch.ldexp(torch.ones_like(expected), torch.floor(torch.log2(expected.abs().clamp(min=1e-30))).int() - 7)
     diff = (expected - got).abs()
     worst = (diff / ulp).max().item()

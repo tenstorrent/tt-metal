@@ -3,14 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Run VBench on an mp4 in a separate interpreter, and report the scores as JSON on stdout.
-
-VBench cannot share `python_env`. Installing it there would downgrade **numpy 2.2.6 -> 1.26.4** and
-**transformers 5.12.1 -> 4.33.2** (plus huggingface-hub, tokenizers and timm), which breaks `ttnn`'s
-numpy ABI and destroys the Qwen3-VL reference the text-encoder gate depends on.
-
-That is not a compromise, because VBench evaluates a *file*: it needs no mesh, no ttnn, and nothing
-the pipeline produced in memory. So generation runs in `python_env` and evaluation runs in an
-interpreter that owns its own numpy -- which is the right split regardless of the conflict.
+VBench cannot share `python_env`: it downgrades numpy and transformers, breaking ttnn's numpy
+ABI and the Qwen3-VL reference.
 
 Usage (from the eval venv):
     python vbench_runner.py <video.mp4> <dimension>[,<dimension>...] [--prompt "..."]
@@ -36,8 +30,7 @@ def main() -> int:
     parser.add_argument("--prompt", default=None)
     args = parser.parse_args()
 
-    # VBench 0.1.5 checkpoints hold typing.OrderedDict, which torch.load's weights_only=True
-    # default (PyTorch 2.6+) rejects.
+    # VBench 0.1.5 checkpoints hold typing.OrderedDict, which torch.load's weights_only default rejects.
     import typing
 
     import torch
@@ -64,7 +57,7 @@ def main() -> int:
             raw = json.load(handle)
 
     scores = {metric: value[0] for metric, value in raw.items()}
-    # The only thing on stdout that the caller parses. VBench itself is chatty on stderr.
+    # The only stdout line the caller parses; VBench itself is chatty on stderr.
     print("VBENCH_JSON " + json.dumps(scores), flush=True)
     return 0
 

@@ -2,26 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Reference-free sanity checks for a joint video + audio generation.
-
-`tests/models/wan2_2/common.py::check_output_sanity` covers the video side; this module adds the
-soundtrack and the relationship between the two streams. Every threshold here
-sits far below any real output, so these fire on genuine corruption and not on run-to-run noise --
-they answer "is this a real video with a real soundtrack, aligned to it", not "is it good".
-
-A/V sync is checked structurally rather than perceptually. MiniMax-H3 puts audio and video rows on
-one shared rotary clock (40 audio latents/s against 24 fps, i.e. 5/3 rotary units per frame), so the
-thing that can actually go wrong is a *duration* or *ordering* error in packing or decode -- a
-half-clip offset, a channel swap, a soundtrack for a different length of video. Cross-correlating
-an audio envelope against frame-to-frame motion energy would test something the model is not
-trained to guarantee (generated audio need not be causally tied to visible motion), so it is
-reported as a diagnostic and never asserted on.
-
-The artifact and metric helpers shared by the e2e gates (`write_artifacts`, `run_vbench`,
-`clip_prompt_alignment`, the warm-generation / timing-table / tier-5 / tier-6 scaffolding at the
-bottom of this module) also live here, so no test module has to import from another test module.
-Helpers used by a single gate live in that gate's file, not here.
-"""
+"""Reference-free A/V sanity checks plus the scaffolding shared by the MiniMax-H3 e2e gates.
+A/V sync is checked structurally (duration/ordering); envelope-vs-motion correlation is diagnostic only."""
 
 from __future__ import annotations
 
@@ -39,14 +21,7 @@ from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS
 
 
 def check_audio_sanity(audio, *, sampling_rate, expected_seconds, tolerance_seconds=0.05):
-    """Guard against a soundtrack that is silent, clipped, constant, or the wrong length.
-
-    Args:
-        audio: `(1, channels, samples)` or `(channels, samples)` float waveform.
-        sampling_rate: samples per second.
-        expected_seconds: duration the video covers.
-        tolerance_seconds: allowed disagreement, default one 24 fps frame's worth (~0.042 s) rounded up.
-    """
+    """Guard against a soundtrack that is silent, clipped, constant, or the wrong length."""
     if isinstance(audio, torch.Tensor):
         audio = audio.detach().cpu().numpy()
     audio = np.asarray(audio)
@@ -69,12 +44,10 @@ def check_audio_sanity(audio, *, sampling_rate, expected_seconds, tolerance_seco
     rms = float(np.sqrt((audio.astype(np.float64) ** 2).mean()))
     assert peak > 1e-3, f"soundtrack is silent (peak {peak:.2e})"
     assert rms > 1e-4, f"soundtrack is near-silent (rms {rms:.2e})"
-    # A decoder stuck on a constant, or one channel dead.
     for index in range(channels):
         channel_std = float(audio[index].std())
         assert channel_std > 1e-4, f"channel {index} is constant (std {channel_std:.2e})"
-    # Hard clipping across most of the waveform means the denormalization is wrong, not that the mix
-    # is loud. A real waveform touches the rails rarely if at all.
+    # Widespread clipping means the denormalization is wrong, not that the mix is loud.
     clipped = float((np.abs(audio) >= 0.999).mean())
     assert clipped < 0.01, f"{clipped:.1%} of samples are at full scale; suspect a scaling error"
 
@@ -85,18 +58,8 @@ def check_audio_sanity(audio, *, sampling_rate, expected_seconds, tolerance_seco
 
 
 def check_av_sync(frames, audio, *, sampling_rate, fps, tolerance_seconds=0.05):
-    """The two streams must describe the same span of time, and the pairing must not be degenerate.
-
-    Asserted:
-      * video and audio durations agree within `tolerance_seconds` (default ~1 frame).
-      * the two stereo channels are not identical -- a mono-duplicated soundtrack means
-        `unpack_audio_tokens` collapsed the channel-major layout.
-      * neither stream is empty.
-
-    Reported only (see the module docstring): the lag at which audio envelope energy best correlates
-    with frame-to-frame motion energy. Useful for spotting a gross half-clip offset by eye; not a
-    pass/fail criterion, because generated audio is not required to track visible motion.
-    """
+    """Durations must agree and stereo channels must differ -- identical channels mean
+    `unpack_audio_tokens` collapsed the channel-major layout. Envelope-motion lag is logged only."""
     if isinstance(frames, torch.Tensor):
         frames = frames.detach().cpu().numpy()
     if isinstance(audio, torch.Tensor):
@@ -117,9 +80,6 @@ def check_av_sync(frames, audio, *, sampling_rate, fps, tolerance_seconds=0.05):
     )
 
     if audio.shape[0] == 2:
-        # Channel-major packing means the left channel is the first block of rows and the right the
-        # second. Getting that wrong duplicates one channel, which is inaudible in a mono playback
-        # check but is a real unpacking bug.
         assert not np.allclose(audio[0], audio[1]), "stereo channels are identical; suspect audio row unpacking"
 
     # Diagnostic only.
@@ -150,22 +110,7 @@ def check_av_sync(frames, audio, *, sampling_rate, fps, tolerance_seconds=0.05):
 
 
 def check_spatial_seams(frames, *, vertical_boundaries, horizontal_boundaries, max_ratio=2.0):
-    """Gradient energy *at* the VAE's tile boundaries against the gradient everywhere else.
-
-    The video VAE decodes spatial tiles independently and cross-fades the overlaps on the host. A
-    wrong blend extent, a wrong tile origin, or per-tile rather than per-image normalization
-    statistics all concentrate their error on those boundary columns and rows -- and a whole-frame
-    mean or PCC averages it straight out, which is exactly the rubric's first entry.
-
-    ~1.0 means a boundary column looks like any other column. A real seam runs several times that,
-    because a visible edge is a large gradient in a place the image did not put one.
-
-    Args:
-        frames: `(F, H, W)` luma or `(F, H, W, 3)`.
-        vertical_boundaries: interior tile start columns, in pixels.
-        horizontal_boundaries: interior tile start rows, in pixels.
-        max_ratio: fail above this. Default 2.0 against ~1.0 measured.
-    """
+    """Gradient energy at the VAE's tile boundaries vs everywhere else (~1.0 = no seam; whole-frame means hide seams)."""
     if isinstance(frames, torch.Tensor):
         frames = frames.detach().cpu().numpy()
     frames = np.asarray(frames).astype(np.float32)
@@ -176,8 +121,7 @@ def check_spatial_seams(frames, *, vertical_boundaries, horizontal_boundaries, m
         inside = np.array([b for b in boundaries if 1 <= b < len(gradient) - 1], dtype=int)
         if not len(inside):
             return float("nan")
-        # Exclude a couple of pixels either side from the baseline, so a smeared seam cannot
-        # inflate the denominator it is being compared against.
+        # Exclude +-2 px around each boundary so a smeared seam cannot inflate its own baseline.
         baseline = np.ones(len(gradient), dtype=bool)
         for b in inside:
             baseline[max(0, b - 2) : b + 3] = False
@@ -204,12 +148,7 @@ def check_spatial_seams(frames, *, vertical_boundaries, horizontal_boundaries, m
 
 
 def log_spectral_flatness(audio, *, sampling_rate, num_bands=64):
-    """Report a coarse log-spectrum shape, to catch a soundtrack that is noise or a single tone.
-
-    Not asserted as a quality bar -- there is no reference to compare a *generated* soundtrack
-    against, so what this provides is a number that moves visibly when the decoder breaks: white
-    noise flattens the spectrum toward 1.0, a stuck tone drives it toward 0.
-    """
+    """Log-spectrum shape, logged only: white noise drives flatness toward 1.0, a stuck tone toward 0."""
     if isinstance(audio, torch.Tensor):
         audio = audio.detach().cpu().numpy()
     audio = np.asarray(audio)
@@ -223,8 +162,7 @@ def log_spectral_flatness(audio, *, sampling_rate, num_bands=64):
     if not frames:
         return {"flatness": float("nan")}
     spectrum = np.abs(np.fft.rfft(np.stack(frames) * np.hanning(window), axis=-1)) ** 2
-    power = spectrum.mean(axis=0)[1:]  # drop DC
-    # Geometric over arithmetic mean: Wiener entropy / spectral flatness.
+    power = spectrum.mean(axis=0)[1:]
     flatness = float(np.exp(np.log(power + 1e-20).mean()) / (power.mean() + 1e-20))
     band_edges = np.linspace(0, len(power), num_bands + 1).astype(int)
     bands = np.array([power[a:b].mean() for a, b in zip(band_edges[:-1], band_edges[1:]) if b > a])
@@ -236,7 +174,6 @@ def log_spectral_flatness(audio, *, sampling_rate, num_bands=64):
 
 
 def _ffmpeg():
-    """An ffmpeg executable: the system binary, else imageio-ffmpeg's bundled static build."""
     exe = shutil.which("ffmpeg")
     if exe:
         return exe
@@ -248,11 +185,6 @@ def _ffmpeg():
 
 
 def write_artifacts(frames, audio, sampling_rate, directory: Path, stem: str = "t2va"):
-    """Write the video, the soundtrack, and a muxed mp4. Returns the paths that were produced.
-
-    `stem` names the files; each gate passes its own (the default is the t2va gate's) so the tasks'
-    artifacts coexist in one directory rather than overwriting each other.
-    """
     import wave
 
     paths = {}
@@ -335,7 +267,6 @@ def write_artifacts(frames, audio, sampling_rate, directory: Path, stem: str = "
 
 
 def probe_streams(path: Path) -> dict:
-    """Per-stream duration from the written container, via ffprobe if it is available."""
     exe = shutil.which("ffprobe")
     if exe is None:
         return {}
@@ -362,8 +293,7 @@ def probe_streams(path: Path) -> dict:
     return streams
 
 
-# Only reached when ffprobe is unavailable: the production 768x1344 working point every e2e gate
-# runs at.
+# Only reached when ffprobe is unavailable.
 _FALLBACK_HEIGHT = 768
 _FALLBACK_WIDTH = 1344
 
@@ -406,13 +336,7 @@ DEFAULT_VBENCH_PYTHON = "/data/kevinmi/vbench_env/bin/python"
 
 
 def run_vbench(video: Path, prompt: str, dimensions) -> dict[str, float]:
-    """Score `video` by running VBench in its own interpreter, and return the dimension scores.
-
-    VBench cannot live in `python_env`: it pins numpy < 2 and transformers 4.33, so installing it
-    would downgrade numpy 2.2.6 -> 1.26.4 and transformers 5.12.1 -> 4.33.2, breaking `ttnn`'s numpy
-    ABI and the Qwen3-VL reference the text-encoder gate depends on. It evaluates a *file* and needs
-    nothing from this process, so it runs out-of-process instead of not at all.
-    """
+    """Run VBench in its own interpreter ($MINIMAX_H3_VBENCH_PYTHON): it pins numpy < 2 / transformers 4.33."""
     interpreter = os.environ.get(VBENCH_VENV_ENV, DEFAULT_VBENCH_PYTHON)
     if not os.path.isfile(interpreter):
         pytest.skip(
@@ -440,11 +364,7 @@ def run_vbench(video: Path, prompt: str, dimensions) -> dict[str, float]:
 
 
 def clip_prompt_alignment(frames: np.ndarray, prompt: str, num_frames: int = 8) -> dict[str, float]:
-    """Mean CLIP similarity between the prompt and evenly-spaced frames, x100.
-
-    Uses `open_clip` (already in `python_env`) over the frames this test already decoded, so unlike
-    the wan2.2 and LTX versions it needs no `decord`.
-    """
+    """Mean CLIP similarity between the prompt and evenly-spaced frames, x100."""
     from PIL import Image
 
     from ...dataset_eval.clip_encoder import CLIPEncoder
@@ -456,12 +376,7 @@ def clip_prompt_alignment(frames: np.ndarray, prompt: str, num_frames: int = 8) 
 
 
 def temporal_seam_score(frames: np.ndarray, period: int) -> float:
-    """Ratio of inter-frame delta *at* chunk boundaries to the delta everywhere else.
-
-    The video VAE decodes in temporal chunks and cross-fades them on the host. If that stitching is
-    wrong, the discontinuity concentrates at multiples of the chunk's pixel-frame count -- which a
-    whole-video mean delta averages away entirely. ~1.0 means boundaries look like ordinary frames.
-    """
+    """Inter-frame delta at temporal chunk boundaries vs elsewhere (~1.0 = no seam)."""
     deltas = np.abs(np.diff(frames.astype(np.float32), axis=0)).mean(axis=(1, 2))
     if len(deltas) < 2 * period:
         return float("nan")
@@ -474,36 +389,16 @@ def temporal_seam_score(frames: np.ndarray, period: int) -> float:
 
 
 # ------------------------------------------------------------------ shared e2e gate scaffolding
-#
-# The pieces every pipeline e2e gate (t2va / fl2va / ref2va) runs the same way. Per-pipeline
-# judgement -- gate values, header wording, which tiers run -- stays at the call sites; what lives
-# here is only the mechanics all three had verbatim.
 
 WEIGHTS_ENV = "MINIMAX_H3_DIFFUSERS_DIR"
 DEFAULT_WEIGHTS = "/data/cglagovich/MiniMax-H3-diffusers"
 
-# Dense: a moving camera, a reflective wet surface, several independent light sources at
-# different colour temperatures, volumetric haze, and foreground/background motion at different depths.
-# Those are the things a video model is most likely to get wrong, and they are also what the artifact
-# rubric reads best -- banding shows in the haze gradients, seams show in the reflections, and flicker
-# shows in the neon.
-# The gated prompt and the t2va tier-6 thresholds are a **matched pair**. Both were calibrated
-# together on this prompt; swapping one without recalibrating the other breaks the gate. Measured
-# on it: CLIP 37.37, VBench imaging_quality 0.6896.
-#
-# `imaging_quality` in particular is prompt-dependent, not just model-dependent: it is a no-reference
-# IQA model that rewards sharp, well-lit frames. A dark rain-at-night scene scored **0.4884** against
-# this same 0.64 bar while looking entirely correct. So a showcase prompt belongs in a
-# manual run, not in this constant.
-#
-# Exported from here so the fl2va gate, whose keyframe is frame 0 of the calibrated t2va generation,
-# uses the *identical* string by import rather than by a copy that can drift.
+# Matched pair with the tier-6 bars (CLIP 37.37, imaging_quality 0.6896); imported by fl2va so it cannot drift.
 CALIBRATED_FOX_PROMPT = (
     "A red fox trots across a snowy field at dawn, its breath visible in the cold air. "
     "The low sun throws long blue shadows behind it, and loose snow lifts from each footfall."
 )
 
-# One truthy set for the RUN_CLIP / RUN_VBENCH switches, so every gate parses them identically.
 _ENV_TRUTHY = ("1", "true", "True")
 
 
@@ -518,11 +413,7 @@ def vbench_gate_enabled() -> bool:
 
 
 def weights_dir(*required_subdirs: str, default: str = DEFAULT_WEIGHTS) -> Path:
-    """The diffusers snapshot directory; `pytest.skip`s when it or a required subdir is missing.
-
-    `required_subdirs` are the partitions the caller's gate actually loads (the ref2va gate
-    requires `transformer_ref`, and passes `default=""` because it has no default snapshot).
-    """
+    """The snapshot dir from MINIMAX_H3_DIFFUSERS_DIR; skips when it or a required partition is missing."""
     directory = Path(os.environ.get(WEIGHTS_ENV, default))
     if not directory.is_dir():
         pytest.skip(f"no MiniMax-H3 snapshot at {directory}; set {WEIGHTS_ENV}")
@@ -540,14 +431,7 @@ def artifact_dir(env: str, default_name: str) -> Path:
 
 
 def run_warm_generation(pipeline, prompt: str, *, seed: int, **gen_kwargs):
-    """One full warmup at the real shape, then the timed generation, asserted to be warm.
-
-    `gen_kwargs` is everything that shapes the request (num_frames/height/width/steps, plus
-    keyframes or references), passed identically to `pipeline.warmup` and to the timed call --
-    every program in the 50-block stack is keyed on the padded packed length, so a warmup at any
-    other shape warms nothing. The padded-length agreement is asserted rather than assumed;
-    it is what makes `pipeline.last_timings` a fully-warm measurement.
-    """
+    """Warmup then the timed generation with identical kwargs; asserts padded-length agreement (programs are keyed on it)."""
     pipeline.warmup(prompt=prompt, **gen_kwargs)
     warm_padded_len = pipeline.last_padded_len
 
@@ -561,13 +445,7 @@ def run_warm_generation(pipeline, prompt: str, *, seed: int, **gen_kwargs):
 
 
 def log_timing_table(pipeline, label: str, num_forwards: int, video_seconds: float, expected_total_s=None, extra=""):
-    """The MEASUREMENT block: per-stage rows, total, per-forward, realtime factor.
-
-    `extra` is spliced into the header right after "2 links" and carries everything that
-    differs per gate -- geometry, anchors, `l1_small_size` -- so those meaningful differences
-    stay at the call site instead of being regenerated here. `expected_total_s`, when given,
-    asserts the total against the gate's did-something-collapse bar. Returns the total.
-    """
+    """The MEASUREMENT block; `expected_total_s`, when given, asserts the total. Returns the total."""
     rows = pipeline.last_timings
     total = sum(seconds for _, seconds in rows)
     logger.info(
@@ -592,12 +470,7 @@ def log_timing_table(pipeline, label: str, num_forwards: int, video_seconds: flo
 
 
 def to_uint8_frames(output) -> np.ndarray:
-    """`output.video` `(1, 3, F, H, W)` in [0, 1] -> `(F, H, W, 3)` uint8, which is what the checkers take.
-
-    Clamps then rounds before the uint8 cast: a plain `.astype(np.uint8)` truncates and, worse,
-    *wraps around* on any value that strays outside [0, 1], turning a barely-out-of-range white
-    pixel into a black one.
-    """
+    """`(1, 3, F, H, W)` [0, 1] -> `(F, H, W, 3)` uint8; clamp + round first -- a bare astype wraps out-of-range values."""
     video = output.video
     assert video.ndim == 5 and video.shape[0] == 1, f"unexpected video shape {tuple(video.shape)}"
     frames = video[0].permute(1, 2, 3, 0).clamp(0, 1).mul(255).round().to(torch.uint8)
@@ -605,11 +478,7 @@ def to_uint8_frames(output) -> np.ndarray:
 
 
 def check_written_file(paths: dict, expected_frames: int, seam_period: int = 17):
-    """Tier 5: gate the written *file*, not just the tensor. No-op when ffmpeg produced no mp4.
-
-    Probes the container (both streams present, muxed A/V skew), re-decodes it (frame count), and
-    scores the temporal seam at the video VAE's chunk period.
-    """
+    """Gate the written *file* (streams, A/V skew, frame count, temporal seam); silently no-ops without an mp4."""
     if "mp4" not in paths:
         return
     streams = probe_streams(paths["mp4"])
@@ -639,12 +508,7 @@ def check_written_file(paths: dict, expected_frames: int, seam_period: int = 17)
 
 
 def gate_clip(frames: np.ndarray, prompt: str, threshold: float, label: str, enabled=None):
-    """The CLIP prompt-alignment gate. May `pytest.skip` when `open_clip` is missing.
-
-    `enabled=None` reads RUN_CLIP (default on); a caller that computes its own switch (the t2va
-    gate forces tier 6 off under a prompt override) passes it explicitly. `threshold` stays at
-    the call site because the bars are calibrated per pipeline.
-    """
+    """CLIP prompt-alignment gate. `enabled=None` reads RUN_CLIP (default on); skips if `open_clip` is missing."""
     if enabled is None:
         enabled = clip_gate_enabled()
     if not enabled:
@@ -664,13 +528,7 @@ def gate_clip(frames: np.ndarray, prompt: str, threshold: float, label: str, ena
 
 
 def gate_vbench(paths: dict, prompt: str, thresholds: dict, label: str, enabled=None, skip_without_mp4=False):
-    """The VBench gate, with the per-dimension failure list in the assert message.
-
-    `enabled=None` reads RUN_VBENCH (default on). A requested dimension with no returned score is
-    an *ungated* dimension, not a pass, so it fails. `skip_without_mp4` chooses what a missing
-    muxed mp4 means: the t2va gate fails (its own ffmpeg step should have produced it), the ref2va
-    gate skips.
-    """
+    """VBench gate (RUN_VBENCH, default on); a requested dimension with no returned score FAILS, never silently passes."""
     if enabled is None:
         enabled = vbench_gate_enabled()
     if not enabled:

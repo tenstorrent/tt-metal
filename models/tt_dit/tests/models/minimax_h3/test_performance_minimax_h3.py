@@ -2,44 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Device performance of one MiniMax-H3 transformer block at realistic 768P sequence lengths.
-
-Fully-warm pipeline-latency measurements (`t2va`, `fl2va`, `ref2va`) live in the e2e gates --
-`test_pipeline_minimax_h3.py`, `test_pipeline_fl2va_minimax_h3.py`,
-`test_pipeline_ref2va_minimax_h3.py` -- where one pipeline construction serves both the
-warmup-then-measure timing and the quality checks. This file holds the cheap block-level test that
-produces the duration-scaling data (5 s / 10 s / 15 s): the packed sequence length is the only thing
-that changes with duration, and one block under Tracy shows how every one of the 50 blocks scales.
-
-Run under the Tracy device profiler, which emits the per-op CSV this test exists to produce:
-
-    scripts/run_safe_pytest.sh --profile \
-        models/tt_dit/tests/models/minimax_h3/test_performance_minimax_h3.py -k transformer_block
-
-The block runs twice per parameter: once to compile and populate the program cache, then once warm.
-The warm iteration is bracketed by `signpost("start")` / `signpost("stop")`, the convention the rest of
-tt_dit uses (see the LTX block test), so the report tool can isolate exactly it:
-
-    tt-perf-report <csv> --start-signpost start --end-signpost stop
-
-Both signposts matter. Without the closing one the analysed region runs to the end of the file and
-folds the output readback into the measurement.
-
-IMPORTANT: one profiled run yields one parameter's worth of ops. Running all three durations under a
-single `--profile` invocation yields a CSV containing only the first (verified against the recorded
-tensor shapes), so profile one duration at a time with `-k`:
-
-    for d in 5s_768p 10s_768p 15s_768p; do
-        scripts/run_safe_pytest.sh --profile <this file> -k $d
-    done
-
-No torch reference is run and no PCC is checked -- correctness lives in the transformer-block
-section of `test_transformer_minimax_h3.py`. This test only asserts the output is the right shape
-and finite, so that a broken run fails instead of quietly producing a CSV of nonsense.
-
-NOTE: `--profile` makes the tracy wrapper mask pytest's exit code, so the run reports PASS as long as
-profiling completed. Check the logged shapes and the CSV, not just the exit status.
-"""
+"""Device perf of one MiniMax-H3 transformer block at 768P; run under `scripts/run_safe_pytest.sh --profile`,
+then `tt-perf-report <csv> --start-signpost start --end-signpost stop`. Profile one duration at a time with
+`-k`: a multi-parameter profiled run yields a CSV containing only the first parameter's ops."""
 
 from __future__ import annotations
 
@@ -75,28 +40,18 @@ from .common import (
     upload_rope,
 )
 
-# Real MiniMax-H3 block dims come from `REAL_BLOCK_CONFIG` in `common.py`, shared with the
-# correctness tests; only the ones used outside the constructors are aliased here.
 HIDDEN_SIZE = REAL_BLOCK_CONFIG["hidden_size"]
 HEAD_DIM = REAL_BLOCK_CONFIG["attention_head_dim"]
 TIME_EMBED_DIM = REAL_BLOCK_CONFIG["time_embed_dim"]
 
 PATCH_SIZE = (1, 2, 2)
-# prod(spatial_downsample_factors) from the video VAE config: [2, 2, 2, 2, 1, 1].
-VAE_SPATIAL_DOWNSAMPLE = 16
-# Representative Qwen3-VL prompt length; the real value is prompt-dependent.
+VAE_SPATIAL_DOWNSAMPLE = 16  # prod(spatial_downsample_factors) from the video VAE config
 NUM_TEXT_TOKENS = 512
-# 768P at 16:9. resolve_canvas_size caps the area at 768 * 1344, so this is the widest 768P canvas.
 ASPECT = (16, 9)
 
 
 def _packed_sizes(duration_s: float) -> dict:
-    """Token counts for `duration_s` seconds of 768P video, from the pipeline's own helpers.
-
-    Derived rather than hardcoded: frame alignment (`17n + 5`), the VAE's `5n + 2` latent
-    frame count, the 40 Hz audio latent grid and the canvas area cap all come from `packing.py`, so
-    these stay correct if the pipeline's constants change.
-    """
+    """Token counts for `duration_s` seconds of 768P video, derived from the pipeline's own packing helpers."""
     height, width = resolve_canvas_size(*ASPECT)
     tokens_per_latent_frame = (height // VAE_SPATIAL_DOWNSAMPLE // PATCH_SIZE[1]) * (
         width // VAE_SPATIAL_DOWNSAMPLE // PATCH_SIZE[2]
@@ -155,22 +110,17 @@ def test_minimax_h3_transformer_block_perf(
     )
 
     num_timesteps = 2
-    # Same layout as the correctness test: text, then audio, then video, with the first video frame
-    # at timestep 0 (clean conditioning) and everything else at timestep 1. The values do not affect
-    # device timing, but keeping them realistic avoids degenerate index patterns.
     position_ids, tags, timestep_indices = packed_layout(
         sizes["num_text"], sizes["num_audio"], sizes["num_video"], (sizes["grid_h"], sizes["grid_w"]), padded_len
     )
     adaln_indices = timestep_indices * MINIMAX_H3_MODALITY_NUM + tags.clamp(min=0)
 
-    # The reference block is built only to source a correctly-keyed random state dict; its forward is
-    # never called. Weight *values* do not affect device timing.
+    # Built only to source a correctly-keyed random state dict; its forward is never called.
     torch_block = TorchMiniMaxH3Block(**REAL_BLOCK_CONFIG).to(torch.float32)
 
     rope = MiniMaxH3RotaryPosEmbed(rope_freq_dim=ROPE_FREQ_DIM, rope_theta=ROPE_THETA)
     with torch.no_grad():
         rope_cos, rope_sin = rope(position_ids)
-    # The fused RoPE consumes head_dim-wide tables in the interleaved layout.
     rope_cos, rope_sin = prepare_rope_tables(rope_cos, rope_sin, HEAD_DIM)
 
     ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
@@ -209,8 +159,7 @@ def test_minimax_h3_transformer_block_perf(
     def run_block() -> ttnn.Tensor:
         out = tt_block(
             tt_spatial,
-            # The true (unpadded) length: ring attention masks the pad tail via logical_n.
-            N=seq_len,
+            N=seq_len,  # unpadded length: ring attention masks the pad tail via logical_n
             temb=tt_temb,
             adaln_indices=tt_adaln,
             rope_cos=tt_rope_cos,
@@ -233,7 +182,6 @@ def test_minimax_h3_transformer_block_perf(
         padded_len // sp_factor,
         HIDDEN_SIZE // tp_factor,
     ), f"unexpected output shape {tuple(tt_out.shape)}"
-    # Cheap guard that the profiled run actually computed something, without a reference.
     local = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
     assert torch.isfinite(local).all(), "block output contains NaN or Inf"
     logger.info(f"output {tuple(tt_out.shape)}, local shard std={local.std().item():.4f}")

@@ -2,14 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-# =============================================================================
 # Shared helpers and constants for the Qwen3-VL encoder tests.
-#
-# Deliberately plain functions and module constants, NOT pytest fixtures:
-# several helpers embed skip conditions (`skip_if_sp_misaligned`) or must run
-# before the parametrize machinery (`VISION_PARAMS`), and hiding them behind
-# fixtures would obscure both.
-# =============================================================================
 
 import contextlib
 
@@ -24,17 +17,10 @@ from ....parallel.config import EncoderParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils.tensor import bf16_tensor
 
-# --------------------------------------------------------------------- device params
-
-# Each parallel config carries its own `device_params`, because fabric is not universally
-# safe to request: `FABRIC_1D` on a 1x1 mesh has no remote ethernet partner, so router init
-# fails the handshake and times out ("Fabric Router Sync: Timeout"). The parallel configs
-# need it for their CCL all-gathers; a single-device mesh has no CCL at all.
+# FABRIC_1D on a 1x1 mesh has no ethernet partner and times out router init, so fabric is per-config, CCL-only.
 L1_SMALL = 32768
 FABRIC = {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": L1_SMALL}
 NO_FABRIC = {"l1_small_size": L1_SMALL}
-
-# --------------------------------------------------------------------- vision tower geometry
 
 # MiniMax-H3's Qwen3-VL vision tower (also Qwen3-VL-32B's).
 HIDDEN_SIZE = 1152
@@ -49,11 +35,6 @@ HIDDEN_ACT = "gelu_pytorch_tanh"
 
 
 def vision_config(depth, **overrides):
-    """`Qwen3VLVisionConfig` at the production dimensions; `depth` is what the tests vary.
-
-    `overrides` land on the config verbatim (the tower test passes its
-    `deepstack_visual_indexes`; the block test keeps the single-tap default).
-    """
     kwargs = dict(
         depth=depth,
         hidden_size=HIDDEN_SIZE,
@@ -73,14 +54,6 @@ def vision_config(depth, **overrides):
     return transformers.Qwen3VLVisionConfig(**kwargs)
 
 
-# --------------------------------------------------------------------- vision parallel configs
-
-# `single` is the replicated reference. The parallel configs shard the module itself: TP fractures
-# the 16 heads (2/device at TP=8), the MLP's intermediate and the merger; SP splits the patch rows
-# and runs ring SDPA. TP and SP must occupy different mesh axes, so the 8x4 system covers TP=8 x SP=4.
-#
-# Only TP=8 is deployed, with SP either off or 4, so the configs are named for both factors. SP alone
-# (TP=1) is not a configuration this model will ever run in and is not covered.
 VISION_MESH = [
     pytest.param((1, 1), (1, 1), None, None, 1, NO_FABRIC, id="single"),
     pytest.param((8, 4), (8, 4), 0, None, 2, FABRIC, id="tp8_sp1"),
@@ -94,7 +67,6 @@ VISION_PARAMS = pytest.mark.parametrize(
 
 
 def resolve_parallel(submesh, tp_axis, sp_axis, num_links):
-    """`(parallel_config, ccl_manager)` for the vision modules, or `(None, None)` when replicated."""
     if tp_axis is None and sp_axis is None:
         return None, None
     shape = tuple(submesh.shape)
@@ -106,9 +78,7 @@ def resolve_parallel(submesh, tp_axis, sp_axis, num_links):
 
 
 def skip_if_sp_misaligned(total, submesh, sp_axis):
-    """Ring SDPA needs `N_local_q % 32 == 0` -- a misaligned grid is a property of the model's
-    geometry (the shape cannot be sequence-parallel at this factor), not of the port, so it skips
-    rather than fails."""
+    """Ring SDPA needs N_local_q % 32 == 0; misalignment is model geometry, not a port bug, so skip."""
     if sp_axis is None:
         return
     sp = tuple(submesh.shape)[sp_axis]
@@ -117,21 +87,13 @@ def skip_if_sp_misaligned(total, submesh, sp_axis):
 
 
 def sp_shard(x, submesh, sp_axis):
-    """Upload row-sharded on the SP axis (replicated when SP is off)."""
     if sp_axis is None:
         return bf16_tensor(x, device=submesh)
     return bf16_tensor(x, device=submesh, mesh_axis=sp_axis, shard_dim=0)
 
 
-# --------------------------------------------------------------------- text encoder helpers
-
-
 @contextlib.contextmanager
 def capture_layer_outputs(lm, layers):
-    """Forward hooks capturing each listed layer's output hidden states, keyed by layer index.
-
-    Run the reference forward inside the `with`; the hooks are removed on exit.
-    """
     caps: dict[int, torch.Tensor] = {}
     handles = [
         lm.layers[i].register_forward_hook(
@@ -147,12 +109,7 @@ def capture_layer_outputs(lm, layers):
 
 
 def hf_rope_params(cfg):
-    """`(rope_theta, mrope_section)` from an HF Qwen3-VL text config.
-
-    In transformers >=5, `rope_theta` lives inside `rope_parameters` and there is no top-level
-    attribute, so it must not be used as a `dict.get` default: Python evaluates defaults eagerly, and
-    `cfg.rope_theta` raises AttributeError on a Qwen3-VL config before `.get` ever runs.
-    """
+    """transformers>=5 has no top-level cfg.rope_theta, so it must not be an (eagerly evaluated) dict.get default."""
     rope_params = getattr(cfg, "rope_parameters", None) or cfg.rope_scaling
     mrope_section = rope_params["mrope_section"]
     rope_theta = rope_params["rope_theta"] if "rope_theta" in rope_params else cfg.rope_theta
@@ -160,11 +117,6 @@ def hf_rope_params(cfg):
 
 
 def encoder_from_hf_config(cfg, **overrides):
-    """`Qwen3VlTextEncoder` built from an HF `Qwen3VLTextConfig`.
-
-    `overrides` (e.g. `device`, `head_dim`, `activation_layers`, `parallel_config`, `ccl_manager`,
-    `is_fsdp`) pass through to the constructor and win over the config-derived values.
-    """
     rope_theta, mrope_section = hf_rope_params(cfg)
     kwargs = dict(
         vocab_size=cfg.vocab_size,

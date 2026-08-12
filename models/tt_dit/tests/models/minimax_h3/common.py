@@ -18,8 +18,7 @@ import ttnn
 from ....utils.tensor import from_torch
 from ....utils.test import ring_params_req_exact_devices
 
-# The VAE's fixed work units: the encoder always runs (17, 256, 256) tiles and the decoder
-# always (7, 16, 16) latent chunks, so every gate that builds one uses these shapes.
+# Fixed VAE work units: encoder (17, 256, 256) tiles, decoder (7, 16, 16) latent chunks.
 TILE = 256
 CLIP_FRAMES = 17
 LATENT_TILE = 16
@@ -48,7 +47,6 @@ def _reference_class(name: str):
 
 
 def random_encoder_state(config: dict) -> dict:
-    """State dict from a randomly-initialised reference encoder -- fast, and enough for timing."""
     cls = _reference_class("MiniMaxH3VideoEncoder3d")
     module = cls(
         in_channels=3,
@@ -65,11 +63,6 @@ def random_encoder_state(config: dict) -> dict:
 
 
 def random_decoder_state(config: dict, *, num_layers: int | None = None) -> dict:
-    """Likewise for the 36-layer decoder: 2.4 B random parameters beat a 10.4 GB read.
-
-    ``num_layers`` overrides the config depth, for gates that only need the ops exercised
-    rather than the full 2.4 B parameters materialised.
-    """
     cls = _reference_class("MiniMaxH3VideoViTDecoder3d")
     module = cls(
         in_channels=config["latent_channels"],
@@ -89,12 +82,7 @@ def random_decoder_state(config: dict, *, num_layers: int | None = None) -> dict
 
 
 def psnr(reference: torch.Tensor, test: torch.Tensor) -> float:
-    """Peak signal-to-noise ratio in dB, with the peak taken from the reference's own range.
-
-    The roundtrip quality gates use this rather than PCC alone: PCC per component says the
-    port matches the reference, but a faint vignette or a dull high end sails through a
-    0.99 PCC and shows up as a PSNR drop.
-    """
+    """PSNR in dB, with the peak taken from the reference's own range."""
     mse = torch.mean((reference.float() - test.float()) ** 2).item()
     if mse == 0.0:
         return float("inf")
@@ -103,13 +91,7 @@ def psnr(reference: torch.Tensor, test: torch.Tensor) -> float:
 
 
 def create_fractal_image(width: int, height: int) -> Image.Image:
-    """A Mandelbrot escape-time image, the repo's existing convention for an I2V seed.
-
-    Copied from `tests/models/wan2_2/test_pipeline_wan_i2v.py`, and it is the right tool for the
-    *discriminating* case for one reason: a fractal is content the model would never generate for this
-    prompt, so "decoded frame 0 resembles the keyframe" cannot be satisfied by a pipeline that ignores
-    the keyframe. See `test_fl2va_follows_the_keyframe`.
-    """
+    """Mandelbrot I2V seed: content the model would never generate, so a pipeline that ignores the keyframe cannot pass."""
     c = np.linspace(-2.0, 1.0, width)[None, :] + 1j * np.linspace(-1.5, 1.5, height)[:, None]
     z = np.zeros_like(c)
     img = np.zeros(c.shape, dtype=np.uint8)
@@ -120,35 +102,15 @@ def create_fractal_image(width: int, height: int) -> Image.Image:
 
 
 def randomize_norm_weights(module: torch.nn.Module, *, scale: float = 0.5) -> torch.nn.Module:
-    """Give every `nn.RMSNorm` in `module` a non-trivial affine weight, in place.
-
-    `nn.RMSNorm` initialises `weight` to all ones, so a reference model built with random weights
-    (rather than loaded from the checkpoint) has an *identity* affine in every norm. That makes the
-    norm weights invisible to a PCC comparison: a port that loaded the wrong norm weight, swapped two
-    of them, or never loaded them at all would still match the reference exactly.
-
-    MiniMax-H3 is full of RMSNorms -- `norm1`, `norm2`, the per-head `norm_q`/`norm_k`, the refiner's
-    `final_norm` -- so this blind spot covers most of the model's non-matmul parameters. Measured on
-    the token refiner at real dims, randomizing the norms moves "norm weights never loaded" from PCC
-    1.000000 (undetectable) to 0.887, and "norm1/norm2 swapped" from 1.000000 to 0.986.
-
-    Call this on the torch reference *before* taking its `state_dict`, so the TT module under test
-    loads the same non-trivial values.
-    """
+    """Randomize every `nn.RMSNorm` affine in place, BEFORE taking `state_dict`: all-ones norms make norm-weight loading invisible to PCC."""
     for submodule in module.modules():
         if isinstance(submodule, torch.nn.RMSNorm) and submodule.weight is not None:
             submodule.weight.data = 1.0 + scale * torch.randn_like(submodule.weight.data)
     return module
 
 
-# ------------------------------------------------------------ transformer test fixtures
-#
-# Shared by `test_transformer_minimax_h3.py` (correctness) and `test_performance_minimax_h3.py`
-# (device perf), so the mesh parametrization, the real block config and the packed-sequence
-# layout cannot drift between the two files.
+# ---- transformer test fixtures, shared by the correctness and perf tests so they cannot drift ----
 
-# The Galaxy 4x8 ring mesh every device test in this directory runs on: SP=8 on mesh axis 1,
-# TP=4 on axis 0, 2 links.
 GALAXY_4X8_RING = pytest.mark.parametrize(
     ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
     [
@@ -159,9 +121,6 @@ GALAXY_4X8_RING = pytest.mark.parametrize(
     indirect=["mesh_device", "device_params"],
 )
 
-# Real MiniMax-H3 transformer-block config, under the torch reference's kwarg names. The rope
-# config sits beside it rather than in it: the TT modules consume precomputed rope tables, so
-# `rope_freq_dim`/`rope_theta` are caller-owned there.
 REAL_BLOCK_CONFIG = dict(
     hidden_size=5376,
     num_attention_heads=56,
@@ -174,8 +133,6 @@ REAL_BLOCK_CONFIG = dict(
 ROPE_FREQ_DIM = 16
 ROPE_THETA = 10000.0
 
-# The same block config under the TT module's kwarg names (`num_heads`/`head_dim` rather than
-# the reference's `num_attention_heads`/`attention_head_dim`).
 TT_BLOCK_CONFIG = dict(
     hidden_size=REAL_BLOCK_CONFIG["hidden_size"],
     num_heads=REAL_BLOCK_CONFIG["num_attention_heads"],
@@ -186,7 +143,7 @@ TT_BLOCK_CONFIG = dict(
     qk_norm_eps=REAL_BLOCK_CONFIG["qk_norm_eps"],
 )
 
-# Token tags, per the reference: 0 video, 1 text, 2 audio (-1 padding, unused in these tests).
+# Reference token tags: 0 video, 1 text, 2 audio.
 TAG_VIDEO, TAG_TEXT, TAG_AUDIO = 0, 1, 2
 
 
@@ -197,25 +154,7 @@ def packed_layout(
     grid_hw: tuple[int, int] = (8, 8),
     padded_len: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Build one packed-sequence layout: `(position_ids, token_tags, timestep_indices)`.
-
-    The block is agnostic to how the pipeline orders rows -- it only reads per-row modality tags and
-    timestep indices through `adaln_indices` -- so this is a representative layout rather than the
-    real t2va one: text rows, then audio rows, then video rows.
-
-    Two distinct timesteps are used so the AdaLN table is addressed at more than one noise level, as
-    the real model does when it serves conditioning rows and target rows in a single forward: text and
-    the first video frame are clean (timestep 0), the remaining video and all audio are noisy
-    (timestep 1). That covers four distinct `(timestep, modality)` table rows including row 0, so an
-    off-by-one-modality error in the per-row gather cannot pass unnoticed.
-
-    Video rows get a (t, h, w) patch grid over `grid_hw`; text and audio rows advance the shared `t`
-    clock with h = w = 0, which is enough to exercise the 3-axis rope on every modality.
-
-    If `padded_len` is given, all three tensors are zero-padded at the tail to that length: pad rows
-    are excluded from attention via ring attention's logical_n, so their values only need to stay in
-    range for the gathers.
-    """
+    """Build one packed layout `(position_ids, token_tags, timestep_indices)`: text, audio, video rows over two timesteps, zero-padded to `padded_len`."""
     grid_h, grid_w = grid_hw
     frame = grid_h * grid_w
     assert num_video % frame == 0, "num_video must fill whole (h, w) frames"
@@ -229,7 +168,6 @@ def packed_layout(
             torch.full((num_video,), TAG_VIDEO, dtype=torch.long),
         ]
     )
-    # Text rows clean; audio noisy; first video frame clean (conditioning), rest noisy (target).
     timestep_indices = torch.cat(
         [
             torch.zeros(num_text, dtype=torch.long),
@@ -257,12 +195,7 @@ def packed_layout(
 
 
 def upload_rope(rope_cos: torch.Tensor, rope_sin: torch.Tensor, *, mesh_device, sp_axis: int):
-    """Upload one prepared `(cos, sin)` table pair, sharded the way every rope consumer wants it.
-
-    Takes the 2D `(seq_len, dim)` tables `prepare_rope_tables` returns, shaped to
-    `[1, 1, seq_len, dim]` on device: fp32, fractured on SP along the sequence. cos/sin are shared
-    by every head, so they are replicated on TP.
-    """
+    """Upload prepared `(cos, sin)` tables: fp32, fractured on SP along the sequence, replicated on TP."""
 
     def _upload(table: torch.Tensor) -> ttnn.Tensor:
         return from_torch(
@@ -275,16 +208,7 @@ def upload_rope(rope_cos: torch.Tensor, rope_sin: torch.Tensor, *, mesh_device, 
     return _upload(rope_cos), _upload(rope_sin)
 
 
-# ------------------------------------------------------------------- tt VAE builders
-#
-# The constructor-from-config kwarg lists below mirror `random_encoder_state` /
-# `random_decoder_state` above: one place derives the tt module from the checkpoint
-# config. Test-specific choices (`temporal_taps`, `num_layers`, `parallel_config`, ...)
-# are deliberately not defaulted here -- pass them explicitly at the call site.
-
-
 def build_visual_encoder(config: dict, mesh_device, num_frames: int, **overrides):
-    """The tt visual encoder at the fixed 256x256 tile, from the checkpoint config."""
     from ....models.vae.minimax_h3.encoder_minimax_h3 import MiniMaxH3Encoder3d
 
     kwargs = dict(
@@ -304,7 +228,6 @@ def build_visual_encoder(config: dict, mesh_device, num_frames: int, **overrides
 
 
 def build_visual_decoder(config: dict, mesh_device, **overrides):
-    """The tt ViT decoder at the fixed (7, 16, 16) latent chunk, from the checkpoint config."""
     from ....models.vae.minimax_h3.decoder_minimax_h3 import MiniMaxH3ViTDecoder3d
 
     kwargs = dict(
@@ -330,7 +253,6 @@ def build_visual_decoder(config: dict, mesh_device, **overrides):
 
 
 def build_audio_decoder(config: dict, mesh_device, **overrides):
-    """The tt audio (BigVGAN) decoder, from the checkpoint config."""
     from ....models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
 
     kwargs = dict(
@@ -347,25 +269,13 @@ def build_audio_decoder(config: dict, mesh_device, **overrides):
     return MiniMaxH3AudioDecoder(**kwargs)
 
 
-# ------------------------------------------------------------- Qwen3-VL conditioner
-#
-# Shared by the text-encoder (t2va) and vision-conditioner (fl2va) gates. The download
-# scope is the caller's: the repository carries ~190 GB across three partitions, and the
-# text-encoder tests deliberately fetch a narrower pattern set than the vision tests.
-
 CONDITIONER_LOCAL_MIRROR = "/data/cglagovich/MiniMax-H3-diffusers"
 CONDITIONER_HF_REPO = "MiniMaxAI/MiniMax-H3"
 CONDITIONER_SUBFOLDER = "text_encoder"
 
 
 def conditioner_checkpoint_dir(patterns: list[str]) -> str:
-    """The directory holding the Qwen3-VL conditioner.
-
-    `MINIMAX_H3_REPO` (a local directory or a Hub repo id), then the local mirror, then a
-    Hub snapshot scoped to `patterns`. A missing checkpoint is a skip, not a failure: there
-    is nothing to compare against, and that is an environment gap rather than a defect in
-    the port.
-    """
+    """Resolve the conditioner directory ($MINIMAX_H3_REPO, local mirror, then Hub snapshot); a missing checkpoint skips."""
     from huggingface_hub import snapshot_download
     from loguru import logger
 
@@ -380,7 +290,7 @@ def conditioner_checkpoint_dir(patterns: list[str]) -> str:
             logger.info(f"MiniMax-H3 conditioner not local; fetching {patterns} from {repo_id}")
             root = snapshot_download(repo_id=repo_id, allow_patterns=patterns)
         return os.path.join(root, CONDITIONER_SUBFOLDER)
-    except Exception as exc:  # noqa: BLE001 - transport/auth/gating failures are a skip, not a failure
+    except Exception as exc:  # noqa: BLE001 - environment gap is a skip, not a failure
         pytest.skip(
             f"MiniMax-H3 conditioner unavailable (tried $MINIMAX_H3_REPO, {CONDITIONER_LOCAL_MIRROR}, then "
             f"{CONDITIONER_HF_REPO}): {exc}"
@@ -388,16 +298,7 @@ def conditioner_checkpoint_dir(patterns: list[str]) -> str:
 
 
 def load_reference_conditioner(path: str):
-    """The released conditioner through `Qwen3VLForConditionalGeneration`, load-info checked.
-
-    Loaded through the full class diffusers declares in its `ComponentSpec`, in the
-    checkpoint's own bf16. The load-info assert proves the shipped weights actually landed,
-    rather than leaving parts of the reference on its fresh init -- a silently partial load
-    is the one way a parity comparison could go green without having tested the checkpoint.
-    `loading_info` values are *sets*, so they are sorted before slicing; indexing a set
-    raises, and this runs on the failure path where a crash would hide the mismatch it is
-    meant to report.
-    """
+    """Load the conditioner with load-info checked: a silently partial load would pass parity while testing the fresh init."""
     import transformers
 
     hf, info = transformers.Qwen3VLForConditionalGeneration.from_pretrained(

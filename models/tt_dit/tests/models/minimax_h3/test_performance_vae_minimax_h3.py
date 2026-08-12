@@ -2,34 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Gate M8f: MiniMax-H3 VAE performance baselines.
-
-Every measurement is recorded against an ``EXPECTED_METRICS`` budget in the style of
-``tests/models/wan2_2/test_performance_wan.py``, so optimisation has a before and a
-regression has something to trip over. The bars are set generously: they exist to catch a
-regression or a pathology, not to pin a tuned number -- nothing here has been through
-``bruteforce_conv3d_sweep.py`` yet.
-
-The visual shipping unit is a data-parallel **wave** -- one work unit per device -- which
-is what the encode/decode paths issue, so the visual budgets gate the wave time directly.
-H/W sharding of a single unit measures worse for throughput: data parallelism
-runs at 95-97 % scaling efficiency with no communication, while sharding adds a
-full-activation all-gather and re-partition at every GroupNorm site plus a halo per conv,
-and its tiles shrink to 2 rows at the deepest, widest-channel blocks -- it only pays when
-one clip's latency matters more than aggregate throughput.
-
-Because tiling fixes the work units, a baseline is a **per-wave** time plus a count: the
-encoder always runs ``(17,256,256)`` tiles and the decoder always ``(7,16,16)`` chunks, so
-a full clip is that time times the wave count. The counts for the supported working points
-are in ``WORK_UNITS`` below, which makes the projected wall time a multiplication rather
-than another measurement.
-
-Quality gates live elsewhere: the visual encode -> decode roundtrip (PCC + PSNR floor) is
-``test_vae_minimax_h3.py::test_visual_roundtrip_quality``, and the audio roundtrip is
-``test_audio_minimax_h3.py::test_roundtrip``.
-
-Tracy capture entry points for the visual/audio decoders live in ``tools/tracy_decode_harness.py``.
-"""
+"""Gate M8f: MiniMax-H3 VAE performance baselines, gated against ``EXPECTED_METRICS`` budgets
+(style of ``tests/models/wan2_2/test_performance_wan.py``). Tracy capture entry points live
+in ``tools/tracy_decode_harness.py``; quality gates live in the vae/audio test files."""
 
 import os
 import time
@@ -59,10 +34,7 @@ SINGLE_DEVICE = [pytest.param((1, 1), {"l1_small_size": 65536}, id="single_devic
 
 HOP_LENGTH = 800
 
-# Work-unit counts per supported working point, so a full-clip projection is a
-# multiplication of the per-wave baselines below rather than another measurement.
-# 768P is 1344x768 -> 4x7 tiles; 1440P is 2560x1440 -> 8x13. 5 s is 124 frames (37 latent),
-# 10 s is 243 frames (72 latent), both under the 17n+5 -> 5n+2 rule at 24 fps.
+# Work units per working point: 768P = 4x7 tiles, 1440P = 8x13; clip/chunk counts per the 17n+5 -> 5n+2 rule.
 WORK_UNITS = {
     "768P_5s": {"tiles": 28, "encode_clips": 8, "decode_chunks": 7},
     "768P_10s": {"tiles": 28, "encode_clips": 15, "decode_chunks": 14},
@@ -71,30 +43,20 @@ WORK_UNITS = {
     "1440P_10s": {"tiles": 104, "encode_clips": 15, "decode_chunks": 14},
     "1440P_15s": {"tiles": 104, "encode_clips": 22, "decode_chunks": 21},
 }
-# 15 s is 362 frames (107 latent) -> n=21 under the 17n+5 -> 5n+2 rule, so 22 encode clips and 21 decode
-# chunks. Cross-checked against the reference helpers rather than derived by hand:
-# `align_num_frames(round(dur * MINIMAX_H3_FPS))` gives 124 / 243 / 362 frames for 5 / 10 / 15 s, i.e.
-# n = 7 / 14 / 21, which reproduces the 5 s and 10 s rows above.
 
-# The audio VAE runs at sampling_rate / hop_length = 32000 / 800 = 40 latent frames per second. The 5 s
-# baseline uses 207 frames rather than the exact 200; the recorded budget was calibrated at 207, so
-# comparability with that recording matters more than the rounding.
-AUDIO_LATENT_FRAMES_5S = 207
+AUDIO_LATENT_FRAMES_5S = 207  # ~5 s at 40 latent fps; budgets were calibrated at 207, not the exact 200
 
-# Seconds per measurement. Generous: a regression bar, not a tuned target. The visual
-# entries gate a whole 32-unit data-parallel wave; at the measured 95-97 % scaling a wave
-# costs about one unit's single-device time, so a per-invocation budget serves as a wave budget.
+# Seconds per measurement. Generous regression bars, not tuned targets; visual entries gate a 32-unit wave.
 EXPECTED_METRICS = {
-    "visual_encoder_clip_wave": 20.0,  # 32 x (1,3,17,256,256) -> (1,48,5,16,16)
-    "visual_encoder_keyframe_wave": 5.0,  # 32 x (1,3,1,256,256)
-    "visual_decoder_wave": 20.0,  # 32 x (1,24,7,16,16), 1797 tokens, 36 layers
-    "audio_encode_5s": 60.0,  # 207 latent frames, stereo as batch 2
+    "visual_encoder_clip_wave": 20.0,
+    "visual_encoder_keyframe_wave": 5.0,
+    "visual_decoder_wave": 20.0,
+    "audio_encode_5s": 60.0,
     "audio_decode_5s": 60.0,
 }
 
 
 def _time_it(fn, *, warmup: int = 1, iterations: int = 2, mesh_device=None) -> float:
-    """Median-free minimum-of-N wall time, after an untimed warmup that absorbs JIT compile."""
     for _ in range(warmup):
         fn()
         if mesh_device is not None:
@@ -110,7 +72,6 @@ def _time_it(fn, *, warmup: int = 1, iterations: int = 2, mesh_device=None) -> f
 
 
 def _report(measurements: dict[str, float]) -> None:
-    """Collect-then-assert-once, as the wan2_2 perf test does."""
     from loguru import logger
 
     failures = []
@@ -133,13 +94,7 @@ MESH_4X8 = [
 
 @pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8, indirect=["mesh_device", "device_params"])
 def test_visual_data_parallel_throughput(mesh_device):
-    """Per-wave time with one work unit per device, gated, plus full-video projections.
-
-    The wave is the shipping unit, so the ``EXPECTED_METRICS`` budgets gate the wave time
-    directly -- this test fails when a wave blows its budget, not just logs. Correctness of
-    the data-parallel decomposition is gated in ``test_vae_parallel_minimax_h3.py``; this
-    only times it.
-    """
+    """Per-wave time with one work unit per device, gated, plus full-video projections."""
     from loguru import logger
 
     weights_dir = weights_subdir("vae")
@@ -151,14 +106,11 @@ def test_visual_data_parallel_throughput(mesh_device):
 
     measurements = {}
 
-    # Both encoder shapes: the 17-frame clip tile and the single-frame keyframe tile.
     for label, num_frames, taps in (
         ("visual_encoder_clip_wave", CLIP_FRAMES, 3),
         ("visual_encoder_keyframe_wave", 1, 1),
     ):
         encoder = build_visual_encoder(config, mesh_device, num_frames, temporal_taps=taps)
-        # Random-init weights: timing does not depend on their values, and skipping the
-        # 10.4 GB checkpoint read is what keeps this baseline quick enough to iterate on.
         encoder.load_torch_state_dict(random_encoder_state(config))
         x = torch.randn(devices, num_frames, TILE, TILE, encoder.conv_in.in_channels)
         x_device = ttnn.from_torch(
@@ -183,7 +135,7 @@ def test_visual_data_parallel_throughput(mesh_device):
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
     )
     decoder_wave = _time_it(lambda: decoder(tokens_device), iterations=8, mesh_device=mesh_device)
-    # ~10.6 TFLOP per invocation at 1797 tokens x 36 layers x dim 2048.
+    # 10.6 = TFLOP per invocation at 1797 tokens x 36 layers x dim 2048.
     logger.info(
         f"PERF visual_decoder_wave of {devices} units: {decoder_wave:.3f} s "
         f"({decoder_wave / devices:.4f} s/unit, {10.6 / (decoder_wave / devices):.1f} TFLOP/s effective per unit)"
@@ -209,14 +161,7 @@ def test_visual_data_parallel_throughput(mesh_device):
 
 @pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
 def test_audio_baselines(mesh_device):
-    """Audio encode/decode timing baselines at 5 s, against their budgets.
-
-    Timing only. Roundtrip quality is gated by ``test_audio_minimax_h3.py::test_roundtrip``,
-    which checks the same encode -> decode against the reference with PSNR *and* a
-    log-spectrogram distance. Real weights are loaded -- the run doubles as a check that the
-    state-dict conversion wires up -- but the timing inputs are synthesised, since timing
-    does not depend on the values.
-    """
+    """Audio encode/decode timing baselines at 5 s, against their budgets."""
     weights_dir = weights_subdir("audio_vae")
     if weights_dir is None:
         pytest.skip("MiniMax-H3 audio_vae not found; set MINIMAX_H3_DIFFUSERS_DIR")

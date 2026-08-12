@@ -2,16 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Host-only gate for the MiniMax-H3 rectified-flow Euler scheduler.
-
-The three inverted conventions (``t = 1 - sigma`` with 1 meaning clean,
-``x0 = x_t + sigma*v`` with a plus, and a sigma grid whose terminal 0 is part of
-the requested step count) each produce plausible-looking but wrong video if got
-backwards, so they are asserted directly rather than only through a rollout.
-
-Golden digests come from a run verified bit-exact against the `minimax-h3`
-diffusers branch, including full 49-evaluation rollouts at both shifts.
-"""
+"""Host-only gate for the MiniMax-H3 rectified-flow Euler scheduler: t = 1 - sigma (1 is clean),
+x0 = x_t + sigma*v (a plus), and a sigma grid whose terminal 0 counts toward the step count.
+Golden digests come from a run verified bit-exact against the minimax-h3 diffusers branch."""
 
 import hashlib
 
@@ -43,7 +36,6 @@ def test_schedule_matches_golden(shift):
 
     assert scheduler.sigmas.numel() == num_sigmas
     assert _digest(scheduler.sigmas) == sigma_sha
-    # 50 grid points drive 49 model evaluations, not 50.
     assert scheduler.num_inference_steps == evaluations
     assert scheduler.timesteps.numel() == evaluations
 
@@ -55,34 +47,24 @@ def test_sigma_grid_conventions(shift):
     sigmas = scheduler.sigmas
 
     assert sigmas[0].item() == 1.0
-    # The shift maps 0 to exactly 0, so the terminal point survives it.
     assert sigmas[-1].item() == 0.0
     assert bool((sigmas[1:] < sigmas[:-1]).all())
-    # t = 1 - sigma, so t is increasing and t = 1 is clean.
     assert torch.equal(scheduler.timesteps, 1.0 - sigmas[:-1])
     assert bool((scheduler.timesteps[1:] > scheduler.timesteps[:-1]).all())
     assert scheduler.timesteps[0].item() == 0.0
 
 
 def test_video_and_audio_schedules_differ():
-    """A request runs two schedules; sharing one would desynchronize the modalities."""
     video = MiniMaxH3Scheduler(shift=VIDEO_SHIFT)
     audio = MiniMaxH3Scheduler(shift=AUDIO_SHIFT)
     video.set_timesteps(50)
     audio.set_timesteps(50)
 
     assert not torch.equal(video.sigmas, audio.sigmas)
-    # The larger shift spends more of the grid near sigma = 1.
     assert video.sigmas[25] > audio.sigmas[25]
 
 
 def test_step_uses_data_ward_velocity():
-    """``x0 = x_t + sigma*v`` -- the sign of the sigma term is what is under test.
-
-    With ``ratio = sigma_next/sigma``, a single step is
-    ``r*x_t + (1-r)*(x_t + sigma*v)``, so a positive velocity must move the
-    sample up. The usual flow-match minus sign would move it down.
-    """
     scheduler = MiniMaxH3Scheduler(shift=VIDEO_SHIFT)
     scheduler.set_timesteps(50)
     sample = torch.zeros(1, 8)
@@ -94,11 +76,7 @@ def test_step_uses_data_ward_velocity():
 
 @pytest.mark.parametrize("timestep", [0.0, 0.5, MINIMAX_H3_KEYFRAME_NOISE_AUG, 1.0])
 def test_scale_noise_is_the_forward_process(timestep):
-    """``x_t = t*x_0 + (1-t)*noise``, with ``t`` taken at face value.
-
-    H3 noises conditioning anchors with a ``noise_aug`` *level*, which is not a
-    schedule entry and must not be looked up in ``self.timesteps``.
-    """
+    """noise_aug is a level, not a schedule entry -- never looked up in self.timesteps."""
     scheduler = MiniMaxH3Scheduler(shift=VIDEO_SHIFT)
     sample = torch.randn(4, 96, generator=torch.Generator().manual_seed(7))
     noise = torch.randn(4, 96, generator=torch.Generator().manual_seed(8))
@@ -121,13 +99,11 @@ def test_explicit_sigmas_used_verbatim(shift):
     scheduler = MiniMaxH3Scheduler(shift=shift)
     sigmas = [1.0, 0.6, 0.3, 0.0]
     scheduler.set_timesteps(sigmas=sigmas)
-    # Verbatim means no shift and no dedup; the values still round through fp32.
     assert torch.equal(scheduler.sigmas, torch.tensor(sigmas, dtype=torch.float32))
     assert scheduler.num_inference_steps == 3
 
 
 def test_matches_diffusers_reference():
-    """Bit-exact rollout against the `minimax-h3` diffusers scheduler."""
     reference = pytest.importorskip(
         "diffusers.schedulers.scheduling_minimax_h3",
         reason="requires the minimax-h3 diffusers branch",

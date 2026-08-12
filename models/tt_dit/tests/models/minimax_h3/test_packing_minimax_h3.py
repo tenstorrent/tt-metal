@@ -2,18 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Host-only parity gate for the MiniMax-H3 packed sequence.
-
-Every quantity here is a checkpoint contract: the fp64 rotary grid *is* the
-audio/video alignment, and the AdaLN table index decides which modulation a row
-receives. Drift is silent -- it produces plausible video that does not match the
-reference -- so these assertions are exact rather than PCC-based.
-
-The golden digests were taken from a run verified bit-exact against the
-`minimax-h3` diffusers branch. When that branch is installed,
-``test_matches_diffusers_reference`` re-checks the whole layout against it
-directly; otherwise the digests stand in.
-"""
+"""Host-only parity gate for the MiniMax-H3 packed sequence: checkpoint contracts, exact
+assertions (drift is silent). Golden digests come from a run verified bit-exact against the
+minimax-h3 diffusers branch; when that branch is installed the layout is re-checked directly."""
 
 import hashlib
 
@@ -25,9 +16,6 @@ from ....pipelines.minimax_h3 import packing as p
 # (label, latent_height, latent_width, num_frames, keyframe_anchors)
 BRINGUP = ("bringup", 544 // 16, 960 // 16, 124, ("first", "last"))
 CANONICAL = ("canonical", 768 // 16, 1344 // 16, 192, ("first",))
-# The t2va working point every T2VA gate runs at: 1344x768, 124 frames, no keyframes.
-# Distinct from the two above in the way that matters here -- an empty `keyframe_anchors`
-# takes the no-condition-rows path, which is the one the t2va pipeline actually uses.
 T2VA = ("t2va_768p_5s", 768 // 16, 1344 // 16, 124, ())
 
 # sequence_length, latent frames, audio latents, sha256[:16] of position_ids and token_tags
@@ -37,9 +25,7 @@ GOLDEN = {
 }
 
 TEXT_LEN = 997
-# A keyframe's VLM vision block lands inside the text rows tagged as video, not
-# text; covering that here keeps the tag plumbing honest.
-VISION_BLOCK = slice(20, 70)
+VISION_BLOCK = slice(20, 70)  # a keyframe's vision block: text rows tagged video
 
 
 def _text_tags():
@@ -95,7 +81,6 @@ def test_audio_latent_num_frames(num_frames, latents):
 )
 def test_resolve_canvas_size(aspect, canvas):
     assert p.resolve_canvas_size(*aspect) == canvas
-    # Both axes must be VAE- and patch-compatible, which is the real constraint.
     assert canvas[0] % p.MINIMAX_H3_CANVAS_MULTIPLE == 0
     assert canvas[1] % p.MINIMAX_H3_CANVAS_MULTIPLE == 0
 
@@ -138,32 +123,21 @@ def test_layout_structure(case):
     assert layout.num_condition_video_rows == len(anchors) * rows_per_frame
     assert layout.num_condition_audio_rows == 0
 
-    # Row order is [text | cond | audio | video]: the three index sets must
-    # partition the sequence with no overlap and no gap.
     covered = torch.cat([layout.text_indices, layout.video_indices, layout.audio_indices]).sort().values
     assert torch.equal(covered, torch.arange(layout.sequence_length))
 
     assert torch.equal(layout.token_tags[layout.audio_indices[:1]], torch.tensor([p.MINIMAX_H3_AUDIO_TAG]))
     assert (layout.token_tags[layout.video_indices] == p.MINIMAX_H3_VIDEO_TAG).all()
-    # The vision block inside the text rows is video-tagged, everything else text.
     assert (layout.token_tags[VISION_BLOCK] == p.MINIMAX_H3_VIDEO_TAG).all()
     assert (layout.token_tags[VISION_BLOCK.stop : TEXT_LEN] == p.MINIMAX_H3_TEXT_TAG).all()
 
-    # Audio rows carry no height coordinate and pin to the width-grid extremes.
     audio_position_ids = layout.position_ids[layout.audio_indices]
     assert (audio_position_ids[:, 1] == 0).all()
     assert audio_position_ids[:, 2].unique().numel() == 2
 
 
 def test_keyframe_anchor_times():
-    """The `first` anchor coincides with frame 0; the `last` anchor overshoots the end.
-
-    `last` is `origin + span(n) - 5/3`, and 5/3 is the *shortest* per-frame span
-    (the `1` of the `(1, 4, 4, 4, 4)` pattern), not the span of the final frame.
-    Whenever `(n - 1) % 5 != 0` that final frame is a `4`, so the anchor lands
-    past the last target frame rather than on it -- 5.0 units past, for both
-    working points. Asserted here because it looks like an off-by-one and is not.
-    """
+    """The `last` anchor overshoots the final frame by 5.0 on purpose -- looks like an off-by-one and is not."""
     _, latent_height, latent_width, num_frames, _ = BRINGUP
     latent_frames = p.video_latent_num_frames(num_frames)
     layout = _layout(latent_height, latent_width, num_frames, ("first", "last"))
@@ -186,8 +160,7 @@ def test_keyframe_anchor_times():
 def test_row_timesteps_pin_condition_rows(case):
     _, latent_height, latent_width, num_frames, anchors = case
     layout = _layout(latent_height, latent_width, num_frames, anchors)
-    # Row timesteps are fp32, so round the expectations through fp32 before
-    # comparing -- 0.7 is not representable and would fail an exact check.
+    # expectations round through fp32: 0.7 is not representable
     video_t, audio_t, cond_t = torch.tensor([0.7, 0.5, p.MINIMAX_H3_KEYFRAME_NOISE_AUG], dtype=torch.float32).tolist()
     timesteps, indices = p.build_row_timesteps(layout, video_t, audio_t, cond_t, cond_t)
 
@@ -199,7 +172,6 @@ def test_row_timesteps_pin_condition_rows(case):
     assert (resolved[condition_rows] == cond_t).all()
     assert (resolved[target_rows] == video_t).all()
     assert (resolved[layout.audio_indices] == audio_t).all()
-    # Text rows never reach an output head and inherit the video timestep.
     assert (resolved[layout.text_indices] == video_t).all()
 
 
@@ -215,15 +187,10 @@ def test_adaln_index_ranges_round_trip(case):
     for start, stop, value in runs:
         rebuilt[start:stop] = value
     assert torch.equal(rebuilt, table_rows)
-
-    # Contiguous runs are what let the device apply modulation as slice plus
-    # broadcast; if this ever grew to O(sequence_length) the design would have
-    # to fall back to a gather.
     assert len(runs) <= 8
 
 
 def test_adaln_index_ranges_are_shard_local():
-    """A sequence-parallel shard must see few runs, not just the whole sequence."""
     _, latent_height, latent_width, num_frames, anchors = CANONICAL
     layout = _layout(latent_height, latent_width, num_frames, anchors)
     _, indices = p.build_row_timesteps(layout, 0.7, 0.5, 0.999, 0.999)
@@ -233,8 +200,6 @@ def test_adaln_index_ranges_are_shard_local():
     shard = layout.sequence_length // sp_factor
     counts = [len(p.adaln_index_ranges(table_rows[i * shard : (i + 1) * shard])) for i in range(sp_factor)]
 
-    # Only the shard holding the text/cond/audio prefix is fragmented; the rest
-    # are pure video and modulate with a single broadcast.
     assert sum(count == 1 for count in counts) >= sp_factor - 2
     assert max(counts) <= 8
 
@@ -261,7 +226,6 @@ def test_unpack_audio_tokens_is_channel_major():
     unpacked = p.unpack_audio_tokens(rows, num_audio_latents)
 
     assert unpacked.shape == (channels, 32, num_audio_latents)
-    # Channel-major: the first block of rows is the left channel in full.
     assert torch.equal(unpacked[0], rows[:num_audio_latents].transpose(0, 1))
     assert torch.equal(unpacked[1], rows[num_audio_latents:].transpose(0, 1))
 
@@ -272,13 +236,7 @@ ROPE_THETA = 10000.0
 
 @pytest.mark.parametrize("case", [BRINGUP, CANONICAL, T2VA], ids=lambda c: c[0])
 def test_rope_tables_match_reference(case):
-    """Bit-exact cross-check of the rotary tables against the reference rope module.
-
-    The tables *are* the audio/video alignment -- a drifted angle desynchronizes the two
-    modalities without failing any shape or finiteness check -- so this is `torch.equal`, not
-    PCC. Exactness is reachable because `build_rope_tables` mirrors the reference op for op and
-    in its order; if a refactor makes it merely close, that is the regression, not the bar.
-    """
+    """torch.equal, not PCC: merely-close is the regression."""
     rope_module = pytest.importorskip(
         "diffusers.models.transformers.transformer_minimax_h3",
         reason="requires the minimax-h3 diffusers branch",
@@ -297,40 +255,25 @@ def test_rope_tables_match_reference(case):
 
 @pytest.mark.parametrize("case", [BRINGUP, CANONICAL, T2VA], ids=lambda c: c[0])
 def test_rope_tables_shape_and_dtype(case):
-    """The width is `2 * 3 * rope_freq_dim`, which is *partial* rotary against head_dim 128.
-
-    Stands in for the reference check when the diffusers branch is absent, and pins the one
-    number the fused RoPE op relayouts against: 96 of each head's 128 channels rotate and the
-    remaining 32 pass through.
-    """
     _, latent_height, latent_width, num_frames, anchors = case
     layout = _layout(latent_height, latent_width, num_frames, anchors)
     cos, sin = p.build_rope_tables(layout.position_ids, rope_freq_dim=ROPE_FREQ_DIM, rope_theta=ROPE_THETA)
 
     assert cos.shape == sin.shape == (layout.sequence_length, 2 * 3 * ROPE_FREQ_DIM)
     assert cos.shape[-1] == 96 < 128, "rotary width must stay narrower than head_dim"
-    # fp32, not the fp64 the position grid is carried in: the reference casts before computing,
-    # and casting after would move the last ulp of every angle.
     assert cos.dtype == sin.dtype == torch.float32
     assert torch.isfinite(cos).all() and torch.isfinite(sin).all()
-    # A row's three axis blocks are concatenated then duplicated, so the two halves are equal.
     half = cos.shape[-1] // 2
     assert torch.equal(cos[:, :half], cos[:, half:])
     assert torch.equal(sin[:, :half], sin[:, half:])
 
 
 def test_rope_tables_distinguish_the_three_axes():
-    """A t2va layout must not collapse to 1-D rope.
-
-    Video rows carry a real `(t, h, w)` grid, so the three per-axis frequency blocks of a video
-    row must differ from each other. If they did not, the spatial rotary would be doing nothing
-    and the failure would look like weak spatial coherence rather than a bug.
-    """
+    """A collapse to 1-D rope would look like weak spatial coherence."""
     _, latent_height, latent_width, num_frames, anchors = T2VA
     layout = _layout(latent_height, latent_width, num_frames, anchors)
     cos, _ = p.build_rope_tables(layout.position_ids, rope_freq_dim=ROPE_FREQ_DIM, rope_theta=ROPE_THETA)
 
-    # A video row well inside the clip: not frame 0, not the first column of its frame.
     row = int(layout.video_indices[-1])
     t_block, h_block, w_block = (
         cos[row, :ROPE_FREQ_DIM],
@@ -343,7 +286,6 @@ def test_rope_tables_distinguish_the_three_axes():
 
 @pytest.mark.parametrize("case", [BRINGUP, CANONICAL], ids=lambda c: c[0])
 def test_matches_diffusers_reference(case):
-    """Bit-exact cross-check against the `minimax-h3` diffusers branch."""
     reference = pytest.importorskip(
         "diffusers.modular_pipelines.minimax_h3.packing",
         reason="requires the minimax-h3 diffusers branch",

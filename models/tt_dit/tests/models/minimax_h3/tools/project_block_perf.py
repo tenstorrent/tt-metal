@@ -3,34 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Project one profiled MiniMax-H3 transformer block out to a denoise step and a whole video.
-
-Reads the Tracy ops CSV produced by `test_performance_minimax_h3.py`, isolates the warm
-iteration between the `start` and `stop` signposts, and multiplies out. Not a test -- the filename
-does not start with `test_`, so pytest leaves it alone.
+Reads the Tracy ops CSV from `test_performance_minimax_h3.py`, isolates the warm iteration
+between the `start`/`stop` signposts, and multiplies out. Not a test; pytest leaves it alone.
 
     python project_block_perf.py 5s=path/to/ops_perf_results_A.csv 15s=.../B.csv
     python project_block_perf.py --drop Permute,Slice 15s=.../B.csv
 
-`--drop` takes op-code substrings and reports what the projection becomes without them, which is how
-to price a fusion that removes a graph of ops before writing it.
-
-Two totals are always reported and they *bracket* the truth rather than one being correct:
-
-  device only        sums kernel time, ignoring the host dispatch gaps between ops. An underestimate:
-                     a real step cannot dispatch for free.
-  device + op gap    adds the measured op-to-op latency. An overestimate at this scale: a single
-                     profiled block cannot overlap host dispatch with a long stream of work, whereas
-                     50 back-to-back layers can.
-
-The bracket is uncalibrated -- nothing here has been checked against a profiled 50-layer run. Treat
-the two numbers as bounds, and note the bracket is widest for short sequences, where the block is
-short enough that dispatch dominates.
-
-Per-op durations merge the mesh the same way tt-perf-report does: the slowest device for ordinary ops,
-since a distributed step only advances as fast as its slowest participant, but the *mean* for
-collectives, whose slowest device has peer-wait time folded into its recorded duration. With that rule
-the totals here reproduce tt-perf-report's exactly, so these are its numbers multiplied out rather
-than a second implementation that could drift from it. See `_per_op`.
+`device only` (no dispatch gaps, underestimate) and `device + op gap` (overestimate) bracket
+the truth. Per-op durations merge the mesh as tt-perf-report does; see `_per_op`.
 """
 
 from __future__ import annotations
@@ -63,19 +43,11 @@ def _warm_rows(path: str) -> tuple[list[dict[str, str]], bool]:
 
 
 def _per_op(rows: list[dict[str, str]]) -> dict[str, dict[str, float]]:
-    """Aggregate to {op code: {device_ns, gap_ns, calls}}, merging devices by slowest per invocation.
+    """Aggregate to {op code: {device_ns, gap_ns, calls}}. `GLOBAL CALL COUNT` is per-device, not a
+    shared invocation id -- matching on it silently counts every op 32x, so match by position instead."""
 
-    NOTE: `GLOBAL CALL COUNT` is per-device, not a shared invocation id, so it cannot be used to line
-    invocations up across the mesh -- doing so silently counts every op 32 times over. Every device
-    executes the same op sequence, so invocations are matched by position within each device's own
-    ordered list instead.
-    """
-
-    # Collectives are averaged across devices, everything else takes the slowest device. A device that
-    # reaches a collective early sits waiting for its peers and that wait is inside its recorded
-    # duration, so the slowest device overstates the collective's real cost; the mean is the estimate
-    # tt-perf-report uses. Verified against it: max everywhere with mean for AllGather and
-    # ReduceScatter reproduces its per-op values and its totals to the nanosecond on all three CSVs.
+    # Mean for collectives (peer-wait is folded into the slowest device), max otherwise -- verified
+    # to reproduce tt-perf-report's per-op values and totals to the nanosecond.
     def merge(values, op: str) -> float:
         values = list(values)
         if "allgather" in op.lower() or "reducescatter" in op.lower():

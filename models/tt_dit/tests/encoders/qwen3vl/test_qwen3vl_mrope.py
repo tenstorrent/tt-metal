@@ -2,25 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-# =============================================================================
-# Qwen3-VL M-RoPE: the multimodal position grid and the interleaved layout.
-#
-# A text-only prompt gives all three (t, h, w) axes the same position, which
-# makes the chunked [TTT..HHH..WWW] and interleaved [THWTHW..] layouts coincide
-# exactly -- the two differ only in which axis feeds each frequency slot, never
-# in the frequency itself. Vision runs break that: an image block carries
-# genuinely different t/h/w positions, so the layout becomes observable and the
-# chunked path stops reproducing a checkpoint that declares
-# `rope_scaling.mrope_interleaved` (MiniMax-H3's conditioner does).
-#
-# This is the groundwork for the vision tower: it fixes the position grid and the
-# rotary layout against the HF reference before anything is built on top. Pure
-# torch, no device -- it runs anywhere.
-#
-# Scope: synthetic `mm_token_type_ids` and grids, which is exactly what
-# `get_rope_index` consumes (it reads nothing else). Wiring these up from a real
-# `Qwen3VLProcessor` belongs with the fused-conditioner test.
-# =============================================================================
+# Qwen3-VL M-RoPE: the multimodal position grid and the interleaved layout,
+# against the HF reference. Pure torch, no device. Text-only prompts make the
+# chunked and interleaved layouts coincide; vision runs make the layout observable.
 
 import pytest
 import torch
@@ -37,11 +21,6 @@ SPATIAL_MERGE_SIZE = 2
 
 @pytest.fixture(scope="module")
 def reference():
-    """A minimal `Qwen3VLModel` for its `get_rope_index` / `get_vision_position_ids`.
-
-    Both are pure index arithmetic -- they read only `config.vision_config.spatial_merge_size` and no
-    weights -- so the stack is shrunk to keep the fixture cheap.
-    """
     config = transformers.Qwen3VLConfig(
         text_config={
             "num_hidden_layers": 2,
@@ -62,25 +41,11 @@ def reference():
     return transformers.AutoModel.from_config(config).eval()
 
 
-# A video's frames are separated by timestamp text (`<0.2 seconds>`) in the presentation, so each
-# frame is its own run rather than one contiguous block. Two tokens stand in for that text.
-_TIMESTAMP_TOKENS = 2
+_TIMESTAMP_TOKENS = 2  # frames are separated by timestamp text in the presentation, so each frame is its own run
 
 
 def _prompt(*runs):
-    """`(mm_token_type_ids, image_grid_thw, video_grid_thw)` for a sequence of runs.
-
-    Each run is `("text", n)`, `("image", (t, h, w))` or `("video", (t, h, w))`.
-
-    Two format rules are modelled, because the reference relies on both and raises without them:
-
-    - A vision block occupies `h * w // spatial_merge_size**2` token slots per frame.
-    - Same-modality blocks are never adjacent. `get_rope_index` groups the sequence with `groupby`, so
-      two touching blocks merge into ONE run while still consuming TWO grid entries -- the positions
-      then come up short. Real prompts always interpose text: MiniMax-H3 emits a `"<Picture i>: "`
-      label before each image and a `"<t> seconds"` stamp before each video frame, and Qwen3-VL's own
-      chat template does the same. A video is therefore emitted here as one run per frame.
-    """
+    """(mm_token_type_ids, image_grid_thw, video_grid_thw) from ("text", n) / ("image"|"video", (t, h, w)) runs."""
     type_ids, images, videos = [], [], []
     for kind, spec in runs:
         t, h, w = spec if kind != "text" else (0, 0, 0)
@@ -90,7 +55,6 @@ def _prompt(*runs):
             type_ids += [1] * (t * h * w // (SPATIAL_MERGE_SIZE**2))
             images.append([t, h, w])
         else:
-            # One grid for the whole video; the reference splits it per frame internally.
             videos.append([t, h, w])
             for _ in range(t):
                 type_ids += [0] * _TIMESTAMP_TOKENS
@@ -110,13 +74,7 @@ PROMPTS = {
     "one_video": (("text", 4), ("video", (2, 4, 4)), ("text", 3)),
     "video_and_image": (("text", 2), ("video", (2, 2, 4)), ("text", 3), ("image", (1, 4, 4)), ("text", 2)),
     "video_3_frames": (("text", 2), ("video", (3, 4, 2)), ("text", 2)),
-    # MiniMax-H3 `fl2va` at the production working point. A keyframe is put onto the target canvas
-    # before the processor sees it, so 1344x768 is grid [1, 48, 84] = 4032 patches = 1008 token slots,
-    # and the presentation is `"<Picture 1>: "` (5 tokens) + the vision block + the prompt verbatim.
-    # Every grid above is a toy by comparison -- the largest is 6 slots. Production length matters:
-    # the rope-table comparison below passes at 13-22 tokens with atol 1e-4 and *fails* at 512, because
-    # longer prompts put more entries on a rounding boundary. Index arithmetic has no such
-    # accumulation, but the tables do, and both are checked by these cases.
+    # production fl2va working point; rope tables only hit rounding boundaries at production length
     "keyframe_768x1344": (("text", 5), ("image", (1, 48, 84)), ("text", 41)),
     "two_keyframes_768x1344": (
         ("text", 5),
@@ -130,9 +88,8 @@ PROMPTS = {
 
 @pytest.mark.parametrize("name", list(PROMPTS))
 def test_mrope_position_ids_matches_reference(reference, name):
-    """The `(3, batch, seq)` position grid matches `Qwen3VLModel.get_rope_index` exactly."""
     type_ids, image_grid, video_grid = _prompt(*PROMPTS[name])
-    input_ids = torch.zeros_like(type_ids)  # get_rope_index reads only shape and the type ids
+    input_ids = torch.zeros_like(type_ids)
 
     expected, _ = reference.get_rope_index(
         input_ids,
@@ -154,9 +111,6 @@ def test_mrope_position_ids_matches_reference(reference, name):
         f"  ref ={expected[:, 0, :12].tolist()}"
     )
 
-    # `vision_position_ids` is the per-block building brick of the grid checked above; pin it against
-    # `get_vision_position_ids` directly too, at a zero and a nonzero start offset. The same grids flow
-    # through both, so this rides along instead of being its own parametrized test.
     grids = ([] if image_grid is None else list(image_grid)) + ([] if video_grid is None else list(video_grid))
     for grid in grids:
         for start in (0, 7):
@@ -169,11 +123,6 @@ def test_mrope_position_ids_matches_reference(reference, name):
 
 
 def test_text_only_layouts_are_identical():
-    """With all three axes on the same position the two layouts coincide bitwise.
-
-    This is the invariant the MiniMax-H3 conditioner test relies on to use the chunked path for
-    `t2va`; asserting it here pins it on our own implementation rather than on the reference's.
-    """
     seq = 64
     chunked = create_rope_tensors(1, seq, None, HEAD_DIM, ROPE_THETA, MROPE_SECTION, interleaved=False)
     interleaved = create_rope_tensors(1, seq, None, HEAD_DIM, ROPE_THETA, MROPE_SECTION, interleaved=True)
@@ -183,12 +132,7 @@ def test_text_only_layouts_are_identical():
 
 @pytest.mark.parametrize("name", list(PROMPTS))
 def test_interleaved_rope_tensors_match_reference(name):
-    """`create_rope_tensors(interleaved=True)` reproduces HF's rotary embedding for the same grid.
-
-    Compared with a tolerance rather than bitwise: `inv_freq` is computed as `theta ** -x` here and
-    `1 / theta ** x` in the reference. Those are mathematically equal but one fp32 ulp apart, so the
-    outputs agree to ~1e-7 and not exactly.
-    """
+    """Toleranced, not bitwise: theta**-x vs the reference's 1/theta**x inv_freq differ by one fp32 ulp."""
     text_config = transformers.Qwen3VLTextConfig(
         hidden_size=5120,
         num_attention_heads=64,
@@ -221,7 +165,6 @@ def test_interleaved_rope_tensors_match_reference(name):
 
 
 def test_position_ids_default_is_the_shared_token_index():
-    """Passing no `position_ids` is the same as passing the token index on all three axes."""
     seq = 32
     implicit = create_rope_tensors(1, seq, None, HEAD_DIM, ROPE_THETA, MROPE_SECTION)
     explicit = create_rope_tensors(
@@ -238,7 +181,6 @@ def test_position_ids_default_is_the_shared_token_index():
 
 
 def test_missing_grid_is_an_error(expect_error):
-    """A vision run with no matching grid is a caller error, not a silent wrong answer."""
     type_ids, image_grid, _ = _prompt(*PROMPTS["one_image"])
     del image_grid
     with expect_error(ValueError, "no matching grid"):
@@ -246,12 +188,7 @@ def test_missing_grid_is_an_error(expect_error):
 
 
 def test_adjacent_same_modality_blocks_are_unsupported(expect_error):
-    """Two touching vision blocks are a format the reference cannot express either.
-
-    `groupby` merges them into one run while two grid entries remain to be consumed, so the positions
-    come up short and the reference raises. Recorded so that nobody "fixes" our implementation to
-    accept an input the reference rejects -- real presentations always interpose a label or timestamp.
-    """
+    """The reference rejects this format too; do not "fix" ours to accept an input it cannot express."""
     type_ids = torch.tensor([[0, 0] + [1] * 4 + [1] * 4 + [0, 0]], dtype=torch.long)
     grids = torch.tensor([[1, 4, 4], [1, 4, 4]], dtype=torch.long)
     with expect_error(RuntimeError, "must match the existing size"):

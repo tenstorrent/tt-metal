@@ -2,34 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-# =============================================================================
-# Qwen3-VL vision tower end to end, on device, against the HF reference.
-#
-# One test, parametrized over eighteen grids and three parallel configurations. It runs
-# the assembled tower -- patch embed, interpolated position embeddings, every
-# block, the output merger and the deepstack mergers -- and checks both things the
-# decoder consumes:
-#   - the merged output tokens (the reference's `pooler_output`), which the decoder
-#     scatters into the text sequence at `<|image_pad|>` positions;
-#   - one deepstack feature per entry of `deepstack_visual_indexes`, which the
-#     decoder adds into its first few layers.
-#
-# Submodules are covered through the tower rather than individually. That includes
-# both merger variants: `use_postshuffle_norm` is their only structural
-# difference, and it is not merely where the reshape sits -- pre-shuffle
-# normalizes each patch over `hidden_size`, post-shuffle normalizes the
-# concatenated group of four over `hidden_size * merge ** 2`, so the two compute
-# different statistics and cannot share weights.
-#
-# Every shape here is one the model actually runs, at the released depth of 27 with
-# deepstack taps at 8/16/24. Nothing is scaled down: the tower is only 595M
-# parameters, so a dummy-weight copy at full depth is cheap, and a reduced one would
-# exercise geometry that never occurs. See the grid tables below for the two
-# distinct sizing rules and why both orientations of each aspect are present.
-#
-# The same paths on the released weights live in
-# tests/models/minimax_h3/test_vision_conditioner_minimax_h3.py.
-# =============================================================================
+# Qwen3-VL vision tower end to end on device against the HF reference: patch
+# embed, position embeddings, every block, the output and deepstack mergers, at
+# the released depth and only production grid shapes.
 
 import pytest
 import torch
@@ -56,59 +31,35 @@ from .common import (
     vision_config,
 )
 
-# The released tower: 27 blocks with deepstack taps at 8, 16 and 24. The whole 595M model, so a
-# dummy-weight copy is affordable and there is no reason to run a shallower one.
-DEPTH = 27
+DEPTH = 27  # released tower: 27 blocks, deepstack taps at 8/16/24
 DEEPSTACK_INDEXES = [8, 16, 24]
 
-# Every grid the model can actually present, measured end to end through the checkpoint's own image
-# processor rather than derived by hand. TWO sizing rules feed the tower and they differ 4x on the short
-# edge, which is the thing most easily got wrong:
-#
-#   - keyframes (`fl2va`) and reference VIDEOS go through `resolve_canvas_size`: 768 px short edge, area
-#     capped at 768x1344, each axis rounded to a multiple of 32 px. At a 16-pixel patch that is 48
-#     patches on the short edge -- except at the aspect extremes, where the AREA CAP binds first and
-#     pushes the short edge down to 32.
-#   - reference IMAGES (`ref2va`) go through `resolve_reference_image_size`: 2048 px short edge, NO area
-#     cap, upscaling intended. That is 128 patches on the short edge and up to 512 on the long one.
-#
-# Both orientations of every aspect are present. They are not redundant despite equal patch counts:
-# `canvas_16to9` is 48x84 while `canvas_4to1` is 32x126, both 4032, and only the pairing catches an
-# `h`-versus-`w` error in the bilinear position table or the 2x2 merge reshape. Every grid has even `h`
-# and `w`, so the merge is always valid.
-#
-# All four area-capped canvases are 4032 patches, which is 31.5 x 128, so NONE of them can be
-# sequence-parallel at SP=4. That is a property of the model's geometry: at the largest canvas, SP=4 is
-# simply unavailable.
-_CANVAS = {  # patches  blocks  SP=4
-    "canvas_1to1": [[1, 48, 48]],  # 2304    1     ok
-    "canvas_4to3": [[1, 48, 64]],  # 3072    1     ok
-    "canvas_3to4": [[1, 64, 48]],  # 3072    1     ok
-    "canvas_16to9": [[1, 48, 84]],  # 4032    1     skip -- area cap
-    "canvas_9to16": [[1, 84, 48]],  # 4032    1     skip -- area cap
-    "canvas_4to1": [[1, 32, 126]],  # 4032    1     skip -- area cap, short edge forced to 32
-    "canvas_1to4": [[1, 126, 32]],  # 4032    1     skip -- area cap
+# Grids measured through the checkpoint's own image processor; orientation pairs catch h-vs-w swaps.
+# The 4032-patch canvases are 31.5 x 128 rows, so SP=4 skips there (model geometry, not a port bug).
+_CANVAS = {
+    "canvas_1to1": [[1, 48, 48]],
+    "canvas_4to3": [[1, 48, 64]],
+    "canvas_3to4": [[1, 64, 48]],
+    "canvas_16to9": [[1, 48, 84]],
+    "canvas_9to16": [[1, 84, 48]],
+    "canvas_4to1": [[1, 32, 126]],  # area cap binds first, short edge forced to 32
+    "canvas_1to4": [[1, 126, 32]],
 }
 _REFERENCE = {
-    "ref_1to1": [[1, 128, 128]],  # 16384    1     ok
-    "ref_4to3": [[1, 128, 170]],  # 21760    1     ok
-    "ref_3to4": [[1, 170, 128]],  # 21760    1     ok
-    "ref_16to9": [[1, 128, 228]],  # 29184    1     ok
-    "ref_9to16": [[1, 228, 128]],  # 29184    1     ok
-    "ref_4to1": [[1, 128, 512]],  # 65536    1     ok
-    "ref_1to4": [[1, 512, 128]],  # 65536    1     ok
+    "ref_1to1": [[1, 128, 128]],
+    "ref_4to3": [[1, 128, 170]],
+    "ref_3to4": [[1, 170, 128]],
+    "ref_16to9": [[1, 128, 228]],
+    "ref_9to16": [[1, 228, 128]],
+    "ref_4to1": [[1, 128, 512]],
+    "ref_1to4": [[1, 512, 128]],
 }
-# `cu_seqlens = repeat_interleave(h*w, t).cumsum()` makes an image one block and a video one block PER
-# FRAME, and attention must never cross a boundary. `two_refs` gets its blocks from separate grid rows
-# and `video_3_frames` from a single row with `t > 1`; both must agree, and a tower that ignored blocking
-# would still pass every single-block grid above. `image_and_video` is the only case that mixes the two
-# sizing rules inside one sequence.
+# an image is one block, a video one block PER FRAME; a tower ignoring boundaries passes single-block grids
 _MULTI = {
-    "two_refs": [[1, 128, 128], [1, 128, 170]],  # 38144    2     ok, unequal lengths
-    "video_3_frames": [[3, 48, 48]],  # 6912    3     ok, one grid row
-    "image_and_video": [[1, 128, 128], [3, 48, 48]],  # 23296    4     ok, both rules
-    # The documented ceiling: nine reference images and three reference videos.
-    "max_load": [[1, 128, 128]] * 9 + [[3, 48, 48]] * 3,  # 168192   18     ok
+    "two_refs": [[1, 128, 128], [1, 128, 170]],
+    "video_3_frames": [[3, 48, 48]],
+    "image_and_video": [[1, 128, 128], [3, 48, 48]],
+    "max_load": [[1, 128, 128]] * 9 + [[3, 48, 48]] * 3,  # documented ceiling: 9 ref images + 3 ref videos
 }
 
 GRIDS = {**_CANVAS, **_REFERENCE, **_MULTI}
@@ -141,21 +92,7 @@ def _tower(reference, submesh, parallel_config=None, ccl_manager=None):
     return tower
 
 
-# ------------------------------------------------------------------------- device
-
-# Mesh/parallel configs are the shared `VISION_PARAMS` from common.py.
-#
-# `check` computes the CPU golden and asserts PCC; `perf` skips both and runs only our implementation,
-# asserting shapes and finiteness. Same ids as the other tt_dit tests -- see
-# models/wan2_2/test_all_gather_minimal_matmul_async.py.
-#
-# `perf` is what makes the large grids usable here, and it runs ONLY on the grids it exists for. The
-# golden is a 27-layer CPU forward whose attention is quadratic within each block, so `max_load` (18
-# blocks, the largest 16384 patches) and the 65536-row grids are dominated by it -- and those cases
-# exercise capacity, tiling and dispatch rather than arithmetic, since accuracy is established by the
-# smaller grids. It is also the mode to use under `python -m tracy`, where the CPU forward would
-# otherwise swamp the capture. A green `perf` run says nothing about accuracy; the small grids get
-# nothing from it, so they run in `check` mode only.
+# perf mode skips the quadratic CPU golden (shapes/finiteness only) and says nothing about accuracy
 _PERF_GRIDS = ("max_load", "ref_4to1", "ref_1to4", "image_and_video")
 assert all(name in GRIDS for name in _PERF_GRIDS)
 _CASES = [pytest.param(name, True, id=f"check-{name}") for name in GRIDS] + [
@@ -166,17 +103,7 @@ _CASES = [pytest.param(name, True, id=f"check-{name}") for name in GRIDS] + [
 @VISION_PARAMS
 @pytest.mark.parametrize(("name", "check_pcc"), _CASES)
 def test_tower_on_device(reference, mesh_device, submesh_shape, tp_axis, sp_axis, num_links, name, check_pcc):
-    """The full tower: patch embed, position embeddings, every block, all four mergers.
-
-    Covers the whole stack through its outputs -- the merged tokens and one deepstack feature per
-    `deepstack_visual_indexes` entry -- so the submodules are exercised here rather than separately. The
-    two merger variants both run, since the output merger is pre-shuffle (norm over 1152) and the
-    deepstack mergers are post-shuffle (norm over 4608).
-
-    The multi-reference grids make `cu_seqlens` load-bearing: attention must not cross from one image or
-    video frame into the next. The reference derives its own boundaries from `grid_thw`, so a tower that
-    ignored blocking would disagree here while still passing on the single-block grids.
-    """
+    """The full tower through both outputs: merged tokens and one deepstack feature per tap."""
     submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     grid = torch.tensor(GRIDS[name], dtype=torch.long)
     total = sum(t * h * w for t, h, w in GRIDS[name])
@@ -193,7 +120,6 @@ def test_tower_on_device(reference, mesh_device, submesh_shape, tp_axis, sp_axis
         golden_deepstack = [f.float() for f in ref_out.deepstack_features]
         assert len(golden_deepstack) == len(DEEPSTACK_INDEXES), "reference did not emit one feature per index"
 
-    # One block per frame, so the count is sum(t) rather than the number of grid rows.
     cu_seqlens = vision_cu_seqlens(grid)
     assert len(cu_seqlens) - 1 == int(grid[:, 0].sum()), f"expected one block per frame, got {cu_seqlens}"
     assert cu_seqlens[0] == 0 and cu_seqlens[-1] == total, f"cu_seqlens must span [0, {total}]: {cu_seqlens}"
@@ -201,7 +127,6 @@ def test_tower_on_device(reference, mesh_device, submesh_shape, tp_axis, sp_axis
     tower = _tower(reference, submesh, *resolve_parallel(submesh, tp_axis, sp_axis, num_links))
     cos, sin = tower.prepare_rope(grid)
     pos = tower.prepare_pos_embeds(grid)
-    # Inputs shard on rows under SP; the tower gathers its own output, so only inputs shard.
     tokens, deepstack = tower.forward(
         sp_shard(patches, submesh, sp_axis),
         pos_embeds=sp_shard(pos, submesh, sp_axis),
@@ -222,7 +147,6 @@ def test_tower_on_device(reference, mesh_device, submesh_shape, tp_axis, sp_axis
         for golden_feature, feature in zip(golden_deepstack, features):
             assert_quality(golden_feature, feature, pcc=0.99)
     else:
-        # `perf`: no golden was computed, so only what can be checked without one.
         assert torch.isfinite(actual_tokens).all(), "merged tokens contain NaN or Inf"
         for i, feature in enumerate(features):
             assert torch.isfinite(feature).all(), f"deepstack {i} contains NaN or Inf"
