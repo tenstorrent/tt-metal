@@ -291,3 +291,24 @@ def test_no_suites_omits_the_section(mapping):
     rows = load_expected(SIM_YAML, "1x3")
     report = build(mapping, rows, rows, [], PASSED, [])
     assert "Other release testing" not in render_markdown(report, META)
+
+
+def test_truncated_failure_list_is_inconclusive(expected):
+    """Hidden failures behind '… and N more (truncated)' must not become passes."""
+    detail = (
+        "3 of 9 RTL sim test(s) failed:\n"
+        "- `[1x3] unit_tests_legacy --gtest_filter=*Beta*`\n"
+        "- … and 2 more (truncated)"
+    )
+    verdict, passed, _ = classify(expected, parse_failed(detail), "failure", detail)
+    assert verdict == INCONCLUSIVE and passed == []
+
+
+def test_results_block_wins_even_when_the_summary_is_truncated(expected):
+    """Truncation only affects the derived path; an explicit block is still exact."""
+    detail = "- … and 2 more (truncated)\n" + _block(
+        passed=[("unit_tests_legacy", "*Alpha*")], failed=[("unit_tests_api", "*Delta*")]
+    )
+    verdict, passed, failed = classify(expected, parse_failed(detail), "failure", detail)
+    assert verdict == FAILED
+    assert [r["filter"] for r in passed] == ["*Alpha*"] and len(failed) == 1

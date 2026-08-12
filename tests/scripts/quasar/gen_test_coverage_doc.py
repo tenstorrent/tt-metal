@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
 """Generate the Quasar test coverage inventory from the quasar test yamls.
 
 Run by the package-and-release workflow, which attaches the result as a release

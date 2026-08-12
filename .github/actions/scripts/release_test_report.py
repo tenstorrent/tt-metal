@@ -153,8 +153,10 @@ def classify(expected, failed_rows, conclusion, detail):
     if conclusion == "success":
         return PASSED, list(expected), []
 
-    # Red with no visible per-test detail: claim no passes.
-    if not failed_rows or "manifest missing" in (detail or "").lower():
+    # Red with no visible per-test detail: claim no passes. A truncated failure
+    # list is the same situation -- the hidden rows would be counted as passes.
+    low = (detail or "").lower()
+    if not failed_rows or "manifest missing" in low or "(truncated)" in low:
         return INCONCLUSIVE, [], []
 
     failed_keys = {(g, f) for _c, g, f, _r in failed_rows}
