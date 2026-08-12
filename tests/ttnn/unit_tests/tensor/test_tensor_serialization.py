@@ -6,7 +6,6 @@ import pytest
 
 import os
 import pathlib
-import re
 
 import torch
 import numpy as np
@@ -15,14 +14,6 @@ import ttnn
 from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype, TORCH_INTEGER_DTYPES
 
 pytestmark = pytest.mark.use_module_device
-
-
-def _kmd_supports_read_only_page_pinning():
-    version_path = pathlib.Path("/sys/module/tenstorrent/version")
-    if not version_path.exists():
-        return False
-    match = re.match(r"(\d+)\.(\d+)\.(\d+)", version_path.read_text().strip())
-    return match is not None and tuple(int(component) for component in match.groups()) >= (2, 9, 0)
 
 
 @pytest.mark.parametrize("shape", [(2, 3, 64, 96)])
@@ -69,9 +60,11 @@ def test_serialization(tmp_path, shape, tt_dtype):
 
 
 def test_large_read_only_file_backed_tensor_upload(tmp_path, device):
-    if not _kmd_supports_read_only_page_pinning():
-        pytest.skip("Device-read-only page pinning requires KMD 2.9.0 or newer")
-
+    # Deliberately ungated. Uploading a read-only file mapping must produce the right tensor on every
+    # system: with device-read-only pinning it takes the pinned path, and without it (older KMD, no
+    # IOMMU, or pinning disabled) try_pin returns nullptr and the upload falls back to a copy. Gating
+    # this on the KMD version would have left the fallback path -- the one every current CI runner
+    # takes -- with no coverage at all.
     # 1024 * 9216 * 4 bytes = 36 MiB, above Metal's 32 MiB pinned H2D threshold.
     shape = (1, 1, 1024, 9216)
     torch_tensor = torch.full(shape, 1.25, dtype=torch.float32)
