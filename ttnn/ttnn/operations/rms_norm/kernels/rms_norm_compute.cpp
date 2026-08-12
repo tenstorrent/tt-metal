@@ -78,7 +78,6 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
-#include "tools/profiler/kernel_profiler.hpp"
 
 namespace {
 constexpr uint32_t cb_input_rm = 0;
@@ -89,6 +88,8 @@ constexpr uint32_t cb_zero_tile = 4;
 constexpr uint32_t cb_stat_sq = 5;
 constexpr uint32_t cb_stat_partial = 7;
 constexpr uint32_t cb_stat_gather = 8;
+constexpr uint32_t cb_stat_gather2 = 15;  // two-stage combine only (root)
+constexpr uint32_t cb_branch_sum = 18;    // two-stage combine only (row leaders)
 constexpr uint32_t cb_stat_sum = 9;
 constexpr uint32_t cb_rstd_send = 10;
 constexpr uint32_t cb_rstd = 11;
@@ -117,6 +118,11 @@ void kernel_main() {
     // Block extent along `hidden` of the buffers that only STREAM over it. Equal
     // to CB_W_TILES (one chunk) unless a resident shard pinned C too wide to fit.
     constexpr uint32_t CB_CHUNK_TILES = get_compile_time_arg_val(9);
+    // Level-2 fan-in of the combine tree (see the writer). 1 == the flat
+    // root-gather: W_GROUP_SIZE is then the whole group, is_leader == is_root, and
+    // every `if constexpr (TWO_STAGE)` below compiles out.
+    constexpr uint32_t STAGE2_SPAN = get_compile_time_arg_val(10);
+    constexpr bool TWO_STAGE = STAGE2_SPAN > 1;
     constexpr uint32_t NUM_CHUNKS = (CB_W_TILES + CB_CHUNK_TILES - 1) / CB_CHUNK_TILES;
     constexpr bool CHUNKED = NUM_CHUNKS > 1;
     // The only chunked configuration with a TILE output is a PINNED output shard
@@ -132,6 +138,7 @@ void kernel_main() {
     const uint32_t core_w = get_arg_val<uint32_t>(3);
     const uint32_t has_tail = get_arg_val<uint32_t>(4);
     const uint32_t is_root = get_arg_val<uint32_t>(5);
+    const uint32_t is_leader = get_arg_val<uint32_t>(6);
 
     compute_kernel_hw_startup(cb_input_tiles, cb_scaler, cb_stat_sq);
 
@@ -191,13 +198,11 @@ void kernel_main() {
         // chunk, popped exactly once at the end of the block.
         const uint32_t in_block_pages = rows_t * (IS_RM_IN ? (NUM_CHUNKS * CB_CHUNK_TILES) : CB_W_TILES);
         {
-            DeviceZoneScopedN("cp_wait_in");
             cb_wait_front(cb_input_tiles, in_block_pages);
         }
 
         // ---------------- sumsq_block + mask_tail_block ----------------
         {
-            DeviceZoneScopedN("cp_sumsq");
             cb_reserve_back(cb_stat_sq, rows_t * nc);
             for (uint32_t k = 0; k < bulk_cols; ++k) {
                 const uint32_t chunk_base = k * CB_CHUNK_TILES;
@@ -268,7 +273,6 @@ void kernel_main() {
         // Scaler is a plain 1.0: the hidden padding was already zeroed above, so
         // no partial scaler is needed here.
         {
-            DeviceZoneScopedN("cp_reduce");
             ckl::reduce<
                 ckernel::PoolType::SUM,
                 ckernel::ReduceDim::REDUCE_ROW,
@@ -283,8 +287,11 @@ void kernel_main() {
         // cb_stat_gather at slot r * G + member. Summing across slots is one
         // more DEST accumulation over grid(rows_t, G); cb_zero_tile is the
         // identity B operand (BinaryFpu needs two CB inputs).
-        if (is_root) {
-            DeviceZoneScopedN("cp_combine");
+        // Combine level 1, on every row LEADER: fold this row's W_GROUP_SIZE
+        // gathered partials with one DEST accumulation. Flat (STAGE2_SPAN == 1) has
+        // leader == root and W_GROUP_SIZE == G, so this IS the Phase 0 chain and it
+        // packs straight into cb_stat_sum.
+        if (is_leader) {
             ckl::eltwise_chain(
                 ckl::EltwiseShape::grid(rows_t, W_GROUP_SIZE),
                 ckl::BinaryFpu<
@@ -296,14 +303,44 @@ void kernel_main() {
                     ckl::Dst::D0,
                     ckl::DestAccumulation::PerRow>{},
                 ckl::PackTile<ckl::output(
-                    cb_stat_sum,
+                    TWO_STAGE ? cb_branch_sum : cb_stat_sum,
                     ckl::ReservePolicy::PerOuter,
                     ckl::PushPolicy::PerOuter,
                     ckl::DataFormatReconfig::Enabled,
                     ckl::PackRelu::Disabled,
                     ckl::L1Accumulation::Disabled,
                     ckl::DestAccumulation::PerRow)>{});
+        }
 
+        // Combine level 2, on the ROOT: fold the STAGE2_SPAN row totals its writer
+        // gathered. The same chain one level up, with a much smaller fan-in — this
+        // is what turns the root's O(G) tile-add walk into O(nx) + O(ny), the O(nx)
+        // half running in parallel on every leader.
+        if constexpr (TWO_STAGE) {
+            if (is_root) {
+                ckl::eltwise_chain(
+                    ckl::EltwiseShape::grid(rows_t, STAGE2_SPAN),
+                    ckl::BinaryFpu<
+                        ckl::input(
+                            cb_stat_gather2, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+                        ckl::input(
+                            cb_zero_tile, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::OperandKind::Scalar),
+                        ckl::BinaryFpuOp::Add,
+                        ckl::BroadcastDim::None,
+                        ckl::Dst::D0,
+                        ckl::DestAccumulation::PerRow>{},
+                    ckl::PackTile<ckl::output(
+                        cb_stat_sum,
+                        ckl::ReservePolicy::PerOuter,
+                        ckl::PushPolicy::PerOuter,
+                        ckl::DataFormatReconfig::Enabled,
+                        ckl::PackRelu::Disabled,
+                        ckl::L1Accumulation::Disabled,
+                        ckl::DestAccumulation::PerRow)>{});
+            }
+        }
+
+        if (is_root) {
             // finalize: rsqrt(sum * (1/W_true) + eps) -> the multicast source.
             // The 1/W uses the TRUE, unpadded W.
             ckl::eltwise_chain(
@@ -321,10 +358,8 @@ void kernel_main() {
         // resident input block serve EVERY chunk, so both are caller-managed here:
         // waited once, popped once, after the last chunk.
         {
-            DeviceZoneScopedN("cp_wait_rstd");
             cb_wait_front(cb_rstd, rows_t);
         }
-        DeviceZoneScopedN("cp_apply");
         if constexpr (OUT_STRIDED) {
             cb_reserve_back(cb_output_tiles, rows_t * CB_W_TILES);
         }

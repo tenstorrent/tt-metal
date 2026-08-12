@@ -60,15 +60,18 @@ CB_RSTD = 11
 CB_GAMMA_RM = 12
 CB_GAMMA_TILES = 13
 CB_NORMED = 14
+CB_STAT_GATHER2 = 15  # two-stage combine only: the row leaders' gather, on the root
 CB_OUTPUT_TILES = 16
 CB_OUTPUT_RM = 17
+CB_BRANCH_SUM = 18  # two-stage combine only: a row leader's level-1 result
 
 # --------------------------------------------------------------------------
 # Semaphores
 # --------------------------------------------------------------------------
-SEM_GATHER = 0  # members -> root: "my partial is in your gather buffer"
+SEM_GATHER = 0  # members -> level-1 leader: "my partial is in your gather buffer"
 SEM_MCAST_READY = 1  # mcast data-ready flag (mcast_pipe)
 SEM_MCAST_CONSUMED = 2  # mcast consumer-ready counter (mcast_pipe)
+SEM_GATHER2 = 3  # two-stage combine only: row leaders -> root
 
 # --------------------------------------------------------------------------
 # Kernel arg-layout contracts. Each mirrors a hardcoded offset in a kernel
@@ -77,10 +80,10 @@ SEM_MCAST_CONSUMED = 2  # mcast consumer-ready counter (mcast_pipe)
 # instead of silently shifting a peer's args.
 # --------------------------------------------------------------------------
 READER_ACCESSOR_CT_BASE = 9  # rms_norm_reader.cpp: TensorAccessorArgs<9>
-WRITER_MCAST_CT_BASE = 7  # rms_norm_writer.cpp: MCAST_CT_BASE
-WRITER_MCAST_RT_BASE = 16  # rms_norm_writer.cpp: MCAST_RT_BASE
+WRITER_MCAST_CT_BASE = 9  # rms_norm_writer.cpp: MCAST_CT_BASE
+WRITER_MCAST_RT_BASE = 20  # rms_norm_writer.cpp: MCAST_RT_BASE
 _READER_NUM_ARGS = 17  # rms_norm_reader.cpp get_arg_val<uint32_t>(0..16)
-_COMPUTE_NUM_ARGS = 6  # rms_norm_compute.cpp get_arg_val<uint32_t>(0..5)
+_COMPUTE_NUM_ARGS = 7  # rms_norm_compute.cpp get_arg_val<uint32_t>(0..6)
 
 # --------------------------------------------------------------------------
 # Blocking / buffer-depth knobs — single source of truth.
@@ -97,11 +100,27 @@ MAX_GATHER_TILES = 64  # cap on block_row_tiles * w_group_size (cb_stat_gather)
 # core against a full gather + multicast round. 0 = uncapped.
 #
 # MEASURED on blackhole_p150b (110-core grid), interleaved bf16 decode shapes,
-# device kernel ns, uncapped -> capped at 32 (which admits G <= 22 on this grid):
+# device kernel ns, uncapped -> capped at 32 (which admits G <= 22 on this grid).
+# WITH THE FLAT ROOT-GATHER (Phase 0 .. Refinement 2b) the cap was a large win:
 #   (1,1,32,5120): 17676 -> 11088 ns (1.59x)   (1,1,32,7168): 18624 -> 12165 ns (1.53x)
 #   (1,1,32,2304): 12056 ->  9677 ns (1.25x)   (1,1,32,1024):  8927 ->  8672 ns (1.03x)
-# Prefill (tensor_row_tiles >> grid) is unaffected: it already selects G = 1..5.
-MAX_W_GROUP_SIZE = 32
+# because the root's combine was O(G): G-1 unicasts into ONE core's L1 plus G fp32
+# tile adds on ONE core, 3630 ns of a 12467 ns op at G=22 alone.
+#
+# THE TWO-STAGE GRID COMBINE (Refinement 3, `_tree_for_box`) removed that term, and
+# with it the reason to cap. Re-MEASURED at the pinned perf config (bf16 / TILE /
+# INTERLEAVED / fp32_dest_acc_en=False / HiFi2), cap 32 -> uncapped:
+#   (1,1,32,7168): 9661 -> 9210 ns (G 22 -> 110)   (1,1,32,5120): 8564 -> 8419 (22 -> 110)
+#   (1,1,32,2304): 7539 -> 7599 ns (22 -> 55)      (1,1,32,1024): 7119 -> 7153 (22 -> 22, same pick)
+# (the same G=110 geometry cost 19133 ns under the flat combine, so this is the
+# knob the scheme-change unlocked, not a re-tune of the old one). Prefill is
+# untouched at either setting — the score ties on occupancy at G=1..5 and prefers
+# the smallest G, measured 99239 ns / 424667 ns against 99379 / 422381.
+#
+# Uncapping also removes the idle-core artefact the cap left on its unmeasured
+# neighbours: at tensor_row_tiles = 2 the cap left 44 of 110 cores active (66 at 3,
+# 88 at 4), because `active = min(row_tiles, num_groups) * G`. The knob stays live.
+MAX_W_GROUP_SIZE = 0
 # Perf lamp P1 — the smallest number of blocks a core's row assignment is cut
 # into. `input_cb_depth = 2` only buys read/compute overlap when there is a
 # block b+1 for the reader to prefetch while compute runs block b; at
@@ -303,6 +322,7 @@ def _cb_specs(
     pin_in=False,
     pin_out=False,
     w_chunk_tiles=None,
+    stage2_span=1,
 ):
     """THE statement of this op's CB inventory — `(index, num_pages, page_size, format)`.
 
@@ -343,11 +363,20 @@ def _cb_specs(
         (CB_ZERO_TILE, 1, FP32_TILE_BYTES, ttnn.float32),
         (CB_STAT_SQ, R * nc_max, FP32_TILE_BYTES, ttnn.float32),
         (CB_STAT_PARTIAL, R, FP32_TILE_BYTES, ttnn.float32),
+        # Level-1 fan-in of the combine tree: `G` cores (flat root-gather) or, on a
+        # two-stage grid combine, the `nx` cores of one grid ROW of the group.
         (CB_STAT_GATHER, R * G, FP32_TILE_BYTES, ttnn.float32),
         (CB_STAT_SUM, R, FP32_TILE_BYTES, ttnn.float32),
         (CB_RSTD_SEND, R, FP32_TILE_BYTES, ttnn.float32),
         (CB_RSTD, R, FP32_TILE_BYTES, ttnn.float32),
     ]
+    if stage2_span > 1:
+        # Two-stage grid combine only: the row leaders' level-2 gather buffer on the
+        # root, and the level-1 result a leader hands to it. Together with the
+        # SHRUNK cb_stat_gather (R*nx instead of R*G) this is strictly LESS L1 than
+        # the flat combine — R*(nx + ny + 1) fp32 tiles against R*nx*ny.
+        specs.append((CB_STAT_GATHER2, R * stage2_span, FP32_TILE_BYTES, ttnn.float32))
+        specs.append((CB_BRANCH_SUM, R, FP32_TILE_BYTES, ttnn.float32))
     if not pin_in:
         # The whole block stays resident here (both passes read it), so this CB is
         # sized on the block width, never on the chunk. On the ROW_MAJOR leg tilize
@@ -399,7 +428,72 @@ def _gamma_rm_aliases_input_rm(geo, unchunked=True):
     )
 
 
-def _cb_bytes(geo, C, G, is_rm_out, has_tail, depths=_DEPTH_LADDER[0], pin_in=False, pin_out=False, w_chunk_tiles=None):
+def _tree_for_box(num_members, nx, ny):
+    """The combine topology for ONE reduction group — `(stage1_span, stage2_span)`.
+
+    The combine is always a TWO-LEVEL tree; `stage2_span == 1` is the degenerate
+    flat root-gather (every member unicasts straight to the root, which sums all
+    `G` partials), i.e. exactly the Phase 0 schedule.
+
+    A group whose bounding box is FULLY populated and more than one grid row tall
+    takes the real tree instead: reduce along x to one leader per grid row
+    (`stage1_span = nx`), then along y to the root (`stage2_span = ny`). That is
+    `tensix_all_reduce`'s measured `two_stage_grid_reduce` — its rule of thumb is
+    "grid two-stage when the grid is busy or the payload is tiny", and this op's
+    payload is `block_row_tiles` tiles, frequently 1.
+
+    WHY IT PAYS HERE (measured, zone timeline on (1,1,32,7168) at G=22): the root's
+    flat combine chain — `G` fp32 tile adds — took 3630 ns, the single largest term
+    left in the decode profile, and it is O(G) on ONE core. The tree makes the root's
+    critical path `nx + ny` tile adds (13 at 11x2, 21 at 11x10) with the `nx` half
+    running in PARALLEL on every row leader, and it cuts the level-1 fan-in at any
+    one destination from `G - 1` incoming unicasts to `nx - 1`.
+
+    A group with filler cores (a shard grid that is not a rectangle, Refinement 2)
+    keeps the flat path: a leader would have to know its row's ACTIVE member count,
+    which is not group-uniform, and cb_stat_gather's push quantum must divide a
+    group-uniform capacity.
+    """
+    # `nx == 1` (a vertical line of cores) is deliberately NOT a tree: level 1 would
+    # be a self-write, so it would cost the round an extra hop (~1 us of NoC +
+    # semaphore + CB latency, measured) and fold exactly the same number of tiles.
+    if nx > 1 and ny > 1 and num_members == nx * ny:
+        return nx, ny
+    return num_members, 1
+
+
+def _combine_tree(groups, G):
+    """`(stage1_span, stage2_span)` for the WHOLE program — one CT block for all groups."""
+    trees = set()
+    for g in groups:
+        xs = {c[0] for c in g["box_cores"]}
+        ys = {c[1] for c in g["box_cores"]}
+        tree = _tree_for_box(len(g["members"]), len(xs), len(ys))
+        if tree[1] > 1:
+            # The tree's root must be the box's (x1, y1) corner, which is where the
+            # `members[-1]` convention puts it for every ordering we build. Fall back
+            # rather than assume it.
+            root = g["members"][-1]["core"]
+            if root != (max(xs), max(ys)):
+                tree = (len(g["members"]), 1)
+        trees.add(tree)
+    if len(trees) != 1:
+        return G, 1
+    return trees.pop()
+
+
+def _cb_bytes(
+    geo,
+    C,
+    G,
+    is_rm_out,
+    has_tail,
+    depths=_DEPTH_LADDER[0],
+    pin_in=False,
+    pin_out=False,
+    w_chunk_tiles=None,
+    stage2_span=1,
+):
     """`(fixed_bytes, per_row_bytes)` of the per-core CB footprint at `(C, G)`.
 
     DERIVED from `_cb_specs` — never restated — by differencing the inventory at
@@ -422,6 +516,7 @@ def _cb_bytes(geo, C, G, is_rm_out, has_tail, depths=_DEPTH_LADDER[0], pin_in=Fa
                 pin_in=pin_in,
                 pin_out=pin_out,
                 w_chunk_tiles=w_chunk_tiles,
+                stage2_span=stage2_span,
             )
         )
 
@@ -442,17 +537,30 @@ def _max_block_row_tiles(
     pin_in=False,
     pin_out=False,
     w_chunk_tiles=None,
+    stage2_span=1,
 ):
     """Closed-form L1 residency solve (a single expression, not a search).
 
-    Returns 0 when even R == 1 does not fit.
+    Returns 0 when even R == 1 does not fit. `G` is the combine tree's LEVEL-1
+    fan-in (the whole group when flat, one grid row when two-stage).
     """
     fixed_bytes, per_row_bytes = _cb_bytes(
-        geo, C, G, is_rm_out, has_tail, depths=depths, pin_in=pin_in, pin_out=pin_out, w_chunk_tiles=w_chunk_tiles
+        geo,
+        C,
+        G,
+        is_rm_out,
+        has_tail,
+        depths=depths,
+        pin_in=pin_in,
+        pin_out=pin_out,
+        w_chunk_tiles=w_chunk_tiles,
+        stage2_span=stage2_span,
     )
     if fixed_bytes + per_row_bytes > budget:
         return 0
-    cap = min(core_row_tiles, max(1, MAX_GATHER_TILES // G))
+    # MAX_GATHER_TILES caps the LARGEST stat buffer, which is R * the largest
+    # fan-in of the tree — `G` when flat, max(nx, ny) when two-stage.
+    cap = min(core_row_tiles, max(1, MAX_GATHER_TILES // max(G, stage2_span)))
     if MIN_PIPELINE_BLOCKS > 1:
         # Perf lamp P1: cut the assignment into >= MIN_PIPELINE_BLOCKS blocks so
         # the depth-`input_cb_depth` input CB has a block to prefetch.
@@ -489,7 +597,10 @@ def _select_candidates(geo, grid_x, grid_y, is_rm_out, budget, w_group_cap):
             C = _div_up(geo.tensor_w_tiles, G)
             active_groups = min(geo.tensor_row_tiles, num_groups)
             core_row_tiles = _div_up(geo.tensor_row_tiles, active_groups)
-            R = _max_block_row_tiles(geo, C, G, core_row_tiles, is_rm_out, has_tail, budget)
+            # An interleaved group is a FULL gc x gr rectangle by construction, so
+            # its combine tree follows straight from the split.
+            s1, s2 = _tree_for_box(G, gc, gr)
+            R = _max_block_row_tiles(geo, C, s1, core_row_tiles, is_rm_out, has_tail, budget, stage2_span=s2)
             if R == 0:
                 continue
             score = (active_groups * G, -G, R)
@@ -912,12 +1023,16 @@ def create_program_descriptor(
         # CHUNK are the only residency knobs left. Walk the depth ladder first at
         # WC == C (so every geometry that fits today keeps its byte-identical
         # single-chunk schedule), and only then chunk the hidden axis.
+        # The shard spec fixes the group geometry, so the combine tree follows from
+        # it too (flat whenever a group's box carries filler cores — see
+        # `_tree_for_box`).
+        sh_s1, sh_s2 = _combine_tree(groups, G)
         R, depths, W_CHUNK = 0, _DEPTH_LADDER[-1], C
         for candidate_depths in _DEPTH_LADDER:
             R = _max_block_row_tiles(
                 geo,
                 C,
-                G,
+                sh_s1,
                 max_row_count,
                 is_rm_out,
                 has_tail_global,
@@ -925,6 +1040,7 @@ def create_program_descriptor(
                 depths=candidate_depths,
                 pin_in=pin_in,
                 pin_out=pin_out,
+                stage2_span=sh_s2,
             )
             if R:
                 depths = candidate_depths
@@ -938,7 +1054,7 @@ def create_program_descriptor(
                     R = _max_block_row_tiles(
                         geo,
                         C,
-                        G,
+                        sh_s1,
                         max_row_count,
                         is_rm_out,
                         has_tail_global,
@@ -947,6 +1063,7 @@ def create_program_descriptor(
                         pin_in=pin_in,
                         pin_out=pin_out,
                         w_chunk_tiles=wc,
+                        stage2_span=sh_s2,
                     )
                     if R:
                         depths, W_CHUNK = candidate_depths, wc
@@ -961,6 +1078,14 @@ def create_program_descriptor(
                 f"alone take {(sv_in.bank_bytes + (sv_out.bank_bytes if sv_out is not None else 0))} bytes of the "
                 f"{_l1_cb_budget()}-byte budget."
             )
+
+    # ---- combine topology -------------------------------------------------
+    # ONE tree for the whole program (the kernels carry one CT block): level-1
+    # fan-in S1, level-2 fan-in S2. S2 == 1 is the flat root-gather of Phase 0 and
+    # is byte-identical to it — every group that is not a fully populated,
+    # multi-row rectangle keeps that path.
+    STAGE1_SPAN, STAGE2_SPAN = _combine_tree(groups, G)
+    TWO_STAGE = STAGE2_SPAN > 1
 
     all_cores = []
     for g in groups:
@@ -1027,7 +1152,7 @@ def create_program_descriptor(
         for index, num_pages, page_size, data_format in _cb_specs(
             geo,
             C,
-            G,
+            STAGE1_SPAN,
             R,
             is_rm_out,
             has_tail_global,
@@ -1036,6 +1161,7 @@ def create_program_descriptor(
             pin_in=pin_in,
             pin_out=pin_out,
             w_chunk_tiles=W_CHUNK,
+            stage2_span=STAGE2_SPAN,
         )
     ]
     if pin_in:
@@ -1047,6 +1173,7 @@ def create_program_descriptor(
         ttnn.SemaphoreDescriptor(id=SEM_GATHER, core_ranges=all_core_ranges, initial_value=0),
         ttnn.SemaphoreDescriptor(id=SEM_MCAST_READY, core_ranges=all_core_ranges, initial_value=0),
         ttnn.SemaphoreDescriptor(id=SEM_MCAST_CONSUMED, core_ranges=all_core_ranges, initial_value=0),
+        ttnn.SemaphoreDescriptor(id=SEM_GATHER2, core_ranges=all_core_ranges, initial_value=0),
     ]
 
     # ---- per-core runtime args ------------------------------------------
@@ -1065,6 +1192,13 @@ def create_program_descriptor(
     for gi, g in enumerate(groups):
         mc = mcasts[gi]
         root_virtual = device.worker_core_from_logical_core(g["root"])
+        # Combine tree, per group: a core's level-1 destination is its grid ROW's
+        # leader (the box's right-hand column) and its level-2 slot is its grid row
+        # index. Flat (STAGE2_SPAN == 1) collapses both to the root, so every
+        # expression below reduces to the Phase 0 one.
+        box_x1 = max(c[0] for c in g["box_cores"])
+        box_x0 = min(c[0] for c in g["box_cores"])
+        box_y0 = min(c[1] for c in g["box_cores"])
         row_start = g["row_start"]
         row_count = g["row_count"]
         num_blocks = _div_up(row_count, R)
@@ -1140,6 +1274,15 @@ def create_program_descriptor(
             )
             reader_args[(cx, cy)] = reader_own_args
 
+            if TWO_STAGE:
+                leader_virtual = device.worker_core_from_logical_core(ttnn.CoreCoord(box_x1, cy))
+                s1_slot, s2_slot = cx - box_x0, cy - box_y0
+                is_leader = 1 if cx == box_x1 else 0
+            else:
+                leader_virtual = root_virtual
+                s1_slot, s2_slot = slot, 0
+                is_leader = is_root
+
             writer_own_args = [
                 output_tensor.buffer_address(),
                 row_start,
@@ -1148,7 +1291,7 @@ def create_program_descriptor(
                 last_block_row_tiles,
                 w_start,
                 core_w,
-                slot,
+                s1_slot,
                 is_root,
                 int(root_virtual.x),
                 int(root_virtual.y),
@@ -1157,6 +1300,10 @@ def create_program_descriptor(
                 out_slice_bytes,
                 out_byte_offset,
                 shard_row_bytes_out,
+                int(leader_virtual.x),
+                int(leader_virtual.y),
+                is_leader,
+                s2_slot,
             ]
             # The writer kernel reads the mcast runtime args from a hardcoded
             # offset (`MCAST_RT_BASE`), so the count of the writer's own args is
@@ -1176,6 +1323,7 @@ def create_program_descriptor(
                 core_w,
                 has_tail,
                 is_root,
+                is_leader,
             ]
             assert len(compute_own_args) == _COMPUTE_NUM_ARGS
             compute_args[(cx, cy)] = compute_own_args
@@ -1226,10 +1374,12 @@ def create_program_descriptor(
         C,
         geo.tensor_w_tiles,
         1 if is_rm_out else 0,
-        G,
+        STAGE1_SPAN,
         SEM_GATHER,
         1 if sv_out is not None else 0,
         W_CHUNK,
+        STAGE2_SPAN,
+        SEM_GATHER2,
     ]
     assert len(writer_ct) == WRITER_MCAST_CT_BASE, (
         f"rms_norm: writer compile-time-arg layout drifted ({len(writer_ct)} own args); "
@@ -1240,7 +1390,7 @@ def create_program_descriptor(
 
     compute_ct = [
         C,
-        G,
+        STAGE1_SPAN,
         1 if geo.has_gamma else 0,
         1 if geo.is_rm_in else 0,
         1 if is_rm_out else 0,
@@ -1249,6 +1399,7 @@ def create_program_descriptor(
         1 if geo.is_rm_gamma else 0,
         1 if alias_gamma_rm else 0,
         W_CHUNK,
+        STAGE2_SPAN,
     ]
 
     kernels = [

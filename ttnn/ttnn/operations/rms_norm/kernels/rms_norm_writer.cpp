@@ -47,7 +47,6 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
-#include "tools/profiler/kernel_profiler.hpp"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
@@ -60,6 +59,8 @@ namespace {
 constexpr uint32_t cb_zero_tile = 4;
 constexpr uint32_t cb_stat_partial = 7;
 constexpr uint32_t cb_stat_gather = 8;
+constexpr uint32_t cb_stat_gather2 = 15;  // two-stage combine only (root)
+constexpr uint32_t cb_branch_sum = 18;    // two-stage combine only (row leaders)
 constexpr uint32_t cb_rstd_send = 10;
 constexpr uint32_t cb_rstd = 11;
 constexpr uint32_t cb_output_tiles = 16;
@@ -144,8 +145,15 @@ void kernel_main() {
     // wide to hold. See the compute kernel's "HIDDEN-AXIS CHUNKING" note.
     constexpr uint32_t CB_CHUNK_TILES = get_compile_time_arg_val(6);
     constexpr uint32_t NUM_CHUNKS = (CB_W_TILES + CB_CHUNK_TILES - 1) / CB_CHUNK_TILES;
-    constexpr uint32_t MCAST_CT_BASE = 7;
-    constexpr uint32_t MCAST_RT_BASE = 16;
+    // Level-2 fan-in of the combine tree. 1 == the flat root-gather (every member
+    // unicasts straight to the root and W_GROUP_SIZE above is the whole group), in
+    // which case every `if constexpr (TWO_STAGE)` below compiles out and this
+    // kernel is byte-identical to the Phase 0 one.
+    constexpr uint32_t STAGE2_SPAN = get_compile_time_arg_val(7);
+    constexpr uint32_t SEM_GATHER2 = get_compile_time_arg_val(8);
+    constexpr bool TWO_STAGE = STAGE2_SPAN > 1;
+    constexpr uint32_t MCAST_CT_BASE = 9;
+    constexpr uint32_t MCAST_RT_BASE = 20;
     constexpr auto mc = McastArgs<MCAST_CT_BASE, MCAST_RT_BASE>();
     constexpr auto dst_args = TensorAccessorArgs<mc.next_compile_time_args_offset()>();
 
@@ -156,7 +164,7 @@ void kernel_main() {
     const uint32_t last_block_row_tiles = get_arg_val<uint32_t>(4);
     const uint32_t w_tile_start = get_arg_val<uint32_t>(5);
     const uint32_t core_w = get_arg_val<uint32_t>(6);
-    const uint32_t my_slot = get_arg_val<uint32_t>(7);
+    const uint32_t my_slot = get_arg_val<uint32_t>(7);  // level-1 slot in the leader's gather
     const uint32_t is_root = get_arg_val<uint32_t>(8);
     const uint32_t root_x = get_arg_val<uint32_t>(9);
     const uint32_t root_y = get_arg_val<uint32_t>(10);
@@ -165,6 +173,13 @@ void kernel_main() {
     const uint32_t out_slice_bytes = get_arg_val<uint32_t>(13);
     const uint32_t out_byte_offset = get_arg_val<uint32_t>(14);
     [[maybe_unused]] const uint32_t shard_row_bytes = get_arg_val<uint32_t>(15);
+    // Combine tree, level 1: this core's destination is its grid ROW's leader. Flat
+    // (STAGE2_SPAN == 1) sets leader == root and is_leader == is_root on the host,
+    // so the gather leg below is unchanged there.
+    const uint32_t leader_x = get_arg_val<uint32_t>(16);
+    const uint32_t leader_y = get_arg_val<uint32_t>(17);
+    const uint32_t is_leader = get_arg_val<uint32_t>(18);
+    [[maybe_unused]] const uint32_t my_row_slot = get_arg_val<uint32_t>(19);  // level-2 slot on the root
 
     // A mcast-box FILLER core (see the reader): inside a group's broadcast rectangle
     // but owning no shard. It carries no work, never gathers and never acks — the
@@ -175,16 +190,19 @@ void kernel_main() {
 
     Noc noc;
     Semaphore<> gather_sem(SEM_GATHER);
+    [[maybe_unused]] Semaphore<> gather2_sem(SEM_GATHER2);
 
     // ---- prepare_constants (cb_zero_tile), ROOT ONLY ------------------------
     // The identity B operand of the combine's Add accumulation (BinaryFpu needs two
-    // CB inputs), read by the ROOT's compute kernel and by nobody else. It lives
+    // CB inputs), read by the compute kernel of every core that runs a combine
+    // chain — the row LEADERS (which is the root alone when the tree is flat, since
+    // is_leader == is_root there) and nobody else. It lives
     // here rather than in the reader for one measured reason: the fill is a
     // 4096-byte scalar store loop costing ~2.4 us, and in the reader it sat AHEAD
     // of the input block on the critical path of every core. This BRISC is idle
     // until the first partial is ready (~6 us on the root at the decode geometry),
     // so the fill is free here and lands long before the combine chain waits on it.
-    if (is_root) {
+    if (is_leader) {
         cb_reserve_back(cb_zero_tile, 1);
         volatile tt_l1_ptr uint32_t* zp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_zero_tile));
         for (uint32_t i = 0, n = get_tile_size(cb_zero_tile) / 4; i < n; ++i) {
@@ -195,10 +213,13 @@ void kernel_main() {
 
     const uint32_t stat_tile_bytes = get_tile_size(cb_stat_gather);
     // cb_stat_gather holds exactly block_row_tiles * W_GROUP_SIZE pages and the
-    // root pushes/pops that many per block, so its write pointer is back at the
+    // leader pushes/pops that many per block, so its write pointer is back at the
     // CB base at the start of every block — identical on every group member,
-    // which is what lets a member address the root's slots by local pointer.
+    // which is what lets a member address the leader's slots by local pointer.
     const uint32_t gather_base = get_write_ptr(cb_stat_gather);
+    // Same argument, one level up: block_row_tiles * STAGE2_SPAN pages, pushed and
+    // popped whole every block, so the base is stable and group-uniform.
+    [[maybe_unused]] const uint32_t gather2_base = TWO_STAGE ? get_write_ptr(cb_stat_gather2) : 0;
 
     const uint32_t out_tile_bytes = get_tile_size(cb_output_tiles);
     // Default page size == the accessor args' aligned page size, which is the
@@ -217,7 +238,6 @@ void kernel_main() {
     // CB the interleaved leg never chunks.
     uint32_t sticks_done = 0;
     auto store_block = [&](uint32_t b, uint32_t rows_t) {
-        DeviceZoneScopedN("wr_store");
         if constexpr (IS_RM_OUT) {
             constexpr uint32_t out_chunk_bytes = (get_tile_size(cb_output_rm) / TILE_HW_DIM) * CB_CHUNK_TILES;
             // ROW_MAJOR output, resident shard or DRAM. untilize emits the
@@ -290,23 +310,24 @@ void kernel_main() {
     // member start block b+1 without having received block b (e.g. a deeper
     // cb_rstd, or dropping the pre-handshake) must add explicit back-pressure on
     // cb_stat_gather.
+    // Level 1: every member -> its row LEADER's cb_stat_gather, slot r*S1 + my_slot.
+    // Flat (STAGE2_SPAN == 1) has leader == root and W_GROUP_SIZE == G, i.e. the
+    // Phase 0 gather verbatim.
     auto gather_partials = [&](uint32_t b, uint32_t rows_t) {
         {
-            DeviceZoneScopedN("wr_wait_partial");
             cb_wait_front(cb_stat_partial, rows_t);
         }
-        DeviceZoneScopedN("wr_gather");
         const uint32_t src = get_read_ptr(cb_stat_partial);
         for (uint32_t r = 0; r < rows_t; ++r) {
             const uint32_t dst = gather_base + (r * W_GROUP_SIZE + my_slot) * stat_tile_bytes;
-            noc_async_write(src + r * stat_tile_bytes, get_noc_addr(root_x, root_y, dst), stat_tile_bytes);
+            noc_async_write(src + r * stat_tile_bytes, get_noc_addr(leader_x, leader_y, dst), stat_tile_bytes);
         }
         noc_async_write_barrier();
         cb_pop_front(cb_stat_partial, rows_t);
         if constexpr (W_GROUP_SIZE > 1) {
-            if (!is_root) {
+            if (!is_leader) {
                 // Ordered behind the write barrier above, so the partial has
-                // landed before the root can observe the count.
+                // landed before the leader can observe the count.
                 //
                 // No atomic barrier follows: this increment and the
                 // `consumer_ready` increment that ReceiverPipe::receive() issues
@@ -317,16 +338,45 @@ void kernel_main() {
                 // — so an early consumer_ready arrival can never let the root run
                 // ahead of the gather. Preserve that ordering on the root if this
                 // handshake is ever restructured.
-                gather_sem.up(noc, root_x, root_y, 1);
+                gather_sem.up(noc, leader_x, leader_y, 1);
             }
         }
-        if (is_root) {
+        if (is_leader) {
             cb_reserve_back(cb_stat_gather, rows_t * W_GROUP_SIZE);
             if constexpr (W_GROUP_SIZE > 1) {
-                DeviceZoneScopedN("wr_gather_wait");
                 gather_sem.wait_min((b + 1) * (W_GROUP_SIZE - 1));
             }
             cb_push_back(cb_stat_gather, rows_t * W_GROUP_SIZE);
+        }
+    };
+
+    // Level 2 (two-stage only): every row LEADER -> the root's cb_stat_gather2,
+    // slot r*S2 + my_row_slot. Compiled out entirely when the combine is flat.
+    // The race argument of the level-1 gather carries over unchanged: a leader
+    // cannot reach block b+1's level-2 write without having RECEIVED the block-b
+    // multicast, which the root only sends after its compute has popped
+    // cb_stat_gather2 for block b.
+    [[maybe_unused]] auto gather_rows = [&](uint32_t b, uint32_t rows_t) {
+        if constexpr (TWO_STAGE) {
+            if (!is_leader) {
+                return;
+            }
+            cb_wait_front(cb_branch_sum, rows_t);
+            const uint32_t src = get_read_ptr(cb_branch_sum);
+            for (uint32_t r = 0; r < rows_t; ++r) {
+                const uint32_t dst = gather2_base + (r * STAGE2_SPAN + my_row_slot) * stat_tile_bytes;
+                noc_async_write(src + r * stat_tile_bytes, get_noc_addr(root_x, root_y, dst), stat_tile_bytes);
+            }
+            noc_async_write_barrier();
+            cb_pop_front(cb_branch_sum, rows_t);
+            if (!is_root) {
+                gather2_sem.up(noc, root_x, root_y, 1);
+            }
+            if (is_root) {
+                cb_reserve_back(cb_stat_gather2, rows_t * STAGE2_SPAN);
+                gather2_sem.wait_min((b + 1) * (STAGE2_SPAN - 1));
+                cb_push_back(cb_stat_gather2, rows_t * STAGE2_SPAN);
+            }
         }
     };
 
@@ -338,13 +388,12 @@ void kernel_main() {
         for (uint32_t b = 0; b < num_blocks; ++b) {
             const uint32_t rows_t = (b + 1 == num_blocks) ? last_block_row_tiles : block_row_tiles;
             gather_partials(b, rows_t);
+            gather_rows(b, rows_t);
             cb_reserve_back(cb_rstd, rows_t);
             const uint32_t rstd_dst = get_write_ptr(cb_rstd);
             {
-                DeviceZoneScopedN("wr_wait_rstd_send");
                 cb_wait_front(cb_rstd_send, rows_t);
             }
-            DeviceZoneScopedN("wr_send");
             // src != dst selects INCLUDE_SRC loopback, so the root lands its own
             // copy in cb_rstd through the same path as every other member.
             sender.send(get_read_ptr(cb_rstd_send), rstd_dst, rows_t * stat_tile_bytes);
@@ -357,9 +406,9 @@ void kernel_main() {
         for (uint32_t b = 0; b < num_blocks; ++b) {
             const uint32_t rows_t = (b + 1 == num_blocks) ? last_block_row_tiles : block_row_tiles;
             gather_partials(b, rows_t);
+            gather_rows(b, rows_t);
             cb_reserve_back(cb_rstd, rows_t);
             {
-                DeviceZoneScopedN("wr_receive");
                 receiver.receive();
             }
             cb_push_back(cb_rstd, rows_t);

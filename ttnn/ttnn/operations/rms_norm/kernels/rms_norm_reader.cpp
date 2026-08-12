@@ -73,7 +73,6 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
-#include "tools/profiler/kernel_profiler.hpp"
 
 namespace {
 constexpr uint32_t cb_input_rm = 0;
@@ -256,7 +255,6 @@ void kernel_main() {
     // layout. The masking of the ragged hidden tile is done numerically by the
     // compute kernel, so the scaler here is a plain 1.0.
     {
-        DeviceZoneScopedN("rd_const");
         dataflow_kernel_lib::
             calculate_and_prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
     }
@@ -348,14 +346,24 @@ void kernel_main() {
         }
     };
 
-    // NOTE: gamma is deliberately NOT loaded here. It is first CONSUMED by the
-    // apply pass of block 0, which cannot start until the cross-core combine has
-    // returned `rstd` — several microseconds after the input block is needed. The
-    // input block, by contrast, gates every downstream stage, so it is read FIRST
-    // and gamma is loaded immediately behind it (below), inside the block loop's
-    // first iteration. MEASURED (zone timeline, (1,1,32,7168) interleaved decode):
-    // gamma ahead of the block cost 1447 ns of pure critical path; behind it, the
-    // read is fully hidden under the combine round. Still exactly once per kernel.
+    // GAMMA ORDERING. A TILE gamma is first CONSUMED by the apply pass of block 0,
+    // which cannot start until the cross-core combine has returned `rstd` — several
+    // microseconds after the input block is needed. The input block, by contrast,
+    // gates every downstream stage, so it is read FIRST and a TILE gamma is loaded
+    // immediately behind it (below), inside the block loop's first iteration.
+    // MEASURED (zone timeline, (1,1,32,7168) interleaved decode): gamma ahead of the
+    // block cost 1447 ns of pure critical path; behind it, the read is fully hidden
+    // under the combine round. Still exactly once per kernel.
+    //
+    // A ROW_MAJOR gamma keeps the OLD order and is loaded here, because it has two
+    // consumers that both run before the block loop can: compute tilizes the stick
+    // into cb_gamma_tiles up front, and under ALIAS_GAMMA_RM the staging buffer IS
+    // cb_input_rm — whose "disjoint lifetimes" guarantee is precisely that gamma
+    // dies before the input's first push. Reordering it produced PCC ~ 0 (compute
+    // tilized input sticks as gamma).
+    if constexpr (HAS_GAMMA && !CHUNKED && IS_RM_GAMMA) {
+        load_gamma_chunk(0);
+    }
 
     // ---------------- load_block (per block) -----------------------------
     // The hidden axis is walked in NUM_CHUNKS chunks of CB_CHUNK_TILES; at
@@ -366,7 +374,6 @@ void kernel_main() {
     [[maybe_unused]] const auto acc_tiles = TensorAccessor(src_args, src_addr, get_tile_size(cb_input_tiles));
     uint32_t sticks_done = 0;
     for (uint32_t b = 0; b < num_blocks; ++b) {
-        DeviceZoneScopedN("rd_block");
         const uint32_t rows_t = (b + 1 == num_blocks) ? last_block_row_tiles : block_row_tiles;
 
         if constexpr (IS_RM_IN) {
@@ -434,13 +441,12 @@ void kernel_main() {
             for (uint32_t k = 0; k < NUM_CHUNKS; ++k) {
                 load_gamma_chunk(k);
             }
-        } else if constexpr (HAS_GAMMA) {
-            // Unchunked: the whole slice, once per kernel, immediately BEHIND the
-            // first block read (see the note above `load_gamma_chunk`). The reader
-            // cannot deadlock here: it only ever waits on cb_input_tiles space, and
-            // the next such wait is block b+1's, strictly after this push.
+        } else if constexpr (HAS_GAMMA && !IS_RM_GAMMA) {
+            // Unchunked TILE gamma: the whole slice, once per kernel, immediately
+            // BEHIND the first block read (see the note above `load_gamma_chunk`).
+            // The reader cannot deadlock here: it only ever waits on cb_input_tiles
+            // space, and the next such wait is block b+1's, strictly after this push.
             if (b == 0) {
-                DeviceZoneScopedN("rd_gamma");
                 load_gamma_chunk(0);
             }
         }
