@@ -20,6 +20,45 @@ namespace ckernel
 namespace sfpu
 {
 
+// Currently unused: 8-datum load/store variants kept alongside the *16
+// versions below for future top32 configurations that process half-width
+// strips (e.g. single-LREG-pair sorts); not referenced by any kernel today.
+template <bool is_fp32_dest_acc_en>
+inline void bitonic_top32_load8(std::uint32_t offset, std::uint32_t dist)
+{
+    constexpr std::uint32_t dst_indices_offset  = 128; // 2 tile x 64 rows per tile
+    constexpr InstrModLoadStore instr_mod_index = is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
+
+    std::uint32_t face_offset = offset >> 4;
+    std::uint32_t ld_offset   = (offset & 0xF) + face_offset * 32;
+
+    // Load 16 consecutive numbers
+    TT_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, ld_offset);
+    TT_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_7, ld_offset + dist);
+
+    // Load 16 consecutive indices
+    TT_SFPLOAD(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_7, dst_indices_offset + ld_offset);
+    TT_SFPLOAD(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_7, dst_indices_offset + ld_offset + dist);
+}
+
+template <bool is_fp32_dest_acc_en>
+inline void bitonic_top32_store8(std::uint32_t offset, std::uint32_t dist)
+{
+    constexpr std::uint32_t dst_indices_offset  = 128; // 2 tile x 64 rows per tile
+    constexpr InstrModLoadStore instr_mod_index = is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
+
+    std::uint32_t face_offset = offset >> 4;
+    std::uint32_t ld_offset   = (offset & 0xF) + face_offset * 32;
+
+    // Load 16 consecutive numbers
+    TT_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_7, ld_offset);
+    TT_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_7, ld_offset + dist);
+
+    // Load 16 consecutive indices
+    TT_SFPSTORE(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_7, dst_indices_offset + ld_offset + 0);
+    TT_SFPSTORE(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_7, dst_indices_offset + ld_offset + dist);
+}
+
 template <bool is_fp32_dest_acc_en>
 inline void bitonic_top32_load16(std::uint32_t dist0, std::uint32_t dist1)
 {
