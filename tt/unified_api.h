@@ -105,6 +105,72 @@ struct Block {
 };
 
 // ---------------------------------------------------------------------------
+// Accumulator -- multi-block matmul
+//
+// The k-loop belongs to the kernel, because the operand CBs have to be waited
+// and popped per block so the reader can stream them. The Accumulator holds the
+// state that loop would otherwise have to carry: which buffer is the running
+// total, which is the destination, and whether there is anything to reload yet.
+//
+//     Accumulator acc(partials_storage, out_storage);
+//     for (uint32_t k = 0; k < Geom::num_blocks; ++k) {
+//         ComputeBlock a = noc_load<1>(in0_storage, in0, k).wait();
+//         ComputeBlock b = noc_load<1>(in1_storage, in1, k).wait();
+//         Block result = acc.accumulate(matmul<Geom>(a, b), k == Geom::num_blocks - 1);
+//         if (k == Geom::num_blocks - 1) noc_store<0>(std::move(result), out, 0);
+//     }
+//
+// The two Storages must be DIFFERENT circular buffers. Intermediate blocks are
+// pushed to the accumulation buffer and re-consumed by the next call; if that
+// were also the output buffer, the DM writer would drain the first intermediate
+// as though it were the answer, and two threads would be popping one CB (see
+// the warning in api/compute/cb_api.h).
+// ---------------------------------------------------------------------------
+
+enum class AccumulatorMode {
+    Dst,  // reload partials into DST and matmul on top
+    L1,   // let the packer accumulate into L1 (not yet implemented)
+};
+
+template <AccumulatorMode Mode = AccumulatorMode::Dst>
+class Accumulator {
+public:
+    Accumulator(const Storage& acc_storage, const Storage& out_storage) :
+        acc_storage(acc_storage), out_storage(out_storage) {}
+
+    // Fold one k-block into the running total. `finish` selects the pack
+    // target: the accumulation buffer, or the output buffer on the last block.
+    //
+    // An epilogue rides on the node itself -- relu(matmul<Geom>(a, b)) appends
+    // to the node's chain, and the chain is applied in place on DST on the final
+    // block, when the accumulator is complete. No separate argument needed.
+    //
+    // Only the Block returned on the finishing call is meaningful; earlier ones
+    // describe the accumulation buffer, which the next call re-consumes.
+    template <typename Node>
+    Block accumulate(const Node& node, bool finish) {
+        static_assert(is_fpu_fusion<Node>::value, "Accumulator drives FPU fusions");
+        static_assert(
+            Mode == AccumulatorMode::Dst || Node::chain::empty,
+            "an epilogue chain is only available in Dst mode; in L1 mode the result is assembled "
+            "by the packer and never sits complete in DST for the chain to fold into");
+        static_assert(Mode == AccumulatorMode::Dst, "AccumulatorMode::L1 is not implemented yet");
+
+        Strategy<expr::kind_of_t<Node>>::run(node, acc_storage.cb_id, out_storage.cb_id, reload, finish);
+        reload = !finish;
+        return finish ? Block(out_storage) : Block(acc_storage);
+    }
+
+    // Reset between output blocks.
+    void clear() { reload = false; }
+
+private:
+    const Storage& acc_storage;
+    const Storage& out_storage;
+    bool reload = false;
+};
+
+// ---------------------------------------------------------------------------
 // ComputeBlock -- compute-side consumption of a Block, and an expression leaf
 // ---------------------------------------------------------------------------
 
