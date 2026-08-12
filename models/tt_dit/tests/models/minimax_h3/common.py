@@ -30,7 +30,10 @@ from ....utils.test import ring_params_8k_req_exact_devices, ring_params_req_exa
 _TUNED_MESH_SHAPES = ((4, 8), (4, 32))
 _RING_PARAMS_BY_SHAPE = {
     (4, 8): ring_params_req_exact_devices,
-    (4, 32): ring_params_8k_req_exact_devices,
+    # The quad traces its denoise step (`trace_denoise` in the pipeline's `_PRESETS_BH`), and a trace
+    # needs somewhere to live. Same 150 MB Wan reserves for its 4x32 perf row; the region is only
+    # reserved, so shapes that never capture a trace pay nothing but address space.
+    (4, 32): {**ring_params_8k_req_exact_devices, "trace_region_size": 150000000},
 }
 
 

@@ -153,7 +153,11 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
     # 8 -> 32. The consequence to remember is that the SP alignment becomes 32 * TILE_SIZE = 1024
     # instead of 256, so every packed length and therefore every program in the 50-block stack is
     # re-keyed; see the padding contract in `__call__`.
-    (4, 32): {"tp_axis": 0, "sp_axis": 1, "num_links": 2, "topology": ttnn.Topology.Ring},
+    # `trace_denoise` is the one key unique to the quad, mirroring Wan's `traced = mesh_shape ==
+    # (4, 32)`. At SP=32 a step is dispatch-bound rather than compute-bound, so the trace is what
+    # makes the extra devices pay; at 4x8 there is enough work per chip that it is not needed, and
+    # leaving it off there keeps the measured working point exactly as it was.
+    (4, 32): {"tp_axis": 0, "sp_axis": 1, "num_links": 2, "topology": ttnn.Topology.Ring, "trace_denoise": True},
 }
 
 
@@ -258,6 +262,9 @@ class MiniMaxH3Pipeline:
         sp_axis = preset["sp_axis"] if sp_axis is None else sp_axis
         num_links = preset["num_links"] if num_links is None else num_links
         topology = preset["topology"] if topology is None else topology
+        self.trace_denoise = preset.get("trace_denoise", False)
+        # Denoise generations completed. Tracing engages only after one untraced pass; see `_denoise`.
+        self._generations_run = 0
         # One repository holds both partitions -- `transformer/` for t2va/fl2va and
         # `transformer_ref/` for ref2va -- with byte-identical `config.json`, so only the
         # weights differ. Fixed at construction because each is 62 GB and switching would
@@ -1821,6 +1828,25 @@ class MiniMaxH3Pipeline:
 
         timesteps = scheduler.timesteps
         audio_timesteps = audio_scheduler.timesteps
+
+        # Trace the per-step forward where the preset asks for it, following Wan, which enables
+        # tracing only on the quad (`traced = mesh_shape == (4, 32)` in its perf test). The win is
+        # not subtle at SP=32: each device holds a quarter of the rows it held at SP=8, so a step is
+        # dominated by dispatching 50 blocks from host across four MPI ranks rather than by the
+        # matmuls, and a trace replaces that dispatch with one replay. It also allocates the CCL
+        # persistent buffers once, at capture, instead of on the first step of every generation.
+        #
+        # Requires the precomputed-AdaLN path, which owns `timestep`; see `traced_step`.
+        # Not on the first generation. A capture can neither compile a program nor allocate a
+        # buffer -- it fails as "Cannot load new binaries during trace capture" and then "Writes are
+        # not supported during trace capture", the latter from `CCLManager`'s lazy
+        # `from_torch(torch.empty(...))` persistent buffers. Both are host work that a *complete*
+        # untraced generation does exactly once, so the first pass through this loop runs untraced
+        # and every pass after it is traced. That is the same shape as Wan, whose perf test warms
+        # the whole pipeline before anything is captured.
+        traced = self.trace_denoise and adaln_cache is not None and self._generations_run > 0
+        if traced:
+            transformer.traced_adaln_cache = adaln_cache
         t_preamble = time.time() - t_preamble
         t_first = t_steady = 0.0
         for i, t in enumerate(timesteps):
@@ -1856,18 +1882,31 @@ class MiniMaxH3Pipeline:
             tt_adaln = self._row_indices(adaln_indices(layout.token_tags, step_row_index), padded_len)
             tt_tsi = self._row_indices(step_row_index, padded_len)
 
-            video_velocity, audio_velocity = transformer(
-                video_1BVC=tt_video,
-                audio_1BAC=tt_audio,
-                prompt_1BLP=tt_prompt,
-                condition_blocks=tt_cond,
-                timestep=tt_timestep,
-                adaln_indices=tt_adaln,
-                timestep_indices=tt_tsi,
-                rope_cos=rope_cos,
-                rope_sin=rope_sin,
-                adaln_cache=adaln_cache,
-            )
+            if traced:
+                video_velocity, audio_velocity = transformer.traced_step(
+                    video_1BVC=tt_video,
+                    audio_1BAC=tt_audio,
+                    prompt_1BLP=tt_prompt,
+                    condition_blocks=tt_cond,
+                    adaln_indices=tt_adaln,
+                    timestep_indices=tt_tsi,
+                    rope_cos=rope_cos,
+                    rope_sin=rope_sin,
+                    traced=True,
+                )
+            else:
+                video_velocity, audio_velocity = transformer(
+                    video_1BVC=tt_video,
+                    audio_1BAC=tt_audio,
+                    prompt_1BLP=tt_prompt,
+                    condition_blocks=tt_cond,
+                    timestep=tt_timestep,
+                    adaln_indices=tt_adaln,
+                    timestep_indices=tt_tsi,
+                    rope_cos=rope_cos,
+                    rope_sin=rope_sin,
+                    adaln_cache=adaln_cache,
+                )
 
             # Replicated after the model's SP gather: read one replica. The model returns the *target*
             # rows only, so reshape to the row width rather than to `video_rows.shape`, which still
@@ -1897,6 +1936,7 @@ class MiniMaxH3Pipeline:
             if i % 10 == 0 or i == len(timesteps) - 1:
                 logger.info(f"  step {i + 1}/{len(timesteps)} t={float(t):.4f}")
 
+        self._generations_run += 1
         steady_steps = max(len(timesteps) - 1, 1)
         logger.info(
             f"denoise breakdown: preamble {t_preamble:.1f}s (rope {t_rope:.1f}s) | "

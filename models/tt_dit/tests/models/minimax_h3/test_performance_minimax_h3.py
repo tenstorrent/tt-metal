@@ -112,7 +112,20 @@ def test_t2va_warm_latency(mesh_device, reset_seeds, num_frames):
 
     # Warm every program and buffer this shape touches. Not timed: this is the warm-window method,
     # not the measurement.
-    pipeline.warmup(num_frames=num_frames, height=HEIGHT, width=WIDTH, num_inference_steps=NUM_INFERENCE_STEPS)
+    # `prompt=PROMPT`, matching the fl2va and ref2va warmups. The default is the literal string
+    # "warmup", which tokenizes to a different length, and the text stream's matmuls are keyed on it:
+    # `token_refiner(context_embedder(prompt_1BLP))` has M = the prompt's token count. Warming at a
+    # different prompt therefore leaves the text path's programs uncompiled at the measured shape,
+    # so the "fully warm" run was still paying for them -- and on the quad it is fatal rather than
+    # merely slow, because a trace capture cannot compile ("Cannot load new binaries during trace
+    # capture. This program is not yet in program cache").
+    pipeline.warmup(
+        prompt=PROMPT,
+        num_frames=num_frames,
+        height=HEIGHT,
+        width=WIDTH,
+        num_inference_steps=NUM_INFERENCE_STEPS,
+    )
 
     output = pipeline(
         PROMPT,
