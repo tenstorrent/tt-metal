@@ -1,5 +1,9 @@
 # Audio decode — how to run the benchmarks
 
+> **Note:** some `audio_perf/` scripts cited below were removed once their conclusions were
+> captured here and in `ITEM1_RESULT.md` / `ITEM2_RESULT.md`. Recover any of them with
+> `git log -- models/tt_dit/tests/models/minimax_h3/audio_perf`. See `README.md` for what survives.
+
 Everything below was run on **bh-glx-110-c09u14** (32 Blackhole chips, mesh 1x1 for these tests).
 `tt-smi -r` is forbidden on this cluster (STATE.md) — use `tt-smi -glx_reset`, and reset after every
 kill.

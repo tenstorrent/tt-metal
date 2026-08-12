@@ -67,7 +67,8 @@ the floor and ~670 ms as data work.
       per-op-sync       6.94 ms total  ->    138.8 us/op
 
 All three are equal, so that microbenchmark is host-*issue*-bound and cannot measure a device floor
-at all. `op_floor.py`'s 180 us/op was host issue cost. **Retire the 1254 ms floor number.** The real
+at all. The retired `op_floor.py`'s 180 us/op was host issue cost. **Retire the 1254 ms floor number.**
+`op_pipeline.py` is kept as the standing counter-evidence. The real
 per-op device cost is ~260 ms / 6955 = ~37 us.
 
 ## Why this matters more than the host/kernel answer

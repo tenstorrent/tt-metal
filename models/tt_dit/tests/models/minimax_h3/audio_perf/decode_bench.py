@@ -1,6 +1,6 @@
 """Median decode time over N runs, building the decoder once.
 
-decode_accuracy.py times one call per process, which is where the session's ~1% run-to-run spread
+Timing one call per process, as an earlier script did, is where the session's ~1% run-to-run spread
 came from. Build once, warm once, then time N decodes; report median and spread.
 """
 import json

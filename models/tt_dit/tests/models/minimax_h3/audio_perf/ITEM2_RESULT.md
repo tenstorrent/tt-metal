@@ -25,7 +25,7 @@
 > are labelled where they matter.
 
 Measured 2026-08-12 on `bh-glx-110-a09u02`, 4x8 Galaxy (32 chips), T=207, fusion off unless stated.
-Scripts: `factor_scan.py`, `halo_cost.py`, `trace_on_mesh.py`, `fusion_on_mesh.py`,
+Scripts: `factor_scan.py`, `trace_on_mesh.py`, `fusion_on_mesh.py`,
 `divergence_probe.py`.
 
 **Three things, in order of importance.** (1) Trace is worth **3.14x** on a sharded mesh against 1.04x
@@ -124,7 +124,7 @@ understates the problem: `(4, 0)` belongs there too until this is fixed.
 Both were the obvious explanations and both are wrong, which is why they are recorded here rather than
 left as plausible.
 
-* **Halo CCLs are not the cost.** `halo_cost.py` times `_t_neighbor_pad` at every decoder stage shape:
+* **Halo CCLs are not the cost.** Timing `_t_neighbor_pad` at every decoder stage shape gave:
   ~202-289 us/call, flat across C=512..8 and identical at pad=1 and pad=25. All ~126 per-conv halo
   exchanges are **~27 ms per decode**, not the ~500 ms they were suspected of.
 * **Sharding does not push convs onto the chunked fallback.** The DRAM auto-slice C-chunking warnings

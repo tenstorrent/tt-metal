@@ -1,5 +1,9 @@
 # Fusion implementation — start here, build only
 
+> **Note:** some `audio_perf/` scripts cited below were removed once their conclusions were
+> captured here and in `ITEM1_RESULT.md` / `ITEM2_RESULT.md`. Recover any of them with
+> `git log -- models/tt_dit/tests/models/minimax_h3/audio_perf`. See `README.md` for what survives.
+
 For a fresh session. **Do not re-derive anything in this file.** The design is settled and the maths is
 verified; what is missing is build-and-verify cycles. The previous session produced ~1.16x against a
 5-100x goal because it kept converting implementation into analysis. Don't repeat that.

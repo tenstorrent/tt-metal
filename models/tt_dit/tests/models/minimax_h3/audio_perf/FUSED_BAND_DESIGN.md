@@ -1,5 +1,9 @@
 # Fused band op — design, grounded in where the 53 ops actually come from
 
+> **Note:** some `audio_perf/` scripts cited below were removed once their conclusions were
+> captured here and in `ITEM1_RESULT.md` / `ITEM2_RESULT.md`. Recover any of them with
+> `git log -- models/tt_dit/tests/models/minimax_h3/audio_perf`. See `README.md` for what survives.
+
 Written before the implementation, because the op-count structure turned out not to be what
 `AUDIO_FUSION_PLAN.md` assumed, and it changes the op's shape.
 

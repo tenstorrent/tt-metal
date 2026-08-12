@@ -1,5 +1,9 @@
 # fp32 `ttnn.transpose` on ROW_MAJOR silently truncates to TF32 (and takes `ttnn.concat` with it)
 
+> **Note:** some `audio_perf/` scripts cited below were removed once their conclusions were
+> captured here and in `ITEM1_RESULT.md` / `ITEM2_RESULT.md`. Recover any of them with
+> `git log -- models/tt_dit/tests/models/minimax_h3/audio_perf`. See `README.md` for what survives.
+
 Draft for an upstream issue. Found while chasing an accuracy divergence in the MiniMax-H3 audio
 decoder; the audio angle is incidental, the defect is general.
 

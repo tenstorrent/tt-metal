@@ -2,8 +2,9 @@
 
 stage_bisect.py put the first divergence at `conv_pre` -- the first conv in the graph -- at -191 dB,
 i.e. the sharded values are ~1e9 times the reference magnitude. That is the signature of uninitialized
-memory or a read that races the CCL, not of padding arithmetic being subtly off. halo_cost.py timed
-`_t_neighbor_pad` but never checked what it produced, so that is the gap to close.
+memory or a read that races the CCL, not of padding arithmetic being subtly off. `_t_neighbor_pad` had
+been *timed* (~218 us/call, ~27 ms per decode across all ~126 convs, so not a cost problem) but never
+checked for correctness, so that is the gap to close.
 
 Two checks, cheapest first.
 
