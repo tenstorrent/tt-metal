@@ -657,5 +657,3 @@ models/experimental/yunet @tvardhineniTT @dvartaniansTT @tenstorrent/cse-develop
 tt_metal/tt-llk/tests/python_tests/helpers/perf* @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT @tenstorrent/codeowner-bypass
 tt_metal/tt-llk/tests/python_tests/**/perf_*.py @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT @tenstorrent/codeowner-bypass
 tt_metal/tt-llk/tests/python_tests/**/test_perf_*.py @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT @tenstorrent/codeowner-bypass
-.github/workflows/llk-perf.yaml @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT @tenstorrent/codeowner-bypass
-.github/workflows/llk-perf-impl.yaml @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT @tenstorrent/codeowner-bypass
