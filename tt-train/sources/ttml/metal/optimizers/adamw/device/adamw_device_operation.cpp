@@ -130,7 +130,8 @@ ttml::metal::optimizers::adamw::device::AdamWDeviceOperation::tensor_return_valu
     float epsilon,
     float weight_decay,
     bool amsgrad,
-    ttml::metal::StochasticRounding stochastic_rounding) {
+    ttml::metal::StochasticRounding stochastic_rounding,
+    std::optional<uint32_t> stochastic_rounding_seed) {
     using OperationType = ttml::metal::optimizers::adamw::device::AdamWDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
@@ -143,6 +144,7 @@ ttml::metal::optimizers::adamw::device::AdamWDeviceOperation::tensor_return_valu
         .weight_decay = weight_decay,
         .amsgrad = amsgrad,
         .stochastic_rounding = stochastic_rounding,
+        .stochastic_rounding_seed = stochastic_rounding_seed,
     };
     auto tensor_args = OperationType::tensor_args_t{
         .param = param,

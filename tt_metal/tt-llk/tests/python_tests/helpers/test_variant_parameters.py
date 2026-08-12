@@ -18,6 +18,7 @@ from .llk_params import (
     BroadcastType,
     DataCopyType,
     DestSync,
+    DstRoundingMode,
     EltwiseBinaryReuseDestType,
     FastMode,
     ImpliedMathFormat,
@@ -647,6 +648,44 @@ class GENERALIZED_MOE_GATE(TemplateParameter):
 
 
 @dataclass
+class DEEPSEEK_MOE_GATE(TemplateParameter):
+    """Compile-time configuration for the deepseek_moe_gate test."""
+
+    dmg_mode: int = 0
+    dmg_sub_op: int = 0
+    dmg_sigmoid: bool = False
+    dmg_reload: bool = False
+    dmg_eps: int = 0
+    dmg_scale: int = 0
+
+    def convert_to_cpp(self) -> str:
+        lines: list[str] = [
+            f"constexpr int DMG_MODE = {self.dmg_mode};",
+            f"constexpr int DMG_SUB_OP = {self.dmg_sub_op};",
+            f"constexpr bool DMG_SIGMOID = {str(self.dmg_sigmoid).lower()};",
+            f"constexpr bool DMG_RELOAD = {str(self.dmg_reload).lower()};",
+            f"constexpr std::uint32_t DMG_EPS = {self.dmg_eps};",
+            f"constexpr std::uint32_t DMG_SCALE = {self.dmg_scale};",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
+class HADAMARD(TemplateParameter):
+    """Compile-time configuration for the H128 Hadamard test."""
+
+    hadamard_normalize: bool = True
+    h16_tile_index: int = 0
+
+    def convert_to_cpp(self) -> str:
+        lines: list[str] = [
+            f"constexpr bool HADAMARD_NORMALIZE = {str(self.hadamard_normalize).lower()};",
+            f"constexpr std::uint32_t HADAMARD_H16_TILE_INDEX = {self.h16_tile_index};",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
 class TOPK_XL(TemplateParameter):
     k: int = 512
     num_chunks: int = 1
@@ -964,6 +1003,16 @@ class SIGN_MAGNITUDE_FORMAT(TemplateParameter):
         return (
             f"constexpr bool SFPU_SIGN_MAGNITUDE = {str(self.sign_magnitude).lower()};"
         )
+
+
+@dataclass
+class SFPU_DST_ROUNDING_MODE(TemplateParameter):
+    """Selects the bf16 narrowing mode for binary SFPU ADD/SUB results."""
+
+    dst_rounding: DstRoundingMode = DstRoundingMode.Default
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr ckernel::DstRoundingMode SFPU_DST_ROUNDING_MODE = {self.dst_rounding.cpp_enum_value};"
 
 
 @dataclass

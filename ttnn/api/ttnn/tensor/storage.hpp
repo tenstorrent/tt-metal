@@ -12,9 +12,9 @@
 #include <tuple>
 #include <vector>
 
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 #include "tt-metalium/distributed_host_buffer.hpp"
-#include "tt-metalium/experimental/tensor/host_tensor.hpp"
+#include "tt-metalium/tensor/host_tensor.hpp"
 #include <ttnn/tensor/tensor_spec.hpp>
 #include <ttnn/distributed/tensor_topology.hpp>
 #include "ttnn/tensor/types.hpp"
