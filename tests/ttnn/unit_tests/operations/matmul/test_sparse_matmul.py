@@ -1006,6 +1006,92 @@ def test_sparse_matmul_compact_optional_output(device):
     torch.testing.assert_close(expanded_torch, expanded_reference, rtol=0.1, atol=1.5)
 
 
+def test_sparse_matmul_rejects_optional_output_tile_mismatch(device, expect_error):
+    """The writer pages the output with the input-derived tile, so any other tile is rejected."""
+    in0, in1, sparsity, nnz, pc, dims = _make_sparse_inputs(device)
+    m, _, n, _, _, _ = dims
+    mismatched_tile_output = ttnn.from_torch(
+        torch.zeros((1, nnz, m, n), dtype=torch.bfloat16),
+        tile=ttnn.Tile([16, 32]),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+
+    with expect_error(RuntimeError, "must match the output tile"):
+        ttnn.sparse_matmul(
+            in0,
+            in1,
+            sparsity=sparsity,
+            nnz=nnz,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=pc,
+            dtype=ttnn.bfloat16,
+            optional_output_tensor=mismatched_tile_output,
+        )
+
+
+def test_sparse_matmul_compact_shape_coincides_with_expanded(device):
+    """Both-inputs-sparse with every entry active: compact [1, E, M, N] equals the expanded
+    shape, so the output is classified compact (zero-fill skipped) — benign under the
+    exact-nnz contract because no batch is skipped and the writer covers every element."""
+    torch.manual_seed(0)
+    num_experts = 8
+    m, k, n = 32, 128, 192
+    sentinel = 96.0
+    in0_torch = torch.randn((1, num_experts, m, k), dtype=torch.bfloat16)
+    in1_torch = torch.randn((1, num_experts, k, n), dtype=torch.bfloat16)
+    sparsity_torch = torch.ones((1, 1, 1, num_experts), dtype=torch.bfloat16)
+
+    in0 = ttnn.from_torch(in0_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    in1 = ttnn.from_torch(in1_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    sparsity = ttnn.from_torch(
+        sparsity_torch,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    output_tensor = ttnn.from_torch(
+        torch.full((1, num_experts, m, n), sentinel, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(6, 1),
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        out_block_h=1,
+        out_block_w=1,
+        per_core_M=1,
+        per_core_N=1,
+        fuse_batch=False,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+    output = ttnn.sparse_matmul(
+        in0,
+        in1,
+        sparsity=sparsity,
+        nnz=num_experts,
+        is_input_a_sparse=True,
+        is_input_b_sparse=True,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        program_config=program_config,
+        dtype=ttnn.bfloat16,
+        optional_output_tensor=output_tensor,
+    )
+
+    output_torch = ttnn.to_torch(output).float()
+    reference = torch.stack([in0_torch[0, e].float() @ in1_torch[0, e].float() for e in range(num_experts)]).unsqueeze(
+        0
+    )
+    assert not (output_torch == sentinel).any()
+    torch.testing.assert_close(output_torch, reference, rtol=0.1, atol=1.5)
+
+
 def test_sparse_matmul_rejects_indivisible_subblock(device, expect_error):
     """out_subblock_w must divide out_block_w, otherwise in1_num_subblocks is 0 and mcast_in0 deadlocks."""
     in0, in1, sparsity, nnz, pc, dims = _make_sparse_inputs(device)
