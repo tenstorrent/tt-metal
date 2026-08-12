@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// Metal binding for the unified programming model.
+// Metal (v1) binding for the unified programming model.
 //
-// unified.hpp includes this automatically. To bind the model to something else
+// <tt/unified> includes this automatically. To bind the model to something else
 // -- the host trace harness, say -- define TT_UNIFIED_CUSTOM_BINDING before
-// including unified.hpp and provide the same names yourself.
+// including <tt/unified> and provide the same names yourself.
 //
 // Two jobs:
 //

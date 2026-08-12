@@ -8,8 +8,8 @@
 // The host points three KernelDescriptors at this file -- a reader
 // (RISCV_1/NCRISC), a writer (RISCV_0/BRISC), and a compute kernel -- with
 // identical compile-time and runtime args. No per-thread defines are needed:
-// unified.hpp pulls in unified_metal.hpp, which derives the projection from the
-// defines metal already emits for each build.
+// <tt/unified> pulls in tt/unified_adaptor_v1.hpp, which derives the projection
+// from the defines metal already emits for each build.
 //
 // What each thread ends up executing:
 //
@@ -29,7 +29,7 @@
 //   1            in1 base address
 //   2            out base address
 
-#include "unified.hpp"
+#include <tt/unified>
 
 namespace u = tt::unified;
 

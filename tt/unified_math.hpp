@@ -3,10 +3,12 @@
 // Compute fusions for unified.hpp.
 //
 // Layering:
-//   unified_expr.hpp  -- domain-free tree shapes + register allocator
-//   fusion.hpp        -- this file: what a leaf is, what each op emits, and the
-//                        per-kind driver strategies
-//   unified.hpp       -- core API (Storage / Block / ComputeBlock / noc_*)
+//   tt/unified_expr.hpp       -- domain-free tree shapes + register allocator
+//   tt/unified_math.hpp       -- this file: what a leaf is, what each op emits,
+//                                and the per-kind driver strategies
+//   tt/unified_api.h          -- core API declarations
+//   tt/unified_impl_v1.hpp    -- core API definitions
+//   tt/unified_adaptor_v1.hpp -- metal binding
 //
 // This header deliberately does not depend on the core types. Leaves and nodes
 // carry raw circular-buffer ids, so the dependency runs one way: unified.hpp
@@ -39,7 +41,13 @@
 
 #include <type_traits>
 
-#include "unified_expr.hpp"
+#include <tt/unified_expr.hpp>
+
+// Every op body below is guarded on IS_COMPUTE_THREAD, which a binding defines.
+// Without one they would all silently compile to nothing, so refuse instead.
+#if !defined(IS_COMPUTE_THREAD) && !defined(IS_DM_THREAD)
+#error "include <tt/unified> (or a binding) before tt/unified_math.hpp"
+#endif
 
 namespace tt {
 namespace unified {
