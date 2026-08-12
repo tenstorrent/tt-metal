@@ -30,6 +30,24 @@ NUM_LATENT_FRAMES = 207
 OUT_DIR = "/data/rshirvani/audio_compare/clips"
 WEIGHTS = os.environ.get("MINIMAX_H3_DIFFUSERS_DIR", "/data/cglagovich/MiniMax-H3-diffusers")
 
+# Mesh / sharding / trace, all env-gated so the default stays exactly the single-device run this
+# script has always been. The acceptance criterion for the whole effort is >= 49.45 dB **against the
+# CPU reference**, and the T-parallel test only ever scores sharded against unsharded -- a different,
+# looser bar (40 dB). So the shipping configuration has to be scored here, not there.
+#
+#   CVD_MESH=4x8 CVD_T_FACTOR=8 CVD_MESH_AXIS=1 CVD_TRACED=1 python cpu_vs_device.py
+#
+# The T-shard factor must equal the mesh axis length: on a 4x8 mesh only (4, axis 0) and (8, axis 1)
+# work; anything else dies in `_partition_t` on a non-tile-aligned slice.
+MESH = tuple(int(v) for v in os.environ.get("CVD_MESH", "1x1").split("x"))
+T_FACTOR = int(os.environ.get("CVD_T_FACTOR", "1"))
+MESH_AXIS = int(os.environ.get("CVD_MESH_AXIS", "1"))
+TRACED = os.environ.get("CVD_TRACED", "0") == "1"
+IS_DEFAULT = MESH == (1, 1) and T_FACTOR == 1 and not TRACED
+# Non-default runs get their config in the filename. Overwriting `{label}_2_device.wav` with a
+# differently-configured decode is how the stale `*_3_device_prefix.wav` confusion started.
+TAG = "" if IS_DEFAULT else f"_{MESH[0]}x{MESH[1]}_f{T_FACTOR}ax{MESH_AXIS}{'_traced' if TRACED else ''}"
+
 # (label, librosa example key, seconds to skip -- past leading silence / into a busy passage)
 CLIPS = [
     ("voice_libri1", "libri1", 0.5),
@@ -94,9 +112,31 @@ def main():
     reference.load_state_dict(load_file(os.path.join(audio_dir, "diffusion_pytorch_model.safetensors")))
 
     num_samples = NUM_LATENT_FRAMES * HOP
-    device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1), l1_small_size=65536)
+    sharded = T_FACTOR > 1
+    if MESH != (1, 1):
+        # open_mesh_device takes no fabric_config; conftest sets it separately, before opening.
+        ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+    device = ttnn.open_mesh_device(
+        ttnn.MeshShape(*MESH),
+        l1_small_size=65536,
+        **({"trace_region_size": 450_000_000} if TRACED else {}),
+    )
     rows = []
     try:
+        print(
+            f"config: mesh {MESH[0]}x{MESH[1]} ({device.get_num_devices()} chips), t_factor={T_FACTOR} "
+            f"axis={MESH_AXIS}, traced={TRACED}",
+            flush=True,
+        )
+        parallel_config = None
+        ccl_manager = None
+        if sharded:
+            from models.tt_dit.parallel.config import ParallelFactor
+            from models.tt_dit.parallel.manager import CCLManager
+
+            parallel_config = ParallelFactor(factor=T_FACTOR, mesh_axis=MESH_AXIS)
+            ccl_manager = CCLManager(device, num_links=1, topology=ttnn.Topology.Linear)
+
         decoder = MiniMaxH3AudioDecoder(
             latent_channels=config["latent_channels"],
             latent_dim=config["latent_dim"],
@@ -106,6 +146,8 @@ def main():
             resblock_kernel_sizes=tuple(config["resblock_kernel_sizes"]),
             resblock_dilation_sizes=tuple(tuple(d) for d in config["resblock_dilation_sizes"]),
             mesh_device=device,
+            parallel_config=parallel_config,
+            ccl_manager=ccl_manager,
         )
         decoder.load_torch_state_dict(convert_minimax_h3_audio_state_dict(dict(reference.state_dict())), strict=False)
 
@@ -120,14 +162,16 @@ def main():
                 cpu_secs = time.perf_counter() - t0
             write_wav(os.path.join(OUT_DIR, f"{label}_1_cpu.wav"), cpu_out)
 
-            decoder(latents)  # warm this shape
+            # Warm with the same `traced` flag the timed runs use, so the trace is captured outside the
+            # measurement rather than inside the first one.
+            decoder(latents, traced=TRACED)
             runs = []
             for _ in range(3):
                 t0 = time.perf_counter()
-                dev_out = decoder(latents)
+                dev_out = decoder(latents, traced=TRACED)
                 runs.append(time.perf_counter() - t0)
             dev_secs = min(runs)
-            write_wav(os.path.join(OUT_DIR, f"{label}_2_device.wav"), dev_out)
+            write_wav(os.path.join(OUT_DIR, f"{label}_2_device{TAG}.wav"), dev_out)
 
             rows.append(
                 (
@@ -141,9 +185,18 @@ def main():
             )
             print(f"done {label}: cpu {cpu_secs:.3f}s  device {dev_secs:.3f}s  psnr {rows[-1][3]:.2f} dB", flush=True)
     finally:
+        if TRACED:
+            try:
+                decoder.release_trace()
+            except Exception:  # nothing to release if the run died before capture
+                pass
         ttnn.close_mesh_device(device)
+        if MESH != (1, 1):
+            # Leaving fabric enabled after close can wedge the next job's init.
+            ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
     print(f"\n=== fp32 decode, {num_samples / SR:.2f} s of 32 kHz audio per clip, batch 2 ===")
+    print(f"config: mesh {MESH[0]}x{MESH[1]}, t_factor={T_FACTOR} axis={MESH_AXIS}, traced={TRACED}")
     print(f"{'clip':<15} {'CPU s':>7} {'device s':>9} {'speedup':>8} {'PSNR dB':>9} {'rel_rmse':>11} {'log-spec':>9}")
     print("-" * 74)
     for label, c, d, p, r, ls in rows:
@@ -155,7 +208,21 @@ def main():
             f"{'mean':<15} {sum(r[1] for r in rows) / n:>7.3f} {sum(r[2] for r in rows) / n:>9.3f} "
             f"{sum(r[1] for r in rows) / sum(r[2] for r in rows):>7.2f}x {sum(r[3] for r in rows) / n:>9.2f}"
         )
-    print(f"\nWAVs in {OUT_DIR} (per clip: _0_source, _1_cpu, _2_device)")
+        mean_psnr = sum(r[3] for r in rows) / n
+        mean_secs = sum(r[2] for r in rows) / n
+        # The accuracy criterion is "no worse than the single-device path", whose mean is 49.45 dB --
+        # not "above 49.45", which a `>=` against the rounded baseline fails by a hair even when the
+        # two are bit-identical. Allow a small tolerance and say which it is.
+        BASELINE_PSNR = 49.45  # single-device fp32 mean, per goal.md
+        drop = BASELINE_PSNR - mean_psnr
+        print(
+            f"\nACCEPTANCE  psnr {mean_psnr:.2f} dB vs {BASELINE_PSNR} baseline "
+            f"({'no degradation' if drop <= 0.05 else f'DOWN {drop:.2f} dB'}): "
+            f"{'PASS' if drop <= 0.05 else 'FAIL'}"
+            f"   |   latency {mean_secs * 1e3:.1f} ms vs 300 ms: {'PASS' if mean_secs <= 0.300 else 'FAIL'}"
+            f" (222 ms stretch: {'PASS' if mean_secs <= 0.222 else 'FAIL'})"
+        )
+    print(f"\nWAVs in {OUT_DIR} (per clip: _0_source, _1_cpu, _2_device{TAG})")
 
 
 if __name__ == "__main__":

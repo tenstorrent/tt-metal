@@ -1,4 +1,28 @@
-# Item 2 result: trace is the lever, 280 ms is reachable, and T-sharding returns the wrong audio
+# Item 2 result: 283 ms at unchanged accuracy — trace is the lever, and one conv was the bug
+
+> **RESOLVED 2026-08-12.** The sharding bug below is fixed and the target is met.
+>
+>     mesh 4x8, t_factor=8 axis=1, traced, vs the CPU reference:
+>     voice_libri1  47.87 dB   voice_libri2  47.82 dB
+>     music_trumpet 52.83 dB   music_brahms  49.28 dB
+>     mean          49.45 dB   283.1 ms      -> 300 ms bar: PASS
+>
+> Per-clip PSNR is **identical to the single-device baseline** (47.87 / 47.82 / 52.83 / 49.28, mean
+> 49.45), so sharding plus trace costs nothing in accuracy — as predicted: a 78.7 dB sharding residual
+> sits 29 dB below the 49.45 dB CPU error, contributing ~0.12% MSE, i.e. 0.005 dB.
+>
+> **0.9304 s -> 0.283 s = 3.29x.** `test_audio_decode_t_parallel` passes with `KNOWN_BROKEN` emptied,
+> so the factor-8 PSNR assert is enforced rather than excused.
+>
+> The cause was **one conv**, not the sharding machinery: `conv_pre` (2048 -> 1024, k=7), the widest in
+> the decode, returned uninitialized memory under T-sharding (absmax 2.6e+11 against a reference 1.391,
+> -204 dB) while *every other conv shape was bit-exact*, and both `_partition_t` and `_t_neighbor_pad`
+> were exactly correct. It now runs unsharded on the full input sequence — free, since that is the
+> shortest T in the graph — with T partitioned immediately after. See `conv_sharded_probe.py` for the
+> shape sweep that isolated it and `stage_bisect.py` for the stage that found it.
+>
+> The rest of this document is the investigation as it happened; the numbers below that predate the fix
+> are labelled where they matter.
 
 Measured 2026-08-12 on `bh-glx-110-a09u02`, 4x8 Galaxy (32 chips), T=207, fusion off unless stated.
 Scripts: `factor_scan.py`, `halo_cost.py`, `trace_on_mesh.py`, `fusion_on_mesh.py`,

@@ -720,12 +720,21 @@ MESH = [
     )
 ]
 # (t_factor, mesh_axis). Axis 1 is the 8-wide axis of the 4x8 Galaxy, axis 0 the 4-wide one.
-# t_factor=8 on axis 1 measures 0.898 s but returns a *different signal* (PSNR -6.3 dB vs
-# the single-device path), so it is xfail-marked rather than removed: the bug is worth
-# finding, and 207 frames padding to 256 makes 256/8 = 32 exactly one tile per shard, which
-# is the obvious suspect. See STATE.md amendment 63.
+#
+# The factor must equal the length of the axis it shards: factor=2 or factor=4 on the 8-wide axis 1
+# both die in `_partition_t` at slice_device_operation.cpp:164 ("height begin index aligned to tiles"),
+# because the partition indexes by the device's coordinate along the axis and assumes it covers it.
+# That is why this list is (4, axis 0) and (8, axis 1) rather than a scan.
+#
+# `KNOWN_BROKEN` is deliberately empty, and adding to it should be a last resort -- an entry here
+# silences the PSNR assert, which is the only thing separating a speedup from a fast wrong answer.
+# It formerly held (8, 1) at -6.3 dB, blamed on 256/8 = 32 being exactly one tile per shard. That was
+# the wrong suspect: *every* factor was wrong, and the cause was `conv_pre` (2048 -> 1024, k=7)
+# returning uninitialized memory under T-sharding while every other conv shape was bit-exact. It now
+# runs unsharded on the full sequence -- see the comment on `Vocoder.conv_pre` -- and both factors
+# measure 78.7 dB. See audio_perf/ITEM2_RESULT.md.
 FACTORS = [(1, 1), (4, 0), (8, 1)]
-KNOWN_BROKEN = {(8, 1)}
+KNOWN_BROKEN: set[tuple[int, int]] = set()
 NUM_LATENT_FRAMES = 207
 ITERS = 3
 
@@ -887,6 +896,15 @@ def test_audio_decode_t_parallel(mesh_device):
         "the single-device baseline did not run, so nothing was compared. If this follows a crashed "
         "run, reset the device (`tt-smi -glx_reset`) -- an allocator TT_FATAL here is usually a dirty "
         "device, not a code failure"
+    )
+    # `baseline_ran` above catches "everything failed" but not the subtler case: if factor 1 raises,
+    # the loop's `baseline_out is None` branch promotes the *next* factor to baseline, and that factor
+    # then scores PSNR inf against itself and reads as correct. That happened for real -- a fusion
+    # crash killed factor 1, factor 4 became the reference, and a -10.1 dB configuration reported inf
+    # until the baseline was made to run. The first result must be the unsharded one.
+    assert results and results[0][0] == 1 and results[0][2] is not None, (
+        f"factor 1 must be the baseline, but the first result that ran was {results[0][:2] if results else None}; "
+        "a later factor has been promoted to baseline and is being compared against itself"
     )
     ran = [(f, a) for f, a, seconds, _ in results if seconds is not None and f != 1]
     assert ran, "no parallel factor ran at all; the T-parallel path is entirely unavailable"

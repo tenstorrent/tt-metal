@@ -26,6 +26,7 @@ from ...layers.audio_ops import (
     _all_gather_t,
     _partition_t,
     _set_tpad_tail,
+    channel_factor,
     partition_channel,
 )
 from ...layers.audio_resample import Activation1d
@@ -255,6 +256,23 @@ class Vocoder(Module):
         # the pipeline warms the decode eagerly at warmup, which the vocoder frees back to a
         # deterministic state, so capture and replay share one free-list.
 
+        # conv_pre stays UNSHARDED even when the rest of the graph is T-sharded, the same way
+        # ConvTranspose1dViaConv3d keeps its inner conv unsharded. This is a correctness fix, not a
+        # preference: at (C_in=2048, C_out=1024, k=7) -- by far the widest conv in the decode -- the
+        # sharded path returns uninitialized memory (measured absmax 2.6e+11 against a reference absmax
+        # of 1.391, i.e. -204 dB), which is what made every T-sharded decode return wrong audio. Every
+        # other conv shape in the decode is bit-exact under sharding; only this one is not, and it is the
+        # one whose size trips conv3d's DRAM auto-slice fallback while its blocking config is derived at
+        # __init__ from the unsharded shape. See audio_perf/conv_sharded_probe.py for the shape sweep.
+        #
+        # Replicating it is close to free: conv_pre runs on the *input* sequence, T=207 (256 padded),
+        # which is 1/800th of the final waveform length, so this is the cheapest row-work in the graph.
+        # `_forward_device` therefore runs conv_pre first and partitions T afterwards.
+        #
+        # Only when there is no channel-TP. Under channel-TP conv_pre's own `gather_channel_to_full` is
+        # what reconstructs full C_in, so taking its parallel_config away would hand it a C-shard; that
+        # path keeps the original ordering untouched.
+        self._conv_pre_unsharded = channel_factor(parallel_config) == 1
         self.conv_pre = _AlignedOutConv1d(
             in_channels=in_channels,
             out_channels=upsample_initial_channel,
@@ -264,8 +282,8 @@ class Vocoder(Module):
             bias=True,
             mesh_device=mesh_device,
             dtype=dtype,
-            parallel_config=parallel_config,
-            ccl_manager=ccl_manager,
+            parallel_config=None if self._conv_pre_unsharded else parallel_config,
+            ccl_manager=None if self._conv_pre_unsharded else ccl_manager,
         )
 
         self.ups = ModuleList(
@@ -422,18 +440,21 @@ class Vocoder(Module):
 
     @traced_function(device=lambda self: self.mesh_device, prep_run=True, clone_prep_inputs=True)
     def _forward_device(self, x_dev: ttnn.Tensor) -> ttnn.Tensor:
-        """Pure-device graph: partition → conv_pre → ups/AMP stack → act_post → conv_post →
+        """Pure-device graph: conv_pre → partition → ups/AMP stack → act_post → conv_post →
         T-gather. Fixed-shape device in/out, so this region is trace-capturable."""
         sharded = self.parallel_config is not None and self.parallel_config.factor > 1
         t_pad = self._t_pad
+        pre_unsharded = self._conv_pre_unsharded
 
-        if sharded:
+        if sharded and not pre_unsharded:
+            # Channel-TP path: original ordering, conv_pre consumes a T-shard and gathers C itself.
             x_dev = ttnn.to_layout(x_dev, ttnn.TILE_LAYOUT)
             x_dev = _partition_t(x_dev, self.parallel_config)
             x_dev = ttnn.to_layout(x_dev, ttnn.ROW_MAJOR_LAYOUT)
 
         # Channel-TP: split C up front so conv_pre's gather reconstructs full C_in (gathering a
         # channel-replicated tensor would duplicate it). conv_post stays full, so no trailing gather.
+        # A no-op when there is no channel-TP, which is why moving it above the T partition is safe.
         x_dev = partition_channel(x_dev, self.parallel_config, dim=2)
 
         def _set_tail(xd, cumrate, mode):
@@ -452,7 +473,15 @@ class Vocoder(Module):
             )
 
         cumrate = 1
+        # Runs on the full replicated sequence -- see the constructor for why this one conv is not
+        # sharded. T is partitioned immediately afterwards, so everything downstream is sharded as
+        # before.
         x_dev = self.conv_pre(x_dev)
+
+        if sharded and pre_unsharded:
+            x_dev = ttnn.to_layout(x_dev, ttnn.TILE_LAYOUT)
+            x_dev = _partition_t(x_dev, self.parallel_config)
+            x_dev = ttnn.to_layout(x_dev, ttnn.ROW_MAJOR_LAYOUT)
 
         for i in range(self.num_upsamples):
             x_dev = _set_tail(x_dev, cumrate, "zeros")  # ups gathers T to full and zero-pads internally

@@ -156,6 +156,19 @@ Sum device op time from the profiler CSV; compare against `decode_bench.py`'s 0.
 
 ## Item 2 — 32 chips  (~~the only 10x-shaped lever~~ a ~3x lever, floored at ~260 ms — see item 1)
 
+> ## ✅ TARGET MET 2026-08-12 — **283 ms at 49.45 dB**, from 0.9304 s (3.29x)
+>
+> `mesh 4x8, t_factor=8 axis=1, traced` scores **49.45 dB mean vs the CPU reference** (47.87 / 47.82 /
+> 52.83 / 49.28) — *identical* to the single-device baseline — at **283.1 ms**. Reproduce with:
+>
+>     CVD_MESH=4x8 CVD_T_FACTOR=8 CVD_MESH_AXIS=1 CVD_TRACED=1 \
+>       python models/tt_dit/tests/models/minimax_h3/audio_perf/cpu_vs_device.py
+>
+> Two things got it there, neither of which is item 2 as written below. **Trace**, worth 3.06x on a
+> sharded mesh against 1.04x on one chip. And a one-conv correctness fix: `conv_pre` returned
+> uninitialized memory under T-sharding while every other conv was bit-exact, which is why every
+> sharded decode was wrong. Item 3 was never needed.
+>
 > **RESULT 2026-08-12 — read `audio_perf/ITEM2_RESULT.md` before touching this section.**
 > The lever is **trace, not chip count**. Traced on the mesh: factor 8 = **0.2800 s** (3.14x), factor 4
 > = 0.4690 s (2.00x), factor 32 projects to 191–281 ms. Untraced, 32 chips project to 822 ms — a
