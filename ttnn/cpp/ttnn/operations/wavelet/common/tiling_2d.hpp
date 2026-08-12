@@ -22,6 +22,9 @@ struct Shape2D {
     size_t width{0};
 
     [[nodiscard]] constexpr bool empty() const noexcept { return height == 0 || width == 0; }
+    [[nodiscard]] constexpr bool is_tile_aligned() const noexcept {
+        return !empty() && height % kTileHeight2D == 0 && width % kTileWidth2D == 0;
+    }
 
     friend constexpr bool operator==(const Shape2D&, const Shape2D&) = default;
 };
@@ -29,6 +32,8 @@ struct Shape2D {
 struct TiledShape2D {
     Shape2D logical{};
     Shape2D storage{};
+
+    [[nodiscard]] static TiledShape2D from_logical(Shape2D logical);
 
     friend constexpr bool operator==(const TiledShape2D&, const TiledShape2D&) = default;
 };
@@ -39,12 +44,8 @@ struct Lwt2DTilingContract {
     bool padding_precedes_split{true};
 };
 
-[[nodiscard]] constexpr bool is_tile_aligned_2d(const Shape2D shape) noexcept {
-    return !shape.empty() && shape.height % kTileHeight2D == 0 && shape.width % kTileWidth2D == 0;
-}
-
 [[nodiscard]] inline size_t checked_shape_area_2d(const Shape2D shape, const char* label) {
-    TT_FATAL(!shape.empty(), "{} shape must be positive, got {}x{}", label, shape.height, shape.width);
+    TT_FATAL(!shape.empty(), "{} shape can't be empty, got {}x{}", label, shape.height, shape.width);
     TT_FATAL(
         shape.height <= std::numeric_limits<size_t>::max() / shape.width,
         "{} shape {}x{} overflows size_t",
@@ -55,7 +56,7 @@ struct Lwt2DTilingContract {
 }
 
 [[nodiscard]] inline size_t round_up_to_tile_2d(const size_t value, const size_t tile_extent, const char* label) {
-    TT_FATAL(value > 0, "{} logical extent must be positive", label);
+    TT_FATAL(value > 0, "{} logical extent must be positive, got {}", label, value);
     TT_FATAL(
         value <= std::numeric_limits<size_t>::max() - (tile_extent - 1),
         "{} logical extent {} cannot be rounded to a {}-element tile",
@@ -65,7 +66,7 @@ struct Lwt2DTilingContract {
     return ((value + tile_extent - 1) / tile_extent) * tile_extent;
 }
 
-[[nodiscard]] inline TiledShape2D make_tiled_shape_2d(const Shape2D logical) {
+inline TiledShape2D TiledShape2D::from_logical(const Shape2D logical) {
     static_cast<void>(checked_shape_area_2d(logical, "2D tensor logical"));
     const Shape2D storage{
         .height = round_up_to_tile_2d(logical.height, kTileHeight2D, "2D tensor height"),
@@ -79,7 +80,7 @@ inline void validate_tiled_shape_2d(const TiledShape2D& shape, const char* label
     static_cast<void>(checked_shape_area_2d(shape.logical, label));
     static_cast<void>(checked_shape_area_2d(shape.storage, label));
     TT_FATAL(
-        is_tile_aligned_2d(shape.storage),
+        shape.storage.is_tile_aligned(),
         "{} storage shape {}x{} violates the 32x32 tiling contract",
         label,
         shape.storage.height,
@@ -93,7 +94,7 @@ inline void validate_tiled_shape_2d(const TiledShape2D& shape, const char* label
         shape.storage.height,
         shape.storage.width);
     TT_FATAL(
-        shape == make_tiled_shape_2d(shape.logical),
+        shape == TiledShape2D::from_logical(shape.logical),
         "{} storage shape {}x{} is not the minimal 32x32 expansion of logical shape {}x{}",
         label,
         shape.storage.height,
@@ -110,7 +111,7 @@ inline void validate_lwt_2d_tiling_contract(const Lwt2DTilingContract& contract)
 
 [[nodiscard]] inline std::vector<float> zero_pad_row_major_to_tiles_2d(
     const std::span<const float> input, const Shape2D logical_shape) {
-    const TiledShape2D tiled_shape = make_tiled_shape_2d(logical_shape);
+    const TiledShape2D tiled_shape = TiledShape2D::from_logical(logical_shape);
     const size_t logical_elements = checked_shape_area_2d(logical_shape, "2D input");
     TT_FATAL(
         input.size() == logical_elements,

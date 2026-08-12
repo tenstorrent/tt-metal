@@ -944,8 +944,8 @@ enum class AlignmentCostClass : uint8_t {
     const size_t band_height = y_plan.output_length;
     const size_t band_width = x_plan.output_length;
     const Lwt2DTilingContract tiling{
-        .input = make_tiled_shape_2d(Shape2D{.height = input_height, .width = input_width}),
-        .band = make_tiled_shape_2d(Shape2D{.height = band_height, .width = band_width}),
+        .input = TiledShape2D::from_logical(Shape2D{.height = input_height, .width = input_width}),
+        .band = TiledShape2D::from_logical(Shape2D{.height = band_height, .width = band_width}),
         .padding_precedes_split = true,
     };
     validate_lwt_2d_tiling_contract(tiling);

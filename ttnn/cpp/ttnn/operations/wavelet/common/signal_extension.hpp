@@ -69,7 +69,7 @@ struct SmoothIndexI32 {
     bool affine{false};
 };
 
-[[nodiscard]] WAVELET_EXTENSION_ALWI uint32_t
+[[nodiscard]] constexpr WAVELET_EXTENSION_ALWI uint32_t
 extension_positive_mod_i32(const int32_t index, const uint32_t period) noexcept {
     if (index >= 0) {
         return static_cast<uint32_t>(index) % period;
@@ -79,7 +79,7 @@ extension_positive_mod_i32(const int32_t index, const uint32_t period) noexcept 
     return tail == 0 ? 0U : period - tail;
 }
 
-[[nodiscard]] WAVELET_EXTENSION_ALWI uint32_t
+[[nodiscard]] constexpr WAVELET_EXTENSION_ALWI uint32_t
 make_symmetric_index_i32(const int32_t index, const uint32_t length) noexcept {
     if (length == 0) {
         return 0;
@@ -92,7 +92,7 @@ make_symmetric_index_i32(const int32_t index, const uint32_t length) noexcept {
     return phase < length ? phase : period - 1U - phase;
 }
 
-[[nodiscard]] WAVELET_EXTENSION_ALWI SignedExtensionPeriod
+[[nodiscard]] constexpr WAVELET_EXTENSION_ALWI SignedExtensionPeriod
 decompose_extension_period(const int64_t index, const uint64_t period) noexcept {
     if (period == 0) {
         return {};

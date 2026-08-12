@@ -404,8 +404,9 @@ inline void append_axis_routes(
     TT_FATAL(total_l1_bytes <= l1_budget_bytes, "2D ILWT uniform L1 allocation exceeds its budget");
 
     const Lwt2DTilingContract tiling{
-        .input = make_tiled_shape_2d(Shape2D{.height = y_plan.original_length, .width = x_plan.original_length}),
-        .band = make_tiled_shape_2d(Shape2D{.height = y_plan.coefficient_length, .width = x_plan.coefficient_length}),
+        .input = TiledShape2D::from_logical(Shape2D{.height = y_plan.original_length, .width = x_plan.original_length}),
+        .band = TiledShape2D::from_logical(
+            Shape2D{.height = y_plan.coefficient_length, .width = x_plan.coefficient_length}),
         .padding_precedes_split = true,
     };
     const uint32_t executable_routes = static_cast<uint32_t>(std::count_if(
