@@ -359,13 +359,48 @@ def _gather_hidden(x: ttnn.Tensor, p: VisionParallel) -> ttnn.Tensor:
 
 
 def _row_parallel_forward(linear, x: ttnn.Tensor, p: VisionParallel) -> ttnn.Tensor:
-    """Run a row-parallel linear on a 2-D activation and gather its fractured result to full width."""
+    """Run a row-parallel linear on a 2-D activation and gather its fractured result to full width.
+
+    The reduce-scatter (inside `linear.forward`) splits on the HIDDEN dim: `hidden/tp = 1152/8 = 144`
+    is 4.5 tiles, so the mid-tile boundary forces a slice/untilize/pad/concat/permute composite -- the
+    "pad dance". `_row_parallel_seq_forward` is the aligned alternative; this is the fallback for
+    sequences that cannot use it (see `_seq_tp_aligned`).
+    """
     if not p.tp:
         return linear.forward(x)
     x, added = _with_batch_axis(x)
     out = p.ccl_manager.all_gather_persistent_buffer(
         linear.forward(x), dim=-1, mesh_axis=p.tp_axis, use_hyperparams=True
     )
+    return _drop_batch_axis(out, added)
+
+
+def _seq_tp_aligned(seq_len: int, p: VisionParallel) -> bool:
+    """Whether a sequence-dim TP reduce-scatter keeps a tile-aligned shard.
+
+    `seq_len / tp_factor` must be a whole number of tiles, i.e. `seq_len % (tp_factor * 32) == 0`.
+    Only then does `_row_parallel_seq_forward` avoid a new (sequence-dim) composite; otherwise the
+    caller must fall back to `_row_parallel_forward`. Compounded with SP this is the global
+    `patch_count % (tp * sp * 32)` precondition.
+    """
+    return p.tp and seq_len % (p.tp_factor * _TILE) == 0
+
+
+def _row_parallel_seq_forward(linear, x: ttnn.Tensor, p: VisionParallel) -> ttnn.Tensor:
+    """Row-parallel linear whose all-reduce is split on the SEQUENCE dim, not the hidden dim.
+
+    `reduce_scatter + all_gather` is an all-reduce on any axis, so this returns the identical
+    full-width, full-sequence result as `_row_parallel_forward` -- but both collectives run on the
+    tile-aligned sequence dim, dodging the `hidden/tp = 144` pad dance. Requires `_seq_tp_aligned`.
+    """
+    if not p.tp:
+        return linear.forward(x)
+    x, added = _with_batch_axis(x)  # (rows, width) -> (1, rows, width); sequence is dim 1
+    # `reduce_scatter_dim=2` targets the sequence in the linear's internal 4-D frame (the 3-D input is
+    # unsqueezed to `(1, 1, rows, width)`), leaving a `(1, rows/tp, width)` shard. Gather it back on the
+    # same sequence axis (dim 1 here) to reconstruct the full reduced sequence.
+    out = linear.forward(x, reduce_scatter_dim=2)
+    out = p.ccl_manager.all_gather_persistent_buffer(out, dim=1, mesh_axis=p.tp_axis, use_hyperparams=True)
     return _drop_batch_axis(out, added)
 
 
@@ -418,10 +453,14 @@ class Qwen3VlVisionMLP(Module):
             self.linear_fc2 = Linear(intermediate_size, hidden_size, bias=True, mesh_device=mesh_device)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        seq_len = x.shape[-2]
         x = self.linear_fc1.forward(x)
         x = ttnn.gelu(x) if self._act.startswith("gelu") else ttnn.silu(x)
         # `RowParallelLinear` reduce-scatters, so its result is fractured on columns; the residual add
         # and the next LayerNorm both need the full width back (cf. `Qwen3VlMlp` in model_qwen3vl.py).
+        # Prefer the sequence-dim all-reduce (aligned) over the hidden-dim one (the 144 pad dance).
+        if _seq_tp_aligned(seq_len, self._p):
+            return _row_parallel_seq_forward(self.linear_fc2, x, self._p)
         return _row_parallel_forward(self.linear_fc2, x, self._p)
 
 
@@ -656,7 +695,11 @@ class Qwen3VlVisionAttention(Module):
         # packed width `_interleave_for_col_parallel` produced on the way in.
         attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attn = ttnn.reshape(attn, (seq_len, self.local_inner))
-        # Row-parallel `proj` consumes exactly this fractured width and reduce-scatters, so gather back.
+        # Row-parallel `proj` reduce-scatters then gathers back to full width. Split that all-reduce on
+        # the tile-aligned sequence dim when the shard allows it (dodging the hidden-dim pad dance),
+        # else on the hidden dim as before.
+        if _seq_tp_aligned(seq_len, self._p):
+            return _row_parallel_seq_forward(self.proj, attn, self._p)
         return _row_parallel_forward(self.proj, attn, self._p)
 
     def _ring_attention(self, q, k, v, local_seq_len: int) -> ttnn.Tensor:

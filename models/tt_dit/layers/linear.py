@@ -430,10 +430,17 @@ class RowParallelLinear(Module):
         use_persistent_buffer: bool = True,
         default_block_size: tuple = None,
         dtype=None,
+        reduce_scatter_dim: int = 3,
     ) -> ttnn.Tensor:
         """
         Expects x to be column fractured.
         Return output fractured on columns.
+
+        `reduce_scatter_dim` selects which axis the partial-sum reduce-scatter splits on, in the op's
+        internal 4-D frame (a rank<=3 input is unsqueezed to 4-D first). The default 3 is the hidden
+        dim -- the historical behaviour. Passing 2 splits on the sequence dim instead, which callers
+        use to keep the collective tile-aligned when `hidden/tp` is not a whole number of tiles (the
+        caller is then responsible for the matching sequence-dim all-gather).
         """
         if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
             unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight.data)
@@ -463,7 +470,7 @@ class RowParallelLinear(Module):
                 output = ttnn.unsqueeze(output, 0)
 
             output = self.ccl_manager.reduce_scatter(
-                output, dim=3, mesh_axis=self.mesh_axis, use_persistent_buffer=use_persistent_buffer
+                output, dim=reduce_scatter_dim, mesh_axis=self.mesh_axis, use_persistent_buffer=use_persistent_buffer
             )
 
             if needs_reshape:
