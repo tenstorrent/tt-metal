@@ -2385,15 +2385,19 @@ struct ConnRoute {
 };
 static std::mutex g_conn_route_mu;
 // Keyed by SRC CHIP only (line direction is a per-chip property; the connection-owner core can differ from
-// the sender, so a per-core key would miss). Deduped by direction and kept sorted by RoutingDirection
-// (N=0,E=1,S=2,W=3,Z=4), i.e. COMPASS order — which is the order the kernel's own connection open sequence
-// walks the active directions, so the sender's per-fiber open-sequence index (ConnRoute::dir_index below)
-// selects the direction it actually opened. Sorted, NOT append order: many fibers on one src chip record
-// concurrently at TT_EMULE_FIBER_WORKERS > 1, so append order is a race — whichever fiber won put its
-// direction at index 0, flipping fwd/bwd for every sender that indexes by open-sequence and teleporting
-// whole slices to the wrong chip (nondeterministic CCL PCC; invisible at K=1, where append order is the
-// deterministic fiber order). See tt-emule docs/fabric-ccl-emulation.md.
+// the sender, so a per-core key would miss). Deduped by direction, kept sorted by RoutingDirection so the
+// contents are a function of the op alone and not of which host thread recorded first. Order here is NOT a
+// direction index — that is g_worker_conns' job. See tt-emule docs/fabric-ccl-emulation.md.
 static std::unordered_map<uint32_t, std::vector<ConnRoute>> g_conn_route;
+// Same records, keyed (src<<32 | wx<<16 | wy) and kept in HOST RECORD ORDER, which
+// append_fabric_connection_rt_args documents as the kernel's own open order (fwd, then bwd). A sender's
+// dir_index is an index into ITS OWN open sequence, so it may only be resolved against this per-worker
+// vector: the src-keyed table above holds the union over every worker on the chip, and on a chip with more
+// than two active directions (the 4-directional path — all_to_all_combine / all_to_all_dispatch on a 4x8
+// galaxy) index 1 of that union is not the same direction the worker opened second, which teleports whole
+// payloads to the wrong chip. Per-worker keying also removes the cross-thread append race, since one
+// worker's connections are recorded by one thread in order.
+static std::unordered_map<uint64_t, std::vector<ConnRoute>> g_worker_conns;
 // Persistent UNDIRECTED ring adjacency (chip -> ring-neighbor chips), accumulated across ALL ops and never
 // reset: the physical ethernet ring is static, but each op's senders open only the connection(s) they use,
 // so any single op's g_conn_route is an incomplete, per-chip one-sided view. The ring walk needs the full
@@ -2419,6 +2423,7 @@ extern "C" void __emule_fabric_record_conn(uint32_t src, uint32_t wx, uint32_t w
     std::lock_guard<std::mutex> lk(g_conn_route_mu);
     if (g_conn_route_dirty.exchange(false)) {
         g_conn_route.clear();
+        g_worker_conns.clear();
         g_worker_dir.clear();
         g_mux_dir.clear();
     }
@@ -2428,9 +2433,13 @@ extern "C" void __emule_fabric_record_conn(uint32_t src, uint32_t wx, uint32_t w
     // Accumulate the undirected ring edge (persistent; unaffected by the per-op reset above).
     g_ring_adj[src].insert(neighbor);
     g_ring_adj[neighbor].insert(src);
+    // Per-worker, in open order — this is what a sender's dir_index indexes.
+    auto& wv = g_worker_conns[__emule_worker_key(src, wx, wy)];
+    if (std::none_of(wv.begin(), wv.end(), [dir](const ConnRoute& c) { return c.dir == dir; })) {
+        wv.push_back(ConnRoute{dir, neighbor});
+    }
     auto& v = g_conn_route[src];
-    // Insert in compass order (see g_conn_route's comment): the position must be a function of `dir`
-    // alone, never of which fiber recorded first.
+    // Sorted by direction so the union's contents don't depend on host record order.
     auto at = v.begin();
     for (; at != v.end(); ++at) {
         if (at->dir == dir) {
@@ -2562,13 +2571,23 @@ static std::vector<uint32_t> __emule_fabric_resolve_targets(const uint8_t* h, ui
         const uint32_t wy = __emule_self->core->logical_y;
         const uint64_t wkey = __emule_worker_key(src_chip, wx, wy);
         std::vector<ConnRoute> conns;
+        // This worker's OWN open sequence, which dir_index indexes; empty on the MUX path, where the
+        // recorded core is the mux, not the worker (direction comes from g_mux_dir there).
+        std::vector<ConnRoute> wconns;
         {
             std::lock_guard<std::mutex> lk(g_conn_route_mu);
             auto it = g_conn_route.find(src_chip);
             if (it != g_conn_route.end()) {
                 conns = it->second;
             }
+            auto wit = g_worker_conns.find(wkey);
+            if (wit != g_worker_conns.end()) {
+                wconns = wit->second;
+            }
         }
+        // Resolve an open-sequence index against this worker's own sequence; the src-keyed union is only a
+        // fallback for senders whose connections were recorded under another core (MUX).
+        const std::vector<ConnRoute>& idx_conns = wconns.empty() ? conns : wconns;
         int dir = -1;
         // (1) Mux-core direction: translate the worker's mux NOC coords to the mux's LOGICAL core and look up
         // the direction the mux→EDM append recorded. Resolves ring, where the range-match below cannot.
@@ -2607,9 +2626,9 @@ static std::vector<uint32_t> __emule_fabric_resolve_targets(const uint8_t* h, ui
             }
             if (n_match == 1) {
                 dir = matched;  // unique range-match — the disambiguated direction
-            } else if (!conns.empty()) {
+            } else if (!idx_conns.empty()) {
                 // no match, or an ambiguous closed-ring tie — use the actually-recorded send index
-                dir = static_cast<int>(conns[r.dir_index < conns.size() ? r.dir_index : 0].dir);
+                dir = static_cast<int>(idx_conns[r.dir_index < idx_conns.size() ? r.dir_index : 0].dir);
             }
             if (dir >= 0) {
                 std::lock_guard<std::mutex> lk(g_conn_route_mu);
@@ -2620,8 +2639,8 @@ static std::vector<uint32_t> __emule_fabric_resolve_targets(const uint8_t* h, ui
             auto wit = g_worker_dir.find(wkey);
             if (wit != g_worker_dir.end()) {
                 dir = static_cast<int>(wit->second);
-            } else if (!conns.empty()) {
-                dir = static_cast<int>(conns[r.dir_index < conns.size() ? r.dir_index : 0].dir);
+            } else if (!idx_conns.empty()) {
+                dir = static_cast<int>(idx_conns[r.dir_index < idx_conns.size() ? r.dir_index : 0].dir);
             }
         }
         if (dir >= 0) {

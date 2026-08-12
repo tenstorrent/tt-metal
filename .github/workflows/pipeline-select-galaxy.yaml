@@ -52,7 +52,6 @@ on:
           - llama3_70b_dp
           - whisper
           - sd35
-          - flux1
           - gpt-oss
           - motif
           - wan22
@@ -75,7 +74,6 @@ on:
           - sd35
           - wan22
           - mochi
-          - flux1
           - motif
           - qwenimage
         default: "disabled"
@@ -91,7 +89,6 @@ on:
           #          - llama_unit_tests
           #          - llama70b_prefill
           - sd35
-          - flux1-dev
           - motif
           #          - sentence_bert
           - wan2-2
