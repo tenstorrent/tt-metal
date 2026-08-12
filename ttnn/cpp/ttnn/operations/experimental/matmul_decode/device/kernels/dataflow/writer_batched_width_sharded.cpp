@@ -11,12 +11,15 @@
 
 // Scatter [Bc, M, Nc] output block to DRAM-interleaved tile pages.
 void kernel_main() {
-    constexpr uint32_t out_cb_index = get_compile_time_arg_val(0);
-    constexpr uint32_t Bc = get_compile_time_arg_val(1);
-    constexpr uint32_t M_tiles = get_compile_time_arg_val(2);
-    constexpr uint32_t Nc_tiles = get_compile_time_arg_val(3);
-    constexpr uint32_t N_tiles = get_compile_time_arg_val(4);
-    constexpr auto out_args = TensorAccessorArgs<5>();
+    // CB indices come in as named args so op fusion can remap them onto the hardware slots it
+    // pool-allocates across phases (see models/experimental/ops/descriptors/fusion/docs/op_fusion.md).
+    constexpr uint32_t out_cb_index = get_named_compile_time_arg_val("cb_out");
+
+    constexpr uint32_t Bc = get_compile_time_arg_val(0);
+    constexpr uint32_t M_tiles = get_compile_time_arg_val(1);
+    constexpr uint32_t Nc_tiles = get_compile_time_arg_val(2);
+    constexpr uint32_t N_tiles = get_compile_time_arg_val(3);
+    constexpr auto out_args = TensorAccessorArgs<4>();
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t b_idx = get_arg_val<uint32_t>(1);

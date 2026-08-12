@@ -142,14 +142,17 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
 
     ProgramDescriptor desc;
 
-    constexpr uint32_t in0_cb_index = CBIndex::c_0;       // this core's A slice (gather source)
-    constexpr uint32_t in1_cb_index = CBIndex::c_1;       // this core's weight block (resident)
-    constexpr uint32_t out_cb_index = CBIndex::c_2;       // this core's output block (compute -> writer)
-    constexpr uint32_t full_in0_cb_index = CBIndex::c_3;  // gathered full A
-    // GCB path only: c_4 carries "compute is done reading in1" back to the reader so it can
-    // release the GCB page; c_31 is the remote (GCB) index aliased onto the local in1 CB.
-    constexpr uint32_t sync_cb_index = CBIndex::c_4;
-    constexpr uint32_t remote_cb_index = CBIndex::c_31;
+    // These are this op's own CB indices; every kernel receives them as named "cb_*" compile-time
+    // args, so op fusion can pool-allocate different hardware slots for two instances sharing a
+    // core without either factory having to know about the other.
+    const uint32_t in0_cb_index = CBIndex::c_0;       // this core's A slice (gather source)
+    const uint32_t in1_cb_index = CBIndex::c_1;       // this core's weight block (resident)
+    const uint32_t out_cb_index = CBIndex::c_2;       // this core's output block (compute -> writer)
+    const uint32_t full_in0_cb_index = CBIndex::c_3;  // gathered full A
+    // GCB path only: sync_cb carries "compute is done reading in1" back to the reader so it can
+    // release the GCB page; remote_cb is the remote (GCB) index aliased onto the local in1 CB.
+    const uint32_t sync_cb_index = CBIndex::c_4;
+    const uint32_t remote_cb_index = CBIndex::c_31;
 
     const uint32_t out_block_num_tiles = Bc * M_tiles * Nc_tiles;
     const uint32_t full_in0_num_tiles = Bc * M_tiles * K_tiles;
@@ -303,16 +306,21 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
     reader_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_kernel_desc.core_ranges = CoreRangeSet(b_core_ranges);
     reader_kernel_desc.compile_time_args = {
-        in0_cb_index,
-        full_in0_cb_index,
         block_slice_tiles,
         in0_tile_size,
         num_senders,
-        in1_cb_index,
         in1_page_num_tiles,
-        remote_cb_index,
-        sync_cb_index,
         num_k_blocks,
+    };
+    // Every CB index travels as a named "cb_*" arg: op fusion pool-allocates hardware CB slots
+    // across the phases it merges and rewrites exactly these args, so positional or hard-coded
+    // indices would leave the kernels pointing at pre-remap slots.
+    reader_kernel_desc.named_compile_time_args = {
+        {"cb_in0", in0_cb_index},
+        {"cb_full_in0", full_in0_cb_index},
+        {"cb_in1", in1_cb_index},
+        {"cb_in1_remote", remote_cb_index},
+        {"cb_sync", sync_cb_index},
     };
     reader_kernel_desc.config = DataMovementConfigDescriptor{
         .processor = DataMovementProcessor::RISCV_1,
@@ -344,13 +352,15 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
     writer_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_kernel_desc.core_ranges = CoreRangeSet(b_core_ranges);
     writer_kernel_desc.compile_time_args = {
-        out_cb_index,
         Bc,
         M_tiles,
         Nc_tiles,
         N_tiles,
     };
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_kernel_desc.compile_time_args);
+    writer_kernel_desc.named_compile_time_args = {
+        {"cb_out", out_cb_index},
+    };
     writer_kernel_desc.config = DataMovementConfigDescriptor{
         .processor = DataMovementProcessor::RISCV_0,
         .noc = NOC::NOC_0,
@@ -374,8 +384,13 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
         Nc_tiles,
         Bc,
         inA_K_tiles_per_core,
-        sync_cb_index,
         num_k_blocks,
+    };
+    compute_kernel_desc.named_compile_time_args = {
+        {"cb_full_in0", full_in0_cb_index},
+        {"cb_in1", in1_cb_index},
+        {"cb_out", out_cb_index},
+        {"cb_sync", sync_cb_index},
     };
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = MathFidelity::HiFi4,

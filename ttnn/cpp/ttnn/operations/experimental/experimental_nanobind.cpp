@@ -161,6 +161,7 @@ void py_module(nb::module_& mod) {
     matmul::detail::bind_attn_matmul_from_cache(mod);
     matmul::detail::bind_group_attn_matmul(mod);
     matmul_decode::detail::bind_matmul_decode_operation(mod);
+    matmul_decode::detail::bind_matmul_decode_descriptor(mod);
     deepseek_prefill::masked_bincount::detail::bind_experimental_masked_bincount_operation(mod);
     high_bw_all_gather::detail::bind_experimental_high_bw_all_gather_operation(mod);
     deepseek_prefill::offset_cumsum::detail::bind_experimental_offset_cumsum_operation(mod);

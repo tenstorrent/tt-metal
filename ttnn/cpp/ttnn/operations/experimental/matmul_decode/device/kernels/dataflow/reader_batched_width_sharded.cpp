@@ -23,16 +23,19 @@
 //     earlier would let the prefetcher overwrite weights still in use. This kernel runs only on
 //     the B core range set, so every core is a receiver.
 void kernel_main() {
-    constexpr uint32_t in0_cb_index = get_compile_time_arg_val(0);
-    constexpr uint32_t full_in0_cb_index = get_compile_time_arg_val(1);
-    constexpr uint32_t block_slice_tiles = get_compile_time_arg_val(2);
-    constexpr uint32_t tile_size_bytes = get_compile_time_arg_val(3);
-    constexpr uint32_t num_senders = get_compile_time_arg_val(4);
-    constexpr uint32_t in1_cb_index = get_compile_time_arg_val(5);
-    constexpr uint32_t in1_page_tiles = get_compile_time_arg_val(6);
-    constexpr uint32_t remote_cb_index = get_compile_time_arg_val(7);
-    constexpr uint32_t sync_cb_index = get_compile_time_arg_val(8);
-    constexpr uint32_t num_k_blocks = get_compile_time_arg_val(9);
+    // CB indices come in as named args so op fusion can remap them onto the hardware slots it
+    // pool-allocates across phases (see models/experimental/ops/descriptors/fusion/docs/op_fusion.md).
+    constexpr uint32_t in0_cb_index = get_named_compile_time_arg_val("cb_in0");
+    constexpr uint32_t full_in0_cb_index = get_named_compile_time_arg_val("cb_full_in0");
+    constexpr uint32_t in1_cb_index = get_named_compile_time_arg_val("cb_in1");
+    constexpr uint32_t remote_cb_index = get_named_compile_time_arg_val("cb_in1_remote");
+    constexpr uint32_t sync_cb_index = get_named_compile_time_arg_val("cb_sync");
+
+    constexpr uint32_t block_slice_tiles = get_compile_time_arg_val(0);
+    constexpr uint32_t tile_size_bytes = get_compile_time_arg_val(1);
+    constexpr uint32_t num_senders = get_compile_time_arg_val(2);
+    constexpr uint32_t in1_page_tiles = get_compile_time_arg_val(3);
+    constexpr uint32_t num_k_blocks = get_compile_time_arg_val(4);
 
     const uint32_t b_idx = get_arg_val<uint32_t>(0);
 

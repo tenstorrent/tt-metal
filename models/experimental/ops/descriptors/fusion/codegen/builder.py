@@ -26,7 +26,7 @@ from models.experimental.ops.descriptors.fusion.cb_allocator import (
     num_cbs_for_device,
     _get_phantom_cb_indices,
     _compute_rebind_info,
-    _extract_remote_cb_indices,
+    _assign_global_cb_indices,
 )
 from models.experimental.ops.descriptors.fusion.codegen.source_gen import (
     _generate_fused_source,
@@ -146,6 +146,7 @@ def _build_fused_descriptor(
     target_core_range: Optional[Any] = None,
     multi_barrier: Optional[MultiBarrierSpec] = None,
     cb_pool: Optional[CBPoolAllocator] = None,
+    emitted_global_cb_ids: Optional[Set[int]] = None,
 ) -> _BuildResult:
     """Build a fused ProgramDescriptor from multiple phases with barrier sync.
 
@@ -155,6 +156,10 @@ def _build_fused_descriptor(
         cb_pool: If provided, use this pre-built pool for CB allocation
             (from global pool projection).  Otherwise, self-allocate
             (used by the linear-chain path).
+        emitted_global_cb_ids: Shared across the core-group builds that get
+            merged into one program, so a GlobalCB-backed CB (declared over the
+            GlobalCircularBuffer's cores, which span several groups) is emitted
+            by the first group only.
     """
     # Validate fp32 consistency
     _validate_fp32_consistency([p.op_descriptor for p in phases])
@@ -198,15 +203,14 @@ def _build_fused_descriptor(
         pool = cb_pool
     else:
         # Self-allocate (linear-chain path or single-group trees).
-        # Pre-reserve remote CB indices from GlobalCBs — prevents collisions
-        # without adding to remaps, so they are excluded from inter-phase CB reset.
+        # GlobalCB-backed CBs claim their indices first: they are passed through
+        # rather than pooled, so the pool must know about them before it hands
+        # slots to anything else.
         pool = CBPoolAllocator(max_slots=num_cbs_for_device(device))
-        for phase in phases:
-            for remote_idx in _extract_remote_cb_indices(phase.op_descriptor.descriptor):
-                pool.reserve_index(remote_idx)
+        global_cb_remaps = [_assign_global_cb_indices(pool, phase.op_descriptor) for phase in phases]
         for phase_idx, phase in enumerate(phases):
             phantom_indices = _get_phantom_cb_indices(phase)
-            pool.allocate_phase(phase_idx, phase.cb_info, phantom_indices)
+            pool.allocate_phase(phase_idx, phase.cb_info, phantom_indices, global_cb_remaps[phase_idx])
 
     # Compute CB address rebinding info using remapped slot indices.
     rebind_info = _compute_rebind_info(phases, pool.phase_remaps)
@@ -234,7 +238,9 @@ def _build_fused_descriptor(
     # Build merged CB descriptors from pool (uses stored source_cb/source_fmt references).
     # NOTE: this mutates fmt_desc.buffer_index — rebind_source_map must be
     # computed above, before this call.
-    merged_cbs, cb_source_map, global_cb_source_map = pool.build_merged_cb_descriptors(phases)
+    merged_cbs, cb_source_map, global_cb_source_map = pool.build_merged_cb_descriptors(
+        phases, emitted_global_cb_ids=emitted_global_cb_ids
+    )
 
     # Set CB core_ranges to the target when building for a specific core group.
     # Skip GlobalCB-backed descriptors — their core_ranges must stay within

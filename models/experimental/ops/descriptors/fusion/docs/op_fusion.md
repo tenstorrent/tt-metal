@@ -1358,8 +1358,8 @@ slots for that phase's CBs. The key invariant:
   phase runs at a time, so the slot is reused.
 
 ```python
-def allocate_phase(self, phase_idx, cb_info, phantom_cb_indices):
-    remap = {}
+def allocate_phase(self, phase_idx, cb_info, phantom_cb_indices, global_cb_remap=None):
+    remap = dict(global_cb_remap or {})
     slots_used_this_phase = set()
 
     # 1. Reserve phantom CBs (identity mapping)
@@ -1500,29 +1500,41 @@ def _match_alias_members(self, members, group_slots, cb_info):
 (2! = 2, 3! = 6).
 
 
-### GlobalCB Remote Indices
+### GlobalCB Indices
 
 `GlobalCircularBuffer`-backed CBs have a dual-index model: a local
-`format_descriptor` (pool-allocated normally) and a `remote_format_descriptor`
-(managed by the GlobalCB firmware, not by stream registers).
+`format_descriptor` (the tile-paged view compute indexes into) and a
+`remote_format_descriptor` (the page-paged view the GlobalCB delivers credits
+on, managed by the GlobalCB firmware rather than by stream registers).
 
-Remote indices must be **reserved** to prevent collisions but must NOT be:
-- Pool-allocated (no `CBSlot` created)
-- Remapped (no entry in `phase_remaps`)
-- Included in inter-phase CB reset (remote CBs use L1-based tracking,
-  not stream registers — resetting them would corrupt the GlobalCB state)
+Both indices are ordinary per-core CB indices, so two ops fused onto the same
+cores — each bringing its own GlobalCB at the same indices — would collide in
+`Program::add_circular_buffer`.  They are therefore **assigned** by the pool,
+but they get no `CBSlot`: the CB's L1 belongs to the `GlobalCircularBuffer`, so
+`build_merged_cb_descriptors` passes the original `CBDescriptor` through
+(rewriting its buffer indices) instead of rebuilding it from slots.  Having no
+slot also keeps them out of the inter-phase CB reset, which would corrupt the
+GlobalCB's L1-based tracking.
+
+Remote indices are packed *downwards* from the index the op chose, because
+`Program::update_kernel_groups` requires every remote index on a core to sit
+above every local one.
 
 ```python
-def reserve_index(self, index):
-    self._allocated_indices.add(index)
+def assign_global_cb_indices(self, key, cb_desc):
+    # key is (id(OpDescriptor), position in descriptor.cbs): indexing
+    # descriptor.cbs returns a fresh wrapper each time, so id(cb_desc) is
+    # not stable across accesses.
+    ...  # locals search upwards, remotes downwards; result goes into the remap
 ```
 
-This is called before phase allocation:
+Assignment runs before phase allocation, and the resulting map is passed into
+`allocate_phase` so the phase's `cb_*` named args follow it:
 
 ```python
-for phase in phases:
-    for remote_idx in _extract_remote_cb_indices(phase.op_descriptor.descriptor):
-        pool.reserve_index(remote_idx)
+global_cb_remaps = [_assign_global_cb_indices(pool, phase.op_descriptor) for phase in phases]
+for phase_idx, phase in enumerate(phases):
+    pool.allocate_phase(phase_idx, phase.cb_info, _get_phantom_cb_indices(phase), global_cb_remaps[phase_idx])
 ```
 
 
@@ -1560,12 +1572,10 @@ imposes no slot limit — it is purely an allocation engine.
 def _build_global_cb_pool(unique_ops):
     pool = CBPoolAllocator()
     phase_infos = [_create_phase_info(op, i) for i, op in enumerate(unique_ops)]
-    for pi in phase_infos:
-        for remote_idx in _extract_remote_cb_indices(pi.op_descriptor.descriptor):
-            pool.reserve_index(remote_idx)
+    global_cb_remaps = [_assign_global_cb_indices(pool, pi.op_descriptor) for pi in phase_infos]
     for phase_idx, pi in enumerate(phase_infos):
         phantom_indices = _get_phantom_cb_indices(pi)
-        pool.allocate_phase(phase_idx, pi.cb_info, phantom_indices)
+        pool.allocate_phase(phase_idx, pi.cb_info, phantom_indices, global_cb_remaps[phase_idx])
     return pool
 ```
 
