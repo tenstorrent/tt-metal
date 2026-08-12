@@ -2582,6 +2582,26 @@ void PerfDebugProfiler::consumer_thread() {
             zone_names_[kernel_profiler::DRISC_ZONE_WRITE] = "DRISC-WRITE";
             zone_names_[kernel_profiler::DRISC_ZONE_WR_BARRIER] = "DRISC-WR-BARRIER";
             zone_names_[kernel_profiler::DRISC_ZONE_PACE] = "DRISC-PACE";
+            // Explicit colours for the drainer zones. The pair that matters is SWEEP vs PACE: they alternate
+            // continuously on a filler row, so "the drainer is working" vs "the controller is holding it off"
+            // has to be readable without reading labels. SWEEP is a saturated blue; PACE is a recessive grey,
+            // because it is deliberate idleness and should not compete for attention with real work.
+            zone_colors_[kernel_profiler::DRISC_ZONE_SWEEP] = 0x2E86C1;        // blue: a sweep of the grid
+            zone_colors_[kernel_profiler::DRISC_ZONE_PACE] = 0x707B7C;         // grey: paced idle, on purpose
+            zone_colors_[kernel_profiler::DRISC_ZONE_READ] = 0x27AE60;         // green: NoC reads
+            zone_colors_[kernel_profiler::DRISC_ZONE_READ_WAIT] = 0x196F3D;    // dark green: read barrier
+            zone_colors_[kernel_profiler::DRISC_ZONE_PROC] = 0x8E44AD;         // purple: scan + head write-back
+            zone_colors_[kernel_profiler::DRISC_ZONE_CREDIT_WAIT] = 0xC0392B;  // red: the phase that sets the knee
+            zone_colors_[kernel_profiler::DRISC_ZONE_WRITE] = 0xD35400;        // orange: egress
+            zone_colors_[kernel_profiler::DRISC_ZONE_WR_BARRIER] = 0xF1C40F;   // yellow: waiting for write acks
+            // MOVER palette. Same zone ids, different hues, because the two roles are different machines: a
+            // filler scans worker L1 and stages to DRAM, a mover reads DRAM and pushes PCIe. Reading a mover row
+            // with a filler's colour scale in your head is the mistake this prevents.
+            zone_colors_mover_[kernel_profiler::DRISC_ZONE_SWEEP] = 0x16A085;        // teal: a mover's visit
+            zone_colors_mover_[kernel_profiler::DRISC_ZONE_READ] = 0x52BE80;         // light green: DRAM read
+            zone_colors_mover_[kernel_profiler::DRISC_ZONE_CREDIT_WAIT] = 0xE74C3C;  // bright red: THE knee phase
+            zone_colors_mover_[kernel_profiler::DRISC_ZONE_WRITE] = 0xE67E22;        // light orange: PCIe push
+            zone_colors_mover_[kernel_profiler::DRISC_ZONE_WR_BARRIER] = 0xF7DC6F;   // light yellow: write acks
         });
         ZoneScopedNC("tracy-emit", 0x2980B9);  // blue: pushing this batch into Tracy -- the slow side (~0.8M
                                                // rec/s). When this saturates, the RING drops; it can no longer
@@ -2692,6 +2712,20 @@ void PerfDebugProfiler::consumer_thread() {
             pkt.risc = risc;
             pkt.timer_id = r.zone;
             pkt.name = name;
+            // Colour by zone AND by role. Core indices at or past n_worker_cores are the drainers, appended in
+            // DRISC order, so the role comes straight off ctx.role[] -- see the lane-block comment in
+            // boot_device.
+            {
+                const bool is_mover = ctx.n_worker_cores != 0 && ci >= ctx.n_worker_cores &&
+                                      (ci - ctx.n_worker_cores) < ctx.n_drisc &&
+                                      ctx.role[ci - ctx.n_worker_cores] == kRoleMover;
+                const auto& tbl = is_mover ? zone_colors_mover_ : zone_colors_;
+                if (auto it = tbl.find(static_cast<uint16_t>(r.zone)); it != tbl.end()) {
+                    pkt.color = it->second;
+                } else if (auto it2 = zone_colors_.find(static_cast<uint16_t>(r.zone)); it2 != zone_colors_.end()) {
+                    pkt.color = it2->second;  // mover table has no override for this zone
+                }
+            }
             // Synced: push the RAW device timestamp -- the context was anchored with a real (host, device)
             // pair, so Tracy places it exactly. Unsynced: fall back to rebasing on the first marker seen.
             const uint64_t base = ctx.synced ? 0 : ctx.marker_ts_base;

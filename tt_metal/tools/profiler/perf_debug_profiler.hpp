@@ -428,6 +428,14 @@ private:
     std::atomic<bool> stop_{false};
     std::atomic<bool> stopped_{false};
     std::unordered_map<uint16_t, std::string> zone_names_;  // srcloc hash -> zone name (Tracy)
+    // srcloc hash -> explicit Tracy zone colour, for the fixed-id drainer zones only. Tracy's default is a hash
+    // of the name, which puts SWEEP and PACE in unrelated-but-similar colours and makes a drainer row hard to
+    // read at a glance -- and the SWEEP/PACE alternation is the whole point of that row. 0/absent = auto.
+    std::unordered_map<uint16_t, uint32_t> zone_colors_;
+    // Mover OVERRIDES for the same zone ids. The two roles share zone names but not meanings -- a filler's
+    // CREDIT-WAIT is DRAM ring room (54 ns, never binds) while a mover's is host FIFO credit (us-scale, and the
+    // phase that sets the knee) -- so a shared colour would invite reading one row's scale onto the other.
+    std::unordered_map<uint16_t, uint32_t> zone_colors_mover_;
     // chip -> the NOC0 coords of that chip's drainer cores, when DRISC self-profiling is on. Filled during
     // boot_device (the only place a drainer's placement is known) and consumed in start() to pre-create their
     // Tracy contexts, which is off the drain hot path.
