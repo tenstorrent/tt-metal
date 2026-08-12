@@ -1,12 +1,12 @@
-=== 01:14:19 variant sweep (wall-clock A/B of every candidate topology) ===
-=== 01:15:09 multi-chunk (16384-token) prefill A/B against the functional decoder ===
-=== 01:15:35 full fused suite ===
-=== 01:23:26 PCC summary + context contract, both derived from the suite run ===
-=== 01:23:26 Tracy: 8 fused windows + 2 multi-chunk functional baselines ===
-=== 01:25:43 watcher (separate run, no profiler attached) ===
-=== 01:28:52 done ===
-/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/fused_decoder/logs/full_test_run.log:================== 91 passed, 3 warnings in 466.68s (0:07:46) ==================
-/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/fused_decoder/logs/watcher_run.log:================== 18 passed, 3 warnings in 184.74s (0:03:04) ==================
+=== 01:33:04 variant sweep (wall-clock A/B of every candidate topology) ===
+=== 01:33:55 multi-chunk (16384-token) prefill A/B against the functional decoder ===
+=== 01:34:21 full fused suite ===
+=== 01:42:13 PCC summary + context contract, both derived from the suite run ===
+=== 01:42:13 Tracy: 8 fused windows + 2 multi-chunk functional baselines ===
+=== 01:44:30 watcher (separate run, no profiler attached) ===
+=== 01:47:40 done ===
+/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/fused_decoder/logs/full_test_run.log:================== 91 passed, 3 warnings in 468.09s (0:07:48) ==================
+/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/fused_decoder/logs/watcher_run.log:================== 18 passed, 3 warnings in 185.23s (0:03:05) ==================
 /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/fused_decoder/logs/tracy_decode_131071_full.log:0
 /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/fused_decoder/logs/tracy_decode_131071_sliding.log:0
 /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/fused_decoder/logs/tracy_decode_full.log:0

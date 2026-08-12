@@ -155,18 +155,18 @@
   "performance": {
     "note": "Warmed, signposted Tracy windows; Device Time column from tt-perf-report --csv, microseconds. 8 trace replays per decode window; all ten committed captures (eight fused windows plus the two multi-chunk functional baselines) are free of dropped profiler markers. 'baseline' is the functional decoder measured the same way.",
     "prefill_8192_tokens_batch1_ms": {
-      "sliding": 49.301,
-      "full": 48.010
+      "sliding": 49.285,
+      "full": 47.980
     },
     "prefill_8192_tokens_batch1_ms_baseline": {
       "sliding": 101.23,
       "full": 99.38
     },
     "traced_decode_ms_per_token": {
-      "sliding@2048": 2.711,
-      "sliding@131071": 2.707,
-      "full@2048": 2.684,
-      "full@131071": 3.178
+      "sliding@2048": 2.712,
+      "sliding@131071": 2.708,
+      "full@2048": 2.685,
+      "full@131071": 3.181
     },
     "traced_decode_ms_per_token_baseline": {
       "sliding@2048": 3.163,
@@ -191,15 +191,15 @@
       "decode_full": 32
     },
     "context_scaling": "sliding decode is context-independent (SDPA reads at most the 2048 window); full (NoPE) decode SDPA goes 36 us -> 529 us between 2048 and 131071.",
-    "decode_roofline": "One decode step streams 967,835,648 B of BF16 weights; at the 383 GB/s the six matmuls achieve that is 2.527 ms, i.e. 93 % of the 2.711 ms fused decode step. Further decode gains require moving fewer bytes (weight dtype) or a higher-efficiency matmul config.",
+    "decode_roofline": "One decode step streams 967,835,648 B of BF16 weights; at the 383 GB/s the six matmuls achieve that is 2.528 ms, i.e. 93 % of the 2.712 ms fused decode step. Further decode gains require moving fewer bytes (weight dtype) or a higher-efficiency matmul config.",
     "fidelity_policy": "Unchanged from the functional stage: the prefill dense projections pin the same HiFi2 / fp32_dest_acc_en=False / packer_l1_acc=True compute-kernel config that ttnn.linear selects by default for BF16, so the before/after is a pure topology comparison. minimal_matmul's own default is more accurate (PCC 0.999994 vs 0.999947 vs FP32) and 2.3-2.5 ms slower per 8192-token prefill; that choice belongs to the optimized-decoder stage.",
     "prefill_16384_tokens_batch1_ms": {
-      "sliding": 104.758,
-      "full": 111.118
+      "sliding": 104.696,
+      "full": 111.121
     },
     "prefill_16384_tokens_batch1_ms_baseline": {
-      "sliding": 213.415,
-      "full": 221.665
+      "sliding": 213.021,
+      "full": 222.291
     }
   },
   "tests": {
