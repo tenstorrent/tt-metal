@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """CPU smoke test for the vendored Cosmos3 audio VAE.
 
 Loads `nvidia/Cosmos3-Super/sound_tokenizer/` (the only public Cosmos3 checkpoint
