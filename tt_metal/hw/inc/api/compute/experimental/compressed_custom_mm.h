@@ -249,18 +249,23 @@ ALWI void compressed_custom_mm_block_math(
  *
  * Return value: None
  *
- * | Argument       | Description                                                                            | Type     | Valid Range                  | Required              |
- * |----------------|----------------------------------------------------------------------------------------|----------|------------------------------|-----------------------|
- * | dense_packing  | Whether to pack consecutive tiles 32 rows apart (instead of 64, doubles dest capacity) | bool     | true/false                   | False (default false) |
+ * | Argument              | Description                                                                            | Type     | Valid Range                  | Required              |
+ * |-----------------------|----------------------------------------------------------------------------------------|----------|------------------------------|-----------------------|
+ * | dense_packing         | Whether to pack consecutive tiles 32 rows apart (instead of 64, doubles dest capacity) | bool     | true/false                   | False (default false) |
+ * | restore_tile_pack_mop | Reinstall the default (32x32-tile, 4-face) tile-pack MOP on exit                       | bool     | true/false                   | False (default false) |
  */
 // clang-format on
-template <bool dense_packing = false>
+template <bool dense_packing = false, bool restore_tile_pack_mop = false>
 ALWI void compressed_custom_mm_block_uninit() {
     if constexpr (dense_packing) {
         // Restore default packing stride of 64 rows between tiles
         PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * 2)));
     }
-    // Deliberately no packer-MOP write here — see custom_mm_block_uninit for why a no-arg
+    if constexpr (restore_tile_pack_mop) {
+        // Opt-in "leave the packer at Default on op exit" convention — see custom_mm_block_uninit.
+        PACK((_llk_pack_mop_config_<PackMode::Default>()));
+    }
+    // Otherwise deliberately no packer-MOP write — see custom_mm_block_uninit for why a no-arg
     // Default MOP write is a clobber, not a restore, on this family's 1x32 tile geometry.
 }
 
