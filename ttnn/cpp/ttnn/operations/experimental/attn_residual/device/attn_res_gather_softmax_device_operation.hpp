@@ -27,6 +27,10 @@ struct AttnResGatherSoftmaxDeviceOperation {
     using shared_variables_t = AttnResGatherSoftmaxMeshWorkloadFactory::shared_variables_t;
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+    // `site` is kept out of the program hash so a walk of read sites lands on one cached
+    // program, which means a hit reaches the factory's page arithmetic without passing
+    // the miss path's bounds checks. This repeats them.
+    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);

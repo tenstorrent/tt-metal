@@ -284,7 +284,9 @@
       -vvv --tb=short
   skus:
     bh_loudbox:
-      timeout: 5
+      # 3:14 with nothing in the kernel cache, which is how CI runs it — 2:17 of that
+      # is the tests and the rest is compiling the op's four kernels.
+      timeout: 4
   owner_id: U09LK84G4TF # Nikola Milicevic
   team: models
 

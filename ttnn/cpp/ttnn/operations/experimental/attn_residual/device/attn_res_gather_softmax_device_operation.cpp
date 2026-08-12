@@ -7,6 +7,7 @@
 #include <array>
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 
@@ -19,6 +20,35 @@
 namespace ttnn::experimental::prim {
 
 using namespace tt::constants;
+
+namespace {
+
+// `site` selects a plane of every batched operand, and the factory turns it into page
+// offsets with no further checking, so a value past the batch reads whatever follows
+// the buffer.
+void validate_site(const AttnResGatherSoftmaxParams& args, const AttnResGatherSoftmaxInputs& tensor_args) {
+    const std::array<std::pair<const ttnn::Tensor*, const char*>, 3> batched = {{
+        {&tensor_args.partial, "partial"},
+        {&tensor_args.shift, "shift"},
+        {&tensor_args.mass, "mass"},
+    }};
+    for (const auto& [tensor, name] : batched) {
+        const auto sites = tensor->padded_shape()[0];
+        TT_FATAL(
+            sites == 1 || args.site < sites,
+            "AttnResGatherSoftmax site {} is past {}'s dim 0 of {}",
+            args.site,
+            name,
+            sites);
+    }
+}
+
+}  // namespace
+
+void AttnResGatherSoftmaxDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    validate_site(args, tensor_args);
+}
 
 void AttnResGatherSoftmaxDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
@@ -107,22 +137,22 @@ void AttnResGatherSoftmaxDeviceOperation::validate_on_program_cache_miss(
             prefix_sum_shape);
     }
     TT_FATAL(partial_shape[1] == 1, "AttnResGatherSoftmax requires a candidate dim of 1, got {}", partial_shape[1]);
-    TT_FATAL(
-        partial_shape[0] == 1 || args.site < partial_shape[0],
-        "AttnResGatherSoftmax site {} is past partial's dim 0 of {}",
-        args.site,
-        partial_shape[0]);
+    validate_site(args, tensor_args);
     TT_FATAL(
         partial_shape[-1] % TILE_WIDTH == 0 && partial_shape[-2] % TILE_HEIGHT == 0,
         "AttnResGatherSoftmax requires tile-aligned inner dims, got {} x {}",
         partial_shape[-2],
         partial_shape[-1]);
 
+    // The logical height, not the padded one: the reader fetches pages 0..Wt-1 and stops,
+    // so a query taller than the tile it pads into would be silently truncated to its
+    // first row rather than rejected.
     const auto& q_shape = tensor_args.q.padded_shape();
     TT_FATAL(
-        q_shape[0] == 1 && q_shape[1] == 1 && q_shape[-1] == partial_shape[-1],
+        q_shape[0] == 1 && q_shape[1] == 1 && tensor_args.q.logical_shape()[-2] == 1 &&
+            q_shape[-1] == partial_shape[-1],
         "AttnResGatherSoftmax takes the statistics against a single query row of partial's width, got {} against {}",
-        q_shape,
+        tensor_args.q.logical_shape(),
         partial_shape);
 
     for (const auto* tensor : {&tensor_args.shift, &tensor_args.mass}) {
@@ -138,11 +168,6 @@ void AttnResGatherSoftmaxDeviceOperation::validate_on_program_cache_miss(
                 tensor->padded_shape()[i],
                 partial_shape[i]);
         }
-        TT_FATAL(
-            tensor->padded_shape()[0] == 1 || args.site < tensor->padded_shape()[0],
-            "AttnResGatherSoftmax site {} is past a scalar operand's dim 0 of {}",
-            args.site,
-            tensor->padded_shape()[0]);
     }
 
     // The exchange writes a peer's slot by naming a page of that peer's own copy of this
@@ -170,6 +195,22 @@ void AttnResGatherSoftmaxDeviceOperation::validate_on_program_cache_miss(
         args.ring_size);
     TT_FATAL(
         args.cluster_axis < 2, "AttnResGatherSoftmax takes a 2D mesh axis, got cluster_axis {}", args.cluster_axis);
+
+    // The exchange is one core opening one connection, because the whole payload is a
+    // handful of scalar tiles — a second link would have nothing to carry. Rejected
+    // rather than ignored, since `num_links` does key the program cache.
+    TT_FATAL(args.num_links == 1, "AttnResGatherSoftmax sends over a single link, got num_links {}", args.num_links);
+
+    // The factory seats its two passes on the compute grid directly, so a subdevice that
+    // does not cover it would put this program on cores the caller kept for something
+    // else.
+    auto* mesh_device = partial.device();
+    const auto grid = mesh_device->compute_with_storage_grid_size();
+    const auto sub_device_id = args.sub_device_id.value_or(mesh_device->get_sub_device_ids().at(0));
+    TT_FATAL(
+        mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id)
+            .contains(CoreRangeSet(CoreRange({0, 0}, {grid.x - 1, grid.y - 1}))),
+        "AttnResGatherSoftmax spans the whole compute grid and cannot be confined to a subdevice");
 }
 
 std::vector<tt::tt_metal::TensorSpec> AttnResGatherSoftmaxDeviceOperation::compute_output_specs(

@@ -169,13 +169,15 @@ def test_fast_weighted_reduce_nc_program_cache(device):
     shape = [1, 9, 128, 256]
 
     entries_before = device.num_program_cache_entries()
+    # Every call's tensors outlive the loop, so the second call cannot land on the
+    # first call's addresses — a stale binding would look correct if it did.
+    live = []
     for _ in range(2):
         torch_input = torch.randn(shape, dtype=torch.bfloat16)
         torch_weight = torch.randn([1, 9, 128, 1], dtype=torch.bfloat16)
-        # Held until after the check so the next iteration cannot reuse the
-        # addresses, which would make a stale binding look correct.
         tt_input, tt_weight = _place(torch_input, device), _place(torch_weight, device)
         output = ttnn.experimental.fast_weighted_reduce_nc(tt_input, tt_weight, dim=1)
+        live += [tt_input, tt_weight, output]
         assert_with_pcc(_reference(torch_input, torch_weight), ttnn.to_torch(output).float(), PCC)
 
     assert device.num_program_cache_entries() - entries_before == 1
