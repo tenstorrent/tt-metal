@@ -646,7 +646,8 @@ MatmulProgramConfig get_matmul_program_config(
     // TODO: allow overwriting of grid size by user_core_coord after allowing
     // support of arbitrary compute grid and more generic sharded output tensor
     // creation
-    auto grid_size = input_tensor_a.shard_spec().value().grid.bounding_box().grid_size();
+    const auto grid_bbox = input_tensor_a.shard_spec().value().grid.bounding_box();
+    auto grid_size = grid_bbox.grid_size();
 
     const auto& a_shape_padded = utilities::get_matmul_tensor_padded_shape(input_tensor_a, transpose_a);
     const auto& b_shape_padded = utilities::get_matmul_tensor_padded_shape(input_tensor_b, transpose_b);
@@ -742,6 +743,7 @@ MatmulProgramConfig get_matmul_program_config(
                 .fuse_batch = true,
                 .fused_activation = fused_activation,
                 .mcast_in0 = mcast_in0,
+                .allowed_worker_cores = CoreRangeSet(grid_bbox),
             };
         }
         if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED and

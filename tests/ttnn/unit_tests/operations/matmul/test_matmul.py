@@ -3689,6 +3689,61 @@ def test_matmul_default_width_sharded(
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
+@pytest.mark.parametrize(
+    "memory_layout, m_size, k_size, n_size",
+    [
+        (ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 384, 32, 32),
+        (ttnn.TensorMemoryLayout.WIDTH_SHARDED, 32, 384, 32),
+    ],
+    ids=["height", "width"],
+)
+def test_matmul_default_sharded_non_origin_single_core(device, memory_layout, m_size, k_size, n_size):
+    """Single-core shard on (1,0) must run on that core, not (0,0)."""
+    torch.manual_seed(0)
+    device_grid = device.compute_with_storage_grid_size()
+    if device_grid.x <= 1:
+        pytest.skip("Need at least 2 columns for non-origin shard")
+
+    input_a_shape = (1, m_size, k_size)
+    input_b_shape = (k_size, n_size)
+    shard_core = ttnn.CoreCoord(1, 0)
+
+    torch_input_tensor_a = torch.randn(input_a_shape, dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.randn(input_b_shape, dtype=torch.bfloat16)
+    torch_output_tensor = torch.matmul(torch_input_tensor_a, torch_input_tensor_b)
+
+    input_a_memory_config = ttnn.MemoryConfig(
+        memory_layout,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(shard_core, shard_core)}),
+            (m_size, k_size),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        device=device,
+        memory_config=input_a_memory_config,
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # DRAM out: L1 sharded-out inference is still origin-anchored.
+    output_tensor = ttnn.matmul(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+
+
 def test_matmul_activation_with_sharded_input(device):
     # Create input tensors
     torch.manual_seed(0)
