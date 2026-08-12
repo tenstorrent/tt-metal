@@ -13,7 +13,6 @@ from transformers import AutoTokenizer
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.common.weight_cache import build_cached_state_dict, mark_weight_cache_complete, weight_cache_is_complete
 from models.demos.llama3_70b_galaxy.demo.demo_common import load_inputs_advanced
 from models.demos.llama3_70b_galaxy.tt.generator import Generator, SamplingParams
 from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations
@@ -137,26 +136,14 @@ def create_tt_qwen_model(
     # When running running prefill-only profile, run just 1 layer
     tt_model_args.n_layers = num_layers if not prefill_profile else 1
 
-    # Warm ttnn cache => build from .tensorbin, skip the HF from_pretrained load. Pure placeholder:
-    # this galaxy demo embeds tokens on-device (HostEmbedding is tests-only), so the state_dict
-    # feeds only the TtTransformer -- no host-weight hybrid needed. (#45400)
-    cache_dir = tt_model_args.weight_cache_path(dtype)
-    cache_identity = dict(
-        model_name=tt_model_args.model_name,
-        n_layers=tt_model_args.n_layers,
-        mesh_shape=tuple(mesh_device.shape),
-    )
-    loaded_real_weights = False
-    if (
-        not prefill_profile
-        and not getattr(tt_model_args, "dummy_weights", False)
-        and weight_cache_is_complete(cache_dir, **cache_identity)
-    ):
-        logger.info("Warm ttnn weight cache detected -- skipping HF state_dict load.")
-        state_dict = build_cached_state_dict(cache_dir)
-    else:
-        state_dict = tt_model_args.load_state_dict()
-        loaded_real_weights = bool(state_dict) and not getattr(tt_model_args, "dummy_weights", False)
+    # NOTE: the warm-ttnn-cache HF-load skip is intentionally DISABLED for qwen3-32b-galaxy.
+    # Qwen attention builds its q_norm/k_norm RMSNorms without a weight_cache_path
+    # (llama_attention.py), so those norms are materialized straight from the state_dict with
+    # cache_file_name=None -- i.e. NOT loaded from a .tensorbin. A dataless placeholder would feed
+    # uninitialized (garbage) q_norm/k_norm weights and corrupt accuracy while still passing.
+    # Load the real weights until those norms are cache-backed or captured in a host sidecar.
+    # (llama3.3-70b-galaxy has no q_norm/k_norm and keeps the skip.) (#45400)
+    state_dict = tt_model_args.load_state_dict()
     page_table = None
     paged_attention_config = None
     tt_kv_cache = None
@@ -187,9 +174,6 @@ def create_tt_qwen_model(
 
     if use_paged_kv_cache:
         tt_kv_cache = [l.attention.layer_past for l in model.layers]
-
-    if loaded_real_weights and not prefill_profile:
-        mark_weight_cache_complete(cache_dir, state_dict, **cache_identity)
 
     return tt_model_args, model, page_table, [tt_kv_cache]
 

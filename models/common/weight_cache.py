@@ -65,9 +65,18 @@ def weight_cache_is_complete(cache_path, *, model_name, n_layers, mesh_shape, fo
         return False
     if not meta.get("weights"):
         return False
-    # If host weights were captured, the sidecar must still be present to rebuild them.
-    if meta.get("host_weights") and not (cache_path / HOST_WEIGHTS_SIDECAR).is_file():
-        return False
+    # If host weights were captured, the sidecar must be present AND loadable. A torn/corrupt
+    # sidecar (interrupted or racing seed) must fall back to a cold load -- the way a torn marker
+    # already does via the except above -- rather than pass this gate and then crash torch.load on
+    # every subsequent run, bricking the cache dir. (#45400 review)
+    if meta.get("host_weights"):
+        sidecar = cache_path / HOST_WEIGHTS_SIDECAR
+        if not sidecar.is_file():
+            return False
+        try:
+            torch.load(sidecar, map_location="cpu", weights_only=True)
+        except Exception:
+            return False
     return any(cache_path.glob("*.tensorbin"))
 
 
@@ -93,21 +102,31 @@ def mark_weight_cache_complete(
             host[k] = v
     try:
         cache_path.mkdir(parents=True, exist_ok=True)
+        # Write both the sidecar and the marker atomically (temp file + os.replace, atomic on
+        # POSIX). Two jobs can seed the same (model, dtype, mesh) dir on one host concurrently, and
+        # an interrupted write must never leave a torn file that a later run picks up: a half-written
+        # sidecar would otherwise pass the is_file() gate and crash torch.load on every subsequent
+        # run. Sidecar first, then marker, so the completeness gate only appears once its sidecar is
+        # fully in place. (#45400 review)
         if host:
-            torch.save(host, cache_path / HOST_WEIGHTS_SIDECAR)
-        marker.write_text(
-            json.dumps(
-                {
-                    "format_version": WEIGHT_CACHE_FORMAT_VERSION,
-                    "model_name": model_name,
-                    "n_layers": n_layers,
-                    "mesh_shape": str(mesh_shape),
-                    "is_moe": bool(is_moe),
-                    "host_weights": sorted(host.keys()),
-                    "weights": weights,
-                }
-            )
+            sidecar = cache_path / HOST_WEIGHTS_SIDECAR
+            sidecar_tmp = sidecar.with_suffix(sidecar.suffix + ".tmp")
+            torch.save(host, sidecar_tmp)
+            os.replace(sidecar_tmp, sidecar)
+        marker_body = json.dumps(
+            {
+                "format_version": WEIGHT_CACHE_FORMAT_VERSION,
+                "model_name": model_name,
+                "n_layers": n_layers,
+                "mesh_shape": str(mesh_shape),
+                "is_moe": bool(is_moe),
+                "host_weights": sorted(host.keys()),
+                "weights": weights,
+            }
         )
+        marker_tmp = marker.with_suffix(marker.suffix + ".tmp")
+        marker_tmp.write_text(marker_body)
+        os.replace(marker_tmp, marker)
         logger.info(f"Marked ttnn weight cache complete: {marker} ({len(weights)} weights, {len(host)} host-loaded)")
     except OSError as e:
         logger.warning(f"Could not write weight-cache completion marker {marker}: {e}")
@@ -120,6 +139,14 @@ class CachedStateDict(collections.abc.MutableMapping):
     returns a fresh dataless ``torch.empty`` of the manifest shape/dtype (which ``ttnn.as_tensor``
     discards on the guaranteed cache hit). Mutable (some loaders ``setdefault`` missing KV-shared
     weights) and truthy (some loaders gate real-weight loading on ``if state_dict:``)."""
+
+    # Explicit marker that this is a warm-cache stand-in, NOT real weights. Callers that must tell
+    # "warm-cache placeholder" apart from "real weights" MUST branch on this attribute, never on
+    # truthiness: this mapping is truthy (non-zero __len__) but tt_transformers' _PlaceholderStateDict
+    # is falsy (__bool__ -> False), so a truthiness test silently means opposite things for the two.
+    # If tt_transformers is ever collapsed onto this class (a listed follow-up), the attribute keeps
+    # `if is_placeholder(...)` reload sites (e.g. test_model_prefill) correct. (#45400 review)
+    is_placeholder = True
 
     def __init__(self, manifest, host):
         self._manifest = manifest  # key -> (shape, dtype_str)
