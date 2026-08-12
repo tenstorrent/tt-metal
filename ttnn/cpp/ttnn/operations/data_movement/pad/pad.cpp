@@ -331,6 +331,22 @@ ttnn::Tensor pad_impl(
         padding_size = padding.size();
         extra_index = 0;
     }
+    if (original_rank > 4) {
+        // Only padding[extra_index .. extra_index + 3] reaches the 4D kernel. Dims below extra_index have no
+        // slot in the 4D spec at all, and axis 0 of the squeezed tensor may be several original dims folded
+        // together -- padding applied there would stretch the whole merged axis instead of one dimension.
+        // pad_leading_dimensions() consumes those dims before we get here; this guard is what the removed
+        // "only supports padding on the lowest 3 dimensions" TT_FATAL used to provide.
+        const auto is_unpadded = [](const PadSpecDim& p) { return p.before_elements == 0 && p.after_elements == 0; };
+        const bool axis0_is_merged =
+            input_tensor_4D.logical_shape()[0] != input_tensor.logical_shape()[static_cast<int>(extra_index)];
+        TT_FATAL(
+            std::all_of(padding.begin(), padding.begin() + static_cast<std::ptrdiff_t>(extra_index), is_unpadded) &&
+                (!axis0_is_merged || is_unpadded(padding[extra_index])),
+            "ttnn.pad: padding on the leading dimensions of a rank {} tensor must be consumed before the squeeze "
+            "to 4D; got a non-zero pad on a dimension that the 4D kernel cannot address",
+            original_rank);
+    }
     auto input_shape_with_tile_padding =
         (input_tensor_4D.layout() == Layout::TILE) ? input_tensor_4D.padded_shape() : input_tensor_4D.logical_shape();
     // For tilized tensors, we want the shape padded to the nearest tile. For row major, we just want the row size
@@ -403,9 +419,18 @@ ttnn::Tensor invoke_rm(
             output_tensor = ttnn::reshape(output_tensor, ttnn::Shape(padded_shape));
         }
     } else {
+        // invoke_rm only ever sees row-major tensors, and pad_impl sizes the 4D output from the *logical*
+        // shape in that case (input_shape_with_tile_padding). The padded output therefore carries no
+        // alignment padding of its own, so the restored rank-N padded shape is the padded logical shape.
+        // Deriving it from input_tensor.padded_shape() instead would disagree with the buffer whenever an
+        // input arrives with padded_shape != logical_shape (e.g. an explicit two-shape reshape).
         const auto output_logical_shape = compute_padded_logical_shape(input_tensor.logical_shape(), padding_vec);
-        const auto output_padded_shape = compute_padded_logical_shape(input_tensor.padded_shape(), padding_vec);
-        output_tensor = ttnn::reshape(output_tensor, output_logical_shape, output_padded_shape);
+        TT_FATAL(
+            output_logical_shape.volume() == output_tensor.padded_shape().volume(),
+            "ttnn.pad: restored shape {} does not match the padded output volume of {}",
+            output_logical_shape,
+            output_tensor.padded_shape());
+        output_tensor = ttnn::reshape(output_tensor, output_logical_shape, output_logical_shape);
     }
     return output_tensor;
 }

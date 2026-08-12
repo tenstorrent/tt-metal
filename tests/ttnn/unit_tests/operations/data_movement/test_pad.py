@@ -1545,3 +1545,29 @@ def test_pad_rank_gt4_tile_front_padding_not_supported(device, padding, expect_e
 
     with expect_error(RuntimeError, "ttnn.pad: on device tile padding does not support front padding"):
         ttnn.pad(input_tensor, padding, 0.0)
+
+
+@pytest.mark.parametrize("use_multicore", [True, False], ids=["multicore", "singlecore"])
+@pytest.mark.parametrize(
+    "shape,padding",
+    [
+        # Leading dim (reshape path) and dim rank-3 (squeeze-to-4D path).
+        ((2, 4, 4, 4, 128), ((0, 1), (0, 0), (0, 0), (0, 0), (0, 0))),
+        ((2, 4, 4, 4, 128), ((0, 0), (0, 1), (0, 2), (0, 0), (0, 0))),
+    ],
+    ids=["dim0", "dim1_and_dim2"],
+)
+def test_pad_rank_gt4_use_multicore(device, shape, padding, use_multicore):
+    """The rank > 4 path must agree with torch for both the multicore and single-core kernels."""
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.randn(shape, dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.pad(
+        torch_input_tensor, _ttnn_padding_to_torch(padding), mode="constant", value=0.0
+    )
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    output_tensor = ttnn.to_torch(ttnn.pad(input_tensor, padding, 0.0, use_multicore=use_multicore))
+
+    assert output_tensor.shape == torch_output_tensor.shape
+    assert torch.equal(torch_output_tensor, output_tensor)
