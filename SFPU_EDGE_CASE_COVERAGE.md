@@ -2,13 +2,29 @@
 
 **Issue:** [tenstorrent/tt-metal#49739 — [LLK] SFPU testing edge cases](https://github.com/tenstorrent/tt-metal/issues/49739)
 **Plan for what is left:** [SFPU_EDGE_CASE_EXPANSION_PLAN.md](SFPU_EDGE_CASE_EXPANSION_PLAN.md)
-**Audited:** 2026-07-23 · **Regenerated from code:** 2026-08-12 (revision 6)
+**Audited:** 2026-07-23 · **Regenerated from code:** 2026-08-12 (revision 7)
 **Scope:** All SFPU LLK kernels in `tt-metal/tt_metal/tt-llk`, audited through the tt-llk Python test
 infra (`tests/python_tests/`). Wormhole B0 and Blackhole share essentially the same SFPU kernel set
 (BH adds only `topk_xl`), so this audit treats them together and notes arch-specific gaps inline.
 Quasar has its own suite under `quasar/` and is **out of scope** — an op driven only from `quasar/`
 counts as untested here.
 
+> ### Revision 7 — cat B is live, and Blackhole answered three open questions
+>
+> The plan's items 1–4 have been implemented and **verified on Blackhole silicon** (p150b). What
+> changed here:
+>
+> * **Cat B is no longer switched off.** Five ops (`Identity`, `Abs`, `Exp`, `Sin`, `Cos`) now inject
+>   `±inf` / `NaN` / signed zeros and are green; five more are measured and deferred (§2.1). §4's
+>   tables carry a cat-B column per op.
+> * **Ternary operand-C poles are driven.** `addcdiv` and `snake_beta` at `c → 0` and `lerp`'s weight
+>   boundaries — previously unreachable by construction — §4.6.
+> * **Three open questions closed by measurement**, all in §5: the `SFPMAD` signed-zero prediction
+>   (confirmed, now arch-gated), whether `-0.0` reaches DEST (it does not, on the datacopy path), and
+>   whether approximate `exp`'s accuracy limit is generational (it is — Wormhole only).
+> * **One new kernel finding:** `Log` saturates a non-finite input to the format maximum, so no
+>   non-finite value survives it (§5.5).
+>
 > ### Revision 6 — the tables are now generated, not overlaid
 >
 > Revisions 2–5 layered "override" notes on top of a body written on 2026-07-23, so reading any row
@@ -56,16 +72,32 @@ All figures re-derived from the tree on 2026-08-12 (see §7 for the commands).
 | Unary ops **outside** the registry — in neither sweep | **21** (§4.3): 5 predicates, 3 threshold, 4 int max/min, 2 unary shift, `Typecast`, `Relu`, 4 perf-only int, `SfpuSwiGLU` |
 | Binary SFPU ops (float + shift) | 43 — 11 with a registered domain, 5 with a driven pole |
 | Binary integer / ternary / scalar / reduce / FPU-binary ops | 5 / 5 / 5 / 3 / 3 |
-| `_OP_SINGULARITIES` entries | 19 |
-| `_OP_EDGE_POINTS` entries | 43 |
-| `SPECIALS_READY_OPS` (cat B opt-in) | **0** — cat B is wired and switched off |
-| `(format, dest_acc)` triples that can carry specials | 7 of 40, measured on Wormhole |
-| Ops diverging from their golden at a driven edge | **10**, over 42 `(op, format, dest_acc)` cells |
+| `_OP_SINGULARITIES` entries | **21** — +2 for the ternary operand-C poles |
+| `_OP_EDGE_POINTS` entries | 43, plus `_OP_OPERAND_EDGE_POINTS` for `lerp`'s operand-C knees |
+| `SPECIALS_READY_OPS` (cat B opt-in) | **5** — `Identity`, `Abs`, `Exp`, `Sin`, `Cos`; 5 more measured and deferred |
+| `(format, dest_acc)` triples that can carry specials | 7 of 40 (Wormhole); **3 of those 7 reachable and confirmed on Blackhole** |
+| Ops diverging from their golden at a driven edge | 10 over 42 cells, of which **16 cells now arch-gated to Wormhole** |
 | Host-side guards over the gates and metadata | 107 tests (`test_sfpu_domains.py`) |
 
-**Category status:** A ✅ closed for every op that has a boundary · B 🟡 measured, off · C ✅ closed
-for the 5 ops whose kernels claim the full int32 range · D ✅ closed for all 43 knees ·
-E ⬜ blocked on C++ · F ⬜ 11 kernels untouched.
+**Category status:** A ✅ closed for every op that has a boundary, unary **and ternary** · B 🟡 live
+for 5 ops of 97, mechanism proven on silicon · C ✅ closed for the 5 ops whose kernels claim the full
+int32 range · D ✅ closed for all 43 knees, plus `lerp`'s weight boundaries · E ⬜ blocked on C++ ·
+F ⬜ 11 kernels untouched.
+
+**Blackhole status (p150b, 2026-08-12).** All four suites pass, through the two-phase
+compile-producer / compile-consumer flow that CI uses:
+
+| Suite | Result |
+|---|---|
+| `test_sfpu_unary.py` | 4932 passed · 1666 skipped · 14 xfailed · 0 failed |
+| `test_sfpu_binary.py` | 739 passed · 531 skipped · 36 xfailed · **0 xpassed** · 0 failed |
+| `test_sfpu_ternary.py` | 39 passed · 25 skipped · 0 failed |
+| `test_sfpu_binop_scalar.py` | 58 passed · 62 skipped · 0 failed |
+
+The binary suite's **0 xpassed is the point**: before the signed-zero class was arch-gated it reported
+16, and those 16 cells are now 16 ordinary passes — i.e. assertions rather than tolerated divergences.
+The same happened to approximate `exp` in the unary suite (4 XPASS → 4 pass). Everything below marked
+"measured" without an arch named is Wormhole, carried forward.
 
 ---
 
@@ -74,27 +106,40 @@ E ⬜ blocked on C++ · F ⬜ 11 kernels untouched.
 Ordered by how much coverage each item is worth. This is the list to work from; §2 of the plan
 sequences it.
 
-### 2.1 Cat B — IEEE specials, for every op (largest gap)
+### 2.1 Cat B — IEEE specials for the other 87 unary ops (still the largest gap)
 
-Wired end to end and **deliberately switched off**: `SPECIALS_READY_OPS` is empty, so no op injects
-`±inf` / `NaN` / signed zeros today. The blocker is not the stimulus and not the format matrix — it is
-that torch-backed goldens do not define a result for non-finite *inputs*. Turning it on regardless
-gives **272 failures out of 564 variants**.
+**No longer zero.** Five ops — `Identity`, `Abs`, `Exp`, `Sin`, `Cos` — now inject `±inf`, `NaN` and
+signed zeros through `SPECIALS_READY_OPS` and are green on Blackhole across every specials-safe triple
+the sweep reaches. The mechanism is proven end to end on silicon; what remains is per-op work.
 
-This is the entire edge story for the **47 smooth ops in §4.2** — they have no knee and no pole, so
-`edge_spec()` returns `None` and they skip the edge sweep. Half the unary op list has no deliberate
-edge coverage until this is done.
+**The next five are measured and deliberately not enrolled.** `Neg`, `Reciprocal`, `Sqrt`, `Rsqrt` and
+`Log` all diverge, but the majority of those divergences are **golden** defects rather than kernel
+ones — `Neg(NaN) → +inf` and `Log(NaN) → +inf` are the golden mangling NaN through the 16-bit dest
+path, and `Neg(+0) → -0` and `Reciprocal(-inf) → -0` are cases where the *hardware* is IEEE-correct and
+the golden is not. Enrolling an op whose golden is wrong would launder a test bug into a permanent
+"known hardware divergence". The full per-probe table is in `_SPECIALS_NEXT_TRANCHE` and the plan's
+§3.2.
 
-The only ops that inject specials today are the five predicates
-(`Isinf`, `Isposinf`, `Isneginf`, `Isnan`, `Isfinite`) via `test_eltwise_unary_sfpu_isinf_isnan`,
-which is also the instrument that measured the safe matrix in §6.
+**87 unary ops remain, and 47 of them are smooth everywhere** (§4.2), so cat B is still their entire
+edge story. Measured cost from the first tranche: of 10 ops attempted, 5 were already correct, 2
+needed a small golden fix (`_sin` / `_cos` called `math.sin` / `math.cos`, which *raise* on a
+non-finite input), and 3 need a real golden decision.
 
-### 2.2 Ternary operand-C edges
+The five predicates (`Isinf`, `Isposinf`, `Isneginf`, `Isnan`, `Isfinite`) still inject specials via
+`test_eltwise_unary_sfpu_isinf_isnan`, which is also the instrument that measured the safe matrix in
+§6.
 
-`SfpuAddcdiv` and `SfpuSnakeBeta` divide by `c`, and `c` is pinned to `uniform(1, 2)` — the pole is
-**deliberately unreachable**. `SfpuLerp`'s weight boundaries (`0`, `1`, `> 1`) are equally undriven.
-No ternary op has a registered domain or a singularity entry. Blocked on `OperandSpecs` carrying only
-`spec_A` and `spec_B`.
+### 2.2 ~~Ternary operand-C edges~~ ✅ closed
+
+`OperandSpecs` gained `spec_C` (defaulting to a copy of `spec_B`, so all five consumers keep working),
+`Operand` gained `C`, and `_OP_OPERAND_EDGE_POINTS` carries per-operand knees. `addcdiv` and
+`snake_beta` now have a registered `Operand.C` singularity at 0 and `lerp` has its weight boundaries;
+`test_sfpu_ternary_edges` drives them. 9 passed / 7 skipped on Blackhole. See §4.6.
+
+What is **not** driven here, deliberately: the `0/0` indeterminate form at the pole. Holding the
+numerator off zero makes the variant assert the pole (4064 of 4096 elements, all `±inf`) instead of
+tolerating a case already recorded against `div`, `fmod`, `remainder` and `xlogy`. If it is ever worth
+driving here it wants its own variant and its own xfail.
 
 ### 2.3 Cat E — the unary shift amount
 
@@ -205,110 +250,110 @@ registered domain at all, so neither sweep reaches it and coverage depends on a 
 
 #### 4.1 Unary ops with a deliberate edge driven — cat A and/or cat D (50 ops)
 
-| Op | Kernel | Random sweep | Cat A boundary (side defined on) | Cat D knees / ties | Edge sweep | Other test | ⚠️ |
-|---|---|---|---|---|---|---|---|
-| `Acos` | `acos` | standard | -1.0 (abo); 1.0 (bel) | — | ✅ | — |  |
-| `Acosh` | `acosh` | broad | 1.0 (abo) | — | ✅ | — |  |
-| `Asin` | `asin` | standard | -1.0 (abo); 1.0 (bel) | — | ✅ | — |  |
-| `Atanh` | `atanh` | broad | -1.0 (abo); 1.0 (bel) | — | ✅ | — |  |
-| `Ceil` | `ceil` | broad | — | `-2, -1, 0, 1, 2` | ✅ | — |  |
-| `Celu` | `celu` | broad | — | `0, -0` | ✅ | — |  |
-| `Clamp` | `clamp` | standard | — | `-1, 1` | ✅ | — |  |
-| `Elu` | `elu` | broad | — | `0, -0` | ✅ | — |  |
-| `EqualZero` | `equal_zero` | standard | — | `0, -0` | ✅ | — |  |
-| `Erfinv` | `erfinv` | standard | -1.0 (abo); 1.0 (bel) | — | ✅ | — | ⚠️ |
-| `Floor` | `floor` | broad | — | `-2, -1, 0, 1, 2` | ✅ | — |  |
-| `Frac` | `frac` | broad | — | `-1.5, -1, 1, 1.5` | ✅ | — |  |
-| `GreaterThanEqualZero` | `greater_than_equal_zero` | standard | — | `0, -0` | ✅ | — |  |
-| `GreaterThanZero` | `greater_than_zero` | standard | — | `0, -0` | ✅ | — |  |
-| `Hardmish` | `hardmish` | standard | — | `-2, 0` | ✅ | — |  |
-| `Hardshrink` | `hardshrink` | standard | — | `-0.5, 0.5` | ✅ | — |  |
-| `Hardsigmoid` | `hardsigmoid` | broad | — | `-3, 3` | ✅ | — |  |
-| `Hardtanh` | `hardtanh` | standard | — | `-1, 1` | ✅ | — |  |
-| `Heaviside` | `heaviside` | standard | — | `0, -0` | ✅ | — | ⚠️ |
-| `LessThanEqualZero` | `less_than_equal_zero` | standard | — | `0, -0` | ✅ | — |  |
-| `LessThanZero` | `less_than_zero` | standard | — | `0, -0` | ✅ | — |  |
-| `Log` | `log` | broad | 0.0 (abo) | — | ✅ | — |  |
-| `Log1p` | `log1p` | broad | -1.0 (abo) | — | ✅ | — |  |
-| `LogWithBase` | `log_with_base` | standard | 0.0 (abo) | — | ✅ | — |  |
-| `Lrelu` | `lrelu` | standard | — | `0, -0` | ✅ | — |  |
-| `NotEqualZero` | `not_equal_zero` | standard | — | `0, -0` | ✅ | — |  |
-| `Prelu` | `prelu` | standard | — | `0, -0` | ✅ | — |  |
-| `Rdiv` | `rdiv` | standard | 0.0 (bot) | — | ✅ | — |  |
-| `Reciprocal` | `reciprocal` | broad | 0.0 (bot) | — | ✅ | — |  |
-| `ReluMax` | `relu_max` | broad | — | `0, 5` | ✅ | — |  |
-| `ReluMin` | `relu_min` | broad | — | `5` | ✅ | — |  |
-| `Round` | `round` | standard | — | `-2.5, -1.5, -0.5, 0.5, 1.5, 2.5` | ✅ | — |  |
-| `Rsqrt` | `rsqrt` | broad | 0.0 (abo) | — | ✅ | — |  |
-| `RsqrtCompat` | `rsqrt_compat` | standard | 0.0 (abo) | — | ✅ | — | ⚠️ |
-| `Selu` | `selu` | standard | — | `0, -0` | ✅ | — |  |
-| `Sign` | `sign` | standard | — | `0, -0` | ✅ | — | ⚠️ |
-| `Signbit` | `signbit` | standard | — | `0, -0` | ✅ | — | ⚠️ |
-| `Softplus` | `softplus` | standard | — | `20` | ✅ | — |  |
-| `Softshrink` | `softshrink` | standard | — | `-0.5, 0.5` | ✅ | — |  |
-| `Sqrt` | `sqrt` | broad | 0.0 (abo) | — | ✅ | — |  |
-| `SqrtCustom` | `sqrt_custom` | standard | 0.0 (abo) | — | ✅ | — |  |
-| `Threshold` | `threshold` | broad | — | `5` | ✅ | — |  |
-| `Trunc` | `trunc` | broad | — | `-1, 0, 1` | ✅ | — |  |
-| `UnaryGe` | `unary_ge` | standard | — | `0.5` | ✅ | — |  |
-| `UnaryGt` | `unary_gt` | standard | — | `0.5` | ✅ | — |  |
-| `UnaryLe` | `unary_le` | standard | — | `0.5` | ✅ | — |  |
-| `UnaryLt` | `unary_lt` | standard | — | `0.5` | ✅ | — |  |
-| `UnaryMax` | `unary_max` | standard | — | `0, -0` | ✅ | — |  |
-| `UnaryMin` | `unary_min` | standard | — | `0, -0` | ✅ | — |  |
-| `Xielu` | `xielu` | standard | — | `0, -0` | ✅ | — |  |
+| Op | Kernel | Random sweep | Cat A boundary (side defined on) | Cat D knees / ties | Cat B | Edge sweep | Other test | ⚠️ |
+|---|---|---|---|---|---|---|---|---|
+| `Acos` | `acos` | standard | -1.0 (abo); 1.0 (bel) | — | ⬜ | ✅ | — |  |
+| `Acosh` | `acosh` | broad | 1.0 (abo) | — | ⬜ | ✅ | — |  |
+| `Asin` | `asin` | standard | -1.0 (abo); 1.0 (bel) | — | ⬜ | ✅ | — |  |
+| `Atanh` | `atanh` | broad | -1.0 (abo); 1.0 (bel) | — | ⬜ | ✅ | — |  |
+| `Ceil` | `ceil` | broad | — | `-2, -1, 0, 1, 2` | ⬜ | ✅ | — |  |
+| `Celu` | `celu` | broad | — | `0, -0` | ⬜ | ✅ | — |  |
+| `Clamp` | `clamp` | standard | — | `-1, 1` | ⬜ | ✅ | — |  |
+| `Elu` | `elu` | broad | — | `0, -0` | ⬜ | ✅ | — |  |
+| `EqualZero` | `equal_zero` | standard | — | `0, -0` | ⬜ | ✅ | — |  |
+| `Erfinv` | `erfinv` | standard | -1.0 (abo); 1.0 (bel) | — | ⬜ | ✅ | — | ⚠️ |
+| `Floor` | `floor` | broad | — | `-2, -1, 0, 1, 2` | ⬜ | ✅ | — |  |
+| `Frac` | `frac` | broad | — | `-1.5, -1, 1, 1.5` | ⬜ | ✅ | — |  |
+| `GreaterThanEqualZero` | `greater_than_equal_zero` | standard | — | `0, -0` | ⬜ | ✅ | — |  |
+| `GreaterThanZero` | `greater_than_zero` | standard | — | `0, -0` | ⬜ | ✅ | — |  |
+| `Hardmish` | `hardmish` | standard | — | `-2, 0` | ⬜ | ✅ | — |  |
+| `Hardshrink` | `hardshrink` | standard | — | `-0.5, 0.5` | ⬜ | ✅ | — |  |
+| `Hardsigmoid` | `hardsigmoid` | broad | — | `-3, 3` | ⬜ | ✅ | — |  |
+| `Hardtanh` | `hardtanh` | standard | — | `-1, 1` | ⬜ | ✅ | — |  |
+| `Heaviside` | `heaviside` | standard | — | `0, -0` | ⬜ | ✅ | — | ⚠️ |
+| `LessThanEqualZero` | `less_than_equal_zero` | standard | — | `0, -0` | ⬜ | ✅ | — |  |
+| `LessThanZero` | `less_than_zero` | standard | — | `0, -0` | ⬜ | ✅ | — |  |
+| `Log` | `log` | broad | 0.0 (abo) | — | 🟡 measured | ✅ | — |  |
+| `Log1p` | `log1p` | broad | -1.0 (abo) | — | ⬜ | ✅ | — |  |
+| `LogWithBase` | `log_with_base` | standard | 0.0 (abo) | — | ⬜ | ✅ | — |  |
+| `Lrelu` | `lrelu` | standard | — | `0, -0` | ⬜ | ✅ | — |  |
+| `NotEqualZero` | `not_equal_zero` | standard | — | `0, -0` | ⬜ | ✅ | — |  |
+| `Prelu` | `prelu` | standard | — | `0, -0` | ⬜ | ✅ | — |  |
+| `Rdiv` | `rdiv` | standard | 0.0 (bot) | — | ⬜ | ✅ | — |  |
+| `Reciprocal` | `reciprocal` | broad | 0.0 (bot) | — | 🟡 measured | ✅ | — |  |
+| `ReluMax` | `relu_max` | broad | — | `0, 5` | ⬜ | ✅ | — |  |
+| `ReluMin` | `relu_min` | broad | — | `5` | ⬜ | ✅ | — |  |
+| `Round` | `round` | standard | — | `-2.5, -1.5, -0.5, 0.5, 1.5, 2.5` | ⬜ | ✅ | — |  |
+| `Rsqrt` | `rsqrt` | broad | 0.0 (abo) | — | 🟡 measured | ✅ | — |  |
+| `RsqrtCompat` | `rsqrt_compat` | standard | 0.0 (abo) | — | ⬜ | ✅ | — | ⚠️ |
+| `Selu` | `selu` | standard | — | `0, -0` | ⬜ | ✅ | — |  |
+| `Sign` | `sign` | standard | — | `0, -0` | ⬜ | ✅ | — | ⚠️ |
+| `Signbit` | `signbit` | standard | — | `0, -0` | ⬜ | ✅ | — | ⚠️ |
+| `Softplus` | `softplus` | standard | — | `20` | ⬜ | ✅ | — |  |
+| `Softshrink` | `softshrink` | standard | — | `-0.5, 0.5` | ⬜ | ✅ | — |  |
+| `Sqrt` | `sqrt` | broad | 0.0 (abo) | — | 🟡 measured | ✅ | — |  |
+| `SqrtCustom` | `sqrt_custom` | standard | 0.0 (abo) | — | ⬜ | ✅ | — |  |
+| `Threshold` | `threshold` | broad | — | `5` | ⬜ | ✅ | — |  |
+| `Trunc` | `trunc` | broad | — | `-1, 0, 1` | ⬜ | ✅ | — |  |
+| `UnaryGe` | `unary_ge` | standard | — | `0.5` | ⬜ | ✅ | — |  |
+| `UnaryGt` | `unary_gt` | standard | — | `0.5` | ⬜ | ✅ | — |  |
+| `UnaryLe` | `unary_le` | standard | — | `0.5` | ⬜ | ✅ | — |  |
+| `UnaryLt` | `unary_lt` | standard | — | `0.5` | ⬜ | ✅ | — |  |
+| `UnaryMax` | `unary_max` | standard | — | `0, -0` | ⬜ | ✅ | — |  |
+| `UnaryMin` | `unary_min` | standard | — | `0, -0` | ⬜ | ✅ | — |  |
+| `Xielu` | `xielu` | standard | — | `0, -0` | ⬜ | ✅ | — |  |
 
 #### 4.2 Unary ops smooth everywhere — cat B is their **entire** edge story (47 ops)
 
-| Op | Kernel | Random sweep | Registered domain | Edge sweep | Other test |
-|---|---|---|---|---|---|
-| `Abs` | `abs` | broad | yes | ⬜ skips | — |
-| `Add1` | `add1` | standard | yes | ⬜ skips | — |
-| `Asinh` | `asinh` | broad | yes | ⬜ skips | — |
-| `Atan` | `atan` | standard | yes | ⬜ skips | — |
-| `CastFp32ToFp16a` | `cast_fp32_to_fp16a` | standard | yes | ⬜ skips | — |
-| `Cbrt` | `cbrt` | standard | yes | ⬜ skips | — |
-| `Cos` | `cosine` | broad | yes | ⬜ skips | — |
-| `Cosh` | `cosh` | standard | yes | ⬜ skips | — |
-| `Digamma` | `digamma` | standard | yes | ⬜ skips | — |
-| `Erf` | `erf` | standard | yes | ⬜ skips | — |
-| `Erfc` | `erfc` | standard | yes | ⬜ skips | — |
-| `Exp` | `exponential` | broad | yes | ⬜ skips | — |
-| `Exp2` | `exp2` | broad | yes | ⬜ skips | — |
-| `ExpWithBase` | `exp_with_base` | standard | yes | ⬜ skips | — |
-| `Expm1` | `expm1` | standard | yes | ⬜ skips | — |
-| `Expm1Cw` | `expm1_cw` | standard | yes | ⬜ skips | — |
-| `Fill` | `fill` | broad | yes | ⬜ skips | — |
-| `Fmod` | `fmod` | standard | yes | ⬜ skips | — |
-| `Gelu` | `gelu` | broad | yes | ⬜ skips | — |
-| `GeluAppx` | `gelu_appx` | standard | yes | ⬜ skips | — |
-| `GeluDerivative` | `gelu_derivative` | standard | yes | ⬜ skips | — |
-| `GeluTanh` | `gelu_tanh` | broad | yes | ⬜ skips | — |
-| `I0` | `i0` | standard | yes | ⬜ skips | — |
-| `I1` | `i1` | standard | yes | ⬜ skips | — |
-| `Identity` | `identity` | standard | yes | ⬜ skips | — |
-| `Lgamma` | `lgamma` | standard | yes | ⬜ skips | — |
-| `Mish` | `mish` | standard | yes | ⬜ skips | — |
-| `Neg` | `negative` | broad | yes | ⬜ skips | — |
-| `Polygamma` | `polygamma` | standard | yes | ⬜ skips | — |
-| `Remainder` | `remainder` | standard | yes | ⬜ skips | — |
-| `Rpow` | `rpow` | standard | yes | ⬜ skips | — |
-| `Sigmoid` | `sigmoid` | standard | yes | ⬜ skips | — |
-| `SigmoidAppx` | `sigmoid_appx` | standard | yes | ⬜ skips | — |
-| `Silu` | `silu` | broad | yes | ⬜ skips | — |
-| `Sin` | `sine` | broad | yes | ⬜ skips | — |
-| `Sinh` | `sinh` | standard | yes | ⬜ skips | — |
-| `Softsign` | `softsign` | standard | yes | ⬜ skips | — |
-| `Square` | `square` | broad | yes | ⬜ skips | — |
-| `Tan` | `tan` | standard | yes | ⬜ skips | — |
-| `Tanh` | `tanh` | broad | yes | ⬜ skips | — |
-| `TanhDerivative` | `tanh_derivative` | standard | yes | ⬜ skips | — |
-| `TanhDerivativeLut` | `tanh_derivative_lut` | standard | yes | ⬜ skips | — |
-| `Tanhshrink` | `tanhshrink` | broad | yes | ⬜ skips | — |
-| `TopKLocalSort` | `topk_local_sort` | **perf-only** | yes | ⬜ skips | — |
-| `TopKMerge` | `topk_merge` | **perf-only** | yes | ⬜ skips | — |
-| `TopKRebuild` | `topk_rebuild` | **perf-only** | yes | ⬜ skips | — |
-| `UnaryPower` | `power` | standard | yes | ⬜ skips | — |
+| Op | Kernel | Random sweep | Registered domain | Cat B | Edge sweep | Other test |
+|---|---|---|---|---|---|---|
+| `Abs` | `abs` | broad | yes | ✅ driven | ✅ cat B only | — |
+| `Add1` | `add1` | standard | yes | ⬜ | ⬜ skips | — |
+| `Asinh` | `asinh` | broad | yes | ⬜ | ⬜ skips | — |
+| `Atan` | `atan` | standard | yes | ⬜ | ⬜ skips | — |
+| `CastFp32ToFp16a` | `cast_fp32_to_fp16a` | standard | yes | ⬜ | ⬜ skips | — |
+| `Cbrt` | `cbrt` | standard | yes | ⬜ | ⬜ skips | — |
+| `Cos` | `cosine` | broad | yes | ✅ driven | ✅ cat B only | — |
+| `Cosh` | `cosh` | standard | yes | ⬜ | ⬜ skips | — |
+| `Digamma` | `digamma` | standard | yes | ⬜ | ⬜ skips | — |
+| `Erf` | `erf` | standard | yes | ⬜ | ⬜ skips | — |
+| `Erfc` | `erfc` | standard | yes | ⬜ | ⬜ skips | — |
+| `Exp` | `exponential` | broad | yes | ✅ driven | ✅ cat B only | — |
+| `Exp2` | `exp2` | broad | yes | ⬜ | ⬜ skips | — |
+| `ExpWithBase` | `exp_with_base` | standard | yes | ⬜ | ⬜ skips | — |
+| `Expm1` | `expm1` | standard | yes | ⬜ | ⬜ skips | — |
+| `Expm1Cw` | `expm1_cw` | standard | yes | ⬜ | ⬜ skips | — |
+| `Fill` | `fill` | broad | yes | ⬜ | ⬜ skips | — |
+| `Fmod` | `fmod` | standard | yes | ⬜ | ⬜ skips | — |
+| `Gelu` | `gelu` | broad | yes | ⬜ | ⬜ skips | — |
+| `GeluAppx` | `gelu_appx` | standard | yes | ⬜ | ⬜ skips | — |
+| `GeluDerivative` | `gelu_derivative` | standard | yes | ⬜ | ⬜ skips | — |
+| `GeluTanh` | `gelu_tanh` | broad | yes | ⬜ | ⬜ skips | — |
+| `I0` | `i0` | standard | yes | ⬜ | ⬜ skips | — |
+| `I1` | `i1` | standard | yes | ⬜ | ⬜ skips | — |
+| `Identity` | `identity` | standard | yes | ✅ driven | ✅ cat B only | — |
+| `Lgamma` | `lgamma` | standard | yes | ⬜ | ⬜ skips | — |
+| `Mish` | `mish` | standard | yes | ⬜ | ⬜ skips | — |
+| `Neg` | `negative` | broad | yes | 🟡 measured | ⬜ skips | — |
+| `Polygamma` | `polygamma` | standard | yes | ⬜ | ⬜ skips | — |
+| `Remainder` | `remainder` | standard | yes | ⬜ | ⬜ skips | — |
+| `Rpow` | `rpow` | standard | yes | ⬜ | ⬜ skips | — |
+| `Sigmoid` | `sigmoid` | standard | yes | ⬜ | ⬜ skips | — |
+| `SigmoidAppx` | `sigmoid_appx` | standard | yes | ⬜ | ⬜ skips | — |
+| `Silu` | `silu` | broad | yes | ⬜ | ⬜ skips | — |
+| `Sin` | `sine` | broad | yes | ✅ driven | ✅ cat B only | — |
+| `Sinh` | `sinh` | standard | yes | ⬜ | ⬜ skips | — |
+| `Softsign` | `softsign` | standard | yes | ⬜ | ⬜ skips | — |
+| `Square` | `square` | broad | yes | ⬜ | ⬜ skips | — |
+| `Tan` | `tan` | standard | yes | ⬜ | ⬜ skips | — |
+| `Tanh` | `tanh` | broad | yes | ⬜ | ⬜ skips | — |
+| `TanhDerivative` | `tanh_derivative` | standard | yes | ⬜ | ⬜ skips | — |
+| `TanhDerivativeLut` | `tanh_derivative_lut` | standard | yes | ⬜ | ⬜ skips | — |
+| `Tanhshrink` | `tanhshrink` | broad | yes | ⬜ | ⬜ skips | — |
+| `TopKLocalSort` | `topk_local_sort` | **perf-only** | yes | ⬜ | ⬜ skips | — |
+| `TopKMerge` | `topk_merge` | **perf-only** | yes | ⬜ | ⬜ skips | — |
+| `TopKRebuild` | `topk_rebuild` | **perf-only** | yes | ⬜ | ⬜ skips | — |
+| `UnaryPower` | `power` | standard | yes | ⬜ | ⬜ skips | — |
 
 #### 4.3 Unary ops outside `_OP_DOMAIN_REGISTRY` — not in either sweep (21 ops)
 
@@ -367,7 +412,7 @@ unreachable, or genuinely uncovered — the last column says which.
 | `SfpuElwadd` | `ADD` | yes | — | ⬜ | `binary` |
 | `SfpuElwdiv` | `DIV` | yes | B=0.0 (bot) | ✅ | `binary` |
 | `SfpuElwmul` | `MUL` | yes | — | ⬜ | `binary` |
-| `SfpuElwpow` | `POW` | yes | A=0.0 (abo) | ✅ | `binary` |
+| `SfpuElwpow` | `POW` | yes | A=0.0 (abo) | ✅ | `binary`, `zz_measure_tol` |
 | `SfpuElwrsub` | `RSUB` | yes | — | ⬜ | `binary` |
 | `SfpuElwsub` | `SUB` | yes | — | ⬜ | `binary` |
 | `SfpuEqInt` | `EQ_INT` | no (format default) | — | ⬜ | `binary` |
@@ -386,7 +431,7 @@ unreachable, or genuinely uncovered — the last column says which.
 | `SfpuRemainderInt32` | `REMAINDER_INT32` | no (format default) | — | ⬜ | `binary` |
 | `SfpuRemainderUint32` | `REMAINDER_UINT32` | no (format default) | — | ⬜ | `binary` |
 | `SfpuRsubInt32` | `RSUB_INT32` | no (format default) | — | ⬜ | `binary` |
-| `SfpuXlogy` | `XLOGY` | yes | B=0.0 (abo) | ✅ | `binary` |
+| `SfpuXlogy` | `XLOGY` | yes | B=0.0 (abo) | ✅ | `binary`, `zz_measure_tol` |
 
 #### 4.5 Binary integer SFPU ops (5 ops)
 
@@ -402,11 +447,26 @@ unreachable, or genuinely uncovered — the last column says which.
 
 | Op | Kernel | Registered domain | Cat A pole | Edge sweep | Driven by |
 |---|---|---|---|---|---|
-| `SfpuAddcdiv` | `addcdiv` | no (format default) | — | ⬜ | `ternary` |
+| `SfpuAddcdiv` | `addcdiv` | no (format default) | C=0.0 (bot) | ✅ | `ternary` |
 | `SfpuAddcmul` | `addcmul` | no (format default) | — | ⬜ | `ternary` |
-| `SfpuLerp` | `lerp` | no (format default) | — | ⬜ | `ternary` |
-| `SfpuSnakeBeta` | `snake_beta` | no (format default) | — | ⬜ | `ternary` |
+| `SfpuLerp` | `lerp` | no (format default) | — | ✅ | `ternary` |
+| `SfpuSnakeBeta` | `snake_beta` | no (format default) | C=0.0 (bot) | ✅ | `ternary` |
 | `SfpuWhere` | `where` | no (format default) | — | ⬜ | `ternary` |
+
+Operand-C edges, driven by `test_sfpu_ternary_edges` (9 passed / 7 skipped on Blackhole):
+
+| Op | Formula | Operand-C probe | Source |
+|---|---|---|---|
+| `SfpuAddcdiv` | `a + value * b / c` | `-0.015625, 0.0, 0.015625` | `_OP_SINGULARITIES` C = (0.0, BOTH) |
+| `SfpuSnakeBeta` | `a + sin(b*a)^2 / c` | `-0.015625, 0.0, 0.015625` | `_OP_SINGULARITIES` C = (0.0, BOTH) |
+| `SfpuLerp` | `a + c * (b - a)` | `-1.0, 0.0, 1.0, 2.0` | `_OP_OPERAND_EDGE_POINTS` C |
+| `SfpuAddcmul` | `a + value * b * c` | none | a multiply has no pole; `edge_spec` returns `None` |
+
+The probe offset is format-relative, so the pole probes become `+/-0.25` in Bfp4_b. `c` is
+zero for 4064 of 4096 elements (custom() zero-fills each face), so the pole is driven hard
+rather than sampled. The numerator is held off zero for the two dividing ops so the variant
+asserts the pole instead of the `0/0` indeterminate form -- see the coverage note in
+`test_sfpu_ternary.py`.
 
 #### 4.7 Scalar-binop ops (5 ops)
 
@@ -445,6 +505,20 @@ case still executes and reports XPASS if the behaviour changes. Every one is cro
 cleanly. **This split is the practically important part:** half of these are specified hardware
 behaviour and chasing them would be wasted effort.
 
+### 5.0 Blackhole settled three of these by measurement
+
+Recorded first because it changes how the rest of §5 should be read. Measured on a p150b:
+
+| Question | Answer | Consequence |
+|---|---|---|
+| Does the `SFPMAD` signed-zero group XPASS on Blackhole, as its ISA page predicts? | **Yes — all 16 cells**, and nothing else XPASSed | The `negative_zero_golden` class is now **arch-gated to Wormhole**, so Blackhole *asserts* the sign of a zero result |
+| Does `-0.0` actually reach DEST on the datacopy path? | **No** | §5.2's inference is confirmed by three unrelated ops; `Signbit`'s six xfails can never XPASS |
+| Is approximate `exp`'s 5% rtol overshoot generational? | **Yes — Wormhole only.** Both reachable combinations XPASSed on Blackhole | `_APPROX_EXP_ACCURACY_XFAIL` is now arch-gated too, so Blackhole asserts approximate exp's accuracy |
+
+All three were *predictions on record* that the non-strict-xfail convention existed to settle, and all
+three resolved in favour of the prediction. That is the convention paying for itself: a skip would have
+left every one of them unanswerable.
+
 ### 5.1 Documented — the ISA is the authority, not a bug list
 
 **The sign of a zero *result* is lost on Wormhole, by specification.** `div(0, -x)`,
@@ -461,7 +535,8 @@ documentation and the hardware disagree.
 
 **`sign(-0.0)` and `heaviside(-0.0)` sit outside the contract of the primitive they use.** `SFPSETCC`
 is specified only *"provided that `VC` is neither negative zero nor any kind of NaN"* — identically on
-both arches, so unlike the `SFPMAD` group this is **not** generational.
+both arches, so unlike the `SFPMAD` group this is **not** generational. Confirmed: these still xfail on
+Blackhole while the `SFPMAD` group XPASSed there.
 
 ### 5.2 The signed-zero group is a *delivery* question, not three separate findings
 
@@ -492,10 +567,21 @@ Consequences, both recorded in the suite's reason strings:
   names.
 
 The partition is asserted at collection (`_assert_signed_zero_partition_valid`), because the
-explanation rests on it and a reason string is prose no run checks. **Not directly measured:** drive
-datacopy with `custom(values=[0.0, -0.0])` and read the DEST sign bit on a `(Float16_b, *, No)`
-variant. The probe is deliberately left in place until then — dropping it on an unmeasured hypothesis
-would silently lose real coverage if the hypothesis is wrong.
+explanation rests on it and a reason string is prose no run checks.
+
+**Now measured, and the inference was right.** Enabling cat B for `Reciprocal`, `Rsqrt` and `Sqrt`
+probed the same question from a completely different direction — three ops with nothing to do with sign
+predicates — and gave the same answer:
+
+| Probe | `dest_acc=No` (datacopy path) | `dest_acc=Yes` (unpack-to-dest) |
+|---|---|---|
+| `1 / -0` | `+inf` — i.e. `-0` was seen as `+0` | — |
+| `rsqrt(-0)` | `+inf` — same | `NaN` — a distinct answer, so a real `-0` arrived |
+| `sqrt(-0)` | `+0` — same | `NaN` — same |
+
+So `-0.0` genuinely is **not delivered** on the datacopy path. `Signbit`'s six xfails are confirmed as
+a stimulus limitation that can never XPASS, and `Sign`'s and `Heaviside`'s six passes there are
+confirmed vacuous. Any future `-0` probe should be scoped to the unpack-to-dest combinations.
 
 ### 5.3 Still open — not explained by the ISA
 
@@ -506,8 +592,31 @@ would silently lose real coverage if the hypothesis is wrong.
 | **`RsqrtCompat(0)` saturates to `1.7014118e38`** (`0x7F000000`) instead of `inf`, on all 8 combinations — while plain `Rsqrt` over the same probe does **not** diverge. Two implementations of one function disagreeing at their shared pole, with nothing in the ISA prescribing either answer | `RsqrtCompat` |
 | **`Erfinv(±1)` saturates** rather than returning ±inf, on the fp32-dest combinations only — tolerance-shaped rather than semantic | `erfinv` |
 
-`RsqrtCompat(0)` is the one worth filing with kernel owners now; the `signbit` question should wait on
-the delivery measurement in §5.2.
+### 5.5 New: `Log` saturates its input, so no non-finite value survives it
+
+Found by enabling cat B. On Blackhole, with a Float32 input:
+
+| Probe | Golden | Hardware |
+|---|---|---|
+| `+inf` | `+inf` | **88.5** |
+| `-inf` | `NaN` | **84.3** |
+| `NaN` | `NaN` | **89.1** |
+| `-0` | `-inf` | **-92.5** |
+
+All finite, and all near `ln(FLT_MAX) = 88.7`. The kernel clamps its input to the format maximum and
+takes the log of *that*, so a non-finite input cannot produce a non-finite output. This is a kernel
+behaviour rather than a golden one and it is the largest cat-B finding so far.
+
+### 5.6 What to raise with kernel owners
+
+Two questions, both cheap for an owner to adjudicate and expensive for a test to keep guessing about:
+
+1. **`Log` saturates non-finite inputs** (§5.5). Is that intended, and should it be documented? Until
+   it is answered there is no way to know whether the right outcome is a pass, an xfail or a bug.
+2. **`RsqrtCompat(0)` saturates to `1.7014118e38`** where plain `Rsqrt` at the same pole does not.
+
+The `signbit` question is **withdrawn**: §5.2's measurement shows the probe is not delivered on those
+six combinations, so there is no kernel contract to question there.
 
 ### 5.4 Two smaller results
 
@@ -546,10 +655,20 @@ express, so neither the lattice nor the tolerance criterion means anything for i
 | `No` | `Float32->Float32`, `Float32->Float16_b`, `Float16_b->Float32`, `Float16_b->Float16_b` |
 | `Yes` | `Float32->Float32`, `Float32->Float16`, `Float32->Float16_b` |
 
-Measured on Wormhole; **unverified on Blackhole**, where the unpack paths differ. The whole matrix is
-written out longhand in `test_sfpu_domains.py` (7 accepted cells of 50) so it cannot be rewritten
-without a test changing outcome — including a guard for the `DestAccumulation` truthiness trap, where
-both enum members are truthy and `bool(member)` would silently flip whole rows.
+Measured on Wormhole. The whole matrix is written out longhand in `test_sfpu_domains.py` (7 accepted
+cells of 50) so it cannot be rewritten without a test changing outcome — including a guard for the
+`DestAccumulation` truthiness trap, where both enum members are truthy and `bool(member)` would
+silently flip whole rows.
+
+**Blackhole: 3 of the 7 confirmed, and the other 4 are unreachable there by construction** — not by
+omission. `_skip_bh_unless_fp32` allows only `Float32->Float32` at `dest_acc=No`, which collapses that
+row's four triples to one, and the edge sweep's format axis is `Float16_b`/`Float32`, so
+`Float32->Float16` at `dest_acc=Yes` is never collected. The three reachable cells
+(`Float32->Float32` at both `dest_acc`, `Float32->Float16_b` at `dest_acc=Yes`) **do** carry specials
+on Blackhole — the five enrolled cat-B ops pass there.
+
+The table is therefore **not** arch-keyed, and should not be until the rows that differ can actually be
+run. What that needs is a Wormhole re-measurement of the same predicate sweep, not more Blackhole time.
 
 ---
 
