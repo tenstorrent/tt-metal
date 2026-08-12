@@ -129,6 +129,15 @@ ttnn.attach_golden_function(
 )
 
 
+def _golden_function(input, dim, index, *, sparse_grad=False, out=None, **_):
+    import torch
+
+    return torch.gather(input, dim, index.to(torch.int64), sparse_grad=sparse_grad, out=out)
+
+
+ttnn.attach_golden_function(ttnn.gather, golden_function=_golden_function)
+
+
 def _golden_function(tensor, repeats, dim=0, **_):
     import torch
 

@@ -11,6 +11,20 @@ from tests.ttnn.utils_for_testing import assert_allclose
 TILE_HEIGHT = 32
 
 
+@pytest.mark.parametrize("index_dtype", [torch.uint16, torch.uint32])
+def test_gather_golden_function(index_dtype):
+    input_tensor = torch.arange(8, dtype=torch.float32).reshape(2, 4)
+    index = torch.tensor([[3, 1, 0], [0, 2, 3]], dtype=torch.int64).to(index_dtype)
+    expected = torch.gather(input_tensor, 1, index.to(torch.int64))
+    output = torch.empty_like(expected)
+
+    golden_function = ttnn.get_golden_function(ttnn.gather)
+    actual = golden_function(input_tensor, 1, index, out=output)
+
+    assert actual is output
+    assert_allclose(expected, actual)
+
+
 @pytest.mark.parametrize(
     "input_shape, index_shape, dim",
     [

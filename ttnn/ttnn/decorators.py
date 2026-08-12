@@ -1018,7 +1018,6 @@ def query_registered_operations(include_experimental=False):
 
 
 def dump_operations(csv_file, include_experimental=False):
-    import csv
     import pandas as pd
 
     apis = query_registered_operations(include_experimental)
@@ -1030,13 +1029,13 @@ def dump_operations(csv_file, include_experimental=False):
             "preprocess_golden_function_inputs": str(obj.preprocess_golden_function_inputs),
             "golden_function": str(obj.golden_function),
             "postprocess_golden_function_outputs": str(obj.postprocess_golden_function_outputs),
+            "has_golden_function": obj.golden_function is not None,
             "is_cpp_operation": obj.is_cpp_operation,
             "is_experimental": obj.is_experimental,
         }
 
     df = pd.DataFrame([to_dict(obj) for obj in apis])
     df.sort_values(by=["is_experimental", "is_cpp_operation", "python_fully_qualified_name"], inplace=True)
-    df["has_golden_function"] = df["golden_function"].apply(lambda golden_function: golden_function is not None)
     df = df[
         [
             "python_fully_qualified_name",
