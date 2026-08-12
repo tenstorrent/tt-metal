@@ -5,6 +5,7 @@
 #include "express_ring_topology.hpp"
 
 #include <algorithm>
+#include <functional>
 #include <limits>
 #include <optional>
 #include <string>
@@ -182,17 +183,23 @@ int ExpressRingTopology::next_row(int src, int dst) const {
         return fwd <= n - fwd ? forward_cycle[domain][(p + 1) % n] : forward_cycle[domain][(p - 1 + n) % n];
     };
 
-    if (is_leaf(src) && leaf_run_of[src] == leaf_run_of[dst]) {
-        const auto& run = leaf_runs[leaf_run_of[src]];
-        const int i = leaf_index_of[src];
-        return run.rows[leaf_index_of[dst] > i ? i + 1 : i - 1];
-    }
-    // A run is left, and entered, by its nearer end. That end is a function of the leaf alone, so
-    // every suffix of the route agrees on it.
+    // A run is left, and entered, by its nearer end -- the half of the run closer to that anchor.
+    // The end is a function of the leaf alone, so every suffix of the route agrees on it.
     const auto nearer_end_is_before = [&](int leaf) {
         const auto& run = leaf_runs[leaf_run_of[leaf]];
         return leaf_index_of[leaf] < static_cast<int>(run.rows.size()) - 1 - leaf_index_of[leaf];
     };
+    // Same-run pairs on the same side of the run's midpoint walk the leaf links directly. Pairs that
+    // straddle the midpoint do NOT: routing them across the middle would chain the run's forward edges
+    // into a cycle with the anchors' chord (an unprotected loop). They fall through to egress+ingress
+    // instead, exiting to one anchor and re-entering from the other, which leaves the middle edge
+    // unused and keeps the run cycle-free.
+    if (is_leaf(src) && leaf_run_of[src] == leaf_run_of[dst] &&
+        nearer_end_is_before(src) == nearer_end_is_before(dst)) {
+        const auto& run = leaf_runs[leaf_run_of[src]];
+        const int i = leaf_index_of[src];
+        return run.rows[leaf_index_of[dst] > i ? i + 1 : i - 1];
+    }
     if (is_leaf(src)) {
         const auto& run = leaf_runs[leaf_run_of[src]];
         const int i = leaf_index_of[src];
@@ -235,6 +242,88 @@ int ExpressRingTopology::next_row(int src, int dst) const {
         }
     }
     TT_THROW("ExpressRingTopology: no paired landing for row {} from row {}", dst, src);
+}
+
+std::vector<std::pair<int, int>> ExpressRingTopology::cyclic_non_ring_hops() const {
+    const int len = axis_len;
+    const auto hop_id = [len](int a, int b) { return a * len + b; };
+    const auto is_ring_edge = [&](int a, int b) {
+        return !is_leaf(a) && !is_leaf(b) && domain_of[a] == domain_of[b] && ring_distance(domain_of[a], a, b) == 1;
+    };
+
+    // Control-dependency graph over directed row-hops: an edge hop -> successor for every pair of
+    // consecutive hops on a route. Homogeneity (checked separately) makes one column representative,
+    // so this is built purely on rows.
+    std::vector<std::vector<int>> succ(len * len);
+    std::vector<char> used(len * len, 0);
+    for (int s = 0; s < len; s++) {
+        for (int d = 0; d < len; d++) {
+            if (s == d) {
+                continue;
+            }
+            int cur = s;
+            int prev = -1;
+            for (int guard = 0; cur != d && guard <= len; guard++) {
+                const int nxt = next_row(cur, d);
+                const int h = hop_id(cur, nxt);
+                used[h] = 1;
+                if (prev >= 0) {
+                    succ[prev].push_back(h);
+                }
+                prev = h;
+                cur = nxt;
+            }
+        }
+    }
+
+    // Tarjan SCC over the hop graph; a hop in a nontrivial SCC takes part in a dependency cycle.
+    std::vector<int> index(len * len, -1);
+    std::vector<int> low(len * len, 0);
+    std::vector<char> on_stack(len * len, 0);
+    std::vector<int> stk;
+    int next_index = 0;
+    std::vector<std::pair<int, int>> bad;
+
+    const std::function<void(int)> strongconnect = [&](int v) {
+        index[v] = low[v] = next_index++;
+        stk.push_back(v);
+        on_stack[v] = 1;
+        for (int w : succ[v]) {
+            if (index[w] == -1) {
+                strongconnect(w);
+                low[v] = std::min(low[v], low[w]);
+            } else if (on_stack[w]) {
+                low[v] = std::min(low[v], index[w]);
+            }
+        }
+        if (low[v] == index[v]) {
+            std::vector<int> component;
+            int w = -1;
+            do {
+                w = stk.back();
+                stk.pop_back();
+                on_stack[w] = 0;
+                component.push_back(w);
+            } while (w != v);
+            // Nontrivial = more than one hop, or a single hop that depends on itself.
+            const bool nontrivial =
+                component.size() > 1 || std::find(succ[v].begin(), succ[v].end(), v) != succ[v].end();
+            if (nontrivial) {
+                for (int h : component) {
+                    if (!is_ring_edge(h / len, h % len)) {
+                        bad.emplace_back(h / len, h % len);
+                    }
+                }
+            }
+        }
+    };
+    for (int v = 0; v < len * len; v++) {
+        if (used[v] && index[v] == -1) {
+            strongconnect(v);
+        }
+    }
+    std::sort(bad.begin(), bad.end());
+    return bad;
 }
 
 std::optional<ExpressRingTopology> derive_express_ring_topology(const MeshGraph& mesh_graph, MeshId mesh_id) {
