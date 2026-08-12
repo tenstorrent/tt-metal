@@ -173,16 +173,19 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
 
     ProgramDescriptor desc;
 
-    constexpr uint32_t in0_cb_index = CBIndex::c_0;       // this core's A slice (gather source)
-    constexpr uint32_t in1_cb_index = CBIndex::c_1;       // this core's B block (resident)
-    constexpr uint32_t out_cb_index = CBIndex::c_2;       // final output shard (base cores)
-    constexpr uint32_t full_in0_cb_index = CBIndex::c_3;  // gathered full A
-    constexpr uint32_t partial_cb_index = CBIndex::c_4;   // this core's partial product
-    constexpr uint32_t reduce_cb_index = CBIndex::c_5;    // gathered K_blocks partials (base cores)
-    // GCB path only: c_6 carries "compute is done reading in1" back to the reader so it can
-    // release the GCB page; c_31 is the remote (GCB) index aliased onto the local in1 CB.
-    constexpr uint32_t sync_cb_index = CBIndex::c_6;
-    constexpr uint32_t remote_cb_index = CBIndex::c_31;
+    // These are this op's own CB indices; every kernel receives them as named "cb_*" compile-time
+    // args, so op fusion can pool-allocate different hardware slots for two instances sharing a
+    // core without either factory having to know about the other.
+    const uint32_t in0_cb_index = CBIndex::c_0;       // this core's A slice (gather source)
+    const uint32_t in1_cb_index = CBIndex::c_1;       // this core's B block (resident)
+    const uint32_t out_cb_index = CBIndex::c_2;       // final output shard (base cores)
+    const uint32_t full_in0_cb_index = CBIndex::c_3;  // gathered full A
+    const uint32_t partial_cb_index = CBIndex::c_4;   // this core's partial product
+    const uint32_t reduce_cb_index = CBIndex::c_5;    // gathered K_blocks partials (base cores)
+    // GCB path only: sync_cb carries "compute is done reading in1" back to the reader so it can
+    // release the GCB page; remote_cb is the remote (GCB) index aliased onto the local in1 CB.
+    const uint32_t sync_cb_index = CBIndex::c_6;
+    const uint32_t remote_cb_index = CBIndex::c_31;
 
     const uint32_t block_num_tiles = M_tiles * Nc_tiles;  // tiles in one (partial / output) shard
 
@@ -354,8 +357,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         "partial_width_sharded matmul_decode two-hub broadcast requires a compute rectangle of at least 2 cores");
 
     const KernelDescriptor::CompileTimeArgs reader_compile_time_args = {
-        in0_cb_index,
-        full_in0_cb_index,
         shard_num_tiles,
         in0_tile_size,
         num_senders,
@@ -371,11 +372,19 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         static_cast<uint32_t>(mcast_end_phys.x),
         static_cast<uint32_t>(mcast_end_phys.y),
         split_H,
-        in1_cb_index,
         in1_page_num_tiles,
-        remote_cb_index,
-        sync_cb_index,
         num_k_blocks,
+    };
+
+    // Every CB index travels as a named "cb_*" arg: op fusion pool-allocates hardware CB slots
+    // across the phases it merges and rewrites exactly these args, so positional or hard-coded
+    // indices would leave the kernels pointing at pre-remap slots.
+    const KernelDescriptor::NamedCompileTimeArgs reader_named_args = {
+        {"cb_in0", in0_cb_index},
+        {"cb_full_in0", full_in0_cb_index},
+        {"cb_in1", in1_cb_index},
+        {"cb_in1_remote", remote_cb_index},
+        {"cb_sync", sync_cb_index},
     };
 
     const std::vector<CoreCoord> sender_cores = corerange_to_cores(inputA_core_range_set, std::nullopt, true);
@@ -415,6 +424,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         reader_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         reader_kernel_desc.core_ranges = CoreRangeSet(ranges);
         reader_kernel_desc.compile_time_args = reader_compile_time_args;
+        reader_kernel_desc.named_compile_time_args = reader_named_args;
         reader_kernel_desc.config = DataMovementConfigDescriptor{
             .processor = DataMovementProcessor::RISCV_1,
             .noc = reader_noc_of(noc),
@@ -510,12 +520,14 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         writer_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         writer_kernel_desc.core_ranges = CoreRangeSet(ranges);
         writer_kernel_desc.compile_time_args = {
-            partial_cb_index,
-            reduce_cb_index,
             block_num_tiles,
             out_tile_size,
             K_blocks,
             reduce_sem_id,
+        };
+        writer_kernel_desc.named_compile_time_args = {
+            {"cb_partial", partial_cb_index},
+            {"cb_reduce", reduce_cb_index},
         };
         writer_kernel_desc.config = DataMovementConfigDescriptor{
             .processor = DataMovementProcessor::RISCV_0,
@@ -583,8 +595,15 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         Nc_tiles,
         K_blocks,
         inA_K_tiles_per_core,
-        sync_cb_index,
         num_k_blocks,
+    };
+    compute_kernel_desc.named_compile_time_args = {
+        {"cb_full_in0", full_in0_cb_index},
+        {"cb_in1", in1_cb_index},
+        {"cb_out", out_cb_index},
+        {"cb_partial", partial_cb_index},
+        {"cb_reduce", reduce_cb_index},
+        {"cb_sync", sync_cb_index},
     };
     if (use_global_cb) {
         compute_kernel_desc.defines.emplace_back("ENABLE_GLOBAL_CB", "1");
