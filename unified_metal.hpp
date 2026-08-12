@@ -26,9 +26,10 @@
 // compute intrinsic is only ever called from inside a `#if IS_COMPUTE_THREAD`
 // region (in fusion.hpp's Strategy and op guards), and every data-movement
 // intrinsic only from inside a `#if IS_DM_THREAD` region (in unified.hpp's
-// noc_*). So each projection declares only its own half. Two exceptions, both
-// because kernels name them on a shared path: `compute_init` (data movement
-// needs a no-op) and `make_accessor` (compute needs one returning NullAccessor).
+// noc_*). So each projection declares only its own half. The one exception is
+// `compute_init`, which kernels call unconditionally and so needs a
+// data-movement no-op. `TensorAccessor` is also named on a shared path, but it
+// is a *type*, and compute simply gets an empty one under the same name.
 
 #pragma once
 
@@ -66,6 +67,7 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/exp.h"
 #include "api/compute/eltwise_unary/relu.h"
+#include "api/compute/matmul.h"
 #include "api/compute/pack.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/tensor/tensor_accessor_args.h"
@@ -73,6 +75,18 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/tensor/tensor_accessor.h"
 #include "api/tensor/tensor_accessor_args.h"
+#endif
+
+#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
+// api/tensor/tensor_accessor.h does not compile on a TRISC: it wants NOC_INDEX
+// and redeclares get_common_arg_addr against api/compute/common.h. A compute
+// kernel never dereferences an accessor -- it only carries one through a
+// statement shared with the data-movement projections -- so an empty stand-in
+// under metal's own name is enough, and kernels spell it identically either way.
+struct TensorAccessor {
+    template <typename Args>
+    constexpr TensorAccessor(Args, uint32_t) {}
+};
 #endif
 
 namespace tt {
@@ -94,57 +108,13 @@ namespace unified {
 // Compute
 // ---------------------------------------------------------------------------
 
-using ckernel::tile_regs_acquire;
-using ckernel::tile_regs_commit;
-using ckernel::tile_regs_release;
-using ckernel::tile_regs_wait;
-
-inline void copy_tile_to_dst(int cb, int tile, int dst) {
-    ckernel::copy_tile(static_cast<uint32_t>(cb), static_cast<uint32_t>(tile), static_cast<uint32_t>(dst));
-}
-
-inline void pack_dst_tile(int dst, int cb) {
-    ckernel::pack_tile(static_cast<uint32_t>(dst), static_cast<uint32_t>(cb));
-}
-
-// Configures unpack/pack for a CB pair. Kernels call this unconditionally, so it
-// is the one intrinsic that also needs a data-movement definition.
+// Only `compute_init` needs binding: kernels call it unconditionally, so a
+// data-movement build needs a no-op counterpart. Everything else -- copy_tile,
+// pack_tile, tile_regs_*, the SFPU ops, matmul_block, pack_block -- is called
+// as ckernel::* straight from fusion.hpp, inside regions already guarded by
+// `#if IS_COMPUTE_THREAD`.
 inline void compute_init(int in_cb, int out_cb) {
     ckernel::init_sfpu(static_cast<uint32_t>(in_cb), static_cast<uint32_t>(out_cb));
-}
-
-// Each `*_init` is cheap and metal kernels routinely re-init per use (see
-// SFPU_OP_CHAIN_0 in tests/.../compute/eltwise_sfpu.cpp), so it is folded in
-// here rather than hoisted -- revisit if it shows up in a profile.
-inline void sfpu_add_dst(int a, int b, int out) {
-    ckernel::add_binary_tile_init();
-    ckernel::add_binary_tile(static_cast<uint32_t>(a), static_cast<uint32_t>(b), static_cast<uint32_t>(out));
-}
-
-// Unary ops are in-place by construction: Emit<Base, Un<Op, C>> evaluates the
-// child into Base then applies the op with src == out == Base, which is exactly
-// what the SFPU tile ops do.
-inline void sfpu_exp_dst(int src, int out) {
-    (void)src;  // == out
-    ckernel::exp_tile_init();
-    ckernel::exp_tile(static_cast<uint32_t>(out));
-}
-
-inline void sfpu_relu_dst(int src, int out) {
-    (void)src;  // == out
-    ckernel::relu_tile_init();
-    ckernel::relu_tile(static_cast<uint32_t>(out));
-}
-
-// The full TensorAccessor does not compile on a TRISC: it wants NOC_INDEX and
-// redeclares get_common_arg_addr against api/compute/common.h. Compute never
-// dereferences an accessor -- it only carries one through a statement it shares
-// with the data-movement projections -- so a stub is enough.
-struct NullAccessor {};
-
-template <typename Args>
-inline NullAccessor make_accessor(Args, uint32_t) {
-    return NullAccessor{};
 }
 
 // TODO: the FPU pack-side epilogue is not bound to metal yet. Declared without a
@@ -163,8 +133,6 @@ void relu_from_pack(int base, int count);
 // unconditionally at entry.
 inline void compute_init(int, int) {}
 
-inline uint32_t cb_write_addr(int cb) { return get_write_ptr(static_cast<uint32_t>(cb)); }
-inline uint32_t cb_read_addr(int cb) { return get_read_ptr(static_cast<uint32_t>(cb)); }
 // The CB's *configured* page size, not the data format's tile size --
 // get_tile_size() is derived from unpack_tile_size[] and only coincides with the
 // page size when a page happens to hold exactly one tile.
@@ -175,45 +143,6 @@ inline uint32_t cb_read_addr(int cb) { return get_read_ptr(static_cast<uint32_t>
 inline uint32_t cb_page_bytes(int cb) {
     return get_local_cb_interface(static_cast<uint32_t>(cb)).fifo_page_size << cb_addr_shift;
 }
-
-// Accessors are constructed here, inside a data-movement region, from the
-// TensorAccessorArgs the shared source names on every projection.
-template <typename Args>
-inline auto make_accessor(Args args, uint32_t base_addr) {
-    return TensorAccessor(args, base_addr);
-}
-
-template <typename Accessor>
-inline void noc_read_page(const Accessor& acc, uint32_t page_id, uint32_t l1_addr, uint32_t bytes) {
-    noc_async_read(acc.get_noc_addr(page_id), l1_addr, bytes);
-}
-
-template <typename Accessor>
-inline void noc_write_page(const Accessor& acc, uint32_t page_id, uint32_t l1_addr, uint32_t bytes) {
-    noc_async_write(l1_addr, acc.get_noc_addr(page_id), bytes);
-}
-
-// Core-to-core: form a NOC address for `local_addr` as seen on core (x, y).
-inline uint64_t noc_addr_on_core(int x, int y, uint32_t local_addr) {
-    return get_noc_addr(static_cast<uint32_t>(x), static_cast<uint32_t>(y), local_addr);
-}
-
-inline void noc_read_from(uint64_t src_noc_addr, uint32_t dst_l1_addr, uint32_t bytes) {
-    noc_async_read(src_noc_addr, dst_l1_addr, bytes);
-}
-
-inline void noc_write_to(uint32_t src_l1_addr, uint64_t dst_noc_addr, uint32_t bytes) {
-    noc_async_write(src_l1_addr, dst_noc_addr, bytes);
-}
-
-inline void noc_read_barrier() { noc_async_read_barrier(); }
-
-// Writes have DEPARTED the local L1 (not landed at the destination). This is the
-// release condition for a source buffer -- see the note on NocAsyncWriteTx.
-inline void noc_writes_flushed() { noc_async_writes_flushed(); }
-
-// Writes have LANDED at the destination.
-inline void noc_write_barrier() { noc_async_write_barrier(); }
 
 #endif
 
