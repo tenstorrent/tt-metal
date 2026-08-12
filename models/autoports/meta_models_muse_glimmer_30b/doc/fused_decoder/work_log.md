@@ -254,7 +254,7 @@ rather than from a grid-shape argument.
 | # | rewrite | effect |
 | --- | --- | --- |
 | I | `silu(gate) * up` -> `ttnn.mul(gate, up, input_tensor_a_activations=[SILU])` | isolated 4.458 -> 2.539 ms at 8192x19968, identical PCC (`logs/op_merge_probes.log`) |
-| J | `heads * sigmoid(gate_proj(h))` -> `ttnn.mul(heads, gate, input_tensor_b_activations=[SIGMOID])` | removes the 0.40 ms prefill `UnaryDeviceOperation` |
+| J | `heads * sigmoid(gate_proj(h))` -> `ttnn.mul(heads, gate, input_tensor_b_activations=[SIGMOID])` | removes the prefill sigmoid `UnaryDeviceOperation` (347.6 us on `sliding`, 380.3 on `full` in the functional captures) |
 | K | prefill SDPA `q_chunk == k_chunk` 128 -> **256**, at **both** call sites | in-memory op at 8192 tokens: 12.368 -> 8.155 ms (sliding), 12.253 -> 7.730 (full), PCC unchanged. Paged `chunked_scaled_dot_product_attention` (every `full` chunk after the first): 36.204 -> 22.831 ms at `chunk_start_idx=8192` and 109.992 -> 72.277 at 32768 — **1.59x**, PCC 0.99978 -> 0.99982 / 0.99965 -> 0.99975 |
 | L | explicit `MinimalMatmulConfig` blocking on the two projection shapes that want one: `o_proj` -> `M16 K4 N8` (full 8192-row chunk only), MLP gate/up -> `M8 K4 N16` | device kernel time at 8192 rows: `o_proj` 2011.9 -> 1957.1 us (+2.80 %), MLP gate/up 9052.9 -> 8795.7 us (+2.92 %), and the MLP win holds on tail chunks too (+0.92 % at 4096, +1.49 % at 6144). Three dispatches per chunk take it, so about 570 us of an 8192-token chunk: the committed window is 49.32 ms, and adding the three measured per-shape deltas back gives 49.89 ms — that is arithmetic on this capture, not a second one |
 
@@ -318,7 +318,7 @@ still improving as K grew.  Reopening it:
 * `bench/prefill_matmul_kblock_probe.py` sweeps `K_block` from 4 up to the full
   K-tile count on all four shapes, divisors and non-divisors alike.  Everything
   at or above 20 tiles is a hard L1 stop: *"Statically allocated circular
-  buffers on core range [0-0 - 10-9] grow to 1684352-2470784 B which is beyond
+  buffers on core range [0-0 - 10-9] grow to 1684352-8893312 B which is beyond
   max L1 size of 1572864 B"* (`program.cpp:1722`).  The same wall hits every
   `M16 x N16`, `M16 K8` and `N24` variant.
 * That sweep reported wins of 1-3 %, which is **the same size as its own
@@ -757,8 +757,43 @@ for that rejection and labelled as such in the README.
 
 ## 7. Stage review
 
-<!-- REVIEW-PLACEHOLDER -->
+`$stage-review` was run as an independent fresh subagent after every change to
+the stage, sixteen rounds in total.  Round 16 returned **`clean-pass` with zero
+required work**; rounds 1-15 returned `more-work-needed` and every finding was
+fixed and re-reviewed rather than argued away.  The reviewer re-derived, from
+the committed artifacts each round, the whole before/after table, both op-share
+breakdowns, every config percentage, the crossover and chunk sweeps, the PCC
+surface and the watcher result, and re-ran `bench/summarize_pcc.py`,
+`bench/summarize_device_probe.py`, `bench/summarize_rope_gather_probe.py` and
+`bench/refresh_context_contract.py --check` against the committed CSVs.
+
+What the review actually changed, in order of consequence:
+
+| round | finding | outcome |
+| --- | --- | --- |
+| 6 | the paged SDPA call site was still on the functional layer's chunk 128 | fixed; 1.59x on that op, and it is the dominant op of any multi-chunk prefill |
+| 7 | the retune I had just made overran the page table on an awkward page count | real bug I introduced, fixed with a dual-constraint halving loop and pinned by `test_multi_chunk_prefill_page_table_bound` |
+| 9 | the `MinimalMatmulConfig` sweep had never tried `K_block` above 4, against a default of 8 | reopened on device kernel time; two shapes now ship a config, worth 2.8-2.9 % on 65 % of prefill |
+| 11 | every RMSNorm ran a higher-fidelity compute-kernel config than the op default, undisclosed, while three documents claimed "unchanged precision" | measured in isolation and at model level, kept, and documented as the stage's one fidelity change (§3.5) |
+| 12 | the *prefill* per-head QK norms had been missed by that uplift, and the test pinning it read an attribute rather than the dispatch | fixed; worth 10x on the worst decode accuracy control, which let the decode tolerance tighten 5e-4 -> 2e-4 |
+| 13 | the decode cos/sin gather's peer merge had never been attempted | built and measured: bit-identical, a wash, now an earned rejection |
+| 10, 14, 15 | quoted numbers that no committed artifact produced | each re-derived; `summarize_pcc.py` and `refresh_context_contract.py` now generate what used to be transcribed, and `--check` turns staleness into an exit code |
 
 ## 8. Checkpoint commits
 
-<!-- COMMIT-PLACEHOLDER -->
+Local only, on `agentic-research/hous/muse-glimmer-30b`; nothing pushed.
+
+| repo | commit | what |
+| --- | --- | --- |
+| tt-metal | `85daa112c57` | the stage: `tt/fused_decoder.py`, `tests/test_fused_decoder.py`, `doc/fused_decoder/`, `doc/context_contract.json` |
+| tt-metal | `827a7ade4dc` | evidence regenerated after the pre-commit hooks reformatted the two sources |
+| tt-metal | `190437a00ed` | the RMSNorm fidelity uplift disclosed and measured; attention-gate sweep; MLP 3072-row point |
+| tt-metal | `70f8e685f10` | the prefill QK norms brought into that uplift; decode tolerance 5e-4 -> 2e-4 |
+| tt-metal | `263ab2641b5` | the RoPE-gather peer merge measured and rejected; docstrings made capture-independent |
+| tt-metal | `e45e9ce1068` | three quoted figures corrected; the last probe summary made regenerable |
+| tt-metal | `3c0d549e7db` | three transcription corrections from round 15 |
+| tt-metal | *(this commit)* | the round-16 `clean-pass` record and these SHAs |
+
+No unrelated dirty state was included: every commit touches only
+`models/autoports/meta_models_muse_glimmer_30b/{tt/fused_decoder.py,
+tests/test_fused_decoder.py, doc/fused_decoder/**, doc/context_contract.json}`.

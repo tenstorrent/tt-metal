@@ -84,7 +84,7 @@ SDPA scale, the centered-RMSNorm `1 + w` fold, the page-table row slicing, the
    This is the single biggest prefill win.
 3. **Decode RMSNorm** runs the sharded multi-core `ttnn.rms_norm` program config
    on a `4x2` core grid instead of landing on one core. This is the single
-   biggest decode win: the four hidden-size norms go 109.9-110.0 -> 12.3-13.4 us
+   biggest decode win: the four hidden-size norms go 109.9-110.0 -> 12.3-13.3 us
    each (per-instance means over the committed capture's eight replays). 13/26/52/104
    -core *non-rectangular* grids are legal for this op and were built and
    measured too; all are slower (limitation 6).
@@ -302,7 +302,7 @@ grep -c "markers were dropped" doc/fused_decoder/logs/tracy_*.log   # all 0
 | full | traced decode, batch 1 | 131071 | 32 -> 34 | 3.575 -> **3.179 ms/token** | 3.608 -> 3.214 | **1.13x** |
 
 At 8192 tokens per layer that is 166.1 k tok/s of layer prefill throughput for
-`sliding` (was 80.9 k) and 170.7 k for `full` (was 82.4 k).
+`sliding` (was 80.9 k) and 170.8 k for `full` (was 82.4 k).
 
 The 16384-token rows are the *multi-chunk* regime — the one a long prompt
 actually runs, and the only one in which a `full` layer touches the paged
@@ -340,7 +340,7 @@ All five projection shapes were swept. Two take a config — `o_proj` ->
 attention gate's best candidate *is* the default, re-measuring to -0.01 %). Everything larger is a hard L1
 stop: `K_block >= 20`, and every `M16 x N16` / `M16 K8` / `N24` variant, fail
 with *"Statically allocated circular buffers on core range [0-0 - 10-9] grow to
-1684352-2470784 B which is beyond max L1 size of 1572864 B"*
+1684352-8893312 B which is beyond max L1 size of 1572864 B"*
 (`program.cpp:1722`). All 28 explicit 2D
 `MatmulMultiCoreReuseMultiCastProgramConfig` grids hit the same budget
 (`logs/prefill_matmul_probe.log`, `logs/prefill_matmul_kblock_*`).
