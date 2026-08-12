@@ -598,15 +598,14 @@ class LTXDistilledPipeline(LTXPipeline):
         timings: list[tuple[str, float]] = []
 
         t0 = time.time()
-        # Only load the Gemma encoder (coresident-evicts DiT/VAE) on a cache miss.
-        cached = os.path.exists(self._device_embed_cache_path([prompt]))
-        if not cached:
-            self.gemma_encoder_pair.ensure_loaded()
-        enc = self.encode_prompts([prompt])
+        # No embedding cache here: a served request encodes a prompt nothing has seen, so a cache hit
+        # would drop the encoder out of the reported total and out of the traced path it belongs in.
+        self.gemma_encoder_pair.ensure_loaded()
+        enc = self.encode_prompts([prompt], use_cache=False)
         v_embeds, a_embeds = enc[0][0].float(), enc[0][1].float()
         t_encode = time.time() - t0
-        timings.append(("Encoder (cache)" if cached else "Encoder", t_encode))
-        logger.info(f"Encoding ({'cache' if cached else 'device'}): {t_encode:.1f}s")
+        timings.append(("Encoder", t_encode))
+        logger.info(f"Encoding (device): {t_encode:.1f}s")
 
         s1_cond_latent = full_cond_latent = None
         cond_strength = 1.0
