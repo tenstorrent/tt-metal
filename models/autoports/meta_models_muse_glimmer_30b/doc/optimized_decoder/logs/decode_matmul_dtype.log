@@ -1,0 +1,116 @@
+2026-08-12 06:28:15.199 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-12 06:28:15.320 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-12 06:28:15.320 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-12 06:28:15.320 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-12 06:28:15.320 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-12 06:28:15.332 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-12 06:28:15.332 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-12 06:28:15.410 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-12 06:28:15.410 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-12 06:28:15.410 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-12 06:28:15.410 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-12 06:28:15.411 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-12 06:28:15.545 | warning  |             UMD | AICLK settled at 1337 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (tt_device.cpp:322)
+2026-08-12 06:28:15.545 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-12 06:28:15.664 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-12 06:28:15.664 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-12 06:28:15.664 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-12 06:28:15.664 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-12 06:28:15.664 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-12 06:28:15.703 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+grid=11-10 dram_grid=8-1
+GROUP 100 wqkv interleaved_wqkv_bf16_lofi
+RESULT interleaved wqkv         K= 6656 N= 4608 dtype=bf16  fid=lofi  cores=auto in0bw=auto    0.1597 ms  pcc=0.999817  (0.1599/0.1598/0.1597)
+GROUP 100 wqkv interleaved_wqkv_bf16_hifi2
+RESULT interleaved wqkv         K= 6656 N= 4608 dtype=bf16  fid=hifi2 cores=auto in0bw=auto    0.1596 ms  pcc=0.999904  (0.1599/0.1599/0.1596)
+GROUP 100 wqkv interleaved_wqkv_bfp8_lofi
+RESULT interleaved wqkv         K= 6656 N= 4608 dtype=bfp8  fid=lofi  cores=auto in0bw=auto    0.1253 ms  pcc=0.999799  (0.1253/0.1257/0.1253)
+GROUP 100 wqkv interleaved_wqkv_bfp8_hifi2
+RESULT interleaved wqkv         K= 6656 N= 4608 dtype=bfp8  fid=hifi2 cores=auto in0bw=auto    0.1252 ms  pcc=0.999883  (0.1255/0.1252/0.1252)
+GROUP 100 wqkv interleaved_wqkv_bfp4_lofi
+RESULT interleaved wqkv         K= 6656 N= 4608 dtype=bfp4  fid=lofi  cores=auto in0bw=auto    0.1250 ms  pcc=0.993579  (0.1256/0.1251/0.1250)
+GROUP 100 wqkv interleaved_wqkv_bfp4_hifi2
+RESULT interleaved wqkv         K= 6656 N= 4608 dtype=bfp4  fid=hifi2 cores=auto in0bw=auto    0.1250 ms  pcc=0.993579  (0.1252/0.1252/0.1250)
+GROUP 100 attn_gate interleaved_attn_gate_bf16_lofi
+RESULT interleaved attn_gate    K= 6656 N= 4096 dtype=bf16  fid=lofi  cores=auto in0bw=auto    0.1389 ms  pcc=0.999817  (0.1391/0.1389/0.1389)
+GROUP 100 attn_gate interleaved_attn_gate_bf16_hifi2
+RESULT interleaved attn_gate    K= 6656 N= 4096 dtype=bf16  fid=hifi2 cores=auto in0bw=auto    0.1389 ms  pcc=0.999906  (0.1390/0.1391/0.1389)
+GROUP 100 attn_gate interleaved_attn_gate_bfp8_lofi
+RESULT interleaved attn_gate    K= 6656 N= 4096 dtype=bfp8  fid=lofi  cores=auto in0bw=auto    0.1184 ms  pcc=0.999797  (0.1185/0.1184/0.1184)
+GROUP 100 attn_gate interleaved_attn_gate_bfp8_hifi2
+RESULT interleaved attn_gate    K= 6656 N= 4096 dtype=bfp8  fid=hifi2 cores=auto in0bw=auto    0.1183 ms  pcc=0.999884  (0.1189/0.1184/0.1183)
+GROUP 100 attn_gate interleaved_attn_gate_bfp4_lofi
+RESULT interleaved attn_gate    K= 6656 N= 4096 dtype=bfp4  fid=lofi  cores=auto in0bw=auto    0.1183 ms  pcc=0.993606  (0.1184/0.1184/0.1183)
+GROUP 100 attn_gate interleaved_attn_gate_bfp4_hifi2
+RESULT interleaved attn_gate    K= 6656 N= 4096 dtype=bfp4  fid=hifi2 cores=auto in0bw=auto    0.1184 ms  pcc=0.993606  (0.1189/0.1184/0.1185)
+GROUP 100 o_proj interleaved_o_proj_bf16_lofi
+RESULT interleaved o_proj       K= 4096 N= 6656 dtype=bf16  fid=lofi  cores=auto in0bw=auto    0.1448 ms  pcc=0.999845  (0.1450/0.1450/0.1448)
+GROUP 100 o_proj interleaved_o_proj_bf16_hifi2
+RESULT interleaved o_proj       K= 4096 N= 6656 dtype=bf16  fid=hifi2 cores=auto in0bw=auto    0.1450 ms  pcc=0.999932  (0.1454/0.1451/0.1450)
+GROUP 100 o_proj interleaved_o_proj_bfp8_lofi
+RESULT interleaved o_proj       K= 4096 N= 6656 dtype=bfp8  fid=lofi  cores=auto in0bw=auto    0.0975 ms  pcc=0.999823  (0.0976/0.0975/0.0975)
+GROUP 100 o_proj interleaved_o_proj_bfp8_hifi2
+RESULT interleaved o_proj       K= 4096 N= 6656 dtype=bfp8  fid=hifi2 cores=auto in0bw=auto    0.0976 ms  pcc=0.999907  (0.0982/0.0976/0.0977)
+GROUP 100 o_proj interleaved_o_proj_bfp4_lofi
+RESULT interleaved o_proj       K= 4096 N= 6656 dtype=bfp4  fid=lofi  cores=auto in0bw=auto    0.0972 ms  pcc=0.993098  (0.0973/0.0973/0.0972)
+GROUP 100 o_proj interleaved_o_proj_bfp4_hifi2
+RESULT interleaved o_proj       K= 4096 N= 6656 dtype=bfp4  fid=hifi2 cores=auto in0bw=auto    0.0973 ms  pcc=0.993098  (0.0974/0.0973/0.0974)
+GROUP 100 mlp_gate_up interleaved_mlp_gate_up_bf16_lofi
+RESULT interleaved mlp_gate_up  K= 6656 N=19968 dtype=bf16  fid=lofi  cores=auto in0bw=auto    0.8131 ms  pcc=0.999818  (3.0484/0.8133/0.8131)
+GROUP 100 mlp_gate_up interleaved_mlp_gate_up_bf16_hifi2
+RESULT interleaved mlp_gate_up  K= 6656 N=19968 dtype=bf16  fid=hifi2 cores=auto in0bw=auto    0.8140 ms  pcc=0.999905  (2.8825/0.8142/0.8140)
+GROUP 100 mlp_gate_up interleaved_mlp_gate_up_bfp8_lofi
+RESULT interleaved mlp_gate_up  K= 6656 N=19968 dtype=bfp8  fid=lofi  cores=auto in0bw=auto    0.4758 ms  pcc=0.999798  (2.9392/0.4758/0.4758)
+GROUP 100 mlp_gate_up interleaved_mlp_gate_up_bfp8_hifi2
+RESULT interleaved mlp_gate_up  K= 6656 N=19968 dtype=bfp8  fid=hifi2 cores=auto in0bw=auto    0.4738 ms  pcc=0.999883  (2.8450/0.4742/0.4738)
+GROUP 100 mlp_gate_up interleaved_mlp_gate_up_bfp4_lofi
+RESULT interleaved mlp_gate_up  K= 6656 N=19968 dtype=bfp4  fid=lofi  cores=auto in0bw=auto    0.3303 ms  pcc=0.993645  (2.9653/0.3305/0.3303)
+GROUP 100 mlp_gate_up interleaved_mlp_gate_up_bfp4_hifi2
+RESULT interleaved mlp_gate_up  K= 6656 N=19968 dtype=bfp4  fid=hifi2 cores=auto in0bw=auto    0.3309 ms  pcc=0.993645  (2.7885/0.3309/0.3310)
+GROUP 100 mlp_down interleaved_mlp_down_bf16_lofi
+RESULT interleaved mlp_down     K=19968 N= 6656 dtype=bf16  fid=lofi  cores=auto in0bw=auto    0.6957 ms  pcc=0.999673  (0.6961/0.6963/0.6957)
+GROUP 100 mlp_down interleaved_mlp_down_bf16_hifi2
+RESULT interleaved mlp_down     K=19968 N= 6656 dtype=bf16  fid=hifi2 cores=auto in0bw=auto    0.6964 ms  pcc=0.999763  (0.6965/0.6964/0.6966)
+GROUP 100 mlp_down interleaved_mlp_down_bfp8_lofi
+RESULT interleaved mlp_down     K=19968 N= 6656 dtype=bfp8  fid=lofi  cores=auto in0bw=auto    0.4660 ms  pcc=0.999654  (0.4662/0.4662/0.4660)
+GROUP 100 mlp_down interleaved_mlp_down_bfp8_hifi2
+RESULT interleaved mlp_down     K=19968 N= 6656 dtype=bfp8  fid=hifi2 cores=auto in0bw=auto    0.4663 ms  pcc=0.999740  (0.4665/0.4663/0.4665)
+GROUP 100 mlp_down interleaved_mlp_down_bfp4_lofi
+RESULT interleaved mlp_down     K=19968 N= 6656 dtype=bfp4  fid=lofi  cores=auto in0bw=auto    0.4648 ms  pcc=0.993078  (0.4649/0.4648/0.4648)
+GROUP 100 mlp_down interleaved_mlp_down_bfp4_hifi2
+RESULT interleaved mlp_down     K=19968 N= 6656 dtype=bfp4  fid=hifi2 cores=auto in0bw=auto    0.4650 ms  pcc=0.993078  (0.4651/0.4650/0.4655)
+nanobind: leaked 1 instances!
+ - leaked instance 0x7066ac9c5068 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 42 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.types.Shape"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - ... skipped remainder
+nanobind: leaked 347 functions!
+ - leaked function "sharded_across_dims"
+ - leaked function "to_json"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "device"
+ - leaked function "update_tensor_topology"
+ - leaked function ""
+ - leaked function "__ne__"
+ - leaked function "to_json"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-12 06:28:32.184 | info     |    BuildKernels | JIT cache stats: 29/161 hits (18.0%) [29 cached, 63 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-12 06:28:32.184 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-12 06:28:32.201 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-12 06:28:32.201 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-12 06:28:32.756 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-12 06:28:32.756 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-12 06:28:32.756 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

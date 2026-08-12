@@ -1,0 +1,116 @@
+2026-08-12 06:55:55.521 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-12 06:55:56.940 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-12 06:55:56.940 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-12 06:55:56.940 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-12 06:55:56.940 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-12 06:55:56.952 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-12 06:55:56.952 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-12 06:55:57.030 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-12 06:55:57.030 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-12 06:55:57.030 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-12 06:55:57.030 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-12 06:55:57.031 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-12 06:55:57.143 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-12 06:55:57.266 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-12 06:55:57.266 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-12 06:55:57.266 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-12 06:55:57.266 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-12 06:55:57.266 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-12 06:55:57.305 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+SMOKE prefill kind=sliding  seq_len=   100 pcc=0.993915
+2026-08-12 06:56:04.340 | critical |          Always | TT_THROW: Statically allocated circular buffers in program 106 clash with L1 buffers on core range [0-0 - 10-9]. L1 buffer allocated at 1335296 and static circular buffer region ends at 1386368 (assert.hpp:104)
+Traceback (most recent call last):
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_decoder/bench/smoke.py", line 114, in <module>
+    main()
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_decoder/bench/smoke.py", line 98, in main
+    tt_dec = dec.decode_forward(
+             ^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/optimized_decoder.py", line 1085, in decode_forward
+    mlp_out = self.mlp.decode_forward(mlp_in, rows)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/optimized_decoder.py", line 458, in decode_forward
+    gate = dec._decode_projection(x_sharded, self.gate, role="mlp_gate", rows=rows)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/optimized_decoder.py", line 798, in _decode_projection
+    return ttnn.linear(
+           ^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/decorators.py", line 650, in __call__
+    result = self.function(*function_args, **function_kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1779: tt::exception
+info:
+Statically allocated circular buffers in program 106 clash with L1 buffers on core range [0-0 - 10-9]. L1 buffer allocated at 1335296 and static circular buffer region ends at 1386368
+backtrace:
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/libtt_metal.so(+0x98d023) [0x77cc35f8d023]
+ --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)
+ --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)
+ --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)
+ --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x359) [0x77cc37b26cd9]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(+0xf34ff8) [0x77cc37b34ff8]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0xff) [0x77cc37b255ef]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x19b) [0x77cc37b2396b]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x508) [0x77cc37b08e68]
+ --- ttnn::prim::matmul(ttnn::Tensor const&, ttnn::Tensor const&, std::optional<ttnn::Tensor> const&, std::optional<ttnn::Tensor> const&, ttnn::prim::MatmulParams const&)
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(+0xe9b304) [0x77cc37a9b304]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6linearERKNS_6TensorES4_RKSt8optionalIS3_EbbRKS5_IKN2tt8tt_metal12MemoryConfigEES5_IKNSA_8DataTypeEERKS5_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS5_IKSJ_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES5_IKNS_19ComputeKernelConfigEES5_IKNS_5types8CoreGridEERKS5_IKNSA_4TileEES5_IS2_ERKS5_IKNSA_12experimental20GlobalCircularBufferEERKS5_IN4ttsl10StrongTypeIhNSA_14SubDeviceIdTagEEEE+0x25a) [0x77cc37a9c93a]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x764ef3) [0x77cc39964ef3]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x764bcb) [0x77cc39964bcb]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x352bc5) [0x77cc39552bc5]
+ --- python() [0x1876122]
+ --- python() [0x1686e59]
+ --- python(_PyEval_EvalFrameDefault+0xe920) [0x1621aa0]
+ --- python() [0x1876122]
+ --- python() [0x1686e59]
+ --- python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]
+ --- python(PyEval_EvalCode+0xe2) [0x1684e62]
+ --- python() [0x16a4982]
+ --- python() [0x17aebff]
+ --- python(_PyRun_SimpleFileObject+0x118) [0x17af3ac]
+ --- python(_PyRun_AnyFileObject+0x42) [0x17af282]
+ --- python() [0x17af1c4]
+ --- python() [0x17af0d8]
+ --- python(Py_RunMain+0x2e5) [0x171f33b]
+ --- python() [0x17406fa]
+ --- python() [0x17404ed]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x77cc7da2a1ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x77cc7da2a28b]
+ --- python(_start+0x29) [0x1795ced]
+
+nanobind: leaked 3 instances!
+ - leaked instance 0x77cc39cb4818 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x77cc39cb49f8 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x77cbe5c0ab68 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 24 types!
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.multi_device.MeshMapperConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - ... skipped remainder
+nanobind: leaked 282 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "deallocate"
+ - leaked function "__repr__"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "__iter__"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-12 06:56:05.264 | info     |    BuildKernels | JIT cache stats: 171/190 hits (90.0%) [171 cached, 34 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-12 06:56:05.264 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-12 06:56:05.278 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-12 06:56:05.278 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-12 06:56:05.855 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-12 06:56:05.855 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-12 06:56:05.855 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

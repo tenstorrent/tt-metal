@@ -1,0 +1,7 @@
+REPRO dram banks = 8; K=6656 N=4608 rows=128, in1 bfloat8_b TILE
+REPRO in1=width-sharded DRAM   grid=(8, 4) per_core_N= 18  non-finite=       0  pcc=0.999744
+REPRO in1=width-sharded DRAM   grid=(9, 4) per_core_N= 16  non-finite=       2  pcc=nan
+REPRO in1=width-sharded DRAM   grid=(11, 4) per_core_N= 14  non-finite=       3  pcc=nan
+REPRO in1=interleaved DRAM     grid=(8, 4) per_core_N= 18  non-finite=       0  pcc=0.999739
+REPRO in1=interleaved DRAM     grid=(9, 4) per_core_N= 16  non-finite=       0  pcc=0.999739
+REPRO in1=interleaved DRAM     grid=(11, 4) per_core_N= 14  non-finite=       0  pcc=0.999739

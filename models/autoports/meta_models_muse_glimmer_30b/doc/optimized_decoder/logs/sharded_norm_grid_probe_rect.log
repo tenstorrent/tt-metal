@@ -1,0 +1,16 @@
+device grid 11x10; hidden 6656 = 208 tiles
+NORMCHK rows=  32 cores=  4 block_h= 1 grid=4x1 grid==shard              nonfinite=      0 max|diff|=0.03182     22.5 us
+NORMCHK rows=  32 cores=  8 block_h= 1 grid=8x1 grid==shard              nonfinite=      0 max|diff|=0.03182     27.3 us
+NORMCHK rows=  32 cores= 16 block_h= 1 grid=8x2 grid==shard              nonfinite=      0 max|diff|=0.03182     25.0 us
+NORMCHK rows= 128 cores=  4 grid==shard              BLOCKED: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 3-0] grow to 1999744 B whic
+NORMCHK rows= 128 cores=  8 block_h= 4 grid=8x1 grid==shard              nonfinite=      0 max|diff|=0.04022     44.1 us
+NORMCHK rows= 128 cores= 16 block_h= 4 grid=8x2 grid==shard              nonfinite=      0 max|diff|=0.04022     33.0 us
+NORMCHK rows= 256 cores=  4 grid==shard              BLOCKED: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/allocator/bank_manager.cpp:462: false | info: | Out of Memory: Not enough space to allocate 3407872 B L1 buffer across 4 banks, where ea
+NORMCHK rows= 256 cores=  8 grid==shard              BLOCKED: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-0] grow to 2012032 B whic
+NORMCHK rows= 256 cores= 16 block_h= 8 grid=8x2 grid==shard              nonfinite=      0 max|diff|=0.03786     57.6 us
+NORMCHK rows= 512 cores=  4 grid==shard              BLOCKED: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/allocator/bank_manager.cpp:462: false | info: | Out of Memory: Not enough space to allocate 6815744 B L1 buffer across 4 banks, where ea
+NORMCHK rows= 512 cores=  8 grid==shard              BLOCKED: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/allocator/bank_manager.cpp:462: false | info: | Out of Memory: Not enough space to allocate 6815744 B L1 buffer across 8 banks, where ea
+NORMCHK rows= 512 cores= 16 grid==shard              BLOCKED: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-1] grow to 2091904 B whic
+NORMCHK rows=1024 cores=  4 grid==shard              BLOCKED: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/allocator/bank_manager.cpp:462: false | info: | Out of Memory: Not enough space to allocate 13631488 B L1 buffer across 4 banks, where e
+NORMCHK rows=1024 cores=  8 grid==shard              BLOCKED: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/allocator/bank_manager.cpp:462: false | info: | Out of Memory: Not enough space to allocate 13631488 B L1 buffer across 8 banks, where e
+NORMCHK rows=1024 cores= 16 grid==shard              BLOCKED: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/allocator/bank_manager.cpp:462: false | info: | Out of Memory: Not enough space to allocate 13631488 B L1 buffer across 16 banks, where

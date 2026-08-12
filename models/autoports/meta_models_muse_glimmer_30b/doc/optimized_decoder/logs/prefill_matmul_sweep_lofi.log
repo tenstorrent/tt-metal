@@ -1,0 +1,414 @@
+2026-08-12 06:37:04.229 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-12 06:37:04.350 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-12 06:37:04.350 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-12 06:37:04.350 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-12 06:37:04.350 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-12 06:37:04.362 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-12 06:37:04.362 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-12 06:37:04.439 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-12 06:37:04.439 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-12 06:37:04.439 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-12 06:37:04.439 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-12 06:37:04.441 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-12 06:37:04.608 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-12 06:37:04.727 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-12 06:37:04.727 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-12 06:37:04.727 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-12 06:37:04.727 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-12 06:37:04.727 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-12 06:37:04.766 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+GROUP 8 wqkv prefill_mm_bfp8_shard_r32
+RESULT wqkv         rows=   32 mm_bfp8_shard         0.2627 ms  pcc=0.999852  (0.2637/0.2629/0.2627)
+GROUP 8 wqkv prefill_mm_bfp4_shard_r32
+RESULT wqkv         rows=   32 mm_bfp4_shard         0.2200 ms  pcc=0.993638  (0.2200/0.2215/0.2208)
+GROUP 8 wqkv prefill_mm_bf16_inter_r32
+RESULT wqkv         rows=   32 mm_bf16_inter         0.2725 ms  pcc=0.999944  (0.2725/0.2735/0.2741)
+GROUP 8 wqkv prefill_linear_bf16_inter_r32
+RESULT wqkv         rows=   32 linear_bf16_inter     0.1643 ms  pcc=0.999904  (0.1652/0.1644/0.1643)
+GROUP 8 wqkv prefill_mm_bfp8_shard_r128
+RESULT wqkv         rows=  128 mm_bfp8_shard         0.2661 ms  pcc=0.999853  (0.2673/0.2661/0.2686)
+GROUP 8 wqkv prefill_mm_bfp4_shard_r128
+RESULT wqkv         rows=  128 mm_bfp4_shard         0.2210 ms  pcc=0.993679  (0.2220/0.2229/0.2210)
+GROUP 8 wqkv prefill_mm_bf16_inter_r128
+RESULT wqkv         rows=  128 mm_bf16_inter         0.2698 ms  pcc=0.999944  (0.2698/0.2731/0.2718)
+GROUP 8 wqkv prefill_linear_bf16_inter_r128
+RESULT wqkv         rows=  128 linear_bf16_inter     0.1748 ms  pcc=0.999905  (0.1750/0.1749/0.1748)
+GROUP 8 wqkv prefill_mm_bfp8_shard_r512
+RESULT wqkv         rows=  512 mm_bfp8_shard         0.2666 ms  pcc=0.999852  (0.2689/0.2669/0.2666)
+GROUP 8 wqkv prefill_mm_bfp4_shard_r512
+RESULT wqkv         rows=  512 mm_bfp4_shard         0.2272 ms  pcc=0.993651  (0.2272/0.2277/0.2276)
+GROUP 8 wqkv prefill_mm_bf16_inter_r512
+RESULT wqkv         rows=  512 mm_bf16_inter         0.2729 ms  pcc=0.999944  (0.2729/0.2763/0.2810)
+GROUP 8 wqkv prefill_linear_bf16_inter_r512
+RESULT wqkv         rows=  512 linear_bf16_inter     0.3519 ms  pcc=0.999905  (0.3542/0.3519/0.3544)
+GROUP 8 wqkv prefill_mm_bfp8_shard_r1024
+RESULT wqkv         rows= 1024 mm_bfp8_shard         0.2962 ms  pcc=0.999852  (0.2962/0.2996/0.3020)
+GROUP 8 wqkv prefill_mm_bfp4_shard_r1024
+RESULT wqkv         rows= 1024 mm_bfp4_shard         0.2676 ms  pcc=0.993655  (0.2676/0.2766/0.2790)
+GROUP 8 wqkv prefill_mm_bf16_inter_r1024
+RESULT wqkv         rows= 1024 mm_bf16_inter         0.4048 ms  pcc=0.999944  (0.4048/0.4100/0.4164)
+GROUP 8 wqkv prefill_linear_bf16_inter_r1024
+RESULT wqkv         rows= 1024 linear_bf16_inter     0.4439 ms  pcc=0.999840  (0.4439/0.4462/0.4506)
+GROUP 8 wqkv prefill_mm_bfp8_shard_r2048
+RESULT wqkv         rows= 2048 mm_bfp8_shard         0.4835 ms  pcc=0.999852  (0.4835/0.4944/0.5016)
+GROUP 8 wqkv prefill_mm_bfp4_shard_r2048
+RESULT wqkv         rows= 2048 mm_bfp4_shard         0.4879 ms  pcc=0.993663  (0.4879/0.4999/0.5030)
+GROUP 8 wqkv prefill_mm_bf16_inter_r2048
+RESULT wqkv         rows= 2048 mm_bf16_inter         0.7865 ms  pcc=0.999944  (0.7865/0.8048/0.8217)
+GROUP 8 wqkv prefill_linear_bf16_inter_r2048
+RESULT wqkv         rows= 2048 linear_bf16_inter     0.7500 ms  pcc=0.999840  (0.7500/0.7646/0.7760)
+GROUP 8 wqkv prefill_mm_bfp8_shard_r3072
+RESULT wqkv         rows= 3072 mm_bfp8_shard         0.7689 ms  pcc=0.999852  (0.7689/0.7793/0.7963)
+GROUP 8 wqkv prefill_mm_bfp4_shard_r3072
+RESULT wqkv         rows= 3072 mm_bfp4_shard         0.7116 ms  pcc=0.993654  (0.7116/0.7211/0.7237)
+GROUP 8 wqkv prefill_mm_bf16_inter_r3072
+RESULT wqkv         rows= 3072 mm_bf16_inter         1.0262 ms  pcc=0.999944  (1.0262/1.0704/1.0897)
+GROUP 8 wqkv prefill_linear_bf16_inter_r3072
+RESULT wqkv         rows= 3072 linear_bf16_inter     1.0362 ms  pcc=0.999840  (1.0362/1.0603/1.0795)
+GROUP 8 wqkv prefill_mm_bfp8_shard_r4096
+RESULT wqkv         rows= 4096 mm_bfp8_shard         0.9240 ms  pcc=0.999852  (0.9240/0.9543/0.9619)
+GROUP 8 wqkv prefill_mm_bfp4_shard_r4096
+RESULT wqkv         rows= 4096 mm_bfp4_shard         0.8890 ms  pcc=0.993653  (0.8890/0.9112/0.9232)
+GROUP 8 wqkv prefill_mm_bf16_inter_r4096
+RESULT wqkv         rows= 4096 mm_bf16_inter         1.3733 ms  pcc=0.999944  (1.3733/1.4287/1.4861)
+GROUP 8 wqkv prefill_linear_bf16_inter_r4096
+RESULT wqkv         rows= 4096 linear_bf16_inter     1.3468 ms  pcc=0.999840  (1.3468/1.3850/1.4164)
+GROUP 8 wqkv prefill_mm_bfp8_shard_r6144
+RESULT wqkv         rows= 6144 mm_bfp8_shard         1.2886 ms  pcc=0.999852  (1.2886/1.3269/1.3636)
+GROUP 8 wqkv prefill_mm_bfp4_shard_r6144
+RESULT wqkv         rows= 6144 mm_bfp4_shard         1.1880 ms  pcc=0.993656  (1.1880/1.2126/1.2454)
+GROUP 8 wqkv prefill_mm_bf16_inter_r6144
+RESULT wqkv         rows= 6144 mm_bf16_inter         2.0533 ms  pcc=0.999944  (2.0533/2.1294/2.2126)
+GROUP 8 wqkv prefill_linear_bf16_inter_r6144
+RESULT wqkv         rows= 6144 linear_bf16_inter     2.0983 ms  pcc=0.999840  (2.0983/2.1955/2.2905)
+GROUP 8 wqkv prefill_mm_bfp8_shard_r8192
+RESULT wqkv         rows= 8192 mm_bfp8_shard         1.5186 ms  pcc=0.999852  (1.5186/1.5660/1.6222)
+GROUP 8 wqkv prefill_mm_bfp4_shard_r8192
+RESULT wqkv         rows= 8192 mm_bfp4_shard         1.4202 ms  pcc=0.993652  (1.4202/1.4646/1.5105)
+GROUP 8 wqkv prefill_mm_bf16_inter_r8192
+RESULT wqkv         rows= 8192 mm_bf16_inter         2.3847 ms  pcc=0.999944  (2.3847/2.5364/2.6827)
+GROUP 8 wqkv prefill_linear_bf16_inter_r8192
+RESULT wqkv         rows= 8192 linear_bf16_inter     2.7361 ms  pcc=0.999840  (2.7361/2.8955/2.9961)
+GROUP 8 attn_gate prefill_mm_bfp8_shard_r32
+RESULT attn_gate    rows=   32 mm_bfp8_shard         0.2063 ms  pcc=0.999851  (0.2063/0.2065/0.2071)
+GROUP 8 attn_gate prefill_mm_bfp4_shard_r32
+RESULT attn_gate    rows=   32 mm_bfp4_shard         0.1802 ms  pcc=0.993633  (0.1817/0.1802/0.1802)
+GROUP 8 attn_gate prefill_mm_bf16_inter_r32
+RESULT attn_gate    rows=   32 mm_bf16_inter         0.2360 ms  pcc=0.999945  (0.2360/0.2377/0.2370)
+GROUP 8 attn_gate prefill_linear_bf16_inter_r32
+RESULT attn_gate    rows=   32 linear_bf16_inter     0.1434 ms  pcc=0.999906  (0.1437/0.1439/0.1434)
+GROUP 8 attn_gate prefill_mm_bfp8_shard_r128
+RESULT attn_gate    rows=  128 mm_bfp8_shard         0.2062 ms  pcc=0.999853  (0.2087/0.2062/0.2063)
+GROUP 8 attn_gate prefill_mm_bfp4_shard_r128
+RESULT attn_gate    rows=  128 mm_bfp4_shard         0.1810 ms  pcc=0.993685  (0.1816/0.1810/0.1812)
+GROUP 8 attn_gate prefill_mm_bf16_inter_r128
+RESULT attn_gate    rows=  128 mm_bf16_inter         0.2356 ms  pcc=0.999944  (0.2356/0.2370/0.2370)
+GROUP 8 attn_gate prefill_linear_bf16_inter_r128
+RESULT attn_gate    rows=  128 linear_bf16_inter     0.1662 ms  pcc=0.999905  (0.1667/0.1665/0.1662)
+GROUP 8 attn_gate prefill_mm_bfp8_shard_r512
+RESULT attn_gate    rows=  512 mm_bfp8_shard         0.2140 ms  pcc=0.999852  (0.2159/0.2140/0.2147)
+GROUP 8 attn_gate prefill_mm_bfp4_shard_r512
+RESULT attn_gate    rows=  512 mm_bfp4_shard         0.1889 ms  pcc=0.993661  (0.1895/0.1890/0.1889)
+GROUP 8 attn_gate prefill_mm_bf16_inter_r512
+RESULT attn_gate    rows=  512 mm_bf16_inter         0.2430 ms  pcc=0.999944  (0.2430/0.2447/0.2456)
+GROUP 8 attn_gate prefill_linear_bf16_inter_r512
+RESULT attn_gate    rows=  512 linear_bf16_inter     0.3044 ms  pcc=0.999840  (0.3055/0.3044/0.3051)
+GROUP 8 attn_gate prefill_mm_bfp8_shard_r1024
+RESULT attn_gate    rows= 1024 mm_bfp8_shard         0.2808 ms  pcc=0.999852  (0.2808/0.2814/0.2820)
+GROUP 8 attn_gate prefill_mm_bfp4_shard_r1024
+RESULT attn_gate    rows= 1024 mm_bfp4_shard         0.2594 ms  pcc=0.993660  (0.2594/0.2624/0.2613)
+GROUP 8 attn_gate prefill_mm_bf16_inter_r1024
+RESULT attn_gate    rows= 1024 mm_bf16_inter         0.3386 ms  pcc=0.999944  (0.3421/0.3386/0.3487)
+GROUP 8 attn_gate prefill_linear_bf16_inter_r1024
+RESULT attn_gate    rows= 1024 linear_bf16_inter     0.3897 ms  pcc=0.999840  (0.3897/0.3914/0.3931)
+GROUP 8 attn_gate prefill_mm_bfp8_shard_r2048
+RESULT attn_gate    rows= 2048 mm_bfp8_shard         0.4699 ms  pcc=0.999852  (0.4699/0.4886/0.5011)
+GROUP 8 attn_gate prefill_mm_bfp4_shard_r2048
+RESULT attn_gate    rows= 2048 mm_bfp4_shard         0.4645 ms  pcc=0.993663  (0.4645/0.4800/0.4734)
+GROUP 8 attn_gate prefill_mm_bf16_inter_r2048
+RESULT attn_gate    rows= 2048 mm_bf16_inter         0.6624 ms  pcc=0.999944  (0.6624/0.6725/0.6793)
+GROUP 8 attn_gate prefill_linear_bf16_inter_r2048
+RESULT attn_gate    rows= 2048 linear_bf16_inter     0.6450 ms  pcc=0.999840  (0.6450/0.6614/0.6708)
+GROUP 8 attn_gate prefill_mm_bfp8_shard_r3072
+RESULT attn_gate    rows= 3072 mm_bfp8_shard         0.7068 ms  pcc=0.999852  (0.7069/0.7068/0.7126)
+GROUP 8 attn_gate prefill_mm_bfp4_shard_r3072
+RESULT attn_gate    rows= 3072 mm_bfp4_shard         0.6607 ms  pcc=0.993656  (0.6607/0.6669/0.6651)
+GROUP 8 attn_gate prefill_mm_bf16_inter_r3072
+RESULT attn_gate    rows= 3072 mm_bf16_inter         0.8963 ms  pcc=0.999944  (0.8963/0.9257/0.9356)
+GROUP 8 attn_gate prefill_linear_bf16_inter_r3072
+RESULT attn_gate    rows= 3072 linear_bf16_inter     0.8966 ms  pcc=0.999840  (0.8966/0.9211/0.9371)
+GROUP 8 attn_gate prefill_mm_bfp8_shard_r4096
+RESULT attn_gate    rows= 4096 mm_bfp8_shard         0.8608 ms  pcc=0.999852  (0.8608/0.8782/0.8917)
+GROUP 8 attn_gate prefill_mm_bfp4_shard_r4096
+RESULT attn_gate    rows= 4096 mm_bfp4_shard         0.8397 ms  pcc=0.993659  (0.8419/0.8397/0.8511)
+GROUP 8 attn_gate prefill_mm_bf16_inter_r4096
+RESULT attn_gate    rows= 4096 mm_bf16_inter         1.1652 ms  pcc=0.999944  (1.1652/1.2000/1.2414)
+GROUP 8 attn_gate prefill_linear_bf16_inter_r4096
+RESULT attn_gate    rows= 4096 linear_bf16_inter     1.1527 ms  pcc=0.999840  (1.1527/1.1878/1.2231)
+GROUP 8 attn_gate prefill_mm_bfp8_shard_r6144
+RESULT attn_gate    rows= 6144 mm_bfp8_shard         1.1340 ms  pcc=0.999852  (1.1340/1.1519/1.1804)
+GROUP 8 attn_gate prefill_mm_bfp4_shard_r6144
+RESULT attn_gate    rows= 6144 mm_bfp4_shard         1.0094 ms  pcc=0.993661  (1.0094/1.0294/1.0686)
+GROUP 8 attn_gate prefill_mm_bf16_inter_r6144
+RESULT attn_gate    rows= 6144 mm_bf16_inter         1.7487 ms  pcc=0.999944  (1.7487/1.8260/1.8925)
+GROUP 8 attn_gate prefill_linear_bf16_inter_r6144
+RESULT attn_gate    rows= 6144 linear_bf16_inter     1.7637 ms  pcc=0.999840  (1.7637/1.8369/1.9123)
+GROUP 8 attn_gate prefill_mm_bfp8_shard_r8192
+RESULT attn_gate    rows= 8192 mm_bfp8_shard         1.3193 ms  pcc=0.999852  (1.3193/1.3664/1.4144)
+GROUP 8 attn_gate prefill_mm_bfp4_shard_r8192
+RESULT attn_gate    rows= 8192 mm_bfp4_shard         1.2470 ms  pcc=0.993659  (1.2470/1.2808/1.3239)
+GROUP 8 attn_gate prefill_mm_bf16_inter_r8192
+RESULT attn_gate    rows= 8192 mm_bf16_inter         2.0854 ms  pcc=0.999944  (2.0854/2.2129/2.3227)
+GROUP 8 attn_gate prefill_linear_bf16_inter_r8192
+RESULT attn_gate    rows= 8192 linear_bf16_inter     2.3208 ms  pcc=0.999840  (2.3208/2.4536/2.5747)
+GROUP 8 o_proj prefill_mm_bfp8_shard_r32
+RESULT o_proj       rows=   32 mm_bfp8_shard         0.2033 ms  pcc=0.999857  (0.2051/0.2043/0.2033)
+GROUP 8 o_proj prefill_mm_bfp4_shard_r32
+RESULT o_proj       rows=   32 mm_bfp4_shard         0.1842 ms  pcc=0.993120  (0.1850/0.1842/0.1844)
+GROUP 8 o_proj prefill_mm_bf16_inter_r32
+RESULT o_proj       rows=   32 mm_bf16_inter         0.2350 ms  pcc=0.999951  (0.2377/0.2362/0.2350)
+GROUP 8 o_proj prefill_linear_bf16_inter_r32
+RESULT o_proj       rows=   32 linear_bf16_inter     0.1505 ms  pcc=0.999932  (0.1516/0.1511/0.1505)
+GROUP 8 o_proj prefill_mm_bfp8_shard_r128
+RESULT o_proj       rows=  128 mm_bfp8_shard         0.2034 ms  pcc=0.999856  (0.2058/0.2040/0.2034)
+GROUP 8 o_proj prefill_mm_bfp4_shard_r128
+RESULT o_proj       rows=  128 mm_bfp4_shard         0.1845 ms  pcc=0.993108  (0.1860/0.1847/0.1845)
+GROUP 8 o_proj prefill_mm_bf16_inter_r128
+RESULT o_proj       rows=  128 mm_bf16_inter         0.2350 ms  pcc=0.999951  (0.2350/0.2356/0.2358)
+GROUP 8 o_proj prefill_linear_bf16_inter_r128
+RESULT o_proj       rows=  128 linear_bf16_inter     0.1593 ms  pcc=0.999933  (0.1606/0.1594/0.1593)
+GROUP 8 o_proj prefill_mm_bfp8_shard_r512
+RESULT o_proj       rows=  512 mm_bfp8_shard         0.2190 ms  pcc=0.999857  (0.2208/0.2190/0.2197)
+GROUP 8 o_proj prefill_mm_bfp4_shard_r512
+RESULT o_proj       rows=  512 mm_bfp4_shard         0.2013 ms  pcc=0.993110  (0.2018/0.2013/0.2016)
+GROUP 8 o_proj prefill_mm_bf16_inter_r512
+RESULT o_proj       rows=  512 mm_bf16_inter         0.2505 ms  pcc=0.999951  (0.2505/0.2527/0.2518)
+GROUP 8 o_proj prefill_linear_bf16_inter_r512
+RESULT o_proj       rows=  512 linear_bf16_inter     0.2602 ms  pcc=0.999932  (0.2602/0.2603/0.2630)
+GROUP 8 o_proj prefill_mm_bfp8_shard_r1024
+RESULT o_proj       rows= 1024 mm_bfp8_shard         0.2868 ms  pcc=0.999857  (0.2868/0.2882/0.2929)
+GROUP 8 o_proj prefill_mm_bfp4_shard_r1024
+RESULT o_proj       rows= 1024 mm_bfp4_shard         0.2710 ms  pcc=0.993103  (0.2716/0.2710/0.2739)
+GROUP 8 o_proj prefill_mm_bf16_inter_r1024
+RESULT o_proj       rows= 1024 mm_bf16_inter         0.3429 ms  pcc=0.999951  (0.3429/0.3467/0.3520)
+GROUP 8 o_proj prefill_linear_bf16_inter_r1024
+RESULT o_proj       rows= 1024 linear_bf16_inter     0.3777 ms  pcc=0.999895  (0.3777/0.3799/0.3832)
+GROUP 8 o_proj prefill_mm_bfp8_shard_r2048
+RESULT o_proj       rows= 2048 mm_bfp8_shard         0.5357 ms  pcc=0.999857  (0.5357/0.5417/0.5399)
+GROUP 8 o_proj prefill_mm_bfp4_shard_r2048
+RESULT o_proj       rows= 2048 mm_bfp4_shard         0.5039 ms  pcc=0.993115  (0.5039/0.5085/0.5220)
+GROUP 8 o_proj prefill_mm_bf16_inter_r2048
+RESULT o_proj       rows= 2048 mm_bf16_inter         0.6853 ms  pcc=0.999951  (0.6853/0.6962/0.7064)
+GROUP 8 o_proj prefill_linear_bf16_inter_r2048
+RESULT o_proj       rows= 2048 linear_bf16_inter     0.6502 ms  pcc=0.999895  (0.6505/0.6502/0.6598)
+GROUP 8 o_proj prefill_mm_bfp8_shard_r3072
+RESULT o_proj       rows= 3072 mm_bfp8_shard         0.7967 ms  pcc=0.999857  (0.8024/0.8035/0.7967)
+GROUP 8 o_proj prefill_mm_bfp4_shard_r3072
+RESULT o_proj       rows= 3072 mm_bfp4_shard         0.7439 ms  pcc=0.993114  (0.7504/0.7439/0.7514)
+GROUP 8 o_proj prefill_mm_bf16_inter_r3072
+RESULT o_proj       rows= 3072 mm_bf16_inter         0.9328 ms  pcc=0.999951  (0.9328/0.9684/0.9633)
+GROUP 8 o_proj prefill_linear_bf16_inter_r3072
+RESULT o_proj       rows= 3072 linear_bf16_inter     0.9726 ms  pcc=0.999895  (0.9726/1.0018/1.0275)
+GROUP 8 o_proj prefill_mm_bfp8_shard_r4096
+RESULT o_proj       rows= 4096 mm_bfp8_shard         0.9702 ms  pcc=0.999857  (0.9702/0.9927/0.9978)
+GROUP 8 o_proj prefill_mm_bfp4_shard_r4096
+RESULT o_proj       rows= 4096 mm_bfp4_shard         0.9469 ms  pcc=0.993111  (0.9469/0.9714/0.9716)
+GROUP 8 o_proj prefill_mm_bf16_inter_r4096
+RESULT o_proj       rows= 4096 mm_bf16_inter         1.2082 ms  pcc=0.999951  (1.2082/1.2457/1.2822)
+GROUP 8 o_proj prefill_linear_bf16_inter_r4096
+RESULT o_proj       rows= 4096 linear_bf16_inter     2.4450 ms  pcc=0.999895  (2.4450/2.4857/2.5132)
+GROUP 8 o_proj prefill_mm_bfp8_shard_r6144
+RESULT o_proj       rows= 6144 mm_bfp8_shard         1.4665 ms  pcc=0.999857  (1.4665/1.5043/1.5091)
+GROUP 8 o_proj prefill_mm_bfp4_shard_r6144
+RESULT o_proj       rows= 6144 mm_bfp4_shard         1.4465 ms  pcc=0.993111  (1.4465/1.4516/1.4669)
+GROUP 8 o_proj prefill_mm_bf16_inter_r6144
+RESULT o_proj       rows= 6144 mm_bf16_inter         1.7820 ms  pcc=0.999951  (1.7820/1.8632/1.9130)
+GROUP 8 o_proj prefill_linear_bf16_inter_r6144
+RESULT o_proj       rows= 6144 linear_bf16_inter     1.9716 ms  pcc=0.999895  (1.9716/2.0473/1.9837)
+GROUP 8 o_proj prefill_mm_bfp8_shard_r8192
+RESULT o_proj       rows= 8192 mm_bfp8_shard         1.4301 ms  pcc=0.999857  (1.4301/1.4834/1.5296)
+GROUP 8 o_proj prefill_mm_bfp4_shard_r8192
+RESULT o_proj       rows= 8192 mm_bfp4_shard         1.2849 ms  pcc=0.993110  (1.2849/1.3212/1.3581)
+GROUP 8 o_proj prefill_mm_bf16_inter_r8192
+RESULT o_proj       rows= 8192 mm_bf16_inter         2.2558 ms  pcc=0.999951  (2.2558/2.3679/2.4742)
+GROUP 8 o_proj prefill_linear_bf16_inter_r8192
+RESULT o_proj       rows= 8192 linear_bf16_inter     4.9121 ms  pcc=0.999895  (4.9121/4.9653/4.9807)
+GROUP 8 mlp_gate_up prefill_mm_bfp8_shard_r32
+RESULT mlp_gate_up  rows=   32 mm_bfp8_shard         1.0291 ms  pcc=0.999852  (1.0412/1.0341/1.0291)
+GROUP 8 mlp_gate_up prefill_mm_bfp4_shard_r32
+RESULT mlp_gate_up  rows=   32 mm_bfp4_shard         0.9028 ms  pcc=0.993657  (0.9134/0.9058/0.9028)
+GROUP 8 mlp_gate_up prefill_mm_bf16_inter_r32
+RESULT mlp_gate_up  rows=   32 mm_bf16_inter         1.0567 ms  pcc=0.999944  (1.0603/1.0567/1.0670)
+GROUP 8 mlp_gate_up prefill_linear_bf16_inter_r32
+RESULT mlp_gate_up  rows=   32 linear_bf16_inter     0.6984 ms  pcc=0.999905  (0.7000/0.6984/0.6993)
+GROUP 8 mlp_gate_up prefill_mm_bfp8_shard_r128
+RESULT mlp_gate_up  rows=  128 mm_bfp8_shard         1.0310 ms  pcc=0.999852  (1.0438/1.0372/1.0310)
+GROUP 8 mlp_gate_up prefill_mm_bfp4_shard_r128
+RESULT mlp_gate_up  rows=  128 mm_bfp4_shard         0.9100 ms  pcc=0.993653  (0.9210/0.9100/0.9125)
+GROUP 8 mlp_gate_up prefill_mm_bf16_inter_r128
+RESULT mlp_gate_up  rows=  128 mm_bf16_inter         1.0688 ms  pcc=0.999944  (1.0688/1.0740/1.0742)
+GROUP 8 mlp_gate_up prefill_linear_bf16_inter_r128
+RESULT mlp_gate_up  rows=  128 linear_bf16_inter     0.7279 ms  pcc=0.999905  (0.7326/0.7279/0.7293)
+GROUP 8 mlp_gate_up prefill_mm_bfp8_shard_r512
+RESULT mlp_gate_up  rows=  512 mm_bfp8_shard         1.0911 ms  pcc=0.999852  (1.0911/1.0938/1.0917)
+GROUP 8 mlp_gate_up prefill_mm_bfp4_shard_r512
+RESULT mlp_gate_up  rows=  512 mm_bfp4_shard         0.9550 ms  pcc=0.993656  (0.9550/0.9589/0.9608)
+GROUP 8 mlp_gate_up prefill_mm_bf16_inter_r512
+RESULT mlp_gate_up  rows=  512 mm_bf16_inter         1.0789 ms  pcc=0.999944  (1.0789/1.1013/1.1257)
+GROUP 8 mlp_gate_up prefill_linear_bf16_inter_r512
+RESULT mlp_gate_up  rows=  512 linear_bf16_inter     0.9517 ms  pcc=0.999905  (0.9517/0.9627/0.9781)
+GROUP 8 mlp_gate_up prefill_mm_bfp8_shard_r1024
+RESULT mlp_gate_up  rows= 1024 mm_bfp8_shard         1.1913 ms  pcc=0.999852  (1.1913/1.2113/1.2368)
+GROUP 8 mlp_gate_up prefill_mm_bfp4_shard_r1024
+RESULT mlp_gate_up  rows= 1024 mm_bfp4_shard         1.0470 ms  pcc=0.993658  (1.0470/1.0727/1.0793)
+GROUP 8 mlp_gate_up prefill_mm_bf16_inter_r1024
+RESULT mlp_gate_up  rows= 1024 mm_bf16_inter         1.4929 ms  pcc=0.999944  (1.4929/1.5607/1.6183)
+GROUP 8 mlp_gate_up prefill_linear_bf16_inter_r1024
+RESULT mlp_gate_up  rows= 1024 linear_bf16_inter     1.4225 ms  pcc=0.999905  (1.4225/1.4856/1.5180)
+GROUP 8 mlp_gate_up prefill_mm_bfp8_shard_r2048
+RESULT mlp_gate_up  rows= 2048 mm_bfp8_shard         2.0145 ms  pcc=0.999852  (2.0145/2.0727/2.1596)
+GROUP 8 mlp_gate_up prefill_mm_bfp4_shard_r2048
+RESULT mlp_gate_up  rows= 2048 mm_bfp4_shard         1.9215 ms  pcc=0.993660  (1.9215/2.0323/2.0167)
+GROUP 8 mlp_gate_up prefill_mm_bf16_inter_r2048
+RESULT mlp_gate_up  rows= 2048 mm_bf16_inter         2.9189 ms  pcc=0.999944  (2.9189/3.1240/3.3220)
+GROUP 8 mlp_gate_up prefill_linear_bf16_inter_r2048
+RESULT mlp_gate_up  rows= 2048 linear_bf16_inter     2.9016 ms  pcc=0.999905  (2.9016/3.0611/3.1899)
+GROUP 8 mlp_gate_up prefill_mm_bfp8_shard_r3072
+RESULT mlp_gate_up  rows= 3072 mm_bfp8_shard         3.4366 ms  pcc=0.999852  (3.4366/3.5455/3.6726)
+GROUP 8 mlp_gate_up prefill_mm_bfp4_shard_r3072
+RESULT mlp_gate_up  rows= 3072 mm_bfp4_shard         3.2082 ms  pcc=0.993659  (3.2082/3.2942/3.3835)
+GROUP 8 mlp_gate_up prefill_mm_bf16_inter_r3072
+RESULT mlp_gate_up  rows= 3072 mm_bf16_inter         4.1796 ms  pcc=0.999944  (4.1796/4.5655/4.8402)
+GROUP 8 mlp_gate_up prefill_linear_bf16_inter_r3072
+RESULT mlp_gate_up  rows= 3072 linear_bf16_inter     4.6465 ms  pcc=0.999840  (4.6465/5.0697/5.3306)
+GROUP 8 mlp_gate_up prefill_mm_bfp8_shard_r4096
+RESULT mlp_gate_up  rows= 4096 mm_bfp8_shard         3.9232 ms  pcc=0.999852  (3.9232/4.1762/4.3240)
+GROUP 8 mlp_gate_up prefill_mm_bfp4_shard_r4096
+RESULT mlp_gate_up  rows= 4096 mm_bfp4_shard         3.7161 ms  pcc=0.993658  (3.7161/3.8671/4.0061)
+GROUP 8 mlp_gate_up prefill_mm_bf16_inter_r4096
+RESULT mlp_gate_up  rows= 4096 mm_bf16_inter         5.4232 ms  pcc=0.999944  (5.4232/6.0868/6.5627)
+GROUP 8 mlp_gate_up prefill_linear_bf16_inter_r4096
+RESULT mlp_gate_up  rows= 4096 linear_bf16_inter    11.9759 ms  pcc=0.999840  (11.9759/12.2482/12.3182)
+GROUP 8 mlp_gate_up prefill_mm_bfp8_shard_r6144
+RESULT mlp_gate_up  rows= 6144 mm_bfp8_shard         6.1056 ms  pcc=0.999852  (6.1056/6.4519/6.6494)
+GROUP 8 mlp_gate_up prefill_mm_bfp4_shard_r6144
+RESULT mlp_gate_up  rows= 6144 mm_bfp4_shard         5.6547 ms  pcc=0.993660  (5.6547/6.0347/6.1982)
+GROUP 8 mlp_gate_up prefill_mm_bf16_inter_r6144
+RESULT mlp_gate_up  rows= 6144 mm_bf16_inter         8.2820 ms  pcc=0.999944  (8.2820/9.3177/9.9711)
+GROUP 8 mlp_gate_up prefill_linear_bf16_inter_r6144
+RESULT mlp_gate_up  rows= 6144 linear_bf16_inter     9.7484 ms  pcc=0.999840  (9.7484/10.7714/11.3574)
+GROUP 8 mlp_gate_up prefill_mm_bfp8_shard_r8192
+RESULT mlp_gate_up  rows= 8192 mm_bfp8_shard         8.4994 ms  pcc=0.999852  (8.4994/9.0641/9.4035)
+GROUP 8 mlp_gate_up prefill_mm_bfp4_shard_r8192
+RESULT mlp_gate_up  rows= 8192 mm_bfp4_shard         7.9526 ms  pcc=0.993658  (7.9526/8.4195/8.6964)
+GROUP 8 mlp_gate_up prefill_mm_bf16_inter_r8192
+RESULT mlp_gate_up  rows= 8192 mm_bf16_inter        11.4161 ms  pcc=0.999944  (11.4161/12.8295/13.5399)
+GROUP 8 mlp_gate_up prefill_linear_bf16_inter_r8192
+RESULT mlp_gate_up  rows= 8192 linear_bf16_inter    24.5321 ms  pcc=0.999840  (24.5321/24.8372/24.9330)
+GROUP 8 mlp_down prefill_mm_bfp8_shard_r32
+RESULT mlp_down     rows=   32 mm_bfp8_shard         1.0678 ms  pcc=0.999813  (1.0794/1.0705/1.0678)
+GROUP 8 mlp_down prefill_mm_bfp4_shard_r32
+RESULT mlp_down     rows=   32 mm_bfp4_shard         0.9891 ms  pcc=0.993225  (0.9945/0.9922/0.9891)
+GROUP 8 mlp_down prefill_mm_bf16_inter_r32
+RESULT mlp_down     rows=   32 mm_bf16_inter         1.0652 ms  pcc=0.999908  (1.0652/1.0662/1.0741)
+GROUP 8 mlp_down prefill_linear_bf16_inter_r32
+RESULT mlp_down     rows=   32 linear_bf16_inter     0.7001 ms  pcc=0.999764  (0.7066/0.7001/0.7011)
+GROUP 8 mlp_down prefill_mm_bfp8_shard_r128
+RESULT mlp_down     rows=  128 mm_bfp8_shard         1.0762 ms  pcc=0.999814  (1.0893/1.0776/1.0762)
+GROUP 8 mlp_down prefill_mm_bfp4_shard_r128
+RESULT mlp_down     rows=  128 mm_bfp4_shard         0.9804 ms  pcc=0.993216  (0.9899/0.9805/0.9804)
+GROUP 8 mlp_down prefill_mm_bf16_inter_r128
+RESULT mlp_down     rows=  128 mm_bf16_inter         1.0731 ms  pcc=0.999908  (1.0731/1.0804/1.0853)
+GROUP 8 mlp_down prefill_linear_bf16_inter_r128
+RESULT mlp_down     rows=  128 linear_bf16_inter     0.7122 ms  pcc=0.999762  (0.7199/0.7157/0.7122)
+GROUP 8 mlp_down prefill_mm_bfp8_shard_r512
+RESULT mlp_down     rows=  512 mm_bfp8_shard         1.0989 ms  pcc=0.999814  (1.0989/1.1042/1.1067)
+GROUP 8 mlp_down prefill_mm_bfp4_shard_r512
+RESULT mlp_down     rows=  512 mm_bfp4_shard         1.0134 ms  pcc=0.993210  (1.0134/1.0138/1.0182)
+GROUP 8 mlp_down prefill_mm_bf16_inter_r512
+RESULT mlp_down     rows=  512 mm_bf16_inter         1.0707 ms  pcc=0.999908  (1.0707/1.0899/1.1162)
+GROUP 8 mlp_down prefill_linear_bf16_inter_r512
+RESULT mlp_down     rows=  512 linear_bf16_inter     1.1049 ms  pcc=0.999763  (1.1049/1.1146/1.1242)
+GROUP 8 mlp_down prefill_mm_bfp8_shard_r1024
+RESULT mlp_down     rows= 1024 mm_bfp8_shard         1.2472 ms  pcc=0.999814  (1.2472/1.2666/1.2948)
+GROUP 8 mlp_down prefill_mm_bfp4_shard_r1024
+RESULT mlp_down     rows= 1024 mm_bfp4_shard         1.1649 ms  pcc=0.993221  (1.1649/1.1851/1.2014)
+GROUP 8 mlp_down prefill_mm_bf16_inter_r1024
+RESULT mlp_down     rows= 1024 mm_bf16_inter         1.4901 ms  pcc=0.999908  (1.4901/1.5546/1.6121)
+GROUP 8 mlp_down prefill_linear_bf16_inter_r1024
+RESULT mlp_down     rows= 1024 linear_bf16_inter     1.6466 ms  pcc=0.999554  (1.6466/1.6991/1.7432)
+GROUP 8 mlp_down prefill_mm_bfp8_shard_r2048
+RESULT mlp_down     rows= 2048 mm_bfp8_shard         1.7896 ms  pcc=0.999814  (1.7896/1.8785/1.9717)
+GROUP 8 mlp_down prefill_mm_bfp4_shard_r2048
+RESULT mlp_down     rows= 2048 mm_bfp4_shard         1.7482 ms  pcc=0.993216  (1.7482/1.8164/1.8742)
+GROUP 8 mlp_down prefill_mm_bf16_inter_r2048
+RESULT mlp_down     rows= 2048 mm_bf16_inter         2.9698 ms  pcc=0.999908  (2.9698/3.1841/3.3790)
+GROUP 8 mlp_down prefill_linear_bf16_inter_r2048
+RESULT mlp_down     rows= 2048 linear_bf16_inter     2.8496 ms  pcc=0.999554  (2.8496/3.0615/3.2395)
+GROUP 8 mlp_down prefill_mm_bfp8_shard_r3072
+RESULT mlp_down     rows= 3072 mm_bfp8_shard         3.0506 ms  pcc=0.999814  (3.0506/3.1962/3.2926)
+GROUP 8 mlp_down prefill_mm_bfp4_shard_r3072
+RESULT mlp_down     rows= 3072 mm_bfp4_shard         2.9984 ms  pcc=0.993213  (2.9984/3.0988/3.1843)
+GROUP 8 mlp_down prefill_mm_bf16_inter_r3072
+RESULT mlp_down     rows= 3072 mm_bf16_inter         4.1766 ms  pcc=0.999908  (4.1766/4.5400/4.8252)
+GROUP 8 mlp_down prefill_linear_bf16_inter_r3072
+RESULT mlp_down     rows= 3072 linear_bf16_inter     4.2727 ms  pcc=0.999554  (4.2727/4.6429/4.9353)
+GROUP 8 mlp_down prefill_mm_bfp8_shard_r4096
+RESULT mlp_down     rows= 4096 mm_bfp8_shard         3.4197 ms  pcc=0.999814  (3.4197/3.6381/3.8367)
+GROUP 8 mlp_down prefill_mm_bfp4_shard_r4096
+RESULT mlp_down     rows= 4096 mm_bfp4_shard         3.2723 ms  pcc=0.993218  (3.2723/3.4574/3.6168)
+GROUP 8 mlp_down prefill_mm_bf16_inter_r4096
+RESULT mlp_down     rows= 4096 mm_bf16_inter         5.4481 ms  pcc=0.999908  (5.4481/6.0599/6.5108)
+GROUP 8 mlp_down prefill_linear_bf16_inter_r4096
+RESULT mlp_down     rows= 4096 linear_bf16_inter    11.6314 ms  pcc=0.999555  (11.6314/11.9131/12.0430)
+GROUP 8 mlp_down prefill_mm_bfp8_shard_r6144
+RESULT mlp_down     rows= 6144 mm_bfp8_shard         5.3906 ms  pcc=0.999814  (5.3906/5.8332/6.1508)
+GROUP 8 mlp_down prefill_mm_bfp4_shard_r6144
+RESULT mlp_down     rows= 6144 mm_bfp4_shard         5.1864 ms  pcc=0.993213  (5.1864/5.5466/5.7652)
+GROUP 8 mlp_down prefill_mm_bf16_inter_r6144
+RESULT mlp_down     rows= 6144 mm_bf16_inter         8.1595 ms  pcc=0.999908  (8.1595/9.2622/9.8715)
+GROUP 8 mlp_down prefill_linear_bf16_inter_r6144
+RESULT mlp_down     rows= 6144 linear_bf16_inter     9.1647 ms  pcc=0.999554  (9.1647/10.0925/10.7271)
+GROUP 8 mlp_down prefill_mm_bfp8_shard_r8192
+RESULT mlp_down     rows= 8192 mm_bfp8_shard         6.4504 ms  pcc=0.999814  (6.4504/7.2494/7.7884)
+GROUP 8 mlp_down prefill_mm_bfp4_shard_r8192
+RESULT mlp_down     rows= 8192 mm_bfp4_shard         6.1551 ms  pcc=0.993214  (6.1551/6.8159/7.2671)
+GROUP 8 mlp_down prefill_mm_bf16_inter_r8192
+RESULT mlp_down     rows= 8192 mm_bf16_inter        11.0047 ms  pcc=0.999908  (11.0047/12.5834/13.4053)
+GROUP 8 mlp_down prefill_linear_bf16_inter_r8192
+RESULT mlp_down     rows= 8192 linear_bf16_inter    23.5603 ms  pcc=0.999554  (23.5603/23.9662/23.9187)
+nanobind: leaked 1 instances!
+ - leaked instance 0x770a6bd90af8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 42 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.types.Shape"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - ... skipped remainder
+nanobind: leaked 347 functions!
+ - leaked function "from_json"
+ - leaked function "__iter__"
+ - leaked function "sfpu_nan"
+ - leaked function "buffer_page_size"
+ - leaked function ""
+ - leaked function "devices"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "__ne__"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-12 06:39:16.648 | info     |    BuildKernels | JIT cache stats: 571/1014 hits (56.3%) [571 cached, 112 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-12 06:39:16.648 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-12 06:39:16.669 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-12 06:39:16.669 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-12 06:39:17.235 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-12 06:39:17.235 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-12 06:39:17.235 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

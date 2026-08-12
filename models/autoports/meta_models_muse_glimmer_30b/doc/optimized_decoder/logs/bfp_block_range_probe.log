@@ -1,0 +1,137 @@
+2026-08-12 07:32:28.686 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-12 07:32:30.112 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-12 07:32:30.112 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-12 07:32:30.112 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-12 07:32:30.112 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-12 07:32:30.124 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-12 07:32:30.124 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-12 07:32:30.202 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-12 07:32:30.202 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-12 07:32:30.202 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-12 07:32:30.202 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-12 07:32:30.203 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-12 07:32:30.300 | warning  |             UMD | AICLK settled at 1337 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (tt_device.cpp:322)
+2026-08-12 07:32:30.300 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-12 07:32:30.422 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-12 07:32:30.422 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-12 07:32:30.423 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-12 07:32:30.423 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-12 07:32:30.423 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-12 07:32:30.461 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+RANGE kind=sliding  self_attn.q_proj.weight      real mean= 2.654 p99= 4.354   synth mean= 2.631 p99= 4.244   synth/real mean=0.992
+QUANT kind=sliding  self_attn.q_proj.weight      bfp8 real max_rel_err= 0.10169  synth max_rel_err= 0.04993  synth/real=0.491
+SNR   kind=sliding  self_attn.q_proj.weight      bfp8 real out_pcc=0.999880  synth out_pcc=0.999881  real_err/synth_err= 1.010
+QUANT kind=sliding  self_attn.q_proj.weight      bfp4 real max_rel_err= 1.62712  synth max_rel_err= 0.78955  synth/real=0.485
+SNR   kind=sliding  self_attn.q_proj.weight      bfp4 real out_pcc=0.993166  synth out_pcc=0.993640  real_err/synth_err= 1.075
+RANGE kind=sliding  self_attn.k_proj.weight      real mean= 2.697 p99= 4.567   synth mean= 2.632 p99= 4.239   synth/real mean=0.976
+QUANT kind=sliding  self_attn.k_proj.weight      bfp8 real max_rel_err= 0.10405  synth max_rel_err= 0.02495  synth/real=0.240
+SNR   kind=sliding  self_attn.k_proj.weight      bfp8 real out_pcc=0.999881  synth out_pcc=0.999886  real_err/synth_err= 1.039
+QUANT kind=sliding  self_attn.k_proj.weight      bfp4 real max_rel_err= 1.48275  synth max_rel_err= 0.39924  synth/real=0.269
+SNR   kind=sliding  self_attn.k_proj.weight      bfp4 real out_pcc=0.993284  synth out_pcc=0.993479  real_err/synth_err= 1.030
+RANGE kind=sliding  self_attn.v_proj.weight      real mean= 2.741 p99= 4.636   synth mean= 2.631 p99= 4.253   synth/real mean=0.960
+QUANT kind=sliding  self_attn.v_proj.weight      bfp8 real max_rel_err= 0.05104  synth max_rel_err= 0.04994  synth/real=0.978
+SNR   kind=sliding  self_attn.v_proj.weight      bfp8 real out_pcc=0.999887  synth out_pcc=0.999883  real_err/synth_err= 0.970
+QUANT kind=sliding  self_attn.v_proj.weight      bfp4 real max_rel_err= 0.81672  synth max_rel_err= 0.78035  synth/real=0.955
+SNR   kind=sliding  self_attn.v_proj.weight      bfp4 real out_pcc=0.993563  synth out_pcc=0.993900  real_err/synth_err= 1.055
+RANGE kind=sliding  self_attn.o_proj.weight      real mean= 2.682 p99= 4.406   synth mean= 2.631 p99= 4.242   synth/real mean=0.981
+QUANT kind=sliding  self_attn.o_proj.weight      bfp8 real max_rel_err= 0.40919  synth max_rel_err= 0.04992  synth/real=0.122
+SNR   kind=sliding  self_attn.o_proj.weight      bfp8 real out_pcc=0.999906  synth out_pcc=0.999908  real_err/synth_err= 1.017
+QUANT kind=sliding  self_attn.o_proj.weight      bfp4 real max_rel_err= 6.24010  synth max_rel_err= 0.78625  synth/real=0.126
+SNR   kind=sliding  self_attn.o_proj.weight      bfp4 real out_pcc=0.993138  synth out_pcc=0.993604  real_err/synth_err= 1.073
+RANGE kind=sliding  self_attn.gate_proj.weight   real mean= 2.647 p99= 4.334   synth mean= 2.632 p99= 4.245   synth/real mean=0.994
+QUANT kind=sliding  self_attn.gate_proj.weight   bfp8 real max_rel_err= 0.10041  synth max_rel_err= 0.04993  synth/real=0.497
+SNR   kind=sliding  self_attn.gate_proj.weight   bfp8 real out_pcc=0.999881  synth out_pcc=0.999879  real_err/synth_err= 0.985
+QUANT kind=sliding  self_attn.gate_proj.weight   bfp4 real max_rel_err= 1.56257  synth max_rel_err= 0.78954  synth/real=0.505
+SNR   kind=sliding  self_attn.gate_proj.weight   bfp4 real out_pcc=0.993536  synth out_pcc=0.993614  real_err/synth_err= 1.012
+RANGE kind=sliding  mlp.gate_proj.weight         real mean= 2.662 p99= 4.433   synth mean= 2.631 p99= 4.244   synth/real mean=0.989
+QUANT kind=sliding  mlp.gate_proj.weight         bfp8 real max_rel_err= 0.10078  synth max_rel_err= 0.04992  synth/real=0.495
+SNR   kind=sliding  mlp.gate_proj.weight         bfp8 real out_pcc=0.999879  synth out_pcc=0.999880  real_err/synth_err= 1.008
+QUANT kind=sliding  mlp.gate_proj.weight         bfp4 real max_rel_err= 1.61249  synth max_rel_err= 0.79875  synth/real=0.495
+SNR   kind=sliding  mlp.gate_proj.weight         bfp4 real out_pcc=0.993385  synth out_pcc=0.993611  real_err/synth_err= 1.035
+RANGE kind=sliding  mlp.up_proj.weight           real mean= 2.665 p99= 4.357   synth mean= 2.631 p99= 4.243   synth/real mean=0.987
+QUANT kind=sliding  mlp.up_proj.weight           bfp8 real max_rel_err= 0.18253  synth max_rel_err= 0.04992  synth/real=0.273
+SNR   kind=sliding  mlp.up_proj.weight           bfp8 real out_pcc=0.999879  synth out_pcc=0.999880  real_err/synth_err= 1.008
+QUANT kind=sliding  mlp.up_proj.weight           bfp4 real max_rel_err= 2.41699  synth max_rel_err= 0.79875  synth/real=0.330
+SNR   kind=sliding  mlp.up_proj.weight           bfp4 real out_pcc=0.993321  synth out_pcc=0.993625  real_err/synth_err= 1.048
+RANGE kind=sliding  mlp.down_proj.weight         real mean= 2.672 p99= 4.406   synth mean= 2.631 p99= 4.242   synth/real mean=0.985
+QUANT kind=sliding  mlp.down_proj.weight         bfp8 real max_rel_err= 0.40746  synth max_rel_err= 0.04993  synth/real=0.123
+SNR   kind=sliding  mlp.down_proj.weight         bfp8 real out_pcc=0.999735  synth out_pcc=0.999738  real_err/synth_err= 1.012
+QUANT kind=sliding  mlp.down_proj.weight         bfp4 real max_rel_err= 6.51937  synth max_rel_err= 0.79880  synth/real=0.123
+SNR   kind=sliding  mlp.down_proj.weight         bfp4 real out_pcc=0.992958  synth out_pcc=0.993435  real_err/synth_err= 1.073
+RANGE kind=full     self_attn.q_proj.weight      real mean= 2.650 p99= 4.317   synth mean= 2.631 p99= 4.246   synth/real mean=0.993
+QUANT kind=full     self_attn.q_proj.weight      bfp8 real max_rel_err= 0.10065  synth max_rel_err= 0.04993  synth/real=0.496
+SNR   kind=full     self_attn.q_proj.weight      bfp8 real out_pcc=0.999879  synth out_pcc=0.999882  real_err/synth_err= 1.020
+QUANT kind=full     self_attn.q_proj.weight      bfp4 real max_rel_err= 1.61040  synth max_rel_err= 0.79895  synth/real=0.496
+SNR   kind=full     self_attn.q_proj.weight      bfp4 real out_pcc=0.993387  synth out_pcc=0.993640  real_err/synth_err= 1.040
+RANGE kind=full     self_attn.k_proj.weight      real mean= 2.680 p99= 4.509   synth mean= 2.633 p99= 4.244   synth/real mean=0.982
+QUANT kind=full     self_attn.k_proj.weight      bfp8 real max_rel_err= 0.10109  synth max_rel_err= 0.02494  synth/real=0.247
+SNR   kind=full     self_attn.k_proj.weight      bfp8 real out_pcc=0.999873  synth out_pcc=0.999882  real_err/synth_err= 1.074
+QUANT kind=full     self_attn.k_proj.weight      bfp4 real max_rel_err= 1.45313  synth max_rel_err= 0.39901  synth/real=0.275
+SNR   kind=full     self_attn.k_proj.weight      bfp4 real out_pcc=0.993361  synth out_pcc=0.993480  real_err/synth_err= 1.018
+RANGE kind=full     self_attn.v_proj.weight      real mean= 2.742 p99= 4.573   synth mean= 2.631 p99= 4.243   synth/real mean=0.960
+QUANT kind=full     self_attn.v_proj.weight      bfp8 real max_rel_err= 0.05146  synth max_rel_err= 0.04996  synth/real=0.971
+SNR   kind=full     self_attn.v_proj.weight      bfp8 real out_pcc=0.999875  synth out_pcc=0.999880  real_err/synth_err= 1.038
+QUANT kind=full     self_attn.v_proj.weight      bfp4 real max_rel_err= 0.82331  synth max_rel_err= 0.77431  synth/real=0.940
+SNR   kind=full     self_attn.v_proj.weight      bfp4 real out_pcc=0.992964  synth out_pcc=0.993538  real_err/synth_err= 1.089
+RANGE kind=full     self_attn.o_proj.weight      real mean= 2.690 p99= 4.431   synth mean= 2.631 p99= 4.245   synth/real mean=0.978
+QUANT kind=full     self_attn.o_proj.weight      bfp8 real max_rel_err= 0.40914  synth max_rel_err= 0.04992  synth/real=0.122
+SNR   kind=full     self_attn.o_proj.weight      bfp8 real out_pcc=0.999905  synth out_pcc=0.999908  real_err/synth_err= 1.026
+QUANT kind=full     self_attn.o_proj.weight      bfp4 real max_rel_err= 6.34164  synth max_rel_err= 0.77381  synth/real=0.122
+SNR   kind=full     self_attn.o_proj.weight      bfp4 real out_pcc=0.993162  synth out_pcc=0.993636  real_err/synth_err= 1.075
+RANGE kind=full     self_attn.gate_proj.weight   real mean= 2.638 p99= 4.276   synth mean= 2.631 p99= 4.240   synth/real mean=0.997
+QUANT kind=full     self_attn.gate_proj.weight   bfp8 real max_rel_err= 0.10086  synth max_rel_err= 0.04991  synth/real=0.495
+SNR   kind=full     self_attn.gate_proj.weight   bfp8 real out_pcc=0.999879  synth out_pcc=0.999880  real_err/synth_err= 1.008
+QUANT kind=full     self_attn.gate_proj.weight   bfp4 real max_rel_err= 1.61373  synth max_rel_err= 0.78607  synth/real=0.487
+SNR   kind=full     self_attn.gate_proj.weight   bfp4 real out_pcc=0.993316  synth out_pcc=0.993585  real_err/synth_err= 1.042
+RANGE kind=full     mlp.gate_proj.weight         real mean= 2.639 p99= 4.290   synth mean= 2.631 p99= 4.244   synth/real mean=0.997
+QUANT kind=full     mlp.gate_proj.weight         bfp8 real max_rel_err= 0.10025  synth max_rel_err= 0.04993  synth/real=0.498
+SNR   kind=full     mlp.gate_proj.weight         bfp8 real out_pcc=0.999879  synth out_pcc=0.999880  real_err/synth_err= 1.008
+QUANT kind=full     mlp.gate_proj.weight         bfp4 real max_rel_err= 2.70667  synth max_rel_err= 0.79883  synth/real=0.295
+SNR   kind=full     mlp.gate_proj.weight         bfp4 real out_pcc=0.993437  synth out_pcc=0.993626  real_err/synth_err= 1.030
+RANGE kind=full     mlp.up_proj.weight           real mean= 2.655 p99= 4.327   synth mean= 2.631 p99= 4.242   synth/real mean=0.991
+QUANT kind=full     mlp.up_proj.weight           bfp8 real max_rel_err= 0.20067  synth max_rel_err= 0.04992  synth/real=0.249
+SNR   kind=full     mlp.up_proj.weight           bfp8 real out_pcc=0.999880  synth out_pcc=0.999881  real_err/synth_err= 1.006
+QUANT kind=full     mlp.up_proj.weight           bfp4 real max_rel_err= 2.88463  synth max_rel_err= 0.79876  synth/real=0.277
+SNR   kind=full     mlp.up_proj.weight           bfp4 real out_pcc=0.993427  synth out_pcc=0.993626  real_err/synth_err= 1.031
+RANGE kind=full     mlp.down_proj.weight         real mean= 2.668 p99= 4.393   synth mean= 2.631 p99= 4.243   synth/real mean=0.986
+QUANT kind=full     mlp.down_proj.weight         bfp8 real max_rel_err= 0.40460  synth max_rel_err= 0.04992  synth/real=0.123
+SNR   kind=full     mlp.down_proj.weight         bfp8 real out_pcc=0.999735  synth out_pcc=0.999738  real_err/synth_err= 1.012
+QUANT kind=full     mlp.down_proj.weight         bfp4 real max_rel_err= 6.47358  synth max_rel_err= 0.79876  synth/real=0.123
+SNR   kind=full     mlp.down_proj.weight         bfp4 real out_pcc=0.993070  synth out_pcc=0.993477  real_err/synth_err= 1.062
+nanobind: leaked 3 instances!
+ - leaked instance 0x73aa162bcef8 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x73a9c248f888 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x73aa162bcd18 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+nanobind: leaked 24 types!
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.multi_device.MeshMapperConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - ... skipped remainder
+nanobind: leaked 282 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "create_sub_device_manager"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-12 07:33:31.165 | info     |    BuildKernels | JIT cache stats: 46/64 hits (71.9%) [46 cached, 4 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-12 07:33:31.165 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-12 07:33:31.178 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-12 07:33:31.178 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-12 07:33:31.623 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-12 07:33:31.623 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-12 07:33:31.624 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

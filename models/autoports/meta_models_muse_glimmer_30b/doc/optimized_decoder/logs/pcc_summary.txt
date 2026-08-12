@@ -1,0 +1,254 @@
+Muse-Glimmer-30B optimized decoder - every asserted PCC check
+source: doc/optimized_decoder/logs/full_test_run.log
+
+244 asserted HF-vs-TTNN checks
+    38 on the released bf16 checkpoint, bar 0.995, worst 0.995079
+   206 on i.i.d.-Gaussian synthetic weights, worst 0.990467
+
+-- released checkpoint (the bar the precision policy is selected on) --
+0.995079  optimized real-weight decode[sliding] step=6 pos=3006
+0.995169  optimized real-weight decode[full] step=0 pos=3000
+0.995800  optimized real-weight traced decode[full] batch=8
+0.995845  optimized real-weight decode[full] step=1 pos=3001
+0.996284  optimized real-weight decode[full] step=5 pos=3005
+0.996560  optimized real-weight decode[full] step=7 pos=3007
+0.996907  optimized real-weight prefill[full] norm-band seq_len=320
+0.996914  optimized real-weight prefill[full] norm-band seq_len=288
+0.996961  optimized real-weight decode[full] step=6 pos=3006
+0.997036  optimized real-weight decode[sliding] step=5 pos=3005
+0.997052  optimized real-weight decode[sliding] step=7 pos=3007
+0.997075  optimized real-weight prefill[full] norm-band seq_len=224
+0.997088  optimized real-weight traced decode[sliding] batch=8
+0.997090  optimized real-weight decode[sliding] step=3 pos=3003
+0.997102  optimized real-weight prefill[full] seq_len=12345
+0.997137  optimized real-weight prefill[full] seq_len=8193
+0.997143  optimized real-weight prefill[full] seq_len=4097
+0.997190  optimized real-weight prefill[full] seq_len=2049
+0.997199  optimized real-weight prefill[full] norm-band seq_len=256
+0.997317  optimized real-weight decode[sliding] step=2 pos=3002
+0.997323  optimized real-weight decode[sliding] step=4 pos=3004
+0.997334  optimized real-weight prefill[full] seq_len=100
+0.997382  optimized real-weight prefill[sliding] norm-band seq_len=320
+0.997506  optimized real-weight prefill[sliding] norm-band seq_len=288
+0.997551  optimized real-weight decode[sliding] step=1 pos=3001
+0.997606  optimized real-weight prefill[sliding] norm-band seq_len=224
+0.997771  optimized real-weight decode[full] step=4 pos=3004
+0.997803  optimized real-weight prefill[sliding] norm-band seq_len=256
+0.997833  optimized real-weight prefill[sliding] seq_len=100
+0.997843  optimized real-weight prefill[sliding] seq_len=2049
+0.997850  optimized real-weight prefill[sliding] seq_len=4097
+0.997861  optimized real-weight prefill[sliding] seq_len=8193
+0.997865  optimized real-weight prefill[sliding] seq_len=12345
+0.997921  optimized real-weight decode[full] step=3 pos=3003
+0.998233  optimized real-weight prefill[full] seq_len=1
+0.998294  optimized real-weight decode[full] step=2 pos=3002
+0.998476  optimized real-weight prefill[sliding] seq_len=1
+0.998666  optimized real-weight decode[sliding] step=0 pos=3000
+
+-- synthetic weights --
+0.990467  optimized decode[full] prompt=3000 pos=3001
+0.990879  optimized decode[full] prompt=2048 pos=2049
+0.990880  optimized decode[full] prompt=3000 pos=3003
+0.991057  optimized decode[full] full-context pos=131071
+0.991084  optimized decode[full] prompt=3000 pos=3000
+0.991255  optimized decode after continuation[full] 1024+1024 pos=2048
+0.991294  optimized stress decode[full] step=16 pos=1040
+0.991393  optimized decode[full] prompt=100 pos=101
+0.991434  optimized traced decode[full] advanced pos=1024
+0.991467  optimized stress decode[full] step=0 pos=1024
+0.991469  optimized stress decode[full] step=32 pos=1056
+0.991474  optimized stress decode[full] step=63 pos=1087
+0.991480  optimized decode[full] prompt=2048 pos=2051
+0.991491  optimized decode[full] prompt=3000 pos=3002
+0.991498  optimized decode after continuation[full] 4096+3000 pos=7096
+0.991507  optimized decode[full] user_id=2 pos=12345
+0.991531  optimized decode[full] batch=32 ragged positions
+0.991590  optimized decode[full] prompt=2048 pos=2048
+0.991601  optimized prefill[full] full-context seq_len=131072 (interior @65536 32 rows)
+0.991614  optimized traced decode replay[full] pos=2048
+0.991643  optimized prefill[full] full-context seq_len=130073 (last 32 rows)
+0.991666  optimized prefill[full] full-context seq_len=131072 (last 32 rows)
+0.991677  optimized decode[full] batch=13 ragged positions
+0.991680  optimized traced decode[full] advanced pos=1025
+0.991731  optimized decode after continuation[full] 64+100 pos=164
+0.991768  optimized decode[full] vs FP32 HF reference pos=2049
+0.991787  optimized decode[full] batch=4 ragged positions
+0.991857  optimized prefill[full] norm-band seq_len=320
+0.991871  optimized prefill[full] norm-band seq_len=288
+0.991907  optimized continuation prefill[full] 1024+1024
+0.991915  optimized traced decode[sliding] advanced pos=1026
+0.991925  optimized decode[full] prompt=100 pos=100
+0.991936  optimized traced decode[full] advanced pos=1026
+0.991974  optimized decode[full] prompt=100 pos=103
+0.992006  optimized stress decode[full] step=48 pos=1072
+0.992035  optimized decode[full] prompt=2048 pos=2050
+0.992039  optimized prefill[full] seq_len=12345
+0.992041  optimized multi-chunk prefill[full] user_id=2 seq_len=12345
+0.992042  optimized prefill[full] max_seq_len==seq_len==12416 (194 pages, 2 chunks)
+0.992086  optimized continuation prefill[full] 4096+3000
+0.992100  optimized decode[full] prompt=100 pos=102
+0.992110  optimized prefill[full] seq_len=8193
+0.992114  optimized prefill[full] seq_len=8192
+0.992146  optimized prefill[full] seq_len==max_seq_len==chunk==4096 attempt=1
+0.992148  optimized continuation prefill[full] 64+100
+0.992161  optimized prefill[full] seq_len==max_seq_len==chunk==4096 attempt=0
+0.992162  optimized prefill[full] norm-band seq_len=256
+0.992168  optimized prefill[full] seq_len=4097
+0.992175  optimized prefill[full] norm-band seq_len=224
+0.992178  optimized prefill[full] batch=32 user=31 seq_len=3147
+0.992180  optimized prefill[full] batch=32 user=30 seq_len=3110
+0.992183  optimized prefill[full] batch=32 user=16 seq_len=2592
+0.992186  optimized prefill[full] batch=32 user=29 seq_len=3073
+0.992187  optimized prefill[full] batch=32 user=26 seq_len=2962
+0.992188  optimized prefill[full] batch=32 user=21 seq_len=2777
+0.992188  optimized prefill[full] batch=32 user=28 seq_len=3036
+0.992189  optimized prefill[full] batch=32 user=20 seq_len=2740
+0.992189  optimized prefill[full] batch=32 user=22 seq_len=2814
+0.992191  optimized prefill[full] batch=32 user=25 seq_len=2925
+0.992191  optimized prefill[full] batch=32 user=23 seq_len=2851
+0.992192  optimized prefill[full] batch=32 user=24 seq_len=2888
+0.992194  optimized prefill[full] batch=32 user=19 seq_len=2703
+0.992195  optimized prefill[full] batch=32 user=27 seq_len=2999
+0.992195  optimized prefill[full] batch=32 user=15 seq_len=2555
+0.992198  optimized prefill[full] batch=32 user=18 seq_len=2666
+0.992198  optimized prefill[full] batch=13 user=12 seq_len=2444
+0.992198  optimized prefill[full] batch=32 user=12 seq_len=2444
+0.992199  optimized prefill[full] batch=13 user=9 seq_len=2333
+0.992199  optimized prefill[full] batch=32 user=9 seq_len=2333
+0.992200  optimized prefill[full] batch=32 user=17 seq_len=2629
+0.992203  optimized prefill[full] batch=13 user=11 seq_len=2407
+0.992203  optimized prefill[full] batch=32 user=11 seq_len=2407
+0.992205  optimized prefill[full] batch=32 user=14 seq_len=2518
+0.992205  optimized prefill[full] batch=13 user=8 seq_len=2296
+0.992205  optimized prefill[full] batch=32 user=8 seq_len=2296
+0.992205  optimized prefill[full] batch=4 user=2 seq_len=2074
+0.992205  optimized prefill[full] batch=13 user=2 seq_len=2074
+0.992205  optimized prefill[full] batch=32 user=2 seq_len=2074
+0.992206  optimized prefill[full] batch=13 user=10 seq_len=2370
+0.992206  optimized prefill[full] batch=32 user=10 seq_len=2370
+0.992207  optimized prefill[full] batch=32 user=13 seq_len=2481
+0.992209  optimized prefill[full] batch=13 user=6 seq_len=2222
+0.992209  optimized prefill[full] batch=32 user=6 seq_len=2222
+0.992210  optimized prefill[full] seq_len=2049
+0.992210  optimized prefill[full] batch=13 user=5 seq_len=2185
+0.992210  optimized prefill[full] batch=32 user=5 seq_len=2185
+0.992211  optimized prefill[full] batch=4 user=1 seq_len=2037
+0.992211  optimized prefill[full] batch=13 user=1 seq_len=2037
+0.992211  optimized prefill[full] batch=32 user=1 seq_len=2037
+0.992212  optimized prefill[full] batch=4 user=3 seq_len=2111
+0.992212  optimized prefill[full] batch=13 user=3 seq_len=2111
+0.992212  optimized prefill[full] batch=32 user=3 seq_len=2111
+0.992213  optimized prefill[full] batch=13 user=7 seq_len=2259
+0.992213  optimized prefill[full] batch=32 user=7 seq_len=2259
+0.992217  optimized prefill[full] batch=13 user=4 seq_len=2148
+0.992217  optimized prefill[full] batch=32 user=4 seq_len=2148
+0.992222  optimized prefill[full] batch=4 user=0 seq_len=2000
+0.992222  optimized prefill[full] batch=13 user=0 seq_len=2000
+0.992222  optimized prefill[full] batch=32 user=0 seq_len=2000
+0.992224  optimized prefill[full] vs FP32 HF reference seq_len=2049
+0.992224  optimized prefill[full] seq_len=2048
+0.992239  optimized prefill[full] seq_len=128
+0.992286  optimized prefill[full] seq_len=100
+0.992352  optimized stress decode[sliding] step=48 pos=1072
+0.992372  optimized stress decode[sliding] step=32 pos=1056
+0.992515  optimized decode[sliding] vs FP32 HF reference pos=2049
+0.992592  optimized decode[sliding] prompt=2048 pos=2048
+0.992717  optimized traced decode replay[sliding] pos=2048
+0.992757  optimized traced decode[sliding] advanced pos=1024
+0.992806  optimized decode[sliding] prompt=3000 pos=3000
+0.992851  optimized decode[sliding] prompt=3000 pos=3002
+0.992853  optimized decode[sliding] batch=4 ragged positions
+0.992950  optimized decode[sliding] full-context pos=131071
+0.992976  optimized decode[sliding] batch=13 ragged positions
+0.993002  optimized decode after continuation[sliding] 4096+3000 pos=7096
+0.993033  optimized decode[sliding] prompt=2048 pos=2050
+0.993044  optimized decode[sliding] user_id=2 pos=12345
+0.993101  optimized decode[sliding] batch=32 ragged positions
+0.993109  optimized stress decode[sliding] step=63 pos=1087
+0.993146  optimized stress decode[sliding] step=0 pos=1024
+0.993193  optimized prefill[full] seq_len=1
+0.993229  optimized decode[sliding] prompt=100 pos=103
+0.993233  optimized decode[sliding] prompt=3000 pos=3003
+0.993239  optimized decode after continuation[sliding] 64+100 pos=164
+0.993275  optimized traced decode[sliding] advanced pos=1025
+0.993277  optimized decode[sliding] prompt=2048 pos=2051
+0.993331  optimized decode after continuation[sliding] 1024+1024 pos=2048
+0.993346  optimized prefill[sliding] norm-band seq_len=320
+0.993354  optimized decode[sliding] prompt=2048 pos=2049
+0.993372  optimized prefill[sliding] norm-band seq_len=288
+0.993403  optimized decode[sliding] prompt=100 pos=102
+0.993414  optimized continuation prefill[sliding] 1024+1024
+0.993441  optimized decode[sliding] prompt=3000 pos=3001
+0.993585  optimized prefill[sliding] full-context seq_len=131072 (last 32 rows)
+0.993593  optimized multi-chunk prefill[sliding] user_id=2 seq_len=12345
+0.993596  optimized prefill[sliding] seq_len=12345
+0.993596  optimized prefill[sliding] max_seq_len==seq_len==12416 (194 pages, 2 chunks)
+0.993597  optimized prefill[sliding] seq_len=8193
+0.993597  optimized decode[sliding] prompt=100 pos=101
+0.993601  optimized decode[sliding] prompt=100 pos=100
+0.993604  optimized prefill[sliding] seq_len=8192
+0.993607  optimized continuation prefill[sliding] 4096+3000
+0.993612  optimized prefill[sliding] full-context seq_len=131072 (interior @65536 32 rows)
+0.993617  optimized prefill[sliding] seq_len=4097
+0.993618  optimized prefill[sliding] seq_len==max_seq_len==chunk==4096 attempt=0
+0.993621  optimized prefill[sliding] seq_len==max_seq_len==chunk==4096 attempt=1
+0.993624  optimized prefill[sliding] norm-band seq_len=256
+0.993629  optimized prefill[sliding] batch=32 user=30 seq_len=3110
+0.993631  optimized prefill[sliding] batch=32 user=24 seq_len=2888
+0.993633  optimized prefill[sliding] batch=32 user=22 seq_len=2814
+0.993633  optimized prefill[sliding] batch=32 user=20 seq_len=2740
+0.993634  optimized prefill[sliding] batch=32 user=28 seq_len=3036
+0.993635  optimized prefill[sliding] batch=32 user=13 seq_len=2481
+0.993635  optimized prefill[sliding] batch=32 user=26 seq_len=2962
+0.993635  optimized prefill[sliding] batch=32 user=21 seq_len=2777
+0.993636  optimized prefill[sliding] batch=32 user=27 seq_len=2999
+0.993636  optimized prefill[sliding] batch=32 user=25 seq_len=2925
+0.993638  optimized prefill[sliding] batch=32 user=29 seq_len=3073
+0.993640  optimized prefill[sliding] batch=32 user=17 seq_len=2629
+0.993640  optimized prefill[sliding] batch=32 user=31 seq_len=3147
+0.993642  optimized prefill[sliding] batch=32 user=14 seq_len=2518
+0.993642  optimized prefill[sliding] batch=32 user=19 seq_len=2703
+0.993643  optimized prefill[sliding] batch=32 user=18 seq_len=2666
+0.993645  optimized prefill[sliding] norm-band seq_len=224
+0.993646  optimized prefill[sliding] batch=13 user=8 seq_len=2296
+0.993646  optimized prefill[sliding] batch=32 user=8 seq_len=2296
+0.993646  optimized prefill[sliding] batch=13 user=11 seq_len=2407
+0.993646  optimized prefill[sliding] batch=32 user=11 seq_len=2407
+0.993646  optimized prefill[sliding] batch=32 user=23 seq_len=2851
+0.993647  optimized prefill[sliding] batch=13 user=12 seq_len=2444
+0.993647  optimized prefill[sliding] batch=32 user=12 seq_len=2444
+0.993648  optimized prefill[sliding] batch=13 user=6 seq_len=2222
+0.993648  optimized prefill[sliding] batch=32 user=6 seq_len=2222
+0.993649  optimized prefill[sliding] batch=32 user=15 seq_len=2555
+0.993650  optimized prefill[sliding] batch=32 user=16 seq_len=2592
+0.993650  optimized prefill[sliding] batch=13 user=4 seq_len=2148
+0.993650  optimized prefill[sliding] batch=32 user=4 seq_len=2148
+0.993652  optimized prefill[sliding] seq_len=2048
+0.993653  optimized prefill[sliding] batch=13 user=10 seq_len=2370
+0.993653  optimized prefill[sliding] batch=32 user=10 seq_len=2370
+0.993654  optimized prefill[sliding] batch=13 user=7 seq_len=2259
+0.993654  optimized prefill[sliding] batch=32 user=7 seq_len=2259
+0.993656  optimized prefill[sliding] batch=13 user=9 seq_len=2333
+0.993656  optimized prefill[sliding] batch=32 user=9 seq_len=2333
+0.993658  optimized prefill[sliding] batch=4 user=1 seq_len=2037
+0.993658  optimized prefill[sliding] batch=13 user=1 seq_len=2037
+0.993658  optimized prefill[sliding] batch=32 user=1 seq_len=2037
+0.993658  optimized prefill[sliding] batch=4 user=3 seq_len=2111
+0.993658  optimized prefill[sliding] batch=13 user=3 seq_len=2111
+0.993658  optimized prefill[sliding] batch=32 user=3 seq_len=2111
+0.993658  optimized prefill[sliding] batch=4 user=2 seq_len=2074
+0.993658  optimized prefill[sliding] batch=13 user=2 seq_len=2074
+0.993658  optimized prefill[sliding] batch=32 user=2 seq_len=2074
+0.993659  optimized prefill[sliding] seq_len=2049
+0.993661  optimized continuation prefill[sliding] 64+100
+0.993665  optimized prefill[sliding] batch=4 user=0 seq_len=2000
+0.993665  optimized prefill[sliding] batch=13 user=0 seq_len=2000
+0.993665  optimized prefill[sliding] batch=32 user=0 seq_len=2000
+0.993665  optimized prefill[sliding] batch=13 user=5 seq_len=2185
+0.993665  optimized prefill[sliding] batch=32 user=5 seq_len=2185
+0.993693  optimized prefill[sliding] vs FP32 HF reference seq_len=2049
+0.993713  optimized prefill[sliding] full-context seq_len=130073 (last 32 rows)
+0.993723  optimized prefill[sliding] seq_len=128
+0.993734  optimized prefill[sliding] seq_len=100
+0.993944  optimized stress decode[sliding] step=16 pos=1040
+0.994212  optimized prefill[sliding] seq_len=1

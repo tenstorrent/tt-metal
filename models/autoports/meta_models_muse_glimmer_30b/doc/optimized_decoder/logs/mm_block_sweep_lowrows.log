@@ -1,0 +1,593 @@
+2026-08-12 06:42:06.218 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-12 06:42:06.338 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-12 06:42:06.338 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-12 06:42:06.338 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-12 06:42:06.338 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-12 06:42:06.350 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-12 06:42:06.350 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-12 06:42:06.428 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-12 06:42:06.428 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-12 06:42:06.428 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-12 06:42:06.428 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-12 06:42:06.429 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-12 06:42:06.544 | warning  |             UMD | AICLK settled at 1337 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (tt_device.cpp:322)
+2026-08-12 06:42:06.544 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-12 06:42:06.665 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-12 06:42:06.665 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-12 06:42:06.665 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-12 06:42:06.665 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-12 06:42:06.665 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-12 06:42:06.704 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+RESULT wqkv         rows=  128 dtype=bfp4 default             0.2200 ms
+2026-08-12 06:42:07.521 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED wqkv rows=128 M1K4N4: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:42:07.522 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED wqkv rows=128 M1K4N8: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:42:07.522 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED wqkv rows=128 M1K4N16: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:42:07.523 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED wqkv rows=128 M1K8N4: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:42:07.523 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED wqkv rows=128 M1K8N8: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:42:07.523 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED wqkv rows=128 M1K8N16: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:42:07.524 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED wqkv rows=128 M1K13N4: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:42:07.524 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED wqkv rows=128 M1K13N8: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:42:07.524 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED wqkv rows=128 M1K13N16: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:42:07.525 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED wqkv rows=128 M1K16N4: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:42:07.525 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED wqkv rows=128 M1K16N8: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:42:07.525 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED wqkv rows=128 M1K16N16: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:42:07.525 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED wqkv rows=128 M1K26N4: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:42:07.526 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED wqkv rows=128 M1K26N8: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:42:07.526 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED wqkv rows=128 M1K26N16: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+RESULT wqkv         rows=  128 dtype=bfp4 M2 K4 N4           0.3031 ms  vs_default= -37.79 %
+RESULT wqkv         rows=  128 dtype=bfp4 M2 K4 N8           0.2482 ms  vs_default= -12.80 %
+RESULT wqkv         rows=  128 dtype=bfp4 M2 K4 N16          0.2159 ms  vs_default=  +1.85 %
+RESULT wqkv         rows=  128 dtype=bfp4 M2 K8 N4           0.2570 ms  vs_default= -16.81 %
+RESULT wqkv         rows=  128 dtype=bfp4 M2 K8 N8           0.2193 ms  vs_default=  +0.30 %
+RESULT wqkv         rows=  128 dtype=bfp4 M2 K8 N16          0.2079 ms  vs_default=  +5.50 %
+RESULT wqkv         rows=  128 dtype=bfp4 M2 K13N4           0.2437 ms  vs_default= -10.76 %
+RESULT wqkv         rows=  128 dtype=bfp4 M2 K13N8           0.2156 ms  vs_default=  +2.02 %
+RESULT wqkv         rows=  128 dtype=bfp4 M2 K13N16          0.2068 ms  vs_default=  +6.01 %
+RESULT wqkv         rows=  128 dtype=bfp4 M2 K16N4           0.2285 ms  vs_default=  -3.86 %
+RESULT wqkv         rows=  128 dtype=bfp4 M2 K16N8           0.2134 ms  vs_default=  +3.02 %
+RESULT wqkv         rows=  128 dtype=bfp4 M2 K16N16          0.2082 ms  vs_default=  +5.36 %
+RESULT wqkv         rows=  128 dtype=bfp4 M2 K26N4           0.2259 ms  vs_default=  -2.69 %
+RESULT wqkv         rows=  128 dtype=bfp4 M2 K26N8           0.2109 ms  vs_default=  +4.13 %
+RESULT wqkv         rows=  128 dtype=bfp4 M2 K26N16          0.2181 ms  vs_default=  +0.89 %
+RESULT wqkv         rows=  128 dtype=bfp4 M4 K4 N4           0.3025 ms  vs_default= -37.52 %
+RESULT wqkv         rows=  128 dtype=bfp4 M4 K4 N8           0.2489 ms  vs_default= -13.12 %
+RESULT wqkv         rows=  128 dtype=bfp4 M4 K4 N16          0.2168 ms  vs_default=  +1.45 %
+RESULT wqkv         rows=  128 dtype=bfp4 M4 K8 N4           0.2579 ms  vs_default= -17.24 %
+RESULT wqkv         rows=  128 dtype=bfp4 M4 K8 N8           0.2219 ms  vs_default=  -0.84 %
+RESULT wqkv         rows=  128 dtype=bfp4 M4 K8 N16          0.2079 ms  vs_default=  +5.52 %
+RESULT wqkv         rows=  128 dtype=bfp4 M4 K13N4           0.2441 ms  vs_default= -10.96 %
+RESULT wqkv         rows=  128 dtype=bfp4 M4 K13N8           0.2157 ms  vs_default=  +1.94 %
+RESULT wqkv         rows=  128 dtype=bfp4 M4 K13N16          0.2086 ms  vs_default=  +5.19 %
+RESULT wqkv         rows=  128 dtype=bfp4 M4 K16N4           0.2291 ms  vs_default=  -4.15 %
+RESULT wqkv         rows=  128 dtype=bfp4 M4 K16N8           0.2147 ms  vs_default=  +2.40 %
+RESULT wqkv         rows=  128 dtype=bfp4 M4 K16N16          0.2094 ms  vs_default=  +4.81 %
+RESULT wqkv         rows=  128 dtype=bfp4 M4 K26N4           0.2258 ms  vs_default=  -2.63 %
+RESULT wqkv         rows=  128 dtype=bfp4 M4 K26N8           0.2118 ms  vs_default=  +3.73 %
+RESULT wqkv         rows=  128 dtype=bfp4 M4 K26N16          0.2192 ms  vs_default=  +0.38 %
+RESULT wqkv         rows=  512 dtype=bfp4 default             0.2258 ms
+2026-08-12 06:42:22.714 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED wqkv rows=512 M1K4N4: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:42:22.715 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED wqkv rows=512 M1K4N8: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:42:22.715 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED wqkv rows=512 M1K4N16: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:42:22.715 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED wqkv rows=512 M1K8N4: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:42:22.716 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED wqkv rows=512 M1K8N8: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:42:22.716 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED wqkv rows=512 M1K8N16: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:42:22.716 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED wqkv rows=512 M1K13N4: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:42:22.717 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED wqkv rows=512 M1K13N8: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:42:22.717 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED wqkv rows=512 M1K13N16: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:42:22.717 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED wqkv rows=512 M1K16N4: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:42:22.718 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED wqkv rows=512 M1K16N8: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:42:22.718 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED wqkv rows=512 M1K16N16: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:42:22.718 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED wqkv rows=512 M1K26N4: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:42:22.718 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED wqkv rows=512 M1K26N8: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:42:22.719 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED wqkv rows=512 M1K26N16: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+RESULT wqkv         rows=  512 dtype=bfp4 M2 K4 N4           0.3175 ms  vs_default= -40.60 %
+RESULT wqkv         rows=  512 dtype=bfp4 M2 K4 N8           0.2565 ms  vs_default= -13.59 %
+RESULT wqkv         rows=  512 dtype=bfp4 M2 K4 N16          0.2283 ms  vs_default=  -1.12 %
+RESULT wqkv         rows=  512 dtype=bfp4 M2 K8 N4           0.2753 ms  vs_default= -21.94 %
+RESULT wqkv         rows=  512 dtype=bfp4 M2 K8 N8           0.2269 ms  vs_default=  -0.48 %
+RESULT wqkv         rows=  512 dtype=bfp4 M2 K8 N16          0.2159 ms  vs_default=  +4.37 %
+RESULT wqkv         rows=  512 dtype=bfp4 M2 K13N4           0.2645 ms  vs_default= -17.13 %
+RESULT wqkv         rows=  512 dtype=bfp4 M2 K13N8           0.2206 ms  vs_default=  +2.29 %
+RESULT wqkv         rows=  512 dtype=bfp4 M2 K13N16          0.2138 ms  vs_default=  +5.32 %
+RESULT wqkv         rows=  512 dtype=bfp4 M2 K16N4           0.2501 ms  vs_default= -10.78 %
+RESULT wqkv         rows=  512 dtype=bfp4 M2 K16N8           0.2190 ms  vs_default=  +3.00 %
+RESULT wqkv         rows=  512 dtype=bfp4 M2 K16N16          0.2154 ms  vs_default=  +4.62 %
+RESULT wqkv         rows=  512 dtype=bfp4 M2 K26N4           0.2509 ms  vs_default= -11.12 %
+RESULT wqkv         rows=  512 dtype=bfp4 M2 K26N8           0.2174 ms  vs_default=  +3.72 %
+RESULT wqkv         rows=  512 dtype=bfp4 M2 K26N16          0.2266 ms  vs_default=  -0.35 %
+RESULT wqkv         rows=  512 dtype=bfp4 M4 K4 N4           0.3167 ms  vs_default= -40.24 %
+RESULT wqkv         rows=  512 dtype=bfp4 M4 K4 N8           0.2573 ms  vs_default= -13.94 %
+RESULT wqkv         rows=  512 dtype=bfp4 M4 K4 N16          0.2277 ms  vs_default=  -0.85 %
+RESULT wqkv         rows=  512 dtype=bfp4 M4 K8 N4           0.2751 ms  vs_default= -21.83 %
+RESULT wqkv         rows=  512 dtype=bfp4 M4 K8 N8           0.2276 ms  vs_default=  -0.79 %
+RESULT wqkv         rows=  512 dtype=bfp4 M4 K8 N16          0.2161 ms  vs_default=  +4.31 %
+RESULT wqkv         rows=  512 dtype=bfp4 M4 K13N4           0.2633 ms  vs_default= -16.61 %
+RESULT wqkv         rows=  512 dtype=bfp4 M4 K13N8           0.2211 ms  vs_default=  +2.07 %
+RESULT wqkv         rows=  512 dtype=bfp4 M4 K13N16          0.2133 ms  vs_default=  +5.51 %
+RESULT wqkv         rows=  512 dtype=bfp4 M4 K16N4           0.2508 ms  vs_default= -11.06 %
+RESULT wqkv         rows=  512 dtype=bfp4 M4 K16N8           0.2190 ms  vs_default=  +2.99 %
+RESULT wqkv         rows=  512 dtype=bfp4 M4 K16N16          0.2158 ms  vs_default=  +4.42 %
+RESULT wqkv         rows=  512 dtype=bfp4 M4 K26N4           0.2505 ms  vs_default= -10.96 %
+RESULT wqkv         rows=  512 dtype=bfp4 M4 K26N8           0.2172 ms  vs_default=  +3.79 %
+RESULT wqkv         rows=  512 dtype=bfp4 M4 K26N16          0.2263 ms  vs_default=  -0.24 %
+RESULT wqkv         rows=  512 dtype=bfp4 M8 K4 N4           0.3190 ms  vs_default= -41.30 %
+RESULT wqkv         rows=  512 dtype=bfp4 M8 K4 N8           0.2580 ms  vs_default= -14.27 %
+RESULT wqkv         rows=  512 dtype=bfp4 M8 K4 N16          0.2278 ms  vs_default=  -0.89 %
+RESULT wqkv         rows=  512 dtype=bfp4 M8 K8 N4           0.2743 ms  vs_default= -21.49 %
+RESULT wqkv         rows=  512 dtype=bfp4 M8 K8 N8           0.2283 ms  vs_default=  -1.11 %
+RESULT wqkv         rows=  512 dtype=bfp4 M8 K8 N16          0.2181 ms  vs_default=  +3.42 %
+RESULT wqkv         rows=  512 dtype=bfp4 M8 K13N4           0.2664 ms  vs_default= -18.00 %
+RESULT wqkv         rows=  512 dtype=bfp4 M8 K13N8           0.2235 ms  vs_default=  +1.00 %
+RESULT wqkv         rows=  512 dtype=bfp4 M8 K13N16          0.2171 ms  vs_default=  +3.84 %
+RESULT wqkv         rows=  512 dtype=bfp4 M8 K16N4           0.2525 ms  vs_default= -11.83 %
+RESULT wqkv         rows=  512 dtype=bfp4 M8 K16N8           0.2221 ms  vs_default=  +1.61 %
+2026-08-12 06:42:40.410 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1717120 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=512 M8K16N16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1717120 B whi
+RESULT wqkv         rows=  512 dtype=bfp4 M8 K26N4           0.2535 ms  vs_default= -12.26 %
+2026-08-12 06:42:41.416 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1596288 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=512 M8K26N8: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1596288 B whi
+2026-08-12 06:42:41.910 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2229120 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=512 M8K26N16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2229120 B whi
+RESULT wqkv         rows=  512 dtype=bfp4 M16K4 N4           0.3200 ms  vs_default= -41.74 %
+RESULT wqkv         rows=  512 dtype=bfp4 M16K4 N8           0.2616 ms  vs_default= -15.88 %
+2026-08-12 06:42:43.412 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2020224 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=512 M16K4N16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2020224 B whi
+RESULT wqkv         rows=  512 dtype=bfp4 M16K8 N4           0.2779 ms  vs_default= -23.09 %
+RESULT wqkv         rows=  512 dtype=bfp4 M16K8 N8           0.2309 ms  vs_default=  -2.25 %
+2026-08-12 06:42:44.933 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2356096 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=512 M16K8N16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2356096 B whi
+RESULT wqkv         rows=  512 dtype=bfp4 M16K13N4           0.2684 ms  vs_default= -18.86 %
+2026-08-12 06:42:45.939 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1869696 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=512 M16K13N8: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1869696 B whi
+2026-08-12 06:42:46.429 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2775936 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=512 M16K13N16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2775936 B whi
+2026-08-12 06:42:46.936 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1627008 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=512 M16K16N4: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1627008 B whi
+2026-08-12 06:42:47.447 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2093952 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=512 M16K16N8: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2093952 B whi
+2026-08-12 06:42:47.947 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 3027840 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=512 M16K16N16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 3027840 B whi
+2026-08-12 06:42:48.468 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2328448 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=512 M16K26N4: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2328448 B whi
+2026-08-12 06:42:48.972 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2841472 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=512 M16K26N8: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2841472 B whi
+2026-08-12 06:42:49.466 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 3867520 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=512 M16K26N16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 3867520 B whi
+RESULT wqkv         rows= 2048 dtype=bfp4 default             0.4897 ms
+2026-08-12 06:42:49.555 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED wqkv rows=2048 M1K4N4: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:42:49.555 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED wqkv rows=2048 M1K4N8: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:42:49.556 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED wqkv rows=2048 M1K4N16: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:42:49.556 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED wqkv rows=2048 M1K8N4: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:42:49.556 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED wqkv rows=2048 M1K8N8: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:42:49.557 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED wqkv rows=2048 M1K8N16: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:42:49.557 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED wqkv rows=2048 M1K13N4: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:42:49.557 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED wqkv rows=2048 M1K13N8: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:42:49.558 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED wqkv rows=2048 M1K13N16: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:42:49.558 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED wqkv rows=2048 M1K16N4: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:42:49.558 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED wqkv rows=2048 M1K16N8: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:42:49.559 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED wqkv rows=2048 M1K16N16: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:42:49.559 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED wqkv rows=2048 M1K26N4: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:42:49.559 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED wqkv rows=2048 M1K26N8: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:42:49.559 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED wqkv rows=2048 M1K26N16: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+RESULT wqkv         rows= 2048 dtype=bfp4 M2 K4 N4           1.2553 ms  vs_default=-156.34 %
+RESULT wqkv         rows= 2048 dtype=bfp4 M2 K4 N8           1.0022 ms  vs_default=-104.65 %
+RESULT wqkv         rows= 2048 dtype=bfp4 M2 K4 N16          0.8650 ms  vs_default= -76.64 %
+RESULT wqkv         rows= 2048 dtype=bfp4 M2 K8 N4           1.0454 ms  vs_default=-113.48 %
+RESULT wqkv         rows= 2048 dtype=bfp4 M2 K8 N8           0.8702 ms  vs_default= -77.69 %
+RESULT wqkv         rows= 2048 dtype=bfp4 M2 K8 N16          0.8143 ms  vs_default= -66.29 %
+RESULT wqkv         rows= 2048 dtype=bfp4 M2 K13N4           1.0016 ms  vs_default=-104.52 %
+RESULT wqkv         rows= 2048 dtype=bfp4 M2 K13N8           0.9258 ms  vs_default= -89.05 %
+RESULT wqkv         rows= 2048 dtype=bfp4 M2 K13N16          0.8399 ms  vs_default= -71.51 %
+RESULT wqkv         rows= 2048 dtype=bfp4 M2 K16N4           0.9572 ms  vs_default= -95.46 %
+RESULT wqkv         rows= 2048 dtype=bfp4 M2 K16N8           0.8610 ms  vs_default= -75.81 %
+RESULT wqkv         rows= 2048 dtype=bfp4 M2 K16N16          0.7802 ms  vs_default= -59.32 %
+RESULT wqkv         rows= 2048 dtype=bfp4 M2 K26N4           0.9747 ms  vs_default= -99.03 %
+RESULT wqkv         rows= 2048 dtype=bfp4 M2 K26N8           0.8332 ms  vs_default= -70.15 %
+RESULT wqkv         rows= 2048 dtype=bfp4 M2 K26N16          0.7884 ms  vs_default= -60.99 %
+RESULT wqkv         rows= 2048 dtype=bfp4 M4 K4 N4           0.8195 ms  vs_default= -67.34 %
+RESULT wqkv         rows= 2048 dtype=bfp4 M4 K4 N8           0.5459 ms  vs_default= -11.48 %
+RESULT wqkv         rows= 2048 dtype=bfp4 M4 K4 N16          0.4834 ms  vs_default=  +1.28 %
+RESULT wqkv         rows= 2048 dtype=bfp4 M4 K8 N4           0.7255 ms  vs_default= -48.16 %
+RESULT wqkv         rows= 2048 dtype=bfp4 M4 K8 N8           0.4993 ms  vs_default=  -1.96 %
+RESULT wqkv         rows= 2048 dtype=bfp4 M4 K8 N16          0.4460 ms  vs_default=  +8.93 %
+RESULT wqkv         rows= 2048 dtype=bfp4 M4 K13N4           0.7082 ms  vs_default= -44.62 %
+RESULT wqkv         rows= 2048 dtype=bfp4 M4 K13N8           0.4995 ms  vs_default=  -1.99 %
+RESULT wqkv         rows= 2048 dtype=bfp4 M4 K13N16          0.4476 ms  vs_default=  +8.60 %
+RESULT wqkv         rows= 2048 dtype=bfp4 M4 K16N4           0.7002 ms  vs_default= -42.98 %
+RESULT wqkv         rows= 2048 dtype=bfp4 M4 K16N8           0.5023 ms  vs_default=  -2.57 %
+RESULT wqkv         rows= 2048 dtype=bfp4 M4 K16N16          0.4452 ms  vs_default=  +9.08 %
+RESULT wqkv         rows= 2048 dtype=bfp4 M4 K26N4           0.7062 ms  vs_default= -44.20 %
+RESULT wqkv         rows= 2048 dtype=bfp4 M4 K26N8           0.5351 ms  vs_default=  -9.26 %
+RESULT wqkv         rows= 2048 dtype=bfp4 M4 K26N16          0.4688 ms  vs_default=  +4.27 %
+RESULT wqkv         rows= 2048 dtype=bfp4 M8 K4 N4           0.8025 ms  vs_default= -63.86 %
+RESULT wqkv         rows= 2048 dtype=bfp4 M8 K4 N8           0.5101 ms  vs_default=  -4.16 %
+RESULT wqkv         rows= 2048 dtype=bfp4 M8 K4 N16          0.4421 ms  vs_default=  +9.72 %
+RESULT wqkv         rows= 2048 dtype=bfp4 M8 K8 N4           0.7303 ms  vs_default= -49.13 %
+RESULT wqkv         rows= 2048 dtype=bfp4 M8 K8 N8           0.4958 ms  vs_default=  -1.25 %
+RESULT wqkv         rows= 2048 dtype=bfp4 M8 K8 N16          0.4407 ms  vs_default= +10.00 %
+RESULT wqkv         rows= 2048 dtype=bfp4 M8 K13N4           0.7407 ms  vs_default= -51.25 %
+RESULT wqkv         rows= 2048 dtype=bfp4 M8 K13N8           0.5098 ms  vs_default=  -4.11 %
+RESULT wqkv         rows= 2048 dtype=bfp4 M8 K13N16          0.4481 ms  vs_default=  +8.50 %
+RESULT wqkv         rows= 2048 dtype=bfp4 M8 K16N4           0.7519 ms  vs_default= -53.54 %
+RESULT wqkv         rows= 2048 dtype=bfp4 M8 K16N8           0.5091 ms  vs_default=  -3.97 %
+2026-08-12 06:43:09.837 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1717120 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=2048 M8K16N16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1717120 B whi
+RESULT wqkv         rows= 2048 dtype=bfp4 M8 K26N4           0.8173 ms  vs_default= -66.90 %
+2026-08-12 06:43:10.659 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1596288 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=2048 M8K26N8: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1596288 B whi
+2026-08-12 06:43:11.053 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2229120 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=2048 M8K26N16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2229120 B whi
+RESULT wqkv         rows= 2048 dtype=bfp4 M16K4 N4           0.8065 ms  vs_default= -64.69 %
+RESULT wqkv         rows= 2048 dtype=bfp4 M16K4 N8           0.5050 ms  vs_default=  -3.13 %
+2026-08-12 06:43:12.278 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2020224 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=2048 M16K4N16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2020224 B whi
+RESULT wqkv         rows= 2048 dtype=bfp4 M16K8 N4           0.7340 ms  vs_default= -49.89 %
+RESULT wqkv         rows= 2048 dtype=bfp4 M16K8 N8           0.4925 ms  vs_default=  -0.56 %
+2026-08-12 06:43:13.510 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2356096 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=2048 M16K8N16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2356096 B whi
+RESULT wqkv         rows= 2048 dtype=bfp4 M16K13N4           0.7446 ms  vs_default= -52.06 %
+2026-08-12 06:43:14.328 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1869696 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=2048 M16K13N8: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1869696 B whi
+2026-08-12 06:43:14.722 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2775936 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=2048 M16K13N16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2775936 B whi
+2026-08-12 06:43:15.124 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1627008 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=2048 M16K16N4: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1627008 B whi
+2026-08-12 06:43:15.527 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2093952 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=2048 M16K16N8: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2093952 B whi
+2026-08-12 06:43:15.922 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 3027840 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=2048 M16K16N16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 3027840 B whi
+2026-08-12 06:43:16.323 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2328448 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=2048 M16K26N4: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2328448 B whi
+2026-08-12 06:43:16.722 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2841472 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=2048 M16K26N8: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2841472 B whi
+2026-08-12 06:43:17.116 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 3867520 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=2048 M16K26N16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 3867520 B whi
+RESULT mlp_gate_up  rows=  128 dtype=bfp4 default             0.9029 ms
+2026-08-12 06:43:17.792 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED mlp_gate_up rows=128 M1K4N4: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:43:17.793 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED mlp_gate_up rows=128 M1K4N8: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:43:17.793 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED mlp_gate_up rows=128 M1K4N16: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:43:17.794 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED mlp_gate_up rows=128 M1K8N4: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:43:17.794 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED mlp_gate_up rows=128 M1K8N8: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:43:17.794 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED mlp_gate_up rows=128 M1K8N16: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:43:17.795 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED mlp_gate_up rows=128 M1K13N4: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:43:17.795 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED mlp_gate_up rows=128 M1K13N8: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:43:17.795 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED mlp_gate_up rows=128 M1K13N16: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:43:17.795 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED mlp_gate_up rows=128 M1K16N4: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:43:17.796 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED mlp_gate_up rows=128 M1K16N8: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:43:17.796 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED mlp_gate_up rows=128 M1K16N16: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:43:17.796 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED mlp_gate_up rows=128 M1K26N4: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:43:17.797 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED mlp_gate_up rows=128 M1K26N8: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:43:17.797 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED mlp_gate_up rows=128 M1K26N16: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+RESULT mlp_gate_up  rows=  128 dtype=bfp4 M2 K4 N4           1.2753 ms  vs_default= -41.25 %
+RESULT mlp_gate_up  rows=  128 dtype=bfp4 M2 K4 N8           1.0380 ms  vs_default= -14.97 %
+RESULT mlp_gate_up  rows=  128 dtype=bfp4 M2 K4 N16          0.8825 ms  vs_default=  +2.26 %
+RESULT mlp_gate_up  rows=  128 dtype=bfp4 M2 K8 N4           1.0845 ms  vs_default= -20.12 %
+RESULT mlp_gate_up  rows=  128 dtype=bfp4 M2 K8 N8           0.8995 ms  vs_default=  +0.37 %
+RESULT mlp_gate_up  rows=  128 dtype=bfp4 M2 K8 N16          0.8530 ms  vs_default=  +5.52 %
+RESULT mlp_gate_up  rows=  128 dtype=bfp4 M2 K13N4           0.9987 ms  vs_default= -10.62 %
+RESULT mlp_gate_up  rows=  128 dtype=bfp4 M2 K13N8           0.9375 ms  vs_default=  -3.83 %
+RESULT mlp_gate_up  rows=  128 dtype=bfp4 M2 K13N16          0.8688 ms  vs_default=  +3.77 %
+RESULT mlp_gate_up  rows=  128 dtype=bfp4 M2 K16N4           0.9491 ms  vs_default=  -5.12 %
+RESULT mlp_gate_up  rows=  128 dtype=bfp4 M2 K16N8           0.8831 ms  vs_default=  +2.19 %
+RESULT mlp_gate_up  rows=  128 dtype=bfp4 M2 K16N16          0.7918 ms  vs_default= +12.30 %
+RESULT mlp_gate_up  rows=  128 dtype=bfp4 M2 K26N4           0.9520 ms  vs_default=  -5.44 %
+RESULT mlp_gate_up  rows=  128 dtype=bfp4 M2 K26N8           0.8691 ms  vs_default=  +3.74 %
+RESULT mlp_gate_up  rows=  128 dtype=bfp4 M2 K26N16          0.8145 ms  vs_default=  +9.78 %
+RESULT mlp_gate_up  rows=  128 dtype=bfp4 M4 K4 N4           1.2842 ms  vs_default= -42.24 %
+RESULT mlp_gate_up  rows=  128 dtype=bfp4 M4 K4 N8           1.0298 ms  vs_default= -14.07 %
+RESULT mlp_gate_up  rows=  128 dtype=bfp4 M4 K4 N16          0.8834 ms  vs_default=  +2.16 %
+RESULT mlp_gate_up  rows=  128 dtype=bfp4 M4 K8 N4           1.0835 ms  vs_default= -20.01 %
+RESULT mlp_gate_up  rows=  128 dtype=bfp4 M4 K8 N8           0.9084 ms  vs_default=  -0.62 %
+RESULT mlp_gate_up  rows=  128 dtype=bfp4 M4 K8 N16          0.8554 ms  vs_default=  +5.25 %
+RESULT mlp_gate_up  rows=  128 dtype=bfp4 M4 K13N4           0.9942 ms  vs_default= -10.11 %
+RESULT mlp_gate_up  rows=  128 dtype=bfp4 M4 K13N8           0.9280 ms  vs_default=  -2.79 %
+RESULT mlp_gate_up  rows=  128 dtype=bfp4 M4 K13N16          0.8714 ms  vs_default=  +3.48 %
+RESULT mlp_gate_up  rows=  128 dtype=bfp4 M4 K16N4           0.9393 ms  vs_default=  -4.04 %
+RESULT mlp_gate_up  rows=  128 dtype=bfp4 M4 K16N8           0.8850 ms  vs_default=  +1.98 %
+RESULT mlp_gate_up  rows=  128 dtype=bfp4 M4 K16N16          0.7919 ms  vs_default= +12.29 %
+RESULT mlp_gate_up  rows=  128 dtype=bfp4 M4 K26N4           0.9553 ms  vs_default=  -5.81 %
+RESULT mlp_gate_up  rows=  128 dtype=bfp4 M4 K26N8           0.8707 ms  vs_default=  +3.57 %
+RESULT mlp_gate_up  rows=  128 dtype=bfp4 M4 K26N16          0.8150 ms  vs_default=  +9.74 %
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 default             0.9599 ms
+2026-08-12 06:43:33.673 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED mlp_gate_up rows=512 M1K4N4: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:43:33.673 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED mlp_gate_up rows=512 M1K4N8: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:43:33.674 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED mlp_gate_up rows=512 M1K4N16: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:43:33.674 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED mlp_gate_up rows=512 M1K8N4: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:43:33.675 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED mlp_gate_up rows=512 M1K8N8: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:43:33.675 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED mlp_gate_up rows=512 M1K8N16: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:43:33.675 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED mlp_gate_up rows=512 M1K13N4: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:43:33.675 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED mlp_gate_up rows=512 M1K13N8: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:43:33.676 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED mlp_gate_up rows=512 M1K13N16: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:43:33.676 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED mlp_gate_up rows=512 M1K16N4: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:43:33.676 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED mlp_gate_up rows=512 M1K16N8: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:43:33.677 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED mlp_gate_up rows=512 M1K16N16: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:43:33.677 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED mlp_gate_up rows=512 M1K26N4: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:43:33.677 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED mlp_gate_up rows=512 M1K26N8: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:43:33.678 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED mlp_gate_up rows=512 M1K26N16: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M2 K4 N4           1.3152 ms  vs_default= -37.01 %
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M2 K4 N8           1.0799 ms  vs_default= -12.50 %
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M2 K4 N16          0.9215 ms  vs_default=  +4.00 %
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M2 K8 N4           1.1304 ms  vs_default= -17.76 %
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M2 K8 N8           0.9543 ms  vs_default=  +0.58 %
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M2 K8 N16          0.8800 ms  vs_default=  +8.32 %
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M2 K13N4           1.0403 ms  vs_default=  -8.38 %
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M2 K13N8           0.9814 ms  vs_default=  -2.24 %
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M2 K13N16          0.8940 ms  vs_default=  +6.86 %
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M2 K16N4           0.9823 ms  vs_default=  -2.33 %
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M2 K16N8           0.9365 ms  vs_default=  +2.43 %
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M2 K16N16          0.8194 ms  vs_default= +14.64 %
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M2 K26N4           1.0044 ms  vs_default=  -4.64 %
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M2 K26N8           0.9277 ms  vs_default=  +3.36 %
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M2 K26N16          0.8397 ms  vs_default= +12.52 %
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M4 K4 N4           1.3230 ms  vs_default= -37.83 %
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M4 K4 N8           1.0811 ms  vs_default= -12.63 %
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M4 K4 N16          0.9129 ms  vs_default=  +4.90 %
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M4 K8 N4           1.1289 ms  vs_default= -17.61 %
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M4 K8 N8           0.9629 ms  vs_default=  -0.32 %
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M4 K8 N16          0.8859 ms  vs_default=  +7.70 %
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M4 K13N4           1.0496 ms  vs_default=  -9.34 %
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M4 K13N8           0.9894 ms  vs_default=  -3.07 %
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M4 K13N16          0.8989 ms  vs_default=  +6.36 %
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M4 K16N4           0.9921 ms  vs_default=  -3.36 %
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M4 K16N8           0.9400 ms  vs_default=  +2.07 %
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M4 K16N16          0.8174 ms  vs_default= +14.84 %
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M4 K26N4           1.0058 ms  vs_default=  -4.79 %
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M4 K26N8           0.9270 ms  vs_default=  +3.43 %
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M4 K26N16          0.8427 ms  vs_default= +12.21 %
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M8 K4 N4           1.3157 ms  vs_default= -37.07 %
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M8 K4 N8           1.0819 ms  vs_default= -12.71 %
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M8 K4 N16          0.9186 ms  vs_default=  +4.31 %
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M8 K8 N4           1.1345 ms  vs_default= -18.19 %
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M8 K8 N8           0.9616 ms  vs_default=  -0.18 %
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M8 K8 N16          0.8816 ms  vs_default=  +8.15 %
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M8 K13N4           1.0522 ms  vs_default=  -9.62 %
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M8 K13N8           0.9804 ms  vs_default=  -2.14 %
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M8 K13N16          0.9003 ms  vs_default=  +6.21 %
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M8 K16N4           0.9946 ms  vs_default=  -3.62 %
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M8 K16N8           0.9402 ms  vs_default=  +2.05 %
+2026-08-12 06:43:52.314 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1717120 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate_up rows=512 M8K16N16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1717120 B whi
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M8 K26N4           0.9946 ms  vs_default=  -3.62 %
+2026-08-12 06:43:53.348 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1596288 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate_up rows=512 M8K26N8: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1596288 B whi
+2026-08-12 06:43:53.854 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2229120 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate_up rows=512 M8K26N16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2229120 B whi
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M16K4 N4           1.3250 ms  vs_default= -38.04 %
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M16K4 N8           1.0940 ms  vs_default= -13.97 %
+2026-08-12 06:43:55.441 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2020224 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate_up rows=512 M16K4N16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2020224 B whi
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M16K8 N4           1.1369 ms  vs_default= -18.44 %
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M16K8 N8           0.9658 ms  vs_default=  -0.62 %
+2026-08-12 06:43:57.018 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2356096 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate_up rows=512 M16K8N16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2356096 B whi
+RESULT mlp_gate_up  rows=  512 dtype=bfp4 M16K13N4           1.0396 ms  vs_default=  -8.31 %
+2026-08-12 06:43:58.062 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1869696 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate_up rows=512 M16K13N8: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1869696 B whi
+2026-08-12 06:43:58.570 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2775936 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate_up rows=512 M16K13N16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2775936 B whi
+2026-08-12 06:43:59.071 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1627008 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate_up rows=512 M16K16N4: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1627008 B whi
+2026-08-12 06:43:59.586 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2093952 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate_up rows=512 M16K16N8: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2093952 B whi
+2026-08-12 06:44:00.094 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 3027840 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate_up rows=512 M16K16N16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 3027840 B whi
+2026-08-12 06:44:00.597 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2328448 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate_up rows=512 M16K26N4: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2328448 B whi
+2026-08-12 06:44:01.110 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2841472 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate_up rows=512 M16K26N8: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2841472 B whi
+2026-08-12 06:44:01.611 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 3867520 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate_up rows=512 M16K26N16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 3867520 B whi
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 default             1.9453 ms
+2026-08-12 06:44:01.736 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED mlp_gate_up rows=2048 M1K4N4: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:44:01.737 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED mlp_gate_up rows=2048 M1K4N8: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:44:01.737 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED mlp_gate_up rows=2048 M1K4N16: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:44:01.738 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED mlp_gate_up rows=2048 M1K8N4: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:44:01.738 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED mlp_gate_up rows=2048 M1K8N8: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:44:01.738 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED mlp_gate_up rows=2048 M1K8N16: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:44:01.739 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED mlp_gate_up rows=2048 M1K13N4: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:44:01.739 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED mlp_gate_up rows=2048 M1K13N8: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:44:01.739 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED mlp_gate_up rows=2048 M1K13N16: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:44:01.740 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED mlp_gate_up rows=2048 M1K16N4: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:44:01.740 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED mlp_gate_up rows=2048 M1K16N8: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:44:01.740 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED mlp_gate_up rows=2048 M1K16N16: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:44:01.740 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED mlp_gate_up rows=2048 M1K26N4: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:44:01.741 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED mlp_gate_up rows=2048 M1K26N8: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+2026-08-12 06:44:01.741 | critical |          Always | TT_FATAL: M_block_size (1) must be divisible by subblock_h (2) (assert.hpp:104)
+BLOCKED mlp_gate_up rows=2048 M1K26N16: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:212: (cfg.M_block_size % cfg.subblock_h) == 0 | info:
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M2 K4 N4           5.1653 ms  vs_default=-165.52 %
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M2 K4 N8           4.2992 ms  vs_default=-121.00 %
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M2 K4 N16          3.7187 ms  vs_default= -91.16 %
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M2 K8 N4           4.3323 ms  vs_default=-122.70 %
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M2 K8 N8           3.8501 ms  vs_default= -97.91 %
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M2 K8 N16          3.5770 ms  vs_default= -83.88 %
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M2 K13N4           4.5437 ms  vs_default=-133.57 %
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M2 K13N8           3.7947 ms  vs_default= -95.07 %
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M2 K13N16          3.5065 ms  vs_default= -80.25 %
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M2 K16N4           4.0736 ms  vs_default=-109.40 %
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M2 K16N8           3.6326 ms  vs_default= -86.74 %
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M2 K16N16          3.3596 ms  vs_default= -72.70 %
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M2 K26N4           3.8728 ms  vs_default= -99.08 %
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M2 K26N8           3.6361 ms  vs_default= -86.91 %
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M2 K26N16          3.4892 ms  vs_default= -79.36 %
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M4 K4 N4           3.1673 ms  vs_default= -62.82 %
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M4 K4 N8           2.3863 ms  vs_default= -22.67 %
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M4 K4 N16          2.0738 ms  vs_default=  -6.61 %
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M4 K8 N4           2.7830 ms  vs_default= -43.06 %
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M4 K8 N8           2.1681 ms  vs_default= -11.45 %
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M4 K8 N16          1.8575 ms  vs_default=  +4.51 %
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M4 K13N4           2.7409 ms  vs_default= -40.89 %
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M4 K13N8           2.0906 ms  vs_default=  -7.47 %
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M4 K13N16          1.9455 ms  vs_default=  -0.01 %
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M4 K16N4           2.6614 ms  vs_default= -36.81 %
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M4 K16N8           2.0957 ms  vs_default=  -7.73 %
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M4 K16N16          1.9035 ms  vs_default=  +2.15 %
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M4 K26N4           2.6409 ms  vs_default= -35.76 %
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M4 K26N8           2.1258 ms  vs_default=  -9.27 %
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M4 K26N16          1.9281 ms  vs_default=  +0.89 %
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M8 K4 N4           3.0367 ms  vs_default= -56.10 %
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M8 K4 N8           2.0210 ms  vs_default=  -3.89 %
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M8 K4 N16          1.7171 ms  vs_default= +11.73 %
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M8 K8 N4           2.7508 ms  vs_default= -41.40 %
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M8 K8 N8           2.0568 ms  vs_default=  -5.73 %
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M8 K8 N16          1.6275 ms  vs_default= +16.34 %
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M8 K13N4           2.7920 ms  vs_default= -43.52 %
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M8 K13N8           1.9855 ms  vs_default=  -2.06 %
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M8 K13N16          1.6272 ms  vs_default= +16.35 %
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M8 K16N4           2.8291 ms  vs_default= -45.43 %
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M8 K16N8           2.0785 ms  vs_default=  -6.85 %
+2026-08-12 06:44:24.504 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1717120 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate_up rows=2048 M8K16N16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1717120 B whi
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M8 K26N4           2.9249 ms  vs_default= -50.36 %
+2026-08-12 06:44:25.388 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1596288 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate_up rows=2048 M8K26N8: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1596288 B whi
+2026-08-12 06:44:25.793 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2229120 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate_up rows=2048 M8K26N16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2229120 B whi
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M16K4 N4           3.0460 ms  vs_default= -56.58 %
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M16K4 N8           2.0684 ms  vs_default=  -6.33 %
+2026-08-12 06:44:27.126 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2020224 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate_up rows=2048 M16K4N16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2020224 B whi
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M16K8 N4           2.7661 ms  vs_default= -42.19 %
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M16K8 N8           1.9743 ms  vs_default=  -1.49 %
+2026-08-12 06:44:28.470 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2356096 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate_up rows=2048 M16K8N16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2356096 B whi
+RESULT mlp_gate_up  rows= 2048 dtype=bfp4 M16K13N4           2.7890 ms  vs_default= -43.37 %
+2026-08-12 06:44:29.349 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1869696 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate_up rows=2048 M16K13N8: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1869696 B whi
+2026-08-12 06:44:29.754 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2775936 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate_up rows=2048 M16K13N16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2775936 B whi
+2026-08-12 06:44:30.166 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1627008 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate_up rows=2048 M16K16N4: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1627008 B whi
+2026-08-12 06:44:30.573 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2093952 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate_up rows=2048 M16K16N8: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2093952 B whi
+2026-08-12 06:44:30.978 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 3027840 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate_up rows=2048 M16K16N16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 3027840 B whi
+2026-08-12 06:44:31.380 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2328448 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate_up rows=2048 M16K26N4: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2328448 B whi
+2026-08-12 06:44:31.787 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2841472 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate_up rows=2048 M16K26N8: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2841472 B whi
+2026-08-12 06:44:32.193 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 3867520 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate_up rows=2048 M16K26N16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 3867520 B whi
+nanobind: leaked 1 instances!
+ - leaked instance 0x74d3adb344c8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 42 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.types.Shape"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - ... skipped remainder
+nanobind: leaked 347 functions!
+ - leaked function "__getitem__"
+ - leaked function "width_sharded"
+ - leaked function ""
+ - leaked function "is_asynchronous_slow_dispatch_enabled"
+ - leaked function "set_sub_device_stall_group"
+ - leaked function ""
+ - leaked function "from_json"
+ - leaked function ""
+ - leaked function "push_current_command_queue_id_for_thread"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-12 06:44:32.694 | info     |    BuildKernels | JIT cache stats: 38/1756 hits (2.2%) [38 cached, 142 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-12 06:44:32.694 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-12 06:44:32.712 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-12 06:44:32.712 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-12 06:44:33.273 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-12 06:44:33.273 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-12 06:44:33.273 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

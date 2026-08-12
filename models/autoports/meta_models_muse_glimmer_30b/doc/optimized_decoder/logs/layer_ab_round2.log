@@ -1,0 +1,488 @@
+2026-08-12 07:21:35.150 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-12 07:21:36.563 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-12 07:21:36.563 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-12 07:21:36.563 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-12 07:21:36.563 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-12 07:21:36.575 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-12 07:21:36.576 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-12 07:21:36.653 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-12 07:21:36.653 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-12 07:21:36.653 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-12 07:21:36.653 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-12 07:21:36.654 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-12 07:21:36.658 | warning  |             UMD | AICLK settled at 1337 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (tt_device.cpp:322)
+2026-08-12 07:21:36.722 | warning  |             UMD | AICLK settled at 1337 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (tt_device.cpp:322)
+2026-08-12 07:21:36.722 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-12 07:21:36.846 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-12 07:21:36.846 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-12 07:21:36.846 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-12 07:21:36.847 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-12 07:21:36.847 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-12 07:21:36.887 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+AB       mlp_bfp4               kind=sliding  prefill8192=   43.70 ms  traced_decode@2048= 1.1228 ms/token  prefill_pcc=0.993904 decode_pcc=0.993717  (1.1490/1.1228)
+AB       all_bfp8               kind=sliding  prefill8192=   45.80 ms  traced_decode@2048= 1.2963 ms/token  prefill_pcc=0.999254 decode_pcc=0.999072  (1.3177/1.2963)
+AB       gateup_bfp4            kind=sliding  prefill8192=   44.58 ms  traced_decode@2048= 1.1804 ms/token  prefill_pcc=0.995648 decode_pcc=0.995480  (1.2077/1.1804)
+AB       mlp_bfp4_kv_bf16       kind=sliding  prefill8192=   43.99 ms  traced_decode@2048= 1.1226 ms/token  prefill_pcc=0.993904 decode_pcc=0.993635  (1.1516/1.1226)
+AB       mlp_bfp4_hifi2         kind=sliding  prefill8192=   58.44 ms  traced_decode@2048= 1.8425 ms/token  prefill_pcc=0.994144 decode_pcc=0.993880  (1.8748/1.8425)
+2026-08-12 07:22:00.017 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1679104 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+FAILED packed_qkv_gate        kind=sliding  TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1679104 B which is beyond max L1 size of 1572864 B | backtrace: | --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(+0x201495a) [0x79e82101495a] | --- tt::tt_metal::detail::ProgramImpl::valid
+Traceback (most recent call last):
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_decoder/bench/layer_ab.py", line 322, in main
+    r = run_candidate(mesh, name, kind, layer_idx, state_dict, ref_layer, args)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_decoder/bench/layer_ab.py", line 242, in run_candidate
+    tt_dec = dec.decode_forward(to_dev(mesh, token), current_pos=cur, page_table=pt, rope_pos_ids=rope)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_decoder/bench/variants.py", line 87, in decode_forward
+    packed = ttnn.linear(
+             ^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/decorators.py", line 650, in __call__
+    result = self.function(*function_args, **function_kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1679104 B which is beyond max L1 size of 1572864 B
+backtrace:
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(+0x201495a) [0x79e82101495a]
+ --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)
+ --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)
+ --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)
+ --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x359) [0x79e81ff26cd9]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(+0xf34ff8) [0x79e81ff34ff8]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0xff) [0x79e81ff255ef]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x19b) [0x79e81ff2396b]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x508) [0x79e81ff08e68]
+ --- ttnn::prim::matmul(ttnn::Tensor const&, ttnn::Tensor const&, std::optional<ttnn::Tensor> const&, std::optional<ttnn::Tensor> const&, ttnn::prim::MatmulParams const&)
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(+0xe9b304) [0x79e81fe9b304]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6linearERKNS_6TensorES4_RKSt8optionalIS3_EbbRKS5_IKN2tt8tt_metal12MemoryConfigEES5_IKNSA_8DataTypeEERKS5_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS5_IKSJ_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES5_IKNS_19ComputeKernelConfigEES5_IKNS_5types8CoreGridEERKS5_IKNSA_4TileEES5_IS2_ERKS5_IKNSA_12experimental20GlobalCircularBufferEERKS5_IN4ttsl10StrongTypeIhNSA_14SubDeviceIdTagEEEE+0x25a) [0x79e81fe9c93a]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x764ef3) [0x79e821d64ef3]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x764bcb) [0x79e821d64bcb]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x352bc5) [0x79e821952bc5]
+ --- python() [0x1876122]
+ --- python() [0x1686e59]
+ --- python(_PyEval_EvalFrameDefault+0xe920) [0x1621aa0]
+ --- python() [0x1876122]
+ --- python() [0x1686e59]
+ --- python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]
+ --- python(PyEval_EvalCode+0xe2) [0x1684e62]
+ --- python() [0x16a4982]
+ --- python() [0x17aebff]
+ --- python(_PyRun_SimpleFileObject+0x118) [0x17af3ac]
+ --- python(_PyRun_AnyFileObject+0x42) [0x17af282]
+ --- python() [0x17af1c4]
+ --- python() [0x17af0d8]
+ --- python(Py_RunMain+0x2e5) [0x171f33b]
+ --- python() [0x17406fa]
+ --- python() [0x17404ed]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x79e86602a1ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x79e86602a28b]
+ --- python(_start+0x29) [0x1795ced]
+
+2026-08-12 07:22:02.726 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2628480 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+FAILED packed_gate_up         kind=sliding  TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2628480 B which is beyond max L1 size of 1572864 B | backtrace: | --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(+0x201495a) [0x79e82101495a] | --- tt::tt_metal::detail::ProgramImpl::vali
+Traceback (most recent call last):
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_decoder/bench/layer_ab.py", line 322, in main
+    r = run_candidate(mesh, name, kind, layer_idx, state_dict, ref_layer, args)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_decoder/bench/layer_ab.py", line 242, in run_candidate
+    tt_dec = dec.decode_forward(to_dev(mesh, token), current_pos=cur, page_table=pt, rope_pos_ids=rope)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/optimized_decoder.py", line 1112, in decode_forward
+    mlp_out = self.mlp.decode_forward(mlp_in, rows)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_decoder/bench/variants.py", line 204, in packed_decode
+    both = ttnn.linear(
+           ^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/decorators.py", line 650, in __call__
+    result = self.function(*function_args, **function_kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2628480 B which is beyond max L1 size of 1572864 B
+backtrace:
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(+0x201495a) [0x79e82101495a]
+ --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)
+ --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)
+ --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)
+ --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x359) [0x79e81ff26cd9]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(+0xf34ff8) [0x79e81ff34ff8]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0xff) [0x79e81ff255ef]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x19b) [0x79e81ff2396b]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x508) [0x79e81ff08e68]
+ --- ttnn::prim::matmul(ttnn::Tensor const&, ttnn::Tensor const&, std::optional<ttnn::Tensor> const&, std::optional<ttnn::Tensor> const&, ttnn::prim::MatmulParams const&)
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(+0xe9b304) [0x79e81fe9b304]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6linearERKNS_6TensorES4_RKSt8optionalIS3_EbbRKS5_IKN2tt8tt_metal12MemoryConfigEES5_IKNSA_8DataTypeEERKS5_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS5_IKSJ_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES5_IKNS_19ComputeKernelConfigEES5_IKNS_5types8CoreGridEERKS5_IKNSA_4TileEES5_IS2_ERKS5_IKNSA_12experimental20GlobalCircularBufferEERKS5_IN4ttsl10StrongTypeIhNSA_14SubDeviceIdTagEEEE+0x25a) [0x79e81fe9c93a]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x764ef3) [0x79e821d64ef3]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x764bcb) [0x79e821d64bcb]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x352bc5) [0x79e821952bc5]
+ --- python() [0x1876122]
+ --- python() [0x1686e59]
+ --- python(_PyEval_EvalFrameDefault+0xe920) [0x1621aa0]
+ --- python() [0x1876122]
+ --- python() [0x1686e59]
+ --- python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]
+ --- python(PyEval_EvalCode+0xe2) [0x1684e62]
+ --- python() [0x16a4982]
+ --- python() [0x17aebff]
+ --- python(_PyRun_SimpleFileObject+0x118) [0x17af3ac]
+ --- python(_PyRun_AnyFileObject+0x42) [0x17af282]
+ --- python() [0x17af1c4]
+ --- python() [0x17af0d8]
+ --- python(Py_RunMain+0x2e5) [0x171f33b]
+ --- python() [0x17406fa]
+ --- python() [0x17404ed]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x79e86602a1ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x79e86602a28b]
+ --- python(_start+0x29) [0x1795ced]
+
+AB       sdpa88                 kind=sliding  prefill8192=   44.06 ms  traced_decode@2048= 1.1197 ms/token  prefill_pcc=0.993904 decode_pcc=0.993698  (1.1496/1.1197)
+AB       boundary16             kind=sliding  prefill8192=   43.87 ms  traced_decode@2048= 1.0930 ms/token  prefill_pcc=0.993904 decode_pcc=0.993676  (1.1166/1.0930)
+2026-08-12 07:22:12.976 | critical |          Always | TT_THROW: Statically allocated circular buffers in program 106 clash with L1 buffers on core range [0-0 - 10-9]. L1 buffer allocated at 1343488 and static circular buffer region ends at 1386368 (assert.hpp:104)
+FAILED boundary4              kind=sliding  TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1779: tt::exception | info: | Statically allocated circular buffers in program 106 clash with L1 buffers on core range [0-0 - 10-9]. L1 buffer allocated at 1343488 and static circular buffer region ends at 1386368 | backtrace: | --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/libtt_metal.so(+0x98d023)
+Traceback (most recent call last):
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_decoder/bench/layer_ab.py", line 322, in main
+    r = run_candidate(mesh, name, kind, layer_idx, state_dict, ref_layer, args)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_decoder/bench/layer_ab.py", line 242, in run_candidate
+    tt_dec = dec.decode_forward(to_dev(mesh, token), current_pos=cur, page_table=pt, rope_pos_ids=rope)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/optimized_decoder.py", line 1112, in decode_forward
+    mlp_out = self.mlp.decode_forward(mlp_in, rows)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/optimized_decoder.py", line 485, in decode_forward
+    gate = dec._decode_projection(x_sharded, self.gate, role="mlp_gate", rows=rows)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/optimized_decoder.py", line 825, in _decode_projection
+    return ttnn.linear(
+           ^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/decorators.py", line 650, in __call__
+    result = self.function(*function_args, **function_kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1779: tt::exception
+info:
+Statically allocated circular buffers in program 106 clash with L1 buffers on core range [0-0 - 10-9]. L1 buffer allocated at 1343488 and static circular buffer region ends at 1386368
+backtrace:
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/libtt_metal.so(+0x98d023) [0x79e81e38d023]
+ --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)
+ --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)
+ --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)
+ --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x359) [0x79e81ff26cd9]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29handle_mesh_adapter_cache_hitITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0xb8) [0x79e81ff25488]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x180) [0x79e81ff23950]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x508) [0x79e81ff08e68]
+ --- ttnn::prim::matmul(ttnn::Tensor const&, ttnn::Tensor const&, std::optional<ttnn::Tensor> const&, std::optional<ttnn::Tensor> const&, ttnn::prim::MatmulParams const&)
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(+0xe9b304) [0x79e81fe9b304]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6linearERKNS_6TensorES4_RKSt8optionalIS3_EbbRKS5_IKN2tt8tt_metal12MemoryConfigEES5_IKNSA_8DataTypeEERKS5_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS5_IKSJ_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES5_IKNS_19ComputeKernelConfigEES5_IKNS_5types8CoreGridEERKS5_IKNSA_4TileEES5_IS2_ERKS5_IKNSA_12experimental20GlobalCircularBufferEERKS5_IN4ttsl10StrongTypeIhNSA_14SubDeviceIdTagEEEE+0x25a) [0x79e81fe9c93a]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x764ef3) [0x79e821d64ef3]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x764bcb) [0x79e821d64bcb]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x352bc5) [0x79e821952bc5]
+ --- python() [0x1876122]
+ --- python() [0x1686e59]
+ --- python(_PyEval_EvalFrameDefault+0xe920) [0x1621aa0]
+ --- python() [0x1876122]
+ --- python() [0x1686e59]
+ --- python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]
+ --- python(PyEval_EvalCode+0xe2) [0x1684e62]
+ --- python() [0x16a4982]
+ --- python() [0x17aebff]
+ --- python(_PyRun_SimpleFileObject+0x118) [0x17af3ac]
+ --- python(_PyRun_AnyFileObject+0x42) [0x17af282]
+ --- python() [0x17af1c4]
+ --- python() [0x17af0d8]
+ --- python(Py_RunMain+0x2e5) [0x171f33b]
+ --- python() [0x17406fa]
+ --- python() [0x17404ed]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x79e86602a1ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x79e86602a28b]
+ --- python(_start+0x29) [0x1795ced]
+
+AB       attn_bw2               kind=sliding  prefill8192=   44.19 ms  traced_decode@2048= 1.1582 ms/token  prefill_pcc=0.993904 decode_pcc=0.993840  (1.1907/1.1582)
+AB       attn_oproj_bw8         kind=sliding  prefill8192=   43.83 ms  traced_decode@2048= 1.1239 ms/token  prefill_pcc=0.993904 decode_pcc=0.993676  (1.1500/1.1239)
+FAILED mlp_bfp4_down_bw12     kind=sliding  the MLP gate/up/down roles must share a core count: down consumes the gate/up product, got [(26, 8), (26, 8), (13, 12)]
+Traceback (most recent call last):
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_decoder/bench/layer_ab.py", line 322, in main
+    r = run_candidate(mesh, name, kind, layer_idx, state_dict, ref_layer, args)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_decoder/bench/layer_ab.py", line 227, in run_candidate
+    dec = build(mesh, name, layer_idx, state_dict, args.decode_context)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_decoder/bench/layer_ab.py", line 219, in build
+    return OptimizedDecoder.from_state_dict(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/optimized_decoder.py", line 741, in from_state_dict
+    return cls(
+           ^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/optimized_decoder.py", line 529, in __init__
+    raise ValueError(
+ValueError: the MLP gate/up/down roles must share a core count: down consumes the gate/up product, got [(26, 8), (26, 8), (13, 12)]
+FAILED mlp_bfp4_down_bw8      kind=sliding  the MLP gate/up/down roles must share a core count: down consumes the gate/up product, got [(26, 8), (26, 8), (13, 8)]
+Traceback (most recent call last):
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_decoder/bench/layer_ab.py", line 322, in main
+    r = run_candidate(mesh, name, kind, layer_idx, state_dict, ref_layer, args)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_decoder/bench/layer_ab.py", line 227, in run_candidate
+    dec = build(mesh, name, layer_idx, state_dict, args.decode_context)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_decoder/bench/layer_ab.py", line 219, in build
+    return OptimizedDecoder.from_state_dict(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/optimized_decoder.py", line 741, in from_state_dict
+    return cls(
+           ^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/optimized_decoder.py", line 529, in __init__
+    raise ValueError(
+ValueError: the MLP gate/up/down roles must share a core count: down consumes the gate/up product, got [(26, 8), (26, 8), (13, 8)]
+AB       mlp_bfp4               kind=full     prefill8192=   43.15 ms  traced_decode@2048= 1.0961 ms/token  prefill_pcc=0.992468 decode_pcc=0.992143  (1.1319/1.0961)
+AB       all_bfp8               kind=full     prefill8192=   44.73 ms  traced_decode@2048= 1.2696 ms/token  prefill_pcc=0.999139 decode_pcc=0.998813  (1.2964/1.2696)
+AB       gateup_bfp4            kind=full     prefill8192=   43.49 ms  traced_decode@2048= 1.1540 ms/token  prefill_pcc=0.994644 decode_pcc=0.994449  (1.1921/1.1540)
+AB       mlp_bfp4_kv_bf16       kind=full     prefill8192=   42.77 ms  traced_decode@2048= 1.0958 ms/token  prefill_pcc=0.992468 decode_pcc=0.992280  (1.1372/1.0958)
+AB       mlp_bfp4_hifi2         kind=full     prefill8192=   58.81 ms  traced_decode@2048= 1.8152 ms/token  prefill_pcc=0.992726 decode_pcc=0.992357  (1.8584/1.8152)
+2026-08-12 07:22:37.941 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1679104 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+FAILED packed_qkv_gate        kind=full     TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1679104 B which is beyond max L1 size of 1572864 B | backtrace: | --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(+0x201495a) [0x79e82101495a] | --- tt::tt_metal::detail::ProgramImpl::valid
+Traceback (most recent call last):
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_decoder/bench/layer_ab.py", line 322, in main
+    r = run_candidate(mesh, name, kind, layer_idx, state_dict, ref_layer, args)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_decoder/bench/layer_ab.py", line 242, in run_candidate
+    tt_dec = dec.decode_forward(to_dev(mesh, token), current_pos=cur, page_table=pt, rope_pos_ids=rope)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_decoder/bench/variants.py", line 87, in decode_forward
+    packed = ttnn.linear(
+             ^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/decorators.py", line 650, in __call__
+    result = self.function(*function_args, **function_kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1679104 B which is beyond max L1 size of 1572864 B
+backtrace:
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(+0x201495a) [0x79e82101495a]
+ --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)
+ --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)
+ --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)
+ --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x359) [0x79e81ff26cd9]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29handle_mesh_adapter_cache_hitITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0xb8) [0x79e81ff25488]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x180) [0x79e81ff23950]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x508) [0x79e81ff08e68]
+ --- ttnn::prim::matmul(ttnn::Tensor const&, ttnn::Tensor const&, std::optional<ttnn::Tensor> const&, std::optional<ttnn::Tensor> const&, ttnn::prim::MatmulParams const&)
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(+0xe9b304) [0x79e81fe9b304]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6linearERKNS_6TensorES4_RKSt8optionalIS3_EbbRKS5_IKN2tt8tt_metal12MemoryConfigEES5_IKNSA_8DataTypeEERKS5_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS5_IKSJ_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES5_IKNS_19ComputeKernelConfigEES5_IKNS_5types8CoreGridEERKS5_IKNSA_4TileEES5_IS2_ERKS5_IKNSA_12experimental20GlobalCircularBufferEERKS5_IN4ttsl10StrongTypeIhNSA_14SubDeviceIdTagEEEE+0x25a) [0x79e81fe9c93a]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x764ef3) [0x79e821d64ef3]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x764bcb) [0x79e821d64bcb]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x352bc5) [0x79e821952bc5]
+ --- python() [0x1876122]
+ --- python() [0x1686e59]
+ --- python(_PyEval_EvalFrameDefault+0xe920) [0x1621aa0]
+ --- python() [0x1876122]
+ --- python() [0x1686e59]
+ --- python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]
+ --- python(PyEval_EvalCode+0xe2) [0x1684e62]
+ --- python() [0x16a4982]
+ --- python() [0x17aebff]
+ --- python(_PyRun_SimpleFileObject+0x118) [0x17af3ac]
+ --- python(_PyRun_AnyFileObject+0x42) [0x17af282]
+ --- python() [0x17af1c4]
+ --- python() [0x17af0d8]
+ --- python(Py_RunMain+0x2e5) [0x171f33b]
+ --- python() [0x17406fa]
+ --- python() [0x17404ed]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x79e86602a1ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x79e86602a28b]
+ --- python(_start+0x29) [0x1795ced]
+
+2026-08-12 07:22:40.728 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2628480 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+FAILED packed_gate_up         kind=full     TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2628480 B which is beyond max L1 size of 1572864 B | backtrace: | --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(+0x201495a) [0x79e82101495a] | --- tt::tt_metal::detail::ProgramImpl::vali
+Traceback (most recent call last):
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_decoder/bench/layer_ab.py", line 322, in main
+    r = run_candidate(mesh, name, kind, layer_idx, state_dict, ref_layer, args)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_decoder/bench/layer_ab.py", line 242, in run_candidate
+    tt_dec = dec.decode_forward(to_dev(mesh, token), current_pos=cur, page_table=pt, rope_pos_ids=rope)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/optimized_decoder.py", line 1112, in decode_forward
+    mlp_out = self.mlp.decode_forward(mlp_in, rows)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_decoder/bench/variants.py", line 204, in packed_decode
+    both = ttnn.linear(
+           ^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/decorators.py", line 650, in __call__
+    result = self.function(*function_args, **function_kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2628480 B which is beyond max L1 size of 1572864 B
+backtrace:
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(+0x201495a) [0x79e82101495a]
+ --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)
+ --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)
+ --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)
+ --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x359) [0x79e81ff26cd9]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29handle_mesh_adapter_cache_hitITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0xb8) [0x79e81ff25488]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x180) [0x79e81ff23950]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x508) [0x79e81ff08e68]
+ --- ttnn::prim::matmul(ttnn::Tensor const&, ttnn::Tensor const&, std::optional<ttnn::Tensor> const&, std::optional<ttnn::Tensor> const&, ttnn::prim::MatmulParams const&)
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(+0xe9b304) [0x79e81fe9b304]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6linearERKNS_6TensorES4_RKSt8optionalIS3_EbbRKS5_IKN2tt8tt_metal12MemoryConfigEES5_IKNSA_8DataTypeEERKS5_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS5_IKSJ_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES5_IKNS_19ComputeKernelConfigEES5_IKNS_5types8CoreGridEERKS5_IKNSA_4TileEES5_IS2_ERKS5_IKNSA_12experimental20GlobalCircularBufferEERKS5_IN4ttsl10StrongTypeIhNSA_14SubDeviceIdTagEEEE+0x25a) [0x79e81fe9c93a]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x764ef3) [0x79e821d64ef3]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x764bcb) [0x79e821d64bcb]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x352bc5) [0x79e821952bc5]
+ --- python() [0x1876122]
+ --- python() [0x1686e59]
+ --- python(_PyEval_EvalFrameDefault+0xe920) [0x1621aa0]
+ --- python() [0x1876122]
+ --- python() [0x1686e59]
+ --- python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]
+ --- python(PyEval_EvalCode+0xe2) [0x1684e62]
+ --- python() [0x16a4982]
+ --- python() [0x17aebff]
+ --- python(_PyRun_SimpleFileObject+0x118) [0x17af3ac]
+ --- python(_PyRun_AnyFileObject+0x42) [0x17af282]
+ --- python() [0x17af1c4]
+ --- python() [0x17af0d8]
+ --- python(Py_RunMain+0x2e5) [0x171f33b]
+ --- python() [0x17406fa]
+ --- python() [0x17404ed]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x79e86602a1ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x79e86602a28b]
+ --- python(_start+0x29) [0x1795ced]
+
+AB       sdpa88                 kind=full     prefill8192=   42.63 ms  traced_decode@2048= 1.0909 ms/token  prefill_pcc=0.992468 decode_pcc=0.992232  (1.1263/1.0909)
+AB       boundary16             kind=full     prefill8192=   43.26 ms  traced_decode@2048= 1.0657 ms/token  prefill_pcc=0.992468 decode_pcc=0.992189  (1.0995/1.0657)
+2026-08-12 07:22:48.250 | critical |          Always | TT_THROW: Statically allocated circular buffers in program 106 clash with L1 buffers on core range [0-0 - 10-9]. L1 buffer allocated at 1343488 and static circular buffer region ends at 1386368 (assert.hpp:104)
+FAILED boundary4              kind=full     TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1779: tt::exception | info: | Statically allocated circular buffers in program 106 clash with L1 buffers on core range [0-0 - 10-9]. L1 buffer allocated at 1343488 and static circular buffer region ends at 1386368 | backtrace: | --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/libtt_metal.so(+0x98d023)
+Traceback (most recent call last):
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_decoder/bench/layer_ab.py", line 322, in main
+    r = run_candidate(mesh, name, kind, layer_idx, state_dict, ref_layer, args)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_decoder/bench/layer_ab.py", line 242, in run_candidate
+    tt_dec = dec.decode_forward(to_dev(mesh, token), current_pos=cur, page_table=pt, rope_pos_ids=rope)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/optimized_decoder.py", line 1112, in decode_forward
+    mlp_out = self.mlp.decode_forward(mlp_in, rows)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/optimized_decoder.py", line 485, in decode_forward
+    gate = dec._decode_projection(x_sharded, self.gate, role="mlp_gate", rows=rows)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/optimized_decoder.py", line 825, in _decode_projection
+    return ttnn.linear(
+           ^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/decorators.py", line 650, in __call__
+    result = self.function(*function_args, **function_kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1779: tt::exception
+info:
+Statically allocated circular buffers in program 106 clash with L1 buffers on core range [0-0 - 10-9]. L1 buffer allocated at 1343488 and static circular buffer region ends at 1386368
+backtrace:
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/libtt_metal.so(+0x98d023) [0x79e81e38d023]
+ --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)
+ --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)
+ --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)
+ --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x359) [0x79e81ff26cd9]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29handle_mesh_adapter_cache_hitITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0xb8) [0x79e81ff25488]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x180) [0x79e81ff23950]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x508) [0x79e81ff08e68]
+ --- ttnn::prim::matmul(ttnn::Tensor const&, ttnn::Tensor const&, std::optional<ttnn::Tensor> const&, std::optional<ttnn::Tensor> const&, ttnn::prim::MatmulParams const&)
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(+0xe9b304) [0x79e81fe9b304]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6linearERKNS_6TensorES4_RKSt8optionalIS3_EbbRKS5_IKN2tt8tt_metal12MemoryConfigEES5_IKNSA_8DataTypeEERKS5_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS5_IKSJ_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES5_IKNS_19ComputeKernelConfigEES5_IKNS_5types8CoreGridEERKS5_IKNSA_4TileEES5_IS2_ERKS5_IKNSA_12experimental20GlobalCircularBufferEERKS5_IN4ttsl10StrongTypeIhNSA_14SubDeviceIdTagEEEE+0x25a) [0x79e81fe9c93a]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x764ef3) [0x79e821d64ef3]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x764bcb) [0x79e821d64bcb]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x352bc5) [0x79e821952bc5]
+ --- python() [0x1876122]
+ --- python() [0x1686e59]
+ --- python(_PyEval_EvalFrameDefault+0xe920) [0x1621aa0]
+ --- python() [0x1876122]
+ --- python() [0x1686e59]
+ --- python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]
+ --- python(PyEval_EvalCode+0xe2) [0x1684e62]
+ --- python() [0x16a4982]
+ --- python() [0x17aebff]
+ --- python(_PyRun_SimpleFileObject+0x118) [0x17af3ac]
+ --- python(_PyRun_AnyFileObject+0x42) [0x17af282]
+ --- python() [0x17af1c4]
+ --- python() [0x17af0d8]
+ --- python(Py_RunMain+0x2e5) [0x171f33b]
+ --- python() [0x17406fa]
+ --- python() [0x17404ed]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x79e86602a1ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x79e86602a28b]
+ --- python(_start+0x29) [0x1795ced]
+
+AB       attn_bw2               kind=full     prefill8192=   43.63 ms  traced_decode@2048= 1.1304 ms/token  prefill_pcc=0.992468 decode_pcc=0.992128  (1.1769/1.1304)
+AB       attn_oproj_bw8         kind=full     prefill8192=   43.80 ms  traced_decode@2048= 1.0973 ms/token  prefill_pcc=0.992468 decode_pcc=0.992189  (1.1351/1.0973)
+FAILED mlp_bfp4_down_bw12     kind=full     the MLP gate/up/down roles must share a core count: down consumes the gate/up product, got [(26, 8), (26, 8), (13, 12)]
+Traceback (most recent call last):
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_decoder/bench/layer_ab.py", line 322, in main
+    r = run_candidate(mesh, name, kind, layer_idx, state_dict, ref_layer, args)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_decoder/bench/layer_ab.py", line 227, in run_candidate
+    dec = build(mesh, name, layer_idx, state_dict, args.decode_context)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_decoder/bench/layer_ab.py", line 219, in build
+    return OptimizedDecoder.from_state_dict(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/optimized_decoder.py", line 741, in from_state_dict
+    return cls(
+           ^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/optimized_decoder.py", line 529, in __init__
+    raise ValueError(
+ValueError: the MLP gate/up/down roles must share a core count: down consumes the gate/up product, got [(26, 8), (26, 8), (13, 12)]
+FAILED mlp_bfp4_down_bw8      kind=full     the MLP gate/up/down roles must share a core count: down consumes the gate/up product, got [(26, 8), (26, 8), (13, 8)]
+Traceback (most recent call last):
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_decoder/bench/layer_ab.py", line 322, in main
+    r = run_candidate(mesh, name, kind, layer_idx, state_dict, ref_layer, args)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_decoder/bench/layer_ab.py", line 227, in run_candidate
+    dec = build(mesh, name, layer_idx, state_dict, args.decode_context)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_decoder/bench/layer_ab.py", line 219, in build
+    return OptimizedDecoder.from_state_dict(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/optimized_decoder.py", line 741, in from_state_dict
+    return cls(
+           ^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/optimized_decoder.py", line 529, in __init__
+    raise ValueError(
+ValueError: the MLP gate/up/down roles must share a core count: down consumes the gate/up product, got [(26, 8), (26, 8), (13, 8)]
+nanobind: leaked 3 instances!
+ - leaked instance 0x79e821fd20c8 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x79e821fd1ee8 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x79e7ce20bbe8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 24 types!
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.multi_device.MeshMapperConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - ... skipped remainder
+nanobind: leaked 282 functions!
+ - leaked function "__repr__"
+ - leaked function "num_program_cache_entries"
+ - leaked function "from_json"
+ - leaked function "devices"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "bounding_box"
+ - leaked function "set_program_cache_misses_allowed"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-12 07:22:57.425 | info     |    BuildKernels | JIT cache stats: 396/477 hits (83.0%) [396 cached, 154 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-12 07:22:57.425 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-12 07:22:57.442 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-12 07:22:57.442 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-12 07:22:58.045 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-12 07:22:58.045 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-12 07:22:58.045 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

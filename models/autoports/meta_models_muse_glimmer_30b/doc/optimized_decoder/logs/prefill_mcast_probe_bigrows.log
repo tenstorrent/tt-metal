@@ -1,0 +1,1531 @@
+2026-08-12 10:13:59.402 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-12 10:13:59.586 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-12 10:13:59.586 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-12 10:13:59.586 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-12 10:13:59.586 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-12 10:13:59.597 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-12 10:13:59.598 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-12 10:13:59.676 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-12 10:13:59.676 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-12 10:13:59.676 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-12 10:13:59.676 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-12 10:13:59.677 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-12 10:13:59.850 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-12 10:13:59.974 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-12 10:13:59.974 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-12 10:13:59.974 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-12 10:13:59.974 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-12 10:13:59.974 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-12 10:14:00.013 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+GROUP 4 wqkv minimal_shipped_r512
+RESULT wqkv       rows=  512 minimal_shipped           0.2483 ms  pcc=0.999852  (0.2483/0.2563)
+GROUP 4 wqkv mcast2d_8x8_bw26_r512
+RESULT wqkv       rows=  512 mcast2d_8x8_bw26          0.1682 ms  pcc=0.999745  (0.1692/0.1682)
+GROUP 4 wqkv mcast2d_8x8_bw16_r512
+RESULT wqkv       rows=  512 mcast2d_8x8_bw16          0.1759 ms  pcc=0.999801  (0.1759/0.1772)
+GROUP 4 wqkv mcast2d_8x8_bw13_r512
+RESULT wqkv       rows=  512 mcast2d_8x8_bw13          0.1760 ms  pcc=0.999814  (0.1760/0.1767)
+GROUP 4 wqkv mcast2d_8x8_bw8_r512
+RESULT wqkv       rows=  512 mcast2d_8x8_bw8           0.1780 ms  pcc=0.999831  (0.1780/0.1790)
+GROUP 4 wqkv mcast2d_8x8_bw26_ob2x18_r512
+RESULT wqkv       rows=  512 mcast2d_8x8_bw26_ob2x18    0.1693 ms  pcc=0.999745  (0.1803/0.1693)
+GROUP 4 wqkv mcast2d_8x8_bw16_ob2x18_r512
+RESULT wqkv       rows=  512 mcast2d_8x8_bw16_ob2x18    0.1764 ms  pcc=0.999801  (0.1764/0.1775)
+GROUP 4 wqkv mcast2d_8x8_bw13_ob2x18_r512
+RESULT wqkv       rows=  512 mcast2d_8x8_bw13_ob2x18    0.1769 ms  pcc=0.999814  (0.1769/0.1778)
+GROUP 4 wqkv mcast2d_8x8_bw8_ob2x18_r512
+RESULT wqkv       rows=  512 mcast2d_8x8_bw8_ob2x18    0.1780 ms  pcc=0.999831  (0.1780/0.1783)
+GROUP 4 wqkv minimal_shipped_r1024
+RESULT wqkv       rows= 1024 minimal_shipped           0.4847 ms  pcc=0.999852  (0.4847/0.4853)
+GROUP 4 wqkv mcast2d_8x8_bw26_r1024
+2026-08-12 10:14:01.802 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1703296 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=1024 mcast2d_8x8_bw26: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1703296 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 wqkv mcast2d_8x8_bw16_r1024
+RESULT wqkv       rows= 1024 mcast2d_8x8_bw16          0.2772 ms  pcc=0.999801  (0.2772/0.2824)
+GROUP 4 wqkv mcast2d_8x8_bw13_r1024
+RESULT wqkv       rows= 1024 mcast2d_8x8_bw13          0.2840 ms  pcc=0.999814  (0.2840/0.2844)
+GROUP 4 wqkv mcast2d_8x8_bw8_r1024
+RESULT wqkv       rows= 1024 mcast2d_8x8_bw8           0.2899 ms  pcc=0.999831  (0.2902/0.2899)
+GROUP 4 wqkv mcast2d_8x8_bw26_ob2x18_r1024
+RESULT wqkv       rows= 1024 mcast2d_8x8_bw26_ob2x18    0.3448 ms  pcc=0.999745  (0.3448/0.3449)
+GROUP 4 wqkv mcast2d_8x8_bw16_ob2x18_r1024
+RESULT wqkv       rows= 1024 mcast2d_8x8_bw16_ob2x18    0.3314 ms  pcc=0.999801  (0.3314/0.3324)
+GROUP 4 wqkv mcast2d_8x8_bw13_ob2x18_r1024
+RESULT wqkv       rows= 1024 mcast2d_8x8_bw13_ob2x18    0.3396 ms  pcc=0.999814  (0.3400/0.3396)
+GROUP 4 wqkv mcast2d_8x8_bw8_ob2x18_r1024
+RESULT wqkv       rows= 1024 mcast2d_8x8_bw8_ob2x18    0.3472 ms  pcc=0.999831  (0.3472/0.3483)
+GROUP 4 wqkv mcast2d_8x8_bw26_ob4x18_r1024
+2026-08-12 10:14:04.230 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1703296 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=1024 mcast2d_8x8_bw26_ob4x18: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1703296 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 wqkv mcast2d_8x8_bw16_ob4x18_r1024
+RESULT wqkv       rows= 1024 mcast2d_8x8_bw16_ob4x18    0.2811 ms  pcc=0.999801  (0.2811/0.2828)
+GROUP 4 wqkv mcast2d_8x8_bw13_ob4x18_r1024
+RESULT wqkv       rows= 1024 mcast2d_8x8_bw13_ob4x18    0.2812 ms  pcc=0.999814  (0.2812/0.2855)
+GROUP 4 wqkv mcast2d_8x8_bw8_ob4x18_r1024
+RESULT wqkv       rows= 1024 mcast2d_8x8_bw8_ob4x18    0.2914 ms  pcc=0.999831  (0.2914/0.2914)
+GROUP 4 wqkv minimal_shipped_r2048
+RESULT wqkv       rows= 2048 minimal_shipped           0.4477 ms  pcc=0.999852  (0.4477/0.4603)
+GROUP 4 wqkv mcast2d_8x8_bw26_r2048
+2026-08-12 10:14:04.868 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2276736 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=2048 mcast2d_8x8_bw26: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2276736 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 wqkv mcast2d_8x8_bw16_r2048
+RESULT wqkv       rows= 2048 mcast2d_8x8_bw16          0.5247 ms  pcc=0.999801  (0.5247/0.5262)
+GROUP 4 wqkv mcast2d_8x8_bw13_r2048
+RESULT wqkv       rows= 2048 mcast2d_8x8_bw13          0.5339 ms  pcc=0.999814  (0.5339/0.5348)
+GROUP 4 wqkv mcast2d_8x8_bw8_r2048
+RESULT wqkv       rows= 2048 mcast2d_8x8_bw8           0.5463 ms  pcc=0.999831  (0.5664/0.5463)
+GROUP 4 wqkv mcast2d_8x8_bw26_ob2x18_r2048
+RESULT wqkv       rows= 2048 mcast2d_8x8_bw26_ob2x18    0.6995 ms  pcc=0.999745  (0.7012/0.6995)
+GROUP 4 wqkv mcast2d_8x8_bw16_ob2x18_r2048
+RESULT wqkv       rows= 2048 mcast2d_8x8_bw16_ob2x18    0.7017 ms  pcc=0.999801  (0.7118/0.7017)
+GROUP 4 wqkv mcast2d_8x8_bw13_ob2x18_r2048
+RESULT wqkv       rows= 2048 mcast2d_8x8_bw13_ob2x18    0.6937 ms  pcc=0.999814  (0.6960/0.6937)
+GROUP 4 wqkv mcast2d_8x8_bw8_ob2x18_r2048
+RESULT wqkv       rows= 2048 mcast2d_8x8_bw8_ob2x18    0.7062 ms  pcc=0.999831  (0.7086/0.7062)
+GROUP 4 wqkv mcast2d_8x8_bw26_ob4x18_r2048
+2026-08-12 10:14:08.022 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1703296 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=2048 mcast2d_8x8_bw26_ob4x18: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1703296 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 wqkv mcast2d_8x8_bw16_ob4x18_r2048
+RESULT wqkv       rows= 2048 mcast2d_8x8_bw16_ob4x18    0.5578 ms  pcc=0.999801  (0.5578/0.5578)
+GROUP 4 wqkv mcast2d_8x8_bw13_ob4x18_r2048
+RESULT wqkv       rows= 2048 mcast2d_8x8_bw13_ob4x18    0.5625 ms  pcc=0.999814  (0.5625/0.5647)
+GROUP 4 wqkv mcast2d_8x8_bw8_ob4x18_r2048
+RESULT wqkv       rows= 2048 mcast2d_8x8_bw8_ob4x18    0.5810 ms  pcc=0.999831  (0.5922/0.5810)
+GROUP 4 wqkv mcast2d_8x10_bw26_r2048
+2026-08-12 10:14:09.607 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 2133376 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=2048 mcast2d_8x10_bw26: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 2133376 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 wqkv mcast2d_8x10_bw16_r2048
+RESULT wqkv       rows= 2048 mcast2d_8x10_bw16         0.4710 ms  pcc=0.999801  (0.4710/0.4753)
+GROUP 4 wqkv mcast2d_8x10_bw13_r2048
+RESULT wqkv       rows= 2048 mcast2d_8x10_bw13         0.4802 ms  pcc=0.999814  (0.4802/0.4810)
+GROUP 4 wqkv mcast2d_8x10_bw8_r2048
+RESULT wqkv       rows= 2048 mcast2d_8x10_bw8          0.4714 ms  pcc=0.999831  (0.4714/0.4760)
+GROUP 4 wqkv minimal_shipped_r4096
+RESULT wqkv       rows= 4096 minimal_shipped           0.7732 ms  pcc=0.999852  (0.7732/0.7881)
+GROUP 4 wqkv mcast2d_8x8_bw26_r4096
+2026-08-12 10:14:11.201 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 3423616 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=4096 mcast2d_8x8_bw26: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 3423616 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 wqkv mcast2d_8x8_bw16_r4096
+2026-08-12 10:14:11.204 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2376576 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=4096 mcast2d_8x8_bw16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2376576 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 wqkv mcast2d_8x8_bw13_r4096
+2026-08-12 10:14:11.206 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2062464 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=4096 mcast2d_8x8_bw13: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2062464 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 wqkv mcast2d_8x8_bw8_r4096
+RESULT wqkv       rows= 4096 mcast2d_8x8_bw8           1.0819 ms  pcc=0.999831  (1.0852/1.0819)
+GROUP 4 wqkv mcast2d_8x8_bw26_ob2x18_r4096
+RESULT wqkv       rows= 4096 mcast2d_8x8_bw26_ob2x18    1.3180 ms  pcc=0.999745  (1.3180/1.3350)
+GROUP 4 wqkv mcast2d_8x8_bw16_ob2x18_r4096
+RESULT wqkv       rows= 4096 mcast2d_8x8_bw16_ob2x18    1.3178 ms  pcc=0.999801  (1.3178/1.3232)
+GROUP 4 wqkv mcast2d_8x8_bw13_ob2x18_r4096
+RESULT wqkv       rows= 4096 mcast2d_8x8_bw13_ob2x18    1.3429 ms  pcc=0.999814  (1.3444/1.3429)
+GROUP 4 wqkv mcast2d_8x8_bw8_ob2x18_r4096
+RESULT wqkv       rows= 4096 mcast2d_8x8_bw8_ob2x18    1.3799 ms  pcc=0.999831  (1.3799/1.3956)
+GROUP 4 wqkv mcast2d_8x8_bw26_ob4x18_r4096
+2026-08-12 10:14:14.639 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1703296 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=4096 mcast2d_8x8_bw26_ob4x18: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1703296 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 wqkv mcast2d_8x8_bw16_ob4x18_r4096
+RESULT wqkv       rows= 4096 mcast2d_8x8_bw16_ob4x18    1.1116 ms  pcc=0.999801  (1.1134/1.1116)
+GROUP 4 wqkv mcast2d_8x8_bw13_ob4x18_r4096
+RESULT wqkv       rows= 4096 mcast2d_8x8_bw13_ob4x18    1.1187 ms  pcc=0.999814  (1.1215/1.1187)
+GROUP 4 wqkv mcast2d_8x8_bw8_ob4x18_r4096
+RESULT wqkv       rows= 4096 mcast2d_8x8_bw8_ob4x18    1.1435 ms  pcc=0.999831  (1.1435/1.1486)
+GROUP 4 wqkv mcast2d_8x10_bw26_r4096
+2026-08-12 10:14:16.459 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 2993536 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=4096 mcast2d_8x10_bw26: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 2993536 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 wqkv mcast2d_8x10_bw16_r4096
+2026-08-12 10:14:16.462 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 2069376 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=4096 mcast2d_8x10_bw16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 2069376 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 wqkv mcast2d_8x10_bw13_r4096
+2026-08-12 10:14:16.464 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1792128 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=4096 mcast2d_8x10_bw13: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1792128 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 wqkv mcast2d_8x10_bw8_r4096
+RESULT wqkv       rows= 4096 mcast2d_8x10_bw8          0.8266 ms  pcc=0.999831  (0.8273/0.8266)
+GROUP 4 wqkv minimal_shipped_r8192
+RESULT wqkv       rows= 8192 minimal_shipped           1.5034 ms  pcc=0.999852  (1.5034/1.5271)
+GROUP 4 wqkv mcast2d_8x8_bw26_r8192
+2026-08-12 10:14:18.926 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 5717376 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=8192 mcast2d_8x8_bw26: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 5717376 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 wqkv mcast2d_8x8_bw16_r8192
+2026-08-12 10:14:18.928 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 4014976 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=8192 mcast2d_8x8_bw16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 4014976 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 wqkv mcast2d_8x8_bw13_r8192
+2026-08-12 10:14:18.931 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 3504256 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=8192 mcast2d_8x8_bw13: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 3504256 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 wqkv mcast2d_8x8_bw8_r8192
+2026-08-12 10:14:19.363 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2653056 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=8192 mcast2d_8x8_bw8: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2653056 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 wqkv mcast2d_8x8_bw26_ob2x18_r8192
+RESULT wqkv       rows= 8192 mcast2d_8x8_bw26_ob2x18    2.6744 ms  pcc=0.999744  (2.8290/2.6744)
+GROUP 4 wqkv mcast2d_8x8_bw16_ob2x18_r8192
+RESULT wqkv       rows= 8192 mcast2d_8x8_bw16_ob2x18    2.7894 ms  pcc=0.999801  (2.7894/2.8025)
+GROUP 4 wqkv mcast2d_8x8_bw13_ob2x18_r8192
+RESULT wqkv       rows= 8192 mcast2d_8x8_bw13_ob2x18    2.7285 ms  pcc=0.999814  (2.7467/2.7285)
+GROUP 4 wqkv mcast2d_8x8_bw8_ob2x18_r8192
+RESULT wqkv       rows= 8192 mcast2d_8x8_bw8_ob2x18    2.7781 ms  pcc=0.999831  (2.7781/2.7806)
+GROUP 4 wqkv mcast2d_8x8_bw26_ob4x18_r8192
+2026-08-12 10:14:23.016 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1703296 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=8192 mcast2d_8x8_bw26_ob4x18: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1703296 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 wqkv mcast2d_8x8_bw16_ob4x18_r8192
+RESULT wqkv       rows= 8192 mcast2d_8x8_bw16_ob4x18    2.2194 ms  pcc=0.999801  (2.2194/2.2398)
+GROUP 4 wqkv mcast2d_8x8_bw13_ob4x18_r8192
+RESULT wqkv       rows= 8192 mcast2d_8x8_bw13_ob4x18    2.2409 ms  pcc=0.999814  (2.2409/2.2603)
+GROUP 4 wqkv mcast2d_8x8_bw8_ob4x18_r8192
+RESULT wqkv       rows= 8192 mcast2d_8x8_bw8_ob4x18    2.3061 ms  pcc=0.999831  (2.3061/2.3292)
+GROUP 4 wqkv mcast2d_8x10_bw26_r8192
+2026-08-12 10:14:25.262 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 4857216 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=8192 mcast2d_8x10_bw26: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 4857216 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 wqkv mcast2d_8x10_bw16_r8192
+2026-08-12 10:14:25.264 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 3400576 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=8192 mcast2d_8x10_bw16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 3400576 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 wqkv mcast2d_8x10_bw13_r8192
+2026-08-12 10:14:25.267 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 2963584 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=8192 mcast2d_8x10_bw13: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 2963584 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 wqkv mcast2d_8x10_bw8_r8192
+2026-08-12 10:14:25.707 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 2235264 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED wqkv rows=8192 mcast2d_8x10_bw8: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 2235264 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 wqkv mcast2d_8x10_bw26_ob2x18_r8192
+RESULT wqkv       rows= 8192 mcast2d_8x10_bw26_ob2x18    2.4346 ms  pcc=0.999744  (2.4346/2.4361)
+GROUP 4 wqkv mcast2d_8x10_bw16_ob2x18_r8192
+RESULT wqkv       rows= 8192 mcast2d_8x10_bw16_ob2x18    2.3828 ms  pcc=0.999801  (2.3828/2.3976)
+GROUP 4 wqkv mcast2d_8x10_bw13_ob2x18_r8192
+RESULT wqkv       rows= 8192 mcast2d_8x10_bw13_ob2x18    2.3472 ms  pcc=0.999814  (2.3472/2.3810)
+GROUP 4 wqkv mcast2d_8x10_bw8_ob2x18_r8192
+RESULT wqkv       rows= 8192 mcast2d_8x10_bw8_ob2x18    2.4577 ms  pcc=0.999831  (2.4577/2.4774)
+GROUP 4 attn_gate minimal_shipped_r512
+RESULT attn_gate  rows=  512 minimal_shipped           0.1990 ms  pcc=0.999852  (0.1990/0.2019)
+GROUP 4 attn_gate mcast2d_8x8_bw26_r512
+RESULT attn_gate  rows=  512 mcast2d_8x8_bw26          0.1516 ms  pcc=0.999745  (0.1516/0.1519)
+GROUP 4 attn_gate mcast2d_8x8_bw16_r512
+RESULT attn_gate  rows=  512 mcast2d_8x8_bw16          0.1630 ms  pcc=0.999801  (0.1630/0.1636)
+GROUP 4 attn_gate mcast2d_8x8_bw13_r512
+RESULT attn_gate  rows=  512 mcast2d_8x8_bw13          0.1549 ms  pcc=0.999814  (0.1549/0.1555)
+GROUP 4 attn_gate mcast2d_8x8_bw8_r512
+RESULT attn_gate  rows=  512 mcast2d_8x8_bw8           0.1601 ms  pcc=0.999831  (0.1601/0.1618)
+GROUP 4 attn_gate mcast2d_8x8_bw26_ob2x16_r512
+RESULT attn_gate  rows=  512 mcast2d_8x8_bw26_ob2x16    0.1525 ms  pcc=0.999745  (0.1545/0.1525)
+GROUP 4 attn_gate mcast2d_8x8_bw16_ob2x16_r512
+RESULT attn_gate  rows=  512 mcast2d_8x8_bw16_ob2x16    0.1608 ms  pcc=0.999801  (0.1608/0.1628)
+GROUP 4 attn_gate mcast2d_8x8_bw13_ob2x16_r512
+RESULT attn_gate  rows=  512 mcast2d_8x8_bw13_ob2x16    0.1542 ms  pcc=0.999814  (0.1542/0.1559)
+GROUP 4 attn_gate mcast2d_8x8_bw8_ob2x16_r512
+RESULT attn_gate  rows=  512 mcast2d_8x8_bw8_ob2x16    0.1624 ms  pcc=0.999831  (0.1632/0.1624)
+GROUP 4 attn_gate minimal_shipped_r1024
+RESULT attn_gate  rows= 1024 minimal_shipped           0.3838 ms  pcc=0.999852  (0.3844/0.3838)
+GROUP 4 attn_gate mcast2d_8x8_bw26_r1024
+2026-08-12 10:14:29.879 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1573760 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED attn_gate rows=1024 mcast2d_8x8_bw26: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1573760 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 attn_gate mcast2d_8x8_bw16_r1024
+RESULT attn_gate  rows= 1024 mcast2d_8x8_bw16          0.2213 ms  pcc=0.999800  (0.2213/0.2238)
+GROUP 4 attn_gate mcast2d_8x8_bw13_r1024
+RESULT attn_gate  rows= 1024 mcast2d_8x8_bw13          0.2251 ms  pcc=0.999814  (0.2251/0.2267)
+GROUP 4 attn_gate mcast2d_8x8_bw8_r1024
+RESULT attn_gate  rows= 1024 mcast2d_8x8_bw8           0.2264 ms  pcc=0.999831  (0.2264/0.2300)
+GROUP 4 attn_gate mcast2d_8x8_bw26_ob2x16_r1024
+RESULT attn_gate  rows= 1024 mcast2d_8x8_bw26_ob2x16    0.3105 ms  pcc=0.999744  (0.3105/0.3121)
+GROUP 4 attn_gate mcast2d_8x8_bw16_ob2x16_r1024
+RESULT attn_gate  rows= 1024 mcast2d_8x8_bw16_ob2x16    0.3088 ms  pcc=0.999800  (0.3091/0.3088)
+GROUP 4 attn_gate mcast2d_8x8_bw13_ob2x16_r1024
+RESULT attn_gate  rows= 1024 mcast2d_8x8_bw13_ob2x16    0.3072 ms  pcc=0.999814  (0.3074/0.3072)
+GROUP 4 attn_gate mcast2d_8x8_bw8_ob2x16_r1024
+RESULT attn_gate  rows= 1024 mcast2d_8x8_bw8_ob2x16    0.3260 ms  pcc=0.999831  (0.3269/0.3260)
+GROUP 4 attn_gate mcast2d_8x8_bw26_ob4x16_r1024
+2026-08-12 10:14:31.929 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1573760 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED attn_gate rows=1024 mcast2d_8x8_bw26_ob4x16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1573760 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 attn_gate mcast2d_8x8_bw16_ob4x16_r1024
+RESULT attn_gate  rows= 1024 mcast2d_8x8_bw16_ob4x16    0.2217 ms  pcc=0.999800  (0.2217/0.2261)
+GROUP 4 attn_gate mcast2d_8x8_bw13_ob4x16_r1024
+RESULT attn_gate  rows= 1024 mcast2d_8x8_bw13_ob4x16    0.2205 ms  pcc=0.999814  (0.2205/0.2234)
+GROUP 4 attn_gate mcast2d_8x8_bw8_ob4x16_r1024
+RESULT attn_gate  rows= 1024 mcast2d_8x8_bw8_ob4x16    0.2287 ms  pcc=0.999831  (0.2329/0.2287)
+GROUP 4 attn_gate minimal_shipped_r2048
+RESULT attn_gate  rows= 2048 minimal_shipped           0.3580 ms  pcc=0.999852  (0.3580/0.3624)
+GROUP 4 attn_gate mcast2d_8x8_bw26_r2048
+2026-08-12 10:14:32.491 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2130816 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED attn_gate rows=2048 mcast2d_8x8_bw26: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2130816 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 attn_gate mcast2d_8x8_bw16_r2048
+RESULT attn_gate  rows= 2048 mcast2d_8x8_bw16          0.4214 ms  pcc=0.999801  (0.4287/0.4214)
+GROUP 4 attn_gate mcast2d_8x8_bw13_r2048
+RESULT attn_gate  rows= 2048 mcast2d_8x8_bw13          0.4317 ms  pcc=0.999814  (0.4323/0.4317)
+GROUP 4 attn_gate mcast2d_8x8_bw8_r2048
+RESULT attn_gate  rows= 2048 mcast2d_8x8_bw8           0.4399 ms  pcc=0.999831  (0.4399/0.4414)
+GROUP 4 attn_gate mcast2d_8x8_bw26_ob2x16_r2048
+RESULT attn_gate  rows= 2048 mcast2d_8x8_bw26_ob2x16    0.6377 ms  pcc=0.999744  (0.6399/0.6377)
+GROUP 4 attn_gate mcast2d_8x8_bw16_ob2x16_r2048
+RESULT attn_gate  rows= 2048 mcast2d_8x8_bw16_ob2x16    0.6334 ms  pcc=0.999801  (0.6357/0.6334)
+GROUP 4 attn_gate mcast2d_8x8_bw13_ob2x16_r2048
+RESULT attn_gate  rows= 2048 mcast2d_8x8_bw13_ob2x16    0.6007 ms  pcc=0.999814  (0.6024/0.6007)
+GROUP 4 attn_gate mcast2d_8x8_bw8_ob2x16_r2048
+RESULT attn_gate  rows= 2048 mcast2d_8x8_bw8_ob2x16    0.6296 ms  pcc=0.999831  (0.6296/0.6314)
+GROUP 4 attn_gate mcast2d_8x8_bw26_ob4x16_r2048
+2026-08-12 10:14:35.169 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1573760 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED attn_gate rows=2048 mcast2d_8x8_bw26_ob4x16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1573760 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 attn_gate mcast2d_8x8_bw16_ob4x16_r2048
+RESULT attn_gate  rows= 2048 mcast2d_8x8_bw16_ob4x16    0.4387 ms  pcc=0.999801  (0.4387/0.4407)
+GROUP 4 attn_gate mcast2d_8x8_bw13_ob4x16_r2048
+RESULT attn_gate  rows= 2048 mcast2d_8x8_bw13_ob4x16    0.4450 ms  pcc=0.999814  (0.4450/0.4454)
+GROUP 4 attn_gate mcast2d_8x8_bw8_ob4x16_r2048
+RESULT attn_gate  rows= 2048 mcast2d_8x8_bw8_ob4x16    0.4515 ms  pcc=0.999831  (0.4528/0.4515)
+GROUP 4 attn_gate mcast2d_8x10_bw26_r2048
+2026-08-12 10:14:36.493 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1991552 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED attn_gate rows=2048 mcast2d_8x10_bw26: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1991552 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 attn_gate mcast2d_8x10_bw16_r2048
+RESULT attn_gate  rows= 2048 mcast2d_8x10_bw16         0.3856 ms  pcc=0.999801  (0.3856/0.3887)
+GROUP 4 attn_gate mcast2d_8x10_bw13_r2048
+RESULT attn_gate  rows= 2048 mcast2d_8x10_bw13         0.3898 ms  pcc=0.999814  (0.3939/0.3898)
+GROUP 4 attn_gate mcast2d_8x10_bw8_r2048
+RESULT attn_gate  rows= 2048 mcast2d_8x10_bw8          0.3911 ms  pcc=0.999831  (0.3911/0.3948)
+GROUP 4 attn_gate minimal_shipped_r4096
+RESULT attn_gate  rows= 4096 minimal_shipped           0.6472 ms  pcc=0.999852  (0.6482/0.6472)
+GROUP 4 attn_gate mcast2d_8x8_bw26_r4096
+2026-08-12 10:14:37.969 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 3244928 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED attn_gate rows=4096 mcast2d_8x8_bw26: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 3244928 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 attn_gate mcast2d_8x8_bw16_r4096
+2026-08-12 10:14:37.972 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2241408 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED attn_gate rows=4096 mcast2d_8x8_bw16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2241408 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 attn_gate mcast2d_8x8_bw13_r4096
+2026-08-12 10:14:37.974 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1940352 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED attn_gate rows=4096 mcast2d_8x8_bw13: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1940352 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 attn_gate mcast2d_8x8_bw8_r4096
+RESULT attn_gate  rows= 4096 mcast2d_8x8_bw8           0.8622 ms  pcc=0.999831  (0.8622/0.8775)
+GROUP 4 attn_gate mcast2d_8x8_bw26_ob2x16_r4096
+RESULT attn_gate  rows= 4096 mcast2d_8x8_bw26_ob2x16    1.1957 ms  pcc=0.999744  (1.1957/1.2001)
+GROUP 4 attn_gate mcast2d_8x8_bw16_ob2x16_r4096
+RESULT attn_gate  rows= 4096 mcast2d_8x8_bw16_ob2x16    1.1930 ms  pcc=0.999801  (1.1930/1.1941)
+GROUP 4 attn_gate mcast2d_8x8_bw13_ob2x16_r4096
+RESULT attn_gate  rows= 4096 mcast2d_8x8_bw13_ob2x16    1.2182 ms  pcc=0.999814  (1.2182/1.2217)
+GROUP 4 attn_gate mcast2d_8x8_bw8_ob2x16_r4096
+RESULT attn_gate  rows= 4096 mcast2d_8x8_bw8_ob2x16    1.2549 ms  pcc=0.999831  (1.2549/1.2594)
+GROUP 4 attn_gate mcast2d_8x8_bw26_ob4x16_r4096
+2026-08-12 10:14:40.909 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1573760 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED attn_gate rows=4096 mcast2d_8x8_bw26_ob4x16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1573760 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 attn_gate mcast2d_8x8_bw16_ob4x16_r4096
+RESULT attn_gate  rows= 4096 mcast2d_8x8_bw16_ob4x16    0.8716 ms  pcc=0.999801  (0.8716/0.8739)
+GROUP 4 attn_gate mcast2d_8x8_bw13_ob4x16_r4096
+RESULT attn_gate  rows= 4096 mcast2d_8x8_bw13_ob4x16    0.8768 ms  pcc=0.999814  (0.8768/0.8825)
+GROUP 4 attn_gate mcast2d_8x8_bw8_ob4x16_r4096
+RESULT attn_gate  rows= 4096 mcast2d_8x8_bw8_ob4x16    0.9037 ms  pcc=0.999831  (0.9037/0.9056)
+GROUP 4 attn_gate mcast2d_8x10_bw26_r4096
+2026-08-12 10:14:42.482 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 2827136 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED attn_gate rows=4096 mcast2d_8x10_bw26: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 2827136 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 attn_gate mcast2d_8x10_bw16_r4096
+2026-08-12 10:14:42.485 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1946496 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED attn_gate rows=4096 mcast2d_8x10_bw16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1946496 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 attn_gate mcast2d_8x10_bw13_r4096
+2026-08-12 10:14:42.487 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1682304 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED attn_gate rows=4096 mcast2d_8x10_bw13: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1682304 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 attn_gate mcast2d_8x10_bw8_r4096
+RESULT attn_gate  rows= 4096 mcast2d_8x10_bw8          0.7341 ms  pcc=0.999831  (0.7341/0.7363)
+GROUP 4 attn_gate minimal_shipped_r8192
+RESULT attn_gate  rows= 8192 minimal_shipped           1.3197 ms  pcc=0.999852  (1.3197/1.3225)
+GROUP 4 attn_gate mcast2d_8x8_bw26_r8192
+2026-08-12 10:14:44.714 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 5473152 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED attn_gate rows=8192 mcast2d_8x8_bw26: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 5473152 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 attn_gate mcast2d_8x8_bw16_r8192
+2026-08-12 10:14:44.717 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 3814272 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED attn_gate rows=8192 mcast2d_8x8_bw16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 3814272 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 attn_gate mcast2d_8x8_bw13_r8192
+2026-08-12 10:14:44.719 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 3316608 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED attn_gate rows=8192 mcast2d_8x8_bw13: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 3316608 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 attn_gate mcast2d_8x8_bw8_r8192
+2026-08-12 10:14:45.063 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2487168 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED attn_gate rows=8192 mcast2d_8x8_bw8: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2487168 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 attn_gate mcast2d_8x8_bw26_ob2x16_r8192
+RESULT attn_gate  rows= 8192 mcast2d_8x8_bw26_ob2x16    2.6508 ms  pcc=0.999745  (2.6508/2.6561)
+GROUP 4 attn_gate mcast2d_8x8_bw16_ob2x16_r8192
+RESULT attn_gate  rows= 8192 mcast2d_8x8_bw16_ob2x16    2.4127 ms  pcc=0.999801  (2.4127/2.4220)
+GROUP 4 attn_gate mcast2d_8x8_bw13_ob2x16_r8192
+RESULT attn_gate  rows= 8192 mcast2d_8x8_bw13_ob2x16    2.4576 ms  pcc=0.999814  (2.4576/2.4617)
+GROUP 4 attn_gate mcast2d_8x8_bw8_ob2x16_r8192
+RESULT attn_gate  rows= 8192 mcast2d_8x8_bw8_ob2x16    2.5283 ms  pcc=0.999831  (2.5283/2.5387)
+GROUP 4 attn_gate mcast2d_8x8_bw26_ob4x16_r8192
+2026-08-12 10:14:48.206 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1573760 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED attn_gate rows=8192 mcast2d_8x8_bw26_ob4x16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1573760 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 attn_gate mcast2d_8x8_bw16_ob4x16_r8192
+RESULT attn_gate  rows= 8192 mcast2d_8x8_bw16_ob4x16    1.7390 ms  pcc=0.999801  (1.7390/1.7550)
+GROUP 4 attn_gate mcast2d_8x8_bw13_ob4x16_r8192
+RESULT attn_gate  rows= 8192 mcast2d_8x8_bw13_ob4x16    1.7564 ms  pcc=0.999814  (1.7564/1.7797)
+GROUP 4 attn_gate mcast2d_8x8_bw8_ob4x16_r8192
+RESULT attn_gate  rows= 8192 mcast2d_8x8_bw8_ob4x16    1.8116 ms  pcc=0.999831  (1.8116/1.8295)
+GROUP 4 attn_gate mcast2d_8x10_bw26_r8192
+2026-08-12 10:14:50.285 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 4637568 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED attn_gate rows=8192 mcast2d_8x10_bw26: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 4637568 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 attn_gate mcast2d_8x10_bw16_r8192
+2026-08-12 10:14:50.288 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 3224448 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED attn_gate rows=8192 mcast2d_8x10_bw16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 3224448 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 attn_gate mcast2d_8x10_bw13_r8192
+2026-08-12 10:14:50.290 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 2800512 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED attn_gate rows=8192 mcast2d_8x10_bw13: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 2800512 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 attn_gate mcast2d_8x10_bw8_r8192
+2026-08-12 10:14:50.628 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 2093952 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED attn_gate rows=8192 mcast2d_8x10_bw8: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 2093952 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 attn_gate mcast2d_8x10_bw26_ob2x16_r8192
+RESULT attn_gate  rows= 8192 mcast2d_8x10_bw26_ob2x16    2.2196 ms  pcc=0.999745  (2.2196/2.2289)
+GROUP 4 attn_gate mcast2d_8x10_bw16_ob2x16_r8192
+RESULT attn_gate  rows= 8192 mcast2d_8x10_bw16_ob2x16    2.0340 ms  pcc=0.999801  (2.0340/2.0468)
+GROUP 4 attn_gate mcast2d_8x10_bw13_ob2x16_r8192
+RESULT attn_gate  rows= 8192 mcast2d_8x10_bw13_ob2x16    2.0635 ms  pcc=0.999814  (2.0635/2.0749)
+GROUP 4 attn_gate mcast2d_8x10_bw8_ob2x16_r8192
+RESULT attn_gate  rows= 8192 mcast2d_8x10_bw8_ob2x16    2.1357 ms  pcc=0.999831  (2.1357/2.1480)
+GROUP 4 o_proj minimal_shipped_r512
+RESULT o_proj     rows=  512 minimal_shipped           0.2069 ms  pcc=0.999857  (0.2069/0.2094)
+GROUP 4 o_proj mcast2d_8x8_bw16_r512
+RESULT o_proj     rows=  512 mcast2d_8x8_bw16          0.1589 ms  pcc=0.999802  (0.1589/0.1603)
+GROUP 4 o_proj mcast2d_8x8_bw8_r512
+RESULT o_proj     rows=  512 mcast2d_8x8_bw8           0.1632 ms  pcc=0.999836  (0.1632/0.1638)
+GROUP 4 o_proj mcast2d_8x8_bw4_r512
+RESULT o_proj     rows=  512 mcast2d_8x8_bw4           0.1730 ms  pcc=0.999842  (0.1730/0.1753)
+GROUP 4 o_proj mcast2d_8x8_bw2_r512
+RESULT o_proj     rows=  512 mcast2d_8x8_bw2           0.1988 ms  pcc=0.999829  (0.1988/0.2006)
+GROUP 4 o_proj mcast2d_8x8_bw16_ob2x26_r512
+RESULT o_proj     rows=  512 mcast2d_8x8_bw16_ob2x26    0.1604 ms  pcc=0.999802  (0.1606/0.1604)
+GROUP 4 o_proj mcast2d_8x8_bw8_ob2x26_r512
+RESULT o_proj     rows=  512 mcast2d_8x8_bw8_ob2x26    0.1615 ms  pcc=0.999836  (0.1615/0.1639)
+GROUP 4 o_proj mcast2d_8x8_bw4_ob2x26_r512
+RESULT o_proj     rows=  512 mcast2d_8x8_bw4_ob2x26    0.1731 ms  pcc=0.999842  (0.1731/0.1769)
+GROUP 4 o_proj mcast2d_8x8_bw2_ob2x26_r512
+RESULT o_proj     rows=  512 mcast2d_8x8_bw2_ob2x26    0.1993 ms  pcc=0.999829  (0.1993/0.1999)
+GROUP 4 o_proj mcast2d_8x8_bw16_ob2x26_r512
+RESULT o_proj     rows=  512 mcast2d_8x8_bw16_ob2x26    0.1610 ms  pcc=0.999802  (0.1610/0.1621)
+GROUP 4 o_proj mcast2d_8x8_bw8_ob2x26_r512
+RESULT o_proj     rows=  512 mcast2d_8x8_bw8_ob2x26    0.1639 ms  pcc=0.999836  (0.1647/0.1639)
+GROUP 4 o_proj mcast2d_8x8_bw4_ob2x26_r512
+RESULT o_proj     rows=  512 mcast2d_8x8_bw4_ob2x26    0.1734 ms  pcc=0.999842  (0.1734/0.1751)
+GROUP 4 o_proj mcast2d_8x8_bw2_ob2x26_r512
+RESULT o_proj     rows=  512 mcast2d_8x8_bw2_ob2x26    0.2015 ms  pcc=0.999829  (0.2023/0.2015)
+GROUP 4 o_proj mcast2d_8x8_bw16_ob2x13_r512
+CORRUPT o_proj     rows=  512 mcast2d_8x8_bw16_ob2x13 pcc=nan
+GROUP 4 o_proj mcast2d_8x8_bw8_ob2x13_r512
+CORRUPT o_proj     rows=  512 mcast2d_8x8_bw8_ob2x13 pcc=nan
+GROUP 4 o_proj mcast2d_8x8_bw4_ob2x13_r512
+CORRUPT o_proj     rows=  512 mcast2d_8x8_bw4_ob2x13 pcc=nan
+GROUP 4 o_proj mcast2d_8x8_bw2_ob2x13_r512
+CORRUPT o_proj     rows=  512 mcast2d_8x8_bw2_ob2x13 pcc=nan
+GROUP 4 o_proj minimal_shipped_r1024
+RESULT o_proj     rows= 1024 minimal_shipped           0.3907 ms  pcc=0.999857  (0.3907/0.3907)
+GROUP 4 o_proj mcast2d_8x8_bw16_r1024
+RESULT o_proj     rows= 1024 mcast2d_8x8_bw16          0.2701 ms  pcc=0.999802  (0.2713/0.2701)
+GROUP 4 o_proj mcast2d_8x8_bw8_r1024
+RESULT o_proj     rows= 1024 mcast2d_8x8_bw8           0.2763 ms  pcc=0.999836  (0.2763/0.2773)
+GROUP 4 o_proj mcast2d_8x8_bw4_r1024
+RESULT o_proj     rows= 1024 mcast2d_8x8_bw4           0.2843 ms  pcc=0.999842  (0.2843/0.2886)
+GROUP 4 o_proj mcast2d_8x8_bw2_r1024
+RESULT o_proj     rows= 1024 mcast2d_8x8_bw2           0.3040 ms  pcc=0.999829  (0.3040/0.3134)
+GROUP 4 o_proj mcast2d_8x8_bw16_ob2x26_r1024
+RESULT o_proj     rows= 1024 mcast2d_8x8_bw16_ob2x26    0.3224 ms  pcc=0.999802  (0.3224/0.3232)
+GROUP 4 o_proj mcast2d_8x8_bw8_ob2x26_r1024
+RESULT o_proj     rows= 1024 mcast2d_8x8_bw8_ob2x26    0.3195 ms  pcc=0.999836  (0.3243/0.3195)
+GROUP 4 o_proj mcast2d_8x8_bw4_ob2x26_r1024
+RESULT o_proj     rows= 1024 mcast2d_8x8_bw4_ob2x26    0.3493 ms  pcc=0.999842  (0.3556/0.3493)
+GROUP 4 o_proj mcast2d_8x8_bw2_ob2x26_r1024
+RESULT o_proj     rows= 1024 mcast2d_8x8_bw2_ob2x26    0.4079 ms  pcc=0.999829  (0.4079/0.4094)
+GROUP 4 o_proj mcast2d_8x8_bw16_ob4x26_r1024
+RESULT o_proj     rows= 1024 mcast2d_8x8_bw16_ob4x26    0.2680 ms  pcc=0.999802  (0.2680/0.2693)
+GROUP 4 o_proj mcast2d_8x8_bw8_ob4x26_r1024
+RESULT o_proj     rows= 1024 mcast2d_8x8_bw8_ob4x26    0.2742 ms  pcc=0.999836  (0.2742/0.2771)
+GROUP 4 o_proj mcast2d_8x8_bw4_ob4x26_r1024
+RESULT o_proj     rows= 1024 mcast2d_8x8_bw4_ob4x26    0.2908 ms  pcc=0.999842  (0.2908/0.2934)
+GROUP 4 o_proj mcast2d_8x8_bw2_ob4x26_r1024
+RESULT o_proj     rows= 1024 mcast2d_8x8_bw2_ob4x26    0.3128 ms  pcc=0.999829  (0.3139/0.3128)
+GROUP 4 o_proj mcast2d_8x8_bw16_ob2x26_r1024
+RESULT o_proj     rows= 1024 mcast2d_8x8_bw16_ob2x26    0.3255 ms  pcc=0.999802  (0.3255/0.3266)
+GROUP 4 o_proj mcast2d_8x8_bw8_ob2x26_r1024
+RESULT o_proj     rows= 1024 mcast2d_8x8_bw8_ob2x26    0.3227 ms  pcc=0.999836  (0.3275/0.3227)
+GROUP 4 o_proj mcast2d_8x8_bw4_ob2x26_r1024
+RESULT o_proj     rows= 1024 mcast2d_8x8_bw4_ob2x26    0.3547 ms  pcc=0.999842  (0.3580/0.3547)
+GROUP 4 o_proj mcast2d_8x8_bw2_ob2x26_r1024
+RESULT o_proj     rows= 1024 mcast2d_8x8_bw2_ob2x26    0.4089 ms  pcc=0.999829  (0.4103/0.4089)
+GROUP 4 o_proj mcast2d_8x8_bw16_ob4x26_r1024
+RESULT o_proj     rows= 1024 mcast2d_8x8_bw16_ob4x26    0.2677 ms  pcc=0.999802  (0.2677/0.2705)
+GROUP 4 o_proj mcast2d_8x8_bw8_ob4x26_r1024
+RESULT o_proj     rows= 1024 mcast2d_8x8_bw8_ob4x26    0.2746 ms  pcc=0.999836  (0.2802/0.2746)
+GROUP 4 o_proj mcast2d_8x8_bw4_ob4x26_r1024
+RESULT o_proj     rows= 1024 mcast2d_8x8_bw4_ob4x26    0.2864 ms  pcc=0.999842  (0.2886/0.2864)
+GROUP 4 o_proj mcast2d_8x8_bw2_ob4x26_r1024
+RESULT o_proj     rows= 1024 mcast2d_8x8_bw2_ob4x26    0.3070 ms  pcc=0.999829  (0.3079/0.3070)
+GROUP 4 o_proj mcast2d_8x8_bw16_ob2x13_r1024
+CORRUPT o_proj     rows= 1024 mcast2d_8x8_bw16_ob2x13 pcc=nan
+GROUP 4 o_proj mcast2d_8x8_bw8_ob2x13_r1024
+CORRUPT o_proj     rows= 1024 mcast2d_8x8_bw8_ob2x13 pcc=nan
+GROUP 4 o_proj mcast2d_8x8_bw4_ob2x13_r1024
+CORRUPT o_proj     rows= 1024 mcast2d_8x8_bw4_ob2x13 pcc=nan
+GROUP 4 o_proj mcast2d_8x8_bw2_ob2x13_r1024
+CORRUPT o_proj     rows= 1024 mcast2d_8x8_bw2_ob2x13 pcc=nan
+GROUP 4 o_proj mcast2d_8x8_bw16_ob4x13_r1024
+CORRUPT o_proj     rows= 1024 mcast2d_8x8_bw16_ob4x13 pcc=nan
+GROUP 4 o_proj mcast2d_8x8_bw8_ob4x13_r1024
+CORRUPT o_proj     rows= 1024 mcast2d_8x8_bw8_ob4x13 pcc=nan
+GROUP 4 o_proj mcast2d_8x8_bw4_ob4x13_r1024
+CORRUPT o_proj     rows= 1024 mcast2d_8x8_bw4_ob4x13 pcc=nan
+GROUP 4 o_proj mcast2d_8x8_bw2_ob4x13_r1024
+CORRUPT o_proj     rows= 1024 mcast2d_8x8_bw2_ob4x13 pcc=nan
+GROUP 4 o_proj minimal_shipped_r2048
+RESULT o_proj     rows= 2048 minimal_shipped           0.4356 ms  pcc=0.999857  (0.4356/0.4372)
+GROUP 4 o_proj mcast2d_8x8_bw16_r2048
+2026-08-12 10:15:04.005 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1966976 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED o_proj rows=2048 mcast2d_8x8_bw16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1966976 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 o_proj mcast2d_8x8_bw8_r2048
+RESULT o_proj     rows= 2048 mcast2d_8x8_bw8           0.5098 ms  pcc=0.999836  (0.5103/0.5098)
+GROUP 4 o_proj mcast2d_8x8_bw4_r2048
+RESULT o_proj     rows= 2048 mcast2d_8x8_bw4           0.5435 ms  pcc=0.999843  (0.5435/0.5442)
+GROUP 4 o_proj mcast2d_8x8_bw2_r2048
+RESULT o_proj     rows= 2048 mcast2d_8x8_bw2           0.5679 ms  pcc=0.999829  (0.5679/0.5761)
+GROUP 4 o_proj mcast2d_8x8_bw16_ob2x26_r2048
+RESULT o_proj     rows= 2048 mcast2d_8x8_bw16_ob2x26    0.6764 ms  pcc=0.999802  (0.6764/0.6800)
+GROUP 4 o_proj mcast2d_8x8_bw8_ob2x26_r2048
+RESULT o_proj     rows= 2048 mcast2d_8x8_bw8_ob2x26    0.6592 ms  pcc=0.999836  (0.6606/0.6592)
+GROUP 4 o_proj mcast2d_8x8_bw4_ob2x26_r2048
+RESULT o_proj     rows= 2048 mcast2d_8x8_bw4_ob2x26    0.7063 ms  pcc=0.999843  (0.7071/0.7063)
+GROUP 4 o_proj mcast2d_8x8_bw2_ob2x26_r2048
+RESULT o_proj     rows= 2048 mcast2d_8x8_bw2_ob2x26    0.8116 ms  pcc=0.999829  (0.8116/0.8117)
+GROUP 4 o_proj mcast2d_8x8_bw16_ob4x26_r2048
+RESULT o_proj     rows= 2048 mcast2d_8x8_bw16_ob4x26    0.5296 ms  pcc=0.999802  (0.5319/0.5296)
+GROUP 4 o_proj mcast2d_8x8_bw8_ob4x26_r2048
+RESULT o_proj     rows= 2048 mcast2d_8x8_bw8_ob4x26    0.5415 ms  pcc=0.999836  (0.5443/0.5415)
+GROUP 4 o_proj mcast2d_8x8_bw4_ob4x26_r2048
+RESULT o_proj     rows= 2048 mcast2d_8x8_bw4_ob4x26    0.5680 ms  pcc=0.999843  (0.5714/0.5680)
+GROUP 4 o_proj mcast2d_8x8_bw2_ob4x26_r2048
+RESULT o_proj     rows= 2048 mcast2d_8x8_bw2_ob4x26    0.6151 ms  pcc=0.999829  (0.6213/0.6151)
+GROUP 4 o_proj mcast2d_8x8_bw16_ob2x26_r2048
+RESULT o_proj     rows= 2048 mcast2d_8x8_bw16_ob2x26    0.6710 ms  pcc=0.999802  (0.6710/0.6735)
+GROUP 4 o_proj mcast2d_8x8_bw8_ob2x26_r2048
+RESULT o_proj     rows= 2048 mcast2d_8x8_bw8_ob2x26    0.6596 ms  pcc=0.999836  (0.6604/0.6596)
+GROUP 4 o_proj mcast2d_8x8_bw4_ob2x26_r2048
+RESULT o_proj     rows= 2048 mcast2d_8x8_bw4_ob2x26    0.7058 ms  pcc=0.999843  (0.7058/0.7089)
+GROUP 4 o_proj mcast2d_8x8_bw2_ob2x26_r2048
+RESULT o_proj     rows= 2048 mcast2d_8x8_bw2_ob2x26    0.8083 ms  pcc=0.999829  (0.8083/0.8109)
+GROUP 4 o_proj mcast2d_8x8_bw16_ob4x26_r2048
+RESULT o_proj     rows= 2048 mcast2d_8x8_bw16_ob4x26    0.5310 ms  pcc=0.999802  (0.5320/0.5310)
+GROUP 4 o_proj mcast2d_8x8_bw8_ob4x26_r2048
+RESULT o_proj     rows= 2048 mcast2d_8x8_bw8_ob4x26    0.5418 ms  pcc=0.999836  (0.5418/0.5441)
+GROUP 4 o_proj mcast2d_8x8_bw4_ob4x26_r2048
+RESULT o_proj     rows= 2048 mcast2d_8x8_bw4_ob4x26    0.5688 ms  pcc=0.999843  (0.5698/0.5688)
+GROUP 4 o_proj mcast2d_8x8_bw2_ob4x26_r2048
+RESULT o_proj     rows= 2048 mcast2d_8x8_bw2_ob4x26    0.6171 ms  pcc=0.999829  (0.6171/0.6212)
+GROUP 4 o_proj mcast2d_8x8_bw16_ob8x26_r2048
+2026-08-12 10:15:10.526 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1966976 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED o_proj rows=2048 mcast2d_8x8_bw16_ob8x26: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1966976 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 o_proj mcast2d_8x8_bw8_ob8x26_r2048
+RESULT o_proj     rows= 2048 mcast2d_8x8_bw8_ob8x26    0.5098 ms  pcc=0.999836  (0.5156/0.5098)
+GROUP 4 o_proj mcast2d_8x8_bw4_ob8x26_r2048
+RESULT o_proj     rows= 2048 mcast2d_8x8_bw4_ob8x26    0.5279 ms  pcc=0.999843  (0.5279/0.5421)
+GROUP 4 o_proj mcast2d_8x8_bw2_ob8x26_r2048
+RESULT o_proj     rows= 2048 mcast2d_8x8_bw2_ob8x26    0.5694 ms  pcc=0.999829  (0.5694/0.5704)
+GROUP 4 o_proj mcast2d_8x8_bw16_ob2x13_r2048
+CORRUPT o_proj     rows= 2048 mcast2d_8x8_bw16_ob2x13 pcc=nan
+GROUP 4 o_proj mcast2d_8x8_bw8_ob2x13_r2048
+CORRUPT o_proj     rows= 2048 mcast2d_8x8_bw8_ob2x13 pcc=nan
+GROUP 4 o_proj mcast2d_8x8_bw4_ob2x13_r2048
+CORRUPT o_proj     rows= 2048 mcast2d_8x8_bw4_ob2x13 pcc=nan
+GROUP 4 o_proj mcast2d_8x8_bw2_ob2x13_r2048
+CORRUPT o_proj     rows= 2048 mcast2d_8x8_bw2_ob2x13 pcc=nan
+GROUP 4 o_proj mcast2d_8x8_bw16_ob4x13_r2048
+CORRUPT o_proj     rows= 2048 mcast2d_8x8_bw16_ob4x13 pcc=nan
+GROUP 4 o_proj mcast2d_8x8_bw8_ob4x13_r2048
+CORRUPT o_proj     rows= 2048 mcast2d_8x8_bw8_ob4x13 pcc=nan
+GROUP 4 o_proj mcast2d_8x8_bw4_ob4x13_r2048
+CORRUPT o_proj     rows= 2048 mcast2d_8x8_bw4_ob4x13 pcc=nan
+GROUP 4 o_proj mcast2d_8x8_bw2_ob4x13_r2048
+CORRUPT o_proj     rows= 2048 mcast2d_8x8_bw2_ob4x13 pcc=nan
+GROUP 4 o_proj mcast2d_8x10_bw16_r2048
+2026-08-12 10:15:14.708 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1848192 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED o_proj rows=2048 mcast2d_8x10_bw16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1848192 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 o_proj mcast2d_8x10_bw8_r2048
+RESULT o_proj     rows= 2048 mcast2d_8x10_bw8          0.4664 ms  pcc=0.999836  (0.4664/0.4749)
+GROUP 4 o_proj mcast2d_8x10_bw4_r2048
+RESULT o_proj     rows= 2048 mcast2d_8x10_bw4          0.4917 ms  pcc=0.999843  (0.4924/0.4917)
+GROUP 4 o_proj mcast2d_8x10_bw2_r2048
+RESULT o_proj     rows= 2048 mcast2d_8x10_bw2          0.5266 ms  pcc=0.999829  (0.5266/0.5266)
+GROUP 4 o_proj minimal_shipped_r4096
+RESULT o_proj     rows= 4096 minimal_shipped           0.8822 ms  pcc=0.999857  (0.8941/0.8822)
+GROUP 4 o_proj mcast2d_8x8_bw16_r4096
+2026-08-12 10:15:16.415 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2917248 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED o_proj rows=4096 mcast2d_8x8_bw16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2917248 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 o_proj mcast2d_8x8_bw8_r4096
+2026-08-12 10:15:16.417 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1940352 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED o_proj rows=4096 mcast2d_8x8_bw8: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1940352 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 o_proj mcast2d_8x8_bw4_r4096
+RESULT o_proj     rows= 4096 mcast2d_8x8_bw4           1.0593 ms  pcc=0.999842  (1.0798/1.0593)
+GROUP 4 o_proj mcast2d_8x8_bw2_r4096
+RESULT o_proj     rows= 4096 mcast2d_8x8_bw2           1.1275 ms  pcc=0.999829  (1.1275/1.1279)
+GROUP 4 o_proj mcast2d_8x8_bw16_ob2x26_r4096
+RESULT o_proj     rows= 4096 mcast2d_8x8_bw16_ob2x26    1.2733 ms  pcc=0.999802  (1.2733/1.2754)
+GROUP 4 o_proj mcast2d_8x8_bw8_ob2x26_r4096
+RESULT o_proj     rows= 4096 mcast2d_8x8_bw8_ob2x26    1.3593 ms  pcc=0.999836  (1.3603/1.3593)
+GROUP 4 o_proj mcast2d_8x8_bw4_ob2x26_r4096
+RESULT o_proj     rows= 4096 mcast2d_8x8_bw4_ob2x26    1.4484 ms  pcc=0.999842  (1.4484/1.4490)
+GROUP 4 o_proj mcast2d_8x8_bw2_ob2x26_r4096
+RESULT o_proj     rows= 4096 mcast2d_8x8_bw2_ob2x26    1.6376 ms  pcc=0.999829  (1.6384/1.6376)
+GROUP 4 o_proj mcast2d_8x8_bw16_ob4x26_r4096
+RESULT o_proj     rows= 4096 mcast2d_8x8_bw16_ob4x26    1.0467 ms  pcc=0.999802  (1.0467/1.0501)
+GROUP 4 o_proj mcast2d_8x8_bw8_ob4x26_r4096
+RESULT o_proj     rows= 4096 mcast2d_8x8_bw8_ob4x26    1.0764 ms  pcc=0.999836  (1.0764/1.0824)
+GROUP 4 o_proj mcast2d_8x8_bw4_ob4x26_r4096
+RESULT o_proj     rows= 4096 mcast2d_8x8_bw4_ob4x26    1.1255 ms  pcc=0.999842  (1.1320/1.1255)
+GROUP 4 o_proj mcast2d_8x8_bw2_ob4x26_r4096
+RESULT o_proj     rows= 4096 mcast2d_8x8_bw2_ob4x26    1.2173 ms  pcc=0.999829  (1.2176/1.2173)
+GROUP 4 o_proj mcast2d_8x8_bw16_ob2x26_r4096
+RESULT o_proj     rows= 4096 mcast2d_8x8_bw16_ob2x26    1.2731 ms  pcc=0.999802  (1.2731/1.2732)
+GROUP 4 o_proj mcast2d_8x8_bw8_ob2x26_r4096
+RESULT o_proj     rows= 4096 mcast2d_8x8_bw8_ob2x26    1.3585 ms  pcc=0.999836  (1.3588/1.3585)
+GROUP 4 o_proj mcast2d_8x8_bw4_ob2x26_r4096
+RESULT o_proj     rows= 4096 mcast2d_8x8_bw4_ob2x26    1.4427 ms  pcc=0.999842  (1.4427/1.4451)
+GROUP 4 o_proj mcast2d_8x8_bw2_ob2x26_r4096
+RESULT o_proj     rows= 4096 mcast2d_8x8_bw2_ob2x26    1.6371 ms  pcc=0.999829  (1.6371/1.6384)
+GROUP 4 o_proj mcast2d_8x8_bw16_ob4x26_r4096
+RESULT o_proj     rows= 4096 mcast2d_8x8_bw16_ob4x26    1.0512 ms  pcc=0.999802  (1.0512/1.0557)
+GROUP 4 o_proj mcast2d_8x8_bw8_ob4x26_r4096
+RESULT o_proj     rows= 4096 mcast2d_8x8_bw8_ob4x26    1.0773 ms  pcc=0.999836  (1.0773/1.0803)
+GROUP 4 o_proj mcast2d_8x8_bw4_ob4x26_r4096
+RESULT o_proj     rows= 4096 mcast2d_8x8_bw4_ob4x26    1.1204 ms  pcc=0.999842  (1.1204/1.1276)
+GROUP 4 o_proj mcast2d_8x8_bw2_ob4x26_r4096
+RESULT o_proj     rows= 4096 mcast2d_8x8_bw2_ob4x26    1.2184 ms  pcc=0.999829  (1.2187/1.2184)
+GROUP 4 o_proj mcast2d_8x8_bw16_ob8x26_r4096
+2026-08-12 10:15:25.682 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1966976 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED o_proj rows=4096 mcast2d_8x8_bw16_ob8x26: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1966976 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 o_proj mcast2d_8x8_bw8_ob8x26_r4096
+RESULT o_proj     rows= 4096 mcast2d_8x8_bw8_ob8x26    1.0338 ms  pcc=0.999836  (1.0440/1.0338)
+GROUP 4 o_proj mcast2d_8x8_bw4_ob8x26_r4096
+RESULT o_proj     rows= 4096 mcast2d_8x8_bw4_ob8x26    1.0692 ms  pcc=0.999842  (1.0692/1.0857)
+GROUP 4 o_proj mcast2d_8x8_bw2_ob8x26_r4096
+RESULT o_proj     rows= 4096 mcast2d_8x8_bw2_ob8x26    1.1423 ms  pcc=0.999829  (1.1423/1.1463)
+GROUP 4 o_proj mcast2d_8x8_bw16_ob2x13_r4096
+CORRUPT o_proj     rows= 4096 mcast2d_8x8_bw16_ob2x13 pcc=nan
+GROUP 4 o_proj mcast2d_8x8_bw8_ob2x13_r4096
+CORRUPT o_proj     rows= 4096 mcast2d_8x8_bw8_ob2x13 pcc=nan
+GROUP 4 o_proj mcast2d_8x8_bw4_ob2x13_r4096
+CORRUPT o_proj     rows= 4096 mcast2d_8x8_bw4_ob2x13 pcc=nan
+GROUP 4 o_proj mcast2d_8x8_bw2_ob2x13_r4096
+CORRUPT o_proj     rows= 4096 mcast2d_8x8_bw2_ob2x13 pcc=nan
+GROUP 4 o_proj mcast2d_8x8_bw16_ob4x13_r4096
+CORRUPT o_proj     rows= 4096 mcast2d_8x8_bw16_ob4x13 pcc=nan
+GROUP 4 o_proj mcast2d_8x8_bw8_ob4x13_r4096
+CORRUPT o_proj     rows= 4096 mcast2d_8x8_bw8_ob4x13 pcc=nan
+GROUP 4 o_proj mcast2d_8x8_bw4_ob4x13_r4096
+CORRUPT o_proj     rows= 4096 mcast2d_8x8_bw4_ob4x13 pcc=nan
+GROUP 4 o_proj mcast2d_8x8_bw2_ob4x13_r4096
+CORRUPT o_proj     rows= 4096 mcast2d_8x8_bw2_ob4x13 pcc=nan
+GROUP 4 o_proj mcast2d_8x10_bw16_r4096
+2026-08-12 10:15:32.273 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 2560896 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED o_proj rows=4096 mcast2d_8x10_bw16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 2560896 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 o_proj mcast2d_8x10_bw8_r4096
+2026-08-12 10:15:32.276 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1682304 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED o_proj rows=4096 mcast2d_8x10_bw8: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1682304 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 o_proj mcast2d_8x10_bw4_r4096
+RESULT o_proj     rows= 4096 mcast2d_8x10_bw4          0.9760 ms  pcc=0.999842  (0.9760/0.9860)
+GROUP 4 o_proj mcast2d_8x10_bw2_r4096
+RESULT o_proj     rows= 4096 mcast2d_8x10_bw2          1.1926 ms  pcc=0.999829  (1.1926/1.1940)
+GROUP 4 o_proj minimal_shipped_r8192
+RESULT o_proj     rows= 8192 minimal_shipped           1.3749 ms  pcc=0.999852  (1.3749/1.4124)
+GROUP 4 o_proj mcast2d_8x8_bw16_r8192
+2026-08-12 10:15:34.972 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 4817792 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED o_proj rows=8192 mcast2d_8x8_bw16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 4817792 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 o_proj mcast2d_8x8_bw8_r8192
+2026-08-12 10:15:34.975 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 3316608 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED o_proj rows=8192 mcast2d_8x8_bw8: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 3316608 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 o_proj mcast2d_8x8_bw4_r8192
+2026-08-12 10:15:34.977 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2566016 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED o_proj rows=8192 mcast2d_8x8_bw4: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2566016 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 o_proj mcast2d_8x8_bw2_r8192
+2026-08-12 10:15:35.385 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2190720 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED o_proj rows=8192 mcast2d_8x8_bw2: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2190720 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 o_proj mcast2d_8x8_bw16_ob2x26_r8192
+RESULT o_proj     rows= 8192 mcast2d_8x8_bw16_ob2x26    2.5996 ms  pcc=0.999802  (2.5996/2.6420)
+GROUP 4 o_proj mcast2d_8x8_bw8_ob2x26_r8192
+RESULT o_proj     rows= 8192 mcast2d_8x8_bw8_ob2x26    2.6691 ms  pcc=0.999836  (2.6691/2.6969)
+GROUP 4 o_proj mcast2d_8x8_bw4_ob2x26_r8192
+RESULT o_proj     rows= 8192 mcast2d_8x8_bw4_ob2x26    2.9062 ms  pcc=0.999843  (2.9139/2.9062)
+GROUP 4 o_proj mcast2d_8x8_bw2_ob2x26_r8192
+RESULT o_proj     rows= 8192 mcast2d_8x8_bw2_ob2x26    3.2762 ms  pcc=0.999829  (3.2762/3.2807)
+GROUP 4 o_proj mcast2d_8x8_bw16_ob4x26_r8192
+RESULT o_proj     rows= 8192 mcast2d_8x8_bw16_ob4x26    2.0990 ms  pcc=0.999802  (2.0990/2.1147)
+GROUP 4 o_proj mcast2d_8x8_bw8_ob4x26_r8192
+RESULT o_proj     rows= 8192 mcast2d_8x8_bw8_ob4x26    2.1777 ms  pcc=0.999836  (2.1777/2.1904)
+GROUP 4 o_proj mcast2d_8x8_bw4_ob4x26_r8192
+RESULT o_proj     rows= 8192 mcast2d_8x8_bw4_ob4x26    2.2799 ms  pcc=0.999843  (2.2799/2.3052)
+GROUP 4 o_proj mcast2d_8x8_bw2_ob4x26_r8192
+RESULT o_proj     rows= 8192 mcast2d_8x8_bw2_ob4x26    2.4529 ms  pcc=0.999829  (2.4529/2.4651)
+GROUP 4 o_proj mcast2d_8x8_bw16_ob2x26_r8192
+RESULT o_proj     rows= 8192 mcast2d_8x8_bw16_ob2x26    2.5896 ms  pcc=0.999802  (2.5896/2.6085)
+GROUP 4 o_proj mcast2d_8x8_bw8_ob2x26_r8192
+RESULT o_proj     rows= 8192 mcast2d_8x8_bw8_ob2x26    2.6447 ms  pcc=0.999836  (2.6447/2.6816)
+GROUP 4 o_proj mcast2d_8x8_bw4_ob2x26_r8192
+RESULT o_proj     rows= 8192 mcast2d_8x8_bw4_ob2x26    2.9119 ms  pcc=0.999843  (2.9161/2.9119)
+GROUP 4 o_proj mcast2d_8x8_bw2_ob2x26_r8192
+RESULT o_proj     rows= 8192 mcast2d_8x8_bw2_ob2x26    3.2858 ms  pcc=0.999829  (3.2858/3.2870)
+GROUP 4 o_proj mcast2d_8x8_bw16_ob4x26_r8192
+RESULT o_proj     rows= 8192 mcast2d_8x8_bw16_ob4x26    2.0957 ms  pcc=0.999802  (2.0957/2.1133)
+GROUP 4 o_proj mcast2d_8x8_bw8_ob4x26_r8192
+RESULT o_proj     rows= 8192 mcast2d_8x8_bw8_ob4x26    2.1641 ms  pcc=0.999836  (2.1641/2.1790)
+GROUP 4 o_proj mcast2d_8x8_bw4_ob4x26_r8192
+RESULT o_proj     rows= 8192 mcast2d_8x8_bw4_ob4x26    2.2917 ms  pcc=0.999843  (2.2917/2.3002)
+GROUP 4 o_proj mcast2d_8x8_bw2_ob4x26_r8192
+RESULT o_proj     rows= 8192 mcast2d_8x8_bw2_ob4x26    2.4567 ms  pcc=0.999829  (2.4567/2.4720)
+GROUP 4 o_proj mcast2d_8x8_bw16_ob8x26_r8192
+2026-08-12 10:15:47.719 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1966976 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED o_proj rows=8192 mcast2d_8x8_bw16_ob8x26: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1966976 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 o_proj mcast2d_8x8_bw8_ob8x26_r8192
+RESULT o_proj     rows= 8192 mcast2d_8x8_bw8_ob8x26    2.0125 ms  pcc=0.999836  (2.0125/2.0563)
+GROUP 4 o_proj mcast2d_8x8_bw4_ob8x26_r8192
+RESULT o_proj     rows= 8192 mcast2d_8x8_bw4_ob8x26    2.1556 ms  pcc=0.999843  (2.1556/2.1750)
+GROUP 4 o_proj mcast2d_8x8_bw2_ob8x26_r8192
+RESULT o_proj     rows= 8192 mcast2d_8x8_bw2_ob8x26    2.2754 ms  pcc=0.999829  (2.2754/2.2966)
+GROUP 4 o_proj mcast2d_8x8_bw16_ob2x13_r8192
+CORRUPT o_proj     rows= 8192 mcast2d_8x8_bw16_ob2x13 pcc=nan
+GROUP 4 o_proj mcast2d_8x8_bw8_ob2x13_r8192
+CORRUPT o_proj     rows= 8192 mcast2d_8x8_bw8_ob2x13 pcc=nan
+GROUP 4 o_proj mcast2d_8x8_bw4_ob2x13_r8192
+CORRUPT o_proj     rows= 8192 mcast2d_8x8_bw4_ob2x13 pcc=nan
+GROUP 4 o_proj mcast2d_8x8_bw2_ob2x13_r8192
+CORRUPT o_proj     rows= 8192 mcast2d_8x8_bw2_ob2x13 pcc=nan
+GROUP 4 o_proj mcast2d_8x8_bw16_ob4x13_r8192
+CORRUPT o_proj     rows= 8192 mcast2d_8x8_bw16_ob4x13 pcc=nan
+GROUP 4 o_proj mcast2d_8x8_bw8_ob4x13_r8192
+CORRUPT o_proj     rows= 8192 mcast2d_8x8_bw8_ob4x13 pcc=nan
+GROUP 4 o_proj mcast2d_8x8_bw4_ob4x13_r8192
+CORRUPT o_proj     rows= 8192 mcast2d_8x8_bw4_ob4x13 pcc=nan
+GROUP 4 o_proj mcast2d_8x8_bw2_ob4x13_r8192
+CORRUPT o_proj     rows= 8192 mcast2d_8x8_bw2_ob4x13 pcc=nan
+GROUP 4 o_proj mcast2d_8x10_bw16_r8192
+2026-08-12 10:15:56.102 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 4105088 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED o_proj rows=8192 mcast2d_8x10_bw16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 4105088 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 o_proj mcast2d_8x10_bw8_r8192
+2026-08-12 10:15:56.105 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 2800512 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED o_proj rows=8192 mcast2d_8x10_bw8: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 2800512 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 o_proj mcast2d_8x10_bw4_r8192
+2026-08-12 10:15:56.107 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 2148224 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED o_proj rows=8192 mcast2d_8x10_bw4: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 2148224 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 o_proj mcast2d_8x10_bw2_r8192
+2026-08-12 10:15:56.533 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1822080 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED o_proj rows=8192 mcast2d_8x10_bw2: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1822080 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 o_proj mcast2d_8x10_bw16_ob2x26_r8192
+RESULT o_proj     rows= 8192 mcast2d_8x10_bw16_ob2x26    2.3229 ms  pcc=0.999802  (2.3229/2.3641)
+GROUP 4 o_proj mcast2d_8x10_bw8_ob2x26_r8192
+RESULT o_proj     rows= 8192 mcast2d_8x10_bw8_ob2x26    2.3118 ms  pcc=0.999836  (2.3118/2.3242)
+GROUP 4 o_proj mcast2d_8x10_bw4_ob2x26_r8192
+RESULT o_proj     rows= 8192 mcast2d_8x10_bw4_ob2x26    2.4585 ms  pcc=0.999843  (2.4585/2.4735)
+GROUP 4 o_proj mcast2d_8x10_bw2_ob2x26_r8192
+RESULT o_proj     rows= 8192 mcast2d_8x10_bw2_ob2x26    2.7791 ms  pcc=0.999829  (2.7791/2.7847)
+GROUP 4 o_proj mcast2d_8x10_bw16_ob2x26_r8192
+RESULT o_proj     rows= 8192 mcast2d_8x10_bw16_ob2x26    2.3101 ms  pcc=0.999802  (2.3266/2.3101)
+GROUP 4 o_proj mcast2d_8x10_bw8_ob2x26_r8192
+RESULT o_proj     rows= 8192 mcast2d_8x10_bw8_ob2x26    2.3103 ms  pcc=0.999836  (2.3103/2.3337)
+GROUP 4 o_proj mcast2d_8x10_bw4_ob2x26_r8192
+RESULT o_proj     rows= 8192 mcast2d_8x10_bw4_ob2x26    2.4600 ms  pcc=0.999843  (2.4600/2.4683)
+GROUP 4 o_proj mcast2d_8x10_bw2_ob2x26_r8192
+RESULT o_proj     rows= 8192 mcast2d_8x10_bw2_ob2x26    2.7875 ms  pcc=0.999829  (2.7875/2.7981)
+GROUP 4 o_proj mcast2d_8x10_bw16_ob2x13_r8192
+CORRUPT o_proj     rows= 8192 mcast2d_8x10_bw16_ob2x13 pcc=nan
+GROUP 4 o_proj mcast2d_8x10_bw8_ob2x13_r8192
+CORRUPT o_proj     rows= 8192 mcast2d_8x10_bw8_ob2x13 pcc=nan
+GROUP 4 o_proj mcast2d_8x10_bw4_ob2x13_r8192
+CORRUPT o_proj     rows= 8192 mcast2d_8x10_bw4_ob2x13 pcc=nan
+GROUP 4 o_proj mcast2d_8x10_bw2_ob2x13_r8192
+CORRUPT o_proj     rows= 8192 mcast2d_8x10_bw2_ob2x13 pcc=nan
+GROUP 4 mlp_gate minimal_shipped_r512
+RESULT mlp_gate   rows=  512 minimal_shipped           0.8209 ms  pcc=0.993646  (0.8209/0.8235)
+GROUP 4 mlp_gate mcast2d_8x8_bw26_r512
+2026-08-12 10:16:06.422 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2980224 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=512 mcast2d_8x8_bw26: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2980224 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw16_r512
+2026-08-12 10:16:06.425 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1999744 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=512 mcast2d_8x8_bw16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1999744 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw13_r512
+2026-08-12 10:16:06.428 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1705600 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=512 mcast2d_8x8_bw13: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1705600 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw8_r512
+RESULT mlp_gate   rows=  512 mcast2d_8x8_bw8           0.5415 ms  pcc=0.993630  (0.5415/0.5418)
+GROUP 4 mlp_gate mcast2d_8x8_bw26_ob2x78_r512
+2026-08-12 10:16:06.977 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2980224 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=512 mcast2d_8x8_bw26_ob2x78: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2980224 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw16_ob2x78_r512
+2026-08-12 10:16:06.979 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1999744 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=512 mcast2d_8x8_bw16_ob2x78: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1999744 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw13_ob2x78_r512
+2026-08-12 10:16:06.980 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1705600 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=512 mcast2d_8x8_bw13_ob2x78: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1705600 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw8_ob2x78_r512
+RESULT mlp_gate   rows=  512 mcast2d_8x8_bw8_ob2x78    0.5347 ms  pcc=0.993630  (0.5347/0.5390)
+GROUP 4 mlp_gate mcast2d_8x8_bw26_ob2x26_r512
+CORRUPT mlp_gate   rows=  512 mcast2d_8x8_bw26_ob2x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw16_ob2x26_r512
+CORRUPT mlp_gate   rows=  512 mcast2d_8x8_bw16_ob2x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw13_ob2x26_r512
+CORRUPT mlp_gate   rows=  512 mcast2d_8x8_bw13_ob2x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw8_ob2x26_r512
+CORRUPT mlp_gate   rows=  512 mcast2d_8x8_bw8_ob2x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw26_ob2x13_r512
+CORRUPT mlp_gate   rows=  512 mcast2d_8x8_bw26_ob2x13 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw16_ob2x13_r512
+CORRUPT mlp_gate   rows=  512 mcast2d_8x8_bw16_ob2x13 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw13_ob2x13_r512
+CORRUPT mlp_gate   rows=  512 mcast2d_8x8_bw13_ob2x13 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw8_ob2x13_r512
+CORRUPT mlp_gate   rows=  512 mcast2d_8x8_bw8_ob2x13 pcc=nan
+GROUP 4 mlp_gate minimal_shipped_r1024
+RESULT mlp_gate   rows= 1024 minimal_shipped           0.9355 ms  pcc=0.993655  (0.9355/0.9568)
+GROUP 4 mlp_gate mcast2d_8x8_bw26_r1024
+2026-08-12 10:16:11.707 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 3512704 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=1024 mcast2d_8x8_bw26: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 3512704 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw16_r1024
+2026-08-12 10:16:11.710 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2450304 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=1024 mcast2d_8x8_bw16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2450304 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw13_r1024
+2026-08-12 10:16:11.712 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2131584 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=1024 mcast2d_8x8_bw13: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2131584 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw8_r1024
+2026-08-12 10:16:12.099 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1600384 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=1024 mcast2d_8x8_bw8: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1600384 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw26_ob2x78_r1024
+2026-08-12 10:16:12.501 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2980224 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=1024 mcast2d_8x8_bw26_ob2x78: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2980224 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw16_ob2x78_r1024
+2026-08-12 10:16:12.937 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1999744 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=1024 mcast2d_8x8_bw16_ob2x78: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1999744 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw13_ob2x78_r1024
+2026-08-12 10:16:13.350 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1705600 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=1024 mcast2d_8x8_bw13_ob2x78: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1705600 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw8_ob2x78_r1024
+RESULT mlp_gate   rows= 1024 mcast2d_8x8_bw8_ob2x78    1.0814 ms  pcc=0.993640  (1.0814/1.0883)
+GROUP 4 mlp_gate mcast2d_8x8_bw26_ob4x78_r1024
+2026-08-12 10:16:13.947 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 3512704 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=1024 mcast2d_8x8_bw26_ob4x78: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 3512704 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw16_ob4x78_r1024
+2026-08-12 10:16:13.949 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2450304 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=1024 mcast2d_8x8_bw16_ob4x78: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2450304 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw13_ob4x78_r1024
+2026-08-12 10:16:13.949 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2131584 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=1024 mcast2d_8x8_bw13_ob4x78: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2131584 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw8_ob4x78_r1024
+2026-08-12 10:16:13.950 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1600384 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=1024 mcast2d_8x8_bw8_ob4x78: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1600384 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw26_ob2x26_r1024
+CORRUPT mlp_gate   rows= 1024 mcast2d_8x8_bw26_ob2x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw16_ob2x26_r1024
+CORRUPT mlp_gate   rows= 1024 mcast2d_8x8_bw16_ob2x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw13_ob2x26_r1024
+CORRUPT mlp_gate   rows= 1024 mcast2d_8x8_bw13_ob2x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw8_ob2x26_r1024
+CORRUPT mlp_gate   rows= 1024 mcast2d_8x8_bw8_ob2x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw26_ob4x26_r1024
+CORRUPT mlp_gate   rows= 1024 mcast2d_8x8_bw26_ob4x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw16_ob4x26_r1024
+CORRUPT mlp_gate   rows= 1024 mcast2d_8x8_bw16_ob4x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw13_ob4x26_r1024
+CORRUPT mlp_gate   rows= 1024 mcast2d_8x8_bw13_ob4x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw8_ob4x26_r1024
+CORRUPT mlp_gate   rows= 1024 mcast2d_8x8_bw8_ob4x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw26_ob2x13_r1024
+CORRUPT mlp_gate   rows= 1024 mcast2d_8x8_bw26_ob2x13 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw16_ob2x13_r1024
+CORRUPT mlp_gate   rows= 1024 mcast2d_8x8_bw16_ob2x13 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw13_ob2x13_r1024
+CORRUPT mlp_gate   rows= 1024 mcast2d_8x8_bw13_ob2x13 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw8_ob2x13_r1024
+CORRUPT mlp_gate   rows= 1024 mcast2d_8x8_bw8_ob2x13 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw26_ob4x13_r1024
+CORRUPT mlp_gate   rows= 1024 mcast2d_8x8_bw26_ob4x13 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw16_ob4x13_r1024
+CORRUPT mlp_gate   rows= 1024 mcast2d_8x8_bw16_ob4x13 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw13_ob4x13_r1024
+CORRUPT mlp_gate   rows= 1024 mcast2d_8x8_bw13_ob4x13 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw8_ob4x13_r1024
+CORRUPT mlp_gate   rows= 1024 mcast2d_8x8_bw8_ob4x13 pcc=nan
+GROUP 4 mlp_gate minimal_shipped_r2048
+RESULT mlp_gate   rows= 2048 minimal_shipped           1.6054 ms  pcc=0.993659  (1.6054/1.6392)
+GROUP 4 mlp_gate mcast2d_8x8_bw26_r2048
+2026-08-12 10:16:24.210 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 4577664 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=2048 mcast2d_8x8_bw26: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 4577664 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw16_r2048
+2026-08-12 10:16:24.212 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 3351424 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=2048 mcast2d_8x8_bw16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 3351424 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw13_r2048
+2026-08-12 10:16:24.215 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2983552 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=2048 mcast2d_8x8_bw13: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2983552 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw8_r2048
+2026-08-12 10:16:24.657 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2370432 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=2048 mcast2d_8x8_bw8: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2370432 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw26_ob2x78_r2048
+2026-08-12 10:16:25.090 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2980224 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=2048 mcast2d_8x8_bw26_ob2x78: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2980224 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw16_ob2x78_r2048
+2026-08-12 10:16:25.484 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1999744 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=2048 mcast2d_8x8_bw16_ob2x78: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1999744 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw13_ob2x78_r2048
+2026-08-12 10:16:25.919 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1705600 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=2048 mcast2d_8x8_bw13_ob2x78: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1705600 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw8_ob2x78_r2048
+RESULT mlp_gate   rows= 2048 mcast2d_8x8_bw8_ob2x78    2.1465 ms  pcc=0.993639  (2.1465/2.1613)
+GROUP 4 mlp_gate mcast2d_8x8_bw26_ob4x78_r2048
+2026-08-12 10:16:27.183 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 3512704 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=2048 mcast2d_8x8_bw26_ob4x78: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 3512704 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw16_ob4x78_r2048
+2026-08-12 10:16:27.581 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2450304 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=2048 mcast2d_8x8_bw16_ob4x78: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2450304 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw13_ob4x78_r2048
+2026-08-12 10:16:27.990 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2131584 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=2048 mcast2d_8x8_bw13_ob4x78: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2131584 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw8_ob4x78_r2048
+2026-08-12 10:16:28.406 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1600384 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=2048 mcast2d_8x8_bw8_ob4x78: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1600384 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw26_ob2x26_r2048
+CORRUPT mlp_gate   rows= 2048 mcast2d_8x8_bw26_ob2x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw16_ob2x26_r2048
+CORRUPT mlp_gate   rows= 2048 mcast2d_8x8_bw16_ob2x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw13_ob2x26_r2048
+CORRUPT mlp_gate   rows= 2048 mcast2d_8x8_bw13_ob2x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw8_ob2x26_r2048
+CORRUPT mlp_gate   rows= 2048 mcast2d_8x8_bw8_ob2x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw26_ob4x26_r2048
+CORRUPT mlp_gate   rows= 2048 mcast2d_8x8_bw26_ob4x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw16_ob4x26_r2048
+CORRUPT mlp_gate   rows= 2048 mcast2d_8x8_bw16_ob4x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw13_ob4x26_r2048
+CORRUPT mlp_gate   rows= 2048 mcast2d_8x8_bw13_ob4x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw8_ob4x26_r2048
+CORRUPT mlp_gate   rows= 2048 mcast2d_8x8_bw8_ob4x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw26_ob8x26_r2048
+2026-08-12 10:16:33.936 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2168192 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=2048 mcast2d_8x8_bw26_ob8x26: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2168192 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw16_ob8x26_r2048
+CORRUPT mlp_gate   rows= 2048 mcast2d_8x8_bw16_ob8x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw13_ob8x26_r2048
+CORRUPT mlp_gate   rows= 2048 mcast2d_8x8_bw13_ob8x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw8_ob8x26_r2048
+CORRUPT mlp_gate   rows= 2048 mcast2d_8x8_bw8_ob8x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw26_ob2x13_r2048
+CORRUPT mlp_gate   rows= 2048 mcast2d_8x8_bw26_ob2x13 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw16_ob2x13_r2048
+CORRUPT mlp_gate   rows= 2048 mcast2d_8x8_bw16_ob2x13 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw13_ob2x13_r2048
+CORRUPT mlp_gate   rows= 2048 mcast2d_8x8_bw13_ob2x13 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw8_ob2x13_r2048
+CORRUPT mlp_gate   rows= 2048 mcast2d_8x8_bw8_ob2x13 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw26_ob4x13_r2048
+CORRUPT mlp_gate   rows= 2048 mcast2d_8x8_bw26_ob4x13 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw16_ob4x13_r2048
+CORRUPT mlp_gate   rows= 2048 mcast2d_8x8_bw16_ob4x13 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw13_ob4x13_r2048
+CORRUPT mlp_gate   rows= 2048 mcast2d_8x8_bw13_ob4x13 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw8_ob4x13_r2048
+CORRUPT mlp_gate   rows= 2048 mcast2d_8x8_bw8_ob4x13 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x10_bw26_r2048
+2026-08-12 10:16:41.014 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 4311424 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=2048 mcast2d_8x10_bw26: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 4311424 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x10_bw16_r2048
+2026-08-12 10:16:41.017 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 3126144 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=2048 mcast2d_8x10_bw16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 3126144 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x10_bw13_r2048
+2026-08-12 10:16:41.019 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 2770560 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=2048 mcast2d_8x10_bw13: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 2770560 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x10_bw8_r2048
+2026-08-12 10:16:41.465 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 2177920 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=2048 mcast2d_8x10_bw8: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 2177920 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate minimal_shipped_r4096
+RESULT mlp_gate   rows= 4096 minimal_shipped           3.0515 ms  pcc=0.993662  (3.0515/3.1408)
+GROUP 4 mlp_gate mcast2d_8x8_bw26_r4096
+2026-08-12 10:16:44.831 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 6707584 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=4096 mcast2d_8x8_bw26: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 6707584 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw16_r4096
+2026-08-12 10:16:44.834 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 5153664 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=4096 mcast2d_8x8_bw16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 5153664 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw13_r4096
+2026-08-12 10:16:44.836 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 4687488 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=4096 mcast2d_8x8_bw13: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 4687488 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw8_r4096
+2026-08-12 10:16:45.276 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 3910528 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=4096 mcast2d_8x8_bw8: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 3910528 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw26_ob2x78_r4096
+2026-08-12 10:16:45.673 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2980224 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=4096 mcast2d_8x8_bw26_ob2x78: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2980224 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw16_ob2x78_r4096
+2026-08-12 10:16:46.126 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1999744 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=4096 mcast2d_8x8_bw16_ob2x78: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1999744 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw13_ob2x78_r4096
+2026-08-12 10:16:46.523 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1705600 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=4096 mcast2d_8x8_bw13_ob2x78: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1705600 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw8_ob2x78_r4096
+RESULT mlp_gate   rows= 4096 mcast2d_8x8_bw8_ob2x78    4.5939 ms  pcc=0.993641  (4.5939/4.6528)
+GROUP 4 mlp_gate mcast2d_8x8_bw26_ob4x78_r4096
+2026-08-12 10:16:48.231 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 3512704 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=4096 mcast2d_8x8_bw26_ob4x78: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 3512704 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw16_ob4x78_r4096
+2026-08-12 10:16:48.642 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2450304 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=4096 mcast2d_8x8_bw16_ob4x78: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2450304 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw13_ob4x78_r4096
+2026-08-12 10:16:49.060 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2131584 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=4096 mcast2d_8x8_bw13_ob4x78: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2131584 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw8_ob4x78_r4096
+2026-08-12 10:16:49.455 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1600384 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=4096 mcast2d_8x8_bw8_ob4x78: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1600384 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw26_ob2x26_r4096
+CORRUPT mlp_gate   rows= 4096 mcast2d_8x8_bw26_ob2x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw16_ob2x26_r4096
+CORRUPT mlp_gate   rows= 4096 mcast2d_8x8_bw16_ob2x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw13_ob2x26_r4096
+CORRUPT mlp_gate   rows= 4096 mcast2d_8x8_bw13_ob2x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw8_ob2x26_r4096
+CORRUPT mlp_gate   rows= 4096 mcast2d_8x8_bw8_ob2x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw26_ob4x26_r4096
+CORRUPT mlp_gate   rows= 4096 mcast2d_8x8_bw26_ob4x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw16_ob4x26_r4096
+CORRUPT mlp_gate   rows= 4096 mcast2d_8x8_bw16_ob4x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw13_ob4x26_r4096
+CORRUPT mlp_gate   rows= 4096 mcast2d_8x8_bw13_ob4x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw8_ob4x26_r4096
+CORRUPT mlp_gate   rows= 4096 mcast2d_8x8_bw8_ob4x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw26_ob8x26_r4096
+2026-08-12 10:16:56.474 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2168192 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=4096 mcast2d_8x8_bw26_ob8x26: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2168192 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw16_ob8x26_r4096
+CORRUPT mlp_gate   rows= 4096 mcast2d_8x8_bw16_ob8x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw13_ob8x26_r4096
+CORRUPT mlp_gate   rows= 4096 mcast2d_8x8_bw13_ob8x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw8_ob8x26_r4096
+CORRUPT mlp_gate   rows= 4096 mcast2d_8x8_bw8_ob8x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw26_ob2x13_r4096
+CORRUPT mlp_gate   rows= 4096 mcast2d_8x8_bw26_ob2x13 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw16_ob2x13_r4096
+CORRUPT mlp_gate   rows= 4096 mcast2d_8x8_bw16_ob2x13 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw13_ob2x13_r4096
+CORRUPT mlp_gate   rows= 4096 mcast2d_8x8_bw13_ob2x13 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw8_ob2x13_r4096
+CORRUPT mlp_gate   rows= 4096 mcast2d_8x8_bw8_ob2x13 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw26_ob4x13_r4096
+CORRUPT mlp_gate   rows= 4096 mcast2d_8x8_bw26_ob4x13 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw16_ob4x13_r4096
+CORRUPT mlp_gate   rows= 4096 mcast2d_8x8_bw16_ob4x13 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw13_ob4x13_r4096
+CORRUPT mlp_gate   rows= 4096 mcast2d_8x8_bw13_ob4x13 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw8_ob4x13_r4096
+CORRUPT mlp_gate   rows= 4096 mcast2d_8x8_bw8_ob4x13 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x10_bw26_r4096
+2026-08-12 10:17:05.202 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 5908864 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=4096 mcast2d_8x10_bw26: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 5908864 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x10_bw16_r4096
+2026-08-12 10:17:05.205 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 4477824 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=4096 mcast2d_8x10_bw16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 4477824 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x10_bw13_r4096
+2026-08-12 10:17:05.208 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 4048512 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=4096 mcast2d_8x10_bw13: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 4048512 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x10_bw8_r4096
+2026-08-12 10:17:05.651 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 3332992 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=4096 mcast2d_8x10_bw8: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 3332992 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate minimal_shipped_r8192
+RESULT mlp_gate   rows= 8192 minimal_shipped           6.2608 ms  pcc=0.993663  (6.2608/6.5751)
+GROUP 4 mlp_gate mcast2d_8x8_bw26_r8192
+2026-08-12 10:17:12.127 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 10967424 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=8192 mcast2d_8x8_bw26: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 10967424 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw16_r8192
+2026-08-12 10:17:12.130 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 8758144 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=8192 mcast2d_8x8_bw16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 8758144 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw13_r8192
+2026-08-12 10:17:12.132 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 8095360 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=8192 mcast2d_8x8_bw13: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 8095360 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw8_r8192
+2026-08-12 10:17:12.578 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 6990720 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=8192 mcast2d_8x8_bw8: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 6990720 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw26_ob2x78_r8192
+2026-08-12 10:17:12.992 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2980224 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=8192 mcast2d_8x8_bw26_ob2x78: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2980224 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw16_ob2x78_r8192
+2026-08-12 10:17:13.439 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1999744 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=8192 mcast2d_8x8_bw16_ob2x78: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1999744 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw13_ob2x78_r8192
+2026-08-12 10:17:13.885 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1705600 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=8192 mcast2d_8x8_bw13_ob2x78: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1705600 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw8_ob2x78_r8192
+RESULT mlp_gate   rows= 8192 mcast2d_8x8_bw8_ob2x78    9.3190 ms  pcc=0.993642  (9.3190/9.4921)
+GROUP 4 mlp_gate mcast2d_8x8_bw26_ob4x78_r8192
+2026-08-12 10:17:16.242 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 3512704 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=8192 mcast2d_8x8_bw26_ob4x78: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 3512704 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw16_ob4x78_r8192
+2026-08-12 10:17:16.701 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2450304 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=8192 mcast2d_8x8_bw16_ob4x78: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2450304 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw13_ob4x78_r8192
+2026-08-12 10:17:17.151 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2131584 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=8192 mcast2d_8x8_bw13_ob4x78: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2131584 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw8_ob4x78_r8192
+2026-08-12 10:17:17.565 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1600384 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=8192 mcast2d_8x8_bw8_ob4x78: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1600384 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw26_ob2x26_r8192
+CORRUPT mlp_gate   rows= 8192 mcast2d_8x8_bw26_ob2x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw16_ob2x26_r8192
+CORRUPT mlp_gate   rows= 8192 mcast2d_8x8_bw16_ob2x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw13_ob2x26_r8192
+CORRUPT mlp_gate   rows= 8192 mcast2d_8x8_bw13_ob2x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw8_ob2x26_r8192
+CORRUPT mlp_gate   rows= 8192 mcast2d_8x8_bw8_ob2x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw26_ob4x26_r8192
+CORRUPT mlp_gate   rows= 8192 mcast2d_8x8_bw26_ob4x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw16_ob4x26_r8192
+CORRUPT mlp_gate   rows= 8192 mcast2d_8x8_bw16_ob4x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw13_ob4x26_r8192
+CORRUPT mlp_gate   rows= 8192 mcast2d_8x8_bw13_ob4x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw8_ob4x26_r8192
+CORRUPT mlp_gate   rows= 8192 mcast2d_8x8_bw8_ob4x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw26_ob8x26_r8192
+2026-08-12 10:17:27.179 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2168192 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=8192 mcast2d_8x8_bw26_ob8x26: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2168192 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x8_bw16_ob8x26_r8192
+CORRUPT mlp_gate   rows= 8192 mcast2d_8x8_bw16_ob8x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw13_ob8x26_r8192
+CORRUPT mlp_gate   rows= 8192 mcast2d_8x8_bw13_ob8x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw8_ob8x26_r8192
+CORRUPT mlp_gate   rows= 8192 mcast2d_8x8_bw8_ob8x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw26_ob2x13_r8192
+CORRUPT mlp_gate   rows= 8192 mcast2d_8x8_bw26_ob2x13 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw16_ob2x13_r8192
+CORRUPT mlp_gate   rows= 8192 mcast2d_8x8_bw16_ob2x13 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw13_ob2x13_r8192
+CORRUPT mlp_gate   rows= 8192 mcast2d_8x8_bw13_ob2x13 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw8_ob2x13_r8192
+CORRUPT mlp_gate   rows= 8192 mcast2d_8x8_bw8_ob2x13 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw26_ob4x13_r8192
+CORRUPT mlp_gate   rows= 8192 mcast2d_8x8_bw26_ob4x13 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw16_ob4x13_r8192
+CORRUPT mlp_gate   rows= 8192 mcast2d_8x8_bw16_ob4x13 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw13_ob4x13_r8192
+CORRUPT mlp_gate   rows= 8192 mcast2d_8x8_bw13_ob4x13 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x8_bw8_ob4x13_r8192
+CORRUPT mlp_gate   rows= 8192 mcast2d_8x8_bw8_ob4x13 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x10_bw26_r8192
+2026-08-12 10:17:39.914 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 9369984 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=8192 mcast2d_8x10_bw26: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 9369984 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x10_bw16_r8192
+2026-08-12 10:17:39.917 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 7406464 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=8192 mcast2d_8x10_bw16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 7406464 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x10_bw13_r8192
+2026-08-12 10:17:39.919 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 6817408 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=8192 mcast2d_8x10_bw13: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 6817408 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x10_bw8_r8192
+2026-08-12 10:17:40.327 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 5835648 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=8192 mcast2d_8x10_bw8: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 5835648 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x10_bw26_ob2x78_r8192
+2026-08-12 10:17:40.701 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 2980224 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=8192 mcast2d_8x10_bw26_ob2x78: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 2980224 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x10_bw16_ob2x78_r8192
+2026-08-12 10:17:41.130 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1999744 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=8192 mcast2d_8x10_bw16_ob2x78: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1999744 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x10_bw13_ob2x78_r8192
+2026-08-12 10:17:41.524 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1705600 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_gate rows=8192 mcast2d_8x10_bw13_ob2x78: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1705600 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_gate mcast2d_8x10_bw8_ob2x78_r8192
+RESULT mlp_gate   rows= 8192 mcast2d_8x10_bw8_ob2x78    7.8728 ms  pcc=0.993642  (7.8728/8.1468)
+GROUP 4 mlp_gate mcast2d_8x10_bw26_ob2x26_r8192
+CORRUPT mlp_gate   rows= 8192 mcast2d_8x10_bw26_ob2x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x10_bw16_ob2x26_r8192
+CORRUPT mlp_gate   rows= 8192 mcast2d_8x10_bw16_ob2x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x10_bw13_ob2x26_r8192
+CORRUPT mlp_gate   rows= 8192 mcast2d_8x10_bw13_ob2x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x10_bw8_ob2x26_r8192
+CORRUPT mlp_gate   rows= 8192 mcast2d_8x10_bw8_ob2x26 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x10_bw26_ob2x13_r8192
+CORRUPT mlp_gate   rows= 8192 mcast2d_8x10_bw26_ob2x13 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x10_bw16_ob2x13_r8192
+CORRUPT mlp_gate   rows= 8192 mcast2d_8x10_bw16_ob2x13 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x10_bw13_ob2x13_r8192
+CORRUPT mlp_gate   rows= 8192 mcast2d_8x10_bw13_ob2x13 pcc=nan
+GROUP 4 mlp_gate mcast2d_8x10_bw8_ob2x13_r8192
+CORRUPT mlp_gate   rows= 8192 mcast2d_8x10_bw8_ob2x13 pcc=nan
+GROUP 4 mlp_down minimal_shipped_r512
+RESULT mlp_down   rows=  512 minimal_shipped           0.8181 ms  pcc=0.993221  (0.8182/0.8181)
+GROUP 4 mlp_down mcast2d_8x8_bw26_r512
+RESULT mlp_down   rows=  512 mcast2d_8x8_bw26          0.5511 ms  pcc=0.993132  (0.5511/0.5537)
+GROUP 4 mlp_down mcast2d_8x8_bw24_r512
+RESULT mlp_down   rows=  512 mcast2d_8x8_bw24          0.5523 ms  pcc=0.993144  (0.5523/0.5525)
+GROUP 4 mlp_down mcast2d_8x8_bw16_r512
+RESULT mlp_down   rows=  512 mcast2d_8x8_bw16          0.5623 ms  pcc=0.993179  (0.5623/0.5681)
+GROUP 4 mlp_down mcast2d_8x8_bw13_r512
+RESULT mlp_down   rows=  512 mcast2d_8x8_bw13          0.5693 ms  pcc=0.993186  (0.5693/0.5694)
+GROUP 4 mlp_down mcast2d_8x8_bw26_ob2x26_r512
+RESULT mlp_down   rows=  512 mcast2d_8x8_bw26_ob2x26    0.5496 ms  pcc=0.993132  (0.5496/0.5566)
+GROUP 4 mlp_down mcast2d_8x8_bw24_ob2x26_r512
+RESULT mlp_down   rows=  512 mcast2d_8x8_bw24_ob2x26    0.5522 ms  pcc=0.993144  (0.5522/0.5542)
+GROUP 4 mlp_down mcast2d_8x8_bw16_ob2x26_r512
+RESULT mlp_down   rows=  512 mcast2d_8x8_bw16_ob2x26    0.5666 ms  pcc=0.993179  (0.5666/0.5699)
+GROUP 4 mlp_down mcast2d_8x8_bw13_ob2x26_r512
+RESULT mlp_down   rows=  512 mcast2d_8x8_bw13_ob2x26    0.5669 ms  pcc=0.993186  (0.5695/0.5669)
+GROUP 4 mlp_down mcast2d_8x8_bw26_ob2x26_r512
+RESULT mlp_down   rows=  512 mcast2d_8x8_bw26_ob2x26    0.5509 ms  pcc=0.993132  (0.5511/0.5509)
+GROUP 4 mlp_down mcast2d_8x8_bw24_ob2x26_r512
+RESULT mlp_down   rows=  512 mcast2d_8x8_bw24_ob2x26    0.5502 ms  pcc=0.993144  (0.5502/0.5526)
+GROUP 4 mlp_down mcast2d_8x8_bw16_ob2x26_r512
+RESULT mlp_down   rows=  512 mcast2d_8x8_bw16_ob2x26    0.5663 ms  pcc=0.993179  (0.5663/0.5706)
+GROUP 4 mlp_down mcast2d_8x8_bw13_ob2x26_r512
+RESULT mlp_down   rows=  512 mcast2d_8x8_bw13_ob2x26    0.5671 ms  pcc=0.993186  (0.5671/0.5709)
+GROUP 4 mlp_down mcast2d_8x8_bw26_ob2x13_r512
+CORRUPT mlp_down   rows=  512 mcast2d_8x8_bw26_ob2x13 pcc=nan
+GROUP 4 mlp_down mcast2d_8x8_bw24_ob2x13_r512
+CORRUPT mlp_down   rows=  512 mcast2d_8x8_bw24_ob2x13 pcc=nan
+GROUP 4 mlp_down mcast2d_8x8_bw16_ob2x13_r512
+CORRUPT mlp_down   rows=  512 mcast2d_8x8_bw16_ob2x13 pcc=nan
+GROUP 4 mlp_down mcast2d_8x8_bw13_ob2x13_r512
+CORRUPT mlp_down   rows=  512 mcast2d_8x8_bw13_ob2x13 pcc=nan
+GROUP 4 mlp_down minimal_shipped_r1024
+RESULT mlp_down   rows= 1024 minimal_shipped           0.8797 ms  pcc=0.993219  (0.8797/0.8838)
+GROUP 4 mlp_down mcast2d_8x8_bw26_r1024
+RESULT mlp_down   rows= 1024 mcast2d_8x8_bw26          0.9865 ms  pcc=0.993128  (0.9913/0.9865)
+GROUP 4 mlp_down mcast2d_8x8_bw24_r1024
+RESULT mlp_down   rows= 1024 mcast2d_8x8_bw24          0.9982 ms  pcc=0.993138  (0.9982/1.0059)
+GROUP 4 mlp_down mcast2d_8x8_bw16_r1024
+RESULT mlp_down   rows= 1024 mcast2d_8x8_bw16          1.0025 ms  pcc=0.993173  (1.0081/1.0025)
+GROUP 4 mlp_down mcast2d_8x8_bw13_r1024
+RESULT mlp_down   rows= 1024 mcast2d_8x8_bw13          1.0234 ms  pcc=0.993183  (1.0234/1.0282)
+GROUP 4 mlp_down mcast2d_8x8_bw26_ob2x26_r1024
+RESULT mlp_down   rows= 1024 mcast2d_8x8_bw26_ob2x26    1.0541 ms  pcc=0.993128  (1.0545/1.0541)
+GROUP 4 mlp_down mcast2d_8x8_bw24_ob2x26_r1024
+RESULT mlp_down   rows= 1024 mcast2d_8x8_bw24_ob2x26    1.0332 ms  pcc=0.993138  (1.0332/1.0404)
+GROUP 4 mlp_down mcast2d_8x8_bw16_ob2x26_r1024
+RESULT mlp_down   rows= 1024 mcast2d_8x8_bw16_ob2x26    1.0718 ms  pcc=0.993173  (1.0718/1.0756)
+GROUP 4 mlp_down mcast2d_8x8_bw13_ob2x26_r1024
+RESULT mlp_down   rows= 1024 mcast2d_8x8_bw13_ob2x26    1.0575 ms  pcc=0.993183  (1.0575/1.0700)
+GROUP 4 mlp_down mcast2d_8x8_bw26_ob4x26_r1024
+RESULT mlp_down   rows= 1024 mcast2d_8x8_bw26_ob4x26    0.9878 ms  pcc=0.993128  (0.9878/0.9902)
+GROUP 4 mlp_down mcast2d_8x8_bw24_ob4x26_r1024
+RESULT mlp_down   rows= 1024 mcast2d_8x8_bw24_ob4x26    1.0039 ms  pcc=0.993138  (1.0039/1.0109)
+GROUP 4 mlp_down mcast2d_8x8_bw16_ob4x26_r1024
+RESULT mlp_down   rows= 1024 mcast2d_8x8_bw16_ob4x26    1.0189 ms  pcc=0.993173  (1.0189/1.0246)
+GROUP 4 mlp_down mcast2d_8x8_bw13_ob4x26_r1024
+RESULT mlp_down   rows= 1024 mcast2d_8x8_bw13_ob4x26    1.0269 ms  pcc=0.993183  (1.0269/1.0356)
+GROUP 4 mlp_down mcast2d_8x8_bw26_ob2x26_r1024
+RESULT mlp_down   rows= 1024 mcast2d_8x8_bw26_ob2x26    1.0511 ms  pcc=0.993128  (1.0513/1.0511)
+GROUP 4 mlp_down mcast2d_8x8_bw24_ob2x26_r1024
+RESULT mlp_down   rows= 1024 mcast2d_8x8_bw24_ob2x26    1.0314 ms  pcc=0.993138  (1.0360/1.0314)
+GROUP 4 mlp_down mcast2d_8x8_bw16_ob2x26_r1024
+RESULT mlp_down   rows= 1024 mcast2d_8x8_bw16_ob2x26    1.0777 ms  pcc=0.993173  (1.0777/1.0784)
+GROUP 4 mlp_down mcast2d_8x8_bw13_ob2x26_r1024
+RESULT mlp_down   rows= 1024 mcast2d_8x8_bw13_ob2x26    1.0637 ms  pcc=0.993183  (1.0637/1.0678)
+GROUP 4 mlp_down mcast2d_8x8_bw26_ob4x26_r1024
+RESULT mlp_down   rows= 1024 mcast2d_8x8_bw26_ob4x26    1.0008 ms  pcc=0.993128  (1.0008/1.0071)
+GROUP 4 mlp_down mcast2d_8x8_bw24_ob4x26_r1024
+RESULT mlp_down   rows= 1024 mcast2d_8x8_bw24_ob4x26    0.9833 ms  pcc=0.993138  (0.9833/0.9865)
+GROUP 4 mlp_down mcast2d_8x8_bw16_ob4x26_r1024
+RESULT mlp_down   rows= 1024 mcast2d_8x8_bw16_ob4x26    1.0184 ms  pcc=0.993173  (1.0184/1.0221)
+GROUP 4 mlp_down mcast2d_8x8_bw13_ob4x26_r1024
+RESULT mlp_down   rows= 1024 mcast2d_8x8_bw13_ob4x26    1.0078 ms  pcc=0.993183  (1.0111/1.0078)
+GROUP 4 mlp_down mcast2d_8x8_bw26_ob2x13_r1024
+CORRUPT mlp_down   rows= 1024 mcast2d_8x8_bw26_ob2x13 pcc=nan
+GROUP 4 mlp_down mcast2d_8x8_bw24_ob2x13_r1024
+CORRUPT mlp_down   rows= 1024 mcast2d_8x8_bw24_ob2x13 pcc=nan
+GROUP 4 mlp_down mcast2d_8x8_bw16_ob2x13_r1024
+CORRUPT mlp_down   rows= 1024 mcast2d_8x8_bw16_ob2x13 pcc=nan
+GROUP 4 mlp_down mcast2d_8x8_bw13_ob2x13_r1024
+CORRUPT mlp_down   rows= 1024 mcast2d_8x8_bw13_ob2x13 pcc=nan
+GROUP 4 mlp_down mcast2d_8x8_bw26_ob4x13_r1024
+CORRUPT mlp_down   rows= 1024 mcast2d_8x8_bw26_ob4x13 pcc=nan
+GROUP 4 mlp_down mcast2d_8x8_bw24_ob4x13_r1024
+CORRUPT mlp_down   rows= 1024 mcast2d_8x8_bw24_ob4x13 pcc=nan
+GROUP 4 mlp_down mcast2d_8x8_bw16_ob4x13_r1024
+CORRUPT mlp_down   rows= 1024 mcast2d_8x8_bw16_ob4x13 pcc=nan
+GROUP 4 mlp_down mcast2d_8x8_bw13_ob4x13_r1024
+CORRUPT mlp_down   rows= 1024 mcast2d_8x8_bw13_ob4x13 pcc=nan
+GROUP 4 mlp_down minimal_shipped_r2048
+RESULT mlp_down   rows= 2048 minimal_shipped           1.7528 ms  pcc=0.993215  (1.7528/1.7787)
+GROUP 4 mlp_down mcast2d_8x8_bw26_r2048
+2026-08-12 10:18:06.407 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2168192 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_down rows=2048 mcast2d_8x8_bw26: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2168192 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_down mcast2d_8x8_bw24_r2048
+2026-08-12 10:18:06.410 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2042752 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_down rows=2048 mcast2d_8x8_bw24: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2042752 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_down mcast2d_8x8_bw16_r2048
+RESULT mlp_down   rows= 2048 mcast2d_8x8_bw16          1.9528 ms  pcc=0.993182  (1.9528/1.9713)
+GROUP 4 mlp_down mcast2d_8x8_bw13_r2048
+RESULT mlp_down   rows= 2048 mcast2d_8x8_bw13          1.9473 ms  pcc=0.993190  (1.9473/1.9667)
+GROUP 4 mlp_down mcast2d_8x8_bw26_ob2x26_r2048
+RESULT mlp_down   rows= 2048 mcast2d_8x8_bw26_ob2x26    2.1539 ms  pcc=0.993136  (2.1539/2.1694)
+GROUP 4 mlp_down mcast2d_8x8_bw24_ob2x26_r2048
+RESULT mlp_down   rows= 2048 mcast2d_8x8_bw24_ob2x26    2.0570 ms  pcc=0.993147  (2.0570/2.0771)
+GROUP 4 mlp_down mcast2d_8x8_bw16_ob2x26_r2048
+RESULT mlp_down   rows= 2048 mcast2d_8x8_bw16_ob2x26    2.1818 ms  pcc=0.993182  (2.1818/2.1958)
+GROUP 4 mlp_down mcast2d_8x8_bw13_ob2x26_r2048
+RESULT mlp_down   rows= 2048 mcast2d_8x8_bw13_ob2x26    2.1198 ms  pcc=0.993190  (2.1198/2.1330)
+GROUP 4 mlp_down mcast2d_8x8_bw26_ob4x26_r2048
+RESULT mlp_down   rows= 2048 mcast2d_8x8_bw26_ob4x26    2.0090 ms  pcc=0.993136  (2.0090/2.0311)
+GROUP 4 mlp_down mcast2d_8x8_bw24_ob4x26_r2048
+RESULT mlp_down   rows= 2048 mcast2d_8x8_bw24_ob4x26    2.0015 ms  pcc=0.993147  (2.0015/2.0264)
+GROUP 4 mlp_down mcast2d_8x8_bw16_ob4x26_r2048
+RESULT mlp_down   rows= 2048 mcast2d_8x8_bw16_ob4x26    2.0382 ms  pcc=0.993182  (2.0382/2.0606)
+GROUP 4 mlp_down mcast2d_8x8_bw13_ob4x26_r2048
+RESULT mlp_down   rows= 2048 mcast2d_8x8_bw13_ob4x26    2.0370 ms  pcc=0.993190  (2.0370/2.0650)
+GROUP 4 mlp_down mcast2d_8x8_bw26_ob2x26_r2048
+RESULT mlp_down   rows= 2048 mcast2d_8x8_bw26_ob2x26    2.1513 ms  pcc=0.993136  (2.1513/2.1699)
+GROUP 4 mlp_down mcast2d_8x8_bw24_ob2x26_r2048
+RESULT mlp_down   rows= 2048 mcast2d_8x8_bw24_ob2x26    2.0485 ms  pcc=0.993147  (2.0485/2.0800)
+GROUP 4 mlp_down mcast2d_8x8_bw16_ob2x26_r2048
+RESULT mlp_down   rows= 2048 mcast2d_8x8_bw16_ob2x26    2.1712 ms  pcc=0.993182  (2.1712/2.1881)
+GROUP 4 mlp_down mcast2d_8x8_bw13_ob2x26_r2048
+RESULT mlp_down   rows= 2048 mcast2d_8x8_bw13_ob2x26    2.1300 ms  pcc=0.993190  (2.1300/2.1356)
+GROUP 4 mlp_down mcast2d_8x8_bw26_ob4x26_r2048
+RESULT mlp_down   rows= 2048 mcast2d_8x8_bw26_ob4x26    2.0093 ms  pcc=0.993136  (2.0093/2.0314)
+GROUP 4 mlp_down mcast2d_8x8_bw24_ob4x26_r2048
+RESULT mlp_down   rows= 2048 mcast2d_8x8_bw24_ob4x26    2.0012 ms  pcc=0.993147  (2.0012/2.0159)
+GROUP 4 mlp_down mcast2d_8x8_bw16_ob4x26_r2048
+RESULT mlp_down   rows= 2048 mcast2d_8x8_bw16_ob4x26    2.0412 ms  pcc=0.993182  (2.0412/2.0604)
+GROUP 4 mlp_down mcast2d_8x8_bw13_ob4x26_r2048
+RESULT mlp_down   rows= 2048 mcast2d_8x8_bw13_ob4x26    2.0493 ms  pcc=0.993190  (2.0548/2.0493)
+GROUP 4 mlp_down mcast2d_8x8_bw26_ob8x26_r2048
+2026-08-12 10:18:12.931 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2168192 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_down rows=2048 mcast2d_8x8_bw26_ob8x26: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2168192 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_down mcast2d_8x8_bw24_ob8x26_r2048
+2026-08-12 10:18:12.932 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2042752 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_down rows=2048 mcast2d_8x8_bw24_ob8x26: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2042752 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_down mcast2d_8x8_bw16_ob8x26_r2048
+RESULT mlp_down   rows= 2048 mcast2d_8x8_bw16_ob8x26    1.9562 ms  pcc=0.993182  (1.9562/1.9777)
+GROUP 4 mlp_down mcast2d_8x8_bw13_ob8x26_r2048
+RESULT mlp_down   rows= 2048 mcast2d_8x8_bw13_ob8x26    1.9677 ms  pcc=0.993190  (1.9677/1.9893)
+GROUP 4 mlp_down mcast2d_8x8_bw26_ob2x13_r2048
+CORRUPT mlp_down   rows= 2048 mcast2d_8x8_bw26_ob2x13 pcc=nan
+GROUP 4 mlp_down mcast2d_8x8_bw24_ob2x13_r2048
+CORRUPT mlp_down   rows= 2048 mcast2d_8x8_bw24_ob2x13 pcc=nan
+GROUP 4 mlp_down mcast2d_8x8_bw16_ob2x13_r2048
+CORRUPT mlp_down   rows= 2048 mcast2d_8x8_bw16_ob2x13 pcc=nan
+GROUP 4 mlp_down mcast2d_8x8_bw13_ob2x13_r2048
+CORRUPT mlp_down   rows= 2048 mcast2d_8x8_bw13_ob2x13 pcc=nan
+GROUP 4 mlp_down mcast2d_8x8_bw26_ob4x13_r2048
+CORRUPT mlp_down   rows= 2048 mcast2d_8x8_bw26_ob4x13 pcc=nan
+GROUP 4 mlp_down mcast2d_8x8_bw24_ob4x13_r2048
+CORRUPT mlp_down   rows= 2048 mcast2d_8x8_bw24_ob4x13 pcc=nan
+GROUP 4 mlp_down mcast2d_8x8_bw16_ob4x13_r2048
+CORRUPT mlp_down   rows= 2048 mcast2d_8x8_bw16_ob4x13 pcc=nan
+GROUP 4 mlp_down mcast2d_8x8_bw13_ob4x13_r2048
+CORRUPT mlp_down   rows= 2048 mcast2d_8x8_bw13_ob4x13 pcc=nan
+GROUP 4 mlp_down mcast2d_8x10_bw26_r2048
+2026-08-12 10:18:17.145 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 2008448 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_down rows=2048 mcast2d_8x10_bw26: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 2008448 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_down mcast2d_8x10_bw24_r2048
+2026-08-12 10:18:17.148 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1891200 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_down rows=2048 mcast2d_8x10_bw24: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1891200 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_down mcast2d_8x10_bw16_r2048
+RESULT mlp_down   rows= 2048 mcast2d_8x10_bw16         1.7331 ms  pcc=0.993182  (1.7331/1.7598)
+GROUP 4 mlp_down mcast2d_8x10_bw13_r2048
+RESULT mlp_down   rows= 2048 mcast2d_8x10_bw13         1.7497 ms  pcc=0.993190  (1.7497/1.7714)
+GROUP 4 mlp_down minimal_shipped_r4096
+RESULT mlp_down   rows= 4096 minimal_shipped           3.2560 ms  pcc=0.993215  (3.2560/3.3956)
+GROUP 4 mlp_down mcast2d_8x8_bw26_r4096
+2026-08-12 10:18:21.120 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 3446144 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_down rows=4096 mcast2d_8x8_bw26: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 3446144 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_down mcast2d_8x8_bw24_r4096
+2026-08-12 10:18:21.122 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 3255168 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_down rows=4096 mcast2d_8x8_bw24: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 3255168 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_down mcast2d_8x8_bw16_r4096
+2026-08-12 10:18:21.125 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2491264 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_down rows=4096 mcast2d_8x8_bw16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2491264 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_down mcast2d_8x8_bw13_r4096
+2026-08-12 10:18:21.534 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2204800 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_down rows=4096 mcast2d_8x8_bw13: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2204800 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_down mcast2d_8x8_bw26_ob2x26_r4096
+RESULT mlp_down   rows= 4096 mcast2d_8x8_bw26_ob2x26    4.2326 ms  pcc=0.993136  (4.2326/4.3053)
+GROUP 4 mlp_down mcast2d_8x8_bw24_ob2x26_r4096
+RESULT mlp_down   rows= 4096 mcast2d_8x8_bw24_ob2x26    4.1587 ms  pcc=0.993146  (4.1587/4.2353)
+GROUP 4 mlp_down mcast2d_8x8_bw16_ob2x26_r4096
+RESULT mlp_down   rows= 4096 mcast2d_8x8_bw16_ob2x26    4.3352 ms  pcc=0.993181  (4.3352/4.4287)
+GROUP 4 mlp_down mcast2d_8x8_bw13_ob2x26_r4096
+RESULT mlp_down   rows= 4096 mcast2d_8x8_bw13_ob2x26    4.2829 ms  pcc=0.993190  (4.2829/4.3607)
+GROUP 4 mlp_down mcast2d_8x8_bw26_ob4x26_r4096
+RESULT mlp_down   rows= 4096 mcast2d_8x8_bw26_ob4x26    4.0360 ms  pcc=0.993136  (4.0360/4.1233)
+GROUP 4 mlp_down mcast2d_8x8_bw24_ob4x26_r4096
+RESULT mlp_down   rows= 4096 mcast2d_8x8_bw24_ob4x26    4.0524 ms  pcc=0.993146  (4.0524/4.1173)
+GROUP 4 mlp_down mcast2d_8x8_bw16_ob4x26_r4096
+RESULT mlp_down   rows= 4096 mcast2d_8x8_bw16_ob4x26    4.1097 ms  pcc=0.993181  (4.1097/4.1656)
+GROUP 4 mlp_down mcast2d_8x8_bw13_ob4x26_r4096
+RESULT mlp_down   rows= 4096 mcast2d_8x8_bw13_ob4x26    4.1487 ms  pcc=0.993190  (4.1487/4.2187)
+GROUP 4 mlp_down mcast2d_8x8_bw26_ob2x26_r4096
+RESULT mlp_down   rows= 4096 mcast2d_8x8_bw26_ob2x26    4.2285 ms  pcc=0.993136  (4.2285/4.3080)
+GROUP 4 mlp_down mcast2d_8x8_bw24_ob2x26_r4096
+RESULT mlp_down   rows= 4096 mcast2d_8x8_bw24_ob2x26    4.1514 ms  pcc=0.993146  (4.1514/4.2305)
+GROUP 4 mlp_down mcast2d_8x8_bw16_ob2x26_r4096
+RESULT mlp_down   rows= 4096 mcast2d_8x8_bw16_ob2x26    4.3312 ms  pcc=0.993181  (4.3312/4.3743)
+GROUP 4 mlp_down mcast2d_8x8_bw13_ob2x26_r4096
+RESULT mlp_down   rows= 4096 mcast2d_8x8_bw13_ob2x26    4.3017 ms  pcc=0.993190  (4.3017/4.3738)
+GROUP 4 mlp_down mcast2d_8x8_bw26_ob4x26_r4096
+RESULT mlp_down   rows= 4096 mcast2d_8x8_bw26_ob4x26    4.0428 ms  pcc=0.993136  (4.0428/4.1342)
+GROUP 4 mlp_down mcast2d_8x8_bw24_ob4x26_r4096
+RESULT mlp_down   rows= 4096 mcast2d_8x8_bw24_ob4x26    4.0629 ms  pcc=0.993146  (4.0629/4.1265)
+GROUP 4 mlp_down mcast2d_8x8_bw16_ob4x26_r4096
+RESULT mlp_down   rows= 4096 mcast2d_8x8_bw16_ob4x26    4.1073 ms  pcc=0.993181  (4.1073/4.1615)
+GROUP 4 mlp_down mcast2d_8x8_bw13_ob4x26_r4096
+RESULT mlp_down   rows= 4096 mcast2d_8x8_bw13_ob4x26    4.1482 ms  pcc=0.993190  (4.1482/4.2230)
+GROUP 4 mlp_down mcast2d_8x8_bw26_ob8x26_r4096
+2026-08-12 10:18:30.464 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2168192 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_down rows=4096 mcast2d_8x8_bw26_ob8x26: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2168192 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_down mcast2d_8x8_bw24_ob8x26_r4096
+2026-08-12 10:18:30.910 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2042752 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_down rows=4096 mcast2d_8x8_bw24_ob8x26: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2042752 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_down mcast2d_8x8_bw16_ob8x26_r4096
+RESULT mlp_down   rows= 4096 mcast2d_8x8_bw16_ob8x26    3.9023 ms  pcc=0.993181  (3.9023/3.9962)
+GROUP 4 mlp_down mcast2d_8x8_bw13_ob8x26_r4096
+RESULT mlp_down   rows= 4096 mcast2d_8x8_bw13_ob8x26    3.9608 ms  pcc=0.993190  (3.9608/4.0507)
+GROUP 4 mlp_down mcast2d_8x8_bw26_ob2x13_r4096
+CORRUPT mlp_down   rows= 4096 mcast2d_8x8_bw26_ob2x13 pcc=nan
+GROUP 4 mlp_down mcast2d_8x8_bw24_ob2x13_r4096
+CORRUPT mlp_down   rows= 4096 mcast2d_8x8_bw24_ob2x13 pcc=nan
+GROUP 4 mlp_down mcast2d_8x8_bw16_ob2x13_r4096
+CORRUPT mlp_down   rows= 4096 mcast2d_8x8_bw16_ob2x13 pcc=nan
+GROUP 4 mlp_down mcast2d_8x8_bw13_ob2x13_r4096
+CORRUPT mlp_down   rows= 4096 mcast2d_8x8_bw13_ob2x13 pcc=nan
+GROUP 4 mlp_down mcast2d_8x8_bw26_ob4x13_r4096
+CORRUPT mlp_down   rows= 4096 mcast2d_8x8_bw26_ob4x13 pcc=nan
+GROUP 4 mlp_down mcast2d_8x8_bw24_ob4x13_r4096
+CORRUPT mlp_down   rows= 4096 mcast2d_8x8_bw24_ob4x13 pcc=nan
+GROUP 4 mlp_down mcast2d_8x8_bw16_ob4x13_r4096
+CORRUPT mlp_down   rows= 4096 mcast2d_8x8_bw16_ob4x13 pcc=nan
+GROUP 4 mlp_down mcast2d_8x8_bw13_ob4x13_r4096
+CORRUPT mlp_down   rows= 4096 mcast2d_8x8_bw13_ob4x13 pcc=nan
+GROUP 4 mlp_down mcast2d_8x10_bw26_r4096
+2026-08-12 10:18:37.031 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 2966912 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_down rows=4096 mcast2d_8x10_bw26: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 2966912 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_down mcast2d_8x10_bw24_r4096
+2026-08-12 10:18:37.034 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 2800512 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_down rows=4096 mcast2d_8x10_bw24: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 2800512 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_down mcast2d_8x10_bw16_r4096
+2026-08-12 10:18:37.036 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 2134912 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_down rows=4096 mcast2d_8x10_bw16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 2134912 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_down mcast2d_8x10_bw13_r4096
+2026-08-12 10:18:37.472 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1885312 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_down rows=4096 mcast2d_8x10_bw13: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1885312 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_down minimal_shipped_r8192
+RESULT mlp_down   rows= 8192 minimal_shipped           5.6865 ms  pcc=0.993228  (5.6865/6.0307)
+GROUP 4 mlp_down mcast2d_8x8_bw26_r8192
+2026-08-12 10:18:43.785 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 6002048 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_down rows=8192 mcast2d_8x8_bw26: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 6002048 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_down mcast2d_8x8_bw24_r8192
+2026-08-12 10:18:43.787 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 5680000 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_down rows=8192 mcast2d_8x8_bw24: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 5680000 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_down mcast2d_8x8_bw16_r8192
+2026-08-12 10:18:43.790 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 4391808 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_down rows=8192 mcast2d_8x8_bw16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 4391808 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_down mcast2d_8x8_bw13_r8192
+2026-08-12 10:18:44.178 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 3908736 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_down rows=8192 mcast2d_8x8_bw13: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 3908736 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_down mcast2d_8x8_bw26_ob2x26_r8192
+RESULT mlp_down   rows= 8192 mcast2d_8x8_bw26_ob2x26    8.6306 ms  pcc=0.993138  (8.6306/8.8937)
+GROUP 4 mlp_down mcast2d_8x8_bw24_ob2x26_r8192
+RESULT mlp_down   rows= 8192 mcast2d_8x8_bw24_ob2x26    8.6717 ms  pcc=0.993149  (8.6717/8.9106)
+GROUP 4 mlp_down mcast2d_8x8_bw16_ob2x26_r8192
+RESULT mlp_down   rows= 8192 mcast2d_8x8_bw16_ob2x26    8.8380 ms  pcc=0.993184  (8.8380/9.0836)
+GROUP 4 mlp_down mcast2d_8x8_bw13_ob2x26_r8192
+RESULT mlp_down   rows= 8192 mcast2d_8x8_bw13_ob2x26    8.8487 ms  pcc=0.993192  (8.8487/9.1401)
+GROUP 4 mlp_down mcast2d_8x8_bw26_ob4x26_r8192
+RESULT mlp_down   rows= 8192 mcast2d_8x8_bw26_ob4x26    8.0045 ms  pcc=0.993138  (8.0045/8.2655)
+GROUP 4 mlp_down mcast2d_8x8_bw24_ob4x26_r8192
+RESULT mlp_down   rows= 8192 mcast2d_8x8_bw24_ob4x26    8.2469 ms  pcc=0.993149  (8.2469/8.4855)
+GROUP 4 mlp_down mcast2d_8x8_bw16_ob4x26_r8192
+RESULT mlp_down   rows= 8192 mcast2d_8x8_bw16_ob4x26    8.2342 ms  pcc=0.993184  (8.2342/8.5275)
+GROUP 4 mlp_down mcast2d_8x8_bw13_ob4x26_r8192
+RESULT mlp_down   rows= 8192 mcast2d_8x8_bw13_ob4x26    8.4240 ms  pcc=0.993192  (8.4240/8.6696)
+GROUP 4 mlp_down mcast2d_8x8_bw26_ob2x26_r8192
+RESULT mlp_down   rows= 8192 mcast2d_8x8_bw26_ob2x26    8.6198 ms  pcc=0.993138  (8.6198/8.8891)
+GROUP 4 mlp_down mcast2d_8x8_bw24_ob2x26_r8192
+RESULT mlp_down   rows= 8192 mcast2d_8x8_bw24_ob2x26    8.6549 ms  pcc=0.993149  (8.6549/8.8989)
+GROUP 4 mlp_down mcast2d_8x8_bw16_ob2x26_r8192
+RESULT mlp_down   rows= 8192 mcast2d_8x8_bw16_ob2x26    8.8058 ms  pcc=0.993184  (8.8058/9.0933)
+GROUP 4 mlp_down mcast2d_8x8_bw13_ob2x26_r8192
+RESULT mlp_down   rows= 8192 mcast2d_8x8_bw13_ob2x26    8.8675 ms  pcc=0.993192  (8.8675/9.1328)
+GROUP 4 mlp_down mcast2d_8x8_bw26_ob4x26_r8192
+RESULT mlp_down   rows= 8192 mcast2d_8x8_bw26_ob4x26    8.0119 ms  pcc=0.993138  (8.0119/8.2687)
+GROUP 4 mlp_down mcast2d_8x8_bw24_ob4x26_r8192
+RESULT mlp_down   rows= 8192 mcast2d_8x8_bw24_ob4x26    8.2167 ms  pcc=0.993149  (8.2167/8.4569)
+GROUP 4 mlp_down mcast2d_8x8_bw16_ob4x26_r8192
+RESULT mlp_down   rows= 8192 mcast2d_8x8_bw16_ob4x26    8.3481 ms  pcc=0.993184  (8.3481/8.6077)
+GROUP 4 mlp_down mcast2d_8x8_bw13_ob4x26_r8192
+RESULT mlp_down   rows= 8192 mcast2d_8x8_bw13_ob4x26    8.4308 ms  pcc=0.993192  (8.4308/8.6772)
+GROUP 4 mlp_down mcast2d_8x8_bw26_ob8x26_r8192
+2026-08-12 10:18:57.375 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2168192 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_down rows=8192 mcast2d_8x8_bw26_ob8x26: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2168192 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_down mcast2d_8x8_bw24_ob8x26_r8192
+2026-08-12 10:18:57.770 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2042752 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_down rows=8192 mcast2d_8x8_bw24_ob8x26: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-7] grow to 2042752 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_down mcast2d_8x8_bw16_ob8x26_r8192
+RESULT mlp_down   rows= 8192 mcast2d_8x8_bw16_ob8x26    8.0217 ms  pcc=0.993184  (8.0217/8.2722)
+GROUP 4 mlp_down mcast2d_8x8_bw13_ob8x26_r8192
+RESULT mlp_down   rows= 8192 mcast2d_8x8_bw13_ob8x26    8.0279 ms  pcc=0.993192  (8.0279/8.2741)
+GROUP 4 mlp_down mcast2d_8x8_bw26_ob2x13_r8192
+CORRUPT mlp_down   rows= 8192 mcast2d_8x8_bw26_ob2x13 pcc=nan
+GROUP 4 mlp_down mcast2d_8x8_bw24_ob2x13_r8192
+CORRUPT mlp_down   rows= 8192 mcast2d_8x8_bw24_ob2x13 pcc=nan
+GROUP 4 mlp_down mcast2d_8x8_bw16_ob2x13_r8192
+CORRUPT mlp_down   rows= 8192 mcast2d_8x8_bw16_ob2x13 pcc=nan
+GROUP 4 mlp_down mcast2d_8x8_bw13_ob2x13_r8192
+CORRUPT mlp_down   rows= 8192 mcast2d_8x8_bw13_ob2x13 pcc=nan
+GROUP 4 mlp_down mcast2d_8x8_bw26_ob4x13_r8192
+CORRUPT mlp_down   rows= 8192 mcast2d_8x8_bw26_ob4x13 pcc=nan
+GROUP 4 mlp_down mcast2d_8x8_bw24_ob4x13_r8192
+CORRUPT mlp_down   rows= 8192 mcast2d_8x8_bw24_ob4x13 pcc=nan
+GROUP 4 mlp_down mcast2d_8x8_bw16_ob4x13_r8192
+CORRUPT mlp_down   rows= 8192 mcast2d_8x8_bw16_ob4x13 pcc=nan
+GROUP 4 mlp_down mcast2d_8x8_bw13_ob4x13_r8192
+CORRUPT mlp_down   rows= 8192 mcast2d_8x8_bw13_ob4x13 pcc=nan
+GROUP 4 mlp_down mcast2d_8x10_bw26_r8192
+2026-08-12 10:19:05.431 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 5043584 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_down rows=8192 mcast2d_8x10_bw26: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 5043584 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_down mcast2d_8x10_bw24_r8192
+2026-08-12 10:19:05.434 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 4770688 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_down rows=8192 mcast2d_8x10_bw24: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 4770688 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_down mcast2d_8x10_bw16_r8192
+2026-08-12 10:19:05.437 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 3679104 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_down rows=8192 mcast2d_8x10_bw16: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 3679104 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_down mcast2d_8x10_bw13_r8192
+2026-08-12 10:19:05.834 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 3269760 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+BLOCKED mlp_down rows=8192 mcast2d_8x10_bw13: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 3269760 B which is beyond max L1 size of 1572864 B | backtrace:
+GROUP 4 mlp_down mcast2d_8x10_bw26_ob2x26_r8192
+RESULT mlp_down   rows= 8192 mcast2d_8x10_bw26_ob2x26    7.3365 ms  pcc=0.993138  (7.3365/7.4980)
+GROUP 4 mlp_down mcast2d_8x10_bw24_ob2x26_r8192
+RESULT mlp_down   rows= 8192 mcast2d_8x10_bw24_ob2x26    7.4149 ms  pcc=0.993149  (7.4149/7.7088)
+GROUP 4 mlp_down mcast2d_8x10_bw16_ob2x26_r8192
+RESULT mlp_down   rows= 8192 mcast2d_8x10_bw16_ob2x26    7.3938 ms  pcc=0.993184  (7.3938/7.6947)
+GROUP 4 mlp_down mcast2d_8x10_bw13_ob2x26_r8192
+RESULT mlp_down   rows= 8192 mcast2d_8x10_bw13_ob2x26    7.4222 ms  pcc=0.993192  (7.4222/7.7447)
+GROUP 4 mlp_down mcast2d_8x10_bw26_ob2x26_r8192
+RESULT mlp_down   rows= 8192 mcast2d_8x10_bw26_ob2x26    7.3414 ms  pcc=0.993138  (7.3414/7.5154)
+GROUP 4 mlp_down mcast2d_8x10_bw24_ob2x26_r8192
+RESULT mlp_down   rows= 8192 mcast2d_8x10_bw24_ob2x26    7.2098 ms  pcc=0.993149  (7.2098/7.7015)
+GROUP 4 mlp_down mcast2d_8x10_bw16_ob2x26_r8192
+RESULT mlp_down   rows= 8192 mcast2d_8x10_bw16_ob2x26    7.4361 ms  pcc=0.993184  (7.4361/7.7371)
+GROUP 4 mlp_down mcast2d_8x10_bw13_ob2x26_r8192
+RESULT mlp_down   rows= 8192 mcast2d_8x10_bw13_ob2x26    7.4580 ms  pcc=0.993192  (7.4580/7.7510)
+GROUP 4 mlp_down mcast2d_8x10_bw26_ob2x13_r8192
+CORRUPT mlp_down   rows= 8192 mcast2d_8x10_bw26_ob2x13 pcc=nan
+GROUP 4 mlp_down mcast2d_8x10_bw24_ob2x13_r8192
+CORRUPT mlp_down   rows= 8192 mcast2d_8x10_bw24_ob2x13 pcc=nan
+GROUP 4 mlp_down mcast2d_8x10_bw16_ob2x13_r8192
+CORRUPT mlp_down   rows= 8192 mcast2d_8x10_bw16_ob2x13 pcc=nan
+GROUP 4 mlp_down mcast2d_8x10_bw13_ob2x13_r8192
+CORRUPT mlp_down   rows= 8192 mcast2d_8x10_bw13_ob2x13 pcc=nan
+nanobind: leaked 3 instances!
+ - leaked instance 0x7a9ca7bdd6f8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x7a9cfb8c5e48 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x7a9cfb8c6028 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+nanobind: leaked 45 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.types.Shape"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.multi_device.MeshMapperConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - ... skipped remainder
+nanobind: leaked 372 functions!
+ - leaked function "device"
+ - leaked function "is_allocated"
+ - leaked function "__repr__"
+ - leaked function ""
+ - leaked function "unpad"
+ - leaked function ""
+ - leaked function "from_json"
+ - leaked function "__ne__"
+ - leaked function "is_sharded"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-12 10:19:15.426 | info     |    BuildKernels | JIT cache stats: 1178/4540 hits (25.9%) [1178 cached, 205 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-12 10:19:15.426 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-12 10:19:15.453 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-12 10:19:15.453 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-12 10:19:15.922 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-12 10:19:15.922 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-12 10:19:15.922 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

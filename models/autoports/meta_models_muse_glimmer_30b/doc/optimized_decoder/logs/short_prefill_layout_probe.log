@@ -1,0 +1,93 @@
+2026-08-12 10:51:18.202 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-12 10:51:18.386 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-12 10:51:18.386 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-12 10:51:18.386 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-12 10:51:18.386 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-12 10:51:18.398 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-12 10:51:18.398 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-12 10:51:18.477 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-12 10:51:18.477 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-12 10:51:18.477 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-12 10:51:18.477 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-12 10:51:18.478 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-12 10:51:18.721 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-12 10:51:18.840 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-12 10:51:18.840 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-12 10:51:18.840 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-12 10:51:18.840 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-12 10:51:18.840 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-12 10:51:18.878 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+NORM rows=  128 interleaved                135.8 us  pcc=0.999997
+NORM rows=  128 sharded_l1_ 8cores+i2s+s2i      45.5 us  pcc=0.999997  speedup= 2.98x
+NORM rows=  128 sharded_l1_16cores+i2s+s2i      35.6 us  pcc=nan  speedup= 3.82x
+NORM rows=  128 sharded_l1_26cores+i2s+s2i      32.2 us  pcc=0.999870  speedup= 4.22x
+NORM rows=  128 sharded_l1_52cores+i2s+s2i      40.8 us  pcc=0.999821  speedup= 3.33x
+NORM rows=  512 interleaved                135.9 us  pcc=0.999997
+2026-08-12 10:51:23.723 | critical |          Always | TT_FATAL: Out of Memory: Not enough space to allocate 6815744 B L1 buffer across 8 banks, where each bank needs to store 851968 B, but bank size is 1461376 B (allocated: 851968 B, free: 609408 B, largest free block: 609408 B) (assert.hpp:104)
+NORM rows=512 sharded_l1_8cores BLOCKED: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/allocator/bank_manager.cpp:462: false | info: | Out of Memory: Not enough space to allocate 6815744 B L1 buffer across 8 banks, where each bank needs to sto
+2026-08-12 10:51:24.503 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-0] grow to 2116480 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+NORM rows=512 sharded_l1_16cores BLOCKED: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-0] grow to 2116480 B which is beyond max L1
+2026-08-12 10:51:25.621 | critical |          Always | TT_THROW: Statically allocated circular buffers in program 38 clash with L1 buffers on core range [0-0 - 10-1]. L1 buffer allocated at 1048576 and static circular buffer region ends at 1491840 (assert.hpp:104)
+NORM rows=512 sharded_l1_26cores BLOCKED: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1779: tt::exception | info: | Statically allocated circular buffers in program 38 clash with L1 buffers on core range [0-0 - 10-1]. L1 b
+NORM rows=  512 sharded_l1_52cores+i2s+s2i      87.5 us  pcc=nan  speedup= 1.55x
+NORM rows= 1024 interleaved                158.6 us  pcc=0.999997
+2026-08-12 10:51:26.874 | critical |          Always | TT_FATAL: Out of Memory: Not enough space to allocate 13631488 B L1 buffer across 8 banks, where each bank needs to store 1703936 B, but bank size is 1461376 B (allocated: 0 B, free: 1461376 B, largest free block: 1461376 B) (assert.hpp:104)
+NORM rows=1024 sharded_l1_8cores BLOCKED: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/allocator/bank_manager.cpp:462: false | info: | Out of Memory: Not enough space to allocate 13631488 B L1 buffer across 8 banks, where each bank needs to st
+2026-08-12 10:51:26.876 | critical |          Always | TT_FATAL: Out of Memory: Not enough space to allocate 13631488 B L1 buffer across 16 banks, where each bank needs to store 851968 B, but bank size is 1461376 B (allocated: 851968 B, free: 609408 B, largest free block: 609408 B) (assert.hpp:104)
+NORM rows=1024 sharded_l1_16cores BLOCKED: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/allocator/bank_manager.cpp:462: false | info: | Out of Memory: Not enough space to allocate 13631488 B L1 buffer across 16 banks, where each bank needs to s
+2026-08-12 10:51:27.903 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-1] grow to 2741120 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+NORM rows=1024 sharded_l1_26cores BLOCKED: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-1] grow to 2741120 B which is beyond max L1
+2026-08-12 10:51:29.018 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-3] grow to 1786752 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+NORM rows=1024 sharded_l1_52cores BLOCKED: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-3] grow to 1786752 B which is beyond max L1
+NORM rows= 2048 interleaved                256.3 us  pcc=0.999997
+2026-08-12 10:51:29.309 | critical |          Always | TT_FATAL: Out of Memory: Not enough space to allocate 27262976 B L1 buffer across 8 banks, where each bank needs to store 3407872 B, but bank size is 1461376 B (allocated: 0 B, free: 1461376 B, largest free block: 1461376 B) (assert.hpp:104)
+NORM rows=2048 sharded_l1_8cores BLOCKED: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/allocator/bank_manager.cpp:462: false | info: | Out of Memory: Not enough space to allocate 27262976 B L1 buffer across 8 banks, where each bank needs to st
+2026-08-12 10:51:29.310 | critical |          Always | TT_FATAL: Out of Memory: Not enough space to allocate 27262976 B L1 buffer across 16 banks, where each bank needs to store 1703936 B, but bank size is 1461376 B (allocated: 0 B, free: 1461376 B, largest free block: 1461376 B) (assert.hpp:104)
+NORM rows=2048 sharded_l1_16cores BLOCKED: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/allocator/bank_manager.cpp:462: false | info: | Out of Memory: Not enough space to allocate 27262976 B L1 buffer across 16 banks, where each bank needs to s
+2026-08-12 10:51:29.312 | critical |          Always | TT_FATAL: Out of Memory: Not enough space to allocate 27262976 B L1 buffer across 26 banks, where each bank needs to store 1048576 B, but bank size is 1461376 B (allocated: 1048576 B, free: 412800 B, largest free block: 412800 B) (assert.hpp:104)
+NORM rows=2048 sharded_l1_26cores BLOCKED: TT_FATAL @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/allocator/bank_manager.cpp:462: false | info: | Out of Memory: Not enough space to allocate 27262976 B L1 buffer across 26 banks, where each bank needs to s
+2026-08-12 10:51:30.431 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-3] grow to 3232640 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+NORM rows=2048 sharded_l1_52cores BLOCKED: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 10-3] grow to 3232640 B which is beyond max L1
+IN0L1 wqkv       rows=  128 in0=DRAM_interleaved          149.4 us  pcc=0.999814
+IN0L1 wqkv       rows=  128 in0=L1_block_sharded+i2s      162.2 us  pcc=0.999814  speedup= 0.92x  shard=(64, 832)
+IN0L1 mlp_gate   rows=  128 in0=DRAM_interleaved          406.8 us  pcc=0.993621
+IN0L1 mlp_gate   rows=  128 in0=L1_block_sharded+i2s      421.3 us  pcc=0.993621  speedup= 0.97x  shard=(32, 832)
+IN0L1 mlp_down   rows=  128 in0=DRAM_interleaved          499.7 us  pcc=0.993148
+IN0L1 mlp_down   rows=  128 in0=L1_block_sharded+i2s      516.6 us  pcc=0.993148  speedup= 0.97x  shard=(32, 2496)
+nanobind: leaked 3 instances!
+ - leaked instance 0x7b07dbdbe6b8 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x7b07dbdbe4d8 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x7b0787faf4c8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 45 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.types.Shape"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.multi_device.MeshMapperConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - ... skipped remainder
+nanobind: leaked 372 functions!
+ - leaked function "GetPCIeDeviceID"
+ - leaked function "bounding_box"
+ - leaked function "is_sharded"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "pop_current_command_queue_id_for_thread"
+ - leaked function "__repr__"
+ - leaked function "__init__"
+ - leaked function "unpad"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-12 10:51:34.002 | info     |    BuildKernels | JIT cache stats: 48/216 hits (22.2%) [48 cached, 43 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-12 10:51:34.002 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-12 10:51:34.016 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-12 10:51:34.016 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-12 10:51:34.457 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-12 10:51:34.457 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-12 10:51:34.457 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)
