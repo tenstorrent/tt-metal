@@ -27,7 +27,7 @@ template <
     bool narrow_row,
     std::uint32_t row_num_datums,
     bool dense,
-    bool configure_remap>
+    bool configure_remap, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void pack_untilize_dest_init_impl(uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
 #ifndef ARCH_QUASAR
     state_configure<Operand::PACK>(ocb, call_line);
@@ -38,7 +38,7 @@ ALWI void pack_untilize_dest_init_impl(uint32_t ocb, uint32_t call_line = __buil
         MATH((llk_math_reconfig_remap(true /*remap_enable*/)));
     }
 #endif
-    PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(ocb)));
+    PACK((llk_pack_reconfig_data_format<is_fp32_dest_acc_en>(ocb)));
     PACK((
         llk_pack_untilize_init<block_ct_dim, full_ct_dim, false /*diagonal*/, narrow_row, row_num_datums, dense>(ocb)));
     PACK((llk_init_packer_dest_offset_registers<PackMode::Untilize, false /*diagonal*/>()));
@@ -50,7 +50,7 @@ ALWI void pack_untilize_dest_init_impl(uint32_t ocb, uint32_t call_line = __buil
 #endif
 }
 
-template <uint32_t block_ct_dim, uint32_t full_ct_dim, bool configure_remap>
+template <uint32_t block_ct_dim, uint32_t full_ct_dim, bool configure_remap, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void pack_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
 #ifndef ARCH_QUASAR
     state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
@@ -59,14 +59,14 @@ ALWI void pack_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line
             false /*transpose_of_faces*/,
             false /*within_face_16x16_transpose*/,
             icb)));  // init must be after configure
-    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
+    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(icb)));
 #else
     UNPACK((llk_unpack_A_init<
             BroadcastType::NONE,
             false /*acc_to_dest*/,
             EltwiseBinaryReuseDestType::NONE,
             false /*unpack_to_dest*/>(false /*transpose_of_faces*/, false /*within_face_16x16_transpose*/, icb)));
-    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE>(icb)));
+    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, is_fp32_dest_acc_en>(icb)));
 #endif
     pack_untilize_dest_init_impl<
         block_ct_dim,
@@ -217,7 +217,7 @@ ALWI void pack_untilize_init_skip_remap(uint32_t icb, uint32_t ocb, uint32_t cal
  * | Function   | block_c_index | Index of the currently processed block     | uint32_t  | >= 0                      | False               |
  */
 // clang-format on
-template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim>
+template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb, uint32_t block_c_index = 0) {
     LLK_SAN_FUNCTION();
     for (uint32_t r = 0; r < block_rt_dim; ++r) {
@@ -230,7 +230,7 @@ ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb,
                     EltwiseBinaryReuseDestType::NONE,
                     UnpackToDestEn>(icb, c)));
             MATH((
-                llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
+                llk_math_eltwise_unary_datacopy<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, UnpackToDestEn>(
                     c, icb)));
 #else
             UNPACK((llk_unpack_A<
@@ -241,10 +241,10 @@ ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb,
             MATH((llk_math_eltwise_unary_datacopy(c, icb)));
 #endif
         }
-        MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
+        MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>()));
         PACK((llk_packer_wait_for_math_done()));
         PACK((llk_pack_untilize<block_ct_dim, full_ct_dim>(1 /*num_blocks*/, ocb, block_c_index)));
-        PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
+        PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en>()));
     }
 }
 
@@ -325,6 +325,7 @@ ALWI void pack_untilize_dest(
  * | Function   | ocb  | Output circular buffer identifier  | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void pack_untilize_uninit(uint32_t ocb) {
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
@@ -338,7 +339,7 @@ ALWI void pack_untilize_uninit(uint32_t ocb) {
     {
         LLK_SAN_SILENT_ZONE();
         PACK((llk_init_packer_dest_offset_registers<PackMode::Default>()));
-        PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(ocb)));
+        PACK((llk_pack_reconfig_data_format<is_fp32_dest_acc_en>(ocb)));
         PACK((llk_pack_init(ocb)));
     }
 

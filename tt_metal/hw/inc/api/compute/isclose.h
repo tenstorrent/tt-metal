@@ -56,11 +56,11 @@ namespace ckernel {
  * | atol_bits | IEEE-754 bit-pattern of the absolute tolerance scalar                 | uint32_t | Must represent a finite non-negative float            | True     |
  */
 // clang-format on
-template <bool EQUAL_NAN = false>
+template <bool EQUAL_NAN = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void isclose_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst, uint32_t rtol_bits, uint32_t atol_bits) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         calculate_sfpu_isclose,
         (APPROX, 8 /* ITERATIONS */, EQUAL_NAN),
         idst0,

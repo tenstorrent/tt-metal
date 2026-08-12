@@ -28,9 +28,10 @@ namespace ckernel {
  * | scale_factor    | uint bitwise representation of 32 bit floating point scale factor          | uint32_t |                                                       | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void dropout_tile(uint32_t idst, uint32_t probability, uint32_t scale_factor) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_dropout, (APPROX), idst, VectorMode::RC, probability, scale_factor));
+        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_dropout, (APPROX), idst, VectorMode::RC, probability, scale_factor));
 }
 
 /**

@@ -36,9 +36,10 @@ namespace ckernel {
  * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void unary_ne_tile(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_ne, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC, param0));
+        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_unary_ne, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC, param0));
 }
 
 /**
@@ -62,10 +63,11 @@ ALWI void unary_ne_tile_init() { MATH(SFPU_UNARY_INIT(unary_ne)); }
  * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void unary_ne_tile_int32(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         calculate_comp_unary_int,
         (APPROX, SfpuType::unary_ne, 8 /*ITERATIONS*/),
         idst,
@@ -89,9 +91,10 @@ ALWI void unary_ne_tile_int32(uint32_t idst, uint32_t param0) {
  * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void unary_eq_tile(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_eq, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC, param0));
+        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_unary_eq, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC, param0));
 }
 
 /**
@@ -115,10 +118,11 @@ ALWI void unary_eq_tile_init() { MATH(SFPU_UNARY_INIT(unary_eq)); }
  * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void unary_eq_tile_int32(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         calculate_comp_unary_int,
         (APPROX, SfpuType::unary_eq, 8 /*ITERATIONS*/),
         idst,
@@ -142,9 +146,10 @@ ALWI void unary_eq_tile_int32(uint32_t idst, uint32_t param0) {
  * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void unary_gt_tile(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_gt, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC, param0));
+        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_unary_gt, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC, param0));
 }
 
 /**
@@ -168,10 +173,11 @@ ALWI void unary_gt_tile_init() { MATH(SFPU_UNARY_INIT(unary_gt)); }
  * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void unary_gt_tile_int32(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         _calculate_comp_unary_int_,
         (APPROX, SfpuType::unary_gt, 8 /*ITERATIONS*/),
         idst,
@@ -195,9 +201,10 @@ ALWI void unary_gt_tile_int32(uint32_t idst, uint32_t param0) {
  * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void unary_ge_tile(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_ge, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC, param0));
+        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_unary_ge, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC, param0));
 }
 
 /**
@@ -221,10 +228,11 @@ ALWI void unary_ge_tile_init() { MATH(SFPU_UNARY_INIT(unary_ge)); }
  * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void unary_ge_tile_int32(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         _calculate_comp_unary_int_,
         (APPROX, SfpuType::unary_ge, 8 /*ITERATIONS*/),
         idst,
@@ -248,9 +256,10 @@ ALWI void unary_ge_tile_int32(uint32_t idst, uint32_t param0) {
  * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void unary_lt_tile(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_lt, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC, param0));
+        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_unary_lt, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC, param0));
 }
 
 // unary lt : if x < value --> 1, else 0
@@ -269,10 +278,11 @@ ALWI void unary_lt_tile(uint32_t idst, uint32_t param0) {
  * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void unary_lt_tile_int32(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         _calculate_comp_unary_int_,
         (APPROX, SfpuType::unary_lt, 8 /*ITERATIONS*/),
         idst,
@@ -301,9 +311,10 @@ ALWI void unary_lt_tile_init() { MATH(SFPU_UNARY_INIT(unary_lt)); }
  * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void unary_le_tile(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_le, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC, param0));
+        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_unary_le, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC, param0));
 }
 
 // unary le : if x <= value --> 1, else 0
@@ -322,10 +333,11 @@ ALWI void unary_le_tile(uint32_t idst, uint32_t param0) {
  * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void unary_le_tile_int32(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         _calculate_comp_unary_int_,
         (APPROX, SfpuType::unary_le, 8 /*ITERATIONS*/),
         idst,
@@ -353,14 +365,15 @@ ALWI void unary_le_tile_init() { MATH(SFPU_UNARY_INIT(unary_le)); }
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void gtz_tile(uint32_t idst) {
 #ifndef ARCH_QUASAR
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_comp, (APPROX, SfpuType::greater_than_zero), idst, VectorMode::RC));
+        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_comp, (APPROX, SfpuType::greater_than_zero), idst, VectorMode::RC));
 #else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         calculate_zero_comp,
         (APPROX, DataFormat::Float32, SfpuType::greater_than_zero, SFPU_ITERATIONS),
         idst,
@@ -393,14 +406,15 @@ ALWI void gtz_tile_init() {
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void nez_tile(uint32_t idst) {
 #ifndef ARCH_QUASAR
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_comp, (APPROX, SfpuType::not_equal_zero), idst, VectorMode::RC));
+        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_comp, (APPROX, SfpuType::not_equal_zero), idst, VectorMode::RC));
 #else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         calculate_zero_comp,
         (APPROX, DataFormat::Float32, SfpuType::not_equal_zero, SFPU_ITERATIONS),
         idst,
@@ -433,11 +447,12 @@ ALWI void nez_tile_init() {
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void gez_tile(uint32_t idst) {
 #ifndef ARCH_QUASAR
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         calculate_comp,
         (APPROX, SfpuType::greater_than_equal_zero),
         idst,
@@ -445,7 +460,7 @@ ALWI void gez_tile(uint32_t idst) {
 #else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         calculate_zero_comp,
         (APPROX, DataFormat::Float32, SfpuType::greater_than_equal_zero, SFPU_ITERATIONS),
         idst,
@@ -478,14 +493,15 @@ ALWI void gez_tile_init() {
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void ltz_tile(uint32_t idst) {
 #ifndef ARCH_QUASAR
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_comp, (APPROX, SfpuType::less_than_zero), idst, VectorMode::RC));
+        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_comp, (APPROX, SfpuType::less_than_zero), idst, VectorMode::RC));
 #else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         calculate_zero_comp,
         (APPROX, DataFormat::Float32, SfpuType::less_than_zero, SFPU_ITERATIONS),
         idst,
@@ -518,14 +534,15 @@ ALWI void ltz_tile_init() {
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void eqz_tile(uint32_t idst) {
 #ifndef ARCH_QUASAR
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_comp, (APPROX, SfpuType::equal_zero), idst, VectorMode::RC));
+        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_comp, (APPROX, SfpuType::equal_zero), idst, VectorMode::RC));
 #else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         calculate_zero_comp,
         (APPROX, DataFormat::Float32, SfpuType::equal_zero, SFPU_ITERATIONS),
         idst,
@@ -558,14 +575,15 @@ ALWI void eqz_tile_init() {
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void lez_tile(uint32_t idst) {
 #ifndef ARCH_QUASAR
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_comp, (APPROX, SfpuType::less_than_equal_zero), idst, VectorMode::RC));
+        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_comp, (APPROX, SfpuType::less_than_equal_zero), idst, VectorMode::RC));
 #else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         calculate_zero_comp,
         (APPROX, DataFormat::Float32, SfpuType::less_than_equal_zero, SFPU_ITERATIONS),
         idst,
@@ -601,10 +619,11 @@ ALWI void lez_tile_init() {
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void gtz_tile_int32(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         calculate_comp_int,
         (APPROX, SfpuType::greater_than_zero),
         idst,
@@ -625,9 +644,10 @@ ALWI void gtz_tile_int32(uint32_t idst) {
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void nez_tile_int32(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_comp_int, (APPROX, SfpuType::not_equal_zero), idst, VectorMode::RC));
+        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_comp_int, (APPROX, SfpuType::not_equal_zero), idst, VectorMode::RC));
 }
 
 // clang-format off
@@ -644,10 +664,11 @@ ALWI void nez_tile_int32(uint32_t idst) {
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void gez_tile_int32(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         calculate_comp_int,
         (APPROX, SfpuType::greater_than_equal_zero),
         idst,
@@ -668,9 +689,10 @@ ALWI void gez_tile_int32(uint32_t idst) {
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void ltz_tile_int32(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_comp_int, (APPROX, SfpuType::less_than_zero), idst, VectorMode::RC));
+        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_comp_int, (APPROX, SfpuType::less_than_zero), idst, VectorMode::RC));
 }
 
 // clang-format off
@@ -687,9 +709,10 @@ ALWI void ltz_tile_int32(uint32_t idst) {
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void eqz_tile_int32(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_comp_int, (APPROX, SfpuType::equal_zero), idst, VectorMode::RC));
+        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_comp_int, (APPROX, SfpuType::equal_zero), idst, VectorMode::RC));
 }
 
 // clang-format off
@@ -706,9 +729,10 @@ ALWI void eqz_tile_int32(uint32_t idst) {
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void eqz_tile_uint16(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_comp_uint16, (APPROX, SfpuType::equal_zero), idst, VectorMode::RC));
+        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_comp_uint16, (APPROX, SfpuType::equal_zero), idst, VectorMode::RC));
 }
 
 // clang-format off
@@ -725,9 +749,10 @@ ALWI void eqz_tile_uint16(uint32_t idst) {
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void eqz_tile_uint32(uint32_t idst) {
     MATH((SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_eqz_uint32, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC)));
+        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_eqz_uint32, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC)));
 }
 
 // clang-format off
@@ -744,10 +769,11 @@ ALWI void eqz_tile_uint32(uint32_t idst) {
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void lez_tile_int32(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         calculate_comp_int,
         (APPROX, SfpuType::less_than_equal_zero),
         idst,
@@ -768,10 +794,11 @@ ALWI void lez_tile_int32(uint32_t idst) {
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void nez_tile_uint16(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         calculate_comp_uint16,
         (APPROX, SfpuType::not_equal_zero),
         idst,
@@ -792,9 +819,10 @@ ALWI void nez_tile_uint16(uint32_t idst) {
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void nez_tile_uint32(uint32_t idst) {
     MATH((SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_nez_uint32, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC)));
+        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_nez_uint32, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC)));
 }
 #endif  // !ARCH_QUASAR
 

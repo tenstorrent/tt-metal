@@ -24,9 +24,10 @@ ALWI void sub_bcast_cols_init_short_custom(uint32_t icb0, uint32_t icb1, uint32_
     UNPACK((llk_unpack_AB_sub_bcast_col_init_custom(icb0)));
 }
 
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sub_tiles_bcast_cols_custom(
     uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, uint32_t ct_dim) {
-    MATH((llk_math_eltwise_binary_sub_bcast_cols_custom<DST_ACCUM_MODE>(icb0, idst, ct_dim)));
+    MATH((llk_math_eltwise_binary_sub_bcast_cols_custom<is_fp32_dest_acc_en>(icb0, idst, ct_dim)));
     UNPACK((llk_unpack_AB_sub_bcast_col_custom(icb0, icb1, itile0, itile1, ct_dim)));
 }
 

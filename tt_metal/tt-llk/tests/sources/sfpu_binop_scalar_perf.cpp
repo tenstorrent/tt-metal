@@ -84,8 +84,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
 
-// Real DST_ACCUM_MODE (not the sfpu_operations.h #define hack) so the binop
-// kernel's RSUB fp32->bf16 correction matches the actual dest mode.
+// Needed so the defaulted is_fp32_dest_acc_en template arg on
+// calculate_binop_with_scalar can resolve when the header is parsed.
+// Call sites pass is_fp32_dest_acc_en explicitly for the RSUB correction path.
 static constexpr bool DST_ACCUM_MODE = is_fp32_dest_acc_en;
 
 #include "llk_sfpu/ckernel_sfpu_binop_with_unary.h"
@@ -182,7 +183,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             DST_SYNC_MODE,
                             is_fp32_dest_acc_en,
                             calculate_binop_with_scalar,
-                            (APPROX_MODE, SFPU_BINOP_MODE, 8),
+                            (APPROX_MODE, SFPU_BINOP_MODE, 8, is_fp32_dest_acc_en),
                             block_tile,
                             VectorMode::RC,
                             SFPU_UNARY_SCALAR);
@@ -211,7 +212,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             DST_SYNC_MODE,
                             is_fp32_dest_acc_en,
                             calculate_binop_with_scalar,
-                            (APPROX_MODE, SFPU_BINOP_MODE, 8),
+                            (APPROX_MODE, SFPU_BINOP_MODE, 8, is_fp32_dest_acc_en),
                             block_tile,
                             VectorMode::RC,
                             SFPU_UNARY_SCALAR);

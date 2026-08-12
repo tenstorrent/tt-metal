@@ -27,10 +27,11 @@ namespace ckernel {
 * | param1          | The value to replace the input with if it is less than or equal to the threshold    | uint32_t |                                                       | True     |
 */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void threshold_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         _calculate_threshold_,
         (APPROX, 8 /* ITERATIONS */, std::uint32_t),
         idst,

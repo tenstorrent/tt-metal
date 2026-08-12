@@ -27,11 +27,11 @@ namespace ckernel {
  * | param0          | The scalar second operand of the bitwise operation                         | uint32_t |                                                       | True     |
  */
 // clang-format on
-template <DataFormat data_format>
+template <DataFormat data_format, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void bitwise_and_tile(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         calculate_sfpu_unary_bitwise,
         (APPROX, sfpu::UnaryBitwiseOp::AND, data_format),
         idst,
@@ -54,11 +54,11 @@ ALWI void bitwise_and_tile(uint32_t idst, uint32_t param0) {
  * | param0          | The scalar second operand of the bitwise operation                         | uint32_t |                                                       | True     |
  */
 // clang-format on
-template <DataFormat data_format>
+template <DataFormat data_format, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void bitwise_or_tile(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         calculate_sfpu_unary_bitwise,
         (APPROX, sfpu::UnaryBitwiseOp::OR, data_format),
         idst,
@@ -81,11 +81,11 @@ ALWI void bitwise_or_tile(uint32_t idst, uint32_t param0) {
  * | param0          | The scalar second operand of the bitwise operation                         | uint32_t |                                                       | True     |
  */
 // clang-format on
-template <DataFormat data_format>
+template <DataFormat data_format, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void bitwise_xor_tile(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         calculate_sfpu_unary_bitwise,
         (APPROX, sfpu::UnaryBitwiseOp::XOR, data_format),
         idst,

@@ -36,6 +36,7 @@ inline void llk_pack_fast_tilize_uninit(const std::uint32_t pack_output) {
         pack_dst_format[output_id], face_r_dim, num_faces, partial_face, narrow_tile);
 }
 
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 inline void llk_pack_fast_tilize_block(
     const std::uint32_t tile_index,
     const std::uint32_t output,
@@ -43,7 +44,7 @@ inline void llk_pack_fast_tilize_block(
     const std::uint32_t unit_dim,
     const std::uint32_t num_units) {
     LLK_ASSERT(
-        (tile_index < get_pack_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE>()),
+        (tile_index < get_pack_dest_max_tiles<DST_SYNC_MODE, is_fp32_dest_acc_en>()),
         "Dst tile exceeds packer destination capacity for the configured W-stride.");
 
     const std::uint8_t output_id = get_output_id(output);

@@ -31,51 +31,51 @@ constexpr p_dim_stride_target dim_stride_of(bool is_tile_dim_reconfig_en) {
 }
 #endif
 
-template <bool is_tile_dim_reconfig_en, bool skip_int8>
+template <bool is_tile_dim_reconfig_en, bool skip_int8, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reconfig_df_both(const uint32_t src_a_operand, const uint32_t src_b_operand) {
-    UNPACK((llk_unpack_reconfig_data_format<DST_ACCUM_MODE, dim_stride_of(is_tile_dim_reconfig_en), skip_int8>(
+    UNPACK((llk_unpack_reconfig_data_format<is_fp32_dest_acc_en, dim_stride_of(is_tile_dim_reconfig_en), skip_int8>(
         src_a_operand, src_b_operand)));
-    MATH((llk_math_reconfig_data_format<DST_ACCUM_MODE, skip_int8>(src_a_operand, src_b_operand)));
+    MATH((llk_math_reconfig_data_format<is_fp32_dest_acc_en, skip_int8>(src_a_operand, src_b_operand)));
 }
 
-template <bool is_tile_dim_reconfig_en, bool skip_int8>
+template <bool is_tile_dim_reconfig_en, bool skip_int8, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reconfig_df_both(
     const uint32_t src_a_old_operand,
     const uint32_t src_a_new_operand,
     const uint32_t src_b_old_operand,
     const uint32_t src_b_new_operand) {
-    UNPACK((llk_unpack_reconfig_data_format<DST_ACCUM_MODE, dim_stride_of(is_tile_dim_reconfig_en), skip_int8>(
+    UNPACK((llk_unpack_reconfig_data_format<is_fp32_dest_acc_en, dim_stride_of(is_tile_dim_reconfig_en), skip_int8>(
         src_a_old_operand, src_a_new_operand, src_b_old_operand, src_b_new_operand)));
-    MATH((llk_math_reconfig_data_format<DST_ACCUM_MODE, skip_int8>(
+    MATH((llk_math_reconfig_data_format<is_fp32_dest_acc_en, skip_int8>(
         src_a_old_operand, src_a_new_operand, src_b_old_operand, src_b_new_operand)));
 }
 
-template <bool is_tile_dim_reconfig_en, bool skip_int8>
+template <bool is_tile_dim_reconfig_en, bool skip_int8, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reconfig_df_srca(const uint32_t srca_new_operand) {
-    UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, dim_stride_of(is_tile_dim_reconfig_en), skip_int8>(
+    UNPACK((llk_unpack_reconfig_data_format_srca<is_fp32_dest_acc_en, dim_stride_of(is_tile_dim_reconfig_en), skip_int8>(
         srca_new_operand)));
-    MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE, skip_int8>(srca_new_operand)));
+    MATH((llk_math_reconfig_data_format_srca<is_fp32_dest_acc_en, skip_int8>(srca_new_operand)));
 }
 
-template <bool is_tile_dim_reconfig_en, bool skip_int8>
+template <bool is_tile_dim_reconfig_en, bool skip_int8, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reconfig_df_srca(const uint32_t srca_old_operand, const uint32_t srca_new_operand) {
-    UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, dim_stride_of(is_tile_dim_reconfig_en), skip_int8>(
+    UNPACK((llk_unpack_reconfig_data_format_srca<is_fp32_dest_acc_en, dim_stride_of(is_tile_dim_reconfig_en), skip_int8>(
         srca_old_operand, srca_new_operand)));
-    MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE, skip_int8>(srca_old_operand, srca_new_operand)));
+    MATH((llk_math_reconfig_data_format_srca<is_fp32_dest_acc_en, skip_int8>(srca_old_operand, srca_new_operand)));
 }
 
-template <bool is_tile_dim_reconfig_en, bool skip_int8>
+template <bool is_tile_dim_reconfig_en, bool skip_int8, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reconfig_df_srcb(const uint32_t srcb_new_operand) {
-    UNPACK((llk_unpack_reconfig_data_format_srcb<DST_ACCUM_MODE, dim_stride_of(is_tile_dim_reconfig_en), skip_int8>(
+    UNPACK((llk_unpack_reconfig_data_format_srcb<is_fp32_dest_acc_en, dim_stride_of(is_tile_dim_reconfig_en), skip_int8>(
         srcb_new_operand)));
-    MATH((llk_math_reconfig_data_format_srcb<DST_ACCUM_MODE, skip_int8>(srcb_new_operand)));
+    MATH((llk_math_reconfig_data_format_srcb<is_fp32_dest_acc_en, skip_int8>(srcb_new_operand)));
 }
 
-template <bool is_tile_dim_reconfig_en, bool skip_int8>
+template <bool is_tile_dim_reconfig_en, bool skip_int8, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reconfig_df_srcb(const uint32_t srcb_old_operand, const uint32_t srcb_new_operand) {
-    UNPACK((llk_unpack_reconfig_data_format_srcb<DST_ACCUM_MODE, dim_stride_of(is_tile_dim_reconfig_en), skip_int8>(
+    UNPACK((llk_unpack_reconfig_data_format_srcb<is_fp32_dest_acc_en, dim_stride_of(is_tile_dim_reconfig_en), skip_int8>(
         srcb_old_operand, srcb_new_operand)));
-    MATH((llk_math_reconfig_data_format_srcb<DST_ACCUM_MODE, skip_int8>(srcb_old_operand, srcb_new_operand)));
+    MATH((llk_math_reconfig_data_format_srcb<is_fp32_dest_acc_en, skip_int8>(srcb_old_operand, srcb_new_operand)));
 }
 
 }  // namespace detail
@@ -383,16 +383,16 @@ ALWI void reconfig_data_format_srcb(const uint32_t srcb_old_operand, const uint3
  * | Function   | new_cb_id               | New data format operand value | uint32_t | Any         | True     |
  */
 // clang-format on
-template <bool is_tile_dim_reconfig_en = false>
+template <bool is_tile_dim_reconfig_en = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void pack_reconfig_data_format(const uint32_t new_cb_id) {
     LLK_SAN_FUNCTION();
 #ifdef ARCH_QUASAR
     static_assert(
         !is_tile_dim_reconfig_en,
         "Quasar pack reconfig does not support tile-dimension changes; call pack_init instead");
-    PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(new_cb_id)));
+    PACK((llk_pack_reconfig_data_format<is_fp32_dest_acc_en>(new_cb_id)));
 #else
-    PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(new_cb_id)));
+    PACK((llk_pack_reconfig_data_format<is_fp32_dest_acc_en>(new_cb_id)));
     if constexpr (is_tile_dim_reconfig_en) {
         PACK((llk_pack_init<PackMode::Default, false /* zero_output */, true /* skip_addrmod_config */>(new_cb_id)));
     }
@@ -423,16 +423,16 @@ ALWI void pack_reconfig_data_format(const uint32_t new_cb_id) {
  * | Function   | new_cb_id               | New data format operand value      | uint32_t | Any         | True     |
  */
 // clang-format on
-template <bool is_tile_dim_reconfig_en = false>
+template <bool is_tile_dim_reconfig_en = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void pack_reconfig_data_format(const uint32_t old_cb_id, const uint32_t new_cb_id) {
     LLK_SAN_FUNCTION();
 #ifdef ARCH_QUASAR
     static_assert(
         !is_tile_dim_reconfig_en,
         "Quasar pack reconfig does not support tile-dimension changes; call pack_init instead");
-    PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(old_cb_id, new_cb_id)));
+    PACK((llk_pack_reconfig_data_format<is_fp32_dest_acc_en>(old_cb_id, new_cb_id)));
 #else
-    PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(old_cb_id, new_cb_id)));
+    PACK((llk_pack_reconfig_data_format<is_fp32_dest_acc_en>(old_cb_id, new_cb_id)));
     if constexpr (is_tile_dim_reconfig_en) {
         PACK((llk_pack_init<PackMode::Default, false /* zero_output */, true /* skip_addrmod_config */>(new_cb_id)));
     }

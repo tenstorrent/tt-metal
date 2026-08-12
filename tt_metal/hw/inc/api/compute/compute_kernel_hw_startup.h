@@ -7,6 +7,7 @@
 #include "api/compute/common.h"
 #include "api/compute/src_order.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
+#include "llk_assert.h"
 
 #ifdef TRISC_UNPACK
 #include "llk_unpack_common_api.h"
@@ -60,6 +61,11 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t icb1, uint32_t ocb) 
     constexpr bool reverse = (src_order == SrcOrder::Reverse);
     const uint32_t src_a_cb = reverse ? icb1 : icb0;
     const uint32_t src_b_cb = reverse ? icb0 : icb1;
+#ifdef ENABLE_LLK_ASSERT
+    // Baseline for assert-only dest-capacity checks; stale across kernel calls on a
+    // core until this write (same class as cfg_state_id persistence).
+    dst_fp32_acc_en = DST_ACCUM_MODE;
+#endif
 #ifndef ARCH_QUASAR
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(src_a_cb, src_b_cb)));
 
@@ -119,6 +125,10 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t ocb) { compute_kerne
 ALWI void enable_fp32_dest_acc() {
     MATH((llk_math_set_fp32_dest_acc(true)));
     PACK((llk_pack_set_fp32_dest_acc(true)));
+#ifdef ENABLE_LLK_ASSERT
+    // Outside MATH/PACK macros so every TRISC thread updates its own copy.
+    dst_fp32_acc_en = true;
+#endif
 }
 #endif
 
@@ -142,6 +152,24 @@ ALWI void enable_fp32_dest_acc() {
 ALWI void disable_fp32_dest_acc() {
     MATH((llk_math_set_fp32_dest_acc(false)));
     PACK((llk_pack_set_fp32_dest_acc(false)));
+#ifdef ENABLE_LLK_ASSERT
+    // Outside MATH/PACK macros so every TRISC thread updates its own copy.
+    dst_fp32_acc_en = false;
+#endif
+}
+
+/**
+ * Convenience wrapper to enable or disable FP32 dest accumulation.
+ * Equivalent to enable_fp32_dest_acc() / disable_fp32_dest_acc().
+ * Assert-enabled builds also update the per-thread tracker used by
+ * dest-capacity LLK_ASSERTs (LLK_ASSERT_DEST_ACC_MODE).
+ */
+ALWI void set_dest_accum_mode(bool enable) {
+    if (enable) {
+        enable_fp32_dest_acc();
+    } else {
+        disable_fp32_dest_acc();
+    }
 }
 #endif
 

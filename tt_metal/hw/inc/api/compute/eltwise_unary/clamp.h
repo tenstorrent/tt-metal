@@ -27,10 +27,11 @@ namespace ckernel {
  * | param1          | The max value for the clamp function                                       | uint32_t |                                                       | True     |
 */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void clamp_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         calculate_clamp,
         (APPROX, 8 /* ITERATIONS */),
         idst,
@@ -55,10 +56,11 @@ ALWI void clamp_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
  * | param1          | The max value for the clamp function                                       | uint32_t |                                                       | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void clamp_tile_int32(uint32_t idst, uint32_t param0, uint32_t param1) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         calculate_clamp_int32,
         (APPROX, 8 /* ITERATIONS */),
         idst,

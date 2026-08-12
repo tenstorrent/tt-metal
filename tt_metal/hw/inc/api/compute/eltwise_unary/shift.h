@@ -29,10 +29,10 @@ namespace ckernel {
  * | param0          | The number of bits to shift the input by                                   | uint32_t |                                                       | True     |
  */
 // clang-format on
-template <DataFormat data_format>
+template <DataFormat data_format, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void left_shift_tile(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_left_shift, (APPROX, data_format), idst, VectorMode::RC, param0));
+        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_left_shift, (APPROX, data_format), idst, VectorMode::RC, param0));
 }
 
 // clang-format off
@@ -53,10 +53,10 @@ ALWI void left_shift_tile(uint32_t idst, uint32_t param0) {
  * | param0          | The number of bits to shift the input by                                   | uint32_t |                                                       | True     |
  */
 // clang-format on
-template <DataFormat data_format>
+template <DataFormat data_format, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void right_shift_tile(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_right_shift, (APPROX, data_format), idst, VectorMode::RC, param0));
+        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_right_shift, (APPROX, data_format), idst, VectorMode::RC, param0));
 }
 
 /**

@@ -39,7 +39,7 @@ namespace ckernel {
  * | odst                  | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <DataFormat data_format>
+template <DataFormat data_format, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void mul_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 #if defined(ARCH_QUASAR)
     static_assert(data_format == DataFormat::Int32, "Unsupported data format for mul_int on Quasar. Supported: Int32");
@@ -54,7 +54,7 @@ ALWI void mul_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     if constexpr (data_format == DataFormat::UInt16) {
         MATH((SFPU_BINARY_CALL(
             DST_SYNC_MODE,
-            DST_ACCUM_MODE,
+            is_fp32_dest_acc_en,
             _mul_int_,
             (APPROX, 8 /* ITERATIONS */),
             idst0,
@@ -63,7 +63,7 @@ ALWI void mul_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
             VectorMode::RC)));
     } else {
         MATH(
-            (SFPU_BINARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, mul_int32, (APPROX), idst0, idst1, odst, VectorMode::RC)));
+            (SFPU_BINARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, mul_int32, (APPROX), idst0, idst1, odst, VectorMode::RC)));
     }
 #endif
 }

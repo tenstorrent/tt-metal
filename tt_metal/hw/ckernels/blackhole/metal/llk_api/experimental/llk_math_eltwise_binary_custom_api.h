@@ -43,7 +43,7 @@ template <bool is_fp32_dest_acc_en = false>
 inline void llk_math_eltwise_binary_sub_bcast_cols_custom(
     const std::uint32_t operandA, const std::uint32_t dst_index, const std::uint32_t ct_dim = 1) {
     LLK_ASSERT(
-        (dst_index + ct_dim <= get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()),
+        (dst_index + ct_dim <= get_dest_max_tiles<DST_SYNC_MODE, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
         "dst range out of bounds");
 
     const std::uint32_t operand_id = get_operand_id(operandA);
@@ -83,7 +83,7 @@ inline void llk_math_eltwise_binary_mul_bcast_cols_init_custom(
 inline void llk_math_eltwise_binary_mul_bcast_cols_custom(
     const std::uint32_t dst_index, const std::uint32_t ct_dim = 1) {
     LLK_ASSERT(
-        (dst_index + ct_dim <= get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()),
+        (dst_index + ct_dim <= get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>(LLK_ASSERT_DEST_ACC_MODE())),
         "dst range out of bounds");
 
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);

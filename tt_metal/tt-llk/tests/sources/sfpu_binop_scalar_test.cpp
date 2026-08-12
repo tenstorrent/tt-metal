@@ -60,9 +60,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 using namespace ckernel;
 
-// calculate_binop_with_scalar() below reads DST_ACCUM_MODE: its RSUB branch applies
-// the fp32->bf16 RNE correction only for the 16-bit-dest (dest_acc:No) path, exactly
-// like production. It's a real constexpr, not the sfpu_operations.h #define hack.
+// Needed so the defaulted is_fp32_dest_acc_en template arg on
+// calculate_binop_with_scalar can resolve when the header is parsed.
 static constexpr bool DST_ACCUM_MODE = is_fp32_dest_acc_en;
 
 #include "llk_sfpu/ckernel_sfpu_binop_with_unary.h"
@@ -93,7 +92,7 @@ void run_kernel(RUNTIME_PARAMETERS)
         DstSync::SyncHalf,
         is_fp32_dest_acc_en,
         calculate_binop_with_scalar,
-        (APPROX_MODE, SFPU_BINOP_MODE, 8 /* ITERATIONS */),
+        (APPROX_MODE, SFPU_BINOP_MODE, 8 /* ITERATIONS */, is_fp32_dest_acc_en),
         0 /* dst_index */,
         VectorMode::RC,
         SFPU_UNARY_SCALAR);

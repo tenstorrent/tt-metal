@@ -28,11 +28,12 @@ ALWI void relu_tile_init() { MATH(SFPU_UNARY_INIT(relu_min)); }
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void relu_tile(uint32_t idst) {
 #ifdef ARCH_QUASAR
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         _relu_min_,
         (SFPU_ITERATIONS /*ITERATIONS*/),
         idst,
@@ -41,7 +42,7 @@ ALWI void relu_tile(uint32_t idst) {
 #else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         _relu_min_,
         (sfpi::vFloat /*VectorType*/, APPROX /*APPROXIMATION_MODE*/, 8 /*ITERATIONS*/, uint32_t /*T*/),
         idst,
@@ -67,20 +68,22 @@ ALWI void relu_tile(uint32_t idst) {
  */
 // clang-format on
 
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void relu_max_tile(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         _relu_max_,
         (sfpi::vFloat /*VectorType*/, APPROX /*APPROXIMATION_MODE*/, 8 /*ITERATIONS*/, uint32_t /*T*/),
         idst,
         VectorMode::RC,
         param0 /*threshold*/));
 }
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void relu_max_tile_pack(uint32_t idst, uint32_t param0) {
     PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         _relu_max_,
         (sfpi::vFloat /*VectorType*/, APPROX /*APPROXIMATION_MODE*/, 8 /*ITERATIONS*/, uint32_t /*T*/),
         idst,
@@ -88,10 +91,11 @@ ALWI void relu_max_tile_pack(uint32_t idst, uint32_t param0) {
         param0 /*threshold*/));
 }
 
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void relu_max_tile_int32(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         relu_clamp_int,
         (APPROX /*APPROXIMATION_MODE*/, false /*IS_LOWER_BOUND*/, 8 /*ITERATIONS*/),
         idst,
@@ -99,10 +103,11 @@ ALWI void relu_max_tile_int32(uint32_t idst, uint32_t param0) {
         param0 /*threshold*/));
 }
 
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void relu_max_tile_uint32(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         relu_clamp_uint,
         (APPROX /*APPROXIMATION_MODE*/, false /*IS_LOWER_BOUND*/, DataFormat::UInt32, 8 /*ITERATIONS*/),
         idst,
@@ -110,10 +115,11 @@ ALWI void relu_max_tile_uint32(uint32_t idst, uint32_t param0) {
         param0 /*threshold*/));
 }
 
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void relu_max_tile_uint16(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         relu_clamp_uint,
         (APPROX /*APPROXIMATION_MODE*/, false /*IS_LOWER_BOUND*/, DataFormat::UInt16, 8 /*ITERATIONS*/),
         idst,
@@ -140,10 +146,11 @@ ALWI void relu_max_tile_init_pack() { PACK(SFPU_UNARY_INIT(relu_max)); }
  * | lower_limit    | Upper limit of relu_min                                                    | uint32_t | Greater than 0                                        | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void relu_min_tile(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         _relu_min_,
         (sfpi::vFloat /*VectorType*/, APPROX /*APPROXIMATION_MODE*/, 8 /*ITERATIONS*/, uint32_t /*T*/),
         idst,
@@ -151,10 +158,11 @@ ALWI void relu_min_tile(uint32_t idst, uint32_t param0) {
         param0 /*threshold*/));
 }
 
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void relu_min_tile_int32(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         relu_clamp_int,
         (APPROX /*APPROXIMATION_MODE*/, true /*IS_LOWER_BOUND*/, 8 /*ITERATIONS*/),
         idst,
@@ -162,10 +170,11 @@ ALWI void relu_min_tile_int32(uint32_t idst, uint32_t param0) {
         param0 /*threshold*/));
 }
 
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void relu_min_tile_uint32(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         relu_clamp_uint,
         (APPROX /*APPROXIMATION_MODE*/, true /*IS_LOWER_BOUND*/, DataFormat::UInt32, 8 /*ITERATIONS*/),
         idst,
@@ -173,10 +182,11 @@ ALWI void relu_min_tile_uint32(uint32_t idst, uint32_t param0) {
         param0 /*threshold*/));
 }
 
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void relu_min_tile_uint16(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         relu_clamp_uint,
         (APPROX /*APPROXIMATION_MODE*/, true /*IS_LOWER_BOUND*/, DataFormat::UInt16, 8 /*ITERATIONS*/),
         idst,
@@ -186,10 +196,11 @@ ALWI void relu_min_tile_uint16(uint32_t idst, uint32_t param0) {
 
 ALWI void relu_min_tile_init() { MATH(SFPU_UNARY_INIT(relu_min)); }
 
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void relu_tile_int32(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         _relu_min_,
         (sfpi::vInt /*VectorType*/, APPROX /*APPROXIMATION_MODE*/, 8 /*ITERATIONS*/, uint32_t /*T*/),
         idst,
@@ -213,8 +224,9 @@ ALWI void relu_tile_int32(uint32_t idst) {
  * | slope          | slope used in leaky relu - will reinterpret unsigned int to float          | uint32_t | Greater than 0                                        | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void leaky_relu_tile(uint32_t idst, uint32_t slope = 0) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_lrelu, (APPROX), idst, VectorMode::RC, slope));
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_lrelu, (APPROX), idst, VectorMode::RC, slope));
 }
 
 ALWI void leaky_relu_tile_init() { MATH(SFPU_UNARY_INIT(lrelu)); }

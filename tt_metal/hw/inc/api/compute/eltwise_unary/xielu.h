@@ -28,12 +28,13 @@ namespace ckernel {
  * | alpha_n        | alpha negative parameter                                                    | uint32_t |                                                       | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void xielu_tile(uint32_t idst, uint32_t alpha_p, uint32_t alpha_n) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         calculate_xielu,
-        (APPROX, DST_ACCUM_MODE),
+        (APPROX, is_fp32_dest_acc_en),
         idst,
         VectorMode::RC,
         alpha_p,

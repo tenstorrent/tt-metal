@@ -45,12 +45,12 @@ constexpr InstrModLoadStore bitwise_instr_mode() {
 }
 }  // namespace detail
 
-template <DataFormat data_format>
+template <DataFormat data_format, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void bitwise_and_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     constexpr InstrModLoadStore INSTRUCTION_MODE = detail::bitwise_instr_mode<data_format>();
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         calculate_sfpu_binary_bitwise,
         (APPROX, sfpu::BinaryBitwiseOp::AND, INSTRUCTION_MODE),
         idst0,
@@ -59,12 +59,12 @@ ALWI void bitwise_and_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst)
         VectorMode::RC)));
 }
 
-template <DataFormat data_format>
+template <DataFormat data_format, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void bitwise_or_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     constexpr InstrModLoadStore INSTRUCTION_MODE = detail::bitwise_instr_mode<data_format>();
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         calculate_sfpu_binary_bitwise,
         (APPROX, sfpu::BinaryBitwiseOp::OR, INSTRUCTION_MODE),
         idst0,
@@ -73,12 +73,12 @@ ALWI void bitwise_or_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) 
         VectorMode::RC)));
 }
 
-template <DataFormat data_format>
+template <DataFormat data_format, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void bitwise_xor_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     constexpr InstrModLoadStore INSTRUCTION_MODE = detail::bitwise_instr_mode<data_format>();
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         calculate_sfpu_binary_bitwise,
         (APPROX, sfpu::BinaryBitwiseOp::XOR, INSTRUCTION_MODE),
         idst0,

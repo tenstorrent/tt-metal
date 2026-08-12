@@ -27,8 +27,9 @@ namespace ckernel {
  * | idst           | The index of the tile in DST register buffer to perform remainder operation | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void remainder_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_remainder, (APPROX), idst, VectorMode::RC));
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_remainder, (APPROX), idst, VectorMode::RC));
 }
 
 /**
@@ -53,10 +54,11 @@ ALWI void remainder_tile_init(uint32_t param0, uint32_t param1) {
  * | param0         | The unsigned divisor                                                        | uint32_t | [1, 4294967295]                                       | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void remainder_tile_uint32(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         calculate_remainder_uint32_scalar,
         (APPROX /*APPROXIMATION_MODE*/, 8 /*ITERATIONS*/),
         idst,

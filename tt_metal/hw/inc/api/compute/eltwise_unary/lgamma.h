@@ -29,16 +29,18 @@ namespace ckernel {
  */
 
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void lgamma_stirling_tile(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_lgamma_stirling, (APPROX, DST_ACCUM_MODE), idst, VectorMode::RC));
+        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_lgamma_stirling, (APPROX, is_fp32_dest_acc_en), idst, VectorMode::RC));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void lgamma_stirling_tile_init() {
-    MATH(SFPU_UNARY_INIT_FN(lgamma, sfpu::lgamma_stirling_init, (APPROX, DST_ACCUM_MODE)));
+    MATH(SFPU_UNARY_INIT_FN(lgamma, sfpu::lgamma_stirling_init, (APPROX, is_fp32_dest_acc_en)));
 }
 
 // clang-format off
@@ -62,12 +64,13 @@ ALWI void lgamma_stirling_tile_init() {
  */
 
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void lgamma_stirling_float_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2) {
     MATH(SFPU_BINARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         calculate_lgamma_stirling_fp32,
-        (APPROX, DST_ACCUM_MODE),
+        (APPROX, is_fp32_dest_acc_en),
         idst0,
         idst1,
         idst2,
@@ -77,8 +80,9 @@ ALWI void lgamma_stirling_float_tile(uint32_t idst0, uint32_t idst1, uint32_t id
 /**
  * Please refer to documentation for any_init.
  */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void lgamma_stirling_float_tile_init() {
-    MATH(SFPU_BINARY_INIT_FN(lgamma, sfpu::lgamma_stirling_init, (APPROX, DST_ACCUM_MODE)));
+    MATH(SFPU_BINARY_INIT_FN(lgamma, sfpu::lgamma_stirling_init, (APPROX, is_fp32_dest_acc_en)));
 }
 
 // clang-format off
@@ -103,12 +107,13 @@ ALWI void lgamma_stirling_float_tile_init() {
  */
 
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void lgamma_adjusted_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, uint32_t idst3) {
     MATH(SFPU_TERNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         calculate_lgamma_adjusted,
-        (APPROX, DST_ACCUM_MODE),
+        (APPROX, is_fp32_dest_acc_en),
         idst0,
         idst1,
         idst2,

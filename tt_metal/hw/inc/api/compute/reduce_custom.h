@@ -59,10 +59,10 @@ namespace ckernel {
  * | Function   | ocb                       | The identifier of the output circular buffer (CB)                                       | uint32_t  | 0 to 31                                        | True     |
  */
 // clang-format on
-template <std::uint32_t block_ct_dim, bool respect_trigger = false>
+template <std::uint32_t block_ct_dim, bool respect_trigger = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reduce_block_max_row_init(const ckernel::TensorShape& tensor_shape, std::uint32_t ocb) {
-    UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim, DST_ACCUM_MODE, respect_trigger>(tensor_shape)));
-    MATH((llk_math_reduce_block_max_row_init<block_ct_dim, DST_ACCUM_MODE>(tensor_shape)));
+    UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim, is_fp32_dest_acc_en, respect_trigger>(tensor_shape)));
+    MATH((llk_math_reduce_block_max_row_init<block_ct_dim, is_fp32_dest_acc_en>(tensor_shape)));
     PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
 }
 
@@ -111,7 +111,7 @@ ALWI void reduce_block_max_row_init(std::uint32_t ocb) {
  * | Function   | idst                      | The index of the tile in DST REG for the result                                         | uint32_t  | Must be less than the acquired size of DST REG | True     |
  */
 // clang-format on
-template <std::uint32_t block_ct_dim, bool respect_trigger = false>
+template <std::uint32_t block_ct_dim, bool respect_trigger = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reduce_block_max_row(
     const ckernel::TensorShape& tensor_shape,
     std::uint32_t icb,
@@ -119,7 +119,7 @@ ALWI void reduce_block_max_row(
     std::uint32_t row_start_index,
     std::uint32_t idst) {
     UNPACK((llk_unpack_AB_reduce_block_max_row<block_ct_dim, respect_trigger>(icb, icb_scaler, row_start_index)));
-    MATH((llk_math_reduce_block_max_row<block_ct_dim, DST_ACCUM_MODE>(idst, tensor_shape)));
+    MATH((llk_math_reduce_block_max_row<block_ct_dim, is_fp32_dest_acc_en>(idst, tensor_shape)));
 }
 
 // num_faces convenience overload: constructs a TensorShape from a flat face count (2 or 4).
@@ -154,9 +154,9 @@ ALWI void reduce_block_max_row(
  * | Function   | ocb                       | The identifier of the output circular buffer (CB)                                       | uint32_t  | 0 to 31                                        | True     |
  */
 // clang-format on
-template <std::uint32_t block_ct_dim, bool respect_trigger = false>
+template <std::uint32_t block_ct_dim, bool respect_trigger = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reduce_block_max_row_reinit_short(const ckernel::TensorShape& tensor_shape, std::uint32_t ocb) {
-    UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim, DST_ACCUM_MODE, respect_trigger>(tensor_shape)));
+    UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim, is_fp32_dest_acc_en, respect_trigger>(tensor_shape)));
     MATH((llk_math_reduce_block_max_row_reinit_with_mop<block_ct_dim>(tensor_shape)));
     PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
 }
@@ -174,9 +174,9 @@ ALWI void reduce_block_max_row_reinit_short(std::uint32_t ocb) {
  * Minimal reinit: only ADDR_MOD_1 + ADDR_MOD_2 + ADDR_MOD_6. Requires copy_tile_custom
  * (which uses ADDR_MOD_4) so ADDR_MOD_3 is preserved from the previous reduce.
  */
-template <std::uint32_t block_ct_dim, bool respect_trigger = false>
+template <std::uint32_t block_ct_dim, bool respect_trigger = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reduce_block_max_row_reinit_minimal(const ckernel::TensorShape& tensor_shape, std::uint32_t ocb) {
-    UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim, DST_ACCUM_MODE, respect_trigger>(tensor_shape)));
+    UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim, is_fp32_dest_acc_en, respect_trigger>(tensor_shape)));
     MATH((llk_math_reduce_block_max_row_reinit_minimal()));
     PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
 }
@@ -193,13 +193,14 @@ ALWI void reduce_block_max_row_reinit_minimal(std::uint32_t ocb) {
  * Requires copy_tile_custom (which uses ADDR_MOD_4) so ADDR_MOD_3 is preserved
  * from the previous reduce.
  */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reduce_block_max_row_reinit_minimal_runtime(
     const ckernel::TensorShape& tensor_shape,
     std::uint32_t ocb,
     std::uint32_t block_ct_dim,
     bool respect_trigger = false) {
     UNPACK(
-        (llk_unpack_AB_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim, respect_trigger, tensor_shape)));
+        (llk_unpack_AB_reduce_block_max_row_init_runtime<is_fp32_dest_acc_en>(block_ct_dim, respect_trigger, tensor_shape)));
     MATH((llk_math_reduce_block_max_row_reinit_minimal_runtime()));
     PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
 }
@@ -215,14 +216,15 @@ ALWI void reduce_block_max_row_reinit_minimal_runtime(
  * Short reinit (runtime variant): Reprograms reduce MOP and restores addrmods.
  * Used when reduce follows custom SDPA sub path with runtime block_ct_dim.
  */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reduce_block_max_row_reinit_short_runtime(
     const ckernel::TensorShape& tensor_shape,
     std::uint32_t ocb,
     std::uint32_t block_ct_dim,
     bool respect_trigger = false) {
     UNPACK(
-        (llk_unpack_AB_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim, respect_trigger, tensor_shape)));
-    MATH((llk_math_reduce_block_max_row_reinit_short_runtime<DST_ACCUM_MODE>(block_ct_dim, tensor_shape)));
+        (llk_unpack_AB_reduce_block_max_row_init_runtime<is_fp32_dest_acc_en>(block_ct_dim, respect_trigger, tensor_shape)));
+    MATH((llk_math_reduce_block_max_row_reinit_short_runtime<is_fp32_dest_acc_en>(block_ct_dim, tensor_shape)));
     PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
 }
 
@@ -281,14 +283,15 @@ ALWI void reduce_block_max_row_uninit(std::uint32_t icb) {
 }
 
 // Runtime variants - block_ct_dim and respect_trigger are runtime parameters.
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reduce_block_max_row_init_runtime(
     const ckernel::TensorShape& tensor_shape,
     std::uint32_t ocb,
     std::uint32_t block_ct_dim,
     bool respect_trigger = false) {
     UNPACK(
-        (llk_unpack_AB_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim, respect_trigger, tensor_shape)));
-    MATH((llk_math_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim, tensor_shape)));
+        (llk_unpack_AB_reduce_block_max_row_init_runtime<is_fp32_dest_acc_en>(block_ct_dim, respect_trigger, tensor_shape)));
+    MATH((llk_math_reduce_block_max_row_init_runtime<is_fp32_dest_acc_en>(block_ct_dim, tensor_shape)));
     PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
 }
 
@@ -299,6 +302,7 @@ ALWI void reduce_block_max_row_init_runtime(
         ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces), ocb, block_ct_dim, respect_trigger);
 }
 
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reduce_block_max_row_runtime(
     const ckernel::TensorShape& tensor_shape,
     std::uint32_t icb,
@@ -309,7 +313,7 @@ ALWI void reduce_block_max_row_runtime(
     bool overlap_first_half = false) {
     UNPACK((llk_unpack_AB_reduce_block_max_row_runtime(
         icb, icb_scaler, row_start_index, respect_trigger, overlap_first_half)));
-    MATH((llk_math_reduce_block_max_row_runtime<DST_ACCUM_MODE>(idst, tensor_shape)));
+    MATH((llk_math_reduce_block_max_row_runtime<is_fp32_dest_acc_en>(idst, tensor_shape)));
 }
 
 // num_faces convenience overload: constructs a TensorShape from a flat face count (2 or 4).

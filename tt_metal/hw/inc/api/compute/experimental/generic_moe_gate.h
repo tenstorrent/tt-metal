@@ -38,7 +38,7 @@ template <
     int num_total_experts = 256,
     bool zero_tail = false,
     bool full_sort = false,
-    bool generate_indices = true>
+    bool generate_indices = true, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void generic_moe_gate(uint32_t icb0, uint32_t icb1, uint32_t eps, uint32_t scale) {
     // NOTE: only num_selected_experts == 16 selects the top-16 SFPU path; every other value routes to
     // top-8, which emits at most eight winners, so 9..15 silently yield 8 rather than the requested
@@ -48,7 +48,7 @@ ALWI void generic_moe_gate(uint32_t icb0, uint32_t icb1, uint32_t eps, uint32_t 
     // template have to be tightened together.
     // Copy add (FPU)
     UNPACK((llk_unpack_AB(icb0, icb1, 0, 0)));
-    MATH((llk_math_deepseek_moe_gate_eltwise_binary<EltwiseBinaryType::ELWADD, DST_ACCUM_MODE, MATH_FIDELITY>(
+    MATH((llk_math_deepseek_moe_gate_eltwise_binary<EltwiseBinaryType::ELWADD, is_fp32_dest_acc_en, MATH_FIDELITY>(
         icb0, icb1, 0, true)));
 
     // Topk SFPU
