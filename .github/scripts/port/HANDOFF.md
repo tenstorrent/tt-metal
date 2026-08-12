@@ -41,6 +41,16 @@ compiled the agent's code and failed on ordinary first-attempt errors: three red
 second iteration is for, and it is the first evidence that the build path works on agent-written
 code rather than on a clean tree.
 
+**Run 3, 2026-08-12, is the first one that worked as designed.** One build dispatch rather than
+four; a `wait` that came back as content; a build failure the agent actually read; an edit; and a
+second build that **passed** -- tree `7fb4d2d88099`, the first agent-written port of this op that
+compiles. It reached that in 38 minutes of agent time across two build cycles.
+
+It did waste one cycle on the way, and that waste is now scaffolded against rather than written
+down: after the first build failed it dispatched a `verify` on the byte-identical tree, which builds
+before it measures and so failed in the same place having queued for a card. `refuse_pointless_
+dispatch` now knows how the last build of a tree turned out and blocks exactly that.
+
 The second run, the same afternoon, got further and failed for a sibling reason. The agent wrote the
 port, started exactly one build -- the start/collect split working -- and then re-dispatched a
 byte-identical tree rather than reading the compiler diagnostics, because a non-zero exit reaches it
