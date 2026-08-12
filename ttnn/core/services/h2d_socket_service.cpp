@@ -20,13 +20,13 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/data_types.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <internal/service/service_core_manager.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/memory_pin.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
