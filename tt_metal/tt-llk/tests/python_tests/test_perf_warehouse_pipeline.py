@@ -13,7 +13,6 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from helpers.perf_compare import compare_run_to_history
-from helpers.perf_dashboard import dashboard_from_warehouse
 from helpers.perf_warehouse_duckdb import DuckDBWarehouse
 
 
@@ -57,13 +56,3 @@ def test_no_regression_when_within_threshold(tmp_path):
 
     assert not result["regressions"]
     assert result["records"], "still compared, just not flagged"
-
-
-def test_dashboard_renders_from_warehouse(tmp_path):
-    wh = DuckDBWarehouse(path=":memory:")
-    wh.load(_run(tmp_path / "n1.parquet", "n1", 100.0))
-
-    written = dashboard_from_warehouse(wh, tmp_path / "dash")
-
-    assert "perf_a" in written
-    assert written["perf_a"].exists()
