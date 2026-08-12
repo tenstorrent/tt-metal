@@ -93,7 +93,11 @@ INPUT_CB_DEPTH = 2  # reader prefetches block b+1 while compute runs block b
 OUTPUT_CB_DEPTH = 2  # writer drains tile-row r while compute produces r+1
 RM_CB_DEPTH = 2  # overlaps stick reads/writes with tilize / untilize
 L1_RESERVE_BYTES = 131072  # kernel binaries, stack, semaphores, allocator slack
-MAX_GATHER_TILES = 64  # cap on block_row_tiles * w_group_size (cb_stat_gather)
+# Cap on block_row_tiles * (the combine tree's largest fan-in) — i.e. on
+# cb_stat_gather's page count — denominated in FP32-TILE EQUIVALENTS, so the knob
+# means the same NUMBER OF BYTES whichever format the statistics pipeline carries
+# (`_Geometry.stat_dtype`); a bf16 pipeline therefore admits twice the tiles.
+MAX_GATHER_TILES = 64
 # Perf lamp P2 — an upper bound on the cores per reduction group. Maximum
 # occupancy is the default first step, but at tensor_row_tiles == 1 the selection
 # pushes w_group_size to the whole grid, leaving 3-4 hidden tiles of real work per
@@ -324,7 +328,7 @@ def _l1_cb_budget():
 class _Geometry:
     """Alignment-aware tile geometry of the whole tensor. `floor` appears nowhere."""
 
-    def __init__(self, input_tensor, gamma):
+    def __init__(self, input_tensor, gamma, fp32_dest_acc_en=True):
         shape = list(input_tensor.shape)
         self.shape = shape
         self.W = shape[-1]
@@ -350,6 +354,24 @@ class _Geometry:
         self.in_dtype = input_tensor.dtype
         self.in_elem_bytes = _elem_bytes(input_tensor)
         self.in_tile_bytes = ttnn.tile_size(input_tensor.dtype)
+
+        # STAT-PIPELINE PRECISION (Refinement 5). cb_stat_sq / _partial / _gather /
+        # _sum / cb_rstd_send / cb_rstd / cb_zero_tile all carry the SAME format, and
+        # it follows `fp32_dest_acc_en` rather than being pinned to fp32:
+        #   True  — the DEST accumulator is fp32, so fp32 in L1 preserves real
+        #           information end to end. Byte-identical to Phase 0..Refinement 4.
+        #   False — the caller has already accepted a 16-bit DEST, and EVERY value on
+        #           this path is produced by a pack out of that DEST and consumed by
+        #           an unpack back into it. An fp32 container then stores bf16-precision
+        #           data: it buys no accuracy and costs 2x on the gather's NoC bytes,
+        #           the rstd multicast, and the per-tile-row L1 footprint that bounds R.
+        # The scaler folds 1/W_true (see the finalize note), so the value stored here
+        # is a share of the MEAN (~1) rather than a raw sum (~W) — the magnitude bf16
+        # handles best. `cb_scaler` / `cb_wmask` stay bf16 unconditionally
+        # (reduce_helpers_dataflow.inl:185-187 static_asserts the scaler format).
+        self.stat_fp32 = bool(fp32_dest_acc_en)
+        self.stat_dtype = ttnn.float32 if self.stat_fp32 else ttnn.bfloat16
+        self.stat_tile_bytes = FP32_TILE_BYTES if self.stat_fp32 else BF16_TILE_BYTES
 
         self.has_gamma = gamma is not None
         if self.has_gamma:
@@ -425,25 +447,27 @@ def _cb_specs(
     C_pad = _div_up(C, WC) * WC
     nc_max = _stat_cols(C, WC, has_tail)  # cb_stat_sq columns per tile-row
 
+    # One format for the whole statistics pipeline — see `_Geometry.stat_dtype`.
+    T_stat, stat_dtype = geo.stat_tile_bytes, geo.stat_dtype
     specs = [
         (CB_SCALER, 1, BF16_TILE_BYTES, ttnn.bfloat16),
-        (CB_ZERO_TILE, 1, FP32_TILE_BYTES, ttnn.float32),
-        (CB_STAT_SQ, R * nc_max, FP32_TILE_BYTES, ttnn.float32),
-        (CB_STAT_PARTIAL, R, FP32_TILE_BYTES, ttnn.float32),
+        (CB_ZERO_TILE, 1, T_stat, stat_dtype),
+        (CB_STAT_SQ, R * nc_max, T_stat, stat_dtype),
+        (CB_STAT_PARTIAL, R, T_stat, stat_dtype),
         # Level-1 fan-in of the combine tree: `G` cores (flat root-gather) or, on a
         # two-stage grid combine, the `nx` cores of one grid ROW of the group.
-        (CB_STAT_GATHER, R * G, FP32_TILE_BYTES, ttnn.float32),
-        (CB_STAT_SUM, R, FP32_TILE_BYTES, ttnn.float32),
-        (CB_RSTD_SEND, R, FP32_TILE_BYTES, ttnn.float32),
-        (CB_RSTD, R, FP32_TILE_BYTES, ttnn.float32),
+        (CB_STAT_GATHER, R * G, T_stat, stat_dtype),
+        (CB_STAT_SUM, R, T_stat, stat_dtype),
+        (CB_RSTD_SEND, R, T_stat, stat_dtype),
+        (CB_RSTD, R, T_stat, stat_dtype),
     ]
     if stage2_span > 1:
         # Two-stage grid combine only: the row leaders' level-2 gather buffer on the
         # root, and the level-1 result a leader hands to it. Together with the
         # SHRUNK cb_stat_gather (R*nx instead of R*G) this is strictly LESS L1 than
         # the flat combine — R*(nx + ny + 1) fp32 tiles against R*nx*ny.
-        specs.append((CB_STAT_GATHER2, R * stage2_span, FP32_TILE_BYTES, ttnn.float32))
-        specs.append((CB_BRANCH_SUM, R, FP32_TILE_BYTES, ttnn.float32))
+        specs.append((CB_STAT_GATHER2, R * stage2_span, T_stat, stat_dtype))
+        specs.append((CB_BRANCH_SUM, R, T_stat, stat_dtype))
     if not pin_in:
         # The whole block stays resident here (both passes read it), so this CB is
         # sized on the block width, never on the chunk. On the ROW_MAJOR leg tilize
@@ -632,7 +656,10 @@ def _max_block_row_tiles(
         return 0
     # MAX_GATHER_TILES caps the LARGEST stat buffer, which is R * the largest
     # fan-in of the tree — `G` when flat, max(nx, ny) when two-stage.
-    cap = min(core_row_tiles, max(1, MAX_GATHER_TILES // max(G, stage2_span)))
+    # MAX_GATHER_TILES is denominated in FP32-tile equivalents (see the knob), so a
+    # bf16 statistics pipeline admits twice the tiles for the same L1 bytes.
+    gather_tile_cap = MAX_GATHER_TILES * FP32_TILE_BYTES // geo.stat_tile_bytes
+    cap = min(core_row_tiles, max(1, gather_tile_cap // max(G, stage2_span)))
     if MIN_PIPELINE_BLOCKS > 1:
         # Perf lamp P1: cut the assignment into >= MIN_PIPELINE_BLOCKS blocks so
         # the depth-`input_cb_depth` input CB has a block to prefetch.
@@ -978,7 +1005,9 @@ def create_program_descriptor(
     compute_kernel_config,
 ):
     device = input_tensor.device()
-    geo = _Geometry(input_tensor, gamma)
+    geo = _Geometry(
+        input_tensor, gamma, fp32_dest_acc_en=bool(getattr(compute_kernel_config, "fp32_dest_acc_en", True))
+    )
 
     # The whole work split — tile-row numbering, per-core row ranges and the
     # row-major stick range every core drains — is derived ONCE, from the INPUT
