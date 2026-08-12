@@ -920,7 +920,17 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         # folds the weight along BOTH batch (group) and N into the width-sharded layout the op
         # expects. The raw torch weight is [g*o_lora_rank, (H*Dh)//g]; ``preprocess`` normalizes it
         # to the per-group [g, K, N] the class folds from (applied only on a cache miss).
+        #
+        # Under the prefetcher it streams through the device's one shared GCB like every other
+        # decode weight, at the fixed b_blocks/n_blocks the registry sizes that buffer against
+        # -- passed explicitly rather than left to the class's own defaults, so a device with a
+        # different grid still gets the geometry the buffer was actually built for.
         in_per_group = (self.num_heads * self.head_dim) // self.o_groups  # K
+        o_a_layout = check_decode_layout("o_a_proj", in_per_group, self.o_lora_rank, batch=self.o_groups)
+        o_a_prefetch = {"use_prefetcher": use_prefetcher}
+        if use_prefetcher:
+            o_a_prefetch["global_cb"] = prefetch_buffers["o_a_proj"]
+            o_a_prefetch["global_cb_page_bytes"] = decode_prefetch_page_bytes(weight_dtype)
         self.o_a_proj = BatchedLinearDecode(
             weights["o_a_proj.weight"],
             device,
@@ -929,7 +939,10 @@ class DeepSeekV4Attention(DeepSeekV4Module):
             batch=self.o_groups,
             K=in_per_group,
             N=self.o_lora_rank,
+            b_blocks=o_a_layout["b_blocks"],
+            n_blocks=o_a_layout["n_blocks"],
             preprocess=lambda w: w.reshape(self.o_groups, self.o_lora_rank, in_per_group).transpose(1, 2).contiguous(),
+            **o_a_prefetch,
         )
 
         # sinks live on host (folded into the softmax denominator), so there is
@@ -989,21 +1002,21 @@ class DeepSeekV4Attention(DeepSeekV4Module):
     def prefetch_weights(self):
         """Stage this block's projection weights ahead of the :meth:`decode` that uses them.
 
-        On the L1 path this copies DRAM -> L1 width-sharded and so is bounded by L1: o_b_proj
-        is left out because its [8192, 4096] weight does not fit alongside the others.
+        On the L1 path this copies DRAM -> L1 width-sharded and so is bounded by L1: o_a_proj
+        and o_b_proj are left out because their weights do not fit alongside the others.
 
         On the prefetcher path it instead queues the DRISC transfers, which allocate nothing
         (the shared GCB was sized at construction) and run off the command queue, so every
-        projection is hoisted -- o_b_proj included. Requires an open prefetcher session (see
-        the class docstring), and every queued request must be consumed by a matching
-        ``decode``: queueing without the follow-up matmul leaves pages nobody drains.
+        projection is hoisted -- o_a_proj and o_b_proj included. Requires an open prefetcher
+        session (see the class docstring), and every queued request must be consumed by a
+        matching ``decode``: queueing without the follow-up matmul leaves pages nobody drains.
 
         Every projection shares one GCB, hence one FIFO, so they are queued here in the order
-        ``decode`` calls them -- which puts the compressor between kv_proj and o_b_proj, since
+        ``decode`` calls them -- which puts the compressor between kv_proj and o_a_proj, since
         ``decode_static`` runs it after ``_qkv`` and before ``_attend`` reaches the output
-        projection. Nothing checks this: a projection whose matmul runs out of turn pops its own
-        page size off the head of another weight's slab, which is wrong results rather than an
-        error.
+        projections (o_a_proj, then o_b_proj -- see ``_grouped_output``). Nothing checks this:
+        a projection whose matmul runs out of turn pops its own page size off the head of
+        another weight's slab, which is wrong results rather than an error.
         """
         self.q_a_proj.fetch_weights()
         self.q_b_proj.fetch_weights()
@@ -1011,6 +1024,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         if self.compressor is not None:
             self.compressor.prefetch_weights()
         if self.use_prefetcher:
+            self.o_a_proj.fetch_weights()
             self.o_b_proj.fetch_weights()
 
     def _sdpa_decode(
