@@ -6,6 +6,7 @@
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/bcast.h"
+#include "api/compute/cb_api.h"
 #include "api/compute/binary_max_min.h"
 #include "api/compute/common.h"
 #include "api/compute/eltwise_binary_sfpu.h"
@@ -22,6 +23,7 @@ constexpr auto cb_grad_idx = tt::CBIndex::c_1;
 constexpr auto cb_exp_avg_idx = tt::CBIndex::c_2;
 constexpr auto cb_exp_avg_sq_idx = tt::CBIndex::c_3;
 constexpr auto cb_max_exp_avg_sq_in_idx = tt::CBIndex::c_4;
+constexpr auto cb_bias_correction_idx = tt::CBIndex::c_5;
 
 constexpr auto cb_output_idx = tt::CBIndex::c_16;
 constexpr auto cb_exp_avg_out_idx = tt::CBIndex::c_17;
@@ -54,6 +56,37 @@ void kernel_main() {
     uint32_t one_minus_beta2 = get_arg_val<uint32_t>(args_idx++);
     uint32_t decay_factor = get_arg_val<uint32_t>(args_idx++);
     [[maybe_unused]] uint32_t seed = get_arg_val<uint32_t>(args_idx++);
+    [[maybe_unused]] uint32_t lr = get_arg_val<uint32_t>(args_idx++);
+
+#if BIAS_CORRECTION_TENSORS
+    // beta^t came in as tensors, so step_size and the second bias correction are
+    // derived here rather than on host. The reader has parked both scalars in
+    // cb_bias_correction_idx, one tile each, value at element (0, 0).
+    //
+    // The variance is scaled by 1 / bias_correction2 *before* the square root
+    // rather than by 1 / sqrt(bias_correction2) after it. Same quantity —
+    // sqrt(v / bc2) == sqrt(v) / sqrt(bc2) — but it needs only a division, so no
+    // square root has to run on the RISC-V core.
+    float recip_bias_correction2 = 0.0F;
+    {
+        cb_wait_front(cb_bias_correction_idx, 2);
+#if defined(ARCH_BLACKHOLE)
+        // Same workaround as ttnn's embedding_backward compute kernel: force the
+        // read to go out to L1 rather than hit a stale cache line.
+        asm volatile("fence");
+#endif
+        // Tile 0 holds beta1^t, tile 1 beta2^t, each at element (0, 0).
+        // read_tile_value hands back the raw 32-bit word, which is the float32
+        // value: the op rejects any other bias dtype.
+        const float beta1_pow = __builtin_bit_cast(float, read_tile_value(cb_bias_correction_idx, 0, 0));
+        const float beta2_pow = __builtin_bit_cast(float, read_tile_value(cb_bias_correction_idx, 1, 0));
+
+        const float learning_rate = __builtin_bit_cast(float, lr);
+        step_size = __builtin_bit_cast(uint32_t, learning_rate / (1.0F - beta1_pow));
+        recip_bias_correction2 = 1.0F / (1.0F - beta2_pow);
+    }
+    const uint32_t recip_bias_correction2_bits = __builtin_bit_cast(uint32_t, recip_bias_correction2);
+#endif
 
     init_sfpu(cb_param_idx, cb_output_idx);
 #if STOCH_ROUND
@@ -142,12 +175,21 @@ void kernel_main() {
 #endif
         sqrt_tile_init();  // sets extra constants
         // binop_with_scalar_tile_init();
+#if BIAS_CORRECTION_TENSORS
+        // sqrt(v_hat_t) + epsilon = sqrt(v_t / bias_correction2) + epsilon
+        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+            mul_unary_tile(block_idx, recip_bias_correction2_bits);
+            sqrt_tile(block_idx);
+            add_unary_tile(block_idx, epsilon);
+        }
+#else
         // sqrt(v_hat_t) + epsilon = sqrt(v_t) * inv_sqrt_bc2 + epsilon)
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             sqrt_tile(block_idx);
             mul_unary_tile(block_idx, inv_sqrt_bc2);
             add_unary_tile(block_idx, epsilon);
         }
+#endif
         cb_wait_front(cb_m_t, block_size);
         copy_tile_init(cb_m_t);
         div_binary_tile_init();

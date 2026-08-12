@@ -40,6 +40,7 @@ set(SOURCES
     ops/frobenius_normalize_test.cpp
     ops/k_split_gram_matmul_op_test.cpp
     optimizers/adamw_full_precision_test.cpp
+    optimizers/adamw_bias_correction_tensor_test.cpp
     optimizers/no_op_test.cpp
     modules/distributed/linear_test.cpp
     serialization/model_serializer_test.cpp

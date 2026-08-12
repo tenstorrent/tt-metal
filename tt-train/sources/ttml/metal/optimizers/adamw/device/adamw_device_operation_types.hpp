@@ -33,6 +33,14 @@ struct tensor_args_t {
     const ttnn::Tensor& exp_avg;
     const ttnn::Tensor& exp_avg_sq;
     std::optional<ttnn::Tensor> max_exp_avg_sq = std::nullopt;
+
+    // Bias-correction terms beta^t as single-element f32 tensors. When engaged, the
+    // kernel derives `step_size` and `1 / bias_correction2` on device and the
+    // `beta1_pow` / `beta2_pow` floats in operation_attributes_t are ignored. Both
+    // must be supplied together. Lets a caller keep beta^t resident on device
+    // instead of reading it back to host every optimizer step.
+    std::optional<ttnn::Tensor> beta1_pow = std::nullopt;
+    std::optional<ttnn::Tensor> beta2_pow = std::nullopt;
 };
 
 using tensor_return_value_t = ttnn::Tensor;

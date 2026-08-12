@@ -87,6 +87,33 @@ void AdamWDeviceOperation::validate_on_program_cache_miss(
         check_tensor(
             max_exp_avg_sq.value(), "Max Exponential Average Squared Buffer", tt::tt_metal::Layout::TILE, param_dtype);
     }
+
+    const auto& beta1_pow = tensor_args.beta1_pow;
+    const auto& beta2_pow = tensor_args.beta2_pow;
+    TT_FATAL(
+        beta1_pow.has_value() == beta2_pow.has_value(),
+        "AdamW requires beta1_pow and beta2_pow to be supplied together, got beta1_pow={} beta2_pow={}",
+        beta1_pow.has_value(),
+        beta2_pow.has_value());
+
+    if (beta1_pow.has_value()) {
+        auto check_bias_tensor = [&](const ttnn::Tensor& tensor, const std::string& name) {
+            TT_FATAL(
+                tensor.dtype() == tt::tt_metal::DataType::FLOAT32,
+                "Tensor '{}' must be FLOAT32, but got '{}'. The bias correction 1 - beta^t cancels badly in "
+                "lower precision - bfloat16 rounds beta^t to 1.0 for small step counts, which would divide by zero.",
+                name,
+                enchantum::to_string(tensor.dtype()));
+            check_tensor(tensor, name, tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::FLOAT32);
+            TT_FATAL(
+                tensor.logical_volume() == 1U,
+                "Tensor '{}' must hold exactly one element, got {}",
+                name,
+                tensor.logical_volume());
+        };
+        check_bias_tensor(beta1_pow.value(), "Beta1 Bias Correction");
+        check_bias_tensor(beta2_pow.value(), "Beta2 Bias Correction");
+    }
 }
 
 AdamWDeviceOperation::spec_return_value_t AdamWDeviceOperation::compute_output_specs(
@@ -106,8 +133,14 @@ ttsl::hash::hash_t AdamWDeviceOperation::compute_program_hash(
     auto amsgrad = args.amsgrad;
     auto stochastic_rounding = args.stochastic_rounding;
     auto max_exp_avg_sq_initialized = tensor_args.max_exp_avg_sq.has_value();
+    auto bias_correction_on_device = tensor_args.beta1_pow.has_value();
     auto hash = tt::tt_metal::operation::hash_operation<AdamWDeviceOperation>(
-        amsgrad, stochastic_rounding, max_exp_avg_sq_initialized, param_tensor.dtype(), param_logical_shape);
+        amsgrad,
+        stochastic_rounding,
+        max_exp_avg_sq_initialized,
+        bias_correction_on_device,
+        param_tensor.dtype(),
+        param_logical_shape);
 
     return hash;
 }
@@ -131,7 +164,9 @@ ttml::metal::optimizers::adamw::device::AdamWDeviceOperation::tensor_return_valu
     float weight_decay,
     bool amsgrad,
     ttml::metal::StochasticRounding stochastic_rounding,
-    std::optional<uint32_t> stochastic_rounding_seed) {
+    std::optional<uint32_t> stochastic_rounding_seed,
+    const std::optional<ttnn::Tensor>& beta1_pow_tensor,
+    const std::optional<ttnn::Tensor>& beta2_pow_tensor) {
     using OperationType = ttml::metal::optimizers::adamw::device::AdamWDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
@@ -152,6 +187,8 @@ ttml::metal::optimizers::adamw::device::AdamWDeviceOperation::tensor_return_valu
         .exp_avg = exp_avg,
         .exp_avg_sq = exp_avg_sq,
         .max_exp_avg_sq = max_exp_avg_sq,
+        .beta1_pow = beta1_pow_tensor,
+        .beta2_pow = beta2_pow_tensor,
     };
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
