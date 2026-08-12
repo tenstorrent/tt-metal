@@ -14,6 +14,8 @@
   "provenance": {
     "measured_at_commit": "09419e3dd635028a2ab7ad3319216f61fe223d63",
     "measured_at_utc": "2026-08-06",
+    "fabric_config": "FABRIC_1D",
+    "baseline_status": "historical pre-Fabric2D guardrail; explicitly retained until the checkpoint-backed Fabric2D matrix is rebaselined",
     "method": "first of five warm synchronized trace replay averages, 10 replays per sample"
   },
   "targets": {

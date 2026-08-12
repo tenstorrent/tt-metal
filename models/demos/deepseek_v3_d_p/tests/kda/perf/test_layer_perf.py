@@ -36,8 +36,13 @@ pytestmark = [
     pytest.mark.parametrize(
         "device_params",
         [
-            # Keep the existing SP1xTP8, SP2xTP4, and SP4xTP2 performance matrix,
-            # but exercise it under the same Fabric2D contract as production K3.
+            # Keep the existing SP1xTP8, SP2xTP4, and SP4xTP2 performance matrix
+            # under the same Fabric2D contract as production K3. The pre-migration
+            # Fabric2D trial recorded an SP1xTP8 device timeout with failed
+            # Ethernet-core recovery; SP2xTP4/SP4xTP2 were correct but
+            # 0.05%/0.10% slower than Fabric1D. Owner: KDA component stage (#52799).
+            # The checkpoint-backed Fabric2D matrix must clear that finding and be
+            # rebaselined before KDA performance or Galaxy promotion is signed off.
             pytest.param(
                 {
                     "l1_small_size": 24576,

@@ -1,6 +1,6 @@
 # Kimi Delta Attention tests
 
-Run every device test through `scripts/run_safe_pytest.sh`. A passing hardware run must end with `SAFE_PYTEST_RESULT: PASS`; a skip is not a pass.
+Run every local device test through `scripts/run_safe_pytest.sh`. A passing local hardware run must end with `SAFE_PYTEST_RESULT: PASS`; a skip is not a pass. CI workflows invoke `pytest` directly and must not schedule the local safe runner.
 
 ## Policy
 
@@ -17,7 +17,11 @@ Run every device test through `scripts/run_safe_pytest.sh`. A passing hardware r
 - CPU-reference determinism uses T=128 and three repetitions. It is marked `long_running` and skips
   unless `KDA_RUN_LONG_TESTS=1`.
 - Required performance acceptance is real Kimi-K3, B=1, T=5120 on SP1xTP8, SP2xTP4, and SP4xTP2.
+- Distributed and performance device fixtures use `FabricConfig.FABRIC_2D`. They do not accept a
+  caller-selected topology; CCL topology is derived per axis from the active FabricConfig.
 - LoudBox references and regression limits live in `perf/perf_targets/bh_loudbox.json`.
+- The current LoudBox references are an explicitly retained historical Fabric1D guardrail. Clear the
+  recorded SP1xTP8 Fabric2D hang and rebaseline all three layouts on Fabric2D before performance sign-off.
 - Rebaseline only when the workload, hardware/runtime contract, or accepted baseline changes.
 - `model/test_real_weights.py` checks output and both states against the independent Torch reference
   and requires usable realtime program records.
