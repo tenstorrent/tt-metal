@@ -14,6 +14,13 @@ import torch
 import ttnn
 from models.common.llm_runtime.config import PageTableLayout
 from models.common.llm_runtime.prefill.config import PrefillRuntimeConfig
+from models.common.llm_runtime.prefill.inputs import (
+    PrefillDeviceInputs,
+    PrefillInputStager,
+    PrefillPositionInputs,
+    allocate_device_tensors,
+    copy_into_device_tensors,
+)
 from models.common.llm_runtime.prefill.plan import (
     PrefillChunk,
     PrefillRequest,
@@ -103,62 +110,6 @@ class PreparedPrefill:
 
 
 @dataclass(frozen=True)
-class PrefillHostInputs:
-    tokens: Any
-    position_indices: Any
-    page_table: Any
-    chunk_page_table: Any | None
-    chunk_start_idx: Any | None
-
-    def values(self) -> tuple[Any, ...]:
-        return (
-            self.tokens,
-            self.position_indices,
-            self.page_table,
-            self.chunk_page_table,
-            self.chunk_start_idx,
-        )
-
-
-@dataclass(frozen=True)
-class PrefillDeviceInputs:
-    tokens: Any
-    rotary_cos: Any
-    rotary_sin: Any
-    page_table: Any
-    chunk_page_table: Any | None
-    position_indices: Any
-    chunk_start_idx: Any | None
-
-    def model_values(self) -> tuple[Any, ...]:
-        return (
-            self.tokens,
-            self.rotary_cos,
-            self.rotary_sin,
-            self.page_table,
-            self.chunk_page_table,
-            self.position_indices,
-            self.chunk_start_idx,
-        )
-
-    def owned_tensor_values(self) -> tuple[Any, ...]:
-        return self.model_values()
-
-
-@dataclass(frozen=True)
-class PrefillPositionInputs:
-    slice_start: Any
-    slice_end: Any
-    row_index: Any
-
-    def values(self) -> tuple[Any, ...]:
-        return self.slice_start, self.slice_end, self.row_index
-
-    def owned_tensor_values(self) -> tuple[Any, ...]:
-        return self.values()
-
-
-@dataclass(frozen=True)
 class InvocationResult:
     value: Any
     owned: Any
@@ -185,15 +136,15 @@ class PrefillHiddenPersistentInputs:
         return self.device_inputs.model_values()
 
 
-@dataclass(frozen=True)
-class PrefillReplayWorkspace:
+@dataclass
+class PrefillReplayState:
     """Program-alias-local postprocessing and sampling state."""
 
     position_inputs: PrefillPositionInputs
     kpt: tuple[Any, Any, Any] | None
     sampled_output: Any | None = None
-    position_signature: list[int] | None = None
-    kpt_signature: list[Any] | None = None
+    position_signature: int | None = None
+    kpt_signature: Any = None
 
     def owned_tensor_values(self) -> tuple[Any, ...]:
         return self.position_inputs.values(), self.kpt, self.sampled_output
@@ -206,7 +157,7 @@ class PrefillCapturePlan:
     signature: PrefillTraceSignature
     prepare_inputs: Callable[[], PrefillHiddenPersistentInputs]
     capture: Callable[[PrefillHiddenPersistentInputs], Any]
-    prepare_workspace: Callable[[], PrefillReplayWorkspace]
+    prepare_workspace: Callable[[], PrefillReplayState]
     schema_fingerprint: Any
     workspace_fingerprint: Any
     refresh_fields: tuple[str, ...] = ("tokens", "page_table", "last_token", "sampling")
@@ -231,6 +182,11 @@ class PrefillRuntime:
             raise TypeError("config must be a PrefillRuntimeConfig")
         self.config = config
         self._transient_orphans: list[TensorResourceOrphan] = []
+        self.inputs = PrefillInputStager(
+            model=config.model,
+            mesh_device=config.mesh_device,
+            release_transient=self._release_or_retain_transient,
+        )
 
     # Public API
 
@@ -363,7 +319,7 @@ class PrefillRuntime:
         def prepare_inputs() -> PrefillHiddenPersistentInputs:
             return self._prepare_hidden_persistent_inputs(prepared)
 
-        def prepare_workspace() -> PrefillReplayWorkspace:
+        def prepare_workspace() -> PrefillReplayState:
             return self._prepare_replay_workspace(prepared)
 
         def capture(persistent: PrefillHiddenPersistentInputs) -> Any:
@@ -397,7 +353,7 @@ class PrefillRuntime:
         self,
         prepared: PreparedPrefill,
         persistent: PrefillHiddenPersistentInputs,
-        workspace: PrefillReplayWorkspace,
+        workspace: PrefillReplayState,
         chunk: PrefillChunk | None = None,
     ) -> None:
         """Refresh borrowed persistent inputs for one replay."""
@@ -412,40 +368,24 @@ class PrefillRuntime:
         # Trace-eligible prefill fixes rotary positions and has no chunk inputs.
         # Rebuilding those capture-owned host tensors on every replay adds TTFT
         # without refreshing any device input; only tokens and page table vary.
-        mapper = ttnn.ReplicateTensorToMesh(self.config.mesh_device)
-        host_tokens = ttnn.from_torch(
-            request.tokens.reshape(1, 1, 1, -1),
-            device=None,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=mapper,
-        )
-        host_page_table = ttnn.from_torch(
-            request.page_table,
-            device=None,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=mapper,
-        )
-        ttnn.copy_host_to_device_tensor(host_tokens, persistent.device_inputs.tokens)
-        ttnn.copy_host_to_device_tensor(host_page_table, persistent.device_inputs.page_table)
+        self.inputs.refresh_regular_device_inputs(request, persistent.device_inputs)
         uses_static_single_logits = (
             prepared.sampling_params is None and request.kind == "single" and not request.uses_chunked_prefill
         )
         if not self._uses_static_q128_topk(request, prepared.sampling_path) and not uses_static_single_logits:
             position_value = relative_last
-            position_signature = workspace.position_signature
-            if position_signature is None or position_signature[0] != position_value:
-                position_inputs = self._prepare_position_inputs_host(relative_last, request.padded_sequence_length)
-                _copy_host_to_device(position_inputs.values(), workspace.position_inputs.values())
-                if position_signature is not None:
-                    position_signature[0] = position_value
+            if workspace.position_signature != position_value:
+                position_inputs = self.inputs.prepare_position_inputs_host(
+                    relative_last, request.padded_sequence_length
+                )
+                copy_into_device_tensors(position_inputs.values(), workspace.position_inputs.values())
+                workspace.position_signature = position_value
         self._refresh_workspace_sampling(prepared, workspace)
 
     def _refresh_workspace_sampling(
         self,
         prepared: PreparedPrefill,
-        workspace: PrefillReplayWorkspace,
+        workspace: PrefillReplayState,
     ) -> None:
         if prepared.sampling_path == "topk":
             sampling_batch_size = self._sampling_output_rows(prepared)
@@ -454,22 +394,20 @@ class PrefillRuntime:
             else:
                 k, p, temperature, _ = _formatted_sampling_values(prepared.sampling_params, sampling_batch_size)
                 kpt_value = k, p, temperature
-            kpt_signature = workspace.kpt_signature
-            if kpt_signature is None or kpt_signature[0] != kpt_value:
+            if workspace.kpt_signature != kpt_value:
                 self._refresh_kpt(
                     workspace.kpt,
                     prepared.sampling_params,
                     sampling_batch_size,
                     force_topk=True,
                 )
-                if kpt_signature is not None:
-                    kpt_signature[0] = kpt_value
+                workspace.kpt_signature = kpt_value
 
     def finish_trace(
         self,
         prepared: PreparedPrefill,
         hidden: Any,
-        workspace: PrefillReplayWorkspace,
+        workspace: PrefillReplayState,
     ) -> InvocationResult:
         """Post-process a replayed hidden-state tensor into a normal result."""
 
@@ -723,8 +661,8 @@ class PrefillRuntime:
                 _retain_owned(owned, kpt)
 
             for chunk in request.chunks:
-                device_inputs, position_inputs = self._stage_prefill_step(
-                    prepared,
+                device_inputs, position_inputs = self.inputs.stage_step(
+                    request,
                     chunk,
                     final_relative_last,
                 )
@@ -773,37 +711,6 @@ class PrefillRuntime:
             attach_cleanup_failures(primary, failures)
             raise
         return InvocationResult(value=output, owned=tuple(owned))
-
-    def _stage_prefill_step(
-        self,
-        prepared: PreparedPrefill,
-        chunk: PrefillChunk,
-        final_relative_last: int,
-    ) -> tuple[PrefillDeviceInputs, PrefillPositionInputs]:
-        request = prepared.request
-        chunked = request.uses_chunked_prefill
-        host_inputs = self._prepare_inputs_host(
-            request.tokens[:, chunk.token_slice],
-            request.page_table,
-            start_pos=chunk.chunk_start_idx if chunked else 0,
-            chunk_page_table=chunk.chunk_page_table if chunked else None,
-            chunk_start_idx=chunk.chunk_start_idx if chunked else None,
-            last_token_idx=max(request.last_token_indices),
-        )
-        device_inputs = None
-        position_inputs = None
-        try:
-            device_inputs = self._stage_device_inputs(host_inputs)
-            position_values = _copy_host_to_device(
-                self._prepare_position_inputs_host(final_relative_last, chunk.chunk_size).values(),
-                mesh_device=self.config.mesh_device,
-            )
-            position_inputs = PrefillPositionInputs(*position_values)
-        except BaseException as primary:
-            failures = self._release_or_retain_transient((device_inputs, position_inputs))
-            attach_cleanup_failures(primary, failures)
-            raise
-        return device_inputs, position_inputs
 
     def _execute_prefill_step(
         self,
@@ -893,69 +800,41 @@ class PrefillRuntime:
         _retain_owned(owned, output)
         return output
 
-    def _trace_input_geometry(self, prepared: PreparedPrefill) -> tuple[Any, ...]:
-        request = prepared.request
-        chunk = request.chunks[0]
-        if request.uses_chunked_prefill:
-            final_chunk = request.chunks[-1]
-            relative_last = (request.last_token_indices[0] - final_chunk.chunk_start_idx) % final_chunk.chunk_size
-            tokens = request.tokens[:, chunk.token_slice]
-            start_pos = chunk.chunk_start_idx
-            chunk_page_table = chunk.chunk_page_table
-            chunk_start_idx = chunk.chunk_start_idx
-            sequence_length = chunk.chunk_size
-        else:
-            relative_last = max(
-                last - cached for last, cached in zip(request.last_token_indices, request.cached_tokens)
-            )
-            tokens = request.tokens
-            start_pos = 0
-            chunk_page_table = None
-            chunk_start_idx = None
-            sequence_length = request.padded_sequence_length
-        return (
-            chunk,
-            relative_last,
-            tokens,
-            start_pos,
-            chunk_page_table,
-            chunk_start_idx,
-            sequence_length,
-        )
-
     def _prepare_hidden_persistent_inputs(self, prepared: PreparedPrefill) -> PrefillHiddenPersistentInputs:
         request = prepared.request
-        _, _, tokens, start_pos, chunk_page_table, chunk_start_idx, _ = self._trace_input_geometry(prepared)
-        host_inputs = self._prepare_inputs_host(
-            tokens,
+        trace_inputs = self.inputs.trace_inputs(request)
+        host_inputs = self.inputs.prepare_host_inputs(
+            trace_inputs.tokens,
             request.page_table,
-            start_pos=start_pos,
-            chunk_page_table=chunk_page_table,
-            chunk_start_idx=chunk_start_idx,
+            start_pos=trace_inputs.start_pos,
+            chunk_page_table=trace_inputs.chunk_page_table,
+            chunk_start_idx=trace_inputs.chunk_start_idx,
             last_token_idx=max(request.last_token_indices),
         )
         device_inputs = None
         try:
-            device_inputs = self._stage_device_inputs(host_inputs)
+            device_inputs = self.inputs.stage_device_inputs(host_inputs)
             if prepared.request.uses_chunked_prefill:
                 # Prime the exact dynamic rotary-copy programs before trace
                 # activation; chunk replay refreshes these buffers in place.
-                self._copy_rotary_inputs(device_inputs)
+                self.inputs.copy_rotary_inputs(device_inputs)
         except BaseException as primary:
             failures = self._release_or_retain_transient(device_inputs)
             attach_cleanup_failures(primary, failures)
             raise
         return PrefillHiddenPersistentInputs(device_inputs=device_inputs)
 
-    def _prepare_replay_workspace(self, prepared: PreparedPrefill) -> PrefillReplayWorkspace:
-        _, relative_last, _, _, _, _, sequence_length = self._trace_input_geometry(prepared)
+    def _prepare_replay_workspace(self, prepared: PreparedPrefill) -> PrefillReplayState:
+        trace_inputs = self.inputs.trace_inputs(prepared.request)
         position_inputs = None
         kpt = None
         sampled_output = None
         try:
             sampling_batch_size = self._sampling_output_rows(prepared)
-            position_values = _copy_host_to_device(
-                self._prepare_position_inputs_host(relative_last, sequence_length).values(),
+            position_values = allocate_device_tensors(
+                self.inputs.prepare_position_inputs_host(
+                    trace_inputs.relative_last, trace_inputs.sequence_length
+                ).values(),
                 mesh_device=self.config.mesh_device,
             )
             position_inputs = PrefillPositionInputs(*position_values)
@@ -974,12 +853,12 @@ class PrefillRuntime:
         if prepared.sampling_params is not None:
             k, p, temperature, _ = _formatted_sampling_values(prepared.sampling_params, sampling_batch_size)
             kpt_signature = k, p, temperature
-        return PrefillReplayWorkspace(
+        return PrefillReplayState(
             position_inputs=position_inputs,
             kpt=kpt,
             sampled_output=sampled_output,
-            position_signature=[relative_last],
-            kpt_signature=[kpt_signature],
+            position_signature=trace_inputs.relative_last,
+            kpt_signature=kpt_signature,
         )
 
     def _refresh_chunk_trace_inputs(
@@ -987,57 +866,20 @@ class PrefillRuntime:
         prepared: PreparedPrefill,
         chunk: PrefillChunk,
         persistent: PrefillHiddenPersistentInputs,
-        workspace: PrefillReplayWorkspace,
+        workspace: PrefillReplayState,
     ) -> None:
         """Refresh every dynamic chunk input while preserving trace-owned storage."""
 
         request = prepared.request
-        host_inputs = self._prepare_inputs_host(
-            request.tokens[:, chunk.token_slice],
-            request.page_table,
-            start_pos=chunk.chunk_start_idx,
-            chunk_page_table=chunk.chunk_page_table,
-            chunk_start_idx=chunk.chunk_start_idx,
-            last_token_idx=max(request.last_token_indices),
-        )
-        _copy_host_to_device(
-            host_inputs.values(),
-            (
-                persistent.device_inputs.tokens,
-                persistent.device_inputs.position_indices,
-                persistent.device_inputs.page_table,
-                persistent.device_inputs.chunk_page_table,
-                persistent.device_inputs.chunk_start_idx,
-            ),
-        )
-
-        # Rotary lookup is dynamic with cached/chunk start. Build the new
-        # values before replay, copy them into trace-owned buffers, then release
-        # the temporary lookup outputs.
-        self._copy_rotary_inputs(persistent.device_inputs)
+        self.inputs.refresh_chunk_device_inputs(request, chunk, persistent.device_inputs)
 
         final_chunk = request.chunks[-1]
         relative_last = (request.last_token_indices[0] - final_chunk.chunk_start_idx) % final_chunk.chunk_size
-        if workspace.position_signature is None or workspace.position_signature[0] != relative_last:
-            position_inputs = self._prepare_position_inputs_host(relative_last, final_chunk.chunk_size)
-            _copy_host_to_device(position_inputs.values(), workspace.position_inputs.values())
-            if workspace.position_signature is not None:
-                workspace.position_signature[0] = relative_last
+        if workspace.position_signature != relative_last:
+            position_inputs = self.inputs.prepare_position_inputs_host(relative_last, final_chunk.chunk_size)
+            copy_into_device_tensors(position_inputs.values(), workspace.position_inputs.values())
+            workspace.position_signature = relative_last
         self._refresh_workspace_sampling(prepared, workspace)
-
-    def _copy_rotary_inputs(self, device_inputs: PrefillDeviceInputs) -> None:
-        rot_mats = None
-        try:
-            rot_mats = tuple(self.config.model.prepare_prefill_rot_mats(device_inputs.position_indices))
-            ttnn.copy(input_a=rot_mats[0], input_b=device_inputs.rotary_cos)
-            ttnn.copy(input_a=rot_mats[1], input_b=device_inputs.rotary_sin)
-        except BaseException as primary:
-            failures = self._release_or_retain_transient(rot_mats)
-            attach_cleanup_failures(primary, failures)
-            raise
-        failures = self._release_or_retain_transient(rot_mats)
-        if failures:
-            raise_cleanup_failures(failures)
 
     def _run_hidden_body(
         self,
@@ -1125,131 +967,6 @@ class PrefillRuntime:
         _retain_owned(owned, output)
         return output
 
-    def _prepare_inputs_host(
-        self,
-        tokens: torch.Tensor,
-        page_table: torch.Tensor,
-        *,
-        start_pos: int = 0,
-        chunk_page_table: torch.Tensor | None = None,
-        chunk_start_idx: int | None = None,
-        last_token_idx: int | None = None,
-    ) -> PrefillHostInputs:
-        if tokens.ndim != 2:
-            raise ValueError("prefill tokens must be rank 2")
-        mapper = ttnn.ReplicateTensorToMesh(self.config.mesh_device)
-        tokens_tt = ttnn.from_torch(
-            tokens.reshape(1, 1, 1, -1),
-            device=None,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=mapper,
-        )
-        rope = self.config.model.rope_setup
-        rope.load_device_weights()
-        matrix_length = int(rope.cos_matrix.shape[2])
-        if matrix_length <= 0:
-            raise ValueError("rotary position table must not be empty")
-        start_pos = int(start_pos)
-        sequence_length = int(tokens.shape[-1])
-        if start_pos < 0:
-            raise ValueError("prefill start position must be nonnegative")
-        if last_token_idx is not None and int(last_token_idx) + 1 > matrix_length:
-            raise ValueError(f"Sequence length {int(last_token_idx) + 1} exceeds rotary capacity {matrix_length}")
-        position_indices = torch.arange(start_pos, start_pos + sequence_length, dtype=torch.long).clamp(
-            max=matrix_length - 1
-        )
-        position_indices_tt = ttnn.from_torch(
-            position_indices.reshape(1, -1),
-            device=None,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=mapper,
-        )
-        page_table_tt = ttnn.from_torch(
-            page_table,
-            device=None,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=mapper,
-        )
-        chunk_tt = (
-            ttnn.from_torch(
-                chunk_page_table,
-                device=None,
-                dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=mapper,
-            )
-            if chunk_page_table is not None
-            else None
-        )
-        chunk_start_tt = (
-            ttnn.from_torch(
-                torch.tensor([int(chunk_start_idx)], dtype=torch.int32),
-                device=None,
-                dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=mapper,
-            )
-            if chunk_start_idx is not None
-            else None
-        )
-        return PrefillHostInputs(tokens_tt, position_indices_tt, page_table_tt, chunk_tt, chunk_start_tt)
-
-    def _prepare_position_inputs_host(self, relative_last: int, sequence_length: int) -> PrefillPositionInputs:
-        relative_last = int(relative_last)
-        sequence_length = int(sequence_length)
-        if relative_last < 0 or relative_last >= sequence_length:
-            raise ValueError("prefill last-token position must fall within the padded sequence")
-        block_start = (relative_last // _TILE_SIZE) * _TILE_SIZE
-        hidden_width = int(self.config.model.config.dim)
-        bounds = ((0, 0, block_start, 0), (1, 1, block_start + _TILE_SIZE, hidden_width))
-        mapper = ttnn.ReplicateTensorToMesh(self.config.mesh_device)
-        slice_bounds = tuple(
-            ttnn.from_torch(
-                torch.tensor(bound, dtype=torch.int32),
-                device=None,
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=mapper,
-            )
-            for bound in bounds
-        )
-        row_index = ttnn.from_torch(
-            torch.tensor([[relative_last % _TILE_SIZE]], dtype=torch.int32),
-            device=None,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=mapper,
-        )
-        return PrefillPositionInputs(slice_bounds[0], slice_bounds[1], row_index)
-
-    def _stage_device_inputs(self, host_inputs: PrefillHostInputs) -> PrefillDeviceInputs:
-        raw_inputs = None
-        rot_mats = None
-        try:
-            raw_inputs = _copy_host_to_device(host_inputs.values(), mesh_device=self.config.mesh_device)
-            prepare_rot_mats = getattr(self.config.model, "prepare_prefill_rot_mats", None)
-            if not callable(prepare_rot_mats):
-                raise TypeError("model must provide prepare_prefill_rot_mats()")
-            rot_mats = tuple(prepare_rot_mats(raw_inputs[1]))
-            if len(rot_mats) != 2:
-                raise ValueError("prepare_prefill_rot_mats() must return cosine and sine tensors")
-        except BaseException as primary:
-            failures = self._release_or_retain_transient((rot_mats, raw_inputs))
-            attach_cleanup_failures(primary, failures)
-            raise
-        return PrefillDeviceInputs(
-            tokens=raw_inputs[0],
-            rotary_cos=rot_mats[0],
-            rotary_sin=rot_mats[1],
-            page_table=raw_inputs[2],
-            chunk_page_table=raw_inputs[3],
-            position_indices=raw_inputs[1],
-            chunk_start_idx=raw_inputs[4],
-        )
-
     def _sampling_batch_size(self, request: PrefillRequest) -> int:
         if self.config.device_sampling_enabled:
             return self.config.sampling_batch_size
@@ -1285,7 +1002,7 @@ class PrefillRuntime:
         host = self._make_host_kpt(sampling_params, batch_size, force_topk)
         if host is None:
             return None
-        return tuple(_copy_host_to_device(host, mesh_device=self.config.mesh_device))
+        return tuple(allocate_device_tensors(host, mesh_device=self.config.mesh_device))
 
     def _make_host_kpt(
         self,
@@ -1335,7 +1052,7 @@ class PrefillRuntime:
         if (host_kpt is None) != (device_kpt is None):
             raise RuntimeError("sampling parameters changed the compiled sampling path")
         if host_kpt is not None:
-            _copy_host_to_device(host_kpt, device_kpt)
+            copy_into_device_tensors(host_kpt, device_kpt)
 
     def _make_sampling_output(self, batch_size: int) -> Any:
         return ttnn.from_torch(
@@ -1406,28 +1123,6 @@ def _new_logprob_output(output: Any, persistent_sampled_output: Any | None) -> A
     if not isinstance(output, tuple) or len(output) != 2:
         raise TypeError("sampled prefill output must contain (tokens, log_probs)")
     return output[1]
-
-
-def _copy_host_to_device(host_tensors, device_tensors=None, mesh_device=None):
-    if device_tensors is None:
-        if mesh_device is None:
-            raise ValueError("mesh_device is required for device allocation")
-        allocated = []
-        try:
-            for host_tensor in host_tensors:
-                allocated.append(ttnn.to_device(host_tensor, device=mesh_device) if host_tensor is not None else None)
-        except BaseException as primary:
-            failures = best_effort_deallocate_owned_tensors(allocated)
-            attach_cleanup_failures(primary, failures)
-            raise
-        return allocated
-    for host_tensor, device_tensor in zip(host_tensors, device_tensors):
-        if host_tensor is None:
-            if device_tensor is not None:
-                raise ValueError("host/device optional tensor structure changed")
-            continue
-        ttnn.copy_host_to_device_tensor(host_tensor, device_tensor)
-    return device_tensors
 
 
 def _fit_prefill_sampling_logits(logits, target_batch: int):

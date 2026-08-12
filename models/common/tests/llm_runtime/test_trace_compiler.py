@@ -10,12 +10,8 @@ import torch
 import models.common.llm_runtime.trace_compiler as trace_compiler_module
 import ttnn
 from models.common.llm_runtime.decode import DecodeDeviceInputs, DecodePersistentInputs
-from models.common.llm_runtime.prefill.runtime import (
-    PrefillDeviceInputs,
-    PrefillHiddenPersistentInputs,
-    PrefillPositionInputs,
-    PrefillReplayWorkspace,
-)
+from models.common.llm_runtime.prefill.inputs import PrefillDeviceInputs, PrefillPositionInputs
+from models.common.llm_runtime.prefill.runtime import PrefillHiddenPersistentInputs, PrefillReplayState
 from models.common.llm_runtime.program_compiler import ProgramCompiler
 from models.common.llm_runtime.trace_compiler import InputRefreshPolicy, TraceCapturePlan, TraceCompiler
 
@@ -429,7 +425,7 @@ def test_cleanup_releases_operation_owned_persistent_dataclasses_once(monkeypatc
         tuple(values[4:7]),
     )
     prefill = PrefillHiddenPersistentInputs(PrefillDeviceInputs(*values[7:14]))
-    prefill_workspace = PrefillReplayWorkspace(
+    prefill_workspace = PrefillReplayState(
         PrefillPositionInputs(*values[14:17]),
         (values[17], values[17], values[17]),
         values[18],

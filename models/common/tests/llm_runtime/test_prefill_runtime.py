@@ -12,20 +12,19 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+import models.common.llm_runtime.prefill.inputs as prefill_inputs_module
 import models.common.llm_runtime.prefill.runtime as prefill_module
 import models.common.llm_runtime.prefill.sampling_helpers as sampling_helpers
 import models.common.llm_runtime.tensor_resources as tensor_resources_module
 from models.common.llm_runtime.config import PageTableLayout
 from models.common.llm_runtime.output_reader import OutputReader
 from models.common.llm_runtime.prefill.config import PrefillRuntimeConfig
+from models.common.llm_runtime.prefill.inputs import PrefillDeviceInputs, PrefillHostInputs, PrefillPositionInputs
 from models.common.llm_runtime.prefill.plan import _plan_prefill_requests
 from models.common.llm_runtime.prefill.runtime import (
     InvocationResult,
-    PrefillDeviceInputs,
     PrefillHiddenPersistentInputs,
-    PrefillHostInputs,
-    PrefillPositionInputs,
-    PrefillReplayWorkspace,
+    PrefillReplayState,
     PrefillRuntime,
     _fit_prefill_sampling_logits,
     _process_output_tokens,
@@ -266,7 +265,7 @@ def test_trace_finish_reuses_trace_owned_sample_output(monkeypatch):
         sampling_params=SamplingParams(temperature=1.0, top_k=32, top_p=0.08),
         sampling_path="topk",
     )
-    workspace = PrefillReplayWorkspace(
+    workspace = PrefillReplayState(
         position_inputs=PrefillPositionInputs("start", "end", "row"),
         kpt=("k", "p", "temperature"),
         sampled_output="persistent-output",
@@ -306,22 +305,22 @@ def test_trace_refresh_skips_unchanged_position_and_sampling_inputs(monkeypatch)
     persistent = PrefillHiddenPersistentInputs(
         device_inputs=PrefillDeviceInputs("tokens", "cos", "sin", "page", None, "positions", None),
     )
-    workspace = PrefillReplayWorkspace(
+    workspace = PrefillReplayState(
         position_inputs=PrefillPositionInputs("start", "end", "row"),
         kpt=("k", "p", "temperature"),
-        position_signature=[79],
-        kpt_signature=[(k, p, temperature)],
+        position_signature=79,
+        kpt_signature=(k, p, temperature),
     )
-    monkeypatch.setattr(prefill_module.ttnn, "ReplicateTensorToMesh", lambda mesh: "mapper")
+    monkeypatch.setattr(prefill_inputs_module.ttnn, "ReplicateTensorToMesh", lambda mesh: "mapper")
     # ttnn.from_torch is an overloaded backend API; this test only distinguishes source dtype.
     monkeypatch.setattr(
-        prefill_module.ttnn,
+        prefill_inputs_module.ttnn,
         "from_torch",
         lambda value, **kwargs: "host-page" if value.dtype == torch.int32 else "host-tokens",
     )
     copied = []
     monkeypatch.setattr(
-        prefill_module.ttnn,
+        prefill_inputs_module.ttnn,
         "copy_host_to_device_tensor",
         lambda host, device: copied.append((host, device)),
     )
@@ -332,7 +331,7 @@ def test_trace_refresh_skips_unchanged_position_and_sampling_inputs(monkeypatch)
     def fail_sampling_refresh(device_kpt, sampling_params, batch_size, force_topk):
         pytest.fail("sampling refreshed")
 
-    monkeypatch.setattr(runtime, "_prepare_position_inputs_host", fail_position_refresh)
+    monkeypatch.setattr(runtime.inputs, "prepare_position_inputs_host", fail_position_refresh)
     monkeypatch.setattr(runtime, "_refresh_kpt", fail_sampling_refresh)
 
     runtime.refresh_trace(prepared, persistent, workspace)
@@ -347,26 +346,26 @@ def test_trace_refresh_skips_dynamic_position_inputs_for_static_single_logits(mo
     persistent = PrefillHiddenPersistentInputs(
         device_inputs=PrefillDeviceInputs("tokens", "cos", "sin", "page", None, "positions", None),
     )
-    workspace = PrefillReplayWorkspace(
+    workspace = PrefillReplayState(
         position_inputs=PrefillPositionInputs("start", "end", "row"),
         kpt=None,
-        position_signature=[0],
+        position_signature=0,
     )
-    monkeypatch.setattr(prefill_module.ttnn, "ReplicateTensorToMesh", lambda mesh: "mapper")
+    monkeypatch.setattr(prefill_inputs_module.ttnn, "ReplicateTensorToMesh", lambda mesh: "mapper")
     monkeypatch.setattr(
-        prefill_module.ttnn,
+        prefill_inputs_module.ttnn,
         "from_torch",
         lambda value, **kwargs: "host-page" if value.dtype == torch.int32 else "host-tokens",
     )
     copied = []
     monkeypatch.setattr(
-        prefill_module.ttnn,
+        prefill_inputs_module.ttnn,
         "copy_host_to_device_tensor",
         lambda host, device: copied.append((host, device)),
     )
     monkeypatch.setattr(
-        runtime,
-        "_prepare_position_inputs_host",
+        runtime.inputs,
+        "prepare_position_inputs_host",
         lambda *args: pytest.fail("position refreshed"),
     )
 
@@ -385,8 +384,8 @@ def test_eager_sampled_prefill_uses_preallocated_output(monkeypatch):
     )
     events = []
     monkeypatch.setattr(
-        runtime,
-        "_stage_prefill_step",
+        runtime.inputs,
+        "stage_step",
         lambda prepared, chunk, final_relative_last: events.append("stage") or ("device-inputs", "positions"),
     )
     monkeypatch.setattr(
@@ -440,7 +439,7 @@ def test_sampling_output_is_allocated_before_capture_with_device_shape(monkeypat
     seen = []
     # ttnn.from_torch is overloaded; allocation options are the behavior under test.
     monkeypatch.setattr(
-        prefill_module.ttnn,
+        prefill_inputs_module.ttnn,
         "from_torch",
         lambda tensor, **kwargs: seen.append((tensor, kwargs)) or "device-output",
     )
@@ -1179,15 +1178,15 @@ def test_chunk_trace_refresh_updates_token_start_tables_rotary_and_preserves_b6_
 
     host_calls = []
     monkeypatch.setattr(
-        runtime,
-        "_prepare_inputs_host",
+        runtime.inputs,
+        "prepare_host_inputs",
         lambda token_slice, full_table, **kwargs: host_calls.append((token_slice, full_table, kwargs))
         or PrefillHostInputs("host-token", "host-position", "host-page", "host-chunk", "host-start"),
     )
     copies = []
     monkeypatch.setattr(
-        prefill_module,
-        "_copy_host_to_device",
+        prefill_inputs_module,
+        "copy_into_device_tensors",
         lambda host, device=None, mesh_device=None: copies.append((host, device)) or device,
     )
     runtime.config.model.prepare_prefill_rot_mats = lambda positions: ("new-cos", "new-sin")
@@ -1198,14 +1197,14 @@ def test_chunk_trace_refresh_updates_token_start_tables_rotary_and_preserves_b6_
         lambda *, input_a, input_b: rotary_copies.append((input_a, input_b)),
     )
     released = []
-    monkeypatch.setattr(runtime, "_release_or_retain_transient", lambda value: released.append(value) or [])
+    monkeypatch.setattr(runtime.inputs, "_release_transient", lambda value: released.append(value) or [])
     persistent = PrefillHiddenPersistentInputs(
         device_inputs=PrefillDeviceInputs("tokens", "cos", "sin", "page", "chunk-page", "positions", "start")
     )
-    workspace = PrefillReplayWorkspace(
+    workspace = PrefillReplayState(
         position_inputs=PrefillPositionInputs("slice-start", "slice-end", "row"),
         kpt=None,
-        position_signature=[32],
+        position_signature=32,
     )
 
     runtime.refresh_trace(prepared, persistent, workspace, chunk)
@@ -1290,7 +1289,7 @@ def test_finish_trace_reports_nested_persistent_logprob_and_intermediate_ownersh
     logprob_output = object()
     logits = object()
     selected = object()
-    workspace = PrefillReplayWorkspace(
+    workspace = PrefillReplayState(
         position_inputs=PrefillPositionInputs("start", "end", "row"),
         kpt=("k", "p", "t"),
         sampled_output=sampled_output,
@@ -1334,7 +1333,7 @@ def test_cached_chunk_trace_logits_preserve_tile_for_logical_last_token_assembly
 
     runtime.config.model.post_process_prefill_output = postprocess
     monkeypatch.setattr(prefill_module.ttnn, "untilize", lambda logits, **kwargs: logits)
-    workspace = PrefillReplayWorkspace(
+    workspace = PrefillReplayState(
         position_inputs=PrefillPositionInputs("slice-start", "slice-end", "row-index"),
         kpt=None,
         sampled_output=None,
@@ -1825,8 +1824,8 @@ def test_regular_logits_and_argmax_preserve_operation_order(
     )
     events = []
     monkeypatch.setattr(
-        runtime,
-        "_stage_prefill_step",
+        runtime.inputs,
+        "stage_step",
         lambda prepared, chunk, final_relative_last: events.append("stage")
         or ("device", PrefillPositionInputs("start", "end", "row")),
     )
@@ -1909,20 +1908,20 @@ def test_cached_one_chunk_stages_planned_chunk_metadata(monkeypatch):
         )
         return "host"
 
-    monkeypatch.setattr(runtime, "_prepare_inputs_host", prepare_inputs_host)
-    monkeypatch.setattr(runtime, "_stage_device_inputs", lambda host_inputs: "device")
+    monkeypatch.setattr(runtime.inputs, "prepare_host_inputs", prepare_inputs_host)
+    monkeypatch.setattr(runtime.inputs, "stage_device_inputs", lambda host_inputs: "device")
     monkeypatch.setattr(
-        runtime,
-        "_prepare_position_inputs_host",
+        runtime.inputs,
+        "prepare_position_inputs_host",
         lambda relative_last, sequence_length: PrefillPositionInputs(relative_last, sequence_length, "row"),
     )
     monkeypatch.setattr(
-        prefill_module,
-        "_copy_host_to_device",
+        prefill_inputs_module,
+        "allocate_device_tensors",
         lambda host_tensors, device_tensors=None, mesh_device=None: host_tensors,
     )
 
-    assert runtime._stage_prefill_step(prepared, chunk, 127) == (
+    assert runtime.inputs.stage_step(request, chunk, 127) == (
         "device",
         PrefillPositionInputs(127, 128, "row"),
     )
@@ -1955,7 +1954,7 @@ def test_chunk_sequence_allocates_kpt_before_steps_and_reuses_final_position(mon
         relative_positions.append(relative_last)
         return object(), object()
 
-    monkeypatch.setattr(runtime, "_stage_prefill_step", stage)
+    monkeypatch.setattr(runtime.inputs, "stage_step", stage)
     monkeypatch.setattr(
         runtime,
         "_execute_prefill_step",
@@ -2012,8 +2011,8 @@ def test_sequence_preserves_sampling_output_preallocation_matrix(
     allocated = []
     monkeypatch.setattr(runtime, "_make_device_kpt", lambda sampling_params, batch_size, force_topk: None)
     monkeypatch.setattr(
-        runtime,
-        "_stage_prefill_step",
+        runtime.inputs,
+        "stage_step",
         lambda prepared, chunk, final_relative_last: (object(), object()),
     )
     monkeypatch.setattr(
@@ -2050,8 +2049,8 @@ def test_prefill_sequence_consumes_planned_chunks_and_releases_intermediate(monk
     executed = iter(step_outputs)
     monkeypatch.setattr(runtime, "_make_device_kpt", lambda sampling_params, batch_size, force_topk: None)
     monkeypatch.setattr(
-        runtime,
-        "_stage_prefill_step",
+        runtime.inputs,
+        "stage_step",
         lambda prepared, chunk, final_relative_last: next(staged),
     )
     monkeypatch.setattr(
@@ -2194,8 +2193,8 @@ def test_sampling_output_failure_releases_all_sequence_resources(monkeypatch, ex
     device_inputs, position_inputs, kpt, hidden = object(), object(), object(), object()
     released = []
     monkeypatch.setattr(
-        runtime,
-        "_stage_prefill_step",
+        runtime.inputs,
+        "stage_step",
         lambda prepared, chunk, final_relative_last: (device_inputs, position_inputs),
     )
     monkeypatch.setattr(
@@ -2228,8 +2227,8 @@ def test_step_execution_failure_releases_staged_sequence_resources(monkeypatch, 
     device_inputs, position_inputs = object(), object()
     released = []
     monkeypatch.setattr(
-        runtime,
-        "_stage_prefill_step",
+        runtime.inputs,
+        "stage_step",
         lambda prepared, chunk, final_relative_last: (device_inputs, position_inputs),
     )
     monkeypatch.setattr(runtime, "_make_device_kpt", lambda sampling_params, batch_size, force_topk: None)
@@ -2262,7 +2261,7 @@ def test_staging_failure_after_prior_chunk_releases_prior_sequence_resources(mon
             raise RuntimeError("second staging failed")
         return device_inputs, position_inputs
 
-    monkeypatch.setattr(runtime, "_stage_prefill_step", stage)
+    monkeypatch.setattr(runtime.inputs, "stage_step", stage)
     monkeypatch.setattr(
         runtime,
         "_execute_prefill_step",
@@ -2290,8 +2289,8 @@ def test_finalization_failure_releases_every_resource_acquired_before_failure(mo
     position_inputs = PrefillPositionInputs("start", "end", "row")
     released = []
     monkeypatch.setattr(
-        runtime,
-        "_stage_prefill_step",
+        runtime.inputs,
+        "stage_step",
         lambda prepared, chunk, final_relative_last: (device_inputs, position_inputs),
     )
     monkeypatch.setattr(runtime, "_make_device_kpt", lambda sampling_params, batch_size, force_topk: None)
@@ -2352,8 +2351,8 @@ def test_unified_path_preserves_primary_error_and_retries_cleanup_orphan(monkeyp
     cleanup_failure = RuntimeError("device busy")
     calls = []
     monkeypatch.setattr(
-        runtime,
-        "_stage_prefill_step",
+        runtime.inputs,
+        "stage_step",
         lambda prepared, chunk, final_relative_last: ("device", "position"),
     )
     monkeypatch.setattr(runtime, "_make_device_kpt", lambda sampling_params, batch_size, force_topk: None)
@@ -2389,8 +2388,8 @@ def test_intermediate_release_failure_is_not_reowned_by_sequence(monkeypatch, ex
     released = []
     monkeypatch.setattr(runtime, "_make_device_kpt", lambda sampling_params, batch_size, force_topk: None)
     monkeypatch.setattr(
-        runtime,
-        "_stage_prefill_step",
+        runtime.inputs,
+        "stage_step",
         lambda prepared, chunk, final_relative_last: (device_inputs, position_inputs),
     )
     monkeypatch.setattr(
