@@ -62,5 +62,25 @@ inline void _add_int_(const std::uint32_t dst_index_in0, const std::uint32_t dst
     }
 }
 
+// Calculates ADD for one pair of SrcS rows (Quasar SFPU ops cover 2 rows)
+inline void _calculate_add_srcs_rows_(const int in0_addr, const int in1_addr, const int store_addr)
+{
+    TT_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, in0_addr);    // load from SrcS into lreg[0]
+    TT_SFPLOAD(p_sfpu::LREG1, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, in1_addr);    // load from SrcS into lreg[1]
+    TTI_SFPADD(p_sfpu::LCONST_1, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, 0x0); // lreg[2] = lreg[0] + lreg[1]
+    TT_SFPSTORE(p_sfpu::LREG2, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, store_addr); // store from lreg[2] into SrcS
+}
+
+// Implements element-wise add on SrcS: reads num_sfpu_iterations row pairs starting at
+// in0_base_addr and in1_base_addr and writes the sums starting at store_base_addr.
+inline void _calculate_add_srcs_(const int in0_base_addr, const int in1_base_addr, const int store_base_addr, const int num_sfpu_iterations)
+{
+#pragma GCC unroll 8
+    for (int d = 0; d < num_sfpu_iterations; d++)
+    {
+        _calculate_add_srcs_rows_(in0_base_addr + (d << 1), in1_base_addr + (d << 1), store_base_addr + (d << 1));
+    }
+}
+
 } // namespace sfpu
 } // namespace ckernel
