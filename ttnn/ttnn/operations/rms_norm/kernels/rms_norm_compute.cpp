@@ -20,7 +20,10 @@
 //                     the 1..2 stat columns into a column-0-valid tile.
 //   combine (root)    the G per-core partials gathered by the writer are summed
 //                     in a second DEST accumulation, then finalized
-//                     x -> rsqrt(x/W_true + eps) into the multicast source.
+//                     x -> rsqrt(x + eps) into the multicast source. The 1/W_true
+//                     divisor is NOT applied here: it rides in the reduce scaler
+//                     (see the reader), so each partial is already a share of the
+//                     MEAN and the gathered sum is the mean itself.
 //   scale_block       x * rstd            (BroadcastDim::Col)
 //   gamma_block       normed * gamma      (BroadcastDim::Row), elided w/o gamma
 //   untilize_out_block (ROW_MAJOR output only)
@@ -84,6 +87,16 @@
 // the CB handshakes on cb_output_tiles / cb_gamma_tiles, so the diff against the
 // baseline is the apply pass's compute contribution.
 #define RMSN_ABLATE_APPLY 0
+// TEMPORARY ablation switch (Refinement 5 measurement) — MUST be 0 in committed
+// code. 1 folds only ONE of the leader's W_GROUP_SIZE gathered partials instead
+// of all of them, keeping the gather CB's wait/pop quantum intact, so the diff
+// against the baseline is the root's fp32 tile-add chain.
+#define RMSN_ABLATE_COMBINE_MATH 0
+// TEMPORARY ablation switch (Refinement 5 measurement) — MUST be 0 in committed
+// code. 1 keeps only the copy + pack of the root's finalize chain (no SFPU at
+// all); 2 keeps the Rsqrt but drops MulUnary/AddUnary. Both keep every CB
+// quantum, so the diffs split the finalize into its SFPU elements.
+#define RMSN_ABLATE_FINALIZE 0
 
 namespace {
 constexpr uint32_t cb_input_rm = 0;
@@ -108,13 +121,70 @@ constexpr uint32_t cb_output_rm = 17;
 
 namespace ckl = compute_kernel_lib;
 
+// ---------------------------------------------------------------------------
+// COLUMN-VALID SFPU chain elements (Refinement 5).
+//
+// The finalize chain runs on a `reduce<SUM, REDUCE_ROW>` result, which is
+// COLUMN-0-VALID: 31 of every tile's 32 columns are structurally garbage and are
+// never read (the apply consumes rstd as an `OperandKind::Col` broadcast, i.e.
+// column 0 alone). Column 0 lives in faces 0 and 2, and the SFPU wrapper already
+// has a mode for exactly that pair — `VectorMode::C` walks Face0 + Face2 and skips
+// the other two (llk_math_eltwise_sfpu_common.h), i.e. HALF the work.
+//
+// `ckl::Rsqrt` / `ckl::AddUnary` cannot express it: the compute-API entry points
+// they call (`rsqrt_tile`, `add_unary_tile`) HARDCODE `VectorMode::RC`. So these
+// are the same ops as the kernel_lib ones with the one template argument the
+// helper does not thread — built as `ckl::UnaryOp` chain ELEMENTS, so
+// eltwise_chain keeps owning the DEST window, the CB lifecycle, the init and the
+// format reconfig. This is a missing block operation built, not a helper bypassed.
+//
+// MEASURED (blackhole_p150b, `(1,1,8192,1024)` BLOCK_SHARDED [1024,128] on (8,8),
+// the pinned perf geometry): the finalize chain was 31.1 us of a 76.9 us wall —
+// 23.1 us of it the Rsqrt alone, at ~720 ns per one-tile-row stat tile — because
+// it is on the ROOT and every other core in the group waits for it.
+namespace {
+template <ckl::Dst Slot = ckl::Dst::D0>
+struct RsqrtColValid : ckl::UnaryOp<RsqrtColValid<Slot>, Slot> {
+    static ALWI void init() { ckernel::rsqrt_tile_init<false>(); }
+    static ALWI void exec_impl(uint32_t slot_offset) {
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_rsqrt,
+            (APPROX, 8 /* ITERATIONS */, DST_ACCUM_MODE, false /* FAST_APPROX */, false /* legacy */),
+            ckl::to_u32(Slot) + slot_offset,
+            VectorMode::C));
+    }
+};
+
+template <ckl::Dst Slot = ckl::Dst::D0>
+struct AddUnaryColValid : ckl::UnaryOp<AddUnaryColValid<Slot>, Slot> {
+    uint32_t param;
+    constexpr explicit AddUnaryColValid(uint32_t p) noexcept : param(p) {}
+    static ALWI void init() { ckernel::binop_with_scalar_tile_init(); }
+    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const {
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_binop_with_scalar,
+            (APPROX, ckernel::ADD_UNARY, 8 /* ITERATIONS */),
+            ckl::to_u32(Slot) + slot_offset,
+            VectorMode::C,
+            param));
+    }
+};
+}  // namespace
+
 void kernel_main() {
     constexpr uint32_t CB_W_TILES = get_compile_time_arg_val(0);
     constexpr uint32_t W_GROUP_SIZE = get_compile_time_arg_val(1);
     constexpr bool HAS_GAMMA = get_compile_time_arg_val(2) != 0;
     constexpr bool IS_RM_IN = get_compile_time_arg_val(3) != 0;
     constexpr bool IS_RM_OUT = get_compile_time_arg_val(4) != 0;
-    constexpr uint32_t INV_W_BITS = get_compile_time_arg_val(5);
+    // Carried by the REDUCE SCALER since Refinement 5 (see the reader), not by a
+    // MulUnary on the finalize chain. Kept as a CT arg so the host arg layout and
+    // every downstream index are unchanged.
+    [[maybe_unused]] constexpr uint32_t INV_W_BITS = get_compile_time_arg_val(5);
     constexpr uint32_t EPS_BITS = get_compile_time_arg_val(6);
     constexpr bool IS_RM_GAMMA = get_compile_time_arg_val(7) != 0;
     // See the reader: the ROW_MAJOR gamma stick is staged in cb_input_rm when the
@@ -298,6 +368,27 @@ void kernel_main() {
         // leader == root and W_GROUP_SIZE == G, so this IS the Phase 0 chain and it
         // packs straight into cb_stat_sum.
         if (is_leader) {
+#if RMSN_ABLATE_COMBINE_MATH
+            cb_wait_front(cb_stat_gather, rows_t * W_GROUP_SIZE);
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::grid(rows_t, 1),
+                ckl::BinaryFpu<
+                    ckl::input(cb_stat_gather, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Block),
+                    ckl::input(cb_zero_tile, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::OperandKind::Scalar),
+                    ckl::BinaryFpuOp::Add,
+                    ckl::BroadcastDim::None,
+                    ckl::Dst::D0,
+                    ckl::DestAccumulation::PerRow>{},
+                ckl::PackTile<ckl::output(
+                    TWO_STAGE ? cb_branch_sum : cb_stat_sum,
+                    ckl::ReservePolicy::PerOuter,
+                    ckl::PushPolicy::PerOuter,
+                    ckl::DataFormatReconfig::Enabled,
+                    ckl::PackRelu::Disabled,
+                    ckl::L1Accumulation::Disabled,
+                    ckl::DestAccumulation::PerRow)>{});
+            cb_pop_front(cb_stat_gather, rows_t * W_GROUP_SIZE);
+#else
             ckl::eltwise_chain(
                 ckl::EltwiseShape::grid(rows_t, W_GROUP_SIZE),
                 ckl::BinaryFpu<
@@ -316,6 +407,7 @@ void kernel_main() {
                     ckl::PackRelu::Disabled,
                     ckl::L1Accumulation::Disabled,
                     ckl::DestAccumulation::PerRow)>{});
+#endif
         }
 
         // Combine level 2, on the ROOT: fold the STAGE2_SPAN row totals its writer
@@ -349,13 +441,25 @@ void kernel_main() {
         if (is_root) {
             // finalize: rsqrt(sum * (1/W_true) + eps) -> the multicast source.
             // The 1/W uses the TRUE, unpadded W.
+#if RMSN_ABLATE_FINALIZE == 1
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(rows_t),
                 ckl::CopyTile<ckl::input(cb_stat_sum)>{},
-                ckl::MulUnary<>{INV_W_BITS},
-                ckl::AddUnary<>{EPS_BITS},
+                ckl::PackTile<ckl::output(cb_rstd_send)>{});
+#elif RMSN_ABLATE_FINALIZE == 2
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::tiles(rows_t),
+                ckl::CopyTile<ckl::input(cb_stat_sum)>{},
                 ckl::Rsqrt<>{},
                 ckl::PackTile<ckl::output(cb_rstd_send)>{});
+#else
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::tiles(rows_t),
+                ckl::CopyTile<ckl::input(cb_stat_sum)>{},
+                AddUnaryColValid<>{EPS_BITS},
+                RsqrtColValid<>{},
+                ckl::PackTile<ckl::output(cb_rstd_send)>{});
+#endif
         }
 
         // ---------------- scale_block (+ gamma_block), once per chunk ---------

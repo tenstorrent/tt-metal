@@ -82,7 +82,7 @@ SEM_GATHER2 = 3  # two-stage combine only: row leaders -> root
 READER_ACCESSOR_CT_BASE = 9  # rms_norm_reader.cpp: TensorAccessorArgs<9>
 WRITER_MCAST_CT_BASE = 9  # rms_norm_writer.cpp: MCAST_CT_BASE
 WRITER_MCAST_RT_BASE = 20  # rms_norm_writer.cpp: MCAST_RT_BASE
-_READER_NUM_ARGS = 17  # rms_norm_reader.cpp get_arg_val<uint32_t>(0..16)
+_READER_NUM_ARGS = 18  # rms_norm_reader.cpp get_arg_val<uint32_t>(0..17)
 _COMPUTE_NUM_ARGS = 7  # rms_norm_compute.cpp get_arg_val<uint32_t>(0..6)
 
 # --------------------------------------------------------------------------
@@ -1216,6 +1216,15 @@ def create_program_descriptor(
             "carries ONE CT block for the whole grid"
         )
 
+    # The reduce scaler carries the 1/W_true divisor (Refinement 5). The reduce
+    # helpers' own doc sanctions exactly this — "the scaler combines reduction with
+    # another factor" — and it deletes one SFPU pass from the root's finalize chain,
+    # which is the single largest term of a sharded geometry's wall. Every partial a
+    # core hands to the combine is then already a per-core MEAN contribution, so the
+    # gathered sum IS the mean and the finalize is just `rsqrt(x + eps)`. It also
+    # narrows the stat magnitude from ~W to ~1, which only helps a 16-bit DEST.
+    inv_w_bits = _f32_bits(1.0 / float(geo.W))
+
     # ---- circular buffers ------------------------------------------------
     # `C` (= cb_w_tiles) is the UNIFORM per-core block width along `hidden`: the
     # ceil of the ragged split. Every CB is allocated on the FULL active core set
@@ -1368,6 +1377,7 @@ def create_program_descriptor(
                 gamma_read_offset,
                 gamma_lead_bytes,
                 shard_row_bytes_in,
+                inv_w_bits,
             ]
             assert len(reader_own_args) == _READER_NUM_ARGS, (
                 f"rms_norm: reader runtime-arg layout drifted ({len(reader_own_args)} args); "
@@ -1434,7 +1444,6 @@ def create_program_descriptor(
     # and the stride of every block CB, so it is uniform across the whole active
     # grid. The ragged hidden remainder rides as the per-core RUNTIME arg
     # `core_w` (the valid slice width, core_w <= C).
-    inv_w_bits = _f32_bits(1.0 / float(geo.W))
     eps_bits = _f32_bits(epsilon)
 
     def _rt(per_core):

@@ -59,6 +59,12 @@
 // code. 1 drops the output DRAM write PAYLOAD while keeping every barrier and CB
 // handshake, so the diff against the baseline is the write's contribution.
 #define RMSN_ABLATE_OUTPUT_WRITE 0
+// TEMPORARY ablation switch (Refinement 5 measurement) — MUST be 0 in committed
+// code. 1 shrinks the gather leg's PAYLOAD to 128 bytes per stat tile (a
+// REDUCE_ROW result is column-0-valid, so 128 B is its information content)
+// while keeping the transaction count, the barrier and every semaphore, so the
+// diff against the baseline is the gather's NoC-byte contribution.
+#define RMSN_ABLATE_GATHER_BYTES 0
 
 namespace {
 constexpr uint32_t cb_zero_tile = 4;
@@ -217,6 +223,11 @@ void kernel_main() {
     }
 
     const uint32_t stat_tile_bytes = get_tile_size(cb_stat_gather);
+#if RMSN_ABLATE_GATHER_BYTES
+    const uint32_t gather_payload_bytes = 128;
+#else
+    const uint32_t gather_payload_bytes = stat_tile_bytes;
+#endif
     // cb_stat_gather holds exactly block_row_tiles * W_GROUP_SIZE pages and the
     // leader pushes/pops that many per block, so its write pointer is back at the
     // CB base at the start of every block — identical on every group member,
@@ -327,7 +338,7 @@ void kernel_main() {
         const uint32_t src = get_read_ptr(cb_stat_partial);
         for (uint32_t r = 0; r < rows_t; ++r) {
             const uint32_t dst = gather_base + (r * W_GROUP_SIZE + my_slot) * stat_tile_bytes;
-            noc_async_write(src + r * stat_tile_bytes, get_noc_addr(leader_x, leader_y, dst), stat_tile_bytes);
+            noc_async_write(src + r * stat_tile_bytes, get_noc_addr(leader_x, leader_y, dst), gather_payload_bytes);
         }
         noc_async_write_barrier();
         cb_pop_front(cb_stat_partial, rows_t);
@@ -372,7 +383,7 @@ void kernel_main() {
             const uint32_t src = get_read_ptr(cb_branch_sum);
             for (uint32_t r = 0; r < rows_t; ++r) {
                 const uint32_t dst = gather2_base + (r * STAGE2_SPAN + my_row_slot) * stat_tile_bytes;
-                noc_async_write(src + r * stat_tile_bytes, get_noc_addr(root_x, root_y, dst), stat_tile_bytes);
+                noc_async_write(src + r * stat_tile_bytes, get_noc_addr(root_x, root_y, dst), gather_payload_bytes);
             }
             noc_async_write_barrier();
             cb_pop_front(cb_branch_sum, rows_t);

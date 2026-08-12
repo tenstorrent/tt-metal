@@ -64,6 +64,143 @@ def test_rms_norm_perf(device, rows, hidden, achievable_ns):
     assert_with_pcc(expected, actual, 0.995)
 
 
+# --- Refinement 5: the five pinned SHARDED perf geometries -------------------
+#
+# feature_spec's `group="perf"` sharded loose cases. Their `achievable_ns` are the
+# measured latency of THAT geometry (2-20x tighter than the interleaved twin), so
+# they may only ever be compared against a sharded measurement at the same pinned
+# config (bf16 / TILE / fp32_dest_acc_en=False / HiFi2) and the same pinned shard
+# spec — never against an interleaved number.
+#
+#          rows, hidden, achievable_ns, placement,      shard[h, w],   grid(x, y)
+SHARD_PERF_CASES = [
+    (32, 1024, 4110, "WIDTH", [32, 128], (8, 1)),
+    (32, 2304, 4617, "WIDTH", [32, 256], (9, 1)),
+    (32, 5120, 5267, "WIDTH", [32, 160], (8, 4)),
+    (32, 7168, 5481, "WIDTH", [32, 256], (7, 4)),
+    (8192, 1024, 25640, "BLOCK", [1024, 128], (8, 8)),
+]
+
+_SHARD_ML = {
+    "WIDTH": ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+    "BLOCK": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+    "HEIGHT": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+}
+
+
+def _run_sharded_perf(device, rows, hidden, scheme, shard_shape, core_grid):
+    from eval.sharding import shard_config
+
+    torch.manual_seed(0)
+    shape = (1, 1, rows, hidden)
+    torch_input = torch.randn(shape, dtype=torch.float32).to(torch.bfloat16)
+    torch_gamma = torch.randn((1, 1, 1, hidden), dtype=torch.float32).to(torch.bfloat16)
+
+    memory_config = shard_config(
+        shard_shape,
+        core_grid,
+        _SHARD_ML[scheme],
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        device=device,
+    )
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+    )
+    tt_gamma = ttnn.from_torch(torch_gamma, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    cfg = ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=False)
+    tt_out = rms_norm(
+        tt_input, gamma=tt_gamma, epsilon=1e-6, compute_kernel_config=cfg, memory_config=tt_input.memory_config()
+    )
+
+    x = torch_input.float()
+    expected = x * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + 1e-6) * torch_gamma.float().reshape(-1)
+    from tests.ttnn.utils_for_testing import assert_with_pcc
+
+    assert_with_pcc(expected, ttnn.to_torch(tt_out).float(), 0.995)
+
+
+@pytest.mark.parametrize(
+    "rows,hidden,achievable_ns,scheme,shard_shape,core_grid",
+    SHARD_PERF_CASES,
+    ids=[f"{s.lower()}_r{r}_h{h}_ref{n}ns" for r, h, n, s, _, _ in SHARD_PERF_CASES],
+)
+def test_rms_norm_perf_sharded(device, rows, hidden, achievable_ns, scheme, shard_shape, core_grid):
+    _run_sharded_perf(device, rows, hidden, scheme, shard_shape, core_grid)
+
+
+# --- Refinement 5 diagnostic: how much of the BLOCK profile is the COMBINE? ---
+#
+# `(1,1,8192,1024)` BLOCK [1024,128] on (8,8) gives every core 32 tile-rows x 4
+# hidden tiles = 128 tiles and a G=8 cross-core reduction group per grid row.
+# The HEIGHT twin below puts the SAME 128 tiles on each of the SAME 64 cores
+# (4 tile-rows x 32 hidden tiles) with G == 1 — no gather, no multicast, no root
+# reduce. The pair isolates the combine at equal compute and equal residency.
+
+
+@pytest.mark.parametrize(
+    "scheme,shard_shape,core_grid",
+    [
+        ("BLOCK", [1024, 128], (8, 8)),
+        ("HEIGHT", [128, 1024], (8, 8)),
+    ],
+    ids=["block_g8", "height_g1"],
+)
+def test_rms_norm_perf_sharded_combine_share(device, scheme, shard_shape, core_grid):
+    _run_sharded_perf(device, 8192, 1024, scheme, shard_shape, core_grid)
+
+
+# --- Refinement 5: the block count of a sharded cross-core combine ------------
+#
+# MAX_GATHER_TILES caps `R * G` — i.e. cb_stat_gather's page count — and on the
+# BLOCK perf geometry (G = 8, 32 tile-rows per core) it is what sets R = 8 and so
+# nblocks = 4. Every block is a full group-wide barrier (gather -> root reduce ->
+# finalize -> multicast) plus a fresh set of phase-boundary LLK inits, so sweeping
+# the cap measures the PER-BLOCK cost directly: duration against nblocks.
+
+
+@pytest.mark.parametrize("gather_cap", [16, 32, 64, 128, 256], ids=lambda c: f"cap{c}")
+def test_rms_norm_perf_sharded_gather_cap(device, gather_cap, monkeypatch):
+    from ttnn.operations.rms_norm import rms_norm_program_descriptor as pd
+
+    monkeypatch.setattr(pd, "MAX_GATHER_TILES", gather_cap)
+    _run_sharded_perf(device, 8192, 1024, "BLOCK", [1024, 128], (8, 8))
+
+
+# --- Refinement 5 diagnostic: the combine at MATCHED (C, R, nblocks) ----------
+#
+# The HEIGHT twin above removes the combine but also changes C (4 -> 32) and the
+# block count (4 -> 1), so its 25.5 us floor mixes the combine with the block
+# schedule. This forces the BLOCK spec's groups to ONE member each — same shard,
+# same C = 4, same R = 8, same 4 blocks, no gather / root reduce / multicast.
+# NUMERICALLY WRONG on purpose (each core normalises by its own quarter row); it
+# is a measurement, so it is `nogather` and skipped unless selected explicitly.
+
+
+@pytest.mark.parametrize("nogather", [False, True], ids=["combine", "nogather"])
+def test_rms_norm_perf_sharded_nogather(device, nogather, monkeypatch):
+    from ttnn.operations.rms_norm import rms_norm_program_descriptor as pd
+
+    monkeypatch.setattr(pd, "MAX_GATHER_TILES", 64 if not nogather else 8)
+    if nogather:
+        real = pd._sharded_groups
+
+        def per_core_groups(sv, infos):
+            out = []
+            for g in real(sv, infos):
+                for m in g["members"]:
+                    out.append({**g, "members": [m], "box_cores": [m["core"]]})
+            return out
+
+        monkeypatch.setattr(pd, "_sharded_groups", per_core_groups)
+    try:
+        _run_sharded_perf(device, 8192, 1024, "BLOCK", [1024, 128], (8, 8))
+    except AssertionError:
+        if not nogather:
+            raise  # the un-ablated run must still be correct
+
+
 # --- perf lamp P2 sweep: cap the cores per reduction group -------------------
 #
 # Maximum occupancy is the selection function's default; at tensor_row_tiles == 1

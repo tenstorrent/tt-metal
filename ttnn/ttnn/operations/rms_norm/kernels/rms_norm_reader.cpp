@@ -4,7 +4,7 @@
 // rms_norm reader (NCRISC / NoC0).
 //
 // Per kernel, once:
-//   prepare_constants()  — cb_scaler (reduce scaler 1.0), cb_wmask (0/1 column
+//   prepare_constants()  — cb_scaler (reduce scaler 1/W_true), cb_wmask (0/1 column
 //                          mask for the ragged hidden tile), cb_zero_tile.
 //   load_gamma_slice()   — cb_gamma_tiles: this core's gamma slice, resident for
 //                          the whole kernel (never popped by compute), so gamma
@@ -247,6 +247,9 @@ void kernel_main() {
     [[maybe_unused]] const uint32_t gamma_read_offset = get_arg_val<uint32_t>(14);
     [[maybe_unused]] const uint32_t gamma_lead_bytes = get_arg_val<uint32_t>(15);
     [[maybe_unused]] const uint32_t shard_row_bytes = get_arg_val<uint32_t>(16);
+    // 1/W_true, as fp32 bits. It rides in the REDUCE SCALER (see prepare_constants)
+    // rather than in a MulUnary on the root's finalize chain.
+    const uint32_t inv_w_bits = get_arg_val<uint32_t>(17);
 
     // A mcast-box FILLER core: inside a reduction group's broadcast rectangle (a
     // shard grid is not always a rectangle) but owning no shard, so it carries no
@@ -258,10 +261,23 @@ void kernel_main() {
     // ---------------- prepare_constants (once per kernel) ----------------
     // Pool-type-aware overload: SUM/REDUCE_ROW fills the matmul-path scaler
     // layout. The masking of the ragged hidden tile is done numerically by the
-    // compute kernel, so the scaler here is a plain 1.0.
+    // compute kernel, so no PARTIAL scaler is needed here.
+    //
+    // The scaler is 1/W_true, not 1.0 (Refinement 5). This is the NON-STANDARD
+    // scaler case the reduce helpers' own header names — "the scaler combines
+    // reduction with another factor" — so `prepare_reduce_scaler` is the
+    // documented entry point rather than `calculate_and_prepare_reduce_scaler`.
+    // WHY: the reduce is the only place the divisor can ride for free (it is a
+    // multiply the matmul-path reduce already performs), and folding it here
+    // DELETES a whole SFPU pass from the root's finalize chain, which measurement
+    // put at ~0.25 us per tile-row of every reduction group's critical path.
+    // Every core's partial is then already its share of the MEAN, so the gathered
+    // sum is the mean itself.
     {
-        dataflow_kernel_lib::
-            calculate_and_prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+        float inv_w;
+        __builtin_memcpy(&inv_w, &inv_w_bits, sizeof(inv_w));
+        dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
+            inv_w);
     }
 
     if constexpr (HAS_ANY_TAIL) {
