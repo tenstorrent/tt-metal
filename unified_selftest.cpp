@@ -60,9 +60,9 @@ inline void exp_tile_init() {}
 inline void exp_tile(uint32_t o) { T("    exp_tile (dst" + n(o) + ")"); }
 inline void relu_tile_init() {}
 inline void relu_tile(uint32_t o) { T("    relu_tile(dst" + n(o) + ")"); }
+inline void init_sfpu(uint32_t icb, uint32_t ocb) { T("  init_sfpu(cb" + n(icb) + " -> cb" + n(ocb) + ")"); }
 }  // namespace ckernel
 
-inline void compute_init(uint32_t, uint32_t) {}
 inline uint32_t get_write_ptr(uint32_t) { return 0; }
 inline uint32_t get_read_ptr(uint32_t) { return 0; }
 inline uint32_t cb_page_bytes(uint32_t) { return 2048; }
@@ -95,9 +95,30 @@ inline void relu_from_pack(uint32_t base, uint32_t count) {
     T("  relu_from_pack(dst" + n(base) + "..dst" + n(base + count - 1) + ")  [replaces tile_regs_wait]");
 }
 namespace ckernel {
-inline void matmul_block(uint32_t in0, uint32_t in1, uint32_t h, uint32_t w, uint32_t kt) {
-    T("    matmul_block(cb" + n(in0) + ",cb" + n(in1) + " h=" + n(h) + " w=" + n(w) + " kt=" + n(kt) + " -> dst0..dst" +
-      n(h * w - 1) + ")");
+enum class SrcOrder { Regular, Reverse };
+template <SrcOrder order = SrcOrder::Regular>
+inline void compute_kernel_hw_startup(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
+    T("  hw_startup(cb" + n(icb0) + ",cb" + n(icb1) + " -> cb" + n(ocb) +
+      (order == SrcOrder::Reverse ? ", SrcOrder::Reverse)" : ")"));
+}
+inline void matmul_block_init(uint32_t in0, uint32_t in1, uint32_t transpose, uint32_t ct, uint32_t rt, uint32_t kt) {
+    (void)transpose;
+    T("  matmul_block_init(cb" + n(in0) + ",cb" + n(in1) + " ct=" + n(ct) + " rt=" + n(rt) + " kt=" + n(kt) + ")");
+}
+inline void matmul_block(
+    uint32_t in0,
+    uint32_t in1,
+    uint32_t in0_tile,
+    uint32_t in1_tile,
+    uint32_t idst,
+    uint32_t transpose,
+    uint32_t ct,
+    uint32_t rt,
+    uint32_t kt) {
+    (void)transpose;
+    (void)kt;
+    T("    matmul_block(cb" + n(in0) + "[" + n(in0_tile) + "],cb" + n(in1) + "[" + n(in1_tile) + "] -> dst" + n(idst) +
+      ".." + n(idst + rt * ct - 1) + ")");
 }
 inline void pack_block(uint32_t dst, uint32_t cb, uint32_t count) {
     T("  pack_block(dst" + n(dst) + ".." + n(dst + count - 1) + " -> cb" + n(cb) + ")");
