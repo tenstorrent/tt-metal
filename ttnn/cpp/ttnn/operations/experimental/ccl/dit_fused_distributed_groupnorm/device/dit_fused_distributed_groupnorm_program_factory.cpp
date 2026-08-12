@@ -484,48 +484,56 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
     const uint32_t arrival_sem_id = use_mux ? CreateSemaphore(program, CoreRangeSet({core_grid}), 0u) : 0u;
     const uint32_t go_sem_id = use_mux ? CreateSemaphore(program, CoreRangeSet({core_grid}), 0u) : 0u;
 
-    const std::string kernel_base =
-        "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_groupnorm/device/kernels/";
+    // Kernels are the stock welford GroupNorm kernels plus the rmsnorm CCL forwarder. The only
+    // fused-specific behaviour lives behind GN_DISTRIBUTED_AG in the two reader kernels; the
+    // compute/writer kernels are used verbatim. At ring_size == 1 the define is not set, so the
+    // fused op compiles the exact stock kernel text.
+    const std::string gn_kernel_base = "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/";
+    const std::string ccl_kernel_base =
+        "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/";
+
+    // Stats CBs are bf16 (cb_data_format above); the reader's cross-device stick layout requires it.
+    const bool stats_is_fp32 = cb_data_format == tt::DataFormat::Float32;
+    // cb_reciprocals is excluded: it's fp32 here but the reconfigs never touch it.
+    const bool enable_fp32_reconfig = ttnn::prim::groupnorm_needs_fp32_reconfig(
+        {in_data_format, out_data_format, cb_data_format, gamma_beta_cb_data_format, in_mask_cb_data_format});
 
     // ------------------------------------------------------------------------
-    // Reader compile-time args. Scalars [0..18] are the welford GN reader args (identical for the
-    // master/sender and the receiver). The master adds fabric AG args [19..26] + two TensorAccessors
-    // (src0, stats DRAM); the receiver has only the src0 TensorAccessor at [19].
+    // Reader compile-time args. Named args mirror the stock welford GN reader exactly; the
+    // TensorAccessor blocks stay positional. The master appends the stats-DRAM accessor after
+    // src0 (the stock reader only declares src0, so the extra block is inert unless
+    // GN_DISTRIBUTED_AG is set).
     // ------------------------------------------------------------------------
-    const std::vector<uint32_t> reader_scalar_ct = {
-        reduce_receiver_semaphore_id,
-        reduce_sender_semaphore_id,
-        num_cores_per_mcast_group,
-        num_groups_per_core * num_batches_per_core,  // num_batch_group
-        num_batches_per_core,                        // num_batches
-        per_core_Nt,                                 // per_core_N
-        per_core_N_bytes_padded,                     // per_core_N_bytes
-        per_core_Nt * tile_w * datum_size_bytes,     // per_core_N_bytes_with_stride
-        per_core_Mt,                                 // per_core_M
-        tile_h,
-        tile_w,
-        block_ht,
-        block_wt,
-        per_core_Mt * Wt / num_batches_per_core,  // num_tiles_per_batch
-        num_out_blocks,
-        num_channels_per_group,
-        num_rows_per_group,
-        cb_in0_welford_index,
-        static_cast<uint32_t>(welford_fp32_alias),
+    const std::unordered_map<std::string, uint32_t> reader_named_ct = {
+        {"reduce_receiver_semaphore_id", reduce_receiver_semaphore_id},
+        {"reduce_sender_semaphore_id", reduce_sender_semaphore_id},
+        {"num_cores_per_mcast_group", num_cores_per_mcast_group},
+        {"num_batch_group", num_groups_per_core * num_batches_per_core},
+        {"num_batches", num_batches_per_core},
+        {"per_core_N", per_core_Nt},
+        {"per_core_N_bytes", per_core_N_bytes_padded},
+        {"per_core_N_bytes_with_stride", per_core_Nt * tile_w * datum_size_bytes},
+        {"datum_size_bytes", datum_size_bytes},
+        {"per_core_M", per_core_Mt},
+        {"TILE_HEIGHT", tile_h},
+        {"TILE_WIDTH", tile_w},
+        {"block_h", block_ht},
+        {"block_w", block_wt},
+        {"block_hw", block_ht * block_wt},
+        {"num_cols_per_group", num_channels_per_group_mod_tile_w},
+        {"num_tiles_per_batch", per_core_Mt * Wt / num_batches_per_core},
+        {"block_w_last", block_wt_last},
+        {"GROUP_SIZE_IS_POWER_OF_2",
+         static_cast<uint32_t>((num_channels_per_group_mod_tile_w & (num_channels_per_group_mod_tile_w - 1)) == 0)},
+        {"GROUP_SIZE_SMALLER_THAN_TILE_W", static_cast<uint32_t>(num_channels_per_group < tile_w)},
+        {"group_row_offset", num_channels_per_group - ((block_wt - 1) * tile_w)},
+        {"num_out_blocks", num_out_blocks},
+        {"num_channels_per_group", num_channels_per_group},
+        {"num_rows_per_group", num_rows_per_group},
+        {"welford_fp32_alias", static_cast<uint32_t>(welford_fp32_alias)},
+        {"cb_in0_welford", cb_in0_welford_index},
+        {"stats_is_fp32", static_cast<uint32_t>(stats_is_fp32)},
     };
-
-    // Master / sender reader (fabric AG).
-    std::vector<uint32_t> sender_reader_ct = reader_scalar_ct;
-    sender_reader_ct.push_back(args.ring_size);         // 19
-    sender_reader_ct.push_back(stick_bytes);            // 20
-    sender_reader_ct.push_back(num_chunks_per_device);  // 21
-    sender_reader_ct.push_back(arrival_sem_id);         // 22
-    sender_reader_ct.push_back(go_sem_id);              // 23
-    sender_reader_ct.push_back(packet_cb_id);           // 24
-    sender_reader_ct.push_back(stats_local_cb_id);      // 25
-    sender_reader_ct.push_back(stats_gathered_cb_id);   // 26
-    TensorAccessorArgs(input_tensor.buffer()).append_to(sender_reader_ct);
-    TensorAccessorArgs(use_mux ? stats_dram_buffer : input_tensor.buffer()).append_to(sender_reader_ct);
 
     std::map<std::string, std::string> reader_defines;
     if (has_gamma) {
@@ -534,51 +542,76 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
     if (has_beta) {
         reader_defines["FUSE_BETA"] = "1";
     }
+    // Only the cross-device path enables the fabric AG + batched handshake. ring_size == 1 leaves
+    // the stock per-group lock-step untouched, so the local path is bit-exact with ttnn.group_norm.
+    if (use_mux) {
+        reader_defines["GN_DISTRIBUTED_AG"] = "1";
+    }
+
+    // Master / sender reader (fabric AG when distributed).
+    std::unordered_map<std::string, uint32_t> sender_reader_named_ct = reader_named_ct;
+    if (use_mux) {
+        sender_reader_named_ct.emplace("ring_size", args.ring_size);
+        sender_reader_named_ct.emplace("stick_bytes", stick_bytes);
+        sender_reader_named_ct.emplace("num_chunks_per_device", num_chunks_per_device);
+        sender_reader_named_ct.emplace("fwd_arrival_sem_id", arrival_sem_id);
+        sender_reader_named_ct.emplace("go_sem_id", go_sem_id);
+        sender_reader_named_ct.emplace("packet_cb_id", packet_cb_id);
+        sender_reader_named_ct.emplace("stats_local_cb_id", stats_local_cb_id);
+        sender_reader_named_ct.emplace("stats_gathered_cb_id", stats_gathered_cb_id);
+    }
+    std::vector<uint32_t> sender_reader_ct;
+    TensorAccessorArgs(input_tensor.buffer()).append_to(sender_reader_ct);
+    TensorAccessorArgs(use_mux ? stats_dram_buffer : input_tensor.buffer()).append_to(sender_reader_ct);
+
     KernelHandle sender_reader_kernel_id = CreateKernel(
         program,
-        kernel_base + "dataflow/dit_gn_welford_reader.cpp",
+        gn_kernel_base + "dataflow/welford_reader_mcast_sender_unary_gn.cpp",
         mcast_sender_cores,
-        ReaderDataMovementConfig(sender_reader_ct, reader_defines));
+        ReaderDataMovementConfig(sender_reader_ct, reader_defines, sender_reader_named_ct));
 
     // Receiver reader (signal + wait; no fabric).
     KernelHandle receiver_reader_kernel_id = 0;
     if (has_receivers) {
-        std::vector<uint32_t> receiver_reader_ct = reader_scalar_ct;
+        std::vector<uint32_t> receiver_reader_ct;
         TensorAccessorArgs(input_tensor.buffer()).append_to(receiver_reader_ct);
         receiver_reader_kernel_id = CreateKernel(
             program,
-            kernel_base + "dataflow/dit_gn_welford_receiver.cpp",
+            gn_kernel_base + "dataflow/welford_reader_mcast_receiver_unary_gn.cpp",
             mcast_receiver_cores,
-            ReaderDataMovementConfig(receiver_reader_ct, reader_defines));
+            ReaderDataMovementConfig(receiver_reader_ct, reader_defines, reader_named_ct));
     }
 
     // ------------------------------------------------------------------------
-    // Writer (welford GN gamma/beta + output) — identical on every reduction core.
+    // Writer (stock welford GN gamma/beta + output) — identical on every reduction core.
+    // Runtime args and CB indices already match stock, so this kernel is used unmodified.
     // ------------------------------------------------------------------------
-    std::vector<uint32_t> writer_ct = {
-        1u,  // is_mcast_sender (stock hardcodes 1 on all cores)
-        static_cast<uint32_t>(has_gamma),
-        static_cast<uint32_t>(has_beta),
-        per_core_Nt,  // num_cols_tile_gamma_beta
-        per_core_Mt,
-        per_core_Nt,
-        per_core_N * datum_size_bytes,            // per_core_N_bytes
-        per_core_Nt * tile_w * datum_size_bytes,  // per_core_N_bytes_with_stride
-        num_groups_per_core,
-        num_batches_per_core,
-        num_channels_per_group_mod_tile_w,
-        per_core_Mt * Wt / num_batches_per_core,  // num_tiles_per_batch
-        block_wt_last,
-        static_cast<uint32_t>((num_channels_per_group_mod_tile_w & (num_channels_per_group_mod_tile_w - 1)) == 0),
-        static_cast<uint32_t>(num_channels_per_group < tile_w),
-        num_channels_per_group - ((block_wt - 1) * tile_w),  // group_row_offset
-        num_out_blocks,
-        block_ht,
-        block_wt,
-        block_ht * block_wt,
-        groupnorm_mode,
-        tile_w,
+    const std::unordered_map<std::string, uint32_t> writer_named_ct = {
+        {"is_mcast_sender", 1u},  // stock hardcodes 1 on all cores
+        {"fuse_gamma", static_cast<uint32_t>(has_gamma)},
+        {"fuse_beta", static_cast<uint32_t>(has_beta)},
+        {"num_cols_tile_gamma_beta", per_core_Nt},
+        {"per_core_M", per_core_Mt},
+        {"per_core_N", per_core_Nt},
+        {"per_core_N_bytes", per_core_N * datum_size_bytes},
+        {"per_core_N_bytes_with_stride", per_core_Nt * tile_w * datum_size_bytes},
+        {"num_groups_per_core", num_groups_per_core},
+        {"num_batches_per_core", num_batches_per_core},
+        {"num_cols_per_group", num_channels_per_group_mod_tile_w},
+        {"num_tiles_per_batch", per_core_Mt * Wt / num_batches_per_core},
+        {"block_w_last", block_wt_last},
+        {"GROUP_SIZE_IS_POWER_OF_2",
+         static_cast<uint32_t>((num_channels_per_group_mod_tile_w & (num_channels_per_group_mod_tile_w - 1)) == 0)},
+        {"GROUP_SIZE_SMALLER_THAN_TILE_W", static_cast<uint32_t>(num_channels_per_group < tile_w)},
+        {"group_row_offset", num_channels_per_group - ((block_wt - 1) * tile_w)},
+        {"num_out_blocks", num_out_blocks},
+        {"block_h", block_ht},
+        {"block_w", block_wt},
+        {"block_hw", block_ht * block_wt},
+        {"groupnorm_mode", groupnorm_mode},
+        {"TILE_WIDTH", tile_w},
     };
+    std::vector<uint32_t> writer_ct;
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_ct);
     TensorAccessorArgs(has_gamma ? gamma->buffer() : nullptr).append_to(writer_ct);
     TensorAccessorArgs(has_beta ? beta->buffer() : nullptr).append_to(writer_ct);
@@ -586,9 +619,9 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
 
     KernelHandle writer_kernel_id = CreateKernel(
         program,
-        kernel_base + "dataflow/dit_gn_welford_writer.cpp",
+        gn_kernel_base + "dataflow/welford_writer_unary_gn_rm_gb.cpp",
         all_reduction_cores,
-        WriterDataMovementConfig(writer_ct));
+        WriterDataMovementConfig(writer_ct, {}, writer_named_ct));
 
     // ------------------------------------------------------------------------
     // Forwarder (single fabric ring all-gather, coalescing all masters' sub-sticks).
@@ -612,9 +645,11 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
             go_sem_id,
         };
         TensorAccessorArgs(stats_dram_buffer).append_to(fwd_ct);
+        // The rmsnorm coalescing forwarder is fully parameterized by these CT args (stick_bytes,
+        // max_rounds, num_chunks_per_device), so it is reused verbatim.
         forwarder_kernel_ids[f] = CreateKernel(
             program,
-            kernel_base + "dataflow/dit_gn_fused_forwarder.cpp",
+            ccl_kernel_base + "dataflow/dit_rmsnorm_fused_forwarder.cpp",
             CoreRangeSet({CoreRange(forwarder_cores[f], forwarder_cores[f])}),
             WriterDataMovementConfig(fwd_ct));
     }
@@ -622,29 +657,30 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
     // ------------------------------------------------------------------------
     // Compute (stock welford GroupNorm PRE/POST) — identical on every reduction core.
     // ------------------------------------------------------------------------
-    std::vector<uint32_t> compute_ct = {
-        static_cast<uint32_t>(has_gamma),  // do_gamma
-        static_cast<uint32_t>(has_beta),   // do_beta
-        num_cores_per_mcast_group,
-        num_batches_per_core,  // batch
-        num_groups_per_core,   // group
-        block_ht,
-        block_wt,
-        per_core_Mt,
-        per_core_Nt,
-        per_core_Mt * per_core_Nt,       // per_core_MN
-        single_tile_size,                // single_tile_size_bytes
-        num_groups_per_core * block_wt,  // num_tiles_input_mask
-        num_out_blocks,
-        num_channels_per_group,
-        0u,  // reciprocal_size (welford native)
-        tile_w,
-        cb_in0_welford_index,
-        static_cast<uint32_t>(welford_fp32_alias),
-        static_cast<uint32_t>(welford_unpack_fp32_active),
+    const std::unordered_map<std::string, uint32_t> compute_named_ct = {
+        {"do_gamma", static_cast<uint32_t>(has_gamma)},
+        {"do_beta", static_cast<uint32_t>(has_beta)},
+        {"num_cores_per_mcast_group", num_cores_per_mcast_group},
+        {"batch", num_batches_per_core},
+        {"group", num_groups_per_core},
+        {"block_h", block_ht},
+        {"block_w", block_wt},
+        {"per_core_M", per_core_Mt},
+        {"per_core_N", per_core_Nt},
+        {"per_core_MN", per_core_Mt * per_core_Nt},
+        {"single_tile_size_bytes", single_tile_size},
+        {"num_tiles_input_mask", num_groups_per_core * block_wt},
+        {"num_out_blocks", num_out_blocks},
+        {"num_channels_per_group", num_channels_per_group},
+        {"reciprocal_size", 0u},  // welford native
+        {"TILE_WIDTH", tile_w},
+        {"cb_in0_welford", cb_in0_welford_index},
+        {"welford_fp32_alias", static_cast<uint32_t>(welford_fp32_alias)},
+        {"welford_unpack_fp32_active", static_cast<uint32_t>(welford_unpack_fp32_active)},
+        {"enable_fp32_reconfig", static_cast<uint32_t>(enable_fp32_reconfig)},
     };
     // Optional fused unary activation. "dst0" is the DEST index the final output tile lives in
-    // when the compute kernel applies the activation (see dit_gn_welford_compute.cpp).
+    // when the compute kernel applies the activation (see welford_groupnorm.cpp).
     std::map<std::string, std::string> compute_defines;
     if (args.fused_activation.has_value()) {
         const auto& act = args.fused_activation.value();
@@ -659,8 +695,8 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = dst_full_sync_en,
         .math_approx_mode = math_approx_mode,
-        .compile_args = compute_ct,
         .defines = compute_defines,
+        .named_compile_args = compute_named_ct,
     };
     if (welford_unpack_fp32_active) {
         std::vector<UnpackToDestMode> unpack_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
@@ -670,7 +706,7 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
         compute_config.unpack_to_dest_mode = unpack_mode;
     }
     KernelHandle compute_kernel_id =
-        CreateKernel(program, kernel_base + "compute/dit_gn_welford_compute.cpp", all_reduction_cores, compute_config);
+        CreateKernel(program, gn_kernel_base + "compute/welford_groupnorm.cpp", all_reduction_cores, compute_config);
 
     // ------------------------------------------------------------------------
     // Runtime args
