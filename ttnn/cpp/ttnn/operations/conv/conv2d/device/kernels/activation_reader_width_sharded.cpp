@@ -125,6 +125,8 @@ void kernel_main() {
     constexpr uint32_t TILE_HEIGHT = 32;
     constexpr uint32_t ntile_height = act_block_h_datums / TILE_HEIGHT;
     constexpr uint32_t ntile_width = act_block_num_tiles / ntile_height;
+    constexpr uint32_t tilized_in0_tile_size = get_tile_size(tilized_in0_cb_id);
+    static_assert(act_mcast_sender_size_bytes == act_block_num_tiles * tilized_in0_tile_size);
 
     // Reset reader_idx to finish act_block_h_datums
     for (uint32_t block_h_index = 0; block_h_index < act_num_blocks_h; block_h_index++) {
@@ -188,10 +190,16 @@ void kernel_main() {
                 act_dfb.reserve_back(act_block_num_tiles);
                 if (act_w_outer_i == this_core_id) {
                     // compute tilizes and pops cb_id_act and pushes to tilized_in0_cb_id
-                    tilized_in0_dfb.wait_front(act_block_num_tiles);
-
-                    act_send_pipe.send(
-                        tilized_in0_dfb.get_read_ptr(), act_dfb.get_write_ptr(), act_mcast_sender_size_bytes);
+                    // Tall blocks have enough row publications to amortize progressive multicast; short blocks are
+                    // faster as one transfer after the complete block is available.
+                    if constexpr (ntile_height >= 8) {
+                        act_send_pipe.send_from_cb<act_block_num_tiles, tilized_in0_tile_size>(
+                            tilized_in0_dfb, act_dfb.get_write_ptr());
+                    } else {
+                        tilized_in0_dfb.wait_front(act_block_num_tiles);
+                        act_send_pipe.send(
+                            tilized_in0_dfb.get_read_ptr(), act_dfb.get_write_ptr(), act_mcast_sender_size_bytes);
+                    }
                 } else {
                     act_recv_pipe.receive(act_w_outer_i);
                 }
