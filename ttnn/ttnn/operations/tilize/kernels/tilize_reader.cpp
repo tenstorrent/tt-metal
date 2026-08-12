@@ -59,16 +59,17 @@
 // and scatter the sticks. So the fill is a plain L1 store loop (no NoC traffic
 // at all) and the clamped read is `noc_async_read` + `get_noc_addr(page, off)`.
 //
-// HELPER SUBSTITUTION, declared (Refinement 6): `stateful_reads == 1` issues the
-// SAME `tile_h` reads to the SAME L1 destinations, but configures the NoC
-// command buffer once per DRAM bank instead of once per transaction (master.md
-// B13, and D21's "shifts, not multiplies" half falls out of it). It is a
-// per-ISSUE-cost lever, and `read_sticks_for_tilize` cannot express it for two
-// reasons: it calls plain `noc_async_read` per stick (six command-buffer
-// register writes each: RET_LO, TARG_LO, TARG_MID, TARG_COORD, LEN, CMD_CTRL),
-// and — like the R3 stagger — it walks its pages sequentially, whereas the
-// grouping needs the sticks issued in bank-phase order. The helper remains the
-// emitted code whenever the lever is off.
+// HELPER SUBSTITUTION, declared (Refinement 6): `fast_addrgen == 1` (master.md
+// D21) and `stateful_reads == 1` (master.md B13) issue the SAME `tile_h` reads
+// of the SAME size to the SAME L1 destinations — they only make each issue
+// cheaper: D21 replaces `TensorAccessor::get_noc_addr`'s two divisions by the
+// bank count with one addition per stick, B13 replaces six command-buffer
+// register writes with three. `read_sticks_for_tilize` cannot express either: it
+// calls `noc_async_read` with an accessor address per stick and exposes no seam
+// for a caller-maintained address table or a stateful command buffer. The issue
+// ORDER is unchanged (that was measured — see the arm), so the substitution is
+// the per-issue cost and nothing else, and the helper remains the emitted code
+// whenever both levers are off.
 //
 // HELPER SUBSTITUTION, declared (Refinement 3): `stagger_reads == 1` issues the
 // same `tile_h` reads to the same L1 destinations in a ROTATED order, and
@@ -132,7 +133,8 @@ void kernel_main() {
     constexpr uint32_t pad_row_bytes = get_compile_time_arg_val(18);     // R5: REAL bytes per stick
     constexpr uint32_t stateful_reads = get_compile_time_arg_val(19);    // lever R6/B13 (1 = on)
     constexpr uint32_t bank_period = get_compile_time_arg_val(20);       // R6: source pages per bank cycle
-    constexpr auto src_args = TensorAccessorArgs<21>();
+    constexpr uint32_t fast_addrgen = get_compile_time_arg_val(21);      // lever R6/D21 (1 = on)
+    constexpr auto src_args = TensorAccessorArgs<22>();
 
     // The largest transfer this kernel can issue. `one_packet` NoC state is only
     // legal at or below the part's burst size, so the arch decides which
@@ -286,39 +288,74 @@ void kernel_main() {
                 noc_async_read_barrier();
             }
             cb_push_back(cb_input_sticks, w);
-        } else if constexpr (stateful_reads == 1 && barrier_per_block == 1) {
-            // R6 (master.md B13 + D21) STATEFUL, BANK-GROUPED READS.
+        } else if constexpr ((stateful_reads == 1 || fast_addrgen == 1) && barrier_per_block == 1) {
+            // R6 CHEAPER READ ISSUE — master.md D21 (`fast_addrgen`) and B13
+            // (`stateful_reads`). SAME transfers, SAME sizes, SAME L1
+            // destinations, and — the part that is load-bearing — the SAME issue
+            // ORDER as the helper: stick 0, 1, ... `tile_h - 1`.
             //
-            // The low-work-per-core regimes are ISSUE-bound, not bandwidth-bound:
-            // `[1,1,32,64]` moves 4 KB in 32 reads and spends ~30 ns per read, so
-            // what costs is the six command-buffer register writes a plain
-            // `noc_async_read` performs, not the bytes. `set_state` writes the
-            // source NODE (TARG_MID + TARG_COORD, plus the length in one-packet
-            // mode) once; each `with_state` issue then writes only RET_LO,
-            // TARG_LO and CMD_CTRL.
+            // The low-work regimes are ISSUE-bound, not bandwidth-bound
+            // (`[1,1,32,64]` moves 4 KB in 32 reads at ~30 ns each), so what is
+            // worth attacking is the per-read WORK. The largest piece of it is
+            // address generation: `TensorAccessor::get_noc_addr` splits the page
+            // into (bank, page-in-bank) with two divisions by the bank count, and
+            // this part has SEVEN banks — not a power of two, so both are
+            // software divides.
             //
-            // The state is per SOURCE NODE, so the sticks are issued in
-            // BANK-PHASE order: an interleaved buffer puts page p in bank
-            // `p % bank_period`, so all the sticks of one phase share a node and
-            // one `set_state` covers them. The order is free — `s` indexes both
-            // the source page and its L1 slot, exactly as in the R3 stagger arm,
-            // so the block lands stick-ordered whichever stick is issued first,
-            // and the single barrier below still covers all of them.
+            // D21 removes them without touching the order. An interleaved buffer
+            // maps page p to bank `p % bank_period` at page `p / bank_period`
+            // inside it, so for a FIXED bank phase the addresses form an
+            // arithmetic progression of one aligned page. `bank_addr[]` therefore
+            // carries one running address per phase, walked in natural stick
+            // order with a wrapping counter (never a modulo): `bank_period + 1`
+            // accessor calls per block instead of `tile_h`.
+            //
+            // Issuing in bank-phase order instead — which would let ONE
+            // `set_state` cover a whole group — was built and measured, and it is
+            // 1.18-1.27x SLOWER: five consecutive requests to the same bank queue
+            // behind each other, while the natural order round-robins the banks.
+            // So B13 keeps the natural order too, where the source node changes
+            // every stick and the state has to be re-programmed every stick; it
+            // stays a live knob (default off) with that measurement recorded.
             //
             // `bank_period` is a pure PERFORMANCE hint, never a correctness
-            // assumption: the coordinate of every address is compared against the
-            // state actually programmed and a mismatch re-programs it. A wrong
-            // period therefore costs a few extra `set_state`s and can never read
-            // the wrong bytes.
+            // assumption: the stride is DERIVED from two real accessor addresses
+            // and used only if they agree on the source node (`affine`),
+            // otherwise every stick falls back to the accessor.
             cb_reserve_back(cb_input_sticks, w);
             const uint32_t l1_base = get_write_ptr(cb_input_sticks);
             const uint32_t page0 = r * tile_h;
+
+            uint64_t bank_addr[bank_period];
+            bool affine = false;
+            uint64_t stride = 0;
+            if constexpr (fast_addrgen == 1) {
+                for (uint32_t phase = 0; phase < bank_period; ++phase) {
+                    bank_addr[phase] = src.get_noc_addr(page0 + phase, byte_offset);
+                }
+                // `bank_period < tile_h` is the host-side gate for arming this
+                // arm at all, so page `page0 + bank_period` is a stick of this
+                // very block and the probe reads nothing extra.
+                const uint64_t probe = src.get_noc_addr(page0 + bank_period, byte_offset);
+                if (((probe ^ bank_addr[0]) >> 32) == 0 && probe > bank_addr[0]) {
+                    stride = probe - bank_addr[0];
+                    affine = true;
+                }
+            }
+
             uint32_t state_node = 0;
             bool have_state = false;
-            for (uint32_t phase = 0; phase < bank_period; ++phase) {
-                for (uint32_t s = phase; s < tile_h; s += bank_period) {
-                    if constexpr (stub_read == 0) {
-                        const uint64_t addr = src.get_noc_addr(page0 + s, byte_offset);
+            uint32_t phase = 0;
+            for (uint32_t s = 0; s < tile_h; ++s) {
+                uint64_t addr;
+                if (affine) {
+                    addr = bank_addr[phase];
+                    bank_addr[phase] += stride;
+                } else {
+                    addr = src.get_noc_addr(page0 + s, byte_offset);
+                }
+                if constexpr (stub_read == 0) {
+                    if constexpr (stateful_reads == 1) {
                         const uint32_t node = static_cast<uint32_t>(addr >> 32);
                         if (!have_state || node != state_node) {
                             if constexpr (stateful_one_packet) {
@@ -334,7 +371,12 @@ void kernel_main() {
                         } else {
                             noc_async_read_with_state(static_cast<uint32_t>(addr), l1_base + s * row_bytes, row_bytes);
                         }
+                    } else {
+                        noc_async_read(addr, l1_base + s * row_bytes, row_bytes);
                     }
+                }
+                if (++phase == bank_period) {
+                    phase = 0;
                 }
             }
             noc_async_read_barrier();

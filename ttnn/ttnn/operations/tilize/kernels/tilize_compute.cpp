@@ -32,6 +32,8 @@ void kernel_main() {
     constexpr bool needs_cast = get_compile_time_arg_val(4) == 1;
     constexpr uint32_t stub_compute = get_compile_time_arg_val(5);  // ablation (0 = off)
     constexpr uint32_t fold_resident = get_compile_time_arg_val(6);  // lever R6/C14-2 (1 = on)
+    constexpr uint32_t tilize_uninit_on = get_compile_time_arg_val(7);  // lever R6 (1 = uninit, the default)
+    constexpr uint32_t wait_upfront = get_compile_time_arg_val(8);      // lever R6 (1 = one wait per CALL)
 
     const uint32_t n_full = get_arg_val<uint32_t>(0);
     const uint32_t n_tail = get_arg_val<uint32_t>(1);
@@ -41,6 +43,21 @@ void kernel_main() {
     constexpr ReconfigureRegisterDatatypeMode reconfig_mode =
         needs_cast ? ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure
                    : ReconfigureRegisterDatatypeMode::NoReconfigure;
+    // R6: the LLK teardown is per-CALL fixed cost, and the low-work regimes are
+    // where fixed cost is the wall (`[1,1,32,64]` spends ~0.5 us of a ~1.9 us
+    // call on a tilize of TWO tiles, i.e. almost all of it on init/uninit).
+    // `InitOnly` keeps the init and drops the uninit; the knob exists so that
+    // trade is a measured number rather than an assumption.
+    constexpr InitUninitMode init_mode =
+        tilize_uninit_on == 1 ? InitUninitMode::InitAndUninit : InitUninitMode::InitOnly;
+    // R6: `WaitBlock` is the right default because it lets the reader run ahead
+    // of compute — but on the RESIDENT path there is no reader to run ahead: the
+    // shard is already in L1 and the CB is armed with every page in ONE push, so
+    // the per-block waits can only re-observe a semaphore that is already set.
+    // `WaitUpfront` collapses them to one. The host arms this ONLY where that
+    // holds (`resident_in`); on the streamed path it would deadlock, because the
+    // CB holds `cb_depth * wt_block` pages and not the whole assignment.
+    constexpr WaitMode wait_mode = wait_upfront == 1 ? WaitMode::WaitUpfront : WaitMode::WaitBlock;
 
     compute_kernel_hw_startup(cb_input_sticks, cb_output_tiles);
 
@@ -86,24 +103,14 @@ void kernel_main() {
 
     // `tilize` ASSERTs num_blocks > 0, so both calls are guarded.
     if (n_full > 0) {
-        compute_kernel_lib::tilize<
-            wt_block,
-            cb_input_sticks,
-            cb_output_tiles,
-            InitUninitMode::InitAndUninit,
-            WaitMode::WaitBlock,
-            reconfig_mode,
-            Fp32Mode::Fast>(n_full);
+        compute_kernel_lib::
+            tilize<wt_block, cb_input_sticks, cb_output_tiles, init_mode, wait_mode, reconfig_mode, Fp32Mode::Fast>(
+                n_full);
     }
     if (n_tail > 0) {
-        compute_kernel_lib::tilize<
-            wt_tail,
-            cb_input_sticks,
-            cb_output_tiles,
-            InitUninitMode::InitAndUninit,
-            WaitMode::WaitBlock,
-            reconfig_mode,
-            Fp32Mode::Fast>(n_tail);
+        compute_kernel_lib::
+            tilize<wt_tail, cb_input_sticks, cb_output_tiles, init_mode, wait_mode, reconfig_mode, Fp32Mode::Fast>(
+                n_tail);
     }
 
     if constexpr (fold_resident == 1) {

@@ -121,7 +121,18 @@ STAGGER_READS = 0
 # performance hint — the kernel compares the programmed node against every
 # address and re-programs on a mismatch, so a wrong period costs a few extra
 # `set_state`s and can never read the wrong bytes.
-STATEFUL_READS = 1
+STATEFUL_READS = 0
+
+# --- Knob: incremental address generation inside a bank group (R6 / D21) ---
+# `TensorAccessor::get_noc_addr(page)` costs TWO divisions by the bank count to
+# split the page into (bank, page-in-bank), and this part's bank count is 7 — not
+# a power of two, so both are software divides. Inside one bank-phase group the
+# pages are consecutive IN THAT BANK, so their addresses form an arithmetic
+# progression: two accessor calls per group give the rest by addition (~14 per
+# block instead of 32 at `tile_h = 32`, 7 banks). The stride is DERIVED from two
+# real accessor addresses and used only when they agree on the source node, so a
+# wrong `read_bank_period` costs accessor calls and never correctness.
+FAST_ADDRGEN = 0
 
 # --- Knob: fold the dataflow kernels away on the resident path (R6 / C14-2) -
 # master.md C14 has TWO degrees: removing the NoC traffic (Refinement 2 — the CBs
@@ -131,6 +142,25 @@ STATEFUL_READS = 1
 # structure. `examples/zero_copy_fold` measured folding at 0.74x on Wormhole at
 # 2 tiles/core, so this ships at whatever THIS part measures, not at that.
 FOLD_RESIDENT = 0
+
+# --- Knob: the tilize LLK teardown (R6) ------------------------------------
+# `tilize_uninit` is per-CALL fixed cost, and the low-work regimes are exactly
+# where per-call fixed cost is the wall: `[1,1,32,64]` spends ~0.5 us of a ~1.9 us
+# call inside a tilize of TWO tiles, i.e. almost all of it on init/uninit rather
+# than on the 26 ns/tile the grid-filling shapes measure. 1 = the helper's default
+# `InitAndUninit`, 0 = `InitOnly` (init kept, teardown skipped).
+TILIZE_UNINIT = 1
+
+# --- Knob: collapse the per-block input wait on the resident path (R6) -----
+# `WaitMode::WaitBlock` is the right default on the streamed path (it is what
+# lets the reader run ahead of compute), but a RESIDENT input has no reader to
+# run ahead of: the shard is already in L1 and the reader arms the CB with every
+# page in a single `cb_push_back`, so the per-block waits can only re-observe a
+# semaphore that is already set. 1 = `WaitUpfront` on the resident path (one wait
+# per call), 0 = `WaitBlock` everywhere, i.e. the pre-R6 kernel byte-for-byte.
+# NEVER armed on a streamed input: there the CB holds `cb_depth * wt_block`
+# pages, not the whole assignment, so an upfront wait would deadlock.
+WAIT_UPFRONT_RESIDENT = 1
 
 # --- Knob: cross-spec reshard direction (R4 / A3c) -------------------------
 # Which SIDE of a cross-spec reshard holds the resident block: 1 = PULL (the
@@ -195,11 +225,27 @@ DEFAULT_LEVERS = {
     # bank grouping can pay (`read_bank_period` decides); a lever value of 1 on a
     # shape whose period is 0 is still the plain path.
     "stateful_reads": None,
+    # R6 (master.md D21): derive the addresses inside a bank-phase group by
+    # addition instead of asking `TensorAccessor` (two divides by the bank count)
+    # per stick. `None` = the shipped default (`FAST_ADDRGEN`), 0 = one accessor
+    # call per stick. Like `stateful_reads` it is only ever armed where bank
+    # grouping is defined (`read_bank_period`).
+    "fast_addrgen": None,
     # R6 (master.md C14, SECOND degree): fold the two dataflow kernels away on
     # the same-spec resident path, where they exist only to run the CB handshake
     # (zero NoC bytes on both sides). 1 = compute-only program, 0 = the
     # three-kernel structure. Unreachable off `MODE_RESIDENT`.
     "fold_resident": None,
+    # R6: keep (1) or skip (0) the tilize LLK teardown. Skipping it leaves the
+    # unpacker configured for tilize when the kernel ends, which the NEXT compute
+    # kernel's own `compute_kernel_hw_startup`/init would have to overwrite — so
+    # it only ships if the measurement is worth that coupling.
+    "tilize_uninit": None,
+    # R6: `WaitUpfront` instead of `WaitBlock` on the resident path (see
+    # `WAIT_UPFRONT_RESIDENT`). `None` = the regime default, 0 = `WaitBlock`
+    # everywhere. Forcing 1 on a streamed input is not offered — it deadlocks by
+    # construction, so the knob is gated on residency rather than trusted.
+    "wait_upfront": None,
     "double_buffer": 1,  # C16: CB depth 2 vs 1  (also the user-facing kwarg)
     # A2/C14 off-arm: consume a resident shard through a TensorAccessor instead
     # of aliasing the CB onto it. 1 = the NON-zero-copy counterfactual (the
@@ -1190,15 +1236,25 @@ def create_program_descriptor(
     # where the R3 stagger — which owns the issue ORDER — is off.
     in_mem = input_tensor.memory_config()
     stateful_knob = STATEFUL_READS if lv["stateful_reads"] is None else lv["stateful_reads"]
+    addrgen_knob = FAST_ADDRGEN if lv["fast_addrgen"] is None else lv["fast_addrgen"]
     bank_period = 0
-    if stateful_knob and not resident_in and n_bands == 1 and not pad_enabled and not int(_knob("stagger_reads")):
+    if (
+        (stateful_knob or addrgen_knob)
+        and not resident_in
+        and n_bands == 1
+        and not pad_enabled
+        and not int(_knob("stagger_reads"))
+    ):
         dram_grid = device.dram_grid_size()
         bank_period = read_bank_period(
             dram_grid.x * dram_grid.y,
             tile_height,
             is_dram_interleaved=(not in_mem.is_sharded() and in_mem.buffer_type == ttnn.BufferType.DRAM),
         )
-    stateful_reads = 1 if bank_period else 0
+    stateful_reads = 1 if (bank_period and stateful_knob) else 0
+    fast_addrgen = 1 if (bank_period and addrgen_knob) else 0
+    if not (stateful_reads or fast_addrgen):
+        bank_period = 0  # the arm is unreachable; keep the CT vector honest
 
     # The shard hands you the block width on any resident side (op_design §6.2).
     blk = blocking(shape, tile_height, elem_size, lv["target_read_bytes"], wt_block_override=plan["wt_block"])
@@ -1379,6 +1435,7 @@ def create_program_descriptor(
         # R6 (B13/D21): the stateful-read arm and the bank period it groups by.
         int(stateful_reads),
         bank_period,
+        int(fast_addrgen),
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
@@ -1404,6 +1461,12 @@ def create_program_descriptor(
     fold_knob = FOLD_RESIDENT if lv["fold_resident"] is None else lv["fold_resident"]
     fold_resident = int(bool(fold_knob) and plan["mode"] == MODE_RESIDENT)
 
+    # R6: the upfront input wait is legal exactly where the input CB is the shard
+    # and the reader pushes all of it at once — i.e. on a resident INPUT. The
+    # knob can only turn it OFF; residency is the gate, never the caller.
+    wait_upfront_knob = WAIT_UPFRONT_RESIDENT if lv["wait_upfront"] is None else lv["wait_upfront"]
+    wait_upfront = int(bool(wait_upfront_knob) and resident_in)
+
     compute_ct_args = [
         CB_INPUT_STICKS,
         CB_OUTPUT_TILES,
@@ -1412,6 +1475,8 @@ def create_program_descriptor(
         needs_cast,
         lv["stub_compute"],
         fold_resident,
+        int(TILIZE_UNINIT if lv["tilize_uninit"] is None else lv["tilize_uninit"]),
+        wait_upfront,
     ]
 
     reader_rt = ttnn.RuntimeArgs()

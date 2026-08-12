@@ -254,9 +254,21 @@ ARMS = {
     # per master.md B0 its off-arm is measured on the smallest regimes first.
     "lever_r6_stateful_off": dict(levers=dict(stateful_reads=0)),
     "lever_r6_stateful_force": dict(levers=dict(stateful_reads=1)),
+    # R6 (master.md D21): derive the addresses inside a bank group by addition
+    # instead of paying `TensorAccessor`'s two divides-by-7 per stick.
+    "lever_r6_addrgen_off": dict(levers=dict(fast_addrgen=0)),
+    "lever_r6_addrgen_force": dict(levers=dict(fast_addrgen=1)),
+    "lever_r6_addrgen_and_stateful": dict(levers=dict(fast_addrgen=1, stateful_reads=1)),
     # R6 (master.md C14, SECOND degree): fold the resident path's two dataflow
     # kernels into compute. Both arms are forcing arms because the choice is a
     # per-regime measurement, not a default.
+    # R6: the tilize LLK teardown, which is per-CALL fixed cost — the term the
+    # low-work regimes are made of.
+    "lever_r6_no_uninit": dict(levers=dict(tilize_uninit=0)),
+    "lever_r6_uninit_force": dict(levers=dict(tilize_uninit=1)),
+    # R6: one input wait per CALL instead of per block, on the resident path
+    # (where the whole shard is already in the CB before compute starts).
+    "lever_r6_wait_upfront_off": dict(levers=dict(wait_upfront=0)),
     "lever_r6_fold_off": dict(levers=dict(fold_resident=0)),
     "lever_r6_fold_force": dict(levers=dict(fold_resident=1)),
     "lever_b5_face_writes": dict(levers=dict(coalesce_writes=0)),
