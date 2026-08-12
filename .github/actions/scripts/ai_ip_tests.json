@@ -1,22 +1,104 @@
 {
-  "_comment": "RTL sim tests that warrant a RELEASE Jira ticket when they fail. Each failed test reported by the 'RTL Sim CI test' check is matched by (config, group, filter, runner); a field omitted in an entry is a wildcard, and `filter` is compared literally (the '*' characters are part of the gtest filter string, not matcher wildcards). Entries are tried in order, so keep specific entries above wildcard ones. Optional per-entry fields: requirement (AIIPSW ticket key, added as a label), team, assignee (Jira accountId), assignee_name (human label, ignored by code). Fields prefixed with '_' are documentation only. Tests not listed here are ignored (no ticket).",
-  "_coverage": "Generated inventory of every Quasar test, where it runs, and which of these entries watches it: tests/scripts/quasar/QUASAR_TEST_COVERAGE.md (regenerate with tests/scripts/quasar/gen_test_coverage_doc.py).",
-  "_reaches_jira_today": "Verified 2026-08-12 against GitLab tensix/tt-umd-simulators main. Only ONE job feeds this matcher: metal_unit_test_vcs_qsr, which runs the config-1x3 rows of tests/scripts/quasar/quasar_sim_regresion_tests.yaml and labels every manifest row '1x3'. So the only tuples that can arrive today are unit_tests_legacy/*DmLoopback*, unit_tests_legacy/*QuasarComputeKernelMultipleThread*, unit_tests_legacy/*Bmm and unit_tests_api/*TensixSingleCoreDirectDramReaderDatacopyWriter. Since tt-umd-simulators!125 (merged 2026-08-12) that job records passes as well as failures in test_results.tsv and ships the full result set to the check as rtl-sim-results/v1 JSON, so release_test_report.py reports evidence rather than inferring it. Everything else below is staged: it matches a row in quasar_regression_tests.yaml or quasar_local_tests.yaml, which today run in the emulator job (metal_unit_test_emu_quasar) that reports to Slack #tt-qsr-emu-ci and does not write that manifest. Those entries activate with no change here once that job feeds it.",
-  "_requirements_comment": "The AIIPSW requirements the release report accounts for, so it can state which features have test evidence and which do not. Read from Jira on 2026-08-12 (epics AIIPSW-1 Jul-15, AIIPSW-5 Aug-15, AIIPSW-10 Sept-15); the epics gain children over time, so refresh this list when the milestone set changes. _evidence records the Quasar tests that EXIST in the repo for that requirement, verified by inspection on 2026-08-12, and whether they are wired into a tests/scripts/quasar yaml -- only wired tests can ever be run by the release gate. 'Not wired' does NOT mean 'no test'.",
-  "_test_tracks_comment": "Three separate Quasar test tracks exist and only the first feeds this automation: (1) tests/scripts/quasar/*.yaml, run by the GitLab sim/emulator jobs; (2) tt_metal/tt-llk/tests/python_tests/quasar/ (27 test_ + 16 perf_ python drivers over 26 sources/quasar/*.cpp), run by tt_metal/tt-llk/tests/run_quasar_regression.sh with CHIP_ARCH=quasar -- and explicitly excluded from simulator selection by tt-umd-simulators scripts/simulator_paths.yml ('skip: tt_metal/tt-llk/tests/'); (3) per-model Quasar op suites under models/, run by hand today.",
+  "_comment": "Failed RTL sim tests that warrant a RELEASE Jira ticket. Matched by (config, group, filter, runner); an omitted field is a wildcard and `filter` is compared literally. First match wins, so keep wildcard entries last. '_'-prefixed fields are documentation only. Unlisted tests get no ticket.",
+  "_coverage": "Generated inventory: tests/scripts/quasar/QUASAR_TEST_COVERAGE.md (gen_test_coverage_doc.py).",
+  "_reaches_jira_today": "Verified 2026-08-12. Only metal_unit_test_vcs_qsr feeds this matcher: it runs the config-1x3 rows of quasar_sim_regresion_tests.yaml and labels every row '1x3'. Other entries match rows in quasar_regression_tests.yaml / quasar_local_tests.yaml, which run in the emulator job that reports to Slack and does not write the manifest; they activate with no change here once it does.",
+  "_requirements_comment": "AIIPSW requirements the release report accounts for, read from Jira 2026-08-12. _evidence names the Quasar tests that EXIST for the requirement and whether any tests/scripts/quasar yaml runs them -- 'not wired' does not mean 'no test'. Refresh when the epics change.",
+  "_test_tracks_comment": "Three Quasar test tracks; only (1) feeds this automation. (1) tests/scripts/quasar/*.yaml. (2) tt_metal/tt-llk/tests/python_tests/quasar/, run by its own run_quasar_regression.sh and skipped by the sim CI's simulator_paths.yml. (3) per-model op suites under models/.",
   "requirements": [
-    {"key": "AIIPSW-2", "milestone": "Jul-15", "summary": "Runtime: Add FD support", "team": "Trinity", "owner": "Kevin Stevens"},
-    {"key": "AIIPSW-3", "milestone": "Jul-15", "summary": "LLK: Compute API calling Yolo related LLK API", "team": "Trinity", "owner": "Filip Vranic", "_evidence": "tests exist, none wired: 23 Quasar YOLO op tests in models/experimental/ops/quasar/tests/yolo_ops/, plus the consolidated LLK Quasar suite in tt_metal/tt-llk/tests/python_tests/quasar/ (track 2)"},
-    {"key": "AIIPSW-9", "milestone": "Jul-15", "summary": "ResNet LLK API passing in Horizon emulation", "team": "Horizon", "owner": "Filip Vranic", "_evidence": "Horizon environment, not Quasar -- out of scope for this gate"},
-    {"key": "AIIPSW-4", "milestone": "Aug-15", "summary": "TTNN/Kernel Ops: Quasar ResNet related Kernel Ops", "team": "Trinity", "owner": "Borys Bradel", "_evidence": "51 op tests in models/demos/vision/classification/resnet50/quasar/tests/ops/ plus 10 model-level tests; 11 wired into quasar_local_tests.yaml"},
-    {"key": "AIIPSW-6", "milestone": "Aug-15", "summary": "Runtime: Add FD support for dispatch engine", "team": "Trinity", "owner": "Kevin Stevens"},
-    {"key": "AIIPSW-8", "milestone": "Aug-15", "summary": "LLK: Quasar int8 support", "team": "Trinity", "owner": "Filip Vranic", "_evidence": "tests exist, not wired: MxInt8 / INT8->INT32 reduce in tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py + sources/quasar/reduce_quasar_test.cpp (PR #49390), track 2"},
-    {"key": "AIIPSW-12", "milestone": "Aug-15", "summary": "LLK: PDL related LLK features", "team": "Trinity", "owner": "Filip Vranic", "_evidence": "8 tests in models/experimental/panoptic_deeplab/tests/ (pcc/* plus test_device_perf_pdl.py) but no Quasar variant; 0 PRs in the v0.75/v0.76 window"},
-    {"key": "AIIPSW-13", "milestone": "Aug-15", "summary": "Runtime: Profiler debug tool support", "team": "Trinity", "owner": "Kevin Stevens", "_evidence": "3 profiler pytests wired into quasar_local_tests.yaml; a further 16 perf_*_quasar.py LLK performance tests exist unwired (PRs 50584-50596, 50898), track 2"},
-    {"key": "AIIPSW-14", "milestone": "Aug-15", "summary": "LLK: Quant/dequant kernels from LLK", "team": "Trinity", "owner": "Filip Vranic", "_evidence": "tests exist, not wired: the quant/requant/dequant family in tt_metal/tt-llk/tests/python_tests/quasar/test_eltwise_binary_sfpu_quasar.py + sources/quasar/eltwise_binary_sfpu_quasar_test.cpp (PR #48208), track 2"},
-    {"key": "AIIPSW-15", "milestone": "Aug-15", "summary": "UMD: \"Higher Level Layer\" support", "team": "UMD", "owner": "unassigned", "_evidence": "UMD-side; Quasar appears in tt_metal/third_party/umd/tests (soc_descs/quasar_simulation_1x1.yaml, simulation/test_simulation_device.cpp) but no test maps to the higher-level-layer requirement -- NOT fully verified, owner to confirm"},
-    {"key": "AIIPSW-7", "milestone": "Sept-15", "summary": "TTNN/Kernel Ops: Quasar Llama related Kernel Ops", "team": "Trinity", "owner": "Borys Bradel", "_evidence": "45 op tests in models/experimental/llama32_1b_quasar/tests/ops/ plus 7 module suites; none wired"},
-    {"key": "AIIPSW-16", "milestone": "Sept-15", "summary": "TTNN/Kernel Ops: Quasar ResNet with conv2D, pool", "team": "Trinity", "owner": "Borys Bradel", "_evidence": "the conv2d/pool/linear subset of the 51 ResNet op tests -- present but not passing on Quasar yet, so unwired"}
+    {
+      "key": "AIIPSW-2",
+      "milestone": "Jul-15",
+      "summary": "Runtime: Add FD support",
+      "team": "Trinity",
+      "owner": "Kevin Stevens"
+    },
+    {
+      "key": "AIIPSW-3",
+      "milestone": "Jul-15",
+      "summary": "LLK: Compute API calling Yolo related LLK API",
+      "team": "Trinity",
+      "owner": "Filip Vranic",
+      "_evidence": "tests exist, none wired: 23 Quasar YOLO op tests in models/experimental/ops/quasar/tests/yolo_ops/, plus the consolidated LLK Quasar suite in tt_metal/tt-llk/tests/python_tests/quasar/ (track 2)"
+    },
+    {
+      "key": "AIIPSW-9",
+      "milestone": "Jul-15",
+      "summary": "ResNet LLK API passing in Horizon emulation",
+      "team": "Horizon",
+      "owner": "Filip Vranic",
+      "_evidence": "Horizon environment, not Quasar -- out of scope for this gate"
+    },
+    {
+      "key": "AIIPSW-4",
+      "milestone": "Aug-15",
+      "summary": "TTNN/Kernel Ops: Quasar ResNet related Kernel Ops",
+      "team": "Trinity",
+      "owner": "Borys Bradel",
+      "_evidence": "51 op tests in models/demos/vision/classification/resnet50/quasar/tests/ops/ plus 10 model-level tests; 11 wired into quasar_local_tests.yaml"
+    },
+    {
+      "key": "AIIPSW-6",
+      "milestone": "Aug-15",
+      "summary": "Runtime: Add FD support for dispatch engine",
+      "team": "Trinity",
+      "owner": "Kevin Stevens"
+    },
+    {
+      "key": "AIIPSW-8",
+      "milestone": "Aug-15",
+      "summary": "LLK: Quasar int8 support",
+      "team": "Trinity",
+      "owner": "Filip Vranic",
+      "_evidence": "tests exist, not wired: MxInt8 / INT8->INT32 reduce in tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py + sources/quasar/reduce_quasar_test.cpp (PR #49390), track 2"
+    },
+    {
+      "key": "AIIPSW-12",
+      "milestone": "Aug-15",
+      "summary": "LLK: PDL related LLK features",
+      "team": "Trinity",
+      "owner": "Filip Vranic",
+      "_evidence": "8 tests in models/experimental/panoptic_deeplab/tests/ (pcc/* plus test_device_perf_pdl.py) but no Quasar variant; 0 PRs in the v0.75/v0.76 window"
+    },
+    {
+      "key": "AIIPSW-13",
+      "milestone": "Aug-15",
+      "summary": "Runtime: Profiler debug tool support",
+      "team": "Trinity",
+      "owner": "Kevin Stevens",
+      "_evidence": "3 profiler pytests wired into quasar_local_tests.yaml; a further 16 perf_*_quasar.py LLK performance tests exist unwired (PRs 50584-50596, 50898), track 2"
+    },
+    {
+      "key": "AIIPSW-14",
+      "milestone": "Aug-15",
+      "summary": "LLK: Quant/dequant kernels from LLK",
+      "team": "Trinity",
+      "owner": "Filip Vranic",
+      "_evidence": "tests exist, not wired: the quant/requant/dequant family in tt_metal/tt-llk/tests/python_tests/quasar/test_eltwise_binary_sfpu_quasar.py + sources/quasar/eltwise_binary_sfpu_quasar_test.cpp (PR #48208), track 2"
+    },
+    {
+      "key": "AIIPSW-15",
+      "milestone": "Aug-15",
+      "summary": "UMD: \"Higher Level Layer\" support",
+      "team": "UMD",
+      "owner": "unassigned",
+      "_evidence": "UMD-side; Quasar appears in tt_metal/third_party/umd/tests (soc_descs/quasar_simulation_1x1.yaml, simulation/test_simulation_device.cpp) but no test maps to the higher-level-layer requirement -- NOT fully verified, owner to confirm"
+    },
+    {
+      "key": "AIIPSW-7",
+      "milestone": "Sept-15",
+      "summary": "TTNN/Kernel Ops: Quasar Llama related Kernel Ops",
+      "team": "Trinity",
+      "owner": "Borys Bradel",
+      "_evidence": "45 op tests in models/experimental/llama32_1b_quasar/tests/ops/ plus 7 module suites; none wired"
+    },
+    {
+      "key": "AIIPSW-16",
+      "milestone": "Sept-15",
+      "summary": "TTNN/Kernel Ops: Quasar ResNet with conv2D, pool",
+      "team": "Trinity",
+      "owner": "Borys Bradel",
+      "_evidence": "the conv2d/pool/linear subset of the 51 ResNet op tests -- present but not passing on Quasar yet, so unwired"
+    }
   ],
   "relevant_tests": [
     {
@@ -26,7 +108,7 @@
       "team": "Trinity",
       "assignee": "712020:f8aa3402-dbce-4799-9094-0f4ec382989e",
       "assignee_name": "Kevin Stevens",
-      "_source": "quasar_sim_regresion_tests.yaml @1x3 (live); quasar_regression_tests.yaml @2x3_DISPATCH"
+      "_source": "sim yaml @1x3 (live); regression yaml @2x3_DISPATCH"
     },
     {
       "group": "unit_tests_legacy",
@@ -35,7 +117,7 @@
       "team": "Trinity",
       "assignee": "712020:f8aa3402-dbce-4799-9094-0f4ec382989e",
       "assignee_name": "Kevin Stevens",
-      "_source": "quasar_sim_regresion_tests.yaml @1x3 (live); quasar_regression_tests.yaml @2x3_DISPATCH"
+      "_source": "sim yaml @1x3 (live); regression yaml @2x3_DISPATCH"
     },
     {
       "group": "unit_tests_legacy",
@@ -44,7 +126,7 @@
       "team": "Trinity",
       "assignee": "712020:f8aa3402-dbce-4799-9094-0f4ec382989e",
       "assignee_name": "Kevin Stevens",
-      "_source": "quasar_sim_regresion_tests.yaml @2x3 (sim CI runs 1x3 only, so not live); quasar_regression_tests.yaml @2x3 and @2x3_DISPATCH"
+      "_source": "sim yaml @2x3 (not live: sim CI runs 1x3 only); regression yaml @2x3, @2x3_DISPATCH"
     },
     {
       "group": "unit_tests_api",
@@ -53,7 +135,7 @@
       "team": "Trinity",
       "assignee": "712020:f8aa3402-dbce-4799-9094-0f4ec382989e",
       "assignee_name": "Kevin Stevens",
-      "_source": "quasar_sim_regresion_tests.yaml @1x3 (live); moved to @2x3_DISPATCH in quasar_regression_tests.yaml by PR #51403"
+      "_source": "sim yaml @1x3 (live); moved to @2x3_DISPATCH by #51403"
     },
     {
       "group": "unit_tests_api",
@@ -62,7 +144,7 @@
       "team": "Trinity",
       "assignee": "712020:f8aa3402-dbce-4799-9094-0f4ec382989e",
       "assignee_name": "Kevin Stevens",
-      "_source": "quasar_regression_tests.yaml @2x3_DISPATCH (was @1x3 before PR #51403); absent from the sim yaml, so not live"
+      "_source": "regression yaml @2x3_DISPATCH (was @1x3 before #51403); not in the sim yaml"
     },
     {
       "group": "unit_tests_api",
@@ -71,7 +153,7 @@
       "team": "Trinity",
       "assignee": "712020:f8aa3402-dbce-4799-9094-0f4ec382989e",
       "assignee_name": "Kevin Stevens",
-      "_source": "quasar_regression_tests.yaml @2x3_DISPATCH (was @1x3 before PR #51403); absent from the sim yaml, so not live"
+      "_source": "regression yaml @2x3_DISPATCH (was @1x3 before #51403); not in the sim yaml"
     },
     {
       "group": "unit_tests_dispatch",
@@ -79,8 +161,8 @@
       "team": "Trinity",
       "assignee": "712020:f8aa3402-dbce-4799-9094-0f4ec382989e",
       "assignee_name": "Kevin Stevens",
-      "_note": "group-only wildcard: every test in the dispatch binary is dispatch-engine relevant",
-      "_source": "quasar_regression_tests.yaml: *QuasarDispatchSInstantiatedAndRunning* @2x3 and @2x3_DISPATCH (group added by PR #51403)"
+      "_note": "group-only wildcard: the whole dispatch binary",
+      "_source": "regression yaml @2x3, @2x3_DISPATCH (group added by #51403)"
     },
     {
       "runner": "pytest",
@@ -89,8 +171,8 @@
       "team": "Trinity",
       "assignee": "712020:f8aa3402-dbce-4799-9094-0f4ec382989e",
       "assignee_name": "Kevin Stevens",
-      "_note": "filter omitted: covers every profiler node id in the file",
-      "_source": "quasar_local_tests.yaml: test_custom_cycle_count_slow_dispatch @1x3, test_custom_cycle_count @2x3_DISPATCH, test_full_buffer @2x3_DISPATCH"
+      "_note": "filter omitted: every node id in the file",
+      "_source": "local yaml: 3 profiler node ids @1x3 and @2x3_DISPATCH"
     },
     {
       "runner": "pytest",
@@ -99,7 +181,7 @@
       "team": "Trinity",
       "assignee": "712020:8b948ca3-de9c-49d2-9e7b-bd009a6106d9",
       "assignee_name": "Borys Bradel",
-      "_source": "quasar_local_tests.yaml @2x3 (whole file)"
+      "_source": "local yaml @2x3 (whole file)"
     },
     {
       "runner": "pytest",
@@ -108,7 +190,7 @@
       "team": "Trinity",
       "assignee": "712020:8b948ca3-de9c-49d2-9e7b-bd009a6106d9",
       "assignee_name": "Borys Bradel",
-      "_source": "quasar_local_tests.yaml @2x3 (whole file)"
+      "_source": "local yaml @2x3 (whole file)"
     },
     {
       "runner": "pytest",
@@ -117,7 +199,7 @@
       "team": "Trinity",
       "assignee": "712020:8b948ca3-de9c-49d2-9e7b-bd009a6106d9",
       "assignee_name": "Borys Bradel",
-      "_source": "quasar_local_tests.yaml @2x3 (whole file)"
+      "_source": "local yaml @2x3 (whole file)"
     },
     {
       "runner": "pytest",
@@ -126,7 +208,7 @@
       "team": "Trinity",
       "assignee": "712020:8b948ca3-de9c-49d2-9e7b-bd009a6106d9",
       "assignee_name": "Borys Bradel",
-      "_source": "quasar_local_tests.yaml @2x3 (whole file)"
+      "_source": "local yaml @2x3 (whole file)"
     },
     {
       "runner": "pytest",
@@ -135,7 +217,7 @@
       "team": "Trinity",
       "assignee": "712020:8b948ca3-de9c-49d2-9e7b-bd009a6106d9",
       "assignee_name": "Borys Bradel",
-      "_source": "quasar_local_tests.yaml @2x3 (whole file)"
+      "_source": "local yaml @2x3 (whole file)"
     },
     {
       "runner": "pytest",
@@ -144,7 +226,7 @@
       "team": "Trinity",
       "assignee": "712020:8b948ca3-de9c-49d2-9e7b-bd009a6106d9",
       "assignee_name": "Borys Bradel",
-      "_source": "quasar_local_tests.yaml @2x3 (whole file)"
+      "_source": "local yaml @2x3 (whole file)"
     },
     {
       "runner": "pytest",
@@ -153,7 +235,7 @@
       "team": "Trinity",
       "assignee": "712020:8b948ca3-de9c-49d2-9e7b-bd009a6106d9",
       "assignee_name": "Borys Bradel",
-      "_source": "quasar_local_tests.yaml @2x3 (whole file)"
+      "_source": "local yaml @2x3 (whole file)"
     },
     {
       "runner": "pytest",
@@ -162,7 +244,7 @@
       "team": "Trinity",
       "assignee": "712020:8b948ca3-de9c-49d2-9e7b-bd009a6106d9",
       "assignee_name": "Borys Bradel",
-      "_source": "quasar_local_tests.yaml @2x3 (whole file)"
+      "_source": "local yaml @2x3 (whole file)"
     },
     {
       "runner": "pytest",
@@ -171,7 +253,7 @@
       "team": "Trinity",
       "assignee": "712020:8b948ca3-de9c-49d2-9e7b-bd009a6106d9",
       "assignee_name": "Borys Bradel",
-      "_source": "quasar_local_tests.yaml @2x3 (whole file)"
+      "_source": "local yaml @2x3 (whole file)"
     },
     {
       "runner": "pytest",
@@ -180,7 +262,7 @@
       "team": "Trinity",
       "assignee": "712020:8b948ca3-de9c-49d2-9e7b-bd009a6106d9",
       "assignee_name": "Borys Bradel",
-      "_source": "quasar_local_tests.yaml @2x3 (whole file)"
+      "_source": "local yaml @2x3 (whole file)"
     },
     {
       "runner": "pytest",
@@ -189,7 +271,7 @@
       "team": "Trinity",
       "assignee": "712020:8b948ca3-de9c-49d2-9e7b-bd009a6106d9",
       "assignee_name": "Borys Bradel",
-      "_source": "quasar_local_tests.yaml @2x3 (whole file)"
+      "_source": "local yaml @2x3 (whole file)"
     },
     {
       "config": "1x3",
@@ -203,8 +285,8 @@
       "team": "Trinity",
       "assignee": "712020:f8aa3402-dbce-4799-9094-0f4ec382989e",
       "assignee_name": "Kevin Stevens",
-      "_note": "config-only wildcard: any test failing under the dispatch-engine config is AIIPSW-6 relevant. MUST stay last -- it would otherwise shadow the more specific entries above that also run at 2x3_DISPATCH.",
-      "_source": "quasar_regression_tests.yaml has 14 rows at @2x3_DISPATCH; quasar_local_tests.yaml has 2"
+      "_note": "config-only wildcard: any 2x3_DISPATCH failure is AIIPSW-6. MUST stay last.",
+      "_source": "14 rows @2x3_DISPATCH in the regression yaml, 2 in the local yaml"
     }
   ]
 }

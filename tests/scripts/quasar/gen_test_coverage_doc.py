@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
 """Generate QUASAR_TEST_COVERAGE.md from the quasar test yamls.
 
-The Quasar test lists grow steadily, and the release automation's relevance map
-(.github/actions/scripts/ai_ip_tests.json) is keyed on (config, group, filter,
-runner) tuples taken from them. Hand-maintained notes about "what runs where"
-went stale within weeks, so this regenerates the picture from the yamls
-themselves and cross-references the relevance map.
+Hand-maintained notes about what runs where went stale within weeks, so this
+regenerates them from the yamls and cross-references ai_ip_tests.json.
 
-Usage:
-    gen_test_coverage_doc.py            # rewrite QUASAR_TEST_COVERAGE.md
-    gen_test_coverage_doc.py --check    # exit 1 if the file is out of date
+    gen_test_coverage_doc.py            # rewrite the doc
+    gen_test_coverage_doc.py --check    # exit 1 if out of date
 """
 import argparse
+import fnmatch
 import json
+import re
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -24,9 +22,8 @@ REPO = HERE.parents[2]
 MAP_PATH = REPO / ".github/actions/scripts/ai_ip_tests.json"
 OUT_PATH = HERE / "QUASAR_TEST_COVERAGE.md"
 
-# Where each yaml is consumed. This is the one thing not derivable from the repo
-# -- the sim CI lives in GitLab (tensix/tt-umd-simulators). Verified 2026-08-11
-# against that project's main branch; re-check when the emu branches merge.
+# Where each yaml is consumed -- the one thing not derivable from the repo.
+# Verified 2026-08-12 against tensix/tt-umd-simulators main.
 YAML_SOURCES = [
     {
         "file": "quasar_sim_regresion_tests.yaml",
@@ -34,12 +31,9 @@ YAML_SOURCES = [
         "configs_run": "1x3 only (hardcoded)",
         "feeds_release_jira": True,
         "note": (
-            "The only list wired to the release gate. The job runs "
-            "`select_quasar_tests.py <yaml> 1x3` and writes `test_results.tsv` "
-            "(every outcome, passed and failed), "
-            "which `report_rtl_sim_failures.py` turns into the \"RTL Sim CI "
-            "test\" GitHub check output that this repo's `file_rtl_sim_jira.py` "
-            "parses. Manifest rows are labelled `1x3` unconditionally."
+            "The only list wired to the release gate. Writes `test_results.tsv` "
+            "(every outcome), which `report_rtl_sim_failures.py` turns into the "
+            "\"RTL Sim CI test\" check output. Rows are labelled `1x3` unconditionally."
         ),
     },
     {
@@ -48,11 +42,9 @@ YAML_SOURCES = [
         "configs_run": "all configs present in the yaml",
         "feeds_release_jira": False,
         "note": (
-            "Nightly/triggered emulator run. **Not merged on GitLab main yet** -- "
-            "it lives on branch `kstevens/emu-quasar-1x3-testing`. Results go to "
-            "`gtest-summary/summary.json` and Slack `#tt-qsr-emu-ci`; this job "
-            "does not write the `test_results.tsv` manifest, so none of these reach "
-            "Jira today."
+            "Nightly emulator run, still on GitLab branch "
+            "`kstevens/emu-quasar-1x3-testing`. Reports to Slack `#tt-qsr-emu-ci`; "
+            "writes no manifest, so none of these reach Jira."
         ),
     },
     {
@@ -61,13 +53,45 @@ YAML_SOURCES = [
         "configs_run": "all configs present in the yaml",
         "feeds_release_jira": False,
         "note": (
-            "Tests the GitLab runner flow does not support yet; pytest-only "
-            "today. Wired on branch `kstevens/pytest_ci`, also Slack-reported. "
-            "Entries move to `quasar_regression_tests.yaml` as pipeline support "
-            "lands."
+            "pytest-only; wired on GitLab branch `kstevens/pytest_ci`, also "
+            "Slack-reported. Entries move to the regression yaml as support lands."
         ),
     },
 ]
+
+
+CASE_RE = re.compile(r"\bTEST(?:_F|_P)?\(\s*([A-Za-z0-9_]+)\s*,\s*([A-Za-z0-9_]+)\s*\)")
+
+
+def defined_gtests():
+    """Every gtest case declared under tests/tt_metal, as Fixture.Test."""
+    cases = set()
+    for src in (REPO / "tests/tt_metal").rglob("*.cpp"):
+        for fixture, name in CASE_RE.findall(src.read_text(errors="ignore")):
+            cases.add(f"{fixture}.{name}")
+    return cases
+
+
+def _core(gtest_filter):
+    """Prefix/Fixture.Test/Param -> Fixture.Test (gtest instantiation naming)."""
+    s = gtest_filter
+    if "/" in s:
+        _, _, rest = s.partition("/")
+        if "." in rest:
+            s = rest
+    return s.split("/")[0]
+
+
+def selected_gtests(rows, cases):
+    hit = set()
+    for row in rows:
+        if row["runner"] != "gtest" or not row["filter"]:
+            continue
+        for part in row["filter"].split(":"):
+            core = _core(part)
+            pattern = core if any(c in core for c in "*?") else f"*{core}*"
+            hit |= {c for c in cases if fnmatch.fnmatch(c, pattern)}
+    return hit
 
 
 def load_rows(path):
@@ -187,42 +211,41 @@ def render():
             )
         out.append("")
 
-    # Requirement rollup: what each AIIPSW ticket is actually covered by.
+    # What each AIIPSW ticket is covered by.
     by_req = defaultdict(list)
     for fname, rows in all_rows.items():
         for r in rows:
             e = match(r, entries)
             if e and e.get("requirement"):
                 by_req[e["requirement"]].append((fname, r))
-    out += ["## Coverage by AIIPSW requirement", ""]
     inventory = load_map_requirements()
-    if by_req or inventory:
-        out += ["| Requirement | Watched rows | Lists | Reaches Jira today |", "|---|---|---|---|"]
-        gating = {s["file"] for s in YAML_SOURCES if s["feeds_release_jira"]}
-        # Every requirement in the inventory gets a row, covered or not, so the
-        # release evidence report and this doc tell the same story.
-        keys = [r["key"] for r in inventory] or sorted(by_req)
-        for req in keys + [k for k in sorted(by_req) if k not in {r["key"] for r in inventory}]:
-            hits = by_req.get(req, [])
-            if not hits:
-                why = next(
-                    (r.get("_evidence") for r in inventory if r["key"] == req and r.get("_evidence")),
-                    "no test wired into a Quasar yaml",
-                )
-                out.append(f"| {req} | 0 | — | **no** — {why} |")
-                continue
-            files = sorted({f for f, _ in hits})
-            live = any(f in gating for f, _ in hits)
-            out.append(
-                f"| {req} | {len(hits)} | {', '.join(f'`{f}`' for f in files)} | "
-                f"{'yes' if live else '**no** — emulator-only path'} |"
-            )
-    else:
-        out.append("_No relevance-map entry currently matches any yaml row._")
+    out += [
+        "## Coverage by AIIPSW requirement",
+        "",
+        "Requirements from `ai_ip_tests.json`. *Wired rows* are yaml rows the "
+        "relevance map watches; *evidence* names the Quasar tests that exist for "
+        "the requirement whether or not any yaml runs them.",
+        "",
+        "| Requirement | Milestone | Owner | Wired rows | Gates release | Evidence |",
+        "|---|---|---|---|---|---|",
+    ]
+    gating = {s["file"] for s in YAML_SOURCES if s["feeds_release_jira"]}
+    known = {r["key"] for r in inventory}
+    rows_out = list(inventory) + [
+        {"key": k, "milestone": "?", "owner": "?"} for k in sorted(by_req) if k not in known
+    ]
+    for req in rows_out:
+        hits = by_req.get(req["key"], [])
+        live = any(f in gating for f, _ in hits)
+        evidence = req.get("_evidence", "wired into the gating yaml")
+        out.append(
+            f"| **{req['key']}** — {req.get('summary', '')} | {req.get('milestone', '?')} "
+            f"| {req.get('owner', '?')} | {len(hits)} | {'yes' if live else 'no'} "
+            f"| {evidence} |"
+        )
     out.append("")
 
-    # Entries that never win a match: no such row, or shadowed by an earlier
-    # entry (match_entry returns the first hit, so order matters).
+    # Never win a match: no such row, or shadowed by an earlier entry.
     unmatched = []
     for e in entries:
         hit = any(match(r, entries) is e for rows in all_rows.values() for r in rows)
@@ -232,9 +255,7 @@ def render():
         out += [
             "## Relevance-map entries that never win a match",
             "",
-            "These file no ticket: either no yaml row matches them, or an earlier "
-            "entry in the map already claims every row they would match. Stale "
-            "entries should be dropped; the rest activate when their test lands.",
+            "No yaml row matches, or an earlier entry claims every row they would.",
             "",
             "| Config | Group | Filter | Requirement |",
             "|---|---|---|---|",
@@ -245,6 +266,26 @@ def render():
                 f"`{md_escape(e.get('filter', '*'))}` | {e.get('requirement', '—')} |"
             )
         out.append("")
+
+    cases = defined_gtests()
+    quasar_cases = {c for c in cases if "quasar" in c.lower()}
+    picked = selected_gtests([r for rows in all_rows.values() for r in rows], cases)
+    gate_rows = [r for f, rows in all_rows.items() if f in gating for r in rows]
+    out += [
+        "## tt-metal gtests: defined vs selected",
+        "",
+        "The yamls select by gtest filter from binaries that hold far more than "
+        "they run. Approximate — `TEST_P` instantiation names are normalised.",
+        "",
+        "| | Count |",
+        "|---|---|",
+        f"| gtest cases defined under `tests/tt_metal` | {len(cases)} |",
+        f"| of those, Quasar-named | {len(quasar_cases)} |",
+        f"| selected by any quasar yaml | {len(picked)} |",
+        f"| selected by the gating sim yaml | {len(selected_gtests(gate_rows, cases))} |",
+        f"| Quasar-named, selected by no yaml | {len(quasar_cases - picked)} |",
+        "",
+    ]
 
     counts = Counter(
         (r["config"], r["runner"]) for rows in all_rows.values() for r in rows

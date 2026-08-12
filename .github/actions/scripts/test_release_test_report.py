@@ -26,9 +26,11 @@ from release_test_report import (  # noqa: E402
     build,
     classify,
     load_expected,
+    parse_junit_dir,
     parse_results_block,
     render_markdown,
     render_plain,
+    suite_totals,
 )
 
 MAP_PATH = SCRIPTS_DIR / "ai_ip_tests.json"
@@ -202,3 +204,89 @@ def test_malformed_block_is_ignored(expected):
 
 def test_no_block_still_derives(expected):
     assert parse_results_block("1 test(s) failed:\n- `[1x3] g --gtest_filter=*X*`") is None
+
+
+# --- other release testing: JUnit XML from release-demo-tests ----------------
+
+JUNIT_PYTEST = """<?xml version="1.0" encoding="utf-8"?>
+<testsuites><testsuite name="pytest" errors="0" failures="1" skipped="1" tests="4">
+<testcase classname="models.demos.llama3.tests.test_x" name="test_a"/>
+<testcase classname="models.demos.llama3.tests.test_x" name="test_b"/>
+<testcase classname="models.demos.llama3.tests.test_x" name="test_c"><failure message="boom">E</failure></testcase>
+<testcase classname="models.demos.llama3.tests.test_x" name="test_d"><skipped message="n/a"/></testcase>
+</testsuite></testsuites>
+"""
+
+JUNIT_ERROR = """<?xml version="1.0"?>
+<testsuites><testsuite name="GtestSuite" tests="1">
+<testcase classname="GtestSuite" name="Boom"><error message="segv">crash</error></testcase>
+</testsuite></testsuites>
+"""
+
+
+def test_junit_dir_absent_is_empty():
+    assert parse_junit_dir("/nonexistent/path/xyz") == []
+    assert parse_junit_dir("") == []
+
+
+def test_junit_counts_and_failure_names(tmp_path):
+    (tmp_path / "a").mkdir()
+    (tmp_path / "a" / "most_recent_tests_1.xml").write_text(JUNIT_PYTEST)
+    suites = parse_junit_dir(tmp_path)
+    assert len(suites) == 1
+    s = suites[0]
+    # pytest labels every suite "pytest"; the filename is the useful label
+    assert s["name"] == "most_recent_tests_1"
+    assert (s["passed"], s["failed"], s["skipped"]) == (2, 1, 1)
+    assert s["failures"] == ["models.demos.llama3.tests.test_x::test_c"]
+
+
+def test_junit_counts_errors_as_failures(tmp_path):
+    (tmp_path / "g.xml").write_text(JUNIT_ERROR)
+    s = parse_junit_dir(tmp_path)[0]
+    assert s["name"] == "GtestSuite" and s["failed"] == 1
+
+
+def test_junit_skips_unparseable_files(tmp_path):
+    (tmp_path / "ok.xml").write_text(JUNIT_ERROR)
+    (tmp_path / "broken.xml").write_text("not xml at all")
+    suites = parse_junit_dir(tmp_path)
+    assert len(suites) == 1, "the corrupt file must not take the whole report down"
+
+
+def test_junit_merges_suites_of_the_same_name(tmp_path):
+    (tmp_path / "one.xml").write_text(JUNIT_ERROR)
+    (tmp_path / "two.xml").write_text(JUNIT_ERROR)
+    s = parse_junit_dir(tmp_path)
+    assert len(s) == 1 and s[0]["failed"] == 2
+
+
+def test_suite_totals(tmp_path):
+    (tmp_path / "a.xml").write_text(JUNIT_PYTEST)
+    (tmp_path / "b.xml").write_text(JUNIT_ERROR)
+    t = suite_totals(parse_junit_dir(tmp_path))
+    assert t == {"suites": 2, "passed": 2, "failed": 2, "skipped": 1}
+
+
+def test_suites_render_but_do_not_touch_requirement_evidence(mapping, tmp_path):
+    (tmp_path / "most_recent_tests_1.xml").write_text(JUNIT_PYTEST)
+    suites = parse_junit_dir(tmp_path)
+    rows = load_expected(SIM_YAML, "1x3")
+    report = build(mapping, rows, rows, [], PASSED, suites)
+
+    md = render_markdown(report, META)
+    assert "Other release testing" in md and "most_recent_tests_1" in md
+    assert "test_c" in md, "failed model tests must be listed"
+    # the model suites are not Quasar: they must not become requirement evidence
+    covered = {r["key"] for r in report["requirements"] if r["passed"]}
+    assert covered == {"AIIPSW-2", "AIIPSW-6"}
+    assert "map to no AIIPSW requirement" in md
+
+    plain = render_plain(report, META)
+    assert "Other release testing" in plain and "FAILED" in plain
+
+
+def test_no_suites_omits_the_section(mapping):
+    rows = load_expected(SIM_YAML, "1x3")
+    report = build(mapping, rows, rows, [], PASSED, [])
+    assert "Other release testing" not in render_markdown(report, META)

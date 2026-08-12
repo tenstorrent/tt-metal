@@ -18,7 +18,7 @@ Regenerate with `python3 tests/scripts/quasar/gen_test_coverage_doc.py`.
 
 ## `quasar_sim_regresion_tests.yaml`
 
-The only list wired to the release gate. The job runs `select_quasar_tests.py <yaml> 1x3` and writes `test_results.tsv` (every outcome, passed and failed), which `report_rtl_sim_failures.py` turns into the "RTL Sim CI test" GitHub check output that this repo's `file_rtl_sim_jira.py` parses. Manifest rows are labelled `1x3` unconditionally.
+The only list wired to the release gate. Writes `test_results.tsv` (every outcome), which `report_rtl_sim_failures.py` turns into the "RTL Sim CI test" check output. Rows are labelled `1x3` unconditionally.
 
 Runs: metal_unit_test_vcs_qsr (VCS) — 1x3 only (hardcoded).
 
@@ -32,7 +32,7 @@ Runs: metal_unit_test_vcs_qsr (VCS) — 1x3 only (hardcoded).
 
 ## `quasar_regression_tests.yaml`
 
-Nightly/triggered emulator run. **Not merged on GitLab main yet** -- it lives on branch `kstevens/emu-quasar-1x3-testing`. Results go to `gtest-summary/summary.json` and Slack `#tt-qsr-emu-ci`; this job does not write the `test_results.tsv` manifest, so none of these reach Jira today.
+Nightly emulator run, still on GitLab branch `kstevens/emu-quasar-1x3-testing`. Reports to Slack `#tt-qsr-emu-ci`; writes no manifest, so none of these reach Jira.
 
 Runs: metal_unit_test_emu_quasar (Zebu/Aether emulator) — all configs present in the yaml.
 
@@ -97,7 +97,7 @@ Runs: metal_unit_test_emu_quasar (Zebu/Aether emulator) — all configs present 
 
 ## `quasar_local_tests.yaml`
 
-Tests the GitLab runner flow does not support yet; pytest-only today. Wired on branch `kstevens/pytest_ci`, also Slack-reported. Entries move to `quasar_regression_tests.yaml` as pipeline support lands.
+pytest-only; wired on GitLab branch `kstevens/pytest_ci`, also Slack-reported. Entries move to the regression yaml as support lands.
 
 Runs: metal_unit_test_emu_quasar (Zebu/Aether emulator) — all configs present in the yaml.
 
@@ -120,28 +120,42 @@ Runs: metal_unit_test_emu_quasar (Zebu/Aether emulator) — all configs present 
 
 ## Coverage by AIIPSW requirement
 
-| Requirement | Watched rows | Lists | Reaches Jira today |
-|---|---|---|---|
-| AIIPSW-2 | 8 | `quasar_regression_tests.yaml`, `quasar_sim_regresion_tests.yaml` | yes |
-| AIIPSW-3 | 0 | — | **no** — tests exist, none wired: 23 Quasar YOLO op tests in models/experimental/ops/quasar/tests/yolo_ops/, plus the consolidated LLK Quasar suite in tt_metal/tt-llk/tests/python_tests/quasar/ (track 2) |
-| AIIPSW-9 | 0 | — | **no** — Horizon environment, not Quasar -- out of scope for this gate |
-| AIIPSW-4 | 11 | `quasar_local_tests.yaml` | **no** — emulator-only path |
-| AIIPSW-6 | 13 | `quasar_regression_tests.yaml`, `quasar_sim_regresion_tests.yaml` | yes |
-| AIIPSW-8 | 0 | — | **no** — tests exist, not wired: MxInt8 / INT8->INT32 reduce in tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py + sources/quasar/reduce_quasar_test.cpp (PR #49390), track 2 |
-| AIIPSW-12 | 0 | — | **no** — 8 tests in models/experimental/panoptic_deeplab/tests/ (pcc/* plus test_device_perf_pdl.py) but no Quasar variant; 0 PRs in the v0.75/v0.76 window |
-| AIIPSW-13 | 3 | `quasar_local_tests.yaml` | **no** — emulator-only path |
-| AIIPSW-14 | 0 | — | **no** — tests exist, not wired: the quant/requant/dequant family in tt_metal/tt-llk/tests/python_tests/quasar/test_eltwise_binary_sfpu_quasar.py + sources/quasar/eltwise_binary_sfpu_quasar_test.cpp (PR #48208), track 2 |
-| AIIPSW-15 | 0 | — | **no** — UMD-side; Quasar appears in tt_metal/third_party/umd/tests (soc_descs/quasar_simulation_1x1.yaml, simulation/test_simulation_device.cpp) but no test maps to the higher-level-layer requirement -- NOT fully verified, owner to confirm |
-| AIIPSW-7 | 0 | — | **no** — 45 op tests in models/experimental/llama32_1b_quasar/tests/ops/ plus 7 module suites; none wired |
-| AIIPSW-16 | 0 | — | **no** — the conv2d/pool/linear subset of the 51 ResNet op tests -- present but not passing on Quasar yet, so unwired |
+Requirements from `ai_ip_tests.json`. *Wired rows* are yaml rows the relevance map watches; *evidence* names the Quasar tests that exist for the requirement whether or not any yaml runs them.
+
+| Requirement | Milestone | Owner | Wired rows | Gates release | Evidence |
+|---|---|---|---|---|---|
+| **AIIPSW-2** — Runtime: Add FD support | Jul-15 | Kevin Stevens | 8 | yes | wired into the gating yaml |
+| **AIIPSW-3** — LLK: Compute API calling Yolo related LLK API | Jul-15 | Filip Vranic | 0 | no | tests exist, none wired: 23 Quasar YOLO op tests in models/experimental/ops/quasar/tests/yolo_ops/, plus the consolidated LLK Quasar suite in tt_metal/tt-llk/tests/python_tests/quasar/ (track 2) |
+| **AIIPSW-9** — ResNet LLK API passing in Horizon emulation | Jul-15 | Filip Vranic | 0 | no | Horizon environment, not Quasar -- out of scope for this gate |
+| **AIIPSW-4** — TTNN/Kernel Ops: Quasar ResNet related Kernel Ops | Aug-15 | Borys Bradel | 11 | no | 51 op tests in models/demos/vision/classification/resnet50/quasar/tests/ops/ plus 10 model-level tests; 11 wired into quasar_local_tests.yaml |
+| **AIIPSW-6** — Runtime: Add FD support for dispatch engine | Aug-15 | Kevin Stevens | 13 | yes | wired into the gating yaml |
+| **AIIPSW-8** — LLK: Quasar int8 support | Aug-15 | Filip Vranic | 0 | no | tests exist, not wired: MxInt8 / INT8->INT32 reduce in tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py + sources/quasar/reduce_quasar_test.cpp (PR #49390), track 2 |
+| **AIIPSW-12** — LLK: PDL related LLK features | Aug-15 | Filip Vranic | 0 | no | 8 tests in models/experimental/panoptic_deeplab/tests/ (pcc/* plus test_device_perf_pdl.py) but no Quasar variant; 0 PRs in the v0.75/v0.76 window |
+| **AIIPSW-13** — Runtime: Profiler debug tool support | Aug-15 | Kevin Stevens | 3 | no | 3 profiler pytests wired into quasar_local_tests.yaml; a further 16 perf_*_quasar.py LLK performance tests exist unwired (PRs 50584-50596, 50898), track 2 |
+| **AIIPSW-14** — LLK: Quant/dequant kernels from LLK | Aug-15 | Filip Vranic | 0 | no | tests exist, not wired: the quant/requant/dequant family in tt_metal/tt-llk/tests/python_tests/quasar/test_eltwise_binary_sfpu_quasar.py + sources/quasar/eltwise_binary_sfpu_quasar_test.cpp (PR #48208), track 2 |
+| **AIIPSW-15** — UMD: "Higher Level Layer" support | Aug-15 | unassigned | 0 | no | UMD-side; Quasar appears in tt_metal/third_party/umd/tests (soc_descs/quasar_simulation_1x1.yaml, simulation/test_simulation_device.cpp) but no test maps to the higher-level-layer requirement -- NOT fully verified, owner to confirm |
+| **AIIPSW-7** — TTNN/Kernel Ops: Quasar Llama related Kernel Ops | Sept-15 | Borys Bradel | 0 | no | 45 op tests in models/experimental/llama32_1b_quasar/tests/ops/ plus 7 module suites; none wired |
+| **AIIPSW-16** — TTNN/Kernel Ops: Quasar ResNet with conv2D, pool | Sept-15 | Borys Bradel | 0 | no | the conv2d/pool/linear subset of the 51 ResNet op tests -- present but not passing on Quasar yet, so unwired |
 
 ## Relevance-map entries that never win a match
 
-These file no ticket: either no yaml row matches them, or an earlier entry in the map already claims every row they would match. Stale entries should be dropped; the rest activate when their test lands.
+No yaml row matches, or an earlier entry claims every row they would.
 
 | Config | Group | Filter | Requirement |
 |---|---|---|---|
 | 1x3 | `unit_tests_api` | `RtlSimCheckOutput.DoesNotExist_ForcedFailure` | — |
+
+## tt-metal gtests: defined vs selected
+
+The yamls select by gtest filter from binaries that hold far more than they run. Approximate — `TEST_P` instantiation names are normalised.
+
+| | Count |
+|---|---|
+| gtest cases defined under `tests/tt_metal` | 3950 |
+| of those, Quasar-named | 359 |
+| selected by any quasar yaml | 40 |
+| selected by the gating sim yaml | 5 |
+| Quasar-named, selected by no yaml | 338 |
 
 ## Rows by config and runner
 

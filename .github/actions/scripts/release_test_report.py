@@ -1,51 +1,35 @@
 #!/usr/bin/env python3
 """Build the release test-evidence report and file it as a Jira issue.
 
-The failure path (file_rtl_sim_jira.py) opens a ticket per failed test. This is
-the other half: after the release gate runs, produce a shareable record of which
-AIIPSW requirements actually have passing test evidence in this release, and
-which have none.
+Two parts, kept separate: AIIPSW requirement evidence from the Quasar RTL sim
+gate, and a summary of the model e2e suites from their JUnit XML (not Quasar, so
+they map to no requirement).
 
-How "executed successfully" is determined
------------------------------------------
-Preferred: the sim CI embeds the full result set -- passes included -- in the
-check's output.text as a JSON block (schema rtl-sim-results/v1, see
-tt-umd-simulators!125, merged 2026-08-12). When present it is authoritative and no
-inference happens.
-
-Fallback, for check output produced before that block existed: the sim CI
-reported only FAILURES, so passes have to be derived:
-
-    executed = the rows of the sim yaml the gating job runs (config SIM_CI_CONFIG)
-    failed   = the per-test rows parsed out of the check detail
-    passed   = executed - failed
-
-That derivation is only sound when the job ran to completion. When the check is
-red but carries no per-test detail, or timed out, or the sim reporter says the
-manifest was missing, the run is marked INCONCLUSIVE and NOTHING is reported as
-passing -- a report that guesses at passes is worse than no report.
+Passes come from the sim CI's rtl-sim-results/v1 block when present. Otherwise
+they are derived as (tests the gate runs) - (tests reported failed), which only
+holds if the run completed: a red check with no per-test detail, a timeout, or a
+missing manifest is reported INCONCLUSIVE with no passes claimed.
 
 Environment:
-  RTL_SIM_CONCLUSION  check conclusion: success | failure | timed_out | ...  (required)
-  RTL_SIM_DETAIL      check output.summary (+ text); failure bullets    (optional)
-  RTL_SIM_SHA         commit the check ran on                           (optional)
-  RTL_SIM_URL         link to the sim results                           (optional)
-  RTL_SIM_RUN_URL     link to the release workflow run                  (optional)
-  RELEASE_VERSION     release tag/version, used in the summary + dedup  (optional)
-  RTL_SIM_MAP         relevance mapping JSON   (default: ./ai_ip_tests.json)
+  RTL_SIM_CONCLUSION  success | failure | timed_out | ...              (required)
+  RTL_SIM_DETAIL      check output.summary (+ text)                    (optional)
+  RTL_SIM_SHA / RTL_SIM_URL / RTL_SIM_RUN_URL                          (optional)
+  RELEASE_VERSION     used in the summary and the dedup label          (optional)
+  RTL_SIM_MAP         relevance mapping   (default: ./ai_ip_tests.json)
   QUASAR_SIM_YAML     the yaml the gating job runs
-                      (default: tests/scripts/quasar/quasar_sim_regresion_tests.yaml)
-  SIM_CI_CONFIG       config the gating job selects                     (default: 1x3)
-  REPORT_MD_OUT       write the markdown report here                    (optional)
-  JIRA_*              as create_jira_issue.py; JIRA_ISSUE_TYPE defaults to Task
-  JIRA_SKIP           when truthy, build the report but do not file it
+  SIM_CI_CONFIG       config the gating job selects              (default: 1x3)
+  TEST_REPORTS_DIR    JUnit XML from release-demo-tests                (optional)
+  REPORT_MD_OUT       write the markdown report here                   (optional)
+  JIRA_*              as create_jira_issue.py; JIRA_ISSUE_TYPE default Task
+  JIRA_SKIP           build the report but do not file it
 
-Exit status is 0 whether or not tests failed -- this reports, it does not gate.
+Exits 0 whether or not tests failed -- this reports, it does not gate.
 """
 import json
 import os
 import re
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import yaml
@@ -59,8 +43,7 @@ DEFAULT_SIM_YAML = REPO / "tests/scripts/quasar/quasar_sim_regresion_tests.yaml"
 
 PASSED, FAILED, INCONCLUSIVE = "passed", "failed", "inconclusive"
 
-# The sim CI's authoritative result block, emitted inside an HTML comment so it
-# renders invisibly on GitHub: <!-- rtl-sim-results/v1\n{...}\n-->
+# <!-- rtl-sim-results/v1\n{...}\n--> in the check summary.
 RESULTS_RE = re.compile(r"<!--\s*rtl-sim-results/v1\s*\n(\{.*?\})\s*\n-->", re.DOTALL)
 
 
@@ -86,12 +69,54 @@ def parse_results_block(detail):
             for r in payload.get(key, [])
         ]
 
-    # A truncated block omits the passed list; treat that as "no block" rather
-    # than silently reporting zero passes.
+    # A truncated block omits the passed list: fall back rather than report zero.
     if payload.get("truncated"):
         print(f"warning: rtl-sim-results block truncated ({payload['truncated']}); falling back")
         return None
     return {"passed": rows("passed"), "failed": rows("failed")}
+
+
+def parse_junit_dir(path):
+    """Per-suite counts from the JUnit XML in the test_reports_* artifacts."""
+    # Guard the empty string: Path("") is ".", which would scan the whole repo.
+    if not path:
+        return []
+    root = Path(path)
+    if not root.is_dir():
+        return []
+
+    suites = {}
+    for xml in sorted(root.rglob("*.xml")):
+        try:
+            tree = ET.parse(xml)
+        except ET.ParseError:
+            print(f"warning: {xml.name} is not parseable XML; skipping")
+            continue
+        for suite in tree.iter("testsuite"):
+            # pytest names every suite "pytest"; the filename is the label.
+            name = suite.get("name") or xml.stem
+            if name in ("pytest", "", None):
+                name = xml.stem
+            acc = suites.setdefault(name, {"name": name, "passed": 0, "failed": 0, "skipped": 0, "failures": []})
+            for case in suite.iter("testcase"):
+                if case.find("failure") is not None or case.find("error") is not None:
+                    acc["failed"] += 1
+                    cls, nm = case.get("classname", ""), case.get("name", "")
+                    acc["failures"].append(f"{cls}::{nm}" if cls else nm)
+                elif case.find("skipped") is not None:
+                    acc["skipped"] += 1
+                else:
+                    acc["passed"] += 1
+    return sorted(suites.values(), key=lambda s: s["name"])
+
+
+def suite_totals(suites):
+    return {
+        "suites": len(suites),
+        "passed": sum(s["passed"] for s in suites),
+        "failed": sum(s["failed"] for s in suites),
+        "skipped": sum(s["skipped"] for s in suites),
+    }
 
 
 def load_expected(yaml_path, config):
@@ -119,7 +144,7 @@ def classify(expected, failed_rows, conclusion, detail):
 
     `failed_rows` are (config, group, filter, runner) tuples from the check.
     """
-    # The sim CI told us exactly what passed -- believe it over any inference.
+    # Authoritative when present.
     reported = parse_results_block(detail)
     if reported is not None:
         verdict = FAILED if reported["failed"] else PASSED
@@ -128,8 +153,7 @@ def classify(expected, failed_rows, conclusion, detail):
     if conclusion == "success":
         return PASSED, list(expected), []
 
-    # Red, but we cannot see which tests failed -- infra failure, timeout, or the
-    # sim pipeline did not forward per-test detail. Claim no passes.
+    # Red with no visible per-test detail: claim no passes.
     if not failed_rows or "manifest missing" in (detail or "").lower():
         return INCONCLUSIVE, [], []
 
@@ -145,8 +169,7 @@ def classify(expected, failed_rows, conclusion, detail):
 
     passed = [r for r in expected if not is_failed(r)]
     failed = [r for r in expected if is_failed(r)]
-    # Failures the expected set does not explain (the yaml moved, or the sim ran
-    # something else): surface them rather than dropping them.
+    # Failures the expected set does not explain: surface, do not drop.
     extra = [
         {"config": c, "group": g, "filter": f, "runner": r}
         for c, g, f, r in failed_rows
@@ -155,7 +178,7 @@ def classify(expected, failed_rows, conclusion, detail):
     return FAILED, passed, failed + extra
 
 
-def build(mapping, expected, passed, failed, verdict):
+def build(mapping, expected, passed, failed, verdict, suites=None):
     """Group the run's tests under the requirement each one serves."""
     def req_of(row):
         entry = match_entry(row["config"], row["group"], row["filter"], row["runner"], mapping)
@@ -181,6 +204,7 @@ def build(mapping, expected, passed, failed, verdict):
 
     return {
         "verdict": verdict,
+        "suites": suites,
         "expected": expected,
         "passed": passed,
         "failed": failed,
@@ -241,9 +265,23 @@ def render_plain(report, meta):
         out += ["", "--- Tests executed that map to no requirement ---"]
         out += _lines(report["unattributed"][PASSED] + report["unattributed"][FAILED])
 
+    suites = report.get("suites") or []
+    if suites:
+        t = suite_totals(suites)
+        out += ["", "--- Other release testing (model e2e suites) ---",
+                f"{t['suites']} suite(s): {t['passed']} passed, {t['failed']} failed, {t['skipped']} skipped."]
+        for s_ in suites:
+            line = f"{s_['name']}: {s_['passed']} passed, {s_['failed']} failed, {s_['skipped']} skipped"
+            out.append(line)
+            for f_ in s_["failures"][:10]:
+                out.append(f"  FAILED {f_}")
+            if len(s_["failures"]) > 10:
+                out.append(f"  ... and {len(s_['failures']) - 10} more")
+        out.append("These suites are not Quasar and do not map to an AIIPSW requirement.")
+
     out += [
         "",
-        "Scope: this covers the RTL sim tests run by the release gate "
+        "Scope: the requirement evidence above covers the RTL sim tests run by the release gate "
         f"({meta['sim_yaml_name']}, config {meta['config']}). Quasar tests that run "
         "only in the emulator job are not included -- that job reports to Slack and "
         "does not feed this check. See tests/scripts/quasar/QUASAR_TEST_COVERAGE.md.",
@@ -318,10 +356,36 @@ def render_markdown(report, meta):
         out += [f"- `{format_test(r['config'], r['group'], r['filter'], r['runner'])}`" for r in extras]
         out.append("")
 
+    suites = report.get("suites") or []
+    if suites:
+        t = suite_totals(suites)
+        out += [
+            "## Other release testing (model e2e suites)",
+            "",
+            f"**{t['suites']} suite(s)** — {t['passed']} passed, {t['failed']} failed, "
+            f"{t['skipped']} skipped. Not Quasar, so these map to no AIIPSW requirement, "
+            "but they are the bulk of what this release exercised.",
+            "",
+            "| Suite | Passed | Failed | Skipped |",
+            "|---|---|---|---|",
+        ]
+        for s_ in suites:
+            out.append(f"| `{s_['name']}` | {s_['passed']} | {s_['failed']} | {s_['skipped']} |")
+        out.append("")
+        failing = [s_ for s_ in suites if s_["failures"]]
+        if failing:
+            out += ["<details><summary>Failed tests</summary>", ""]
+            for s_ in failing:
+                out.append(f"**{s_['name']}**")
+                out += [f"- `{f_}`" for f_ in s_["failures"][:25]]
+                if len(s_["failures"]) > 25:
+                    out.append(f"- … and {len(s_['failures']) - 25} more")
+            out += ["", "</details>", ""]
+
     out += [
         "---",
         "",
-        "Scope note: this covers only the RTL sim tests the release gate runs "
+        "Scope note: the requirement evidence above covers only the RTL sim tests the release gate runs "
         f"(`{meta['sim_yaml_name']}`, config `{meta['config']}`). Quasar tests that run "
         "only in the emulator job are not included — that job reports to Slack and does "
         "not feed this check. Full inventory: "
@@ -344,7 +408,12 @@ def main():
     expected = load_expected(sim_yaml, config)
     failed_rows = parse_failed(detail)
     verdict, passed, failed = classify(expected, failed_rows, conclusion, detail)
-    report = build(mapping, expected, passed, failed, verdict)
+    suites = parse_junit_dir(_env("TEST_REPORTS_DIR", ""))
+    if suites:
+        t = suite_totals(suites)
+        print(f"read {t['suites']} test suite(s) from TEST_REPORTS_DIR: "
+              f"{t['passed']} passed, {t['failed']} failed, {t['skipped']} skipped")
+    report = build(mapping, expected, passed, failed, verdict, suites)
 
     meta = {
         "version": version,

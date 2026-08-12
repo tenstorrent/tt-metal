@@ -1,28 +1,21 @@
 #!/usr/bin/env python3
 """File one RELEASE Jira issue per *relevant* failed RTL sim test.
 
-Reads the per-test failure detail the sim polling agent embeds in the
-"RTL Sim CI test" GitHub check output, keeps only the tests listed in a
-relevance mapping, and files (or de-dupes onto) one Jira issue per relevant
-failed test -- so if three relevant tests fail, three tickets are filed/updated.
+Reads the per-test detail from the "RTL Sim CI test" check output, keeps only the
+tests listed in the relevance mapping, and files (or de-dupes onto) one issue per
+relevant failed test. A test is (config, group, filter, runner); an omitted field
+in a mapping entry is a wildcard. Each gets a stable dedup label so reruns
+comment instead of opening duplicates.
 
 Environment:
   RTL_SIM_DETAIL    check output.summary (+ text). Per-test lines look like:
                       - `[1x3] unit_tests_api --gtest_filter=Foo.Bar`
                       - `[2x3] models/demos/.../test_add.py::test_foo`
-  RTL_SIM_SHA       commit the check ran on                        (optional)
-  RTL_SIM_URL       link to the sim results (check html_url)       (optional)
-  RTL_SIM_RUN_URL   link to the release workflow run               (optional)
-  RTL_SIM_MAP       path to the relevance-mapping JSON
-                    (default: <this dir>/ai_ip_tests.json)
-  JIRA_BASE_URL / JIRA_USER_EMAIL / JIRA_API_TOKEN / JIRA_PROJECT_KEY  (required)
-  JIRA_ISSUE_TYPE   issue type name                                (default: Bug)
-  JIRA_DRY_RUN      when truthy, print instead of calling Jira
-
-A failed test is identified by (config, group, filter, runner) and is "relevant"
-when the mapping has an entry whose stated fields all match (an omitted field is
-a wildcard). Each relevant test gets a stable per-test dedup label so it owns one
-issue and later releases comment on it instead of opening duplicates.
+  RTL_SIM_SHA / RTL_SIM_URL / RTL_SIM_RUN_URL                        (optional)
+  RTL_SIM_MAP       relevance mapping   (default: ./ai_ip_tests.json)
+  JIRA_BASE_URL / JIRA_USER_EMAIL / JIRA_API_TOKEN / JIRA_PROJECT_KEY (required)
+  JIRA_ISSUE_TYPE   issue type name                              (default: Bug)
+  JIRA_DRY_RUN      print instead of calling Jira
 """
 import json
 import os
@@ -30,13 +23,8 @@ import re
 
 from create_jira_issue import _env, _truthy, file_issue
 
-# One bullet per failed test. The config is always bracketed; what follows is
-# either a gtest binary + --gtest_filter=, or a pytest file path (+ optional
-# node id). The sim reporter currently renders every row with --gtest_filter=
-# regardless of runner, so a `.py` group may carry either separator -- treat the
-# group's extension, not the separator, as the runner signal.
-# - `[1x3] unit_tests_api --gtest_filter=RtlSimCheckOutput.DoesNotExist_ForcedFailure`
-# - `[2x3] models/demos/.../test_add.py::test_foo`
+# The sim reporter renders every row with --gtest_filter= regardless of runner,
+# so the group's extension, not the separator, decides the runner.
 LINE_RE = re.compile(r"\[([^\]]+)\]\s+(\S+?)(?:::(\S+)|\s+--gtest_filter=(\S+))?(?=[\s`]|$)")
 
 
@@ -45,17 +33,12 @@ def _slug(text):
 
 
 def parse_failed(detail):
-    """Return de-duplicated (config, group, filter, runner) tuples from the detail.
-
-    `filter` is "" for a whole-file pytest row (the yaml omits `filter`, so the
-    whole file runs). `runner` is "pytest" when the group is a .py path.
-    """
+    """De-duplicated (config, group, filter, runner) tuples from the detail."""
     seen, out = set(), []
     for m in LINE_RE.finditer(detail or ""):
         config, group, node_id, gtest_filter = (g.strip("`") if g else g for g in m.groups())
         runner = "pytest" if group.endswith(".py") else "gtest"
-        # A gtest row without --gtest_filter= is not a test line (e.g. prose that
-        # happens to start with a bracketed word); skip it.
+        # No --gtest_filter= means it is prose, not a test line.
         if runner == "gtest" and not gtest_filter:
             continue
         key = (config, group, node_id or gtest_filter or "", runner)
@@ -73,13 +56,7 @@ def format_test(config, group, filt, runner):
 
 
 def _filter_matches(want, filt):
-    """True when the mapped filter matches the failed row's filter.
-
-    `back2back: true` entries in the quasar yaml are merged by the sim CI into a
-    single ':'-joined gtest filter, so one failed row can stand for a batch of
-    tests. Treat the batch as matching if any component matches: at release time
-    a red batch containing a watched test has to be looked at either way.
-    """
+    """Match the mapped filter, or any component of a ':'-joined back2back batch."""
     return want == filt or want in filt.split(":")
 
 
@@ -155,9 +132,7 @@ def main():
         print(result)
         filed += 1
 
-    # Safety net: the check was red but carried no parseable per-test detail
-    # (e.g. the sim pipeline has not forwarded it, or an infra failure). File one
-    # aggregate ticket so the failure is never silently dropped.
+    # Red but no parseable detail: one aggregate ticket so it is not lost.
     if not failed:
         print("no per-test lines in check detail; filing one aggregate ticket")
         print(
