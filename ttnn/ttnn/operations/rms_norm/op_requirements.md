@@ -322,7 +322,7 @@ would become ~1.3 µs on every core's post-mcast path, so it only wins if the ap
 I did not take either: both are new schemes with their own precision/serialization questions, and
 this phase's named lever (the combine topology) is landed and measured.
 
-### [ ] Refinement 4 — Speed up the prefill (bandwidth-bound) profiles
+### [x] Refinement 4 — Speed up the prefill (bandwidth-bound) profiles
 
 **Type**: perf
 
@@ -352,6 +352,62 @@ measured 4–8-tile sweet spot for the perf shapes (`C` = 11–112) but **below*
 shapes (`C` = 2–3 on e.g. `(99991, 64)`, `(1,1,3232,96)`); batching several tile-rows behind one
 barrier requires raising `output_cb_depth`, which is one host constant. That is L1-for-overlap, so
 measure it against the block-size co-tune rather than stacking both blind.
+
+**Outcome**: **`(1,1,8192,1024)` 100047 → 91157 ns (1.098×)** and **`(1,1,8192,2304)` 218643 →
+196134 ns (1.115×)** at the pinned config (bf16 / TILE / INTERLEAVED / gamma bf16 TILE /
+`fp32_dest_acc_en=False` / HiFi2, blackhole_p150b) — both now clear their `achievable_ns`
+(96744 / 211345), which neither did before. `(1,1,8192,5120)` 425780 → 421220 and
+`(1,1,8192,7168)` 588950 → 589550 are unchanged within noise. Two collateral shapes also improved
+(`(3,1,736,5119)` 155493 → 135613, 1.147×; `(1,1,4096,4096)` 195524 → 184774, 1.058×); nothing
+measured slower.
+I began by **classifying the bound with a full ablation** rather than turning the named knobs, and
+that redirected the phase. Stubbing the payloads one at a time (switches kept in the kernels at 0):
+baseline 100047/218643/425780/588950 → input read stubbed 71803/153281/312564/439221 → output write
+stubbed 74229/157832/287079/421081 → both DRAM legs stubbed 30508/64558/99126/134253 → apply math
+also stubbed 21390/45241/62428/83047. So the DRAM contribution is **483/490/514/517 GB/s over 2N
+bytes — the stream is already at DRAM peak**, there is no bandwidth to recover, and the two named
+bandwidth knobs cannot help. What *is* recoverable is that per-core **compute is 23–30 % of the wall
+and essentially ADDITIVE with the DRAM stream** (near-zero overlap), so the wall is the *busiest
+core's* tile count. The Goal's own "check the tile-row imbalance" pointer turned out to be the right
+target for the wrong reason: I first tested it directly with perfectly-balanced row twins (7040 and
+10560 rows at `W = 1024`, 8800 at `W = 7168`) and balance alone moved **nothing** (328.6 / 361.4 /
+403.6 GB/s against the imbalanced 336.2 / 394.5) — it is not a bandwidth effect. It is a
+critical-path effect, and the lever that lands it is `_admissible_by_balance`: among splits that
+tie on occupancy, keep only those within `BALANCE_SLACK_PCT = 15 %` of the shortest
+`max_tiles_per_core`, gated on `C ≥ MIN_CORE_W_TILES = 16`, then let the Phase 0 `−G` tiebreak
+choose. That takes `G` 1 → 2 on the two shapes above (55 row-groups, 5-vs-4 instead of 3-vs-2,
+`R` 3 → 5 and 2 → 4). The band is deliberately **not** a score key: minimising
+`max_tiles_per_core` outright picks `G = 11` (72 tiles vs `G = 2`'s 80) and measures **25 % worse**
+at `W = 1024` (123542 ns), because those 8 tiles cost 5 combine rounds on an 11-core group and a
+6 KiB per-tile-row DRAM run — which is also where `MIN_CORE_W_TILES` comes from (`double_buffer`'s
+4–8-tile plateau, read off the geometry). Blast radius surveyed over 31 shapes: 4 change geometry,
+all 4 measured faster; every decode and every narrow-hidden shape is byte-identical.
+**Both named knobs measured NULL and are kept at their byte-identical defaults**, now as genuinely
+*live* knobs — `_DEPTH_LADDER` became `_depth_ladder()` because a constant tuple had frozen
+`INPUT_CB_DEPTH`'s import-time value into the residency solve's default argument, so re-tuning the
+depth would have been allocated without being solved for. `MIN_PIPELINE_BLOCKS` 1/2/3/4 re-measured
+at `fp32_dest_acc_en=False` **and** at the new geometry: 92796/91009/94927/92082 (1024),
+198618/197725/195813/196209 (2304), 423492/424718/419275/424435 (5120),
+593148/595673/589124/587184 (7168) — flat, as the verifier notes predicted, and now for the
+measured reason (the read is not the un-overlapped stage). `(input_cb_depth, output_cb_depth)` over
+{(2,2),(2,3),(2,4),(3,2),(3,3),(4,4)}: every shape's best is within 1.8 % of (2,2) and the winner
+differs per shape ((3,3) at 1024, (3,2) at 2304, (2,4) at 5120, (2,3) at 7168) — noise, not signal.
+The writer's TILE drain already batches `C = 16…112` tiles per barrier, an order above
+`double_buffer`'s plateau, so the notes' "batch several tile-rows behind one barrier" has nothing
+left to buy on these shapes.
+**What binds now, and what I did not do.** The wall is `bytes/500 GB/s + per-core compute`, and the
+compute term is three block-wide FPU passes: `sumsq` (`x·x`), `scale` (`x·rstd`), `gamma`
+(`normed·γ`), plus the `cb_normed` round trip between the last two. Perfect DRAM/compute overlap
+would be worth another 1.25–1.49×. The next lever I would try is design lamp **P4** — fuse
+`scale_block` and `gamma_block` into one DEST window, which deletes one of the three passes *and*
+`cb_normed`'s whole-block L1 write+read. It needs two pieces I judged too risky for the remaining
+budget: `DestReuseBinary` has **no broadcast-dim parameter**, so gamma must first be expanded from
+its row-0-valid form to full tiles (once per kernel, `C` tile-ops, against `rows·C` saved per
+block — net ≈ 3 % of the wall on these shapes), and dest-reuse routes DEST through a Src register
+at bf16, which is exactly `cb_normed`'s format for a bf16 input but a real precision loss for
+`float32`, so the path would have to be dtype-gated. `compute_fusion` also measured FPU-consumer
+dest-reuse at 0.94× / 0.82× *isolated*, so a ~3 % predicted win against a measured-negative
+primitive is not a bet worth making blind. Recorded, not filed as a follow-up.
 
 ### [ ] Refinement 5 — Speed up the sharded perf geometries
 

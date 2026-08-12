@@ -360,3 +360,110 @@
   the zero-copy shard assertion and the chunking knob. The harness itself now runs the **exact**
   pinned perf config (`fp32_dest_acc_en=False`), which Refinement 1 unblocked and which it was still
   proxying at `True`.
+
+## Refinement 4 — Speed up the prefill (bandwidth-bound) profiles
+
+- **Date**: 2026-08-12
+- **What was done**: one lever landed — a **critical-path admissibility band** on the work split
+  (`_admissible_by_balance` in `rms_norm_program_descriptor.py`) — plus two named knobs re-measured
+  and kept at their byte-identical defaults. No kernel *logic* changed; the diff is the host
+  selection function, two new host constants, and a small DRY fix.
+  - **The ablation came first, and it redirected the phase.** The heading is named
+    "bandwidth-bound", so I classified the bound before touching a knob, by stubbing each payload
+    while keeping every barrier and CB handshake (the three `RMSN_ABLATE_*` switches, left in the
+    kernels at `0`, i.e. compile-time inert):
+
+    | (1,1,8192,W) | W=1024 | W=2304 | W=5120 | W=7168 |
+    |---|---|---|---|---|
+    | baseline | 100047 | 218643 | 425780 | 588950 |
+    | input read stubbed | 71803 | 153281 | 312564 | 439221 |
+    | output write stubbed | 74229 | 157832 | 287079 | 421081 |
+    | both DRAM legs stubbed (compute only) | 30508 | 64558 | 99126 | 134253 |
+    | + apply math stubbed (floor) | 21390 | 45241 | 62428 | 83047 |
+
+    `baseline − compute_only` gives **483 / 490 / 514 / 517 GB/s over 2N bytes**: the DRAM stream is
+    already at peak, so there is no bandwidth to recover and neither named bandwidth knob can help.
+    What *is* recoverable: **per-core compute is 23–30 % of the wall and essentially ADDITIVE with
+    the DRAM stream** (near-zero overlap), so the wall is the *busiest core's* tile count. The
+    single-leg ablations are also **super-additive** (149.7 + 167.9 µs < 454.7 µs at W=7168) — the
+    read and write streams contend with each other, which is why removing either alone under-counts.
+  - **The Goal's "tile-row imbalance" pointer was the right target for the wrong reason.** I tested
+    it directly first, with no code change, by profiling perfectly-balanced row twins of each perf
+    shape (7040 and 10560 rows at W=1024 — 220 and 330 tile-rows over 110 groups, exactly 2 and 3
+    each — and 8800 rows at W=7168): 328.6 / 361.4 / 403.6 GB/s against the *imbalanced* 336.2 /
+    394.5. Balance alone moves **nothing** as a bandwidth effect. It is a **critical-path** effect,
+    which the ablation is what explains.
+  - **The lever.** `row` splits in whole TILE-ROWS, so 256 tile-rows over 110 row-groups is 3-vs-2
+    and the critical core carries 1.29× the mean. Splitting `hidden` as well re-quantises the row
+    split finely (`G = 2` ⇒ 55 groups ⇒ 5-vs-4 ⇒ 1.07×) at the price of one combine round per block
+    and a narrower per-core DRAM run. `_admissible_by_balance` keeps, among the candidates that tie
+    on occupancy, only those whose `max_tiles_per_core = core_row_tiles · C` is within
+    `BALANCE_SLACK_PCT = 15 %` of the best — and only among those with `C ≥ MIN_CORE_W_TILES = 16`.
+    The Phase 0 keys (`−G`, then `R`) choose among the survivors, unchanged.
+  - **Why a slack BAND and not a score key** (this is the whole design of the lever): minimising
+    `max_tiles_per_core` outright picks the *widest* group and loses badly. Measured by forcing `G`
+    with the new `MIN_W_GROUP_SIZE` sweep handle:
+
+    | shape | G=1 | G=2 | G=5 | G=10 | G=11 |
+    |---|---|---|---|---|---|
+    | (1,1,8192,1024) | 99123 | **91316** | 99687 | 103695 | 123542 |
+    | (1,1,8192,2304) | 214959 | **196059** | 208107 | 205636 | 214383 |
+    | (1,1,8192,5120) | n/a (L1) | 423343 | 437224 | 426409 | 415553 |
+    | (1,1,8192,7168) | n/a (L1) | 591909 | 588487 | 600031 | 584071 |
+
+    `G = 11` has the *shortest* critical path at W=1024 (24 tile-rows × C=3 = 72 tiles, against
+    `G = 2`'s 80) and is **25 % slower**, because those 8 tiles are bought with 5 combine rounds on
+    an 11-core group and a 6 KiB per-tile-row DRAM run. `MIN_CORE_W_TILES` is that second cost read
+    off the geometry: `C` *is* the reader's per-tile-row DRAM run and the writer's per-barrier batch,
+    and `double_buffer`'s measured plateau is 4–8 tiles. The admissible window for the slack is
+    [11.2 %, 20 %) (below 11.2 % only `G=11` survives at W=1024; at 20 % `G=1` re-enters at W=2304
+    and wins on `−G` again) — 15 % is its midpoint.
+  - **Two knobs re-measured and kept at their defaults, as measured nulls.** `MIN_PIPELINE_BLOCKS`
+    1/2/3/4, now at `fp32_dest_acc_en=False` *and* at the new geometry (the verifier notes asked for
+    exactly this re-measurement): 92796/91009/94927/92082 · 198618/197725/195813/196209 ·
+    423492/424718/419275/424435 · 593148/595673/589124/587184 — flat, and now for the *measured*
+    reason (the read is not the un-overlapped stage; the compute is).
+    `(input_cb_depth, output_cb_depth)` over {(2,2),(2,3),(2,4),(3,2),(3,3),(4,4)}: every shape's
+    best is within 1.8 % of (2,2) and the winner differs per shape — noise, not signal. The writer's
+    TILE drain already batches `C = 16…112` tiles per barrier, an order above the plateau, so the
+    notes' "batch several tile-rows behind one barrier" has nothing left to buy here.
+  - **DRY fix the sweep exposed**: `_DEPTH_LADDER` was a module constant built at import, so
+    `INPUT_CB_DEPTH`'s import-time value was frozen into the residency solve's *default argument*.
+    Re-tuning the depth would then have been **allocated without being solved for** (a silent L1
+    overrun). It is now `_depth_ladder()`, rebuilt per call, and the two solve entry points resolve
+    `depths=None` internally — so both depths are genuinely live knobs.
+- **Accuracy achieved**: unchanged and unaffected — the band changes only which `(G, C, R)` a shape
+  is computed with, and both regimes were already exercised. `test_rms_norm_perf`'s PCC gate (0.995)
+  holds on all 8 perf shapes; golden `-m perf` 13/13, `-m pad_poison` 24/24 (so the ragged-hidden
+  mask and the true-`W` divisor survive the geometry change), the `1x1x64x128` cartesian slice
+  165/165 with 39 xfailed and no xpass drift.
+- **Golden test progress**: `test_op_loose` **381/384** — byte-for-byte the same 3 failures
+  Refinement 2b recorded and Refinement 3 confirmed (two `W = 11008` TILE HEIGHT cells +
+  `13x777x1023` WIDTH, all three the documented capacity limit), so no regression. Unit directory
+  green (266 + sharded/precision + 114 perf-file cases).
+- **Issues encountered**: none of substance. Two free failures: the first depth-sweep test
+  monkeypatched `_DEPTH_LADDER` after I had replaced it with a function (`AttributeError`), and the
+  first ablation runs collected only one case each because `run_safe_pytest.sh` appends `-x` and an
+  ablated kernel fails its PCC check — `--run-all` fixes it.
+- **What is left (a finding, not a queued task)**: the wall is now
+  `bytes/500 GB/s + per-core compute`, and perfect DRAM/compute overlap would be worth another
+  1.25–1.49×. The compute term is three block-wide FPU passes — `sumsq` (`x·x`), `scale`
+  (`x·rstd`), `gamma` (`normed·γ`) — plus `cb_normed`'s whole-block round trip between the last
+  two. The next lever is design lamp **P4**: fuse `scale_block` and `gamma_block` into one DEST
+  window, deleting a pass *and* `cb_normed`. I did not take it: `DestReuseBinary` has **no
+  broadcast-dim parameter**, so gamma would first have to be expanded from its row-0-valid form to
+  full tiles (once per kernel, `C` tile-ops against `rows·C` saved per block ≈ 3 % of the wall), and
+  dest-reuse routes DEST through a Src register at bf16 — exactly `cb_normed`'s format for a bf16
+  input, but a real precision loss for `float32`, so the path needs a dtype gate. `compute_fusion`
+  also measured FPU-consumer dest-reuse at 0.94× / 0.82× *isolated*, so a ~3 % predicted win
+  against a measured-negative primitive was not worth the remaining budget. See the `**Outcome**`
+  line in `op_requirements.md`.
+- **Tests added**: `test_rms_norm_perf.py` grows four sweeps/guards, all reusing the existing
+  `test_rms_norm_perf` body — `test_rms_norm_perf_row_balance` (perfectly-balanced row twins, the
+  measurement that refuted the imbalance-as-bandwidth hypothesis),
+  `test_rms_norm_perf_wgroup_min` (the `MIN_W_GROUP_SIZE` sweep that produced the G table above),
+  `test_rms_norm_perf_cb_depths` (the `(input, output)` depth co-tune), and
+  `test_rms_norm_perf_balance_collateral` (the two non-perf shapes whose geometry the band changes,
+  measured `phase0` vs `banded` in one run: `(3,1,736,5119)` 155493 → 135613, `(1,1,4096,4096)`
+  195524 → 184774 — both faster). Kernel-side, the three `RMSN_ABLATE_*` compile-time switches are
+  left in place at `0`: they are inert, and they are the harness that produced the table above.

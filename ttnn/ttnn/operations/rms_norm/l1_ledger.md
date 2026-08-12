@@ -335,3 +335,50 @@ the measurement showed to be the binding term (3630 ns of a 12467 ns decode op a
 The prefill rows are untouched: the score ties on occupancy for every `G` that fills the grid and
 the `−G` tiebreak still takes the smallest, so the cap was never binding there (measured: 99 559 /
 212 595 / 425 990 / 592 081 ns against 103 076 / 220 005 / 425 343 / 591 707 before).
+
+---
+
+## Refinement 4 deltas — the critical-path admissibility band
+
+**No CB is added, removed or resized.** The inventory above is unchanged; every `Num Pages`
+expression still reads `R`, `C`, `G`/`S1`, `S2` and the depth knobs. What changed is which
+`(G, C, R)` the selection function *picks* for a shape whose `row` split leaves a materially
+unbalanced critical path — `_admissible_by_balance`, gated by `BALANCE_SLACK_PCT = 15` and
+`MIN_CORE_W_TILES = 16`. Because the per-core footprint is a function of `(C, G, R)` and every
+candidate the band chooses among **already cleared the residency solve**, the L1 accounting
+needs no new row: the band can only ever pick a geometry that fits.
+
+Two second-order footprint consequences, both favourable, both already expressed by the table:
+
+* `C` halves (or better) wherever the band fires, so `cb_input_tiles` (`depth·R·C`), `cb_normed`
+  (`R·C`), `cb_output_tiles` (`depth·C`) and `cb_gamma_tiles` (`C`) all shrink per tile-row —
+  which is what lets the solve return a **coarser** `R` (`(1,1,8192,1024)`: `R` 3 → 5,
+  `(1,1,8192,2304)`: 2 → 4). Coarser `R` is fewer combine rounds, i.e. the knob moving in the
+  direction `op_design.md` wants.
+* `cb_stat_gather` grows from `R·1` to `R·G`, i.e. from `R` to `2R` fp32 tiles at `G = 2` — 4 KiB
+  extra per tile-row against the ~64 KiB per tile-row the block CBs give back.
+
+### Data-movement budget — updated selections
+
+Activation crossings are **unchanged in kind** (input 1×, output 1×; 0× on a resident shard).
+`gamma` improves: it crosses DRAM `num_row_groups ×`, and the band *halves* `num_row_groups` on
+the shapes where it fires, because a group is now 2 cores instead of 1.
+
+| Shape | `G` (was) | row-groups (was) | `C` (was) | `R` (was) | blocks/core (was) | cores | DRAM crossings | Cross-core per block |
+|-------|-----------|------------------|-----------|-----------|-------------------|-------|----------------|----------------------|
+| `(1,1,8192,1024)` prefill | **2** (1) | **55** (110) | **16** (32) | **5** (3) | 1 (1) | 110 | in 1×, out 1×, gamma **55×** (was 110×) | `1·R` fp32 tile gathered + `R` multicast to 2 |
+| `(1,1,8192,2304)` prefill | **2** (1) | **55** (110) | **36** (72) | **4** (2) | 2 (2) | 110 | in 1×, out 1×, gamma **55×** (was 110×) | `1·R` gathered + `R` multicast to 2 |
+| `(1,1,8192,5120)` prefill | 2 | 55 | 80 | 1 | 5 | 110 | unchanged | unchanged |
+| `(1,1,8192,7168)` prefill | 2 | 55 | 112 | 1 | 5 | 110 | unchanged | unchanged |
+| every `(1,1,32,W)` decode | unchanged | unchanged | unchanged | unchanged | unchanged | unchanged | unchanged | unchanged (the band never fires: one candidate survives the occupancy key) |
+
+So the total DRAM bytes **fall** on the two shapes that moved — by `55 · W · 2` bytes of gamma
+(0.11 MiB at `W = 1024`) — while the activation traffic, which is 99.9 % of the total, is
+untouched. The measured win (1.098× / 1.115×) is not that saving; it is the shorter critical
+path (see the changelog), and the gamma saving is incidental.
+
+**Statistics traffic appears where there was none.** At `G = 1` the combine degenerates to a
+local copy; at `G = 2` each block really unicasts `R` fp32 tiles to the partner and multicasts
+`R` back. That is `2·R·4096` bytes per block per group — 40 KiB per block at `R = 5` — against
+the ~2.6 MiB of activation bytes the same block moves, i.e. 1.5 %. It is the cost the band pays
+and the measurement says it is worth it.
