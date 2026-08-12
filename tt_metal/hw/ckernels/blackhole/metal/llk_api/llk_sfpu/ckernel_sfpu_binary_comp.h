@@ -33,9 +33,14 @@ inline constexpr bool unsupported_fp32_compare_v = false;
 // implementation: |a|+|b| folds ±0/subnormals together (sum == 0) and detects NaN
 // (as<vInt>(sum) > +inf bits). dst_reg[] uses sfpi row units (32/tile) vs the raw 64.
 //
-// NOTE: the fp32 comparison paths have no reliable tt-llk python coverage — the float
-// comparison suite (test_sfpu_binary_float) disables Lt/Gt/Le/Ge/Eq/Ne because the
-// generated stimuli produce near-ties. Validate at the ttnn level.
+// NOTE: sfpi has no total-order float compare. It lowers every vFloat relational
+// operator to SFPMAD (a - b) followed by SFPSETCC on the sign, where the raw-TTI
+// original used SFPGT/SFPLE, which compare the sign-magnitude bit patterns directly.
+// The equality path below therefore compares bit patterns rather than subtracting.
+// The two ordered paths still subtract, which is exact except when a - b underflows
+// into the flushed denormal range: operands closer together than 2^-126 compare as
+// equal. That window is why test_sfpu_binary_float still disables Lt/Gt/Le/Ge, and
+// closing it needs either an sfpi total-order compare or a return to raw SFPGT/SFPLE.
 constexpr int FP32_INF_BITS = 0x7F800000;
 constexpr std::uint32_t dst_tile_size_sfpi_comp = 32;
 
@@ -55,8 +60,12 @@ inline void calculate_binary_comp_fp32_equal(
         sfpi::vInt sum_bits = sfpi::as<sfpi::vInt>(sum);
         sfpi::vFloat result = default_result;
 
-        // total-order a == b (a <= b && b <= a)
-        v_if(a <= b && b <= a) { result = equal_result; }
+        // Total-order a == b, tested on the raw bit patterns rather than as
+        // (a <= b && b <= a). sfpi lowers vFloat compares to a subtract plus a
+        // sign check, so the pair-of-inequalities form evaluates inf == inf via
+        // inf - inf = NaN and answers "unordered" for two identical operands.
+        // Integer equality is exact under wraparound and needs no such guard.
+        v_if(sfpi::as<sfpi::vInt>(a) == sfpi::as<sfpi::vInt>(b)) { result = equal_result; }
         v_endif;
         // |a|+|b| == 0 treats all ±0/subnormals as equal
         v_if(sum == 0.0f) { result = equal_result; }
@@ -167,32 +176,46 @@ inline void calculate_binary_comp_int32(
             RELATIONAL_OP == SfpuType::ge,
         "Supported operation types: lt, gt, le, ge");
 
-    // INT32 load layout converts Dest sign-magnitude <-> 2's-complement, so the loaded
-    // vInt lanes are true 2's-complement and sfpi's signed comparisons order them correctly.
+    // Do NOT write this as v_if(a < b). sfpi lowers a signed vInt compare to a plain
+    // SFPIADD subtract with the condition code taken from the sign of the difference,
+    // which wraps whenever the operands span the full int32 range: INT32_MAX - (-1)
+    // is 0x80000000, so INT32_MAX > -1 answers false. The branchless fold below is the
+    // overflow-safe form introduced by #27829 (lt/gt) and #28397 (ge/le); it compiles to
+    // the same nine instructions as the raw-TTI sequence it replaces.
+    //
+    // When the signs of a and b disagree, the top bit of a ^ b is set and OR-ing it in
+    // forces the answer to come from the sign of b (LT) or a (GE). When they agree,
+    // a - setsgn(b, sign) cannot overflow and its own sign is the answer.
+    constexpr bool use_ge = (RELATIONAL_OP == SfpuType::le || RELATIONAL_OP == SfpuType::ge);
+    constexpr bool swap_operands = (RELATIONAL_OP == SfpuType::gt || RELATIONAL_OP == SfpuType::le);
+    constexpr int fold_sign = use_ge ? 1 : 0;
+
+    const std::uint32_t dst_index_a = swap_operands ? dst_index_in1 : dst_index_in0;
+    const std::uint32_t dst_index_b = swap_operands ? dst_index_in0 : dst_index_in1;
+
     // dst_reg[] indexes in sfpi row units (32/tile), unlike the raw TT_SFPLOAD immediate (64).
     constexpr std::uint32_t dst_tile_size_sfpi = 32;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vInt a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
-        sfpi::vInt b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
-        sfpi::vInt result = 0;
+        sfpi::vInt a = sfpi::dst_reg[dst_index_a * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
+        sfpi::vInt b = sfpi::dst_reg[dst_index_b * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
 
-        if constexpr (RELATIONAL_OP == SfpuType::lt) {
-            v_if(a < b) { result = 1; }
-            v_endif;
-        } else if constexpr (RELATIONAL_OP == SfpuType::gt) {
-            v_if(a > b) { result = 1; }
-            v_endif;
-        } else if constexpr (RELATIONAL_OP == SfpuType::le) {
-            v_if(a <= b) { result = 1; }
-            v_endif;
-        } else if constexpr (RELATIONAL_OP == SfpuType::ge) {
-            v_if(a >= b) { result = 1; }
-            v_endif;
+        sfpi::vInt fold = a - sfpi::as<sfpi::vInt>(sfpi::setsgn(sfpi::as<sfpi::vUInt>(b), fold_sign));
+
+        // Accumulate into whichever operand dies last, so no copy is needed.
+        if constexpr (use_ge) {
+            b = b ^ a;
+            b = b | fold;
+            a = a ^ b;
+        } else {
+            a = a ^ b;
+            a = a | fold;
+            a = a ^ b;
         }
 
-        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>() = result;
+        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>() =
+            sfpi::as<sfpi::vInt>(sfpi::as<sfpi::vUInt>(a) >> 31);
         sfpi::dst_reg++;
     }
 }
