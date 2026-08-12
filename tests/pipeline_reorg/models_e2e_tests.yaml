@@ -983,14 +983,8 @@
   team: models
 
 # ── Mochi (TT-DiT) ─────────────────────────────────────────────────
-#
-# One entry across both SKUs: the mesh configs carry
-# require_exact_physical_num_devices, so each machine selects its own DiT/VAE
-# pairing and skips the rest, and skip_if_unsupported_num_links drops configs
-# asking for more ethernet links than the machine has. No -k mesh filters.
 # test_tt_mochi_pipeline is named explicitly to keep the CPU-only diffusers
 # reference test in the same file out of CI.
-
 - name: TT-DiT Mochi e2e tests
   cmd: |
     unset HF_HUB_OFFLINE
@@ -1008,7 +1002,7 @@
       timeout: 55
       tier: 3
       release_ready: false
-  owner_id: U09ELB03XRU # Stephen Osborne
+  owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
 # ── Panoptic DeepLab ───────────────────────────────────────────────

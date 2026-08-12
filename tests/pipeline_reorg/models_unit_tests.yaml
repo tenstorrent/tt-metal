@@ -1105,15 +1105,6 @@
   team: models
 
 # ── Mochi (TT-DiT) ─────────────────────────────────────────────────
-#
-# One entry across both SKUs. The remaining -k terms select WHICH CASE runs
-# (op variant, channel/latent size, sequence length) — never which machine;
-# mesh selection is handled by require_exact_physical_num_devices and
-# skip_if_unsupported_num_links in the test files.
-# The legacy legs prefixed the VAE line with FAKE_DEVICE; nothing under
-# models/tt_dit reads it, and tt_transformers asserts it is unset, so it is
-# dropped rather than carried over.
-
 - name: TT-DiT Mochi unit tests
   cmd: |
     unset HF_HUB_OFFLINE
@@ -1130,7 +1121,7 @@
     wh_galaxy:
       timeout: 80
       tier: 3
-  owner_id: U09ELB03XRU # Stephen Osborne
+  owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
 # ============================================================================
