@@ -197,9 +197,18 @@ wrong file. **Cross-check the frame counts in the scorer's output against the ge
 catches a stale file instantly (`§6.32` is the time it didn't).
 
 WAVs land in `generated/`, gitignored — CC BY-NC derived, so they stay on the box. They are the only
-way to actually *hear* the model, and no metric substitutes for that. A ready-made sampler of the
-current build is `generated/SAMPLER_current_build.wav` (13 clips, 136 s); play with
-`ffplay -nodisp -autoexit`.
+way to actually *hear* the model, and no metric substitutes for that. The sampler **for this build**
+is `generated/SAMPLER_shipcheck.wav` (15 clips, 140.0 s), built by `tests/probes/make_sampler.py`
+from the `quality_shipcheck` run on `035983fef2`; play it with `ffplay -nodisp -autoexit`.
+
+**NOBODY HAS LISTENED TO IT YET** — see `§4`. Three of its clips are the deliberately adversarial
+fixture prompts and the index labels them so; `STATUS.md §3.2` records the fp32 CPU reference
+collapsing on the same text, so they are a model limitation, not a port defect.
+
+`make_sampler.py TAG` builds one from any tagged run — it only STITCHES existing wavs, so the tag
+must name a generation you actually ran. `SAMPLER_p150_HEAD.wav` is the older `§6.58` one on
+`1e778bc297`, which predates `§6.65` and `§6.67`; `SAMPLER_current_build.wav`, named in
+`STATUS.md §3`, is the N150-era pass and is no longer on the box at all.
 
 ---
 
@@ -213,7 +222,7 @@ current build is `generated/SAMPLER_current_build.wav` (13 clips, 136 s); play w
 | MOS long-form / min / mean | 4.6050 / 2.6597 / 3.9972 |
 | clicks / natural `[END_AUDIO]` | 52 / 30 |
 | utterance length ceiling | `max_seq_len`, holding prompt + frames; 2048 ≈ 136 s. Costs DRAM, not RTF (`§6.69`) |
-| listening pass | done on this build — `generated/SAMPLER_current_build.wav` |
+| listening pass | **NOT DONE — the last open quality question.** The sampler for this build is ready and unheard: `generated/SAMPLER_shipcheck.wav` (15 clips, 140 s). Every objective metric passes; naturalness has never been evaluated by a human on any p150 build |
 
 **"Long-form" means ≥100 frames — currently cases 2, 3 and 10.** Quote only those, always with the
 case list. **Case 0 includes kernel compilation (RTF ~1.8) and must be excluded.** Short cases are
