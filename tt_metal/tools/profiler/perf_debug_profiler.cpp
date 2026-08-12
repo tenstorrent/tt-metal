@@ -358,51 +358,55 @@ constexpr uint32_t kHsHead = 0, kHsTail = 16, kHsProbeF = 32, kHsProbeM = 48, kH
 
 // ---- DRISC SELF-PROFILING knobs -----------------------------------------------------------------------
 //
-// TT_METAL_PERF_DEBUG_DRISC_ZONES=N makes every drainer emit its OWN device zones, framed as worker spans and
+// TT_METAL_PERF_DEBUG_DRISC_ZONES=1 makes every drainer emit its OWN device zones, framed as worker spans and
 // pushed down the path it already owns, so they land in Tracy on their own per-core row beside the workers.
 // Unset or 0 is today's path bit for bit: every compile arg below is then 0 and the kernel's `if constexpr`
 // discards all of it, including the staging slot it would otherwise reserve.
 //
-// N is the MINIMUM SWEEPS BETWEEN CAPTURED SWEEPS, not "sample every Nth". The distinction is the whole design
-// (see the kernel): both roles are >99% idle, so a phase-based sample captures the idle poll loop and misses
-// every burst. The trigger is discovered WORK; N only spreads the captures across the run.
-uint32_t drisc_zones() {
-    static const uint32_t v = [] {
+// This TRACES rather than samples. Sampling was built first and rejected on use: at ~4.5% of busy sweeps a
+// drainer's row is a few disconnected zones whose gaps read as idle time when they are really uncaptured
+// sweeps. Every sweep inside an active window is now instrumented instead.
+bool drisc_zones() {
+    static const bool v = [] {
         const char* s = std::getenv("TT_METAL_PERF_DEBUG_DRISC_ZONES");
-        if (s == nullptr || *s == '\0' || *s == '0') {
-            return 0u;
-        }
-        const uint32_t n = static_cast<uint32_t>(std::strtoul(s, nullptr, 10));
-        return n == 0 ? 200u : n;  // bare "1" is legal (capture every busy sweep); a non-numeric value = 200
+        return s != nullptr && *s != '\0' && *s != '0';
     }();
     return v;
 }
 
-// Sparse IDLE-sweep samples, OFF by default. Turning them on scatters DRISC zones across the drainer's whole
-// residency (~190 ms) while the workload is a ~1.9 ms sliver, and -- because a filler's self frame is a real
-// frame its mover must ship -- manufactures mover credit-wait/write zones outside the workload window
-// entirely. Only useful when the question is specifically "what does an IDLE drainer cost per poll".
-// Returns the sweep period, or 0 for off.
-uint32_t drisc_zone_idle_every() {
+// How long, in MICROSECONDS of device wall clock, the capture window stays open past the last work seen. This
+// is what makes coverage contiguous across a burst instead of restarting per busy sweep, and what keeps the
+// drainer's ~99% idle residency (hundreds of ms to seconds, against a ~2 ms workload) out of the trace.
+// In cycles on the device; a filler idles at 8.5 us + a 12.7 us pacing gap, a mover at 0.7 us, so a hold
+// expressed in SWEEPS would mean two completely different durations on the two roles.
+uint32_t drisc_zone_hold_cycles() {
     static const uint32_t v = [] {
-        const char* s = std::getenv("TT_METAL_PERF_DEBUG_DRISC_ZONE_IDLE");
-        if (s == nullptr || *s == '\0' || *s == '0') {
-            return 0u;
-        }
-        const uint32_t n = static_cast<uint32_t>(std::strtoul(s, nullptr, 10));
-        return n != 0 ? n : drisc_zones() * 32u;  // "=1" means "use the default spacing", not "every sweep"
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_DRISC_ZONE_HOLD_US");
+        const uint32_t us = (s != nullptr && *s != '\0') ? static_cast<uint32_t>(std::strtoul(s, nullptr, 10)) : 500u;
+        return (us == 0 ? 500u : us) * 1350u;  // the drainer stamps with the 1.35 GHz Tensix wall clock
     }();
     return v;
 }
 
-// Frames of self capture per DRISC. A self frame is a whole 10,560 B slot of which only ring 0 is live, and
-// one instrumented busy filler sweep fills roughly two of them, so this is what stops the instrument from
-// out-shipping the payload. 64 frames is 676 KB against a filler's ~18.5 MB, i.e. ~3.6%, and still ~8k zones.
+// DETAIL LEVEL. 0 (default) = DRISC-SWEEP + DRISC-PACE only: the two depth-0 zones that account for a
+// drainer's whole cadence with no unexplained whitespace, at ~4 markers per sweep. 1 = also the per-batch
+// child phases (read / read-wait / proc / credit-wait / write / wr-barrier), ~100 markers per sweep.
+uint32_t drisc_zone_detail() {
+    static const uint32_t v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_DRISC_ZONE_DETAIL");
+        return (s != nullptr && *s != '\0') ? static_cast<uint32_t>(std::strtoul(s, nullptr, 10)) : 0u;
+    }();
+    return v;
+}
+
+// Frame budget per DRISC. With tracing this is a COVERAGE limit rather than a safety net: frames scale with
+// how long the drainer stays busy. At detail 0 a frame holds ~63 sweeps, so 256 frames is ~16,000 sweeps --
+// far more than a workload window needs. At detail 1 a frame holds ~2.5 sweeps, so the same budget is ~640.
 uint32_t drisc_zone_frames() {
     static const uint32_t v = [] {
         const char* s = std::getenv("TT_METAL_PERF_DEBUG_DRISC_ZONE_FRAMES");
-        const uint32_t n = (s != nullptr && *s != '\0') ? static_cast<uint32_t>(std::strtoul(s, nullptr, 10)) : 64u;
-        return n == 0 ? 64u : n;
+        const uint32_t n = (s != nullptr && *s != '\0') ? static_cast<uint32_t>(std::strtoul(s, nullptr, 10)) : 256u;
+        return n == 0 ? 256u : n;
     }();
     return v;
 }
@@ -1128,7 +1132,7 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
     // inside that loop: a drainer brought up before another would otherwise get a decoder sized too small and
     // silently drop the later drainer's frames (lane >= nl is a `continue`).
     const uint32_t self_core0 = static_cast<uint32_t>(num_cores);
-    const bool self_zones_on = drisc_zones() != 0 && drisc_zone_frames() != 0;
+    const bool self_zones_on = drisc_zones() && drisc_zone_frames() != 0;
     if (self_zones_on) {
         ctx.n_worker_cores = static_cast<uint32_t>(num_cores);
         ctx.nl = (static_cast<uint32_t>(num_cores) + ctx.n_drisc) * kNRisc;
@@ -1414,7 +1418,7 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
         // does not grow, the OFF build is untouched, and the only behavioural cost is that a MOVER's largest
         // batch drops from 7 frames to 6 (a filler's batch is bounded by kGenSlots = 3 either way, so it is
         // unaffected). That cost is real and is measured in FINDINGS rather than waved off.
-        const uint32_t self_frames_cap = drisc_zones() != 0 ? drisc_zone_frames() : 0u;
+        const uint32_t self_frames_cap = drisc_zones() ? drisc_zone_frames() : 0u;
         const uint32_t nstage_drain = (self_frames_cap != 0 && nstage >= 3) ? nstage - 1u : nstage;
         if (self_frames_cap != 0 && nstage < 3) {
             log_warning(
@@ -1807,11 +1811,11 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
                 // to a lane through one map keyed on exactly that. A DRISC guessing its own coordinates would
                 // be a second, silent way to get it wrong.
                 self_frames_cap != 0 ? 1u : 0u,
-                drisc_zones(),
+                drisc_zone_hold_cycles(),
                 (static_cast<uint32_t>(ctx.drisc_virtual[d].x) & 0xFFFFu) |
                     ((static_cast<uint32_t>(ctx.drisc_virtual[d].y) & 0xFFFFu) << 16),
                 self_frames_cap,
-                drisc_zone_idle_every()};
+                drisc_zone_detail()};
             const std::string kdrain = "tt_metal/tools/profiler/kernels/drisc_profiler_drain.cpp";
             auto drain_id =
                 tensix_drain ? CreateKernel(
@@ -2051,19 +2055,17 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
         log_info(
             tt::LogMetal,
             "[perf-debug profiler] Device {}: DRISC SELF-PROFILING on -- {} drainer cores get lanes [{},{}) "
-            "and their own Tracy rows | capture spacing >= {} sweeps, budget {} frames/DRISC ({:.0f} KB, "
-            "{} zones max) | idle-sweep samples {} | a drainer's staging slot count drops {} -> {} to make room",
+            "and their own Tracy rows | TRACING every sweep in a work-armed window (hold {} us past the last "
+            "work), detail {} | budget {} frames/DRISC ({:.0f} KB) | a drainer's staging slot count drops "
+            "{} -> {} to make room",
             device_id,
             ctx.n_drisc,
             self_core0 * kNRisc,
             ctx.nl,
-            drisc_zones(),
+            drisc_zone_hold_cycles() / 1350u,
+            drisc_zone_detail() == 0 ? "0 (SWEEP + PACE only)" : "1 (full per-batch phases)",
             drisc_zone_frames(),
             drisc_zone_frames() * slot_bytes_all / 1024.0,
-            drisc_zone_frames() * (kernel_profiler::PROFILER_L1_VECTOR_SIZE / 4),
-            drisc_zone_idle_every() != 0
-                ? fmt::format("every {} sweeps <<< these land OUTSIDE the workload window", drisc_zone_idle_every())
-                : std::string("OFF (every capture is work-triggered, so they line up with the cores)"),
             nstage_report,
             nstage_report > 0 ? nstage_report - 1 : 0);
     }
@@ -2579,6 +2581,7 @@ void PerfDebugProfiler::consumer_thread() {
             zone_names_[kernel_profiler::DRISC_ZONE_CREDIT_WAIT] = "DRISC-CREDIT-WAIT";
             zone_names_[kernel_profiler::DRISC_ZONE_WRITE] = "DRISC-WRITE";
             zone_names_[kernel_profiler::DRISC_ZONE_WR_BARRIER] = "DRISC-WR-BARRIER";
+            zone_names_[kernel_profiler::DRISC_ZONE_PACE] = "DRISC-PACE";
         });
         ZoneScopedNC("tracy-emit", 0x2980B9);  // blue: pushing this batch into Tracy -- the slow side (~0.8M
                                                // rec/s). When this saturates, the RING drops; it can no longer
@@ -3182,48 +3185,69 @@ void PerfDebugProfiler::stop() {
                 const uint32_t self_bytes = res[64] * 10560u;
                 log_info(
                     tt::LogMetal,
-                    "[perf-debug profiler] DRISC {} SELF-ZONES ({}): {} frames ({:.0f} KB, {:.2f}% of this "
-                    "drainer's {:.1f} MB egress) | {} sweeps captured of which {} DID WORK ({} frames went to "
-                    "idle samples) | {} rewound + {} abandoned (idle, discarded free) | {} sweeps skipped once "
-                    "the budget ran out | {} markers, {} words | publish cost {:.2f} ms ({:.2f}% of the run){}",
+                    "[perf-debug profiler] DRISC {} SELF-ZONES ({}, detail {}): TRACED {} of {} sweeps "
+                    "({:.1f}% of ALL sweeps, {} of them did work) across {} work window(s) | {} frames of a {} "
+                    "budget ({:.0f} KB, {:.2f}% of this drainer's {:.1f} MB egress) | {} markers, {} words, "
+                    "{:.1f} markers/sweep | publish cost {:.2f} ms ({:.2f}% of the run){}{}",
                     d,
                     res[48] == kRoleFiller ? "FILLER" : (res[48] == kRoleMover ? "MOVER" : "FULL"),
+                    res[86],
+                    res[66],
+                    res[4],
+                    res[4] ? 100.0 * res[66] / static_cast<double>(res[4]) : 0.0,
+                    res[67],
+                    res[68],
                     res[64],
+                    res[85],
                     self_bytes / 1024.0,
                     res[5] ? 100.0 * self_bytes / (static_cast<double>(res[5]) * 64.0) : 0.0,
                     (static_cast<double>(res[5]) * 64.0) / (1024.0 * 1024.0),
-                    res[66],
-                    res[67],
-                    res[86],
-                    res[68],
-                    res[85],
-                    res[69],
                     res[65],
                     res[73],
+                    res[66] ? static_cast<double>(res[65]) / res[66] : 0.0,
                     (static_cast<double>(c_self_cyc) / kCycPerUs) / 1000.0,
                     cyc ? 100.0 * static_cast<double>(c_self_cyc) / static_cast<double>(cyc) : 0.0,
-                    res[70] != 0 ? fmt::format(
-                                       " | TRUNCATED: {} captured sweeps ran past one ring and lost {} markers "
-                                       "off their tails (deliberate -- the bound is what keeps a captured sweep "
-                                       "from crossing the knee; the SWEEP zone is still closed)",
-                                       res[87],
-                                       res[70])
+                    // The budget is a COVERAGE limit now, so say when it bound: the row just ends, and a short
+                    // row is otherwise indistinguishable from a drainer that stopped having work to do.
+                    res[69] != 0 ? fmt::format(
+                                       "  <<< BUDGET EXHAUSTED after {} frames: {} later sweeps went untraced, "
+                                       "so this row ENDS EARLY rather than the drainer going idle. Raise "
+                                       "TT_METAL_PERF_DEBUG_DRISC_ZONE_FRAMES.",
+                                       res[64],
+                                       res[69])
+                                 : std::string(),
+                    res[70] != 0 ? fmt::format(" | {} markers LOST (a publish could not free the ring)", res[70])
                                  : std::string());
+                // Trace COMPLETENESS: every word written into the self ring must have been shipped. A shortfall
+                // is trace stranded in the ring at teardown, which no other counter reveals -- it just makes the
+                // Tracy row end early, indistinguishable from the drainer going quiet.
+                if (res[87] != res[73]) {
+                    log_warning(
+                        tt::LogMetal,
+                        "[perf-debug profiler] DRISC {} SELF-ZONES: {} of {} words shipped -- {} words ({} "
+                        "markers) of this drainer's own trace were STRANDED IN THE RING at teardown, so its "
+                        "Tracy row ends early.",
+                        d,
+                        res[87],
+                        res[73],
+                        res[73] - res[87],
+                        (res[73] - res[87]) / 2);
+                }
                 // A capture whose sweeps all turned out idle is a FAILED capture even though every count above
                 // looks healthy -- on a mover especially, since the credit wait that sets the knee only happens
                 // on a busy visit. Say so rather than let a plausible frame count stand in for coverage.
                 if (res[66] != 0 && res[67] == 0) {
                     log_warning(
                         tt::LogMetal,
-                        "[perf-debug profiler] DRISC {} SELF-ZONES: all {} captured sweeps were IDLE -- the "
-                        "capture contains no read/proc/credit-wait/write of consequence. The work-arm never "
-                        "fired; treat this drainer's zones as cadence only.",
+                        "[perf-debug profiler] DRISC {} SELF-ZONES: all {} traced sweeps were IDLE -- the window "
+                        "opened but nothing of consequence happened inside it. Treat this row as cadence only.",
                         d,
                         res[66]);
                 }
                 // The cross-check side: phase totals over EXACTLY the sweeps the zones describe, so summing
                 // zone durations per name out of the Tracy capture must reproduce these. See the kernel.
                 auto u64r = [&res](size_t i) { return (static_cast<uint64_t>(res[i + 1]) << 32) | res[i]; };
+                if (res[86] != 0) {
                 log_info(
                     tt::LogMetal,
                     "[perf-debug profiler] DRISC {} SELF-ZONES cross-check over {} fully-instrumented sweeps: "
@@ -3238,6 +3262,7 @@ void PerfDebugProfiler::stop() {
                     u64r(79) / kCycPerUs,
                     u64r(81) / kCycPerUs,
                     u64r(83) / kCycPerUs);
+                }
             }
             const uint32_t sweeps_busy = res[4] > res[20] ? res[4] - res[20] : 0;
             log_info(
