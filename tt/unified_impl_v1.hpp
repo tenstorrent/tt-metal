@@ -43,6 +43,44 @@ inline Block& Block::operator=(Block&& o) {
 }
 
 // ---------------------------------------------------------------------------
+// Accumulator
+// ---------------------------------------------------------------------------
+
+template <AccumulatorMode Mode>
+Accumulator<Mode>::Accumulator(const Storage& acc_storage, const Storage& out_storage) :
+    acc_storage(acc_storage), out_storage(out_storage) {}
+
+template <AccumulatorMode Mode>
+template <typename Node, typename Epilogue>
+Block Accumulator<Mode>::accumulate(const Node& node, bool finish, Epilogue epilogue) {
+    static_assert(is_fpu_fusion<Node>::value, "Accumulator drives FPU fusions");
+
+    if constexpr (std::is_same_v<Epilogue, std::nullptr_t>) {
+        Strategy<expr::kind_of_t<Node>>::template run<Mode>(node, acc_storage.cb_id, out_storage.cb_id, reload, finish);
+    } else {
+        // Apply the epilogue to a bare-chain node of the same geometry to
+        // recover just the ops it adds; those are the finish-only ones. The
+        // node's own chain stays per-step.
+        using Bare = MatmulNode<typename Node::geometry, expr::UnaryChain<>>;
+        using Fused = decltype(epilogue(std::declval<Bare>()));
+        static_assert(
+            is_fpu_fusion<Fused>::value,
+            "an epilogue must return an FPU fusion node -- it receives the matmul node and should "
+            "extend its chain, e.g. [](auto mm) { return relu(mm); }");
+        Strategy<expr::kind_of_t<Node>>::template run<Mode>(
+            node, acc_storage.cb_id, out_storage.cb_id, reload, finish, typename Fused::chain{});
+    }
+
+    reload = !finish;
+    return finish ? Block(out_storage) : Block(acc_storage);
+}
+
+template <AccumulatorMode Mode>
+void Accumulator<Mode>::clear() {
+    reload = false;
+}
+
+// ---------------------------------------------------------------------------
 // ComputeBlock
 // ---------------------------------------------------------------------------
 
