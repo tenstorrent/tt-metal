@@ -24,7 +24,6 @@
 #include <numeric>
 #include <set>
 #include <string>
-#include <system_error>
 #include <type_traits>
 #include <vector>
 #include <sys/mman.h>
@@ -962,15 +961,15 @@ TEST_F(MeshTensorPinnedMemoryBudgetTest, LargeReadOnlyFileBackedWriteUsesReadOnl
     file_name.push_back('\0');
     int writable_fd = mkstemp(file_name.data());
     ASSERT_NE(writable_fd, -1);
-    // Remove the file on every exit path. The explicit unlink below normally gets there first; this covers an
-    // ASSERT failure in between, which would otherwise abort the test body and leave 36 MiB on disk per run.
-    struct FileRemover {
-        std::string path;
-        ~FileRemover() {
-            std::error_code ec;
-            std::filesystem::remove(path, ec);
-        }
-    } file_remover{std::string(file_name.data())};
+    // The device-visible mapping has to come from a read-only descriptor: that is the shape real callers have (an
+    // mmap of a weights file opened O_RDONLY), and it is what clears VM_MAYWRITE so the mapping cannot be widened
+    // to writable behind the pin. Open it now, while the name still exists, and drop the name immediately -- the
+    // two descriptors keep the inode alive for the rest of the test, so no exit path, including an ASSERT failure
+    // below or a crash, can leave 36 MiB on disk. The file is still empty here; the ftruncate below extends the
+    // inode, which both descriptors see.
+    int read_only_fd = open(file_name.data(), O_RDONLY | O_CLOEXEC);
+    ASSERT_NE(read_only_fd, -1);
+    ASSERT_EQ(unlink(file_name.data()), 0);
 
     ASSERT_EQ(ftruncate(writable_fd, buffer_size), 0);
     void* writable_mapping = mmap(nullptr, buffer_size, PROT_READ | PROT_WRITE, MAP_SHARED, writable_fd, 0);
@@ -984,9 +983,6 @@ TEST_F(MeshTensorPinnedMemoryBudgetTest, LargeReadOnlyFileBackedWriteUsesReadOnl
     ASSERT_EQ(munmap(writable_mapping, buffer_size), 0);
     ASSERT_EQ(close(writable_fd), 0);
 
-    int read_only_fd = open(file_name.data(), O_RDONLY | O_CLOEXEC);
-    ASSERT_NE(read_only_fd, -1);
-    ASSERT_EQ(unlink(file_name.data()), 0);
     void* read_only_mapping = mmap(nullptr, buffer_size, PROT_READ, MAP_SHARED, read_only_fd, 0);
     ASSERT_NE(read_only_mapping, MAP_FAILED);
     ASSERT_EQ(close(read_only_fd), 0);
