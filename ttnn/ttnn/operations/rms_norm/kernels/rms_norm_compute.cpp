@@ -79,6 +79,12 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
+// TEMPORARY ablation switch (Refinement 4 measurement) — MUST be 0 in committed
+// code. 1 drops the apply pass's MATH (scale_block + gamma_block) while keeping
+// the CB handshakes on cb_output_tiles / cb_gamma_tiles, so the diff against the
+// baseline is the apply pass's compute contribution.
+#define RMSN_ABLATE_APPLY 0
+
 namespace {
 constexpr uint32_t cb_input_rm = 0;
 constexpr uint32_t cb_input_tiles = 1;
@@ -394,6 +400,20 @@ void kernel_main() {
                 ckl::DestAccumulation::Disabled,
                 ckl::TileOffset::Strided);
 
+#if RMSN_ABLATE_APPLY
+            // Payload stubbed, synchronization scaffolding intact.
+            if constexpr (HAS_GAMMA) {
+                cb_wait_front(cb_gamma_tiles, CB_CHUNK_TILES);
+            }
+            if constexpr (!OUT_STRIDED) {
+                // Per tile-row, matching the streaming quantum the writer waits on
+                // (cb_output_tiles holds only OUTPUT_CB_DEPTH * WC pages).
+                for (uint32_t r = 0; r < rows_t; ++r) {
+                    cb_reserve_back(cb_output_tiles, cols);
+                    cb_push_back(cb_output_tiles, cols);
+                }
+            }
+#else
             if constexpr (HAS_GAMMA) {
                 if constexpr (IS_RM_GAMMA && CHUNKED) {
                     // This chunk's gamma slice, re-fed by the reader per chunk.
@@ -440,6 +460,7 @@ void kernel_main() {
                     ckl::BinaryFpu<in_spec, rstd_spec, ckl::BinaryFpuOp::Mul, ckl::BroadcastDim::Col>{src},
                     ckl::PackTile<ckl::output(cb_output_tiles)>{});
             }
+#endif
 
             // ---------------- untilize_out_block (RM output only) ------------
             if constexpr (IS_RM_OUT) {

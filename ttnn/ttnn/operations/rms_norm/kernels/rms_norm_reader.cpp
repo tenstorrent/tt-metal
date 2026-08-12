@@ -74,6 +74,11 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
+// TEMPORARY ablation switch (Refinement 4 measurement) — MUST be 0 in committed
+// code. 1 drops the input DRAM read PAYLOAD while keeping every barrier and CB
+// handshake, so the diff against the baseline is the read's contribution.
+#define RMSN_ABLATE_INPUT_READ 0
+
 namespace {
 constexpr uint32_t cb_input_rm = 0;
 constexpr uint32_t cb_input_tiles = 1;
@@ -423,6 +428,7 @@ void kernel_main() {
             const uint32_t pages = rows_t * CB_W_TILES;
             cb_reserve_back(cb_input_tiles, pages);
             const uint32_t dst = get_write_ptr(cb_input_tiles);
+#if !RMSN_ABLATE_INPUT_READ
             for (uint32_t r = 0; r < rows_t; ++r) {
                 const uint32_t row_tile = row_tile_start + b * block_row_tiles + r;
                 const uint32_t base = row_tile * TENSOR_W_TILES + w_tile_start;
@@ -430,6 +436,7 @@ void kernel_main() {
                     noc_async_read_tile(base + c, acc_tiles, dst + (r * CB_W_TILES + c) * tile_bytes);
                 }
             }
+#endif
             // The whole block behind one barrier — never one barrier per tile.
             noc_async_read_barrier();
             cb_push_back(cb_input_tiles, pages);

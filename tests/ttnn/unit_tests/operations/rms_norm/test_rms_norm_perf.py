@@ -107,6 +107,39 @@ def test_rms_norm_perf_pipeline_blocks(device, rows, hidden, min_blocks, monkeyp
     test_rms_norm_perf(device, rows, hidden, 0)
 
 
+# --- Refinement 4: is the prefill wall DRAM bandwidth, or the row imbalance? ---
+#
+# The prefill profile is aggregate-DRAM-bandwidth bound, so the interesting
+# question is what fraction of the wall is the SELECTION's tile-row imbalance
+# rather than the DRAM itself: 256 tile-rows over 110 row-groups is 36 groups with
+# 3 and 74 with 2, so the critical-path core carries 3/(256/110) = 1.29x the
+# average and the last third of the op runs with only 36 of 110 cores demanding
+# DRAM.
+#
+# This sweep isolates that WITHOUT changing any code: each shape below is the same
+# hidden size at a row count that the SAME split divides EXACTLY (a perfectly
+# balanced twin), next to the 8192-row case that does not. Divide bytes by the
+# measured device-kernel ns to compare achieved GB/s directly.
+#
+#   W=1024 -> G=1, 110 row-groups: balanced at rows % (110*32) == 0
+#   W=7168 -> G=2,  55 row-groups: balanced at rows % ( 55*32) == 0
+
+
+@pytest.mark.parametrize(
+    "rows,hidden",
+    [
+        (7040, 1024),  # 220 tile-rows / 110 groups = 2 each, exact
+        (8192, 1024),  # 256 tile-rows / 110 groups = 3-vs-2  <-- the perf case
+        (10560, 1024),  # 330 tile-rows / 110 groups = 3 each, exact
+        (8800, 7168),  # 275 tile-rows /  55 groups = 5 each, exact
+        (8192, 7168),  # 256 tile-rows /  55 groups = 5-vs-4  <-- the perf case
+    ],
+    ids=lambda v: str(v),
+)
+def test_rms_norm_perf_row_balance(device, rows, hidden):
+    test_rms_norm_perf(device, rows, hidden, 0)
+
+
 # --- Refinement 3: the combine tree is structural, not numerical ---------------
 #
 # The two-stage grid combine and the flat root-gather produce the SAME numbers, so

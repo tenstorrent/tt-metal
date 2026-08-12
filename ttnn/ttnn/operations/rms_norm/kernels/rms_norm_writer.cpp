@@ -55,6 +55,11 @@
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 
+// TEMPORARY ablation switch (Refinement 4 measurement) — MUST be 0 in committed
+// code. 1 drops the output DRAM write PAYLOAD while keeping every barrier and CB
+// handshake, so the diff against the baseline is the write's contribution.
+#define RMSN_ABLATE_OUTPUT_WRITE 0
+
 namespace {
 constexpr uint32_t cb_zero_tile = 4;
 constexpr uint32_t cb_stat_partial = 7;
@@ -284,9 +289,11 @@ void kernel_main() {
                 const uint32_t src = get_read_ptr(cb_output_tiles);
                 const uint32_t row_tile = row_tile_start + b * block_row_tiles + r;
                 const uint32_t base = row_tile * TENSOR_W_TILES + w_tile_start;
+#if !RMSN_ABLATE_OUTPUT_WRITE
                 for (uint32_t c = 0; c < core_w; ++c) {
                     noc_async_write_tile(base + c, out_acc, src + c * out_tile_bytes);
                 }
+#endif
                 // One barrier per tile-row (core_w tiles), never per tile.
                 noc_async_write_barrier();
                 cb_pop_front(cb_output_tiles, CB_W_TILES);
