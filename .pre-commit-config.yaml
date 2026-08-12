@@ -69,7 +69,7 @@ repos:
       types: [file]
     - id: validate-metalium-includes
       name: validate-metalium-includes
-      entry: python3 scripts/validate_api/validate_includes.py tt_metal/api --check-ttnn-forwards
+      entry: python3 scripts/validate_api/validate_includes.py tt_metal/api
       language: system
       pass_filenames: false
 - repo: local

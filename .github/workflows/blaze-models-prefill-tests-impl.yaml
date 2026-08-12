@@ -31,7 +31,7 @@ on:
       resource-prefix:
         required: true
         type: string
-        description: "Unique prefix for allocation/environment names when multiple impl jobs share a run (e.g. module, sdpa-perf)"
+        description: "Unique prefix when multiple impl jobs share a run (e.g. module, sdpa-perf)"
       hang-detection-timeout:
         required: false
         type: number
@@ -142,6 +142,9 @@ jobs:
   multihost-tests:
     name: ${{ matrix.test-group.name }}
     needs: load-test-matrix
+    container:
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+
     env:
       PATH: "/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
       VIRTUAL_ENV: /opt/venv
@@ -162,56 +165,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
-
-      - name: Parse docker image
-        id: parse-image
-        run: |
-          IMAGE="${{ inputs.docker-image }}"
-          REPOSITORY="${IMAGE%:*}"
-          TAG="${IMAGE##*:}"
-          echo "repository=$REPOSITORY" >> $GITHUB_OUTPUT
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
-
-      - name: Extract allocation spec from SKU
-        id: extract-spec
-        run: |
-          pip3 install PyYAML
-          {
-            echo "allocation_spec<<EOF"
-            # Derive the allocation from this leg's own SKU (matrix.test-group.sku) rather than
-            # the pipeline-wide sp-config, so individual tests can opt into a different allocation
-            # pool (e.g. bh_sc1_high_power) without changing the pool for the rest of the run.
-            python3 .github/scripts/utils/extract_allocation_from_sku.py "${{ matrix.test-group.sku }}"
-            echo "EOF"
-          } >> $GITHUB_OUTPUT
-
-      - name: Create allocation for ${{ matrix.test-group.name }}
-        id: allocation
-        uses: ./.github/actions/ttop-create-allocation
-        timeout-minutes: 120
-        with:
-          allocationName: ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ inputs.resource-prefix }}-${{ strategy.job-index }}
-          namespace: ttop-ci
-          spec: ${{ steps.extract-spec.outputs.allocation_spec }}
-
-      - name: Get allocation configs
-        uses: ./.github/actions/ttop-get-allocation-data
-        with:
-          allocationName: ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ inputs.resource-prefix }}-${{ strategy.job-index }}
-          allocationNamespace: ttop-ci
-
-      - name: Create test environment
-        uses: ./.github/actions/ttop-create-environment
-        timeout-minutes: 30
-        with:
-          environmentName:  ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ inputs.resource-prefix }}-${{ strategy.job-index }}
-          allocationName:  ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ inputs.resource-prefix }}-${{ strategy.job-index }}
-          allocationNamespace: ttop-ci
-          workerRepository: ${{ steps.parse-image.outputs.repository }}
-          workerTag: ${{ steps.parse-image.outputs.tag }}
-          useDevHostMount: 'true'
-          sharedVolumeEnabled: 'true'
-          path: /etc/ttop
 
       - name: 📦 Download Build Artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -498,20 +451,6 @@ jobs:
           api-key: ${{ secrets.TT_CHAT_API_KEY }}
           api-url: ${{ secrets.TT_CHAT_URL }}
           job-name: ${{ matrix.test-group.name }}
-
-      - name: Delete test environment
-        if: always()
-        uses: ./.github/actions/ttop-delete-environment
-        with:
-          environmentName:  ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ inputs.resource-prefix }}-${{ strategy.job-index }}
-          namespace: ttop-ci
-
-      - name: Delete allocation
-        if: always()
-        uses: ./.github/actions/ttop-delete-allocation
-        with:
-          allocationName:  ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ inputs.resource-prefix }}-${{ strategy.job-index }}
-          namespace: ttop-ci
 
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}

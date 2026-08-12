@@ -1,6 +1,6 @@
 # Prefill KV-migration — configuration and gates
 
-The prefill side on its own terms: the files that configure it, and three gates that can be run against it
+The prefill side on its own terms: the files that configure it, and two gates that can be run against it
 directly with **no decode side present**. The tt-llm-engine launch harness generates and invokes this
 underneath; this document is the layer beneath that. It is also the path to take when integrating a new
 model, because the gates isolate failures that the harness necessarily reports as one.
@@ -10,9 +10,8 @@ Assumes the model is already integrated — adapter registered, golden trace sta
 
 | Gate | What it exercises | Needs |
 |------|-------------------|-------|
-| **0 — standalone PCC** | Prefill writes correct KV (precondition for everything) | tt-metal tree only |
-| **1 — mock migration** | The KV-chunk address table is correct, read device-lessly | tt-metal tree only |
-| **2 — loopback migration** | The real DRAM → transport → DRAM copy, and migrated-KV accuracy read back from the driver | + tt-llm-engine binaries |
+| **1 — mock migration** | Prefill writes correct KV (precondition for everything) and the KV-chunk address table is correct, read device-lessly | tt-metal tree only |
+| **2 — loopback migration** | The real DRAM → transport → DRAM copy, and migrated-KV accuracy | + tt-llm-engine binaries |
 
 Gate 2 covers the same ground as the harness's own prefill-loopback stage. The difference is only that the
 harness drives it end to end instead of three terminals.
@@ -137,8 +136,8 @@ can never pull migration in. Migration has to share the producer's process — i
 resident-slot state and must migrate while the runner still holds the KV in device DRAM — which is why one
 module covers both halves rather than chaining two.
 
-So: **any run that migrates uses `migration_driver`**; only the no-migration gates (Gate 0 and Gate 1 below)
-use `prefill_producer`. Invoking `migration_driver` *is* the opt-in, so `migration: {issue: true}` is
+So: **any run that migrates uses `migration_driver`**; only the no-migration gate (Gate 1 below)
+uses `prefill_producer`. Invoking `migration_driver` *is* the opt-in, so `migration: {issue: true}` is
 redundant there and an explicit `false` is warned about rather than honoured.
 
 The harness follows the same rule. Its step is still **named** `prefill_producer` (that name appears in its
@@ -390,30 +389,15 @@ flags go after the script's three positional arguments and reach every rank verb
 
 ---
 
-## Gate 0 — standalone KV PCC
-
-A precondition, with no migration involved. Single rank, so run the runner directly rather than under
-`tt-run`, and export the model config (see the forwarding note above).
-
-```bash
-env PREFILL_MANIFEST=$MODEL_MANIFEST \
-    PREFILL_NUM_LAYERS=<L> PREFILL_MAX_SEQ_LEN=<S> PREFILL_CHUNK_SIZE=<C> \
-    PREFILL_STANDALONE=1 PREFILL_STANDALONE_PCC=1 \
-    PREFILL_STANDALONE_NCHUNKS=$NCHUNKS PREFILL_STANDALONE_CHUNKED_NCHUNKS=$NCHUNKS \
-    python -m models.demos.common.prefill.runners.prefill_runner
-```
-
-Expect `[kv-pcc]` per-layer lines, with the minimum at or above `PREFILL_STANDALONE_CHUNKED_PCC` (runner
-default `0.88`). The exact wording is your model's, since the validator lives in your package. `PREFILL_MODEL`
-comes from the model manifest here; exporting it directly also works.
-
 ## Gate 1 — mock migration and producer read-back
 
-The runner serialises the KV-chunk table and device map and nothing else; the producer reads each chunk
-device-lessly via `read_dram_umd` — the same UMD path the migration worker uses — and PCCs against golden.
-This isolates one question: is `build_kv_chunk_table` correct? No endpoint, no worker and no MPI are
-involved. Requires the producer to implement a read-back for this model's cache layout (see
-`prefill_producer.py`).
+This is also the KV-correctness precondition: prefill must write correct KV before migration means
+anything. The runner serialises the KV-chunk table and device map and nothing else; the producer reads
+each chunk device-lessly via `read_dram_umd` — the same UMD path the migration worker uses — and PCCs
+against golden. This isolates one question: is `build_kv_chunk_table` correct? No endpoint, no worker and
+no MPI are involved. Requires the producer to implement a read-back for this model's cache layout (see
+`prefill_producer.py`). `PREFILL_MAX_SEQ_LEN` must be at least `chunks * CHUNK_SIZE` or the runner
+asserts when a chunk overruns the cache — it no longer derives from a chunk count.
 
 In the binding, replace the migration block with:
 
@@ -434,7 +418,7 @@ $RUN $BINDING $HOST:1
 python -m models.demos.common.prefill.runners.prefill_producer --manifest $MANIFEST
 ```
 
-`prefill_producer` here, deliberately: this gate migrates nothing, so it is one of the two runs that does
+`prefill_producer` here, deliberately: this gate migrates nothing, so it is the one run that does
 **not** use `migration_driver`.
 
 Expect `[producer] KV cache PCC PASSED` (threshold `PREFILL_STANDALONE_CHUNKED_PCC`, producer default

@@ -1120,7 +1120,8 @@ def run_chunked_block_glm_indexer(
     [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(l1_small_size=512),
+            # Routing consumes 512 B; leave 256 B for sparse-MLA high-bandwidth-gather semaphores.
+            torus_xy_device_params(l1_small_size=768),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",

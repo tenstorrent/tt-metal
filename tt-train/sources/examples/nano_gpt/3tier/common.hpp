@@ -23,7 +23,8 @@ struct TrainingConfig {
     uint32_t seed = 5489U;
     uint32_t model_save_interval = 500;
     uint32_t batch_size = 64;
-    uint32_t num_epochs = 1;
+    // 0 = no epoch cap; max_steps ends the run.
+    uint32_t num_epochs = 0;
     uint32_t max_steps = 5000;
     // accumulate batches for gradient update
     uint32_t gradient_accumulation_steps = 1;

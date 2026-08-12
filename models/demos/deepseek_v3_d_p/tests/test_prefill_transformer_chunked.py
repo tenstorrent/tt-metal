@@ -949,7 +949,8 @@ _PADDED_MODES = ["notrace", "traced"]
     [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(l1_small_size=512, trace_region_size=256 * 1024 * 1024),
+            # L1_SMALL holds the routing semaphores plus sparse-MLA high-bandwidth-gather semaphores.
+            torus_xy_device_params(l1_small_size=768, trace_region_size=256 * 1024 * 1024),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
@@ -1015,7 +1016,8 @@ def test_kimi_prefill_transformer_chunked_padded(
     [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(l1_small_size=512),
+            # Routing consumes 512 B; leave 256 B for sparse-MLA high-bandwidth-gather semaphores.
+            torus_xy_device_params(l1_small_size=768),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
@@ -1655,7 +1657,7 @@ def run_chunked_transformer_updated(
     [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(l1_small_size=512, trace_region_size=256 * 1024 * 1024),
+            torus_xy_device_params(l1_small_size=768, trace_region_size=256 * 1024 * 1024),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
@@ -1741,7 +1743,7 @@ def test_kimi_prefill_transformer_chunked_perf(
     [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(l1_small_size=512, trace_region_size=256 * 1024 * 1024),
+            torus_xy_device_params(l1_small_size=768, trace_region_size=256 * 1024 * 1024),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
@@ -1881,7 +1883,8 @@ def test_ds_prefill_transformer_chunked_no_pcc(
     [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(l1_small_size=512),
+            # Routing consumes 512 B; leave 256 B for sparse-MLA high-bandwidth-gather semaphores.
+            torus_xy_device_params(l1_small_size=768),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",

@@ -34,6 +34,19 @@ TEST_VARIANTS = {name: get_adapter(name) for name in ADAPTER_PATHS}
 DSV3 = get_adapter("deepseek_v3_d_p")
 
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
+
+# glm_5_2 is a TEST-ONLY variant here: its adapter is intentionally kept out of the shared common
+# ADAPTER_PATHS (prefill serving is not wired), so register it locally for the `variant` fixture
+# without modifying the common prefill registry.
+from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_2 import GLM52Adapter
+
+TEST_VARIANTS["glm_5_2"] = GLM52Adapter()
+
+# kimi_k3 is TEST-ONLY for the same reason, more strongly: 69 of its 93 layers are KDA
+# linear-attention layers with no TT implementation, so only its MLA layer is testable.
+from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3 import KimiK3Adapter
+
+TEST_VARIANTS["kimi_k3"] = KimiK3Adapter()
 from models.demos.deepseek_v3_d_p.utils.test_utils import convert_state_dict, detect_language_model_prefix
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import download_infinitebench_subset
 
@@ -803,6 +816,17 @@ def random_weights(config_only):
             * std
         ).to(torch.bfloat16),
     }
+
+    # Kimi-K3 output gate. Appended AFTER the block above so the manual_seed(42) draw order for every
+    # non-gated variant is unchanged (the cached reference results depend on it — see above).
+    if getattr(config, "mla_use_output_gate", False):
+        weights["g_proj.weight"] = (
+            torch.randn(
+                config.num_attention_heads * config.v_head_dim,
+                config.hidden_size,
+            )
+            * std
+        ).to(torch.bfloat16)
 
     logger.info(f"Generated {len(weights)} random weight tensors using config dimensions")
     return config, weights

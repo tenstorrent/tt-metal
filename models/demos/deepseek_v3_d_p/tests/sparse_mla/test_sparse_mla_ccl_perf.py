@@ -125,13 +125,13 @@ class CollectivePath:
     name: str
     mla_ref: str  # the production source this mirrors, e.g. "mla.py:1468"
     collective_axis: int
-    in_dim: int
+    gather_dim: int
     input_placements: tuple
     layout: object
     logical_shape: Callable
     local_input_shape: Callable
     output_placements: tuple  # tensor placements after the collective (asserted post-op)
-    out_dim: int
+    partition_dim: int
     expected_output_shape: Callable
     verify_reshard: bool = False
 
@@ -139,8 +139,8 @@ class CollectivePath:
         assert all(
             isinstance(placement, ttnn.PlacementShard) for placement in self.input_placements + self.output_placements
         ), f"{self.name}: reshard placements must all be PlacementShard"
-        assert self.input_placements[self.collective_axis].dim == self.in_dim
-        assert self.output_placements[self.collective_axis].dim == self.out_dim
+        assert self.input_placements[self.collective_axis].dim == self.gather_dim
+        assert self.output_placements[self.collective_axis].dim == self.partition_dim
 
 
 # --------------------------------------------------------------------------------------------------
@@ -186,10 +186,10 @@ def _sequence_to_head_output_shape(w: Workload, mesh_shape) -> list:
 # removed; full sparse-MLA production coverage owns that collective on the real 8x4 Galaxy profile.
 GLM_HEAD_TO_SEQUENCE = CollectivePath(
     name="glm_head_to_sequence_reshard",
-    mla_ref="mla.py:1423 (_sparse_mla thin-head transpose)",
+    mla_ref="mla.py:1481-1489 (_sparse_mla thin-head transpose)",
     collective_axis=TP_AXIS,
-    in_dim=1,
-    out_dim=2,
+    gather_dim=1,
+    partition_dim=2,
     input_placements=(ttnn.PlacementShard(2), ttnn.PlacementShard(1)),  # SP shards Q, TP shards H.
     output_placements=(ttnn.PlacementShard(2), ttnn.PlacementShard(2)),  # SP shards Q, TP also shards Q.
     layout=ttnn.TILE_LAYOUT,
@@ -201,10 +201,10 @@ GLM_HEAD_TO_SEQUENCE = CollectivePath(
 
 GLM_SEQUENCE_TO_HEAD = CollectivePath(
     name="glm_sequence_to_head_reshard",
-    mla_ref="mla.py:1471 (_sparse_mla transpose inverse)",
+    mla_ref="mla.py:1528-1538 (_sparse_mla transpose inverse)",
     collective_axis=TP_AXIS,
-    in_dim=2,
-    out_dim=1,
+    gather_dim=2,
+    partition_dim=1,
     input_placements=(ttnn.PlacementShard(2), ttnn.PlacementShard(2)),  # SP shards Q, TP also shards Q.
     output_placements=(ttnn.PlacementShard(2), ttnn.PlacementShard(1)),  # SP shards Q, TP shards H.
     layout=ttnn.TILE_LAYOUT,
@@ -265,13 +265,15 @@ def _profile_programs(mesh_device, run_fn):
     measured_runtime_id = max(record["runtime_id"] for record in records)
     records = tuple(record for record in records if record["runtime_id"] == measured_runtime_id)
 
-    measured_records = tuple(record for record in records if record["runtime_id"])
     program_durations_ns = {}
-    for record in measured_records:
+    for record in records:
         runtime_id = record["runtime_id"]
-        program_durations_ns[runtime_id] = max(program_durations_ns.get(runtime_id, 0.0), float(record["duration_ns"]))
+        if runtime_id:
+            program_durations_ns[runtime_id] = max(
+                program_durations_ns.get(runtime_id, 0.0), float(record["duration_ns"])
+            )
     assert program_durations_ns, "real-time profiler returned no valid program durations"
-    return result, measured_records, program_durations_ns
+    return result, tuple(records), program_durations_ns
 
 
 def _tensor_description(tensor):
@@ -282,12 +284,13 @@ def _tensor_description(tensor):
 # --------------------------------------------------------------------------------------------------
 # Collective execution
 # --------------------------------------------------------------------------------------------------
-def _reshard(tt_input, path, system):
+def _reshard(tt_input, output_buffer, path, system):
     """Run the single all-to-all used by sparse MLA to exchange sharded tensor dimensions."""
     return ttnn.experimental.all_to_all_async_generic(
         tt_input,
-        in_dim=path.in_dim,
-        out_dim=path.out_dim,
+        in_dim=path.gather_dim,
+        out_dim=path.partition_dim,
+        persistent_output_buffer=output_buffer,
         num_links=system.num_links,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         topology=system.topology,
@@ -328,12 +331,12 @@ def _build_reshard_input(mesh_device, path, torch_input, system):
     )
     tt_input = ttnn.experimental.all_to_all_async_generic(
         source,
-        in_dim=path.out_dim,
-        out_dim=path.in_dim,
+        in_dim=path.output_placements[cax].dim,
+        out_dim=path.input_placements[cax].dim,
         num_links=system.num_links,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        topology=system.topology,
         cluster_axis=cax,
+        topology=system.topology,
     )
     ttnn.synchronize_device(mesh_device)
     ttnn.deallocate(source)
@@ -359,10 +362,17 @@ def _run_reshard(mesh_device, path, workload, system) -> Measurement:
     tt_input = _build_reshard_input(mesh_device, path, torch_input, system)
     # Input shape is shared with the traffic roofline; output shape remains an explicit reshard assertion.
     assert list(ttnn.get_device_tensors(tt_input)[0].shape) == path.local_input_shape(workload, mesh_shape)
-
+    # Match MLA: preallocate the exact per-device output once, outside the profiled collective.
+    output_buffer = ttnn.empty(
+        path.expected_output_shape(workload, mesh_shape),
+        device=mesh_device,
+        layout=path.layout,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
     tt_output, records, program_durations_ns = _profile_programs(
         mesh_device,
-        lambda: _reshard(tt_input, path, system),
+        lambda: _reshard(tt_input, output_buffer, path, system),
     )
     assert list(ttnn.get_device_tensors(tt_output)[0].shape) == path.expected_output_shape(workload, mesh_shape)
     if path.verify_reshard:
@@ -410,7 +420,7 @@ def report(path: CollectivePath, scenario: str, mesh_device, measurement: Measur
     sp, tp = mesh_device.shape
 
     logger.info(
-        f"{path.name}/{scenario} [{traffic.topology}, SP{sp}xTP{tp}]: {measurement.input_description} -> {measurement.output_description}"
+        f"{path.name}/{scenario} [SP{sp}xTP{tp}]: {measurement.input_description} -> {measurement.output_description}"
     )
     logger.info(
         f"theoretical fabric roofline: {traffic.link_gigabits_per_second_per_direction:.1f} "
@@ -421,9 +431,8 @@ def report(path: CollectivePath, scenario: str, mesh_device, measurement: Measur
         f"total-mesh={traffic.total_network_bytes / 1e6:.3f} MB, "
         f"theoretical={traffic.theoretical_ns / 1e3:.3f} us"
     )
-    measured_ops = "all_to_all" if path.out_dim is not None else "all_gather"
     logger.info(
-        f"real-time profiler measured: {measured_ns / 1e3:.3f} us ({measured_ops}), "
+        f"real-time profiler measured: {measured_ns / 1e3:.3f} us (all_to_all), "
         f"achieved ethernet bandwidth={measured_gigabytes_per_second:.3f} / "
         f"{traffic.roofline_gigabytes_per_second:.3f} GB/s, "
         f"roofline utilization={roofline_utilization:.1%}, "
