@@ -110,7 +110,7 @@ ttnn:
     bh_quietbox_2: 85
   integration:
     wh_llmbox: 30
-    wh_galaxy: 340
+    wh_galaxy: 250
     wh_n150_civ2: 60
     bh_p100: 30
     bh_p150b_civ2_viommu: 30
@@ -332,11 +332,9 @@ models:
     wh_n150: 28
     wh_galaxy_perf: 120
     bh_p150: 27
-    bh_quietbox_2: 195
+    bh_quietbox_2: 245
     bh_galaxy: 78
     bh_sc1: 140
-    # Consumed by WAN 2.2 multihost
-    # quad e2e: T2V(40) + I2V(80) = 120 in models_e2e_tests.yaml.
     bh_sc4: 120
   e2e_tier2:
     wh_llmbox_perf: 266
@@ -346,7 +344,7 @@ models:
     bh_p300: 42
     bh_quietbox_2: 186
   e2e_tier3:
-    wh_llmbox_perf: 64
+    wh_llmbox_perf: 75
     wh_n150: 62
     wh_n300: 60
     bh_p150: 7
@@ -363,12 +361,9 @@ models:
     wh_galaxy: 235
     wh_galaxy_perf: 45
     bh_p150: 20
-    bh_quietbox_2: 260
+    bh_quietbox_2: 380
     bh_galaxy: 75
     bh_sc1: 75
-    # Renamed from bh_sc4-mgd (SKU consolidation). Consumed by WAN 2.2
-    # transformer-block multihost quad unit (timeout 40 + headroom) in
-    # models_unit_tests.yaml.
     bh_sc4: 50
   unit_tier2:
     wh_llmbox: 114
@@ -378,7 +373,7 @@ models:
     bh_p150: 20
     bh_quietbox_2: 50
   unit_tier3:
-    wh_llmbox: 20
+    wh_llmbox: 30
     wh_llmbox_perf: 58
     wh_n150: 41
     wh_n300: 33
@@ -386,20 +381,20 @@ models:
     bh_p300: 30
     bh_quietbox_2: 21
   integration:
-    wh_llmbox: 422
+    wh_llmbox: 125
   perf:
-    wh_llmbox_perf: 685
+    wh_llmbox_perf: 200
     wh_galaxy: 280
-    wh_galaxy_perf: 150
+    wh_galaxy_perf: 90
   device_perf:
     wh_n150: 20
     bh_p150: 20
     bh_p300: 20
     bh_quietbox_2: 80
   demo:
-    wh_llmbox_perf: 1290
+    wh_llmbox_perf: 90
     wh_galaxy: 345
-    wh_galaxy_perf: 150
+    wh_galaxy_perf: 90
     bh_galaxy: 470
     # blaze_models_prefill_tests.yaml sum of bh_sc1 job timeouts (tightened from 840)
     bh_sc1: 437
@@ -415,7 +410,7 @@ models:
     bh_p150b_civ2_viommu: 50
     bh_loudbox: 1200
     bh_p300: 800
-    bh_quietbox_2: 270
+    bh_quietbox_2: 110
   sweep_tier1:
     wh_n150: 30
     wh_galaxy: 30
