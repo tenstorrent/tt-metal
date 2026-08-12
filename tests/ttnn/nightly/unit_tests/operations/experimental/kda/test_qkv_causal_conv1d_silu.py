@@ -115,9 +115,13 @@ def test_qkv_causal_conv1d_silu_contract(device: ttnn.Device, widths: tuple[int,
     input_tensors = (input_tt, history_tt, *taps_tt)
     snapshots = tuple(ttnn.to_torch(tensor).clone() for tensor in input_tensors)
 
-    def run() -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+    def run(
+        current_input: ttnn.Tensor = input_tt,
+        current_history: ttnn.Tensor = history_tt,
+        current_taps: tuple[ttnn.Tensor, ...] = taps_tt,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         with ttnn.manage_config("throw_exception_on_fallback", True):
-            return _run(input_tt, history_tt, taps_tt, widths=widths)
+            return _run(current_input, current_history, current_taps, widths=widths)
 
     outputs = run()
     for name, output, width in zip(("q", "k", "v"), outputs, widths, strict=True):
@@ -128,7 +132,9 @@ def test_qkv_causal_conv1d_silu_contract(device: ttnn.Device, widths: tuple[int,
         assert all(output.buffer_address() != tensor.buffer_address() for tensor in input_tensors)
 
     cache_entries = device.num_program_cache_entries()
-    repeated_outputs = run()
+    repeated_host, repeated_device = _device_inputs(device, widths=widths, seed=224)
+    repeated_expected = _reference(*repeated_host, widths)
+    repeated_outputs = run(*repeated_device)
     ttnn.synchronize_device(device)
     assert device.num_program_cache_entries() == cache_entries
 
@@ -139,12 +145,12 @@ def test_qkv_causal_conv1d_silu_contract(device: ttnn.Device, widths: tuple[int,
         ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
     ttnn.synchronize_device(device)
 
-    for name, golden, output, repeated, traced in zip(
-        ("q", "k", "v"), expected, outputs, repeated_outputs, traced_outputs, strict=True
+    for name, golden, repeated_golden, output, repeated, traced in zip(
+        ("q", "k", "v"), expected, repeated_expected, outputs, repeated_outputs, traced_outputs, strict=True
     ):
         actual = ttnn.to_torch(output)
         assert_accurate(golden, actual, name=name, pcc_threshold=0.999)
-        assert_bit_identical(actual, ttnn.to_torch(repeated), name=f"{name} eager repeat")
+        assert_accurate(repeated_golden, ttnn.to_torch(repeated), name=f"{name} cache hit", pcc_threshold=0.999)
         assert_bit_identical(actual, ttnn.to_torch(traced), name=f"{name} trace replay")
 
     for name, before, tensor in zip(
