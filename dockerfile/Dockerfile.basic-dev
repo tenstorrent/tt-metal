@@ -59,21 +59,21 @@ ENV CPATH=${OMPI_PREFIX}/include
 ENV PKG_CONFIG_PATH=${OMPI_PREFIX}/lib/pkgconfig
 
 # Copy uv from official distroless image
-COPY --from=uv-layer /uv /uvx /usr/local/bin/
+COPY --from=uv-layer --link /uv /uvx /usr/local/bin/
 
 # Copy cmake from pre-built tool image
-COPY --from=cmake-layer /install/ /usr/local/
+COPY --from=cmake-layer --link /install/ /usr/local/
 
 # Copy OpenMPI from pre-built tool image
-COPY --from=openmpi-layer /install/ /opt/
+COPY --from=openmpi-layer --link /install/ /opt/
 
 # Copy ccache from pre-built tool image
-COPY --from=ccache-layer /install/ /usr/local/
+COPY --from=ccache-layer --link /install/ /usr/local/
 
-# Copy SFPI from pre-built tool image
-RUN --mount=from=sfpi-layer,source=/install,target=/sfpi-staging \
-    mkdir -p /opt/tenstorrent && \
-    cp -a /sfpi-staging/opt/tenstorrent/sfpi /opt/tenstorrent/
+# Copy SFPI from pre-built tool image.
+# COPY --link makes this an independent merge layer whose blob depends only on
+# the sfpi content, not on upstream base-stage churn (decouples registry cache).
+COPY --from=sfpi-layer --link /install/opt/tenstorrent/sfpi /opt/tenstorrent/sfpi
 
 RUN test -x /usr/local/bin/cmake || { echo "ERROR: cmake not found in cmake-layer" >&2; exit 1; } && \
     test -d "${OMPI_PREFIX}/bin" || { echo "ERROR: OpenMPI not found in openmpi-layer" >&2; exit 1; } && \
