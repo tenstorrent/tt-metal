@@ -56,9 +56,9 @@ void kernel_main() {
     u::Storage in1_storage(kCbIn1, tiles_per_block);
     u::Storage out_storage(kCbOut, tiles_per_block);
 
-    const auto in0 = u::make_accessor(in0_args, in0_addr);
-    const auto in1 = u::make_accessor(in1_args, in1_addr);
-    const auto out = u::make_accessor(out_args, out_addr);
+    const auto in0 = TensorAccessor(in0_args, in0_addr);
+    const auto in1 = TensorAccessor(in1_args, in1_addr);
+    const auto out = TensorAccessor(out_args, out_addr);
 
     for (uint32_t b = 0; b < num_blocks; ++b) {
         // Reader (DM thread 1) fills these; compute waits on them.

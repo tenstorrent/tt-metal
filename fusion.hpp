@@ -62,7 +62,7 @@ struct TileSource {
 
     void emit(int dst, int tile) const {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
-        copy_tile_to_dst(cb_id, tile, dst);
+        ckernel::copy_tile(cb_id, tile, dst);
 #else
         (void)dst;
         (void)tile;
@@ -73,7 +73,8 @@ struct TileSource {
 struct AddOp {
     static void apply(int lhs, int rhs, int out) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
-        sfpu_add_dst(lhs, rhs, out);
+        ckernel::add_binary_tile_init();
+        ckernel::add_binary_tile(lhs, rhs, out);
 #else
         (void)lhs;
         (void)rhs;
@@ -85,7 +86,9 @@ struct AddOp {
 struct ExpOp {
     static void apply(int src, int out) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
-        sfpu_exp_dst(src, out);
+        (void)src;  // == out; SFPU unaries work in place
+        ckernel::exp_tile_init();
+        ckernel::exp_tile(out);
 #else
         (void)src;
         (void)out;
@@ -103,10 +106,16 @@ struct ExpOp {
 // `apply_from_pack` is the packer-side epilogue the FPU strategy uses -- it
 // replaces tile_regs_wait(). An op that offers only the former simply fails to
 // compile in an FPU chain, which is the intent.
+//
+// The `*_tile_init()` calls are inline rather than hoisted: they are cheap, and
+// metal kernels routinely re-init per use (see SFPU_OP_CHAIN_0 in
+// tests/.../compute/eltwise_sfpu.cpp). Worth hoisting if it shows in a profile.
 struct ReluOp {
     static void apply(int src, int out) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
-        sfpu_relu_dst(src, out);
+        (void)src;  // == out; SFPU unaries work in place
+        ckernel::relu_tile_init();
+        ckernel::relu_tile(out);
 #else
         (void)src;
         (void)out;
@@ -242,12 +251,12 @@ struct Strategy<SFPUFusion> {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
         cb_reserve_back(cb_id, num_tiles);
         for (int i = 0; i < num_tiles; ++i) {
-            tile_regs_acquire();
+            ckernel::tile_regs_acquire();
             expr::emit(node, i);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_dst_tile(expr::result_slot_v<Node>, cb_id);
-            tile_regs_release();
+            ckernel::tile_regs_commit();
+            ckernel::tile_regs_wait();
+            ckernel::pack_tile(expr::result_slot_v<Node>, cb_id);
+            ckernel::tile_regs_release();
         }
         cb_push_back(cb_id, num_tiles);
 #else
@@ -272,27 +281,27 @@ struct Strategy<FPUFusion> {
         using Chain = typename Node::chain;
         for (int block = 0; block < G::num_blocks; ++block) {
             const bool last_out = (block == G::num_blocks - 1);
-            tile_regs_acquire();
+            ckernel::tile_regs_acquire();
             // matmul_block self-increments dst_index from 0, so the whole
             // subblock is the accumulator -- nothing here is allocatable.
-            matmul_block(node.in0_cb, node.in1_cb, G::out_subblock_h, G::out_subblock_w, G::in0_block_w);
-            tile_regs_commit();
+            ckernel::matmul_block(node.in0_cb, node.in1_cb, G::out_subblock_h, G::out_subblock_w, G::in0_block_w);
+            ckernel::tile_regs_commit();
             if (last_out) {
                 cb_reserve_back(cb_id, G::out_subblock_num_tiles);
                 if constexpr (Chain::empty) {
-                    tile_regs_wait();
+                    ckernel::tile_regs_wait();
                 } else {
                     // The pack-side epilogue replaces tile_regs_wait().
                     Chain::apply_from_pack(0, G::out_subblock_num_tiles);
                 }
-                pack_block(0, cb_id, G::out_subblock_num_tiles);
+                ckernel::pack_block(0, cb_id, G::out_subblock_num_tiles);
                 cb_push_back(cb_id, G::out_subblock_num_tiles);
             } else {
-                tile_regs_wait();
+                ckernel::tile_regs_wait();
                 // TODO: real kernels spill/reload partials through an
                 // intermediate CB here (mm_partials). Omitted from the sketch.
             }
-            tile_regs_release();
+            ckernel::tile_regs_release();
         }
 #else
         (void)node;
