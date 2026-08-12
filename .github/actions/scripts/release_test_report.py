@@ -8,9 +8,13 @@ which have none.
 
 How "executed successfully" is determined
 -----------------------------------------
-The sim CI reports only FAILURES -- `failed_tests.tsv` lists failed tests and
-nothing else, so there is no positive list of passes to read. Passes are
-therefore derived:
+Preferred: the sim CI embeds the full result set -- passes included -- in the
+check's output.text as a JSON block (schema rtl-sim-results/v1, see
+tt-umd-simulators!125). When that block is present it is authoritative and no
+inference happens.
+
+Fallback, for check output produced before that block existed: the sim CI
+reported only FAILURES, so passes have to be derived:
 
     executed = the rows of the sim yaml the gating job runs (config SIM_CI_CONFIG)
     failed   = the per-test rows parsed out of the check detail
@@ -40,6 +44,7 @@ Exit status is 0 whether or not tests failed -- this reports, it does not gate.
 """
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -53,6 +58,40 @@ REPO = HERE.parents[2]
 DEFAULT_SIM_YAML = REPO / "tests/scripts/quasar/quasar_sim_regresion_tests.yaml"
 
 PASSED, FAILED, INCONCLUSIVE = "passed", "failed", "inconclusive"
+
+# The sim CI's authoritative result block, emitted inside an HTML comment so it
+# renders invisibly on GitHub: <!-- rtl-sim-results/v1\n{...}\n-->
+RESULTS_RE = re.compile(r"<!--\s*rtl-sim-results/v1\s*\n(\{.*?\})\s*\n-->", re.DOTALL)
+
+
+def parse_results_block(detail):
+    """Return the sim CI's full result set, or None if it did not send one."""
+    m = RESULTS_RE.search(detail or "")
+    if not m:
+        return None
+    try:
+        payload = json.loads(m.group(1))
+    except json.JSONDecodeError:
+        print("warning: rtl-sim-results block present but not valid JSON; ignoring")
+        return None
+
+    def rows(key):
+        return [
+            {
+                "config": r.get("config", ""),
+                "group": r.get("group", ""),
+                "filter": r.get("filter", ""),
+                "runner": r.get("runner", "gtest"),
+            }
+            for r in payload.get(key, [])
+        ]
+
+    # A truncated block omits the passed list; treat that as "no block" rather
+    # than silently reporting zero passes.
+    if payload.get("truncated"):
+        print(f"warning: rtl-sim-results block truncated ({payload['truncated']}); falling back")
+        return None
+    return {"passed": rows("passed"), "failed": rows("failed")}
 
 
 def load_expected(yaml_path, config):
@@ -80,6 +119,12 @@ def classify(expected, failed_rows, conclusion, detail):
 
     `failed_rows` are (config, group, filter, runner) tuples from the check.
     """
+    # The sim CI told us exactly what passed -- believe it over any inference.
+    reported = parse_results_block(detail)
+    if reported is not None:
+        verdict = FAILED if reported["failed"] else PASSED
+        return verdict, reported["passed"], reported["failed"]
+
     if conclusion == "success":
         return PASSED, list(expected), []
 

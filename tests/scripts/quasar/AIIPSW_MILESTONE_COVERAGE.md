@@ -70,12 +70,20 @@ requirements have passing test evidence, via
 - a **Jira issue** in `RELEASE`, one per release version (re-runs update it
   rather than piling up), labelled with every requirement that has passing tests.
 
-**How "executed successfully" is decided.** The sim CI reports only failures —
-`failed_tests.tsv` has no positive list — so passes are derived as
-*(tests the gate is expected to run)* − *(tests reported failed)*. That is only
-sound when the run completed, so when the check is red with no per-test detail,
-or timed out, or the sim reporter says the manifest was missing, the report is
-marked **INCONCLUSIVE** and claims no passes at all.
+**How "executed successfully" is decided.** Two paths:
+
+1. **Authoritative.** The sim CI embeds its full result set — passes included —
+   in the check's `output.text` as a JSON block (`rtl-sim-results/v1`). When
+   that block is present it is used verbatim and nothing is inferred. Landing
+   via tt-umd-simulators!125.
+2. **Derived**, for output produced before that block existed. The old manifest
+   (`failed_tests.tsv`) listed failures only, so passes were computed as
+   *(tests the gate is expected to run)* − *(tests reported failed)*. That is
+   only sound when the run completed, so when the check is red with no per-test
+   detail, or timed out, or the sim reporter says the manifest was missing, the
+   report is marked **INCONCLUSIVE** and claims no passes at all. A truncated or
+   malformed JSON block also falls back to this path rather than reporting zero
+   passes.
 
 The report deliberately lists requirements with **no** evidence alongside those
 with it. On today's gate a green release covers **2 of 12** requirements

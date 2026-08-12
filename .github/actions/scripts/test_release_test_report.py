@@ -26,6 +26,7 @@ from release_test_report import (  # noqa: E402
     build,
     classify,
     load_expected,
+    parse_results_block,
     render_markdown,
     render_plain,
 )
@@ -155,3 +156,49 @@ def test_renderers_cover_every_requirement(mapping):
     plain = render_plain(report, META)
     for req in mapping["requirements"]:
         assert req["key"] in plain, f"{req['key']} missing from the report"
+
+
+# --- the sim CI's authoritative result block (rtl-sim-results/v1) -------------
+
+def _block(passed, failed, extra=""):
+    payload = {
+        "schema": "rtl-sim-results/v1",
+        "total": len(passed) + len(failed),
+        "passed": [{"config": "1x3", "group": g, "filter": f} for g, f in passed],
+        "failed": [{"config": "1x3", "group": g, "filter": f} for g, f in failed],
+    }
+    body = json.dumps(payload)[:-1] + extra + "}" if extra else json.dumps(payload)
+    return f"<!-- rtl-sim-results/v1\n{body}\n-->"
+
+
+def test_results_block_is_authoritative_over_derivation(expected):
+    """When the sim CI reports passes explicitly, nothing is inferred."""
+    detail = _block(passed=[("unit_tests_legacy", "*Zeta*")], failed=[])
+    verdict, passed, failed = classify(expected, [], "success", detail)
+    assert verdict == PASSED
+    # *Zeta* is not in the expected set at all -- proof the block won, not the yaml.
+    assert [r["filter"] for r in passed] == ["*Zeta*"] and failed == []
+
+
+def test_results_block_reports_failures(expected):
+    detail = _block(passed=[("unit_tests_legacy", "*Alpha*")], failed=[("unit_tests_api", "*Delta*")])
+    verdict, passed, failed = classify(expected, [], "failure", detail)
+    assert verdict == FAILED
+    assert [r["filter"] for r in passed] == ["*Alpha*"]
+    assert [r["filter"] for r in failed] == ["*Delta*"]
+
+
+def test_truncated_block_falls_back_rather_than_reporting_zero_passes(expected):
+    detail = _block([], [], extra=',"truncated":"passed list omitted: output size limit"')
+    assert classify(expected, [], "failure", detail)[0] == INCONCLUSIVE
+
+
+def test_malformed_block_is_ignored(expected):
+    detail = "<!-- rtl-sim-results/v1\n{not json}\n-->"
+    assert parse_results_block(detail) is None
+    # falls through to the derivation path
+    assert classify(expected, [], "success", detail)[0] == PASSED
+
+
+def test_no_block_still_derives(expected):
+    assert parse_results_block("1 test(s) failed:\n- `[1x3] g --gtest_filter=*X*`") is None
