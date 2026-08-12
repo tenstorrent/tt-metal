@@ -102,4 +102,4 @@ jobs:
       enable-llk-asserts: ${{ needs.determine-debug-flags.outputs.enable-llk-asserts == 'true' }}
       run-wormhole: ${{ inputs.run-wormhole-tests || github.event_name == 'schedule' }}
       run-blackhole: ${{ inputs.run-blackhole-tests || github.event_name == 'schedule' }}
-      run-ttsim-tests: false # ttsim requires gcc-12 which is not available on Ubuntu 24.04
+      run-sim: false # ttsim requires gcc-12 which is not available on Ubuntu 24.04
