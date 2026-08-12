@@ -29,8 +29,10 @@ def profile_realtime_program(
     import ttnn
 
     profile_records = []
+    dropped = [0]
 
     def collect_records(batch):
+        dropped[0] += int(batch.dropped)
         for record in batch.records:
             if profile_records and not collect_all:
                 return
@@ -72,6 +74,14 @@ def profile_realtime_program(
             time.sleep(0.01)
     finally:
         ttnn.device.UnregisterProgramRealtimeProfilerCallback(handle)
+
+    # Dropped records make the set partial: on a mesh, losing the slowest chip's record silently
+    # under-reports a program's critical path, so a perf gate could read green off incomplete data.
+    if dropped[0]:
+        raise RuntimeError(
+            f"Real-time profiler dropped {dropped[0]} record(s) — the receiver could not keep up, so the "
+            "record set is incomplete and durations may under-report."
+        )
 
     if not profile_records:
         raise RuntimeError(
