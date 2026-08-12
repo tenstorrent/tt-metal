@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/wavelet/device/wavelet_2d_program_factory.hpp"
+#include "ttnn/operations/wavelet/device/wavelet_2d_operation_impl.hpp"
 
 #include <algorithm>
 #include <array>
@@ -983,7 +983,7 @@ void validate_forward_inputs_2d(const Lwt2DParams& operation_attributes, const L
         "2D DWT reflect and antireflect modes require both dimensions greater than one");
 
     if (tensor_args.preallocated_outputs.has_value()) {
-        const auto specs = Lwt2DDeviceOperation::compute_output_specs(operation_attributes, tensor_args);
+        const auto specs = detail::compute_lwt_2d_output_specs(operation_attributes, tensor_args);
         const std::array<tt::tt_metal::TensorSpec, 4> expected = {
             std::get<0>(specs), std::get<1>(specs), std::get<2>(specs), std::get<3>(specs)};
         for (size_t index = 0; index < expected.size(); ++index) {
@@ -1057,7 +1057,7 @@ void validate_inverse_inputs_2d(const Ilwt2DParams& operation_attributes, const 
     if (tensor_args.preallocated_output.has_value()) {
         validate_preallocated_output_2d(
             *tensor_args.preallocated_output,
-            Ilwt2DDeviceOperation::compute_output_specs(operation_attributes, tensor_args),
+            detail::compute_ilwt_2d_output_spec(operation_attributes, tensor_args),
             tensor_args.ll.device(),
             "2D IDWT output");
         for (const auto* input : inputs) {
@@ -1070,28 +1070,23 @@ void validate_inverse_inputs_2d(const Ilwt2DParams& operation_attributes, const 
 
 }  // namespace
 
-tt::tt_metal::WorkloadDescriptor Lwt2DDeviceOperation::ProgramFactory::create_workload_descriptor(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value,
+namespace detail {
+
+tt::tt_metal::WorkloadDescriptor create_lwt_2d_workload(
+    const Lwt2DParams& operation_attributes,
+    const Lwt2DInputs& tensor_args,
+    Lwt2DOutputs& tensor_return_value,
     const MeshCoordinateRangeSet& tensor_coords) {
     return dispatch_scheme(operation_attributes.scheme_id, [&]<typename Scheme>() {
         return build_forward_workload_2d<Scheme>(operation_attributes, tensor_args, tensor_return_value, tensor_coords);
     });
 }
 
-void Lwt2DDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+void validate_lwt_2d(const Lwt2DParams& operation_attributes, const Lwt2DInputs& tensor_args) {
     validate_forward_inputs_2d(operation_attributes, tensor_args);
 }
 
-void Lwt2DDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_forward_inputs_2d(operation_attributes, tensor_args);
-}
-
-Lwt2DDeviceOperation::spec_return_value_t Lwt2DDeviceOperation::compute_output_specs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+Lwt2DOutputSpecs compute_lwt_2d_output_specs(const Lwt2DParams& operation_attributes, const Lwt2DInputs& tensor_args) {
     const auto& info = scheme_info(operation_attributes.scheme_id);
     const Logical2DShape input_shape = logical_2d_shape(tensor_args.input, "2D DWT input");
     const uint64_t height = (static_cast<uint64_t>(input_shape.height) + info.tap_size - 1) / 2;
@@ -1107,13 +1102,12 @@ Lwt2DDeviceOperation::spec_return_value_t Lwt2DDeviceOperation::compute_output_s
     return {spec, spec, spec, spec};
 }
 
-Lwt2DDeviceOperation::tensor_return_value_t Lwt2DDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+Lwt2DOutputs create_lwt_2d_output_tensors(const Lwt2DParams& operation_attributes, const Lwt2DInputs& tensor_args) {
     if (tensor_args.preallocated_outputs.has_value()) {
         const auto& outputs = *tensor_args.preallocated_outputs;
         return {outputs[0], outputs[1], outputs[2], outputs[3]};
     }
-    auto specs = compute_output_specs(operation_attributes, tensor_args);
+    auto specs = compute_lwt_2d_output_specs(operation_attributes, tensor_args);
     return {
         create_device_tensor(std::get<0>(specs), tensor_args.input.device()),
         create_device_tensor(std::get<1>(specs), tensor_args.input.device()),
@@ -1122,28 +1116,22 @@ Lwt2DDeviceOperation::tensor_return_value_t Lwt2DDeviceOperation::create_output_
     };
 }
 
-tt::tt_metal::WorkloadDescriptor Ilwt2DDeviceOperation::ProgramFactory::create_workload_descriptor(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value,
+tt::tt_metal::WorkloadDescriptor create_ilwt_2d_workload(
+    const Ilwt2DParams& operation_attributes,
+    const Ilwt2DInputs& tensor_args,
+    Tensor& tensor_return_value,
     const MeshCoordinateRangeSet& tensor_coords) {
     return dispatch_scheme(operation_attributes.scheme_id, [&]<typename Scheme>() {
         return build_inverse_workload_2d<Scheme>(operation_attributes, tensor_args, tensor_return_value, tensor_coords);
     });
 }
 
-void Ilwt2DDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+void validate_ilwt_2d(const Ilwt2DParams& operation_attributes, const Ilwt2DInputs& tensor_args) {
     validate_inverse_inputs_2d(operation_attributes, tensor_args);
 }
 
-void Ilwt2DDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_inverse_inputs_2d(operation_attributes, tensor_args);
-}
-
-Ilwt2DDeviceOperation::spec_return_value_t Ilwt2DDeviceOperation::compute_output_specs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+tt::tt_metal::TensorSpec compute_ilwt_2d_output_spec(
+    const Ilwt2DParams& operation_attributes, const Ilwt2DInputs& tensor_args) {
     return output_spec_2d(
         logical_2d_shape(tensor_args.ll, "2D ILWT LL input"),
         operation_attributes.output_height,
@@ -1151,58 +1139,14 @@ Ilwt2DDeviceOperation::spec_return_value_t Ilwt2DDeviceOperation::compute_output
         operation_attributes.output_memory_config);
 }
 
-Ilwt2DDeviceOperation::tensor_return_value_t Ilwt2DDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+Tensor create_ilwt_2d_output_tensor(const Ilwt2DParams& operation_attributes, const Ilwt2DInputs& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return *tensor_args.preallocated_output;
     }
-    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.ll.device());
+    return create_device_tensor(
+        compute_ilwt_2d_output_spec(operation_attributes, tensor_args), tensor_args.ll.device());
 }
 
-std::tuple<Tensor, Tensor, Tensor, Tensor> lwt_2d(
-    const Tensor& input,
-    const SchemeId scheme_id,
-    const BoundaryMode boundary_mode,
-    const MemoryConfig& output_memory_config,
-    const std::optional<std::array<Tensor, 4>>& preallocated_outputs) {
-    return device_operation::launch<Lwt2DDeviceOperation>(
-        Lwt2DParams{
-            .scheme_id = scheme_id,
-            .boundary_mode = boundary_mode,
-            .output_memory_config = output_memory_config,
-        },
-        Lwt2DInputs{
-            .input = input,
-            .preallocated_outputs = preallocated_outputs,
-        });
-}
-
-Tensor ilwt_2d(
-    const Tensor& ll,
-    const Tensor& lh,
-    const Tensor& hl,
-    const Tensor& hh,
-    const SchemeId scheme_id,
-    const BoundaryMode boundary_mode,
-    const uint32_t output_height,
-    const uint32_t output_width,
-    const MemoryConfig& output_memory_config,
-    const std::optional<Tensor>& preallocated_output) {
-    return device_operation::launch<Ilwt2DDeviceOperation>(
-        Ilwt2DParams{
-            .scheme_id = scheme_id,
-            .boundary_mode = boundary_mode,
-            .output_height = output_height,
-            .output_width = output_width,
-            .output_memory_config = output_memory_config,
-        },
-        Ilwt2DInputs{
-            .ll = ll,
-            .lh = lh,
-            .hl = hl,
-            .hh = hh,
-            .preallocated_output = preallocated_output,
-        });
-}
+}  // namespace detail
 
 }  // namespace ttnn::prim

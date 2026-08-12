@@ -7,8 +7,10 @@
 #include <tt_stl/assert.hpp>
 
 #include "ttnn/operations/wavelet/common/wavelet_host.hpp"
-#include "ttnn/operations/wavelet/device/wavelet_1d_program_factory.hpp"
-#include "ttnn/operations/wavelet/device/wavelet_2d_program_factory.hpp"
+#include "ttnn/operations/wavelet/device/ilwt_1d_device_operation.hpp"
+#include "ttnn/operations/wavelet/device/ilwt_2d_device_operation.hpp"
+#include "ttnn/operations/wavelet/device/lwt_1d_device_operation.hpp"
+#include "ttnn/operations/wavelet/device/lwt_2d_device_operation.hpp"
 
 namespace ttnn {
 

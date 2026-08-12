@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/wavelet/device/wavelet_1d_program_factory.hpp"
+#include "ttnn/operations/wavelet/device/wavelet_1d_operation_impl.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1357,7 +1357,7 @@ void validate_forward_inputs(const Lwt1DParams& operation_attributes, const Lwt1
         !boundary_mode_requires_multiple_samples(operation_attributes.boundary_mode) || input_shape.length > 1,
         "DWT reflect and antireflect modes require an input length greater than one");
 
-    const auto expected_specs = Lwt1DDeviceOperation::compute_output_specs(operation_attributes, tensor_args);
+    const auto expected_specs = detail::compute_lwt_1d_output_specs(operation_attributes, tensor_args);
     if (tensor_args.preallocated_outputs.has_value()) {
         validate_preallocated_output(
             std::get<0>(*tensor_args.preallocated_outputs),
@@ -1409,7 +1409,7 @@ void validate_inverse_inputs(const Ilwt1DParams& operation_attributes, const Ilw
     if (tensor_args.preallocated_output.has_value()) {
         validate_preallocated_output(
             *tensor_args.preallocated_output,
-            Ilwt1DDeviceOperation::compute_output_specs(operation_attributes, tensor_args),
+            detail::compute_ilwt_1d_output_spec(operation_attributes, tensor_args),
             tensor_args.approximation.device(),
             "IDWT output");
         TT_FATAL(
@@ -1421,121 +1421,70 @@ void validate_inverse_inputs(const Ilwt1DParams& operation_attributes, const Ilw
 
 }  // namespace
 
-tt::tt_metal::WorkloadDescriptor Lwt1DDeviceOperation::ProgramFactory::create_workload_descriptor(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value,
+namespace detail {
+
+tt::tt_metal::WorkloadDescriptor create_lwt_1d_workload(
+    const Lwt1DParams& operation_attributes,
+    const Lwt1DInputs& tensor_args,
+    Lwt1DOutputs& tensor_return_value,
     const MeshCoordinateRangeSet& tensor_coords) {
     return dispatch_scheme(operation_attributes.scheme_id, [&]<typename Scheme>() {
         return build_forward_workload<Scheme>(operation_attributes, tensor_args, tensor_return_value, tensor_coords);
     });
 }
 
-void Lwt1DDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+void validate_lwt_1d(const Lwt1DParams& operation_attributes, const Lwt1DInputs& tensor_args) {
     validate_forward_inputs(operation_attributes, tensor_args);
 }
 
-void Lwt1DDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_forward_inputs(operation_attributes, tensor_args);
-}
-
-Lwt1DDeviceOperation::spec_return_value_t Lwt1DDeviceOperation::compute_output_specs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+Lwt1DOutputSpecs compute_lwt_1d_output_specs(const Lwt1DParams& operation_attributes, const Lwt1DInputs& tensor_args) {
     const Logical1DShape input_shape = logical_1d_shape(tensor_args.input, "DWT input");
     const uint32_t coefficient_length = dwt_coefficient_length(input_shape.length, operation_attributes.scheme_id);
     auto spec = output_spec_1d(input_shape, coefficient_length, operation_attributes.output_memory_config);
     return {spec, spec};
 }
 
-Lwt1DDeviceOperation::tensor_return_value_t Lwt1DDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+Lwt1DOutputs create_lwt_1d_output_tensors(const Lwt1DParams& operation_attributes, const Lwt1DInputs& tensor_args) {
     if (tensor_args.preallocated_outputs.has_value()) {
         return *tensor_args.preallocated_outputs;
     }
-    auto specs = compute_output_specs(operation_attributes, tensor_args);
+    auto specs = compute_lwt_1d_output_specs(operation_attributes, tensor_args);
     return {
         create_device_tensor(std::get<0>(specs), tensor_args.input.device()),
         create_device_tensor(std::get<1>(specs), tensor_args.input.device()),
     };
 }
 
-tt::tt_metal::WorkloadDescriptor Ilwt1DDeviceOperation::ProgramFactory::create_workload_descriptor(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value,
+tt::tt_metal::WorkloadDescriptor create_ilwt_1d_workload(
+    const Ilwt1DParams& operation_attributes,
+    const Ilwt1DInputs& tensor_args,
+    Tensor& tensor_return_value,
     const MeshCoordinateRangeSet& tensor_coords) {
     return dispatch_scheme(operation_attributes.scheme_id, [&]<typename Scheme>() {
         return build_inverse_workload<Scheme>(operation_attributes, tensor_args, tensor_return_value, tensor_coords);
     });
 }
 
-void Ilwt1DDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+void validate_ilwt_1d(const Ilwt1DParams& operation_attributes, const Ilwt1DInputs& tensor_args) {
     validate_inverse_inputs(operation_attributes, tensor_args);
 }
 
-void Ilwt1DDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_inverse_inputs(operation_attributes, tensor_args);
-}
-
-Ilwt1DDeviceOperation::spec_return_value_t Ilwt1DDeviceOperation::compute_output_specs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+tt::tt_metal::TensorSpec compute_ilwt_1d_output_spec(
+    const Ilwt1DParams& operation_attributes, const Ilwt1DInputs& tensor_args) {
     return output_spec_1d(
         logical_1d_shape(tensor_args.approximation, "IDWT approximation"),
         operation_attributes.original_length,
         operation_attributes.output_memory_config);
 }
 
-Ilwt1DDeviceOperation::tensor_return_value_t Ilwt1DDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+Tensor create_ilwt_1d_output_tensor(const Ilwt1DParams& operation_attributes, const Ilwt1DInputs& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return *tensor_args.preallocated_output;
     }
     return create_device_tensor(
-        compute_output_specs(operation_attributes, tensor_args), tensor_args.approximation.device());
+        compute_ilwt_1d_output_spec(operation_attributes, tensor_args), tensor_args.approximation.device());
 }
 
-std::tuple<Tensor, Tensor> lwt(
-    const Tensor& input,
-    const SchemeId scheme_id,
-    const BoundaryMode boundary_mode,
-    const MemoryConfig& output_memory_config,
-    const std::optional<std::tuple<Tensor, Tensor>>& preallocated_outputs) {
-    return device_operation::launch<Lwt1DDeviceOperation>(
-        Lwt1DParams{
-            .scheme_id = scheme_id,
-            .boundary_mode = boundary_mode,
-            .output_memory_config = output_memory_config,
-        },
-        Lwt1DInputs{
-            .input = input,
-            .preallocated_outputs = preallocated_outputs,
-        });
-}
-
-Tensor ilwt(
-    const Tensor& approximation,
-    const Tensor& detail,
-    const SchemeId scheme_id,
-    const BoundaryMode boundary_mode,
-    const uint32_t original_length,
-    const MemoryConfig& output_memory_config,
-    const std::optional<Tensor>& preallocated_output) {
-    return device_operation::launch<Ilwt1DDeviceOperation>(
-        Ilwt1DParams{
-            .scheme_id = scheme_id,
-            .boundary_mode = boundary_mode,
-            .original_length = original_length,
-            .output_memory_config = output_memory_config,
-        },
-        Ilwt1DInputs{
-            .approximation = approximation,
-            .detail = detail,
-            .preallocated_output = preallocated_output,
-        });
-}
+}  // namespace detail
 
 }  // namespace ttnn::prim
