@@ -21,7 +21,144 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/tt_pause.hpp>
 
+#if defined(__x86_64__)
+#include <emmintrin.h>
+#endif
+#if defined(__linux__)
+#include <sys/mman.h>
+#endif
+
 namespace tt::tt_metal {
+
+namespace broadcast_ring_detail {
+
+// Concurrent slot copy. BOTH the writer and every reader MUST go through these helpers (never a
+// plain C++ load/store or std::memcpy on live slots): concurrent non-atomic access is a data race /
+// UB in the C++ abstract machine even when claim-drop makes torn values harmless.
+//
+// x86: MOV / MOVDQU / MOVNTDQ in asm with a "memory" clobber -- outside the abstract machine; we rely
+// on x86 TSO (+ sfence after NT) for visibility, and on claim-recheck to drop any torn snapshot.
+// Elsewhere: std::atomic_ref<uint64_t> relaxed on 8 B units (ISO-defined; values may still tear
+// across units, which claim-drop handles the same way).
+
+inline void concurrent_copy(void* dst, const void* src, size_t bytes) {
+#if defined(__x86_64__)
+    auto* d = static_cast<unsigned char*>(dst);
+    const auto* s = static_cast<const unsigned char*>(src);
+    // Prefer 16 B moves when dst is 16-aligned (ring slots are); src may be unaligned (batch scratch).
+    if (bytes >= 16 && (reinterpret_cast<uintptr_t>(d) & 15u) == 0) {
+        while (bytes >= 16) {
+            asm volatile(
+                "movdqu (%[src]), %%xmm0\n\t"
+                "movdqa %%xmm0, (%[dst])\n\t"
+                :
+                : [dst] "r"(d), [src] "r"(s)
+                : "xmm0", "memory");
+            d += 16;
+            s += 16;
+            bytes -= 16;
+        }
+    }
+    while (bytes >= 8) {
+        asm volatile(
+            "movq (%[src]), %%rax\n\t"
+            "movq %%rax, (%[dst])\n\t"
+            :
+            : [dst] "r"(d), [src] "r"(s)
+            : "rax", "memory");
+        d += 8;
+        s += 8;
+        bytes -= 8;
+    }
+    while (bytes != 0) {
+        asm volatile(
+            "movb (%[src]), %%al\n\t"
+            "movb %%al, (%[dst])\n\t"
+            :
+            : [dst] "r"(d), [src] "r"(s)
+            : "al", "memory");
+        d += 1;
+        s += 1;
+        bytes -= 1;
+    }
+#else
+    // ISO path: relaxed atomic_ref on both ends so either side may be the shared slot.
+    auto* d = static_cast<unsigned char*>(dst);
+    const auto* s = static_cast<const unsigned char*>(src);
+    while (bytes >= sizeof(uint64_t) && (reinterpret_cast<uintptr_t>(d) % alignof(uint64_t)) == 0 &&
+           (reinterpret_cast<uintptr_t>(s) % alignof(uint64_t)) == 0) {
+        uint64_t w = std::atomic_ref<uint64_t>(*reinterpret_cast<uint64_t*>(const_cast<unsigned char*>(s)))
+                         .load(std::memory_order_relaxed);
+        std::atomic_ref<uint64_t>(*reinterpret_cast<uint64_t*>(d)).store(w, std::memory_order_relaxed);
+        d += sizeof(uint64_t);
+        s += sizeof(uint64_t);
+        bytes -= sizeof(uint64_t);
+    }
+    while (bytes != 0) {
+        const unsigned char b =
+            std::atomic_ref<unsigned char>(*const_cast<unsigned char*>(s)).load(std::memory_order_relaxed);
+        std::atomic_ref<unsigned char>(*d).store(b, std::memory_order_relaxed);
+        d += 1;
+        s += 1;
+        bytes -= 1;
+    }
+#endif
+}
+
+// Non-temporal write into ring slots. Same concurrent-access contract as concurrent_copy: asm only,
+// reader still loads via concurrent_copy. WC stores need stream_fence() before publishing head.
+// Always AVX-32 NT (vmovdqu/vmovntdq) then 16 B SSE NT for large copies -- no env knobs.
+inline void concurrent_stream_copy(void* dst, const void* src, size_t bytes) {
+#if defined(__x86_64__)
+    auto* d = static_cast<unsigned char*>(dst);
+    const auto* s = static_cast<const unsigned char*>(src);
+    // Align dst to 32 B for AVX NT stores.
+    const size_t misalign = reinterpret_cast<uintptr_t>(d) & 31u;
+    if (misalign != 0) {
+        const size_t head = std::min(32u - static_cast<unsigned>(misalign), static_cast<unsigned>(bytes));
+        concurrent_copy(d, s, head);
+        d += head;
+        s += head;
+        bytes -= head;
+    }
+    while (bytes >= 32) {
+        asm volatile(
+            "vmovdqu (%[src]), %%ymm0\n\t"
+            "vmovntdq %%ymm0, (%[dst])\n\t"
+            :
+            : [dst] "r"(d), [src] "r"(s)
+            : "ymm0", "memory");
+        d += 32;
+        s += 32;
+        bytes -= 32;
+    }
+    asm volatile("vzeroupper" ::: "ymm0", "memory");
+    while (bytes >= 16) {
+        asm volatile(
+            "movdqu (%[src]), %%xmm0\n\t"
+            "movntdq %%xmm0, (%[dst])\n\t"
+            :
+            : [dst] "r"(d), [src] "r"(s)
+            : "xmm0", "memory");
+        d += 16;
+        s += 16;
+        bytes -= 16;
+    }
+    if (bytes != 0) {
+        concurrent_copy(d, s, bytes);
+    }
+#else
+    concurrent_copy(dst, src, bytes);
+#endif
+}
+
+inline void stream_fence() {
+#if defined(__x86_64__)
+    _mm_sfence();
+#endif
+}
+
+}  // namespace broadcast_ring_detail
 
 /**
  * @brief Single-producer, multi-consumer broadcast ring buffer.
@@ -47,6 +184,9 @@ class BroadcastRing {
     using WakeTokenAtomic = std::atomic<uint32_t>;
 #endif
     static constexpr size_t kFalseSharingSize = 128;
+    // Below this, a batch fits in cache and readers likely consume it soon -- a cached copy wins.
+    // 4 KiB: profiler publishes multi-KB slot batches; NT sooner keeps L3 for decode/copy.
+    static constexpr size_t kStreamCopyMinBytes = 4096;
     struct SlotsView;
     struct SharedState;
 
@@ -65,7 +205,60 @@ public:
     explicit BroadcastRing(size_t capacity) :
         capacity_(capacity ? std::bit_ceil(capacity) : 1),
         slots_(std::make_unique<Slot[]>(capacity_)),
-        writer_(&shared_state_, view()) {}
+        writer_(&shared_state_, view()) {
+        warm_pages(/*lock=*/true);
+    }
+
+    /**
+     * @brief Prefault (and optionally mlock) slot storage so the first publish isn't eating soft faults
+     * on the timed path. Safe to call again right before a capture -- re-touches every page.
+     *
+     * Touches the same Slot layout used by publish_batch (Slot == T-sized storage for trivially-copyable
+     * T), plus asks for THP and pins so a long device bring-up can't reclaim the working set before the
+     * first D2H.
+     */
+    void warm_pages(bool lock = true) {
+        if constexpr (!kTriviallyCopyable) {
+            return;
+        }
+        void* const base = static_cast<void*>(slots_.get());
+        const size_t bytes = capacity_ * sizeof(Slot);
+#if defined(__linux__)
+        if (bytes >= (size_t{8} << 20)) {
+            const uintptr_t addr = reinterpret_cast<uintptr_t>(base);
+            const uintptr_t page = 4096;
+            const uintptr_t lo = (addr + page - 1) & ~(page - 1);
+            const uintptr_t hi = (addr + bytes) & ~(page - 1);
+            if (hi > lo) {
+                // Fault-time is when THP is granted -- ask before the touch.
+                madvise(reinterpret_cast<void*>(lo), hi - lo, MADV_HUGEPAGE);
+                madvise(reinterpret_cast<void*>(lo), hi - lo, MADV_WILLNEED);
+            }
+        }
+#endif
+        // Full memset: hard-faults every 4K (or THP) into the calling thread's address space.
+        std::memset(base, 0, bytes);
+#if defined(__linux__)
+        if (lock && bytes >= (size_t{1} << 20)) {
+            // Best-effort pin. Failure is fine (RLIMIT_MEMLOCK); pages are still resident from memset.
+            (void)mlock(base, bytes);
+        }
+#endif
+        // Second pass: stride by page with a volatile byte store. Catches holes and warms the TLB for
+        // the emit path's access pattern. (Avoid volatile T= -- T may not have a volatile assignment.)
+        auto* const bytes_p = static_cast<unsigned char*>(base);
+        constexpr size_t kPage = 4096;
+        for (size_t off = 0; off < bytes; off += kPage) {
+            volatile unsigned char* p = bytes_p + off;
+            *p = static_cast<unsigned char>(*p + 1);
+            *p = static_cast<unsigned char>(*p - 1);
+        }
+        if (bytes != 0) {
+            volatile unsigned char* last = bytes_p + (bytes - 1);
+            *last = static_cast<unsigned char>(*last + 1);
+            *last = static_cast<unsigned char>(*last - 1);
+        }
+    }
 
     ~BroadcastRing() {
         TT_FATAL(
@@ -84,6 +277,7 @@ public:
          * @brief Publishes a batch of items (does not wake readers; see wake_readers()).
          *
          * If @p items is larger than capacity(), only its last capacity() items are retained.
+         * Always sfences after NT stores before publishing head.
          */
         void publish_batch(std::span<const T> items) noexcept {
             static_assert(kStoreNoexcept, "T must be nothrow-copyable; use publish_batch_move otherwise");
@@ -134,15 +328,46 @@ public:
             // raised claim in its recheck and drops the potentially overwritten items
             shared_state->claim.store(head + n, std::memory_order_relaxed);
             std::atomic_thread_fence(std::memory_order_release);
-            for (size_t k = skip; k < n; k++) {
-                if constexpr (std::is_const_v<U>) {
-                    view.slot_at(head + k).store(items[k]);
-                } else {
-                    view.slot_at(head + k).store(std::move(items[k]));
+            bool streamed = false;
+            if constexpr (kTriviallyCopyable && std::is_const_v<U>) {
+                // Contiguous memcpy into ring slots (1 or 2 segments on wrap). Separating a compact
+                // producer scratch fill from this burst is what keeps host decode from thrashing
+                // against a multi-hundred-MB ring on every marker.
+                static_assert(sizeof(Slot) == sizeof(T), "trivially-copyable Slot must be raw T storage");
+                const T* src = items.data() + skip;
+                size_t remain = n - skip;
+                uint64_t pos = head + skip;
+                while (remain != 0) {
+                    const size_t idx = pos & (view.capacity - 1);
+                    const size_t take = std::min(remain, view.capacity - idx);
+                    const size_t bytes = take * sizeof(T);
+                    if (bytes >= kStreamCopyMinBytes) {
+                        broadcast_ring_detail::concurrent_stream_copy(
+                            static_cast<void*>(&view.slots[idx]), static_cast<const void*>(src), bytes);
+                        streamed = true;
+                    } else {
+                        broadcast_ring_detail::concurrent_copy(
+                            static_cast<void*>(&view.slots[idx]), static_cast<const void*>(src), bytes);
+                    }
+                    src += take;
+                    pos += take;
+                    remain -= take;
+                }
+            } else {
+                for (size_t k = skip; k < n; k++) {
+                    if constexpr (std::is_const_v<U>) {
+                        view.slot_at(head + k).store(items[k]);
+                    } else {
+                        view.slot_at(head + k).store(std::move(items[k]));
+                    }
                 }
             }
-            shared_state->head.store(head + n, std::memory_order_release);
+            // NT (WC) stores need sfence before readers may observe head.
+            if (streamed) {
+                broadcast_ring_detail::stream_fence();
+            }
             head_cache_ = head + n;
+            shared_state->head.store(head_cache_, std::memory_order_release);
         }
 
         SharedState* shared_state_;
@@ -328,34 +553,20 @@ private:
         kTriviallyCopyable || (std::is_nothrow_move_constructible_v<T> && std::is_nothrow_move_assignable_v<T>);
     static constexpr bool kLoadNoexcept = kTriviallyCopyable || std::is_nothrow_copy_assignable_v<T>;
 
+    // Trivially-copyable slot storage. Payload is NOT a C++ atomic object: concurrent writer/reader
+    // access goes through broadcast_ring_detail::concurrent_copy (x86 asm MOVs, or atomic_ref
+    // elsewhere) so the abstract machine never sees a plain data race. claim-recheck still drops
+    // torn multi-unit snapshots.
+    //
+    // Visibility of a fully published slot: Writer::publish does a release fence then head.store(release);
+    // a Reader acquire-loads that head before concurrent_copy'ing the slot.
     struct AtomicSlot {
-        static constexpr size_t kWordCount = (sizeof(T) + sizeof(uint64_t) - 1) / sizeof(uint64_t);
+        alignas(T) std::byte storage[sizeof(T)];
 
-        std::array<std::atomic<uint64_t>, kWordCount> words;
-
-        void store(const T& v) noexcept {
-            const std::byte* src = reinterpret_cast<const std::byte*>(&v);
-#pragma GCC unroll 8
-            for (size_t k = 0; k < kWordCount; k++) {
-                uint64_t w = 0;
-                std::memcpy(&w, src + k * sizeof(uint64_t), word_bytes(k));
-                words[k].store(w, std::memory_order_relaxed);
-            }
-        }
+        void store(const T& v) noexcept { broadcast_ring_detail::concurrent_copy(storage, &v, sizeof(T)); }
         void store(T&& v) noexcept { store(static_cast<const T&>(v)); }
 
-        void load(T& out) const noexcept {
-            std::byte* dst = reinterpret_cast<std::byte*>(&out);
-#pragma GCC unroll 8
-            for (size_t k = 0; k < kWordCount; k++) {
-                const uint64_t w = words[k].load(std::memory_order_relaxed);
-                std::memcpy(dst + k * sizeof(uint64_t), &w, word_bytes(k));
-            }
-        }
-
-        static constexpr size_t word_bytes(size_t k) noexcept {
-            return std::min(sizeof(uint64_t), sizeof(T) - k * sizeof(uint64_t));
-        }
+        void load(T& out) const noexcept { broadcast_ring_detail::concurrent_copy(&out, storage, sizeof(T)); }
     };
 
     struct LockedSlot {

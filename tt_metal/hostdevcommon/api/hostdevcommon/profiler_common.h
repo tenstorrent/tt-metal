@@ -276,6 +276,12 @@ constexpr static std::uint32_t PROFILER_L1_BUFFER_SIZE = PROFILER_L1_VECTOR_SIZE
 // multiples of L1_ALIGNMENT (16 B on Blackhole), which keeps the WHOLE-PAGE PCIe write aligned. Alignment
 // is not a nicety here: the NoC MIS-DELIVERS a misaligned transfer rather than rejecting it.
 constexpr static std::uint32_t SPSC_SPAN_PREFIX_WORDS = 16;
+// w0 bit 0: payload layout. Set = each RISC's LIVE run, packed exactly and unwrapped (the layout above);
+// clear = five WHOLE RING_CAPACITY ring blocks, raw, and the host resolves head/wrap itself. The filler
+// packs via per-segment NoC gather-writes out of its bulk snapshot (no CPU copy -- a CPU repack cost the
+// drainer 45% of its cycles, which is what killed the packed layout the first time); the full-job drainer
+// still ships whole rings because its frames go straight from the fused-read staging to the socket.
+constexpr static std::uint32_t SPSC_SPAN_PACKED_FLAG = 1;
 // Wire type code. Must equal PP_BULK_SPAN in tt_metal/tools/profiler/spsc_packet.h, which is plain C and
 // cannot include this header; spsc_marker_decode.hpp static_asserts that the two agree.
 constexpr static std::uint32_t SPSC_SPAN_PACKET_TYPE = 13;
@@ -289,6 +295,10 @@ constexpr static std::uint32_t SPSC_SPAN_TYPE_SHIFT = 27;
 // (167 -> 339 us per busy sweep), pushing the worst sweep past the ring-fill deadline and turning 0
 // producer stalls into 952. Socket page bookkeeping is not the host-egress wall.
 constexpr static std::uint32_t SPSC_SPAN_PAGE_WORDS = 16;
+// D2H socket credit quantum in bytes. Defaults to the frame pad (64 B) so live-pack ships without
+// per-frame pad-up to a large page. FINDINGS' ~80 KB page win was an egress microbench; raising this to
+// a whole span on the real path concentrated credit-wait and created producer stalls (see above). Host
+// memcpy width is won by coalescing many 64 B pages per read, not by enlarging the quantum.
 
 // Live words one RISC contributes to a span frame. With exact packing this is the entire geometry: the
 // drainer ships `run` words and the host consumes `run` words, both derived from the same control vector.

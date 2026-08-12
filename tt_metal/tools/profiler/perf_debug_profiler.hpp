@@ -9,27 +9,27 @@
 // the host<->device sync machinery, the stale 4-word/44-bit-graft decode). It drains the worker per-RISC
 // SPSC profiler rings DIRECTLY via the resident drainer firmware and streams device zones to Tracy.
 //
-// Engine (proven in the standalone drain harness, silicon-verified):
-//   boot_device (resident drain kernels, slow-dispatch LaunchProgram)  ->  2 D2HSockets (dual relay,
-//   4 MiB each, multi-window)  ->  N continuous drain threads (pages -> spsc_decode -> WorkerZonePacket)
-//   ->  RealtimeProfilerTracyHandler.
-// Shares the marker wire format with the drain kernel through spsc_marker_decode.hpp, so host and device
-// can never drift. Booted once at MeshDevice bring-up (resident); P_STOP at teardown.
+// Engine:
+//   boot_device -> 2 D2HSockets
+//   -> producer (poll/copy/ack into ping-pong staging)
+//   -> decoder  (staging -> ping-pong publish batches)  // overlapped with the next sock-read
+//   -> publisher (batches -> BroadcastRing)             // overlapped with decode
+//   -> consumer (ring -> Tracy)
+// Shares the marker wire format with the drain kernel through spsc_marker_decode.hpp.
 #pragma once
 
+#include <array>
 #include <atomic>
-#include <condition_variable>
 #include <cstdint>
-#include <deque>
 
 #include "hostdevcommon/profiler_common.h"
 
 #include <tt-metalium/core_coord.hpp>
 #include <memory>
-#include <mutex>
 #include <span>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -56,15 +56,31 @@ struct SpscDecodeState;
 // buffer, so the region's size and the ring's size are one knob. See FINDINGS §N+39.
 uint32_t perf_debug_dram_region_bytes_per_risc();
 
-// Decoded device record handed writer -> reader. Layout mirrors the standalone drain harness's Rec exactly (ts first
-// packs it to 24 B instead of 32 padded), so both paths move the same bytes per record.
-struct PerfDebugRec {
+// Decoded device record handed writer -> reader. Packed to 12 B: full device timestamp + meta.
+//   meta = [31:29] record type | [28:26] device index | [25:16] lane | [15:0] zone srcloc hash / id16
+// Zone records are self-contained. A DATA/EVENT head is followed by EXT (full 20-bit id + word count
+// in ts) then CONT payload pairs in ts -- rare path.
+// Per-record `prog` stays dropped (runtime_host_id=0 until a sticky-PROG side channel is restored);
+// timestamps stay full-width -- truncating them is not an acceptable publish-bandwidth cheat.
+struct __attribute__((packed)) PerfDebugRec {
     uint64_t ts;
-    uint32_t lane;
-    uint32_t type;
-    uint32_t zone;
-    uint32_t prog;
+    uint32_t meta;
 };
+static_assert(sizeof(PerfDebugRec) == 12);
+static_assert(std::is_trivially_copyable_v<PerfDebugRec>);
+inline constexpr uint32_t kRecTypeShift = 29;
+inline constexpr uint32_t kRecDevShift = 26;
+inline constexpr uint32_t kRecLaneShift = 16;
+inline constexpr uint32_t kRecDevMax = 8;
+inline constexpr uint32_t kRecLaneMax = 1024;
+// Record type codes. START/END equal the wire's PP_ZONE_START/END so the hot emit stores the wire type
+// unmapped; the rest are this stream's own codes (the wire's 5-bit space does not fit 3 bits).
+inline constexpr uint32_t kRecZoneStart = 0;
+inline constexpr uint32_t kRecZoneEnd = 1;
+inline constexpr uint32_t kRecData = 3;
+inline constexpr uint32_t kRecEvent = 4;
+inline constexpr uint32_t kRecCont = 5;
+inline constexpr uint32_t kRecExt = 6;
 
 // One PerfDebugProfiler per MeshDevice. Constructing it boots the drainer drainer on every eligible local
 // Blackhole device and starts the drain threads; destroying it (or calling stop()) signals P_STOP, joins
@@ -82,10 +98,11 @@ public:
     void stop();
 
 private:
-    // Fixed drain config -- the silicon-validated defaults (see the standalone drain harness / the knee + Tracy sweeps):
-    // 2 reader harts + 2 relay harts (dual relay), one 12 MiB D2HSocket FIFO per relay, adaptive per-core drain.
+    // Fixed drain config -- the silicon-validated defaults (see the standalone drain harness / the knee + Tracy
+    // sweeps): 2 reader harts + 2 relay harts (dual relay), one 12 MiB D2HSocket FIFO per relay, adaptive per-core
+    // drain.
     static constexpr uint32_t kNRead = 2;
-    static constexpr uint32_t kNRelay = 2;    // dual relay
+    static constexpr uint32_t kNRelay = 2;  // dual relay
     // TWO DRISC drainers, and one D2H socket per drainer -- kNSockets is both counts. Each drainer owns
     // a disjoint contiguous slice of the grid (cores [0,60) / [60,120) at 120 cores), its own L1, its own
     // head mirrors and its own 12 MiB socket, so the two drain loops share nothing on the device.
@@ -179,12 +196,11 @@ private:
     // Per-read page cap. 0 = UNCAPPED (take whatever the FIFO holds, bounded only by fifo_pages-1).
     // Overridable at runtime with TT_METAL_PERF_DEBUG_MAX_PAGES.
     //
-    // Max pages pulled per read() (kPageSize = 64 B, so 1024 pages = 64 KB). Override:
-    // TT_METAL_PERF_DEBUG_MAX_PAGES. 0 = uncapped.
+    // Socket page = one staged span frame (kPageSize = 10,560 B). FINDINGS egress winner was
+    // ~80 KB x 8 pages/read ≈ 640 KB per host read → 25.4 GB/s with memcpy (57.6 GB/s discard).
+    // Default 60 pages ≈ 619 KB. Override: TT_METAL_PERF_DEBUG_MAX_PAGES.
     //
-    // This has been 1024, then 0, and is now 1024 again. Both changes were right for their time, and the
-    // reason it flipped back is worth keeping:
-    //
+    // HISTORY (when kPageSize was 64 B):
     // ERA 1 -- inline Tracy push on the drain thread. A small cap multiplied a huge fixed per-read cost
     // (socket read + decode + the Tracy push, all on one thread), so the FIFO stayed full and the RELAY sat
     // in HOST-WAIT, back-pressuring the reader into the worker cores. Measured on UFLD-v2 (~99M markers),
@@ -209,12 +225,29 @@ private:
     // At real-model rates the FIFO rarely holds 1024 pages, so the cap barely binds -- it costs nothing and
     // buys ~75 delay units of margin at the knee. See FINDINGS SS27.
     //
+    // ERA 3 -- live-pack on the mover (variable frames) needs 64 B pages again. Cap 10240 = 640 KB/read
+    // so we still amortize; uncapped risks a multi-ms stall on one socket while the other starves.
+    // Optional MIN_PAGES (TT_METAL_PERF_DEBUG_MIN_PAGES) holds a poll until a FINDINGS-sized chunk is
+    // pending; default 0 -- device-side pack coalesce already widens bursts, and a host hold stranded
+    // FIFO tails at teardown until stop-drain was added.
+    //
     // KNOWN LIMITATION: a PAGE cap does not bound per-pass TIME. Once data is plentiful every read is a full
     // cap-sized read, which is why caps of 64 / 256 / 1024 / 4096 are indistinguishable below the knee. The
     // correct fix is to bound elapsed time per pass; this is the stopgap that behaves well at observed rates.
     // Note also the ack is issued by read() itself, so a bigger read acks MORE data sooner, not later.
-    static constexpr uint32_t kMaxPagesPerRead = 1024;
+    // 64 B socket pages (SPSC_SPAN_PAGE_WORDS). Live-pack emits variable-length frames; a large fixed
+    // page would pad every frame back to a full slot and erase the PCIe win (measured). Cap ~640 KB/read.
+    static constexpr uint32_t kMaxPagesPerRead = 10240;  // 640 KB @ 64 B; uncapped was slower/noisier
     static constexpr uint32_t kPageSize = 64;
+    static_assert(kPageSize == kernel_profiler::SPSC_SPAN_PAGE_WORDS * 4u, "host/device socket page contract");
+    // Bound on the decoder's cross-call residual (a trailing partial packet, at most one incomplete
+    // BULK_SPAN frame ~2640 words). Sizes the publish batches so one decode call can never overflow.
+    static constexpr uint32_t kDecodeCarryWords = 4096;
+    // Decode-worker fan-out ceiling (TT_METAL_PERF_DEBUG_DECODE_WORKERS picks the actual count, default 3).
+    // Cores shard CONTIGUOUSLY across workers (worker = core * N / num_cores), which preserves per-lane
+    // record order structurally: a lane never changes worker, and each worker consumes its slots in
+    // stream order. Cap 4: w=3 matches w=4 on marker-wire; w=2 is decode-bound.
+    static constexpr uint32_t kMaxDecodeWorkers = 4;
     static constexpr uint32_t kNRisc = 5;
     static constexpr uint32_t kNoSocket = 0xFFFFFFFFu;  // DeviceCtx::sock_of for a filler
 
@@ -237,30 +270,34 @@ private:
         CoreCoord drisc_virtual[kMaxDrisc];
         uint64_t drisc_l1_noc[kMaxDrisc] = {};  // NoC-addressable base of each DRISC L1 window
         uint32_t drisc_l1_base[kMaxDrisc] = {};
-        uint32_t stop_addr[kMaxDrisc] = {};     // host writes 1 to quiesce, 2 to release the NIU
-        uint32_t done_addr[kMaxDrisc] = {};     // drainer publishes 0xD09E**** once its last page is out
+        uint32_t stop_addr[kMaxDrisc] = {};  // host writes 1 to quiesce, 2 to release the NIU
+        uint32_t done_addr[kMaxDrisc] = {};  // drainer publishes 0xD09E**** once its last page is out
         uint32_t results_addr[kMaxDrisc] = {};
         // ---- role split (all zero / kRoleFull when the knob is off) ----
-        uint32_t n_drisc = kNSockets;             // 2 normally, kNFillers + kNSockets with the role split on
-        uint32_t role[kMaxDrisc] = {};            // 0 = full job, 1 = filler, 2 = mover
-        uint32_t sock_of[kMaxDrisc] = {};         // socket index this DRISC owns, or kNoSocket
-        uint32_t hs_addr[kMaxDrisc] = {};         // filler's handshake block (head/tail/probes) in its L1
+        uint32_t n_drisc = kNSockets;      // 2 normally, kNFillers + kNSockets with the role split on
+        uint32_t role[kMaxDrisc] = {};     // 0 = full job, 1 = filler, 2 = mover
+        uint32_t sock_of[kMaxDrisc] = {};  // socket index this DRISC owns, or kNoSocket
+        uint32_t hs_addr[kMaxDrisc] = {};  // filler's handshake block (head/tail/probes) in its L1
         // mover -> the filler indices it drains, and how many. n_peer is 0 for a filler / full-job drainer.
         uint32_t peer_of[kMaxDrisc][kNPeerMax] = {};
         uint32_t n_peer[kMaxDrisc] = {};
-        uint32_t dram_bank[kMaxDrisc] = {};       // ring bank of the ring DRISC d OWNS (fillers; 0 for movers)
+        uint32_t dram_bank[kMaxDrisc] = {};  // ring bank of the ring DRISC d OWNS (fillers; 0 for movers)
         // Bank-relative base of the ring DRISC d owns. PER-DRISC rather than one shared value: the kernel
         // reaches its ring through get_noc_addr_from_bank_id, which adds bank_to_dram_offset[bank] itself, so
         // the host has to subtract THAT BANK's offset. It measures 0 in every bank on bh-26, but with four
         // rings a single shared address would silently mis-address any bank whose offset differed.
         uint32_t dram_addr[kMaxDrisc] = {};
-        uint32_t dram_frames = 0;                 // ring capacity in whole frames (identical for every ring)
+        uint32_t dram_frames = 0;  // ring capacity in whole frames (identical for every ring)
         // No buffer handle: the rings live in the HAL's per-bank DRAM PROFILER region, which is reserved for
         // the profiler's whole lifetime by construction. Nothing to own, nothing to free.
         // core_index -> virtual (x,y) [what the SRC lane resolves to], and virtual -> NOC0 (x,y) [Tracy view].
         std::vector<std::pair<uint32_t, uint32_t>> core_virt;
         std::unordered_map<uint64_t, std::pair<uint32_t, uint32_t>> virt_to_noc0;
         std::unique_ptr<profiler::SpscDecodeState> decode[kNSockets];
+        // Per-(worker, socket) decode state for the parallel workers. Per-lane fields shard trivially (a
+        // lane's frames always land on one worker); cur_prog is naturally per-core because each core's
+        // BRISC emits its own STICKY_PROG and a core's frames stay on one worker.
+        std::unique_ptr<profiler::SpscDecodeState> wdecode[kMaxDecodeWorkers * kNSockets];
         bool active = false;
         // --hartzones equivalent (TT_METAL_PERF_DEBUG_HART_ZONES=1): the drain harts inject their own
         // busy/idle spans IN-BAND. {rdcycle, meta} pairs per hart (START,END alternating); each hart is written
@@ -270,12 +307,35 @@ private:
             uint64_t rdc;
             uint32_t meta;
         };
-        // Per-socket state that used to live as locals in the old per-socket drain thread. drain_pass() is
-        // now one pass called repeatedly by the single writer thread, so it has to persist here.
+        // Per-socket state; drain_pass() is called repeatedly by this socket's producer thread, so it
+        // persists here. Staging slots: the producer fills slot (fill_seq & mask), ACKs, splits the slot
+        // into whole-frame ranges per decode worker, and advances fill_seq; each WORKER consumes its
+        // ranges from every slot in order and advances its own wdone. A slot is reusable when every
+        // worker has passed it. Eight slots: the mover ships same-filler frame batches, so a
+        // single slot's frames often belong to ONE worker -- pipeline depth across slots is what lets
+        // several workers run concurrently. Four slots stalls decode under role-split (50–120 ms).
+        //
+        // ZERO-COPY (decode in place on D2H peek) lost twice to this staging copy: branchy decode
+        // pulls ~5 GB/s from cold PCIe lines; memcpy + L3-warm decode is ~3x. Do not remove.
+        static constexpr size_t kStageSlots = 8;
         struct SockState {
-            std::vector<uint32_t> buf;        // scratch for the page read (+ decoder residual)
-            std::vector<PerfDebugRec> batch;  // pre-sized to the per-read record upper bound
-            uint64_t iters = 0, pages = 0, emit = 0, stall = 0;
+            std::array<std::vector<uint32_t>, kStageSlots> buf{};
+            std::array<size_t, kStageSlots> words{};
+            // Producer-authored per-slot, per-worker WHOLE-frame ranges (pointer, words) into the slot's
+            // staging (or into carry[slot] for the one frame that straddled the previous slot's end).
+            std::array<std::array<std::vector<std::pair<const uint32_t*, uint32_t>>, kMaxDecodeWorkers>, kStageSlots>
+                ranges{};
+            // A frame cut by a slot boundary is reassembled here (indexed by the slot that completes it);
+            // carry_pend holds the partial tail copied out before its slot is recycled.
+            std::array<std::vector<uint32_t>, kStageSlots> carry{};
+            std::vector<uint32_t> carry_pend;
+            alignas(64) std::atomic<uint64_t> fill_seq{0};
+            std::array<std::atomic<uint64_t>, kMaxDecodeWorkers> wdone{};
+            uint64_t iters = 0, pages = 0, stall = 0;
+            // Producer-thread-owned phase counters (two producer threads now, so these cannot be members
+            // of the profiler).
+            uint64_t read_ns = 0, wait_ns = 0, copy_ns = 0, ack_ns = 0, poll_ns = 0, polls = 0, reads = 0, bytes = 0,
+                     wall_ns = 0;
             uint32_t quiesce = 0;
             bool done = false;
             bool overflow_reported = false;  // one-shot: pages_available() exceeded the FIFO (see drain_pass)
@@ -292,11 +352,16 @@ private:
         // origin, so the benign race is preferable to making the struct unmovable.
         uint64_t marker_ts_base = 0;
         bool synced = false;  // a real host<->device clock sync succeeded -> push RAW device timestamps
+        // Device cycles per nanosecond (GHz). From clock sync when valid, else aiclk. Used for
+        // first→last zone sustained-throughput reporting.
+        double freq_ghz = 0.0;
 
         DeviceCtx();
         ~DeviceCtx();
         DeviceCtx(DeviceCtx&&) noexcept;
     };
+
+    void report_sustained_throughput();  // device first→last zone vs host busy/wall, same numerators
 
     void start(const std::shared_ptr<distributed::MeshDevice>& mesh_device);
     // Put this DRISC's NIU into stream mode (1) or back to NOC2AXI (0). Its own program, launched and
@@ -312,67 +377,70 @@ private:
     // block forever -- the workload wedges rather than merely losing its capture.
     void disarm_producers(const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t device_id);
     bool boot_device(const std::shared_ptr<distributed::MeshDevice>& mesh_device, DeviceCtx& ctx);
-    // ONE read+decode pass over (ctx, sock): pages -> decode -> records -> ring. Returns true if it moved data.
+    // ONE read pass over (ctx, sock): pages -> early ACK -> split the staged slot into per-worker
+    // whole-frame ranges -> publish the slot to the decode workers. Returns true if it moved data.
     bool drain_pass(DeviceCtx& ctx, uint32_t sock_idx);
+    // Producer-side splitter: walk the staged words packet-by-packet (frame hops -- 2 loads per ~10 KB
+    // frame), route each whole frame to its core's worker, and reassemble the frame cut at the slot
+    // boundary via carry_pend/carry[slot]. Adjacent same-worker frames coalesce into one range.
+    void split_slot(DeviceCtx& ctx, uint32_t sock_idx, size_t slot, const uint32_t* stage, size_t words);
+    // Decode one slot's ranges for one worker into that worker's PublishBatch and submit it.
+    void decode_ranges(DeviceCtx& ctx, uint32_t sock_idx, uint32_t worker, size_t slot);
     // PRODUCER STAGGER PROBE. first_ts_[lane] = device timestamp of the first marker seen on that lane.
     // The SPREAD across lanes says whether the 110 cores start together or staggered -- which is the open
     // question behind the "degraded" batching difference (12 vs 57 cores with data per drainer sweep).
-    // Indexed by the record's lane field; 0 = not yet seen. Written only by the decode threads, one lane
-    // belongs to exactly one socket, so no locking is needed.
+    // Indexed by the record's lane field; 0 = not yet seen. Written only by the producer thread.
     std::vector<uint64_t> first_ts_;
     void report_lane_spread();
     // Read the drainer's LIVE state (done word, heartbeat, phase) mid-run and log it. Distinguishes
     // "kernel exited" from "kernel blocked in the credit wait" from "kernel sweeping with nothing to do" --
     // states the end-of-run results block cannot tell apart because it is only published on exit.
     void dump_drainer_state(DeviceCtx& ctx, uint32_t d, const char* why);
-    void writer_thread(uint32_t sock_idx);   // one reader per socket: poll -> read -> ack -> enqueue
-    // One decoder per socket -- decode state is sequential per stream. Owns decode+publish; see
-    // decode_and_publish for why that work is off the reader thread.
-    void decoder_thread(uint32_t sock_idx);
-    void decode_and_publish(DeviceCtx& ctx, uint32_t sock_idx, std::vector<uint32_t>& buf, size_t words);
-    void consumer_thread();  // BroadcastRing reader -> PerfDebugTracyHandler (the slow sink, now off the drain)
+    // Producer for ONE socket: poll -> read -> ack -> split into per-worker ranges.
+    void producer_thread(uint32_t sock_idx);
+    // Decode worker: consumes its ranges from every socket's slots, in slot order.
+    void decode_worker(uint32_t worker);
+    // Dedicated BroadcastRing writer: drains worker scratch batches via publish_batch.
+    void publisher_thread();
+    void consumer_thread();  // BroadcastRing reader -> PerfDebugTracyHandler
+    bool decoder_work_pending() const;
+
+    struct PublishBatch {
+        std::vector<PerfDebugRec> recs;
+        size_t n = 0;
+    };
+    static constexpr size_t kPublishBatchSlots = 4;  // slack so decode never waits on publisher
+    // Per-worker double-buffered SPSC handoff (worker -> publisher) plus that worker's decode counters
+    // (single-writer, summed/maxed at report time).
+    struct WorkerPub {
+        std::array<PublishBatch, kPublishBatchSlots> batches{};
+        alignas(64) std::atomic<uint64_t> prod{0};
+        alignas(64) std::atomic<uint64_t> cons{0};
+        uint64_t decode_ns = 0;
+        uint64_t recs = 0;
+        uint64_t zone_recs = 0;
+        uint64_t stall = 0;
+        uint64_t emit[kNSockets] = {0, 0};
+        uint64_t last_rec_ns = 0;
+    };
+    PublishBatch* publish_acquire_batch(uint32_t worker);  // wait until a free slot
+    void publish_submit_batch(uint32_t worker);
+    void publish_wait_idle();  // every worker's cons == prod
+    void publish_stop();
 
     std::vector<DeviceCtx> devices_;
     std::unique_ptr<PerfDebugTracyHandler> tracy_;
-    // ★ Same shape as the standalone drain harness: the drain NEVER blocks on Tracy. One writer publishes decoded
-    // records into a BroadcastRing; a separate consumer pushes them to Tracy. A lagging consumer DROPS its
-    // own records (reported) instead of back-pressuring the FIFO -> relay -> reader -> worker cores.
-    // Measured why this is required: with the push inline, UFLD-v2 put relay0 in HOST-WAIT for 15.85 s of a
-    // 19 s run and stalled producers 826x; with the push removed entirely, stalls went to 0.
+    // Single BroadcastRing: decode workers submit L3 scratch batches; one publisher NT-copies in.
     std::unique_ptr<RecRingHolder> ring_;
-    std::vector<std::thread> writers_;
-    std::vector<std::thread> decoders_;
-    // One raw buffer per outstanding read, handed reader -> decoder. Bounded: at 64 KB per buffer this caps
-    // at ~64 MB. On exhaustion the reader still DRAINS the FIFO into a scratch and discards, because leaving
-    // the FIFO full would back-pressure the DRISC and stall the workload -- losing capture beats perturbing
-    // the thing being measured, the same policy the BroadcastRing already uses on its own overflow.
-    // Pool ceiling. SIZED IN BUFFERS, so it is really a limit on reads-in-flight -- and the right number
-    // depends on the per-read page cap, which is tunable. At cap 1024 (64 KB reads) the queue peaked at
-    // 363 and 1024 was ample; at cap 176 (11 KB reads) there are 4.6x more reads, the queue pinned at
-    // exactly 1023 and the writer began DISCARDING: 5.31M of 6.0M records, ~11% of the capture silently
-    // lost, with worst-sweep credit-wait doubling to 155 us. Overridable so the two knobs can be matched.
-    static constexpr size_t kMaxPooledBufs = 4096;
-    struct DecodeItem {
-        DeviceCtx* ctx = nullptr;
-        uint32_t sock = 0;
-        std::vector<uint32_t> buf;
-        // VALID WORD COUNT, carried explicitly rather than as buf.size(). The buffer is pooled and grows
-        // MONOTONICALLY to the largest read seen, so its size is not the length of this read. Sizing by
-        // resize() instead cost 12.3 ms per run in pure zeroing -- see drain_pass.
-        size_t words = 0;
-    };
-    struct DecodeQueue {
-        std::mutex m;
-        std::condition_variable cv;
-        std::deque<DecodeItem> work;
-        std::vector<std::vector<uint32_t>> free_bufs;
-        size_t allocated = 0;
-        uint64_t dropped = 0;   // reads discarded: pool exhausted (decoder fell behind)
-        uint64_t max_depth = 0;
-        bool quit = false;
-    };
-    DecodeQueue dq_[kNSockets];
-    std::vector<std::thread> consumers_;
+    std::array<std::thread, kNSockets> producers_;
+    std::vector<std::thread> workers_;
+    std::thread publisher_;
+    std::thread consumer_;
+    uint32_t n_workers_ = 3;
+    std::array<WorkerPub, kMaxDecodeWorkers> wpub_{};
+    std::atomic<bool> publisher_stop_{false};
+    std::once_flag first_data_once_;
+    std::atomic<bool> decoder_stop_{false};
     std::atomic<uint64_t> consumed_{0};
     std::atomic<uint64_t> dropped_{0};
     std::atomic<bool> writer_done_{false};
@@ -380,40 +448,21 @@ private:
     // TEMPORARY DIAGNOSTICS (nesting investigation): where markers vanish between decode and the ring, and
     // whether per-lane ts order is already broken at publish or only after the ring.
     std::atomic<uint64_t> w_drop_lane_{0};    // markers whose lane is outside the known core grid
-    std::atomic<uint64_t> w_batch_flush_{0};  // mid-decode flushes because the record batch filled
+    std::atomic<uint64_t> w_batch_flush_{0};  // mid-decode claim re-arms because the reservation filled
     std::atomic<uint64_t> w_pub_regress_{0};  // per-lane ts going backwards AT PUBLISH (must stay 0)
     std::atomic<uint64_t> w_pub_ok_{0};
     std::vector<uint64_t> pub_last_ts_;
-    // BroadcastRing is SINGLE-producer ("driven by a single thread"), but there is one decoder thread per
-    // socket and they all publish to the one Writer. Unserialized that races: a slot claimed by one thread
-    // while the other advances head lets the reader observe a slot that was never written -- it reads the
-    // stale record still there from an earlier wrap. Consequences measured on a 12x10 run at delay 100:
-    // 1,377 per-lane timestamp regressions and 1,027,642 of 5,490,733 records lost. Serialized: 0 and 0.
-    // Publishing happens once per socket read (~1.1k times/run), so this lock is off the per-record path.
-    std::mutex publish_mu_;
     std::atomic<uint64_t> w_con_regress_{0};
     std::atomic<uint64_t> w_con_seen_{0};
-    // Writer-thread phase accounting, in nanoseconds. Touched only by the writer thread and read after it
-    // joins, so no synchronisation is needed. The Tracy zones (sock-read/decode/publish) only exist inside
-    // a capture; these exist always, which is what lets us say whether the host wall is the COPY or the
-    // per-marker DECODE without guessing.
     uint64_t w_read_ns_ = 0;
-    // sock-read split. `read()` is wait_for_bytes + two memcpys + pop_bytes + notify_sender(the ack), and
-    // only the memcpy scales with BYTES -- which is what makes under-packed frames a HOST problem. The ack
-    // is a single ~180 ns PCIe write and the resize is an allocation, so attributing the whole of sock-read
-    // to "the copy" would be a guess. These three separate it.
-    uint64_t w_resize_ns_ = 0;
+    uint64_t w_wait_ns_ = 0;
+    uint64_t w_copy_ns_ = 0;
+    // sock-read split. `read()` is wait_for_bytes + two memcpys + pop_bytes; the ack is issued separately.
+    // Only the memcpy scales with BYTES. The ack is a single ~180 ns PCIe write.
     uint64_t w_ack_ns_ = 0;
     uint64_t w_predrain_ns_ = 0;
-    // Per-read handoff costs (TSC ticks). At a small page cap the writer does 4.6x more reads and stalls
-    // are 4x worse with identical bytes -- the cost scales with READ COUNT, and it is not the copy, the
-    // ack, the pool size or the writer's sleep (all measured/falsified). These two time the remaining
-    // per-read work: taking a buffer from the pool, and the enqueue+notify handoff to the decoder. Both
-    // take the SAME mutex the decoder holds while dequeuing, so contention is the standing suspect.
-    uint64_t w_pool_ns_ = 0;
-    uint64_t w_enq_ns_ = 0;  // diagnostic: store-buffer drain charged separately from the ack
     uint64_t w_decode_ns_ = 0;
-    uint64_t w_publish_ns_ = 0;
+    uint64_t w_publish_ns_ = 0;  // dedicated publisher occupancy
     uint64_t w_reads_ = 0;
     uint64_t w_bytes_ = 0;
     uint64_t w_recs_ = 0;
@@ -421,6 +470,12 @@ private:
     uint64_t w_poll_ns_ = 0;
     uint64_t w_polls_ = 0;
     uint64_t w_wall_ns_ = 0;
+    // Sustained-throughput window. Device: min/max ZONE marker timestamps (device cycles). Host: steady_clock
+    // ns from first successful drain through last decode that published records. Same numerators (D2H bytes,
+    // marker-wire bytes, zone count) over each window => apples-to-apples GB/s and Mzones/s.
+    uint64_t w_zone_recs_ = 0;         // PP_ZONE_START/END only (excludes PP_DATA continuations)
+    uint64_t host_first_data_ns_ = 0;  // steady_clock ns since epoch; 0 = none
+    uint64_t host_last_rec_ns_ = 0;
     std::atomic<bool> stop_{false};
     std::atomic<bool> stopped_{false};
     std::unordered_map<uint16_t, std::string> zone_names_;  // srcloc hash -> zone name (Tracy)

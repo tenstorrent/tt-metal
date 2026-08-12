@@ -74,10 +74,12 @@
 // produced 0/25 failures held in stream mode and 0/25 doing filler-only duty. The hazard lives in the
 // egress/host-facing half.
 //
-// The frame layout does not change, which is what keeps the host decoder untouched: a DRAM ring slot is the
-// same 2,640-word prefix+span the socket path ships, so the mover copies whole frames and never re-frames.
+// Filler→DRAM keeps the whole-slot layout (fixed ring indexing). The mover may LIVE-PACK before PCIe
+// (SPSC_SPAN_PACKED_FLAG): only live ring runs cross the wire. Pack uses NoC L1 loopback DMA -- a CPU
+// word walk was the FINDINGS 45% tax; memcpy still left mover busy ~50 us. NoC pack is ~10 us proc.
 
 #include <cstdint>
+#include <cstring>
 
 #include "api/compile_time_args.h"
 #include "api/core_local_mem.h"
@@ -248,9 +250,11 @@ void kernel_main() {
     constexpr uint32_t kPrefix = kernel_profiler::SPSC_SPAN_PREFIX_WORDS;
     constexpr uint32_t kSlotWords = kPrefix + kSpanWords;  // 2,640
     constexpr uint32_t kSlotBytes = kSlotWords * 4u;       // 10,560
-    constexpr uint32_t kPageWords = kernel_profiler::SPSC_SPAN_PAGE_WORDS;
-    constexpr uint32_t kPageBytes = kPageWords * 4u;
-    constexpr uint32_t kPagesPerSlot = kSlotWords / kPageWords;  // 165
+    // Socket page = wire pad quantum (64 B). Live-pack produces variable-length frames, so the page must
+    // stay small: a 10,560 B page would force every packed frame back up to a full slot and erase the win.
+    // Whole-slot ships (filler→DRAM, ablate) use kPagesPerSlot pages per frame.
+    constexpr uint32_t kSocketPageBytes = kernel_profiler::SPSC_SPAN_PAGE_WORDS * 4u;
+    constexpr uint32_t kPagesPerSlot = kSlotBytes / kSocketPageBytes;  // 165
     // Reads take the NoC the writes do not; NOC_INDEX (the kernel's configured NoC) carries egress.
     constexpr uint8_t kReadNoc = NOC_INDEX == 0 ? 1 : 0;
     // Two staging generations: one fills while the other drains.
@@ -269,6 +273,13 @@ void kernel_main() {
     // ---- ROLE SPLIT (see the header). 0 = today's full-job drainer, and every arg below is then 0. ----
     constexpr uint32_t kRoleFull = 0, kRoleFiller = 1, kRoleMover = 2;
     constexpr uint32_t kRole = get_compile_time_arg_val(20);
+    // LIVE-PACK on the mover: rewrite each DRAM frame into the packed wire layout (SPSC_SPAN_PACKED_FLAG)
+    // before the PCIe push. Filler→DRAM stays whole-slot (fixed ring indexing); only host-facing bytes shrink.
+    // Host decoder already understands the flag (spsc_marker_decode.hpp).
+    // Input depth 2 (not kGenSlots=3) leaves 5 slots ≈ 52 KB for the pack accumulate buffer so both peers
+    // of a dual-ring mover usually fit in ONE PCIe ship.
+    constexpr bool kLivePack = (kRole == kRoleMover);
+    constexpr uint32_t kPackInSlots = kLivePack ? 2u : kNStage;
     constexpr uint32_t kDramBank = get_compile_time_arg_val(21);    // allocator bank id of this ring
     constexpr uint32_t kDramAddr = get_compile_time_arg_val(22);    // bank-relative base of this ring
     constexpr uint32_t kDramFrames = get_compile_time_arg_val(23);  // ring capacity in whole frames
@@ -314,7 +325,9 @@ void kernel_main() {
 
     static_assert(kSpanBytes <= NOC_MAX_BURST_SIZE, "the fused span read must fit one NoC burst");
     static_assert(kNumRisc <= kernel_profiler::PROFILER_SPSC_MAX_RISC, "control layout too small");
-    static_assert(kSlotWords % kPageWords == 0, "a slot must be a whole number of socket pages");
+    static_assert(kSlotBytes % kSocketPageBytes == 0, "a slot must be a whole number of socket pages");
+    static_assert(kPagesPerSlot == kSlotBytes / kSocketPageBytes, "kPagesPerSlot mismatch");
+    static_assert(kSocketPageBytes == 64u, "live-pack assumes 64 B socket pages");
 
     const uint32_t num_cores = get_arg_val<uint32_t>(0);
     const uint32_t cv_src = get_arg_val<uint32_t>(1);  // start of profiler_msg_t on the worker
@@ -367,7 +380,7 @@ void kernel_main() {
         sender = create_sender_socket_interface(kSocketConfigAddr);
         pcie_xy_enc = kPcieEncOverride != 0 ? kPcieEncOverride : sender.d2h.pcie_xy_enc;
         pcie_base = (static_cast<uint64_t>(sender.d2h.data_addr_hi) << 32) | sender.downstream_fifo_addr;
-        set_sender_socket_page_size(sender, kPageBytes);
+        set_sender_socket_page_size(sender, kSocketPageBytes);
     }
 
     volatile tt_l1_ptr uint32_t* stop = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kStopAddr);
@@ -505,24 +518,19 @@ void kernel_main() {
     // never fires in normal operation -- it exists purely to convert "wait forever" into "lose a frame".
     constexpr uint64_t kCreditWaitCycles = 67500000ull;
 
-    // Ship `count` adjacent slots as ONE contiguous write. They are already framed in place: nothing is
+    // Ship `count` adjacent FULL slots as ONE contiguous write. They are already framed in place: nothing is
     // copied, nothing is assembled.
     // Returns false if this send was dropped (credit wait expired), so an amplified run stops repeating
     // into a consumer that is not acking instead of billing one dropped frame per repeat.
-    auto ship_once = [&](uint32_t start, uint32_t count) -> bool {
-        const uint32_t nbytes = count * kSlotBytes;
-        const uint32_t npages = count * kPagesPerSlot;
+    auto ship_bytes = [&](uint32_t src_l1, uint32_t nbytes) -> bool {
+        const uint32_t npages = nbytes / kSocketPageBytes;
         const uint64_t t0 = get_timestamp();
-        *phase = kPhaseReserve;  // if the host sees this stuck, the credit wait is the deadlock
+        *phase = kPhaseReserve;
         const bool credited = reserve_pages_bounded(sender, npages, t0 + kCreditWaitCycles, stop);
         *phase = kPhaseWrite;
         if (!credited) {
-            // The consumer is gone or wedged. DROP this frame rather than block: the heads for these slots
-            // were already written back, so the producers stay unblocked and the workload runs to
-            // completion. Capture is best-effort; the workload is not.
             *phase = kPhDropped;
             credit_timeouts++;
-            dropped_frames += count;
             c_reserve += get_timestamp() - t0;
             return false;
         }
@@ -531,15 +539,12 @@ void kernel_main() {
         if (static_cast<uint32_t>(t1 - t0) > max_reserve) {
             max_reserve = static_cast<uint32_t>(t1 - t0);
         }
-        // A multi-page write is one contiguous burst, so it must be split where the FIFO wraps;
-        // socket_push_pages only wraps the pointer, it does not split the transfer.
         *phase = kPhWrChunk;
-        const uint32_t base = kStageBase + start * kSlotBytes;
         const uint32_t fifo_size = sender.downstream_fifo_curr_size;
         const uint32_t first = (sender.write_ptr + nbytes > fifo_size) ? fifo_size - sender.write_ptr : nbytes;
-        write_to_host_chunked(pcie_xy_enc, base, pcie_base + sender.write_ptr, first);
+        write_to_host_chunked(pcie_xy_enc, src_l1, pcie_base + sender.write_ptr, first);
         if (first < nbytes) {
-            write_to_host_chunked(pcie_xy_enc, base + first, pcie_base, nbytes - first);
+            write_to_host_chunked(pcie_xy_enc, src_l1 + first, pcie_base, nbytes - first);
         }
         const uint64_t t2 = get_timestamp();
         c_wr_chunk += t2 - t1;
@@ -556,6 +561,93 @@ void kernel_main() {
         pages += npages;
         pushes++;
         return true;
+    };
+
+    auto ship_once = [&](uint32_t start, uint32_t count) -> bool {
+        if (!ship_bytes(kStageBase + start * kSlotBytes, count * kSlotBytes)) {
+            dropped_frames += count;
+            return false;
+        }
+        return true;
+    };
+
+    // L1→L1 bulk via NoC loopback. CPU memcpy on a DRISC is the FINDINGS 45% tax (~11 cyc/word even when
+    // non-volatile); the NIU moves aligned spans for nearly free. Src/dst must be 16 B aligned; size too.
+    // Tiny / misaligned edges stay on the CPU.
+    auto noc_l1_copy = [&](uint32_t dst_l1, uint32_t src_l1, uint32_t nbytes) {
+        if (nbytes == 0) {
+            return;
+        }
+        // Peel to 16 B alignment (same misalignment on both sides after the packed lead pad).
+        const uint32_t head_peel = (16u - (dst_l1 & 15u)) & 15u;
+        if (head_peel != 0) {
+            const uint32_t n = head_peel < nbytes ? head_peel : nbytes;
+            memcpy(reinterpret_cast<void*>(dst_l1), reinterpret_cast<const void*>(src_l1), n);
+            dst_l1 += n;
+            src_l1 += n;
+            nbytes -= n;
+        }
+        const uint32_t noc_n = nbytes & ~15u;
+        // Skip NoC setup for crumbs -- issue cost dominates below ~64 B.
+        if (noc_n >= 64u) {
+            // Pack DMAs on kReadNoc so they can overlap NOC_INDEX credit/PCIe work.
+            noc_async_read(get_noc_addr(src_l1, kReadNoc), dst_l1, noc_n, kReadNoc);
+            dst_l1 += noc_n;
+            src_l1 += noc_n;
+            nbytes -= noc_n;
+        }
+        if (nbytes != 0) {
+            memcpy(reinterpret_cast<void*>(dst_l1), reinterpret_cast<const void*>(src_l1), nbytes);
+        }
+    };
+
+    // Pack one whole-slot frame at `src` into packed wire layout at `dst`. Returns frame size in BYTES
+    // (page-aligned). Matches spsc_marker_decode.hpp packed walk: pad to 16 B, (head&3) lead words, then
+    // the live run unwrapped. Lead words may be zero -- the host skips them without inspecting contents.
+    // Ring runs go through noc_l1_copy (queued); caller must barrier before reading the packed bytes.
+    auto pack_frame = [&](uint32_t src, uint32_t dst) -> uint32_t {
+        const uint32_t* in = reinterpret_cast<const uint32_t*>(src);
+        uint32_t* out_base = reinterpret_cast<uint32_t*>(dst);
+        const uint32_t* ctrl = in + kPrefix;
+        const uint32_t* rings = ctrl + kCtrlWords;
+        uint32_t* out = out_base + kPrefix;
+        noc_l1_copy(reinterpret_cast<uint32_t>(out), reinterpret_cast<uint32_t>(ctrl), kCtrlWords * 4u);
+        out += kCtrlWords;
+        for (uint32_t r = 0; r < kNumRisc; r++) {
+            const uint32_t head = ctrl[kernel_profiler::SPSC_RING_HEAD_0 + r];
+            const uint32_t tail = ctrl[kernel_profiler::SPSC_RING_TAIL_0 + r];
+            const uint32_t run = kernel_profiler::spsc_span_live(head, tail, kRingWords);
+            if (run == 0) {
+                continue;
+            }
+            const uint32_t off = static_cast<uint32_t>(out - out_base);
+            const uint32_t pad_lead = ((4u - (off & 3u)) & 3u) + (head & 3u);
+            if (pad_lead != 0) {
+                memset(out, 0, pad_lead * 4u);
+                out += pad_lead;
+            }
+            const uint32_t* ring = rings + r * kRingWords;
+            const uint32_t head_mod = head % kRingWords;
+            const uint32_t first = (kRingWords - head_mod) < run ? (kRingWords - head_mod) : run;
+            noc_l1_copy(reinterpret_cast<uint32_t>(out), reinterpret_cast<uint32_t>(ring + head_mod), first * 4u);
+            out += first;
+            if (run > first) {
+                noc_l1_copy(reinterpret_cast<uint32_t>(out), reinterpret_cast<uint32_t>(ring), (run - first) * 4u);
+                out += run - first;
+            }
+        }
+        const uint32_t payload = static_cast<uint32_t>(out - out_base) - kPrefix;
+        const uint32_t frame = kernel_profiler::spsc_span_frame_words(payload);
+        const uint32_t have = static_cast<uint32_t>(out - out_base);
+        if (have < frame) {
+            memset(out, 0, (frame - have) * 4u);
+        }
+        out_base[0] = kernel_profiler::spsc_span_w0() | kernel_profiler::SPSC_SPAN_PACKED_FLAG;
+        out_base[1] = payload;
+        for (uint32_t k = 2; k < kPrefix; k++) {
+            out_base[k] = 0;
+        }
+        return frame * 4u;
     };
 
     // One logical frame = kShipRepeat sends of the same staged bytes. At kShipRepeat == 1 this is exactly the
@@ -767,107 +859,215 @@ void kernel_main() {
                 *hb = sweeps * kAblateBatches + b + 1;
             }
         } else if constexpr (kRole == kRoleMover) {
-        // ---- MOVER: kNPeer DRAM rings -> staging -> the existing D2H socket ----
-        //
-        // No worker grid, no control-vector scan, no head write-back. The frames in the ring are already
-        // complete (prefix + span, written by the filler), so this is a copy and a push -- which is why the
-        // socket protocol, the host FIFO and the host decoder are all untouched by the role split.
-        //
-        // The peers are visited SEQUENTIALLY and each gets the whole staging area. The write barrier at the
-        // end of a peer's visit is what makes that safe (it already had to be there for staging reuse), and
-        // it is also why splitting the slots between peers would buy nothing: the two pushes go into ONE
-        // socket, so they could not have overlapped anyway. Cost of getting this wrong is direct -- halving
-        // the batch doubles the per-frame credit-wait/notify overhead, which is where the knee lives.
-        for (uint32_t peer = 0; peer < kNPeer; peer++) {
-        const uint32_t pxy = kPeerXYs[peer];
-        const uint64_t t_r0 = get_timestamp();
-        noc_async_read(
-            get_noc_addr(pxy & 0xFFFFu, pxy >> 16, kPeerHss[peer] + kHsHead), kHeadScratch, 4u, NOC_INDEX);
-        // The FREE-function barrier, matching the free-function read above. Noc{}::async_read_barrier() is a
-        // different accounting path, and a barrier that watches the wrong counters returns EARLY -- which
-        // here would mean reading a head value that has not landed yet.
-        noc_async_read_barrier(NOC_INDEX);
-        invalidate_l1_cache();
-        const uint32_t head = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kHeadScratch);
-        uint32_t n = head - mv_tail[peer];
-        // HANDSHAKE SANITY, and it is not paranoia -- this exact check is what turns a silent capture
-        // corruption into a reported number.
-        //
-        // head is monotonic and the filler can never be more than kDramFrames ahead, so n > kDramFrames is
-        // structurally impossible and means the value is not a head at all. Observed for real: releasing the
-        // filler's NIU (stop=2) flips it back to NOC2AXI, where an inbound DRAM-range address is forwarded to
-        // GDDR instead of terminating at L1 -- so this read started returning GDDR contents (0xF5AE93CB), n
-        // underflowed to ~4.1e9, the `n > kNStage` clamp quietly turned that into "7 frames are ready", and
-        // the mover shipped 1,800 frames of garbage that no existing counter noticed. Bail instead of clamp.
-        if (n > kDramFrames) {
-            hs_bad++;
-            n = 0;
-            egress_dead = true;  // the peer is gone or unreadable; shipping anything more is corruption
-        }
-        if (n > ring_hi[peer]) {
-            ring_hi[peer] = n;
-        }
-        if (n != 0) {
-            // Bounded by staging, then by the ring wrap -- clamping at the wrap costs one short read per lap
-            // and keeps this a SINGLE contiguous DRAM read, which matters because reads are what the mover
-            // is made of.
-            if (n > kNStage) {
-                n = kNStage;
+            // ---- MOVER: kNPeer DRAM rings -> staging -> (optional live-pack) -> D2H socket ----
+            //
+            // No worker grid, no control-vector scan, no head write-back. The frames in the ring are already
+            // complete (prefix + span, written by the filler), so this is a copy and a push -- which is why the
+            // socket protocol, the host FIFO and the host decoder are all untouched by the role split.
+            //
+            // LIVE-PACK coalesce: pack every peer's frames into one L1 buffer, barrier pack (frees staging for
+            // the next peer), then ONE PCIe ship for the sweep. Host sees fewer/larger FIFO bursts. Pack DMAs
+            // use kReadNoc; credit-reserve spins on the host pointer while those DMAs drain.
+            //
+            // Peers still visit SEQUENTIALLY (shared staging). The write barrier per peer covers the tail write.
+            const uint32_t pack_base = kLivePack ? (kStageBase + kPackInSlots * kSlotBytes) : 0u;
+            const uint32_t pack_cap = kLivePack ? ((kNStage - kPackInSlots) * kSlotBytes) : 0u;
+            uint32_t packed_acc = 0;
+            uint32_t packed_frames = 0;
+
+            auto flush_packed = [&]() {
+                if constexpr (!kLivePack) {
+                    return;
+                }
+                if (packed_acc == 0) {
+                    return;
+                }
+                // Size is known from CPU layout even while payload DMAs are still in flight on kReadNoc --
+                // start the credit wait so a non-zero reserve overlaps the barrier.
+                const uint32_t npages = packed_acc / kSocketPageBytes;
+                const uint64_t t0 = get_timestamp();
+                *phase = kPhaseReserve;
+                const bool credited = reserve_pages_bounded(sender, npages, t0 + kCreditWaitCycles, stop);
+                noc_async_read_barrier(kReadNoc);
+                invalidate_l1_cache();
+                *phase = kPhaseWrite;
+                if (!credited) {
+                    *phase = kPhDropped;
+                    credit_timeouts++;
+                    dropped_frames += packed_frames;
+                    c_reserve += get_timestamp() - t0;
+                    packed_acc = 0;
+                    packed_frames = 0;
+                    return;
+                }
+                const uint64_t t1 = get_timestamp();
+                c_reserve += t1 - t0;
+                if (static_cast<uint32_t>(t1 - t0) > max_reserve) {
+                    max_reserve = static_cast<uint32_t>(t1 - t0);
+                }
+                // Inline the PCIe write/push/notify (same as ship_bytes body) now that credits are held and
+                // the pack buffer is valid.
+                *phase = kPhWrChunk;
+                const uint32_t fifo_size = sender.downstream_fifo_curr_size;
+                const uint32_t first =
+                    (sender.write_ptr + packed_acc > fifo_size) ? fifo_size - sender.write_ptr : packed_acc;
+                write_to_host_chunked(pcie_xy_enc, pack_base, pcie_base + sender.write_ptr, first);
+                if (first < packed_acc) {
+                    write_to_host_chunked(pcie_xy_enc, pack_base + first, pcie_base, packed_acc - first);
+                }
+                const uint64_t t2 = get_timestamp();
+                c_wr_chunk += t2 - t1;
+                *phase = kPhWrPush;
+                socket_push_pages(sender, npages);
+                const uint64_t t3 = get_timestamp();
+                c_wr_push += t3 - t2;
+                *phase = kPhWrNotify;
+                socket_notify_receiver(sender);
+                const uint64_t t4 = get_timestamp();
+                c_wr_notify += t4 - t3;
+                c_write += t4 - t1;
+                *phase = kPhWrDone;
+                pages += npages;
+                pushes++;
+                packed_acc = 0;
+                packed_frames = 0;
+            };
+
+            for (uint32_t peer = 0; peer < kNPeer; peer++) {
+                const uint32_t pxy = kPeerXYs[peer];
+                const uint64_t t_r0 = get_timestamp();
+                noc_async_read(
+                    get_noc_addr(pxy & 0xFFFFu, pxy >> 16, kPeerHss[peer] + kHsHead), kHeadScratch, 4u, NOC_INDEX);
+                // The FREE-function barrier, matching the free-function read above. Noc{}::async_read_barrier() is a
+                // different accounting path, and a barrier that watches the wrong counters returns EARLY -- which
+                // here would mean reading a head value that has not landed yet.
+                noc_async_read_barrier(NOC_INDEX);
+                invalidate_l1_cache();
+                const uint32_t head = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kHeadScratch);
+                uint32_t n = head - mv_tail[peer];
+                // HANDSHAKE SANITY, and it is not paranoia -- this exact check is what turns a silent capture
+                // corruption into a reported number.
+                //
+                // head is monotonic and the filler can never be more than kDramFrames ahead, so n > kDramFrames is
+                // structurally impossible and means the value is not a head at all. Observed for real: releasing the
+                // filler's NIU (stop=2) flips it back to NOC2AXI, where an inbound DRAM-range address is forwarded to
+                // GDDR instead of terminating at L1 -- so this read started returning GDDR contents (0xF5AE93CB), n
+                // underflowed to ~4.1e9, the `n > kNStage` clamp quietly turned that into "7 frames are ready", and
+                // the mover shipped 1,800 frames of garbage that no existing counter noticed. Bail instead of clamp.
+                if (n > kDramFrames) {
+                    hs_bad++;
+                    n = 0;
+                    egress_dead = true;  // the peer is gone or unreadable; shipping anything more is corruption
+                }
+                if (n > ring_hi[peer]) {
+                    ring_hi[peer] = n;
+                }
+                if (n != 0) {
+                    // Bounded by staging, then by the ring wrap -- clamping at the wrap costs one short read per lap
+                    // and keeps this a SINGLE contiguous DRAM read, which matters because reads are what the mover
+                    // is made of.
+                    // Live-pack: kPackInSlots of staging for DRAM frames; the rest accumulates packed wire bytes.
+                    const uint32_t n_cap = kLivePack ? kPackInSlots : kNStage;
+                    if (n > n_cap) {
+                        n = n_cap;
+                    }
+                    const uint32_t off = mv_tail[peer] % kDramFrames;
+                    if (off + n > kDramFrames) {
+                        n = kDramFrames - off;
+                    }
+                    noc_async_read(
+                        get_noc_addr_from_bank_id<true>(
+                            kPeerBanks[peer], kPeerAddrs[peer] + off * kSlotBytes, NOC_INDEX),
+                        kStageBase,
+                        n * kSlotBytes,
+                        NOC_INDEX);
+                    noc_b.async_read_barrier();
+                    c_read += get_timestamp() - t_r0;
+                    if (*mv_probe_frame[peer] == 0) {
+                        // First frame word the mover ever saw ON THIS RING. The host checks it against spsc_span_w0(),
+                        // which proves the filler's DRAM write and this read agree on the address -- end to end, with
+                        // no host-side DRAM read needed and no way for a plausible-but-wrong ring address to pass.
+                        // Per ring, because the two rings are in different DRAM banks and only one of them may be
+                        // wrong.
+                        *mv_probe_frame[peer] = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kStageBase);
+                    }
+                    // Release the ring region NOW: the bytes are in staging, so the filler may reuse it immediately.
+                    // Doing this before the push (rather than after) is what keeps the filler off the ring ceiling.
+                    mv_tail[peer] += n;
+                    volatile tt_l1_ptr uint32_t* tsrc =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kHeadScratch + 32u);
+                    *tsrc = mv_tail[peer];
+                    noc_async_write(
+                        kHeadScratch + 32u,
+                        get_noc_addr(pxy & 0xFFFFu, pxy >> 16, kPeerHss[peer] + kHsTail),
+                        4u,
+                        NOC_INDEX);
+                    *mv_live_head[peer] = head;
+                    *mv_live_tail[peer] = mv_tail[peer];
+                    if constexpr (kLivePack) {
+                        const uint64_t t_pack0 = get_timestamp();
+                        uint64_t t_pack_mark = t_pack0;
+                        for (uint32_t i = 0; i < n; i++) {
+                            // Worst-case packed frame is a whole slot; flush before we would overrun the pack buf.
+                            if (packed_acc + kSlotBytes > pack_cap) {
+                                c_proc += get_timestamp() - t_pack_mark;
+                                flush_packed();
+                                const uint64_t t_bflush = get_timestamp();
+                                *phase = kPhBar2;
+                                if (!write_barrier_bounded(t_bflush + kCreditWaitCycles, dbg_hw_ack, dbg_sw_ack)) {
+                                    egress_dead = true;
+                                    break;
+                                }
+                                c_barrier += get_timestamp() - t_bflush;
+                                t_pack_mark = get_timestamp();
+                            }
+                            if (egress_dead) {
+                                break;
+                            }
+                            packed_acc += pack_frame(kStageBase + i * kSlotBytes, pack_base + packed_acc);
+                            packed_frames++;
+                        }
+                        // Staging is the NoC-read source -- must complete before the next peer overwrites it.
+                        noc_async_read_barrier(kReadNoc);
+                        invalidate_l1_cache();
+                        c_proc += get_timestamp() - t_pack_mark;
+                    } else {
+                        ship_run(0, n);
+                    }
+                    frames += n;
+                    mv_moved[peer] += n;
+                    if (n > mv_max_n[peer]) {
+                        mv_max_n[peer] = n;
+                    }
+                    // ONE barrier covers the PCIe push (staging is about to be refilled -- by the NEXT PEER as well
+                    // as the next sweep), the tail write (the filler cannot see room until it lands) and the reuse of
+                    // the +32 scratch word the tail write sources from.
+                    const uint64_t t_b0 = get_timestamp();
+                    *phase = kPhBar2;
+                    if (!write_barrier_bounded(t_b0 + kCreditWaitCycles, dbg_hw_ack, dbg_sw_ack)) {
+                        egress_dead = true;
+                    }
+                    c_barrier += get_timestamp() - t_b0;
+                } else {
+                    c_read += get_timestamp() - t_r0;
+                }
+                // Never start the second peer once egress is dead: staging may hold unflushed bytes, and an
+                // impossible head on one ring says nothing good about the other.
+                if (egress_dead) {
+                    break;
+                }
+            }  // for peer
+            if constexpr (kLivePack) {
+                if (packed_acc != 0 && !egress_dead) {
+                    flush_packed();
+                    const uint64_t t_b1 = get_timestamp();
+                    *phase = kPhBar2;
+                    if (!write_barrier_bounded(t_b1 + kCreditWaitCycles, dbg_hw_ack, dbg_sw_ack)) {
+                        egress_dead = true;
+                    }
+                    c_barrier += get_timestamp() - t_b1;
+                }
             }
-            const uint32_t off = mv_tail[peer] % kDramFrames;
-            if (off + n > kDramFrames) {
-                n = kDramFrames - off;
-            }
-            noc_async_read(
-                get_noc_addr_from_bank_id<true>(kPeerBanks[peer], kPeerAddrs[peer] + off * kSlotBytes, NOC_INDEX),
-                kStageBase,
-                n * kSlotBytes,
-                NOC_INDEX);
-            noc_b.async_read_barrier();
-            c_read += get_timestamp() - t_r0;
-            if (*mv_probe_frame[peer] == 0) {
-                // First frame word the mover ever saw ON THIS RING. The host checks it against spsc_span_w0(),
-                // which proves the filler's DRAM write and this read agree on the address -- end to end, with
-                // no host-side DRAM read needed and no way for a plausible-but-wrong ring address to pass.
-                // Per ring, because the two rings are in different DRAM banks and only one of them may be wrong.
-                *mv_probe_frame[peer] = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kStageBase);
-            }
-            // Release the ring region NOW: the bytes are in staging, so the filler may reuse it immediately.
-            // Doing this before the push (rather than after) is what keeps the filler off the ring ceiling.
-            mv_tail[peer] += n;
-            volatile tt_l1_ptr uint32_t* tsrc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kHeadScratch + 32u);
-            *tsrc = mv_tail[peer];
-            noc_async_write(
-                kHeadScratch + 32u,
-                get_noc_addr(pxy & 0xFFFFu, pxy >> 16, kPeerHss[peer] + kHsTail),
-                4u,
-                NOC_INDEX);
-            *mv_live_head[peer] = head;
-            *mv_live_tail[peer] = mv_tail[peer];
-            ship_run(0, n);
-            frames += n;
-            mv_moved[peer] += n;
-            if (n > mv_max_n[peer]) {
-                mv_max_n[peer] = n;
-            }
-            // ONE barrier covers the PCIe push (staging is about to be refilled -- by the NEXT PEER as well
-            // as the next sweep), the tail write (the filler cannot see room until it lands) and the reuse of
-            // the +32 scratch word the tail write sources from.
-            const uint64_t t_b0 = get_timestamp();
-            *phase = kPhBar2;
-            if (!write_barrier_bounded(t_b0 + kCreditWaitCycles, dbg_hw_ack, dbg_sw_ack)) {
-                egress_dead = true;
-            }
-            c_barrier += get_timestamp() - t_b0;
-        } else {
-            c_read += get_timestamp() - t_r0;
-        }
-        // Never start the second peer once egress is dead: staging may hold unflushed bytes, and an
-        // impossible head on one ring says nothing good about the other.
-        if (egress_dead) {
-            break;
-        }
-        }  // for peer
         } else {
         // ---- software pipeline: read generation G on kReadNoc while generation G^1 ships on NOC_INDEX ----
         //

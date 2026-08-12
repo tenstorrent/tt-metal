@@ -19,8 +19,12 @@
 #include <common/TracyTTDeviceData.hpp>  // tracy::RiscType worker lanes
 
 #include <chrono>
-#include <x86intrin.h>
+#include <cstring>
 #include <thread>
+#include <x86intrin.h>
+#if defined(__linux__)
+#include <sys/mman.h>
+#endif
 
 #include <tt-metalium/allocator.hpp>
 #include "impl/dispatch/dispatch_core_manager.hpp"
@@ -56,11 +60,149 @@ namespace tt::tt_metal {
 
 namespace pz = tt::tt_metal::profiler;
 
-// Host-only record type for a PP_DATA payload continuation. Never appears on the wire, so it only has to
-// avoid the codes prof_packet.h actually uses (0,1,2,5..11); 31 is the top of the 5-bit type field.
-constexpr uint32_t kRecDataCont = 31u;
 // Largest payload the 7-bit wire size field can express, in uint64s -- bounds the consumer's scratch.
 constexpr uint32_t kMaxEventValues = 64;
+
+#if defined(__linux__)
+#include <pthread.h>
+#include <sched.h>
+#include <unistd.h>
+#include <fstream>
+#include <sstream>
+#include <vector>
+// Physical-core pin plan (single-NUMA 6c/12t here). Producers on phys 0–1, decode on next N phys,
+// publisher on SMT sibling of last decode -- never on an SMT sibling of a producer.
+enum class PinRole : int { Producer0 = 0, Producer1 = 1, Decode = 2, Publisher = 3 };
+struct PinPlan {
+    bool on = false;
+    int prod[2] = {-1, -1};
+    std::vector<int> decode;  // physical CPUs for decode workers
+    int publish = -1;
+};
+static const PinPlan& pin_plan() {
+    static const PinPlan p = [] {
+        PinPlan out;
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_PIN_BASE");
+        if (s != nullptr && *s != '\0' && std::strtol(s, nullptr, 10) < 0) {
+            return out;  // disabled
+        }
+        const long ncpu = sysconf(_SC_NPROCESSORS_ONLN);
+        if (ncpu <= 0) {
+            return out;
+        }
+        std::vector<bool> seen(static_cast<size_t>(ncpu), false);
+        std::vector<int> phys;
+        for (long c = 0; c < ncpu; ++c) {
+            if (seen[static_cast<size_t>(c)]) {
+                continue;
+            }
+            phys.push_back(static_cast<int>(c));
+            std::ifstream in("/sys/devices/system/cpu/cpu" + std::to_string(c) + "/topology/thread_siblings_list");
+            std::string line;
+            if (std::getline(in, line)) {
+                for (char& ch : line) {
+                    if (ch == ',' || ch == '-') {
+                        ch = ' ';
+                    }
+                }
+                std::stringstream ss(line);
+                int id;
+                while (ss >> id) {
+                    if (id >= 0 && id < ncpu) {
+                        seen[static_cast<size_t>(id)] = true;
+                    }
+                }
+            } else {
+                seen[static_cast<size_t>(c)] = true;
+            }
+        }
+        if (phys.size() < 4) {
+            return out;
+        }
+        out.on = true;
+        // Two producers (one per socket) on phys 0–1.
+        out.prod[0] = phys[0];
+        out.prod[1] = phys[1];
+        constexpr size_t prod_cores = 2u;
+        // Default is 3 decode workers. Pin them on dedicated phys cores after the producers.
+        // Publisher must NOT share an SMT sibling with a live decode worker (measured: that alone
+        // drops marker-wire ~20 → ~15 GB/s). Prefer the next free phys core's SMT; fall back to the
+        // last decode core's sibling only when the machine is too small.
+        const size_t n_decode = std::min<size_t>(3, phys.size() > prod_cores ? phys.size() - prod_cores : 0);
+        for (size_t i = 0; i < n_decode; ++i) {
+            out.decode.push_back(phys[prod_cores + i]);
+        }
+        if (out.decode.empty()) {
+            out.decode.push_back(phys.back());
+        }
+        {
+            const size_t pub_phys_i = prod_cores + n_decode;
+            const int pub_phys = (pub_phys_i < phys.size()) ? phys[pub_phys_i] : out.decode.back();
+            std::ifstream in(
+                "/sys/devices/system/cpu/cpu" + std::to_string(pub_phys) + "/topology/thread_siblings_list");
+            std::string line;
+            out.publish = pub_phys;
+            if (std::getline(in, line)) {
+                for (char& ch : line) {
+                    if (ch == ',' || ch == '-') {
+                        ch = ' ';
+                    }
+                }
+                std::stringstream ss(line);
+                int id;
+                while (ss >> id) {
+                    if (id != pub_phys) {
+                        out.publish = id;
+                        break;
+                    }
+                }
+            }
+        }
+        return out;
+    }();
+    return p;
+}
+static int pin_cpu_for(PinRole role, uint32_t index = 0) {
+    const PinPlan& p = pin_plan();
+    if (!p.on) {
+        return -1;
+    }
+    switch (role) {
+        case PinRole::Producer0: return p.prod[0];
+        case PinRole::Producer1: return p.prod[1];
+        case PinRole::Decode: return p.decode[index % static_cast<uint32_t>(p.decode.size())];
+        case PinRole::Publisher: return p.publish;
+    }
+    return -1;
+}
+static void pin_self_to_cpu(int cpu) {
+    if (cpu < 0) {
+        return;
+    }
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    CPU_SET(static_cast<unsigned>(cpu), &set);
+    (void)pthread_setaffinity_np(pthread_self(), sizeof(set), &set);
+}
+#else
+enum class PinRole : int { Producer0 = 0, Producer1 = 1, Decode = 2, Publisher = 3 };
+static int pin_cpu_for(PinRole, uint32_t = 0) { return -1; }
+static void pin_self_to_cpu(int) {}
+#endif
+
+#if defined(__x86_64__)
+// Zone-block emit into 12 B {ts,meta} records.
+static uint32_t emit_zone_block_avx2(
+    const uint32_t* lin, uint32_t nwords, uint32_t base_meta, uint32_t hi, uint32_t /*prog*/, PerfDebugRec* out) {
+    uint32_t k = 0;
+    for (uint32_t i = 0; i + 1 < nwords; i += 2) {
+        _mm_prefetch(reinterpret_cast<const char*>(lin + i + 16), _MM_HINT_T0);
+        out[k++] = PerfDebugRec{
+            pp_full_ts(hi, lin[i + 1]), ((lin[i] >> 27) << kRecTypeShift) | base_meta | (lin[i] & 0xFFFFu)};
+    }
+    return k;
+}
+#endif
 
 // pimpl so the BroadcastRing header stays out of perf_debug_profiler.hpp.
 struct RecRingHolder {
@@ -130,16 +272,6 @@ std::chrono::seconds writer_timeout() {
         const char* s = std::getenv("TT_METAL_PERF_DEBUG_WRITER_TIMEOUT_S");
         const uint32_t n = (s == nullptr || *s == '\0') ? 120u : static_cast<uint32_t>(std::strtoul(s, nullptr, 10));
         return std::chrono::seconds(n == 0 ? 120u : n);
-    }();
-    return v;
-}
-
-// TT_METAL_PERF_DEBUG_WRITER_DIE_AFTER: test hook -- writer thread exits after N successful reads, so the
-// "consumer vanished mid-stream" deadlock can be reproduced deliberately. 0 (default) disables it.
-uint32_t writer_die_after() {
-    static const uint32_t v = [] {
-        const char* s = std::getenv("TT_METAL_PERF_DEBUG_WRITER_DIE_AFTER");
-        return (s == nullptr || *s == '\0') ? 0u : static_cast<uint32_t>(std::strtoul(s, nullptr, 10));
     }();
     return v;
 }
@@ -399,6 +531,20 @@ uint32_t max_pages_per_read(uint32_t compiled_default) {
     return v;
 }
 
+// Hold off on a sock read until at least this many pages are pending, so FIFO→staging memcpy sees
+// FINDINGS-sized chunks (~64 KB+). 0 = disabled (default). Override: TT_METAL_PERF_DEBUG_MIN_PAGES.
+// When set, drain_pass still takes sub-min tails once stop_ is set so teardown cannot strand pages.
+uint32_t min_pages_per_read() {
+    static const uint32_t v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_MIN_PAGES");
+        if (s == nullptr || *s == '\0') {
+            return 0u;
+        }
+        return static_cast<uint32_t>(std::strtoul(s, nullptr, 10));
+    }();
+    return v;
+}
+
 // TT_METAL_PERF_DEBUG_STALL_ONLY=1: decode far enough to COUNT PRODUCER STALL ZONES and nothing else --
 // no record building, no BroadcastRing publish, no Tracy. The packet walk is still the real one (a raw scan
 // for the 0x7FFF pattern would false-positive on timestamp words that happen to equal 32767), so the count
@@ -426,6 +572,16 @@ bool decode_disabled() {
         return s != nullptr && *s != '\0' && *s != '0';
     }();
     return off;
+}
+
+// TT_METAL_PERF_DEBUG_D2H_DISCARD=1: wait for pages, pop+ack, NEVER memcpy out of the FIFO.
+// Isolates the PCIe/flow-control ceiling (FINDINGS: ~57 GB/s with discard vs ~25 GB/s with memcpy).
+bool d2h_discard_only() {
+    static const bool on = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_D2H_DISCARD");
+        return s != nullptr && *s != '\0' && *s != '0';
+    }();
+    return on;
 }
 
 // TT_METAL_PERF_DEBUG_NO_TRACY=1: drain and decode EXACTLY as normal (markers and stall zones are still
@@ -509,28 +665,8 @@ double tsc_ns_per_tick() {
         }
         const uint64_t c1 = __rdtsc();
         const auto t1 = std::chrono::steady_clock::now();
-        const double ns =
-            static_cast<double>(std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count());
+        const double ns = static_cast<double>(std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count());
         return (c1 > c0) ? ns / static_cast<double>(c1 - c0) : 0.0;
-    }();
-    return v;
-}
-
-// TT_METAL_PERF_DEBUG_RESIZE_ZERO=1 restores the OLD buffer handling (clear() on return to the pool, exact
-// resize per read), which value-initialized the whole buffer immediately before memcpy overwrote it. Kept
-// so the fix can be A/B'd on silicon instead of argued from first principles.
-bool resize_zero_legacy() {
-    static const bool v = [] {
-        const char* s = std::getenv("TT_METAL_PERF_DEBUG_RESIZE_ZERO");
-        return s != nullptr && *s != '\0' && *s != '0';
-    }();
-    return v;
-}
-
-bool ack_predrain() {
-    static const bool v = [] {
-        const char* s = std::getenv("TT_METAL_PERF_DEBUG_ACK_PREDRAIN");
-        return s != nullptr && *s != '\0' && *s != '0';
     }();
     return v;
 }
@@ -648,7 +784,76 @@ thread_local std::string g_bringup_step = "(not started)";
 
 PerfDebugProfiler::DeviceCtx::DeviceCtx() = default;
 PerfDebugProfiler::DeviceCtx::~DeviceCtx() = default;
-PerfDebugProfiler::DeviceCtx::DeviceCtx(DeviceCtx&&) noexcept = default;
+PerfDebugProfiler::DeviceCtx::DeviceCtx(DeviceCtx&& o) noexcept :
+    chip_id(o.chip_id),
+    params_addr(o.params_addr),
+    nl(o.nl),
+    device(o.device),
+    n_drisc(o.n_drisc),
+    dram_frames(o.dram_frames),
+    core_virt(std::move(o.core_virt)),
+    virt_to_noc0(std::move(o.virt_to_noc0)),
+    active(o.active),
+    hz_raw(std::move(o.hz_raw)),
+    nharts(o.nharts),
+    marker_ts_base(o.marker_ts_base),
+    synced(o.synced),
+    freq_ghz(o.freq_ghz) {
+    for (uint32_t i = 0; i < kNSockets; i++) {
+        sockets[i] = std::move(o.sockets[i]);
+        decode[i] = std::move(o.decode[i]);
+    }
+    for (uint32_t i = 0; i < kMaxDecodeWorkers * kNSockets; i++) {
+        wdecode[i] = std::move(o.wdecode[i]);
+    }
+    for (uint32_t d = 0; d < kMaxDrisc; d++) {
+        drain_program[d] = std::move(o.drain_program[d]);
+        drisc_logical[d] = o.drisc_logical[d];
+        drisc_virtual[d] = o.drisc_virtual[d];
+        drisc_l1_noc[d] = o.drisc_l1_noc[d];
+        drisc_l1_base[d] = o.drisc_l1_base[d];
+        stop_addr[d] = o.stop_addr[d];
+        done_addr[d] = o.done_addr[d];
+        results_addr[d] = o.results_addr[d];
+        role[d] = o.role[d];
+        sock_of[d] = o.sock_of[d];
+        hs_addr[d] = o.hs_addr[d];
+        n_peer[d] = o.n_peer[d];
+        dram_bank[d] = o.dram_bank[d];
+        dram_addr[d] = o.dram_addr[d];
+        for (uint32_t p = 0; p < kNPeerMax; p++) {
+            peer_of[d][p] = o.peer_of[d][p];
+        }
+    }
+    for (uint32_t s = 0; s < kNSockets; s++) {
+        auto& dst = sock_state[s];
+        auto& src = o.sock_state[s];
+        dst.buf = std::move(src.buf);
+        dst.words = src.words;
+        dst.ranges = std::move(src.ranges);
+        dst.carry = std::move(src.carry);
+        dst.carry_pend = std::move(src.carry_pend);
+        dst.fill_seq.store(src.fill_seq.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        for (uint32_t w = 0; w < kMaxDecodeWorkers; w++) {
+            dst.wdone[w].store(src.wdone[w].load(std::memory_order_relaxed), std::memory_order_relaxed);
+        }
+        dst.iters = src.iters;
+        dst.pages = src.pages;
+        dst.stall = src.stall;
+        dst.read_ns = src.read_ns;
+        dst.wait_ns = src.wait_ns;
+        dst.copy_ns = src.copy_ns;
+        dst.ack_ns = src.ack_ns;
+        dst.poll_ns = src.poll_ns;
+        dst.polls = src.polls;
+        dst.reads = src.reads;
+        dst.bytes = src.bytes;
+        dst.wall_ns = src.wall_ns;
+        dst.quiesce = src.quiesce;
+        dst.done = src.done;
+        dst.overflow_reported = src.overflow_reported;
+    }
+}
 
 PerfDebugProfiler::PerfDebugProfiler(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     try {
@@ -704,6 +909,7 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
         }
         if (sync.valid) {
             ctx.synced = true;
+            ctx.freq_ghz = sync.frequency;
             tracy_->AddDevice(
                 ctx.chip_id, sync.host_anchor, static_cast<double>(sync.device_at_anchor), sync.frequency);
             log_info(
@@ -715,6 +921,7 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
                 freq,
                 sync.device_at_anchor);
         } else {
+            ctx.freq_ghz = freq;
             log_warning(
                 tt::LogMetal,
                 "[perf-debug profiler] Device {} clock sync FAILED; falling back to first-marker anchoring "
@@ -731,41 +938,117 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
         devices_.push_back(std::move(ctx));
     }
 
-    // Spawn AFTER devices_ is stable (the threads index into it). ONE writer (read+decode+publish) and one
-    // consumer (ring -> Tracy), matching the standalone drain harness: the slow Tracy sink is off the drain path.
+    // Spawn AFTER devices_ is stable (the threads index into it): 2 producers (one per socket),
+    // DECODE_WORKERS decode threads, one publisher, one consumer (ring -> Tracy). The slow Tracy
+    // sink stays off the drain path.
     if (!devices_.empty()) {
         const uint32_t cap = max_pages_per_read(kMaxPagesPerRead);
         // Records per read: a page holds at most page_words/2 two-word markers.
         const size_t recs_per_page = (kPageSize / sizeof(uint32_t)) / 2;
         read_chunk_recs_ = cap ? static_cast<size_t>(cap) * recs_per_page : static_cast<size_t>(kHRingWords);
         pub_last_ts_.assign(static_cast<size_t>(kNSockets) * devices_.front().nl, 0);
-        ring_ = std::make_unique<RecRingHolder>(ring_capacity_recs());
-        // PRE-POPULATE THE BUFFER POOL.
-        //
-        // The writer takes a buffer from free_bufs, or default-constructs an empty one when the pool is
-        // dry -- and an empty vector then gets resize()d to the read size, which VALUE-INITIALIZES all
-        // 64 KB immediately before memcpy overwrites every byte. Measured on a healthy card that cost
-        // ~9.6 ms/run, 76% of the writer's entire workload, against 3.0 ms for the copy it precedes.
-        //
-        // Grow-only sizing alone could not fix it: the decoder runs 231-253 buffers behind, so the pool is
-        // dry most of the time and nearly every read allocated a FRESH (size 0) vector. Handing out
-        // already-sized buffers is what makes grow-only actually bite -- after this, resize() is a no-op
-        // on the steady-state path and the zeroing happens once per buffer at startup instead of once per
-        // read.
+        // Pre-size every socket's ping-pong staging buffers to the max read. Hot-path drain_pass must
+        // NEVER allocate or value-init.
         const size_t max_read_words = static_cast<size_t>(cap ? cap : kHRingWords) * (kPageSize / sizeof(uint32_t));
-        const size_t kPrefillBufs = (cap && cap < 512) ? 1536 : 320;  // small caps => far more reads in flight  // > the ~253 max queue depth observed, so the pool stays warm
-        for (uint32_t s = 0; s < kNSockets; s++) {
-            std::lock_guard<std::mutex> lk(dq_[s].m);
-            for (size_t i = 0; i < kPrefillBufs; i++) {
-                dq_[s].free_bufs.emplace_back(max_read_words, 0u);
-                dq_[s].allocated++;
+        for (auto& ctx : devices_) {
+            for (uint32_t s = 0; s < kNSockets; s++) {
+                auto& ss = ctx.sock_state[s];
+                for (auto& b : ss.buf) {
+                    b.assign(max_read_words, 0u);
+#if defined(__linux__)
+                    {
+                        void* p = b.data();
+                        const size_t bytes = b.size() * sizeof(uint32_t);
+                        if (bytes >= (size_t{1} << 20)) {
+                            madvise(p, bytes, MADV_HUGEPAGE);
+                            madvise(p, bytes, MADV_WILLNEED);
+                        }
+                    }
+#endif
+                }
+                ss.fill_seq.store(0, std::memory_order_relaxed);
+                for (auto& wd : ss.wdone) {
+                    wd.store(0, std::memory_order_relaxed);
+                }
             }
         }
-        for (uint32_t s = 0; s < kNSockets; s++) {
-            writers_.emplace_back(&PerfDebugProfiler::writer_thread, this, s);
-            decoders_.emplace_back(&PerfDebugProfiler::decoder_thread, this, s);
+        // Pre-size ping-pong publish batches to the worst-case record yield of ONE decode call:
+        // max staged words + the decode-state residual carry, at the worst records-per-word ratio
+        // (a bare 2-word PP_DATA yields head + EXT = 2 records, 1/word). decode_into_ring relies on
+        // this to append with NO per-marker capacity check.
+        const size_t words_max =
+            (cap ? static_cast<size_t>(cap) * (kPageSize / sizeof(uint32_t)) : static_cast<size_t>(kHRingWords)) +
+            kDecodeCarryWords;
+        const size_t batch_cap = words_max + 16;
+        // 3 decode workers (default) → L3 scratch batches → publisher NT-publish_batch into BroadcastRing.
+        // Matches 4-worker marker-wire; 2 workers are decode-bound (~3 ms vs publish ~2.3 ms).
+        n_workers_ = [] {
+            const char* s = std::getenv("TT_METAL_PERF_DEBUG_DECODE_WORKERS");
+            uint32_t n = (s != nullptr && *s != '\0') ? static_cast<uint32_t>(std::strtoul(s, nullptr, 10)) : 3u;
+            return std::clamp<uint32_t>(n, 1u, kMaxDecodeWorkers);
+        }();
+        for (uint32_t w = 0; w < n_workers_; w++) {
+            for (auto& b : wpub_[w].batches) {
+                b.recs.assign(batch_cap, PerfDebugRec{});
+                b.n = 0;
+#if defined(__linux__)
+                // Ask THP for the scratch so emit stays in huge pages / fewer TLB misses vs 4K.
+                {
+                    void* p = b.recs.data();
+                    const size_t bytes = b.recs.size() * sizeof(PerfDebugRec);
+                    if (bytes >= (size_t{1} << 20)) {
+                        madvise(p, bytes, MADV_HUGEPAGE);
+                        madvise(p, bytes, MADV_WILLNEED);
+                        std::memset(p, 0, bytes);  // fault + warm on bring-up thread
+                    }
+                }
+#endif
+            }
+            wpub_[w].prod.store(0, std::memory_order_relaxed);
+            wpub_[w].cons.store(0, std::memory_order_relaxed);
         }
-        consumers_.emplace_back(&PerfDebugProfiler::consumer_thread, this);
+        TT_FATAL(
+            devices_.size() <= kRecDevMax,
+            "[perf-debug profiler] {} devices exceed the record meta's {}-device field",
+            devices_.size(),
+            kRecDevMax);
+        for (const auto& d : devices_) {
+            TT_FATAL(
+                d.nl <= kRecLaneMax,
+                "[perf-debug profiler] {} lanes exceed the record meta's {}-lane field",
+                d.nl,
+                kRecLaneMax);
+        }
+        publisher_stop_.store(false, std::memory_order_relaxed);
+        decoder_stop_.store(false, std::memory_order_relaxed);
+        // One producer per socket (poll/copy/ack/split). Scratch decode + dedicated publisher
+        // publish_batch (NT) into a single BroadcastRing.
+        // TT_METAL_PERF_DEBUG_NO_CONSUMER=1 skips only the Tracy consumer -- the ring is still fed.
+        static const bool no_consumer = [] {
+            const char* s = std::getenv("TT_METAL_PERF_DEBUG_NO_CONSUMER");
+            return s != nullptr && *s != '\0' && *s != '0';
+        }();
+        ring_ = std::make_unique<RecRingHolder>(ring_capacity_recs());
+        ring_->ring.warm_pages(/*lock=*/true);
+        publisher_ = std::thread(&PerfDebugProfiler::publisher_thread, this);
+        for (uint32_t w = 0; w < n_workers_; w++) {
+            workers_.emplace_back(&PerfDebugProfiler::decode_worker, this, w);
+        }
+        for (uint32_t sk = 0; sk < kNSockets; sk++) {
+            producers_[sk] = std::thread(&PerfDebugProfiler::producer_thread, this, sk);
+        }
+        const uint32_t n_con = no_consumer ? 0u : 1u;
+        if (!no_consumer) {
+            consumer_ = std::thread(&PerfDebugProfiler::consumer_thread, this);
+        }
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler] host threads: {} producer + {} decode + 1 publisher + {} consumer "
+            "(total {}) | scratch+publisher",
+            kNSockets,
+            n_workers_,
+            n_con,
+            kNSockets + n_workers_ + 1u + n_con);
     }
     if (!devices_.empty()) {
         log_info(
@@ -909,8 +1192,9 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
     // mode held fixed.
     std::optional<CoreCoord> fd_tensix_core;
     if (tensix_drain && !slow_dispatch) {
-        auto rt_core = MetalContext::instance(context_id).get_dispatch_core_manager().get_reserved_realtime_profiler_core(
-            device_id);
+        auto rt_core = MetalContext::instance(context_id)
+                           .get_dispatch_core_manager()
+                           .get_reserved_realtime_profiler_core(device_id);
         if (!rt_core.has_value()) {
             log_warning(
                 tt::LogMetal,
@@ -1080,7 +1364,7 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
     // ring's size and the region's size ONE knob (perf_debug_dram_region_bytes_per_risc), and the ring becomes
     // available in every bank at a single address rather than only in banks we allocated pages for.
     //
-    // Frames are still whole: capacity truncates to a multiple of the 165-page frame, so a FRAME never
+    // Frames are still whole: capacity truncates to a multiple of the slot frame, so a FRAME never
     // straddles the wrap (a RUN of frames still can, and stage_run splits it).
     if (rsplit) {
         try {
@@ -1225,11 +1509,7 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
             if (fd_tensix_core.has_value()) {
                 ctx.drisc_logical[d] = *fd_tensix_core;
             } else {
-                TT_FATAL(
-                    d < gy,
-                    "drainer {} does not fit the reserved column (only {} rows)",
-                    d,
-                    gy);
+                TT_FATAL(d < gy, "drainer {} does not fit the reserved column (only {} rows)", d, gy);
                 ctx.drisc_logical[d] = CoreCoord{gx, d};
             }
             ctx.drisc_virtual[d] = ctx.device->virtual_core_from_logical_core(ctx.drisc_logical[d], CoreType::WORKER);
@@ -1397,132 +1677,144 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
         const bool has_socket = sk != kNoSocket;
         try {
             if (has_socket) {
-            // sender_is_l2cpu switches the socket between "physical NoC coord + full L1 address" (DRISC,
-            // drainer) and the normal worker path (logical coord, worker-L1 semantics). The socket picks the
-            // static-vs-dynamic write path by ASKING UMD whether this core has a window (see init_sender_tlb),
-            // so the window configured just above is what puts the DRISC on the static path.
-            g_bringup_step = fmt::format("drainer {}: D2HSocket construct (writes config into DRISC L1)", d);
-            ctx.sockets[sk] = std::make_unique<distributed::D2HSocket>(
-                mesh_device,
-                distributed::MeshCoreCoord{
-                    scoord,
-                    tensix_drain ? ctx.drisc_logical[d] : CoreCoord(drisc_phys.x, drisc_phys.y)},
-                static_cast<uint32_t>((static_cast<uint64_t>(kHRingWords) * 4 / kPageSize) * kPageSize),
-                distributed::D2HSocket::ExternalConfigBuffer{.address = cfg_l1, .sender_is_l2cpu = !tensix_drain});
-            ctx.sockets[sk]->set_page_size(kPageSize);
-            // MEASURE the flow-control poll directly. The per-poll cost derived from the rounded "poll X%"
-            // log line differed ~10x between a fast and a degraded card, but that figure is too indirect to
-            // build a diagnosis on -- and the non-hugepage path reads HOST memory, not MMIO, so a ~1 us cost
-            // would not make sense there. Time the actual call and report which path it takes.
-            {
-                const auto t0 = std::chrono::steady_clock::now();
-                constexpr uint32_t kPollProbe = 2000;
-                uint32_t sink = 0;
-                for (uint32_t k = 0; k < kPollProbe; k++) {
-                    sink += ctx.sockets[sk]->pages_available();
-                }
-                const double ns_per =
-                    std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - t0).count() /
-                    kPollProbe;
-                log_info(
-                    tt::LogMetal,
-                    "[perf-debug profiler] flow-control poll probe: {:.0f} ns/call over {} calls | hugepage "
-                    "path: {} | (sink {})",
-                    ns_per,
-                    kPollProbe,
-                    ctx.sockets[sk]->is_using_hugepage() ? "YES (clflush+lfence)" : "no (mfence, host buffer)",
-                    sink);
-                // ACK-WRITE PROBE. socket read() ends in notify_sender(), which PCIe-writes bytes_acked to
-                // the sender core -- one DEVICE write per read. This is the access the poll probe did NOT
-                // cover (that one reads host memory: 13 ns on every box measured). A fixed ~4 us/read
-                // overhead on one card is the right order for a dynamic-TLB reconfigure per access, so
-                // measure the write and say which TLB path it uses. Writing the current bytes_acked is
-                // idempotent -- it re-sends the value the socket already holds.
+                // sender_is_l2cpu switches the socket between "physical NoC coord + full L1 address" (DRISC,
+                // drainer) and the normal worker path (logical coord, worker-L1 semantics). The socket picks the
+                // static-vs-dynamic write path by ASKING UMD whether this core has a window (see init_sender_tlb),
+                // so the window configured just above is what puts the DRISC on the static path.
+                g_bringup_step = fmt::format("drainer {}: D2HSocket construct (writes config into DRISC L1)", d);
+                ctx.sockets[sk] = std::make_unique<distributed::D2HSocket>(
+                    mesh_device,
+                    distributed::MeshCoreCoord{
+                        scoord, tensix_drain ? ctx.drisc_logical[d] : CoreCoord(drisc_phys.x, drisc_phys.y)},
+                    static_cast<uint32_t>((static_cast<uint64_t>(kHRingWords) * 4 / kPageSize) * kPageSize),
+                    distributed::D2HSocket::ExternalConfigBuffer{.address = cfg_l1, .sender_is_l2cpu = !tensix_drain});
+                ctx.sockets[sk]->set_page_size(kPageSize);
+                // MEASURE the flow-control poll directly. The per-poll cost derived from the rounded "poll X%"
+                // log line differed ~10x between a fast and a degraded card, but that figure is too indirect to
+                // build a diagnosis on -- and the non-hugepage path reads HOST memory, not MMIO, so a ~1 us cost
+                // would not make sense there. Time the actual call and report which path it takes.
                 {
-                    const auto a0 = std::chrono::steady_clock::now();
-                    constexpr uint32_t kAckProbe = 500;
-                    for (uint32_t k = 0; k < kAckProbe; k++) {
-                        ctx.sockets[sk]->probe_ack_write();
+                    const auto t0 = std::chrono::steady_clock::now();
+                    constexpr uint32_t kPollProbe = 2000;
+                    uint32_t sink = 0;
+                    for (uint32_t k = 0; k < kPollProbe; k++) {
+                        sink += ctx.sockets[sk]->pages_available();
                     }
-                    const double ack_ns =
-                        std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - a0).count() /
-                        kAckProbe;
+                    const double ns_per =
+                        std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - t0).count() /
+                        kPollProbe;
                     log_info(
                         tt::LogMetal,
-                        "[perf-debug profiler] ACK-WRITE probe: {:.0f} ns/write over {} device writes | TLB "
-                        "path: {}",
-                        ack_ns,
-                        kAckProbe,
-                        ctx.sockets[sk]->has_static_tlb() ? "STATIC window" : "DYNAMIC (reconfigure per access)");
-                }
-                // DEVICE SMALL-READ probe. 4-byte cluster.read_core from the drainer core -- the SAME access
-                // wait_until_cores_done() issues per core and the one that blows the 2 ms budget in the
-                // "MMIO per-op timeout: 4B load took N us" aborts. The write probe above and this read probe
-                // together cover both directions; the flow-control poll probe covers neither (host memory).
-                {
-                    const auto r0 = std::chrono::steady_clock::now();
-                    constexpr uint32_t kRdProbe = 500;
-                    const uint64_t rd_addr = ctx.drisc_l1_noc[d] + (ctx.done_addr[d] - ctx.drisc_l1_base[d]);
-                    const tt_cxy_pair rd_core(device_id, ctx.drisc_virtual[d]);
-                    uint32_t v = 0, acc = 0;
-                    for (uint32_t k = 0; k < kRdProbe; k++) {
-                        cluster.read_core(&v, sizeof(v), rd_core, rd_addr);
-                        acc += v;
+                        "[perf-debug profiler] flow-control poll probe: {:.0f} ns/call over {} calls | hugepage "
+                        "path: {} | (sink {})",
+                        ns_per,
+                        kPollProbe,
+                        ctx.sockets[sk]->is_using_hugepage() ? "YES (clflush+lfence)" : "no (mfence, host buffer)",
+                        sink);
+                    // ACK-WRITE PROBE. socket read() ends in notify_sender(), which PCIe-writes bytes_acked to
+                    // the sender core -- one DEVICE write per read. This is the access the poll probe did NOT
+                    // cover (that one reads host memory: 13 ns on every box measured). A fixed ~4 us/read
+                    // overhead on one card is the right order for a dynamic-TLB reconfigure per access, so
+                    // measure the write and say which TLB path it uses. Writing the current bytes_acked is
+                    // idempotent -- it re-sends the value the socket already holds.
+                    {
+                        const auto a0 = std::chrono::steady_clock::now();
+                        constexpr uint32_t kAckProbe = 500;
+                        for (uint32_t k = 0; k < kAckProbe; k++) {
+                            ctx.sockets[sk]->probe_ack_write();
+                        }
+                        const double ack_ns =
+                            std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - a0).count() /
+                            kAckProbe;
+                        log_info(
+                            tt::LogMetal,
+                            "[perf-debug profiler] ACK-WRITE probe: {:.0f} ns/write over {} device writes | TLB "
+                            "path: {}",
+                            ack_ns,
+                            kAckProbe,
+                            ctx.sockets[sk]->has_static_tlb() ? "STATIC window" : "DYNAMIC (reconfigure per access)");
                     }
-                    const double rd_ns =
-                        std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - r0).count() /
-                        kRdProbe;
-                    log_info(
-                        tt::LogMetal,
-                        "[perf-debug profiler] DEVICE-READ probe: {:.0f} ns/read over {} 4B device reads (acc {})",
-                        rd_ns,
-                        kRdProbe,
-                        acc);
-                }
-                // WORKER-CORE CONTROL PROBE -- the one that makes "degraded" mean something.
-                //
-                // Both probes above target the DRAINER core, which is a DRAM core on the DRISC arm and a
-                // worker on the Tensix arm. So the two arms have never measured the same destination, and
-                // every "the card is degraded" number ever recorded here is really "accesses to the DRAM
-                // endpoint are ~13x slower". Whether a WORKER access on that same card is also slow was never
-                // measured -- and "the Tensix arm never degrades" may just be that it never probes the
-                // endpoint that degrades.
-                //
-                // Probing a fixed worker in EVERY run settles it in one observation:
-                //   worker slow too  => card-wide MMIO degradation, the drainer core is incidental
-                //   worker fine      => the DRAM endpoint alone is sick, and the Tensix arm is BLIND to it
-                {
-                    const auto w0 = std::chrono::steady_clock::now();
-                    constexpr uint32_t kWkProbe = 500;
-                    const tt_cxy_pair wk_core(
-                        device_id, CoreCoord{ctx.core_virt[0].first, ctx.core_virt[0].second});
-                    uint32_t v = 0, acc = 0;
-                    for (uint32_t k = 0; k < kWkProbe; k++) {
-                        cluster.read_core(&v, sizeof(v), wk_core, prof_l1);
-                        acc += v;
+                    // DEVICE SMALL-READ probe. 4-byte cluster.read_core from the drainer core -- the SAME access
+                    // wait_until_cores_done() issues per core and the one that blows the 2 ms budget in the
+                    // "MMIO per-op timeout: 4B load took N us" aborts. The write probe above and this read probe
+                    // together cover both directions; the flow-control poll probe covers neither (host memory).
+                    {
+                        const auto r0 = std::chrono::steady_clock::now();
+                        constexpr uint32_t kRdProbe = 500;
+                        const uint64_t rd_addr = ctx.drisc_l1_noc[d] + (ctx.done_addr[d] - ctx.drisc_l1_base[d]);
+                        const tt_cxy_pair rd_core(device_id, ctx.drisc_virtual[d]);
+                        uint32_t v = 0, acc = 0;
+                        for (uint32_t k = 0; k < kRdProbe; k++) {
+                            cluster.read_core(&v, sizeof(v), rd_core, rd_addr);
+                            acc += v;
+                        }
+                        const double rd_ns =
+                            std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - r0).count() /
+                            kRdProbe;
+                        log_info(
+                            tt::LogMetal,
+                            "[perf-debug profiler] DEVICE-READ probe: {:.0f} ns/read over {} 4B device reads (acc {})",
+                            rd_ns,
+                            kRdProbe,
+                            acc);
                     }
-                    const double wk_ns =
-                        std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - w0).count() /
-                        kWkProbe;
-                    log_info(
-                        tt::LogMetal,
-                        "[perf-debug profiler] WORKER-READ control probe: {:.0f} ns/read over {} 4B reads from "
-                        "worker virtual ({},{}) (acc {}) -- compare against DEVICE-READ above: both slow = "
-                        "card-wide, worker fast = the drainer's endpoint alone",
-                        wk_ns,
-                        kWkProbe,
-                        ctx.core_virt[0].first,
-                        ctx.core_virt[0].second,
-                        acc);
+                    // WORKER-CORE CONTROL PROBE -- the one that makes "degraded" mean something.
+                    //
+                    // Both probes above target the DRAINER core, which is a DRAM core on the DRISC arm and a
+                    // worker on the Tensix arm. So the two arms have never measured the same destination, and
+                    // every "the card is degraded" number ever recorded here is really "accesses to the DRAM
+                    // endpoint are ~13x slower". Whether a WORKER access on that same card is also slow was never
+                    // measured -- and "the Tensix arm never degrades" may just be that it never probes the
+                    // endpoint that degrades.
+                    //
+                    // Probing a fixed worker in EVERY run settles it in one observation:
+                    //   worker slow too  => card-wide MMIO degradation, the drainer core is incidental
+                    //   worker fine      => the DRAM endpoint alone is sick, and the Tensix arm is BLIND to it
+                    {
+                        const auto w0 = std::chrono::steady_clock::now();
+                        constexpr uint32_t kWkProbe = 500;
+                        const tt_cxy_pair wk_core(
+                            device_id, CoreCoord{ctx.core_virt[0].first, ctx.core_virt[0].second});
+                        uint32_t v = 0, acc = 0;
+                        for (uint32_t k = 0; k < kWkProbe; k++) {
+                            cluster.read_core(&v, sizeof(v), wk_core, prof_l1);
+                            acc += v;
+                        }
+                        const double wk_ns =
+                            std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - w0).count() /
+                            kWkProbe;
+                        log_info(
+                            tt::LogMetal,
+                            "[perf-debug profiler] WORKER-READ control probe: {:.0f} ns/read over {} 4B reads from "
+                            "worker virtual ({},{}) (acc {}) -- compare against DEVICE-READ above: both slow = "
+                            "card-wide, worker fast = the drainer's endpoint alone",
+                            wk_ns,
+                            kWkProbe,
+                            ctx.core_virt[0].first,
+                            ctx.core_virt[0].second,
+                            acc);
+                    }
                 }
-            }
-            // One decode stream per SOCKET, so this follows the socket and not the DRISC. A filler produces
-            // no stream to decode: its frames reach the host through its mover's socket.
-            ctx.decode[sk] = std::make_unique<pz::SpscDecodeState>();
-            ctx.decode[sk]->reset(ctx.nl);
-            for (uint32_t c = 0; c < num_cores; c++) {
-                ctx.decode[sk]->core_of_xy[coords[c]] = c;  // full map: lane ids stay global across drainers
-            }
+                // One decode stream per SOCKET, so this follows the socket and not the DRISC. A filler produces
+                // no stream to decode: its frames reach the host through its mover's socket. ctx.decode[sk]
+                // stays the producer's splitter lookup (xy_core); the workers decode with their own
+                // per-(worker, socket) states below.
+                ctx.decode[sk] = std::make_unique<pz::SpscDecodeState>();
+                ctx.decode[sk]->reset(ctx.nl);
+                for (uint32_t c = 0; c < num_cores; c++) {
+                    TT_FATAL(
+                        ctx.decode[sk]->set_core_xy(coords[c], c),
+                        "[perf-debug profiler] virtual coord 0x{:x} exceeds SpscDecodeState::kXyGrid={} -- raise "
+                        "the dense xy_core table",
+                        coords[c],
+                        pz::SpscDecodeState::kXyGrid);
+                }
+                for (uint32_t w = 0; w < kMaxDecodeWorkers; w++) {
+                    auto& wd = ctx.wdecode[w * kNSockets + sk];
+                    wd = std::make_unique<pz::SpscDecodeState>();
+                    wd->reset(ctx.nl);
+                    std::memcpy(wd->xy_core, ctx.decode[sk]->xy_core, sizeof(wd->xy_core));
+                }
             }  // has_socket
 
             // Zero done AND the heartbeat/phase words behind it. Zeroing only `done` leaves the PREVIOUS
@@ -1613,14 +1905,22 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
             if (!tensix_drain && drain_noc() == 1 && want_mirror) {
                 const auto& mmio_soc = cluster.get_soc_desc(cluster.get_associated_mmio_device(device_id));
                 const auto pcie_noc0 = mmio_soc.get_cores(CoreType::PCIE, CoordSystem::NOC0).front();
-                const uint32_t mx = static_cast<uint32_t>(mmio_soc.grid_size.x) - 1 - static_cast<uint32_t>(pcie_noc0.x);
-                const uint32_t my = static_cast<uint32_t>(mmio_soc.grid_size.y) - 1 - static_cast<uint32_t>(pcie_noc0.y);
+                const uint32_t mx =
+                    static_cast<uint32_t>(mmio_soc.grid_size.x) - 1 - static_cast<uint32_t>(pcie_noc0.x);
+                const uint32_t my =
+                    static_cast<uint32_t>(mmio_soc.grid_size.y) - 1 - static_cast<uint32_t>(pcie_noc0.y);
                 pcie_enc_override = hal.noc_xy_pcie64_encoding(mx, my);
                 log_info(
                     tt::LogMetal,
                     "[perf-debug profiler] NoC 1 egress: PCIe tile NOC0 ({},{}) -> NOC1 ({},{}) on a {}x{} grid, "
                     "enc 0x{:x}",
-                    pcie_noc0.x, pcie_noc0.y, mx, my, mmio_soc.grid_size.x, mmio_soc.grid_size.y, pcie_enc_override);
+                    pcie_noc0.x,
+                    pcie_noc0.y,
+                    mx,
+                    my,
+                    mmio_soc.grid_size.x,
+                    mmio_soc.grid_size.y,
+                    pcie_enc_override);
             }
 
             // A MOVER reads its FILLER's handshake block, so it needs that filler's virtual NoC coords and L1
@@ -1682,20 +1982,21 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
                 peer_addr[1]};
             const std::string kdrain = "tt_metal/tools/profiler/kernels/drisc_profiler_drain.cpp";
             auto drain_id =
-                tensix_drain ? CreateKernel(
-                                   *ctx.drain_program[d],
-                                   kdrain,
-                                   ctx.drisc_logical[d],
-                                   DataMovementConfig{
-                                       .processor = DataMovementProcessor::RISCV_0,
-                                       .noc = NOC::RISCV_0_default,
-                                       .compile_args = cargs,
-                                       .defines = {{"DRAIN_ON_TENSIX", "1"}}})
-                             : CreateKernel(
-                                   *ctx.drain_program[d],
-                                   kdrain,
-                                   ctx.drisc_logical[d],
-                                   DramConfig{.noc = drain_noc() == 1 ? NOC::NOC_1 : NOC::NOC_0, .compile_args = cargs});
+                tensix_drain
+                    ? CreateKernel(
+                          *ctx.drain_program[d],
+                          kdrain,
+                          ctx.drisc_logical[d],
+                          DataMovementConfig{
+                              .processor = DataMovementProcessor::RISCV_0,
+                              .noc = NOC::RISCV_0_default,
+                              .compile_args = cargs,
+                              .defines = {{"DRAIN_ON_TENSIX", "1"}}})
+                    : CreateKernel(
+                          *ctx.drain_program[d],
+                          kdrain,
+                          ctx.drisc_logical[d],
+                          DramConfig{.noc = drain_noc() == 1 ? NOC::NOC_1 : NOC::NOC_0, .compile_args = cargs});
             std::vector<uint32_t> rt = {my_cores, static_cast<uint32_t>(prof_l1)};
             rt.insert(rt.end(), coords.begin() + lo, coords.begin() + hi);
             SetRuntimeArgs(*ctx.drain_program[d], drain_id, ctx.drisc_logical[d], rt);
@@ -1713,8 +2014,7 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
             g_bringup_step = fmt::format("drainer {}: heartbeat verify", d);
             // the run hung. Poll the heartbeat instead of assuming: it must leave 0 and then advance.
             {
-                const uint64_t hb_addr =
-                    ctx.drisc_l1_noc[d] + (ctx.done_addr[d] - ctx.drisc_l1_base[d]) + 4;
+                const uint64_t hb_addr = ctx.drisc_l1_noc[d] + (ctx.done_addr[d] - ctx.drisc_l1_base[d]) + 4;
                 const tt_cxy_pair core(device_id, ctx.drisc_virtual[d]);
                 uint32_t hb0 = 0, hb1 = 0;
                 const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
@@ -1746,10 +2046,7 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
                         st, sizeof(st), core, ctx.drisc_l1_noc[d] + (ctx.done_addr[d] - ctx.drisc_l1_base[d]));
                     uint32_t stopw = 0;
                     cluster.read_core(
-                        &stopw,
-                        sizeof(stopw),
-                        core,
-                        ctx.drisc_l1_noc[d] + (ctx.stop_addr[d] - ctx.drisc_l1_base[d]));
+                        &stopw, sizeof(stopw), core, ctx.drisc_l1_noc[d] + (ctx.stop_addr[d] - ctx.drisc_l1_base[d]));
                     log_warning(
                         tt::LogMetal,
                         "[perf-debug profiler] Device {}: drainer {} FAILED TO START (heartbeat {} -> {} after "
@@ -1791,8 +2088,8 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
             // filler no longer passes.
             for (uint32_t pi = 0; is_mover && pi < ctx.n_peer[d]; pi++) {
                 const uint32_t p = ctx.peer_of[d][pi];
-                const uint32_t want_echo = kProbeFillerMagic + p;   // planted by filler p, read by this mover
-                const uint32_t want_back = kProbeMoverMagic + pi;   // written by this mover into peer slot pi
+                const uint32_t want_echo = kProbeFillerMagic + p;  // planted by filler p, read by this mover
+                const uint32_t want_back = kProbeMoverMagic + pi;  // written by this mover into peer slot pi
                 const tt_cxy_pair mv(device_id, ctx.drisc_virtual[d]);
                 const tt_cxy_pair fl(device_id, ctx.drisc_virtual[p]);
                 uint32_t echo = 0, back = 0;
@@ -1804,7 +2101,10 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
                         mv,
                         ctx.drisc_l1_noc[d] + (ctx.done_addr[d] - ctx.drisc_l1_base[d]) + 20 + 16 * pi);
                     cluster.read_core(
-                        &back, sizeof(back), fl, ctx.drisc_l1_noc[p] + (ctx.hs_addr[p] - ctx.drisc_l1_base[p]) + kHsProbeM);
+                        &back,
+                        sizeof(back),
+                        fl,
+                        ctx.drisc_l1_noc[p] + (ctx.hs_addr[p] - ctx.drisc_l1_base[p]) + kHsProbeM);
                     if (echo == want_echo && back == want_back) {
                         break;
                     }
@@ -1889,169 +2189,203 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
     return true;
 }
 
-// ONE read+decode pass over (ctx, sock_idx): pages -> spsc_decode -> PerfDebugRec -> BroadcastRing.
-// Returns true if it moved data. Deliberately does NOT touch Tracy: the sink lives on the consumer thread so
-// a slow Tracy push can never back-pressure the FIFO -> relay -> reader -> worker cores. (Measured: with the
-// push inline, UFLD-v2 held relay0 in HOST-WAIT 15.85 s of a 19 s run and stalled producers 826x; with the
-// push removed, 0 stalls. This is the same structure the standalone drain harness uses.)
-// Decode + publish, OFF the reader thread.
-//
-// MEASURED: with this inline, the reader's ack rate was gated by per-marker work -- read 3.8 ms, decode
-// 13.5 ms, publish 8.7 ms, so 85% of host time sat between one ack and the next. At delay 300 that produced
-// 17,366 producer stalls where the same device code with a minimal decode produced 0. The copy was never the
-// problem (15% of host work, 15-19 GB/s); the interpretation was.
-//
-// Sequential by construction: SpscDecodeState carries sticky timer highs, the packet residual and the
-// per-lane head mirror across buffers, so buffers for one socket MUST be decoded in arrival order. That is
-// why there is one decoder per socket rather than a pool.
-void PerfDebugProfiler::decode_and_publish(
-    DeviceCtx& ctx, uint32_t sock_idx, std::vector<uint32_t>& buf, size_t words) {
+// Decode one slot's whole-frame ranges into an L3 scratch PublishBatch, then hand off to the
+// dedicated publisher via the per-worker SPSC (publish_submit_batch). Early ACK already happened
+// in drain_pass -- this never touches the FIFO.
+void PerfDebugProfiler::decode_ranges(DeviceCtx& ctx, uint32_t sock_idx, uint32_t worker, size_t slot) {
     DeviceCtx::SockState& ss = ctx.sock_state[sock_idx];
-    pz::SpscDecodeState& st = *ctx.decode[sock_idx];
-    static const bool ddbg = (std::getenv("TT_PERF_DEBUG_ZONE_DUMP") != nullptr);
-    (void)ddbg;
-    const auto t_dec_all = std::chrono::steady_clock::now();
-    if (stall_only()) {
-        pz::spsc_decode(
-            st, buf.data(), words, ctx.nl,
-            [&](uint32_t, uint32_t type, uint32_t hash, uint64_t, uint32_t) {
-                if (hash == 0x7FFFu && type == PP_ZONE_START) {
-                    ss.stall++;
-                    w_stalls_++;
-                }
-                ss.emit++;
-            });
-        w_decode_ns_ +=
-            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t_dec_all)
-                .count();
+    auto& ranges = ss.ranges[slot][worker];
+    if (ranges.empty()) {
         return;
     }
-    ss.batch.resize(read_chunk_recs_);  // upper bound on records from one read (words >= records)
-    PerfDebugRec* bcur = ss.batch.data();
-    PerfDebugRec* const bend = ss.batch.data() + ss.batch.size();
-    const uint32_t dev_idx = static_cast<uint32_t>(&ctx - devices_.data());
+    pz::SpscDecodeState& st = *ctx.wdecode[worker * kNSockets + sock_idx];
+    WorkerPub& wp = wpub_[worker];
+    size_t total_words = 0;
+    for (const auto& r : ranges) {
+        total_words += r.second;
+    }
+    const auto t_dec_all = std::chrono::steady_clock::now();
+    if (stall_only()) {
+        for (const auto& r : ranges) {
+            pz::spsc_decode(
+                st, r.first, r.second, ctx.nl, [&](uint32_t, uint32_t type, uint32_t hash, uint64_t, uint32_t) {
+                    if (hash == 0x7FFFu && type == PP_ZONE_START) {
+                        ss.stall++;
+                        wp.stall++;
+                    }
+                    wp.emit[sock_idx]++;
+                });
+        }
+        wp.decode_ns +=
+            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t_dec_all).count();
+        return;
+    }
+    if (!ring_) {
+        return;
+    }
 
-    // Publish a span of records to the ring. Used both for the tail of a read and for a mid-decode flush
-    // when the batch fills, so a full batch is never discarded.
-    auto publish_recs = [&](const PerfDebugRec* p, size_t n) {
-        if (n == 0 || !ring_) {
-            return;
+    const uint32_t dev_idx = static_cast<uint32_t>(&ctx - devices_.data());
+    const uint32_t dev_bits = dev_idx << kRecDevShift;
+    const size_t bound = total_words + st.resid.size() + 16;
+
+    auto emit_into = [&](PerfDebugRec* out, size_t& k) {
+        for (const auto& r : ranges) {
+            pz::spsc_decode(
+                st,
+                r.first,
+                r.second,
+                ctx.nl,
+                [&](uint32_t lane, uint32_t type, uint32_t hash, uint64_t ts, uint32_t /*prog*/) {
+                    if (type > PP_ZONE_END) {
+                        return;
+                    }
+                    out[k++] = PerfDebugRec{ts, (type << kRecTypeShift) | dev_bits | (lane << kRecLaneShift) | hash};
+                },
+                [&](uint32_t lane,
+                    uint32_t type,
+                    uint32_t id,
+                    uint64_t ts,
+                    uint32_t /*prog*/,
+                    const uint32_t* payload,
+                    uint32_t n) {
+                    const uint32_t ml = dev_bits | (lane << kRecLaneShift);
+                    const uint32_t rt = (type == PP_EVENT) ? kRecEvent : kRecData;
+                    out[k++] = PerfDebugRec{ts, (rt << kRecTypeShift) | ml | (id & 0xFFFFu)};
+                    out[k++] = PerfDebugRec{(static_cast<uint64_t>(id) << 32) | n, (kRecExt << kRecTypeShift) | ml};
+                    for (uint32_t c = 0; c < (n + 1u) / 2u; c++) {
+                        const uint64_t hi = payload[2 * c];
+                        const uint64_t lo = (2 * c + 1 < n) ? payload[2 * c + 1] : 0u;
+                        out[k++] = PerfDebugRec{(hi << 32) | lo, (kRecCont << kRecTypeShift) | ml};
+                    }
+                },
+                [&](const uint32_t* p, uint32_t nw, uint32_t lane, uint32_t bhi, uint32_t bprog) {
+#if defined(__x86_64__)
+                    k += emit_zone_block_avx2(p, nw, dev_bits | (lane << kRecLaneShift), bhi, bprog, out + k);
+#else
+                    const uint32_t ml = dev_bits | (lane << kRecLaneShift);
+                    for (uint32_t j = 0; j < nw; j += 2) {
+                        out[k++] = PerfDebugRec{
+                            pp_full_ts(bhi, p[j + 1]), ((p[j] >> 27) << kRecTypeShift) | ml | (p[j] & 0xFFFFu)};
+                    }
+#endif
+                });
         }
-        w_recs_ += n;
-        // Stagger probe: remember each lane's FIRST marker timestamp (cheap: one compare per record).
-        if (!first_ts_.empty()) {
-            for (size_t k = 0; k < n; k++) {
-                const uint32_t ln = p[k].lane & 0x00FFFFFFu;
-                if (ln < first_ts_.size() && first_ts_[ln] == 0) {
-                    first_ts_[ln] = p[k].ts;
-                }
-            }
-        }
-        ZoneScopedNC("publish", 0xE67E22);  // orange: publish records to the BroadcastRing
-        const auto t_p0 = std::chrono::steady_clock::now();
-        {
-            std::lock_guard<std::mutex> pg(publish_mu_);  // SP ring, N decoder threads -- see publish_mu_
-            ring_->ring.writer().publish_batch(std::span<const PerfDebugRec>(p, n));
-        }
-        w_publish_ns_ +=
-            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t_p0).count();
     };
 
-    ZoneScopedNC("decode", 0x8E44AD);  // purple: pages -> records. With the sink decoupled this plus sock-read
-                                       // is the writer's whole job; if it ever fills the thread, the DRAIN is
-                                       // the wall (not Tracy) -- the opposite of the UFLD-v2 case.
     const auto t_dec0 = std::chrono::steady_clock::now();
-    pz::spsc_decode(
-        st,
-        buf.data(),
-        words,
-        ctx.nl,
-        [&](uint32_t lane, uint32_t type, uint32_t hash, uint64_t ts, uint32_t prog) {
-            // SPSC wire codes, NOT hostdevcommon PacketTypes: the two sources never co-exist and share no
-            // decode, so never compare a wire type against a PacketTypes value (they agree at 0/1 only by
-            // history). PP_DATA events arrive on the emit_data sink below; PP_ZONE_TOTAL is not a duration.
-            if (type != PP_ZONE_START && type != PP_ZONE_END) {
-                return;
-            }
-            ss.emit++;
-            if (hash == 0x7FFFu && type == PP_ZONE_START) {
-                ss.stall++;  // PROFILER_STALL_ZONE_ID: a producer RISC blocked on a FULL ring. Non-zero means
-                             // the capture PERTURBED the workload (kernels elongated); still lossless.
-            }
-            if (lane / kNRisc >= ctx.core_virt.size()) {
-                w_drop_lane_.fetch_add(1, std::memory_order_relaxed);
-                return;
-            }
-            if (bcur >= bend) {
-                // FLUSH, never drop. Dropping deleted markers mid-stream, which unpairs ZONE_START/END and
-                // leaves that lane's Tracy GPU stack permanently one level deeper (nesting is by push order),
-                // so one lost END scrambles every zone after it on that lane for the rest of the run.
-                publish_recs(ss.batch.data(), static_cast<size_t>(bcur - ss.batch.data()));
-                bcur = ss.batch.data();
-                w_batch_flush_.fetch_add(1, std::memory_order_relaxed);
-            }
-            {
-                // Lanes never cross sockets (contiguous core split), so [sock][lane] has a single writer.
-                const size_t li = static_cast<size_t>(sock_idx) * ctx.nl + lane;
-                if (li < pub_last_ts_.size()) {
-                    if (ts < pub_last_ts_[li]) {
-                        w_pub_regress_.fetch_add(1, std::memory_order_relaxed);
-                    } else {
-                        pub_last_ts_[li] = ts;
-                        w_pub_ok_.fetch_add(1, std::memory_order_relaxed);
-                    }
-                }
-            }
-            // Rebase to the first device ts this run sees, so zones land near the Tracy context origin
-            // instead of ~device-wall-clock ticks into the timeline.
-            if (ctx.marker_ts_base == 0) {
-                ctx.marker_ts_base = ts;
-            }
-            // Pack the device index into the high bits of lane: one ring serves every (device, socket), and
-            // the consumer must know which DeviceCtx to resolve coords against. lane = core*NRISC+risc fits
-            // comfortably in 24 bits (110 cores * 5 = 550), so the top 8 are free. Keeps PerfDebugRec
-            // byte-identical to the standalone drain harness's Rec.
-            *bcur++ = PerfDebugRec{ts, (dev_idx << 24) | lane, type, hash, prog};
-        },
-        // PP_DATA point events (DeviceTimestampedData / DeviceRecordEvent). The payload cannot fit in a
-        // 24-byte PerfDebugRec, and WIDENING the Rec would cost ~67% more ring bytes on a path that carries
-        // ~99M records for a single UFLD-v2 run -- so the payload rides CONTINUATION records instead: one
-        // primary (type PP_DATA, zone = id | size<<20) followed by one record per uint64. Events are rare
-        // next to zones, so the common path pays nothing and Rec stays byte-identical to the harness Rec.
-        [&](uint32_t lane,
-            uint32_t type,
-            uint32_t id,
-            uint64_t ts,
-            uint32_t prog,
-            const uint32_t* payload,
-            uint32_t n) {
-            ss.emit++;
-            if (lane / kNRisc >= ctx.core_virt.size()) {
-                return;
-            }
-            const uint32_t cont = (n + 1u) / 2u;  // 2 payload words == one uint64 == one continuation rec
-            if (bcur + 1 + cont > bend) {
-                return;  // batch full: drop this event rather than emit a primary with no payload
-            }
-            if (ctx.marker_ts_base == 0) {
-                ctx.marker_ts_base = ts;
-            }
-            // `type` (PP_DATA vs PP_EVENT) rides the record so the consumer knows whether the id is a
-            // compile-time tag it may name-resolve.
-            *bcur++ = PerfDebugRec{ts, (dev_idx << 24) | lane, type, id | (n << 20), prog};
-            for (uint32_t k = 0; k < cont; k++) {
-                // The producer writes each uint64 hi-word first (see timeStampedData), so recombine in
-                // that order and hand the consumer a finished value.
-                const uint64_t hi = payload[2 * k];
-                const uint64_t lo = (2 * k + 1 < n) ? payload[2 * k + 1] : 0u;
-                *bcur++ = PerfDebugRec{(hi << 32) | lo, (dev_idx << 24) | lane, kRecDataCont, 0, prog};
-            }
-        });
+    size_t k = 0;
 
-    w_decode_ns_ +=
+    PublishBatch* cur = publish_acquire_batch(worker);
+    TT_FATAL(
+        bound <= cur->recs.size(),
+        "[perf-debug profiler] publish batch under-sized: {} bound vs {} rec slots",
+        bound,
+        cur->recs.size());
+    PerfDebugRec* const out = cur->recs.data();
+    emit_into(out, k);
+    wp.decode_ns +=
         std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t_dec0).count();
+    cur->n = k;
+    if (k != 0) {
+        publish_submit_batch(worker);
+    }
 
-    publish_recs(ss.batch.data(), static_cast<size_t>(bcur - ss.batch.data()));
+    if (k != 0) {
+        if (ctx.marker_ts_base == 0) {
+            // First record ts; benign if two sockets race the latch.
+            ctx.marker_ts_base = 1;
+        }
+        wp.emit[sock_idx] += k;
+        wp.zone_recs += k;
+        wp.recs += k;
+        wp.last_rec_ns = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+                .count());
+    }
+}
+
+// Producer-side splitter. Walks the staged slot packet-by-packet (a BULK_SPAN hop reads 2 header words
+// per ~10 KB frame) and routes each WHOLE frame to worker = core * n_workers / num_cores; anything that
+// is not an identifiable frame goes to worker 0. A packet cut at the slot boundary is copied out into
+// carry_pend (the slot's staging gets recycled) and completed from the next slot into carry[slot], which
+// that slot's ranges then reference -- so workers only ever see whole packets and their decode states
+// never carry a residual.
+void PerfDebugProfiler::split_slot(
+    DeviceCtx& ctx, uint32_t sock_idx, size_t slot, const uint32_t* stage, size_t words) {
+    DeviceCtx::SockState& ss = ctx.sock_state[sock_idx];
+    for (uint32_t w = 0; w < n_workers_; w++) {
+        ss.ranges[slot][w].clear();
+    }
+    const auto& xymap = *ctx.decode[sock_idx];
+    const uint32_t nl = ctx.nl;
+    const uint32_t ncores = nl / kNRisc;
+    const uint32_t nworkers = n_workers_;
+    auto worker_of_frame = [&](const uint32_t* frame) -> uint32_t {
+        if (nworkers == 1 || !pp_is_bulkspan(frame[0])) {
+            return 0;
+        }
+        const uint32_t xy = frame[kernel_profiler::SPSC_SPAN_PREFIX_WORDS + kernel_profiler::SPSC_CORE_XY];
+        const uint32_t core = xymap.lookup_core(xy);
+        return core == 0xFFFFFFFFu ? 0u : (core * nworkers) / ncores;
+    };
+    auto emit_range = [&](uint32_t w, const uint32_t* ptr, uint32_t len) {
+        auto& rl = ss.ranges[slot][w];
+        // The mover ships same-filler batches, so adjacent frames usually share a worker: coalesce.
+        if (!rl.empty() && rl.back().first + rl.back().second == ptr) {
+            rl.back().second += len;
+        } else {
+            rl.emplace_back(ptr, len);
+        }
+    };
+
+    size_t p = 0;
+    // Complete the packet carried from the previous slot, if any.
+    if (!ss.carry_pend.empty()) {
+        auto& pend = ss.carry_pend;
+        for (;;) {
+            if (pend.size() >= 2) {
+                const size_t need = pz::spsc_top_packet_words(pend[0], pend[1]);
+                if (pend.size() >= need) {
+                    break;
+                }
+                const size_t take = std::min(need - pend.size(), words - p);
+                pend.insert(pend.end(), stage + p, stage + p + take);
+                p += take;
+                if (pend.size() < need) {
+                    // The whole slot went into the still-incomplete packet (possible only for tiny reads).
+                    return;
+                }
+                break;
+            }
+            if (p >= words) {
+                return;
+            }
+            pend.push_back(stage[p++]);
+        }
+        ss.carry[slot].swap(pend);
+        pend.clear();
+        emit_range(
+            worker_of_frame(ss.carry[slot].data()),
+            ss.carry[slot].data(),
+            static_cast<uint32_t>(ss.carry[slot].size()));
+    }
+    while (p < words) {
+        if (p + 1 >= words) {
+            if (pp_is_src(stage[p]) || pp_is_timer(stage[p])) {
+                emit_range(0, stage + p, 1);  // a complete 1-word packet needs no carry
+                return;
+            }
+            ss.carry_pend.assign(stage + p, stage + words);
+            return;
+        }
+        const size_t need = pz::spsc_top_packet_words(stage[p], stage[p + 1]);
+        if (p + need > words) {
+            ss.carry_pend.assign(stage + p, stage + words);
+            return;
+        }
+        emit_range(worker_of_frame(stage + p), stage + p, static_cast<uint32_t>(need));
+        p += need;
+    }
 }
 
 bool PerfDebugProfiler::drain_pass(DeviceCtx& ctx, uint32_t sock_idx) {
@@ -2060,33 +2394,23 @@ bool PerfDebugProfiler::drain_pass(DeviceCtx& ctx, uint32_t sock_idx) {
         return false;
     }
     DeviceCtx::SockState& ss = ctx.sock_state[sock_idx];
-    // No decode state here any more -- this thread only reads and acks; SpscDecodeState belongs to the
-    // decoder thread, which is the only place the stream is interpreted.
     const uint32_t page_words = kPageSize / sizeof(uint32_t);
     static const bool ddbg = (std::getenv("TT_PERF_DEBUG_ZONE_DUMP") != nullptr);
 
-    // Both of these touch the device/FIFO state and run on EVERY pass for EVERY socket, so they set the
-    // writer's loop period. They were previously outside any zone, which is how a run could show 79 ms of
-    // writer zones inside a 5,433 ms span with the time unattributable.
     uint32_t fifo_pages;
     uint32_t np;
     {
-        ZoneScopedNC("sock-poll", 0x16A085);  // teal: "is there anything to read?" -- pure overhead when empty
         const auto t0 = std::chrono::steady_clock::now();
         fifo_pages = sock->get_fifo_curr_size() / sock->get_page_size();
         np = sock->pages_available();
-        w_poll_ns_ += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0)
-                          .count();
-        w_polls_++;
+        ss.poll_ns +=
+            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count();
+        ss.polls++;
     }
     if (np == 0) {
         return false;
     }
     if (np >= fifo_pages) {
-        // A FLOW-CONTROL VIOLATION, not a quirk: pages_available() is (bytes_sent - bytes_acked)/page, so
-        // exceeding the FIFO means the sender wrote more than the FIFO holds at least once. Clamping keeps
-        // the read in bounds but desynchronizes host read_ptr from device write_ptr -- the host then acks
-        // bytes it never consumed, over-crediting the sender permanently. Say so loudly, once per socket.
         if (!ss.overflow_reported) {
             ss.overflow_reported = true;
             log_warning(
@@ -2105,128 +2429,218 @@ bool PerfDebugProfiler::drain_pass(DeviceCtx& ctx, uint32_t sock_idx) {
     if (cap != 0 && np > cap) {
         np = cap;
     }
+    // Coalesce small arrivals into a wider memcpy (FINDINGS: ~25 GB/s needs ~64–640 KB/read).
+    // Do not wait if the FIFO is already half full -- drain to protect credits. Always take a
+    // sub-min chunk once stop_ is set so quiesce cannot mark the socket done with pages still pending.
+    const uint32_t min_pg = min_pages_per_read();
+    if (min_pg != 0 && np < min_pg && np < (fifo_pages / 2) && !stop_.load(std::memory_order_relaxed)) {
+        return false;
+    }
+    // Brief spin-coalesce removed: holding ACK for fatter memcpy extended HOST wall and starved movers.
     if (ddbg && ss.iters < 40) {
         log_info(tt::LogMetal, "[drain sock={}] iter={} np={} fifo_pages={}", sock_idx, ss.iters, np, fifo_pages);
     }
     ss.iters++;
     ss.pages += np;
-    // Take a buffer from the pool. If the decoder has fallen behind and the pool is dry, still read (the
-    // FIFO must keep draining or the DRISC stalls) but discard the data and count it.
-    const uint64_t t_pool0 = tsc_now();
-    std::vector<uint32_t> pooled;
-    bool discard = false;
-    {
-        std::lock_guard<std::mutex> lk(dq_[sock_idx].m);
-        DecodeQueue& q = dq_[sock_idx];
-        if (!q.free_bufs.empty()) {
-            pooled = std::move(q.free_bufs.back());
-            q.free_bufs.pop_back();
-        } else if (q.allocated < kMaxPooledBufs) {
-            q.allocated++;
-        } else {
-            q.dropped++;
-            discard = true;
-        }
-    }
-    w_pool_ns_ += tsc_now() - t_pool0;
-    std::vector<uint32_t>& dst = discard ? ss.buf : pooled;
-    {
-        ZoneScopedNC("buf-resize", 0xD35400);
-        // GROW ONLY. std::vector::resize VALUE-INITIALIZES, so resizing to the exact read size every time
-        // zeroed the whole buffer immediately before memcpy overwrote every byte of it -- 12.3 ms per run,
-        // more than the copy itself (7.9 ms). Buffers are pooled, so letting them grow monotonically to the
-        // largest read means the zeroing happens a handful of times instead of once per read. The valid
-        // length travels in DecodeItem::words.
-        const uint64_t tr = tsc_now();
-        const size_t need = static_cast<size_t>(np) * page_words;
-        if (resize_zero_legacy()) {
-            dst.resize(need);  // legacy: exact size every read; pairs with clear() below
-        } else if (dst.size() < need) {
-            dst.resize(need);
-        }
-        w_resize_ns_ += tsc_now() - tr;
-    }
-    {
-        // SPLIT so the byte-proportional part is visible on its own. read(notify_sender=false) is
-        // wait_for_bytes + the memcpys + pop_bytes; the ack is then issued separately and timed. Same work,
-        // same order, same point in time -- the ack still goes out before the buffer is handed to the
-        // decoder, so the drainer's credit is released exactly as early as before.
-        ZoneScopedNC("sock-read", 0x27AE60);  // green: pulls pages -- the byte-proportional stage
+
+    if (d2h_discard_only()) {
+        // Ceiling probe: retire pages without touching FIFO payload (no staging memcpy).
         const uint64_t t0 = tsc_now();
-        sock->read(dst.data(), np, /*notify_sender=*/false);
+        (void)sock->peek(np);  // wait_for_bytes only
+        sock->pop(np, /*notify_sender=*/false);
         const uint64_t t1 = tsc_now();
-        if (ack_predrain()) {
-            asm volatile("sfence" ::: "memory");
-        }
-        const uint64_t t1b = tsc_now();
-        sock->probe_ack_write();  // notify_sender(): one PCIe write + sfence
+        sock->probe_ack_write();
         const uint64_t t2 = tsc_now();
-        w_read_ns_ += t1 - t0;
-        w_predrain_ns_ += t1b - t1;
-        w_ack_ns_ += t2 - t1b;
-        w_reads_++;
-        w_bytes_ += static_cast<uint64_t>(np) * kPageSize;
-    }
-    if (decode_disabled() || discard) {
+        ss.read_ns += t1 - t0;
+        ss.ack_ns += t2 - t1;
+        ss.reads++;
+        ss.bytes += static_cast<uint64_t>(np) * kPageSize;
         return true;
     }
-    // Hand the raw buffer to the decoder and go straight back to polling. This is the whole point: the ack
-    // (issued inside sock->read above) is no longer behind 85% of host work.
-    const uint64_t t_enq0 = tsc_now();
-    {
-        std::lock_guard<std::mutex> lk(dq_[sock_idx].m);
-        dq_[sock_idx].work.push_back(
-            DecodeItem{&ctx, sock_idx, std::move(pooled), static_cast<size_t>(np) * page_words});
+
+    // Wait for a free staging slot: every worker must be past it (its ranges, and any carry it
+    // references, are about to be overwritten).
+    const uint64_t fill = ss.fill_seq.load(std::memory_order_relaxed);
+    for (;;) {
+        uint64_t wmin = UINT64_MAX;
+        for (uint32_t w = 0; w < n_workers_; w++) {
+            wmin = std::min(wmin, ss.wdone[w].load(std::memory_order_acquire));
+        }
+        if (fill - wmin < DeviceCtx::kStageSlots) {
+            break;
+        }
+        _mm_pause();
     }
-    dq_[sock_idx].cv.notify_one();
-    w_enq_ns_ += tsc_now() - t_enq0;
+    const size_t slot = static_cast<size_t>(fill & (DeviceCtx::kStageSlots - 1));
+    auto& stage = ss.buf[slot];
+    TT_FATAL(
+        stage.size() >= static_cast<size_t>(np) * page_words,
+        "[perf-debug profiler] staging buffer too small ({} words < {} needed) -- start() must pre-size "
+        "to max read; hot-path allocation is forbidden",
+        stage.size(),
+        static_cast<size_t>(np) * page_words);
+    {
+        // Split wait vs FIFO→staging copy (read() lumps them; FINDINGS cares about both).
+        const uint64_t t0 = tsc_now();
+        const auto view = sock->peek(np);
+        const uint64_t t1 = tsc_now();
+        auto* dst = reinterpret_cast<char*>(stage.data());
+        // Wide copy: FIFO is cold (PCIe); staging is the decode working set. Plain memcpy; the prior
+        // MOVNTDQA path regressed. Clang turns this into ERMSB/AVX for large n.
+        std::memcpy(dst, view.first, view.first_bytes);
+        if (view.second_bytes != 0) {
+            std::memcpy(dst + view.first_bytes, view.second, view.second_bytes);
+        }
+        const uint64_t t2 = tsc_now();
+        sock->pop(np, /*notify_sender=*/false);
+        sock->probe_ack_write();  // batched notify: one PCIe write of cumulative bytes_acked
+        const uint64_t t3 = tsc_now();
+        ss.wait_ns += t1 - t0;
+        ss.copy_ns += t2 - t1;
+        ss.read_ns += t2 - t0;  // wait+copy (legacy "sock-read" numerator)
+        ss.ack_ns += t3 - t2;
+        ss.reads++;
+        ss.bytes += static_cast<uint64_t>(np) * kPageSize;
+    }
+    if (decode_disabled()) {
+        // No decode consumers -- retire the slot immediately so fill never stalls.
+        ss.words[slot] = 0;
+        ss.fill_seq.store(fill + 1, std::memory_order_relaxed);
+        for (uint32_t w = 0; w < n_workers_; w++) {
+            ss.wdone[w].store(fill + 1, std::memory_order_release);
+        }
+        return true;
+    }
+    // ACK already issued -- split into per-worker whole-frame ranges and publish the slot.
+    ss.words[slot] = static_cast<size_t>(np) * page_words;
+    split_slot(ctx, sock_idx, slot, stage.data(), ss.words[slot]);
+    ss.fill_seq.store(fill + 1, std::memory_order_release);
     return true;
 }
 
-// The single writer thread: round-robin every (device, socket); each drain_pass publishes its own read as one
-// data-driven batch, then wake readers once per sweep. Idle sweeps back off. Mirrors the standalone drain harness.
-void PerfDebugProfiler::decoder_thread(uint32_t sock_idx) {
-    tracy::SetThreadName("perf-debug-decoder");
-    DecodeQueue& q = dq_[sock_idx];
-    for (;;) {
-        DecodeItem item;
-        {
-            std::unique_lock<std::mutex> lk(q.m);
-            q.cv.wait(lk, [&q] { return !q.work.empty() || q.quit; });
-            if (q.work.empty()) {
-                if (q.quit) {
-                    return;
+bool PerfDebugProfiler::decoder_work_pending() const {
+    for (const auto& ctx : devices_) {
+        for (uint32_t s = 0; s < kNSockets; s++) {
+            const auto& ss = ctx.sock_state[s];
+            const uint64_t fill = ss.fill_seq.load(std::memory_order_acquire);
+            for (uint32_t w = 0; w < n_workers_; w++) {
+                if (ss.wdone[w].load(std::memory_order_acquire) != fill) {
+                    return true;
                 }
-                continue;
             }
-            q.max_depth = std::max<uint64_t>(q.max_depth, q.work.size());
-            item = std::move(q.work.front());
-            q.work.pop_front();
         }
-        decode_and_publish(*item.ctx, item.sock, item.buf, item.words);
-        std::lock_guard<std::mutex> lk(q.m);
-        if (resize_zero_legacy()) {
-            item.buf.clear();  // legacy path: forces the next resize to zero the whole buffer
+    }
+    return false;
+}
+
+void PerfDebugProfiler::decode_worker(uint32_t worker) {
+    tracy::SetThreadName(fmt::format("perf-debug-decode{}", worker).c_str());
+    pin_self_to_cpu(pin_cpu_for(PinRole::Decode, worker));
+    // Prefault/TLB-warm on the core that will emit into the ring. Constructor memset ran on the
+    // bring-up thread; soft faults + remote-NUMA first-touch would otherwise land in decode_ns.
+    if (worker == 0 && ring_) {
+        ring_->ring.warm_pages(/*lock=*/true);
+    }
+    for (;;) {
+        bool any = false;
+        for (auto& ctx : devices_) {
+            for (uint32_t s = 0; s < kNSockets; s++) {
+                DeviceCtx::SockState& ss = ctx.sock_state[s];
+                const uint64_t mine = ss.wdone[worker].load(std::memory_order_relaxed);
+                const uint64_t fill = ss.fill_seq.load(std::memory_order_acquire);
+                if (mine >= fill) {
+                    continue;
+                }
+                const size_t slot = static_cast<size_t>(mine & (DeviceCtx::kStageSlots - 1));
+                decode_ranges(ctx, s, worker, slot);
+                ss.wdone[worker].store(mine + 1, std::memory_order_release);
+                any = true;
+            }
         }
-        q.free_bufs.push_back(std::move(item.buf));
+        if (any) {
+            continue;
+        }
+        if (decoder_stop_.load(std::memory_order_acquire) && !decoder_work_pending()) {
+            break;
+        }
+        _mm_pause();
     }
 }
 
-void PerfDebugProfiler::writer_thread(uint32_t sock_idx) {
-    tracy::SetThreadName("perf-debug-writer");
-    // Startup accounting: the gap between this thread entering and its FIRST successful drain is the window
-    // in which the D2H FIFO can fill unserviced -- which back-pressures relay -> reader -> worker rings and
-    // stalls every producing RISC once. Reported so it is a number rather than an inference.
+// Double-buffer SPSC: decoder fills slots[prod%N], bumps prod; publisher drains slots[cons%N], bumps cons.
+// Slack = kPublishBatchSlots. No mutex.
+PerfDebugProfiler::PublishBatch* PerfDebugProfiler::publish_acquire_batch(uint32_t worker) {
+    for (;;) {
+        WorkerPub& wp = wpub_[worker];
+        const uint64_t prod = wp.prod.load(std::memory_order_relaxed);
+        const uint64_t cons = wp.cons.load(std::memory_order_acquire);
+        if (prod - cons < kPublishBatchSlots) {
+            PublishBatch& b = wp.batches[prod & (kPublishBatchSlots - 1)];
+            b.n = 0;
+            return &b;
+        }
+        _mm_pause();
+    }
+}
+
+void PerfDebugProfiler::publish_submit_batch(uint32_t worker) {
+    wpub_[worker].prod.fetch_add(1, std::memory_order_release);
+}
+
+void PerfDebugProfiler::publish_wait_idle() {
+    for (uint32_t w = 0; w < n_workers_; w++) {
+        while (wpub_[w].cons.load(std::memory_order_acquire) != wpub_[w].prod.load(std::memory_order_relaxed)) {
+            _mm_pause();
+        }
+    }
+}
+
+void PerfDebugProfiler::publish_stop() { publisher_stop_.store(true, std::memory_order_release); }
+
+void PerfDebugProfiler::publisher_thread() {
+    tracy::SetThreadName("perf-debug-pub");
+    pin_self_to_cpu(pin_cpu_for(PinRole::Publisher));
+    auto& writer = ring_->ring.writer();
+    uint64_t my_pub_ns = 0;
+    for (;;) {
+        bool any = false;
+        for (uint32_t w = 0; w < n_workers_; w++) {
+            WorkerPub& wp = wpub_[w];
+            const uint64_t cons = wp.cons.load(std::memory_order_relaxed);
+            const uint64_t prod = wp.prod.load(std::memory_order_acquire);
+            if (cons >= prod) {
+                continue;
+            }
+            PublishBatch& b = wp.batches[cons & (kPublishBatchSlots - 1)];
+            if (b.n != 0) {
+                const auto t0 = std::chrono::steady_clock::now();
+                writer.publish_batch(std::span<const PerfDebugRec>(b.recs.data(), b.n));
+                my_pub_ns +=
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count();
+            }
+            wp.cons.store(cons + 1, std::memory_order_release);
+            any = true;
+        }
+        if (any) {
+            writer.wake_readers();
+            continue;
+        }
+        if (publisher_stop_.load(std::memory_order_acquire)) {
+            break;
+        }
+        _mm_pause();
+    }
+    w_publish_ns_ = my_pub_ns;
+}
+
+// Producer for ONE socket: poll -> read -> ack -> split.
+void PerfDebugProfiler::producer_thread(uint32_t sock_idx) {
+    tracy::SetThreadName(fmt::format("perf-debug-prod{}", sock_idx).c_str());
+    pin_self_to_cpu(pin_cpu_for(sock_idx == 0 ? PinRole::Producer0 : PinRole::Producer1));
     const auto t_writer_entry = std::chrono::steady_clock::now();
-    // Wall time of this thread's whole loop. Without it, phase totals cannot distinguish "saturated" from
-    // "mostly waiting for the device" -- the exact mistake made when host work time was compared against the
-    // DRISC's busy time as though they shared a window.
     const auto t_wall0 = t_writer_entry;
-    bool first_data_seen = false;
     auto watchdog = std::chrono::steady_clock::now();
     auto backoff = std::chrono::microseconds(writer_backoff_us());
-    // Drain-to-empty on stop: stop() sets P_STOP first, so the drainer stops producing; keep reading until every
-    // socket has been empty for a sustained window, else the tail of the run is lost. Deadline backstops it.
     constexpr uint32_t kQuiesceEmpties = 200;
     std::chrono::steady_clock::time_point drain_deadline{};
     bool deadline_set = false;
@@ -2238,49 +2652,36 @@ void PerfDebugProfiler::writer_thread(uint32_t sock_idx) {
         }
         bool any = false, all_done = true;
         for (auto& ctx : devices_) {
-            {
-                const uint32_t s = sock_idx;  // one reader per socket -- they never touch each other's state
-                DeviceCtx::SockState& ss = ctx.sock_state[s];
-                if (ss.done) {
-                    continue;
-                }
-                all_done = false;
-                if (drain_pass(ctx, s)) {
-                    any = true;
-                    ss.quiesce = 0;
-                } else if (
-                    stopping &&
-                    (++ss.quiesce >= kQuiesceEmpties || std::chrono::steady_clock::now() >= drain_deadline)) {
-                    ss.done = true;  // stop signalled AND drained (or deadline) => this socket is flushed
-                }
+            DeviceCtx::SockState& ss = ctx.sock_state[sock_idx];
+            if (ss.done) {
+                continue;
+            }
+            all_done = false;
+            if (drain_pass(ctx, sock_idx)) {
+                any = true;
+                ss.quiesce = 0;
+            } else if (
+                stopping && (++ss.quiesce >= kQuiesceEmpties || std::chrono::steady_clock::now() >= drain_deadline)) {
+                ss.done = true;
             }
         }
-        if (any && !first_data_seen) {
-            first_data_seen = true;
-            const double ms =
-                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_writer_entry).count();
-            log_info(
-                tt::LogMetal,
-                "[perf-debug profiler] writer: first data {:.2f} ms after thread start [large => the FIFO sat "
-                "unserviced and producers will have stalled once]",
-                ms);
+        if (any) {
+            std::call_once(first_data_once_, [&]() {
+                host_first_data_ns_ = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                                                std::chrono::steady_clock::now().time_since_epoch())
+                                                                .count());
+                const double ms =
+                    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_writer_entry)
+                        .count();
+                log_info(
+                    tt::LogMetal,
+                    "[perf-debug profiler] producer: first data {:.2f} ms after thread start [large => the FIFO sat "
+                    "unserviced and producers will have stalled once]",
+                    ms);
+            });
         }
         if (any && ring_) {
             ring_->ring.writer().wake_readers();
-        }
-        // TEST HOOK: stop acking after N successful reads, to reproduce "the host consumer went away while
-        // the device is mid-stream" on demand. That is the state the unbounded credit wait used to deadlock
-        // in; with the bounded wait the drainer should drop frames and the workload should still finish.
-        if (any && writer_die_after() != 0) {
-            static uint32_t reads_done = 0;
-            if (++reads_done >= writer_die_after()) {
-                log_warning(
-                    tt::LogMetal,
-                    "[perf-debug profiler] TEST HOOK: writer exiting after {} reads; the device will lose "
-                    "its credits from here on",
-                    reads_done);
-                break;
-            }
         }
         if (all_done) {
             break;
@@ -2288,52 +2689,32 @@ void PerfDebugProfiler::writer_thread(uint32_t sock_idx) {
         if (any) {
             watchdog = std::chrono::steady_clock::now();
         } else {
+            if (decoder_work_pending()) {
+                continue;
+            }
             if (std::chrono::steady_clock::now() - watchdog > writer_timeout()) {
                 log_warning(
                     tt::LogMetal,
-                    "[perf-debug profiler] writer WALL TIMEOUT ({} s no progress)",
+                    "[perf-debug profiler] producer WALL TIMEOUT ({} s no progress)",
                     std::chrono::duration_cast<std::chrono::seconds>(writer_timeout()).count());
-                // Before giving up -- which permanently stops acking and so permanently strands a drainer
-                // that IS waiting on credits -- record what the drainer is actually doing. A starving writer
-                // and a credit-blocked drainer are contradictory states (blocked implies a FULL fifo), so if
-                // both appear the flow-control accounting has desynchronized.
                 for (auto& c : devices_) {
                     for (uint32_t dd = 0; dd < c.n_drisc; dd++) {
-                        dump_drainer_state(c, dd, "writer-wall-timeout");
+                        dump_drainer_state(c, dd, "producer-wall-timeout");
+                    }
+                    for (uint32_t s = 0; s < kNSockets; s++) {
+                        c.sock_state[s].done = true;
                     }
                 }
                 break;
             }
-            // Every socket came back empty: the writer is STARVED waiting on the device. If this dominates
-            // while the device shows no stalls, the host is comfortably ahead -- the healthy state.
-            if (first_data_seen) {
-                ZoneScopedNC("sock-idle", 0x7D6608);  // dark yellow: steady-state starvation (healthy)
-                std::this_thread::sleep_for(backoff);
-            } else {
-                // Distinct name: idling BEFORE any data has arrived is the startup window, not steady-state
-                // starvation, and only this one can leave the FIFO unserviced while producers fill rings.
-                ZoneScopedNC("writer-startup-idle", 0xC0392B);  // red
-                std::this_thread::sleep_for(backoff);
-            }
+            std::this_thread::sleep_for(backoff);
         }
     }
+    const uint64_t wall = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t_wall0).count());
     for (auto& ctx : devices_) {
-        for (uint32_t s = 0; s < kNSockets; s++) {
-            const DeviceCtx::SockState& ss = ctx.sock_state[s];
-            log_info(
-                tt::LogMetal,
-                "[perf-debug profiler] socket {} drained: {} pages, {} markers ({} reads); producer stall "
-                "zones: {} [0 = drainer kept up, non-zero = capture perturbed the workload]",
-                s,
-                ss.pages,
-                ss.emit,
-                ss.iters,
-                ss.stall);
-        }
+        ctx.sock_state[sock_idx].wall_ns = wall;
     }
-    w_wall_ns_ = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                     std::chrono::steady_clock::now() - t_wall0)
-                     .count();
 }
 
 // BroadcastRing reader -> Tracy. This is the slow side (~270 ns/marker measured), and it is now the ONLY
@@ -2351,22 +2732,23 @@ void PerfDebugProfiler::consumer_thread() {
     // independently, and because a primary record and its continuations can straddle a read batch.
     struct PendingEvent {
         bool active = false;
-        uint32_t lane_full = 0;
+        uint32_t meta = 0;
         uint64_t ts = 0;
         uint32_t id = 0;
         uint32_t type = 0;
         uint32_t prog = 0;
-        uint32_t want = 0;  // uint64s expected
+        uint32_t want = 0;  // uint64s expected; UINT32_MAX until the EXT record supplies it
         uint32_t got = 0;
         uint64_t vals[kMaxEventValues] = {};
     } pend;
     std::vector<uint64_t> con_last_ts_(4096, 0);
     auto emit_batch = [&](std::span<PerfDebugRec> b) {
         for (const auto& r : b) {
-            if (r.type != PP_ZONE_START && r.type != PP_ZONE_END) {
+            const uint32_t rt = r.meta >> kRecTypeShift;
+            if (rt != kRecZoneStart && rt != kRecZoneEnd) {
                 continue;
             }
-            const uint32_t ln = r.lane & 0xFFFFFFu;
+            const uint32_t ln = (r.meta >> kRecLaneShift) & (kRecLaneMax - 1u);
             if (ln < con_last_ts_.size()) {
                 w_con_seen_.fetch_add(1, std::memory_order_relaxed);
                 if (r.ts < con_last_ts_[ln]) {
@@ -2388,9 +2770,6 @@ void PerfDebugProfiler::consumer_thread() {
             }
             zone_names_[0x7FFFu] = "PRODUCER-STALL";  // PROFILER_STALL_ZONE_ID
         });
-        ZoneScopedNC("tracy-emit", 0x2980B9);  // blue: pushing this batch into Tracy -- the slow side (~0.8M
-                                               // rec/s). When this saturates, the RING drops; it can no longer
-                                               // back-pressure the device.
         // Resolve a lane to its coords + name and push the reassembled event. Shares the coord/name
         // resolution shape with the zone path below.
         auto flush_event = [&]() {
@@ -2398,8 +2777,8 @@ void PerfDebugProfiler::consumer_thread() {
                 return;
             }
             pend.active = false;
-            const uint32_t dev_idx = pend.lane_full >> 24;
-            const uint32_t lane = pend.lane_full & 0x00FFFFFFu;
+            const uint32_t dev_idx = (pend.meta >> kRecDevShift) & (kRecDevMax - 1u);
+            const uint32_t lane = (pend.meta >> kRecLaneShift) & (kRecLaneMax - 1u);
             if (dev_idx >= devices_.size()) {
                 return;
             }
@@ -2422,7 +2801,7 @@ void PerfDebugProfiler::consumer_thread() {
             pkt.core_noc0_y = ny;
             pkt.risc = risc;
             pkt.id = pend.id;
-            pkt.runtime_id = (pend.type == PP_EVENT);
+            pkt.runtime_id = (pend.type == kRecEvent);
             // A runtime id is NOT a source-location hash: looking it up would borrow an unrelated zone's
             // name (id 42 vs whatever hashes to 42). Only compile-time tags get resolved.
             if (!pkt.runtime_id) {
@@ -2441,7 +2820,8 @@ void PerfDebugProfiler::consumer_thread() {
         };
 
         for (const auto& r : b) {
-            if (r.type == kRecDataCont) {
+            const uint32_t rt = r.meta >> kRecTypeShift;
+            if (rt == kRecCont) {
                 if (pend.active && pend.got < kMaxEventValues) {
                     pend.vals[pend.got++] = r.ts;
                 }
@@ -2450,26 +2830,33 @@ void PerfDebugProfiler::consumer_thread() {
                 }
                 continue;
             }
-            if (r.type == PP_DATA || r.type == PP_EVENT) {
-                flush_event();  // defensive: a truncated predecessor must not absorb this event's payload
-                pend = PendingEvent{};
-                pend.active = true;
-                pend.lane_full = r.lane;
-                pend.ts = r.ts;
-                pend.id = r.zone & 0xFFFFFu;
-                pend.type = r.type;
-                pend.prog = r.prog;
-                pend.want = ((r.zone >> 20) + 1u) / 2u;  // payload words -> uint64s
-                if (pend.want == 0) {
-                    flush_event();  // a bare event (DeviceRecordEvent) has no continuations
+            if (rt == kRecExt) {
+                if (pend.active) {
+                    pend.id = static_cast<uint32_t>(r.ts >> 32);
+                    pend.want = ((static_cast<uint32_t>(r.ts) & 0x7Fu) + 1u) / 2u;  // payload words -> uint64s
+                    if (pend.want == 0) {
+                        flush_event();  // a bare event (DeviceRecordEvent) has no continuations
+                    }
                 }
                 continue;
             }
-            if (r.type != PP_ZONE_START && r.type != PP_ZONE_END) {
-                continue;  // e.g. PP_ZONE_TOTAL: an accumulated sum, not a duration on the timeline
+            if (rt == kRecData || rt == kRecEvent) {
+                flush_event();  // defensive: a truncated predecessor must not absorb this event's payload
+                pend = PendingEvent{};
+                pend.active = true;
+                pend.meta = r.meta;
+                pend.ts = r.ts;
+                pend.id = r.meta & 0xFFFFu;  // provisional; the EXT record supplies the full 20-bit id
+                pend.type = rt;
+                pend.prog = 0;
+                pend.want = UINT32_MAX;  // unknown until the EXT record lands
+                continue;
             }
-            const uint32_t dev_idx = r.lane >> 24;
-            const uint32_t lane = r.lane & 0x00FFFFFFu;
+            if (rt != kRecZoneStart && rt != kRecZoneEnd) {
+                continue;
+            }
+            const uint32_t dev_idx = (r.meta >> kRecDevShift) & (kRecDevMax - 1u);
+            const uint32_t lane = (r.meta >> kRecLaneShift) & (kRecLaneMax - 1u);
             if (dev_idx >= devices_.size()) {
                 continue;
             }
@@ -2485,7 +2872,7 @@ void PerfDebugProfiler::consumer_thread() {
                 ny = it->second.second;
             }
             std::string_view name;
-            if (auto it = zone_names_.find(static_cast<uint16_t>(r.zone)); it != zone_names_.end()) {
+            if (auto it = zone_names_.find(static_cast<uint16_t>(r.meta)); it != zone_names_.end()) {
                 name = it->second;
             }
             perf_debug::WorkerZonePacket pkt;
@@ -2495,13 +2882,13 @@ void PerfDebugProfiler::consumer_thread() {
             pkt.core_noc0_x = nx;
             pkt.core_noc0_y = ny;
             pkt.risc = risc;
-            pkt.timer_id = r.zone;
+            pkt.timer_id = r.meta & 0xFFFFu;
             pkt.name = name;
             // Synced: push the RAW device timestamp -- the context was anchored with a real (host, device)
             // pair, so Tracy places it exactly. Unsynced: fall back to rebasing on the first marker seen.
             const uint64_t base = ctx.synced ? 0 : ctx.marker_ts_base;
             pkt.timestamp = (r.ts >= base) ? (r.ts - base) : 0;
-            pkt.is_start = (r.type == PP_ZONE_START);
+            pkt.is_start = (rt == kRecZoneStart);
             if (!tracy_push_disabled()) {
                 tracy_->HandleWorkerZone(pkt);
             }
@@ -2526,9 +2913,6 @@ void PerfDebugProfiler::consumer_thread() {
             break;
         }
         {
-            ZoneScopedNC("ring-wait", 0x7F8C8D);  // gray: consumer starved, waiting on the writer. Mirrors the
-                                                  // harness's mq-pop-wait. Plentiful here = the sink is keeping
-                                                  // up; ~absent = the sink is the bottleneck and drops loom.
             rd.wait(tok);
         }
     }
@@ -2572,6 +2956,59 @@ void PerfDebugProfiler::report_lane_spread() {
         us(med - lo),
         us(p90 - lo),
         us(hi - lo) / static_cast<double>(seen.size() - 1));
+}
+
+// Host sustained throughput from copy+ack+decode+publish busy time (and optional wall). Device first→last
+// zone rate is NOT derived here -- that wants a device-side window, not a host scan of every record.
+void PerfDebugProfiler::report_sustained_throughput() {
+    if (w_zone_recs_ == 0 && w_bytes_ == 0) {
+        log_info(tt::LogMetal, "[perf-debug profiler] sustained throughput: nothing drained");
+        return;
+    }
+    const uint64_t marker_wire_bytes = w_zone_recs_ * 8ull;
+    const uint64_t zones = w_zone_recs_ / 2ull;
+
+    auto gbps = [](uint64_t bytes, double span_s) {
+        return span_s > 0.0 ? (static_cast<double>(bytes) / 1e9) / span_s : 0.0;
+    };
+    auto mzps = [](uint64_t z, double span_s) { return span_s > 0.0 ? (static_cast<double>(z) / 1e6) / span_s : 0.0; };
+
+    // Pipeline busy: copy+ack, decode, and ring publish overlap on different threads. Report the max
+    // (true pipeline occupancy). Publish is in the max -- BroadcastRing ingest is the product.
+    const double copy_ack_s = (w_read_ns_ * tsc_ns_per_tick() + w_ack_ns_ * tsc_ns_per_tick()) / 1e9;
+    const double decode_s = w_decode_ns_ / 1e9;
+    const double publish_s = w_publish_ns_ / 1e9;
+    const double host_busy_s = std::max(copy_ack_s, std::max(decode_s, publish_s));
+    log_info(
+        tt::LogMetal,
+        "[perf-debug profiler] SUSTAINED THROUGHPUT -- {} zone-markers ({} zones) | marker-wire {:.1f} MB | "
+        "D2H {:.1f} MB",
+        w_zone_recs_,
+        zones,
+        marker_wire_bytes / (1024.0 * 1024.0),
+        w_bytes_ / (1024.0 * 1024.0));
+    log_info(
+        tt::LogMetal,
+        "[perf-debug profiler]   HOST busy (pipeline max(copy+ack {:.3f}, decode {:.3f}, publish {:.3f}) ms): "
+        "marker-wire {:.2f} GB/s | D2H {:.2f} GB/s | {:.2f} Mzones/s",
+        copy_ack_s * 1e3,
+        decode_s * 1e3,
+        publish_s * 1e3,
+        gbps(marker_wire_bytes, host_busy_s),
+        gbps(w_bytes_, host_busy_s),
+        mzps(zones, host_busy_s));
+
+    if (host_first_data_ns_ != 0 && host_last_rec_ns_ > host_first_data_ns_) {
+        const double host_wall_s = static_cast<double>(host_last_rec_ns_ - host_first_data_ns_) / 1e9;
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler]   HOST wall (first data→last decode submit {:.3f} ms): "
+            "marker-wire {:.2f} GB/s | D2H {:.2f} GB/s | {:.2f} Mzones/s",
+            host_wall_s * 1e3,
+            gbps(marker_wire_bytes, host_wall_s),
+            gbps(w_bytes_, host_wall_s),
+            mzps(zones, host_wall_s));
+    }
 }
 
 void PerfDebugProfiler::dump_drainer_state(DeviceCtx& ctx, uint32_t d, const char* why) {
@@ -2639,9 +3076,8 @@ void PerfDebugProfiler::dump_drainer_state(DeviceCtx& ctx, uint32_t d, const cha
             tl,
             hd - tl,
             ctx.dram_frames,
-            (ctx.dram_frames != 0 && (hd - tl) >= ctx.dram_frames)
-                ? "  <<< RING FULL: the mover is not consuming"
-                : "");
+            (ctx.dram_frames != 0 && (hd - tl) >= ctx.dram_frames) ? "  <<< RING FULL: the mover is not consuming"
+                                                                   : "");
     }
     if (b[1] == a[1] && !exited && b[2] == 3 && np == 0) {
         log_warning(
@@ -2680,12 +3116,8 @@ void PerfDebugProfiler::stop() {
             continue;
         }
         auto& cluster = MetalContext::instance().get_cluster();
-        auto stop_word = [&](uint32_t d) {
-            return ctx.drisc_l1_noc[d] + (ctx.stop_addr[d] - ctx.drisc_l1_base[d]);
-        };
-        auto done_word = [&](uint32_t d) {
-            return ctx.drisc_l1_noc[d] + (ctx.done_addr[d] - ctx.drisc_l1_base[d]);
-        };
+        auto stop_word = [&](uint32_t d) { return ctx.drisc_l1_noc[d] + (ctx.stop_addr[d] - ctx.drisc_l1_base[d]); };
+        auto done_word = [&](uint32_t d) { return ctx.drisc_l1_noc[d] + (ctx.done_addr[d] - ctx.drisc_l1_base[d]); };
         auto quiesce = [&](uint32_t d) {
             if (ctx.drain_program[d] == nullptr) {
                 return;
@@ -2778,13 +3210,15 @@ void PerfDebugProfiler::stop() {
             if (ctx.drain_program[d] == nullptr) {
                 continue;
             }
-                const tt_cxy_pair drisc(ctx.chip_id, ctx.drisc_virtual[d]);
+            const tt_cxy_pair drisc(ctx.chip_id, ctx.drisc_virtual[d]);
             uint32_t one = 1;
-            cluster.write_core(&one, sizeof(uint32_t), drisc, ctx.drisc_l1_noc[d] + (ctx.stop_addr[d] - ctx.drisc_l1_base[d]));
+            cluster.write_core(
+                &one, sizeof(uint32_t), drisc, ctx.drisc_l1_noc[d] + (ctx.stop_addr[d] - ctx.drisc_l1_base[d]));
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
             uint32_t done = 0;
             while (std::chrono::steady_clock::now() < deadline) {
-                cluster.read_core(&done, sizeof(uint32_t), drisc, ctx.drisc_l1_noc[d] + (ctx.done_addr[d] - ctx.drisc_l1_base[d]));
+                cluster.read_core(
+                    &done, sizeof(uint32_t), drisc, ctx.drisc_l1_noc[d] + (ctx.done_addr[d] - ctx.drisc_l1_base[d]));
                 if ((done & 0xFFFF0000u) == 0xD09E0000u) {
                     break;
                 }
@@ -2793,7 +3227,9 @@ void PerfDebugProfiler::stop() {
             }
             if ((done & 0xFFFF0000u) != 0xD09E0000u) {
                 log_warning(
-                    tt::LogMetal, "[perf-debug profiler] Device {}: DRISC drainer did not acknowledge stop", ctx.chip_id);
+                    tt::LogMetal,
+                    "[perf-debug profiler] Device {}: DRISC drainer did not acknowledge stop",
+                    ctx.chip_id);
                 // WHERE is it stuck? The phase word is live while the loop runs, so this says which part of
                 // the kernel is blocking instead of leaving it to inference. POLL = sweep body (NoC reads or
                 // the control-vector pass), RESERVE = credit wait (should be impossible now it is bounded),
@@ -2936,8 +3372,7 @@ void PerfDebugProfiler::stop() {
                         res[51],
                         tail,
                         batch,
-                        res[51] != 0 ? "  <<< the DRAM ring FILLED: raise TT_METAL_PERF_DEBUG_ROLE_RING_MB"
-                                     : "");
+                        res[51] != 0 ? "  <<< the DRAM ring FILLED: raise TT_METAL_PERF_DEBUG_ROLE_RING_MB" : "");
                 }
                 if (is_mv) {
                     // MUST be 0. Non-zero means the mover was handed a value that cannot be a head, so it
@@ -3005,13 +3440,80 @@ void PerfDebugProfiler::stop() {
             // Release it to restore the NIU. It cannot do that until we say so: NOC2AXI forwards inbound
             // DRAM-range addresses to GDDR, so the flip takes this L1 out of the host's view.
             uint32_t two = 2;
-            cluster.write_core(&two, sizeof(uint32_t), drisc, ctx.drisc_l1_noc[d] + (ctx.stop_addr[d] - ctx.drisc_l1_base[d]));
+            cluster.write_core(
+                &two, sizeof(uint32_t), drisc, ctx.drisc_l1_noc[d] + (ctx.stop_addr[d] - ctx.drisc_l1_base[d]));
         }
     }
     stop_.store(true, std::memory_order_release);
-    for (auto& w : writers_) {
-        if (w.joinable()) {
-            w.join();  // each drains its own socket to quiescence
+    for (auto& t : producers_) {
+        if (t.joinable()) {
+            t.join();  // drains its socket to quiescence (staging fills included)
+        }
+    }
+    // Finish any in-flight slot decodes, then stop the workers before draining publish batches.
+    decoder_stop_.store(true, std::memory_order_release);
+    for (auto& t : workers_) {
+        if (t.joinable()) {
+            t.join();
+        }
+    }
+    publish_wait_idle();
+    publish_stop();
+    if (publisher_.joinable()) {
+        publisher_.join();
+    }
+    // Aggregate: volumes sum; critical-path times take the MAX across parallel sockets (matching
+    // decode workers). Summing two parallel drain copy times double-counted the copy stage.
+    uint64_t max_copy_ack_ns = 0;
+    for (auto& ctx : devices_) {
+        for (uint32_t sk = 0; sk < kNSockets; sk++) {
+            const auto& ss = ctx.sock_state[sk];
+            w_read_ns_ = std::max(w_read_ns_, ss.read_ns);
+            w_wait_ns_ = std::max(w_wait_ns_, ss.wait_ns);
+            w_copy_ns_ = std::max(w_copy_ns_, ss.copy_ns);
+            w_ack_ns_ = std::max(w_ack_ns_, ss.ack_ns);
+            w_poll_ns_ = std::max(w_poll_ns_, ss.poll_ns);
+            max_copy_ack_ns = std::max(max_copy_ack_ns, ss.read_ns + ss.ack_ns);
+            w_polls_ += ss.polls;
+            w_reads_ += ss.reads;
+            w_bytes_ += ss.bytes;
+            w_wall_ns_ = std::max(w_wall_ns_, ss.wall_ns);
+            uint64_t emit = 0;
+            for (uint32_t w = 0; w < n_workers_; w++) {
+                emit += wpub_[w].emit[sk];
+            }
+            log_info(
+                tt::LogMetal,
+                "[perf-debug profiler] socket {} drained: {} pages, {} markers ({} reads); producer stall "
+                "zones: {} | copy {:.2f} ms ({:.2f} GB/s) [0 stalls = drainer kept up]",
+                sk,
+                ss.pages,
+                emit,
+                ss.iters,
+                ss.stall,
+                ss.copy_ns * tsc_ns_per_tick() / 1e6,
+                ss.copy_ns ? (static_cast<double>(ss.bytes) / (ss.copy_ns * tsc_ns_per_tick())) : 0.0);
+        }
+    }
+    // Prefer per-socket (copy+ack) max so HOST busy doesn't mix sock0 copy with sock1 ack.
+    if (max_copy_ack_ns != 0) {
+        w_read_ns_ = max_copy_ack_ns;
+        w_ack_ns_ = 0;
+    }
+    for (uint32_t w = 0; w < n_workers_; w++) {
+        const auto& wp = wpub_[w];
+        w_decode_ns_ = std::max(w_decode_ns_, wp.decode_ns);
+        w_recs_ += wp.recs;
+        w_zone_recs_ += wp.zone_recs;
+        w_stalls_ += wp.stall;
+        host_last_rec_ns_ = std::max(host_last_rec_ns_, wp.last_rec_ns);
+        if (wp.recs != 0) {
+            log_info(
+                tt::LogMetal,
+                "[perf-debug profiler] decode worker {}: {} records in {:.1f} ms",
+                w,
+                wp.recs,
+                wp.decode_ns / 1e6);
         }
     }
     // ---- the knee metric, read straight out of every worker's L1 ----
@@ -3052,48 +3554,15 @@ void PerfDebugProfiler::stop() {
             worst);
     }
 
-    // Drain every decode queue before declaring the writers done, else the tail of the run is lost.
-    for (uint32_t s = 0; s < kNSockets; s++) {
-        std::lock_guard<std::mutex> lk(dq_[s].m);
-        dq_[s].quit = true;
-    }
-    for (uint32_t s = 0; s < kNSockets; s++) {
-        dq_[s].cv.notify_all();
-    }
-    for (auto& d : decoders_) {
-        if (d.joinable()) {
-            d.join();
-        }
-    }
-    uint64_t q_dropped = 0, q_depth = 0;
-    for (uint32_t s = 0; s < kNSockets; s++) {
-        q_dropped += dq_[s].dropped;
-        q_depth = std::max(q_depth, dq_[s].max_depth);
-    }
-    if (q_dropped != 0) {
-        log_warning(
-            tt::LogMetal,
-            "[perf-debug profiler] decoders fell behind: {} reads discarded (pool of {} per socket "
-            "exhausted); capture is incomplete but the workload was not perturbed",
-            q_dropped,
-            kMaxPooledBufs);
-    }
-    // After the decode threads are joined, so every lane's first marker has been seen.
     report_lane_spread();
-    log_info(tt::LogMetal, "[perf-debug profiler] decode queues: max depth {} buffers", q_depth);
+    report_sustained_throughput();
     writer_done_.store(true, std::memory_order_release);
-    // Why the host is the wall. The egress-only benchmark moved bytes with a copy and no interpretation;
-    // this thread also DECODES every marker and publishes every record, on the same thread that issues the
-    // socket acks -- so the ack rate, and hence the sender's credit wait, is gated by per-marker work.
     if (w_reads_ != 0) {
-        // w_read_ns_ holds TSC TICKS (the fine per-read timers moved to rdtsc; steady_clock cost ~650 ns a
-        // call, which swamped events of a few us). decode/publish are still steady_clock nanoseconds.
-        // Mixing them silently reported this same copy as "56.0 ms" here and "12.4 ms" in the split below.
         const double read_ms = w_read_ns_ * tsc_ns_per_tick() / 1e6;
         const double dec_ms = w_decode_ns_ / 1e6, pub_ms = w_publish_ns_ / 1e6;
         log_info(
             tt::LogMetal,
-            "[perf-debug profiler] host writer: {} reads, {:.1f} MB, {} records | sock-read {:.1f} ms "
+            "[perf-debug profiler] host producer: {} reads, {:.1f} MB, {} records | sock-read {:.1f} ms "
             "({:.2f} GB/s) | decode {:.1f} ms ({:.1f} ns/marker) | publish {:.1f} ms",
             w_reads_,
             w_bytes_ / (1024.0 * 1024.0),
@@ -3105,54 +3574,37 @@ void PerfDebugProfiler::stop() {
             pub_ms);
         log_info(
             tt::LogMetal,
-            "[perf-debug profiler] host writer sock-read split: copy {:.1f} ms ({:.2f} GB/s, {:.1f} ns/KB) | "
-            "ack {:.1f} ms ({:.0f} ns/read) | predrain {:.1f} ms ({:.0f} ns/read) | resize {:.1f} ms",
-            w_read_ns_ * tsc_ns_per_tick() / 1e6,
-            w_read_ns_ ? (static_cast<double>(w_bytes_) / (w_read_ns_ * tsc_ns_per_tick())) : 0.0,
-            w_bytes_ ? (static_cast<double>(w_read_ns_) * tsc_ns_per_tick() * 1024.0 / static_cast<double>(w_bytes_))
+            "[perf-debug profiler] host producer sock-read split: wait {:.1f} ms | copy {:.1f} ms ({:.2f} GB/s, "
+            "{:.1f} ns/KB) | ack {:.1f} ms ({:.0f} ns/read) | predrain {:.1f} ms ({:.0f} ns/read)",
+            w_wait_ns_ * tsc_ns_per_tick() / 1e6,
+            w_copy_ns_ * tsc_ns_per_tick() / 1e6,
+            w_copy_ns_ ? (static_cast<double>(w_bytes_) / (w_copy_ns_ * tsc_ns_per_tick())) : 0.0,
+            w_bytes_ ? (static_cast<double>(w_copy_ns_) * tsc_ns_per_tick() * 1024.0 / static_cast<double>(w_bytes_))
                      : 0.0,
             w_ack_ns_ * tsc_ns_per_tick() / 1e6,
             w_reads_ ? (static_cast<double>(w_ack_ns_) * tsc_ns_per_tick() / w_reads_) : 0.0,
             w_predrain_ns_ * tsc_ns_per_tick() / 1e6,
-            w_reads_ ? (static_cast<double>(w_predrain_ns_) * tsc_ns_per_tick() / w_reads_) : 0.0,
-            w_resize_ns_ * tsc_ns_per_tick() / 1e6);
-        log_info(
-            tt::LogMetal,
-            "[perf-debug profiler] writer handoff: pool-acquire {:.1f} ms ({:.0f} ns/read) | enqueue+notify "
-            "{:.1f} ms ({:.0f} ns/read) -- both take the SAME mutex the decoder holds while dequeuing",
-            w_pool_ns_ * tsc_ns_per_tick() / 1e6,
-            w_reads_ ? (static_cast<double>(w_pool_ns_) * tsc_ns_per_tick() / w_reads_) : 0.0,
-            w_enq_ns_ * tsc_ns_per_tick() / 1e6,
-            w_reads_ ? (static_cast<double>(w_enq_ns_) * tsc_ns_per_tick() / w_reads_) : 0.0);
-        // TWO THREADS, TWO BUDGETS. decode+publish run on the DECODER thread, not the writer -- charging
-        // them against the writer's wall produced "134% busy" with negative idle. And the per-read timers
-        // are TSC TICKS while poll/decode/publish are steady_clock ns; mixing them inflated sock-read by
-        // the ~4.5x tick ratio (4.4 ms of copy reported as 41.5% of a 48.1 ms wall).
+            w_reads_ ? (static_cast<double>(w_predrain_ns_) * tsc_ns_per_tick() / w_reads_) : 0.0);
         const double wall_ms = w_wall_ns_ / 1e6;
         const double tick_ms = tsc_ns_per_tick() / 1e6;
-        const double sock_ms = (w_read_ns_ + w_ack_ns_ + w_resize_ns_) * tick_ms;  // the writer's real work
+        const double sock_ms = (w_read_ns_ + w_ack_ns_) * tick_ms;
         const double dec_only_ms = w_decode_ns_ / 1e6;
         const double pub_only_ms = w_publish_ns_ / 1e6;
-        const double writer_work_ms = sock_ms + (w_poll_ns_ / 1e6);
+        // decode/publish run on sibling threads (overlapped with sock-read).
+        const double work_ms = sock_ms + (w_poll_ns_ / 1e6);
         log_info(
             tt::LogMetal,
-            "[perf-debug profiler] WRITER thread wall {:.1f} ms: poll {:.1f}% ({} polls) | sock-read {:.1f}% "
-            "(copy+ack+resize) | idle {:.1f}% -- {:.0f}% busy",
+            "[perf-debug profiler] PRODUCER thread wall {:.1f} ms: poll {:.1f}% ({} polls) | sock-read {:.1f}% "
+            "| idle {:.1f}% -- {:.0f}% busy (decode {:.1f} ms on decoder, publish {:.1f} ms on publisher; both "
+            "overlapped)",
             wall_ms,
             wall_ms > 0 ? 100.0 * (w_poll_ns_ / 1e6) / wall_ms : 0.0,
             w_polls_,
             wall_ms > 0 ? 100.0 * sock_ms / wall_ms : 0.0,
-            wall_ms > 0 ? 100.0 * (wall_ms - writer_work_ms) / wall_ms : 0.0,
-            wall_ms > 0 ? 100.0 * writer_work_ms / wall_ms : 0.0);
-        log_info(
-            tt::LogMetal,
-            "[perf-debug profiler] DECODER thread: decode {:.1f} ms + publish {:.1f} ms = {:.1f} ms vs writer "
-            "wall {:.1f} ms -- {:.0f}% of the writer's wall; queue depth is the tell if it lags",
+            wall_ms > 0 ? 100.0 * (wall_ms - work_ms) / wall_ms : 0.0,
+            wall_ms > 0 ? 100.0 * work_ms / wall_ms : 0.0,
             dec_only_ms,
-            pub_only_ms,
-            dec_only_ms + pub_only_ms,
-            wall_ms,
-            wall_ms > 0 ? 100.0 * (dec_only_ms + pub_only_ms) / wall_ms : 0.0);
+            pub_only_ms);
         if (stall_only()) {
             log_info(
                 tt::LogMetal,
@@ -3177,12 +3629,10 @@ void PerfDebugProfiler::stop() {
         }
     }
     if (ring_) {
-        ring_->ring.writer().wake_readers();  // unblock a consumer parked in wait()
+        ring_->ring.writer().wake_readers();
     }
-    for (auto& c : consumers_) {
-        if (c.joinable()) {
-            c.join();
-        }
+    if (consumer_.joinable()) {
+        consumer_.join();
     }
     if (ring_) {
         log_info(
@@ -3192,21 +3642,20 @@ void PerfDebugProfiler::stop() {
             ring_capacity_recs(),
             consumed_.load(),
             dropped_.load());
-    log_info(
-        tt::LogMetal,
-        "[perf-debug profiler] order/loss: per-lane ts regressions {} of {} at publish, {} of {} at consume "
-        "[both MUST be 0; non-zero = records reordered => Tracy nesting corrupt] | lane-bound drops {} | "
-        "batch flushes {}",
-        w_pub_regress_.load(),
-        w_pub_ok_.load() + w_pub_regress_.load(),
-        w_con_regress_.load(),
-        w_con_seen_.load(),
-        w_drop_lane_.load(),
-        w_batch_flush_.load());
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler] order/loss: per-lane ts regressions {} of {} at publish, {} of {} at consume "
+            "[both MUST be 0; non-zero = records reordered => Tracy nesting corrupt] | lane-bound drops {} | "
+            "batch flushes {}",
+            w_pub_regress_.load(),
+            w_pub_ok_.load() + w_pub_regress_.load(),
+            w_con_regress_.load(),
+            w_con_seen_.load(),
+            w_drop_lane_.load(),
+            w_batch_flush_.load());
     }
     tracy_.reset();
     devices_.clear();
 }
-
 
 }  // namespace tt::tt_metal
