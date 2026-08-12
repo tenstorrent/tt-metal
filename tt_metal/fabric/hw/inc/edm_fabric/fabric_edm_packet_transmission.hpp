@@ -157,10 +157,7 @@ FORCE_INLINE
     // is undefined behaviour here: the switch can match nothing and execute nothing,
     // while the packet has already been counted as received. Recording the type here is
     // the only way to see that; past the hint the compiler may assume it cannot happen.
-    // packet_start, not &header: header is a const reference and reinterpret_cast cannot
-    // strip constness.
-    tt::tt_fabric::debug::record_rx_type(
-        static_cast<uint8_t>(noc_send_type), *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(packet_start));
+    tt::tt_fabric::debug::record_rx_type(static_cast<uint8_t>(noc_send_type));
 
     if (noc_send_type > tt::tt_fabric::NocSendType::NOC_SEND_TYPE_LAST) {
         __builtin_unreachable();
@@ -238,6 +235,9 @@ FORCE_INLINE
                 increment,
                 tt::tt_fabric::edm_to_local_chip_noc,
                 tt::tt_fabric::forward_and_local_write_noc_vc);
+            // STAGE 5: the atomic has now been ISSUED. Paired against record_fused_inc
+            // above, this brackets the last previously-unmeasured step of the receive path.
+            tt::tt_fabric::debug::record_fused_inc_issued(static_cast<uint32_t>(semaphore_dest_address & 0xFFFFFFFF));
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_UNICAST_SCATTER_WRITE: {
@@ -365,6 +365,13 @@ __attribute__((optimize("jump-tables"))) void execute_chip_unicast_to_relay(
     uint16_t payload_size_bytes,
     uint32_t transaction_id,
     uint8_t rx_channel_id) {
+    // FABRIC LINK COUNTERS: despite the name, this branch TERMINATES the packet on this
+    // chip -- it is the udm_mode alternative to execute_chip_unicast_to_local_chip, which
+    // reaches record_rx_type via ..._impl. This path does not, so classify it here or UDM
+    // builds lose every locally-delivered packet from rx_hist. Onward forwarding is counted
+    // in forward_payload_to_downstream_edm, not here.
+    tt::tt_fabric::debug::record_rx_type(static_cast<uint8_t>(packet_start->get_noc_send_type()));
+
     // Assert that relay has space (best effort check)
     ASSERT(local_relay_interface.template edm_has_space_for_packet<ENABLE_RISC_CPU_DATA_CACHE>());
 
@@ -477,6 +484,12 @@ FORCE_INLINE
         ROUTING_FIELDS_TYPE cached_routing_fields,
         tt::tt_fabric::EdmToEdmSender<NUM_SENDER_BUFFERS>& downstream_edm_interface,
         uint8_t transaction_id) {
+    // FABRIC LINK COUNTERS: the onward-forward branch of the receive path. Counted here,
+    // inside the function, because receiver_forward_packet reaches it from 36 call sites
+    // across its 1D and 2D overloads. Must stay ahead of update_packet_header_for_next_hop
+    // below, which rewrites the routing fields.
+    tt::tt_fabric::debug::record_forward_type(static_cast<uint8_t>(packet_header->get_noc_send_type()));
+
     // TODO: PERF - this should already be getting checked by the caller so this should be redundant make it an ASSERT
     ASSERT(downstream_edm_interface.template edm_has_space_for_packet<ENABLE_RISC_CPU_DATA_CACHE>());  // best effort check
 

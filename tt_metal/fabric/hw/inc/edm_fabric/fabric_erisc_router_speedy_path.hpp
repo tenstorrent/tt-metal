@@ -143,19 +143,12 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
                 }
             }
             // FABRIC LINK COUNTERS: the speedy path is a second, complete send implementation.
-            // Uninstrumented it would make tx/txq undercount by exactly the VC0 traffic it
-            // carries, which reads as packet loss that never happened. tx and txq are bumped
-            // together here because this path fuses the send decision and the hardware handoff
-            // into one block -- unlike send_next_data, where they are separable.
-            {
-                auto* counters = tt::tt_fabric::debug::fabric_link_counters();
-                counters->tx++;
-                counters->txq++;
-                if (tt::tt_fabric::debug::is_r3_fused_inc(pkt_header)) {
-                    counters->tx_r3++;
-                    counters->txq_r3++;
-                }
-            }
+            // Uninstrumented it would make tx undercount by exactly the VC0 traffic it carries,
+            // which reads as packet loss that never happened. Classification and the at-the-wire
+            // count are adjacent here because this path fuses the send decision and the hardware
+            // handoff into one block -- unlike send_next_data, where they are separable.
+            tt::tt_fabric::debug::record_tx_type(pkt_header);
+            tt::tt_fabric::debug::record_tx_wire();
             internal_::eth_send_packet_bytes_unsafe(sender_txq_id, src_addr, dest_addr, payload_size_bytes);
 
             // Note: We can only advance to the next buffer index if we have fully completed the send (both the payload
@@ -297,7 +290,7 @@ FORCE_INLINE bool run_receiver_channel_step_speedy(
         // FABRIC LINK COUNTER: the speedy path's consume site. Must match the send side above,
         // or a link whose two ends were built with different path selections would appear to
         // lose (or invent) packets purely from the instrumentation gap.
-        tt::tt_fabric::debug::fabric_link_counters()->rx++;
+        tt::tt_fabric::debug::record_rx_wire();
         receiver_state.unacked_sends++;
     }
 

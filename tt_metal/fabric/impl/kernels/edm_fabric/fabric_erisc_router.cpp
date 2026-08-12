@@ -602,16 +602,16 @@ FORCE_INLINE void send_next_data(
         while (internal_::eth_txq_is_busy(sender_txq_id)) {
         };
     }
-    // FABRIC LINK COUNTER: handed to the eth TXQ hardware. Paired against tx, this splits the
-    // send path in two -- tx > txq means the EDM decided to send but never reached the handoff;
-    // txq == tx with the peer's rx short means the loss is past the handoff, i.e. link-layer.
-    {
-        auto* counters = tt::tt_fabric::debug::fabric_link_counters();
-        counters->txq++;
-        if (tt::tt_fabric::debug::is_r3_fused_inc(pkt_header)) {
-            counters->txq_r3++;
-        }
-    }
+    // FABRIC LINK COUNTER: the last software point before the packet leaves the chip. This
+    // is `tx` -- the authoritative "sent" count. The per-type classification happened a few
+    // steps earlier (record_tx_type), where the header was still intact.
+    tt::tt_fabric::debug::record_tx_wire();
+    // FABRIC LINK COUNTER: the size about to be handed to the hardware, unvalidated by
+    // eth_send_packet_bytes_unsafe. > CHANNEL_BUFFER_SIZE means this transfer runs off the end
+    // of the destination slot and onto the NEXT slot's header. The channel already knows its
+    // own bound; the send path just never asks it.
+    tt::tt_fabric::debug::record_oversized_send(
+        static_cast<uint32_t>(payload_size_bytes), channel_buffer_size, sender_channel_index);
     internal_::eth_send_packet_bytes_unsafe(sender_txq_id, src_addr, dest_addr, payload_size_bytes);
 
     // Note: We can only advance to the next buffer index if we have fully completed the send (both the payload and sync
@@ -1702,17 +1702,13 @@ FORCE_INLINE
     if (can_send) {
         did_something = true;
         progress = true;
-        // FABRIC LINK COUNTER: packet pushed onto the link. Past the TXQ-busy check
-        // above, so this means "on the wire", not merely "queued".
-        tt::tt_fabric::debug::fabric_link_counters()->tx++;
-
         auto* pkt_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
             local_sender_channel.get_cached_next_buffer_slot_addr());
-        // FABRIC LINK COUNTER: of those pushes, the ones carrying an R3 semaphore increment.
-        // Read before update_packet_header_before_eth_send, which may rewrite routing fields.
-        if (tt::tt_fabric::debug::is_r3_fused_inc(pkt_header)) {
-            tt::tt_fabric::debug::fabric_link_counters()->tx_r3++;
-        }
+        // FABRIC LINK COUNTERS: classify the outgoing packet by NocSendType here, where the
+        // header is still intact -- update_packet_header_before_eth_send below rewrites
+        // routing fields. The packet itself is counted later, at the wire, in
+        // send_next_data; comparing tx against sum(tx_hist) then brackets this whole block.
+        tt::tt_fabric::debug::record_tx_type(pkt_header);
         if constexpr (!UPDATE_PKT_HDR_ON_RX_CH) {
             update_packet_header_before_eth_send<sender_channel_index>(pkt_header);
         }
@@ -1854,7 +1850,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
             increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
             // FABRIC LINK COUNTER: packet consumed from the ethernet link (first-level-ack path).
-            tt::tt_fabric::debug::fabric_link_counters()->rx++;
+            tt::tt_fabric::debug::record_rx_wire();
 
             uint8_t src_ch_id;
             if constexpr (skip_src_ch_id_update) {
@@ -1865,6 +1861,20 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                 auto receiver_buffer_index = ack_counter.get_buffer_index();
                 tt_l1_ptr PACKET_HEADER_TYPE* packet_header = const_cast<PACKET_HEADER_TYPE*>(
                     local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index));
+                // FABRIC LINK COUNTER: sanity-check the header the moment it comes off the
+                // link, BEFORE the dispatch gate ever looks at it. This is the temporal
+                // discriminator: a header that is already garbage here was damaged at or
+                // before the send, whereas one that passes here and is garbage at dispatch was
+                // clobbered while sitting in the buffer.
+                if constexpr (is_2d_fabric) {
+#if defined(FABRIC_2D)
+                    tt::tt_fabric::debug::record_arrival_check(
+                        packet_header->routing_fields.hop_index,
+                        packet_header->payload_size_bytes,
+                        sizeof(packet_header->route_buffer),
+                        channel_buffer_size);
+#endif
+                }
                 receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
                 src_ch_id = receiver_channel_pointers.get_src_chan_id(receiver_buffer_index);
             }
@@ -1927,9 +1937,39 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                 can_forward_packet_completely(cached_routing_fields, downstream_edm_interfaces[0]);
 #endif
         }
+        // FABRIC LINK COUNTER: capture the two gate arms separately before they are ANDed,
+        // so a refusal can be attributed to one of them rather than to "the gate".
+        const bool fabric_dbg_space_ok = can_send_to_all_local_chip_receivers;
+        bool fabric_dbg_trid_ok = true;
         if constexpr (enable_trid_flush_check_on_noc_txn) {
             bool trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
+            fabric_dbg_trid_ok = trid_flushed;
             can_send_to_all_local_chip_receivers &= trid_flushed;
+        }
+        if (!can_send_to_all_local_chip_receivers) {
+            // FABRIC LINK COUNTER: this slot is the head of the line and is not moving.
+            // 0xFFFFFFFF for the 1D path, where there is no hop command at all (inert here:
+            // IS_2D_FABRIC == 1 on every router in this configuration).
+            uint32_t fabric_dbg_hop_cmd = 0xFFFFFFFFu;
+            uint32_t fabric_dbg_hop_index = 0xFFFFFFFFu;
+            if constexpr (is_2d_fabric) {
+#if defined(FABRIC_2D)
+                fabric_dbg_hop_cmd = hop_cmd;
+                fabric_dbg_hop_index = cached_routing_fields.hop_index;
+#endif
+            }
+            tt::tt_fabric::debug::record_dispatch_block(
+                fabric_dbg_hop_cmd,
+                fabric_dbg_hop_index,
+                fabric_dbg_space_ok,
+                fabric_dbg_trid_ok,
+                // &routing_fields, NOT the header base. HybridMeshPacketHeaderT derives from
+                // PacketHeaderBase, which puts command_fields (40B) + payload_size_bytes +
+                // noc_send_type + src_ch_id AHEAD of routing_fields -- decoding from the base
+                // read command payload as hop commands and produced a convincing-looking
+                // garbage route in r76. Pointing at routing_fields directly means the reader
+                // needs no knowledge of the base layout, and route_buffer follows immediately.
+                reinterpret_cast<uint32_t>(&packet_header->routing_fields));
         }
         if (can_send_to_all_local_chip_receivers) {
             did_something = true;
@@ -1966,7 +2006,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                 // FABRIC LINK COUNTER: the OTHER consume path. enable_first_level_ack picks
                 // exactly one of the two at compile time, so instrumenting both is what makes
                 // rx correct regardless of how this build is configured.
-                tt::tt_fabric::debug::fabric_link_counters()->rx++;
+                tt::tt_fabric::debug::record_rx_wire();
             }
         }
     }
