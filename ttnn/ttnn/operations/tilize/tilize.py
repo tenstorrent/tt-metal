@@ -29,6 +29,7 @@ from .tilize_program_descriptor import (
     TILE_WIDTH,
     auto_padded_shape,
     create_program_descriptor,
+    output_tensor_spec,
     pad_plan,
     plan_placement,
     tile_geometry,
@@ -328,9 +329,14 @@ SUPPORTED = {
     "pad_value": ["none", "zero", "positive", "negative"],
     "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned", "hw_non_aligned"],
     "orientation": ["none", ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
-    "tile_height": [DEFAULT_TILE_HEIGHT],
-    "in_layout": [ttnn.ROW_MAJOR_LAYOUT],
-    "in_tile_height": ["none"],
+    # Refinement 8 (T1 + T2) — tile geometry. `tile_height` is the OUTPUT tile's
+    # height; every legal sub-32 value of `Tile({h, 32})` is accepted, and
+    # nothing in the op keys on 32 (see `tag_alignment` / `DEFAULT_TILE_HEIGHT`).
+    "tile_height": [DEFAULT_TILE_HEIGHT, 16, 8, 4, 2, 1],
+    # T2 — the RETILE path: an already-tiled input re-laid at a different tile
+    # height. `"none"` is the ROW_MAJOR sentinel and is always legal.
+    "in_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
+    "in_tile_height": ["none", DEFAULT_TILE_HEIGHT, 16, 8, 4, 2, 1],
 }
 
 
@@ -632,12 +638,19 @@ def _dispatch(
     padded_shape = pad["padded_shape"] if pad is not None else None
     needs_view = padded_shape is not None and auto_padded_shape(logical_shape, tile_height) != padded_shape
 
+    # R8 (T1): the tile geometry has to reach the OUTPUT BUFFER, not only the
+    # CBs — `allocate_tensor_on_device(shape, ...)` hardcodes the default 32x32
+    # tile, so a tiny-tile call would allocate 32-row pages under a kernel
+    # writing `tile_height`-row ones. `output_tensor_spec` is the one place that
+    # is stated, for every tile height including 32.
     output_tensor = ttnn.allocate_tensor_on_device(
-        ttnn.Shape(padded_shape if needs_view else logical_shape),
-        out_dtype,
-        ttnn.TILE_LAYOUT,
+        output_tensor_spec(
+            ttnn.Shape(padded_shape if needs_view else logical_shape),
+            out_dtype,
+            out_memory_config,
+            tile_height,
+        ),
         device,
-        out_memory_config,
     )
 
     program_descriptor = create_program_descriptor(

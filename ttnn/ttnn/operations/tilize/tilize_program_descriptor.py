@@ -551,6 +551,50 @@ def auto_padded_shape(shape, tile_height: int = DEFAULT_TILE_HEIGHT):
     return out
 
 
+# ---------------------------------------------------------------------------
+# Output allocation (Refinement 8 / T1 — the tile geometry has to reach the
+# BUFFER, not only the CBs)
+# ---------------------------------------------------------------------------
+
+
+def output_tensor_spec(shape, dtype, memory_config, tile_height: int):
+    """The output's `TensorSpec`, carrying the requested tile geometry.
+
+    `ttnn.allocate_tensor_on_device(shape, dtype, layout, device, mem_config)`
+    builds its spec through `PageConfig(layout)` with NO tile, i.e. always the
+    default 32x32 one. A tiny-tile call would then get an output buffer whose
+    page is a 32-row tile while every CB, kernel arg and LLK in this op used
+    `tile_height` rows — a silent geometry disagreement, not an error. Only the
+    `TensorSpec` overload can carry `tile=`, so the allocation goes through it.
+
+    ONE path, not two: the same call builds the 32x32 spec, so the default
+    geometry cannot drift away from the tiny-tile one. The three constructor
+    overloads mirror the three placements `_spec_from_memory_config` already
+    distinguishes (interleaved / legacy 2-D shard / nd shard).
+    """
+    tile = ttnn.Tile([tile_height, TILE_WIDTH])
+    if not memory_config.is_sharded():
+        return ttnn.TensorSpec(shape, dtype, ttnn.TILE_LAYOUT, memory_config.buffer_type, tile)
+    if memory_config.memory_layout in LEGACY_SHARD_SCHEMES:
+        return ttnn.TensorSpec(
+            shape,
+            dtype,
+            ttnn.TILE_LAYOUT,
+            memory_config.memory_layout,
+            memory_config.shard_spec,
+            memory_config.buffer_type,
+            tile,
+        )
+    return ttnn.TensorSpec(
+        shape,
+        dtype,
+        ttnn.TILE_LAYOUT,
+        memory_config.nd_shard_spec,
+        memory_config.buffer_type,
+        tile,
+    )
+
+
 def _f32_to_bf16_bits(bits: int) -> int:
     """fp32 bit pattern -> bf16 bit pattern, round-to-nearest-EVEN.
 
