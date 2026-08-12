@@ -518,7 +518,7 @@ fresh whole-op breakdown rather than from a lever guessed at now.
 
 ---
 
-### [ ] Refinement 7 — dtypes, the value-preserving cast, and padded dtypes (prompt A4 + A5b + P3)
+### [x] Refinement 7 — dtypes, the value-preserving cast, and padded dtypes (prompt A4 + A5b + P3)
 
 **Goal**: widen the numeric surface in one bundle:
 
@@ -555,6 +555,48 @@ fidelity/DEST half does not apply — the dtype + intermediate-CB-format half do
 **Done when**: all four input dtypes and all five output dtypes (minus INVALID crosses) pass the
 golden suite, uint8 exactly and with no strided-tile signature; the padded cells pass per dtype with
 an exact fill; the per-dtype ceiling is re-run and recorded.
+
+**Outcome** (`[x]`, 2026-08-12): all four input dtypes and all five output dtypes are in SUPPORTED
+(plus `uint16` / `int32`, the wider-integer family `test_regression.py` exercises and the golden
+TARGET collapses onto `uint32`). Golden registry **42 -> 332 supported_pass, 0 failed**, 48 xfailed
+(all Refinement 8's tile-geometry axes); `test_regression.py` 26 passed; unit dir 165 passed /
+0 failed. Everything the format can represent is **bit-exact** (`comp_equal`): uint8, uint16,
+uint32, int32, fp32->fp32, bf16->fp32. The lossy pairs are inside the golden thresholds
+(fp32->bf16 PCC 0.9999958 — one bf16 ulp, the cast itself; ->bf8b PCC 0.99997).
+
+*The queue called this "the cheapest tier". Three things made it not.* (a) **uint8 came back an
+ALL-ZERO tile**, and `op_design.md` §8.5's predicted mechanism (a per-face row dim giving a
+*strided* tile) is not it — DEVICE_PRINT on both ends showed the reader's L1 correct and the packed
+tile zero, so it is DEST **width**: with a 16-bit DEST the packer reads the int8 payload as a float
+denormal. `fp32_dest_acc_en` fixes it (0/8192 mismatches vs 8165/8192). (b) **fp32->fp32 was LOSSY**
+(max diff 1.6e-2) — `Fast` truncates fp32 -> tf32, which for an op whose contract is a *bijection on
+byte positions* is a defect, not a precision preference; the `Fp32Mode::Lossless` +
+`fp32_dest_acc_en` + `UnpackToDestFp32` triple makes it bit-exact. (c) The golden matrix then
+surfaced two defects no probe would have: the **A5b narrow-stick alignment gap** (a 1-byte datum at
+an odd block width puts the per-stick L1 destination at phase 32 of the 64 B DRAM unit — watcher
+"invalid address alignment in NOC transaction"; fixed by staging the block through a DRAM-aligned
+scratch CB and compacting, which closes **master.md B11** and moves it from
+`structurally-impossible` to `applied`), and **P3's sharp edge**: the pad fill is packed in the
+INPUT format, so a *widening* cast rounded the caller's number (bf16->fp32 with `pad_value=10.2`
+gave 10.1875). The writer now rewrites the pad POSITIONS in the output format, armed only where the
+output holds the fill strictly better.
+
+*Per-dtype ceiling, re-run as the note asked.* All three wide-page dtypes are DM-bound with compute
+fully overlap-hidden (`ablate_compute` 0.96-1.01x), so **disabling fast tilize for an fp32 output
+costs nothing measurable** — the note's flagged risk did not materialize. Against the op's own
+412 GB/s practical DRAM rate: fp32 **0.93** (87 815 ns / 33.55 MB), uint8 **0.86** (23 647 /
+8.39 MB), bf16->bf8b **0.87** (35 834 / 12.85 MB), vs bf16's 0.92. The narrow-stick row reconciles
+against a *different* bound and is AT it: 28.2 GB/s measured vs ~28 predicted by halving Phase 0's
+own B6 transaction-size curve twice (128 B -> 110 GB/s). Levers, both arms each: bit-exact fp32
+**0.992x** (free), the 32-bit DEST **1.015x** (free), the bfp8 packer a **measured null** (<=1.0%,
+so the fp32-input gate is kept on PCC grounds not perf), and the staged read **1.169x where armed /
+0.994x elsewhere** — the price of correctness, recorded rather than left unknown. Cumulative bench:
+all 15 prior shapes within +-1.3% (noise); 4 dtype rows added so the dtype branch is benched across
+the whole range of the parameter it keys on. **Remaining headroom, as a FINDING (not a queue
+item)**: uint8 and bf8b sit at 0.86-0.87 because their output PAGE is smaller than bf16's (1024 /
+1088 B vs 2048 B), so the writer issues the same transaction count for fewer bytes (`ablate_write`
+0.62x / 0.72x, its largest share of any dtype); the candidate is a multi-tile coalesced write, a
+transaction-shape change that belongs to a perf round starting from a fresh whole-op breakdown.
 
 ---
 

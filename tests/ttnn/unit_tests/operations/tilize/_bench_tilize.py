@@ -139,7 +139,55 @@ SHAPES = {
     # is now runnable and master.md B0's rule is measurable on the shape it names:
     # 1 core, 1 block, 1 tile, and 30 of 32 rows read while 2 are filled.
     "smallest_padded": (1, 1, 30, 32),
+    # Refinement 7 (A4/A5b/P3) adds the DTYPE axis, and the verifier note is that
+    # the ceiling is per dtype: WT_BLOCK is a BYTE target, so the tile grid, the
+    # page size and therefore the DRAM bound all move with the element size.
+    # Four rows, all on the square's logical shape so the only variable is the
+    # format:
+    #   dtype_fp32        fp32 -> fp32, the Fp32Mode::Lossless path (which also
+    #                     disables fast tilize, `tilize_helpers.inl`). 4x the
+    #                     bytes of `square`, WT_BLOCK 8.
+    #   dtype_uint8       uint8 -> uint8, the 32-bit-DEST path. 1/2 the bytes,
+    #                     WT_BLOCK 32; W=2048 keeps the read ALIGNED.
+    #   dtype_uint8_narrow  the A5b staged reader's own regime (Wt == 1, so the
+    #                     per-stick destination is off the 64 B grid and every
+    #                     block is staged + compacted). Its cost has no off-arm
+    #                     because the direct read is not legal, so it is read
+    #                     against `dtype_uint8`'s per-byte rate.
+    #   dtype_bf16_to_bf8b  the block-float OUTPUT, where the packer choice is a
+    #                     real perf knob (`bfp8_precise`).
+    "dtype_fp32": (1, 1, 2048, 2048),
+    "dtype_uint8": (1, 1, 2048, 2048),
+    "dtype_uint8_narrow": (1, 1, 65536, 32),
+    "dtype_bf16_to_bf8b": (1, 1, 2048, 2048),
 }
+
+# R7: per-shape (input dtype, output dtype). One source of truth, in the same
+# shape as `_MEM_BY_SHAPE` / `_PAD_BY_SHAPE`; a shape absent here is the bf16
+# identity every earlier phase measured.
+_DTYPE_BY_SHAPE = {
+    "dtype_fp32": (ttnn.float32, ttnn.float32),
+    "dtype_uint8": (ttnn.uint8, ttnn.uint8),
+    "dtype_uint8_narrow": (ttnn.uint8, ttnn.uint8),
+    "dtype_bf16_to_bf8b": (ttnn.bfloat16, ttnn.bfloat8_b),
+}
+
+# Bytes per L1 datum, for the GB/s column and the block geometry in the header.
+# `bfloat8_b` is block-float (no fixed datum size); its TILE is 1088 B for 1024
+# datums, so 1.0625 is the honest per-datum figure.
+_ELEM_BYTES = {
+    ttnn.bfloat16: 2,
+    ttnn.float32: 4,
+    ttnn.uint32: 4,
+    ttnn.uint16: 2,
+    ttnn.int32: 4,
+    ttnn.uint8: 1,
+    ttnn.bfloat8_b: 1.0625,
+}
+
+
+def _dtypes_for(shape_name):
+    return _DTYPE_BY_SHAPE.get(shape_name, (ttnn.bfloat16, ttnn.bfloat16))
 
 
 def _height_shard(grid_end, shard_shape):
@@ -295,6 +343,22 @@ ARMS = {
     # forcing arms so the choice is measured on any cross-spec geometry.
     "lever_r4_reshard_push": dict(levers=dict(reshard_pull=0)),
     "lever_r4_reshard_pull": dict(levers=dict(reshard_pull=1)),
+    # R7 (A4/A5b) — the two numeric-format knobs, each with its off-arm. Both are
+    # CORRECTNESS levers on their own dtype (the off-arm is numerically wrong
+    # there, which is exactly what makes it worth knowing what correctness
+    # costs), and both are no-ops on every other dtype.
+    "lever_r7_fp32_fast": dict(levers=dict(fp32_lossless=0)),
+    "lever_r7_dest16": dict(levers=dict(fp32_dest_acc_8bit=0)),
+    # R7 — the bfp8 packer. The ONLY one of the three that is a pure perf knob:
+    # the fast packer truncates the block-float mantissas, the precise one rounds
+    # and costs an extra pack pass. Shipped gated on an fp32 INPUT
+    # (/numeric-formats-metal 1.7), so both arms have to stay measurable.
+    "lever_r7_bfp8_precise": dict(levers=dict(bfp8_precise=1)),
+    "lever_r7_bfp8_fast": dict(levers=dict(bfp8_precise=0)),
+    # R7 (master.md B11) — the narrow-stick staged read's off-arm. Numerically
+    # WRONG on the shapes that arm it (that is the defect), measured only for
+    # what alignment-correctness costs.
+    "lever_b11_stage_off": dict(levers=dict(stage_reads=0)),
     # ---- ablation arms (classification; output wrong by design) ---------
     "ablate_compute": dict(levers=dict(stub_compute=1)),
     "ablate_read": dict(levers=dict(stub_read=1)),
@@ -319,8 +383,16 @@ def _selected(env_name, universe):
 
 def _bench_input(shape, device, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG):
     torch.manual_seed(0)
+    if dtype == ttnn.uint8:
+        source = torch.randint(0, 256, shape, dtype=torch.uint8)
+    elif dtype in (ttnn.uint32, ttnn.uint16, ttnn.int32):
+        source = torch.randint(0, 100, shape, dtype=torch.int32)
+    elif dtype == ttnn.float32:
+        source = torch.randn(shape, dtype=torch.float32)
+    else:
+        source = torch.randn(shape).bfloat16()
     return ttnn.from_torch(
-        torch.randn(shape).bfloat16(),
+        source,
         dtype=dtype,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
@@ -365,8 +437,11 @@ def test_bench(device):
     for shape_name in shape_names:
         shape = SHAPES[shape_name]
         in_mem, out_mem = _mem_for(shape_name)
-        tt_input = _bench_input(shape, device, memory_config=in_mem)
+        in_dtype, out_dtype = _dtypes_for(shape_name)
+        tt_input = _bench_input(shape, device, dtype=in_dtype, memory_config=in_mem)
         pad_kwargs = _pad_for(shape_name)
+        if out_dtype != in_dtype:
+            pad_kwargs = dict(pad_kwargs, dtype=out_dtype)
         for arm in arm_names:
             kwargs = dict(ARMS[arm], **pad_kwargs)
             run_fn = lambda kw=kwargs, t=tt_input, om=out_mem: _dispatch(t, om, use_multicore=True, **kw)
@@ -383,7 +458,9 @@ def test_bench(device):
     payload = {}
     for shape_name in shape_names:
         shape = SHAPES[shape_name]
-        blk = blocking(list(shape), 32, 2)
+        in_dtype, out_dtype = _dtypes_for(shape_name)
+        elem_bytes = _ELEM_BYTES[in_dtype]
+        blk = blocking(list(shape), 32, int(elem_bytes))
         in_mem, out_mem = _mem_for(shape_name)
         if in_mem.is_sharded() or out_mem.is_sharded():
             # A shard's cores are fixed by its spec (master.md A2), and the shard
@@ -397,8 +474,8 @@ def test_bench(device):
                 out_memory_config=out_mem,
                 Wt=blk["Wt"],
                 nt_h=blk["nt_h"],
-                in_tile_bytes=2048,
-                out_tile_bytes=2048,
+                in_tile_bytes=1024 * int(elem_bytes),
+                out_tile_bytes=1024 * int(elem_bytes),
             )
             side_mem = in_mem if plan["sharded_side"] == "in" else out_mem
             nt_h_shard = plan["shard"]["nt_h_shard"]
@@ -416,8 +493,9 @@ def test_bench(device):
                 min_blocks_per_core=gate["min_blocks_per_core"],
                 spread_cores=bool(gate["spread_cores"]),
             )
-        elem_bytes = 2
-        total_bytes = 2 * torch.tensor(shape).prod().item() * elem_bytes  # read + write
+        # read (input format) + write (output format) — they differ on a cast.
+        datums = torch.tensor(shape).prod().item()
+        total_bytes = int(datums * (elem_bytes + _ELEM_BYTES[out_dtype]))
         base = results.get((shape_name, "base"))
         lines += [
             "",
@@ -440,6 +518,8 @@ def test_bench(device):
                 "cores": len(cores),
                 "blocks": blk["total_blocks"],
                 "wt_block": blk["wt_block"],
+                "dtype": str(in_dtype),
+                "output_dtype": str(out_dtype),
             }
     print("\n".join(lines))
 

@@ -1426,3 +1426,202 @@ block now records `[1,1,30,32]`, retiring A0's own "re-run once the padded reade
 
 `verify_levers ... --phase "Refinement 6"` is now clean: 24/24 rows, 0 blocking, 0 signal.
 No kernel, program-factory or op-entry-point file was touched.
+
+---
+
+## Refinement 7 — dtypes, the value-preserving cast, and padded dtypes (prompt A4 + A5b + P3)
+
+- **Date:** 2026-08-12
+- **Type:** generality (`[x]`)
+- **Accuracy achieved:** every new dtype is **bit-exact** (`comp_equal`, not PCC) where the format
+  allows it — uint8, uint16, uint32, int32, float32→float32, bfloat16→float32 all at
+  `mismatches = 0 / N`. The lossy pairs land inside the golden thresholds: fp32→bf16 **PCC
+  0.9999958** (max diff 0.015625 = one bf16 ulp, i.e. the cast itself), bf16→bf8b **PCC 0.99997**,
+  fp32→bf8b **PCC 0.99997**. Padded cells are exact per dtype, including the sub-word fill
+  replication and the negative-integer bit_cast.
+- **Golden test progress:** `test_golden.py` **42 → 332 passed / 0 failed / 48 xfailed**
+  (the 48 are Refinement 8's `tile_height` / `in_layout` axes). `test_regression.py` 26 passed /
+  1 skipped. Unit dir **165 passed / 8 xfailed / 0 failed**.
+
+### What was done
+
+`SUPPORTED["dtype"] += float32, uint32, uint16, int32, uint8` and
+`SUPPORTED["output_dtype"] += float32, bfloat8_b, uint32, uint16, int32, uint8`. The queue called
+this "the cheapest tier"; it was not, and the three things that made it expensive are the
+deliverable.
+
+**1. `numeric_policy()` — the dtype surface as one decision table.** tilize has no arithmetic and so
+no `ComputeKernelConfig` surface, but it does have three numeric-format decisions, each a *pair* of
+host config + kernel template argument that must agree or the tilize helper's own `static_assert`s
+fire. They now come out of one function, so the two halves cannot drift:
+
+| decision | armed when | why |
+|---|---|---|
+| `needs_cast` → `UnpackAndPackReconfigure` | `out != in` | unchanged from Phase 0 |
+| `Fp32Mode::Lossless` + `fp32_dest_acc_en` + `UnpackToDestFp32` | fp32 → fp32 | all three or none — the helper asserts the other two |
+| `fp32_dest_acc_en` (32-bit DEST) | 1-byte input datum | keyed on `element_size()`, so int8/fp8 inherit it |
+| `bfp8_pack_precise` | bf8b output **and** fp32 input | the fast packer clears the PCC gate from bf16 |
+
+**2. The two dtypes that were not "just another width", each diagnosed by measurement.**
+
+- **uint8 → an all-ZERO tile.** `op_design.md` §8.5 predicted a *strided* tile from a wrong per-face
+  row dim. That is not the mechanism. DEVICE_PRINT on both ends (`probes/probe_026.py`) showed the
+  reader's L1 correct (`0x03020100` for bytes 0,1,2,3) and the writer's packed tile all zero — so it
+  is compute, and specifically DEST **width**: the regular tilize path is unpack → SrcA → A2D → DEST
+  → pack, and with a 16-bit DEST the packer reads the int8 payload as a float16 denormal and writes
+  0. `fp32_dest_acc_en` widens DEST to 32 bits and the tile is exact. Measured both arms:
+  `dest_acc ON 0/8192 mismatches`, `OFF 8165/8192, max diff 250`.
+- **float32 → float32 was LOSSY.** `Fast` truncates fp32 → tf32 into DEST: measured max diff
+  **1.6e-2**, PCC 0.999998 — a *bijection on byte positions* returning different bytes. The helper's
+  own guidance ("you almost never want Lossless") is about kernels whose FPU consumers re-truncate
+  anyway; tilize has no consumer, its output IS the user's tensor. With the Lossless triple:
+  **0 / 8192 mismatches**.
+
+**3. Two defects the golden matrix surfaced that no probe would have.**
+
+- **A5b, the narrow-stick alignment gap (master.md B11).** A DRAM read needs a DRAM-aligned (64 B)
+  L1 *destination*, and the reader's is `l1_base + s * w * 32 * elem` — fixed by the tile layout,
+  because the tilize LLK derives its own source stride from the block width. At ≥ 2 bytes per datum
+  every legal `w` clears 64 B; at ONE byte an **odd** `w` gives 32 / 96 / 160 … and every odd stick
+  lands at phase 32. Watcher under `--dev`: *"NCRISC using noc0 tried to unicast read 32 bytes to
+  local L1[0x01b320] … invalid address alignment in NOC transaction"*. `WT_BLOCK_MAX`'s `max(2, …)`
+  floor does not save it because `WT_BLOCK = min(Wt, WT_BLOCK_MAX)` clamps to Wt — which is exactly
+  what `test_b11_uint8_narrow_stick_is_the_known_alignment_gap` had pinned since Phase 0 as "A5b's
+  job". Fixed by the **staged read**: the block's sticks land in a reader-private scratch CB at a
+  DRAM-aligned stride, ONE barrier (B7 preserved), then a local word-store compaction into the
+  tile-layout stride. Exact at W = 32 / 96 / 160 / 1056 (the `wt_tail` case) on DRAM and L1 sources.
+- **P3's sharp edge: the pad fill is packed in the INPUT format, so a WIDENING cast rounds the
+  caller's number.** `tilize(bf16, dtype=float32, pad_value=10.2)` returned 10.1875 in the pad
+  region — one bf16 ulp, delta 0.0125, on 7 golden cells. §8.3's "pack in the input format" rule is
+  right about the *transit medium* (the fill lives in the input CB, which carries the input tensor's
+  raw bytes) and wrong about the *result*. The writer now rewrites the pad POSITIONS in the output
+  format (`fill_tile_pad`, tile-face addressing, sharing `fill_pad_region` with the reader through
+  the new `kernels/pad_fill.hpp`), armed only where the output format holds the fill **strictly
+  better** — so a same-dtype call, an integer pair, a narrowing cast and every exactly-representable
+  fill (0, 10.0, 42.0, 3.5, −18.0, −32.5) emit none of it.
+
+**P3 otherwise needed no new code:** `pad_fill_word` already packed in the input format and
+replicated across the 32-bit store word (4× uint8, 2× bf16/uint16, 1× fp32/uint32/int32) with the
+signed→unsigned bit_cast, and R5's `test_pad_value_subword_replication` / `test_pad_value_int32_bitcast`
+already covered it.
+
+### Perf gate
+
+**Bound classification (ablation, 4 dtype rows on the square's logical shape):**
+
+| shape | dtype | ns | GB/s | ablate_read | ablate_compute | ablate_write | ablate_all | verdict |
+|---|---|---:|---:|---:|---:|---:|---:|---|
+| `dtype_fp32` | fp32→fp32 | 87 815 | 382 | 0.738x | 0.998x | 0.578x | 0.007x | DM-bound, both halves |
+| `dtype_uint8` | uint8→uint8 | 23 647 | 355 | 0.755x | 0.959x | 0.621x | 0.021x | DM-bound |
+| `dtype_bf16_to_bf8b` | bf16→bf8b | 35 834 | 358 | 0.504x | 0.994x | 0.717x | 0.015x | DM-bound (read-heavy: 2 B in, 1.06 B out) |
+| `dtype_uint8_narrow` | uint8, Wt=1 | 148 669 | 28 | **0.056x** | 1.011x | 0.981x | 0.008x | **read-bound, entirely** |
+
+Compute is overlap-hidden on every wide-page dtype (0.96–1.01x), exactly as it is at bf16 — so
+**disabling fast tilize for an fp32 output costs nothing measurable**, which is the one thing the
+verifier note flagged as a risk.
+
+**Per-dtype ceiling, re-run as the note asked.** The op's own practical DRAM rate (Phase 0 / R1:
+the square's 40.7 µs target for 16.78 MB) is **412 GB/s**; the per-dtype target is that rate applied
+to the dtype's own byte count, since `WT_BLOCK` is a byte target and every row lands on the same
+1024 B transaction:
+
+| shape | bytes (r+w) | target ns | measured ns | achieved |
+|---|---:|---:|---:|---:|
+| `square` bf16 (reference) | 16.78 MB | 40 720 | 44 282 | **0.92** |
+| `dtype_fp32` | 33.55 MB | 81 440 | 87 815 | **0.93** |
+| `dtype_uint8` | 8.39 MB | 20 360 | 23 647 | **0.86** |
+| `dtype_bf16_to_bf8b` | 12.85 MB | 31 180 | 35 834 | **0.87** |
+
+`dtype_uint8_narrow` is reconciled against a **different** bound and is AT it: a 32 B page is half
+this part's 64 B DRAM unit (so the tensor occupies 2× its logical bytes) and each transaction is
+1/32 of the measured 1024 B optimum. Phase 0's own B6 sweep puts 128 B transactions at 110 GB/s on
+the square; halving twice predicts ~28 GB/s and the measurement is **28.2**. The narrow-stick regime
+is at its transaction-size ceiling, not off it.
+
+**Levers, each with both arms (`--phase "Refinement 7"` → 0 blocking, 0 signal, 24/24 rows):**
+
+| knob | arm | on / off (ns) | verdict |
+|---|---|---|---|
+| `fp32_lossless` | `dtype_fp32` | 87 815 / 87 071 | **0.992x — bit-exactness is FREE** (DM-bound; the slower tilize path is overlap-hidden) |
+| `fp32_dest_acc_8bit` | `dtype_uint8` | 23 647 / 24 010 | **1.015x — the 32-bit DEST is not a cost** (and the off-arm is numerically wrong) |
+| `bfp8_precise` | `dtype_bf16_to_bf8b` | 35 834 / precise 36 145 / fast 36 360 | **measured null (≤1.0%)** — the skill's ~1.4x precise-packer cost does not reproduce on a DM-bound shape, so the fp32-input gate is kept on PCC grounds, not perf |
+| `stage_reads` (**B11**) | `dtype_uint8_narrow` | 151 153 / 129 353 | **1.169x = the price of correctness** in the narrow regime; **0.994x (noise) on the aligned uint8 square**, i.e. zero cost everywhere else |
+
+**Ledger:** **B11 moves `structurally-impossible` → `applied`.** Its Phase-0 text had named the exact
+exception it could not yet reach ("a 1-byte dtype with Wt == 1 … explicitly owned by refinement
+A5b"), and R7 reached it. That is the ledger doing its job — a row closed by argument at Phase 0 was
+reopened by measurement four refinements later.
+
+**Cumulative bench set — no regression, all 15 prior shapes re-measured in one run:**
+
+| shape | R6 | R7 | delta | verdict |
+|---|---:|---:|---:|---|
+| `(1,1,2048,2048)` square | 44 410 | 44 282 | −0.3 % | noise |
+| `(1,1,32,16384)` wide_short | 6 775 | 6 686 | −1.3 % | noise |
+| `(1,1,2048,64)` tall_narrow | 4 817 | 4 797 | −0.4 % | noise (5 trials) |
+| `(1,1,32,64)` smallest | 1 924 | 1 915 | −0.5 % | noise |
+| `(1,1,32,32)` smallest_aligned | 1 835 | 1 836 | +0.1 % | noise |
+| `(1,1,512,2048)` l1_to_l1 | 5 029 | 5 032 | +0.1 % | noise |
+| `(1,1,2048,2048)` sharded_big | 2 106 | 2 122 | +0.8 % | noise |
+| `(1,1,512,64)` sharded_small | 837 | 829 | −1.0 % | noise (5 trials) |
+| `(1,1,1024,1024)` reshard | 22 877 | 22 685 | −0.8 % | noise |
+| `(1,1,1024,1024)` reshard_rowwise | 15 724 | 15 582 | −0.9 % | noise |
+| `(1,1,2046,2048)` padded_h_tail | 44 117 | 44 353 | +0.5 % | noise |
+| `(1,1,2048,2046)` padded_w_tail | 44 269 | 44 311 | +0.1 % | noise |
+| `(1,1,2048,2048)` padded_noop | 44 291 | 44 328 | +0.1 % | noise |
+| `(1,1,1,16384)` padded_row_vector | 28 936 | 28 873 | −0.2 % | noise |
+| `(1,1,30,32)` smallest_padded | 1 916 | 1 879 | −1.9 % | noise (5 trials) |
+
+Four bench rows added (`dtype_fp32`, `dtype_uint8`, `dtype_uint8_narrow`, `dtype_bf16_to_bf8b`) and
+the bench gained a `_DTYPE_BY_SHAPE` map — one source of truth in the same shape as `_MEM_BY_SHAPE`
+and `_PAD_BY_SHAPE` — plus a per-dtype element size so the GB/s column and the reported block
+geometry are the ones each row actually ran with. This is the shape-dependent-path coverage the
+non-regression rule asks for: the dtype branch is now benched across the whole range of the
+parameter it keys on (1, 2, 4 bytes and block-float), not at one point.
+
+### Issues encountered
+
+- `Tensor.element_size()` **raises** on a block-float dtype, and the new `out_elem_size` query hit it
+  unconditionally — every `bfloat8_b` output cell died with `ValueError: datum for bfp2, bfp4, bfp8
+  is invalid` (84 golden failures). Caught by the golden run, not by reasoning; `element_size_or_zero`
+  is the sentinel and the 0 never reaches arithmetic (the pad rewrite excludes block-float
+  structurally — a shared-exponent tile cannot be written with raw stores).
+- The B13/D21 issue-cost levers write straight into the tile-layout destination, which is precisely
+  what is illegal in the narrow-stick regime, so the host disarms them there. They are a low-work
+  optimization; the correct read wins.
+
+### Tests added
+
+- `test_tilize_debug.py::test_b11_uint8_narrow_stick_alignment_gap_is_closed_by_the_staged_reader`
+  — replaces the Phase-0 pin that *documented* the gap. Asserts both halves: the geometry still
+  produces the unaligned stride (so the hazard is real), and the descriptor arms the staged reader
+  for `uint8` Wt = 1 / 3 while leaving `uint8` Wt = 2 and every bf16 width alone — read off the real
+  CT-arg vector, not re-derived.
+- `test_tilize_debug.py::test_r7_numeric_policy_arms_exactly_the_formats_that_need_it` — the dtype
+  decision table pinned directly, including that both knobs are live (forcing them off restores the
+  pre-R7 configuration).
+- `test_tilize_debug.py::test_r7_pad_cast_fix_arms_only_where_the_output_holds_the_fill_better` —
+  the widening-fill gate from both sides, plus the `format_roundtrip` oracle underneath it.
+- `_bench_tilize.py`: 4 dtype shapes and 5 arms (`lever_r7_fp32_fast`, `lever_r7_dest16`,
+  `lever_r7_bfp8_precise`, `lever_r7_bfp8_fast`, `lever_b11_stage_off`).
+- Probes 023–036 (the uint8 signature dump, the round-trip control, the DEVICE_PRINT
+  reader-vs-compute discriminator, the alignment sweep, the widening-fill sweep).
+
+### Remaining headroom, as a FINDING (not a queue item)
+
+1. **The narrow-stick regime (`uint8` with `Wt == 1`) is at 28 GB/s and that is its ceiling, not a
+   deficit** — see the reconciliation above. The only lever is a bigger transaction, and the tile
+   layout forbids it: the destination stride IS `w * 32 * elem`. What *could* move it is a source
+   with wider pages (a caller-side layout choice), or reading several tile-ROWS per transaction,
+   which would need the tilize LLK to accept a source stride it does not derive from the block
+   width. Not a lever this op holds.
+2. **The staged read costs 1.169x where it is armed.** Half of that is the compaction copy (a word
+   loop over `tile_h * row_bytes` per block); it could in principle be a local L1→L1 `noc_async_read`
+   (16 B alignment, so legal) issued alongside the DRAM reads, trading RISC stores for NoC issues.
+   Untested — and on a shape that is 94 % DRAM read, the copy is not what binds.
+3. **uint8 and bf8b sit at 0.86–0.87 of their DRAM targets vs bf16's 0.92.** Both have a *smaller*
+   output page than bf16 (1024 B and 1088 B vs 2048 B), so the write side issues the same number of
+   transactions for fewer bytes — the writer's `ablate_write` is 0.62x / 0.72x, its largest share of
+   any dtype. The candidate is a multi-tile coalesced write where output tiles are contiguous in the
+   destination (they are, within a block, only when `n_wchunks == 1`), which is a real transaction-
+   shape change and belongs to a perf round with a fresh whole-op breakdown.

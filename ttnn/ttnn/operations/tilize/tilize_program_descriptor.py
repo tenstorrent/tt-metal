@@ -312,6 +312,20 @@ DEFAULT_LEVERS = {
     # correctness lever for 8-bit AND a throughput cost everywhere else, so both
     # arms have to stay measurable.
     "fp32_dest_acc_8bit": None,
+    # R7: the bfloat8_b PACKER. `None` = the shipped gate (precise only for an
+    # fp32 input, /numeric-formats-metal 1.7), 1 = precise everywhere, 0 = fast
+    # everywhere. The one purely-perf knob of the three numeric ones: precise
+    # rounds the block-float mantissas and costs an extra pack pass, fast
+    # truncates. No effect off a bfloat8_b output.
+    "bfp8_precise": None,
+    # R7 (A5b / master.md B11): the narrow-stick STAGED read. `None` = the
+    # shipped auto-detect (armed exactly where the per-stick L1 destination
+    # would be off the DRAM alignment grid), 0 = the direct read everywhere.
+    # The off-arm is NUMERICALLY WRONG on the shapes that need staging (it is
+    # the bug this refinement fixed, and it trips the watcher under --dev) — it
+    # exists so the COST of alignment-correctness is a measured number rather
+    # than an unknown.
+    "stage_reads": None,
     "stub_read": 0,  # ablation: drop the NoC read payload
     "stub_compute": 0,  # ablation: drop the tilize math
     "stub_write": 0,  # ablation: drop the NoC write payload
@@ -502,6 +516,10 @@ def numeric_policy(in_dtype, out_dtype, in_elem_size, levers=None) -> dict:
     # Keyed off the ELEMENT SIZE, not a dtype list: the constraint is the DEST
     # width a 1-byte datum needs, so int8 / fp8 inherit it without an edit.
     dest_acc_8bit = bool(dest_acc_8bit_knob) and in_elem_size == 1
+    precise_knob = lv.get("bfp8_precise")
+    # The shipped gate is the INPUT dtype: bf16 -> bfp8_b clears the golden PCC
+    # gate on the fast packer (measured 0.99997), so only a wide fp32 input pays.
+    _precise_pack = (in_dtype == ttnn.float32) if precise_knob is None else bool(precise_knob)
     return {
         "needs_cast": int(out_dtype != in_dtype),
         "fp32_lossless": int(fp32_lossless),
@@ -509,7 +527,7 @@ def numeric_policy(in_dtype, out_dtype, in_elem_size, levers=None) -> dict:
         # tied to `fp32_lossless` and never set on its own.
         "unpack_to_dest_fp32": int(fp32_lossless),
         "fp32_dest_acc_en": bool(fp32_lossless or dest_acc_8bit),
-        "bfp8_pack_precise": bool(out_dtype == ttnn.bfloat8_b and in_dtype == ttnn.float32),
+        "bfp8_pack_precise": bool(out_dtype == ttnn.bfloat8_b and _precise_pack),
     }
 
 
@@ -1467,6 +1485,8 @@ def create_program_descriptor(
     # whole kernel. `stage_stride_max` is what the scratch has to hold per stick
     # (+ one unit of slack, because a CB base is only L1-aligned).
     stage_unaligned = int(src_is_dram and any((w * tile_row_bytes) % dram_align for w in (wt_block, wt_tail)))
+    if lv["stage_reads"] is not None:
+        stage_unaligned = int(bool(lv["stage_reads"]) and stage_unaligned)
     stage_bytes = tile_height * _round_up(max(wt_block, wt_tail) * tile_row_bytes, dram_align) + dram_align
     if stage_unaligned:
         # The B13/D21 issue-cost levers write straight into the tile-layout

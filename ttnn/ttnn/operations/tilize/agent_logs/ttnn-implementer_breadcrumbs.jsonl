@@ -35,3 +35,4 @@
 {"event":"fix_applied","refinement":7,"what":"numeric_policy(): fp32_dest_acc_en for 1-byte datums (uint8 exact, was all-zero) + Fp32Mode::Lossless triple for fp32 identity (bit-exact, was maxdiff 1.6e-2) + bfp8_pack_precise gated on fp32 input","ts":"2026-08-12T18:31:08+00:00"}
 {"event":"test_run","refinement":7,"test":"tests/ttnn/unit_tests/operations/tilize/test_tilize.py","status":"pass","detail":"51 passed / 8 xfailed / 0 failed (was 32p/27x)","ts":"2026-08-12T18:31:08+00:00"}
 {"event":"test_run","refinement":7,"test":"eval/golden_tests/tilize/test_golden.py","status":"pass","detail":"332 passed / 0 failed / 48 xfailed (was 42 passed at R6)","ts":"2026-08-12T18:52:17+00:00"}
+{"event":"test_run","refinement":7,"test":"_bench_tilize.py cumulative + dtype ablation","status":"pass","detail":"15 prior shapes within +-1.3% (noise); 4 dtype rows added; B11 applied with both arms","ts":"2026-08-12T19:01:15+00:00"}
