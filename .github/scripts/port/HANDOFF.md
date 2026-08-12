@@ -25,7 +25,21 @@ side, and the pipeline is now split in two because of it.
 
 As of 2026-08-11 that run of failures is over. Both halves of the split pipeline work against real
 hardware: the launcher pushes, the workflow builds and measures on CIv2, and the results come back.
-What has never been tried is the only part that was ever the point -- the agent driving it.
+
+On 2026-08-12 the agent drove it for the first time. It read the manifest, wrote the whole
+`untilize` port -- roughly 2,400 lines across 17 files -- adopted the generated routing test the
+baseline had sent back, and correctly chose a compile before spending device time. Then it could
+not compile anything, for a reason that had nothing to do with the port: **the MCP gateway cancels a
+tool call after 60 seconds by default**, and `build` is minutes. It died at 1m00s four times, the
+agent reasonably read four identical infrastructure failures as infrastructure, reported through
+`missing_tool` and declined to open a PR on unverified code. Every one of those judgements was
+right. Four CIv2 builds were left running with nobody reading them.
+
+That is fixed, and the fix reshaped the tool surface -- see below. The one build that did finish
+compiled the agent's code and failed on ordinary first-attempt errors: three redefinitions in
+`untilize_codegen_supported.cpp`, two `-Werror` unused variables, one bad overload. That is what the
+second iteration is for, and it is the first evidence that the build path works on agent-written
+code rather than on a clean tree.
 
 ## The pipeline is two workflows, and neither can do the other's half
 
@@ -193,6 +207,40 @@ Nothing else in the repo uses `checkout-filter`, so we are the first, and a part
 lazily if something later walks history. Nothing in this build does. If a future step starts reading
 old trees it will silently refetch them and the win will quietly disappear.
 
+## A tool call may not last ten minutes, so the launcher cannot wait inside one
+
+This is the constraint that shapes the agent's tool surface, and it is not negotiable from here.
+
+The MCP gateway cancels a tool call when its own deadline passes. That deadline defaults to **60
+seconds**, is set by `engine.mcp.tool-timeout`, and gh-aw refuses to compile a value above **600s**
+-- the error names the ceiling, so this is a deliberate limit rather than something to be talked
+around. The per-tool `timeout:` values in `port-op.md` are a different thing entirely: those bound
+the handler process, this bounds the request. Setting the per-tool value to 5400 did nothing,
+because the gateway had already given up ninety times over.
+
+A build is 8.5 minutes on a good day and a verify is closer to forty, so no ceiling that gh-aw
+permits is enough. Waiting inside the call was never going to work.
+
+So `dispatch.py` splits: `--start` pushes and returns a handle, and `--wait HANDLE` blocks for up to
+`WAIT_BUDGET` (420s) before returning "still going". The agent sees three tools -- `build`, `verify`,
+`wait` -- and a build costs two or three `wait` calls, a verify five or six. Three things about this
+are worth keeping in mind if you touch it:
+
+- **"Still going" must never read like a verdict.** `--wait` exits **4** for this, distinct from
+  every gate exit code, and says in words that nothing is wrong. An agent that reads "not finished"
+  as "your port is broken" will start editing code that compiles.
+- **The budget has to leave room for what happens after the run ends.** Collecting means downloading
+  an artifact and laying it over the tree. 420s of polling inside a 540s tool timeout inside the
+  gateway's 600s is the arithmetic; if you raise one, raise them in that order.
+- **Starting cancels whatever it supersedes.** `retire_inflight` exists because the failure above
+  left four builds on CIv2 at once. A dispatch nobody is holding a handle to is a card nobody is
+  reading, and the far side has no way to notice the near side stopped caring.
+
+Verified end to end against real infrastructure on 2026-08-12, not just in `selftest.py`: start
+returned a handle in 28 seconds, two `wait` calls reported the run still going with cumulative age
+accounted correctly across calls, the third collected `build OK` at 8.7 minutes, and both the
+scratch ref and the job record were gone afterwards.
+
 ## The one thing CIv2 cannot do
 
 Routed around rather than fixed, by the split described at the top. The diagnosis is kept because it
@@ -262,9 +310,12 @@ files. That grep is the check.
 
 ## What is *not* verified
 
-**Everything except the agent now runs.** The launcher drove a full `build` and a full `baseline`
-against a card on 2026-08-11; what has never run is the agent driving the launcher. See below for
-exactly where the proven part stops.
+**The agent now runs too, up to the point where it needs an answer back.** On 2026-08-12 it reached
+a model, read the task, wrote the port and started a build on CIv2 that compiled its code. What has
+never happened is a result being *returned* to it: every collect path the agent would take -- `wait`
+on a build, `wait` on a verify, and everything downstream of a verdict -- is still unexercised from
+inside the sandbox, because the gateway was cancelling the call before it could finish. The
+start-and-collect split that fixes it is proven from a laptop but not yet from an agent.
 
 What *is* checked, beyond `selftest.py`: both workflow files pass `actionlint`. The token boundary
 was established by compiling and reading the lock file. The whole parameter round trip -- the JSON
@@ -319,8 +370,13 @@ What that leaves genuinely untested:
 
 - **`verify` mode.** `report_verify` and the `gate.json` it reads have never run. It is the only mode
   whose exit code drives the agent's next move, so it is the highest-value thing left to probe.
-- **The agent driving any of this.** The pre-step that writes the token, the sandbox boundary it
-  relies on, and the agent calling the launcher as a tool. The agent has still never reached a model.
+- **The agent collecting a result.** It has started work and started a build; it has never been
+  handed an answer. In particular nothing has yet checked that an agent reads exit 4 as "call again"
+  rather than as a failure -- the prompt says so in three places, but only a real run settles it.
+- **The token pre-step under a real agent.** It ran and the push worked, so the boundary holds in
+  practice, but the credential is `CODEGEN_REPO_TOKEN` and now carries `workflow` scope as well as
+  `repo`. `refuse_pipeline_edits` is the only thing standing between that scope and a snapshot that
+  edits CI. Do not weaken it.
 - **Scale.** Both runs sampled 24 cases. The correctness band over all 208 is uncapped by design --
   the routing claim only means something across the whole out-of-scope set -- so if anything times
   out, it is still that.
@@ -332,17 +388,18 @@ What that leaves genuinely untested:
 
 ### How to run the dry run
 
-Cheapest first, so each failure costs the least it can. Steps 1 to 3 are done.
+Cheapest first, so each failure costs the least it can. Steps 1 to 4 are done.
 
 1. ~~A manual scratch push with `mode: build`.~~ Done: trigger, `resolve`, front of `build-artifact`.
 2. ~~A `baseline` on a card.~~ Done, twice -- once by hand and once through the launcher.
 3. ~~`dispatch.py` end to end from a laptop.~~ Done: `build` in 8.5 minutes, `baseline` in 19.
-4. Next: a `verify` through the launcher, which is the only mode left whose report path has never
-   run. It needs a tree with a real ported leg, so it cannot be driven from a clean checkout the way
-   the other two were -- which makes it the natural first thing to watch inside a real agentic run
-   rather than something to rehearse separately.
-5. Then push the branch to `ebanerjee/port-op-dryrun` to trigger `port-op` itself, which runs the
-   baseline as its own pre-agent step and then hands over to the agent.
+4. ~~`--start` and `--wait` end to end from a laptop.~~ Done 2026-08-12: handle in 28 seconds, two
+   "still going" replies, collected `build OK` at 8.7 minutes, ref and job record both swept.
+5. Next: push to `ebanerjee/port-op-dryrun` to trigger `port-op` itself. The agent half is now the
+   cheap thing to test and the device half the expensive one, which is the reverse of before: watch
+   the *first* `wait` call, because everything the agent does after it depends on reading exit 4 as
+   "call again". If that works, `verify` is the only report path left that has never run, and it
+   will run inside that same session rather than needing a rehearsal of its own.
 
 Measured per-cycle wall times, which the budget argument rests on: a `build` is 8.5 minutes and a
 `baseline` 19, both well inside the 20 and 35-45 the design assumed. A `verify` is still unmeasured,
