@@ -133,6 +133,22 @@ class Api:
         _, _, body = self._request("GET", url)
         return json.loads(body)
 
+    def token_scopes(self) -> str:
+        """What the credential is actually allowed to do, straight from GitHub.
+
+        Only ever called to explain a failure. A classic PAT's scopes come back in a header; a fine
+        grained token or an App token has none and says so by omission, which is not the same as
+        having none of the permissions.
+        """
+        try:
+            _, headers, _ = self._request("GET", f"{self.base}/")
+        except ApiError as exc:
+            return f"could not be read ({exc})"
+        scopes = headers.get("x-oauth-scopes")
+        if scopes is None:
+            return "not reported, so this is a fine-grained or App token rather than a classic PAT"
+        return scopes or "(none)"
+
     def download(self, url: str) -> bytes:
         """Follow the signed-URL redirect GitHub uses for logs and artifacts.
 
@@ -232,6 +248,43 @@ def commit_worktree(repo: Path, work: Path, message: str) -> tuple[str, str]:
         cwd=repo,
     )
     return commit, base
+
+
+# GitHub's git server decides, on every push, whether the push creates or updates a workflow file,
+# because a token without `workflow` scope may not. On this repo that decision routinely times out
+# and the push is rejected with a message blaming the scope -- see tenstorrent/tt-metal#32354, which
+# hit the fork-mirroring workflow the same way and is labelled `infra-ci`. It is a false negative:
+# cli/cli#13635 reports it against a token that *did* hold the permission, and the same push succeeds
+# on a retry. Nothing about the scratch commit provokes it; `refuse_pipeline_edits` has already
+# guaranteed the push changes no workflow at all.
+PUSH_ATTEMPTS = 5
+PUSH_RETRY_MESSAGES = (
+    "Unable to determine if workflow can be created or updated",
+    "the remote end hung up unexpectedly",
+)
+
+
+def push_ref(repo: Path, remote: str, refspec: str, git_env: dict, *, required: bool = True) -> bool:
+    """Push, retrying the rejection GitHub hands out when its own workflow check times out.
+
+    Backs off rather than hammering, since the failure is a server-side deadline and an immediate
+    retry is the one most likely to hit the same cold cache.
+    """
+    delay = 5
+    for attempt in range(1, PUSH_ATTEMPTS + 1):
+        try:
+            git("push", remote, refspec, cwd=repo, env=git_env)
+            return True
+        except DispatchError as exc:
+            retryable = any(m in str(exc) for m in PUSH_RETRY_MESSAGES)
+            if not retryable or attempt == PUSH_ATTEMPTS:
+                if not required:
+                    return False
+                raise
+            log(f"  push attempt {attempt}/{PUSH_ATTEMPTS} rejected by GitHub's workflow check; retrying in {delay}s")
+            time.sleep(delay)
+            delay *= 2
+    return False
 
 
 @contextmanager
@@ -488,7 +541,13 @@ def main() -> int:
     log(f"{args.mode} for {args.op}: pushing {commit[:12]} (base {base[:12]}) to {branch}")
 
     with credentialed(work, token_file) as git_env:
-        git("push", remote, f"{commit}:refs/heads/{branch}", cwd=repo, env=git_env)
+        try:
+            push_ref(repo, remote, f"{commit}:refs/heads/{branch}", git_env)
+        except DispatchError as exc:
+            # The rejection names `workflows` scope whether or not that is the real cause, so say
+            # what the credential actually holds. `workflow` present means this is the server-side
+            # false negative and the answer is elsewhere; absent means the token needs widening.
+            raise DispatchError(f"{exc}\n\nthe push credential's scopes are: {api.token_scopes()}") from None
 
     try:
         started = time.monotonic()
@@ -503,8 +562,11 @@ def main() -> int:
 
         results = fetch_results(api, run["id"], work / f"results-{nonce}")
     finally:
+        # Deleting can meet the same check as creating, and a ref left behind is litter rather than
+        # a failure -- the agent job sweeps the namespace at the end. So retry, but never raise.
         with credentialed(work, token_file) as git_env:
-            git("push", remote, f":refs/heads/{branch}", cwd=repo, env=git_env, check=False)
+            if not push_ref(repo, remote, f":refs/heads/{branch}", git_env, required=False):
+                log(f"  could not delete {branch}; the post-run sweep will get it")
 
     if args.mode == "build":
         return report_build(run, api)
