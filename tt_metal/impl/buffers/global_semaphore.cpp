@@ -19,6 +19,7 @@
 
 #include "global_semaphore_impl.hpp"
 #include "mesh_device.hpp"
+#include <tt_stl/reflection.hpp>
 #include "impl/context/metal_context.hpp"
 
 namespace tt::tt_metal {
@@ -158,3 +159,17 @@ std::tuple<CoreRangeSet, BufferType> GlobalSemaphore::attribute_values() const {
 }
 
 }  // namespace tt::tt_metal
+
+std::ostream& operator<<(std::ostream& os, const tt::tt_metal::GlobalSemaphore& global_semaphore) {
+    ttsl::reflection::operator<<(os, global_semaphore);
+    return os;
+}
+
+namespace std {
+
+std::size_t hash<tt::tt_metal::GlobalSemaphore>::operator()(
+    const tt::tt_metal::GlobalSemaphore& global_semaphore) const {
+    return ttsl::hash::hash_objects_with_default_seed(global_semaphore.attribute_values());
+}
+
+}  // namespace std

@@ -417,4 +417,8 @@ CircularBufferConfig::Builder CircularBufferConfig::remote_index(uint8_t buffer_
     return Builder::RemoteBuilder(*this, buffer_index);
 }
 
+bool operator==(const CircularBufferConfig& lhs, const CircularBufferConfig& rhs) { return lhs.impl() == rhs.impl(); }
+
+bool operator!=(const CircularBufferConfig& lhs, const CircularBufferConfig& rhs) { return !(lhs == rhs); }
+
 }  // namespace tt::tt_metal

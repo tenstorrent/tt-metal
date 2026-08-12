@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <tuple>
@@ -12,6 +13,7 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal_types.hpp>
+#include <ostream>
 
 // forward declarations
 namespace tt::tt_metal {
@@ -55,6 +57,9 @@ public:
     static constexpr auto attribute_names = std::forward_as_tuple("cores", "buffer_type");
     std::tuple<CoreRangeSet, BufferType> attribute_values() const;
 
+    // Internal constructor (internal use only)
+    GlobalSemaphore(GlobalSemaphoreImpl&& impl);
+
     GlobalSemaphoreImpl& impl();
     const GlobalSemaphoreImpl& impl() const;
 
@@ -64,9 +69,6 @@ private:
 
     GlobalSemaphore(
         IDevice* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
-
-    // Internal constructor (internal use only)
-    GlobalSemaphore(GlobalSemaphoreImpl&& impl);
 
     std::unique_ptr<GlobalSemaphoreImpl> pimpl_;
 
@@ -83,3 +85,14 @@ private:
 };
 
 }  // namespace tt::tt_metal
+
+std::ostream& operator<<(std::ostream& os, const tt::tt_metal::GlobalSemaphore& global_semaphore);
+
+namespace std {
+
+template <>
+struct hash<tt::tt_metal::GlobalSemaphore> {
+    std::size_t operator()(const tt::tt_metal::GlobalSemaphore& global_semaphore) const;
+};
+
+}  // namespace std

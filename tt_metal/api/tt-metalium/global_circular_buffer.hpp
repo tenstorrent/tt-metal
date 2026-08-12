@@ -58,6 +58,9 @@ public:
     GlobalCircularBuffer(GlobalCircularBuffer&&) noexcept = default;
     GlobalCircularBuffer& operator=(GlobalCircularBuffer&&) noexcept = default;
 
+    // Internal constructor (internal use only)
+    explicit GlobalCircularBuffer(std::shared_ptr<GlobalCircularBufferImpl> impl);
+
     const Buffer& cb_buffer() const;
 
     const CoreRangeSet& sender_cores() const;
@@ -82,9 +85,6 @@ private:
         const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
         uint32_t size,
         BufferType buffer_type = BufferType::L1);
-
-    // Wraps an already-constructed Impl (e.g. the experimental DRAM-sender factory).
-    explicit GlobalCircularBuffer(std::shared_ptr<GlobalCircularBufferImpl> impl);
 
     std::shared_ptr<GlobalCircularBufferImpl> impl_;
 
