@@ -17,7 +17,12 @@ from models.common.llm_runtime.prefill.inputs import (
     copy_into_device_tensors,
 )
 from models.common.llm_runtime.prefill.plan import PrefillChunk
-from models.common.llm_runtime.prefill.postprocess import PrefillPostprocessor, new_logprob_output, without_borrowed
+from models.common.llm_runtime.prefill.postprocess import (
+    KPTSignature,
+    PrefillPostprocessor,
+    new_logprob_output,
+    without_borrowed,
+)
 from models.common.llm_runtime.prefill.sampling_helpers import _formatted_sampling_values
 from models.common.llm_runtime.prefill.signatures import (
     PrefillTraceSignature,
@@ -46,7 +51,7 @@ class PrefillReplayState:
     kpt: tuple[Any, Any, Any] | None
     sampled_output: Any | None = None
     position_signature: int | None = None
-    kpt_signature: Any = None
+    kpt_signature: KPTSignature = None
 
     def owned_tensor_values(self) -> tuple[Any, ...]:
         return self.position_inputs.values(), self.kpt, self.sampled_output
@@ -70,8 +75,8 @@ class PrefillCapturePlan:
     prepare_inputs: Callable[[], PrefillHiddenPersistentInputs]
     capture: Callable[[PrefillHiddenPersistentInputs], Any]
     prepare_workspace: Callable[[], PrefillReplayState]
-    schema_fingerprint: Any
-    workspace_fingerprint: Any
+    schema_fingerprint: tuple[Any, ...]
+    workspace_fingerprint: tuple[Any, ...]
     refresh_fields: tuple[str, ...] = ("tokens", "page_table", "last_token", "sampling")
 
 
@@ -169,7 +174,7 @@ class PrefillTraceLifecycle:
         prepared: PreparedPrefill,
         hidden: Any,
         state: PrefillReplayState,
-    ) -> Any:
+    ) -> InvocationResult:
         replay_local: list[Any] = []
         output = self.hooks.postprocessor.finish_regular_prefill(
             prepared,

@@ -11,9 +11,13 @@ import torch
 
 import ttnn
 from models.common.llm_runtime.prefill.config import PrefillRuntimeConfig
+from models.common.llm_runtime.prefill.inputs import PrefillPositionInputs
 from models.common.llm_runtime.prefill.plan import PrefillRequest
 from models.common.llm_runtime.prefill.sampling_helpers import _TILE_SIZE, SamplingPath, _formatted_sampling_values
+from models.common.llm_runtime.prefill.signatures import PreparedPrefill
 from models.common.sampling import SamplingParams
+
+KPTSignature = tuple[tuple[int, ...], tuple[float, ...], tuple[float, ...]] | None
 
 
 class PrefillPostprocessor:
@@ -55,7 +59,7 @@ class PrefillPostprocessor:
             return self.config.sampling_batch_size
         return request.padded_batch_size
 
-    def sampling_output_rows(self, prepared: Any) -> int:
+    def sampling_output_rows(self, prepared: PreparedPrefill) -> int:
         # TT sampling validates K/P/T against the physical logits row count.
         # The static Q128 path retains one complete tile and selects the exact
         # logical row on the host, so its sampling tensors must span that tile.
@@ -139,11 +143,11 @@ class PrefillPostprocessor:
 
     def refresh_workspace_sampling(
         self,
-        prepared: Any,
+        prepared: PreparedPrefill,
         *,
         kpt: tuple[Any, Any, Any] | None,
-        kpt_signature: Any,
-    ) -> Any:
+        kpt_signature: KPTSignature,
+    ) -> KPTSignature:
         if prepared.sampling_path != "topk":
             return kpt_signature
         sampling_batch_size = self.sampling_output_rows(prepared)
@@ -190,10 +194,10 @@ class PrefillPostprocessor:
 
     def finish_regular_prefill(
         self,
-        prepared: Any,
+        prepared: PreparedPrefill,
         hidden: Any,
         kpt: tuple[Any, Any, Any] | None,
-        position_inputs: Any,
+        position_inputs: PrefillPositionInputs,
         *,
         sampled_output: Any | None = None,
         owned: list[Any] | None = None,
@@ -251,10 +255,10 @@ class PrefillPostprocessor:
 
     def finish_prefill_sequence(
         self,
-        prepared: Any,
+        prepared: PreparedPrefill,
         final_step_output: Any,
         kpt: tuple[Any, Any, Any] | None,
-        position_inputs: Any,
+        position_inputs: PrefillPositionInputs,
         *,
         sampled_output: Any | None,
         owned: list[Any],

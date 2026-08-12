@@ -26,8 +26,16 @@ from models.common.llm_runtime.prefill.inputs import PrefillDeviceInputs, Prefil
 from models.common.llm_runtime.prefill.plan import _plan_prefill_requests
 from models.common.llm_runtime.prefill.postprocess import fit_prefill_sampling_logits
 from models.common.llm_runtime.prefill.runtime import PrefillRuntime
+from models.common.llm_runtime.prefill.signatures import (
+    PrefillProgramSignature,
+    PrefillTraceSignature,
+    PreparedPrefill,
+    capture_schema_fingerprint,
+    workspace_fingerprint,
+)
 from models.common.llm_runtime.prefill.trace import PrefillHiddenPersistentInputs, PrefillReplayState
-from models.common.llm_runtime.program_compiler import ProgramCompiler
+from models.common.llm_runtime.program_compiler import ProgramCompiler, ProgramKey
+from models.common.llm_runtime.trace_compiler import TraceKey
 from models.common.sampling import SamplingParams
 
 
@@ -1104,6 +1112,55 @@ def test_program_signatures_are_material_and_trace_classification_is_separate_fr
     assert multi.trace_signature is None
     assert logits.request.uses_chunked_prefill is False
     assert cached.request.uses_chunked_prefill is True
+
+
+def test_prefill_signature_keys_and_trace_fingerprints_have_stable_goldens():
+    program_signature = PrefillProgramSignature(
+        operation_variant="regular-batched",
+        padded_batch_size=16,
+        invocation_sequence_length=128,
+        page_table_width=32,
+        chunk_page_table_width=None,
+        sampling_path="topk",
+    )
+    trace_signature = PrefillTraceSignature(
+        operation_variant="chunked",
+        padded_batch_size=1,
+        padded_sequence_length=512,
+        page_table_width=32,
+        chunk_page_table_width=4,
+    )
+    prepared = PreparedPrefill(
+        request=SimpleNamespace(),
+        sampling_params=SamplingParams(temperature=1.0, top_k=32, top_p=0.08),
+        sampling_path="topk",
+        program_signatures=(program_signature,),
+        trace_signature=trace_signature,
+    )
+
+    assert ProgramKey.from_signature(program_signature).digest == (
+        "1fb47a00a66b522391f24ce966d44cbfe133b2623f5e2f7ae03cf2c31f6a42c5"
+    )
+    assert TraceKey.from_signature(trace_signature).digest == (
+        "4b71c7b3d465fe51a661a621c45b7952f7cc7028adb171d7e9b17161b07113b0"
+    )
+    assert capture_schema_fingerprint(prepared) == (
+        "prefill-hidden-v2",
+        trace_signature,
+        (
+            "operation_variant",
+            "padded_batch_size",
+            "padded_sequence_length",
+            "page_table_width",
+            "chunk_page_table_width",
+        ),
+    )
+    assert workspace_fingerprint(prepared, sampling_output_rows=32) == (
+        "prefill-postprocess-v1",
+        "topk",
+        32,
+        True,
+    )
 
 
 def test_cached_offsets_share_one_chunk_trace_identity_and_can_trace_contract():
