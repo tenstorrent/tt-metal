@@ -22,6 +22,7 @@ from models.tt_dit.models.audio_vae.audio_decoder_ltx import LTXAudioDecoderAdap
 from models.tt_dit.pipelines.ltx.pipeline_ltx_distilled import LTXDistilledPipeline
 from models.tt_dit.utils.ltx import (
     DEFAULT_LTX_PROMPT,
+    STEADY_STATE_LTX_PROMPT,
     default_ltx_checkpoint,
     default_ltx_gemma,
     print_ltx_timing_table,
@@ -137,6 +138,11 @@ def test_pipeline_distilled(
     )
 
     prompt = os.environ.get("PROMPT", DEFAULT_LTX_PROMPT)
+    # Gen #1 is the steady-state measurement, and on console every request encodes a prompt the
+    # cache has never seen — so it gets its own prompt to keep the encoder in the measured path.
+    # Under dynamic_load the encoder is coresident-excluded with the DiT: a second encode would
+    # evict the DiT and clobber the captured traces, so that path reuses the cached embedding.
+    steady_state_prompt = prompt if dynamic_load else os.environ.get("PROMPT_STEADY_STATE", STEADY_STATE_LTX_PROMPT)
 
     def run(*, prompt, number, seed):
         output_filename = os.environ.get("OUTPUT_PATH", f"ltx_av_fast_{width}x{height}_{number}.mp4")
@@ -291,9 +297,9 @@ def test_pipeline_distilled(
         # replay — its Stage 1/2 denoise times are the steady-state measurement.
         if traced:
             logger.info("=== traced steady-state pass (gen #1, pure replay) ===")
-            run(prompt=prompt, number=1, seed=seed)
-            check_output_with_clip(prompt, 1)
-            check_output_with_vbench(prompt, 1, seed=seed)
+            run(prompt=steady_state_prompt, number=1, seed=seed)
+            check_output_with_clip(steady_state_prompt, 1)
+            check_output_with_vbench(steady_state_prompt, 1, seed=seed)
         else:
             check_output_with_clip(prompt, 0)
             check_output_with_vbench(prompt, 0)
