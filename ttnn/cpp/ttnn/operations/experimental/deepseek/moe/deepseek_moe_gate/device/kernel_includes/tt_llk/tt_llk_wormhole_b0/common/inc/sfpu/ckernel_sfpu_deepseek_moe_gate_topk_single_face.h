@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_addrmod.h"
 #include "ckernel_instr_params.h"
@@ -19,11 +20,11 @@ namespace sfpu {
 // TODO: Initial evaluation of using replay buffers here did not show any performance improvement
 // Try re-evaluating with latest op sequence and record larger sequences
 
-constexpr uint32_t dst_tile_offset = 64;  // 1 tile x 64 rows per tile
-constexpr uint32_t scores_offset = 0;
-constexpr uint32_t indices_offset = scores_offset + dst_tile_offset;
-constexpr uint32_t bias_offset = indices_offset + dst_tile_offset;
-constexpr uint32_t interm_offset = bias_offset + dst_tile_offset;
+constexpr std::uint32_t dst_tile_offset = 64;  // 1 tile x 64 rows per tile
+constexpr std::uint32_t scores_offset = 0;
+constexpr std::uint32_t indices_offset = scores_offset + dst_tile_offset;
+constexpr std::uint32_t bias_offset = indices_offset + dst_tile_offset;
+constexpr std::uint32_t interm_offset = bias_offset + dst_tile_offset;
 
 template <bool is_fp32_dest_acc_en>
 inline void bitonic_topk_load16_single_face() {
@@ -41,7 +42,7 @@ inline void bitonic_topk_load16_single_face() {
     TTI_SFPLOAD(p_sfpu::LREG7, instr_mod_index, ADDR_MOD_3, indices_offset + 12);
 }
 
-template <bool is_fp32_dest_acc_en, uint32_t offset = 0>
+template <bool is_fp32_dest_acc_en, std::uint32_t offset = 0>
 inline void bitonic_topk_load16_concat_indices_single_face() {
     // Load 16 consecutive numbers
     TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, bias_offset + 0 + offset);
@@ -396,7 +397,7 @@ inline void _deepseek_moe_gate_sort_top4_groups() {
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
-inline void _deepseek_moe_gate_top8(uint32_t eps, uint32_t scale) {
+inline void _deepseek_moe_gate_top8(std::uint32_t eps, std::uint32_t scale) {
     constexpr bool idir = false;  // Sort descending order
 
     // Combine and sort 4 groups of 8 values to 2 groups of 8 values
@@ -483,8 +484,38 @@ inline void _deepseek_moe_gate_top8(uint32_t eps, uint32_t scale) {
     TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_3, scores_offset + 4);
 }
 
+// Zero the working LReg set so the gate's junk lanes are deterministic.
+//
+// The topk building blocks are not total in their register use: bitonic_topk_load8_even_cols_*
+// populates only LREG0/1/4/5, while bitonic_top8_ph3_st4_to_1 SFPSWAPs against LREG2/3 and
+// SFPTRANSPs across LREG0-3. Lanes this run never defined therefore reach the full 32-lane
+// SFPSTOREs carrying whatever the previously executed kernel left in the LReg file. That residue
+// is a fixed point once warm, so run 0 (cold) disagrees with runs 1..N and the bit-exact harness
+// reports the op as non-deterministic even though the answer -- row 0, cols 0..k-1 -- is correct.
+// Same root cause as generalized_moe_gate (#52699), which sanitized its *test* rather than the LLK.
+//
+// This makes the junk lanes deterministically 0 instead of prior-kernel state. It does NOT fix the
+// underlying contract: the real fix is to make the load helpers total, i.e. define LREG2/3/6/7
+// before the sort network reads them, so no caller can observe an undefined register. Do that and
+// this function -- and the test-side sanitize in generalized_moe_gate_test.cpp -- become removable.
+//
+// LREG14 is deliberately untouched: on WH the gate uses it to broadcast, which is exactly why the
+// reciprocal init below stays deferred into the top8 fn.
+inline void _dmg_zero_working_lregs() {
+    TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+    TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+    TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
+    TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG3, 0);
+    TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG4, 0);
+    TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG5, 0);
+    TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG6, 0);
+    TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG7, 0);
+    TTI_SFPNOP;
+}
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void _init_deepseek_moe_gate_topk() {
+    _dmg_zero_working_lregs();
     // Note: For BH there is no conflict with reg usage between the gate and reciprocal
     // For WH, since we use reg 14 to broadcast, this would overwrite the recip value, so we init within the top8 fn
     // instead of ahead of time
