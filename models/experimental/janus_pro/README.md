@@ -33,7 +33,9 @@ Notes:
 ## Details
 - The entry point to the model is located at:`models/experimental/janus_pro/tt/janus_pro_e2e_model.py`
 - Batch Size :1
-- Precision: vision tower `bfloat16`, decoder `bfloat8_b` (single fixed config — no separate accuracy/performance precision modes)
+- Precision: decoder `bfloat8_b`. Vision tower: projection weights and matmul outputs `bfloat8_b`,
+  residual stream and all biases `bfloat16`, patch embedding `bfloat16` (it runs once per image).
+  Single fixed config — no separate accuracy/performance precision modes.
 - Image pre-processing is performed using PyTorch / the HF processor on host (384×384) before passing to the on-device vision model.
 
 ## Performance
