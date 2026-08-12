@@ -182,6 +182,133 @@ auto matmul(const ComputeBlock& a, const ComputeBlock& b) {
     return matmul<Geometry>(as_node(a), as_node(b));
 }
 
+template <int thread>
+struct NocAsyncReadTx {
+    explicit NocAsyncReadTx(const Storage& storage) : cb_id(storage.cb_id), num_tiles(storage.num_tiles) {}
+    NocAsyncReadTx(int cb_id, int num_tiles) : cb_id(cb_id), num_tiles(num_tiles) {}
+
+    NocAsyncReadTx(const NocAsyncReadTx&) = delete;
+    NocAsyncReadTx& operator=(const NocAsyncReadTx&) = delete;
+    NocAsyncReadTx(NocAsyncReadTx&&) = delete;
+    NocAsyncReadTx& operator=(NocAsyncReadTx&&) = delete;
+
+#if defined(IS_DM_THREAD) && IS_DM_THREAD && defined(ASSERT_ENABLED) && ASSERT_ENABLED
+    ~NocAsyncReadTx() { ASSERT(waited); }
+#endif
+
+    Block wait() const {
+#if defined(IS_DM_THREAD) && IS_DM_THREAD
+        if constexpr (thread == TT_DM_THREAD_ID) {
+            noc_read_barrier();
+            cb_push(cb_id, num_tiles);
+        }
+#if defined(IS_DM_THREAD) && IS_DM_THREAD && defined(ASSERT_ENABLED) && ASSERT_ENABLED
+        waited = true;
+#endif
+#endif
+        return Block(cb_id, num_tiles);
+    }
+
+    int cb_id;
+    int num_tiles;  // This could eventually be N dimensional (maybe via template params?)
+
+#if defined(IS_DM_THREAD) && IS_DM_THREAD && defined(ASSERT_ENABLED) && ASSERT_ENABLED
+    mutable bool waited = false;
+#endif
+};
+
+template <int thread>
+struct NocAsyncWriteTx {
+    explicit NocAsyncWriteTx(const Storage& storage) : cb_id(storage.cb_id), num_tiles(storage.num_tiles) {}
+    NocAsyncWriteTx(int cb_id, int num_tiles) : cb_id(cb_id), num_tiles(num_tiles) {}
+
+    NocAsyncWriteTx(const NocAsyncWriteTx&) = delete;
+    NocAsyncWriteTx& operator=(const NocAsyncWriteTx&) = delete;
+    NocAsyncWriteTx(NocAsyncWriteTx&&) = delete;
+    NocAsyncWriteTx& operator=(NocAsyncWriteTx&&) = delete;
+
+    ~NocAsyncWriteTx() {
+#if defined(IS_DM_THREAD) && IS_DM_THREAD
+        if constexpr (thread == TT_DM_THREAD_ID) {
+            noc_writes_flushed();
+            cb_pop(cb_id, num_tiles);
+        }
+#endif
+    }
+
+    void wait() const {
+#if defined(IS_DM_THREAD) && IS_DM_THREAD
+        if constexpr (thread == TT_DM_THREAD_ID) {
+            noc_write_barrier();
+        }
+#endif
+    }
+
+    int cb_id;
+    int num_tiles;  // This could eventually be N dimensional (maybe via template params?)
+};
+
+// A core-to-core copy has both halves: a local source Block to release and a
+// destination Storage to publish. It therefore combines the two handles above --
+// the destination follows the read rule (explicit wait(), because a consumer
+// must know the data has arrived) and the source follows the write rule (the
+// destructor releases it, so there is nothing to forget).
+//
+// `SrcIsLocal` is true when this core's L1 is the data source, i.e. for a push
+// to a peer. Then the NOC has to have finished reading it before the pop, so the
+// destructor flushes first. For a pull, the source is the peer's L1 and the
+// local Block is only a handle, so a bare pop is right.
+template <int thread, bool SrcIsLocal>
+struct NocAsyncCopyTx {
+    NocAsyncCopyTx(const Storage& dst, const Block& src) :
+        dst_cb(dst.cb_id), dst_tiles(dst.num_tiles), src_cb(src.cb_id), src_tiles(src.num_tiles) {}
+
+    NocAsyncCopyTx(const NocAsyncCopyTx&) = delete;
+    NocAsyncCopyTx& operator=(const NocAsyncCopyTx&) = delete;
+    NocAsyncCopyTx(NocAsyncCopyTx&&) = delete;
+    NocAsyncCopyTx& operator=(NocAsyncCopyTx&&) = delete;
+
+    ~NocAsyncCopyTx() {
+#if defined(IS_DM_THREAD) && IS_DM_THREAD
+        if constexpr (thread == TT_DM_THREAD_ID) {
+            if constexpr (SrcIsLocal) {
+                noc_writes_flushed();
+            }
+            cb_pop(src_cb, src_tiles);
+        }
+#if defined(ASSERT_ENABLED) && ASSERT_ENABLED
+        ASSERT(waited);
+#endif
+#endif
+    }
+
+    Block wait() const {
+#if defined(IS_DM_THREAD) && IS_DM_THREAD
+        if constexpr (thread == TT_DM_THREAD_ID) {
+            if constexpr (SrcIsLocal) {
+                noc_write_barrier();
+            } else {
+                noc_read_barrier();
+            }
+            cb_push(dst_cb, dst_tiles);
+        }
+#if defined(ASSERT_ENABLED) && ASSERT_ENABLED
+        waited = true;
+#endif
+#endif
+        return Block(dst_cb, dst_tiles);
+    }
+
+    int dst_cb;
+    int dst_tiles;
+    int src_cb;
+    int src_tiles;
+
+#if defined(IS_DM_THREAD) && IS_DM_THREAD && defined(ASSERT_ENABLED) && ASSERT_ENABLED
+    mutable bool waited = false;
+#endif
+};
+
 // ---------------------------------------------------------------------------
 // Data movement. Each is pinned to a DM thread by its `thread` argument, and
 // compiles away entirely on every other thread.
@@ -193,7 +320,7 @@ auto matmul(const ComputeBlock& a, const ComputeBlock& b) {
 // The accessor comes from make_accessor(); on the compute projection that is a
 // NullAccessor, since a real one cannot be built on a TRISC.
 template <int thread, typename Accessor>
-Block noc_load(const Storage& storage, const Accessor& acc, int block_idx) {
+NocAsyncReadTx<thread> noc_load(const Storage& storage, const Accessor& acc, int block_idx) {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
         cb_reserve(storage.cb_id, storage.num_tiles);
@@ -204,19 +331,17 @@ Block noc_load(const Storage& storage, const Accessor& acc, int block_idx) {
             noc_read_page(acc, first + static_cast<uint32_t>(p), l1, bytes);
             l1 += bytes;
         }
-        noc_read_barrier();
-        cb_push(storage.cb_id, storage.num_tiles);
     }
 #else
     (void)acc;
     (void)block_idx;
 #endif
-    return Block(storage);
+    return NocAsyncReadTx<thread>(storage);
 }
 
 // Drains a Block to a tensor. Takes the Block by value: this call consumes it.
 template <int thread, typename Accessor>
-void noc_store(Block block, const Accessor& acc, int block_idx) {
+NocAsyncWriteTx<thread> noc_store(Block block, const Accessor& acc, int block_idx) {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
         cb_wait(block.cb_id, block.num_tiles);
@@ -227,14 +352,13 @@ void noc_store(Block block, const Accessor& acc, int block_idx) {
             noc_write_page(acc, first + static_cast<uint32_t>(p), l1, bytes);
             l1 += bytes;
         }
-        noc_write_barrier();
-        cb_pop(block.cb_id, block.num_tiles);
     }
 #else
     (void)block;
     (void)acc;
     (void)block_idx;
 #endif
+    return NocAsyncWriteTx<thread>(block.cb_id, block.num_tiles);
 }
 
 template <int thread, typename Accessor>
@@ -255,7 +379,7 @@ Block noc_load_mcast(const Storage& storage, Mcast mcast, const Accessor& acc, i
 // ---------------------------------------------------------------------------
 
 template <int thread>
-Block noc_read(const Storage& storage, Block block, Coord coord, int offset) {
+NocAsyncCopyTx<thread, /*SrcIsLocal=*/false> noc_read(const Storage& storage, Block block, Coord coord, int offset) {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
         cb_wait(block.cb_id, block.num_tiles);
@@ -264,20 +388,16 @@ Block noc_read(const Storage& storage, Block block, Coord coord, int offset) {
         const uint64_t src =
             noc_addr_on_core(coord.x, coord.y, cb_read_addr(block.cb_id) + static_cast<uint32_t>(offset));
         noc_read_from(src, cb_write_addr(storage.cb_id), bytes * static_cast<uint32_t>(storage.num_tiles));
-        noc_read_barrier();
-        cb_push(storage.cb_id, storage.num_tiles);
-        cb_pop(block.cb_id, block.num_tiles);
     }
 #else
-    (void)block;
     (void)coord;
     (void)offset;
 #endif
-    return Block(storage);
+    return NocAsyncCopyTx<thread, false>(storage, block);
 }
 
 template <int thread>
-Block noc_write(const Storage& storage, Block block, Coord coord, int offset) {
+NocAsyncCopyTx<thread, /*SrcIsLocal=*/true> noc_write(const Storage& storage, Block block, Coord coord, int offset) {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
         cb_wait(block.cb_id, block.num_tiles);
@@ -286,16 +406,12 @@ Block noc_write(const Storage& storage, Block block, Coord coord, int offset) {
         const uint64_t dst =
             noc_addr_on_core(coord.x, coord.y, cb_write_addr(storage.cb_id) + static_cast<uint32_t>(offset));
         noc_write_to(cb_read_addr(block.cb_id), dst, bytes * static_cast<uint32_t>(block.num_tiles));
-        noc_write_barrier();
-        cb_push(storage.cb_id, storage.num_tiles);
-        cb_pop(block.cb_id, block.num_tiles);
     }
 #else
-    (void)block;
     (void)coord;
     (void)offset;
 #endif
-    return Block(storage);
+    return NocAsyncCopyTx<thread, true>(storage, block);
 }
 
 }  // namespace unified

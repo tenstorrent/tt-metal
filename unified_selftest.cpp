@@ -79,8 +79,9 @@ inline uint64_t noc_addr_on_core(int x, int y, uint32_t addr) {
 }
 inline void noc_read_from(uint64_t, uint32_t, uint32_t) { T2("noc_read_from()"); }
 inline void noc_write_to(uint32_t, uint64_t, uint32_t) { T2("noc_write_to()"); }
-inline void noc_read_barrier() {}
-inline void noc_write_barrier() {}
+inline void noc_read_barrier() { T2("noc_read_barrier()"); }
+inline void noc_writes_flushed() { T2("noc_writes_flushed()"); }
+inline void noc_write_barrier() { T2("noc_write_barrier()"); }
 inline void relu_from_pack(int base, int count) {
     T("  relu_from_pack(dst" + n(base) + "..dst" + n(base + count - 1) + ")  [replaces tile_regs_wait]");
 }
@@ -91,6 +92,11 @@ inline void matmul_block(int in0, int in1, int h, int w, int kt) {
 inline void pack_block(int dst, int cb, int count) {
     T("  pack_block(dst" + n(dst) + ".." + n(dst + count - 1) + " -> cb" + n(cb) + ")");
 }
+
+#if defined(ASSERT_ENABLED) && ASSERT_ENABLED
+#include <cassert>
+#define ASSERT(x) assert(x)
+#endif
 
 #define TT_UNIFIED_CUSTOM_BINDING 1
 #include "unified.hpp"
@@ -118,8 +124,8 @@ void example_eltwise() {
     Storage out_storage(3, 2);
 
     for (int i = 0; i < 1; ++i) {
-        ComputeBlock lhs = noc_load<0>(lhs_storage, t0, i);
-        ComputeBlock rhs = noc_load<1>(rhs_storage, t1, i);
+        ComputeBlock lhs = noc_load<0>(lhs_storage, t0, i).wait();
+        ComputeBlock rhs = noc_load<1>(rhs_storage, t1, i).wait();
 
         ComputeBlock tmp = tmp_storage.store(lhs + rhs);
 
@@ -135,13 +141,26 @@ void example_unary() {
     Storage in_storage(0, 2);
     Storage out_storage(3, 2);
 
-    ComputeBlock x = noc_load<1>(in_storage, t0, 0);
+    ComputeBlock x = noc_load<1>(in_storage, t0, 0).wait();
     noc_store<0>(out_storage.store(x.exp()), t2, 0);
 }
 
-// NOTE: the two-stage reduction with a core-to-core hop is deferred until
-// noc_read/noc_write have a correct peer handshake -- see the TODO in
-// unified.hpp. A local cb_push cannot update a remote core's CB pointers.
+// Core-to-core hop, exercising NocAsyncCopyTx. The peer handshake is still not
+// right (see the TODO in unified.hpp) -- this only checks that the local half of
+// the protocol balances and that the handle's two halves fire.
+void example_peer_hop() {
+    auto t0 = make_accessor(FakeArgs{0}, 0);
+    auto t2 = make_accessor(FakeArgs{2}, 0);
+    Coord peer{0, 0};
+    Storage in_storage(0, 2);
+    Storage hop_storage(1, 2);
+    Storage out_storage(3, 2);
+
+    ComputeBlock x = noc_load<1>(in_storage, t0, 0).wait();
+    Block staged = hop_storage.store(x.exp());
+    ComputeBlock y = noc_write<0>(out_storage, std::move(staged), peer, 0).wait();
+    noc_store<0>(out_storage.store(y.exp()), t2, 0);
+}
 
 // The FPU path: matmul with a fused relu epilogue, then the SFPU path consuming
 // its result out of an intermediate Storage.
@@ -157,8 +176,8 @@ void example_matmul_relu() {
     // out_subblock 2x2 = 4 DST tiles, k-dim 2, 2 inner blocks
     using Geom = MatmulGeometry</*h=*/2, /*w=*/2, /*in0_block_w=*/2, /*num_blocks=*/2>;
 
-    ComputeBlock a = noc_load<0>(a_storage, t0, 0);
-    ComputeBlock b = noc_load<1>(b_storage, t1, 0);
+    ComputeBlock a = noc_load<0>(a_storage, t0, 0).wait();
+    ComputeBlock b = noc_load<1>(b_storage, t1, 0).wait();
 
     // relu folds into the matmul's pack-side epilogue rather than wrapping it
     ComputeBlock mm = mm_storage.store(relu(matmul<Geom>(a, b)));
@@ -222,6 +241,8 @@ int main() {
     ok &= report("unary");
     tt::unified::example_matmul_relu();
     ok &= report("matmul_relu");
+    tt::unified::example_peer_hop();
+    ok &= report("peer_hop");
     printf("\n%s: %s\n", TT_LABEL, ok ? "ALL BALANCED" : "FAILURES PRESENT");
     return ok ? 0 : 1;
 }
