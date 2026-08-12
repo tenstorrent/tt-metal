@@ -74,6 +74,10 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
              std::pair{&in.tap2, "tap2"},
              std::pair{&in.tap3, "tap3"}}) {
         TT_FATAL(
+            tensor->logical_shape()[-1] == channels,
+            "qkv_causal_conv1d_silu: {} last dimension must equal Q+K+V",
+            name);
+        TT_FATAL(
             tensor->logical_volume() == channels, "qkv_causal_conv1d_silu: {} logical volume must equal Q+K+V", name);
     }
     TT_FATAL(
