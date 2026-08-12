@@ -24,6 +24,49 @@ function(useCcache)
         message(STATUS "ccache compression: defaulting to zstd level 3 (override with CCACHE_COMPRESS env var)")
     endif()
 
+    # Opt-in distributed compilation via Icecream, for dev environments with spare
+    # compute nodes (e.g. exabox). Off everywhere else by default -- including CI --
+    # since it only activates when TT_ICECC_SCHEDULER_HOST is set, which we expect
+    # dev environments to export globally (e.g. from the exabox image), never
+    # something this repo defaults on its own.
+    set(TT_ICECC_SCHEDULER_HOST
+        $ENV{TT_ICECC_SCHEDULER_HOST}
+        CACHE STRING "Icecream scheduler host; set to enable distributed ccache builds"
+    )
+    if(TT_ICECC_SCHEDULER_HOST)
+        find_program(ICECC_EXECUTABLE icecc)
+        if(NOT ICECC_EXECUTABLE)
+            message(WARNING "TT_ICECC_SCHEDULER_HOST is set but icecc was not found -- falling back to plain ccache")
+        else()
+            # Icecream ships the compiler itself to remote nodes, but the bundle is built
+            # per-toolchain -- and per-ABI for clang's libc++/libstdc++ split -- via
+            # icecc-create-env. Map the selected toolchain to its pre-built env tarball
+            # rather than relying on icecc's slower/less predictable auto-environment-creation.
+            if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND ENABLE_LIBCXX)
+                set(_tt_icecc_env_name "clang-20-libcxx")
+            elseif(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+                set(_tt_icecc_env_name "clang-20-libstdcxx")
+            elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+                set(_tt_icecc_env_name "gcc-${CMAKE_CXX_COMPILER_VERSION}")
+            endif()
+
+            set(TT_ICECC_VERSION
+                "/opt/tenstorrent/icecc-envs/${_tt_icecc_env_name}.tar.gz"
+                CACHE STRING "Icecream toolchain env tarball for the selected compiler"
+            )
+            if(NOT EXISTS "${TT_ICECC_VERSION}")
+                message(WARNING "Icecream env tarball not found at ${TT_ICECC_VERSION} -- falling back to plain ccache")
+            else()
+                list(APPEND CCACHE_ENV
+                    "CCACHE_PREFIX=${ICECC_EXECUTABLE}"
+                    "ICECC_VERSION=${TT_ICECC_VERSION}"
+                    "ICECC_SCHEDULER_HOST=${TT_ICECC_SCHEDULER_HOST}"
+                )
+                message(STATUS "Icecream distributed compilation enabled (scheduler: ${TT_ICECC_SCHEDULER_HOST}, env: ${_tt_icecc_env_name})")
+            endif()
+        endif()
+    endif()
+
     if(CMAKE_GENERATOR MATCHES "Ninja")
         foreach(lang IN ITEMS C CXX)
             set(CMAKE_${lang}_COMPILER_LAUNCHER
