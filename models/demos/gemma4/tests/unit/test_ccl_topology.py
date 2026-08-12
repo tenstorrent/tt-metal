@@ -54,11 +54,18 @@ def test_ccl_topology_ring_on_bh_8_device_mesh(monkeypatch):
     assert default_ccl_topology(_FakeMesh(8)) == ttnn.Topology.Ring
 
 
-def test_ccl_topology_linear_on_wh_8_device_mesh(monkeypatch):
-    """WH T3K 1x8: keep Linear — Ring regresses 26B-A4B full-model PCC < 0.76."""
+def test_ccl_topology_ring_on_wh_8_device_mesh_dense(monkeypatch):
+    """WH T3K 1x8 dense (31B): Ring is the decode-swept default (is_moe=False)."""
     monkeypatch.delenv("GEMMA4_CCL_TOPOLOGY", raising=False)
     monkeypatch.setattr("models.demos.gemma4.tt.ccl.is_blackhole", lambda: False)
-    assert default_ccl_topology(_FakeMesh(8)) == ttnn.Topology.Linear
+    assert default_ccl_topology(_FakeMesh(8), is_moe=False) == ttnn.Topology.Ring
+
+
+def test_ccl_topology_linear_on_wh_8_device_mesh_moe(monkeypatch):
+    """WH T3K 1x8 MoE (26B-A4B): Ring drops full-model PCC; keep Linear."""
+    monkeypatch.delenv("GEMMA4_CCL_TOPOLOGY", raising=False)
+    monkeypatch.setattr("models.demos.gemma4.tt.ccl.is_blackhole", lambda: False)
+    assert default_ccl_topology(_FakeMesh(8), is_moe=True) == ttnn.Topology.Linear
 
 
 def test_ccl_topology_env_override_beats_device_count(monkeypatch):
@@ -402,6 +409,46 @@ def test_sharded_norm_env_kill_switches(monkeypatch):
     assert not sharded_norm_enabled()
     monkeypatch.setenv("GEMMA4_NORM_KEEP_SHARDED", "false")
     assert not norm_keep_sharded_enabled()
+
+
+def test_prefill_mlp_island_gates(monkeypatch):
+    """Short dense prefill keeps the LN island; MoE / batch / long seq / env opt out."""
+    from models.demos.gemma4.tt.rms_norm import (
+        _PREFILL_ISLAND_MAX_HEIGHT,
+        _SHARDED_NORM_MAX_HEIGHT,
+        prefill_mlp_island_enabled,
+    )
+
+    monkeypatch.delenv("GEMMA4_PREFILL_ISLAND", raising=False)
+    monkeypatch.delenv("GEMMA4_SHARDED_NORM", raising=False)
+    monkeypatch.delenv("GEMMA4_NORM_KEEP_SHARDED", raising=False)
+    assert prefill_mlp_island_enabled(96)
+    assert prefill_mlp_island_enabled(_PREFILL_ISLAND_MAX_HEIGHT)
+    assert not prefill_mlp_island_enabled(_PREFILL_ISLAND_MAX_HEIGHT + 32)
+    assert not prefill_mlp_island_enabled(_SHARDED_NORM_MAX_HEIGHT)
+    assert not prefill_mlp_island_enabled(96, batch_size=2)
+    assert not prefill_mlp_island_enabled(96, enable_moe=True)
+    monkeypatch.setenv("GEMMA4_PREFILL_ISLAND", "0")
+    assert not prefill_mlp_island_enabled(96)
+
+
+def test_ccl_sync_rs_height_aware_defaults(monkeypatch):
+    """Decode/short prefill stay w=1,c=1; T3K chunk height 2048 switches to w=2,c=2."""
+    from models.demos.gemma4.tt.ccl import ccl_sync_rs_chunks, ccl_sync_rs_workers
+
+    monkeypatch.delenv("GEMMA4_CCL_SYNC_RS_WORKERS", raising=False)
+    monkeypatch.delenv("GEMMA4_CCL_SYNC_RS_CHUNKS", raising=False)
+    assert ccl_sync_rs_workers() == 1
+    assert ccl_sync_rs_chunks() == 1
+    assert ccl_sync_rs_workers(32) == 1
+    assert ccl_sync_rs_workers(96) == 1
+    assert ccl_sync_rs_workers(1024) == 1
+    assert ccl_sync_rs_workers(2048) == 2
+    assert ccl_sync_rs_chunks(2048) == 2
+    monkeypatch.setenv("GEMMA4_CCL_SYNC_RS_WORKERS", "1")
+    monkeypatch.setenv("GEMMA4_CCL_SYNC_RS_CHUNKS", "1")
+    assert ccl_sync_rs_workers(2048) == 1
+    assert ccl_sync_rs_chunks(2048) == 1
 
 
 def test_weight_cache_path_qualified_by_mesh(tmp_path, monkeypatch):
