@@ -823,6 +823,100 @@ def _check_hf_fallback(src: str) -> list:
     return hits
 
 
+_STACK_PROBE = """
+import json, sys
+import ttnn
+from models.experimental.perf_automation.cc_optimize._op_sig_probe import find_all_stacks
+sys.path.insert(0, {demo!r})
+from tt.pipeline import build_pipeline
+dev = ttnn.open_device(device_id=0, l1_small_size=24576)
+try:
+    pipe = build_pipeline(dev, layers=2)
+    try:
+        import torch as _t
+        _m = _t.nn.Module
+    except Exception:
+        _m = ()
+    n = 0
+    for st in find_all_stacks(pipe) or []:
+        blocks = getattr(st, "stack", None) or []
+        if not blocks:
+            continue
+        head = blocks[0]
+        if _m and isinstance(head, _m):
+            continue          # HF reference weights, never dispatched
+        if not callable(head):
+            continue          # KV slots and other data-only lists
+        n += 1
+    print("STACKS=%d" % n)
+finally:
+    try: ttnn.close_device(dev)
+    except Exception: pass
+"""
+
+
+def _block_stack_gate(demo_dir: Path, model_id: str, timeout_s: int):
+    """Every section the config declares must be visible to the profiler's walk.
+
+    Two independent facts, neither of which needs a naming convention or a marker in the model:
+
+      * the HF config declares a block depth PER SECTION (transformers has already parsed it), and
+      * building the model and walking it says how many stacks are actually discoverable.
+
+    Fewer stacks than sections means structure is hidden, and hidden structure cannot be sized,
+    capped or attributed -- it is inferred instead, silently, for the whole life of every run.
+
+    The build runs in a SUBPROCESS at layers=2: a shallow build is seconds, and a model that dies
+    building shallow is itself a finding (Voxtral crashed in the argmax reshape at depth 2 because
+    its aggregate sub-block was left holding zero layers). Either way, this command must not be taken
+    down by the model it is checking.
+
+    Returns a reason string, or None when the model is fine or the check could not run.
+    """
+    try:
+        from models.experimental.perf_automation.agent.layer_depth import declared_section_depths
+
+        sections = [int(d) for d in declared_section_depths(model_id=model_id, model_dir=str(demo_dir)) if int(d) > 0]
+    except Exception:  # noqa: BLE001
+        return None
+    if len(sections) < 2:
+        return None  # single-section model: one stack is the whole story
+    code = _STACK_PROBE.format(demo=str(demo_dir))
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            timeout=max(300, int(timeout_s or 0)),
+            cwd=str(demo_dir),
+        )
+    except Exception as exc:  # noqa: BLE001 -- an unrunnable probe is not a model defect
+        return None
+    found = None
+    for line in (proc.stdout or "").splitlines():
+        if line.startswith("STACKS="):
+            try:
+                found = int(line.split("=", 1)[1])
+            except ValueError:
+                pass
+    if found is None:
+        tail = ((proc.stderr or "") + (proc.stdout or "")).strip().splitlines()[-3:]
+        return (
+            "G6 block stacks: the model could not be BUILT at layers=2 (a shallow build is what "
+            "every profile uses), so its stacks cannot be checked. Capping must leave a runnable "
+            "model, not a fragment. tail: %s" % " | ".join(t[:120] for t in tail)
+        )
+    if found < len(sections):
+        return (
+            "G6 block stacks: the config declares %d sections (depths %s) but only %d block "
+            "stack(s) are discoverable. Hold EACH repeated stack as a list of same-typed blocks, or "
+            "give differing per-layer wrappers a COMMON BASE. A stack the walk cannot see is never "
+            "capped, never marked, and its depth is inferred for the whole run."
+            % (len(sections), ", ".join(str(d) for d in sections[:4]), found)
+        )
+    return None
+
+
 def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
     """Model-agnostic gate runner: G1 native, G2/G3 (run tests/e2e), G4 demo/ structure. Returns (ok, reasons)."""
     reasons = []
@@ -1138,6 +1232,25 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
         record_trace_verdict(demo_dir, _tg)
     except Exception as _tge:  # noqa: BLE001
         print("[emit-e2e] trace-gate evaluation skipped: %s" % _tge)
+
+    # ---- G6: the profiler can SEE every repeated stack -------------------------------------
+    # PROSE IN THIS FILE IS NOT A GUARANTEE. The spec above tells the author to cap every repeated
+    # stack and to keep each one discoverable, and Voxtral-Mini-3B was emitted violating both: its
+    # per-layer wrappers shared no base, so find_all_stacks saw ONE stack for a three-section model,
+    # full_blocks came back 0, the 2/4/8/16 ladder was climbed to recover a depth the markers give
+    # free, and a single depth capped the text decoder while both 32-layer audio encoders ran whole.
+    # That cost a day, and every gate in this file passed the entire time.
+    #
+    # The HF config is the witness and needs no device: it declares a depth per section, already
+    # parsed by transformers. Building the model at a shallow cap and walking it answers the other
+    # half -- how many stacks are actually visible -- in seconds, because a capped build is cheap
+    # (measured 7.1s on Voxtral at layers=2, against 30+ minutes at full depth).
+    #
+    # Failing here is the point. A model that reaches optimize undiscoverable is a defect in what
+    # THIS command just produced, and catching it now costs seconds instead of an hour of profiling.
+    _stack_reason = _block_stack_gate(demo_dir, os.environ.get("E2E_MODEL_ID", ""), timeout_s)
+    if _stack_reason:
+        reasons.append(_stack_reason)
 
     return (len(reasons) == 0), reasons
 
