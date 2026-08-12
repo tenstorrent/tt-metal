@@ -46,17 +46,13 @@ void kernel_main() {
 
     Noc noc;
     DataflowBuffer dfb_in0(dfb::in0);
-    DataflowBuffer batch_dfb(dfb::batch);
-
-    volatile tt_l1_ptr int* addr_ptr = nullptr;
+    // Private staging area for this core's copy of the batch ids. `volatile` because the NoC, not
+    // the compiler, is what writes them; the read barrier below is not a compiler barrier.
+    Scratchpad<volatile int32_t> batch_stage(scratch::batch);
 
     if (batch_id_size > 0) {
-        batch_dfb.reserve_back(1);
-        uint32_t l1_write_addr = batch_dfb.get_write_ptr();
-        noc.async_read(batchAddr, batch_dfb, (batch_id_size << 2), {.page_id = 0}, {.offset_bytes = 0});
+        noc.async_read(batchAddr, batch_stage, (batch_id_size << 2), {.page_id = 0}, {.offset_bytes = 0});
         noc.async_read_barrier();
-        batch_dfb.push_back(1);
-        addr_ptr = reinterpret_cast<volatile tt_l1_ptr int*>(l1_write_addr);
     }
 
     if constexpr (IS_SHARD_LOCAL) {
@@ -91,9 +87,9 @@ void kernel_main() {
             // indices give the last-listed value priority.
             bool replace_b = false;
             uint32_t replace_src = 0;
-            if (addr_ptr) {
+            if (batch_id_size > 0) {
                 for (uint32_t k = 0; k < batch_id_size; ++k) {
-                    if (static_cast<uint32_t>(addr_ptr[k]) == b_global) {
+                    if (static_cast<uint32_t>(batch_stage[k]) == b_global) {
                         replace_b = true;
                         replace_src = k;
                     }
@@ -173,7 +169,7 @@ void kernel_main() {
             uint32_t batch_to_replace_id = 0;
             if (batch_id_size > 0) {
                 for (uint32_t i = 0; i < batch_id_size; ++i) {
-                    if (static_cast<uint32_t>(addr_ptr[i]) == my_batch_id) {
+                    if (static_cast<uint32_t>(batch_stage[i]) == my_batch_id) {
                         replace_batch = true;
                         batch_to_replace_id = i;
                     }
@@ -238,9 +234,9 @@ void kernel_main() {
 
                 bool replace_batch = false;
                 uint32_t batch_to_replace_id = 0;
-                if (addr_ptr) {
+                if (batch_id_size > 0) {
                     for (uint32_t k = 0; k < batch_id_size; ++k) {
-                        if (static_cast<uint32_t>(addr_ptr[k]) == my_slice) {
+                        if (static_cast<uint32_t>(batch_stage[k]) == my_slice) {
                             replace_batch = true;
                             batch_to_replace_id = k;
                         }

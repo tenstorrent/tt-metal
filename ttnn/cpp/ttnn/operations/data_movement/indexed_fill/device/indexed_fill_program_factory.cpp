@@ -33,7 +33,7 @@ constexpr uint32_t MODE_SHARD_LOCAL_SHARDED_B = 3;
 const KernelSpecName IF_READER{"if_reader"};
 const KernelSpecName IF_WRITER{"if_writer"};
 const DFBSpecName IF_DATA_DFB{"if_data"};
-const DFBSpecName IF_BATCH_DFB{"if_batch"};
+const ScratchpadSpecName IF_BATCH_SCRATCH{"if_batch"};
 const TensorParamName IF_BATCH_IDS{"if_batch_ids"};
 const TensorParamName IF_INPUT_A{"if_input_a"};
 const TensorParamName IF_INPUT_B{"if_input_b"};
@@ -286,17 +286,12 @@ ttnn::device_operation::ProgramArtifacts IndexedFillProgramFactory::create_progr
     }
     spec.dataflow_buffers.push_back(data_dfb);
 
-    // Batch DFB: staging buffer for the `b` uint32 batch ids. Touched only by the reader,
-    // which fills it (reserve_back / push_back) and reads the staged indices straight back
-    // through a raw SRAM pointer (get_write_ptr) rather than a FIFO consume. It is therefore a
-    // single-ended buffer, so bind the reader as both PRODUCER and CONSUMER (self-loop). The
-    // data format is inert here (the buffer is filled/read by raw byte access at a byte page
-    // size), so the value set for it is cosmetic.
-    spec.dataflow_buffers.push_back(DataflowBufferSpec{
-        .unique_id = IF_BATCH_DFB,
-        .entry_size = batch_page_size,
-        .num_entries = 2,
-        .data_format_metadata = dfb_data_format,
+    // Batch-id scratchpad: private SRAM staging area for the `b` uint32 batch ids. The reader
+    // NOC-reads the ids into it once and then indexes them directly; nothing else touches it, so
+    // it carries no FIFO semantics. Two `batch_page_size` slots; the reader stages into the first.
+    spec.scratchpads.push_back(ScratchpadSpec{
+        .unique_id = IF_BATCH_SCRATCH,
+        .size_per_node = batch_page_size * 2,
     });
 
     const auto arch = input_a.device()->arch();
@@ -313,14 +308,10 @@ ttnn::device_operation::ProgramArtifacts IndexedFillProgramFactory::create_progr
             {
                 DFBBinding{
                     .dfb_spec_name = IF_DATA_DFB, .accessor_name = "in0", .endpoint_type = DFBEndpointType::PRODUCER},
-                DFBBinding{
-                    .dfb_spec_name = IF_BATCH_DFB,
-                    .accessor_name = "batch",
-                    .endpoint_type = DFBEndpointType::PRODUCER},
-                DFBBinding{
-                    .dfb_spec_name = IF_BATCH_DFB,
-                    .accessor_name = "batch",
-                    .endpoint_type = DFBEndpointType::CONSUMER},
+            },
+        .scratchpad_bindings =
+            {
+                ScratchpadBinding{.scratchpad_spec_name = IF_BATCH_SCRATCH, .accessor_name = "batch"},
             },
         .tensor_bindings =
             {
