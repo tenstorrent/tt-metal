@@ -440,7 +440,7 @@ def test_sampling_output_is_allocated_before_capture_with_device_shape(monkeypat
         "from_torch",
         lambda tensor, **kwargs: seen.append((tensor, kwargs)) or "device-output",
     )
-    monkeypatch.setattr(prefill_module.ttnn, "ReplicateTensorToMesh", lambda mesh: "replicate")
+    monkeypatch.setattr(postprocess_module.ttnn, "ReplicateTensorToMesh", lambda mesh: "replicate")
 
     assert runtime.postprocessor.make_sampling_output(1) == "device-output"
     assert tuple(seen[0][0].shape) == (1, 1, 1, 1)
@@ -456,10 +456,10 @@ def test_sampled_token_normalization_converts_only_first_replica(monkeypatch, sh
     first = torch.arange(32, dtype=torch.int32).reshape(shape)
     second = torch.full(shape, 99, dtype=torch.int32)
     converted = []
-    monkeypatch.setattr(prefill_module.ttnn, "Tensor", DistributedTensor)
-    monkeypatch.setattr(prefill_module.ttnn, "get_device_tensors", lambda value: [first, second])
+    monkeypatch.setattr(postprocess_module.ttnn, "Tensor", DistributedTensor)
+    monkeypatch.setattr(postprocess_module.ttnn, "get_device_tensors", lambda value: [first, second])
     monkeypatch.setattr(
-        prefill_module.ttnn,
+        postprocess_module.ttnn,
         "to_torch",
         lambda value: converted.append(value) or value,
     )
@@ -843,14 +843,14 @@ def test_disabled_batched_extract_keeps_batched_forward_and_uses_per_slot_postpr
     )[0]
     hidden = torch.arange(2 * 128, dtype=torch.float32).reshape(1, 1, 256, 1)
     seen = []
-    monkeypatch.setattr(prefill_module.ttnn, "reshape", lambda value, shape: value.reshape(shape))
+    monkeypatch.setattr(postprocess_module.ttnn, "reshape", lambda value, shape: value.reshape(shape))
 
     def post_process_prefill_output(slot_hidden, last_token):
         seen.append((slot_hidden.clone(), last_token))
         return torch.full((1, 1, 32, runtime.config.model.vocab_size), len(seen), dtype=torch.float32)
 
     runtime.config.model.post_process_prefill_output = post_process_prefill_output
-    monkeypatch.setattr(prefill_module.ttnn, "untilize", lambda logits, **kwargs: logits)
+    monkeypatch.setattr(postprocess_module.ttnn, "untilize", lambda logits, **kwargs: logits)
 
     outputs = runtime.postprocessor.finish_regular_prefill(
         prepared,
@@ -946,7 +946,7 @@ def test_active_15_and_16_share_complete_program_and_trace_signatures(monkeypatc
     assert partial.program_signatures == full.program_signatures
     assert partial.trace_signature == full.trace_signature
 
-    monkeypatch.setattr(prefill_module.ttnn, "synchronize_device", lambda mesh: None)
+    monkeypatch.setattr(postprocess_module.ttnn, "synchronize_device", lambda mesh: None)
     compiler = ProgramCompiler("mesh", lambda: object())
     first = compiler.compile(partial.program_signatures[0], lambda _: torch.zeros(1))
     second = compiler.compile(
@@ -1189,7 +1189,7 @@ def test_chunk_trace_refresh_updates_token_start_tables_rotary_and_preserves_b6_
     runtime.config.model.prepare_prefill_rot_mats = lambda positions: ("new-cos", "new-sin")
     rotary_copies = []
     monkeypatch.setattr(
-        prefill_module.ttnn,
+        postprocess_module.ttnn,
         "copy",
         lambda *, input_a, input_b: rotary_copies.append((input_a, input_b)),
     )
@@ -1329,7 +1329,7 @@ def test_cached_chunk_trace_logits_preserve_tile_for_logical_last_token_assembly
         return torch.arange(rows, dtype=torch.float32).reshape(1, 1, rows, 1).expand(-1, -1, -1, 8)
 
     runtime.config.model.post_process_prefill_output = postprocess
-    monkeypatch.setattr(prefill_module.ttnn, "untilize", lambda logits, **kwargs: logits)
+    monkeypatch.setattr(postprocess_module.ttnn, "untilize", lambda logits, **kwargs: logits)
     workspace = PrefillReplayState(
         position_inputs=PrefillPositionInputs("slice-start", "slice-end", "row-index"),
         kpt=None,
@@ -1374,7 +1374,7 @@ def test_static_q128_single_topk_uses_tile_output_and_exact_host_row(monkeypatch
         return value[:, :, start[2] : end[2], :]
 
     sampled = []
-    monkeypatch.setattr(prefill_module.ttnn, "slice", slice_logits)
+    monkeypatch.setattr(postprocess_module.ttnn, "slice", slice_logits)
     monkeypatch.setattr(
         runtime.postprocessor,
         "sample_device",
@@ -1473,8 +1473,8 @@ def test_prefill_sampling_logits_are_fit_to_runtime_sampling_rows(monkeypatch):
             dim=2,
         )
 
-    monkeypatch.setattr(prefill_module.ttnn, "slice", slice_logits)
-    monkeypatch.setattr(prefill_module.ttnn, "pad", pad_logits)
+    monkeypatch.setattr(postprocess_module.ttnn, "slice", slice_logits)
+    monkeypatch.setattr(postprocess_module.ttnn, "pad", pad_logits)
 
     assert fit_prefill_sampling_logits(exact, 32) is exact
     assert fit_prefill_sampling_logits(too_many, 32).shape[2] == 32
@@ -1658,7 +1658,7 @@ def test_regular_batched_step_and_finalization_preserve_exact_model_contract(mon
     runtime.config.model.post_process_batched_prefill_output = post_process_batched_prefill_output
     # ttnn.untilize is overloaded; this test intentionally records backend options.
     monkeypatch.setattr(
-        prefill_module.ttnn,
+        postprocess_module.ttnn,
         "untilize",
         lambda value, **kwargs: calls.append(("untilize", value, kwargs)) or "output",
     )
@@ -1752,7 +1752,7 @@ def test_batched_postprocess_uses_per_row_last_token_indices_for_mixed_exact_len
         return "logits"
 
     runtime.config.model.post_process_batched_prefill_output = post_process_batched_prefill_output
-    monkeypatch.setattr(prefill_module.ttnn, "untilize", lambda logits, **kwargs: "output")
+    monkeypatch.setattr(postprocess_module.ttnn, "untilize", lambda logits, **kwargs: "output")
 
     assert (
         runtime.postprocessor.finish_regular_prefill(
@@ -1859,12 +1859,12 @@ def test_regular_logits_and_argmax_preserve_operation_order(
     )
     # ttnn.untilize is overloaded; this test only checks operation order.
     monkeypatch.setattr(
-        prefill_module.ttnn,
+        postprocess_module.ttnn,
         "untilize",
         lambda *args, **kwargs: events.append("untilize") or torch.zeros(1, 1, 32, 64),
     )
     monkeypatch.setattr(
-        prefill_module.ttnn,
+        postprocess_module.ttnn,
         "slice",
         lambda *args, **kwargs: events.append("slice") or torch.zeros(1, 1, 1, 64),
     )
@@ -2061,7 +2061,7 @@ def test_prefill_sequence_consumes_planned_chunks_and_releases_intermediate(monk
     )
     # ttnn.untilize is overloaded; this test only verifies its input and output.
     monkeypatch.setattr(
-        prefill_module.ttnn,
+        postprocess_module.ttnn,
         "untilize",
         lambda value, **kwargs: final_output if value is step_outputs[-1] else pytest.fail("wrong final output"),
     )
@@ -2330,7 +2330,7 @@ def test_finalization_failure_releases_every_resource_acquired_before_failure(mo
     runtime.config.model.post_process_prefill_output = postprocess
     monkeypatch.setattr(postprocess_module, "fit_prefill_sampling_logits", pad)
     monkeypatch.setattr(runtime.postprocessor, "sample_device", sample)
-    monkeypatch.setattr(prefill_module.ttnn, "untilize", untilize)
+    monkeypatch.setattr(postprocess_module.ttnn, "untilize", untilize)
     monkeypatch.setattr(runtime, "_release_or_retain_transient", lambda values: released.append(values) or [])
 
     with expect_error(RuntimeError, f"{failure_point} failed"):
@@ -2472,14 +2472,14 @@ def test_single_logits_prefill_uses_static_tile_then_selects_exact_row_before_re
         return torch.ones(1, 1, 32, runtime.config.model.vocab_size)
 
     runtime.config.model.post_process_prefill_output = post_process_prefill_output
-    monkeypatch.setattr(prefill_module.ttnn, "untilize", lambda logits, **kwargs: logits)
+    monkeypatch.setattr(postprocess_module.ttnn, "untilize", lambda logits, **kwargs: logits)
     sliced = []
 
     def slice_output(value, start, end):
         sliced.append((start, end))
         return value[:, :, start[2] : end[2], :]
 
-    monkeypatch.setattr(prefill_module.ttnn, "slice", slice_output)
+    monkeypatch.setattr(postprocess_module.ttnn, "slice", slice_output)
     positions = PrefillPositionInputs("slice-start", "slice-end", "row-index")
     logits = runtime.postprocessor.finish_regular_prefill(prepared, "hidden", None, positions)
 
