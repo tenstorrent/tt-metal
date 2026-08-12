@@ -4,26 +4,27 @@
 """PCC: the Kimi K3 attention-residuals read (`models/demos/deepseek_v3_d_p/tt/attn_res`)
 against the torch oracle, at the per-chip shape prefill actually runs.
 
-Prefill chunks 5120 tokens across the sequence-parallel axis, so every chip sees
-`5120 / sp` rows. On the Galaxy `(8, 4)` that is **640**, and 640 is the only row
-count this file uses — the op's cost and its collective's algorithm both turn on it, and
-a suite parametrized at 64 tokens exercises a reduction production never issues.
-
-Two placements, both sharded:
-
-  * `(2, 4)` — LoudBox. `d` split 4 ways, tokens split 2 ways. TP factor 4 is
-    Galaxy's, so this arm covers the reduction Galaxy runs.
-  * `(8, 4)` — Galaxy. Same TP factor over a wider sequence axis, which the op is
-    indifferent to; it is here to be run on the box, not to add coverage.
+One placement, one shape: `(2, 4)` on a LoudBox, 1280 tokens split 2 ways over the
+sequence axis and `d` split 4 ways over the tensor axis, so every chip holds **640**
+rows and `d/4 = 1792` columns. That row count is prefill's own — it chunks 5120 tokens
+across an 8-deep sequence axis on the Galaxy — and the op's cost and its collective's
+algorithm both turn on it, so a suite parametrized at 64 tokens would exercise a
+reduction production never issues. TP factor 4 is Galaxy's, which is what makes this
+box's reduction the same reduction Galaxy runs.
 
 No single-device arm. The read's exchange is what its one dispatch is built around, so
 `TtAttnRes` rejects `tp_factor == 1` outright rather than degrading to something the
-model never executes.
+model never executes. No Galaxy `(8, 4)` arm either: it holds the same TP factor over a
+wider sequence axis, which the op is indifferent to, so it costs 32 chips to re-run the
+reduction this arm already covers.
 
-`mesh_device` skips a placement asking for more chips than the host has, so this file
-is inert rather than failing on a runner that cannot hold it — single-card Blackhole
-SKUs collect it and skip both arms. CI runs it on `bh_loudbox`, where `(2, 4)` gates
-and `(8, 4)` skips on chip count.
+The parametrization that remains is over branches, not shapes. `S` selects whether the
+statistics cross the tensor axis folded or unfolded, and the walk covers the seal cadence
+the single reads cannot.
+
+`mesh_device` skips a placement asking for more chips than the host has, so this file is
+inert rather than failing on a runner that cannot hold it — single-card Blackhole SKUs
+collect it and skip. CI runs it on `bh_loudbox`.
 """
 
 import pytest
@@ -32,8 +33,9 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
-from models.demos.deepseek_v3_d_p.reference.attn_res.attn_res import EPS, attn_res
+from models.demos.deepseek_v3_d_p.reference.attn_res.attn_res import EPS, attn_res, attn_res_stack
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
+from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import BLOCK_SIZE, attn_res_stack_split
 
 PCC_GATE = 0.9999
 REL_ERR_GATE = 2e-2
@@ -43,14 +45,20 @@ PER_CHIP_TOKENS = 640
 READ_SITES = 24
 PROJ_STD = 0.02
 
+# Layer 0 has no sealed snapshot so its pre-attention read is skipped, which is why 93
+# layers hold 187 queries and take 186 reads: 92 pre, 93 post, and one model-level read
+# after the stack.
+LAYERS = 93
+READS = 2 * LAYERS
+
+# Scales each module's contribution so 93 rounds of accumulation stay in bf16's range.
+MODULE_SCALE = 0.02
+
 # `ttnn.all_reduce` needs an initialized fabric context on a real mesh; without it the
 # op dies in the control plane rather than returning wrong numbers.
 FABRIC = {"fabric_config": ttnn.FabricConfig.FABRIC_1D}
 
-PLACEMENTS = [
-    pytest.param((2, 4), FABRIC, id="mesh-2x4"),
-    pytest.param((8, 4), FABRIC, id="mesh-8x4"),
-]
+PLACEMENTS = [pytest.param((2, 4), FABRIC, id="mesh-2x4")]
 
 on_placements = pytest.mark.parametrize(
     "mesh_device, device_params", PLACEMENTS, indirect=["mesh_device", "device_params"]
@@ -186,3 +194,84 @@ def test_sequence_axis_communicates_nothing(mesh_device, device_params):
         f"sharding {num_tokens} tokens over the SP axis changes the first {PER_CHIP_TOKENS} outputs "
         f"by up to {delta:.3e} — something is communicating on the sequence axis"
     )
+
+
+def _module_stub(h):
+    """Stands in for an attention or MLP block.
+
+    `accumulate` takes ownership of what a module returns and the layer driver frees `h`
+    afterwards, so a stub cannot hand back `h` itself without a double free. A scalar
+    multiply is the cheapest genuinely-new tensor.
+    """
+    return ttnn.multiply(h, MODULE_SCALE)
+
+
+def _make_stack(op, seed=0):
+    """Everything the walk consumes, on host: the embeddings and all 187 folded queries."""
+    generator = torch.Generator().manual_seed(seed)
+    randn = lambda *shape: torch.randn(*shape, generator=generator)
+
+    hidden_states = randn(PER_CHIP_TOKENS * op.sp_factor, HIDDEN_SIZE)
+    fold = lambda: (1.0 + 0.1 * randn(HIDDEN_SIZE)) * (PROJ_STD * randn(HIDDEN_SIZE))
+    return hidden_states, [fold() for _ in range(LAYERS)], [fold() for _ in range(LAYERS)], fold()
+
+
+@on_placements
+def test_walk_matches_reference(mesh_device, device_params):
+    """All 93 layers driven by `attn_res_stack_split`, against the reference walk.
+
+    A driver that batches the wrong sites, or seals on the wrong layer, is wrong in a way
+    the reads above cannot see: they issue one `inter_block` and index its sites by hand,
+    so they never exercise the seal cadence or the site bookkeeping across a stack. This
+    is the only thing in the repo that does.
+
+    It clears the same PCC gate one read does. 186 rounds of bf16 accumulation cost about
+    as much accuracy as a single read, because every read renormalizes the stream against
+    the sealed set rather than compounding it.
+    """
+    op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS)
+    hidden_states, q_pre, q_post, q_out = _make_stack(op)
+
+    embeddings = ttnn.from_torch(
+        hidden_states.unsqueeze(0).unsqueeze(0),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=op.mesh_device,
+        mesh_mapper=op.stream_mapper,
+    )
+    tt_pre, tt_post = [op.to_query(q) for q in q_pre], [op.to_query(q) for q in q_post]
+    tt_out = op.to_query(q_out)
+
+    # The walk takes ownership of the stream it is handed and frees it, so the embeddings
+    # go in as a clone and stay available for the deallocation sweep below.
+    device_walk = attn_res_stack_split(
+        op,
+        ttnn.clone(embeddings),
+        tt_pre,
+        tt_post,
+        tt_out,
+        [_module_stub] * LAYERS,
+        [_module_stub] * LAYERS,
+        block_size=BLOCK_SIZE,
+    )
+    got = ttnn.to_torch(device_walk, mesh_composer=op.stream_composer).reshape(-1, HIDDEN_SIZE)
+    ttnn.deallocate(device_walk)
+
+    torch_stub = lambda h: h * MODULE_SCALE
+    want = attn_res_stack(
+        hidden_states,
+        q_pre,
+        q_post,
+        q_out,
+        [torch_stub] * LAYERS,
+        [torch_stub] * LAYERS,
+        block_size=BLOCK_SIZE,
+        eps=EPS,
+    )
+
+    pcc = _pcc(got, want)
+    logger.info(f"device vs reference over {LAYERS} layers, {READS} reads: PCC {pcc:.7f}")
+    assert pcc >= PCC_GATE, f"device walk disagrees with the reference: PCC {pcc:.7f} < {PCC_GATE}"
+
+    for tensor in (embeddings, tt_out, *tt_pre, *tt_post):
+        ttnn.deallocate(tensor)
