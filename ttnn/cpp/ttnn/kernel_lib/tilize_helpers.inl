@@ -62,24 +62,6 @@ constexpr bool has_unpack_to_dest_fp32() {
 #endif
 }
 
-template <uint32_t input_dfb, bool pack_default>
-constexpr bool has_unpack_to_dest_fp32() {
-    // Detects whether the CB was configured with UnpackToDestMode::UnpackToDestFp32 in the
-    // program factory. The JIT folds that host-side enum into unpack_dst_format[]: when set,
-    // a Float32 CB keeps Dest-side format Float32 (0); with Default mode it is downgraded to
-    // Tf32 (4). So comparing unpack_src_format[cb] == unpack_dst_format[cb] is a reliable
-    // compile-time signal on the TRISCs that can see both arrays (UNPACK and MATH; PACK cannot).
-    //
-    // pack_default controls the value returned on PACK (where the check is not observable).
-    // Callers pick it so the surrounding static_assert passes on PACK, deferring enforcement
-    // to UNPACK/MATH.
-#if defined(UCK_CHLKC_PACK)
-    return pack_default;
-#else
-    return unpack_src_format[input_dfb] == unpack_dst_format[input_dfb];
-#endif
-}
-
 template <uint32_t block_width_tiles, uint32_t input_dfb, uint32_t output_dfb>
 constexpr bool can_use_fast_tilize() {
 #ifdef ARCH_QUASAR
