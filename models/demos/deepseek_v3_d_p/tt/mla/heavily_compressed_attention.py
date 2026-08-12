@@ -445,8 +445,10 @@ class TtHCA(_TtHCABase):
             **kwargs,
         )
 
-    def _q_stem(self, hidden_states, position_ids: torch.Tensor):
-        """[B, 1, S/sp, hidden/tp] -> q [B, num_heads/tp, S/sp, head_dim]. ``position_ids`` is full-length."""
+    def _q_stem(self, hidden_states, cos, sin):
+        """[B, 1, S/sp, hidden/tp] -> q [B, num_heads/tp, S/sp, head_dim]. ``cos``/``sin`` cover the padded
+        slab and are built once per call -- the q stem, the kv stem and the output un-rope all want the same
+        rotation, and rebuilding it costs ~2.9 ms of host time each (rotary_emb plus two uploads)."""
         input_shape = tuple(hidden_states.shape)
         if len(input_shape) != 4 or input_shape[1] != 1:
             raise ValueError(f"Expected hidden_states shape [B, 1, S, hidden], got {input_shape}")
@@ -494,11 +496,10 @@ class TtHCA(_TtHCABase):
         nope_dim = self.head_dim - self.rope_head_dim
         nope = ttnn.slice(q, [0, 0, 0, 0], [batch, num_heads_local, seq_len, nope_dim])
         rope = ttnn.slice(q, [0, 0, 0, nope_dim], [batch, num_heads_local, seq_len, self.head_dim])
-        cos, sin = self._cos_sin(position_ids)
         rope = ttnn.experimental.rotary_embedding_llama(rope, cos, sin, self.trans_mat, is_decode_mode=False)
         return ttnn.concat([nope, rope], dim=-1)
 
-    def _kv_stem(self, hidden_states, position_ids: torch.Tensor):
+    def _kv_stem(self, hidden_states, cos, sin):
         """[B, 1, S/sp, hidden/tp] -> single-head sliding_kv [B, 1, S/sp, head_dim], TP-replicated.
         K == V in V4. Returns the full S; the sliding-window truncation is a chunked-prefill concern."""
         input_shape = tuple(hidden_states.shape)
@@ -538,7 +539,6 @@ class TtHCA(_TtHCABase):
         nope_dim = self.head_dim - self.rope_head_dim
         nope = ttnn.slice(kv, [0, 0, 0, 0], [batch, 1, seq_len, nope_dim])
         rope = ttnn.slice(kv, [0, 0, 0, nope_dim], [batch, 1, seq_len, self.head_dim])
-        cos, sin = self._cos_sin(position_ids)
         rope = ttnn.experimental.rotary_embedding_llama(rope, cos, sin, self.trans_mat, is_decode_mode=False)
         return ttnn.concat([nope, rope], dim=-1)
 
@@ -579,7 +579,8 @@ class TtHCA(_TtHCABase):
         sliding_kv,
         compressed_kv,
         block_bias: torch.Tensor,
-        position_ids: torch.Tensor,
+        cos,
+        sin,
         carry=None,
         kv_actual: int = 0,
         real_len: int | None = None,
@@ -655,8 +656,9 @@ class TtHCA(_TtHCABase):
         nope_dim = self.head_dim - self.rope_head_dim
         nope = ttnn.slice(attn, [0, 0, 0, 0], [batch, num_heads_local, seq_local, nope_dim])
         rope = ttnn.slice(attn, [0, 0, 0, nope_dim], [batch, num_heads_local, seq_local, self.head_dim])
-        cos, sin = self._cos_sin(position_ids, negate_sin=True)
-        rope = ttnn.experimental.rotary_embedding_llama(rope, cos, sin, self.trans_mat, is_decode_mode=False)
+        # Undoing V's RoPE is the conjugate rotation, so the same cos serves and only sin flips. Negating
+        # on device costs one elementwise op instead of a second host build and upload.
+        rope = ttnn.experimental.rotary_embedding_llama(rope, cos, ttnn.neg(sin), self.trans_mat, is_decode_mode=False)
         return ttnn.concat([nope, rope], dim=-1), next_carry
 
     def _write_compressed(self, state, new_entries, n_new, keep_tail=True):
@@ -861,8 +863,11 @@ class TtHCA(_TtHCABase):
             tail = torch.arange(1, seq_pad_global - position_ids.shape[1] + 1).unsqueeze(0)
             pos_padded = torch.cat([position_ids, position_ids[:, -1:] + tail], dim=1)
 
-        q = self._q_stem(hidden_states, pos_padded)
-        sliding_kv = self._kv_stem(hidden_states, pos_padded)
+        # One build for the whole padded slab: the q stem, the kv stem and the output un-rope all rotate
+        # by the same positions, and each rebuild is ~2.9 ms of host time (rotary_emb plus two uploads).
+        cos, sin = self._cos_sin(pos_padded)
+        q = self._q_stem(hidden_states, cos, sin)
+        sliding_kv = self._kv_stem(hidden_states, cos, sin)
         new_entries, block_bias = self.compressor(
             hidden_states,
             position_ids,
@@ -879,7 +884,8 @@ class TtHCA(_TtHCABase):
             sliding_kv,
             state.compressed_kv,
             block_bias,
-            pos_padded,
+            cos,
+            sin,
             carry=state.sliding_carry,
             kv_actual=state.kv_actual,
             real_len=real_len,
