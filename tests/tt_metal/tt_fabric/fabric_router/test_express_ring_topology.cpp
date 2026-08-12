@@ -213,6 +213,9 @@ TEST(ExpressRingTopologyTest, Rings32x4) {
             {2, 0, 1},  // ex4 -> ex8 is terminal: walk ex4 to the paired landing's source side
             {3, 4, 4},  // paired leaves
         });
+    // Every nontrivial dependency cycle is a protected ring; the two families and their crossovers
+    // introduce none outside them.
+    EXPECT_TRUE(topo.cyclic_non_ring_hops().empty()) << "unprotected dependency cycle on the two-family fixture";
 }
 
 using tt::tt_fabric::fabric_router_tests::ControlPlaneFixture;
@@ -325,6 +328,61 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 )");
     MeshGraph mesh_graph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, path);
     EXPECT_ANY_THROW(derive_express_ring_topology(mesh_graph, MeshId{0}));
+}
+
+// A single wide pattern on the 32-row RING axis: each block skips six interior rows, so leaves form
+// runs of six rather than pairs. Exercises entering and leaving a long run one row at a time: each
+// hop must land on a physically adjacent row.
+TEST(ExpressRingTopologyTest, LeafRunsOfSix) {
+    const auto path = write_temp_descriptor("express_links_32x4_ex8_only.textproto", R"(
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [32, 4] dim_types: [RING, RING] }
+  host_topology   { dims: [4, 1] }
+  channels { count: 2 policy: RELAXED }
+  express_links { dim_idx: 0  pattern { start: 0  step: 8 } }
+}
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+)");
+    MeshGraph mesh_graph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, path);
+    const auto topo = derive_express_ring_topology(mesh_graph, MeshId{0});
+    ASSERT_TRUE(topo.has_value());
+
+    // One ring over the block endpoints; four runs of six between them.
+    EXPECT_EQ(topo->forward_cycle, (std::vector<std::vector<int>>{{0, 7, 8, 15, 16, 23, 24, 31}}));
+    ASSERT_EQ(topo->leaf_runs.size(), 4u);
+    for (const auto& run : topo->leaf_runs) {
+        EXPECT_EQ(run.rows.size(), 6u) << "run bounded by " << run.anchor_before << "," << run.anchor_after;
+    }
+
+    // Every ordered pair must route to its destination in bounded hops over edges that exist.
+    const auto& conn = mesh_graph.get_intra_mesh_connectivity()[0];
+    const auto adjacent = [&](int a, int b) {
+        const auto chip = [&](int row) {
+            return static_cast<int>(mesh_graph.coordinate_to_chip(MeshId{0}, MeshCoordinate(row, 0)));
+        };
+        return conn[chip(a)].find(chip(b)) != conn[chip(a)].end();
+    };
+    for (int src = 0; src < topo->axis_len; src++) {
+        for (int dst = 0; dst < topo->axis_len; dst++) {
+            if (src == dst) {
+                continue;
+            }
+            int cur = src;
+            int hops = 0;
+            for (; cur != dst && hops <= topo->axis_len; hops++) {
+                const int next = topo->next_row(cur, dst);
+                ASSERT_TRUE(adjacent(cur, next))
+                    << src << "->" << dst << ": " << cur << "->" << next << " not adjacent";
+                cur = next;
+            }
+            EXPECT_EQ(cur, dst) << "route " << src << "->" << dst << " did not converge";
+        }
+    }
+
+    // No dependency cycle may form through the run's leaf links.
+    EXPECT_TRUE(topo->cyclic_non_ring_hops().empty()) << "unprotected dependency cycle in the run-of-6 routes";
 }
 
 // An open X dimension yields no X ring state even alongside a live express (Y) axis: the ordinary
