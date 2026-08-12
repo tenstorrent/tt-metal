@@ -740,9 +740,17 @@ def apply_output_projection(tensor, weights: AttentionWeights, memory_config=Non
         tensor.deallocate(True)
         return out
 
+    rows = matmul_rows(tensor)
     program_config, tuned_out_memcfg, compute_kernel_config = interleaved_o_proj_prefill_config(
-        matmul_rows(tensor), int(tensor.shape[-1]), int(weights.o_proj.shape[-1])
+        rows, int(tensor.shape[-1]), int(weights.o_proj.shape[-1])
     )
+    # Decode: land the projection in L1 instead of DRAM. Bit-exact (the matmul
+    # keeps its program config, only the writeback target changes) and measured
+    # 38.9 -> 33.8 us in isolation (sweeps/mm_l1_progcfg.py ARM=l1, "in0 DRAM,
+    # out L1", torch.equal-clean). The [1,1,32,5376] result is 344 KB and its
+    # only consumer is the all-reduce.
+    if tuned_out_memcfg is None and memory_config is None and rows <= ttnn.TILE_SIZE:
+        tuned_out_memcfg = ttnn.L1_MEMORY_CONFIG
     act, act_l1 = hoist_prefill_matmul_in0_if_needed(tensor, program_config)
     out = ttnn.linear(
         act,
