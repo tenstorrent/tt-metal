@@ -25,28 +25,31 @@
 //     A/B/output bounding box, so cores outside the B grid have no in1 or sync CB and must skip
 //     the handshake entirely.
 void kernel_main() {
-    constexpr uint32_t in0_cb_index = get_compile_time_arg_val(0);
-    constexpr uint32_t full_in0_cb_index = get_compile_time_arg_val(1);
-    constexpr uint32_t shard_num_tiles = get_compile_time_arg_val(2);
-    constexpr uint32_t tile_size_bytes = get_compile_time_arg_val(3);
-    constexpr uint32_t num_senders = get_compile_time_arg_val(4);
-    constexpr uint32_t num_receivers = get_compile_time_arg_val(5);
-    uint32_t mcast_x_start = get_compile_time_arg_val(6);
-    uint32_t mcast_y_start = get_compile_time_arg_val(7);
-    uint32_t mcast_x_end = get_compile_time_arg_val(8);
-    uint32_t mcast_y_end = get_compile_time_arg_val(9);
-    constexpr uint32_t stage_sem_id = get_compile_time_arg_val(10);
-    constexpr uint32_t done_sem_id = get_compile_time_arg_val(11);
-    constexpr uint32_t hub0_noc_x = get_compile_time_arg_val(12);
-    constexpr uint32_t hub0_noc_y = get_compile_time_arg_val(13);
-    constexpr uint32_t hub1_noc_x = get_compile_time_arg_val(14);
-    constexpr uint32_t hub1_noc_y = get_compile_time_arg_val(15);
-    constexpr uint32_t split_H = get_compile_time_arg_val(16);
-    constexpr uint32_t in1_cb_index = get_compile_time_arg_val(17);
-    constexpr uint32_t in1_page_tiles = get_compile_time_arg_val(18);
-    constexpr uint32_t remote_cb_index = get_compile_time_arg_val(19);
-    constexpr uint32_t sync_cb_index = get_compile_time_arg_val(20);
-    constexpr uint32_t num_k_blocks = get_compile_time_arg_val(21);
+    // CB indices come in as named args so op fusion can remap them onto the hardware slots it
+    // pool-allocates across phases (see models/experimental/ops/descriptors/fusion/docs/op_fusion.md).
+    constexpr uint32_t in0_cb_index = get_named_compile_time_arg_val("cb_in0");
+    constexpr uint32_t full_in0_cb_index = get_named_compile_time_arg_val("cb_full_in0");
+    constexpr uint32_t in1_cb_index = get_named_compile_time_arg_val("cb_in1");
+    constexpr uint32_t remote_cb_index = get_named_compile_time_arg_val("cb_in1_remote");
+    constexpr uint32_t sync_cb_index = get_named_compile_time_arg_val("cb_sync");
+
+    constexpr uint32_t shard_num_tiles = get_compile_time_arg_val(0);
+    constexpr uint32_t tile_size_bytes = get_compile_time_arg_val(1);
+    constexpr uint32_t num_senders = get_compile_time_arg_val(2);
+    constexpr uint32_t num_receivers = get_compile_time_arg_val(3);
+    uint32_t mcast_x_start = get_compile_time_arg_val(4);
+    uint32_t mcast_y_start = get_compile_time_arg_val(5);
+    uint32_t mcast_x_end = get_compile_time_arg_val(6);
+    uint32_t mcast_y_end = get_compile_time_arg_val(7);
+    constexpr uint32_t stage_sem_id = get_compile_time_arg_val(8);
+    constexpr uint32_t done_sem_id = get_compile_time_arg_val(9);
+    constexpr uint32_t hub0_noc_x = get_compile_time_arg_val(10);
+    constexpr uint32_t hub0_noc_y = get_compile_time_arg_val(11);
+    constexpr uint32_t hub1_noc_x = get_compile_time_arg_val(12);
+    constexpr uint32_t hub1_noc_y = get_compile_time_arg_val(13);
+    constexpr uint32_t split_H = get_compile_time_arg_val(14);
+    constexpr uint32_t in1_page_tiles = get_compile_time_arg_val(15);
+    constexpr uint32_t num_k_blocks = get_compile_time_arg_val(16);
 
     const uint32_t is_sender = get_arg_val<uint32_t>(0);
     const uint32_t sender_id = get_arg_val<uint32_t>(1);

@@ -142,7 +142,7 @@ def _build_global_cb_pool(
         CBPoolAllocator,
         num_cbs_for_device,
         _get_phantom_cb_indices,
-        _extract_remote_cb_indices,
+        _assign_global_cb_indices,
     )
     from models.experimental.ops.descriptors.fusion.codegen import _create_phase_info
 
@@ -151,15 +151,16 @@ def _build_global_cb_pool(
     # Create PhaseInfo for each unique op
     phase_infos = [_create_phase_info(op, i) for i, op in enumerate(unique_ops)]
 
-    # Reserve remote CB indices from all ops first
-    for pi in phase_infos:
-        for remote_idx in _extract_remote_cb_indices(pi.op_descriptor.descriptor):
-            pool.reserve_index(remote_idx)
+    # GlobalCB-backed CBs claim their indices first: they are passed through rather
+    # than pooled, so the pool must know about them before it hands slots to anything
+    # else.  Two ops on the same cores each bring their own GlobalCB, so this is where
+    # the second one is moved off the first one's indices.
+    global_cb_remaps = [_assign_global_cb_indices(pool, pi.op_descriptor) for pi in phase_infos]
 
     # Allocate each unique op as a phase
     for phase_idx, pi in enumerate(phase_infos):
         phantom_indices = _get_phantom_cb_indices(pi)
-        pool.allocate_phase(phase_idx, pi.cb_info, phantom_indices)
+        pool.allocate_phase(phase_idx, pi.cb_info, phantom_indices, global_cb_remaps[phase_idx])
 
     return pool
 
@@ -460,6 +461,11 @@ class OpGraphBuilder:
         all_prog_descs = [op.descriptor for op in unique_ops] if multi_group else []
         saved_all_cb_state = _save_cb_state(all_prog_descs) if multi_group else []
 
+        # GlobalCB-backed CBs are declared over the GlobalCircularBuffer's own
+        # cores, which can span several groups, so the group builds share this
+        # set and only the first one to reach a given CBDescriptor emits it.
+        emitted_global_cb_ids: Set[int] = set()
+
         results = []
         for g_idx, group in enumerate(groups):
             if multi_group:
@@ -483,6 +489,7 @@ class OpGraphBuilder:
                 segment_cache,
                 needs_target_core_range=multi_group,
                 cb_pool=per_group_pools[g_idx],
+                emitted_global_cb_ids=emitted_global_cb_ids,
             )
             results.append(result)
 
@@ -634,6 +641,7 @@ class OpGraphBuilder:
         segment_cache: Dict[Tuple[frozenset, frozenset], BarrierConfig],
         needs_target_core_range: bool = False,
         cb_pool: Optional["CBPoolAllocator"] = None,
+        emitted_global_cb_ids: Optional[Set[int]] = None,
     ) -> _BuildResult:
         """Build a fused _BuildResult for one core group.
 
@@ -645,6 +653,9 @@ class OpGraphBuilder:
                 single-group linear chains, this should be False.
             cb_pool: If provided, a pre-projected CB pool for this group
                 (from the global pool).  When None, the builder self-allocates.
+            emitted_global_cb_ids: Shared with the other groups of this tree so
+                each GlobalCB-backed CBDescriptor is emitted exactly once across
+                the groups merged into one program.
         """
         from models.experimental.ops.descriptors.fusion.codegen import (
             _build_fused_descriptor,
@@ -687,6 +698,7 @@ class OpGraphBuilder:
             target_core_range=target_cr,
             multi_barrier=multi_barrier,
             cb_pool=cb_pool,
+            emitted_global_cb_ids=emitted_global_cb_ids,
         )
 
     @staticmethod

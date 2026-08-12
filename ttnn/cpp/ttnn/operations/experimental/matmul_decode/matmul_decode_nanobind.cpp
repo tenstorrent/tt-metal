@@ -6,9 +6,11 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/variant.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/experimental/matmul_decode/matmul_decode.hpp"
+#include "ttnn/operations/experimental/matmul_decode/device/matmul_decode_descriptor.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::operations::experimental::matmul_decode::detail {
@@ -80,6 +82,92 @@ void bind_matmul_decode_operation(nb::module_& mod) {
         nb::arg("output_mem_config") = nb::none(),
         nb::arg("global_cb") = nb::none(),
         nb::arg("global_cb_k_blocks") = 1);
+}
+
+// Descriptor-level bindings for models/experimental/ops/descriptors/matmul_decode.py, mirroring
+// the ttnn::prim::MatmulDeviceOperation block in matmul_nanobind.cpp. Bound onto the same
+// "ttnn.experimental" submodule as bind_matmul_decode_operation above, so these appear as
+// ttnn._ttnn.operations.experimental.MatmulDecode{Params,Inputs,DeviceOperation,...}.
+void bind_matmul_decode_descriptor(nb::module_& mod) {
+    nb::class_<ttnn::prim::MatmulDecodeParams>(mod, "MatmulDecodeParams")
+        .def(nb::init<>())
+        .def_rw("M", &ttnn::prim::MatmulDecodeParams::M)
+        .def_rw("N", &ttnn::prim::MatmulDecodeParams::N)
+        .def_rw("K", &ttnn::prim::MatmulDecodeParams::K)
+        .def_rw("output_mem_config", &ttnn::prim::MatmulDecodeParams::output_mem_config)
+        .def_rw("output_dtype", &ttnn::prim::MatmulDecodeParams::output_dtype)
+        .def_rw("partial_width_sharded", &ttnn::prim::MatmulDecodeParams::partial_width_sharded)
+        .def_rw("batch", &ttnn::prim::MatmulDecodeParams::batch)
+        .def_rw("b_blocks", &ttnn::prim::MatmulDecodeParams::b_blocks)
+        .def_rw("n_blocks", &ttnn::prim::MatmulDecodeParams::n_blocks)
+        .def_rw("global_cb", &ttnn::prim::MatmulDecodeParams::global_cb)
+        .def_rw("global_cb_k_blocks", &ttnn::prim::MatmulDecodeParams::global_cb_k_blocks);
+
+    nb::class_<ttnn::prim::MatmulDecodeInputs>(mod, "MatmulDecodeInputs")
+        .def(
+            "__init__",
+            [](ttnn::prim::MatmulDecodeInputs* t, const Tensor& a, const Tensor& b) {
+                new (t) ttnn::prim::MatmulDecodeInputs{a, b};
+            },
+            nb::arg("input_tensor_a"),
+            nb::arg("input_tensor_b"))
+        .def_rw("input_tensor_a", &ttnn::prim::MatmulDecodeInputs::input_tensor_a)
+        .def_rw("input_tensor_b", &ttnn::prim::MatmulDecodeInputs::input_tensor_b);
+
+    nb::class_<ttnn::prim::MatmulDecodeDeviceOperation>(mod, "MatmulDecodeDeviceOperation")
+        .def_static(
+            "create_output_tensors",
+            &ttnn::prim::MatmulDecodeDeviceOperation::create_output_tensors,
+            nb::arg("operation_attributes"),
+            nb::arg("tensor_args"))
+        .def_static(
+            "compute_output_specs",
+            &ttnn::prim::MatmulDecodeDeviceOperation::compute_output_specs,
+            nb::arg("operation_attributes"),
+            nb::arg("tensor_args"))
+        .def_static(
+            "compute_program_hash",
+            &ttnn::prim::MatmulDecodeDeviceOperation::compute_descriptor_program_hash,
+            nb::arg("operation_attributes"),
+            nb::arg("tensor_args"));
+
+    // Each program factory's create_descriptor, mirroring the MatmulMultiCoreReuse*ProgramFactory
+    // bindings in matmul_nanobind.cpp. matmul_decode has no "core_range_set" override argument --
+    // unlike plain matmul, core placement is entirely derived from where the caller already
+    // sharded input_tensor_a / input_tensor_b / the output tensor (or, on the prefetcher path,
+    // from the GlobalCircularBuffer's receiver set), so there is nothing extra to pass here.
+    nb::class_<ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::FullWidthSharded>(
+        mod, "MatmulDecodeFullWidthShardedProgramFactory")
+        .def_static(
+            "create_descriptor",
+            &ttnn::prim::matmul_decode_full_width_sharded_create_descriptor,
+            nb::arg("operation_attributes"),
+            nb::arg("tensor_args"),
+            nb::arg("tensor_return_value"));
+
+    nb::class_<ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::PartialWidthSharded>(
+        mod, "MatmulDecodePartialWidthShardedProgramFactory")
+        .def_static(
+            "create_descriptor",
+            &ttnn::prim::matmul_decode_partial_width_sharded_create_descriptor,
+            nb::arg("operation_attributes"),
+            nb::arg("tensor_args"),
+            nb::arg("tensor_return_value"));
+
+    nb::class_<ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::BatchedWidthSharded>(
+        mod, "MatmulDecodeBatchedWidthShardedProgramFactory")
+        .def_static(
+            "create_descriptor",
+            &ttnn::prim::matmul_decode_batched_width_sharded_create_descriptor,
+            nb::arg("operation_attributes"),
+            nb::arg("tensor_args"),
+            nb::arg("tensor_return_value"));
+
+    mod.def(
+        "matmul_decode_select_program_factory",
+        &ttnn::prim::matmul_decode_select_program_factory,
+        nb::arg("operation_attributes"),
+        nb::arg("tensor_args"));
 }
 
 }  // namespace ttnn::operations::experimental::matmul_decode::detail

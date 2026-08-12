@@ -4,6 +4,7 @@
 set(TTNN_OP_EXPERIMENTAL_MATMUL_DECODE_API_HEADERS
     matmul_decode.hpp
     device/matmul_decode_device_operation.hpp
+    device/matmul_decode_descriptor.hpp
 )
 
 set(TTNN_OP_EXPERIMENTAL_MATMUL_DECODE_SRCS
@@ -12,6 +13,7 @@ set(TTNN_OP_EXPERIMENTAL_MATMUL_DECODE_SRCS
     device/full_width_sharded_program_factory.cpp
     device/partial_width_sharded_program_factory.cpp
     device/batched_width_sharded_program_factory.cpp
+    device/matmul_decode_descriptor.cpp
 )
 
 set(TTNN_OP_EXPERIMENTAL_MATMUL_DECODE_NANOBIND_SRCS matmul_decode_nanobind.cpp)
