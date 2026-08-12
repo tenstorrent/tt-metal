@@ -25,7 +25,13 @@ the single reads cannot.
 `mesh_device` skips a placement asking for more chips than the host has, so this file is
 inert rather than failing on a runner that cannot hold it — single-card Blackhole SKUs
 collect it and skip. CI runs it on `bh_loudbox`.
+
+Queries are random by default. Point `TT_K3_ATTN_RES_WEIGHTS` at a file written by
+`tests/attn_res/fetch_query_weights.py` to run every gate below on the checkpoint's own
+`res_norm`/`res_proj` weights instead; that fetch is a by-hand step and CI never takes it.
 """
+
+import os
 
 import pytest
 import torch
@@ -34,6 +40,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.attn_res.attn_res import EPS, attn_res, attn_res_stack
+from models.demos.deepseek_v3_d_p.reference.attn_res.weights import fold_queries
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import BLOCK_SIZE, attn_res_stack_split
 
@@ -50,6 +57,11 @@ READ_SITES = 24
 # is a near-uniform softmax and a milder shift for the online rescale to carry. The scale
 # here is kept above the checkpoint's deliberately — it is the harder of the two.
 PROJ_STD = 0.02
+
+# Set to a file of the checkpoint's own `res_norm`/`res_proj` pairs — written by
+# `tests/attn_res/fetch_query_weights.py` — to run every gate here on the real queries.
+# Unset is the default and the only thing CI ever runs; nothing in this file downloads.
+QUERY_WEIGHTS = os.environ.get("TT_K3_ATTN_RES_WEIGHTS")
 
 # Layer 0 has no sealed snapshot so its pre-attention read is skipped, which is why 93
 # layers hold 187 queries and take 186 reads: 92 pre, 93 post, and one model-level read
@@ -86,17 +98,41 @@ def _rel_err(got, want):
 
 
 def _make_case(num_tokens, num_sealed, seed=0):
-    """One read's inputs: the live stream, `num_sealed` frozen snapshots, one folded query."""
+    """One read's inputs: the live stream and `num_sealed` frozen snapshots."""
     generator = torch.Generator().manual_seed(seed)
     randn = lambda *shape: torch.randn(*shape, generator=generator)
-    return (
-        randn(num_tokens, HIDDEN_SIZE),
-        randn(num_tokens, num_sealed, HIDDEN_SIZE),
-        (1.0 + 0.1 * randn(HIDDEN_SIZE)) * (PROJ_STD * randn(HIDDEN_SIZE)),
-    )
+    return randn(num_tokens, HIDDEN_SIZE), randn(num_tokens, num_sealed, HIDDEN_SIZE)
 
 
-def _to_device(op, prefix_sum, block_residual, query, stream_mapper=None):
+def _queries(seed=0):
+    """Every folded query the stack holds: 93 pre-attention, 93 post-attention, one final.
+
+    Real ones when `TT_K3_ATTN_RES_WEIGHTS` names a file, random otherwise. Either way the
+    sites do not share a query, which is what makes `merge`'s site index observable.
+    """
+    if QUERY_WEIGHTS is not None:
+        return fold_queries(torch.load(QUERY_WEIGHTS), LAYERS)
+
+    generator = torch.Generator().manual_seed(seed)
+    randn = lambda *shape: torch.randn(*shape, generator=generator)
+    fold = lambda: (1.0 + 0.1 * randn(HIDDEN_SIZE)) * (PROJ_STD * randn(HIDDEN_SIZE))
+    return [fold() for _ in range(LAYERS)], [fold() for _ in range(LAYERS)], fold()
+
+
+def _walk_sites(q_pre, q_post):
+    """The queries in the order the walk issues them.
+
+    Layer 0 has nothing sealed to read against, so `q_pre[0]` is never issued — in the
+    checkpoint that entry is a dead constant against a `1.7e-5` projection, which is the
+    architecture agreeing with the driver.
+    """
+    sites = [q_post[0]]
+    for pre, post in zip(q_pre[1:], q_post[1:]):
+        sites += [pre, post]
+    return sites
+
+
+def _to_device(op, prefix_sum, block_residual, queries, stream_mapper=None):
     mapper = op.stream_mapper if stream_mapper is None else stream_mapper
     to_tt = lambda t: ttnn.from_torch(
         t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=op.mesh_device, mesh_mapper=mapper
@@ -104,7 +140,7 @@ def _to_device(op, prefix_sum, block_residual, query, stream_mapper=None):
     return (
         to_tt(prefix_sum.unsqueeze(0).unsqueeze(0)),
         to_tt(block_residual.permute(1, 0, 2).unsqueeze(0)) if block_residual.shape[1] else None,
-        op.to_query(query),
+        [op.to_query(q) for q in queries],
     )
 
 
@@ -112,14 +148,11 @@ def _from_device(op, tensor):
     return ttnn.to_torch(tensor, mesh_composer=op.stream_composer).reshape(-1, HIDDEN_SIZE)
 
 
-def _read_sites(op, tt_block, tt_prefix, tt_query, sites=READ_SITES):
-    """Every read site of one block, as the walk issues them: one `inter_block`, `sites` folds.
-
-    Every site gets the same query, so every one of them has to land on the same oracle.
-    """
-    partials, shifts, masses = op.inter_block(tt_block, [tt_query] * sites)
+def _read_sites(op, tt_block, tt_prefix, tt_queries):
+    """Every read site of one block, as the walk issues them: one `inter_block`, then folds."""
+    partials, shifts, masses = op.inter_block(tt_block, tt_queries)
     try:
-        for site in range(sites):
+        for site, tt_query in enumerate(tt_queries):
             merged = op.merge(partials, shifts, masses, tt_prefix, tt_query, site)
             yield _from_device(op, merged)
             ttnn.deallocate(merged)
@@ -135,17 +168,20 @@ def test_read_matches_reference(mesh_device, num_sealed, device_params):
     """A whole 12-layer block's reads at 640 rows per chip — production's schedule.
 
     `S = 1` is the narrowest sealed set the walk ever reads, and the one where the
-    statistics cross unfolded; `S = 8` is where every candidate-axis kernel appears."""
+    statistics cross unfolded; `S = 8` is where every candidate-axis kernel appears. Each
+    site carries its own query and is scored against its own oracle, so a `merge` that
+    read the wrong site's statistics would fail here rather than agree with itself."""
     op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS)
     num_tokens = PER_CHIP_TOKENS * op.sp_factor
     assert op.shard_width == HIDDEN_SIZE // op.tp_factor
 
-    prefix_sum, block_residual, query = _make_case(num_tokens, num_sealed)
-    tt_prefix, tt_block, tt_query = _to_device(op, prefix_sum, block_residual, query)
-    want = attn_res(prefix_sum, block_residual, query, EPS)
+    prefix_sum, block_residual = _make_case(num_tokens, num_sealed)
+    queries = _walk_sites(*_queries()[:2])[:READ_SITES]
+    tt_prefix, tt_block, tt_queries = _to_device(op, prefix_sum, block_residual, queries)
 
     worst_pcc, worst_rel_err = 1.0, 0.0
-    for got in _read_sites(op, tt_block, tt_prefix, tt_query):
+    for site, got in enumerate(_read_sites(op, tt_block, tt_prefix, tt_queries)):
+        want = attn_res(prefix_sum, block_residual, queries[site], EPS)
         worst_pcc = min(worst_pcc, _pcc(got, want))
         worst_rel_err = max(worst_rel_err, _rel_err(got, want))
 
@@ -172,7 +208,8 @@ def test_sequence_axis_communicates_nothing(mesh_device, device_params):
     because both runs stay self-consistent within their own placement."""
     op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS)
     num_tokens = PER_CHIP_TOKENS * op.sp_factor
-    prefix_sum, block_residual, query = _make_case(num_tokens, 8)
+    prefix_sum, block_residual = _make_case(num_tokens, 8)
+    query = _walk_sites(*_queries()[:2])[0]
 
     # `stream_mapper` shards dim 2 on the SP axis; dropping that entry replicates it.
     replicated_dims = [None, None]
@@ -181,12 +218,12 @@ def test_sequence_axis_communicates_nothing(mesh_device, device_params):
 
     outputs = []
     for tokens, mapper in ((num_tokens, None), (PER_CHIP_TOKENS, replicated)):
-        tt_prefix, tt_block, tt_query = _to_device(
-            op, prefix_sum[:tokens], block_residual[:tokens], query, stream_mapper=mapper
+        tt_prefix, tt_block, tt_queries = _to_device(
+            op, prefix_sum[:tokens], block_residual[:tokens], [query], stream_mapper=mapper
         )
         # One site is enough — the sealed half is what the placement change moves, and
         # the batch over sites does not touch the token axis.
-        outputs.extend(_read_sites(op, tt_block, tt_prefix, tt_query, sites=1))
+        outputs.extend(_read_sites(op, tt_block, tt_prefix, tt_queries))
 
     sharded, duplicated = outputs
     # Both SP rows of run B ran identical inputs, so they must agree too.
@@ -215,11 +252,8 @@ def _module_stub(h):
 def _make_stack(op, seed=0):
     """Everything the walk consumes, on host: the embeddings and all 187 folded queries."""
     generator = torch.Generator().manual_seed(seed)
-    randn = lambda *shape: torch.randn(*shape, generator=generator)
-
-    hidden_states = randn(PER_CHIP_TOKENS * op.sp_factor, HIDDEN_SIZE)
-    fold = lambda: (1.0 + 0.1 * randn(HIDDEN_SIZE)) * (PROJ_STD * randn(HIDDEN_SIZE))
-    return hidden_states, [fold() for _ in range(LAYERS)], [fold() for _ in range(LAYERS)], fold()
+    hidden_states = torch.randn(PER_CHIP_TOKENS * op.sp_factor, HIDDEN_SIZE, generator=generator)
+    return (hidden_states, *_queries(seed))
 
 
 @on_placements
