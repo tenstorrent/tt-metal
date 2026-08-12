@@ -350,6 +350,30 @@ SUPPORTED = {
 EXCLUSIONS = [
     {"use_multicore": False, "shard_api": "legacy_2d"},
     {"use_multicore": False, "shard_api": "nd"},
+    # Refinement 8 (T1) — BLOCK-FLOAT OUTPUT below a 16-row FACE. A bfloat8_b
+    # tile carries a shared-exponent section whose size the packer programs as
+    # `exp_section_size = partial_face ? 1 : num_faces`
+    # (`cpack_common.h`), while the section a sub-16 tile actually needs is
+    # `face_r_dim * num_faces` bytes (`Tile::get_tile_size`) — the register
+    # cannot express it once `face_r_dim < 16`. `tile.cpp`'s
+    # TILE_FACE_HW_CHOICES says the same thing in words: 8x32 and below are
+    # "not supported yet on llk, just for host loopback".
+    #
+    # MEASURED, per height, bf16 -> bfloat8_b on [1,1,128,256] (max |diff| vs
+    # the torch source; a correct bfp8 round-trip is ~0.03 on this data):
+    #   tile_height 32 -> 0.037   16 -> 0.037   (both fine, face_r_dim == 16)
+    #   tile_height  8 -> 7.15     4 -> 6.55     2 -> 6.46     1 -> 6.63
+    # Not a packer-mode question: `bfp8_precise` 0/1 and an fp32 vs bf16 input
+    # all give the identical wrong number. Every NON-block-float dtype is
+    # bit-exact at every one of these heights, so the gap is block-float's
+    # exponent section and nothing else.
+    #
+    # `tile_height: 16` is deliberately NOT here — it keeps `face_r_dim == 16`
+    # (`face_shape` is `{min(h,16), 16}`) and measures correct.
+    {"output_dtype": ttnn.bfloat8_b, "tile_height": 8},
+    {"output_dtype": ttnn.bfloat8_b, "tile_height": 4},
+    {"output_dtype": ttnn.bfloat8_b, "tile_height": 2},
+    {"output_dtype": ttnn.bfloat8_b, "tile_height": 1},
 ]
 
 
@@ -502,6 +526,7 @@ def validate(
     #    it is a relation between the two specs and the shape rather than a value
     #    of either. `plan_placement` is the same function the descriptor builds
     #    from, so a refusal here can never disagree with what the op can do.
+    _check_retile(input_tensor, tile_height)
     _check_placement(
         input_tensor,
         out_memory_config,
@@ -517,6 +542,32 @@ def validate(
     )
 
     return scenario, axes
+
+
+def _check_retile(input_tensor, tile_height):
+    """R8 (T2): the two geometry facts the retile reader needs and cannot pad for.
+
+    The reader projects output row `g` onto source tile-row `g // in_tile_h`,
+    row `g % in_tile_h` — exact only when H is a whole number of BOTH tile
+    heights. It has no pad body (a TILE input's last two dims are tile multiples
+    by construction, which is why retile + pad is refused outright), so a
+    mismatch would read the input's own tile-padding rows as if they were data.
+    A typed support refusal, not a ValueError: `feature_spec.py` INVALID rule 4
+    already declares a non-aligned TILE input structurally impossible, so
+    nothing the golden suite runs reaches this.
+    """
+    if input_tensor.layout != ttnn.TILE_LAYOUT:
+        return
+    shape = list(input_tensor.shape)
+    in_tile_h = int(list(input_tensor.tile.tile_shape)[0])
+    h = shape[-2] if len(shape) >= 2 else 1
+    w = shape[-1] if len(shape) >= 1 else 1
+    if h % in_tile_h or h % tile_height or w % TILE_WIDTH:
+        raise UnsupportedAxisValue(
+            f"tilize: a retile of {tuple(shape[-2:])} from a {in_tile_h}x{TILE_WIDTH} tile to a "
+            f"{tile_height}x{TILE_WIDTH} one needs H a multiple of both tile heights and W a "
+            f"multiple of {TILE_WIDTH}; a TILE input carries no pad path to make up the difference"
+        )
 
 
 def _check_placement(input_tensor, out_memory_config, tile_height, pad=None):
@@ -546,6 +597,7 @@ def _check_placement(input_tensor, out_memory_config, tile_height, pad=None):
         out_tile_bytes=in_tile_bytes,  # only the RESIDENT/STREAMED choice matters here
         in_shape=in_shape,
         pad_enabled=pad_enabled,
+        retile=input_tensor.layout == ttnn.TILE_LAYOUT,
     )
     if plan["error"] is not None:
         raise UnsupportedAxisValue(plan["error"])

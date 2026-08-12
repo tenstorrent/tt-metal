@@ -59,6 +59,12 @@
 // and scatter the sticks. So the fill is a plain L1 store loop (no NoC traffic
 // at all) and the clamped read is `noc_async_read` + `get_noc_addr(page, off)`.
 //
+// `retile == 1` (Refinement 8, T2) is the FIFTH production path and the only one
+// whose SOURCE is not row-major: the input is already tiled, at a DIFFERENT tile
+// height, so its pages are TILES and a stick has to be assembled out of the face
+// pairs of one source tile-row. It emits the SAME `cb_input_sticks` contract, so
+// compute and the writer are byte-identical to the aligned path. See the arm.
+//
 // HELPER SUBSTITUTION, declared (Refinement 6): `fast_addrgen == 1` (master.md
 // D21) and `stateful_reads == 1` (master.md B13) issue the SAME `tile_h` reads
 // of the SAME size to the SAME L1 destinations — they only make each issue
@@ -84,6 +90,26 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.hpp"
 #include "pad_fill.hpp"  // the shared pad-fill store loop (also used by the writer)
+
+// Local L1 -> L1 copy of `bytes` (no NoC traffic at all). Shared by the two
+// staged readers below — R7's narrow-stick compaction and R8's retile face
+// walk. Both ends are 4-byte aligned at every call site: the staging strides
+// are whole alignment units and the tile-layout offsets are whole tile-columns
+// or 16-datum face halves, and the element size always divides 4 — so only the
+// LENGTH can carry a sub-word tail (the pad body's clamp to a non-tile-multiple
+// real width).
+FORCE_INLINE void copy_l1_bytes(uint32_t to_addr, uint32_t from_addr, uint32_t bytes) {
+    volatile tt_l1_ptr uint32_t* to = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(to_addr);
+    volatile tt_l1_ptr uint32_t* from = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(from_addr);
+    const uint32_t n_words = bytes >> 2;
+    for (uint32_t i = 0; i < n_words; ++i) {
+        to[i] = from[i];
+    }
+    for (uint32_t b = n_words << 2; b < bytes; ++b) {
+        *reinterpret_cast<volatile tt_l1_ptr uint8_t*>(to_addr + b) =
+            *reinterpret_cast<volatile tt_l1_ptr uint8_t*>(from_addr + b);
+    }
+}
 
 // R7/A5b — the ALIGNMENT-AWARE NARROW-STICK READ.
 //
@@ -130,22 +156,9 @@ FORCE_INLINE void read_rows_staged(
     }
     noc_async_read_barrier();
 
-    // Compaction. Both ends are 4-byte aligned (`row_stride` is a whole number
-    // of tile-columns and `stage_stride` a whole number of alignment units), so
-    // only the LENGTH can have a sub-word tail — which it does exactly when the
-    // caller is the pad body clamping to a non-tile-multiple real width.
-    const uint32_t n_words = read_bytes >> 2;
+    // Compaction into the tile-layout stride (`copy_l1_bytes` above).
     for (uint32_t s = 0; s < rows; ++s) {
-        volatile tt_l1_ptr uint32_t* from =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage_base + s * stage_stride);
-        volatile tt_l1_ptr uint32_t* to = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_base + s * row_stride);
-        for (uint32_t i = 0; i < n_words; ++i) {
-            to[i] = from[i];
-        }
-        for (uint32_t b = n_words << 2; b < read_bytes; ++b) {
-            *reinterpret_cast<volatile tt_l1_ptr uint8_t*>(l1_base + s * row_stride + b) =
-                *reinterpret_cast<volatile tt_l1_ptr uint8_t*>(stage_base + s * stage_stride + b);
-        }
+        copy_l1_bytes(l1_base + s * row_stride, stage_base + s * stage_stride, read_bytes);
     }
 }
 
@@ -176,7 +189,14 @@ void kernel_main() {
     constexpr uint32_t stage_unaligned = get_compile_time_arg_val(22);  // 1 = stage through cb_read_stage
     constexpr uint32_t cb_read_stage = get_compile_time_arg_val(23);    // scratch CB (reader-private)
     constexpr uint32_t dram_align = get_compile_time_arg_val(24);       // this part's DRAM alignment unit
-    constexpr auto src_args = TensorAccessorArgs<25>();
+    // R8 (T2): the retile arm — a TILE-layout SOURCE and the geometry of ITS tile.
+    constexpr uint32_t retile = get_compile_time_arg_val(25);               // 1 = TILE source (retile)
+    constexpr uint32_t src_tile_h = get_compile_time_arg_val(26);           // rows per SOURCE tile
+    constexpr uint32_t src_face_h = get_compile_time_arg_val(27);           // rows per SOURCE face
+    constexpr uint32_t src_tile_bytes = get_compile_time_arg_val(28);       // bytes per SOURCE tile page
+    constexpr uint32_t retile_stage_stride = get_compile_time_arg_val(29);  // aligned stride in the scratch
+    constexpr uint32_t Wt = get_compile_time_arg_val(30);                   // tile-columns (source grid width)
+    constexpr auto src_args = TensorAccessorArgs<31>();
 
     // The largest transfer this kernel can issue. `one_packet` NoC state is only
     // legal at or below the part's burst size, so the arch decides which
@@ -213,7 +233,88 @@ void kernel_main() {
         const uint32_t row_bytes = w * tile_row_bytes;
         const uint32_t byte_offset = wchunk * wt_block * tile_row_bytes;
 
-        if constexpr (pad_enabled == 1) {
+        if constexpr (retile == 1) {
+            // R8 (T2) RETILE READER — the FIFTH production path, and the only
+            // one whose SOURCE is not row-major.
+            //
+            // The source is already tiled, at `src_tile_h` rows per tile; the
+            // output asks for `tile_h`. Everything downstream is stated in the
+            // OUTPUT tile grid, so this arm's whole job is to emit the SAME
+            // `cb_input_sticks` contract as the aligned reader — `tile_h`
+            // row-major sticks of `w * tile_row_bytes`, `w` pages pushed —
+            // which is why compute and the writer are byte-identical here.
+            //
+            // Mapping. Output row `g = r*tile_h + s` lives in source tile-row
+            // `g / src_tile_h`, at row `g % src_tile_h` inside it (exact,
+            // because a retile is refused unless H is a multiple of BOTH tile
+            // heights — the op has no pad on this path). Within a tile that row
+            // is split across a FACE PAIR: columns 0..15 in the even face,
+            // 16..31 in the odd one, at `in_face_row * 16 * elem` inside each.
+            //
+            // Transaction shape, and why it is a STAGED read rather than the
+            // two 16-wide face reads op_design §8.4 sketches: a face half is
+            // `16*elem` bytes (32 B at bf16, 16 B at uint8) and its L1
+            // destination inside the stick block sits at `t*tile_row_bytes`,
+            // i.e. off the 64 B DRAM alignment grid for exactly the same reason
+            // R7's narrow sticks were — the watcher rejects that read. So the
+            // block's source TILES are staged whole (page-aligned source,
+            // DRAM-aligned destination stride) and the face walk becomes local
+            // L1 stores. Track T is correctness-gated (§8.4), so the shrink
+            // direction's over-read of `src_tile_h / tile_h` is accepted and
+            // deliberately NOT chased with a DM lever.
+            //
+            // HELPER SUBSTITUTION, declared: `read_sticks_for_tilize` indexes
+            // its source by STICK (`.inl:121`), so a tile-paged source lands on
+            // the wrong bytes; and op_design §7.2 records why the
+            // untilize -> tilize helper chain cannot serve either (one CB has
+            // one page size, and T2 is DEFINED by src_tile_h != tile_h). There
+            // is no kernel_lib entry point for a tile-source stick assembly.
+            cb_reserve_back(cb_input_sticks, w);
+            const uint32_t l1_base = get_write_ptr(cb_input_sticks);
+            // The CB base is only L1-aligned; the host sized the scratch with
+            // one alignment unit of slack so this round-up stays inside it.
+            const uint32_t stage_base = ((get_write_ptr(cb_read_stage) + dram_align - 1) / dram_align) * dram_align;
+            constexpr uint32_t half_bytes = tile_row_bytes / 2;           // one face half of one row
+            constexpr uint32_t src_face_bytes = src_face_h * half_bytes;  // one whole SOURCE face
+            const uint32_t c0 = wchunk * wt_block;
+
+            uint32_t s = 0;
+            while (s < tile_h) {
+                const uint32_t g = r * tile_h + s;
+                const uint32_t src_row_block = g / src_tile_h;
+                const uint32_t row0 = g - src_row_block * src_tile_h;
+                uint32_t rows_here = src_tile_h - row0;
+                if (rows_here > tile_h - s) {
+                    rows_here = tile_h - s;
+                }
+                // Stage this source tile-row's `w` tiles. ONE barrier per
+                // staged group (B7's rule applied to the group that is the
+                // unit here) — the local stores below read what it covers.
+                if constexpr (stub_read == 0) {
+                    const uint32_t page0 = src_row_block * Wt + c0;
+                    for (uint32_t t = 0; t < w; ++t) {
+                        noc_async_read(
+                            src.get_noc_addr(page0 + t), stage_base + t * retile_stage_stride, src_tile_bytes);
+                    }
+                    noc_async_read_barrier();
+                }
+                for (uint32_t k = 0; k < rows_here; ++k) {
+                    const uint32_t row = row0 + k;
+                    const uint32_t face_pair = (row / src_face_h) * 2;
+                    const uint32_t in_face_row = row - (row / src_face_h) * src_face_h;
+                    const uint32_t face_off = face_pair * src_face_bytes + in_face_row * half_bytes;
+                    uint32_t dst = l1_base + (s + k) * row_bytes;
+                    for (uint32_t t = 0; t < w; ++t) {
+                        const uint32_t from = stage_base + t * retile_stage_stride + face_off;
+                        copy_l1_bytes(dst, from, half_bytes);                                // columns 0..15
+                        copy_l1_bytes(dst + half_bytes, from + src_face_bytes, half_bytes);  // columns 16..31
+                        dst += tile_row_bytes;
+                    }
+                }
+                s += rows_here;
+            }
+            cb_push_back(cb_input_sticks, w);
+        } else if constexpr (pad_enabled == 1) {
             // R5 (P1/P2/P4/P5) PADDED READER — one body, all three pad regions.
             //
             // The block's `tile_h` output rows are the padded rows

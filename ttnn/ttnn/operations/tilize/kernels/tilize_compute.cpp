@@ -22,7 +22,31 @@
 //       tilize's own bijection contract demands bit-exactness and Fast measurably
 //       truncates (R7/A4; the host arms Lossless's two prerequisites).
 
+// R8 (T1) — THE 1x32 TILE IS THE ONE HEIGHT `tilize` CANNOT PACK.
+//
+// `tilize_init` routes the packer through `llk_pack_init<PackMode::Tilize>`,
+// whose MOP is a replay buffer of `face_r_dim - 1` instructions and which
+// asserts `face_r_dim in {2,4,8,16}` (`llk_pack.h`, the PackMode::Tilize arm).
+// A 1x32 tile has `face_shape == {1,16}` (`tile.cpp`'s TILE_FACE_HW_CHOICES),
+// so `face_r_dim == 1` makes that length ZERO and the kernel does not even
+// COMPILE: "lltt.h:28: argument 2 '0' is out of range [1, 32]" on TRISC2.
+// Measured, not assumed — heights 32/16/8/4/2 build and are bit-exact.
+//
+// It is also the one height where tilize has no work to do. A 1x32 tile is two
+// 1x16 faces laid consecutively, i.e. datum columns 0..15 then 16..31 of the
+// same row: byte-for-byte the row-major stick the reader already put in
+// `cb_input_sticks`. So at `tile_h == 1` the interleave is the IDENTITY and the
+// compute phase is a datum-preserving COPY — which still has to happen, because
+// it is what carries the `dtype=` cast and what packs into the output CB.
+//
+// HELPER, not raw LLK: `compute_kernel_lib::copy` is the kernel_lib chain for
+// exactly that (CopyTile -> PackTile), and its reconfig defaults carry the cast
+// the same way `tilize`'s `UnpackAndPackReconfigure` does. The packer's
+// PackMode::Default arm handles `face_r_dim == 1` explicitly
+// (`PACK_INTF_SEL = SINGLE_INTF_ACTIVE`), which is why this path builds where
+// the tilize one cannot.
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 
 void kernel_main() {
@@ -36,6 +60,7 @@ void kernel_main() {
     constexpr uint32_t tilize_uninit_on = get_compile_time_arg_val(7);  // lever R6 (1 = uninit, the default)
     constexpr uint32_t wait_upfront = get_compile_time_arg_val(8);      // lever R6 (1 = one wait per CALL)
     constexpr uint32_t fp32_lossless = get_compile_time_arg_val(9);     // lever R7/A4 (1 = bit-exact fp32)
+    constexpr uint32_t tile_h = get_compile_time_arg_val(10);           // R8/T1: the OUTPUT tile height knob
 
     const uint32_t n_full = get_arg_val<uint32_t>(0);
     const uint32_t n_tail = get_arg_val<uint32_t>(1);
@@ -105,6 +130,24 @@ void kernel_main() {
                 cb_push_back(cb_output_tiles, w);
                 cb_pop_front(cb_input_sticks, w);
             }
+        }
+        if constexpr (fold_resident == 1) {
+            cb_wait_front(cb_output_tiles, fold_pages);
+            cb_pop_front(cb_output_tiles, fold_pages);
+        }
+        return;
+    }
+
+    // R8 (T1): at a 1-row tile the interleave is the identity (see the file
+    // header), so the phase is one streaming copy over the core's whole
+    // assignment. Per-tile streaming, which is compatible with the block
+    // contract on both sides: the reader pushes `w` pages at once and a
+    // per-tile `cb_wait_front(1)` is satisfied by that, and the writer's
+    // `cb_wait_front(w)` is satisfied once `w` single pushes have landed.
+    if constexpr (tile_h == 1) {
+        const uint32_t tiles = n_full * wt_block + n_tail * wt_tail;
+        if (tiles > 0) {
+            compute_kernel_lib::copy<cb_input_sticks, cb_output_tiles>(compute_kernel_lib::EltwiseShape::tiles(tiles));
         }
         if constexpr (fold_resident == 1) {
             cb_wait_front(cb_output_tiles, fold_pages);

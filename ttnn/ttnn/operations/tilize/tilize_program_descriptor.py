@@ -1003,6 +1003,7 @@ def plan_placement(
     reshard_pull: "bool | None" = None,
     in_shape=None,
     pad_enabled: bool = False,
+    retile: bool = False,
 ):
     """Choose RESIDENT / STREAMED per side. Pure — no tensors, no device.
 
@@ -1024,7 +1025,14 @@ def plan_placement(
     # the fill into the CALLER'S OWN input tensor to place them. So padding
     # disqualifies input residency (never output residency — an output tile is
     # whole, and compute packs the fill into it like any other datum).
-    no_resident_in = force_streamed or pad_enabled
+    #
+    # R8 (T2): a RETILE input is disqualified from residency for a different
+    # reason — its shard holds TILES of `in_tile_height` rows, not the row-major
+    # sticks `cb_input_sticks` is defined to carry, so aliasing the CB onto it
+    # would hand compute the wrong geometry (and same-spec in/out would
+    # otherwise look like the zero-copy case, because the two specs differ only
+    # in a tile height no ShardSpec records).
+    no_resident_in = force_streamed or pad_enabled or retile
     in_res = None if no_resident_in else shard_residency(in_memory_config, tile_height=tile_height)
     out_res = None if force_streamed else shard_residency(out_memory_config, tile_height=tile_height)
 
@@ -1032,7 +1040,15 @@ def plan_placement(
     # `tile_height * TILE_WIDTH * elem_size`, so it carries the element size
     # without a second parameter that could disagree with it.
     elem_size = max(1, in_tile_bytes // (tile_height * TILE_WIDTH))
-    bands = source_bands(in_memory_config, in_shape[-1] if len(in_shape) else 1, elem_size)
+    # R8 (T2): `source_bands` describes a ROW-MAJOR source, whose page is one row
+    # of its shard. A TILE source's page is a TILE, addressed by the retile
+    # reader through the tile grid instead — so the band geometry is not merely
+    # unused there, it would be a wrong description of the same buffer.
+    bands = (
+        (1, (in_shape[-1] if len(in_shape) else 1) * elem_size)
+        if retile
+        else source_bands(in_memory_config, in_shape[-1] if len(in_shape) else 1, elem_size)
+    )
     if pad_enabled and bands is not None and bands[0] > 1:
         # The padded reader assembles each stick from ONE source page (it has to
         # clamp the read at the real row width); a banded source would need the
@@ -1397,6 +1413,21 @@ def create_program_descriptor(
     in_tile_bytes = tile_height * TILE_WIDTH * elem_size  # RM input is never block-float
     out_tile_bytes = output_tensor.buffer_page_size()
 
+    # R8 (T2) — RETILE geometry. A TILE-layout input's pages are TILES of
+    # `src_tile_h` rows, not row-major sticks, so the reader assembles each
+    # stick out of them (`retile` arm in tilize_reader.cpp). Everything else —
+    # blocking, core split, CBs, compute, writer — is stated in the OUTPUT tile
+    # grid and is unchanged, which is the whole point of keeping the
+    # `cb_input_sticks` contract identical.
+    #
+    # `face_shape` for a 32-wide tile is `{min(h, 16), 16}` (tile.cpp's
+    # TILE_FACE_HW_CHOICES), so one datum row of one tile-column lives in TWO
+    # faces: columns 0..15 in the even face of the pair, 16..31 in the odd one.
+    retile = int(input_tensor.layout == ttnn.TILE_LAYOUT)
+    src_tile_h = int(list(input_tensor.tile.tile_shape)[0]) if retile else tile_height
+    src_face_h = min(src_tile_h, 16)
+    src_tile_bytes = src_tile_h * TILE_WIDTH * elem_size
+
     # R7 (A4/A5b): the whole dtype surface in one call — the cast flag, the fp32
     # bit-exact triple and the 8-bit DEST width. Host config and kernel template
     # argument come from the SAME dict, so they cannot drift apart.
@@ -1447,6 +1478,7 @@ def create_program_descriptor(
         reshard_pull=_knob("reshard_pull"),
         in_shape=in_shape,
         pad_enabled=pad_enabled,
+        retile=bool(retile),
     )
     if plan["error"] is not None:
         # A support gap, not a contract violation: validate() raises the same
@@ -1499,6 +1531,7 @@ def create_program_descriptor(
         and not resident_in
         and n_bands == 1
         and not pad_enabled
+        and not retile  # R8/T2: the retile arm addresses TILES, not sticks
         and not int(_knob("stagger_reads"))
     ):
         dram_grid = device.dram_grid_size()
@@ -1528,10 +1561,27 @@ def create_program_descriptor(
     # so either one being off the alignment grid arms the staged reader for the
     # whole kernel. `stage_stride_max` is what the scratch has to hold per stick
     # (+ one unit of slack, because a CB base is only L1-aligned).
-    stage_unaligned = int(src_is_dram and any((w * tile_row_bytes) % dram_align for w in (wt_block, wt_tail)))
+    # R8 (T2): a retile block is not read stick-by-stick at all, so the R7 stride
+    # rule does not describe it — the retile arm stages the SOURCE TILES instead
+    # and owns its own alignment (`retile_stage_stride` below).
+    stage_unaligned = int(
+        (not retile) and src_is_dram and any((w * tile_row_bytes) % dram_align for w in (wt_block, wt_tail))
+    )
     if lv["stage_reads"] is not None:
         stage_unaligned = int(bool(lv["stage_reads"]) and stage_unaligned)
-    stage_bytes = tile_height * _round_up(max(wt_block, wt_tail) * tile_row_bytes, dram_align) + dram_align
+    # R8 (T2): the retile scratch holds ONE input tile-row of the block — `w`
+    # source tiles at a DRAM-aligned stride, so every staged read lands on the
+    # alignment grid whatever the source tile height is (a 1x32 uint8 tile is 32
+    # bytes, i.e. half an alignment unit). Bounded by a constant like every other
+    # CB here: `w * src_tile_bytes <= WT_BLOCK_MAX * 32 * elem * src_tile_h`, and
+    # `WT_BLOCK_MAX * 32 * elem` is the byte target — so <= 32 * TARGET_READ_BYTES
+    # regardless of W or H.
+    retile_stage_stride = _round_up(src_tile_bytes, dram_align)
+    stage_bytes = (
+        max(wt_block, wt_tail) * retile_stage_stride
+        if retile
+        else tile_height * _round_up(max(wt_block, wt_tail) * tile_row_bytes, dram_align)
+    ) + dram_align
     if stage_unaligned:
         # The B13/D21 issue-cost levers write straight into the tile-layout
         # destination, which is exactly what is illegal here. They are a
@@ -1694,7 +1744,7 @@ def create_program_descriptor(
                 )
             ],
         )
-        if stage_unaligned
+        if (stage_unaligned or retile)
         else None
     )
 
@@ -1735,6 +1785,15 @@ def create_program_descriptor(
         stage_unaligned,
         CB_READ_STAGE,
         dram_align,
+        # R8 (T2): the retile arm and the SOURCE tile geometry it walks.
+        # `retile == 0` erases the whole body, so every ROW_MAJOR-input path
+        # stays what Refinement 7 shipped.
+        retile,
+        src_tile_h,  # rows per SOURCE tile
+        src_face_h,  # rows per SOURCE face = min(src_tile_h, 16)
+        src_tile_bytes,  # bytes per SOURCE tile page
+        retile_stage_stride,  # DRAM-aligned stride between staged source tiles
+        Wt,  # tile-columns: the source tile grid's width is the output's
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
@@ -1788,6 +1847,11 @@ def create_program_descriptor(
         int(TILIZE_UNINIT if lv["tilize_uninit"] is None else lv["tilize_uninit"]),
         wait_upfront,
         numeric["fp32_lossless"],  # R7 (A4): Fp32Mode::Lossless on the fp32 identity
+        # R8 (T1): the OUTPUT tile height. The compute kernel only branches on
+        # its degenerate value (`tile_h == 1`, where the pack-tilize MOP has no
+        # legal replay length and the interleave is the identity anyway); every
+        # other height is carried by the CB tile descriptor as before.
+        tile_height,
     ]
 
     # R7: the op's ONLY ComputeConfigDescriptor. Every field is derived from the
