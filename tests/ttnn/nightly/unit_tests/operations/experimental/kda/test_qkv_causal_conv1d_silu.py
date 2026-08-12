@@ -171,6 +171,7 @@ def test_qkv_causal_conv1d_silu_program_key_includes_split_widths(device: ttnn.D
         ("host_input", "allocated device tensor"),
         ("batch", r"input must be \[1,T,Q\+K\+V\]"),
         ("history_shape", r"history must be \[1,3,Q\+K\+V\]"),
+        ("tap_last_dimension", r"tap2 last dimension must equal Q\+K\+V"),
         ("tap_volume", "tap2 logical volume must equal"),
         ("input_layout", "input has unsupported layout"),
         ("history_layout", "history has unsupported layout"),
@@ -202,8 +203,10 @@ def test_qkv_causal_conv1d_silu_rejects_invalid_tensors(
 
     if case == "host_input":
         input_tt = ttnn.from_torch(inputs, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    elif case == "tap_last_dimension":
+        taps_list[2] = _to_device(taps[2].reshape(-1, 1), device, layout=ttnn.TILE_LAYOUT)
     elif case == "tap_volume":
-        taps_list[2] = _to_device(taps[2][..., :-32], device, layout=ttnn.TILE_LAYOUT)
+        taps_list[2] = _to_device(torch.cat((taps[2], taps[2]), dim=0), device, layout=ttnn.TILE_LAYOUT)
     elif case == "input_layout":
         input_tt = _to_device(inputs, device, layout=ttnn.TILE_LAYOUT)
     elif case == "history_layout":
