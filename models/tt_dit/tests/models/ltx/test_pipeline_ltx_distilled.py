@@ -144,6 +144,7 @@ def test_pipeline_distilled(
     # Under dynamic_load the encoder is coresident-excluded with the DiT: a second encode would
     # evict the DiT and clobber the captured traces, so that path reuses the cached embedding.
     steady_state_prompt = prompt if dynamic_load else os.environ.get("PROMPT_STEADY_STATE", STEADY_STATE_LTX_PROMPT)
+    replay_prompt = prompt if dynamic_load else STEADY_STATE_REPLAY_LTX_PROMPT
 
     def run(*, prompt, number, seed):
         output_filename = os.environ.get("OUTPUT_PATH", f"ltx_av_fast_{width}x{height}_{number}.mp4")
@@ -302,9 +303,11 @@ def test_pipeline_distilled(
             logger.info("=== gen #1: encode trace capture ===")
             run(prompt=steady_state_prompt, number=1, seed=seed)
             logger.info("=== traced steady-state pass (gen #2, pure replay) ===")
-            run(prompt=STEADY_STATE_REPLAY_LTX_PROMPT, number=2, seed=seed)
-            check_output_with_clip(steady_state_prompt, 1)
-            check_output_with_vbench(steady_state_prompt, 1, seed=seed)
+            run(prompt=replay_prompt, number=2, seed=seed)
+            # Gate gen #2: a corrupted full-replay pass is the failure this structure exists to
+            # catch, and gen #1 still has a capture in it.
+            check_output_with_clip(replay_prompt, 2)
+            check_output_with_vbench(replay_prompt, 2, seed=seed)
         else:
             check_output_with_clip(prompt, 0)
             check_output_with_vbench(prompt, 0)
