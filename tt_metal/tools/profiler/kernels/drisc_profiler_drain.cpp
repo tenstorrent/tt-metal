@@ -283,6 +283,52 @@ void kernel_main() {
     constexpr uint32_t kPeerHsAddr1 = get_compile_time_arg_val(29);
     constexpr uint32_t kDramBank1 = get_compile_time_arg_val(30);
     constexpr uint32_t kDramAddr1 = get_compile_time_arg_val(31);
+    // ---- DRISC SELF-PROFILING (args 32..35; 0 = off, and every use is behind `if constexpr`) ----
+    //
+    // The drainer emits its OWN device zones by framing them exactly like a worker span and shipping them
+    // down the path it already owns: a FILLER stages the frame into its DRAM ring, a MOVER pushes it to its
+    // socket. There is no side channel and no second wire format -- the frame IS a worker span (16-word
+    // prefix, a 64-word control vector carrying THIS core's identity, five 512-word rings), so the host
+    // decoder is untouched. Only ring 0 is ever live, because myRiscID == PROCESSOR_INDEX == 0 on a DRISC and
+    // the decoder yields nothing from a ring whose tail equals its head; that wastes 4/5 of a self frame,
+    // which is fine at DRISC zone volume (measured in FINDINGS).
+    constexpr uint32_t kSelfZones = get_compile_time_arg_val(32);
+    // MINIMUM SWEEPS BETWEEN CAPTURES -- a rate limiter, not a phase. Sampling "every Nth sweep" is the
+    // obvious design and it is the wrong one here, because both roles are overwhelmingly idle: a filler moves
+    // frames in 114 of ~21,000 sweeps (0.5%) and a mover in ~330 of ~200,000 (0.17%). Uniform sampling of that
+    // distribution yields a capture of almost nothing but idle poll loops and misses every burst -- and on a
+    // mover the burst is the whole point, because the knee is the WORST sweep's credit wait and credit wait
+    // only ever happens on a mover with frames in hand.
+    //
+    // So the trigger is WORK and this is only the spacing: a sweep is captured when it did work (or follows one
+    // that did) and the limiter allows it. Spacing exists because the frame budget is small -- without it every
+    // capture would land in the first few hundred sweeps and the rest of the run would be blind.
+    constexpr uint32_t kSelfSample = get_compile_time_arg_val(33);
+    // Sparse IDLE samples, so the timeline still shows an idle drainer's true poll cadence rather than only
+    // its bursts. Derived, not another knob.
+    constexpr uint32_t kSelfIdleEvery = kSelfSample * 32u;
+    // Spacing between WORK captures, which has to be far tighter than kSelfSample. A drainer is resident for
+    // the whole process but the workload only occupies a short window of it, so a filler's ~113 busy sweeps are
+    // not spread over its ~25,000 sweeps -- they are packed into a few hundred consecutive ones. MEASURED with
+    // one shared 200-sweep limiter: 113 busy sweeps yielded exactly ONE work capture, and the rest of the
+    // budget went to idle samples. The frame budget is the real bound on work captures; this only stops one
+    // burst from consuming all of it.
+    constexpr uint32_t kSelfWorkEvery = kSelfSample / 8u + 1u;
+    constexpr uint32_t kSelfXY = get_compile_time_arg_val(34);  // this DRISC's own virtual (y<<16)|x
+    // Hard cap on self frames. MANDATORY, not defensive: one instrumented busy sweep emits ~400 markers (40
+    // batch iterations x ~10), which is ~800 words = two whole ring-fulls, so instrumenting freely would ship
+    // more self frames than payload frames.
+    constexpr uint32_t kSelfMaxFrames = get_compile_time_arg_val(35);
+    // Idle samples get their OWN slice of that budget, and that separation is not tidiness. A mover runs
+    // ~550,000 sweeps, so even one sample per 6,400 is ~85 captures; sharing one pool they took 53 of a
+    // 64-frame budget and left 11 for the bursts that are the entire reason to profile a mover. An idle sweep
+    // also ships a whole 10,560 B frame for ~6 markers, so it is the most expensive capture per zone there is.
+    constexpr uint32_t kSelfIdleFrames = kSelfMaxFrames / 8u + 1u;
+    // The self frame lives in staging slot kNStage -- one PAST every slot the drain pipeline can touch. The
+    // host reserves it by passing (nstage - 1) as kNStage when this is on, so DRISC L1 does not grow and the
+    // OFF build is byte-identical. A filler's pipeline only ever reaches slot 2*kGenSlots-1 and a mover's
+    // batch is capped at kNStage, so nothing else can write here.
+    constexpr uint32_t kSelfSlot = kNStage;
     // Indexed by peer slot. constexpr arrays of compile-time args, so nothing is loaded from memory to reach
     // them; the loop over kNPeer is a fully-known trip count.
     constexpr uint32_t kPeerXYs[2] = {kPeerXY, kPeerXY1};
@@ -311,6 +357,12 @@ void kernel_main() {
     constexpr uint32_t kProbeMoverMagic = 0x5A0FE1EDu;
     static_assert(kRole == kRoleFull || kRole == kRoleFiller || kRole == kRoleMover, "unknown drainer role");
     static_assert(kGenSlots >= 1, "need at least one slot per staging generation");
+
+    static_assert(kSelfZones == 0 || kSelfSample >= 1, "self-profiling needs a sampling period >= 1");
+    static_assert(kSelfZones == 0 || kSelfMaxFrames >= 1, "self-profiling with a 0 frame budget captures nothing");
+    // The ablation pre-fills and re-ships staging slots [0, kAblateSlots) forever and never runs the sweep
+    // body, so there is nothing to self-profile and its staged bytes would collide with the self frame.
+    static_assert(kSelfZones == 0 || kAblate == 0, "self-profiling and the egress ablation are mutually exclusive");
 
     static_assert(kSpanBytes <= NOC_MAX_BURST_SIZE, "the fused span read must fit one NoC burst");
     static_assert(kNumRisc <= kernel_profiler::PROFILER_SPSC_MAX_RISC, "control layout too small");
@@ -501,6 +553,15 @@ void kernel_main() {
     bool egress_dead = false;
     uint32_t credit_timeouts = 0;  // bounded credit wait expired -> frame dropped instead of deadlocking
     uint32_t dropped_frames = 0;
+    // ---- DRISC SELF-PROFILING: the last egress call's phase boundaries -----------------------------------
+    //
+    // stage_run/ship_once RECORD their credit-wait/write boundaries here instead of emitting zones directly,
+    // for two reasons. Ordering: the self-marker emitter is defined further down (it needs emit_run, which
+    // needs these), and a lambda cannot call one declared after it. Re-entrancy: self_publish ships its frame
+    // THROUGH these same functions, so an emitter called from inside them would recurse. The caller turns the
+    // recorded interval into zones right after the egress call returns, which is also where it belongs in the
+    // stream -- inside the PROC zone, after its siblings. eg_t1/eg_t2 are 0 when that phase did not happen.
+    uint64_t eg_t0 = 0, eg_t1 = 0, eg_t2 = 0;
     // ~50 ms at 1.35 GHz. Enormously above anything healthy (worst observed credit wait is ~0.1 us), so it
     // never fires in normal operation -- it exists purely to convert "wait forever" into "lose a frame".
     constexpr uint64_t kCreditWaitCycles = 67500000ull;
@@ -523,7 +584,13 @@ void kernel_main() {
             *phase = kPhDropped;
             credit_timeouts++;
             dropped_frames += count;
-            c_reserve += get_timestamp() - t0;
+            const uint64_t t_drop = get_timestamp();
+            c_reserve += t_drop - t0;
+            if constexpr (kSelfZones != 0) {
+                eg_t0 = t0;
+                eg_t1 = t_drop;
+                eg_t2 = 0;  // there was no write
+            }
             return false;
         }
         const uint64_t t1 = get_timestamp();
@@ -555,6 +622,13 @@ void kernel_main() {
         *phase = kPhWrDone;
         pages += npages;
         pushes++;
+        if constexpr (kSelfZones != 0) {
+            // Exactly the intervals c_reserve and c_write just took, so the zones and the counters cannot
+            // disagree about anything except framing.
+            eg_t0 = t0;
+            eg_t1 = t1;
+            eg_t2 = t4;
+        }
         return true;
     };
 
@@ -636,6 +710,11 @@ void kernel_main() {
             *phase = kPhDropped;
             credit_timeouts++;
             dropped_frames += count;
+            if constexpr (kSelfZones != 0) {
+                eg_t0 = t0;
+                eg_t1 = t1;
+                eg_t2 = 0;  // there was no write
+            }
             return;
         }
         *phase = kPhWrChunk;
@@ -664,6 +743,11 @@ void kernel_main() {
         frames_staged += count;
         pages += count * kPagesPerSlot;
         pushes++;
+        if constexpr (kSelfZones != 0) {
+            eg_t0 = t0;   // ring-room wait: a filler's only blocking wait, what c_reserve means for this role
+            eg_t1 = t1;
+            eg_t2 = t2;
+        }
         }
     };
 
@@ -686,6 +770,263 @@ void kernel_main() {
             stage_run(start, count);
         } else {
             ship_run(start, count);
+        }
+    };
+
+    // ---- DRISC SELF-PROFILING: state, one ring, and the two operations on it --------------------------
+    //
+    // The self frame is a WORKER SPAN, so this is a producer of exactly the shape kernel_profiler.hpp is:
+    // 2-word markers (type|zone-id , timer_low) preceded by a 1-word STICKY_TIMER whenever the wall clock's
+    // high half ticks, appended into a 512-word circular ring, with monotonic head/tail word counters in the
+    // control vector. The clock is the SAME register the workers use (RISCV_DEBUG_REG_WALL_CLOCK_L, read here
+    // through get_timestamp()), which is why no anchor, graft or calibration is needed anywhere.
+    //
+    // Markers are stamped from timestamps the drain loop HAS ALREADY READ (t_batch0/t_issue, the t0/t1/t2 of
+    // stage_run, the barrier's t_b0, ...) rather than by reading the clock again. That is deliberate twice
+    // over: it adds no clock reads to the hot path, and it makes a zone's duration the SAME quantity the
+    // out[] phase counter accumulates -- so the zones and the counters agree by construction and any
+    // disagreement is a framing or decode bug, which is the only thing worth cross-checking.
+    volatile tt_l1_ptr uint32_t* self_ctrl =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kStageBase + kSelfSlot * kSlotBytes + kPrefix * 4u);
+    volatile tt_l1_ptr uint32_t* self_ring = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+        kStageBase + kSelfSlot * kSlotBytes + (kPrefix + kCtrlWords) * 4u);
+    uint32_t self_head = 0;                // words the host has been shown (consumer side, kept by us)
+    uint32_t self_tail = 0;                // words written (producer side)
+    uint32_t self_hi = 0xFFFFFFFFu;        // last wall-clock high half emitted; ~0 forces a first sticky
+    uint32_t self_frames = 0;              // self frames shipped
+    uint32_t self_markers = 0;             // markers written into the ring
+    uint32_t self_dropped = 0;             // markers refused because a publish could not free the ring
+    uint32_t self_sweeps = 0;              // sweeps whose markers were actually shipped
+    uint32_t self_sweeps_work = 0;         // of those, the ones that did real work (the ones that matter)
+    uint32_t self_rewound = 0;             // instrumented sweeps discarded (turned out idle) -- free, not lost
+    uint32_t self_abandoned = 0;           // idle sweeps dropped mid-flight when the ring filled -- also free
+    uint32_t self_trunc_sweeps = 0;        // captured sweeps whose zones ran past one ring and were cut short
+    uint32_t self_idle_frames = 0;         // of self_frames, the ones spent on sweeps that did NO work
+    uint32_t self_over = 0;                // sweeps NOT instrumented because the frame budget was spent
+    uint32_t self_next_sweep = 0;          // rate limiter: no capture before this sweep number
+    uint64_t c_self = 0;                   // cycles spent publishing self frames (the perturbation)
+    uint64_t self_t_sweep0 = 0;            // this sweep's start, so a mid-sweep arm can still open SWEEP
+    bool self_on = false;                  // this sweep is being instrumented
+    bool self_busy = false;                // inside self_publish: suppress marker emission (re-entrancy)
+    bool self_prev_busy = false;           // the previous sweep did work
+    bool self_work = false;                // THIS sweep did work (set by self_arm / the end-of-sweep check)
+    bool self_pub_in_sweep = false;        // a frame was already shipped mid-sweep, so rewinding is not an option
+    bool self_trunc = false;               // this sweep hit the one-ring bound and stopped emitting
+    bool self_from_start = false;          // instrumented from the top of the sweep, not armed part-way in
+    // PHASE TOTALS OVER THE INSTRUMENTED-FROM-THE-START SWEEPS ONLY -- the cross-check the zones are worth
+    // nothing without. The out[10..19] lifetime totals cannot verify a sampled instrument: they cover the whole
+    // run while the zones cover ~0.5% of it. These cover exactly the sweeps the zones do, so the host can
+    // assert an EQUALITY against zone durations summed out of the Tracy capture:
+    //   sum(READ) + sum(READ-WAIT) == c_read delta      sum(CREDIT-WAIT) == c_reserve delta
+    //   sum(PROC) - sum(CREDIT-WAIT) - sum(WRITE) == c_proc delta      sum(WR-BARRIER) == c_barrier delta
+    // Restricted to from-the-start sweeps because a sweep ARMED part-way through has zones for only part of it,
+    // and comparing those against a whole-sweep counter delta would fail for a reason that is not a bug.
+    uint32_t self_ck_sweeps = 0;
+    uint64_t self_ck_read = 0, self_ck_proc = 0, self_ck_rsv = 0, self_ck_write = 0, self_ck_bar = 0;
+    if constexpr (kSelfZones != 0) {
+        volatile tt_l1_ptr uint32_t* pfx =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kStageBase + kSelfSlot * kSlotBytes);
+        pfx[0] = kernel_profiler::spsc_span_w0();
+        pfx[1] = kSpanWords;  // the full five-ring span: only ring 0 is live, and the host skips the rest
+        for (uint32_t k = 2; k < kPrefix; k++) {
+            pfx[k] = 0;
+        }
+        // The whole control vector, not just the words we use: it ships verbatim and the host reads a head
+        // and a tail for all five RISCs. Rings 1-4 must read tail == head == 0 forever or the decoder would
+        // walk uninitialised L1 as markers.
+        for (uint32_t k = 0; k < kCtrlWords; k++) {
+            self_ctrl[k] = 0;
+        }
+        self_ctrl[kernel_profiler::SPSC_CORE_XY] = kSelfXY;
+    }
+
+    // Publish the ring's live window as one self frame, then wait for it to land.
+    //
+    // The barrier is at the END, and that placement is the correctness argument: after a publish the live
+    // window is empty, so the very next marker overwrites a word the in-flight frame is still shipping. The
+    // reverse order (barrier before the next publish) would leave exactly that hole. The fence is the same
+    // one publish_tail() needs -- the NIU reads L1, and Blackhole stores can reach SRAM out of order, so the
+    // marker stores must be ordered before the write that ships them.
+    //
+    // Every counter the existing phase breakdown is built on is SAVED AND RESTORED around the egress call.
+    // The self frame really does go through stage_run/ship_run -- that is the whole point, one wire format and
+    // one ring protocol -- but if its credit wait, write and pages leaked into c_reserve/c_write/pages then
+    // turning this feature on would silently change the numbers it exists to explain. frames_staged,
+    // dropped_frames, ring_hi, ring_blocked and egress_dead are deliberately NOT restored: those describe the
+    // ring and the consumer, and a self frame occupies a real ring slot.
+    auto self_publish = [&]() {
+        if constexpr (kSelfZones == 0) {
+            return;
+        } else {
+        if (self_tail == self_head) {
+            return;
+        }
+        const uint64_t t_s0 = get_timestamp();
+        self_busy = true;
+        self_ctrl[kernel_profiler::SPSC_RING_HEAD_0] = self_head;
+        self_ctrl[kernel_profiler::SPSC_RING_TAIL_0] = self_tail;
+        asm volatile("fence" ::: "memory");
+        const uint64_t s_rsv = c_reserve, s_wr = c_write, s_ch = c_wr_chunk, s_pu = c_wr_push, s_no = c_wr_notify;
+        const uint32_t s_pages = pages, s_pushes = pushes, s_maxr = max_reserve;
+        emit_run(kSelfSlot, 1);
+        eg_t1 = 0;  // the self frame's own egress is not a zone; drop the interval it just recorded
+        eg_t2 = 0;
+        c_reserve = s_rsv;
+        c_write = s_wr;
+        c_wr_chunk = s_ch;
+        c_wr_push = s_pu;
+        c_wr_notify = s_no;
+        pages = s_pages;
+        pushes = s_pushes;
+        max_reserve = s_maxr;
+        if (write_barrier_bounded(get_timestamp() + kCreditWaitCycles, dbg_hw_ack, dbg_sw_ack)) {
+            publish_head();  // a filler's self frame is flushed, so the mover may be told about it
+            self_head = self_tail;
+            self_frames++;
+            self_pub_in_sweep = true;
+        } else {
+            // Egress is dead. ship_run/stage_run have already accounted the drop; stop instrumenting rather
+            // than keep writing into a ring nothing will ever read.
+            egress_dead = true;
+        }
+        self_busy = false;
+        c_self += get_timestamp() - t_s0;
+        }
+    };
+
+    // Append one 2-word marker at an ALREADY-READ timestamp. Publishes first if the ring is too full to hold
+    // a sticky plus a marker; a marker is only ever dropped if that publish could not free it (egress dead),
+    // and then it is counted rather than lost silently.
+    auto self_mark = [&](uint32_t zone_id, uint32_t type, uint64_t ts) {
+        if constexpr (kSelfZones == 0) {
+            (void)zone_id;
+            (void)type;
+            (void)ts;
+            return;
+        } else {
+        if (!self_on || self_busy) {
+            return;
+        }
+        // 3 = worst case (1-word sticky + 2-word marker). Leave a margin so a run can never exceed the ring
+        // capacity, which the host clamps (spsc_span_live) rather than trusts.
+        if (self_tail - self_head > kRingWords - 8u) {
+            // THE RING FILLED AND THIS SWEEP HAS SHOWN NO WORK -> ABANDON IT, do not publish.
+            //
+            // This is what keeps the frame budget aimed at busy sweeps, and getting it wrong is not subtle.
+            // An idle FILLER sweep still walks 40 batches and so emits ~320 markers = ~640 words, which
+            // overflows a 512-word ring: with a publish here instead, that idle sweep shipped a frame, could no
+            // longer be rewound, and the budget went to it. MEASURED before this existed: 55 captured filler
+            // sweeps of which exactly ONE did any work, 0 rewound -- a capture that looked healthy by every
+            // count and contained no credit-wait or write at all.
+            if (!self_work) {
+                self_tail = self_head;
+                self_on = false;
+                self_from_start = false;  // its zones are gone, so it must not feed the counter cross-check
+                self_abandoned++;
+                return;
+            }
+            // ONE RING PER SWEEP, HARD. Past that, TRUNCATE the sweep rather than publish mid-flight.
+            //
+            // Publishing here instead is what pushed this over the knee. A captured busy filler sweep emits
+            // ~480 markers (40 batches x ~12) = ~960 words, so it needed a mid-sweep publish -- and the marker
+            // writes plus that publish added 3.8 us to the WORST sweep (proc 7.5 -> 11.3 us, worst 19.0 ->
+            // 23.2 us). At 120 cores / delay 15 the rings sit at 472-488 of 512 words, so one late sweep blocks
+            // dozens of lossless producers at once: MEASURED 292-362 producer stalls across 67-87 cores against
+            // 0 with the feature off. Truncating bounds a captured sweep to ~250 markers and exactly one publish
+            // (at the end, where it is off the sweep's own critical path).
+            //
+            // The SWEEP END marker is always let through -- the 8-word margin is never spent once we stop
+            // writing, so there is room -- because an unclosed zone corrupts that lane's Tracy stack for the
+            // rest of the capture. Truncated sweeps are counted, excluded from the counter cross-check (their
+            // zones no longer cover the whole sweep), and reported.
+            if (zone_id != kernel_profiler::DRISC_ZONE_SWEEP || type != kernel_profiler::SPSC_TYPE_ZONE_END) {
+                if (!self_trunc) {
+                    self_trunc = true;
+                    self_from_start = false;
+                    self_trunc_sweeps++;
+                }
+                self_dropped++;
+                return;
+            }
+        }
+        const uint32_t hi = static_cast<uint32_t>(ts >> 32);
+        if (hi != self_hi) {
+            self_ring[self_tail % kRingWords] = kernel_profiler::spsc_sticky_timer_w0(hi);
+            self_tail++;
+            self_hi = hi;
+        }
+        self_ring[self_tail % kRingWords] = kernel_profiler::spsc_marker_w0(type, zone_id);
+        self_tail++;
+        self_ring[self_tail % kRingWords] = static_cast<uint32_t>(ts & 0xFFFFFFFFu);
+        self_tail++;
+        self_markers++;
+        }
+    };
+    // A whole zone from two timestamps the caller already has. Emitted AFTER the fact, which is only sound
+    // because both markers carry explicit times: the pair lands in the stream in increasing-time order, which
+    // is all Tracy's per-lane nesting needs.
+    auto self_zone = [&](uint32_t zone_id, uint64_t t_begin, uint64_t t_end) {
+        self_mark(zone_id, kernel_profiler::SPSC_TYPE_ZONE_START, t_begin);
+        self_mark(zone_id, kernel_profiler::SPSC_TYPE_ZONE_END, t_end);
+    };
+    // TURN INSTRUMENTATION ON MID-SWEEP, at the moment work is discovered.
+    //
+    // This is what makes the feature catch bursts instead of the idle loop, and it is only possible because
+    // markers carry explicit timestamps: SWEEP's START is emitted here with the sweep's OWN t_sweep0, long
+    // after that instant passed. Deciding at the top of a sweep cannot work -- whether a sweep has anything
+    // to do is not knowable until the head read (mover) or the control-vector scan (filler) says so, and
+    // arming from history alone misses the first sweep of every burst.
+    //
+    // A mover arms BEFORE issuing its DRAM read, so a busy peer visit is captured whole. A filler arms once a
+    // batch turns out to contain live cores, so the batches of that sweep BEFORE the first live core are not
+    // recovered (their timestamps are gone) -- every later batch of the sweep is. That asymmetry is real and
+    // is stated in FINDINGS rather than hidden.
+    // emit_run plus the two zones its egress just recorded. Every payload egress goes through this; the SELF
+    // frame's own egress deliberately does not (self_publish calls emit_run directly and clears the record).
+    //
+    // `!self_on` short-circuits to a bare emit_run, and that is a MEASURED requirement, not defensive style.
+    // These emitters are too large for -Os to inline, so a call that only checks a flag and returns still costs
+    // a real call at every site -- and this one sits in the scan loop. With the checks inside the emitters
+    // instead of at the call sites, an UNINSTRUMENTED sweep got 20% slower (idle sweep 8.5 -> 10.2 us) and proc
+    // rose 7.5 -> 10.5 us on a busy one, which was enough to put 1,587 producer stalls on a run that had 0.
+    auto emit_run_z = [&](uint32_t start, uint32_t count) {
+        if constexpr (kSelfZones == 0) {
+            emit_run(start, count);
+        } else if (!self_on) {
+            emit_run(start, count);
+        } else {
+            eg_t1 = 0;
+            eg_t2 = 0;
+            emit_run(start, count);
+            if (eg_t1 != 0) {
+                self_zone(kernel_profiler::DRISC_ZONE_CREDIT_WAIT, eg_t0, eg_t1);
+                if (eg_t2 != 0) {
+                    self_zone(kernel_profiler::DRISC_ZONE_WRITE, eg_t1, eg_t2);
+                }
+            }
+        }
+    };
+    auto self_arm = [&](uint32_t zone_id, uint64_t t_begin, uint64_t t_end) {
+        if constexpr (kSelfZones == 0) {
+            (void)zone_id;
+            (void)t_begin;
+            (void)t_end;
+            return;
+        } else {
+        self_work = true;
+        if (self_on || self_busy) {
+            return;
+        }
+        if (self_frames >= kSelfMaxFrames || sweeps < self_next_sweep) {
+            return;
+        }
+        self_on = true;
+        self_mark(kernel_profiler::DRISC_ZONE_SWEEP, kernel_profiler::SPSC_TYPE_ZONE_START, self_t_sweep0);
+        // The zone that discovered the work, retroactively. Skipped when the caller has no interval to
+        // contribute (t_end == 0), which is how the filler arms from inside its scan.
+        if (t_end != 0) {
+            self_zone(zone_id, t_begin, t_end);
+        }
         }
     };
 
@@ -740,6 +1081,28 @@ void kernel_main() {
                        s_bar0 = c_barrier;
         const uint64_t words_at_sweep_start = total_words;
         sweep_max_run = 0;
+
+        // Instrument this sweep from its very start? Only two reasons to: the previous sweep did work (so this
+        // one probably will, and starting early is what makes a burst's second sweep COMPLETE), or it is one of
+        // the sparse idle samples. Everything else arms later, from self_arm, when work is actually found.
+        if constexpr (kSelfZones != 0) {
+            self_t_sweep0 = t_sweep0;
+            self_work = false;
+            self_pub_in_sweep = false;
+            self_trunc = false;
+            self_on = false;
+            self_from_start = false;
+            if (self_frames >= kSelfMaxFrames) {
+                self_over++;
+            } else if (
+                sweeps >= self_next_sweep &&
+                (self_prev_busy ||
+                 ((sweeps % kSelfIdleEvery) == 0 && self_idle_frames < kSelfIdleFrames))) {
+                self_on = true;
+                self_from_start = true;
+                self_mark(kernel_profiler::DRISC_ZONE_SWEEP, kernel_profiler::SPSC_TYPE_ZONE_START, t_sweep0);
+            }
+        }
 
         // ---- ABLATION: egress only (kAblate=1) ----
         //
@@ -808,6 +1171,15 @@ void kernel_main() {
             ring_hi[peer] = n;
         }
         if (n != 0) {
+            // A MOVER's definition of work, and it is known BEFORE anything expensive happens -- so unlike the
+            // filler, a mover's busy visit is captured WHOLE (its read zone included). This is the arm that
+            // matters most: a mover is idle in ~199,584 of ~199,918 sweeps (0.17% busy), and the socket credit
+            // wait that sets the knee exists only on this path and only when n != 0.
+            if constexpr (kSelfZones != 0) {
+                if (!self_on) {
+                    self_arm(0, 0, 0);
+                }
+            }
             // Bounded by staging, then by the ring wrap -- clamping at the wrap costs one short read per lap
             // and keeps this a SINGLE contiguous DRAM read, which matters because reads are what the mover
             // is made of.
@@ -824,7 +1196,15 @@ void kernel_main() {
                 n * kSlotBytes,
                 NOC_INDEX);
             noc_b.async_read_barrier();
-            c_read += get_timestamp() - t_r0;
+            const uint64_t t_r1 = get_timestamp();
+            c_read += t_r1 - t_r0;
+            // The same interval c_read just took, as a zone. A mover's read is head-read + the contiguous
+            // DRAM batch read + its barrier, all one span -- there is no issue/wait split to make here.
+            if constexpr (kSelfZones != 0) {
+                if (self_on) {
+                    self_zone(kernel_profiler::DRISC_ZONE_READ, t_r0, t_r1);
+                }
+            }
             if (*mv_probe_frame[peer] == 0) {
                 // First frame word the mover ever saw ON THIS RING. The host checks it against spsc_span_w0(),
                 // which proves the filler's DRAM write and this read agree on the address -- end to end, with
@@ -844,7 +1224,7 @@ void kernel_main() {
                 NOC_INDEX);
             *mv_live_head[peer] = head;
             *mv_live_tail[peer] = mv_tail[peer];
-            ship_run(0, n);
+            emit_run_z(0, n);  // a mover's emit_run IS ship_run; the wrapper adds its credit-wait/write zones
             frames += n;
             mv_moved[peer] += n;
             if (n > mv_max_n[peer]) {
@@ -858,9 +1238,23 @@ void kernel_main() {
             if (!write_barrier_bounded(t_b0 + kCreditWaitCycles, dbg_hw_ack, dbg_sw_ack)) {
                 egress_dead = true;
             }
-            c_barrier += get_timestamp() - t_b0;
+            const uint64_t t_b1 = get_timestamp();
+            c_barrier += t_b1 - t_b0;
+            if constexpr (kSelfZones != 0) {
+                if (self_on) {
+                    self_zone(kernel_profiler::DRISC_ZONE_WR_BARRIER, t_b0, t_b1);
+                }
+            }
         } else {
-            c_read += get_timestamp() - t_r0;
+            const uint64_t t_r1 = get_timestamp();
+            c_read += t_r1 - t_r0;
+            // An EMPTY visit is still a read: the head poll and its barrier are what an idle mover sweep is
+            // made of, and 185,097 of 185,409 sweeps are idle. Leaving it out would hide the whole idle cost.
+            if constexpr (kSelfZones != 0) {
+                if (self_on) {
+                    self_zone(kernel_profiler::DRISC_ZONE_READ, t_r0, t_r1);
+                }
+            }
         }
         // Never start the second peer once egress is dead: staging may hold unflushed bytes, and an
         // impossible head on one ring says nothing good about the other.
@@ -882,7 +1276,27 @@ void kernel_main() {
 
         auto process_batch = [&](uint32_t base_c, uint32_t n, uint32_t g) {
             const uint64_t t_p0 = get_timestamp();
-            const uint64_t flush_at = c_reserve + c_write;
+            // c_self joins the nested term because self_publish RESTORES c_reserve/c_write (see there), so
+            // without it the time a mid-batch self publish spends would be charged to `proc`. With kSelfZones
+            // == 0 the ternary folds to a literal 0 and this is the expression it always was.
+            const uint64_t flush_at = c_reserve + c_write + (kSelfZones != 0 ? c_self : 0);
+            // PROC's START goes out here rather than at the end, so its children (the credit wait and the
+            // write inside emit_run) follow it in the stream. A parent whose START is written after its
+            // children would nest wrong in Tracy however good the timestamps are. `proc_open` tracks whether
+            // it was actually emitted, because this batch may instead ARM instrumentation part-way through --
+            // and an END without its START is an orphan the host has to throw away.
+            bool proc_open = false;
+            // `frames` advances once per LIVE core, so this is a zero-cost way to ask at the end of the batch
+            // whether it found any work -- no flag in the scan loop, which is the one place nothing may be
+            // added (see the SCAN comment below: it is register-pressure bound, and a call in there spilled
+            // the head mirror and cost 40% of proc).
+            const uint32_t frames_at_p0 = frames;
+            if constexpr (kSelfZones != 0) {
+                if (self_on) {
+                    self_mark(kernel_profiler::DRISC_ZONE_PROC, kernel_profiler::SPSC_TYPE_ZONE_START, t_p0);
+                    proc_open = true;
+                }
+            }
             uint32_t run_start = 0, run_len = 0;
             for (uint32_t i = 0; i < n; i++) {
                 const uint32_t c = base_c + i;
@@ -934,7 +1348,7 @@ void kernel_main() {
                 if (peak > sweep_max_run) { sweep_max_run = peak; }
                 const uint32_t live = r0 + r1 + r2 + r3 + r4;
                 if (live == 0) {
-                    emit_run(run_start, run_len);
+                    emit_run_z(run_start, run_len);
                     run_len = 0;
                     continue;
                 }
@@ -969,15 +1383,38 @@ void kernel_main() {
                 frames++;
                 total_words += live;
             }
-            emit_run(run_start, run_len);
+            // A LIVE CORE is a filler's definition of work, and this is the first point after the scan where it
+            // can be acted on without putting anything inside the scan. Arming here is what makes busy sweeps
+            // get captured at all -- 114 of ~21,000 sweeps have live cores, so a rule keyed on sweep number
+            // samples the other 99.5%. COST: this batch's own read zones are already gone (their timestamps
+            // belong to a previous loop iteration), so the first batch of a newly-armed sweep contributes only
+            // its PROC zone and its egress children. Every later batch of that sweep is complete.
+            if constexpr (kSelfZones != 0) {
+                if (!self_on && frames != frames_at_p0) {
+                    self_arm(0, 0, 0);
+                    if (self_on) {
+                        self_mark(kernel_profiler::DRISC_ZONE_PROC, kernel_profiler::SPSC_TYPE_ZONE_START, t_p0);
+                        proc_open = true;
+                    }
+                }
+            }
+            emit_run_z(run_start, run_len);
             gen_shipped[g] = true;
             // SATURATING. The nested ship_run time is subtracted out so it is not double-counted against
             // proc, but if that term ever exceeds the elapsed span the unsigned subtract wraps -- observed
             // once as "proc 18727729111430.1%", which silently corrupts the whole phase breakdown.
             {
-                const uint64_t span = get_timestamp() - t_p0;
-                const uint64_t nested = (c_reserve + c_write) - flush_at;
+                const uint64_t t_p1 = get_timestamp();
+                const uint64_t span = t_p1 - t_p0;
+                const uint64_t nested = (c_reserve + c_write + (kSelfZones != 0 ? c_self : 0)) - flush_at;
                 c_proc += (span > nested) ? (span - nested) : 0;
+                if constexpr (kSelfZones != 0) {
+                    // The PROC zone spans t_p0..t_p1, i.e. c_proc PLUS its nested credit-wait/write children.
+                    // That is what a Tracy parent is; the host cross-check subtracts the children.
+                    if (proc_open) {
+                        self_mark(kernel_profiler::DRISC_ZONE_PROC, kernel_profiler::SPSC_TYPE_ZONE_END, t_p1);
+                    }
+                }
             }
         };
 
@@ -989,7 +1426,13 @@ void kernel_main() {
                 const uint64_t t_b0 = get_timestamp();
                 *phase = kPhBar1;
                 const bool flushed = write_barrier_bounded(t_b0 + kCreditWaitCycles, dbg_hw_ack, dbg_sw_ack);
-                c_barrier += get_timestamp() - t_b0;
+                const uint64_t t_b1 = get_timestamp();
+                c_barrier += t_b1 - t_b0;
+                if constexpr (kSelfZones != 0) {
+                    if (self_on) {
+                        self_zone(kernel_profiler::DRISC_ZONE_WR_BARRIER, t_b0, t_b1);
+                    }
+                }
                 if (!flushed) {
                     egress_dead = true;
                     break;
@@ -1030,6 +1473,15 @@ void kernel_main() {
                 }
             }
             const uint64_t t_issue = get_timestamp();
+            // c_read is TWO disjoint intervals per batch -- the issue, and whatever wait survives the
+            // concurrent ship -- so it takes two zones. One zone spanning both would swallow process_batch and
+            // claim read time the overlap actually hides, which is the very error the c_read accounting
+            // comment below was written to fix.
+            if constexpr (kSelfZones != 0) {
+                if (self_on) {
+                    self_zone(kernel_profiler::DRISC_ZONE_READ, t_batch0, t_issue);
+                }
+            }
 
             // The overlap: these writes go out on NOC_INDEX while the reads above fly on kReadNoc.
             if (have_pend) {
@@ -1044,7 +1496,13 @@ void kernel_main() {
             if constexpr (kReadSplit != 0) {
                 noc_b.async_read_barrier();  // staging reuse is only safe once BOTH read NoCs have landed
             }
-            c_read += (t_issue - t_batch0) + (get_timestamp() - t_after_proc);
+            const uint64_t t_read_end = get_timestamp();
+            c_read += (t_issue - t_batch0) + (t_read_end - t_after_proc);
+            if constexpr (kSelfZones != 0) {
+                if (self_on) {
+                    self_zone(kernel_profiler::DRISC_ZONE_READ_WAIT, t_after_proc, t_read_end);
+                }
+            }
 
             pend_base = base_c;
             pend_n = n;
@@ -1064,7 +1522,13 @@ void kernel_main() {
             } else {
                 publish_head();
             }
-            c_barrier += get_timestamp() - t_b0;
+            const uint64_t t_b1 = get_timestamp();
+            c_barrier += t_b1 - t_b0;
+            if constexpr (kSelfZones != 0) {
+                if (self_on) {
+                    self_zone(kernel_profiler::DRISC_ZONE_WR_BARRIER, t_b0, t_b1);
+                }
+            }
         }
 
         }
@@ -1083,6 +1547,51 @@ void kernel_main() {
             c_idle += sweep_cyc;
         } else {
             c_busy += sweep_cyc;
+        }
+
+        // ---- close and either SHIP or REWIND this sweep's self zones ----
+        //
+        // REWIND is the whole reason the budget can be aimed at busy sweeps: discarding an instrumented sweep
+        // costs one assignment, so instrumenting speculatively (because the previous sweep was busy) is free
+        // when the guess is wrong. It is only available while nothing has been shipped yet -- once a frame is
+        // out, the SWEEP zone is open on the host and MUST be closed or that lane's Tracy stack stays one deep
+        // forever, so self_pub_in_sweep forces the publish.
+        if constexpr (kSelfZones != 0) {
+            const bool busy = frames != frames_at_sweep_start;
+            if (self_on) {
+                self_mark(
+                    kernel_profiler::DRISC_ZONE_SWEEP,
+                    kernel_profiler::SPSC_TYPE_ZONE_END,
+                    t_sweep0 + sweep_cyc);
+                const bool did_work = busy || self_work;
+                if (did_work || self_pub_in_sweep || (sweeps % kSelfIdleEvery) == 0) {
+                    const uint32_t before = self_frames;
+                    self_publish();
+                    self_sweeps++;
+                    if (did_work) {
+                        self_sweeps_work++;
+                    } else {
+                        self_idle_frames += self_frames - before;
+                    }
+                    // Work captures are spaced tightly (they are what this exists for and the budget bounds
+                    // them); idle samples are spaced wide (they are context, and the most expensive kind).
+                    self_next_sweep = sweeps + (did_work ? kSelfWorkEvery : kSelfSample);
+                    if (self_from_start) {
+                        // The counter side of the cross-check, over exactly the sweep the zones just described.
+                        self_ck_sweeps++;
+                        self_ck_read += c_read - s_read0;
+                        self_ck_proc += c_proc - s_proc0;
+                        self_ck_rsv += c_reserve - s_rsv0;
+                        self_ck_write += c_write - s_wr0;
+                        self_ck_bar += c_barrier - s_bar0;
+                    }
+                } else {
+                    self_tail = self_head;
+                    self_rewound++;
+                }
+                self_on = false;
+            }
+            self_prev_busy = busy;
         }
 
         // ---- pacing controller ----
@@ -1126,6 +1635,19 @@ void kernel_main() {
             while (get_timestamp() < until) {
             }
         }
+    }
+
+    // The loop can leave from the MIDDLE of an instrumented sweep (the stop word, a bounded barrier giving up,
+    // the sweep cap). Close and ship what is in the ring: an un-emitted SWEEP END would leave that lane's Tracy
+    // stack one level deep for the rest of the capture, which is exactly the orphan class the handler exists to
+    // guard against. Publishing needs a live egress, so skip it if egress is already declared dead.
+    if constexpr (kSelfZones != 0) {
+        if (self_on && !egress_dead) {
+            self_mark(kernel_profiler::DRISC_ZONE_SWEEP, kernel_profiler::SPSC_TYPE_ZONE_END, get_timestamp());
+            self_publish();
+            self_sweeps++;
+        }
+        self_on = false;
     }
 
     // socket_barrier() waits for the host to ack everything, so it hangs on a dead consumer just
@@ -1235,6 +1757,40 @@ void kernel_main() {
     out[62] = (kRole == kRoleMover) ? *mv_probe_f[1] : 0u;
     out[63] = ring_hi[1];
     static_assert(kNPeer <= 2, "the results block only carries two peers (out[58..63])");
+    // ---- DRISC SELF-PROFILING counters (0 on the default path) ----
+    //
+    // Shipped WITH the feature for the same reason the role split's were: a sampled, capped instrument that
+    // reports only "it worked" is indistinguishable from one that captured the wrong 0.5% of the run. These say
+    // how much was captured, how much was deliberately discarded, how much was refused for budget, and what it
+    // cost -- so "silently truncated" is not a state this can be in.
+    out[64] = self_frames;        // self frames shipped (x 10,560 B each)
+    out[65] = self_markers;       // markers written into the self ring
+    out[66] = self_sweeps;        // sweeps whose zones were shipped
+    out[67] = self_sweeps_work;   // of those, the ones that actually did work -- the ones worth having
+    out[68] = self_rewound;       // instrumented, turned out idle, discarded for free
+    out[69] = self_over;          // sweeps left uninstrumented because the frame budget was spent
+    out[70] = self_dropped;       // markers lost because a publish could not free the ring (should be 0)
+    out[71] = static_cast<uint32_t>(c_self & 0xFFFFFFFFu);
+    out[72] = static_cast<uint32_t>(c_self >> 32);
+    out[73] = self_tail;          // total words ever appended (monotonic)
+    // The cross-check block: the phase totals over the sweeps the zones cover, so a host that sums zone
+    // durations out of the Tracy capture can assert an equality rather than eyeball a plausible shape.
+    out[74] = self_ck_sweeps;
+    out[75] = static_cast<uint32_t>(self_ck_read & 0xFFFFFFFFu);
+    out[76] = static_cast<uint32_t>(self_ck_read >> 32);
+    out[77] = static_cast<uint32_t>(self_ck_proc & 0xFFFFFFFFu);
+    out[78] = static_cast<uint32_t>(self_ck_proc >> 32);
+    out[79] = static_cast<uint32_t>(self_ck_rsv & 0xFFFFFFFFu);
+    out[80] = static_cast<uint32_t>(self_ck_rsv >> 32);
+    out[81] = static_cast<uint32_t>(self_ck_write & 0xFFFFFFFFu);
+    out[82] = static_cast<uint32_t>(self_ck_write >> 32);
+    out[83] = static_cast<uint32_t>(self_ck_bar & 0xFFFFFFFFu);
+    out[84] = static_cast<uint32_t>(self_ck_bar >> 32);
+    out[85] = self_abandoned;    // idle sweeps dropped mid-flight when the ring filled (free, nothing shipped)
+    out[86] = self_idle_frames;  // of self_frames, the ones spent on sweeps that did no work
+    out[87] = self_trunc_sweeps;  // captured sweeps cut short at one ring (their tail zones are missing)
+    static_assert(
+        kernel_profiler::SPSC_DRAIN_RESULT_WORDS >= 88, "the results block must hold the self-profiling counters");
 
     *phase = kPhaseExit;
     // Only hand the socket back if the consumer was still alive. update_socket_config() talks to the same

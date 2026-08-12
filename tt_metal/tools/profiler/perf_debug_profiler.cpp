@@ -356,6 +356,40 @@ constexpr uint32_t kProbeFillerMagic = 0xF11E5A17u;
 constexpr uint32_t kProbeMoverMagic = 0x5A0FE1EDu;
 constexpr uint32_t kHsHead = 0, kHsTail = 16, kHsProbeF = 32, kHsProbeM = 48, kHsBytes = 64;
 
+// ---- DRISC SELF-PROFILING knobs -----------------------------------------------------------------------
+//
+// TT_METAL_PERF_DEBUG_DRISC_ZONES=N makes every drainer emit its OWN device zones, framed as worker spans and
+// pushed down the path it already owns, so they land in Tracy on their own per-core row beside the workers.
+// Unset or 0 is today's path bit for bit: every compile arg below is then 0 and the kernel's `if constexpr`
+// discards all of it, including the staging slot it would otherwise reserve.
+//
+// N is the MINIMUM SWEEPS BETWEEN CAPTURED SWEEPS, not "sample every Nth". The distinction is the whole design
+// (see the kernel): both roles are >99% idle, so a phase-based sample captures the idle poll loop and misses
+// every burst. The trigger is discovered WORK; N only spreads the captures across the run.
+uint32_t drisc_zones() {
+    static const uint32_t v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_DRISC_ZONES");
+        if (s == nullptr || *s == '\0' || *s == '0') {
+            return 0u;
+        }
+        const uint32_t n = static_cast<uint32_t>(std::strtoul(s, nullptr, 10));
+        return n == 0 ? 200u : n;  // bare "1" is legal (capture every busy sweep); a non-numeric value = 200
+    }();
+    return v;
+}
+
+// Frames of self capture per DRISC. A self frame is a whole 10,560 B slot of which only ring 0 is live, and
+// one instrumented busy filler sweep fills roughly two of them, so this is what stops the instrument from
+// out-shipping the payload. 64 frames is 676 KB against a filler's ~18.5 MB, i.e. ~3.6%, and still ~8k zones.
+uint32_t drisc_zone_frames() {
+    static const uint32_t v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_DRISC_ZONE_FRAMES");
+        const uint32_t n = (s != nullptr && *s != '\0') ? static_cast<uint32_t>(std::strtoul(s, nullptr, 10)) : 64u;
+        return n == 0 ? 64u : n;
+    }();
+    return v;
+}
+
 // TT_METAL_PERF_DEBUG_NSTAGE: cap on staging slots. A DRISC's L1 fits 7; a Tensix's fits ~130, which would
 // make the two drainers incomparable, so the Tensix path clamps to the DRISC count by default.
 uint32_t nstage_cap(uint32_t computed) {
@@ -727,6 +761,12 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
         // ~110 cores typically run the workload, and pre-creating all of them litters the capture with
         // empty (count=0) contexts that read as "cores not showing up". The per-zone mutex+lookup cost is
         // identical either way; lazy creation just avoids minting dead contexts.
+        //
+        // The DRAINER cores are the exception, and pre-created: with self-profiling on they are GUARANTEED to
+        // emit zones, so none of them can turn into a dead context, and there are only a handful.
+        if (auto it = self_zone_cores_.find(ctx.chip_id); it != self_zone_cores_.end() && !it->second.empty()) {
+            tracy_->PreCreateContexts(ctx.chip_id, it->second);
+        }
         ctx.active = true;
         devices_.push_back(std::move(ctx));
     }
@@ -1058,6 +1098,29 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
             ringbank.push_back(0);
         }
     }
+
+    // ---- DRISC SELF-PROFILING: give each drainer a LANE BLOCK of its own ----------------------------------
+    //
+    // A drainer's self frame is an ordinary span frame, so the host resolves it exactly like a worker's: by
+    // looking up SPSC_CORE_XY in core_of_xy and turning the answer into lane = core * NRISC + risc. That means
+    // the drainer cores need core indices, and the lane space has to be wide enough to hold them. Appending
+    // them after the worker grid keeps every worker lane id EXACTLY where it was, which matters because
+    // pub_last_ts_ / first_ts_ / con_last_ts_ are all indexed by it.
+    //
+    // Done HERE rather than in the per-DRISC loop below because ctx.nl is consumed by SpscDecodeState::reset()
+    // inside that loop: a drainer brought up before another would otherwise get a decoder sized too small and
+    // silently drop the later drainer's frames (lane >= nl is a `continue`).
+    const uint32_t self_core0 = static_cast<uint32_t>(num_cores);
+    const bool self_zones_on = drisc_zones() != 0 && drisc_zone_frames() != 0;
+    if (self_zones_on) {
+        ctx.n_worker_cores = static_cast<uint32_t>(num_cores);
+        ctx.nl = (static_cast<uint32_t>(num_cores) + ctx.n_drisc) * kNRisc;
+        ctx.core_virt.resize(static_cast<size_t>(num_cores) + ctx.n_drisc);
+        if (first_ts_.size() < ctx.nl) {
+            first_ts_.assign(ctx.nl, 0);
+        }
+    }
+
     for (uint32_t d = 0; d < ctx.n_drisc; d++) {
         ctx.dram_bank[d] = ringbank[d];
     }
@@ -1066,6 +1129,7 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
         (kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE + kNRisc * kernel_profiler::PROFILER_L1_VECTOR_SIZE) *
         sizeof(uint32_t);
     const uint32_t slot_bytes_all = kernel_profiler::SPSC_SPAN_PREFIX_WORDS * sizeof(uint32_t) + span_bytes_all;
+    uint32_t nstage_report = 0;  // last drainer's mapped staging-slot count, for the self-profiling log line
 
     // ---- REUSE the old profiler's DRAM region; do NOT allocate a second buffer ----
     //
@@ -1296,6 +1360,17 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
                 CoordSystem::NOC0);
             drisc_phys = CoreCoord{phys.x, phys.y};
             ctx.drisc_virtual[d] = ctx.device->virtual_core_from_logical_core(ctx.drisc_logical[d], CoreType::DRAM);
+            // This drainer's own core, as a Tracy row: virtual coords are what its self frame carries in
+            // SPSC_CORE_XY, NOC0 is what a Tracy context is keyed on. Registered for BOTH maps here, where both
+            // are in hand -- a DRAM core is absent from metal_soc_descriptor's profiler flat-id map (TENSIX and
+            // ETH only), so nothing else would ever give it a row.
+            if (self_zones_on) {
+                ctx.core_virt[self_core0 + d] = {
+                    static_cast<uint32_t>(ctx.drisc_virtual[d].x), static_cast<uint32_t>(ctx.drisc_virtual[d].y)};
+                ctx.virt_to_noc0[(static_cast<uint64_t>(ctx.drisc_virtual[d].x) << 32) |
+                                 static_cast<uint64_t>(ctx.drisc_virtual[d].y)] = {
+                    static_cast<uint32_t>(drisc_phys.x), static_cast<uint32_t>(drisc_phys.y)};
+            }
             ctx.drisc_l1_base[d] = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
             ctx.drisc_l1_noc[d] = hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
             region = hal.get_dev_size(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
@@ -1313,6 +1388,27 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
             disarm_producers(mesh_device, device_id);
             return false;
         }
+        // ---- DRISC SELF-PROFILING takes ONE staging slot, and takes it out of nstage rather than out of L1 ----
+        //
+        // The self frame is a full slot (prefix + control vector + five rings), so it needs somewhere slot-sized
+        // to live. There is no room to ADD one: a DRAM core's UNRESERVED L1 is 86 KB and 7 slots of 10,560 B
+        // plus the scratch/misc/socket-config reserve already leave under 2 KB spare. So hand the kernel
+        // (nstage - 1) slots and let it use index kNStage -- one past its own array -- for the self frame. L1
+        // does not grow, the OFF build is untouched, and the only behavioural cost is that a MOVER's largest
+        // batch drops from 7 frames to 6 (a filler's batch is bounded by kGenSlots = 3 either way, so it is
+        // unaffected). That cost is real and is measured in FINDINGS rather than waved off.
+        const uint32_t self_frames_cap = drisc_zones() != 0 ? drisc_zone_frames() : 0u;
+        const uint32_t nstage_drain = (self_frames_cap != 0 && nstage >= 3) ? nstage - 1u : nstage;
+        if (self_frames_cap != 0 && nstage < 3) {
+            log_warning(
+                tt::LogMetal,
+                "[perf-debug profiler] Device {}: only {} staging slots fit, too few to spare one for DRISC "
+                "self-profiling (needs >= 3 so kGenSlots stays >= 1); self zones are OFF for this run",
+                device_id,
+                nstage);
+        }
+        const uint32_t self_slot = nstage_drain;  // must match the kernel's kSelfSlot == kNStage
+        nstage_report = nstage;
         const uint32_t stage_base = ctx.drisc_l1_base[d];
         const uint32_t head_scratch = stage_base + nstage * slot_bytes;
         ctx.done_addr[d] = head_scratch + kScratchBytes;
@@ -1321,7 +1417,14 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
         // The role-split handshake block. Allocated for every role so the L1 layout (and hence every other
         // address) is identical whether the knob is on or off -- a mover reads its FILLER's block, and that
         // only works because both cores lay their L1 out the same way.
-        ctx.hs_addr[d] = ctx.results_addr[d] + 256;
+        // Sized off the SHARED constant, not a literal: this moved once already (48 -> 64 words) and a
+        // hand-copied 256 here would have silently overlapped the handshake.
+        ctx.hs_addr[d] = ctx.results_addr[d] + kernel_profiler::SPSC_DRAIN_RESULT_WORDS * sizeof(uint32_t);
+        TT_FATAL(
+            self_frames_cap == 0 || self_slot < nstage,
+            "perf-debug: DRISC self-profiling wants staging slot {} but only {} slots are mapped",
+            self_slot,
+            nstage);
         const uint32_t cfg_l1 = ctx.drisc_l1_base[d] + region - kCfgReserve;
         TT_FATAL(ctx.hs_addr[d] + kHsBytes <= cfg_l1, "DRISC L1 layout overlaps the socket config");
 
@@ -1574,7 +1677,7 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
             // Same reason, for the results block: it is published only on kernel exit, so a drainer that is
             // still running at teardown leaves the PREVIOUS run's numbers there and they read as this run's.
             // That is how a 42 s run reported "495.7 ms, credit-wait 0.1%" and hid its own credit timeouts.
-            const std::vector<uint32_t> zero_res(64, 0);
+            const std::vector<uint32_t> zero_res(kernel_profiler::SPSC_DRAIN_RESULT_WORDS, 0);
             cluster.write_core(
                 zero_res.data(),
                 (uint32_t)(zero_res.size() * sizeof(uint32_t)),
@@ -1646,7 +1749,7 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
             ctx.drain_program[d] = std::make_unique<Program>(CreateProgram());
             const std::vector<uint32_t> cargs = {
                 stage_base,
-                nstage,
+                nstage_drain,  // one fewer than the slots mapped when self-profiling owns the last one
                 head_scratch,
                 ctx.results_addr[d],
                 ctx.done_addr[d],
@@ -1680,7 +1783,17 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
                 peer_xy[1],
                 peer_hs[1],
                 peer_bank[1],
-                peer_addr[1]};
+                peer_addr[1],
+                // ---- DRISC self-profiling (arg 32..35). All zero when the knob is off. ----
+                // The identity is passed in rather than read from a firmware global: SPSC_CORE_XY has to be in
+                // the SAME coordinate space the worker cores stamp (virtual), because the host resolves a frame
+                // to a lane through one map keyed on exactly that. A DRISC guessing its own coordinates would
+                // be a second, silent way to get it wrong.
+                self_frames_cap != 0 ? 1u : 0u,
+                drisc_zones(),
+                (static_cast<uint32_t>(ctx.drisc_virtual[d].x) & 0xFFFFu) |
+                    ((static_cast<uint32_t>(ctx.drisc_virtual[d].y) & 0xFFFFu) << 16),
+                self_frames_cap};
             const std::string kdrain = "tt_metal/tools/profiler/kernels/drisc_profiler_drain.cpp";
             auto drain_id =
                 tensix_drain ? CreateKernel(
@@ -1885,6 +1998,53 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
             num_cores,
             nstage,
             slot_bytes);
+    }
+
+    // ---- DRISC SELF-PROFILING: teach every decoder the drainer cores' identities -------------------------
+    //
+    // AFTER the bring-up loop, because a drainer's virtual coords only exist once it has been placed, and a
+    // mover's socket decoder is created before the last filler is placed. Every socket gets EVERY drainer's
+    // entry for the same reason it gets every worker's: a frame's identity is resolved from the map, and a
+    // missing entry makes the decoder skip the frame whole -- silently.
+    if (self_zones_on) {
+        for (uint32_t sk = 0; sk < kNSockets; sk++) {
+            if (ctx.decode[sk] == nullptr) {
+                continue;
+            }
+            for (uint32_t d = 0; d < ctx.n_drisc; d++) {
+                const uint32_t xy = (static_cast<uint32_t>(ctx.drisc_virtual[d].x) & 0xFFFFu) |
+                                    ((static_cast<uint32_t>(ctx.drisc_virtual[d].y) & 0xFFFFu) << 16);
+                ctx.decode[sk]->core_of_xy[xy] = self_core0 + d;
+            }
+        }
+        // Mint the drainers' Tracy contexts up front. Only these six -- pre-creating the worker grid litters a
+        // capture with empty contexts (see start()), but a drainer core is guaranteed to produce zones when this
+        // knob is on, and creating a context costs a GpuNewContext+Populate+name that has no business happening
+        // on the drain path.
+        std::vector<std::pair<uint32_t, uint32_t>> drisc_noc0;
+        for (uint32_t d = 0; d < ctx.n_drisc; d++) {
+            const auto it = ctx.virt_to_noc0.find(
+                (static_cast<uint64_t>(ctx.drisc_virtual[d].x) << 32) | static_cast<uint64_t>(ctx.drisc_virtual[d].y));
+            if (it != ctx.virt_to_noc0.end()) {
+                drisc_noc0.push_back(it->second);
+            }
+        }
+        self_zone_cores_[ctx.chip_id] = std::move(drisc_noc0);
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler] Device {}: DRISC SELF-PROFILING on -- {} drainer cores get lanes [{},{}) "
+            "and their own Tracy rows | capture spacing >= {} sweeps, budget {} frames/DRISC ({:.0f} KB, "
+            "{} zones max) | a drainer's staging slot count drops {} -> {} to make room",
+            device_id,
+            ctx.n_drisc,
+            self_core0 * kNRisc,
+            ctx.nl,
+            drisc_zones(),
+            drisc_zone_frames(),
+            drisc_zone_frames() * slot_bytes_all / 1024.0,
+            drisc_zone_frames() * (kernel_profiler::PROFILER_L1_VECTOR_SIZE / 4),
+            nstage_report,
+            nstage_report > 0 ? nstage_report - 1 : 0);
     }
 
     return true;
@@ -2388,6 +2548,16 @@ void PerfDebugProfiler::consumer_thread() {
                 log_warning(tt::LogMetal, "[perf-debug profiler] zone-name load failed ({})", e.what());
             }
             zone_names_[0x7FFFu] = "PRODUCER-STALL";  // PROFILER_STALL_ZONE_ID
+            // DRISC self-profiling. These ids are FIXED rather than source-location hashes (see
+            // DriscSelfZone), so generateZoneSourceLocationsHashes() can never supply their names --
+            // registering them here is the only thing that stops them showing up as "Zone_32752".
+            zone_names_[kernel_profiler::DRISC_ZONE_SWEEP] = "DRISC-SWEEP";
+            zone_names_[kernel_profiler::DRISC_ZONE_READ] = "DRISC-READ";
+            zone_names_[kernel_profiler::DRISC_ZONE_READ_WAIT] = "DRISC-READ-WAIT";
+            zone_names_[kernel_profiler::DRISC_ZONE_PROC] = "DRISC-PROC";
+            zone_names_[kernel_profiler::DRISC_ZONE_CREDIT_WAIT] = "DRISC-CREDIT-WAIT";
+            zone_names_[kernel_profiler::DRISC_ZONE_WRITE] = "DRISC-WRITE";
+            zone_names_[kernel_profiler::DRISC_ZONE_WR_BARRIER] = "DRISC-WR-BARRIER";
         });
         ZoneScopedNC("tracy-emit", 0x2980B9);  // blue: pushing this batch into Tracy -- the slow side (~0.8M
                                                // rec/s). When this saturates, the RING drops; it can no longer
@@ -2803,7 +2973,7 @@ void PerfDebugProfiler::stop() {
             }
             // The drainer's own view of the run. Host-side page and marker counts cannot distinguish a
             // bandwidth wall from a latency one; sweeps/frames/cycles can.
-            std::vector<uint32_t> res(64, 0);
+            std::vector<uint32_t> res(kernel_profiler::SPSC_DRAIN_RESULT_WORDS, 0);
             cluster.read_core(
                 res.data(),
                 res.size() * sizeof(uint32_t),
@@ -2884,7 +3054,9 @@ void PerfDebugProfiler::stop() {
                 pct(c_ph_head),
                 c_proc ? (100.0 * static_cast<double>(c_ph_head) / static_cast<double>(c_proc)) : 0.0,
                 pct(c_proc > c_ph_head ? c_proc - c_ph_head : 0),
-                ctx.core_virt.size());
+                // WORKER cores. With self-profiling on, core_virt also holds the drainers, and the head
+                // write-back is issued to producers only -- reporting 126 issues/sweep on a 120-core grid.
+                ctx.n_worker_cores != 0 ? ctx.n_worker_cores : ctx.core_virt.size());
             // WORST-SWEEP breakdown. The knee is decided by the worst sweep, not the mean, and the worst
             // has been running ~2.5x the mean with no explanation. These are that one sweep's phases.
             {
@@ -2977,6 +3149,75 @@ void PerfDebugProfiler::stop() {
                     }
                 }
             }
+            // ---- DRISC SELF-PROFILING counters (only printed when the knob is on) ----
+            //
+            // Everything needed to tell "captured the right 0.5% of the run" from "captured the idle loop and
+            // looked healthy doing it": how many captured sweeps DID WORK (the ones that matter -- a mover's
+            // credit wait only exists on those), how many were discarded, how many were refused for budget, and
+            // the bytes. A summary frame count alone cannot distinguish those cases, which is the failure mode
+            // this whole block exists to make impossible.
+            if (res[64] != 0 || res[66] != 0 || res[69] != 0) {
+                const uint64_t c_self_cyc = (static_cast<uint64_t>(res[72]) << 32) | res[71];
+                const uint32_t self_bytes = res[64] * 10560u;
+                log_info(
+                    tt::LogMetal,
+                    "[perf-debug profiler] DRISC {} SELF-ZONES ({}): {} frames ({:.0f} KB, {:.2f}% of this "
+                    "drainer's {:.1f} MB egress) | {} sweeps captured of which {} DID WORK ({} frames went to "
+                    "idle samples) | {} rewound + {} abandoned (idle, discarded free) | {} sweeps skipped once "
+                    "the budget ran out | {} markers, {} words | publish cost {:.2f} ms ({:.2f}% of the run){}",
+                    d,
+                    res[48] == kRoleFiller ? "FILLER" : (res[48] == kRoleMover ? "MOVER" : "FULL"),
+                    res[64],
+                    self_bytes / 1024.0,
+                    res[5] ? 100.0 * self_bytes / (static_cast<double>(res[5]) * 64.0) : 0.0,
+                    (static_cast<double>(res[5]) * 64.0) / (1024.0 * 1024.0),
+                    res[66],
+                    res[67],
+                    res[86],
+                    res[68],
+                    res[85],
+                    res[69],
+                    res[65],
+                    res[73],
+                    (static_cast<double>(c_self_cyc) / kCycPerUs) / 1000.0,
+                    cyc ? 100.0 * static_cast<double>(c_self_cyc) / static_cast<double>(cyc) : 0.0,
+                    res[70] != 0 ? fmt::format(
+                                       " | TRUNCATED: {} captured sweeps ran past one ring and lost {} markers "
+                                       "off their tails (deliberate -- the bound is what keeps a captured sweep "
+                                       "from crossing the knee; the SWEEP zone is still closed)",
+                                       res[87],
+                                       res[70])
+                                 : std::string());
+                // A capture whose sweeps all turned out idle is a FAILED capture even though every count above
+                // looks healthy -- on a mover especially, since the credit wait that sets the knee only happens
+                // on a busy visit. Say so rather than let a plausible frame count stand in for coverage.
+                if (res[66] != 0 && res[67] == 0) {
+                    log_warning(
+                        tt::LogMetal,
+                        "[perf-debug profiler] DRISC {} SELF-ZONES: all {} captured sweeps were IDLE -- the "
+                        "capture contains no read/proc/credit-wait/write of consequence. The work-arm never "
+                        "fired; treat this drainer's zones as cadence only.",
+                        d,
+                        res[66]);
+                }
+                // The cross-check side: phase totals over EXACTLY the sweeps the zones describe, so summing
+                // zone durations per name out of the Tracy capture must reproduce these. See the kernel.
+                auto u64r = [&res](size_t i) { return (static_cast<uint64_t>(res[i + 1]) << 32) | res[i]; };
+                log_info(
+                    tt::LogMetal,
+                    "[perf-debug profiler] DRISC {} SELF-ZONES cross-check over {} fully-instrumented sweeps: "
+                    "read {:.1f} us | proc {:.1f} us | credit-wait {:.1f} us | write {:.1f} us | wr-barrier "
+                    "{:.1f} us -- sum(DRISC-READ)+sum(DRISC-READ-WAIT), sum(DRISC-PROC)-sum(DRISC-CREDIT-WAIT)"
+                    "-sum(DRISC-WRITE), sum(DRISC-CREDIT-WAIT), sum(DRISC-WRITE), sum(DRISC-WR-BARRIER) from "
+                    "the capture must match these",
+                    d,
+                    res[74],
+                    u64r(75) / kCycPerUs,
+                    u64r(77) / kCycPerUs,
+                    u64r(79) / kCycPerUs,
+                    u64r(81) / kCycPerUs,
+                    u64r(83) / kCycPerUs);
+            }
             const uint32_t sweeps_busy = res[4] > res[20] ? res[4] - res[20] : 0;
             log_info(
                 tt::LogMetal,
@@ -3028,7 +3269,13 @@ void PerfDebugProfiler::stop() {
         const uint64_t prof_l1 = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::PROFILER);
         std::vector<uint32_t> cv(kernel_profiler::SPSC_CONTROL_END, 0);
         uint64_t total = 0, worst = 0, cores_hit = 0;
-        for (const auto& [vx, vy] : ctx.core_virt) {
+        // WORKER cores only. With DRISC self-profiling on, core_virt also holds the drainer cores, and a DRAM
+        // core has no producer and no stall counters -- reading the TENSIX profiler address on one returns
+        // whatever is at that offset in DRISC L1. Measured before this bound existed: "80,475,310,058 producer
+        // stalls across 73 of 126 cores", which reads as a catastrophically perturbed run and is pure garbage.
+        const size_t n_stall_cores = ctx.n_worker_cores != 0 ? ctx.n_worker_cores : ctx.core_virt.size();
+        for (size_t ci = 0; ci < n_stall_cores; ci++) {
+            const auto [vx, vy] = ctx.core_virt[ci];
             cluster.read_core(
                 cv.data(),
                 kernel_profiler::SPSC_CONTROL_END * sizeof(uint32_t),
@@ -3049,7 +3296,7 @@ void PerfDebugProfiler::stop() {
             ctx.chip_id,
             total,
             cores_hit,
-            ctx.core_virt.size(),
+            n_stall_cores,
             worst);
     }
 

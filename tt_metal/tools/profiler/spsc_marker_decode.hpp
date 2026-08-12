@@ -35,6 +35,11 @@ static_assert(
     PP_BULK_SPAN == kernel_profiler::SPSC_SPAN_PACKET_TYPE,
     "spsc_packet.h (plain C, drainer firmware) and profiler_common.h (C++, metal kernels) must agree on the "
     "BULK_SPAN wire code -- they cannot include each other, so this is the only thing holding them together");
+// Same argument for the three codes the DRISC self-profiling packer in profiler_common.h emits directly.
+static_assert(PP_ZONE_START == kernel_profiler::SPSC_TYPE_ZONE_START, "ZONE_START wire code disagrees");
+static_assert(PP_ZONE_END == kernel_profiler::SPSC_TYPE_ZONE_END, "ZONE_END wire code disagrees");
+static_assert(PP_STICKY_TIMER == kernel_profiler::SPSC_TYPE_STICKY_TIMER, "STICKY_TIMER wire code disagrees");
+static_assert(PP_TYPE_SHIFT == kernel_profiler::SPSC_SPAN_TYPE_SHIFT, "packet type field moved");
 
 namespace tt::tt_metal::profiler {
 
