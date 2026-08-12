@@ -4,7 +4,8 @@
 
 #pragma once
 
-#if defined(DEVICE_DEBUG_DUMP) && (defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC))
+#if defined(DEVICE_DEBUG_DUMP) && defined(PROFILE_KERNEL) && !defined(DISPATCH_KERNEL) && \
+    (defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC))
 
 #include "noc_debugging_metadata.hpp"
 #include "internal/risc_attribs.h"
@@ -30,8 +31,13 @@ FORCE_INLINE void recordScopedLockEvent(uint32_t locked_address_base, uint32_t n
 #define RECORD_SCOPED_LOCK_EVENT(event_type, locked_address_base, num_bytes) \
     noc_debugging_profiler::recordScopedLockEvent<event_type>((locked_address_base), (num_bytes))
 
+// Unregister every DFB extent this RISC declared.
+#define RECORD_DFB_REGION_CLEAR() \
+    noc_debugging_profiler::recordScopedLockEvent<NocDebuggingEventMetadata::NocDebugEventType::DFB_REGION_CLEAR>(0, 0)
+
 #else
 
 #define RECORD_SCOPED_LOCK_EVENT(event_type, locked_address_base, num_bytes)
+#define RECORD_DFB_REGION_CLEAR()
 
 #endif

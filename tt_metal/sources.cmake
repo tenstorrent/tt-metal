@@ -100,16 +100,16 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/tensor_apis_with_pad_values.hpp
     api/tt-metalium/experimental/tensor_host_pad_apis.hpp
     api/tt-metalium/experimental/tensor_serialization_support.hpp
-    api/tt-metalium/experimental/tensor/host_tensor.hpp
-    api/tt-metalium/experimental/tensor/mesh_tensor.hpp
-    api/tt-metalium/experimental/tensor/spec/layout/alignment.hpp
-    api/tt-metalium/experimental/tensor/spec/layout/layout.hpp
-    api/tt-metalium/experimental/tensor/spec/layout/page_config.hpp
-    api/tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp
-    api/tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp
-    api/tt-metalium/experimental/tensor/spec/tensor_spec.hpp
-    api/tt-metalium/experimental/tensor/tensor_apis.hpp
-    api/tt-metalium/experimental/tensor/tensor_types.hpp
+    api/tt-metalium/tensor/host_tensor.hpp
+    api/tt-metalium/tensor/mesh_tensor.hpp
+    api/tt-metalium/tensor/spec/layout/alignment.hpp
+    api/tt-metalium/tensor/spec/layout/layout.hpp
+    api/tt-metalium/tensor/spec/layout/page_config.hpp
+    api/tt-metalium/tensor/spec/layout/tensor_layout.hpp
+    api/tt-metalium/tensor/spec/memory_config/memory_config.hpp
+    api/tt-metalium/tensor/spec/tensor_spec.hpp
+    api/tt-metalium/tensor/tensor_apis.hpp
+    api/tt-metalium/tensor/tensor_types.hpp
     api/tt-metalium/experimental/udm/mesh_builder.hpp
     api/tt-metalium/experimental/udm/mesh_circular_buffer.hpp
     api/tt-metalium/experimental/udm/mesh_kernel.hpp
