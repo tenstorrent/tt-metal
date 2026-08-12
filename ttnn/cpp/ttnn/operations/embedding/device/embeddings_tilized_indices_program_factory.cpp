@@ -94,13 +94,23 @@ tt::tt_metal::ProgramDescriptor EmbeddingsTilizedIndicesProgramFactory::create_d
 
     constexpr uint32_t src1_cb_index = tt::CBIndex::c_1;
     uint32_t index_page_size = round_up_to_mul32(input_element_size_bytes);
+    // The reader kernel (embedding_ind_tilized.cpp) issues a single NOC read of the full aligned
+    // input page (input.get_aligned_page_size()) into this CB. The FACE_HEIGHT*index_page_size
+    // size is a stale lower bound that is smaller than a tile page for tilized indices, which lets
+    // the read overflow the circular buffer (surfaced by the watcher as a NOC error). Size the CB
+    // to hold the whole aligned input page while keeping the old value as a floor.
+    uint32_t src1_page_size = FACE_HEIGHT * index_page_size;
+    const uint32_t aligned_input_page_size = a.buffer()->aligned_page_size();
+    if (aligned_input_page_size > src1_page_size) {
+        src1_page_size = aligned_input_page_size;
+    }
     desc.cbs.push_back(CBDescriptor{
-        .total_size = FACE_HEIGHT * index_page_size,
+        .total_size = src1_page_size,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = src1_cb_index,
             .data_format = input_cb_data_format,
-            .page_size = FACE_HEIGHT * index_page_size,
+            .page_size = src1_page_size,
         }}},
     });
 
