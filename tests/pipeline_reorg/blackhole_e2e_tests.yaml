@@ -135,7 +135,6 @@
 # --- stress (continuous gate) ---
 - id: bh-fabric-stability-stress
   name: fabric stability nightly tests
-  # Timeout added to filter false regressions.
   cmd: TT_METAL_OPERATION_TIMEOUT_SECONDS=0 ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ./tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_stability.yaml --filter 'name.*_short'
   skus:
     bh_loudbox:
