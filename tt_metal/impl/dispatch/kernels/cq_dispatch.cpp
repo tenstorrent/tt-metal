@@ -224,126 +224,6 @@ using CBReaderType = CBReaderWithReleasePolicy<
 
 static CBReaderType dispatch_cb_reader;
 
-// TEMPORARY: end-to-end prefetcher->dispatcher copy latency instrumentation. See fd_copy_bench.hpp.
-//
-// The sample is taken immediately after the credit wait returns -- that instant is when the dispatcher
-// may legally read the data, i.e. the semantic end of the publish. Stores happen after the sample, so
-// they fall outside the measured interval.
-//
-// Records only the FIRST BLOCKING wait of each command. Two reasons:
-//
-//  1. The wait inside acquire_pages() is CONDITIONAL (cq_common.hpp:484). If credits were already banked
-//     the loop is skipped, and the timestamp then reflects when the dispatcher got around to looking
-//     rather than transport latency. Measurement showed EXACTLY ONE non-blocking wait per command on both
-//     Quasar and Blackhole (observes - waited == iterations in every run) -- almost certainly the first
-//     wait, which finds the dispatch command's own bytes already present from the RELAY_INLINE. The first
-//     BLOCKING wait is therefore the one that actually waits on the prefetcher's payload publish.
-//  2. A command triggers many waits (one per available-data chunk), so recording all of them made the
-//     count disagree with the prefetcher's and left overwrite-last pairing unrelated events.
-//
-// kSlotWaitedCount stays as a diagnostic count of ALL blocking waits; it costs a counter increment and no
-// timestamp, so it does not perturb the measured path.
-static uint32_t fd_bench_observe_count = 0;
-static uint32_t fd_bench_waited_count = 0;
-
-// Called ONLY when the wait actually blocked, so the unconditional increment below counts blocking waits.
-FORCE_INLINE void fd_bench_record_first_observe(bool& recorded, uint32_t available_data) {
-    // Sample BEFORE any store. A store ahead of the timestamp delays the sample and inflates the measured
-    // latency by the cost of an uncached write. Skip the probe when we already recorded this command.
-    const uint32_t t_obs = recorded ? 0u : get_timestamp_32b();
-    fd_copy_bench::slots()[fd_copy_bench::kSlotWaitedCount] = ++fd_bench_waited_count;
-    if (recorded) {
-        return;
-    }
-    recorded = true;
-    // Per-command timestamp for the averaged Metric A, indexed by the pre-increment count so it lines up
-    // with the prefetcher's issue[i]. t_obs was sampled at the top of this function, before any store.
-    if (fd_bench_observe_count < fd_copy_bench::kPairEntries) {
-        fd_copy_bench::slots()[fd_copy_bench::kObservePairBase + fd_bench_observe_count] = t_obs;
-    }
-    fd_copy_bench::slots()[fd_copy_bench::kSlotLastTObserved] = t_obs;
-    fd_copy_bench::slots()[fd_copy_bench::kSlotObserveCount] = ++fd_bench_observe_count;
-    fd_copy_bench::slots()[fd_copy_bench::kSlotLastAvailBytes] = available_data;
-}
-
-// Stall/work accounting, accumulated over the run. stall/busy is the direct test of "is the consumer kept
-// fed": low means the prefetcher's higher per-byte cost is not reaching the dispatcher.
-FORCE_INLINE uint32_t rdcycle() {
-    uint32_t c;
-    asm volatile("rdcycle %0" : "=r"(c));
-    return c;
-}
-
-static uint32_t fd_bench_total_cycles = 0;
-static uint32_t fd_bench_stall_cycles = 0;
-static uint32_t fd_bench_nonblock_cycles = 0;
-static uint32_t fd_bench_nonblock_count = 0;
-static uint32_t fd_bench_bytes = 0;
-static uint32_t fd_bench_cmd_count = 0;
-// Main-loop accounting (see fd_copy_bench.hpp). loop_wait covers the top-of-loop
-// wait_for_available_data_and_release_old_pages, which is where credit release to the prefetcher actually
-// happens -- previously outside every bracket, and over half the command period was unattributed.
-static uint32_t fd_bench_loop_wait_cycles = 0;
-static uint32_t fd_bench_loop_cmd_cycles = 0;
-static uint32_t fd_bench_loop_iters = 0;
-static uint32_t fd_bench_loop_wait_max = 0;
-
-// Non-blocking waits are the baseline: same code path, no spin. Their per-call cost is the overhead the
-// blocking waits also pay (uncached semaphore read, invalidate_l1_cache, noc_async_atomic_barrier, block
-// release), so subtracting it isolates real starvation from the cost of polling.
-FORCE_INLINE void fd_bench_note_wait(bool blocked, uint32_t cycles) {
-    if (blocked) {
-        fd_bench_stall_cycles += cycles;
-    } else {
-        fd_bench_nonblock_cycles += cycles;
-        ++fd_bench_nonblock_count;
-    }
-}
-
-FORCE_INLINE void fd_bench_accumulate(uint32_t total, uint32_t bytes) {
-    // One timestamp per command, whether or not this command ever blocked. `total` was already computed by the
-    // caller before this call, so the probe does not inflate the cycle accounting.
-    if (fd_bench_cmd_count < fd_copy_bench::kPairEntries) {
-        fd_copy_bench::slots()[fd_copy_bench::kCmdTimePairBase + fd_bench_cmd_count] = get_timestamp_32b();
-    }
-    fd_bench_total_cycles += total;
-    fd_bench_bytes += bytes;
-    ++fd_bench_cmd_count;
-    fd_copy_bench::slots()[fd_copy_bench::kSlotDispTotalCycles] = fd_bench_total_cycles;
-    fd_copy_bench::slots()[fd_copy_bench::kSlotDispStallCycles] = fd_bench_stall_cycles;
-    fd_copy_bench::slots()[fd_copy_bench::kSlotDispNonblockCycles] = fd_bench_nonblock_cycles;
-    fd_copy_bench::slots()[fd_copy_bench::kSlotDispNonblockCount] = fd_bench_nonblock_count;
-    fd_copy_bench::slots()[fd_copy_bench::kSlotDispBytes] = fd_bench_bytes;
-    fd_copy_bench::slots()[fd_copy_bench::kSlotDispCmdCount] = fd_bench_cmd_count;
-}
-
-FORCE_INLINE void fd_bench_init_dispatch() {
-    fd_copy_bench::slots()[fd_copy_bench::kSlotLastTObserved] = 0;
-    fd_copy_bench::slots()[fd_copy_bench::kSlotObserveCount] = 0;
-    fd_copy_bench::slots()[fd_copy_bench::kSlotWaitedCount] = 0;
-    fd_copy_bench::slots()[fd_copy_bench::kSlotDispTotalCycles] = 0;
-    fd_copy_bench::slots()[fd_copy_bench::kSlotDispStallCycles] = 0;
-    fd_copy_bench::slots()[fd_copy_bench::kSlotDispNonblockCycles] = 0;
-    fd_copy_bench::slots()[fd_copy_bench::kSlotDispNonblockCount] = 0;
-    fd_copy_bench::slots()[fd_copy_bench::kSlotDispBytes] = 0;
-    fd_copy_bench::slots()[fd_copy_bench::kSlotDispCmdCount] = 0;
-    fd_bench_total_cycles = 0;
-    fd_bench_stall_cycles = 0;
-    fd_bench_nonblock_cycles = 0;
-    fd_bench_nonblock_count = 0;
-    fd_bench_bytes = 0;
-    fd_bench_cmd_count = 0;
-    fd_copy_bench::slots()[fd_copy_bench::kSlotDispLoopWaitCycles] = 0;
-    fd_copy_bench::slots()[fd_copy_bench::kSlotDispCmdCycles] = 0;
-    fd_copy_bench::slots()[fd_copy_bench::kSlotDispLoopIters] = 0;
-    fd_copy_bench::slots()[fd_copy_bench::kSlotDispLoopWaitMax] = 0;
-    fd_bench_loop_wait_cycles = 0;
-    fd_bench_loop_cmd_cycles = 0;
-    fd_bench_loop_iters = 0;
-    fd_bench_loop_wait_max = 0;
-    fd_copy_bench::slots()[fd_copy_bench::kSlotDispatchMagic] = fd_copy_bench::kDispatchMagic;
-}
-
 constexpr uint32_t packed_write_max_multicast_sub_cmds =
     get_packed_write_max_multicast_sub_cmds(packed_write_max_unicast_sub_cmds);
 constexpr uint32_t max_write_packed_large_cmd =
@@ -654,10 +534,10 @@ void process_exec_buf_end_d() { relay_to_next_cb(cmd_ptr, sizeof(CQDispatchCmd))
 // Note that for non-paged writes, the number of writes per page is always 1
 // This means each noc_write frees up a page
 void process_write_linear(uint32_t num_mcast_dests) {
-    // Benchmark: record only this command's first blocking wait.
-    bool fd_bench_recorded = false;
-    const uint32_t fd_bench_cmd_start = rdcycle();
-    uint32_t fd_bench_cmd_bytes = 0;
+    // Chunk index for per-chunk waypoints. Function-scoped local, not a static: it is only live within
+    // one command and must not carry state or a reset obligation across calls. Unused on the FABRIC_RELAY
+    // path, which does not go through the per-chunk credit wait below.
+    [[maybe_unused]] uint32_t fd_bench_chunk = 0;
 
     volatile tt_l1_ptr CQDispatchCmdLarge* cmd =
         reinterpret_cast<volatile tt_l1_ptr CQDispatchCmdLarge*>(l1_uncached_addr(cmd_ptr));
@@ -697,18 +577,15 @@ void process_write_linear(uint32_t num_mcast_dests) {
             }
         }
 #else
-        const bool fd_bench_blocked = (dispatch_cb_reader.available_bytes(data_ptr) == 0);
-        // Bracket the wait for the stall accounting. The second rdcycle comes BEFORE the wall-clock record
-        // so the stall figure is not inflated by the record's ~42-cycle probe on Quasar; the cost is ~4
-        // cycles of delay on the end-to-end timestamp, i.e. 0.2% of a ~2000-cycle interval.
-        const uint32_t fd_bench_w0 = rdcycle();
+#if FD_BENCH_DP_CHUNK_WAYPOINTS
+        fd_copy_bench::dp_chunk_mark(fd_bench_chunk, fd_copy_bench::kDpChunkAcqStart, fd_copy_bench::bench_cycle());
+#endif
         uint32_t available_data = dispatch_cb_reader.wait_for_available_data_and_release_old_pages(data_ptr);
-        fd_bench_note_wait(fd_bench_blocked, rdcycle() - fd_bench_w0);
-        if (fd_bench_blocked) {
-            fd_bench_record_first_observe(fd_bench_recorded, available_data);
-        }
+#if FD_BENCH_DP_CHUNK_WAYPOINTS
+        fd_copy_bench::dp_chunk_mark(fd_bench_chunk, fd_copy_bench::kDpChunkAcqEnd, fd_copy_bench::bench_cycle());
+#endif
+        ++fd_bench_chunk;
         uint32_t xfer_size = length > available_data ? available_data : length;
-        fd_bench_cmd_bytes += xfer_size;
 #endif
         cq_noc_async_write_with_state_any_len(static_cast<uint32_t>(data_ptr), dst_addr, xfer_size, num_mcast_dests);
         // Increment counters based on the number of packets that were written
@@ -721,7 +598,9 @@ void process_write_linear(uint32_t num_mcast_dests) {
     }
 
     cmd_ptr = data_ptr;
-    fd_bench_accumulate(rdcycle() - fd_bench_cmd_start, fd_bench_cmd_bytes);
+    // NOT guarded by FD_BENCH_DP_TIMELINE -- this pair is the period-only baseline (§3.8).
+    fd_copy_bench::dp_mark(fd_copy_bench::kDpCmdEnd, fd_copy_bench::bench_cycle());
+    fd_copy_bench::dp_commit_row();
 }
 
 void process_write() {
@@ -1590,6 +1469,7 @@ re_run_command:
                 relay_to_next_cb(cmd_ptr, sizeof(CQDispatchCmd));
             }
             cmd_ptr += sizeof(CQDispatchCmd);
+            fd_copy_bench::dp_publish_and_flag();
             done = true;
             break;
 
@@ -1638,6 +1518,7 @@ static inline bool process_cmd_h(uintptr_t& cmd_ptr) {
         case CQ_DISPATCH_CMD_TERMINATE:
             // DPRINT("dispatch_h terminate\n");
             cmd_ptr += sizeof(CQDispatchCmd);
+            fd_copy_bench::dp_publish_and_flag();
             done = true;
             break;
 
@@ -1721,7 +1602,6 @@ void kernel_main() {
 #else
     DPRINT("dispatch_{}{}: start\n", is_h_variant, is_d_variant);
 #endif
-    fd_bench_init_dispatch();
 
     // Get runtime args
     my_dev_id = get_arg_val<uint32_t>(OFFSETOF_MY_DEV_ID);
@@ -1806,16 +1686,13 @@ void kernel_main() {
     *get_dispatch_progress_ptr() = dispatch_progress;
 
     while (!done) {
-        // BENCHMARK: this top-of-loop call is where credits are released back to the prefetcher, and it was
-        // outside every previous bracket. See fd_copy_bench.hpp / design doc §4.3a.
-        const uint32_t fd_bench_lw0 = rdcycle();
+#if FD_BENCH_DP_TIMELINE
+        fd_copy_bench::dp_mark(fd_copy_bench::kDpLoopWaitStart, fd_copy_bench::bench_cycle());
+#endif
         dispatch_cb_reader.wait_for_available_data_and_release_old_pages<DispatchTelemetryBlockGuard>(cmd_ptr);
-        const uint32_t fd_bench_lw = rdcycle() - fd_bench_lw0;
-        fd_bench_loop_wait_cycles += fd_bench_lw;
-        // The first wait spans device-init to first-command and dwarfs everything else; the host trims it.
-        if (fd_bench_lw > fd_bench_loop_wait_max) {
-            fd_bench_loop_wait_max = fd_bench_lw;
-        }
+#if FD_BENCH_DP_TIMELINE
+        fd_copy_bench::dp_mark(fd_copy_bench::kDpLoopWaitEnd, fd_copy_bench::bench_cycle());
+#endif
 
         DeviceZoneScopedN("CQ-DISPATCH");
 #if defined(COMPILE_FOR_IDLE_ERISC)
@@ -1828,14 +1705,10 @@ void kernel_main() {
         }
 #endif
 
-        const uint32_t fd_bench_cmd0 = rdcycle();
+#if FD_BENCH_DP_TIMELINE
+        fd_copy_bench::dp_mark(fd_copy_bench::kDpCmdStart, fd_copy_bench::bench_cycle());
+#endif
         done = is_d_variant ? process_cmd_d(cmd_ptr, l1_cache) : process_cmd_h(cmd_ptr);
-        fd_bench_loop_cmd_cycles += rdcycle() - fd_bench_cmd0;
-        ++fd_bench_loop_iters;
-        fd_copy_bench::slots()[fd_copy_bench::kSlotDispLoopWaitCycles] = fd_bench_loop_wait_cycles;
-        fd_copy_bench::slots()[fd_copy_bench::kSlotDispCmdCycles] = fd_bench_loop_cmd_cycles;
-        fd_copy_bench::slots()[fd_copy_bench::kSlotDispLoopIters] = fd_bench_loop_iters;
-        fd_copy_bench::slots()[fd_copy_bench::kSlotDispLoopWaitMax] = fd_bench_loop_wait_max;
 
         // Increment dispatch progress counter and write to L1 memory
         dispatch_progress++;
