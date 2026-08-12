@@ -323,6 +323,7 @@ jobs:
           sparse-checkout: |
             .github/actions
             tests/scripts/quasar
+            tests/tt_metal
           sparse-checkout-cone-mode: false
 
       - name: Download test reports from the release test suites
@@ -358,12 +359,17 @@ jobs:
           python3 .github/actions/scripts/release_test_report.py
           cat release-test-evidence.md >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Generate the Quasar test coverage inventory
+        run: python3 tests/scripts/quasar/gen_test_coverage_doc.py
+
       - name: Upload report
         if: ${{ always() }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: release-test-evidence-${{ inputs.tag-version || github.run_id }}
-          path: release-test-evidence.md
+          path: |
+            release-test-evidence.md
+            tests/scripts/quasar/QUASAR_TEST_COVERAGE.md
           if-no-files-found: warn
 
   # We need to tag the image used to reproduce the release later

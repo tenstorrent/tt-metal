@@ -260,25 +260,31 @@ def render():
             )
         out.append("")
 
+    # Skipped rather than reported as zero when tests/tt_metal is absent, e.g. a
+    # sparse checkout that did not ask for it.
     cases = defined_gtests()
     quasar_cases = {c for c in cases if "quasar" in c.lower()}
     picked = selected_gtests([r for rows in all_rows.values() for r in rows], cases)
     gate_rows = [r for f, rows in all_rows.items() if f in gating for r in rows]
-    out += [
-        "## tt-metal gtests: defined vs selected",
-        "",
-        "The yamls select by gtest filter from binaries that hold far more than "
-        "they run. Approximate — `TEST_P` instantiation names are normalised.",
-        "",
-        "| | Count |",
-        "|---|---|",
-        f"| gtest cases defined under `tests/tt_metal` | {len(cases)} |",
-        f"| of those, Quasar-named | {len(quasar_cases)} |",
-        f"| selected by any quasar yaml | {len(picked)} |",
-        f"| selected by the gating sim yaml | {len(selected_gtests(gate_rows, cases))} |",
-        f"| Quasar-named, selected by no yaml | {len(quasar_cases - picked)} |",
-        "",
-    ]
+    out += (
+        []
+        if not cases
+        else [
+            "## tt-metal gtests: defined vs selected",
+            "",
+            "The yamls select by gtest filter from binaries that hold far more than "
+            "they run. Approximate — `TEST_P` instantiation names are normalised.",
+            "",
+            "| | Count |",
+            "|---|---|",
+            f"| gtest cases defined under `tests/tt_metal` | {len(cases)} |",
+            f"| of those, Quasar-named | {len(quasar_cases)} |",
+            f"| selected by any quasar yaml | {len(picked)} |",
+            f"| selected by the gating sim yaml | {len(selected_gtests(gate_rows, cases))} |",
+            f"| Quasar-named, selected by no yaml | {len(quasar_cases - picked)} |",
+            "",
+        ]
+    )
 
     counts = Counter((r["config"], r["runner"]) for rows in all_rows.values() for r in rows)
     out += ["## Rows by config and runner", "", "| Config | Runner | Rows |", "|---|---|---|"]
