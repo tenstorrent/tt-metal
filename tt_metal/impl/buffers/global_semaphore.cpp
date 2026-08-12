@@ -126,14 +126,14 @@ GlobalSemaphore::GlobalSemaphore(
     GlobalSemaphore(GlobalSemaphoreImpl(device, std::move(cores), initial_value, buffer_type)) {}
 
 GlobalSemaphore::GlobalSemaphore(GlobalSemaphoreImpl impl) :
-    pimpl_(std::make_unique<GlobalSemaphoreImpl>(std::move(impl))) {}
+    impl_(std::make_unique<GlobalSemaphoreImpl>(std::move(impl))) {}
 
 GlobalSemaphore::GlobalSemaphore(const GlobalSemaphore& other) :
-    pimpl_(other.pimpl_ ? std::make_unique<GlobalSemaphoreImpl>(*other.pimpl_) : nullptr) {}
+    impl_(other.impl_ ? std::make_unique<GlobalSemaphoreImpl>(*other.impl_) : nullptr) {}
 
 GlobalSemaphore& GlobalSemaphore::operator=(const GlobalSemaphore& other) {
     if (this != &other) {
-        pimpl_ = other.pimpl_ ? std::make_unique<GlobalSemaphoreImpl>(*other.pimpl_) : nullptr;
+        impl_ = other.impl_ ? std::make_unique<GlobalSemaphoreImpl>(*other.impl_) : nullptr;
     }
     return *this;
 }
@@ -144,18 +144,24 @@ GlobalSemaphore& GlobalSemaphore::operator=(GlobalSemaphore&& other) noexcept = 
 
 GlobalSemaphore::~GlobalSemaphore() = default;
 
-IDevice* GlobalSemaphore::device() const { return pimpl_->device(); }
+IDevice* GlobalSemaphore::device() const { return impl().device(); }
 
-GlobalSemaphoreImpl& GlobalSemaphore::impl() { return *pimpl_; }
+GlobalSemaphoreImpl& GlobalSemaphore::impl() {
+    TT_FATAL(impl_ != nullptr, "GlobalSemaphore is in a moved-from state.");
+    return *impl_;
+}
 
-const GlobalSemaphoreImpl& GlobalSemaphore::impl() const { return *pimpl_; }
+const GlobalSemaphoreImpl& GlobalSemaphore::impl() const {
+    TT_FATAL(impl_ != nullptr, "GlobalSemaphore is in a moved-from state.");
+    return *impl_;
+}
 
-DeviceAddr GlobalSemaphore::address() const { return pimpl_->address(); }
+DeviceAddr GlobalSemaphore::address() const { return impl().address(); }
 
-void GlobalSemaphore::reset_semaphore_value(uint32_t reset_value) const { pimpl_->reset_semaphore_value(reset_value); }
+void GlobalSemaphore::reset_semaphore_value(uint32_t reset_value) const { impl().reset_semaphore_value(reset_value); }
 
 std::tuple<CoreRangeSet, BufferType> GlobalSemaphore::attribute_values() const {
-    return std::make_tuple(pimpl_->cores(), pimpl_->buffer_type());
+    return std::make_tuple(impl().cores(), impl().buffer_type());
 }
 
 }  // namespace tt::tt_metal

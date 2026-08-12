@@ -81,7 +81,6 @@ public:
     Builder index(uint8_t buffer_index);
     Builder remote_index(uint8_t buffer_index);
 
-    // pre-condition: the CircularBufferConfig must not be in a moved-from state.
     CircularBufferConfigImpl& impl();
     const CircularBufferConfigImpl& impl() const;
 
@@ -89,9 +88,7 @@ public:
     friend bool operator!=(const CircularBufferConfig& lhs, const CircularBufferConfig& rhs);
 
 private:
-    // May be nullptr if the CircularBufferConfig is in a moved-from state.
-    // Avoid using pimpl_ directly; use the impl() accessor instead.
-    std::unique_ptr<CircularBufferConfigImpl> pimpl_;
+    std::unique_ptr<CircularBufferConfigImpl> impl_;
 };
 
 bool operator==(const CircularBufferConfig& lhs, const CircularBufferConfig& rhs);

@@ -290,13 +290,13 @@ bool operator!=(const CircularBufferConfigImpl& lhs, const CircularBufferConfigI
 
 CircularBufferConfig::CircularBufferConfig(
     uint32_t total_size, const std::map<uint8_t, tt::DataFormat>& data_format_spec) :
-    pimpl_(std::make_unique<CircularBufferConfigImpl>(total_size, data_format_spec)) {}
+    impl_(std::make_unique<CircularBufferConfigImpl>(total_size, data_format_spec)) {}
 
 CircularBufferConfig::CircularBufferConfig(uint32_t total_size) :
-    pimpl_(std::make_unique<CircularBufferConfigImpl>(total_size)) {}
+    impl_(std::make_unique<CircularBufferConfigImpl>(total_size)) {}
 
 CircularBufferConfig::CircularBufferConfig(CircularBufferConfigImpl impl) :
-    pimpl_(std::make_unique<CircularBufferConfigImpl>(std::move(impl))) {}
+    impl_(std::make_unique<CircularBufferConfigImpl>(std::move(impl))) {}
 
 CircularBufferConfig make_circular_buffer_config(CircularBufferConfigImpl impl) {
     return CircularBufferConfig(std::move(impl));
@@ -305,13 +305,13 @@ CircularBufferConfig make_circular_buffer_config(CircularBufferConfigImpl impl) 
 CircularBufferConfig::~CircularBufferConfig() = default;
 
 CircularBufferConfig::CircularBufferConfig(const CircularBufferConfig& other) :
-    pimpl_(other.pimpl_ ? std::make_unique<CircularBufferConfigImpl>(*other.pimpl_) : nullptr) {}
+    impl_(other.impl_ ? std::make_unique<CircularBufferConfigImpl>(*other.impl_) : nullptr) {}
 
 CircularBufferConfig& CircularBufferConfig::operator=(const CircularBufferConfig& other) {
     if (this == &other) {
         return *this;
     }
-    pimpl_ = other.pimpl_ ? std::make_unique<CircularBufferConfigImpl>(*other.pimpl_) : nullptr;
+    impl_ = other.impl_ ? std::make_unique<CircularBufferConfigImpl>(*other.impl_) : nullptr;
     return *this;
 }
 
@@ -319,13 +319,13 @@ CircularBufferConfig::CircularBufferConfig(CircularBufferConfig&& other) noexcep
 CircularBufferConfig& CircularBufferConfig::operator=(CircularBufferConfig&& other) noexcept = default;
 
 CircularBufferConfigImpl& CircularBufferConfig::impl() {
-    TT_FATAL(pimpl_ != nullptr, "CircularBufferConfig is in a moved-from state.");
-    return *pimpl_;
+    TT_FATAL(impl_ != nullptr, "CircularBufferConfig is in a moved-from state.");
+    return *impl_;
 }
 
 const CircularBufferConfigImpl& CircularBufferConfig::impl() const {
-    TT_FATAL(pimpl_ != nullptr, "CircularBufferConfig is in a moved-from state.");
-    return *pimpl_;
+    TT_FATAL(impl_ != nullptr, "CircularBufferConfig is in a moved-from state.");
+    return *impl_;
 }
 
 CircularBufferConfig& CircularBufferConfig::set_page_size(uint8_t buffer_index, uint32_t page_size) {

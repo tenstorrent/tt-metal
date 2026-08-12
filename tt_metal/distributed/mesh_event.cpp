@@ -4,7 +4,7 @@
 
 #include <mesh_event.hpp>
 
-#include "mesh_command_queue.hpp"
+#include <tt_stl/assert.hpp>
 #include "mesh_device.hpp"
 #include "mesh_event_impl.hpp"
 
@@ -14,14 +14,14 @@ MeshEventImpl::MeshEventImpl(
     uint32_t id, MeshDevice* device, uint32_t mesh_cq_id, const MeshCoordinateRange& device_range) :
     id_(id), device_(device), mesh_cq_id_(mesh_cq_id), device_range_(device_range) {}
 
-MeshEvent::MeshEvent(MeshEventImpl impl) : pimpl_(std::make_unique<MeshEventImpl>(std::move(impl))) {}
+MeshEvent::MeshEvent(MeshEventImpl impl) : impl_(std::make_unique<MeshEventImpl>(std::move(impl))) {}
 
 MeshEvent::MeshEvent(const MeshEvent& other) :
-    pimpl_(other.pimpl_ ? std::make_unique<MeshEventImpl>(*other.pimpl_) : nullptr) {}
+    impl_(other.impl_ ? std::make_unique<MeshEventImpl>(*other.impl_) : nullptr) {}
 
 MeshEvent& MeshEvent::operator=(const MeshEvent& other) {
     if (this != &other) {
-        pimpl_ = other.pimpl_ ? std::make_unique<MeshEventImpl>(*other.pimpl_) : nullptr;
+        impl_ = other.impl_ ? std::make_unique<MeshEventImpl>(*other.impl_) : nullptr;
     }
     return *this;
 }
@@ -30,10 +30,16 @@ MeshEvent::MeshEvent(MeshEvent&& other) noexcept = default;
 MeshEvent& MeshEvent::operator=(MeshEvent&& other) noexcept = default;
 MeshEvent::~MeshEvent() = default;
 
-MeshDevice* MeshEvent::device() const { return pimpl_->device(); }
+MeshDevice* MeshEvent::device() const { return impl().device(); }
 
-MeshEventImpl& MeshEvent::impl() { return *pimpl_; }
-const MeshEventImpl& MeshEvent::impl() const { return *pimpl_; }
+MeshEventImpl& MeshEvent::impl() {
+    TT_FATAL(impl_ != nullptr, "MeshEvent is in a moved-from state.");
+    return *impl_;
+}
+const MeshEventImpl& MeshEvent::impl() const {
+    TT_FATAL(impl_ != nullptr, "MeshEvent is in a moved-from state.");
+    return *impl_;
+}
 
 MeshEvent make_mesh_event(
     uint32_t id, MeshDevice* device, uint32_t mesh_cq_id, const MeshCoordinateRange& device_range) {

@@ -70,7 +70,7 @@ private:
     GlobalSemaphore(
         IDevice* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
 
-    std::unique_ptr<GlobalSemaphoreImpl> pimpl_;
+    std::unique_ptr<GlobalSemaphoreImpl> impl_;
 
     friend GlobalSemaphore CreateGlobalSemaphore(
         IDevice* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type);

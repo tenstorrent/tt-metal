@@ -52,14 +52,13 @@ GlobalCircularBuffer CreateGlobalCircularBuffer(
 
 class GlobalCircularBuffer {
 public:
-    GlobalCircularBuffer(const GlobalCircularBuffer&) = default;
-    GlobalCircularBuffer& operator=(const GlobalCircularBuffer&) = default;
-
-    GlobalCircularBuffer(GlobalCircularBuffer&&) noexcept = default;
-    GlobalCircularBuffer& operator=(GlobalCircularBuffer&&) noexcept = default;
-
-    // Internal constructor (internal use only)
     explicit GlobalCircularBuffer(GlobalCircularBufferImpl impl);
+
+    GlobalCircularBuffer(const GlobalCircularBuffer& other);
+    GlobalCircularBuffer& operator=(const GlobalCircularBuffer& other);
+    GlobalCircularBuffer(GlobalCircularBuffer&& other) noexcept;
+    GlobalCircularBuffer& operator=(GlobalCircularBuffer&& other) noexcept;
+    ~GlobalCircularBuffer();
 
     const Buffer& cb_buffer() const;
 
@@ -74,10 +73,8 @@ public:
         std::forward_as_tuple("sender_receiver_core_mapping", "size", "buffer_type");
     std::tuple<std::vector<std::pair<CoreCoord, CoreRangeSet>>, uint32_t, BufferType> attribute_values() const;
 
-    // Internal-only accessors (all_cores(), buffer_address(), get_device()) live on the Impl; see
-    // tt_metal/impl/buffers/global_circular_buffer_impl.hpp.
-    GlobalCircularBufferImpl& impl() { return *impl_; }
-    const GlobalCircularBufferImpl& impl() const { return *impl_; }
+    GlobalCircularBufferImpl& impl();
+    const GlobalCircularBufferImpl& impl() const;
 
 private:
     GlobalCircularBuffer(
@@ -86,7 +83,7 @@ private:
         uint32_t size,
         BufferType buffer_type = BufferType::L1);
 
-    std::shared_ptr<GlobalCircularBufferImpl> impl_;
+    std::unique_ptr<GlobalCircularBufferImpl> impl_;
 
     friend GlobalCircularBuffer CreateGlobalCircularBuffer(
         IDevice* device,
