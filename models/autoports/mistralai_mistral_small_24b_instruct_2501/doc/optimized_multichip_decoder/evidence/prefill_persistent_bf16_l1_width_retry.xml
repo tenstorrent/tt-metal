@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="25.717" timestamp="2026-07-19T00:58:26.606681+00:00" hostname="23ff5195c3f7"><testcase classname="models.autoports.mistralai_mistral_small_24b_instruct_2501.tests.test_multichip_decoder" name="test_multichip_two_layer_stacked_prefill_layout_perf[blackhole-mesh_device0-device_params0]" time="24.936"><properties><property name="start_timestamp" value="2026-07-19T00:58:27" /><property name="end_timestamp" value="2026-07-19T00:58:52" /></properties><failure message="RuntimeError: TT_THROW @ /home/mvasiljevic/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception&#10;info:&#10;Statically allocated circular buffers on core range [0-4 - 1-4] grow to 3061248 B which is beyond max L1 size of 1572864 B&#10;backtrace:&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x164e4ca) [0x78fc8664e4ca]&#10; --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so(+0xbc4d73) [0x78fc847c4d73]&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so(+0xa6c7e3) [0x78fc8466c7e3]&#10; --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xf5c79) [0x78fccae17c79]&#10; --- /lib/x86_64-linux-gnu/libc.so.6(+0x9caa4) [0x78fccd8d3aa4]&#10; --- /lib/x86_64-linux-gnu/libc.so.6(__clone+0x44) [0x78fccd960a64]">mesh_device = MeshDevice(1x4 grid, 4 devices)
+
+    @pytest.mark.parametrize("device_params", STACK_DEVICE_PARAMS, indirect=True)
+    @pytest.mark.parametrize("mesh_device", MESH_PARAMS, indirect=True)
+    def test_multichip_two_layer_stacked_prefill_layout_perf(mesh_device):
+        """Compare repeated public prefill transposes with one stack-boundary conversion."""
+
+        iterations = int(os.environ.get(PERF_ITERS_ENV, "10"))
+        config = _config()
+        state = _real_state()
+        prefill_collective_family = os.environ.get(PREFILL_COLLECTIVE_FAMILY_ENV, "default")
+        prefill_collective_dtype = os.environ.get(PREFILL_COLLECTIVE_DTYPE_ENV, "bf16")
+        first = MultichipDecoder.from_state_dict(
+            state,
+            hf_config=config,
+            layer_idx=LAYER_IDX,
+            mesh_device=mesh_device,
+            prefill_collective_family=prefill_collective_family,
+            prefill_collective_dtype=prefill_collective_dtype,
+        )
+        second = MultichipDecoder.from_state_dict(
+            state,
+            hf_config=config,
+            layer_idx=LAYER_IDX,
+            mesh_device=mesh_device,
+            shared_rope=first.shared_rope,
+            shared_collective=first.shared_collective,
+            shared_prefill_collective=first.shared_prefill_collective,
+            prefill_collective_family=prefill_collective_family,
+            prefill_collective_dtype=prefill_collective_dtype,
+        )
+        first_caches = _multichip_caches(config, mesh_device)
+        second_caches = _multichip_caches(config, mesh_device)
+        generator = torch.Generator().manual_seed(2515)
+        hidden = torch.randn(
+            (1, EMITTED_BATCH, EMITTED_PREFILL_SEQUENCE, config.hidden_size),
+            generator=generator,
+            dtype=torch.bfloat16,
+        )
+        tt_hidden = _mesh_input(hidden, mesh_device)
+
+        def public_pair():
+            output = first.prefill_forward(tt_hidden, *first_caches)
+            return second.prefill_forward(output, *second_caches)
+
+        stacked_input, logical_seq_len = first.prepare_prefill_residual(tt_hidden)
+
+        def stacked_pair():
+            output = first.prefill_forward_stacked(
+                stacked_input, *first_caches, logical_seq_len=logical_seq_len
+            )
+            return second.prefill_forward_stacked(
+                output, *second_caches, logical_seq_len=logical_seq_len
+            )
+
+&gt;       eager_public = public_pair()
+                       ^^^^^^^^^^^^^
+
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py:958:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py:945: in public_pair
+    output = first.prefill_forward(tt_hidden, *first_caches)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/multichip_decoder.py:1157: in prefill_forward
+    attention = self._all_reduce_hidden(attention)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/multichip_decoder.py:834: in _all_reduce_hidden
+    return ttnn.experimental.all_reduce_async(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = FastOperation(python_fully_qualified_name='ttnn.experimental.all_reduce_async', function=&lt;ttnn._ttnn.operations.experi...uts=None, golden_function=None, postprocess_golden_function_outputs=None, is_cpp_operation=True, is_experimental=False)
+function_args = (device_id: 3, MeshCoordinate([0, 0])
+ttnn.Tensor([[[[-1.9287e-02, -4.0283e-02,  ..., -2.2583e-02, -2.5513e-02],
+     ...0,  ...,  0.0000e+00,  0.0000e+00]]]], shape=Shape([1, 1, 576, 20480]), dtype=DataType::BFLOAT16, layout=Layout::TILE))
+function_kwargs = {'cluster_axis': 1, 'dtype': DataType.BFLOAT16, 'memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_...W_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), 'mesh_device': MeshDevice(1x4 grid, 4 devices), ...}
+cq_id = None, recording = False
+
+    def __call__(self, *function_args, **function_kwargs):
+        cq_id = None
+        if "queue_id" in function_kwargs:
+            cq_id = function_kwargs.pop("queue_id")
+        elif "cq_id" in function_kwargs:
+            cq_id = function_kwargs.pop("cq_id")
+
+        recording = ttnn.graph.is_python_io_recording_enabled()
+        if recording:
+            ttnn.graph.track_function_start(self.python_fully_qualified_name)
+            ttnn.graph.record_python_operation(self.python_fully_qualified_name, function_args, function_kwargs)
+            input_tensors = get_all_tensors((function_args, function_kwargs))
+            set_tensor_id(input_tensors)
+
+        try:
+            if cq_id is None:
+&gt;               result = self.function(*function_args, **function_kwargs)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               RuntimeError: TT_THROW @ /home/mvasiljevic/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception
+E               info:
+E               Statically allocated circular buffers on core range [0-4 - 1-4] grow to 3061248 B which is beyond max L1 size of 1572864 B
+E               backtrace:
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x164e4ca) [0x78fc8664e4ca]
+E                --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so(+0xbc4d73) [0x78fc847c4d73]
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so(+0xa6c7e3) [0x78fc8466c7e3]
+E                --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xf5c79) [0x78fccae17c79]
+E                --- /lib/x86_64-linux-gnu/libc.so.6(+0x9caa4) [0x78fccd8d3aa4]
+E                --- /lib/x86_64-linux-gnu/libc.so.6(__clone+0x44) [0x78fccd960a64]
+
+ttnn/ttnn/decorators.py:473: RuntimeError</failure></testcase></testsuite></testsuites>

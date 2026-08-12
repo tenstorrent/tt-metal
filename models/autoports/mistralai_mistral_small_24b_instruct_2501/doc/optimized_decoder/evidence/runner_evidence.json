@@ -1,0 +1,70 @@
+{
+  "runtime_source_sha256": "c4d3eb3c7df806c67160b20a2d5d22118dc8acae4227b885abcc5adbef85429e",
+  "test_source_sha256": "22b1c18477abc4a6cc2dd6771f221ff7c633edf1a9787ebba5f492a6160e6199",
+  "watcher": {
+    "environment": {
+      "TT_VISIBLE_DEVICES": "2,3",
+      "TT_METAL_WATCHER": "10"
+    },
+    "pytest_exit_code": 0,
+    "pytest_result": "1 passed in 23.89s",
+    "attached_logical_devices": [0, 1],
+    "detached_logical_devices": [0, 1],
+    "error_assert_hang_noc_signature_matches": 0,
+    "junit_xml": "watcher.xml",
+    "junit_xml_sha256": "c77d3206f130c0111416bfe46aea7e78d5d137ee8b85874016541ce7fdd02877",
+    "runner_log": "watcher_runner.log",
+    "runner_log_sha256": "2abb8ee577628a8778bcc3af69cc1790caf1dcf8605d79d1d39ffa85dbd297c5",
+    "device_log": "watcher_device.log",
+    "device_log_sha256": "7049f8f5cf4d85806b67057c5bcb7a7e7d1125d259e5a700d5edb265ad0e98ea"
+  },
+  "expected_mlp_block16_failures": {
+    "device_l1_bytes": 1572864,
+    "static_circular_buffer_bytes": 3977984,
+    "exact_failure": "Statically allocated circular buffers on core range [0-0 - 9-9] grow to 3977984 B which is beyond max L1 size of 1572864 B",
+    "candidates": [
+      {
+        "policy": "selected_mlp_10x32",
+        "geometry": {
+          "input_cores": 10,
+          "intermediate_cores": 32,
+          "output_cores": 40,
+          "gate_up_max_block": 16,
+          "down_max_block": 16
+        },
+        "weight_dtype": "bfloat4_b",
+        "math_fidelity": "LoFi",
+        "dram_sharded": true,
+        "gate_up_in0_block_w": 16,
+        "gate_up_per_core_n": 32,
+        "real_prefill_pcc": 0.999797170529265,
+        "pytest_exit_code": 1,
+        "expected_allocation_failure_confirmed": true,
+        "post_failure_device_inventory": "healthy",
+        "runner_log": "mlp_block16_10x32_runner.log",
+        "runner_log_sha256": "677640de2d1a654d717e469643857ce643fb2f3c0180890cfd26deae6670b6cd"
+      },
+      {
+        "policy": "selected_mlp_10x64",
+        "geometry": {
+          "input_cores": 10,
+          "intermediate_cores": 64,
+          "output_cores": 40,
+          "gate_up_max_block": 16,
+          "down_max_block": 16
+        },
+        "weight_dtype": "bfloat4_b",
+        "math_fidelity": "LoFi",
+        "dram_sharded": true,
+        "gate_up_in0_block_w": 16,
+        "gate_up_per_core_n": 16,
+        "real_prefill_pcc": 0.999797170529265,
+        "pytest_exit_code": 1,
+        "expected_allocation_failure_confirmed": true,
+        "post_failure_device_inventory": "healthy",
+        "runner_log": "mlp_block16_10x64_runner.log",
+        "runner_log_sha256": "0be65d6e34cdffb68540514900c8ae9bf5d35284c70a6182ef74223f36576a8e"
+      }
+    ]
+  }
+}

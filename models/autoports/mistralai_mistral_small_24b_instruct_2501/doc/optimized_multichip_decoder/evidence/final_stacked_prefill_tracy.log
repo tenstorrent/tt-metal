@@ -1,0 +1,101 @@
++ timeout 1200 env TT_LOGGER_LEVEL=fatal MISTRAL_SMALL_24B_REAL_WEIGHT_DIR=/home/mvasiljevic/hf-cache/hub/models--mistralai--Mistral-Small-24B-Instruct-2501/snapshots/9527884be6e5616bdd54de542f9ae13384489724 MISTRAL_SMALL_24B_MULTICHIP_PROFILE_STACKED_PREFILL=1 MISTRAL_SMALL_24B_MULTICHIP_PERF_ITERS=1 python -m tracy -r -p -v -o models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/optimized_multichip_decoder/tracy/final_stacked_prefill_bfp8 -m pytest -q -s --junitxml=models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/optimized_multichip_decoder/evidence/final_stacked_prefill_tracy.xml models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_profile_internal_stacked_prefill
+2026-07-19 01:36:58.529 | INFO     | __main__:main:189 - Setting profiler artifacts folder to models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/optimized_multichip_decoder/tracy/final_stacked_prefill_bfp8
+2026-07-19 01:36:58.530 | INFO     | __main__:main:395 - Using port 8086
+2026-07-19 01:36:58.530 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-07-19 01:36:58.532 | INFO     | tracy:run_report_setup:112 - Capture command: ('/home/mvasiljevic/tt-metal/build/tools/profiler/bin/tracy-capture -o models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/optimized_multichip_decoder/tracy/final_stacked_prefill_bfp8/.logs/tracy_profile_log_host.tracy -f -p 8086',)
+Connecting to 127.0.0.1:8086...2026-07-19 01:36:58.537 | INFO     | __main__:main:413 - Test process started
+2026-07-19 01:36:59.238 | INFO     | __main__:main:189 - Setting profiler artifacts folder to models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/optimized_multichip_decoder/tracy/final_stacked_prefill_bfp8
+2026-07-19 01:36:59.469 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/mvasiljevic/tt-metal/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: github-actions-annotate-failures-0.3.0, anyio-4.14.2, dash-2.15.0, split-0.11.0, timeout-2.4.0, benchmark-5.2.3, cov-7.0.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_profile_internal_stacked_prefill[blackhole-mesh_device0-device_params0] --------------------------------------------------------------------------
+It appears as if there is not enough space for /dev/shm/sm_segment.23ff5195c3f7.1000.65d80000.0 (the shared-memory backing
+file). It is likely that your MPI job will now either abort or experience
+performance degradation.
+
+  Local host:  23ff5195c3f7
+  Space Requested: 16777216 B
+  Space Available: 17539072 B
+--------------------------------------------------------------------------
+2026-07-19 01:37:02.481 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-19 01:37:02.481 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-19 01:37:03.245 | DEBUG    | conftest:mesh_device:599 - multidevice with 4 devices is created
+2026-07-19 01:37:14.998 | INFO     | tracy:signpost:49 - MULTICHIP_INTERNAL_STACK_PREFILL
+2026-07-19 01:37:15.005 | INFO     | tracy:signpost:49 - MULTICHIP_INTERNAL_STACK_PREFILL_END
+MULTICHIP_INTERNAL_STACK_PREFILL_PROFILE_RESULT logical_seq_len=18 two_layer_ms=6.131294 per_layer_ms=3.065647 iterations=1
+PASSED
+
+==================================== PASSES ====================================
+- generated xml file: /home/mvasiljevic/tt-metal/models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/optimized_multichip_decoder/evidence/final_stacked_prefill_tracy.xml -
+============================== slowest durations ===============================
+11.76s call     models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_profile_internal_stacked_prefill[blackhole-mesh_device0-device_params0]
+1.53s teardown models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_profile_internal_stacked_prefill[blackhole-mesh_device0-device_params0]
+1.51s setup    models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_profile_internal_stacked_prefill[blackhole-mesh_device0-device_params0]
+=========================== short test summary info ============================
+PASSED models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_profile_internal_stacked_prefill[blackhole-mesh_device0-device_params0]
+============================== 1 passed in 15.84s ==============================
+nanobind: leaked 2 instances!
+ - leaked instance 0x7be7f4b3df08 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x7be7ec1b8648 of type "ttnn._ttnn.tensor.MemoryConfig"
+nanobind: leaked 21 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "FabricConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - ... skipped remainder
+nanobind: leaked 247 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "from_json"
+ - leaked function ""
+ - leaked function "compute_program_hash"
+ - leaked function "to_list"
+ - leaked function ""
+ - leaked function "from_json"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html
+Timer resolution: 0 ns
+
+Frames: 2
+Time span: 27.94 s
+Zones: 604,998
+Elapsed time: 19.51 s
+Saving trace... done!
+Trace size 6247.36 KB (19.30% ratio)
+2026-07-19 01:37:19.117 | INFO     | __main__:main:452 - Copying /home/mvasiljevic/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/mvasiljevic/tt-metal/build/profiler/build_wasm/traces/test_multichip_decoder_2026_07_19_01_37_19.tracy
+2026-07-19 01:37:19.120 | INFO     | __main__:main:455 - Copied /home/mvasiljevic/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/mvasiljevic/tt-metal/build/profiler/build_wasm/traces/test_multichip_decoder_2026_07_19_01_37_19.tracy
+2026-07-19 01:37:19.120 | INFO     | __main__:main:464 - embed.tracy -> traces/test_multichip_decoder_2026_07_19_01_37_19.tracy
+2026-07-19 01:37:19.120 | INFO     | tracy.serve_wasm:launch_server_subprocess:284 - Launching tracy web app GUI server subprocess...
+2026-07-19 01:37:19.120 | INFO     | tracy.serve_wasm:launch_server_subprocess:287 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-07-19 01:37:19.120 | INFO     | tracy.serve_wasm:launch_server_subprocess:294 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
+2026-07-19 01:37:19.335 | INFO     | tracy:generate_report:162 - Host side ops time report generated at models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/optimized_multichip_decoder/tracy/final_stacked_prefill_bfp8/.logs/tracy_ops_times.csv
+2026-07-19 01:37:19.347 | INFO     | tracy:generate_report:173 - Host side ops data report generated at models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/optimized_multichip_decoder/tracy/final_stacked_prefill_bfp8/.logs/tracy_ops_data.csv
+2026-07-19 01:37:19.347 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:345 - Importing ops logs
+/home/mvasiljevic/tt-metal/tools/tracy/process_ops_logs.py:450: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(tracyOpTimesLog)
+2026-07-19 01:37:19.975 | INFO     | tracy.perf_counter_analysis:get_device_op_data:2140 - Getting device ops
+2026-07-19 01:37:19.975 | INFO     | tracy.process_ops_logs:append_device_data:1009 - Appending device data
+2026-07-19 01:37:20.701 | INFO     | tracy.process_ops_logs:generate_reports:1342 - OPs' perf analysis is finished! Generating reports ...
+2026-07-19 01:37:20.702 | INFO     | tracy.process_ops_logs:generate_reports:1360 - Copying runtime artifacts
+2026-07-19 01:37:20.720 | INFO     | tracy.process_ops_logs:generate_reports:1369 - Generating OPs CSV
+2026-07-19 01:37:21.381 | INFO     | tracy.process_ops_logs:generate_reports:1765 - OPs csv generated at: /home/mvasiljevic/tt-metal/models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/optimized_multichip_decoder/tracy/final_stacked_prefill_bfp8/reports/2026_07_19_01_37_20/ops_perf_results_2026_07_19_01_37_20.csv

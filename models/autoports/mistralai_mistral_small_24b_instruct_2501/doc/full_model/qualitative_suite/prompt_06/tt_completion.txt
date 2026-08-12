@@ -1,0 +1,14 @@
+Certainly! The Fibonacci sequence is a series of numbers where each number is the sum of the two preceding ones, usually starting with 0 and 1. Here is a Python function to calculate the Fibonacci sequence up to a given number of terms:
+
+```python
+def fibonacci(n):
+    """
+    Generate a list containing the Fibonacci sequence up to n terms.
+
+    :param n: The number of terms in the Fibonacci sequence to generate.
+    :return: A list containing the Fibonacci sequence.
+    """
+    if n <= 0:
+        return []
+    elif n == 1:
+        return [0

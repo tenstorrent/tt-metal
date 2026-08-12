@@ -1,0 +1,152 @@
++ env TT_METAL_WATCHER=10 TT_METAL_WATCHER_NOINLINE=1 TT_METAL_WATCHER_DISABLE_ETH=1 TT_LOGGER_LEVEL=info MISTRAL_SMALL_24B_REAL_WEIGHT_DIR=/home/mvasiljevic/hf-cache/hub/models--mistralai--Mistral-Small-24B-Instruct-2501/snapshots/9527884be6e5616bdd54de542f9ae13384489724 MISTRAL_SMALL_24B_MULTICHIP_PERF_ITERS=100 timeout 900 pytest -q -s --junitxml=models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/optimized_multichip_decoder/evidence/watcher_final_two_layer_shared_bfp8.xml models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_two_layer_stacked_decode_layout_perf
+2026-07-19 01:50:09.132 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/mvasiljevic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: github-actions-annotate-failures-0.3.0, anyio-4.14.2, dash-2.15.0, split-0.11.0, timeout-2.4.0, benchmark-5.2.3, cov-7.0.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_two_layer_stacked_decode_layout_perf[blackhole-mesh_device0-device_params0] 2026-07-19 01:50:10.682 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-19 01:50:10.682 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-19 01:50:10.682 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-19 01:50:10.682 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-19 01:50:10.685 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:569)
+2026-07-19 01:50:10.685 | info     |             UMD | Firmware bundle version 19.8.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-19 01:50:10.694 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-19 01:50:10.914 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-07-19 01:50:10.914 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-19 01:50:10.914 | info     |             UMD | KMD version: 2.8.0 (cluster.cpp:145)
+2026-07-19 01:50:10.914 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-19 01:50:10.915 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-19 01:50:11.118 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+--------------------------------------------------------------------------
+It appears as if there is not enough space for /dev/shm/sm_segment.23ff5195c3f7.1000.ef370000.0 (the shared-memory backing
+file). It is likely that your MPI job will now either abort or experience
+performance degradation.
+
+  Local host:  23ff5195c3f7
+  Space Requested: 16777216 B
+  Space Available: 17489920 B
+--------------------------------------------------------------------------
+2026-07-19 01:50:11.244 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-19 01:50:11.244 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-19 01:50:11.244 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-19 01:50:11.244 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-19 01:50:11.244 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-19 01:50:11.244 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-19 01:50:11.244 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-19 01:50:11.244 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-19 01:50:11.244 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-19 01:50:11.244 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-19 01:50:11.244 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-19 01:50:11.244 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-19 01:50:11.244 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-19 01:50:11.244 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-19 01:50:11.300 | info     |       LLRuntime | Watcher log file: /home/mvasiljevic/tt-metal/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-07-19 01:50:11.300 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-07-19 01:50:11.300 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-07-19 01:50:11.300 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-07-19 01:50:11.300 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-07-19 01:50:11.300 | info     |       LLRuntime | Watcher server initialized, disabled features: ETH (watcher_server.cpp:547)
+2026-07-19 01:50:11.300 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-19 01:50:11.304 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-19 01:50:11.306 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-07-19 01:50:11.311 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-19 01:50:11.316 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-19 01:50:11.329 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-07-19 01:50:11.331 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-07-19 01:50:11.336 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-07-19 01:50:11.337 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-07-19 01:50:11.337 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-07-19 01:50:11.337 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:305)
+2026-07-19 01:50:11.480 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681929600_memory' (shm_resource_tracker.cpp:282)
+2026-07-19 01:50:11.480 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681929601_memory' (shm_resource_tracker.cpp:282)
+2026-07-19 01:50:11.480 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681932032_memory' (shm_resource_tracker.cpp:282)
+2026-07-19 01:50:11.480 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681932033_memory' (shm_resource_tracker.cpp:282)
+2026-07-19 01:50:12.060 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349986 GHz, device_time_at_sync=33129669780 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-19 01:50:12.060 | info     |           Metal | [Real-time profiler] Device 2 sync complete: 100 samples, frequency=1.349981 GHz, device_time_at_sync=33173338064 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-19 01:50:12.061 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349982 GHz, device_time_at_sync=33114931677 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-19 01:50:12.063 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349978 GHz, device_time_at_sync=33164785123 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-19 01:50:12.092 | DEBUG    | conftest:mesh_device:599 - multidevice with 4 devices is created
+2026-07-19 01:50:21.384 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-19 01:50:21.388 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-19 01:50:21.393 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-19 01:50:21.397 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-19 01:50:23.616 | warning  |              Op | ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program factory is being used (tilize_device_operation.cpp:151)
+2026-07-19 01:50:31.407 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-19 01:50:31.411 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-19 01:50:31.416 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-19 01:50:31.420 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+Building ncrisc, compile step:
+cd /home/mvasiljevic/tt-metal-cache/tt-metal-cache10484426986445314715/kernels/reader_interleaved_no_bcast/8961272184543395946/ncrisc/ && /home/mvasiljevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/mvasiljevic/tt-metal/ -I/home/mvasiljevic/tt-metal/ttnn -I/home/mvasiljevic/tt-metal/ttnn/cpp -I/home/mvasiljevic/tt-metal/tt_metal -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/common -I/home/mvasiljevic/tt-metal/tt_metal/hostdevcommon/api -I/home/mvasiljevic/tt-metal/tt_metal/api/ -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/mvasiljevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/mvasiljevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/mvasiljevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow -c -o /home/mvasiljevic/tt-metal-cache/tt-metal-cache10484426986445314715/kernels/reader_interleaved_no_bcast/8961272184543395946/ncrisc/ncrisck.16452271220413842757.o /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /home/mvasiljevic/tt-metal-cache/tt-metal-cache10484426986445314715/kernels/reader_interleaved_no_bcast/8961272184543395946/ncrisc/ncrisck.16452271220413842757.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DWATCHER_ENABLED -DWATCHER_NOINLINE -DWATCHER_DISABLE_ETH -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"reader_interleaved_no_bcast/8961272184543395946/\"" -DBCAST_LLK='0' -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS='0' -DFILL_TILE_WITH_FIRST_COLUMN='fill_tile_with_first_column_bfloat16' -DFILL_TILE_WITH_FIRST_COLUMN_B='fill_tile_with_first_column_bfp8' -DFILL_TILE_WITH_FIRST_COLUMN_RM='fill_tile_with_first_column_rm_bfloat16' -DFILL_TILE_WITH_FIRST_ELEMENT='fill_tile_with_first_element_bfloat16' -DFILL_TILE_WITH_FIRST_ELEMENT_B='fill_tile_with_first_element_bfp8' -DFILL_TILE_WITH_FIRST_ROW='fill_tile_with_first_row_bfloat16' -DFILL_TILE_WITH_FIRST_ROW_B='fill_tile_with_first_row_bfp8' -DFILL_TILE_WITH_FIRST_ROW_RM='fill_tile_with_first_row_rm_bfloat16' -DFILL_WITH_VALUE='fill_with_val_bfloat16' -DFILL_WITH_VALUE_B='fill_with_val_bfloat16' -DROUTING_MODE='137' -DSRC_SHARDED='1' -DSRC_SHARDED_B='1' -DNOC_INDEX='0' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=17,2048,1,11,15,33685762,67240706,100795650,167905026,201460482,3330,17,1088,1,11,15,33685762,67240706,100795650,167905026,201460482,3330,1
+In file included from ../kernel_includes.hpp:1,
+                 from /home/mvasiljevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:22:
+/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_no_bcast.cpp: In function 'void kernel_main()':
+/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_no_bcast.cpp:39:20: warning: variable 'src_b_args' set but not used [-Wunused-but-set-variable]
+   39 |     constexpr auto src_b_args =
+      |                    ^~~~~~~~~~
+2026-07-19 01:50:36.191 | INFO     | tracy:signpost:49 - MULTICHIP_PUBLIC_STACK_DECODE
+2026-07-19 01:50:36.986 | INFO     | tracy:signpost:49 - MULTICHIP_PUBLIC_STACK_DECODE_END
+2026-07-19 01:50:36.986 | INFO     | tracy:signpost:49 - MULTICHIP_INTERNAL_STACK_DECODE
+2026-07-19 01:50:37.611 | INFO     | tracy:signpost:49 - MULTICHIP_INTERNAL_STACK_DECODE_END
+public/stacked two-layer output: 1.0
+traced public/stacked: 1.0
+MULTICHIP_STACK_LAYOUT_RESULT dense_kernel_family=dram_sharded mlp_projection_family=separate collective_family=persistent collective_dtype=bfp8 attention_activation_dtype=bf16 mlp_activation_dtype=bf16 attention_geometry=(10, 12, 16, 8, 10, 4) mlp_geometry=(10, 32, 40, 16, 16) attention_weight_dtype=bfp4 mlp_weight_dtype=bfp4 attention_math_fidelity=lofi mlp_math_fidelity=lofi public_two_layer_ms=6.962122 internal_two_layer_ms=5.840771 public_per_layer_ms=3.481061 internal_per_layer_ms=2.920386 speedup=1.191987 iterations=100
+PASSED
+
+==================================== PASSES ====================================
+- generated xml file: /home/mvasiljevic/tt-metal/models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/optimized_multichip_decoder/evidence/watcher_final_two_layer_shared_bfp8.xml -
+============================== slowest durations ===============================
+25.52s call     models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_two_layer_stacked_decode_layout_perf[blackhole-mesh_device0-device_params0]
+1.62s setup    models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_two_layer_stacked_decode_layout_perf[blackhole-mesh_device0-device_params0]
+0.15s teardown models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_two_layer_stacked_decode_layout_perf[blackhole-mesh_device0-device_params0]
+=========================== short test summary info ============================
+PASSED models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_two_layer_stacked_decode_layout_perf[blackhole-mesh_device0-device_params0]
+============================== 1 passed in 27.95s ==============================
+nanobind: leaked 2 instances!
+ - leaked instance 0x78e6fd441f38 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x78e6fcc6c588 of type "ttnn._ttnn.tensor.MemoryConfig"
+nanobind: leaked 21 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "FabricConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - ... skipped remainder
+nanobind: leaked 247 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function "sfpu_nan"
+ - leaked function "sfpu_inf"
+ - leaked function "is_sharded"
+ - leaked function ""
+ - leaked function "to"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "is_per_core_allocated"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-07-19 01:50:39.537 | info     |    BuildKernels | JIT cache stats: 153/164 hits (93.3%) [153 cached, 35 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-19 01:50:39.537 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-19 01:50:39.537 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-07-19 01:50:39.537 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-07-19 01:50:39.537 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
+2026-07-19 01:50:39.537 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
+2026-07-19 01:50:39.537 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
+2026-07-19 01:50:39.549 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-19 01:50:39.549 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-19 01:50:40.142 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-19 01:50:40.142 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-19 01:50:40.142 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

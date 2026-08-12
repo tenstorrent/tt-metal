@@ -1,0 +1,16 @@
+phase,measurement,before_ms,final_ms,reduction_percent,iterations,artifact
+prefill,two_layer_public_to_internal_same_final_path,5.107562,4.448526,12.9000,20,final_default_stack_prefill_20.log
+prefill,final_per_layer_warmed_batch32_seq18,,2.224263,,20,final_default_stack_prefill_20.log
+decode,two_layer_completed_contract_general_ccl_to_final_internal,1.144173,0.806169,29.5413,100,control_default_ccl_stack_decode_100.log|candidate_collective_bfp8_final_stack_100.log
+decode,two_layer_public_to_internal_same_final_bfp8_path,1.055324,0.805981,23.6234,300,final_default_stack_decode_bfp8_300.log
+decode,final_per_layer_traced_warmed_batch32_token1,,0.402990,,300,final_default_stack_decode_bfp8_300.log
+decode,paired_persistent_bf16_to_bfp8,0.807669,0.806020,0.2042,300,paired_collective_bf16_stack_300.log|paired_collective_bfp8_stack_300.log
+prefill,batch1_two_layer_public_to_internal_same_final_path,2.256544,2.038562,9.6600,20,final_batch1_stack_prefill_20.log
+prefill,final_per_layer_warmed_batch1_seq18,,1.019281,,20,final_batch1_stack_prefill_20.log
+decode,batch1_completed_public_general_bf16_to_final_internal_bfp8,0.915775,0.829644,9.4053,100,control_batch1_general_ccl_stack_decode_100.log|final_batch1_stack_decode_100.log
+decode,final_per_layer_traced_warmed_batch1_token1,,0.414822,,100,final_batch1_stack_decode_100.log
+decode,final_source_batch32_public_to_internal,1.056937,0.806937,23.6533,20,final_current_source_gate_bfp8.log
+prefill,final_source_batch32_public_to_internal,5.077650,4.480664,11.7571,20,final_current_source_gate_bfp8.log
+prefill,batch1_final_current_public_to_internal,2.101789,1.896023,9.7900,100,prefill_sharded_norm_control_batch1_100.log
+prefill,final_per_layer_warmed_batch1_seq18,,0.948012,,100,prefill_sharded_norm_control_batch1_100.log
+prefill,batch1_decoder_local_trace_replay,1.896023,1.401168,26.0996,100,prefill_trace_batch1_100.log|prefill_sharded_norm_control_batch1_100.log

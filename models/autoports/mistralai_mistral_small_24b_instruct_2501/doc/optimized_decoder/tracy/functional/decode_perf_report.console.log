@@ -1,0 +1,15 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'PERF_DECODE'.
+Using operations until 'PERF_DECODE_END'.
+Detected data from 1 devices. Merging device data...
+Writing CSV output to models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/optimized_decoder/tracy/functional/decode_perf_report.csv
+Overall DRAM roofline (modeled ops): 2.9% (15 GB/s)
+Warning: Unclassified operation 'NLPCreateQKVHeadsDecodeDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'RotaryEmbeddingDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'RepeatDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'SdpaDecodeDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Writing CSV stacked report to models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/optimized_decoder/tracy/functional/decode_perf_report_stacked.csv
+Plotting PNG stacked report to models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/optimized_decoder/tracy/functional/decode_perf_report_stacked.png

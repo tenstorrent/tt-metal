@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="0" skipped="0" tests="1" time="9.151" timestamp="2026-07-16T13:05:12.944053+00:00" hostname="23ff5195c3f7"><testcase classname="models.autoports.mistralai_mistral_small_24b_instruct_2501.tests.test_optimized_decoder" name="test_warmed_prefill_and_traced_decode_perf[blackhole-1]" time="8.494"><properties><property name="start_timestamp" value="2026-07-16T13:05:13" /><property name="end_timestamp" value="2026-07-16T13:05:22" /></properties><system-out>--------------------------------- Captured Log ---------------------------------
+
+--------------------------------- Captured Out ---------------------------------
+full_packed_bfp4_lofi eager versus traced decode: 1.0
+PERF_RESULT impl=optimized policy=full_packed_bfp4_lofi prefill_seq=18 prefill_ms=5.377842 traced_decode_ms=1.857137 iterations=100
+
+</system-out><system-err>--------------------------------- Captured Err ---------------------------------
+2026-07-16 13:05:14.115 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-16 13:05:14.115 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-16 13:05:14.766 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+2026-07-16 13:05:21.697 | INFO     | tracy:signpost:49 - PERF_PREFILL
+2026-07-16 13:05:21.703 | INFO     | tracy:signpost:49 - PERF_PREFILL_END
+2026-07-16 13:05:21.765 | INFO     | tracy:signpost:49 - PERF_DECODE
+2026-07-16 13:05:21.951 | INFO     | tracy:signpost:49 - PERF_DECODE_END
+
+</system-err></testcase></testsuite></testsuites>

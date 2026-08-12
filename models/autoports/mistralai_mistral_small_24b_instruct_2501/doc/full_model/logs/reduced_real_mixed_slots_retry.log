@@ -1,0 +1,181 @@
+2026-07-20 06:47:57.213 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/mvasiljevic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: github-actions-annotate-failures-0.3.0, anyio-4.14.2, dash-2.15.0, split-0.11.0, timeout-2.4.0, benchmark-5.2.3, cov-7.0.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_full_model.py::test_reduced_real_mixed_fixed_slots_and_inactive_rows[blackhole-mesh_device0-device_params0] 2026-07-20 06:47:58.803 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-20 06:47:58.803 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-20 06:47:58.803 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-20 06:47:58.803 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-20 06:47:58.804 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:569)
+2026-07-20 06:47:58.804 | info     |             UMD | Firmware bundle version 19.8.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-20 06:47:58.808 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-20 06:47:59.030 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-07-20 06:47:59.030 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-20 06:47:59.030 | info     |             UMD | KMD version: 2.8.0 (cluster.cpp:145)
+2026-07-20 06:47:59.030 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-20 06:47:59.032 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-20 06:47:59.182 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-07-20 06:47:59.310 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-20 06:47:59.311 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-20 06:47:59.311 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-20 06:47:59.311 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-20 06:47:59.311 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-20 06:47:59.311 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-20 06:47:59.311 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-20 06:47:59.311 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-20 06:47:59.311 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-20 06:47:59.311 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-20 06:47:59.311 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-20 06:47:59.311 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-20 06:47:59.311 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-20 06:47:59.311 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-20 06:47:59.316 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-20 06:47:59.317 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-20 06:47:59.317 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-20 06:47:59.317 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-20 06:47:59.351 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-07-20 06:47:59.377 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-07-20 06:47:59.378 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-07-20 06:47:59.378 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-07-20 06:47:59.379 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-07-20 06:47:59.379 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-07-20 06:47:59.379 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:305)
+2026-07-20 06:47:59.418 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681929600_memory' (shm_resource_tracker.cpp:282)
+2026-07-20 06:47:59.418 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681929601_memory' (shm_resource_tracker.cpp:282)
+2026-07-20 06:47:59.418 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681932032_memory' (shm_resource_tracker.cpp:282)
+2026-07-20 06:47:59.418 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681932033_memory' (shm_resource_tracker.cpp:282)
+2026-07-20 06:47:59.998 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349993 GHz, device_time_at_sync=36950129955069 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-20 06:47:59.998 | info     |           Metal | [Real-time profiler] Device 2 sync complete: 100 samples, frequency=1.349992 GHz, device_time_at_sync=36975698906966 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-20 06:47:59.998 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349984 GHz, device_time_at_sync=36990609569114 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-20 06:47:59.999 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349986 GHz, device_time_at_sync=36961670889056 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-20 06:48:00.029 | DEBUG    | conftest:mesh_device:599 - multidevice with 4 devices is created
+FAILED2026-07-20 06:48:14.742 | INFO     | conftest:pytest_runtest_teardown:1140 - In custom teardown, open device ids: {0, 1, 2, 3}
+
+
+=================================== FAILURES ===================================
+_ test_reduced_real_mixed_fixed_slots_and_inactive_rows[blackhole-mesh_device0-device_params0] _
+
+mesh_device = MeshDevice(1x4 grid, 4 devices)
+
+    @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+    @pytest.mark.parametrize("mesh_device", MESH_PARAMS, indirect=True)
+    def test_reduced_real_mixed_fixed_slots_and_inactive_rows(mesh_device):
+        snapshot_text = os.environ.get(REDUCED_REAL_ENV)
+        if not snapshot_text:
+            pytest.skip(f"Set {REDUCED_REAL_ENV} to the complete local HF snapshot")
+        snapshot = os.fspath(snapshot_text)
+        config = AutoConfig.from_pretrained(snapshot, local_files_only=True)
+        model = MistralSmall24BFullModel.from_state_dict(
+            SafetensorStateDict(snapshot),
+            hf_config=config,
+            mesh_device=mesh_device,
+            full_model_config=FullModelConfig(
+                max_batch_size=3,
+                max_context_len=64,
+                num_blocks=6,
+                prefill_chunk_size=32,
+                override_num_layers=1,
+            ),
+        )
+        generator = MistralSmall24BGenerator(model, SimpleNamespace(eos_token_id=2))
+        tokens = torch.tensor(
+            [
+                [1, 11, 12, 13, 14, 15, 16, 0, 0, 0, 0],
+                [1, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30],
+            ],
+            dtype=torch.long,
+        )
+        caller_page_table = torch.tensor([[0, 1], [2, 3]], dtype=torch.int32)
+        logits = generator.prefill_forward(
+            tokens,
+            page_table=caller_page_table,
+            kv_cache=None,
+            prompt_lens=[7, 11],
+        )
+        assert tuple(logits.shape) == (2, 1, config.vocab_size)
+        assert torch.equal(
+            generator._page_table_host,
+            torch.tensor([[0, 1], [2, 3], [4, 5]], dtype=torch.int32),
+        )
+
+        sampled = generator.decode_forward(
+            torch.tensor([[101], [202]], dtype=torch.long),
+            torch.tensor([7, 11], dtype=torch.long),
+            page_table=caller_page_table,
+            kv_cache=generator._ensure_kv_cache(),
+            sampling_mode="device",
+            enable_trace=True,
+        )
+        sampled_host = _first_device_to_torch(sampled).reshape(-1)
+>       assert sampled_host[:2].ge(0).all()
+               ^^^^^^^^^^^^^^^^^^^^^^
+E       NotImplementedError: "ge_cpu" not implemented for 'UInt32'
+
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_full_model.py:365: NotImplementedError
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+python_env/lib/python3.12/site-packages/pydantic/_internal/_config.py:291
+  /home/mvasiljevic/tt-metal/python_env/lib/python3.12/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /home/mvasiljevic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+14.56s call     models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_full_model.py::test_reduced_real_mixed_fixed_slots_and_inactive_rows[blackhole-mesh_device0-device_params0]
+1.45s setup    models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_full_model.py::test_reduced_real_mixed_fixed_slots_and_inactive_rows[blackhole-mesh_device0-device_params0]
+0.12s teardown models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_full_model.py::test_reduced_real_mixed_fixed_slots_and_inactive_rows[blackhole-mesh_device0-device_params0]
+=========================== short test summary info ============================
+FAILED models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_full_model.py::test_reduced_real_mixed_fixed_slots_and_inactive_rows[blackhole-mesh_device0-device_params0]
+======================== 1 failed, 3 warnings in 16.87s ========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+nanobind: leaked 3 instances!
+ - leaked instance 0x79023a7c8288 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x79023af61d58 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x79023b075f68 of type "ttnn._ttnn.device.DispatchCoreConfig"
+nanobind: leaked 39 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "FabricConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.multi_device.MeshMapperConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - ... skipped remainder
+nanobind: leaked 321 functions!
+ - leaked function "reshape"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "create_matmul_attributes"
+ - leaked function "to_numpy"
+ - leaked function ""
+ - leaked function "set_program_cache_misses_allowed"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-07-20 06:48:16.474 | info     |    BuildKernels | JIT cache stats: 407/412 hits (98.8%) [407 cached, 141 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-20 06:48:16.474 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-20 06:48:16.488 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-20 06:48:16.488 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-20 06:48:17.073 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-20 06:48:17.073 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-20 06:48:17.073 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

@@ -123,6 +123,9 @@ def _run_one_entry(
 
     stats = acc.compute_accuracy(user_idx=entry_idx)
     stats.update(_compute_perf_stats(timing=timing, end_s=end_s, token_count=stats["total"]))
+    generate_stats = getattr(generator, "last_generate_stats", None)
+    if generate_stats:
+        stats["generate_stats"] = generate_stats
     return stats
 
 
@@ -237,6 +240,8 @@ def run_teacher_forcing(
             )
             per_entry.append(stats)
             print(_format_row(f"entry[{entry_idx}]", stats))
+            if stats.get("generate_stats"):
+                print(f"entry[{entry_idx}] trace stats: {stats['generate_stats']}")
     finally:
         teardown = getattr(generator, "teardown", None)
         if callable(teardown):
@@ -278,7 +283,7 @@ def _main() -> None:
     add_mesh_device_args(parser)
     args = parser.parse_args()
 
-    mesh_device = open_readiness_mesh_device(args.mesh_device, args.fabric_config)
+    mesh_device = open_readiness_mesh_device(args.mesh_device, args.fabric_config, args.trace_region_size)
     try:
         run_teacher_forcing(
             model_dir=args.model_dir.resolve(),

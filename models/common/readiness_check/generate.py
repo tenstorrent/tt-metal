@@ -34,6 +34,7 @@ import argparse
 import bz2
 import json
 import os
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Optional
 
@@ -129,6 +130,18 @@ def _chat_or_plain_prompt_tokens(tokenizer, prompt_text: str, *, chat_template: 
         )
     else:
         prompt_tokens = tokenizer.encode(prompt_text, add_special_tokens=True)
+
+    # Some fast tokenizers return a BatchEncoding from apply_chat_template even
+    # when tokenize=True.  Normalize the single-prompt result before iterating;
+    # otherwise iteration yields the mapping key ("input_ids") rather than IDs.
+    if isinstance(prompt_tokens, Mapping):
+        if "input_ids" not in prompt_tokens:
+            raise ValueError("Chat-template tokenization did not return input_ids")
+        prompt_tokens = prompt_tokens["input_ids"]
+    if isinstance(prompt_tokens, torch.Tensor):
+        prompt_tokens = prompt_tokens.tolist()
+    if len(prompt_tokens) == 1 and isinstance(prompt_tokens[0], (list, tuple)):
+        prompt_tokens = prompt_tokens[0]
 
     if not prompt_tokens:
         raise ValueError("Prompt tokenization produced no tokens")
@@ -280,6 +293,7 @@ def generate_reference(
     prompt_file: Optional[Path] = None,
     aime24_prompts_file: Path = DEFAULT_AIME24_PROMPTS_FILE,
     aime24_prompt_index: int = 0,
+    fix_mistral_regex: bool = False,
 ) -> Path:
     """
     Generate a readiness reference file from book text or a prompt.
@@ -298,6 +312,7 @@ def generate_reference(
         prompt_file: Prompt file when prompt_source="file"
         aime24_prompts_file: DeepSeek AIME24 prompts JSON when prompt_source="aime24"
         aime24_prompt_index: Zero-based prompt index in the AIME24 prompts JSON
+        fix_mistral_regex: Apply the corrected Mistral tokenizer regex
 
     Returns:
         Path to saved reference file
@@ -319,7 +334,10 @@ def generate_reference(
     device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     print(f"Loading model {hf_model_id} on {device}...")
-    tokenizer = AutoTokenizer.from_pretrained(hf_model_id, trust_remote_code=True)
+    tokenizer_kwargs = {"trust_remote_code": True}
+    if fix_mistral_regex:
+        tokenizer_kwargs["fix_mistral_regex"] = True
+    tokenizer = AutoTokenizer.from_pretrained(hf_model_id, **tokenizer_kwargs)
     model = AutoModelForCausalLM.from_pretrained(hf_model_id, trust_remote_code=True).eval().to(device)
 
     # Get token IDs
@@ -433,6 +451,11 @@ def _main() -> None:
         action="store_true",
         help="Render direct prompts with tokenizer.apply_chat_template before generating the HF continuation.",
     )
+    parser.add_argument(
+        "--fix-mistral-regex",
+        action="store_true",
+        help="Use the corrected Mistral tokenizer regex when loading the tokenizer.",
+    )
     parser.add_argument("--prompt", help="Direct prompt text for --prompt-source=text.")
     parser.add_argument("--prompt-file", type=Path, help="Prompt file for --prompt-source=file.")
     parser.add_argument(
@@ -484,6 +507,7 @@ def _main() -> None:
         prompt_file=args.prompt_file,
         aime24_prompts_file=args.aime24_prompts_file,
         aime24_prompt_index=args.aime24_prompt_index,
+        fix_mistral_regex=args.fix_mistral_regex,
     )
     print(f"Reference saved to: {path}")
 

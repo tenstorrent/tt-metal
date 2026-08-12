@@ -1,0 +1,73 @@
+2026-07-19 02:23:40.349 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/mvasiljevic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: github-actions-annotate-failures-0.3.0, anyio-4.14.2, dash-2.15.0, split-0.11.0, timeout-2.4.0, benchmark-5.2.3, cov-7.0.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_two_layer_stacked_decode_layout_perf[blackhole-mesh_device0-device_params0] --------------------------------------------------------------------------
+It appears as if there is not enough space for /dev/shm/sm_segment.23ff5195c3f7.1000.acd70000.0 (the shared-memory backing
+file). It is likely that your MPI job will now either abort or experience
+performance degradation.
+
+  Local host:  23ff5195c3f7
+  Space Requested: 16777216 B
+  Space Available: 17539072 B
+--------------------------------------------------------------------------
+2026-07-19 02:23:42.479 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-19 02:23:42.480 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-19 02:23:43.200 | DEBUG    | conftest:mesh_device:599 - multidevice with 4 devices is created
+2026-07-19 02:24:06.570 | INFO     | tracy:signpost:49 - MULTICHIP_PUBLIC_STACK_DECODE
+2026-07-19 02:24:06.667 | INFO     | tracy:signpost:49 - MULTICHIP_PUBLIC_STACK_DECODE_END
+2026-07-19 02:24:06.667 | INFO     | tracy:signpost:49 - MULTICHIP_INTERNAL_STACK_DECODE
+2026-07-19 02:24:06.760 | INFO     | tracy:signpost:49 - MULTICHIP_INTERNAL_STACK_DECODE_END
+public/stacked two-layer output: 1.0
+traced public/stacked: 1.0
+MULTICHIP_STACK_LAYOUT_RESULT active_batch=1 dense_kernel_family=dram_sharded mlp_projection_family=separate collective_family=persistent collective_dtype=bfp8 attention_activation_dtype=bf16 mlp_activation_dtype=bf16 attention_geometry=(10, 12, 16, 8, 10, 4) mlp_geometry=(10, 32, 40, 16, 16) attention_weight_dtype=bfp4 mlp_weight_dtype=bfp4 attention_math_fidelity=lofi mlp_math_fidelity=lofi public_two_layer_ms=0.841827 internal_two_layer_ms=0.829644 public_per_layer_ms=0.420914 internal_per_layer_ms=0.414822 speedup=1.014685 iterations=100
+PASSED
+
+==================================== PASSES ====================================
+- generated xml file: /home/mvasiljevic/tt-metal/models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/optimized_multichip_decoder/evidence/final_batch1_stack_decode_100.xml -
+============================== slowest durations ===============================
+23.56s call     models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_two_layer_stacked_decode_layout_perf[blackhole-mesh_device0-device_params0]
+1.51s setup    models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_two_layer_stacked_decode_layout_perf[blackhole-mesh_device0-device_params0]
+0.13s teardown models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_two_layer_stacked_decode_layout_perf[blackhole-mesh_device0-device_params0]
+=========================== short test summary info ============================
+PASSED models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_two_layer_stacked_decode_layout_perf[blackhole-mesh_device0-device_params0]
+============================== 1 passed in 25.85s ==============================
+nanobind: leaked 2 instances!
+ - leaked instance 0x73f5e2b8df38 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x73f5e23f4408 of type "ttnn._ttnn.tensor.MemoryConfig"
+nanobind: leaked 21 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "FabricConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - ... skipped remainder
+nanobind: leaked 247 functions!
+ - leaked function "__init__"
+ - leaked function "create_descriptor"
+ - leaked function "create_sub_device_manager"
+ - leaked function "device"
+ - leaked function ""
+ - leaked function "clear_loaded_sub_device_manager"
+ - leaked function "__ne__"
+ - leaked function "to_json"
+ - leaked function ""
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html

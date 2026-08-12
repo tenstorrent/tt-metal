@@ -1,0 +1,182 @@
++ env TT_LOGGER_LEVEL=fatal MISTRAL_SMALL_24B_REAL_WEIGHT_DIR=/home/mvasiljevic/hf-cache/hub/models--mistralai--Mistral-Small-24B-Instruct-2501/snapshots/9527884be6e5616bdd54de542f9ae13384489724 MISTRAL_SMALL_24B_MULTICHIP_PERF_ITERS=20 MISTRAL_SMALL_24B_MULTICHIP_PREFILL_COLLECTIVE_FAMILY=persistent timeout 900 pytest -q -s --junitxml=models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/optimized_multichip_decoder/evidence/prefill_persistent_bf16_l1_width_retry.xml models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_two_layer_stacked_prefill_layout_perf
+2026-07-19 00:58:25.955 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/mvasiljevic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: github-actions-annotate-failures-0.3.0, anyio-4.14.2, dash-2.15.0, split-0.11.0, timeout-2.4.0, benchmark-5.2.3, cov-7.0.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_two_layer_stacked_prefill_layout_perf[blackhole-mesh_device0-device_params0] --------------------------------------------------------------------------
+It appears as if there is not enough space for /dev/shm/sm_segment.23ff5195c3f7.1000.72010000.0 (the shared-memory backing
+file). It is likely that your MPI job will now either abort or experience
+performance degradation.
+
+  Local host:  23ff5195c3f7
+  Space Requested: 16777216 B
+  Space Available: 17539072 B
+--------------------------------------------------------------------------
+2026-07-19 00:58:27.991 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-19 00:58:27.991 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-19 00:58:28.710 | DEBUG    | conftest:mesh_device:599 - multidevice with 4 devices is created
+2026-07-19 00:58:52.063 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-4 - 1-4] grow to 3061248 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-07-19 00:58:52.063 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-4 - 1-4] grow to 3061248 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-07-19 00:58:52.063 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-4 - 1-4] grow to 3061248 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-07-19 00:58:52.063 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-4 - 1-4] grow to 3061248 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+FAILED2026-07-19 00:58:52.323 | INFO     | conftest:pytest_runtest_teardown:1140 - In custom teardown, open device ids: {0, 1, 2, 3}
+
+
+=================================== FAILURES ===================================
+_ test_multichip_two_layer_stacked_prefill_layout_perf[blackhole-mesh_device0-device_params0] _
+
+mesh_device = MeshDevice(1x4 grid, 4 devices)
+
+    @pytest.mark.parametrize("device_params", STACK_DEVICE_PARAMS, indirect=True)
+    @pytest.mark.parametrize("mesh_device", MESH_PARAMS, indirect=True)
+    def test_multichip_two_layer_stacked_prefill_layout_perf(mesh_device):
+        """Compare repeated public prefill transposes with one stack-boundary conversion."""
+
+        iterations = int(os.environ.get(PERF_ITERS_ENV, "10"))
+        config = _config()
+        state = _real_state()
+        prefill_collective_family = os.environ.get(PREFILL_COLLECTIVE_FAMILY_ENV, "default")
+        prefill_collective_dtype = os.environ.get(PREFILL_COLLECTIVE_DTYPE_ENV, "bf16")
+        first = MultichipDecoder.from_state_dict(
+            state,
+            hf_config=config,
+            layer_idx=LAYER_IDX,
+            mesh_device=mesh_device,
+            prefill_collective_family=prefill_collective_family,
+            prefill_collective_dtype=prefill_collective_dtype,
+        )
+        second = MultichipDecoder.from_state_dict(
+            state,
+            hf_config=config,
+            layer_idx=LAYER_IDX,
+            mesh_device=mesh_device,
+            shared_rope=first.shared_rope,
+            shared_collective=first.shared_collective,
+            shared_prefill_collective=first.shared_prefill_collective,
+            prefill_collective_family=prefill_collective_family,
+            prefill_collective_dtype=prefill_collective_dtype,
+        )
+        first_caches = _multichip_caches(config, mesh_device)
+        second_caches = _multichip_caches(config, mesh_device)
+        generator = torch.Generator().manual_seed(2515)
+        hidden = torch.randn(
+            (1, EMITTED_BATCH, EMITTED_PREFILL_SEQUENCE, config.hidden_size),
+            generator=generator,
+            dtype=torch.bfloat16,
+        )
+        tt_hidden = _mesh_input(hidden, mesh_device)
+
+        def public_pair():
+            output = first.prefill_forward(tt_hidden, *first_caches)
+            return second.prefill_forward(output, *second_caches)
+
+        stacked_input, logical_seq_len = first.prepare_prefill_residual(tt_hidden)
+
+        def stacked_pair():
+            output = first.prefill_forward_stacked(
+                stacked_input, *first_caches, logical_seq_len=logical_seq_len
+            )
+            return second.prefill_forward_stacked(
+                output, *second_caches, logical_seq_len=logical_seq_len
+            )
+
+>       eager_public = public_pair()
+                       ^^^^^^^^^^^^^
+
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py:958:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py:945: in public_pair
+    output = first.prefill_forward(tt_hidden, *first_caches)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/multichip_decoder.py:1157: in prefill_forward
+    attention = self._all_reduce_hidden(attention)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/multichip_decoder.py:834: in _all_reduce_hidden
+    return ttnn.experimental.all_reduce_async(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = FastOperation(python_fully_qualified_name='ttnn.experimental.all_reduce_async', function=<ttnn._ttnn.operations.experi...uts=None, golden_function=None, postprocess_golden_function_outputs=None, is_cpp_operation=True, is_experimental=False)
+function_args = (device_id: 3, MeshCoordinate([0, 0])
+ttnn.Tensor([[[[-1.9287e-02, -4.0283e-02,  ..., -2.2583e-02, -2.5513e-02],
+     ...0,  ...,  0.0000e+00,  0.0000e+00]]]], shape=Shape([1, 1, 576, 20480]), dtype=DataType::BFLOAT16, layout=Layout::TILE))
+function_kwargs = {'cluster_axis': 1, 'dtype': DataType.BFLOAT16, 'memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_...W_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), 'mesh_device': MeshDevice(1x4 grid, 4 devices), ...}
+cq_id = None, recording = False
+
+    def __call__(self, *function_args, **function_kwargs):
+        cq_id = None
+        if "queue_id" in function_kwargs:
+            cq_id = function_kwargs.pop("queue_id")
+        elif "cq_id" in function_kwargs:
+            cq_id = function_kwargs.pop("cq_id")
+
+        recording = ttnn.graph.is_python_io_recording_enabled()
+        if recording:
+            ttnn.graph.track_function_start(self.python_fully_qualified_name)
+            ttnn.graph.record_python_operation(self.python_fully_qualified_name, function_args, function_kwargs)
+            input_tensors = get_all_tensors((function_args, function_kwargs))
+            set_tensor_id(input_tensors)
+
+        try:
+            if cq_id is None:
+>               result = self.function(*function_args, **function_kwargs)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               RuntimeError: TT_THROW @ /home/mvasiljevic/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception
+E               info:
+E               Statically allocated circular buffers on core range [0-4 - 1-4] grow to 3061248 B which is beyond max L1 size of 1572864 B
+E               backtrace:
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x164e4ca) [0x78fc8664e4ca]
+E                --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so(+0xbc4d73) [0x78fc847c4d73]
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so(+0xa6c7e3) [0x78fc8466c7e3]
+E                --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xf5c79) [0x78fccae17c79]
+E                --- /lib/x86_64-linux-gnu/libc.so.6(+0x9caa4) [0x78fccd8d3aa4]
+E                --- /lib/x86_64-linux-gnu/libc.so.6(__clone+0x44) [0x78fccd960a64]
+
+ttnn/ttnn/decorators.py:473: RuntimeError
+- generated xml file: /home/mvasiljevic/tt-metal/models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/optimized_multichip_decoder/evidence/prefill_persistent_bf16_l1_width_retry.xml -
+============================== slowest durations ===============================
+23.35s call     models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_two_layer_stacked_prefill_layout_perf[blackhole-mesh_device0-device_params0]
+1.45s setup    models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_two_layer_stacked_prefill_layout_perf[blackhole-mesh_device0-device_params0]
+0.13s teardown models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_two_layer_stacked_prefill_layout_perf[blackhole-mesh_device0-device_params0]
+=========================== short test summary info ============================
+FAILED models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_two_layer_stacked_prefill_layout_perf[blackhole-mesh_device0-device_params0]
+============================== 1 failed in 25.72s ==============================
+nanobind: leaked 2 instances!
+ - leaked instance 0x78fc3a13e058 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x78fc39988408 of type "ttnn._ttnn.tensor.MemoryConfig"
+nanobind: leaked 21 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "FabricConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - ... skipped remainder
+nanobind: leaked 247 functions!
+ - leaked function "get_device_ids"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "unpad_from_tile"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html

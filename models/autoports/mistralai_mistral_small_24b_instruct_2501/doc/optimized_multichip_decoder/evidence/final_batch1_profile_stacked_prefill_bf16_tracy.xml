@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="15.437" timestamp="2026-07-19T02:40:12.659130+00:00" hostname="23ff5195c3f7"><testcase classname="models.autoports.mistralai_mistral_small_24b_instruct_2501.tests.test_multichip_decoder" name="test_multichip_profile_internal_stacked_prefill[blackhole-mesh_device0-device_params0]" time="14.393"><properties><property name="start_timestamp" value="2026-07-19T02:40:13" /><property name="end_timestamp" value="2026-07-19T02:40:28" /></properties><failure message="ValueError: hidden_states must have shape [1, 32, seq, 5120], got (1, 1, 18, 5120)">mesh_device = MeshDevice(1x4 grid, 4 devices)
+
+    @pytest.mark.parametrize("device_params", STACK_DEVICE_PARAMS, indirect=True)
+    @pytest.mark.parametrize("mesh_device", MESH_PARAMS, indirect=True)
+    def test_multichip_profile_internal_stacked_prefill(mesh_device):
+        """Profile only the stack-preserving two-layer prefill region."""
+
+        if os.environ.get(PROFILE_STACKED_PREFILL_ENV) != "1":
+            pytest.skip(f"Set {PROFILE_STACKED_PREFILL_ENV}=1 to profile stacked prefill")
+        iterations = int(os.environ.get(PERF_ITERS_ENV, "1"))
+        active_batch = int(os.environ.get(ACTIVE_BATCH_ENV, EMITTED_BATCH))
+        config = _config()
+        decoder = MultichipDecoder.from_state_dict(
+            _real_state(), hf_config=config, layer_idx=LAYER_IDX, mesh_device=mesh_device
+        )
+        first_caches = _multichip_caches(config, mesh_device)
+        second_caches = _multichip_caches(config, mesh_device)
+        generator = torch.Generator().manual_seed(2519)
+        hidden = torch.randn(
+            (1, active_batch, EMITTED_PREFILL_SEQUENCE, config.hidden_size),
+            generator=generator,
+            dtype=torch.bfloat16,
+        )
+&gt;       stacked_input, logical_seq_len = decoder.prepare_prefill_residual(_mesh_input(hidden, mesh_device))
+                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py:1067:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/multichip_decoder.py:974: in prepare_prefill_residual
+    seq_len = self._validate_hidden_states(hidden_states)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;models.autoports.mistralai_mistral_small_24b_instruct_2501.tt.multichip_decoder.MultichipDecoder object at 0x75110d1bd220&gt;
+hidden_states = device_id: 3, MeshCoordinate([0, 0])
+ttnn.Tensor([[[[ 3.4943e-03,  2.5391e-02,  ..., -6.3281e-01, -1.7891e+00],
+      ...e+00,  ...,  7.1875e-01,  2.0156e+00]]]], shape=Shape([1, 1, 18, 5120]), dtype=DataType::BFLOAT16, layout=Layout::TILE)
+expected_seq_len = None
+
+    def _validate_hidden_states(self, hidden_states, expected_seq_len: int | None = None) -&gt; int:
+        shape = tuple(hidden_states.shape)
+        if len(shape) != 4 or shape[0] != 1 or shape[1] != self.batch or shape[3] != self.hidden_size:
+&gt;           raise ValueError(f"hidden_states must have shape [1, {self.batch}, seq, {self.hidden_size}], got {shape}")
+E           ValueError: hidden_states must have shape [1, 32, seq, 5120], got (1, 1, 18, 5120)
+
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/functional_decoder.py:244: ValueError</failure></testcase></testsuite></testsuites>

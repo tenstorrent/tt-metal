@@ -1,0 +1,23 @@
+Command:
+  TT_METAL_HOME=/home/mvasiljevic/tt-metal TT_METAL_BUILD=/home/mvasiljevic/tt-metal/build ttnn-advise run --repo /home/mvasiljevic/tt-metal --metal-build /home/mvasiljevic/tt-metal/build --capture models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/full_model/shard_advise/advise_terminal.py --output models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/full_model/shard_advise/report.json
+
+Result: environment failure before capture (no report produced).
+
+Traceback (most recent call last):
+  File "/opt/ttmlir-toolchain/venv/bin/ttnn-advise", line 3, in <module>
+    from ttnn_jit._src.cli import main
+  File "/opt/ttmlir-toolchain/venv/lib/python3.12/site-packages/ttnn_jit/__init__.py", line 104, in <module>
+    from ttnn_jit.api import (
+  File "/opt/ttmlir-toolchain/venv/lib/python3.12/site-packages/ttnn_jit/api.py", line 8, in <module>
+    from ttnn_jit._src.jit import JitFunction
+  File "/opt/ttmlir-toolchain/venv/lib/python3.12/site-packages/ttnn_jit/_src/__init__.py", line 7, in <module>
+    from ttnn_jit._ttmlir_runtime.runtime import (
+ImportError: /opt/ttmlir-toolchain/venv/lib/python3.12/site-packages/ttnn_jit/libTTMLIRRuntime.so: undefined symbol: ttnn::experimental::moe_compute(...)
+
+Classification:
+  The preinstalled tt-mlir advisor runtime and current tt-metal operator ABI
+  are out of sync. The failure occurred before importing the capture script,
+  so it is not evidence about the graph. Per shard-advise policy the toolchain
+  was not rebuilt in this experiment. The accepted decoder sharding reports
+  remain unchanged; the exact terminal capture target is retained alongside
+  this log for reproduction after the environment is repaired.

@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="12.848" timestamp="2026-07-18T23:46:21.414052+00:00" hostname="23ff5195c3f7"><testcase classname="models.autoports.mistralai_mistral_small_24b_instruct_2501.tests.test_multichip_decoder" name="test_warmed_single_chip_and_multichip_perf[blackhole-mesh_device0-device_params0]" time="12.160"><properties><property name="start_timestamp" value="2026-07-18T23:46:22" /><property name="end_timestamp" value="2026-07-18T23:46:34" /></properties><failure message="AssertionError: geometry/default output: 0.9998458061914737&#10;assert False">mesh_device = MeshDevice(1x4 grid, 4 devices)
+
+    @pytest.mark.parametrize("device_params", [_perf_device_params()], indirect=True)
+    @pytest.mark.parametrize("mesh_device", [_perf_mesh_param()], indirect=True)
+    def test_warmed_single_chip_and_multichip_perf(mesh_device):
+        implementation = os.environ.get(PERF_IMPL_ENV)
+        if implementation not in {"optimized", "multichip"}:
+            pytest.skip(f"Set {PERF_IMPL_ENV}=optimized|multichip")
+        iterations = int(os.environ.get(PERF_ITERS_ENV, "20"))
+        config = _config()
+        state = _real_state()
+        decoder_cls = OptimizedDecoder if implementation == "optimized" else MultichipDecoder
+        decoder_kwargs = {}
+        if implementation == "multichip":
+            attention_geometry = _geometry_from_env(ATTENTION_GEOMETRY_ENV, 6)
+            mlp_geometry = _geometry_from_env(MLP_GEOMETRY_ENV, 5)
+            decoder_kwargs["dense_kernel_family"] = os.environ.get(DENSE_KERNEL_FAMILY_ENV, "dram_sharded")
+            decoder_kwargs["mlp_projection_family"] = os.environ.get(MLP_PROJECTION_FAMILY_ENV, "separate")
+            decoder_kwargs["collective_family"] = os.environ.get(COLLECTIVE_FAMILY_ENV, "default")
+            decoder_kwargs["collective_dtype"] = os.environ.get(COLLECTIVE_DTYPE_ENV, "bf16")
+            decoder_kwargs["decode_activation_dtype"] = os.environ.get(DECODE_ACTIVATION_DTYPE_ENV, "bf16")
+            attention_weight_dtype = _weight_dtype_from_env(ATTENTION_WEIGHT_DTYPE_ENV)
+            mlp_weight_dtype = _weight_dtype_from_env(MLP_WEIGHT_DTYPE_ENV)
+            attention_fidelity = _fidelity_from_env(ATTENTION_FIDELITY_ENV)
+            mlp_fidelity = _fidelity_from_env(MLP_FIDELITY_ENV)
+            if attention_weight_dtype is not None:
+                decoder_kwargs["attention_weight_dtype"] = attention_weight_dtype
+            if mlp_weight_dtype is not None:
+                decoder_kwargs["mlp_weight_dtype"] = mlp_weight_dtype
+            if attention_fidelity is not None:
+                decoder_kwargs["attention_math_fidelity"] = attention_fidelity
+            if mlp_fidelity is not None:
+                decoder_kwargs["mlp_math_fidelity"] = mlp_fidelity
+            if attention_geometry is not None:
+                decoder_kwargs["attention_geometry"] = attention_geometry
+            if mlp_geometry is not None:
+                decoder_kwargs["mlp_geometry"] = mlp_geometry
+        decoder = decoder_cls.from_state_dict(
+            state, hf_config=config, layer_idx=LAYER_IDX, mesh_device=mesh_device, **decoder_kwargs
+        )
+        if implementation == "optimized":
+            key_cache, value_cache = _single_caches(config, mesh_device)
+            to_device = lambda tensor: _single_input(tensor, mesh_device)
+            to_host = ttnn.to_torch
+            cache_to_host = lambda tensor: ttnn.to_torch(tensor)
+        else:
+            key_cache, value_cache = _multichip_caches(config, mesh_device)
+            to_device = lambda tensor: _mesh_input(tensor, mesh_device)
+            to_host = _replicated_host
+            cache_to_host = lambda tensor: _cache_host(tensor, mesh_device)
+
+        generator = torch.Generator().manual_seed(2513)
+        prefill_hidden = torch.randn(
+            (1, EMITTED_BATCH, EMITTED_PREFILL_SEQUENCE, config.hidden_size),
+            generator=generator,
+            dtype=torch.bfloat16,
+        )
+        tt_prefill = to_device(prefill_hidden)
+        decoder.prefill_forward(tt_prefill, key_cache, value_cache)
+        ttnn.synchronize_device(mesh_device)
+        tracy.signpost("MULTICHIP_PREFILL")
+        start = time.perf_counter()
+        decoder.prefill_forward(tt_prefill, key_cache, value_cache)
+        ttnn.synchronize_device(mesh_device)
+        prefill_ms = (time.perf_counter() - start) * 1000
+        tracy.signpost("MULTICHIP_PREFILL_END")
+
+        decode_hidden = torch.randn((1, EMITTED_BATCH, 1, config.hidden_size), generator=generator, dtype=torch.bfloat16)
+        tt_decode = to_device(decode_hidden)
+        eager = decoder.decode_forward(tt_decode, key_cache, value_cache, current_pos=EMITTED_PREFILL_SEQUENCE)
+        ttnn.synchronize_device(mesh_device)
+        eager_host = to_host(eager)
+        geometry_artifact = os.environ.get(GEOMETRY_ARTIFACT_ENV)
+        geometry_artifact_mode = os.environ.get(GEOMETRY_ARTIFACT_MODE_ENV)
+        if implementation == "multichip" and geometry_artifact:
+            if geometry_artifact_mode == "write":
+                torch.save(eager_host, geometry_artifact)
+            elif geometry_artifact_mode == "compare":
+&gt;               _assert_pcc(
+                    torch.load(geometry_artifact, weights_only=True),
+                    eager_host,
+                    0.9999,
+                    "geometry/default output",
+                )
+
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py:710:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+reference = tensor([[[[ 1.5000, -0.3965, -0.8281,  ..., -0.2617,  0.2754, -1.0469]],
+
+         [[ 0.2539, -0.7500,  0.1357,  ..., ...70, -0.7461]],
+
+         [[ 0.1143, -0.1758, -0.1553,  ..., -2.5312, -0.1680, -1.2656]]]],
+       dtype=torch.bfloat16)
+actual = tensor([[[[ 1.5312, -0.4121, -0.8633,  ..., -0.2500,  0.2754, -1.0625]],
+
+         [[ 0.2480, -0.7109,  0.1201,  ..., ...66, -0.7539]],
+
+         [[ 0.1113, -0.1250, -0.1338,  ..., -2.5625, -0.1582, -1.2500]]]],
+       dtype=torch.bfloat16)
+threshold = 0.9999, label = 'geometry/default output'
+
+    def _assert_pcc(reference, actual, threshold: float, label: str):
+        passed, message = comp_pcc(reference.float(), actual.float(), pcc=threshold)
+        print(f"{label}: {message}")
+&gt;       assert passed, f"{label}: {message}"
+E       AssertionError: geometry/default output: 0.9998458061914737
+E       assert False
+
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_functional_decoder.py:179: AssertionError</failure></testcase></testsuite></testsuites>

@@ -1,0 +1,193 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'PERF_PREFILL'.
+Using operations until 'PERF_PREFILL_END'.
+Detected data from 1 devices. Merging device data...
+
+🚀 Performance Report 🚀
+========================
+
+ID   Total %  Bound  OP Code                                           Device   Device Time  Op-to-Op Gap  Cores  DRAM     DRAM %  FLOPs        FLOPs %  Math Fidelity
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+151    0.1 %         LayerNormDeviceOperation                                1       104 μs                   32                                                BF16, BF16 => BF16
+152    5.6 %   SLOW  MatmulDeviceOperation b={32} x 32 x 5120 x 6144         1     5,239 μs          1 μs     96  16 GB/s   3.2 %  12.3 TFLOPs    4.6 %  HiFi2 BF16 x BF16 => BF16
+153    0.1 %         NlpCreateHeadsDeviceOperation                           1        89 μs          1 μs     32                                                      BF16 => BF16
+154    0.0 %         SliceDeviceOperation                                    1         1 μs          1 μs      4                                                      BF16 => BF16
+155    0.0 %         SliceDeviceOperation                                    1         1 μs          1 μs      4                                                      BF16 => BF16
+156    0.2 %         RotaryEmbeddingDeviceOperation                          1       151 μs          1 μs    110                                                BF16, BF16 => BF16
+157    0.1 %         RotaryEmbeddingDeviceOperation                          1        51 μs          0 μs    110                                                BF16, BF16 => BF16
+158    0.0 %         SliceDeviceOperation                                    1        45 μs          0 μs    110                                                      BF16 => BF16
+159    0.0 %         SliceDeviceOperation                                    1        12 μs          1 μs    110                                                      BF16 => BF16
+160    0.0 %         SliceDeviceOperation                                    1         1 μs          1 μs     32                                                      BF16 => BF16
+161    0.0 %         SliceDeviceOperation                                    1         1 μs          1 μs     32                                                      BF16 => BF16
+162    0.0 %         UpdateKVCacheOperation                                  1         3 μs          1 μs      8                                                BF16, BF16 => BF16
+163    0.0 %         UpdateKVCacheOperation                                  1         3 μs          1 μs      8                                                BF16, BF16 => BF16
+164    0.0 %         SliceDeviceOperation                                    1         2 μs          1 μs     32                                                      BF16 => BF16
+165    0.0 %         SliceDeviceOperation                                    1         2 μs          1 μs     32                                                      BF16 => BF16
+166    0.0 %         UpdateKVCacheOperation                                  1         3 μs          1 μs      8                                                BF16, BF16 => BF16
+167    0.0 %         UpdateKVCacheOperation                                  1         3 μs          1 μs      8                                                BF16, BF16 => BF16
+168    0.0 %         SliceDeviceOperation                                    1         2 μs          1 μs     32                                                      BF16 => BF16
+169    0.0 %         SliceDeviceOperation                                    1         2 μs          1 μs     32                                                      BF16 => BF16
+170    0.0 %         UpdateKVCacheOperation                                  1         3 μs          1 μs      8                                                BF16, BF16 => BF16
+171    0.0 %         UpdateKVCacheOperation                                  1         3 μs          1 μs      8                                                BF16, BF16 => BF16
+172    0.0 %         SliceDeviceOperation                                    1         2 μs          1 μs     32                                                      BF16 => BF16
+173    0.0 %         SliceDeviceOperation                                    1         2 μs          1 μs     32                                                      BF16 => BF16
+174    0.0 %         UpdateKVCacheOperation                                  1         3 μs          1 μs      8                                                BF16, BF16 => BF16
+175    0.0 %         UpdateKVCacheOperation                                  1         3 μs          1 μs      8                                                BF16, BF16 => BF16
+176    0.0 %         SliceDeviceOperation                                    1         2 μs          1 μs     32                                                      BF16 => BF16
+177    0.0 %         SliceDeviceOperation                                    1         2 μs          1 μs     32                                                      BF16 => BF16
+178    0.0 %         UpdateKVCacheOperation                                  1         3 μs          1 μs      8                                                BF16, BF16 => BF16
+179    0.0 %         UpdateKVCacheOperation                                  1         3 μs          1 μs      8                                                BF16, BF16 => BF16
+180    0.0 %         SliceDeviceOperation                                    1         2 μs          1 μs     32                                                      BF16 => BF16
+181    0.0 %         SliceDeviceOperation                                    1         2 μs          1 μs     32                                                      BF16 => BF16
+182    0.0 %         UpdateKVCacheOperation                                  1         3 μs          1 μs      8                                                BF16, BF16 => BF16
+183    0.0 %         UpdateKVCacheOperation                                  1         3 μs          1 μs      8                                                BF16, BF16 => BF16
+184    0.0 %         SliceDeviceOperation                                    1         2 μs          1 μs     32                                                      BF16 => BF16
+185    0.0 %         SliceDeviceOperation                                    1         1 μs          1 μs     32                                                      BF16 => BF16
+186    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+187    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+188    0.0 %         SliceDeviceOperation                                    1         1 μs          1 μs     32                                                      BF16 => BF16
+189    0.0 %         SliceDeviceOperation                                    1         1 μs          4 μs     32                                                      BF16 => BF16
+190    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+191    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+192    0.0 %         SliceDeviceOperation                                    1         1 μs          1 μs     32                                                      BF16 => BF16
+193    0.0 %         SliceDeviceOperation                                    1         1 μs          4 μs     32                                                      BF16 => BF16
+194    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+195    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+196    0.0 %         SliceDeviceOperation                                    1         1 μs          1 μs     32                                                      BF16 => BF16
+197    0.0 %         SliceDeviceOperation                                    1         1 μs          4 μs     32                                                      BF16 => BF16
+198    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+199    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+200    0.0 %         SliceDeviceOperation                                    1         1 μs          1 μs     32                                                      BF16 => BF16
+201    0.0 %         SliceDeviceOperation                                    1         1 μs          4 μs     32                                                      BF16 => BF16
+202    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+203    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+204    0.0 %         SliceDeviceOperation                                    1         1 μs          1 μs     32                                                      BF16 => BF16
+205    0.0 %         SliceDeviceOperation                                    1         1 μs          4 μs     32                                                      BF16 => BF16
+206    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+207    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+208    0.0 %         SliceDeviceOperation                                    1         1 μs          1 μs     32                                                      BF16 => BF16
+209    0.0 %         SliceDeviceOperation                                    1         1 μs          4 μs     32                                                      BF16 => BF16
+210    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+211    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+212    0.0 %         SliceDeviceOperation                                    1         1 μs          1 μs     32                                                      BF16 => BF16
+213    0.0 %         SliceDeviceOperation                                    1         1 μs          4 μs     32                                                      BF16 => BF16
+214    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+215    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+216    0.0 %         SliceDeviceOperation                                    1         1 μs          2 μs     32                                                      BF16 => BF16
+217    0.0 %         SliceDeviceOperation                                    1         1 μs          4 μs     32                                                      BF16 => BF16
+218    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+219    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+220    0.0 %         SliceDeviceOperation                                    1         1 μs          1 μs     32                                                      BF16 => BF16
+221    0.0 %         SliceDeviceOperation                                    1         1 μs          4 μs     32                                                      BF16 => BF16
+222    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+223    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+224    0.0 %         SliceDeviceOperation                                    1         1 μs          1 μs     32                                                      BF16 => BF16
+225    0.0 %         SliceDeviceOperation                                    1         1 μs          4 μs     32                                                      BF16 => BF16
+226    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+227    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+228    0.0 %         SliceDeviceOperation                                    1         1 μs          1 μs     32                                                      BF16 => BF16
+229    0.0 %         SliceDeviceOperation                                    1         1 μs          4 μs     32                                                      BF16 => BF16
+230    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+231    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+232    0.0 %         SliceDeviceOperation                                    1         1 μs          1 μs     32                                                      BF16 => BF16
+233    0.0 %         SliceDeviceOperation                                    1         1 μs          4 μs     32                                                      BF16 => BF16
+234    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+235    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+236    0.0 %         SliceDeviceOperation                                    1         1 μs          1 μs     32                                                      BF16 => BF16
+237    0.0 %         SliceDeviceOperation                                    1         1 μs          4 μs     32                                                      BF16 => BF16
+238    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+239    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+240    0.0 %         SliceDeviceOperation                                    1         1 μs          1 μs     32                                                      BF16 => BF16
+241    0.0 %         SliceDeviceOperation                                    1         1 μs          4 μs     32                                                      BF16 => BF16
+242    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+243    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+244    0.0 %         SliceDeviceOperation                                    1         1 μs          1 μs     32                                                      BF16 => BF16
+245    0.0 %         SliceDeviceOperation                                    1         1 μs          4 μs     32                                                      BF16 => BF16
+246    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+247    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+248    0.0 %         SliceDeviceOperation                                    1         1 μs          1 μs     32                                                      BF16 => BF16
+249    0.0 %         SliceDeviceOperation                                    1         1 μs          4 μs     32                                                      BF16 => BF16
+250    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+251    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+252    0.0 %         SliceDeviceOperation                                    1         1 μs          1 μs     32                                                      BF16 => BF16
+253    0.0 %         SliceDeviceOperation                                    1         1 μs          4 μs     32                                                      BF16 => BF16
+254    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+255    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+256    0.0 %         SliceDeviceOperation                                    1         1 μs          1 μs     32                                                      BF16 => BF16
+257    0.0 %         SliceDeviceOperation                                    1         1 μs          4 μs     32                                                      BF16 => BF16
+258    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+259    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+260    0.0 %         SliceDeviceOperation                                    1         1 μs          1 μs     32                                                      BF16 => BF16
+261    0.0 %         SliceDeviceOperation                                    1         1 μs          4 μs     32                                                      BF16 => BF16
+262    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+263    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+264    0.0 %         SliceDeviceOperation                                    1         1 μs          1 μs     32                                                      BF16 => BF16
+265    0.0 %         SliceDeviceOperation                                    1         1 μs          4 μs     32                                                      BF16 => BF16
+266    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+267    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+268    0.0 %         SliceDeviceOperation                                    1         1 μs          1 μs     32                                                      BF16 => BF16
+269    0.0 %         SliceDeviceOperation                                    1         1 μs          4 μs     32                                                      BF16 => BF16
+270    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+271    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+272    0.0 %         SliceDeviceOperation                                    1         1 μs          1 μs     32                                                      BF16 => BF16
+273    0.0 %         SliceDeviceOperation                                    1         1 μs          4 μs     32                                                      BF16 => BF16
+274    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+275    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+276    0.0 %         SliceDeviceOperation                                    1         1 μs          1 μs     32                                                      BF16 => BF16
+277    0.0 %         SliceDeviceOperation                                    1         1 μs          4 μs     32                                                      BF16 => BF16
+278    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+279    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+280    0.0 %         SliceDeviceOperation                                    1         1 μs          2 μs     32                                                      BF16 => BF16
+281    0.0 %         SliceDeviceOperation                                    1         1 μs          4 μs     32                                                      BF16 => BF16
+282    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+283    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+284    0.0 %         SliceDeviceOperation                                    1         1 μs          1 μs     32                                                      BF16 => BF16
+285    0.0 %         SliceDeviceOperation                                    1         1 μs          4 μs     32                                                      BF16 => BF16
+286    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+287    0.0 %         UpdateKVCacheOperation                                  1         2 μs          1 μs      8                                                BF16, BF16 => BF16
+288    0.1 %         SDPAOperation                                           1        80 μs          3 μs    110                                                BF16, BF16 => BF16
+289    0.1 %         NLPConcatHeadsDeviceOperation                           1        61 μs          1 μs     32                                                      BF16 => BF16
+290    3.7 %   SLOW  MatmulDeviceOperation b={32} x 32 x 4096 x 5120         1     3,458 μs          0 μs     80  18 GB/s   3.4 %  12.4 TFLOPs    5.6 %  HiFi2 BF16 x BF16 => BF16
+291    0.1 %         BinaryNgDeviceOperation                                 1        71 μs          1 μs    110                                                BF16, BF16 => BF16
+292    0.1 %         LayerNormDeviceOperation                                1       105 μs          0 μs     32                                                BF16, BF16 => BF16
+293   29.7 %   SLOW  MatmulDeviceOperation b={32} x 32 x 5120 x 32768        1    27,937 μs          0 μs    103  15 GB/s   2.9 %  12.3 TFLOPs    4.3 %  HiFi2 BF16 x BF16 => BF16
+294    0.5 %         UnaryDeviceOperation                                    1       445 μs          1 μs    110                                                      BF16 => BF16
+295   29.7 %   SLOW  MatmulDeviceOperation b={32} x 32 x 5120 x 32768        1    27,934 μs          1 μs    103  15 GB/s   2.9 %  12.3 TFLOPs    4.3 %  HiFi2 BF16 x BF16 => BF16
+296    0.5 %         BinaryNgDeviceOperation                                 1       449 μs          1 μs    110                                                BF16, BF16 => BF16
+297   29.0 %   SLOW  MatmulDeviceOperation b={32} x 32 x 32768 x 5120        1    27,267 μs          1 μs     80  15 GB/s   3.0 %  12.6 TFLOPs    5.7 %  HiFi2 BF16 x BF16 => BF16
+298    0.1 %         BinaryNgDeviceOperation                                 1        71 μs          1 μs    110                                                BF16, BF16 => BF16
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+     100.0 %         148 device ops, 0 host ops, 0 signposts                      93,797 μs        225 μs         15 GB/s   2.9 %
+
+💡 Advice 💡
+============
+
+Matmul Optimization
+-------------------
+152    5.6 %   SLOW  MatmulDeviceOperation b={32} x 32 x 5120 x 6144         1     5,239 μs          1 μs     96  16 GB/s   3.2 %  12.3 TFLOPs    4.6 %  HiFi2 BF16 x BF16 => BF16
+- If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED)
+- in0_block_w=2 and output subblock 1x2 look good 🤷
+- If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy
+
+290    3.7 %   SLOW  MatmulDeviceOperation b={32} x 32 x 4096 x 5120         1     3,458 μs          0 μs     80  18 GB/s   3.4 %  12.4 TFLOPs    5.6 %  HiFi2 BF16 x BF16 => BF16
+- If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED)
+- in0_block_w=2 and output subblock 1x2 look good 🤷
+- If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy
+
+293   29.7 %   SLOW  MatmulDeviceOperation b={32} x 32 x 5120 x 32768        1    27,937 μs          0 μs    103  15 GB/s   2.9 %  12.3 TFLOPs    4.3 %  HiFi2 BF16 x BF16 => BF16
+- If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED)
+- in0_block_w=2 and output subblock 1x5 look good 🤷
+- If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy
+
+295   29.7 %   SLOW  MatmulDeviceOperation b={32} x 32 x 5120 x 32768        1    27,934 μs          1 μs    103  15 GB/s   2.9 %  12.3 TFLOPs    4.3 %  HiFi2 BF16 x BF16 => BF16
+- If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED)
+- in0_block_w=2 and output subblock 1x5 look good 🤷
+- If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy
+
+297   29.0 %   SLOW  MatmulDeviceOperation b={32} x 32 x 32768 x 5120        1    27,267 μs          1 μs     80  15 GB/s   3.0 %  12.6 TFLOPs    5.7 %  HiFi2 BF16 x BF16 => BF16
+- If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED)
+- in0_block_w=2 and output subblock 1x2 look good 🤷
+- If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy

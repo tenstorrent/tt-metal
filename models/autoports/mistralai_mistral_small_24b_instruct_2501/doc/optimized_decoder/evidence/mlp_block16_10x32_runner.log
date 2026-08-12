@@ -1,0 +1,257 @@
+COMMAND=env TT_VISIBLE_DEVICES=2,3 MISTRAL_SMALL_24B_REAL_WEIGHT_DIR=<snapshot-9527884> MISTRAL_SMALL_24B_OPT_POLICY=selected_mlp_10x32 pytest -q -s ...::test_real_weight_optimized_policy_pcc
+TT_VISIBLE_DEVICES=2,3
+MISTRAL_SMALL_24B_OPT_POLICY=selected_mlp_10x32
+REAL_WEIGHT_SNAPSHOT=9527884be6e5616bdd54de542f9ae13384489724
+MLP_GEOMETRY=(input_cores=10,intermediate_cores=32,output_cores=40,gate_up_max_block=16,down_max_block=16)
+PRECISION=bfloat4_b
+MATH_FIDELITY=LoFi
+DRAM_SHARDED=true
+GATE_UP_IN0_BLOCK_W=16
+GATE_UP_PER_CORE_N=32
+c4d3eb3c7df806c67160b20a2d5d22118dc8acae4227b885abcc5adbef85429e  models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/optimized_decoder.py
+22b1c18477abc4a6cc2dd6771f221ff7c633edf1a9787ebba5f492a6160e6199  models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_optimized_decoder.py
+2026-07-16 13:16:21.599 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/mvasiljevic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: github-actions-annotate-failures-0.3.0, anyio-4.14.2, dash-2.15.0, split-0.11.0, timeout-2.4.0, benchmark-5.2.3, cov-7.0.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_optimized_decoder.py::test_real_weight_optimized_policy_pcc[blackhole-1] 2026-07-16 13:16:23.117 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-16 13:16:23.117 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-16 13:16:23.117 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-16 13:16:23.117 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-16 13:16:23.120 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:569)
+2026-07-16 13:16:23.120 | info     |             UMD | Firmware bundle version 19.8.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-16 13:16:23.123 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-16 13:16:23.234 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1}/[2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-07-16 13:16:23.234 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-16 13:16:23.234 | info     |             UMD | KMD version: 2.8.0 (cluster.cpp:145)
+2026-07-16 13:16:23.234 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-16 13:16:23.235 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-16 13:16:23.315 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-07-16 13:16:23.393 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-16 13:16:23.393 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-16 13:16:23.393 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-16 13:16:23.393 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-16 13:16:23.393 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-16 13:16:23.393 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-16 13:16:23.393 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-16 13:16:23.393 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-16 13:16:23.393 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {1:2} (topology_mapper_utils.cpp:2342)
+2026-07-16 13:16:23.393 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {1:2} (topology_mapper_utils.cpp:2350)
+2026-07-16 13:16:23.397 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-16 13:16:23.397 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-16 13:16:23.411 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-16 13:16:23.450 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681929600_memory' (shm_resource_tracker.cpp:282)
+2026-07-16 13:16:24.028 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349983 GHz, device_time_at_sync=2061507283950 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-16 13:16:24.043 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+2026-07-16 13:16:37.464 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 9-9] grow to 3977984 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+selected_mlp_10x32 real prefill: 0.999797170529265
+FAILED2026-07-16 13:16:38.314 | INFO     | conftest:pytest_runtest_teardown:1140 - In custom teardown, open device ids: {0, 1}
+
+
+=================================== FAILURES ===================================
+______________ test_real_weight_optimized_policy_pcc[blackhole-1] ______________
+
+mesh_device = MeshDevice(1x1 grid, 1 devices)
+
+    @pytest.mark.parametrize("mesh_device", [1], indirect=True)
+    def test_real_weight_optimized_policy_pcc(mesh_device):
+        if OPT_POLICY_ENV not in os.environ:
+            pytest.skip(f"Set {OPT_POLICY_ENV} to run an explicit real-weight precision policy")
+        policy, policy_kwargs = _optimized_policy_kwargs()
+        config = _config()
+        state = _real_state()
+        decoder = OptimizedDecoder.from_state_dict(
+            state,
+            hf_config=config,
+            layer_idx=LAYER_IDX,
+            mesh_device=mesh_device,
+            **policy_kwargs,
+        )
+        reference_layer = _hf_layer(state, config)
+        key_cache, value_cache = _empty_optimized_caches(config, mesh_device)
+        generator = torch.Generator().manual_seed(2504)
+        prefill_hidden = torch.randn(
+            (1, EMITTED_BATCH, EMITTED_PREFILL_SEQUENCE, config.hidden_size),
+            generator=generator,
+            dtype=torch.bfloat16,
+        )
+        reference_prefill, _, _, reference_cache = _reference_layer(reference_layer, prefill_hidden, config)
+        actual_prefill = decoder.prefill_forward(_tt_tensor(prefill_hidden, mesh_device), key_cache, value_cache)
+        _assert_pcc(reference_prefill, _to_host(actual_prefill), 0.99, f"{policy} real prefill")
+
+        decode_hidden = torch.randn((1, EMITTED_BATCH, 1, config.hidden_size), generator=generator, dtype=torch.bfloat16)
+        reference_decode, decode_key, decode_value, _ = _reference_layer(
+            reference_layer,
+            decode_hidden,
+            config,
+            start_pos=EMITTED_PREFILL_SEQUENCE,
+            cache=reference_cache,
+        )
+>       actual_decode = decoder.decode_forward(
+            _tt_tensor(decode_hidden, mesh_device),
+            key_cache,
+            value_cache,
+            current_pos=EMITTED_PREFILL_SEQUENCE,
+        )
+
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_optimized_decoder.py:345:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/optimized_decoder.py:914: in decode_forward
+    hidden_states = self._mlp_forward(hidden_states)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/optimized_decoder.py:509: in _mlp_forward
+    gate = ttnn.matmul(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = FastOperation(python_fully_qualified_name='ttnn.matmul', function=<ttnn._ttnn.operations.matmul.matmul_t object at 0x7...<function default_postprocess_golden_function_outputs at 0x7c58c1c8fa60>, is_cpp_operation=True, is_experimental=False)
+function_args = (ttnn.Tensor([[[[ 2.6406e+00,  4.4062e+00,  ...,  2.5156e+00, -3.2969e+00],
+               [ 1.4531e+00,  7.8516e-01, ...0.0049, -0.0010,  ...,  0.0000, -0.0020]], shape=Shape([5120, 32768]), dtype=DataType::BFLOAT4_B, layout=Layout::TILE))
+function_kwargs = {'compute_kernel_config': <ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7c58bb5041e0>, 'dtype': ...ltiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=16,per_core_M=1,per_core_N=32,fused_activation=std::nullopt)}
+cq_id = None, recording = False
+
+    def __call__(self, *function_args, **function_kwargs):
+        cq_id = None
+        if "queue_id" in function_kwargs:
+            cq_id = function_kwargs.pop("queue_id")
+        elif "cq_id" in function_kwargs:
+            cq_id = function_kwargs.pop("cq_id")
+
+        recording = ttnn.graph.is_python_io_recording_enabled()
+        if recording:
+            ttnn.graph.track_function_start(self.python_fully_qualified_name)
+            ttnn.graph.record_python_operation(self.python_fully_qualified_name, function_args, function_kwargs)
+            input_tensors = get_all_tensors((function_args, function_kwargs))
+            set_tensor_id(input_tensors)
+
+        try:
+            if cq_id is None:
+>               result = self.function(*function_args, **function_kwargs)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               RuntimeError: TT_THROW @ /home/mvasiljevic/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception
+E               info:
+E               Statically allocated circular buffers on core range [0-0 - 9-9] grow to 3977984 B which is beyond max L1 size of 1572864 B
+E               backtrace:
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x164e4ca) [0x7c590ea4e4ca]
+E                --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)
+E                --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)
+E                --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x3de) [0x7c590ebf823e]
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1805b38) [0x7c590ec05b38]
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0xe6) [0x7c590ebf79e6]
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x16e) [0x7c590ebf647e]
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x4ea) [0x7c590ebf537a]
+E                --- ttnn::prim::matmul(tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, std::optional<tt::tt_metal::Tensor> const&, std::optional<tt::tt_metal::Tensor> const&, ttnn::prim::MatmulParams const&)
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x178a65a) [0x7c590eb8a65a]
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6matmulERKN2tt8tt_metal6TensorES6_bbRKSt8optionalIKNS3_12MemoryConfigEES7_IKNS3_8DataTypeEERKS7_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS7_IKSG_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES7_IKNS_19ComputeKernelConfigEES7_IKNS_5types8CoreGridEERKS7_IKNS3_4TileEES7_IS4_ERKS7_IKNS3_12experimental20GlobalCircularBufferEERKS7_IN4ttsl10StrongTypeIhNS3_14SubDeviceIdTagEEEE+0x373) [0x7c590eb89a43]
+E                --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x4e433f) [0x7c590f6e433f]
+E                --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x4e3a6b) [0x7c590f6e3a6b]
+E                --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x315575) [0x7c590f515575]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(PyEval_EvalCode+0xde) [0x18931a0]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18b12c9]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2b145]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_SimpleFileObject+0x106) [0x1a2af06]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_AnyFileObject+0x4a) [0x1a2ac8a]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ac10]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ab1d]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ae1fe3]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c298]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c0ac]
+E                --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7c59558701ca]
+E                --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7c595587028b]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_start+0x29) [0x19a4a69]
+
+ttnn/ttnn/decorators.py:473: RuntimeError
+- generated xml file: /home/mvasiljevic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+13.42s call     models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_optimized_decoder.py::test_real_weight_optimized_policy_pcc[blackhole-1]
+1.13s setup    models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_optimized_decoder.py::test_real_weight_optimized_policy_pcc[blackhole-1]
+0.12s teardown models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_optimized_decoder.py::test_real_weight_optimized_policy_pcc[blackhole-1]
+=========================== short test summary info ============================
+FAILED models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_optimized_decoder.py::test_real_weight_optimized_policy_pcc[blackhole-1]
+============================== 1 failed in 16.04s ==============================
+nanobind: leaked 2 instances!
+ - leaked instance 0x7c58c2141f68 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x7c58c19cc108 of type "ttnn._ttnn.tensor.MemoryConfig"
+nanobind: leaked 20 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - ... skipped remainder
+nanobind: leaked 247 functions!
+ - leaked function "from_json"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "volume"
+ - leaked function "buffer_page_size"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "update_tensor_topology"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-07-16 13:16:40.115 | info     |    BuildKernels | JIT cache stats: 162/162 hits (100.0%) [162 cached, 86 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-16 13:16:40.115 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-16 13:16:40.123 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-16 13:16:40.123 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-16 13:16:40.450 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-16 13:16:40.450 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-16 13:16:40.450 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)
+PYTEST_EXIT_CODE=1
+2026-07-16 13:16:37.464 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 9-9] grow to 3977984 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+E               Statically allocated circular buffers on core range [0-0 - 9-9] grow to 3977984 B which is beyond max L1 size of 1572864 B
+EXPECTED_ALLOCATION_FAILURE_CONFIRMED=true
+                      All available boards on host (UMD):
+┏━━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━━┓
+┃ UMD Chip   ┃            ┃            ┃            ┃ Device      ┃ Board      ┃
+┃ ID         ┃ PCI BDF    ┃ PCI Dev ID ┃ Board Type ┃ Series      ┃ Number     ┃
+┡━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━━┩
+│ 0          │ 0000:03:0… │ /dev/tens… │ Blackhole  │ p300c       │ 000004613… │
+│ 1          │ 0000:04:0… │ /dev/tens… │ Blackhole  │ p300c       │ 000004613… │
+└────────────┴────────────┴────────────┴────────────┴─────────────┴────────────┘
+                        Boards that can be reset (UMD):
+┏━━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━━┓
+┃ UMD Chip   ┃            ┃            ┃            ┃ Device      ┃ Board      ┃
+┃ ID         ┃ PCI BDF    ┃ PCI Dev ID ┃ Board Type ┃ Series      ┃ Number     ┃
+┡━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━━┩
+│ 0          │ 0000:03:0… │ /dev/tens… │ Blackhole  │ p300c       │ 000004613… │
+│ 1          │ 0000:04:0… │ /dev/tens… │ Blackhole  │ p300c       │ 000004613… │
+└────────────┴────────────┴────────────┴────────────┴─────────────┴────────────┘

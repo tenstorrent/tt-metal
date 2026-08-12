@@ -1,0 +1,165 @@
++ env TT_LOGGER_LEVEL=fatal MISTRAL_SMALL_24B_REAL_WEIGHT_DIR=/home/mvasiljevic/hf-cache/hub/models--mistralai--Mistral-Small-24B-Instruct-2501/snapshots/9527884be6e5616bdd54de542f9ae13384489724 MISTRAL_SMALL_24B_MULTICHIP_PERF_ITERS=20 MISTRAL_SMALL_24B_MULTICHIP_CAPACITY=1 timeout 1800 pytest -q -s --junitxml=models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/optimized_multichip_decoder/evidence/final_full_gate_bfp8.xml models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_runtime_is_owned_and_has_no_host_fallback models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_synthetic_prefill_decode_pcc_layout_and_trace models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_paged_cache_page_table_and_positions models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_mutable_nonuniform_positions_trace models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_two_layer_stacked_decode_layout_perf models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_two_layer_stacked_prefill_layout_perf models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_full_context_paged_cache_capacity
+2026-07-19 01:45:54.670 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/mvasiljevic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: github-actions-annotate-failures-0.3.0, anyio-4.14.2, dash-2.15.0, split-0.11.0, timeout-2.4.0, benchmark-5.2.3, cov-7.0.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 7 items
+
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_runtime_is_owned_and_has_no_host_fallback PASSED
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_synthetic_prefill_decode_pcc_layout_and_trace[blackhole-mesh_device0-device_params0] --------------------------------------------------------------------------
+It appears as if there is not enough space for /dev/shm/sm_segment.23ff5195c3f7.1000.493a0000.0 (the shared-memory backing
+file). It is likely that your MPI job will now either abort or experience
+performance degradation.
+
+  Local host:  23ff5195c3f7
+  Space Requested: 16777216 B
+  Space Available: 17539072 B
+--------------------------------------------------------------------------
+2026-07-19 01:45:56.904 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-19 01:45:56.904 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-19 01:45:57.617 | DEBUG    | conftest:mesh_device:599 - multidevice with 4 devices is created
+multichip prefill seq=17: 0.9953362717313301
+multichip prefill seq=17 key cache: 0.9937555220311516
+multichip prefill seq=17 value cache: 0.9937416771205696
+multichip prefill seq=18: 0.995353370184995
+multichip prefill seq=18 key cache: 0.9937432608752191
+multichip prefill seq=18 value cache: 0.9937523257633109
+multichip prefill seq=32: 0.9955553389334062
+multichip prefill seq=32 key cache: 0.9936880404312317
+multichip prefill seq=32 value cache: 0.9936750332323779
+multichip decode: 0.9949842115502825
+multichip decode key append: 0.9937224634661334
+multichip decode value append: 0.9937865718301981
+PASSED
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_paged_cache_page_table_and_positions[blackhole-mesh_device0-device_params0] 2026-07-19 01:46:19.141 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-19 01:46:19.141 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-19 01:46:19.251 | DEBUG    | conftest:mesh_device:599 - multidevice with 4 devices is created
+multichip paged prefill: 0.9953562692303087
+matched paged/contiguous prefill: 1.0
+matched paged/contiguous prefill K cache: 1.0
+matched paged/contiguous prefill V cache: 1.0
+matched contiguous decode: 0.9949219160358479
+multichip paged decode: 0.9949219160358479
+matched paged/contiguous decode: 1.0
+paged physical key mapping: 0.9937459049428374
+paged physical value mapping: 0.9936687720571902
+PASSED
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_mutable_nonuniform_positions_trace[blackhole-mesh_device0-device_params0] 2026-07-19 01:46:39.324 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-19 01:46:39.324 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-19 01:46:39.436 | DEBUG    | conftest:mesh_device:599 - multidevice with 4 devices is created
+mutable trace contiguous step=0: 0.994986773581353
+mutable trace K step=0: 0.9937952384652304
+mutable trace V step=0: 0.9937988350268694
+mutable trace contiguous step=1: 0.9949190875637092
+mutable trace K step=1: 0.9937716533381244
+mutable trace V step=1: 0.9937870137187588
+mutable trace contiguous step=2: 0.9949258179716738
+mutable trace K step=2: 0.9938790596902318
+mutable trace V step=2: 0.9938085514008836
+mutable trace paged step=0: 0.994986773581353
+mutable trace K step=0: 0.9937952384652304
+mutable trace V step=0: 0.9937988350268694
+mutable trace paged step=1: 0.9949190875637092
+mutable trace K step=1: 0.9937716533381244
+mutable trace V step=1: 0.9937870137187588
+mutable trace paged step=2: 0.9949258179716738
+mutable trace K step=2: 0.9938790596902318
+mutable trace V step=2: 0.9938085514008836
+PASSED
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_two_layer_stacked_decode_layout_perf[blackhole-mesh_device0-device_params0] 2026-07-19 01:47:07.438 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-19 01:47:07.439 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-19 01:47:08.139 | DEBUG    | conftest:mesh_device:599 - multidevice with 4 devices is created
+2026-07-19 01:47:30.972 | INFO     | tracy:signpost:49 - MULTICHIP_PUBLIC_STACK_DECODE
+2026-07-19 01:47:31.023 | INFO     | tracy:signpost:49 - MULTICHIP_PUBLIC_STACK_DECODE_END
+2026-07-19 01:47:31.023 | INFO     | tracy:signpost:49 - MULTICHIP_INTERNAL_STACK_DECODE
+2026-07-19 01:47:31.051 | INFO     | tracy:signpost:49 - MULTICHIP_INTERNAL_STACK_DECODE_END
+public/stacked two-layer output: 1.0
+traced public/stacked: 1.0
+MULTICHIP_STACK_LAYOUT_RESULT dense_kernel_family=dram_sharded mlp_projection_family=separate collective_family=persistent collective_dtype=bfp8 attention_activation_dtype=bf16 mlp_activation_dtype=bf16 attention_geometry=(10, 12, 16, 8, 10, 4) mlp_geometry=(10, 32, 40, 16, 16) attention_weight_dtype=bfp4 mlp_weight_dtype=bfp4 attention_math_fidelity=lofi mlp_math_fidelity=lofi public_two_layer_ms=1.056345 internal_two_layer_ms=0.807111 public_per_layer_ms=0.528172 internal_per_layer_ms=0.403555 speedup=1.308798 iterations=20
+PASSED
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_two_layer_stacked_prefill_layout_perf[blackhole-mesh_device0-device_params0] 2026-07-19 01:47:31.387 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-19 01:47:31.387 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-19 01:47:31.498 | DEBUG    | conftest:mesh_device:599 - multidevice with 4 devices is created
+2026-07-19 01:47:54.465 | INFO     | tracy:signpost:49 - MULTICHIP_PUBLIC_STACK_PREFILL
+2026-07-19 01:47:54.575 | INFO     | tracy:signpost:49 - MULTICHIP_PUBLIC_STACK_PREFILL_END
+2026-07-19 01:47:54.575 | INFO     | tracy:signpost:49 - MULTICHIP_INTERNAL_STACK_PREFILL
+2026-07-19 01:47:54.672 | INFO     | tracy:signpost:49 - MULTICHIP_INTERNAL_STACK_PREFILL_END
+public/stacked two-layer prefill: 1.0
+MULTICHIP_PREFILL_STACK_LAYOUT_RESULT logical_seq_len=18 prefill_collective_family=default prefill_collective_dtype=bf16 public_two_layer_ms=5.089993 internal_two_layer_ms=4.589539 public_per_layer_ms=2.544996 internal_per_layer_ms=2.294770 speedup=1.109042 iterations=20
+PASSED
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_full_context_paged_cache_capacity[blackhole-mesh_device0-device_params0] 2026-07-19 01:47:55.018 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-19 01:47:55.018 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-19 01:47:55.130 | DEBUG    | conftest:mesh_device:599 - multidevice with 4 devices is created
+MULTICHIP_CAPACITY_PASS layers=40 batch=32 max_cache_len=32768 local_cache_shape=(32768, 2, 32, 128) current_pos=32767 runtime_reserve_bytes=4294967296
+PASSED
+
+==================================== PASSES ====================================
+- generated xml file: /home/mvasiljevic/tt-metal/models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/optimized_multichip_decoder/evidence/final_full_gate_bfp8.xml -
+============================== slowest durations ===============================
+28.75s call     models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_full_context_paged_cache_capacity[blackhole-mesh_device0-device_params0]
+27.67s call     models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_mutable_nonuniform_positions_trace[blackhole-mesh_device0-device_params0]
+23.17s call     models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_two_layer_stacked_prefill_layout_perf[blackhole-mesh_device0-device_params0]
+22.91s call     models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_two_layer_stacked_decode_layout_perf[blackhole-mesh_device0-device_params0]
+21.16s call     models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_synthetic_prefill_decode_pcc_layout_and_trace[blackhole-mesh_device0-device_params0]
+19.73s call     models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_paged_cache_page_table_and_positions[blackhole-mesh_device0-device_params0]
+1.42s setup    models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_synthetic_prefill_decode_pcc_layout_and_trace[blackhole-mesh_device0-device_params0]
+0.91s setup    models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_two_layer_stacked_decode_layout_perf[blackhole-mesh_device0-device_params0]
+0.34s setup    models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_paged_cache_page_table_and_positions[blackhole-mesh_device0-device_params0]
+0.33s setup    models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_full_context_paged_cache_capacity[blackhole-mesh_device0-device_params0]
+0.33s setup    models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_mutable_nonuniform_positions_trace[blackhole-mesh_device0-device_params0]
+0.32s setup    models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_two_layer_stacked_prefill_layout_perf[blackhole-mesh_device0-device_params0]
+0.20s setup    models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_runtime_is_owned_and_has_no_host_fallback
+0.13s teardown models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_two_layer_stacked_prefill_layout_perf[blackhole-mesh_device0-device_params0]
+0.13s teardown models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_synthetic_prefill_decode_pcc_layout_and_trace[blackhole-mesh_device0-device_params0]
+0.13s teardown models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_paged_cache_page_table_and_positions[blackhole-mesh_device0-device_params0]
+0.13s teardown models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_mutable_nonuniform_positions_trace[blackhole-mesh_device0-device_params0]
+0.13s teardown models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_full_context_paged_cache_capacity[blackhole-mesh_device0-device_params0]
+0.12s teardown models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_two_layer_stacked_decode_layout_perf[blackhole-mesh_device0-device_params0]
+
+(2 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_runtime_is_owned_and_has_no_host_fallback
+PASSED models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_synthetic_prefill_decode_pcc_layout_and_trace[blackhole-mesh_device0-device_params0]
+PASSED models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_paged_cache_page_table_and_positions[blackhole-mesh_device0-device_params0]
+PASSED models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_mutable_nonuniform_positions_trace[blackhole-mesh_device0-device_params0]
+PASSED models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_two_layer_stacked_decode_layout_perf[blackhole-mesh_device0-device_params0]
+PASSED models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_two_layer_stacked_prefill_layout_perf[blackhole-mesh_device0-device_params0]
+PASSED models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_full_context_paged_cache_capacity[blackhole-mesh_device0-device_params0]
+======================== 7 passed in 148.66s (0:02:28) =========================
+nanobind: leaked 2 instances!
+ - leaked instance 0x737493fc5f38 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x7374939c4a08 of type "ttnn._ttnn.tensor.MemoryConfig"
+nanobind: leaked 21 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "FabricConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - ... skipped remainder
+nanobind: leaked 247 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function "__repr__"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "experimental_per_core_buffer_address"
+ - leaked function ""
+ - leaked function "__init__"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html

@@ -1,0 +1,40 @@
+family,candidate,correctness,two_layer_latency_ms,adjacent_control_ms,decision,evidence
+residual_layout,decode_l1_stack,"public/stacked and trace PCC 1.0",0.805981,1.055324,accepted,final_default_stack_decode_bfp8_300.log
+residual_layout,prefill_flat_dram_stack,"public/stacked PCC 1.0; logical S18",4.448526,5.107562,accepted,final_default_stack_prefill_20.log
+collective,default_general_bf16,"candidate/default PCC 0.999994677",0.900100,0.807788,rejected,control_default_ccl_stack_decode_100.log
+collective,persistent_bf16,"paired baseline",0.807669,0.806020,rejected_after_bfp8_pair,paired_collective_bf16_stack_300.log
+collective,persistent_bfp8,"BFP8/BF16 PCC 0.999990825; TP1 decode 0.999988553",0.806020,0.807669,accepted,paired_collective_bfp8_stack_300.log|final_real_tp1_compare_bfp8.log
+collective_topology,ring,"correct exact payload",0.117872,0.114246,rejected,inherited_completed_stage_exact_payload
+projection,packed_gate_up,"candidate/default PCC 0.999983112",0.811856,0.807788,rejected,candidate_packed_final_stack_100.log
+activation,attention_bfp8,"candidate/default PCC 0.99999165",0.828778,0.807788,rejected,candidate_attention_activation_bfp8_final_stack_100.log
+activation,mlp_bfp8,"candidate/default PCC 0.9999744",0.824331,0.807788,rejected,candidate_mlp_activation_bfp8_final_stack_100.log
+geometry,attention_medium_20_24_8_16_20_2,"candidate/default PCC 0.99999012",0.826607,0.806169,rejected,candidate_attention_geometry_medium_final_stack_100.log
+geometry,attention_wide_40_48_4_32_40_1,"candidate/default PCC 0.99998962",0.864758,0.806169,rejected,candidate_attention_geometry_wide_final_stack_100.log
+geometry,mlp_narrow_20_16_20_8_16,"candidate/default PCC 0.99998842",0.832353,0.806169,rejected,candidate_mlp_geometry_narrow_final_stack_100.log
+geometry,mlp_wide_80_64_80_2_8,"candidate/default PCC 0.99996459",0.902445,0.806169,rejected,candidate_mlp_geometry_wide_final_stack_100.log
+weight_dtype,attention_bfp8,"candidate/default PCC 0.99997492",0.813754,0.806169,rejected,candidate_attention_weight_bfp8_final_stack_100.log
+weight_dtype,mlp_bfp8_block16,"L1 CB 1913600 exceeds 1572864",,,adapted,candidate_mlp_weight_bfp8_final_stack_100.log
+weight_dtype,mlp_bfp8_block8,"candidate/default PCC 0.99939779 below 0.9999",0.905056,0.806169,rejected,candidate_mlp_weight_bfp8_block8_retry_stack_100.log|candidate_mlp_weight_bfp8_block8_timing_stack_100.log
+fidelity,attention_hifi2,"candidate/default PCC 0.999990825",0.845966,0.806169,rejected,candidate_attention_hifi2_final_stack_100.log
+fidelity,mlp_hifi2,"candidate/default PCC 0.999990825",1.192333,0.806169,rejected,candidate_mlp_hifi2_final_stack_100.log
+fused_matmul_ccl,ring_mrs_distributed_norm_agmm_interleaved,"rank PCC 0.999676-0.999697",0.362035,0.393561,valid_but_incompatible_with_final_1d_dram_sharded,fused_ccl_interleaved_real_chain_100.log
+fused_matmul_ccl,tuned_dram_sharded_down,"MatmulReduceScatterAsync requires 2D multicast",,,rejected,fused_ccl_tuned_dram_sharded_down_blocker_real.log
+fused_matmul_ccl,tuned_dram_sharded_wo,"MatmulReduceScatterAsync requires 2D multicast",,,rejected,fused_ccl_tuned_dram_sharded_wo_blocker_real.log
+activation,prefill_l1_qkv_width,"unsupported width-sharded multicast input",,,adapted,prefill_l1_qkv_candidate.xml
+activation,prefill_l1_qkv_block_5x9,passed,4.110194,3.809161,rejected,prefill_l1_qkv_block_candidate.xml
+prefill_collective,persistent_bf16_chunk32_dram,"PCC 1.0 after five layout/CB adaptations",12.818221,4.448526,rejected,prefill_persistent_bf16_chunk32_dram_retry.log
+dense_kernel,advisor_1d,"PCC 0.9999844",0.755150,0.579367,rejected,advisor_1d_control.xml
+persistent_buffers,shared_workspace_two_layers,"identity and traced reuse pass",0.805981,,accepted,final_default_stack_decode_bfp8_300.log|watcher_final_two_layer_shared_bfp8.log
+runtime_contract,nonaligned_paged_mutable,"S17/18/32; paged/contiguous PCC 1.0; deterministic trace",,,accepted,final_full_gate_bfp8.log
+capacity,full_context,"40 layers/cache pairs + 4 GiB reserve; position 32767 pass",,,accepted,final_full_gate_bfp8.log
+fused_matmul_ccl,exact_final_boundaries_a_b,"gate/up/qkv rank PCC 0.999603-0.999626",0.842464,0.347050,rejected_2.427499x_slower,fused_exact_boundaries_real_bfp8.log
+runtime_contract,batch1_logical_slice,"true TP4 batch1; public/stacked and traced PCC 1.0",0.829644,0.915775,accepted,final_batch1_stack_decode_100.log|control_batch1_general_ccl_stack_decode_100.log
+runtime_contract,phase_explicit_collective,"batch1 prefill TP1 PCC 0.999985284; decode PCC 0.999989612",2.038562,2.256544,accepted,final_batch1_stack_prefill_20.log|final_batch1_real_tp1_compare.log
+watcher,batch1_two_layer_shared_workspace,"100 traced replays; empty audit; four healthy p300c boards",0.829644,,accepted,watcher_final_batch1_two_layer_shared_bfp8.log|watcher_error_audit_batch1_bfp8.txt|post_watcher_health_batch1_bfp8.log
+prefill_norm,decode_11core_block_first,"QKV shard width 15 tiles not divisible by in0_block_w 8",,,adapted,prefill_sharded_norm_candidate_batch1_first.log
+prefill_norm,decode_11core_block5_retry,"candidate/default PCC 0.999761602; below 0.9999",2.221102,2.084208,rejected,prefill_sharded_norm_candidate_batch1_block5_timing.log
+prefill_norm,no_padding_5core_combined,"candidate/default PCC 0.999898482",2.265096,1.896023,rejected,prefill_sharded_norm_candidate_batch1_5core_100.log|prefill_sharded_norm_control_batch1_100.log
+prefill_norm,qkv_consumer_8x1_block,"candidate/default PCC 0.999976375",2.167228,2.084208,rejected_3.983_percent_slower,prefill_qkv_sharded_norm_candidate_batch1_20.log
+prefill_norm,mlp_consumer_10x1_width,"candidate/default PCC 0.999897230",2.119506,2.084208,rejected_1.694_percent_slower,prefill_mlp_sharded_norm_candidate_batch1_20.log
+prefill_norm,combined_consumer_ready,"candidate/default PCC 0.999888951",2.254134,1.896023,rejected_18.888_percent_slower,prefill_sharded_norm_candidate_batch1_consumer_layout_100.log|prefill_sharded_norm_control_batch1_100.log
+prefill_trace,decoder_local_two_layer,"eager/traced PCC 1.0",1.401168,1.896023,accepted_trace_safe_26.100_percent_faster,prefill_trace_batch1_100.log

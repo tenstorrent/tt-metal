@@ -1,0 +1,241 @@
+2026-07-19 02:20:29.266 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/mvasiljevic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: github-actions-annotate-failures-0.3.0, anyio-4.14.2, dash-2.15.0, split-0.11.0, timeout-2.4.0, benchmark-5.2.3, cov-7.0.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_two_layer_stacked_decode_layout_perf[blackhole-mesh_device0-device_params0] --------------------------------------------------------------------------
+It appears as if there is not enough space for /dev/shm/sm_segment.23ff5195c3f7.1000.f0250000.0 (the shared-memory backing
+file). It is likely that your MPI job will now either abort or experience
+performance degradation.
+
+  Local host:  23ff5195c3f7
+  Space Requested: 16777216 B
+  Space Available: 17539072 B
+--------------------------------------------------------------------------
+2026-07-19 02:20:31.360 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-19 02:20:31.360 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-19 02:20:32.077 | DEBUG    | conftest:mesh_device:599 - multidevice with 4 devices is created
+2026-07-19 02:20:55.325 | critical |          Always | TT_FATAL: Target number of cores 32 is greater than total available cores 1 (assert.hpp:104)
+FAILED2026-07-19 02:20:55.508 | INFO     | conftest:pytest_runtest_teardown:1140 - In custom teardown, open device ids: {0, 1, 2, 3}
+
+
+=================================== FAILURES ===================================
+_ test_multichip_two_layer_stacked_decode_layout_perf[blackhole-mesh_device0-device_params0] _
+
+mesh_device = MeshDevice(1x4 grid, 4 devices)
+
+    @pytest.mark.parametrize("device_params", STACK_DEVICE_PARAMS, indirect=True)
+    @pytest.mark.parametrize("mesh_device", MESH_PARAMS, indirect=True)
+    def test_multichip_two_layer_stacked_decode_layout_perf(mesh_device):
+        """Compare repeated public restores with a stack-compatible residual layout."""
+
+        iterations = int(os.environ.get(PERF_ITERS_ENV, "50"))
+        active_batch = int(os.environ.get(ACTIVE_BATCH_ENV, EMITTED_BATCH))
+        assert 1 <= active_batch <= EMITTED_BATCH
+        config = _config()
+        state = _real_state()
+        dense_kernel_family = os.environ.get(DENSE_KERNEL_FAMILY_ENV, "dram_sharded")
+        mlp_projection_family = os.environ.get(MLP_PROJECTION_FAMILY_ENV, "separate")
+        collective_family = os.environ.get(COLLECTIVE_FAMILY_ENV, "persistent")
+        collective_dtype = os.environ.get(COLLECTIVE_DTYPE_ENV, "bfp8")
+        decode_activation_dtype = os.environ.get(DECODE_ACTIVATION_DTYPE_ENV, "bf16")
+        attention_activation_dtype = os.environ.get(ATTENTION_ACTIVATION_DTYPE_ENV)
+        mlp_activation_dtype = os.environ.get(MLP_ACTIVATION_DTYPE_ENV)
+        attention_geometry = _geometry_from_env(ATTENTION_GEOMETRY_ENV, 6)
+        mlp_geometry = _geometry_from_env(MLP_GEOMETRY_ENV, 5)
+        attention_weight_dtype = _weight_dtype_from_env(ATTENTION_WEIGHT_DTYPE_ENV)
+        mlp_weight_dtype = _weight_dtype_from_env(MLP_WEIGHT_DTYPE_ENV)
+        attention_fidelity = _fidelity_from_env(ATTENTION_FIDELITY_ENV)
+        mlp_fidelity = _fidelity_from_env(MLP_FIDELITY_ENV)
+        decoder_kwargs = {
+            "dense_kernel_family": dense_kernel_family,
+            "mlp_projection_family": mlp_projection_family,
+            "collective_family": collective_family,
+            "collective_dtype": collective_dtype,
+            "decode_activation_dtype": decode_activation_dtype,
+            "attention_activation_dtype": attention_activation_dtype,
+            "mlp_activation_dtype": mlp_activation_dtype,
+            "batch": active_batch,
+        }
+        for name, value in (
+            ("attention_geometry", attention_geometry),
+            ("mlp_geometry", mlp_geometry),
+            ("attention_weight_dtype", attention_weight_dtype),
+            ("mlp_weight_dtype", mlp_weight_dtype),
+            ("attention_math_fidelity", attention_fidelity),
+            ("mlp_math_fidelity", mlp_fidelity),
+        ):
+            if value is not None:
+                decoder_kwargs[name] = value
+        first = MultichipDecoder.from_state_dict(
+            state,
+            hf_config=config,
+            layer_idx=LAYER_IDX,
+            mesh_device=mesh_device,
+            **decoder_kwargs,
+        )
+        second = MultichipDecoder.from_state_dict(
+            state,
+            hf_config=config,
+            layer_idx=LAYER_IDX,
+            mesh_device=mesh_device,
+            shared_rope=first.shared_rope,
+            shared_collective=first.shared_collective,
+            **decoder_kwargs,
+        )
+        first_caches = _multichip_caches(config, mesh_device, batch=active_batch)
+        second_caches = _multichip_caches(config, mesh_device, batch=active_batch)
+        generator = torch.Generator().manual_seed(2514)
+        hidden = torch.randn((1, active_batch, 1, config.hidden_size), generator=generator, dtype=torch.bfloat16)
+        tt_hidden = _mesh_input(hidden, mesh_device)
+        current_pos_tensor = _mesh_input(
+            torch.full((active_batch,), EMITTED_PREFILL_SEQUENCE, dtype=torch.int32),
+            mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.int32,
+        )
+
+        def public_pair():
+            output = first.decode_forward(tt_hidden, *first_caches, current_pos_tensor=current_pos_tensor)
+            return second.decode_forward(output, *second_caches, current_pos_tensor=current_pos_tensor)
+
+        stacked_input = first.prepare_decode_residual(tt_hidden)
+
+        def stacked_pair():
+            output = first.decode_forward_stacked(stacked_input, *first_caches, current_pos_tensor=current_pos_tensor)
+            return second.decode_forward_stacked(output, *second_caches, current_pos_tensor=current_pos_tensor)
+
+>       eager_public = public_pair()
+                       ^^^^^^^^^^^^^
+
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py:868:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py:859: in public_pair
+    output = first.decode_forward(tt_hidden, *first_caches, current_pos_tensor=current_pos_tensor)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/multichip_decoder.py:1254: in decode_forward
+    query, key, value = ttnn.experimental.nlp_create_qkv_heads_decode(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = FastOperation(python_fully_qualified_name='ttnn.experimental.nlp_create_qkv_heads_decode', function=<ttnn._ttnn.operat...uts=None, golden_function=None, postprocess_golden_function_outputs=None, is_cpp_operation=True, is_experimental=False)
+function_args = (device_id: 3, MeshCoordinate([0, 0])
+ttnn.Tensor([[[[ 4.2383e-01, -9.2285e-02,  ...,  8.9453e-01, -2.6953e-01],
+     ...00,  ...,  0.0000e+00,  0.0000e+00]]]], shape=Shape([1, 1, 32, 1536]), dtype=DataType::BFLOAT16, layout=Layout::TILE),)
+function_kwargs = {'memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::HEIGHT_SHARDED,buffer_type=BufferType::L1,shard_spec=..._shard_spec=std::nullopt,created_with_nd_shard_spec=0), 'num_heads': 8, 'num_kv_heads': 2, 'overlap_qk_coregrid': None}
+cq_id = None, recording = False
+
+    def __call__(self, *function_args, **function_kwargs):
+        cq_id = None
+        if "queue_id" in function_kwargs:
+            cq_id = function_kwargs.pop("queue_id")
+        elif "cq_id" in function_kwargs:
+            cq_id = function_kwargs.pop("cq_id")
+
+        recording = ttnn.graph.is_python_io_recording_enabled()
+        if recording:
+            ttnn.graph.track_function_start(self.python_fully_qualified_name)
+            ttnn.graph.record_python_operation(self.python_fully_qualified_name, function_args, function_kwargs)
+            input_tensors = get_all_tensors((function_args, function_kwargs))
+            set_tensor_id(input_tensors)
+
+        try:
+            if cq_id is None:
+>               result = self.function(*function_args, **function_kwargs)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               RuntimeError: TT_FATAL @ /home/mvasiljevic/tt-metal/tt_metal/common/work_split.cpp:160: target_num_cores <= sub_core_grids.num_cores()
+E               info:
+E               Target number of cores 32 is greater than total available cores 1
+E               backtrace:
+E                --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3d14f1) [0x710140dd14f1]
+E                --- tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(tt::xy_pair, unsigned int, tt::tt_metal::CoreRangeSet const&, bool)
+E                --- ttnn::experimental::prim::NLPCreateQKVHeadsDecodeDeviceOperation::compute_output_specs(ttnn::experimental::prim::NlpCreateQkvHeadsDecodeParams const&, ttnn::experimental::prim::NlpCreateQkvHeadsDecodeInputs const&)
+E                --- ttnn::experimental::prim::NLPCreateQKVHeadsDecodeDeviceOperation::create_output_tensors(ttnn::experimental::prim::NlpCreateQkvHeadsDecodeParams const&, ttnn::experimental::prim::NlpCreateQkvHeadsDecodeInputs const&)
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_12experimental4prim38NLPCreateQKVHeadsDecodeDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0xce) [0x7101402a958e]
+E                --- ttnn::prim::nlp_create_qkv_heads_decode(tt::tt_metal::Tensor const&, unsigned int, unsigned int, unsigned int, bool, bool, std::optional<tt::tt_metal::Tensor const> const&, std::optional<unsigned int>, tt::tt_metal::MemoryConfig const&)
+E                --- ttnn::experimental::nlp_create_qkv_heads_decode(tt::tt_metal::Tensor const&, unsigned int, std::optional<unsigned int const>, std::optional<std::array<tt::tt_metal::Tensor, 3ul> >&, std::optional<bool const>, std::optional<tt::tt_metal::Tensor const> const&, std::optional<unsigned int const>, std::optional<tt::tt_metal::MemoryConfig> const&)
+E                --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x5083ed) [0x710140f083ed]
+E                --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x315575) [0x710140d15575]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18124a0]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xf93a) [0x182277a]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(PyEval_EvalCode+0xde) [0x18931a0]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18b12c9]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2b145]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_SimpleFileObject+0x106) [0x1a2af06]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_AnyFileObject+0x4a) [0x1a2ac8a]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ac10]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ab1d]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ae1fe3]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c298]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c0ac]
+E                --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x710186e361ca]
+E                --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x710186e3628b]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_start+0x29) [0x19a4a69]
+
+ttnn/ttnn/decorators.py:473: RuntimeError
+- generated xml file: /home/mvasiljevic/tt-metal/models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/optimized_multichip_decoder/evidence/final_batch1_stack_decode_100.xml -
+============================== slowest durations ===============================
+23.25s call     models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_two_layer_stacked_decode_layout_perf[blackhole-mesh_device0-device_params0]
+1.46s setup    models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_two_layer_stacked_decode_layout_perf[blackhole-mesh_device0-device_params0]
+0.13s teardown models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_two_layer_stacked_decode_layout_perf[blackhole-mesh_device0-device_params0]
+=========================== short test summary info ============================
+FAILED models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_two_layer_stacked_decode_layout_perf[blackhole-mesh_device0-device_params0]
+============================== 1 failed in 25.55s ==============================
+nanobind: leaked 2 instances!
+ - leaked instance 0x7100f3ebb0a8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x7100f2fb4408 of type "ttnn._ttnn.tensor.MemoryConfig"
+nanobind: leaked 21 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "FabricConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - ... skipped remainder
+nanobind: leaked 247 functions!
+ - leaked function "experimental_per_core_buffer_address"
+ - leaked function ""
+ - leaked function "__repr__"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "subtract"
+ - leaked function "__init__"
+ - leaked function "to_json"
+ - leaked function "__repr__"
+ - leaked function "default_core_range"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html
