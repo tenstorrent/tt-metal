@@ -1,0 +1,35 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// The unified programming model.
+//
+//     #include <tt/unified>
+//
+// A unified kernel is ONE source describing a whole Tensix pipeline. It is
+// compiled once per baby RISC-V thread, and each statement lowers to that
+// thread's half of the circular-buffer protocol. See tt/unified_api.h for the
+// surface and the protocol table.
+//
+// This header is the version selector. Today there is one target -- the Metal
+// v1 programming model (Wormhole / Blackhole) -- so it picks the v1 adaptor and
+// implementation unconditionally. As other metal language versions arrive, the
+// choice happens here and nothing above it changes:
+//
+//     tt/unified                -- this file: selects a backend + implementation
+//       tt/unified_adaptor_v1.hpp  -- binds the model's intrinsics to metal v1
+//       tt/unified_api.h           -- core API declarations (version-agnostic)
+//         tt/unified_math.hpp      -- leaves, ops, fusion kinds, strategies
+//           tt/unified_expr.hpp    -- domain-free expression tree + allocator
+//       tt/unified_impl_v1.hpp     -- definitions for the v1 target
+//
+// To bind against something other than metal -- the host trace harness, say --
+// define TT_UNIFIED_CUSTOM_BINDING and provide the intrinsics yourself before
+// including this header.
+
+#pragma once
+
+#ifndef TT_UNIFIED_CUSTOM_BINDING
+#include <tt/unified_adaptor_v1.hpp>
+#endif
+
+#include <tt/unified_api.h>
+#include <tt/unified_impl_v1.hpp>
