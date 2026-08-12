@@ -53,7 +53,7 @@ grep "HEALTH OK" "$LOGDIR/health.log"
 echo
 echo "=== [1/3] default-path regression (depthwise_mac / channel_padding, 1800s cap)"
 timeout 1800 python -m pytest \
-    models/tt_dit/tests/models/minimax_h3/test_audio_vae_minimax_h3.py \
+    models/tt_dit/tests/models/minimax_h3/test_audio_minimax_h3.py \
     -k "depthwise_mac or channel_padding" -q > "$LOGDIR/regress.log" 2>&1
 echo "exit=$?"; tail -3 "$LOGDIR/regress.log"
 
@@ -76,7 +76,7 @@ grep -E "prepared weight|widened weight|conv alone|fused snake|PASS|FAIL|differs
 echo
 echo "=== [3/3] full test file (17 expected, 3600s cap)"
 timeout 3600 python -m pytest \
-    models/tt_dit/tests/models/minimax_h3/test_audio_vae_minimax_h3.py \
+    models/tt_dit/tests/models/minimax_h3/test_audio_minimax_h3.py \
     -q > "$LOGDIR/full.log" 2>&1
 echo "exit=$?"; tail -4 "$LOGDIR/full.log"
 

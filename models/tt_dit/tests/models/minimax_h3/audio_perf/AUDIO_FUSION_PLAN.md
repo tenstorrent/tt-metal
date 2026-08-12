@@ -1,5 +1,9 @@
 # Audio decode — implementation plan for the remaining 5-10x
 
+> **Note:** some `audio_perf/` scripts cited below were removed once their conclusions were
+> captured here and in `ITEM1_RESULT.md` / `ITEM2_RESULT.md`. Recover any of them with
+> `git log -- models/tt_dit/tests/models/minimax_h3/audio_perf`. See `README.md` for what survives.
+
 Everything here is sized from measurements in this branch. Each script that produced a number is
 named, so any figure can be re-derived rather than trusted. `AUDIO_RESULTS.md` covers what is already
 achieved (~1.3x); this covers what is not.

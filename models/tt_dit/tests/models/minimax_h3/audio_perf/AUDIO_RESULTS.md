@@ -1,5 +1,9 @@
 # MiniMax-H3 audio decode — what changed, measured
 
+> **Note:** some `audio_perf/` scripts cited below were removed once their conclusions were
+> captured here and in `ITEM1_RESULT.md` / `ITEM2_RESULT.md`. Recover any of them with
+> `git log -- models/tt_dit/tests/models/minimax_h3/audio_perf`. See `README.md` for what survives.
+
 Branch `worktree-audio-kernels`. All figures are one warmed forward at the shipping working point
 (207 latents x 2 channels -> 165,600 samples, mesh 1x1 Blackhole), reproduced with the commands in
 `AUDIO_KERNELS_BENCH.md`. STATE.md am. 82 records ±8 % run-to-run at identical shape and seed, so

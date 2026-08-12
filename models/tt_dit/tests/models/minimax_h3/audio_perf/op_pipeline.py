@@ -1,14 +1,21 @@
 """Is the ~170 us/op fixed cost real serial device work, or an artefact of syncing after every op?
 
-op_floor.py timed one op at a time with a synchronize in between, which serializes host and device and
-folds round-trip latency into every measurement. That number (170 us) happens to match the decode's
-1401 ms / 6955 ops = 201 us, but agreement is not proof -- the decode could be paying something else.
+An earlier probe timed one op at a time with a synchronize in between, which serializes host and device
+and folds round-trip latency into every measurement. That number (170-180 us) happens to match the
+decode's 1401 ms / 6955 ops = 201 us, but agreement is not proof -- the decode could be paying something
+else.
+
+**Answered 2026-08-12: it is sync latency, not device work.** Measured chained 141.9 / independent 125.7
+/ per-op-sync 138.8 us/op -- all three equal, so this microbenchmark is host-*issue*-bound and cannot
+see device time at all. The "6955 ops x 180 us = 1254 ms floor" that followed from it is void; real
+per-op device cost is ~37 us. Kept as the standing counter-evidence, since that floor is quoted in older
+notes. See ITEM1_RESULT.md.
 
 Three measurements, each issuing N ops and synchronizing ONCE at the end:
 
   chained      op i+1 consumes op i's output, so the device cannot overlap them
   independent  N ops on the same input, free to pipeline
-  per-op-sync  the op_floor.py methodology, for comparison
+  per-op-sync  the per-op-synchronize methodology, for comparison
 
 If independent is far cheaper than per-op-sync, the floor is sync latency and the real per-op cost is
 lower. If chained ~= per-op-sync, the cost is genuine serial work and op count is the wall.

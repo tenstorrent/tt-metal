@@ -78,13 +78,15 @@ build dir against the worktree source (2.6 GB, and ccache is warm).
 | `run_snake_verify.sh` | one-shot: device health -> regression -> snake golden -> full gate |
 | `snake_fused_verify.py` | fused snake vs float64 golden (7.649e-08) |
 | `band_grouped_multiplier.py` | acceptance test for item 3 |
-| `band_{concat,wide_conv,reduce}_cost.py` | evidence for the rejected options |
+
+The `band_*_cost.py` evidence scripts for the rejected options were removed; their conclusions are in the
+dead-ends list below, and `audio_perf/README.md` documents everything that survives.
 
 Gate: `pytest models/tt_dit/tests/models/minimax_h3/test_audio_minimax_h3.py -q`
 (renamed from `test_audio_vae_minimax_h3.py` by h3's suite consolidation).
 
-Do **not** quote timings from `decode_accuracy.py` — it times one call per process, which is where
-~1% spread came from. Use `decode_bench.py`.
+Do **not** time one decode per process — that is where the ~1% spread came from. Use `decode_bench.py`,
+which builds once and reports a median. (The old `decode_accuracy.py` did the former and was removed.)
 
 Stale WAVs: `*_3_device_prefix.wav` are from 08-07 and a different config. Delete before any
 listening test.
@@ -130,7 +132,7 @@ which means deleting ops.
 
 * `PROFILE_2026_08_06.txt` device times sum to **~1.3-1.4 s** against ~1.1 s end-to-end. Device time
   cannot exceed wall time, so one of those is measured wrong.
-* `op_floor.py`'s **180 us/op was measured with a synchronize between ops**, so it folds host
+* The retired `op_floor.py`'s **180 us/op was measured with a synchronize between ops**, so it folds host
   round-trip into every sample. "6955 ops x 180 us = 1254 ms of floor" is therefore **not** a
   device-time floor and must stop being quoted as one.
 * `decoder_minimax_h3_audio.py`'s docstring says the vocoder is ~70% host-bound and tracing is "its
