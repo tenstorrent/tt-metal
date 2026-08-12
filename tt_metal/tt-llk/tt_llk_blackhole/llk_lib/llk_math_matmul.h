@@ -449,6 +449,62 @@ inline void matmul_configure_mop(
 }
 
 /**
+ * @brief Configure the specialized BF16 HiFi2 16x32 x 32x32 matmul path.
+ *
+ * This path is intentionally exact-shape: in0 is 16x32, in1 is 32x32, inputs
+ * are not transposed, and fidelity is HiFi2. It adds ADDR_MOD_6 so the final
+ * MVMUL can reset fidelity and release both source operands in one instruction.
+ */
+inline void _llk_math_matmul_16x32_32x32_hifi2_init_()
+{
+    matmul_configure_addrmod<MathFidelity::HiFi2, 0>(false /* transpose */, FACE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false /* partial_face */);
+
+    // The first phase ends with ADDR_MOD_5, which advances fidelity. The last
+    // phase uses ADDR_MOD_6 to reset all counters, including fidelity.
+    addr_mod_t {
+        .srca     = {.incr = 0, .clr = 1, .cr = 1},
+        .srcb     = {.incr = 0, .clr = 1, .cr = 1},
+        .dest     = {.incr = 0, .clr = 1, .cr = 1},
+        .fidelity = {.incr = 0, .clr = 1},
+    }
+        .set(ADDR_MOD_6);
+
+    math::reset_counters(p_setrwc::SET_ABD_F);
+}
+
+/**
+ * @brief Compute one output as two K-face partial tiles.
+ *
+ * The first and second K-face contributions are accumulated in destination
+ * tiles 0 and 1 respectively. Each partial receives both HiFi2 phases, while
+ * the resulting recurrence distance of eight permits one MVMUL per cycle. The
+ * packer must add the two partial tiles when writing the final output.
+ */
+inline void _llk_math_matmul_16x32_32x32_hifi2_splitk2_(const std::uint32_t dst_index)
+{
+    constexpr std::uint32_t partial_tile_stride = 1U << DstTileSizeLog2[DstTileShape::Tile32x32];
+    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
+
+    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0);
+    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_4, 0);
+    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, partial_tile_stride);
+    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, partial_tile_stride);
+    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, partial_tile_stride);
+    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, partial_tile_stride);
+
+    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0);
+    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_4, 0);
+    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, partial_tile_stride);
+    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, partial_tile_stride);
+    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, partial_tile_stride);
+    TTI_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_6, partial_tile_stride);
+}
+
+/**
  * @brief Emit one throttled MVMUL sequence for a full 32x32 tile, interleaving NOPs to cap matmul throughput.
  *
  * Each Level specialization (1..5) uses a different NOP-to-MVMUL ratio, yielding progressively lower throughput

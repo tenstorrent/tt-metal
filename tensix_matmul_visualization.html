@@ -1,0 +1,816 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Tensix Matmul — Why Split-K Is Faster</title>
+  <style>
+    :root {
+      --bg: #07111f;
+      --panel: rgba(14, 29, 48, 0.88);
+      --panel-2: #10263d;
+      --line: #294661;
+      --text: #eef7ff;
+      --muted: #91a9bc;
+      --a: #35d6ff;
+      --b: #f7c948;
+      --math: #b38cff;
+      --d0: #ff7a90;
+      --d1: #55e6a5;
+      --out: #6fd6ff;
+      --danger: #ff667d;
+      --good: #58e6a9;
+      --shadow: 0 18px 55px rgba(0, 0, 0, 0.34);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 14% 9%, rgba(53, 214, 255, 0.12), transparent 26rem),
+        radial-gradient(circle at 88% 75%, rgba(179, 140, 255, 0.12), transparent 30rem),
+        var(--bg);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    button { font: inherit; }
+
+    .page {
+      width: min(1380px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 26px 0 40px;
+    }
+
+    header {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 24px;
+      margin-bottom: 20px;
+    }
+
+    .eyebrow {
+      color: var(--a);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 7px 0 5px;
+      font-size: clamp(30px, 4vw, 55px);
+      line-height: 1;
+      letter-spacing: -0.045em;
+    }
+
+    .subtitle { margin: 0; color: var(--muted); font-size: 15px; }
+
+    .perf-pill {
+      flex: 0 0 auto;
+      display: grid;
+      grid-template-columns: auto auto;
+      gap: 4px 13px;
+      align-items: center;
+      padding: 13px 16px;
+      border: 1px solid rgba(88, 230, 169, 0.38);
+      border-radius: 15px;
+      background: rgba(88, 230, 169, 0.08);
+      box-shadow: var(--shadow);
+    }
+
+    .perf-pill strong { color: var(--good); font-size: 25px; }
+    .perf-pill span { color: var(--muted); font-size: 12px; }
+
+    .stage {
+      position: relative;
+      overflow: hidden;
+      min-height: 620px;
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      background: linear-gradient(145deg, rgba(16, 38, 61, 0.96), rgba(7, 17, 31, 0.98));
+      box-shadow: var(--shadow);
+    }
+
+    .tabs {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 7px;
+      margin-bottom: 10px;
+      padding: 6px;
+      border: 1px solid var(--line);
+      border-radius: 15px;
+      background: rgba(14, 29, 48, 0.82);
+    }
+
+    .tab {
+      padding: 11px 14px;
+      border: 1px solid transparent;
+      border-radius: 10px;
+      color: var(--muted);
+      background: transparent;
+      cursor: pointer;
+      font-weight: 800;
+      transition: 180ms;
+    }
+
+    .tab:hover { color: var(--text); background: rgba(255,255,255,0.035); }
+    .tab.active { color: #06111d; border-color: var(--a); background: var(--a); }
+
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      gap: 15px;
+      padding: 15px 18px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(7, 17, 31, 0.65);
+    }
+
+    .step-copy { display: flex; align-items: center; gap: 12px; }
+
+    .step-number {
+      display: grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      color: #06111d;
+      background: var(--a);
+      font-weight: 900;
+    }
+
+    #stepTitle { margin: 0; font-size: 17px; }
+    #stepText { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
+
+    .legend { display: flex; flex-wrap: wrap; justify-content: end; gap: 8px 13px; }
+    .legend span { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; }
+    .dot { width: 9px; height: 9px; border-radius: 50%; }
+
+    .diagram {
+      position: relative;
+      display: grid;
+      grid-template-columns: 1.12fr 0.9fr 1.35fr 0.9fr 1.05fr;
+      gap: 28px;
+      align-items: center;
+      min-height: 490px;
+      padding: 35px 32px 28px;
+    }
+
+    .comparison {
+      position: relative;
+      z-index: 5;
+      display: none;
+      grid-column: 1 / -1;
+      grid-template-columns: 1fr 90px 1fr;
+      gap: 20px;
+      align-items: stretch;
+    }
+
+    .comparison.visible { display: grid; }
+
+    .compare-card {
+      padding: 20px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: rgba(8, 23, 38, 0.96);
+    }
+
+    .compare-card.old { border-color: rgba(255, 102, 125, 0.45); }
+    .compare-card.new { border-color: rgba(88, 230, 169, 0.45); }
+    .compare-card h3 { margin: 0 0 5px; font-size: 20px; }
+    .compare-card.old h3 { color: var(--danger); }
+    .compare-card.new h3 { color: var(--good); }
+    .compare-card > p { min-height: 42px; margin: 0 0 18px; color: var(--muted); font-size: 12px; }
+
+    .schedule {
+      display: grid;
+      grid-template-columns: repeat(8, 1fr);
+      gap: 5px;
+      margin: 13px 0 18px;
+    }
+
+    .op {
+      display: grid;
+      place-items: center;
+      aspect-ratio: 1;
+      border-radius: 7px;
+      color: #07111f;
+      background: var(--d0);
+      font-size: 9px;
+      font-weight: 900;
+    }
+
+    .op.alt { background: var(--d1); }
+    .op.stalled { color: white; background: repeating-linear-gradient(135deg, #693143 0 4px, var(--danger) 4px 8px); }
+
+    .mini-dest { display: grid; grid-template-columns: repeat(8, 1fr); gap: 5px; }
+    .mini-dest i { height: 28px; border-radius: 5px; background: #29445b; }
+    .mini-dest.old i:nth-child(-n+4) { background: var(--d0); }
+    .mini-dest.new i:nth-child(-n+4) { background: var(--d0); }
+    .mini-dest.new i:nth-child(n+5) { background: var(--d1); }
+
+    .vs {
+      display: grid;
+      place-items: center;
+      color: var(--muted);
+      font-size: 14px;
+      font-weight: 900;
+    }
+
+    .compare-result {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: end;
+      margin-top: 18px;
+      padding-top: 15px;
+      border-top: 1px solid var(--line);
+    }
+    .compare-result span { color: var(--muted); font-size: 11px; }
+    .compare-result strong { font-size: 25px; }
+    .old .compare-result strong { color: var(--danger); }
+    .new .compare-result strong { color: var(--good); }
+
+    .diff-callout {
+      display: none;
+      grid-column: 1 / -1;
+      padding: 13px 17px;
+      border: 1px solid rgba(53, 214, 255, 0.36);
+      border-radius: 12px;
+      color: #cfeefa;
+      background: rgba(53, 214, 255, 0.07);
+      font-size: 13px;
+      text-align: center;
+    }
+    .diff-callout.visible { display: block; }
+
+    .flow-line {
+      position: absolute;
+      top: 50%;
+      left: 9%;
+      right: 9%;
+      height: 2px;
+      z-index: 0;
+      background: repeating-linear-gradient(90deg, #294661 0 9px, transparent 9px 16px);
+    }
+
+    .node {
+      position: relative;
+      z-index: 2;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 17px;
+      background: rgba(14, 29, 48, 0.96);
+      transition: opacity 300ms, transform 300ms, border-color 300ms, box-shadow 300ms;
+    }
+
+    .node-label {
+      margin-bottom: 10px;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .node.active {
+      transform: translateY(-4px);
+      border-color: var(--active-color, var(--a));
+      box-shadow: 0 0 0 1px color-mix(in srgb, var(--active-color, var(--a)) 28%, transparent),
+                  0 14px 34px color-mix(in srgb, var(--active-color, var(--a)) 14%, transparent);
+    }
+
+    .node.dim { opacity: 0.32; }
+
+    .inputs { display: grid; gap: 14px; border: 0; background: transparent; padding: 0; }
+
+    .tile-wrap { display: grid; grid-template-columns: 52px 1fr; gap: 10px; align-items: center; }
+    .tile-meta strong { display: block; font-size: 15px; }
+    .tile-meta small { color: var(--muted); font-size: 10px; }
+
+    .matrix {
+      position: relative;
+      display: grid;
+      overflow: hidden;
+      aspect-ratio: 1;
+      border: 1px solid currentColor;
+      border-radius: 8px;
+      color: var(--a);
+      background: color-mix(in srgb, currentColor 9%, transparent);
+    }
+
+    .matrix.a-matrix { aspect-ratio: 2 / 1; }
+    .matrix.b-matrix { color: var(--b); }
+    .matrix.out-matrix { color: var(--out); }
+    .matrix::before,
+    .matrix::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background-image:
+        linear-gradient(90deg, transparent 49%, currentColor 50%, transparent 51%),
+        linear-gradient(0deg, transparent 49%, currentColor 50%, transparent 51%);
+      opacity: 0.25;
+    }
+
+    .matrix.a-matrix::after { background-image: linear-gradient(90deg, transparent 49%, currentColor 50%, transparent 51%); }
+
+    .k-half {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 50%;
+      opacity: 0;
+      transition: opacity 250ms;
+    }
+    .k0 { left: 0; background: rgba(255, 122, 144, 0.52); }
+    .k1 { right: 0; background: rgba(85, 230, 165, 0.52); }
+    .show-k0 .k0, .show-k1 .k1 { opacity: 1; }
+
+    .core {
+      --active-color: var(--math);
+      padding: 13px;
+      border-color: rgba(179, 140, 255, 0.42);
+    }
+
+    .core-title { display: flex; justify-content: space-between; gap: 8px; align-items: center; margin-bottom: 10px; }
+    .core-title strong { font-size: 16px; }
+    .chip { padding: 3px 6px; border-radius: 5px; color: var(--math); background: rgba(179, 140, 255, 0.12); font-size: 9px; font-weight: 800; }
+
+    .cores { display: grid; gap: 6px; }
+    .unit {
+      position: relative;
+      padding: 9px 8px;
+      border: 1px solid #2b4963;
+      border-radius: 8px;
+      color: #b2c4d2;
+      background: #0a1b2c;
+      font-size: 10px;
+      text-align: center;
+      transition: 220ms;
+    }
+    .unit.active { color: white; border-color: var(--math); background: rgba(179, 140, 255, 0.18); }
+    .unit.math-unit { padding: 19px 8px; font-size: 13px; font-weight: 900; }
+    .unit small { display: block; margin-top: 3px; color: var(--muted); font-size: 8px; font-weight: 500; }
+
+    .dest { --active-color: var(--d0); display: grid; gap: 8px; }
+    .dest-box {
+      position: relative;
+      overflow: hidden;
+      min-height: 75px;
+      padding: 10px;
+      border: 1px solid #38536a;
+      border-radius: 10px;
+      transition: 250ms;
+    }
+    .dest-box strong { font-size: 12px; }
+    .dest-box small { display: block; color: var(--muted); font-size: 9px; }
+    .dest-box.active.d0 { border-color: var(--d0); background: rgba(255, 122, 144, 0.13); }
+    .dest-box.active.d1 { border-color: var(--d1); background: rgba(85, 230, 165, 0.13); }
+    .blocks { display: grid; grid-template-columns: repeat(4, 1fr); gap: 3px; margin-top: 9px; }
+    .block { height: 10px; border-radius: 2px; background: #29445b; }
+    .dest-box.active .block { animation: blockPulse 900ms infinite alternate; }
+    .dest-box.d0.active .block { background: var(--d0); }
+    .dest-box.d1.active .block { background: var(--d1); }
+    .dest-box .block:nth-child(2) { animation-delay: 100ms; }
+    .dest-box .block:nth-child(3) { animation-delay: 200ms; }
+    .dest-box .block:nth-child(4) { animation-delay: 300ms; }
+
+    .packer { --active-color: var(--good); }
+    .plus {
+      display: grid;
+      place-items: center;
+      width: 45px;
+      height: 45px;
+      margin: 10px auto;
+      border: 2px solid var(--good);
+      border-radius: 50%;
+      color: var(--good);
+      font-size: 26px;
+      font-weight: 300;
+    }
+    .packer p { margin: 8px 0 0; color: var(--muted); font-size: 10px; text-align: center; }
+
+    .result { --active-color: var(--out); text-align: center; }
+    .result .matrix { width: min(120px, 100%); margin: auto; }
+    .result strong { display: block; margin-top: 10px; }
+    .result small { color: var(--muted); }
+
+    .packet {
+      position: absolute;
+      z-index: 4;
+      display: none;
+      width: 16px;
+      height: 16px;
+      top: calc(50% - 8px);
+      left: 12%;
+      border-radius: 4px;
+      background: var(--packet-color, var(--a));
+      box-shadow: 0 0 18px var(--packet-color, var(--a));
+      animation: travel 1.8s ease-in-out infinite;
+    }
+    .packet.visible { display: block; }
+
+    .cycle-panel {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 14px;
+      align-items: center;
+      padding: 14px 20px 18px;
+      border-top: 1px solid var(--line);
+      background: rgba(7, 17, 31, 0.55);
+    }
+    .cycle-panel label { color: var(--muted); font-size: 11px; font-weight: 800; text-transform: uppercase; }
+    .cycle-track { display: grid; grid-template-columns: repeat(25, 1fr); gap: 3px; }
+    .cycle {
+      height: 18px;
+      border-radius: 3px;
+      background: #1d354a;
+      transition: 250ms;
+    }
+    .cycle.work { background: var(--math); }
+    .cycle.stall { background: repeating-linear-gradient(135deg, var(--danger) 0 3px, #642b3d 3px 6px); }
+    .cycle.saved { background: rgba(88, 230, 169, 0.22); border: 1px solid rgba(88, 230, 169, 0.38); }
+    .cycle-summary { min-width: 112px; font-size: 13px; text-align: right; }
+    .cycle-summary strong { color: var(--good); font-size: 22px; }
+
+    .controls {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 16px;
+      align-items: center;
+      margin-top: 16px;
+    }
+    .buttons { display: flex; gap: 8px; }
+    .btn {
+      min-width: 98px;
+      padding: 10px 14px;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      color: var(--text);
+      background: var(--panel);
+      cursor: pointer;
+      transition: 160ms;
+    }
+    .btn:hover:not(:disabled) { transform: translateY(-1px); border-color: var(--a); }
+    .btn.primary { color: #06111d; border-color: var(--a); background: var(--a); font-weight: 850; }
+    .btn:disabled { cursor: not-allowed; opacity: 0.35; }
+
+    .steps { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; }
+    .step-dot {
+      position: relative;
+      height: 7px;
+      padding: 0;
+      border: 0;
+      border-radius: 99px;
+      background: #20384e;
+      cursor: pointer;
+      transition: 220ms;
+    }
+    .step-dot.done { background: rgba(53, 214, 255, 0.42); }
+    .step-dot.current { background: var(--a); box-shadow: 0 0 15px rgba(53, 214, 255, 0.5); }
+
+    .hint { color: var(--muted); font-size: 11px; text-align: right; }
+
+    @keyframes travel {
+      0% { left: 12%; opacity: 0; transform: scale(0.6) rotate(0); }
+      10% { opacity: 1; }
+      90% { opacity: 1; }
+      100% { left: 87%; opacity: 0; transform: scale(1) rotate(180deg); }
+    }
+    @keyframes blockPulse { from { opacity: 0.4; } to { opacity: 1; } }
+
+    @media (max-width: 930px) {
+      header { align-items: start; flex-direction: column; }
+      .diagram { grid-template-columns: repeat(2, 1fr); padding: 25px; }
+      .flow-line, .packet { display: none !important; }
+      .result { grid-column: span 2; }
+      .comparison { grid-template-columns: 1fr; }
+      .vs { min-height: 32px; }
+      .cycle-panel { grid-template-columns: 1fr; }
+      .cycle-summary { text-align: left; }
+      .controls { grid-template-columns: 1fr; }
+      .hint { display: none; }
+    }
+
+    @media (max-width: 560px) {
+      .page { width: min(100% - 18px, 1380px); padding-top: 12px; }
+      .topbar { align-items: start; flex-direction: column; }
+      .legend { justify-content: start; }
+      .diagram { grid-template-columns: 1fr; gap: 12px; padding: 16px; }
+      .result { grid-column: auto; }
+      .tabs { grid-template-columns: 1fr; }
+      .controls, .buttons { display: grid; grid-template-columns: 1fr 1fr; }
+      #playBtn { grid-column: span 2; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header>
+      <div>
+        <div class="eyebrow">Blackhole Tensix · BF16 · HiFi2</div>
+        <h1>One tiny matmul, step by step</h1>
+        <p class="subtitle">A 16×32 tile multiplied by a 32×32 tile — and why split-K removes the stalls.</p>
+      </div>
+      <div class="perf-pill" aria-label="Performance result">
+        <strong>25.1 → 17.14</strong>
+        <span>cycles / output tile<br />31.7% fewer cycles</span>
+      </div>
+    </header>
+
+    <div class="tabs" role="tablist" aria-label="Matmul implementation views">
+      <button class="tab active" role="tab" aria-selected="true" data-tab="previous">1 · Previous implementation</button>
+      <button class="tab" role="tab" aria-selected="false" data-tab="current">2 · Current implementation</button>
+      <button class="tab" role="tab" aria-selected="false" data-tab="difference">3 · What changed?</button>
+    </div>
+
+    <section class="stage" aria-live="polite">
+      <div class="topbar">
+        <div class="step-copy">
+          <div class="step-number" id="stepNumber">1</div>
+          <div>
+            <h2 id="stepTitle">Meet the tiles</h2>
+            <p id="stepText">We want one 16×32 result tile.</p>
+          </div>
+        </div>
+        <div class="legend">
+          <span><i class="dot" style="background:var(--a)"></i> A tile</span>
+          <span><i class="dot" style="background:var(--b)"></i> B tile</span>
+          <span><i class="dot" style="background:var(--d0)"></i> K-half 0</span>
+          <span><i class="dot" style="background:var(--d1)"></i> K-half 1</span>
+        </div>
+      </div>
+
+      <div class="diagram" id="diagram">
+        <div class="flow-line"></div>
+        <div class="packet" id="packet"></div>
+
+        <div class="comparison" id="comparison">
+          <article class="compare-card old">
+            <h3>Previous schedule</h3>
+            <p>All MVMULs quickly return to the same four destination blocks.</p>
+            <div class="mini-dest old"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+            <div class="schedule" aria-label="Old instruction schedule">
+              <i class="op">M</i><i class="op">M</i><i class="op">M</i><i class="op">M</i>
+              <i class="op stalled">wait</i><i class="op">M</i><i class="op">M</i><i class="op stalled">wait</i>
+            </div>
+            <div class="compare-result"><span>Destination recurrence<br />causes RAW stalls</span><strong>25.1</strong></div>
+          </article>
+          <div class="vs">VERSUS</div>
+          <article class="compare-card new">
+            <h3>Current split-K schedule</h3>
+            <p>K is split across two partial tiles, exposing eight independent destination blocks.</p>
+            <div class="mini-dest new"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+            <div class="schedule" aria-label="New instruction schedule">
+              <i class="op">M</i><i class="op">M</i><i class="op">M</i><i class="op">M</i>
+              <i class="op alt">M</i><i class="op alt">M</i><i class="op alt">M</i><i class="op alt">M</i>
+            </div>
+            <div class="compare-result"><span>One MVMUL can issue<br />almost every cycle</span><strong>17.14</strong></div>
+          </article>
+          <div class="diff-callout" id="diffCallout">Same multiplication and same output. Only the order and location of intermediate accumulation changed.</div>
+        </div>
+
+        <div class="node inputs" id="inputs">
+          <div class="node tile-wrap" id="tileA" style="--active-color:var(--a)">
+            <div class="matrix a-matrix"><span class="k-half k0"></span><span class="k-half k1"></span></div>
+            <div class="tile-meta"><strong>A</strong><small>16 rows × 32 K</small></div>
+          </div>
+          <div class="node tile-wrap" id="tileB" style="--active-color:var(--b)">
+            <div class="matrix b-matrix"><span class="k-half k0"></span><span class="k-half k1"></span></div>
+            <div class="tile-meta"><strong>B</strong><small>32 K × 32 cols</small></div>
+          </div>
+        </div>
+
+        <div class="node" id="unpack" style="--active-color:var(--a)">
+          <div class="node-label">Data feed</div>
+          <div class="unit" id="unpackUnit">2× DM RISC-V<small>NoC → circular buffers in L1</small></div>
+        </div>
+
+        <div class="node core" id="math">
+          <div class="core-title"><strong>Tensix compute</strong><span class="chip">3 compute RISC-V</span></div>
+          <div class="cores">
+            <div class="unit">UNPACK thread<small>L1 → SrcA / SrcB</small></div>
+            <div class="unit math-unit" id="fpu">MATH / FPU<small>16 MVMUL instructions</small></div>
+            <div class="unit">PACK thread</div>
+          </div>
+        </div>
+
+        <div class="node dest" id="dest">
+          <div class="node-label">Destination registers</div>
+          <div class="dest-box d0" id="dest0"><strong id="dest0Title">Partial tile 0</strong><small id="dest0Text">A[:, 0:16] × B[0:16, :]</small><div class="blocks"><i class="block"></i><i class="block"></i><i class="block"></i><i class="block"></i></div></div>
+          <div class="dest-box d1" id="dest1"><strong>Partial tile 1</strong><small>A[:, 16:32] × B[16:32, :]</small><div class="blocks"><i class="block"></i><i class="block"></i><i class="block"></i><i class="block"></i></div></div>
+        </div>
+
+        <div>
+          <div class="node packer" id="packer">
+            <div class="node-label">Pack RISC-V</div>
+            <div class="plus">+</div>
+            <p>Add both partial tiles while writing to L1</p>
+          </div>
+          <div class="node result" id="result" style="margin-top:12px">
+            <div class="matrix out-matrix"></div>
+            <strong>C = A × B</strong>
+            <small>16 × 32 output</small>
+          </div>
+        </div>
+      </div>
+
+      <div class="cycle-panel">
+        <label id="cycleLabel">Old schedule</label>
+        <div class="cycle-track" id="cycleTrack" aria-label="25-cycle performance timeline"></div>
+        <div class="cycle-summary" id="cycleSummary"><strong>25.1</strong> cycles/tile</div>
+      </div>
+    </section>
+
+    <nav class="controls" aria-label="Animation controls">
+      <div class="buttons">
+        <button class="btn" id="prevBtn">← Previous</button>
+        <button class="btn primary" id="nextBtn">Next →</button>
+        <button class="btn" id="playBtn">▶ Autoplay</button>
+      </div>
+      <div class="steps" id="steps" aria-label="Choose a step"></div>
+      <div class="hint">Tip: use ← and → keys</div>
+    </nav>
+  </main>
+
+  <script>
+    const sceneSets = {
+      previous: [
+        { title: "Previous: load the tiles", text: "A is 16×32 and B is 32×32. Unpack loads both into the FPU source registers.", active: ["tileA", "tileB", "unpack", "unpackUnit"], packet: "a", cycle: "old" },
+        { title: "Accumulate into one destination tile", text: "All 16 MVMUL instructions accumulate the output directly into the same four physical destination blocks.", active: ["math", "fpu", "dest", "dest0"], halves: "both", cycle: "old" },
+        { title: "Return too soon", text: "The schedule returns to a block before its earlier write has cleared the pipeline. This is a destination read-after-write hazard.", active: ["math", "fpu", "dest0"], cycle: "old" },
+        { title: "The FPU must wait", text: "The 16 useful instructions are mixed with roughly nine cycles of waiting, so math takes about 25.1 cycles per tile.", active: ["math", "fpu", "dest0"], cycle: "old" },
+        { title: "Pack the result", text: "The result is correct, but the destination stalls leave the matrix unit under-used.", active: ["dest0", "packer", "result"], packet: "out", cycle: "old" }
+      ],
+      current: [
+        { title: "Current: load the same tiles", text: "The inputs, output shape, BF16 format and HiFi2 math are unchanged.", active: ["tileA", "tileB", "unpack", "unpackUnit"], packet: "a", cycle: "split" },
+        { title: "Split the shared K dimension", text: "K=32 is divided into two K=16 halves. Each half will produce one partial result tile.", active: ["tileA", "tileB", "math", "dest"], halves: "both", cycle: "split" },
+        { title: "Compute partial tile 0", text: "Across HiFi2's two passes, 8 MVMULs use K-half 0 and write into destination tile 0.", active: ["math", "fpu", "dest", "dest0"], halves: "k0", packet: "d0", cycle: "fast" },
+        { title: "Compute partial tile 1", text: "Another 8 MVMULs use K-half 1 and destination tile 1. We now have eight independent destination blocks.", active: ["math", "fpu", "dest", "dest1"], halves: "k1", packet: "d1", cycle: "fast" },
+        { title: "No destination bubbles", text: "By the time the schedule returns to a block, its prior write is ready. All 16 MVMULs issue back-to-back.", active: ["math", "fpu", "dest0", "dest1"], cycle: "result" },
+        { title: "Pack and add", text: "Pack adds the two partial tiles while writing one correct output tile to L1.", active: ["dest0", "dest1", "packer", "result"], packet: "out", cycle: "result" },
+        { title: "Current result", text: "The exact same matmul now takes 17.14 cycles per tile—close to the 16-cycle instruction floor.", active: ["math", "fpu", "result"], cycle: "result" }
+      ],
+      difference: [
+        { title: "The important difference", text: "Previous uses four destination blocks; current uses eight. The arithmetic itself is unchanged.", compare: "both", cycle: "split" },
+        { title: "Previous: four blocks recur too soon", text: "Red striped slots are pipeline bubbles caused by writing the same destination blocks again too early.", compare: "old", cycle: "old" },
+        { title: "Current: eight blocks stay busy", text: "The second K-half writes elsewhere, giving earlier destination writes enough time to finish.", compare: "new", cycle: "result" },
+        { title: "One sentence summary", text: "Use more independent temporary destinations, then add them during Pack: same answer, far fewer stalls.", compare: "summary", cycle: "result" }
+      ]
+    };
+
+    const ids = ["tileA", "tileB", "unpack", "unpackUnit", "math", "fpu", "dest", "dest0", "dest1", "packer", "result"];
+    const stepTitle = document.getElementById("stepTitle");
+    const stepText = document.getElementById("stepText");
+    const stepNumber = document.getElementById("stepNumber");
+    const cycleTrack = document.getElementById("cycleTrack");
+    const cycleLabel = document.getElementById("cycleLabel");
+    const cycleSummary = document.getElementById("cycleSummary");
+    const packet = document.getElementById("packet");
+    const comparison = document.getElementById("comparison");
+      const diffCallout = document.getElementById("diffCallout");
+      const dest0Title = document.getElementById("dest0Title");
+      const dest0Text = document.getElementById("dest0Text");
+    const normalNodes = [...document.querySelectorAll(".diagram > .inputs, .diagram > #unpack, .diagram > #math, .diagram > #dest, .diagram > div:last-child")];
+    const tabButtons = [...document.querySelectorAll(".tab")];
+    const prevBtn = document.getElementById("prevBtn");
+    const nextBtn = document.getElementById("nextBtn");
+    const playBtn = document.getElementById("playBtn");
+    const stepsEl = document.getElementById("steps");
+    let activeTab = "previous";
+    let scenes = sceneSets[activeTab];
+    let index = 0;
+    let timer = null;
+
+    function buildStepButtons() {
+      stepsEl.innerHTML = "";
+      stepsEl.style.gridTemplateColumns = `repeat(${scenes.length}, 1fr)`;
+      scenes.forEach((scene, i) => {
+        const button = document.createElement("button");
+        button.className = "step-dot";
+        button.title = `Step ${i + 1}: ${scene.title}`;
+        button.setAttribute("aria-label", button.title);
+        button.addEventListener("click", () => { stop(); index = i; render(); });
+        stepsEl.appendChild(button);
+      });
+    }
+
+    for (let i = 0; i < 25; i++) {
+      const el = document.createElement("i");
+      el.className = "cycle";
+      cycleTrack.appendChild(el);
+    }
+
+    function renderCycles(mode) {
+      [...cycleTrack.children].forEach((cell, i) => {
+        cell.className = "cycle";
+        if (mode === "old") {
+          cell.classList.add(i < 16 ? "work" : "stall");
+        } else if (mode === "split") {
+          cell.classList.add(i < 8 ? "work" : i < 16 ? "saved" : "stall");
+        } else {
+          cell.classList.add(i < 16 ? "work" : i < 18 ? "saved" : "dim");
+        }
+      });
+
+      if (mode === "old") {
+        cycleLabel.textContent = "Old schedule · purple = math, red = stall";
+        cycleSummary.innerHTML = "<strong style='color:var(--danger)'>25.1</strong> cycles/tile";
+      } else if (mode === "split") {
+        cycleLabel.textContent = "Split-K · alternate between 8 independent blocks";
+        cycleSummary.innerHTML = "remove RAW stalls";
+      } else {
+        cycleLabel.textContent = "Optimized schedule · 16 MVMULs issued back-to-back";
+        cycleSummary.innerHTML = "<strong>17.14</strong> cycles/tile";
+      }
+    }
+
+    function render() {
+      const scene = scenes[index];
+      stepNumber.textContent = index + 1;
+      stepTitle.textContent = scene.title;
+      stepText.textContent = scene.text;
+
+      const isDifference = activeTab === "difference";
+      dest0Title.textContent = activeTab === "previous" ? "One output tile" : "Partial tile 0";
+      dest0Text.textContent = activeTab === "previous" ? "All K contributions accumulate here" : "A[:, 0:16] × B[0:16, :]";
+      comparison.classList.toggle("visible", isDifference);
+      normalNodes.forEach(el => el.style.display = isDifference ? "none" : "");
+      document.querySelector(".flow-line").style.display = isDifference ? "none" : "";
+
+      if (!isDifference) {
+        ids.forEach(id => {
+          const el = document.getElementById(id);
+          el.classList.remove("active", "dim");
+          if (!scene.active.includes(id)) el.classList.add("dim");
+        });
+        scene.active.forEach(id => document.getElementById(id).classList.add("active"));
+      }
+
+      const oldCard = comparison.querySelector(".old");
+      const newCard = comparison.querySelector(".new");
+      oldCard.style.opacity = scene.compare === "new" ? "0.28" : "1";
+      newCard.style.opacity = scene.compare === "old" ? "0.28" : "1";
+      diffCallout.classList.toggle("visible", scene.compare === "summary");
+
+      document.querySelectorAll(".matrix").forEach(el => el.classList.remove("show-k0", "show-k1"));
+      if (scene.halves === "both" || scene.halves === "k0") document.querySelectorAll(".matrix:not(.out-matrix)").forEach(el => el.classList.add("show-k0"));
+      if (scene.halves === "both" || scene.halves === "k1") document.querySelectorAll(".matrix:not(.out-matrix)").forEach(el => el.classList.add("show-k1"));
+
+      packet.className = "packet";
+      if (scene.packet) {
+        packet.classList.add("visible");
+        const colors = { a: "var(--a)", d0: "var(--d0)", d1: "var(--d1)", out: "var(--good)" };
+        packet.style.setProperty("--packet-color", colors[scene.packet]);
+      }
+
+      renderCycles(scene.cycle);
+      [...stepsEl.children].forEach((el, i) => {
+        el.className = "step-dot" + (i < index ? " done" : "") + (i === index ? " current" : "");
+      });
+      prevBtn.disabled = index === 0;
+      nextBtn.textContent = index === scenes.length - 1 ? "Restart ↺" : "Next →";
+    }
+
+    function selectTab(name) {
+      stop();
+      activeTab = name;
+      scenes = sceneSets[name];
+      index = 0;
+      tabButtons.forEach(button => {
+        const selected = button.dataset.tab === name;
+        button.classList.toggle("active", selected);
+        button.setAttribute("aria-selected", String(selected));
+      });
+      buildStepButtons();
+      render();
+    }
+
+    function next() { index = index === scenes.length - 1 ? 0 : index + 1; render(); }
+    function previous() { if (index > 0) { index--; render(); } }
+    function stop() { clearInterval(timer); timer = null; playBtn.textContent = "▶ Autoplay"; }
+    function togglePlay() {
+      if (timer) return stop();
+      playBtn.textContent = "❚❚ Pause";
+      timer = setInterval(next, 2600);
+    }
+
+    prevBtn.addEventListener("click", () => { stop(); previous(); });
+    nextBtn.addEventListener("click", () => { stop(); next(); });
+    playBtn.addEventListener("click", togglePlay);
+    tabButtons.forEach(button => button.addEventListener("click", () => selectTab(button.dataset.tab)));
+    document.addEventListener("keydown", event => {
+      if (event.key === "ArrowRight") { stop(); next(); }
+      if (event.key === "ArrowLeft") { stop(); previous(); }
+      if (event.key === " ") { event.preventDefault(); togglePlay(); }
+    });
+
+    buildStepButtons();
+    render();
+  </script>
+</body>
+</html>

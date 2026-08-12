@@ -80,15 +80,28 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    _llk_math_matmul_init_<MATH_FIDELITY, THROTTLE_LEVEL>(
-        params.in0_tile_r_dim,
-        params.in0_tile_c_dim,
-        params.in1_tile_r_dim,
-        params.in1_tile_c_dim,
-        params.PARTIAL_FACE_MATH,
-        params.UNPACK_TRANSPOSE_FACES,
-        params.CT_DIM,
-        params.RT_DIM);
+    const bool use_16x32_32x32_hifi2_splitk2_path =
+        MATH_FIDELITY == MathFidelity::HiFi2 && THROTTLE_LEVEL == 0 && params.in0_tile_r_dim == FACE_R_DIM && params.in0_tile_c_dim == TILE_C_DIM &&
+        params.in1_tile_r_dim == TILE_R_DIM && params.in1_tile_c_dim == TILE_C_DIM && params.PARTIAL_FACE_PACK && !params.PARTIAL_FACE_MATH &&
+        !params.UNPACK_TRANSPOSE_FACES && params.CT_DIM == 1 && params.RT_DIM == 1 && params.KT_DIM == 1 &&
+        formats.math == ckernel::to_underlying(DataFormat::Float16_b) && formats.pack_src == ckernel::to_underlying(DataFormat::Float16_b) &&
+        formats.pack_dst == ckernel::to_underlying(DataFormat::Float16_b) && dest_sync == DstSync::SyncHalf && !is_fp32_dest_acc_en && params.DST_INDEX == 0;
+    if (use_16x32_32x32_hifi2_splitk2_path)
+    {
+        _llk_math_matmul_16x32_32x32_hifi2_init_();
+    }
+    else
+    {
+        _llk_math_matmul_init_<MATH_FIDELITY, THROTTLE_LEVEL>(
+            params.in0_tile_r_dim,
+            params.in0_tile_c_dim,
+            params.in1_tile_r_dim,
+            params.in1_tile_c_dim,
+            params.PARTIAL_FACE_MATH,
+            params.UNPACK_TRANSPOSE_FACES,
+            params.CT_DIM,
+            params.RT_DIM);
+    }
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     for (int block = 0; block < params.NUM_BLOCKS; ++block)
@@ -99,7 +112,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
             "Matmul block exceeds destination capacity");
         for (std::uint32_t j = 0; j < params.KT_DIM; j++)
         {
-            _llk_math_matmul_<MATH_FIDELITY, THROTTLE_LEVEL>(params.DST_INDEX, params.CT_DIM, params.RT_DIM);
+            if (use_16x32_32x32_hifi2_splitk2_path)
+            {
+                _llk_math_matmul_16x32_32x32_hifi2_splitk2_(params.DST_INDEX);
+            }
+            else
+            {
+                _llk_math_matmul_<MATH_FIDELITY, THROTTLE_LEVEL>(params.DST_INDEX, params.CT_DIM, params.RT_DIM);
+            }
         }
 
         _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
@@ -119,6 +139,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+    const bool use_16x32_32x32_hifi2_splitk2_path =
+        MATH_FIDELITY == MathFidelity::HiFi2 && THROTTLE_LEVEL == 0 && params.in0_tile_r_dim == FACE_R_DIM && params.in0_tile_c_dim == TILE_C_DIM &&
+        params.in1_tile_r_dim == TILE_R_DIM && params.in1_tile_c_dim == TILE_C_DIM && params.PARTIAL_FACE_PACK && !params.UNPACK_TRANSPOSE_FACES &&
+        params.CT_DIM == 1 && params.RT_DIM == 1 && params.KT_DIM == 1 && formats.pack_src == ckernel::to_underlying(DataFormat::Float16_b) &&
+        formats.pack_dst == ckernel::to_underlying(DataFormat::Float16_b) && dest_sync == DstSync::SyncHalf && !is_fp32_dest_acc_en && params.DST_INDEX == 0;
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
         formats.pack_src,
         formats.pack_dst,
@@ -136,7 +161,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
         for (std::uint32_t tile = 0; tile < params.NUM_TILES_IN_BLOCK; ++tile)
         {
             const std::uint32_t result_tile = block * params.NUM_TILES_IN_BLOCK + tile;
-            _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(params.DST_INDEX + tile, L1_ADDRESS(params.buffer_Res[result_tile]));
+            if (use_16x32_32x32_hifi2_splitk2_path)
+            {
+                _llk_pack_reconfig_l1_acc_(0);
+                _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(params.DST_INDEX, L1_ADDRESS(params.buffer_Res[result_tile]));
+                _llk_pack_reconfig_l1_acc_(1);
+                _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(params.DST_INDEX + 1, L1_ADDRESS(params.buffer_Res[result_tile]));
+                _llk_pack_reconfig_l1_acc_(0);
+            }
+            else
+            {
+                _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(params.DST_INDEX + tile, L1_ADDRESS(params.buffer_Res[result_tile]));
+            }
         }
         _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
     }

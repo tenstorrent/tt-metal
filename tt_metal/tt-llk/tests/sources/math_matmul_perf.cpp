@@ -145,12 +145,25 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const bool UNPACK_TRANSPOSE_FACES = params.UNPACK_TRANSPOSE_FACES;
 #endif
 
+    const bool use_16x32_32x32_hifi2_splitk2_path = MATH_FIDELITY == MathFidelity::HiFi2 && THROTTLE_LEVEL == 0 && in0_tile_r_dim == FACE_R_DIM &&
+                                                    in0_tile_c_dim == TILE_C_DIM && in1_tile_r_dim == TILE_R_DIM && in1_tile_c_dim == TILE_C_DIM &&
+                                                    !PARTIAL_FACE_MATH && !UNPACK_TRANSPOSE_FACES && CT_DIM == 1 && RT_DIM == 1 && KT_DIM == 1 &&
+                                                    formats.math == ckernel::to_underlying(DataFormat::Float16_b) && dest_sync == DstSync::SyncHalf &&
+                                                    !is_fp32_dest_acc_en && DST_INDEX == 0 && PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE;
+
     {
         START_PERF_MEASURE("INIT")
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
-        _llk_math_matmul_init_<MATH_FIDELITY, THROTTLE_LEVEL>(
-            in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, PARTIAL_FACE_MATH, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM);
+        if (use_16x32_32x32_hifi2_splitk2_path)
+        {
+            _llk_math_matmul_16x32_32x32_hifi2_init_();
+        }
+        else
+        {
+            _llk_math_matmul_init_<MATH_FIDELITY, THROTTLE_LEVEL>(
+                in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, PARTIAL_FACE_MATH, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM);
+        }
 
         PROFILER_SYNC();
     }
@@ -169,9 +182,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                for (std::uint32_t j = 0; j < KT_DIM; j++)
+                if (use_16x32_32x32_hifi2_splitk2_path)
                 {
-                    _llk_math_matmul_<MATH_FIDELITY, THROTTLE_LEVEL>(DST_INDEX, CT_DIM, RT_DIM);
+                    _llk_math_matmul_16x32_32x32_hifi2_splitk2_(DST_INDEX);
+                }
+                else
+                {
+                    for (std::uint32_t j = 0; j < KT_DIM; j++)
+                    {
+                        _llk_math_matmul_<MATH_FIDELITY, THROTTLE_LEVEL>(DST_INDEX, CT_DIM, RT_DIM);
+                    }
                 }
             }
         }
