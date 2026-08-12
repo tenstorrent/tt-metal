@@ -1230,14 +1230,14 @@ tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_
         operation_attributes.dispatch_group_size,
         operation_attributes.num_links);
     const uint32_t fwd_pages = fwd_chunks * pages_per_chunk;
-    const ttnn::TensorSpec fwd_spec(
+    const tt::tt_metal::TensorSpec fwd_spec(
         ttnn::Shape({fwd_pages, fwd_page_bytes / static_cast<uint32_t>(sizeof(uint32_t))}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::UINT32,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
             tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM}));
     // Throws if it does not fit DRAM, which IS the "verify it fits" check this stage asks for.
-    auto fwd_owner = std::make_shared<ttnn::Tensor>(tt::tt_metal::create_device_tensor(fwd_spec, mesh_device));
+    auto fwd_owner = std::make_shared<ttnn::Tensor>(create_device_tensor(fwd_spec, mesh_device));
     auto* dram_fwd_buf = fwd_owner->buffer();
     TT_FATAL(dram_fwd_buf != nullptr, "combine_fabric2d: forwarding buffer has no device buffer");
     TT_FATAL(
