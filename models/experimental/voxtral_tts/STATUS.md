@@ -217,6 +217,10 @@ does. Harness: `scripts/generate_quality_set.py` then `scripts/score_quality_set
   F0 separates cleanly — males 110.6 / 106.7 Hz vs females 205.1 / 192.0 Hz, with the two male
   readings agreeing within 4 Hz on unrelated text.
 
+> **A LISTENING PASS HAS SINCE BEEN DONE ON THE p150 BUILD — see §6.73.** It produced one
+> finding, on an adversarial fixture, traced to model behaviour rather than the port. The
+> paragraph below is the older N150-era pass and is kept for the record.
+
 **Listening pass: done, informally — verdict "sounds good".** Re-done on the POST-BLOCK-2-SWEEP build
 (2026-08-06, `82d04f977a1`, Block 2 at ~21 ms/frame after §6.30/§6.31) via
 `generated/SAMPLER_current_build.wav` (**no longer on the box** — and its name has been misleading
@@ -530,6 +534,8 @@ verdict, so you can jump rather than read 3,900 lines.
   not RTF ⟵ **corrects a "~1024 tokens" claim that appeared in three places and was never measured**
 - **§6.70** — runs on tt-metal main +777 commits with **no source changes** and the same speed;
   acoustic codes 45→40 (kernel rounding, toward the reference)
+- **§6.73** — symbol input: the device is systematically SHORTER, and the reference's extra
+  length is a repetition loop in 3 of 3 draws. The first finding a listening pass has produced
 - **§6.72** — the head split reverses BACK, −0.775 ms/frame bit-exact. §6.68 counted one op
   short: its 6.2 µs was Block 1's op, and Block 2's is 90.5
 - **§6.71** — the headline REPRODUCED on a clean tree: 27.664 ms/frame, RTF 0.3656, WER 0 of 894.
@@ -4574,6 +4580,64 @@ section cites a measured cost, check that the measurement is of the op the decis
 §6.44 (fused KV write) and §6.28 (DRAM-sharded matmul) were re-checked here and both still stand.
 
 **New headline: 26.928 ms/frame, RTF 0.3567**, Block 2 ~14.2 ms.
+
+### 6.73 — symbol input: the device is systematically SHORTER, and the reference's extra length is repetition
+
+**The first finding a listening pass has ever produced on this branch**, and it took about three
+minutes of listening to surface something 45 utterances of metrics did not — because the prompt it
+lives on is excluded from WER by construction.
+
+**The observation.** Playing `SAMPLER_shipcheck.wav` against `SAMPLER_FP32REF.wav`, case 10 (*"Numbers
+1234567890 and symbols !@#$%^&*() plus   spaces."*) sounds cut off on the device: the reference
+articulates "exclamation" where the device produces something clipped.
+
+**IT IS NOT SEED NOISE, which is the part worth having.** Three seeds each, and the ranges are
+**disjoint** — the reference's shortest draw is 20 frames longer than the device's longest:
+
+| | seed 0 | seed 1 | seed 2 | range |
+|---|---|---|---|---|
+| device | 184 | 162 | 199 | **162–199** |
+| fp32 reference | 242 | 219 | 252 | **219–252** |
+
+§6.38's control puts seed-only swings at 10–59 frames, so a single pair would have proved nothing;
+disjoint ranges over three each is real. **The device is ~56 frames (4.5 s) shorter on this prompt.**
+
+**IT IS NOT A TRUNCATION.** The waveform envelopes rule that out — last-200 ms RMS is 0.22–0.32× the
+clip mean on both, and the *reference* ends more abruptly (0 ms of trailing silence against the
+device's 16–34 ms). Nothing is being cut; the two say different amounts.
+
+**THE REFERENCE'S EXTRA LENGTH IS A REPETITION LOOP, in 3 of 3 draws.** Whisper (`whisper-base.en`):
+
+    REF s0   '... et twen, pass into twen, plen, twen,'                    loops, never finishes
+    REF s1   '... exclamation, eps, and 2 is, exclamation, incur, pest, spaces,'
+    REF s2   '... and send full in the leastly K, X, line colon, and send full in send, ... plus max speed.'
+    DEV s0   'Numbers, 12,345,67,890, and symbols, x-climes, points, et, nobeludio e, plus and spaces,'
+    DEV s1   'numbers 1234 567 890 and symbols exclamation and she look a section and zero sets spaces'
+
+The device reaches the end of the sentence and stops; the reference circles. **So the device being
+shorter here is termination, not omission** — and on seed 1 it reaches `spaces` in 162 frames where
+the reference needs 219 to reach the same place.
+
+**THE ORIGINAL OBSERVATION SURVIVES, NARROWED.** At seed 0 the reference's `exclamations` really is
+cleaner than the device's `x-climes`. At seed 1 the device says `exclamation` clearly and the
+*reference* says it twice. Neither implementation renders `!@#$%^&*()` reliably; which one sounds
+better is a per-draw coin flip on a prompt the model cannot parse.
+
+**THIS CORRECTS §3.2**, which records *"duration agrees to within 2 frames on the symbol text
+(reference 242, device 240)"*. That was one draw each on the N150 build. It no longer holds, and
+with three seeds each it could not have been established from the pair it rested on.
+
+**Verdict: model brittleness on non-speech input, reproduced from both sides — not a port defect.**
+§3.2 already found the same shape on the emoji fixture, where the *reference* collapses at 6257% WER
+while the device stays partly coherent, and attaches the warning *"do not read the device being
+better as a quality claim"*. **That warning is symmetric and applies here in the other direction.**
+Sanitising or spelling out such text belongs upstream of the model, exactly as §3.2 concluded.
+
+**Two method notes.** Whisper on deliberately-nonsensical audio is an ASR forced to map gibberish
+onto words, so the exact strings are indicative only — **the repetition is the robust signal**, and
+it does not arise by transcription accident. And the reason a metric never caught this is structural:
+`score_quality_set` buckets cases 4/10/11/14 out of WER because a symbol run has no defined
+transcript, so **the only instrument that covers those four prompts is a human ear.**
 
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of

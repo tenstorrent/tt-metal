@@ -403,12 +403,7 @@ def main():
                          "decode = KV cache + steps vs IncrementalBackbone; "
                          "flow = Block 2 vs its reference; codec = Block 3 vs its reference; "
                          "codes = blocks 1+2 end to end, integer-code agreement")
-    # ALL 15 by default for --gate decode, and that is deliberate. A 2-prompt default is what let
-    # STATUS.md 6.8 record a number to 0.01 pp on a prompt set it did not name, on a gate whose
-    # prompt-to-prompt spread is 0.45 pp -- see gate_decode's docstring and STATUS.md 6.15. All 15
-    # are valid here even though score_quality_set buckets 4/10/11/14 out: that exclusion is about
-    # WER having no defined transcript for them, and teacher-forcing feeds both sides identical
-    # frames, so prompt content cannot invalidate the comparison. Narrow with --cases only when
+    # ALL 15 by default, deliberately -- NOTES.md [gate-01]. Narrow with --cases only when
     # debugging one prompt, never when recording a number.
     ap.add_argument("--cases", default="all",
                     help='"all" (default) or prompt_fixture.json indices, e.g. "0,2"')

@@ -72,6 +72,9 @@ def main():
         print(f"    §{k} cited by {sorted(set(v))}")
         bad += 1
 
+    # This one used to PRINT without counting, so it could never fail a run -- while the docstring
+    # and the commit adding it both said "exits 1 on any of them". It gates now, which is only
+    # safe because the one violation it had (tt_gates.py's --cases essay) moved to [gate-01].
     print("long comment runs (>=5 lines), which belong in NOTES.md:")
     for f in sorted(glob.glob(f"{V}/tt/*.py") + glob.glob(f"{V}/tests/*.py")):
         lines = open(f).read().splitlines()
@@ -80,6 +83,7 @@ def main():
             run = run + 1 if ln.strip().startswith("#") else 0
             if run == 5:
                 print(f"    {os.path.relpath(f, V)}:{i - 3}")
+                bad += 1
 
     print("\nOK" if not bad else f"\n{bad} PROBLEM(S)")
     return 1 if bad else 0

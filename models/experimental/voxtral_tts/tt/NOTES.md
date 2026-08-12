@@ -22,6 +22,7 @@ was rejected, the numbers behind both, and the traps that cost real time.
 - [`ttnn_voxtral_flow.py`](#ttnn-voxtral-flowpy) — Block 2 -- 390M flow-matching acoustic transformer
 - [`ttnn_voxtral_codec.py`](#ttnn-voxtral-codecpy) — Block 3 -- codec decoder, codes to waveform
 - [`ttnn_voxtral_pipeline.py`](#ttnn-voxtral-pipelinepy) — the three blocks wired together
+- [`tests/tt_gates.py`](#teststt-gatespy) — the on-device gate harness
 
 ---
 
@@ -1751,6 +1752,25 @@ Hand-rolled rather than ttnn.transformer.scaled_dot_product_attention, which was
                 # but the transposed convs overlap, so a pathological tail is worth avoiding.
 ```
 
+
+---
+
+## `tests/tt_gates.py`
+
+*the on-device gate harness*
+
+### [gate-01] `--cases` — all 15 prompts by default, and why the default is load-bearing
+
+```text
+ A 2-prompt default is what let STATUS.md 6.8 record a number to 0.01 pp on a prompt set it did
+ not name, on a gate whose prompt-to-prompt spread is 0.45 pp -- 4x the effect it was being read
+ for. 6.15 is the full post-mortem; gate_decode's docstring carries the short version.
+
+ ALL 15 ARE VALID HERE even though score_quality_set buckets 4/10/11/14 out of WER. That exclusion
+ is about WER having no defined transcript for a symbol run read aloud -- STATUS.md 6.73 -- and this gate
+ is TEACHER-FORCED: both sides see identical frames, so prompt content cannot invalidate the
+ comparison the way it invalidates a free-running WER number.
+```
 
 ---
 
