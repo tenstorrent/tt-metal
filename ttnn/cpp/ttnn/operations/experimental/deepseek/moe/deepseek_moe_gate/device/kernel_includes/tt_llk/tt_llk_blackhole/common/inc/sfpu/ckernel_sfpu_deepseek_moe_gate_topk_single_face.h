@@ -493,6 +493,12 @@ inline void _deepseek_moe_gate_top8(std::uint32_t eps, std::uint32_t scale) {
 // LREG14 is deliberately untouched: the gate uses it to broadcast, and on WH it also carries the
 // reciprocal constants (see the note in the WH _init_deepseek_moe_gate_topk).
 inline void _dmg_zero_working_lregs() {
+    // Enable every lane first. SFPMOV is condition-code gated -- the SFPSETCC .. SFPMOV .. SFPENCC
+    // idiom in ckernel_sfpu_where.h, ckernel_sfpu_softmax_k.h and ckernel_sfpu_binary_bcast.h relies
+    // on exactly that. Without this the zeroing inherits whatever CC state the previously executed
+    // kernel left and silently skips the disabled lanes, which are precisely the lanes carrying the
+    // residue. Run 31590053109 failed with the zeroing in place for this reason.
+    TTI_SFPENCC(0, 0, 0, 0);
     TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
     TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
     TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
