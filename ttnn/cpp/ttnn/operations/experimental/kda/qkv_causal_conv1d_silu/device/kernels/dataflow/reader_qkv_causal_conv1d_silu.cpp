@@ -28,7 +28,8 @@ void kernel_main() {
     const uint32_t tap2_addr = get_arg_val<uint32_t>(6);
     const uint32_t tap3_addr = get_arg_val<uint32_t>(7);
 
-    constexpr uint32_t tile_bytes = 2048;
+    constexpr uint32_t weights_cb = 2;
+    constexpr uint32_t tile_bytes = get_tile_size(weights_cb);
     const auto input = TensorAccessor(input_a, input_addr, row_bytes);
     const auto history = TensorAccessor(history_a, history_addr, row_bytes);
     const auto tap0 = TensorAccessor(tap0_a, tap0_addr, tile_bytes);
@@ -37,7 +38,7 @@ void kernel_main() {
     const auto tap3 = TensorAccessor(tap3_a, tap3_addr, tile_bytes);
     Noc noc;
 
-    CircularBuffer weights(2);
+    CircularBuffer weights(weights_cb);
     CircularBuffer activation(0);
     auto load_weights = [&](uint32_t ct_start) {
         weights.reserve_back(4 * block_ct);
