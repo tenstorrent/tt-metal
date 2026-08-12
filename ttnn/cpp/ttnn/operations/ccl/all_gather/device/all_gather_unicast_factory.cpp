@@ -152,19 +152,40 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
 
     // Num worker cores per direction per link. >1 requires an additional fabric mux core to own the fabric
     // connection and multiplex traffic. Values below are per-arch sweep results.
+    //
+    // The op is transaction-rate bound, not bandwidth bound: measured time tracks the packet count, so what a
+    // worker count has to do is keep the link's packet pipeline full. That gives three regimes, and the
+    // thresholds below are in bytes *per link* so they carry to other link counts.
+    //   tiny   -- the mux is a store-and-forward hop, and below ~320 KB/link its fixed cost outweighs the
+    //             throughput it buys, so connect the single worker straight to the ERISC instead.
+    //   middle -- one worker cannot keep the link fed; two can, and a third only adds contention.
+    //   large  -- only reached on a ring, with pages big enough to fill a packet. There the per-packet payload
+    //             is large enough that the downstream drains faster than two workers can issue, so a third
+    //             pays. With small pages the packet rate saturates downstream first and the third worker again
+    //             only contends, hence the page term. A line never wants a third: measured at 48 MB it costs
+    //             1.6%, since its middle links carry more and saturate downstream at two workers already.
     uint32_t num_links = operation_attributes.axis_num_links[axis];
     const uint32_t input_page_size = input_tensor.buffer()->aligned_page_size();
     const auto arch = input_tensor.device()->arch();
+    const uint64_t gathered_bytes =
+        static_cast<uint64_t>(input_tensor.physical_volume()) * input_tensor.element_size() * num_devices;
+    const uint64_t per_link_bytes = gathered_bytes / std::max(1u, num_links);
     uint32_t workers_per_dir = 1;
     if (arch == tt::ARCH::WORMHOLE_B0) {
         // Two workers saturate a link: one cannot keep it fed, and past two they only contend on the NOC.
-        // Only tile shapes were swept past two workers, so the large-page ring exception below is untested
-        // here rather than ruled out.
+        // TODO(perf): re-sweep on Wormhole. The Blackhole regimes below came out of a sweep this branch has
+        // not had, and two of the three have nothing arch-specific about them: skipping the mux under a size
+        // threshold, and sizing the CB page off the stripe. Wormhole's smaller packet (7616 max) and single
+        // link should move the thresholds, not remove them. Left at the old flat value until measured.
         workers_per_dir = 2;
     } else if (arch == tt::ARCH::BLACKHOLE) {
-        // One worker (no mux) is far worse, and past two they only contend on the NOC. The exception is a
-        // ring with large pages, where a packet carries too few chunks to keep the link fed with two.
-        workers_per_dir = (is_ring && input_page_size >= 4096) ? 3 : 2;
+        if (per_link_bytes < 320 * 1024) {
+            workers_per_dir = 1;
+        } else if (is_ring && per_link_bytes >= 16 * 1024 * 1024 && input_page_size >= 2048) {
+            workers_per_dir = 3;
+        } else {
+            workers_per_dir = 2;
+        }
     }
 
     // Shrink core usage to fit available core grid. Shrink workers_per_link first, and then shrink num_links.
@@ -289,28 +310,6 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
 
     ::ttnn::ccl::validate_packet_size(arch, packet_size, output_chunk_size);
 
-    // --- CB sizing ---
-    // cb_page_size is a multiple of input_page_size, which is itself a multiple of
-    // output_chunk_size = min(input, output), so the kernel increments both
-    // the cb_read_ptr and cb_write_ptr cleanly.
-    const uint32_t pages_per_packet = std::max(1u, packet_size / input_page_size);
-    uint32_t cb_page_size = input_page_size * pages_per_packet;
-    uint32_t cb_depth = 3;
-    // Perf hack: pack multiple pages into a single CB page to reduce CB sync frequency between reader and
-    // writer. Note this increases effective CB depth. Row-major is safe too: an integer multiplier preserves
-    // the multiple-of-input_page_size property above.
-    // Empirically determined heuristic, works well for all tensor sizes
-    const uint32_t ideal_multiplier = (arch == tt::ARCH::BLACKHOLE) ? 4 : 3;
-    const uint32_t max_l1_space = ttnn::operations::data_movement::get_max_l1_space(input_tensor);
-    const uint32_t multiplier = std::clamp(max_l1_space / (cb_depth * cb_page_size), 1u, ideal_multiplier);
-    if (multiplier < ideal_multiplier) {
-        log_warning(
-            tt::LogOp,
-            "CircularBuffer depth reduced due to L1 pressure (only {} B available), performance may regress.",
-            max_l1_space);
-    }
-    cb_page_size *= multiplier;
-
     // --- Stripe geometry ---
     // input_pages_per_stripe = num input pages along [gather dim .. last dim] this
     // device contributes per stripe. For a last-dim RM gather this is the *page* count,
@@ -340,6 +339,50 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     // and may straddle pages.
     const uint32_t output_chunks_per_stripe = input_pages_per_stripe * split_factor;
     TT_FATAL(output_chunks_per_stripe > 0, "output_chunks_per_stripe must be > 0");
+
+    // --- CB sizing ---
+    // cb_page_size is a multiple of input_page_size, which is itself a multiple of
+    // output_chunk_size = min(input, output), so the kernel increments both
+    // the cb_read_ptr and cb_write_ptr cleanly.
+    const uint32_t pages_per_packet = std::max(1u, packet_size / input_page_size);
+    uint32_t cb_page_size = input_page_size * pages_per_packet;
+    uint32_t cb_depth = 3;
+    // Perf hack: pack multiple pages into a single CB page to reduce CB sync frequency between reader and
+    // writer. Note this increases effective CB depth. Row-major is safe too: an integer multiplier preserves
+    // the multiple-of-input_page_size property above.
+    //
+    // The multiplier trades sync frequency against pipeline granularity, and a CB page of one to two packets
+    // beats the wider ones: bigger coarsens the relay pipeline (a downstream device waits longer for its
+    // first batch) without buying back enough sync savings.
+    //
+    // In the three-worker regime the choice is set by the stripe instead. A short stripe means the chunk
+    // iterator jumps to a far-away output page every few chunks, so a wide CB page batches many of those
+    // jumps into one burst of scattered writes; a long stripe is contiguous, so a wide CB page is one long
+    // run and DRAM likes it. Confirmed by a controlled A/B: the same tensor, layout and page size gathered on
+    // dim 2 (one long stripe) wants 2 and on dim 3 (short stripes) wants 1, each by 2-4%.
+    //
+    // Two workers have their own exception: a narrow band either side of ~1.5 MB gathered where 4 beats 2 by
+    // 3-16%. That one resisted explanation -- not tensor size, stripe width or pages per worker; two shapes
+    // with identical page counts land on opposite sides of it. Encoded as measured rather than rationalised;
+    // if it has to go, 4 everywhere for two workers is the no-regression fallback and costs 2-8% at 1-20 MB.
+    // TODO(perf): root-cause the band. Most likely a DRAM access-pattern effect of the page-id stride, so
+    // the thing to look at is the bank sequence the stripe jump produces, not another size threshold. A
+    // magic size window is a maintenance hazard and should be replaced by whatever actually drives it.
+    constexpr uint32_t short_stripe_chunks = 256;
+    const uint32_t bh_multiplier = workers_per_dir >= 3   ? (output_chunks_per_stripe < short_stripe_chunks ? 1 : 2)
+                                   : workers_per_dir == 1 ? 2
+                                   : (per_link_bytes >= 600 * 1024 && per_link_bytes < 1024 * 1024) ? 4
+                                                                                                    : 2;
+    const uint32_t ideal_multiplier = (arch == tt::ARCH::BLACKHOLE) ? bh_multiplier : 3;
+    const uint32_t max_l1_space = ttnn::operations::data_movement::get_max_l1_space(input_tensor);
+    const uint32_t multiplier = std::clamp(max_l1_space / (cb_depth * cb_page_size), 1u, ideal_multiplier);
+    if (multiplier < ideal_multiplier) {
+        log_warning(
+            tt::LogOp,
+            "CircularBuffer depth reduced due to L1 pressure (only {} B available), performance may regress.",
+            max_l1_space);
+    }
+    cb_page_size *= multiplier;
 
     ////////////////////////////////////////////////////////////////
     // Circular Buffer and Kernel creation
@@ -381,11 +424,9 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
 
     // Mux slots per channel. Shared with the writer kernel, which needs it at compile time to fold its slot
     // wrap-around; the two must agree or the mux's flow control breaks.
-    // A single buffer stalls the worker on every credit round-trip to the forwarder, so one is never right.
-    // TODO(perf): re-sweep. The earlier "past two it gains nothing, and very deep rings start to hurt again"
-    // result was measured when the writer flushed before every packet, which capped it at one packet in
-    // flight regardless of slot count. The writer now pipelines over a header ring (fabric_header_ring_size in
-    // kernels/unicast_common.hpp), so the two want sweeping together.
+    // A single buffer stalls the worker on every credit round-trip to the forwarder, so one is never right:
+    // it costs 30-60%. Re-swept against the writer's header ring, which had invalidated the previous result:
+    // 2 through 16 are all within noise of each other, so the floor is still the only thing that matters.
     constexpr uint8_t num_buffers_per_channel = 2;
 
     // Writer

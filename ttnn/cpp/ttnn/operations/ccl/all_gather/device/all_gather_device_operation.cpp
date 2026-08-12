@@ -271,7 +271,16 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
                 // a ring's.
                 uint64_t mcast_ceiling;
                 if (is_ring) {
-                    mcast_ceiling = std::min<uint64_t>(650'000, 300 * txn);
+                    // 190, down from 300: the unicast worker-count and CB-page retune moved the measured
+                    // crossover from ~614 KB/link to ~384 KB/link at a 2 KB page, worth up to 9% at 1 MB.
+                    // Every point re-measured wants the boundary at or below where this puts it, so the
+                    // change only ever moves cases from multicast to unicast that unicast wins.
+                    // TODO(perf): the linear-in-page form itself no longer fits. Measured crossovers are
+                    // ~384 KB/link at a 2 KB page but below 50 KB/link at a 512 B page, and no coefficient
+                    // here can express both. A page-squared form fits both (and is what this rule used
+                    // before 2026-08), but two page sizes is too thin to refit on. Sweep the crossover
+                    // across >= 4 page sizes, row-major so the page is controllable, and refit.
+                    mcast_ceiling = std::min<uint64_t>(650'000, 190 * txn);
                 } else {
                     const double sqrt_page = std::sqrt(static_cast<double>(txn));
                     mcast_ceiling = std::min<uint64_t>(1'700'000, static_cast<uint64_t>(27'000 * sqrt_page));

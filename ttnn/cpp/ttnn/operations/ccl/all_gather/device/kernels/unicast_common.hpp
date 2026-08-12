@@ -105,14 +105,18 @@ private:
 // still in flight, so the ring depth is exactly how many packets can be outstanding: at depth 1 every packet
 // costs a flush and nothing pipelines. Depths past the sender's slot count are harmless but pointless --
 // reserve_slot() blocks first.
-// TODO(perf): sweep, jointly with the mux's num_buffers_per_channel (all_gather_unicast_factory.cpp), whose
-// "past two it gains nothing" result was measured at depth 1 and so no longer applies.
+// Swept 1/2/4/8, jointly with the mux's num_buffers_per_channel and the posted-write flag below, at 256 KB /
+// 5 MB / 48 MB: every combination lands within noise of every other. Depth cannot help much by construction
+// anyway -- async_writes_flushed() runs once per CB page before the page is popped, so a CB page's worth of
+// packets is the real ceiling on how many can be outstanding. The op is transaction-rate bound downstream of
+// the worker, not short of packets in flight.
 constexpr uint32_t fabric_header_ring_size = 2;
 
 // Post the payload/header writes into the fabric buffer, i.e. no ack. Drops the ack return traffic from the
 // worker's NOC, which the mux forwarder shares. Ordering against the credit doorbell is preserved: the
 // doorbell is issued after the payload, to the same destination on the same VC.
-// TODO(perf): sweep.
+// Swept: no measurable effect either way, same reason as the ring depth above. Left off, since off is the
+// conservative choice -- posted writes drop the ack the flush would otherwise count.
 constexpr bool fabric_use_posted_writes = false;
 
 // Unicasts pages one hop to the single neighbor. Handles packetization (pack several pages into one
@@ -241,6 +245,15 @@ public:
 
 private:
     // Fabric limits
+    //
+    // These two caps set the op's ceiling, because it is transaction-rate bound: measured time tracks the
+    // packet count, not the byte count (halving the payload roughly doubles the time). Payload per packet is
+    // min(packet_size/page, 4) * page, so a tile page of 2 KB is stuck at 8 KB per packet however big the
+    // fabric packet is, and page size ends up worth 16x across the range measured.
+    // TODO(perf): two openings. Chunk count is not free either -- at an identical 8 KB payload, one chunk
+    // beats four by ~10%, which points at the receiving ERISC's per-chunk NOC write issue rate. And a
+    // destination-contiguous run could go out as one plain unicast write instead of a scatter, lifting both
+    // caps at once; interleaved DRAM never gives that, but a sharded output would.
     static constexpr uint32_t max_pages_per_packet = NOC_SCATTER_WRITE_MAX_CHUNKS;
     static constexpr uint32_t min_pages_per_packet = NOC_SCATTER_WRITE_MIN_CHUNKS;
     // When page_size < packet_size
