@@ -198,6 +198,12 @@ inline void noc_write_to(uint32_t src_l1_addr, uint64_t dst_noc_addr, uint32_t b
 }
 
 inline void noc_read_barrier() { noc_async_read_barrier(); }
+
+// Writes have DEPARTED the local L1 (not landed at the destination). This is the
+// release condition for a source buffer -- see the note on NocAsyncWriteTx.
+inline void noc_writes_flushed() { noc_async_writes_flushed(); }
+
+// Writes have LANDED at the destination.
 inline void noc_write_barrier() { noc_async_write_barrier(); }
 
 #endif
