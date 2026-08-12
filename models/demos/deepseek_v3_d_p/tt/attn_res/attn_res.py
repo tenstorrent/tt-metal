@@ -110,9 +110,11 @@ class TtAttnRes(LightweightModule):
             rate, so `[1, 1, N, C]` puts up to 32 candidates inside the column
             the padding already paid for. Phase 9 P4: 348 us -> 47 us on `(2,4)`
             at `C = 18`, and the cost stops scaling with the candidate count.
-            Costs two `ttnn.permute` calls, which is why it is off untraced —
-            there two extra launches cancel the saving exactly — and why it is
-            width-gated even when on; see `FOLD_MIN_CANDIDATES`.
+            Costs two `ttnn.permute` calls, and pays for them even untraced,
+            where each launch is billed to the host: 111.3 ms against 120.3 ms
+            over the 186-read walk on `(2,4)`. Width-gated even when on, because
+            below a few candidates the padding is the payload; see
+            `FOLD_MIN_CANDIDATES`.
         one_pass_stats: take both `d`-reductions in a single pass over `v`, with
             `rms_norm_pre_all_gather` for the sum of squares and a matmul for the
             dot. Written as `mul` then `sum`, each reduction materializes a second

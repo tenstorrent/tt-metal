@@ -162,3 +162,65 @@ def test_matches_torch(mesh_device, device_params, fuse_add):
         assert torch.equal(settled, added), f"max|settled - add| = {(settled.float() - added.float()).abs().max():.6e}"
         _, vs_torch_stream = assert_with_pcc(stream, settled.float(), PCC)
         logger.info(f"settled stream vs torch: {vs_torch_stream}, bit-identical to ttnn.add")
+
+
+@pytest.mark.parametrize("mesh_device, device_params", [pytest.param((2, 4), FABRIC, id="mesh-2x4")], indirect=True)
+def test_rejects_a_site_past_the_batch_on_a_cache_hit(mesh_device, device_params, expect_error):
+    """`site` shapes no kernel and is kept out of the program hash, so the second call
+    below is a cache hit and never reaches the validation the first one passed. Without
+    a check on that path the factory turns the bad site into page offsets and reads past
+    the operands it was handed. Numerics are gated above; this one only needs a batch,
+    so it runs at the smallest shape that still shards four ways."""
+    torch.manual_seed(2026)
+
+    mesh_shape = tuple(mesh_device.shape)
+    tp_factor, sp_factor = mesh_shape[TP_AXIS], mesh_shape[SP_AXIS]
+    num_tokens, hidden, sites = 32 * sp_factor, 32 * tp_factor, 2
+
+    stream_dims, vector_dims, scalar_dims = [None, None], [None, None], [None, None]
+    stream_dims[SP_AXIS], stream_dims[TP_AXIS] = 2, 3
+    vector_dims[TP_AXIS] = 3
+    scalar_dims[SP_AXIS] = 2
+
+    to_dev = lambda t, dims, dtype=ttnn.bfloat16: ttnn.from_torch(
+        t,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=dims, mesh_shape=mesh_shape),
+    )
+    stream_shape, scalar_shape = [sites, 1, num_tokens, hidden], [sites, 1, num_tokens, 1]
+    tt_partial = to_dev(torch.randn(stream_shape, dtype=torch.bfloat16), stream_dims)
+    tt_prefix = to_dev(torch.randn([1, 1, num_tokens, hidden], dtype=torch.bfloat16), stream_dims)
+    tt_query = to_dev(torch.randn([1, 1, 1, hidden], dtype=torch.bfloat16), vector_dims)
+    tt_shift = to_dev(torch.randn(scalar_shape), scalar_dims, ttnn.float32)
+    tt_mass = to_dev(torch.rand(scalar_shape) + 1.0, scalar_dims, ttnn.float32)
+    tt_stats = to_dev(torch.zeros([1, 2 * tp_factor, num_tokens, 1]), scalar_dims, ttnn.float32)
+
+    grid = mesh_device.compute_with_storage_grid_size()
+    semaphore = ttnn.create_global_semaphore(
+        mesh_device,
+        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))]),
+        0,
+    )
+
+    read = lambda site: ttnn.experimental.attn_res_gather_softmax(
+        tt_partial,
+        tt_prefix,
+        tt_shift,
+        tt_mass,
+        tt_query,
+        tt_stats,
+        semaphore,
+        cluster_axis=TP_AXIS,
+        inv_hidden_size=INV_HIDDEN_SIZE,
+        eps=EPS,
+        site=site,
+    )
+
+    entries_before = mesh_device.num_program_cache_entries()
+    read(sites - 1)
+    assert mesh_device.num_program_cache_entries() > entries_before, "the first read did not populate the cache"
+
+    with expect_error(RuntimeError, f"site {sites} is past partial's dim 0 of {sites}"):
+        read(sites)
