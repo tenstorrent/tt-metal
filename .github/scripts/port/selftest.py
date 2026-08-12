@@ -638,19 +638,32 @@ for name, spec in _tools.items():
 # nine minutes of a card to relearn the same diagnostics, which is what happened on 2026-08-12.
 with tempfile.TemporaryDirectory() as tmp:
     work = Path(tmp)
-    dispatch.refuse_unchanged_build(work, work, "build", "abc123")
+    dispatch.refuse_pointless_dispatch(work, "build", "abc123")
     check("the first build of a tree goes through", True)
     try:
-        dispatch.refuse_unchanged_build(work, work, "build", "abc123")
+        dispatch.refuse_pointless_dispatch(work, "build", "abc123")
         check("rebuilding an unchanged tree is refused", False, "it was dispatched")
     except dispatch.Refusal as exc:
         check("rebuilding an unchanged tree is refused", "deterministic" in str(exc), str(exc))
-    dispatch.refuse_unchanged_build(work, work, "build", "def456")
+
+    # The expensive mistake, seen on 2026-08-12: verify builds before it measures, so verifying a
+    # tree that just failed to compile burns a card slot to reach the same error.
+    dispatch.record_build_outcome(work, "abc123", ok=False)
+    try:
+        dispatch.refuse_pointless_dispatch(work, "verify", "abc123")
+        check("verifying a tree that failed to build is refused", False, "it was dispatched")
+    except dispatch.Refusal as exc:
+        check("verifying a tree that failed to build is refused", "does not compile" in str(exc), str(exc))
+
+    dispatch.record_build_outcome(work, "abc123", ok=True)
+    dispatch.refuse_pointless_dispatch(work, "verify", "abc123")
+    check("verifying a tree that built is allowed", True)
+    # Measurement is noisy in a way compilation is not, so a second opinion stays allowed.
+    dispatch.refuse_pointless_dispatch(work, "verify", "abc123")
+    check("re-verifying the same built tree is still allowed", True)
+
+    dispatch.refuse_pointless_dispatch(work, "build", "def456")
     check("an edited tree builds again", True)
-    # Measurement is noisy in a way compilation is not, so re-measuring stays allowed.
-    dispatch.refuse_unchanged_build(work, work, "verify", "def456")
-    dispatch.refuse_unchanged_build(work, work, "verify", "def456")
-    check("re-verifying the same tree is still allowed", True)
 
 print()
 print(f"{len(failures)} failure(s)" + (": " + ", ".join(failures) if failures else ""))
