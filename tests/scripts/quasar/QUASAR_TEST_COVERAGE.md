@@ -122,10 +122,18 @@ Runs: metal_unit_test_emu_quasar (Zebu/Aether emulator) — all configs present 
 
 | Requirement | Watched rows | Lists | Reaches Jira today |
 |---|---|---|---|
-| AIIPSW-13 | 3 | `quasar_local_tests.yaml` | **no** — emulator-only path |
 | AIIPSW-2 | 8 | `quasar_regression_tests.yaml`, `quasar_sim_regresion_tests.yaml` | yes |
+| AIIPSW-3 | 0 | — | **no** — 18 Quasar LLK tests in the tt-llk repo (tests/python_tests/quasar/); separate CI, not gated here |
+| AIIPSW-9 | 0 | — | **no** — Horizon environment, not Quasar -- out of scope for this gate |
 | AIIPSW-4 | 11 | `quasar_local_tests.yaml` | **no** — emulator-only path |
 | AIIPSW-6 | 13 | `quasar_regression_tests.yaml`, `quasar_sim_regresion_tests.yaml` | yes |
+| AIIPSW-8 | 0 | — | **no** — no named Quasar sim test -- owning team to name it |
+| AIIPSW-12 | 0 | — | **no** — no named Quasar sim test -- owning team to name it |
+| AIIPSW-13 | 3 | `quasar_local_tests.yaml` | **no** — emulator-only path |
+| AIIPSW-14 | 0 | — | **no** — no named Quasar sim test -- owning team to name it |
+| AIIPSW-15 | 0 | — | **no** — UMD-side; no tt-metal Quasar yaml row |
+| AIIPSW-7 | 0 | — | **no** — 45 op tests + module tests under models/experimental/llama32_1b_quasar/tests/, none wired into a Quasar yaml yet |
+| AIIPSW-16 | 0 | — | **no** — the conv2d/pool/linear ops that do not pass on Quasar yet |
 
 ## Relevance-map entries that never win a match
 

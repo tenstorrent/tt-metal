@@ -202,12 +202,15 @@ jobs:
     runs-on: ubuntu-slim
     continue-on-error: true
     steps:
-      # Needed for create_jira_issue.py below.
+      # Needed for create_jira_issue.py below, and for the quasar test list the
+      # evidence report reads to know which tests the gate is expected to run.
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
-          sparse-checkout: .github/actions
+          sparse-checkout: |
+            .github/actions
+            tests/scripts/quasar
           sparse-checkout-cone-mode: false
 
       - name: Verify RTL Sim CI test check is green on stable HEAD
@@ -246,7 +249,13 @@ jobs:
             case "$STATUS:$CONCLUSION" in
               completed:success)
                 echo "::notice::Check passed on $SHA. $URL"
-                echo "sim-failed=false" >> "$GITHUB_OUTPUT"
+                # conclusion/url are also read by the evidence report below,
+                # which runs on the green path too.
+                {
+                  echo "sim-failed=false"
+                  echo "conclusion=success"
+                  echo "url=$URL"
+                } >> "$GITHUB_OUTPUT"
                 exit 0 ;;
               completed:*)
                 echo "::error::Check on $SHA: conclusion=$CONCLUSION. $URL"
@@ -289,8 +298,47 @@ jobs:
           fi
           python3 .github/actions/scripts/file_rtl_sim_jira.py
 
+      # Positive counterpart to the filing step above: a per-release record of
+      # which AIIPSW requirements have passing test evidence, and which have
+      # none. Runs on the green path too -- that is the path where the report is
+      # the whole point. Kept before the re-assert step so a red run still
+      # publishes its report.
+      - name: Build release test-evidence report
+        id: evidence
+        if: ${{ always() && steps.rtl-sim.outputs.sha != '' }}
+        env:
+          JIRA_BASE_URL: "https://tenstorrent.atlassian.net"
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_RELEASE_USER_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_RELEASE_API_TOKEN }}
+          JIRA_PROJECT_KEY: "RELEASE"
+          JIRA_ISSUE_TYPE: "Task"
+          RTL_SIM_CONCLUSION: ${{ steps.rtl-sim.outputs.conclusion }}
+          RTL_SIM_DETAIL: ${{ steps.rtl-sim.outputs.detail }}
+          RTL_SIM_SHA: ${{ steps.rtl-sim.outputs.sha }}
+          RTL_SIM_URL: ${{ steps.rtl-sim.outputs.url }}
+          RTL_SIM_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RELEASE_VERSION: ${{ inputs.tag-version }}
+          REPORT_MD_OUT: release-test-evidence.md
+        run: |
+          set -uo pipefail
+          python3 -c "import yaml" 2>/dev/null || pip install --quiet pyyaml
+          if [ -z "${JIRA_USER_EMAIL}" ] || [ -z "${JIRA_API_TOKEN}" ]; then
+            echo "::notice::JIRA_RELEASE_* secrets not configured; building the report without filing it."
+            export JIRA_SKIP=1
+          fi
+          python3 .github/actions/scripts/release_test_report.py
+          cat release-test-evidence.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload release test-evidence report
+        if: ${{ always() && steps.evidence.outcome != 'skipped' }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: release-test-evidence-${{ inputs.tag-version || github.run_id }}
+          path: release-test-evidence.md
+          if-no-files-found: warn
+
       - name: Re-assert sim failure
-        if: ${{ steps.rtl-sim.outputs.sim-failed == 'true' }}
+        if: ${{ always() && steps.rtl-sim.outputs.sim-failed == 'true' }}
         run: |
           echo "RTL sim check failed on stable HEAD; a RELEASE Jira issue was filed/updated."
           exit 1

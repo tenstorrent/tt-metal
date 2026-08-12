@@ -59,6 +59,29 @@ Three test-suite PRs by @kstevensTT landed after the branch point:
 | `quasar_local_tests.yaml` | did not exist | **14 pytest rows** (3 profiler, 11 ResNet ops) |
 | `quasar_sim_regresion_tests.yaml` | 5 | **5 — unchanged since 2026-06-01** |
 
+## Release test-evidence report
+
+Every Package-and-release run on `stable` produces a shareable record of which
+requirements have passing test evidence, via
+`.github/actions/scripts/release_test_report.py`. It lands in three places:
+
+- the **workflow run summary**,
+- a **`release-test-evidence-<version>` artifact** (markdown), and
+- a **Jira issue** in `RELEASE`, one per release version (re-runs update it
+  rather than piling up), labelled with every requirement that has passing tests.
+
+**How "executed successfully" is decided.** The sim CI reports only failures —
+`failed_tests.tsv` has no positive list — so passes are derived as
+*(tests the gate is expected to run)* − *(tests reported failed)*. That is only
+sound when the run completed, so when the check is red with no per-test detail,
+or timed out, or the sim reporter says the manifest was missing, the report is
+marked **INCONCLUSIVE** and claims no passes at all.
+
+The report deliberately lists requirements with **no** evidence alongside those
+with it. On today's gate a green release covers **2 of 12** requirements
+(AIIPSW-2 and AIIPSW-6) — the report is only proof of what actually ran, and
+saying so is the point.
+
 ## Known gaps
 
 1. **The growth is on a Slack path, not the Jira path.** The expanded lists run in

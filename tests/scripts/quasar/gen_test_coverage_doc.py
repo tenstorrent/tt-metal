@@ -94,6 +94,11 @@ def load_map():
     return json.loads(MAP_PATH.read_text()).get("relevant_tests", [])
 
 
+def load_map_requirements():
+    """The AIIPSW requirement inventory the release evidence report reports on."""
+    return json.loads(MAP_PATH.read_text()).get("requirements", [])
+
+
 def match(row, entries):
     """The relevance-map entry watching this row, or None (same rules as the filer)."""
     for e in entries:
@@ -189,11 +194,22 @@ def render():
             if e and e.get("requirement"):
                 by_req[e["requirement"]].append((fname, r))
     out += ["## Coverage by AIIPSW requirement", ""]
-    if by_req:
+    inventory = load_map_requirements()
+    if by_req or inventory:
         out += ["| Requirement | Watched rows | Lists | Reaches Jira today |", "|---|---|---|---|"]
         gating = {s["file"] for s in YAML_SOURCES if s["feeds_release_jira"]}
-        for req in sorted(by_req):
-            hits = by_req[req]
+        # Every requirement in the inventory gets a row, covered or not, so the
+        # release evidence report and this doc tell the same story.
+        keys = [r["key"] for r in inventory] or sorted(by_req)
+        for req in keys + [k for k in sorted(by_req) if k not in {r["key"] for r in inventory}]:
+            hits = by_req.get(req, [])
+            if not hits:
+                why = next(
+                    (r.get("_evidence") for r in inventory if r["key"] == req and r.get("_evidence")),
+                    "no test wired into a Quasar yaml",
+                )
+                out.append(f"| {req} | 0 | — | **no** — {why} |")
+                continue
             files = sorted({f for f, _ in hits})
             live = any(f in gating for f, _ in hits)
             out.append(
