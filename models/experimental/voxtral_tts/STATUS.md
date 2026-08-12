@@ -534,6 +534,8 @@ verdict, so you can jump rather than read 3,900 lines.
   not RTF ⟵ **corrects a "~1024 tokens" claim that appeared in three places and was never measured**
 - **§6.70** — runs on tt-metal main +777 commits with **no source changes** and the same speed;
   acoustic codes 45→40 (kernel rounding, toward the reference)
+- **§6.74** — `_trunk`'s sequence build: the reshape is a GHOST (0.068 not 0.742 ms/frame),
+  the concat is BIGGER than recorded (1.16-1.90 not 0.707). §7's lead is all concat
 - **§6.73** — symbol input: the device is systematically SHORTER, and the reference's extra
   length is a repetition loop in 3 of 3 draws. The first finding a listening pass has produced
 - **§6.72** — the head split reverses BACK, −0.775 ms/frame bit-exact. §6.68 counted one op
@@ -4581,6 +4583,14 @@ section cites a measured cost, check that the measurement is of the op the decis
 
 **New headline: 26.928 ms/frame, RTF 0.3567**, Block 2 ~14.2 ms.
 
+**CONFIRMED ON THE COMMITTED SOURCE, and this is the canonical baseline.** The A/B above ran with
+a temporary env switch in the tree; a clean `--tier audio` on `5641f0444b` afterwards reads
+**26.992 ms/frame, RTF 0.3606**, WER 0 of 894, 45/45 terminated, 132 tests — +0.064 ms against the
+arm, a sixth of §6.63's 0.390 floor. Its `_dirty` flag is set by doc edits only; no `.py` differs
+from the commit. **Use `quality_head_5641f04` as the `--compare` before-tag** rather than spending
+18 minutes re-deriving it: `shipcheck`, `hs_fused` and `hs_hand` all predate this code or carry the
+switch.
+
 ### 6.73 — symbol input: the device is systematically SHORTER, and the reference's extra length is repetition
 
 **The first finding a listening pass has ever produced on this branch**, and it took about three
@@ -4638,6 +4648,42 @@ onto words, so the exact strings are indicative only — **the repetition is the
 it does not arise by transcription accident. And the reason a metric never caught this is structural:
 `score_quality_set` buckets cases 4/10/11/14 out of WER because a symbol run has no defined
 transcript, so **the only instrument that covers those four prompts is a human ear.**
+
+### 6.74 — `_trunk`'s sequence build re-measured: the reshape is a ghost, the concat is BIGGER
+
+§7 has called lines 174+176 *"the largest genuinely untouched item, most likely next win"* at
+1.449 ms/frame combined. That rests on §6.36, an **eager map on the N150**, and §6.67 established
+that an eager map ranks by launch cost — it put `concat` at 144.7 µs where the traced cost is 2.6.
+So both halves were re-measured here, by §6.67's injection method, at their real shapes. **Nothing
+was changed; this is a measurement.**
+
+| line | §6.36 eager (N150) | eager, this chip | traced injection | ms/frame ×7 |
+|---|---|---|---|---|
+| `176` reshape → `[1,B*3,3072]` | 106.0 µs → 0.742 ms | ~6.7 µs | **9.8 µs** | **0.068** |
+| `174` `concat([p0,p1,p2], dim=1)` | 101.0 µs → 0.707 ms | 165.6 µs (spread 0.6) | **271.4 µs** | **1.16–1.90** |
+
+**THE RESHAPE IS A GHOST** — 0.068 ms/frame against the 0.742 on record, i.e. ~93% of it was launch
+cost that §6.65 removed. Half of §7's lead does not exist.
+
+**THE CONCAT IS REAL AND UNDER-RECORDED.** Both instruments put it well above §6.36's 101 µs, and
+the traced figure *exceeding* the eager one is §6.52's rule rather than a contradiction: a tight
+loop of identical ops pipelines and understates — the silu op reads 12.2 µs isolated and ~54 in
+block. The injection slope is clean (543.0 at +2, 1085.7 at +4, i.e. 271.4 and 271.4).
+
+**So §7's total was roughly right and its composition was wrong: it is essentially all concat**,
+which makes this single op the largest non-matmul item in Block 2 — larger than §6.72's win.
+
+**THE OBVIOUS FIX IS ALREADY CLOSED, and re-measuring it here does not reopen it.** A 2-way
+`concat([p0, p12])` measures **124.8 µs against 165.6**, a genuine 0.29 ms/frame on paper. §6.30
+killed it and the reason still holds: `p2` changes every frame, so building `p12` does not vanish,
+it MOVES — seven new concats a frame to save seven cheaper ones, and the op count goes up.
+
+**ONE IDEA NOT YET CONSIDERED, recorded rather than tried.** This attention has no RoPE and no
+mask ([flow-01]), so it is permutation-equivariant over the three tokens — the sequence ORDER is
+free, and only which slot the velocity is read from matters. Whether that admits a cheaper build is
+unknown. **Think before measuring**: §6.34 is the case where a restructuring that kept the op count
+the same and moved data to a wider point in the graph lost, and this op is 36 KB of data costing
+271 µs, so it is not bandwidth.
 
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of

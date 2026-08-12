@@ -3,12 +3,13 @@
 You are picking this up with no context. Read this top to bottom once — about ten minutes — and you
 will be able to run everything and change something without breaking it.
 
-**Three files, three jobs:**
+**Three files, four jobs:**
 
 | file | what it is | when to read it |
 |---|---|---|
 | **`ONBOARDING.md`** (this) | how to run things, how to prove you didn't break them, the method | first, once |
-| **`STATUS.md`** | the running log, `§1`–`§6.72`. `§1`–`§6.38` are N150; `§6.39+` is this fork. Every experiment with its numbers, **including the rejected ones** | before trying anything, to check it isn't already settled |
+| **`STATUS.md`** | the running log, `§1`–`§6.74`. `§1`–`§6.38` are N150; `§6.39+` is this fork. Every experiment with its numbers, **including the rejected ones** | before trying anything, to check it isn't already settled |
+| **`§8` of this file** | the **ledger**: every shipped optimization, every reversal, every rejection, one line each, pointing at its `§` | to see the whole decision history at a glance |
 | **`tt/NOTES.md`** | the prose that used to live in the code. Grep-able IDs `[gpt-04]`, `[flow-10]`, `[codec-12]`, `[pipe-02]` | when a line of code carries a `NOTES.md [id]` pointer |
 
 The `tt/*.py` files are deliberately thin — one-line pointers, no essays. **If you find yourself
@@ -121,6 +122,9 @@ needs torchaudio only to resample 24 kHz to 16 kHz, so scipy's `resample_poly` i
 
 ```bash
 Q=models/experimental/voxtral_tts/scripts/quality_report.py
+#   THE BEFORE-TAG ALREADY EXISTS: `quality_head_5641f04`, a clean audio tier on HEAD
+#   (§6.72). Compare against it rather than re-running 18 minutes. Older tags predate the
+#   current head split and are NOT valid baselines.
 python $Q --tier fast  --tag before      # ~3.5 min   pytest + flow + codes
 python $Q --tier full  --tag before      # ~20 min    + wiring, prefill26, codec, decode
 python $Q --tier audio --tag before      # ~50 min    + generation, WER, artifacts, MOS
@@ -368,9 +372,13 @@ here and are in §8 instead.**
   named the blocker as `_NORM_SHARD`'s hardcoded `(32, 96)`, which raises at 48 rows — **that
   constant no longer exists on this fork (§6.40)**, so the stated obstacle is gone and the lead
   should be re-costed. Still *throughput, not latency*: per-utterance RTF will not move.
-- **Block 2's `_trunk` sequence build** — `§6.36` put lines 174+176 (a 3-way concat and a reshape)
-  at 1.449 ms/frame combined on the N150, the largest genuinely untouched item, and small ops cost
-  **3.4× more here** (§6.45). Never re-measured on this chip. Most likely next win.
+- **Block 2's `_trunk` concat — now the largest non-matmul item in Block 2, and re-measured
+  (`§6.74`).** Line 174's 3-way concat costs **165.6 µs eager / 271.4 µs traced**, i.e.
+  **1.16–1.90 ms/frame** over its 7 calls — well above `§6.36`'s recorded 0.707. **Line 176's
+  reshape is a GHOST**: 9.8 µs traced against a recorded 0.742 ms/frame, so half of what this item
+  used to claim does not exist. The obvious 2-way rewrite is closed (`§6.30`: `p2` changes per
+  frame, so the concat moves rather than vanishing). Unexplored: the attention has no RoPE and no
+  mask, so token ORDER is free — see `§6.74`.
 - **`wo` and Block 2's `w2` run at ~40% of the ceiling** (§6.41) — both N=3072, and §6.41 shows the
   p150 penalises *narrow* N. §6.43 proved blocking cannot reach it and the isolated gap is
   overlapped away, so this needs a different attack: §6.28's DRAM-sharded matmul was rejected
@@ -399,74 +407,111 @@ here and are in §8 instead.**
 
 ---
 
-## 8. What is settled — do not re-run these
+## 8. The ledger — every optimization and every rejection
 
-Full numbers in STATUS; this is the index so you don't spend a day on a closed question.
+**This is the whole decision history in three tables.** Full numbers and reasoning live in the
+`§` each row names; this is the map, so you can see what was tried without reading 4,600 lines
+chronologically. A rejection here is worth as much as a win: it is the reason you should not
+spend a day re-deriving it.
 
-**⚠⚠ READ THIS ONE FIRST — it was never true on either chip.** `[flow-12]` and `§6.8` both record
-that SiLU "rides along on the w1 matmul instead of being its own op" via `activation="silu"`.
-**It does not.** That kwarg measures 98.8 µs against a plain matmul's 85.5 — the same +14.9 as
-writing `ttnn.silu()` yourself, because that is effectively what it does. Only a program config's
-`fused_activation` actually fuses (88.1 µs). Worth **2.42 ms/frame** across the 47 w1 calls, and
-slightly *more* accurate. Both blocks now use `DECODE_PRG` (`§6.52`, `[gpt-26]`). If you write a
-new matmul with an activation, **do not use the kwarg**.
+### ⚠ Three things that cost the most time to learn
 
-**⚠ NINE HAVE REVERSED**, five of them because §6.65 traced the frame and removed the per-op
-launch cost their reasoning rested on (§6.68 closes that line).
+**1. `activation="silu"` IS NOT FUSED, and was never fused on either chip.** It measures 98.8 µs
+against a plain matmul's 85.5 — the same +14.9 as writing `ttnn.silu()` yourself, because that is
+what it does. Only a program config's `fused_activation` folds it in (88.1 µs), and it is slightly
+*more* accurate besides. Worth **2.42 ms/frame** across the 47 w1 calls. Both blocks use
+`DECODE_PRG` now (`§6.52`, `[gpt-26]`). **If you write a new matmul with an activation, do not use
+the kwarg.**
 
-**⚠ THE FIRST SEVEN.** These were settled on the N150 and are settled the OTHER WAY
-here. The parent branch's verdict is wrong on this chip; do not restore any of them.
+**2. AN ISOLATED SWEEP MEASURES PIPELINING; A BLOCK MEASURES DISPATCH (`§6.52`).** A tight loop of
+*identical* ops pipelines and a real block of *differing* ops does not, so isolated microbenchmarks
+understate op cost by ~4× — the silu op is 12.2 µs isolated and ~54 µs in-block. That is why `w2`
+and `wo` posted 2.4× isolated wins and delivered **exactly 0.00 ms**, and why `§6.47`'s estimate
+missed by 48×. **And a block A/B is itself only a screen (`§6.63`): `--tier audio`'s `ms_per_frame`
+decides.**
 
-| N150 verdict | p150 verdict |
-|---|---|
-| hand-tuned matmul program configs measure SLOWER (`§6.24`) | **shipped, −4.24 ms/frame** — but only because that was measured on `wq`, already at 94% of its floor. `wo` and `w2` sit at 144–147 GB/s of a 367 ceiling (`§6.52`) |
-| width-sharded decode RMSNorm, both blocks (`§6.9`/`§6.18`) | **interleaved** — sharding LOSES 4.4–4.5 ms/frame and is further from fp32 truth (`§6.39`/`§6.40`) |
-| `wo` needs a tuned program config (`§6.25`) | **no config** — inert on the step, and removing it is bit-exact (`§6.43`) |
-| fused KV cache write + `_V_SHARD` (`§6.20`/`§6.22`) | **two plain writes** — the fused one is 0.687 ms/step slower (`§6.44`) |
-| `_QKV_GRID_X = 8`, 1 core is worse (`§6.19`) | **1 core**, 0.461 ms/step better (`§6.44`) |
-| hand-rolled 9-op head split in Block 2 (`§6.31`) | **hand-rolled again** — `§6.45` shipped the fused op, then `§6.65` traced away the launch cost it was chosen for; traced, fused is 90.5 µs against nine ops' 48.6, so `§6.72` reverses it BACK for −0.775 ms/frame, bit-exact |
-| `sdpa` for Block 2's interior REJECTED (`§6.37`) | **shipped** — +2.555 ms/frame; 1.57× the fp64 error here, not 6.48×, codes unmoved (`§6.45`) |
+**3. DECODE IS ONE TILE OF ROWS; PREFILL IS MANY.** The matmul program configs (`§6.52`),
+residual-as-bias (`§6.62`) and the sharded norm (`§6.67`) are all decode-only, and **two of the
+three would be SILENTLY WRONG on prefill** rather than raising.
 
-**The reason they flipped is one pair of numbers (`§6.41`/`§6.45`): the p150 has ~367 GB/s and
-a ~68 µs per-op floor against the N150's 194–202 GB/s and ~20 µs. Bytes are cheap, launches are
-expensive, so deleting ops wins where `§6.6` wanted fewer, bigger kernels.**
+### 8.1 Shipped — what the 26.9 ms is made of
 
-**⚠ AND THE MEASUREMENT RULE THAT COSTS THE MOST TIME (`§6.52`).** An isolated microbenchmark in a
-tight loop **understates op cost by ~4×**, because a loop of *identical* ops pipelines and a real
-block of *differing* ops does not. The silu op costs 12.2 µs isolated and ~54 µs in-block. This is
-why `w2` and `wo` posted 2.4× isolated wins and delivered **exactly 0.00 ms** in the block, why
-`§6.47`'s estimate missed by 48×, and why `§6.43` exists. **Isolated sweeps screen candidates;
-only a whole-block A/B with the shipped config entered twice as a noise floor decides.**
+Largest first. "block" means it was measured on the block and did not survive to the frame.
 
-**Settled on the p150 (measured here):**
+| change | worth | § |
+|---|---|---|
+| sharded decode RMSNorm, restored once tracing removed the reshard cost | **−5.399 ms/frame** | `§6.67` |
+| decode matmul program configs, incl. real silu fusion | **−5.06 ms/frame** end-to-end | `§6.52` |
+| the whole per-frame graph traced as one capture | **−4.244 ms/frame** | `§6.65` |
+| sdpa for Block 2's attention interior | −2.555 ms/frame | `§6.45` |
+| residual as matmul bias, both Block 1 sites | −1.918 ms/step, **0 on the frame** | `§6.62` |
+| in-place elementwise, Block 1 | +0.929 ms/step | `§6.47` |
+| two plain KV writes + 1-core qkv shard | +0.907 ms/step | `§6.44` |
+| in-place elementwise, Block 2 (needs the L1 concat) | +0.790 ms/frame | `§6.48` |
+| hand-rolled 9-op head split, restored | **−0.775 ms/frame**, bit-exact | `§6.72` |
+| `_SDPA_PRG` — the one N150 config that survived | +0.197 ms/step | `§6.46` |
+| `out_subblock_w` candidate list was missing 3 | inert, fixed for correctness | `§6.61` |
 
-| tried | verdict |
-|---|---|
-| fusing w1+w3 into one 3072×18432 matmul | still **rejected**, but NOT for `§6.24`'s reason — the fused matmul is now 1.03× **faster** (372 vs 362 GB/s); it loses 21–23 µs/layer on the split and the lost free `activation="silu"` (`§6.42`) |
-| `w2` in BFP8 | **no gain** — half the bytes, identical 206 µs; `§6.38`'s "largest single win left" is worth zero here (`§6.41`) |
-| `_SDPA_PRG` alternatives | k=128 is faster and degrades at pos 128 and 1000; k=512 8×2 is the only config exact at all 13 positions (`§6.46`) |
-| ranking by distance-from-roofline | **not a signal here** — `wo` at 39% of ceiling is entirely overlapped away (`§6.43`) |
+Inherited from the N150 branch and still shipping: the CFG batch fold into rows (2.23×), the qkv
+weight fusion, `SCALE` folded into wqkv's q rows, `_trunk` projecting before it narrows, the
+semantic argmax on the host, the codec's gather-based pad and its matmul output projection, BFP8
+on FF+attn with w2 in bf16. See `§6.6`–`§6.31`.
 
-**Settled on the N150, not re-tested here — treat as probable, not proven:**
+### 8.2 Reversed — decisions that flipped, and why
 
-| tried | verdict |
-|---|---|
-| BFP4 weights | 8.4× the error for 12% of the time |
-| ttnn's fused q+k RoPE | wrong convention (interleaved vs our half-split); 0.236 ms to adopt |
-| device tracing **as a shipping strategy** | +0.35 ms and three silent failure modes |
-| lower math fidelity (HiFi2 / LoFi) | Block 2: **slower and 9× worse** (`[flow-03]`); Block 1: ~4 ms for 10–20× the code errors |
-| DRAM-sharded matmul for the norm output | 1.66× slower with blocking tuned (`§6.28`) — **but decided against a 194 GB/s ceiling; worth re-opening (§7)** |
-| folding CFG + Euler into a weighted reduce | 1.543× isolated, **zero** whole-block, flips an FSQ boundary |
-| permuting straight from `av` in the unfold | 1.77× faster and **returns garbage** |
-| project-then-duplicate in `_solve` | 0.785× isolated (`§6.34`) |
-| `ttnn.repeat` instead of `ttnn.concat` | 1.8× worse |
-| `ttnn.swiglu` `TT_THROW`s on a concatenated pair (`§6.37`) | **does not reproduce** — it ran and returned `(1,1,32,9216)` (`§6.42`) |
-| `ttnn.add_` / `ttnn.multiply_` in place, **+0.001 ms** (`§6.37`) | **reversed** — worth +0.929 ms/step in Block 1 and +0.790 ms/frame in Block 2; in-place removes an ALLOCATION, ~12 µs of a ~68 µs op (`§6.47`/`§6.48`) |
-| residual-as-bias | Block 1: w2's add is already free. Block 2: **not expressible** — ttnn `bias` is per-output-column, our residual differs per row |
-| `_solve` tensors moved into L1 | neutral-to-worse, monotonically (`§6.37`) |
-| **eliminating CFG** | costs only **1.8%** (0.322 ms/frame) — "CFG doubles the work" does not hold (`§6.35`) |
+**Nine.** Five because `§6.65` traced the frame and removed the per-op launch cost their reasoning
+rested on; the rest because the chip is different. **A rejection is stale when its premise is a
+cost someone has since removed** — and `§6.72` is the case where that rule was applied with the
+wrong op's number and a reversal went unnoticed.
 
----
+| was | is now | why it flipped | § |
+|---|---|---|---|
+| width-sharded decode norm (N150) | dropped, then **restored** | interleaved parallelises over ROWS and decode has one; the two reshards cost launch, which tracing removed | `§6.39`/`§6.40` → `§6.67` |
+| hand-rolled head split (N150) | fused, then **hand-rolled again** | ops cost 67.7 µs, so fusing won; tracing made ops cheap and the fused op is 90.5 µs traced vs nine ops' 48.6 | `§6.31` → `§6.45` → `§6.72` |
+| tuned matmul configs measure SLOWER | **shipped** | the N150 result was measured on `wq`, already at 94% of its floor | `§6.24` → `§6.52` |
+| tracing rejected, "0.7% for three silent failure modes" | **shipped** | `§6.52` made the device work faster and exposed 13.3% dispatch in Block 2 | `§6.26`/`§6.49` → `§6.65` |
+| residual-as-bias rejected at +0.069 ms | **shipped** at −1.918 | the add hid in a 92.7 µs matmul's shadow; `§6.52` made it 40.3 and exposed it | `§6.47` → `§6.62` |
+| sdpa for Block 2 rejected, 6.48× the error | **shipped**, 1.57× | different chip; codes do not move and WER improved | `§6.37` → `§6.45` |
+| fused KV write + `_V_SHARD` | **two plain writes** | the fused one is 0.687 ms/step slower here | `§6.20`/`§6.22` → `§6.44` |
+| `_QKV_GRID_X = 8` | **1 core** | the grid never reaches the consumers; filling fewer cores is cheaper | `§6.19` → `§6.44` |
+| `wo` needs a tuned program config | **no config** | inert on the step, and removing it is bit-exact | `§6.25` → `§6.43` |
+
+### 8.3 Rejected — measured, and not taken
+
+| idea | verdict | § |
+|---|---|---|
+| BFP4 weights, Block 2 | 8.4× the differing codes for 1.139× | `§6.17` |
+| fusing w1+w3 into one 18432-wide matmul | rejected on BOTH chips for OPPOSITE reasons — 4× slower on N150, faster there but loses the free silu and pays a split here | `§6.24`, `§6.42` |
+| DRAM-sharded matmul for the norm output | 1.66× slower with blocking tuned; re-opened and still rejected | `§6.28`, `§6.68` |
+| `rotary_embedding_llama_fused_qk` | wrong rotation convention — ours are permuted to half-split at load | `§6.23` |
+| lower math fidelity (HiFi2 / LoFi) | Block 2 slower AND 9× worse; Block 1 ~4 ms for 10–20× the code errors | `[flow-03]` |
+| fp32 KV cache | `sdpa_decode` rejects the dtype; hand-rolling around it is **44.7× slower** | `§6.57` |
+| higher-precision prefill | fp32 weights buy nothing; fp32 activations work and the gain is gone by decode step 1 | `§6.55`, `§6.56` |
+| bf16 weights through decode | +29% for no measurable accuracy, non-monotonically | `§6.57` |
+| moving the three host steps on device | device is 7–29× slower; the whole host tail is 82 µs | `§6.50` |
+| project-then-duplicate in `_solve` | 0.785× — moving duplication downstream widens the tensor 48× | `§6.34` |
+| eliminating CFG | costs only **1.8%** — "CFG doubles the work" does not hold | `§6.35` |
+| 2 command queues | a vision-only idiom here; our per-step host input is 6 KB | `§6.51` |
+| bf16 semantic head | 2.079× and **deliberately held back** — one flip redirects the whole utterance | `§6.31` |
+| fewer Euler steps (7→5) | reaches RTF 0.411 but is a MODEL change; the reference uses 7 | `§7` |
+| sdpa in Block 3 | 1.44–2.27× faster, 3.3× worse worst-case error, failed 11 tests | `§4.1` |
+| smaller codec slab / batched chunks / unchunked attention | all three reduce FLOPs and all three are slower | `§4` |
+| MCD as a quality metric | failed its own self-test by ~10×; **no MCD number is reported** | `§6.59` |
+
+### 8.4 Corrections — claims this project made and later disproved
+
+The most useful rows in the whole file, because each was believed and acted on.
+
+| claim | correction | § |
+|---|---|---|
+| `activation="silu"` fuses | it never did, on either chip | `§6.52` |
+| "the fused head split costs 6.2 µs traced" | that is Block 1's op; Block 2's is **90.5** | `§6.72` |
+| the codes gate's 29.5% is a real accuracy number | synthetic-input artefact; real prompts read 3.9%, 100% off-by-one | `§6.54` |
+| prefill needs chunking past ~1024 tokens | never measured, never true; clean to 4096 | `§6.69` |
+| "duration agrees within 2 frames on symbol text" | one draw each; with 3 seeds the ranges are disjoint | `§6.73` |
+| the norm's core count has an interior minimum at 32 | true on N150, monotone on Blackhole | `§6.18` → `§6.39` |
+| a single-seed WER comparison can rank two builds | the same code spans 0.88–2.06% across seeds | `§6.7` |
+| worst-sample MAX is a usable statistic | unstable order statistic; use mean and p90 | `§6.8` |
 
 ## 9. What to reuse from elsewhere in this repo
 
