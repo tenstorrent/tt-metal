@@ -12,14 +12,14 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::experimental::ccl {
+namespace ttnn::experimental::attn_residual {
 
 // One read site's whole path from a tensor-parallel-sharded residual stream to the mixed
-// hidden state, in a single dispatch. Standalone that path is three:
+// hidden state, in a single dispatch. The path is three stages:
 //
-//   stats = attn_res_stats(prefix_sum, q)     per-rank sum of squares and dots
-//   live  = all_gather(stats, cluster_axis)   completes them across the shard axis
-//   h     = attn_res_merge(partial, prefix_sum, shift, mass, live)
+//   stats  per-rank sum of squares and dots over this rank's shard of `d`
+//   gather completes them across the shard axis
+//   fold   the online-softmax combine below
 //
 // and the fold itself is
 //
@@ -47,7 +47,7 @@ namespace ttnn::experimental::ccl {
 // scores and folds `prefix_sum + pending` and returns that sum as a second output for the
 // caller to carry forward, which is a whole dispatch cheaper than adding it beforehand.
 // The returned vector is one tensor without it and two with it.
-std::vector<ttnn::Tensor> attn_res_gather_merge(
+std::vector<ttnn::Tensor> attn_res_gather_softmax(
     const ttnn::Tensor& partial,
     const ttnn::Tensor& prefix_sum,
     const ttnn::Tensor& shift,
@@ -66,4 +66,4 @@ std::vector<ttnn::Tensor> attn_res_gather_merge(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config);
 
-}  // namespace ttnn::experimental::ccl
+}  // namespace ttnn::experimental::attn_residual

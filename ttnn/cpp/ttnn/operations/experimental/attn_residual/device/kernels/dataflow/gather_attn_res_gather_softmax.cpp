@@ -7,9 +7,9 @@
 // — so the exchange is funnelled here rather than run from each worker.
 //
 // What crosses is this rank's whole statistics plane: two tiles per token row-tile,
-// written into the slot the peers' merge kernels read for this rank. Peers write
+// written into the slot the peers' fold cores read for this rank. Peers write
 // their own slots here symmetrically, so nothing has to be reordered on arrival and
-// the reduction is the slot-wise sum the merge already performs.
+// the reduction is the slot-wise sum the fold already performs.
 //
 // Ordering: a peer's arrival increment is sent after every payload bound for that
 // peer, on the same connection, and the fabric preserves order per connection. A

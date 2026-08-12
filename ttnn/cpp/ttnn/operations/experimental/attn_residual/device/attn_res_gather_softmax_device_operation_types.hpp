@@ -17,7 +17,7 @@
 
 namespace ttnn::experimental::prim {
 
-struct AttnResGatherMergeParams {
+struct AttnResGatherSoftmaxParams {
     uint32_t site;
     float inv_hidden_size;
     float eps;
@@ -26,13 +26,13 @@ struct AttnResGatherMergeParams {
     ttnn::ccl::Topology topology;
     uint32_t num_links;
     // Tensor-parallel ranks over `cluster_axis`, and so also the number of statistic
-    // pairs the merge sums.
+    // pairs the fold sums.
     uint32_t ring_size;
     uint32_t cluster_axis;
     tt::tt_metal::GlobalSemaphore semaphore;  // Not default constructible
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
 
-    AttnResGatherMergeParams(
+    AttnResGatherSoftmaxParams(
         uint32_t site,
         float inv_hidden_size,
         float eps,
@@ -105,7 +105,7 @@ struct AttnResGatherMergeParams {
 //
 // At R == 1 an operand is shared by every site and `site` does not apply to it, which
 // is what lets one call mix batched partial, shift and mass with a per-site stream.
-struct AttnResGatherMergeInputs {
+struct AttnResGatherSoftmaxInputs {
     ttnn::Tensor partial;
     ttnn::Tensor prefix_sum;
     ttnn::Tensor shift;

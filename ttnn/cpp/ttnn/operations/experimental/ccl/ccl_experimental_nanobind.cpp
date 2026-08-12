@@ -38,13 +38,11 @@
 #include "ttnn/operations/experimental/ccl/all_to_all_dispatch_metadata/all_to_all_dispatch_metadata_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/moe_compute/moe_compute_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/moe/selective_reduce_combine/selective_reduce_combine_nanobind.hpp"
-#include "ttnn/operations/experimental/ccl/attn_res_gather_merge/attn_res_gather_merge_nanobind.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
 void py_module(nb::module_& mod) {
     ccl::bind_fused_rms_minimal(mod);
-    ccl::bind_attn_res_gather_merge(mod);
     ccl::bind_dit_fused_distributed_rmsnorm(mod);
     ccl::bind_all_gather_matmul_async(mod);
     ccl::bind_strided_all_gather_minimal_matmul_async(mod);

@@ -19,7 +19,7 @@ per-site traffic over it. That one does not batch in composed form: it contracts
 the candidate axis, and reaching it with a matmul means making that axis a tile axis,
 whose two permutes over the sealed set cost what the matmul saves.
 
-`merge` is one dispatch. `ttnn.experimental.attn_res_gather_merge` takes the live
+`merge` is one dispatch. `ttnn.experimental.attn_res_gather_softmax` takes the live
 stream's statistics, crosses the tensor-parallel axis, and folds the sealed partial in,
 which is why nothing between the statistics and the result exists as a tensor.
 
@@ -579,7 +579,7 @@ class TtAttnRes(LightweightModule):
         # The live stream's statistics are taken inside this program, which is why the
         # exchange they need is here rather than around it and why the read is one
         # dispatch. Nothing between the statistics and the result exists as a tensor.
-        outputs = ttnn.experimental.attn_res_gather_merge(
+        outputs = ttnn.experimental.attn_res_gather_softmax(
             partial,
             prefix_sum,
             shift,

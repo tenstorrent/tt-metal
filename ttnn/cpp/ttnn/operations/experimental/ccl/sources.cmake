@@ -2,9 +2,6 @@
 # Module owners should update this file when adding/removing/renaming source files.
 
 set(TTNN_OP_EXPERIMENTAL_CCL_SRCS
-    attn_res_gather_merge/attn_res_gather_merge.cpp
-    attn_res_gather_merge/device/attn_res_gather_merge_device_operation.cpp
-    attn_res_gather_merge/device/attn_res_gather_merge_program_factory.cpp
     llama_common.cpp
     composite_common.cpp
     reduce_scatter_common/reduce_scatter_validate_utils.cpp
@@ -109,7 +106,6 @@ set(TTNN_OP_EXPERIMENTAL_CCL_SRCS
 )
 
 set(TTNN_OP_EXPERIMENTAL_CCL_API_HEADERS
-    attn_res_gather_merge/attn_res_gather_merge.hpp
     all_reduce_async/all_reduce_async.hpp
     all_gather_async/all_gather_async.hpp
     all_gather_async/device/all_gather_async_device_operation.hpp
@@ -146,7 +142,6 @@ set(TTNN_OP_EXPERIMENTAL_CCL_NANOBIND_SRCS
     llama_reduce_scatter_matmul/rs_matmul_nanobind.cpp
     all_reduce_async/all_reduce_async_nanobind.cpp
     rms_allgather/rms_allgather_nanobind.cpp
-    attn_res_gather_merge/attn_res_gather_merge_nanobind.cpp
     dit_fused_distributed_rmsnorm/dit_fused_distributed_rmsnorm_nanobind.cpp
     llama_reduce_scatter/llama_reduce_scatter_nanobind.cpp
     llama_reduce_scatter_create_heads/llama_reduce_scatter_create_heads_nanobind.cpp

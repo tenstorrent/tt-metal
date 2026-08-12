@@ -148,8 +148,8 @@ void kernel_main() {
 
     // Pass two: hand compute a complete scalar set per token row this core's tile run
     // touches, then drain its output. The set is rank-major — shift, mass, then each
-    // rank's sum of squares and dots — which is the layout the merge's derivation
-    // already expected of a gather.
+    // rank's sum of squares and dots — the layout a gathering collective leaves, so
+    // the fold's weight derivation reads it without reordering.
     //
     // The run is contiguous in output-tile order, so `i % Wt == 0` is exactly a token
     // row boundary and the Wt tiles between two boundaries share one scalar set.

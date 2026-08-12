@@ -7,9 +7,11 @@
 The whole read is one program, so nothing inside it is separately observable and the
 gate is fp32 torch over the unsharded `d`.
 
-Sharded the way the model shards: `d` over the tensor-parallel axis, tokens over the
-sequence axis. `tp_factor == 1` would make the gather an identity and certify nothing,
-so there is no single-device arm.
+Sharded the way the model shards, at the shape the model runs: 1280 tokens over a
+2-deep sequence axis and `d` over a 4-deep tensor-parallel axis, so every chip holds 640
+rows of a 1792-wide shard. `tp_factor == 1` would make the gather an identity and certify
+nothing, so there is no single-device arm, and the row count is not swept — the op's cost
+and its collective's algorithm both turn on it.
 
 The `settle` arms hand in a deferred residual write, which the op folds by distributing
 the row weight over the two addends rather than by summing them first. The stream it
@@ -26,7 +28,7 @@ from models.common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 pytestmark = pytest.mark.skipif(
-    not is_blackhole(), reason="attn_res_gather_merge has only been brought up on Blackhole"
+    not is_blackhole(), reason="attn_res_gather_softmax has only been brought up on Blackhole"
 )
 
 # bfloat16 in and out with one rounding at the pack.
@@ -35,6 +37,7 @@ PCC = 0.9999
 HIDDEN_SIZE = 7168
 INV_HIDDEN_SIZE = 1.0 / HIDDEN_SIZE
 EPS = 1e-6
+PER_CHIP_TOKENS = 640
 
 TP_AXIS = 1
 SP_AXIS = 0
@@ -58,18 +61,13 @@ def _oracle(partial, prefix_sum, shift, mass, query):
 
 
 @pytest.mark.parametrize("mesh_device, device_params", [pytest.param((2, 4), FABRIC, id="mesh-2x4")], indirect=True)
-@pytest.mark.parametrize(
-    "per_chip_tokens",
-    [640, 128],
-    ids=["tokens640", "tokens128"],
-)
 @pytest.mark.parametrize("fuse_add", [False, True], ids=["plain", "settle"])
-def test_matches_torch(mesh_device, device_params, per_chip_tokens, fuse_add):
+def test_matches_torch(mesh_device, device_params, fuse_add):
     torch.manual_seed(2026)
 
     mesh_shape = tuple(mesh_device.shape)
     tp_factor, sp_factor = mesh_shape[TP_AXIS], mesh_shape[SP_AXIS]
-    num_tokens = per_chip_tokens * sp_factor
+    num_tokens = PER_CHIP_TOKENS * sp_factor
 
     stream_dims, vector_dims, scalar_dims = [None, None], [None, None], [None, None]
     stream_dims[SP_AXIS], stream_dims[TP_AXIS] = 2, 3
@@ -131,7 +129,7 @@ def test_matches_torch(mesh_device, device_params, per_chip_tokens, fuse_add):
         0,
     )
 
-    fused = ttnn.experimental.attn_res_gather_merge(
+    fused = ttnn.experimental.attn_res_gather_softmax(
         tt_partial,
         tt_prefix,
         tt_shift,

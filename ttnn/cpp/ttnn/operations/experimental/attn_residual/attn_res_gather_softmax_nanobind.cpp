@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "attn_res_gather_merge_nanobind.hpp"
+#include "attn_res_gather_softmax_nanobind.hpp"
 
 #include <optional>
 
@@ -12,12 +12,12 @@
 
 #include "ttnn-nanobind/bind_function.hpp"
 
-#include "ttnn/operations/experimental/ccl/attn_res_gather_merge/attn_res_gather_merge.hpp"
+#include "ttnn/operations/experimental/attn_residual/attn_res_gather_softmax.hpp"
 
-namespace ttnn::operations::experimental::ccl {
+namespace ttnn::operations::experimental::attn_residual {
 
-void bind_attn_res_gather_merge(nb::module_& mod) {
-    ttnn::bind_function<"attn_res_gather_merge", "ttnn.experimental.">(
+void bind_attn_res_gather_softmax(nb::module_& mod) {
+    ttnn::bind_function<"attn_res_gather_softmax", "ttnn.experimental.">(
         mod,
         R"doc(
             One read site's whole path from a tensor-parallel-sharded residual stream
@@ -64,7 +64,7 @@ void bind_attn_res_gather_merge(nb::module_& mod) {
 
             Blackhole only, and requires a ring size above 1 on `cluster_axis`.
         )doc",
-        &ttnn::experimental::ccl::attn_res_gather_merge,
+        &ttnn::experimental::attn_residual::attn_res_gather_softmax,
         nb::arg("partial").noconvert(),
         nb::arg("prefix_sum").noconvert(),
         nb::arg("shift").noconvert(),
@@ -85,4 +85,4 @@ void bind_attn_res_gather_merge(nb::module_& mod) {
         nb::arg("compute_kernel_config").noconvert() = nb::none());
 }
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::operations::experimental::attn_residual
