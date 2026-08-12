@@ -69,7 +69,8 @@ private:
     FabricSwitchManager() = default;
     ~FabricSwitchManager() = default;
 
-    // Cache the device map returned by CreateDevices to use directly in CloseDevices
+    // Cached device map from detail::CreateDevices for CloseDevices teardown.
+    // Cannot migrate to MeshDevice::create_unit_meshes (fatals on tt-switch meshes).
     std::map<tt::ChipId, tt::tt_metal::IDevice*> switch_devices_;
 };
 
