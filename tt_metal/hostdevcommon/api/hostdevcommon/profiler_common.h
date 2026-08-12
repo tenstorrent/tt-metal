@@ -216,7 +216,13 @@ enum DriscSelfZone : std::uint32_t {
     DRISC_ZONE_CREDIT_WAIT = PROFILER_DRISC_ZONE_BASE + 4,  // filler: DRAM ring room. mover: socket credit
     DRISC_ZONE_WRITE = PROFILER_DRISC_ZONE_BASE + 5,        // the egress write itself
     DRISC_ZONE_WR_BARRIER = PROFILER_DRISC_ZONE_BASE + 6,   // write barrier before staging is reused
-    DRISC_ZONE_COUNT = 7,
+    // The inter-sweep PACING GAP -- a sibling of SWEEP at depth 0, not a child. A filler's gap is set by the
+    // fill-ratio controller and measured 17,156 cycles (12.7 us) against its own 8.5 us sweep, so without a
+    // zone for it a filler's Tracy row is more whitespace than zones and the whitespace looks like a gap in
+    // the instrument. A MOVER is excluded from the controller (see drisc_profiler_drain.cpp) so its gap is 0
+    // and this zone simply never appears there -- which is itself the answer to "is the mover being paced".
+    DRISC_ZONE_PACE = PROFILER_DRISC_ZONE_BASE + 7,
+    DRISC_ZONE_COUNT = 8,
 };
 
 // STICKY_META (SPSC/drainer backend): an 8B context packet emitted once per RISC per launch at the main
