@@ -56,7 +56,9 @@ def create_program_descriptor(
     CB_SCALER = 2
     CB_OUT = 16
 
-    num_scaler_tiles = 2 if has_partial else 1
+    reduce_axis_tiles = Wt if reduce_row else Ht
+    single_partial_scaler = 1 if has_partial and reduce_axis_tiles == 1 else 0
+    num_scaler_tiles = 2 if has_partial and not single_partial_scaler else 1
     scaler_tile_size = ttnn.tile_size(ttnn.bfloat16)
 
     cbs = [
@@ -98,6 +100,7 @@ def create_program_descriptor(
         partial if has_partial else TILE_DIM,
         reduce_row_mode,
         pool_type_sum,
+        single_partial_scaler,
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 

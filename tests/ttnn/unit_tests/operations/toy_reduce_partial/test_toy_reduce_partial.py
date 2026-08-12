@@ -27,6 +27,7 @@ from ttnn.operations.toy_reduce_partial import toy_reduce_partial
         pytest.param((1, 1, 32, 59), -1, id="reduce_w__W=59_partial=27"),
         pytest.param((1, 1, 32, 33), -1, id="reduce_w__W=33_partial=1"),
         pytest.param((1, 1, 32, 63), -1, id="reduce_w__W=63_partial=31"),
+        pytest.param((1, 1, 32, 17), -1, id="reduce_w__W=17_single_partial_tile"),
         pytest.param((1, 1, 64, 80), -1, id="reduce_w__H=64_W=80_partial=16"),
         # REDUCE_ROW (W) — aligned baselines
         pytest.param((1, 1, 32, 64), -1, id="reduce_w__W=64_aligned"),
@@ -40,6 +41,7 @@ from ttnn.operations.toy_reduce_partial import toy_reduce_partial
         pytest.param((1, 1, 59, 32), -2, id="reduce_h__H=59_partial=27"),
         pytest.param((1, 1, 33, 32), -2, id="reduce_h__H=33_partial=1"),
         pytest.param((1, 1, 63, 32), -2, id="reduce_h__H=63_partial=31"),
+        pytest.param((1, 1, 17, 32), -2, id="reduce_h__H=17_single_partial_tile"),
         pytest.param((1, 1, 80, 64), -2, id="reduce_h__H=80_W=64_partial=16"),
         # REDUCE_COL (H) — aligned baselines
         pytest.param((1, 1, 64, 32), -2, id="reduce_h__H=64_aligned"),
@@ -96,6 +98,7 @@ def test_toy_reduce_partial(device, shape, dim):
         pytest.param((1, 1, 32, 55), -1, id="sum_reduce_w__W=55_partial=23"),
         pytest.param((1, 1, 32, 33), -1, id="sum_reduce_w__W=33_partial=1"),
         pytest.param((1, 1, 32, 63), -1, id="sum_reduce_w__W=63_partial=31"),
+        pytest.param((1, 1, 32, 17), -1, id="sum_reduce_w__W=17_single_partial_tile"),
         pytest.param((1, 1, 64, 80), -1, id="sum_reduce_w__H=64_W=80_partial=16"),
         # REDUCE_ROW (W) with SUM — aligned baselines (matmul path, no partial)
         pytest.param((1, 1, 32, 64), -1, id="sum_reduce_w__W=64_aligned"),
@@ -103,6 +106,7 @@ def test_toy_reduce_partial(device, shape, dim):
         # REDUCE_COL (H) with SUM — uses reduce_tile path (not matmul), verifies no regression
         pytest.param((1, 1, 48, 32), -2, id="sum_reduce_h__H=48_partial=16"),
         pytest.param((1, 1, 37, 32), -2, id="sum_reduce_h__H=37_partial=5"),
+        pytest.param((1, 1, 17, 32), -2, id="sum_reduce_h__H=17_single_partial_tile"),
         pytest.param((1, 1, 64, 32), -2, id="sum_reduce_h__H=64_aligned"),
         pytest.param((1, 1, 32, 32), -2, id="sum_reduce_h__H=32_single_tile"),
     ],

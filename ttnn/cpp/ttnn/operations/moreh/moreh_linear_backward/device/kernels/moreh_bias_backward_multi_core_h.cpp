@@ -82,7 +82,7 @@ void kernel_main() {
                 const auto reduce_layout = compute_kernel_lib::ReduceInputMemoryLayout::contiguous();
                 const auto reduce_accum = compute_kernel_lib::Accumulate::at(cb_intermed1, num_tile_done);
                 const auto reduce_partial = (do_mask_h && last_row)
-                                                ? compute_kernel_lib::ReducePartialScaler::last_tile_at(1)
+                                                ? compute_kernel_lib::ReducePartialScaler::last_tile()
                                                 : compute_kernel_lib::ReducePartialScaler::none();
                 if (do_mask) {
                     if (last_out) {

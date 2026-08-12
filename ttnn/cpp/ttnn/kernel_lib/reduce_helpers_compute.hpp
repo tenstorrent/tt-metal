@@ -147,19 +147,19 @@ struct ReduceInputBlockShape {
  * @brief Partial-scaler descriptor for non-tile-aligned reduce dimensions
  *
  * When the reduce dimension is not a multiple of TILE_DIM, the reader emits
- * TWO scaler tiles into scaler_cb: tile 0 has the full scaler (all positions
- * filled), and tile 1 has the partial scaler (only the valid positions filled,
- * the rest zeroed). The compute kernel must use tile 1 for the *last* tile
- * along the reduce dimension and tile 0 for every other tile, so the padding
- * lanes multiply by zero and contribute nothing.
+ * either a full scaler followed by a partial scaler, or just a partial scaler
+ * when the input has only one tile along the reduce dimension. The compute
+ * kernel must use the partial scaler for the *last* tile along the reduce
+ * dimension, so the padding lanes multiply by zero and contribute nothing.
  *
- * This struct selects which scaler-tile index to use on the last reduce-dim
- * iteration. The default (`none()`) keeps the legacy behavior of using tile 0
- * everywhere. Use `last_tile_at(1)` (or any non-zero idx) to switch to the
- * partial scaler on the last tile.
+ * This struct describes the scaler-CB layout. The default (`none()`) keeps the
+ * legacy behavior of using one full scaler tile. Use `last_tile()` when the CB
+ * contains [full, partial], or `only_tile()` when it contains one partial scaler
+ * and the input has exactly one tile along the reduce dimension.
  *
- * Pair with dataflow_kernel_lib::prepare_partial_reduce_scalers (or
- * calculate_and_prepare_partial_reduce_scalers) on the reader side.
+ * Pair last_tile() with dataflow_kernel_lib::prepare_partial_reduce_scalers
+ * (or calculate_and_prepare_partial_reduce_scalers) on the reader side. Pair
+ * only_tile() with prepare_reduce_scaler using the valid reduce-axis count.
  *
  * REDUCE_SCALAR does not support partial scalers — it applies the scaler
  * twice (row then col), which a single partial tile cannot encode. The
@@ -180,17 +180,26 @@ struct ReduceInputBlockShape {
  *
  * Usage:
  *   constexpr auto partial = has_partial
- *       ? ReducePartialScaler::last_tile_at(1)
+ *       ? ReducePartialScaler::last_tile()
  *       : ReducePartialScaler::none();
  *   reduce<SUM, REDUCE_ROW>(cb_in, cb_scaler, cb_out, shape, ..., partial);
  */
-struct ReducePartialScaler {
-    // Scaler-tile index to use for the LAST reduce-dim iteration. 0 = no partial (use tile 0
-    // everywhere); >0 = index of the partial scaler tile.
-    uint32_t last_tile_scaler_idx = 0;
+enum class ReducePartialScalerMode : uint8_t {
+    None,
+    LastTile,
+    OnlyTile,
+};
 
-    static constexpr ReducePartialScaler none() { return {0}; }
-    static constexpr ReducePartialScaler last_tile_at(uint32_t idx = 1) { return {idx}; }
+struct ReducePartialScaler {
+    ReducePartialScalerMode mode = ReducePartialScalerMode::None;
+
+    static constexpr ReducePartialScaler none() { return {ReducePartialScalerMode::None}; }
+    static constexpr ReducePartialScaler last_tile() { return {ReducePartialScalerMode::LastTile}; }
+    static constexpr ReducePartialScaler only_tile() { return {ReducePartialScalerMode::OnlyTile}; }
+
+    constexpr bool uses_partial() const { return mode != ReducePartialScalerMode::None; }
+    constexpr uint32_t scaler_tile_count() const { return mode == ReducePartialScalerMode::LastTile ? 2 : 1; }
+    constexpr uint32_t partial_scaler_idx() const { return mode == ReducePartialScalerMode::LastTile ? 1 : 0; }
 };
 
 /**
@@ -366,10 +375,9 @@ struct NoOp {
  * @param accumulate Accumulation configuration (default: NoAccumulation)
  * @param post_reduce_op Callback after each reduction (default: NoOp)
  * @param partial_scaler Partial-scaler selector for non-tile-aligned reduce
- *        dimensions (default: ReducePartialScaler::none()). When set to
- *        last_tile_at(idx), the helper waits for `idx + 1` scaler tiles and
- *        uses scaler tile `idx` for the last reduce-dim iteration. Pair with
- *        dataflow_kernel_lib::prepare_partial_reduce_scalers on the reader.
+ *        dimensions (default: ReducePartialScaler::none()). Use last_tile()
+ *        when the reader emits [full, partial], or only_tile() when it emits
+ *        one partial scaler for a single-tile reduction axis.
  *        Not supported for REDUCE_SCALAR or the Int32 SFPU reduce path.
  *
  * @example

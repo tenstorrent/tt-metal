@@ -96,7 +96,7 @@ FORCE_INLINE void calculate_and_prepare_reduce_scaler(
 //   tile 0 → full scaler
 //   tile 1 → partial scaler
 //
-// Pair with compute_kernel_lib::ReducePartialScaler::last_tile_at(1) on the
+// Pair with compute_kernel_lib::ReducePartialScaler::last_tile() on the
 // compute side. REDUCE_SCALAR is not supported (scaler is applied twice).
 // =============================================================================
 

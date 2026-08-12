@@ -22,7 +22,8 @@ void kernel_main() {
     constexpr uint32_t partial_dim = get_compile_time_arg_val(3);  // partial_w or partial_h
     constexpr uint32_t reduce_row_mode = get_compile_time_arg_val(4);
     constexpr uint32_t pool_type_sum = get_compile_time_arg_val(5);
-    constexpr auto src_args = TensorAccessorArgs<6>();
+    constexpr uint32_t single_partial_scaler = get_compile_time_arg_val(6);
+    constexpr auto src_args = TensorAccessorArgs<7>();
 
     constexpr uint32_t cb_in = 0;
     constexpr uint32_t cb_scaler = 2;
@@ -32,7 +33,9 @@ void kernel_main() {
 
     float scaler_f = __builtin_bit_cast(float, scaler_bits);
 
-    if constexpr (has_partial) {
+    if constexpr (single_partial_scaler) {
+        dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler, pool_type, reduce_dim>(scaler_f, partial_dim);
+    } else if constexpr (has_partial) {
         dataflow_kernel_lib::prepare_partial_reduce_scalers<cb_scaler, pool_type, reduce_dim, partial_dim>(scaler_f);
     } else {
         dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler, pool_type, reduce_dim>(scaler_f);

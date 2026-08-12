@@ -96,7 +96,7 @@ inline void drain_block_padding(uint32_t dfb_id, uint32_t num_tiles, uint32_t bl
  * is ragged; reduce<> applies it to that tile so the padding columns contribute nothing.
  */
 inline compute_kernel_lib::ReducePartialScaler partial_scaler_for(uint32_t N, uint32_t tile_width) {
-    return (N % tile_width > 0) ? compute_kernel_lib::ReducePartialScaler::last_tile_at(1)
+    return (N % tile_width > 0) ? compute_kernel_lib::ReducePartialScaler::last_tile()
                                 : compute_kernel_lib::ReducePartialScaler::none();
 }
 
