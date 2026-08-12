@@ -135,7 +135,7 @@ Record status and workaround in the **buffer portability** table for every CB or
 
 **What is already portable (do not churn):**
 
-- Class 1 DM transfers via `**Noc` from `noc.h`** (`async_read` / `async_write` + `offset_bytes`) — kernel must **not** call `get_*_ptr` or use `dataflow_api.h` `noc_async_`* with a grabbed L1 addr ([whitelist access control](../shared/cb_dfb_api_whitelist.md#access-control-get_ptr-vs-evil)).
+- Class 1 DM transfers via `**Noc` from `noc.h`** (`async_read` / `async_write` + `offset_bytes`) — kernel must **not** call `get_*_ptr` or use `dataflow_api.h` `noc_async_`* with a grabbed L1 addr ([whitelist access control](../shared/cb_dfb_api_whitelist.md#access-control-get__ptr-vs-evil_set_)).
 - Canonical producer/consumer FIFO (Pattern A/B in the audit) — on Quasar DM prefer **implicit sync** (single-entry NOC to the DFB; no FIFO calls); on WH/BH use **explicit** `reserve`/`push`/`wait`/`pop`.
 - Classes 2–5 pointer surgery → map to **evil_get/set** ([whitelist](../shared/cb_dfb_api_whitelist.md)), not leave `LocalCBInterface` field writes — and **not** blessed `get_*_ptr`.
 

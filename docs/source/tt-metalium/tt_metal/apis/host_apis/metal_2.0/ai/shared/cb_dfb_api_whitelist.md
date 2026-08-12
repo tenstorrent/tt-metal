@@ -7,7 +7,7 @@
 ## How to use this list
 
 1. Prefer canonical FIFO (**A**) and public peeks (**C**) for normal producer/consumer flow.
-2. For DM transfers, prefer Device 2.0 `**Noc` APIs from `noc.h`** (DFB endpoints + `offset_bytes`) over leftover `get_*_ptr` + `dataflow_api.h` `noc_async_`* (see [Access control](#access-control-get_ptr-vs-evil_set)).
+2. For DM transfers, prefer Device 2.0 `**Noc` APIs from `noc.h`** (DFB endpoints + `offset_bytes`) over leftover `get_*_ptr` + `dataflow_api.h` `noc_async_`* (see [Access control](#access-control-get__ptr-vs-evil_set_)).
 3. Map `LocalCBInterface` pointer **mutations** to `**evil_set_`*** (**D**). Peeks use public `get_*_ptr`.
 4. Do not attempt to work around any missing DFB APIs. Please prominently note the issue in the porting report.
 
