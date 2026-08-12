@@ -37,6 +37,7 @@ from models.demos.blackhole.qwen36.tests.test_factory import (
     shard_to_device,
     tp_composer,
 )
+from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.demos.blackhole.qwen36.tt.attention.rope_tp import rot_mats_decode, rot_mats_prefill
 from models.demos.blackhole.qwen36.tt.attention.tp import TPAttention, load_attention_weights_tp
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
@@ -210,10 +211,14 @@ def test_attention_tp_paged(mesh_device, reset_seeds, ensure_gc, request):
             torch.tensor(rows, dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device
         )
 
+    # Cache dtype must match what TPAttention._sdpa_bf8 casts K/V to before the fill (same helper
+    # model.py's allocate_kv_caches uses) -- otherwise paged_fill_cache's dtype assert trips.
+    _cache_dtype = ttnn.bfloat8_b if tpc.sdpa_bf8_enabled(args) else ttnn.bfloat16
+
     def mk_cache():
         return ttnn.from_torch(
             torch.zeros(num_blocks, NKV, block_size, HD, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
+            dtype=_cache_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
@@ -298,10 +303,14 @@ def test_attention_tp_paged_peruser(mesh_device, B, reset_seeds, ensure_gc, requ
     # attention/tp.py's _fuse_agmm; on WH the model's ff_norm gathers before attention instead.
     _fused_prefill_in = getattr(args, "attn_qkv_fused_weight_memcfg", None) is not None and is_blackhole()
 
+    # Cache dtype must match what TPAttention._sdpa_bf8 casts K/V to before the fill (same helper
+    # model.py's allocate_kv_caches uses) -- otherwise paged_fill_cache's dtype assert trips.
+    _cache_dtype = ttnn.bfloat8_b if tpc.sdpa_bf8_enabled(args) else ttnn.bfloat16
+
     def mk_cache(num_blocks):
         return ttnn.from_torch(
             torch.zeros(num_blocks, NKV, block_size, HD, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
+            dtype=_cache_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),

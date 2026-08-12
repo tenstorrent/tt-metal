@@ -2821,8 +2821,11 @@ class Qwen36Model:
     def allocate_kv_caches(self, kv_cache_shape, dtype, batch_size=1):
         """Allocate caches for all 32 layers. Returns only the attention KV caches (for vLLM)."""
         assert self._deltanet_external_states is None, "allocate_kv_caches already called; deallocate first"
-        # QWEN_SDPA_BF8: bf8 paged KV for SDPA; halves KV memory (gated — validate PCC at long ctx).
-        if os.environ.get("QWEN_SDPA_BF8", "0") == "1":
+        # bf8 paged KV for SDPA; halves KV memory. Default ON for Wormhole N300, override with
+        # QWEN_SDPA_BF8=0/1 — must agree with attention/tp.py's TPAttention._sdpa_bf8 (same helper).
+        from models.demos.blackhole.qwen36.tt import tp_common as tpc
+
+        if tpc.sdpa_bf8_enabled(self.args):
             dtype = ttnn.bfloat8_b
         if self.num_devices > 1:
             return self._allocate_kv_caches_tp(kv_cache_shape, dtype, batch_size)
