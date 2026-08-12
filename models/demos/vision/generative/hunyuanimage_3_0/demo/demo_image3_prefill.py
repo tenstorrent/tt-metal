@@ -2,12 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Runnable demo for `tencent/HunyuanImage-3.0` — Call-1:
-`hunyuan_image3_transformer_prefill`.
-
-Tokenizes a real prompt with the HF tokenizer, runs the SHARED TTNN pipeline
-(`tt/pipeline.py` — the exact code the e2e test asserts on), and prints the
-real transformer last_hidden_state produced on device.
+"""Transformer prefill demo for HunyuanImage-3.0. Tokenizes a prompt with the HF tokenizer, runs
+the shared TTNN transformer forward (`tt/pipeline.py`, the same code the e2e test exercises), and
+prints the on-device last_hidden_state; with --compare it also runs the HF reference forward and
+reports the PCC.
 
     ./python_env/bin/python -m \
         models.demos.vision.generative.hunyuanimage_3_0.demo.demo_image3_prefill \

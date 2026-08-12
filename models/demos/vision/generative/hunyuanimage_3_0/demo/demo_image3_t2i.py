@@ -2,16 +2,17 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""HunyuanImage-3.0 hybrid text->image demo on Tenstorrent (Blackhole Galaxy).
+"""Single text->image render demo for HunyuanImage-3.0 on the Tenstorrent mesh (Blackhole Galaxy):
+turns a prompt into a 1024² PNG.
 
-Runs the 80B MoE transformer's `gen_image` diffusion forward on the TT mesh (the
-32 decoder layers) with the FlowMatch scheduler + CFG + velocity head + VAE decode
-on host, and saves a PNG.
+Drives the 80B MoE transformer's `gen_image` diffusion forward on the mesh (the 32 decoder layers)
+with a FlowMatch (Euler) scheduler, CFG, and the timestep-conditioned velocity head, then decodes
+the latent to an image with the host VAE and saves the PNG.
 
   ./python_env/bin/python -m models.demos.vision.generative.hunyuanimage_3_0.demo.demo_image3_t2i \
       --prompt "a red panda astronaut, studio lighting" --steps 50 --out panda.png
 
-Model load dominates cold-start (~15 min). Use a named tmux + tee a log.
+Model load dominates cold-start (~15 min); run it under a named tmux and tee a log.
 """
 
 from __future__ import annotations

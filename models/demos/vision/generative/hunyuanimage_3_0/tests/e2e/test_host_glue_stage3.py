@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
-"""PCC: fully on-device head-glue text->image step (hidden resident on mesh) vs host."""
+"""Checks a fully on-device text->image step against the host reference (PCC), with the patch-embed,
+transformer, and velocity head all run on the mesh and the hidden state kept resident across the step."""
 from __future__ import annotations
 
 import os

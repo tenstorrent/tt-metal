@@ -2,7 +2,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Transformer gate: per-layer teacher-forced PCC >= 0.99 across all decoder layers vs HF-bf16."""
+"""Exercises the full-depth TTNN transformer and checks per-layer correctness: each decoder layer
+is teacher-forced with the HF hidden state and asserted at PCC >= 0.99 against the bf16 reference,
+across all decoder layers."""
 
 from __future__ import annotations
 

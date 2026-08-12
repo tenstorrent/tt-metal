@@ -2,7 +2,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Per-component PCC: HunyuanImage-3.0 decoder layer, TTNN vs HF."""
+"""Verifies a HunyuanImage-3.0 decoder block by comparing each TTNN component against the
+HF reference at PCC >= 0.99. Covers the RMSNorm, grouped-query attention with 2D-RoPE and
+qk-norm, scaled-dot-product attention, the routed/shared MoE feed-forward, and the residual adds."""
 
 from __future__ import annotations
 

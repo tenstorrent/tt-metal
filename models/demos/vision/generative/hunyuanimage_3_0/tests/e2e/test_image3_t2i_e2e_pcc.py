@@ -2,7 +2,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""End-to-end PCC: prompt->image (diffusion loop + scheduler + VAE), host vs TT decoder layers."""
+"""Checks an end-to-end prompt->image render for correctness, running the diffusion loop
+(FlowMatch scheduler + CFG + velocity head + VAE decode) with the TT decoder layers and
+comparing against the host reference (PCC)."""
 
 from __future__ import annotations
 

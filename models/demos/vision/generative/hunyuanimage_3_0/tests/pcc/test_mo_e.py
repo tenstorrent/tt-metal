@@ -2,7 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Per-component PCC: HunyuanImage-3.0 MoE (routed + shared experts), TTNN vs HF."""
+"""Verifies the HunyuanImage-3.0 MoE block by comparing each TTNN component against the HF
+reference at PCC >= 0.99. Covers the top-8 routed SwiGLU experts and the always-on shared expert."""
 
 from __future__ import annotations
 

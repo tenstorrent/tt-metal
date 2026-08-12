@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""PCC: on-device VAE decoder (mesh conv3d + distributed GroupNorm) vs HF AutoencoderKLConv3D."""
+"""Checks the on-device VAE decoder against the HF AutoencoderKLConv3D reference (PCC). Exercises
+the mesh conv3d and the distributed reduce-moments GroupNorm that replace the host decode."""
 from __future__ import annotations
 
 import glob

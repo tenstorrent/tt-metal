@@ -2,7 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Contract: trace replay matches eager (PCC) per stage + host-op purity (zero host aten ops)."""
+"""Verifies the execution contract for the traced 2-CQ pipeline: trace-capture replay matches
+eager execution (PCC) at each pipeline stage, and the host op stream stays pure (zero host aten ops)."""
 
 from __future__ import annotations
 

@@ -16,9 +16,9 @@ The render is a deterministic feed-forward: `(prompt, seed, steps, size)` reprod
 
 Performance is measured in seconds per image at 1024×1024px, warm (resident server; the one-time step-1 kernel compile is amortized across images).
 
-| System        | CFG | SP | TP | Steps | Current Performance |
-|---------------|-----|----|----|-------|---------------------|
-| Galaxy (8×4)  | 2   | 4  | 8  | 50    | ~29.8 s             |
+| System        | Resolution | CFG | SP | TP | Steps | Current Performance |
+|---------------|------------|-----|----|----|-------|---------------------|
+| Galaxy (8×4)  | 1024²      | 2   | 4  | 8  | 50    | ~29.8 s             |
 
 CFG is batched into a single `bsz=2` forward per step (CFG-parallel). The ~29.8 s is a ~25.8 s denoising loop (~511 ms/step) plus a 4.0 s on-device VAE decode. Correctness: image-step velocity PCC 1.0 vs the host reference; on-device VAE PCC 0.99995.
 

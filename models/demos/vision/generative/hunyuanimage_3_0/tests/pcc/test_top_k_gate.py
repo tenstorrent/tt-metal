@@ -2,7 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Per-component PCC: HunyuanImage-3.0 top-k router/gate (weights + indices), TTNN vs HF."""
+"""Verifies the HunyuanImage-3.0 top-k router/gate by comparing its TTNN output against the HF
+reference at PCC >= 0.99, checking both the routing weights and the selected expert indices."""
 
 from __future__ import annotations
 

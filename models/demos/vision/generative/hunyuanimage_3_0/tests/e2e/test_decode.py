@@ -2,7 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Decode: incremental-KV autoregressive decode — token agreement vs causal HF + per-user t/s/u."""
+"""Exercises incremental-KV autoregressive decode: checks token agreement against a causal HF
+reference and reports per-user throughput (tokens/s/user)."""
 from __future__ import annotations
 
 import os

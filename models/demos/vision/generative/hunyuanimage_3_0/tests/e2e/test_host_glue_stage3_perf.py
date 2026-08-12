@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Performance: shipped on-device text->image render; emits ONDEVICE_E2E_TOTAL_LATENCY_S (~29.8s warm @1024^2/50-step)."""
+"""Measures the latency of the shipped fully on-device text->image render and reports
+ONDEVICE_E2E_TOTAL_LATENCY_S — about 29.8 s warm per image at 1024²/50-step."""
 from __future__ import annotations
 
 import os

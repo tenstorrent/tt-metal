@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
-"""PCC: TTNN patch-embed + velocity head (final_layer) vs host."""
+"""Checks the TTNN patch-embed and velocity head (final_layer) against their host reference
+implementations (PCC) — the conv-based head-glue that wraps the transformer on either side."""
 from __future__ import annotations
 
 import os

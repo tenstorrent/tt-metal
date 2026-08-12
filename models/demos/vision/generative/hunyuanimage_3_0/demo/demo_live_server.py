@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""LIVE DEMO server (HunyuanImage-3.0 on TT Galaxy). Builds the 32-layer on-device stack ONCE +
-warms it up, then tails a JSON-lines queue and renders each submitted prompt WARM (~84 s @ 50 steps,
-1024²) — no per-render rebuild. Submit a request by appending one JSON line to
-$HUNYUAN_DEMO_DIR/queue.jsonl: {"id": "...", "prompt": "...", "steps": 50}. Output:
-$HUNYUAN_DEMO_DIR/out/<id>.png plus a <id>.done marker (holds render seconds, or "FAIL")."""
+"""Live queue-driven server (HunyuanImage-3.0 on TT Galaxy): builds the 32-layer on-device stack
+once and warms it, then tails a JSON-lines queue and renders each submitted prompt warm (~29.8 s
+@ 50 steps, 1024²) with no per-render rebuild. Submit a request by appending one JSON line to
+$HUNYUAN_DEMO_DIR/queue.jsonl: {"id": "...", "prompt": "...", "steps": 50}. Each render writes
+$HUNYUAN_DEMO_DIR/out/<id>.png plus a <id>.done marker (holding render seconds, or "FAIL")."""
 import json
 import os
 import time
