@@ -264,11 +264,24 @@ PUSH_RETRY_MESSAGES = (
 )
 
 
-def push_ref(repo: Path, remote: str, refspec: str, git_env: dict, *, required: bool = True) -> bool:
+def push_ref(
+    repo: Path,
+    remote: str,
+    refspec: str,
+    git_env: dict,
+    *,
+    required: bool = True,
+    scopes: callable = None,
+) -> bool:
     """Push, retrying the rejection GitHub hands out when its own workflow check times out.
 
     Backs off rather than hammering, since the failure is a server-side deadline and an immediate
     retry is the one most likely to hit the same cold cache.
+
+    Retrying only helps when the check timed out despite the credential being allowed to push
+    workflows. A classic PAT without `workflow` scope will be rejected every time, so the first
+    rejection asks GitHub what the token actually holds and gives up immediately if that is the
+    answer -- four more attempts would cost 70 seconds per dispatch to relearn the same fact.
     """
     delay = 5
     for attempt in range(1, PUSH_ATTEMPTS + 1):
@@ -277,10 +290,22 @@ def push_ref(repo: Path, remote: str, refspec: str, git_env: dict, *, required: 
             return True
         except DispatchError as exc:
             retryable = any(m in str(exc) for m in PUSH_RETRY_MESSAGES)
+            if retryable and attempt == 1 and scopes is not None:
+                held = scopes()
+                if "workflow" not in held:
+                    retryable = False
+                    exc = DispatchError(
+                        f"{exc}\n\nthe push credential holds only: {held}\n"
+                        "Without `workflow` scope GitHub must decide whether this push touches a "
+                        "workflow file, and on this repo that decision times out -- every time, not "
+                        "intermittently. Give the push token `workflow` scope alongside `repo`. "
+                        "That is safe here: refuse_pipeline_edits already rejects any snapshot that "
+                        "changes anything under .github/, so the scope is never exercised."
+                    )
             if not retryable or attempt == PUSH_ATTEMPTS:
                 if not required:
                     return False
-                raise
+                raise exc from None
             log(f"  push attempt {attempt}/{PUSH_ATTEMPTS} rejected by GitHub's workflow check; retrying in {delay}s")
             time.sleep(delay)
             delay *= 2
@@ -541,13 +566,7 @@ def main() -> int:
     log(f"{args.mode} for {args.op}: pushing {commit[:12]} (base {base[:12]}) to {branch}")
 
     with credentialed(work, token_file) as git_env:
-        try:
-            push_ref(repo, remote, f"{commit}:refs/heads/{branch}", git_env)
-        except DispatchError as exc:
-            # The rejection names `workflows` scope whether or not that is the real cause, so say
-            # what the credential actually holds. `workflow` present means this is the server-side
-            # false negative and the answer is elsewhere; absent means the token needs widening.
-            raise DispatchError(f"{exc}\n\nthe push credential's scopes are: {api.token_scopes()}") from None
+        push_ref(repo, remote, f"{commit}:refs/heads/{branch}", git_env, scopes=api.token_scopes)
 
     try:
         started = time.monotonic()
