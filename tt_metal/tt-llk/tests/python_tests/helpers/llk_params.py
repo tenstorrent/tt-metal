@@ -77,6 +77,9 @@ class MathOperation(Enum):
     Acosh = OpSpec("acosh", MathOpType.SFPU_UNARY)
     Celu = OpSpec("celu", MathOpType.SFPU_UNARY)
     Cos = OpSpec("cosine", MathOpType.SFPU_UNARY)
+    # Whole-tile column-wise cumulative sum; not element-wise, so its golden works on the
+    # tilized tensor rather than per datum.
+    Cumsum = OpSpec("cumsum", MathOpType.SFPU_UNARY)
     Elu = OpSpec("elu", MathOpType.SFPU_UNARY)
     Exp = OpSpec("exponential", MathOpType.SFPU_UNARY)
     Exp2 = OpSpec("exp2", MathOpType.SFPU_UNARY)
