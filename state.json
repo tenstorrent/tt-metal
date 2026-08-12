@@ -1,18 +1,18 @@
 {
-  "last_run": "2026-08-09T06:32:00Z",
-  "run_id": 31299007703,
+  "last_run": "2026-08-12T06:48:00Z",
+  "run_id": 31571161814,
   "open_prs": {
     "51999": {
       "issue": 51420,
-      "status": "checks green; pr-gate.yaml action_required (maintainer approval gate), unchanged this run"
+      "status": "checks green; pr-gate.yaml action_required (maintainer approval gate), unchanged this run; unchanged as of 2026-08-12 run"
     },
     "52106": {
       "issue": 51660,
-      "status": "checks green; pr-gate.yaml action_required, unchanged this run"
+      "status": "checks green; pr-gate.yaml action_required, unchanged this run; unchanged as of 2026-08-12 run"
     },
     "51868": {
       "issue": 51866,
-      "status": "checks green (2 runs, one success conclusion); pr-gate.yaml action_required after fix-commit push; full review cycle done, one perf/predication concern deliberately deferred; unchanged this run"
+      "status": "checks green (2 runs, one success conclusion); pr-gate.yaml action_required after fix-commit push; full review cycle done, one perf/predication concern deliberately deferred; unchanged this run; unchanged as of 2026-08-12 run"
     }
   },
   "issues_labeled": [
@@ -37,7 +37,8 @@
     "52390": "closed by maintainer VirdhatchaniKN 2026-08-07; no longer needs action",
     "52612": "fix already in open PR #52613 (drop stale sinh_bw/cosh_bw input-domain guard); do not open duplicate",
     "52614": "fix already in open PR #52615 (factor magnitude out before squaring in variance composite); do not open duplicate",
-    "52607": "fix already in open PR #52608 (guard setexp exponent in xielu neg-exp helper); do not open duplicate"
+    "52607": "fix already in open PR #52608 (guard setexp exponent in xielu neg-exp helper); do not open duplicate",
+    "52901": "fix already in open PR #52902 (reporter's own Horner-order fix for slice TILE reader); do not open duplicate"
   },
   "dropped_fix_targets": {
     "51845": "maintainer jasondavies explicitly rejected both proposed remedies on 2026-08-05 -- do not attempt fix"
@@ -46,7 +47,8 @@
     "52124": "Clamp sin/cos to [-1,1] - maintainer rejected this approach in #51845 discussion",
     "52126": "ttnn.i0 fix, I0_MAX_INPUT=88.5f concern per #52178",
     "51843": "alternate ttnn.i0 fix, same concern",
-    "52237": "fixes #52233 zero-length NoC write (packed-write payload rounding); watch for merge"
+    "52237": "fixes #52233 zero-length NoC write (packed-write payload rounding); watch for merge",
+    "45709": "fully approved + CodeOwners complete but stuck in action_required repo-side gate since 2026-06; needs maintainer to manually re-enable/rerun gate, not a normal nudge case"
   },
   "sfpu_clamp_family": {
     "note": "Family in #52178 (kinginu). i1 #52174 fixed/measured. Still open no-PR: erfc #51137, digamma #51128, snake_beta #51116. sin/cos #51845 blocked. softplus #51866 has PR #51868 pending gate."
@@ -58,14 +60,15 @@
   },
   "stale_pr_nudges": {
     "34933": "2026-08-07: /codeowners ping (approved-adjacent doc fix, branch behind main)",
-    "22649": "2026-08-07: /codeowners ping (falcon7b 6U tests, approved by skhorasganiTT, stale since 2025-11)",
-    "21584": "2026-08-07: /codeowners ping (eth benchmark re-enable, 3x approved, stale since 2025-12)"
+    "21584": "2026-08-07: /codeowners ping (eth benchmark re-enable, 3x approved, stale since 2025-12)",
+    "45516": "2026-08-12: author nudge (behind main, no reviews yet)",
+    "49658": "2026-08-12: /codeowners ping (approved by mgajewskiTT, 1 pending CodeOwners group)"
   },
   "backlog_cursor": {
     "task1_labeling": "labeled 52614, 52607 this run; oldest-first sweep resumed near 52260/52231/52228 (perf tracking / cleanup tasks, no clear label fit -- skipped); next candidates: continue oldest-first from ~52200s not yet covered",
     "task2_commenting": "no new comments this run -- 52612/52614/52607 all have thorough reporter root-cause + fix PR already open, additional comment would be redundant",
     "task3_fix": "no new fix PRs opened this run -- 3 candidate community bugs (52607,52612,52614) already have fix PRs from original reporters (52608,52613,52615); just needs maintainer review",
-    "task6_stale_prs": "pinged #34933, #22649, #21584 this run (3/3 max reached); next candidates for future pass: other stale non-repo-assist PRs not yet surveyed beyond first ~30 open PRs sorted by updated_at asc"
+    "task6_stale_prs": "pinged #45516, #49658 this run (2/3 used); #34933/#21584 skipped (pinged 2026-08-10, within cooldown); #22649 closed, removed from tracking; #45709 noted separately as gate-stuck, not nudge-eligible"
   },
-  "notes": "2026-08-09 run: Task 1 - labeled #52614 (bug+community, variance composite float32 under/overflow, reporter analysis verified against unary_composite_op.cpp) and #52607 (bug, xielu setexp exponent wrap for large negative inputs, fix PR #52608 already open). Task 3 - checked #52607/#52612/#52614 for existing fixes via github search on PR bodies; all three already have well-documented fix PRs from the original external reporters (#52608, #52613, #52615) -- no duplicate fix PRs created, recorded as covered. Task 5 - checked CI status on all 3 repo-assist PRs (#51999, #52106, #51868): all green checks, all still pr-gate action_required (maintainer approval gate), no maintainer feedback since last run, no new comments to avoid noise; #51868 mergeable_state now behind main but left untouched per no-rebase policy. Task 8 - updated monthly summary #51865 with fresh run entry, added new Suggested Actions items for PRs #52608/#52613/#52615, removed #52390 (closed by maintainer)."
+  "notes": "2026-08-12 run: Task 5 - checked CI on all 3 repo-assist PRs, all green/unchanged, still action_required. Task 1/3 - confirmed #52901 has existing reporter fix PR #52902 (Horner-order bug in slice TILE reader), skipped duplicate, recorded covered. Task 6 - confirmed #22649 now closed, removed from watch; #34933/#21584 within cooldown, skipped; nudged #45516 (author, behind main) and #49658 (/codeowners ping, 1 pending group); noted #45709 as gate-stuck special case (approved but action_required, needs maintainer). Task 8 - appended run entry to #51865 monthly summary with all above; refreshed suggested actions."
 }
