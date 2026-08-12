@@ -734,6 +734,7 @@ class Gemma4Model:
         chunk_start_idx=None,
         chunk_page_table=None,
         allow_sharded_decode_logits=True,
+        allow_sharded_prefill_logits=False,
     ):
         """
         Forward pass through decoder layers + final norm + lm_head + softcapping.
@@ -1030,7 +1031,11 @@ class Gemma4Model:
                 (1, 1, tile_start + 32, hidden_states.shape[-1]),
             )
 
-        logits = self._apply_lm_head(hidden_states, is_decode=is_decode, allow_sharded=allow_sharded_decode_logits)
+        # Decode may skip vocab AG when on-device sampling consumes TP shards.
+        # Prefill defaults to gather (host logits); opt in only when the caller
+        # will device-sample (see process_logits_after_prefill_trace).
+        allow_sharded = allow_sharded_decode_logits if is_decode else allow_sharded_prefill_logits
+        logits = self._apply_lm_head(hidden_states, is_decode=is_decode, allow_sharded=allow_sharded)
         if not is_decode:
             # After lm_head only — mid-forward / pre-lm_head flush corrupts token-0 on TP.
             self._flush_deferred_bounded_fills_if_needed()
@@ -1060,8 +1065,10 @@ class Gemma4Model:
         - Softcapping (``tanh(logits/cap)*cap``) is element-wise and works on the
           sharded vocab. ttnn.mul/ttnn.tanh are not in-place, so the results are
           captured — dropping them silently no-ops the cap and tanks PCC vs HF.
-        - The sharded vocab is all-gathered back to full width, except in decode
-          on-device sampling (the sampling module consumes sharded logits).
+        - The sharded vocab is all-gathered back to full width, except when
+          on-device sampling will consume TP-sharded logits (decode or prefill
+          first-token). That path also skips the host Untilize that follows
+          full-vocab readback.
 
         ``allow_sharded`` must be False whenever the HOST reads these logits, even
         though ``self.sampling`` exists: the module is constructed for every
@@ -1071,7 +1078,8 @@ class Gemma4Model:
         silently substitutes low-id fragments for any token above the shard
         ("creature"->"create", "lapped"->"la"), worst on long-context tasks that
         need rare tokens. Same trap the spec-decode path avoids by forcing
-        ``is_decode=False``.
+        ``allow_sharded=False``. Prefill ``__call__`` defaults
+        ``allow_sharded_prefill_logits=False`` for the same reason.
         """
         # Bracket the lm_head matmul + softcap with a Tracy signpost so the
         # op_perf_results.py --signpost gemma4_lm_head filter sums just this
@@ -1112,9 +1120,8 @@ class Gemma4Model:
             signpost(header=LM_HEAD_SIGNPOST)
 
         if self.mesh_config is not None and self.mesh_config.tp > 1 and self.lm_head_weight is not None:
-            if self.sampling is not None and is_decode and allow_sharded:
-                pass  # Sampling module handles TP-sharded logits directly
-            else:
+            # Sampling consumes TP-sharded logits; host readback must gather.
+            if self.sampling is None or not allow_sharded:
                 from models.demos.gemma4.tt.ccl import ccl_allgather
 
                 logits = ccl_allgather(logits, self.mesh_config, self.ccl_manager)
@@ -1699,6 +1706,7 @@ class Gemma4Model:
         embeds_torch=None,
         pli_device_tensors=None,
         page_tables_per_layer=None,
+        allow_sharded_prefill_logits=False,
         **kwargs,
     ):
         """Prefill forward — Generator-compatible signature.
@@ -1722,6 +1730,10 @@ class Gemma4Model:
         ``get_last_token`` is passed down so the last-token slice happens
         *before* lm_head — slicing after would still allocate full-seq
         logits first.
+
+        Pass ``allow_sharded_prefill_logits=True`` when the caller will
+        on-device-sample TP-sharded logits (skips vocab AllGather). Host
+        full-vocab readback must leave this False (default).
         """
         del rot_mats_global, rot_mats_local, kwargs
         if input_ids_torch is None:
@@ -1746,6 +1758,7 @@ class Gemma4Model:
             user_id=user_id,
             chunk_start_idx=chunk_start_idx,
             chunk_page_table=chunk_page_table,
+            allow_sharded_prefill_logits=allow_sharded_prefill_logits,
         )
 
     def process_output_prefill(self, tt_out, last_token_idx):
@@ -1767,7 +1780,7 @@ class Gemma4Model:
             torch_output = ttnn.to_torch(tt_out)
         return torch_output[..., last_token_idx, : self.vocab_size]
 
-    def process_logits_after_prefill_trace(self, hidden_states, last_token_idx):
+    def process_logits_after_prefill_trace(self, hidden_states, last_token_idx, allow_sharded=False):
         """Deferred lm_head for traced prefill.
 
         The trace returns post-norm hidden states ``[1,1,seq,hidden]`` when
@@ -1777,6 +1790,10 @@ class Gemma4Model:
 
         If the last dim is already vocab-sized (legacy / batched path that ran
         lm_head inside the trace), only slice and return.
+
+        ``allow_sharded=True`` skips the vocab AllGather when the caller will
+        run on-device sampling on TP-sharded logits (same contract as decode).
+        Host full-vocab readback must keep the default ``False``.
         """
         get_last_token = (last_token_idx // 32) * 32
         sliced = ttnn.slice(
@@ -1785,7 +1802,7 @@ class Gemma4Model:
             (1, 1, get_last_token + 32, hidden_states.shape[-1]),
         )
         if sliced.shape[-1] == self.hidden_size:
-            logits = self._apply_lm_head(sliced, is_decode=False)
+            logits = self._apply_lm_head(sliced, is_decode=False, allow_sharded=allow_sharded)
         else:
             logits = sliced
         # Trace deferred lm_head: commit bounded ring fills after logits.

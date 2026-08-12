@@ -700,7 +700,11 @@ class ChunkedPrefillPageTableGuardMixin:
             )
             if is_last_chunk:
                 last_token_idx_for_trace = last_token_idx_in_chunk
-                return self.model[model_id].process_logits_after_prefill_trace(tt_out, last_token_idx_for_trace)
+                return self.model[model_id].process_logits_after_prefill_trace(
+                    tt_out,
+                    last_token_idx_for_trace,
+                    allow_sharded=kwargs.get("allow_sharded_prefill_logits", False),
+                )
             del tt_out
         raise RuntimeError("Traced multi-chunk prefill produced no last-chunk logits")
 
@@ -865,6 +869,7 @@ class ChunkedPrefillPageTableGuardMixin:
             get_last_token=(-1 if batch_size > 1 else self._prefill_get_last_token(last_token_idx)),
             kv_cache=kv_cache,
             batch_size=batch_size,
+            allow_sharded_prefill_logits=kwargs.get("allow_sharded_prefill_logits", False),
         )
 
     def _gemma4_eager_token_feedback_buffer(self, model_id: int):

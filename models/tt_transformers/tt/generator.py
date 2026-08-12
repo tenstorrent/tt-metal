@@ -1071,6 +1071,9 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 and getattr(self.model[model_id], "_supports_on_device_sampling", False)
                 and getattr(self.model[model_id], "sampling", None) is not None
             )
+            # Prefill opt-in: skip vocab AllGather when on-device sampling will
+            # consume TP-sharded logits (Gemma4). Host full-vocab path keeps False.
+            local_kwargs["allow_sharded_prefill_logits"] = sampling_enabled
 
             if use_batched_prefill:
                 # Galaxy 70B approach: slot-based placement with shape [padded_batch, prefill_seq_len]
@@ -1315,7 +1318,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                         for local_idx, slot in enumerate(empty_slots):
                             user_logits = logits[slot : slot + 1, :, :, :]
                             _logits = self.model[model_id].process_logits_after_prefill_trace(
-                                user_logits, last_token_idx[slot]
+                                user_logits, last_token_idx[slot], allow_sharded=False
                             )
                             _logits = ttnn.to_layout(
                                 _logits, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -1345,7 +1348,9 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     )
                     continue
                 else:
-                    logits = self.model[model_id].process_logits_after_prefill_trace(logits, last_token_idx_for_trace)
+                    logits = self.model[model_id].process_logits_after_prefill_trace(
+                        logits, last_token_idx_for_trace, allow_sharded=sampling_enabled
+                    )
             else:
                 if return_hidden_states:
                     raise NotImplementedError("return_hidden_states=True requires enable_trace=True")
