@@ -15,6 +15,7 @@ monkeypatched to this class for the duration of ``Transformer.__init__``.
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
+from models.demos.multimodal.lfm25_vl.tt.short_conv import TtLfm2ShortConv
 
 # Import the *original* TransformerBlock directly from its defining module so this class
 # still works correctly even while `models.tt_transformers.tt.model.TransformerBlock` is
@@ -23,7 +24,6 @@ from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.decoder import TransformerBlock as OriginalTransformerBlock
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.mlp import MLP
-from models.demos.multimodal.lfm25_vl.tt.short_conv import TtLfm2ShortConv
 
 
 def _is_prefill(mode) -> bool:

@@ -104,14 +104,10 @@ class TtSiglip2VisionEmbeddings(LightweightModule):
         spatial_shapes = torch.tensor([[grid_h, grid_w]] * bsz, dtype=torch.long, device=images.device)
         return patches, spatial_shapes
 
-    def resize_positional_embeddings(
-        self, spatial_shapes: torch.Tensor, max_length: int
-    ) -> torch.Tensor:
+    def resize_positional_embeddings(self, spatial_shapes: torch.Tensor, max_length: int) -> torch.Tensor:
         """Bicubic-resize the fixed position table to each image's ``(H, W)`` grid (NaFlex)."""
         embed_dim = self._pos_embedding_host.shape[-1]
-        pos = self._pos_embedding_host.reshape(
-            self.position_embedding_size, self.position_embedding_size, embed_dim
-        )
+        pos = self._pos_embedding_host.reshape(self.position_embedding_size, self.position_embedding_size, embed_dim)
         # (1, dim, H, W) for interpolate
         pos = pos.permute(2, 0, 1).unsqueeze(0).float()
         batch_size = spatial_shapes.shape[0]

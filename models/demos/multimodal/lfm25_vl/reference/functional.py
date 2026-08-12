@@ -15,7 +15,9 @@ import torch
 import torch.nn.functional as F
 
 
-def round_ffn_dim_to_multiple(intermediate_size: int, multiple_of: int = 256, ffn_dim_multiplier: float | None = 1.0) -> int:
+def round_ffn_dim_to_multiple(
+    intermediate_size: int, multiple_of: int = 256, ffn_dim_multiplier: float | None = 1.0
+) -> int:
     """LLaMA-style SwiGLU hidden-dim auto-adjustment ("block_auto_adjust_ff_dim" in LFM2's config).
 
     ``intermediate_size=12288`` -> ``8192`` for LFM2.5-VL-1.6B's text backbone.

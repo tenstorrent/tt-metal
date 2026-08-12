@@ -77,7 +77,9 @@ class TtLfm25VlVisionModel(LightweightModule):
             dim=configuration.vision_dim,
             state_dict=state_dict,
             state_dict_prefix=f"{prefix}ln_post.",
-            weight_cache_path=configuration.weight_cache_path(dtype) if weight_cache_path is None else weight_cache_path,
+            weight_cache_path=configuration.weight_cache_path(dtype)
+            if weight_cache_path is None
+            else weight_cache_path,
             weight_dtype=dtype,
             eps=configuration.norm_eps_vision,
         )

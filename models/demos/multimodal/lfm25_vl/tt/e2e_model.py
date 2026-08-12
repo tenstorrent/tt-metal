@@ -20,12 +20,12 @@ from __future__ import annotations
 
 import torch
 
-import ttnn
 import models.tt_transformers.tt.model as tt_model_module
-from models.tt_transformers.tt.generator import Generator
-from models.tt_transformers.tt.model import Transformer
+import ttnn
 from models.demos.multimodal.lfm25_vl.tt.decoder import LfmDecoderLayer
 from models.demos.multimodal.lfm25_vl.tt.vision_model import TtLfm25VlVisionModel
+from models.tt_transformers.tt.generator import Generator
+from models.tt_transformers.tt.model import Transformer
 
 
 class TtLfm25VlModel(Transformer):
@@ -83,7 +83,9 @@ class TtLfm25VlModel(Transformer):
             spatial_shapes=spatial_shapes,
             pixel_attention_mask=pixel_attention_mask,
         )
-        comp_vision_output = ttnn.to_torch(vision_output, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))
+        comp_vision_output = ttnn.to_torch(
+            vision_output, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+        )
         # vision_output is [1, T, dim] (or [T, dim] after squeeze); take full token sequence
         if comp_vision_output.dim() == 3:
             return comp_vision_output[0]
@@ -151,11 +153,7 @@ class TtLfm25VlModel(Transformer):
 
         if vision_embeddings is None and pixel_values is not None:
             pvs = pixel_values if isinstance(pixel_values, (list, tuple)) else [pixel_values]
-            shapes = (
-                spatial_shapes
-                if isinstance(spatial_shapes, (list, tuple))
-                else [spatial_shapes] * len(pvs)
-            )
+            shapes = spatial_shapes if isinstance(spatial_shapes, (list, tuple)) else [spatial_shapes] * len(pvs)
             masks = (
                 pixel_attention_mask
                 if isinstance(pixel_attention_mask, (list, tuple))
