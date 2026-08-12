@@ -1,0 +1,38 @@
+# Qwen3-0.6B GRPO on the reverse-text task. Tested on 1x p150.
+# MGD: tt_metal/fabric/mesh_graph_descriptors/p150_mesh_graph_descriptor.textproto
+#
+# Run:
+#   python3 reverse_text/reverse_text_training_example.py
+
+training_config:
+  # Only max_sequence_length is read from here; the Qwen3 architecture comes
+  # from the HuggingFace config of the model source.
+  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/qwen3_06b.yaml"
+
+  optimizer:
+    type: MorehAdamW
+    lr: 2.0e-5
+    beta1: 0.9
+    beta2: 0.99
+    epsilon: 1.0e-8
+    weight_decay: 0.0
+    amsgrad: false
+    kahan_summation: false
+
+  grpo_config:
+    epsilon: 0.2
+    per_device_train_batch_size: 16  # one prompt's group of 16 completions
+    num_iterations: 1
+    gradient_accumulation_steps: 4  # 4 prompts x 16 completions = 64 per batch
+    logging_steps: 1
+    checkpointing: false
+    checkpoint_interval: 5
+    prompts_to_train: 80  # 20 optimizer steps x 4 prompts per batch
+    temperature: 1.0
+    max_completion_length: 384
+    num_generations: 16
+    warmup_steps: 2
+
+device_config:
+  enable_ddp: false
+  mesh_shape: [1, 1]
