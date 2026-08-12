@@ -60,6 +60,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "hostdevcommon/common_values.hpp"
+#include "noc/noc_parameters.h"
 
 namespace dataflow_kernel_lib {
 
@@ -209,6 +210,19 @@ public:
     // Counter correctness fences remain owned by the pipe.
     template <SourceL1Guard SOURCE_GUARD = SourceL1Guard::Guard>
     FORCE_INLINE void send(uint32_t src_l1, uint32_t dst_l1, uint32_t size);
+
+    // Stream a compile-time-sized block directly from a producer-backed CB. Unlike send(), this does
+    // not wait for the whole source block up front: it waits only for enough pages to cover each NoC
+    // burst, sends that chunk, then advances. The pipe still owns the ONE logical channel lifecycle --
+    // pre-handshake before the first chunk, a linked data chain, one final ready signal, and the same
+    // completion/reset guarantees as send(). This preserves producer/multicast overlap without exposing
+    // raw multicast, loopback, local-copy, or semaphore details to the caller.
+    template <
+        uint32_t PAGE_COUNT,
+        uint32_t PAGE_SIZE,
+        uint32_t MAX_CHUNK_BYTES = NOC_MAX_BURST_SIZE,
+        SourceL1Guard SOURCE_GUARD = SourceL1Guard::Guard>
+    FORCE_INLINE void send_from_cb(DataflowBuffer& src_cb, uint32_t dst_l1);
 
     // ===== CONTROL channel (a pure ready signal, no data block) =====
     // Broadcast a readiness signal (a doorbell, optionally carrying a small non-zero Flag value).
@@ -387,6 +401,16 @@ struct McastArgs {
     ReceiverPipe<data_ready, pre_handshake, consumer_ready, signal, num_senders> receiver(const Noc& noc) const {
         const uint32_t* coords = reinterpret_cast<const uint32_t*>(get_arg_addr(RT_BASE + (rotating ? 4 : 0)));
         return ReceiverPipe<data_ready, pre_handshake, consumer_ready, signal, num_senders>(noc, coords);
+    }
+
+    // Rotating wire only: whether this core is the sender for `round`. Sender identity is part of the
+    // helper-emitted coordinate list, so a migrated kernel does not carry a second operation-owned
+    // sender-id ABI or reconstruct logical row/column topology.
+    template <uint8_t NOC_ID = noc_index>
+    bool is_sender(uint32_t round) const {
+        static_assert(rotating, "McastArgs::is_sender(round) requires a rotating sender wire");
+        ASSERT(round < num_senders);
+        return sender_x(round) == my_x[NOC_ID] && sender_y(round) == my_y[NOC_ID];
     }
 
     // ---- RT coord accessors (escape hatches) ----
