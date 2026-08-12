@@ -504,7 +504,9 @@ def report_build(run: dict, api: Api) -> int:
     print(
         f"BUILD FAILED -- the compiler rejected your code. The tool worked; the diagnostics below "
         f"are the answer, and rebuilding without editing will reproduce them exactly.\n\n"
-        f"Run: {run['html_url']}\n"
+        f"Edit the files named below, then `build` again. Do not call `verify` yet: a verify builds "
+        f"before it measures, so on this tree it would fail in the same place after queueing for a "
+        f"card.\n\nRun: {run['html_url']}\n"
     )
     print(failure_output(api, run["id"]))
     return 1
@@ -629,28 +631,58 @@ def retire_inflight(api: Api, work: Path, repo: Path, remote: str, token_file: P
         record_path.unlink(missing_ok=True)
 
 
-def refuse_unchanged_build(work: Path, repo: Path, mode: str, tree: str) -> None:
-    """Refuse a second `build` of a tree that has not changed since the last one.
+BUILD_STATE = "last-build.json"
 
-    Scaffolding rather than a plea in the prompt, because the prompt already asks for this and it
-    happened anyway: the agent re-dispatched a byte-identical tree twenty seconds after a build
-    failed, and would have spent nine minutes of a card learning the same diagnostics again.
 
-    `build` only, and only against the immediately preceding one. Compilation is deterministic, so
-    an unchanged tree provably cannot compile differently. `verify` is not: it measures, measurement
-    is noisy, and re-measuring is sometimes a legitimate thing to want.
+def _build_state(work: Path) -> dict:
+    try:
+        return json.loads((work / BUILD_STATE).read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def record_build_outcome(work: Path, tree: str, ok: bool) -> None:
+    """Remember how the last build of this exact tree turned out, for the guard below."""
+    if tree:
+        (work / BUILD_STATE).write_text(json.dumps({"tree": tree, "outcome": "passed" if ok else "failed"}))
+
+
+def refuse_pointless_dispatch(work: Path, mode: str, tree: str) -> None:
+    """Refuse dispatches whose answer is already known, before they cost a card.
+
+    Scaffolding rather than a plea in the prompt, because the prompt already asks for both of these
+    and both happened anyway. Compilation is deterministic: a given tree compiles the same way every
+    time, so there are exactly two dispatches that cannot teach anything.
+
+      - Building a tree that has already been built. Seen 2026-08-12: the agent re-dispatched a
+        byte-identical tree twenty seconds after a build failed.
+      - Verifying a tree whose build failed. Seen the same afternoon, and the more expensive of the
+        two: `verify` builds before it measures, so it fails in the same place having queued for a
+        card first.
+
+    Re-verifying a tree that *built* is deliberately still allowed. Measurement is noisy in a way
+    compilation is not, and wanting a second opinion on a number is legitimate.
     """
-    if mode != "build":
+    state = _build_state(work)
+    if not tree or state.get("tree") != tree:
+        if mode == "build":
+            (work / BUILD_STATE).write_text(json.dumps({"tree": tree, "outcome": "dispatched"}))
         return
-    marker = work / "last-build-tree"
-    if marker.is_file() and marker.read_text().strip() == tree:
+
+    if mode == "build":
         raise Refusal(
             "this is the same tree as the last build, byte for byte, so it would fail in exactly "
             "the same way -- a compile is deterministic. Nothing was dispatched and no time was "
             "spent. Read the diagnostics from the previous build, edit the files they name, and "
             "call `build` again once the tree differs."
         )
-    marker.write_text(tree)
+    if mode == "verify" and state.get("outcome") == "failed":
+        raise Refusal(
+            "this exact tree failed to build, and `verify` builds before it measures -- so it would "
+            "fail in the same place, having queued for a card first. Nothing was dispatched. Fix "
+            "the compile errors the last build reported, get a `build` to pass, and verify then. "
+            "A verify cannot measure code that does not compile."
+        )
 
 
 def cleanup_ref(work: Path, repo: Path, remote: str, token_file: Path, branch: str) -> None:
@@ -767,7 +799,8 @@ def main() -> int:
         # difference as the agent writing where it should not have.
         raise DispatchError(f"HEAD moved from {base[:12]} to {parent[:12]} while snapshotting")
     refuse_pipeline_edits(repo, base, commit)
-    refuse_unchanged_build(work, repo, args.mode, git("rev-parse", f"{commit}^{{tree}}", cwd=repo))
+    tree = git("rev-parse", f"{commit}^{{tree}}", cwd=repo)
+    refuse_pointless_dispatch(work, args.mode, tree)
     retire_inflight(api, work, repo, remote, token_file)
     log(f"{args.mode} for {args.op}: pushing {commit[:12]} (base {base[:12]}) to {branch}")
 
@@ -797,6 +830,7 @@ def main() -> int:
                 "op": args.op,
                 "branch": branch,
                 "commit": commit,
+                "tree": tree,
                 "run_id": run["id"],
                 "run_url": run["html_url"],
                 "started": time.time(),
@@ -851,6 +885,9 @@ def resume(api: Api, args, work: Path, repo: Path, remote: str, token_file: Path
     finally:
         cleanup_ref(work, repo, remote, token_file, record["branch"])
         forget_job(work, args.wait)
+
+    if record["mode"] == "build":
+        record_build_outcome(work, record.get("tree", ""), run.get("conclusion") == "success")
 
     return delivered(report(record["mode"], run, api, results, repo), args.as_tool)
 
