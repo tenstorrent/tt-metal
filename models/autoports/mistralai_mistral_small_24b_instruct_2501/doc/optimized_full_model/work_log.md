@@ -155,3 +155,7 @@ and generated texts. Its conclusions are retained in `stage_review.md`.
 300-second timeout fired during the normal layer-40 weight load. Fixture teardown
 closed the mesh; a bounded health check showed all four devices. The 1,800-second
 retry passed and the final correctness/warmed run supersedes both.
+
+The post-review implementation/evidence commit is `d0313954b04` (`Optimize
+Mistral Small 24B full-model token-out path`). This follow-up documentation
+commit records that SHA. Nothing was pushed.
