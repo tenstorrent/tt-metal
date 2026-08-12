@@ -333,16 +333,33 @@ def pad_single(
 
 
 def local_device_to_torch(tt_tensor: ttnn.Tensor) -> torch.Tensor:
-    """Convert a ttnn device tensor to a torch tensor by reading from the local device.
+    """Read one shard of a **replicated** device tensor back to torch, without any collective.
 
-    In a distributed environment, iterates over the mesh coordinates to find the
-    tensor shard that belongs to the local device before calling ``ttnn.to_torch``.
+    This is the safe readback for a tensor every device holds a copy of. `ttnn.to_torch` requires
+    the host tensor to carry exactly one shard (`pytensor.cpp`: "Can't convert a tensor distributed
+    on ... mesh to row-major logical tensor"), so the whole job is handing it a single-device tensor.
+    `ttnn.get_device_tensors` slices the local device storage into exactly those, and on a
+    multi-host mesh it returns this host's shards only -- so any element of it is both local and,
+    for a replicated tensor, the whole answer.
+
+    Use this rather than `to_torch(...)` in this module for replicated tensors: that builds a mesh
+    composer, and a composer on a multi-host mesh runs `host_ccl::all_gather`, an MPI collective. Use
+    `fast_device_to_host` when the tensor is genuinely *sharded* and the host needs all of it.
+
+    **Replicated only.** For a sharded tensor this returns one arbitrary shard rather than failing,
+    which is silent and wrong; use `fast_device_to_host` there instead.
     """
     mesh_device = tt_tensor.device()
     view = mesh_device.get_view() if ttnn.using_distributed_env() else None
     coords = list(tt_tensor.tensor_topology().mesh_coords())
     device_tensors = ttnn.get_device_tensors(tt_tensor)
 
+    # `get_device_tensors` enumerates the *whole* mesh: on a 4x32 quad it returns 128 shards on every
+    # rank, matching the 128 coordinates `mesh_coords()` lists. So `[0]` is the shard at global
+    # coordinate (0, 0), which is local on exactly one rank; on the others, converting it makes the
+    # host gather and `ttnn.to_torch` rejects the multi-buffer result (`pytensor.cpp`:
+    # `buffers.size() == 1`). Measured on the quad: `[0]` passes on the rank owning column 0 and
+    # raises on the other three. The `is_local` filter is what makes this correct, not a guard.
     torch_tensor = None
     for coord, device_tensor in zip(coords, device_tensors):
         if view is None or view.is_local(coord):
@@ -476,6 +493,37 @@ def _reassemble_2d(
     """
     d0, d1 = concat_dims
 
+    if d0 is not None and d0 == d1:
+        # One tensor dim fractured row-major over the *whole* mesh, i.e.
+        # `ShardTensorToMesh(dim=d)`, whose mapper flattens the mesh and hands shard `i` to
+        # device `(i // cols, i % cols)`.  This is not expressible as two independent per-axis
+        # concats: both mesh indices fold into a single linearised block offset.  The general
+        # branch below would compute the right total extent but write `slices[d0]` and then
+        # `slices[d1]` into the *same* index, so the second write wins and the row index is
+        # lost -- shard `(r, c)` lands at position `c` for every `r`.  Row-major iteration means
+        # the last row wins, which is how a 4x8 read of units 0..31 returns `[24..31, 0, 0, ...]`.
+        # The C++ equivalent refuses this instead of getting it wrong
+        # (`ttnn/core/tensor/xtensor/partition.cpp`: "dims must be unique").
+        cols = mesh_shape[1]
+        span = shard_shape[d0]
+        full_shape = list(shard_shape)
+        full_shape[d0] = span * mesh_shape[0] * cols
+
+        out_dtype = dtype if dtype is not None else shards[0].dtype
+        if permute is not None:
+            out = torch.empty([full_shape[p] for p in permute], dtype=out_dtype)
+            d0_out = list(permute).index(d0)
+        else:
+            out = torch.empty(full_shape, dtype=out_dtype)
+            d0_out = d0
+
+        for coord, shard in zip(mesh_coords, shards):
+            base = (int(coord[0]) * cols + int(coord[1])) * span
+            slices = [slice(None)] * len(full_shape)
+            slices[d0_out] = slice(base, base + span)
+            out[tuple(slices)] = shard.permute(*permute).contiguous() if permute is not None else shard
+        return out
+
     if d0 is not None and d1 is not None:
         s0, s1 = shard_shape[d0], shard_shape[d1]
         full_shape = list(shard_shape)
@@ -573,7 +621,13 @@ def fast_device_to_host(
         )
 
     # --- Multi-host: hybrid on-device collective + fast local DMA -----------
-    if ttnn.using_distributed_env():
+    # Gated on a world size above one, not merely on `using_distributed_env()`: under a
+    # single-rank MPI launch every mesh coordinate is local, so the single-host path below is
+    # both correct and cheaper.  Taking the hybrid path there would all-gather the inter-host
+    # axis and then skip the `repeat`/`mesh_partition` that re-shards it (`n_hosts > 1`),
+    # leaving each device holding replicated data that the host-side reassembly would treat
+    # as distinct blocks.
+    if ttnn.using_distributed_env() and int(ttnn.distributed_context_get_size()) > 1:
         if ccl_manager is None:
             msg = "fast_device_to_host requires ccl_manager in a distributed (multi-host) environment"
             raise ValueError(msg)
@@ -660,6 +714,24 @@ def fast_device_to_host(
         local_mesh_shape[inter_host_axis] = len(local_inter_positions)
         local_mesh_shape[intra_host_axis] = len(local_intra_positions)
         local_mesh_shape = tuple(local_mesh_shape)
+
+        if concat_dims[0] is not None and concat_dims[0] == concat_dims[1]:
+            # The linearised branch of `_reassemble_2d` reconstructs a global block index from
+            # this host's *remapped* 0-based coordinates, which only equals the true index when
+            # the host owns a contiguous run of inter-host positions starting at a multiple of
+            # its own run length.  That is what the quad-galaxy descriptor gives (host `h` owns
+            # columns `8h..8h+7` of a 4x32), and it is exactly the property that would break
+            # silently -- as a frame permutation, not an error -- under a strided or ragged
+            # ownership layout.
+            run = len(local_inter_positions)
+            first = local_inter_positions[0]
+            if local_inter_positions != list(range(first, first + run)) or first % run:
+                msg = (
+                    f"a dim-{concat_dims[0]} fracture read back on rank {rank} needs this host's "
+                    f"inter-host (axis {inter_host_axis}) positions to be a contiguous run aligned "
+                    f"to its own length; got {local_inter_positions}"
+                )
+                raise ValueError(msg)
 
         inter_remap = {pos: i for i, pos in enumerate(local_inter_positions)}
         intra_remap = {pos: i for i, pos in enumerate(local_intra_positions)}

@@ -38,7 +38,7 @@ from ....pipelines.minimax_h3 import packing as p
 from ....pipelines.minimax_h3 import packing_ref2va as rp
 from ....pipelines.minimax_h3 import references as R
 from ....utils.check import assert_quality
-from ....utils.test import ring_params_req_exact_devices
+from .common import mesh_params
 
 reference_before_encoder = pytest.importorskip(
     "diffusers.modular_pipelines.minimax_h3.before_encoder",
@@ -404,13 +404,7 @@ _L1_SMALL = int(os.environ.get("MINIMAX_H3_L1_SMALL", 16384))
 # The same ring fabric params the e2e gates use, so the encode is measured in the configuration it
 # will actually run in. A LINE config happens to work here -- the VAE encoders use no ring CCL -- but
 # "it passed under a config production does not use" is exactly how am. 124 and 125 got missed.
-MESH_4X8 = [
-    pytest.param(
-        (4, 8),
-        {**ring_params_req_exact_devices, "l1_small_size": _L1_SMALL},
-        id="4x8",
-    )
-]
+MESHES = mesh_params(l1_small_size=_L1_SMALL)
 
 REFERENCE_PCC = 0.99
 # 22 frames is `17 * 1 + 5`, the smallest count with more than one chunk's worth of
@@ -472,7 +466,7 @@ def _reference_case(case: str):
 
 
 @pytest.mark.timeout(7200)
-@pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize(("mesh_device", "device_params"), MESHES, indirect=["mesh_device", "device_params"])
 @pytest.mark.parametrize("case", ["image", "audio", "video"])
 def test_encode_references_matches_reference(mesh_device, case, reset_seeds):
     """One modality's reference encode, against the reference implementation, on real media.

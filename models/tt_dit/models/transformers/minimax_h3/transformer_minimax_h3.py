@@ -14,6 +14,7 @@ from ....layers.module import Module, ModuleList
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
+from ....utils.tracing import traced_function
 from .adaln_cache_minimax_h3 import MiniMaxH3AdalnCache
 from .token_refiner_minimax_h3 import MiniMaxH3TokenRefiner
 from .transformer_block_minimax_h3 import MiniMaxH3TransformerBlock
@@ -269,6 +270,10 @@ class MiniMaxH3Transformer3DModel(Module):
         self.freq_dim = freq_dim
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
+        # Read by `traced_step`, which cannot take it as an argument -- see that method. The caller
+        # sets it once per request, before the denoising loop.
+        self.traced_adaln_cache: MiniMaxH3AdalnCache | None = None
+        self._pad_cache: dict[tuple[int, ttnn.DataType, ttnn.Layout], ttnn.Tensor] = {}
         self.parallel_config = parallel_config
         self.tp_mesh_axis = parallel_config.tensor_parallel.mesh_axis
         self.tp_factor = parallel_config.tensor_parallel.factor
@@ -481,13 +486,7 @@ class MiniMaxH3Transformer3DModel(Module):
             streams = [ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT) for t in streams]
         hidden = ttnn.concat(streams, dim=2)
         if padded_len != seq_len:
-            pad = ttnn.zeros(
-                [1, 1, padded_len - seq_len, self.hidden_local],
-                dtype=hidden.dtype,
-                layout=pad_layout,
-                device=self.mesh_device,
-            )
-            hidden = ttnn.concat([hidden, pad], dim=2)
+            hidden = ttnn.concat([hidden, self._padding_rows(padded_len - seq_len, hidden.dtype, pad_layout)], dim=2)
         if not tile_aligned:
             # `padded_len` is a multiple of sp_factor * TILE, so the assembled sequence is tile
             # aligned even though none of its parts was.
@@ -544,3 +543,69 @@ class MiniMaxH3Transformer3DModel(Module):
         video_out = ttnn.slice(video_all, [0, 0, video_start, 0], [1, 1, seq_len, video_all.shape[-1]])
         audio_out = ttnn.slice(audio_all, [0, 0, audio_start, 0], [1, 1, video_start, audio_all.shape[-1]])
         return video_out, audio_out
+
+    def _padding_rows(self, rows: int, dtype: ttnn.DataType, layout: ttnn.Layout) -> ttnn.Tensor:
+        """The zero rows that pad the packed sequence up to `padded_len`, allocated once.
+
+        Cached rather than built per call: `ttnn.zeros` writes to device and a trace capture forbids
+        writes ("Writes are not supported during trace capture"). The shape is fixed for a request --
+        `padded_len - seq_len` depends only on the layout and the prompt -- and `concat` does not
+        modify its operands, so one buffer serves every step.
+        """
+        key = (rows, dtype, layout)
+        cached = self._pad_cache.get(key)
+        if cached is None:
+            cached = ttnn.zeros([1, 1, rows, self.hidden_local], dtype=dtype, layout=layout, device=self.mesh_device)
+            self._pad_cache[key] = cached
+        return cached
+
+    # `prep_run=False`, as in Wan: the caller guarantees a complete untraced generation has already
+    # run (`_denoise` gates tracing on `_generations_run > 0`). A capture can neither compile a program
+    # nor allocate a buffer, and a single prep forward is not sufficient -- it fills the program cache
+    # but `CCLManager` still allocates its persistent buffers lazily, which surfaces as "Writes are not
+    # supported during trace capture".
+    #
+    # `clone_prep_inputs=False` because `forward` does not write to its inputs.
+    @traced_function(device=lambda self: self.mesh_device, clone_prep_inputs=False, prep_run=False)
+    def traced_step(
+        self,
+        *,
+        video_1BVC: ttnn.Tensor,
+        audio_1BAC: ttnn.Tensor,
+        prompt_1BLP: ttnn.Tensor,
+        condition_blocks: list[tuple[ttnn.Tensor, str]] | None,
+        adaln_indices: ttnn.Tensor,
+        timestep_indices: ttnn.Tensor,
+        rope_cos: ttnn.Tensor,
+        rope_sin: ttnn.Tensor,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """One denoising forward, shaped so `Tracer` can capture it. Precomputed-AdaLN path only.
+
+        `Tracer` accepts only tensors and plain scalars, nested in tuples/lists/dicts, and validates
+        that every input keeps its shape across calls. `forward` violates both:
+
+        * `adaln_cache` is a `MiniMaxH3AdalnCache` object, so it is read off `self` here instead of
+          being passed. Set `self.traced_adaln_cache` before the loop.
+        * `timestep` is `[1, 1, num_timesteps, 1]`, and the *number* of distinct noise levels changes
+          from step to step (the conditioning floor collides with the video level early in the
+          schedule and separates later), so it cannot be a traced input. It is also unused on this
+          path -- `forward` computes `temb` only when `not self.precomputed_adaln` -- so it is dropped
+          rather than padded, under an assert so that turning the precompute path off fails loudly
+          instead of changing numerics.
+
+        Everything else is fixed-shape for a given request: the row counts are set by the packed
+        layout and the index tensors are built against `padded_len`.
+        """
+        assert self.precomputed_adaln, "traced_step drops `timestep`, which the non-precomputed AdaLN path needs"
+        return self.forward(
+            video_1BVC=video_1BVC,
+            audio_1BAC=audio_1BAC,
+            prompt_1BLP=prompt_1BLP,
+            condition_blocks=condition_blocks,
+            timestep=None,
+            adaln_indices=adaln_indices,
+            timestep_indices=timestep_indices,
+            rope_cos=rope_cos,
+            rope_sin=rope_sin,
+            adaln_cache=self.traced_adaln_cache,
+        )

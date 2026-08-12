@@ -19,6 +19,7 @@ import ttnn
 from ...layers.audio_ops import Conv2dViaConv3d
 from ...layers.module import Module, ModuleList
 from ...utils.conv3d import conv_pad_in_channels
+from ...utils.tensor import local_device_to_torch
 from ...utils.tracing import traced_function
 
 LATENT_DOWNSAMPLE_FACTOR = 4
@@ -480,7 +481,7 @@ class MelDecoder(Module):
 
     def _device_to_host(self, x: ttnn.Tensor) -> torch.Tensor:
         """Download + strip out_channels padding (Conv2dViaConv3d) + BHWC → BCHW + reshape."""
-        out_bhwc = ttnn.to_torch(ttnn.get_device_tensors(x)[0])
+        out_bhwc = local_device_to_torch(x)
         out_bhwc = out_bhwc[..., : self.out_ch]
         out_bchw = out_bhwc.permute(0, 3, 1, 2).contiguous()
         return self._adjust_output_shape(out_bchw, self._target_shape)

@@ -15,6 +15,7 @@ import ttnn
 
 from ...layers.audio_resample import UpSample1d
 from ...layers.module import Module, Parameter
+from ...utils.tensor import local_device_to_torch
 from .vocoder_ltx import Vocoder
 
 
@@ -82,7 +83,7 @@ class _STFTFn(Module):
         assert y_BTC.layout == ttnn.ROW_MAJOR_LAYOUT, f"expected ROW_MAJOR, got {y_BTC.layout}"
         assert y_BTC.shape[2] == 1, f"STFT input must have C=1, got {y_BTC.shape[2]}"
 
-        y_host = ttnn.to_torch(ttnn.get_device_tensors(y_BTC)[0])
+        y_host = local_device_to_torch(y_BTC)
         y_host = y_host.squeeze(-1).float().contiguous()
         y_padded = torch.nn.functional.pad(y_host, (self.left_pad, 0))
         y_windowed = y_padded.unfold(dimension=-1, size=self.win_length, step=self.hop_length)
@@ -266,7 +267,7 @@ class VocoderWithBWE(Module):
         )
         log_mel_dev = self.mel_stft(y_dev)
         ttnn.deallocate(y_dev)
-        log_mel_host = ttnn.to_torch(ttnn.get_device_tensors(log_mel_dev)[0])
+        log_mel_host = local_device_to_torch(log_mel_dev)
         ttnn.deallocate(log_mel_dev)
         T_frames = log_mel_host.shape[1]
         n_mels = log_mel_host.shape[2]
@@ -283,7 +284,7 @@ class VocoderWithBWE(Module):
         x_dev = ttnn.from_torch(x_BTC, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=self.dtype)
         y_dev = self.resampler(x_dev)
         ttnn.deallocate(x_dev)
-        y_host = ttnn.to_torch(ttnn.get_device_tensors(y_dev)[0])
+        y_host = local_device_to_torch(y_dev)
         ttnn.deallocate(y_dev)
         return y_host.transpose(1, 2).contiguous()
 
