@@ -4,19 +4,20 @@
 
 """The one GlobalCircularBuffer every prefetched decode weight streams through.
 
-A device gets a single GCB, shared by every :class:`~.layers.LinearDecode` on it: the
-attention block's four projections, its compressor's pair, and the MoE block's shared
-expert. This module owns the two things that has to be agreed on model-wide -- the weight
-layouts and the order the matmuls consume them -- so no single block can size a buffer
-against a layout another block does not use.
+A device gets a single GCB, shared by every :class:`~.layers.LinearDecode` and
+:class:`~.layers.BatchedLinearDecode` on it: the attention block's four projections, its
+grouped output projection, its compressor's pair, and the MoE block's shared expert. This
+module owns the two things that has to be agreed on model-wide -- the weight layouts and the
+order the matmuls consume them -- so no single block can size a buffer against a layout
+another block does not use.
 
 Why one buffer rather than one per shape:
 
 * A GCB is a permanent L1 allocation. At bf4 the default ring is 288 KB per receiver core;
-  a per-projection buffer would multiply that by nine, and a per-layer one by the layer
+  a per-projection buffer would multiply that by ten, and a per-layer one by the layer
   count.
 * Each GCB also takes a fixed ~176 B slice of the DRISC senders' 1 KB state zone, which
-  caps a device at about six however small they are. Nine would not fit.
+  caps a device at about six however small they are. Ten would not fit.
 * Most of all it is what lets the prefetcher run *ahead*: a 16-page ring holds far more
   than the two pages the matmul waiting on it needs, so the senders keep working through
   later weights while the workers are still on an earlier one, instead of resynchronising
@@ -27,12 +28,15 @@ they all divide into pages of 32, so each weight is delivered as some number of 
 sized pages and the ring's page size never changes between transfers -- which matters
 because a ring whose page size *does* change hangs (see
 :func:`~.layers.make_shared_decode_gcb`). Every weight also has to want the same number of
-B cores (64 here), since a GCB's receiver set is fixed at construction.
+B cores (64 here), since a GCB's receiver set is fixed at construction -- ``o_a_proj``'s
+batched ``b_blocks x n_blocks`` grid is sized to 64 for exactly this reason.
 
-The price is a single FIFO ordering contract spanning all nine weights, and it is not
+The price is a single FIFO ordering contract spanning all ten weights, and it is not
 checked anywhere: a matmul that runs out of turn pops another weight's page and produces
 wrong results rather than an error. ``DECODE_GCB_GROUP`` is that order.
 """
+
+from typing import Optional
 
 import ttnn
 
@@ -66,6 +70,12 @@ DECODE_LAYOUTS = {
         "k_blocks": 4,
         "n_blocks": 16,
     },
+    # The grouped output projection (o_a of DeepseekV4GroupedLinear): batched over o_groups,
+    # folded along both batch and N into a b_blocks x n_blocks grid (see
+    # BatchedLinearDecode). 8x8 is what falls out of the model's o_groups=8, o_lora_rank=1024
+    # on this device's grid -- the same 64 receivers as everything else, which is what lets
+    # it join this buffer at all.
+    "o_a_proj": {"K": 4096, "N": 1024, "batch": 8, "b_blocks": 8, "n_blocks": 8},
     # The MoE shared expert. gate and up are laid out so their [T, I] outputs land on the 32
     # cores holding 64 columns each -- exactly the K-sharding down_proj wants of its
     # activation -- so the SwiGLU intermediate feeds down_proj where it already sits.
@@ -75,14 +85,17 @@ DECODE_LAYOUTS = {
 }
 
 # The order one layer's matmuls consume the buffer, which is the order the requests must be
-# queued in. Attention runs first and ends on o_b_proj, with the compressor between kv_proj
-# and o_b_proj (it runs after ``_qkv`` and before ``_attend``); the MoE block follows.
+# queued in. Attention runs first: q_a/q_b/kv from ``_qkv``, then the compressor (it runs
+# after ``_qkv`` and before ``_attend``), then ``_attend``'s grouped output projection
+# (o_a_proj before o_b_proj -- see ``DeepSeekV4Attention._grouped_output``). The MoE block
+# follows.
 DECODE_GCB_GROUP = (
     "q_a_proj",
     "q_b_proj",
     "kv_proj",
     "compressed_sparse_attention",
     "heavily_compressed_attention",
+    "o_a_proj",
     "o_b_proj",
     "shared_gate_proj",
     "shared_up_proj",
@@ -126,8 +139,9 @@ def make_decode_prefetch_buffers(
     return {name: global_cb for name in DECODE_GCB_GROUP}
 
 
-def check_decode_layout(name: str, K: int, N: int) -> dict:
-    """``DECODE_LAYOUTS[name]``, having checked it against the ``K``/``N`` the config wants.
+def check_decode_layout(name: str, K: int, N: int, batch: Optional[int] = None) -> dict:
+    """``DECODE_LAYOUTS[name]``, having checked it against the ``K``/``N`` (and, for a batched
+    weight, ``batch``) the config wants.
 
     The layouts are constants (the shared GCB is sized from them before any weight is built),
     so a config they do not describe has to be caught here: left alone it would reach the
@@ -137,5 +151,9 @@ def check_decode_layout(name: str, K: int, N: int) -> dict:
     if (layout["K"], layout["N"]) != (K, N):
         raise ValueError(
             f"the {name} layout is fixed at K={layout['K']}, N={layout['N']} but this config wants K={K}, N={N}"
+        )
+    if layout.get("batch") != batch:
+        raise ValueError(
+            f"the {name} layout is fixed at batch={layout.get('batch')} but this config wants batch={batch}"
         )
     return layout

@@ -85,14 +85,37 @@ def _bank_receivers_strided(bank_idx: int, recv_per_bank: int, num_dram_banks: i
 
 
 def decode_weight_layout(
-    K: int, N: int, partial_width_sharded: bool = False, k_blocks: Optional[int] = None, n_blocks: Optional[int] = None
+    K: int,
+    N: int,
+    partial_width_sharded: bool = False,
+    k_blocks: Optional[int] = None,
+    n_blocks: Optional[int] = None,
+    batch: Optional[int] = None,
+    b_blocks: Optional[int] = None,
 ):
-    """``(num_b_cores, slab_shape, preferred_width)`` for a :class:`LinearDecode` weight.
+    """``(num_b_cores, slab_shape, preferred_width)`` for a :class:`LinearDecode` /
+    :class:`BatchedLinearDecode` weight.
 
     The single source of truth for how a weight is cut across B cores, shared by the layer
     and by :func:`make_shared_decode_gcb` so a shared GCB cannot be sized against a layout
     that differs from the one the layer actually builds.
+
+    ``batch`` selects :class:`BatchedLinearDecode`'s layout: the weight is folded along both
+    batch and N into a ``[Bc*K, Nc]`` block per core (``Bc = batch/b_blocks``,
+    ``Nc = N/n_blocks``, ``b_blocks`` defaulting to ``batch`` as the class does), spread over
+    ``b_blocks * n_blocks`` cores. It is checked first since ``partial_width_sharded`` has no
+    meaning for a batched weight.
     """
+    if batch is not None:
+        b_blocks = batch if b_blocks is None else b_blocks
+        if n_blocks is None:
+            raise ValueError("batch=... requires n_blocks")
+        if batch % b_blocks or N % n_blocks:
+            raise ValueError(
+                f"b_blocks ({b_blocks}) must divide batch ({batch}) and n_blocks ({n_blocks}) must divide N ({N})"
+            )
+        bc = batch // b_blocks
+        return b_blocks * n_blocks, (bc * K, N // n_blocks), n_blocks
     if partial_width_sharded:
         if k_blocks is None or n_blocks is None:
             raise ValueError("partial_width_sharded=True requires k_blocks and n_blocks")
@@ -680,6 +703,17 @@ class BatchedLinearDecode(DeepSeekV4Module):
     torch weight on a cache MISS, *before* the batch/N fold, to normalize it to
     ``[batch, K, N]`` (e.g. the o_a reshape from ``[batch*N, K]``); it is skipped on a
     cache hit (the folded, tilized weight is already on disk).
+
+    ``use_prefetcher=True`` switches the weight to the same DRISC-prefetched path
+    :class:`LinearDecode` uses: the identically-folded ``[1, 1, Bc*K, b_blocks*N]`` tensor is
+    stored DRAM ND-sharded (one ``[Bc*K, Nc]`` slab per B core) instead of L1 width-sharded,
+    and the tensor prefetcher pushes each slab into the matmul's in1 buffer through a
+    ``GlobalCircularBuffer``. Only the destination changes -- the fold, and so the B-core
+    geometry a shared GCB must be sized against (``decode_weight_layout(..., batch=batch,
+    ...)``), is the same either way. ``matmul_decode``'s rank-4 activation path always emits a
+    DRAM-interleaved output regardless of the weight's source, so this needs no output-side
+    sharding. See :class:`LinearDecode`'s docstring for the ``global_cb`` / session details,
+    which carry over unchanged.
     """
 
     def __init__(
@@ -696,6 +730,10 @@ class BatchedLinearDecode(DeepSeekV4Module):
         n_blocks: Optional[int] = None,
         num_inputA_cores: int = 32,
         preprocess: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
+        use_prefetcher: bool = False,
+        num_prefetch_slabs: int = 2,
+        global_cb=None,
+        global_cb_page_bytes: Optional[int] = None,
     ):
         self.device = device
         self.dtype = dtype
@@ -703,6 +741,10 @@ class BatchedLinearDecode(DeepSeekV4Module):
         self.K = K
         self.N = N
         self.num_inputA_cores = num_inputA_cores
+        self.use_prefetcher = use_prefetcher
+        self.global_cb = None
+        self.gcb_k_blocks = 1
+        self.prefetch_queued = False
 
         # One batch per core row (Bc = 1) by default; widen N across as many cores as the grid
         # allows while keeping each N-shard tile-aligned.
@@ -720,6 +762,29 @@ class BatchedLinearDecode(DeepSeekV4Module):
         self.bc = batch // self.b_blocks
         self.nc = N // self.n_blocks
 
+        def fold(w):
+            # [batch, K, N] -> [b_blocks, Bc, K, N] -> [Bc, K, b_blocks, N] -> [1, 1, Bc*K, b_blocks*N].
+            return (
+                w.reshape(self.b_blocks, self.bc, K, N)
+                .permute(1, 2, 0, 3)
+                .reshape(1, 1, self.bc * K, self.b_blocks * N)
+                .contiguous()
+            )
+
+        if use_prefetcher:
+            self._init_prefetched_weight(
+                weight,
+                cache_file_name,
+                dtype,
+                preprocess,
+                fold,
+                slab_shape=(self.bc * K, self.nc),
+                num_slabs=num_prefetch_slabs,
+                shared_cb=global_cb,
+                shared_cb_page_bytes=global_cb_page_bytes,
+            )
+            return
+
         b_core_range_set = ttnn.num_cores_to_corerangeset(
             self.b_blocks * self.n_blocks, device.compute_with_storage_grid_size(), row_wise=True
         )
@@ -735,14 +800,97 @@ class BatchedLinearDecode(DeepSeekV4Module):
         if w is not None:
             if preprocess is not None:
                 w = preprocess(w)
-            # w: [batch, K, N] -> [b_blocks, Bc, K, N] -> [Bc, K, b_blocks, N] -> [1, 1, Bc*K, b_blocks*N].
-            w = (
-                w.reshape(self.b_blocks, self.bc, K, N)
-                .permute(1, 2, 0, 3)
-                .reshape(1, 1, self.bc * K, self.b_blocks * N)
-                .contiguous()
-            )
+            w = fold(w)
         self.weight = _load_weight(w, device, cache_file_name=cache_file_name, dtype=dtype)
+
+    def _init_prefetched_weight(
+        self,
+        weight,
+        cache_file_name,
+        dtype,
+        preprocess,
+        fold,
+        slab_shape,
+        num_slabs,
+        shared_cb=None,
+        shared_cb_page_bytes=None,
+    ):
+        """Store the weight DRAM ND-sharded and point the layer at the GCB it prefetches through.
+
+        Mirrors :meth:`LinearDecode._init_prefetched_weight` -- see its docstring for the
+        slab-to-receiver pairing and the ``shared_cb`` / ``shared_cb_page_bytes`` contract, both
+        unchanged here. The only difference is the weight tensor itself: it is folded along
+        batch and N exactly as the L1 path folds it (``fold``), so the per-receiver slab the ND
+        shard cuts from the folded ``[1, 1, Bc*K, b_blocks*N]`` tensor is the same ``[Bc*K,
+        Nc]`` block the L1 path width-shards -- only the destination (DRAM ND-shard vs. L1
+        width-shard) differs.
+        """
+        num_b_cores = self.b_blocks * self.n_blocks
+        num_dram_banks = _dram_banks_for(num_b_cores, self.device)
+        if shared_cb is not None:
+            receivers = shared_cb.receiver_cores()
+            if receivers.num_cores() != num_b_cores:
+                raise ValueError(
+                    f"this weight needs {num_b_cores} B cores but the shared GCB has "
+                    f"{receivers.num_cores()} receivers"
+                )
+            page_bytes = shared_cb_page_bytes or _slab_bytes(dtype, slab_shape)
+            self.gcb_k_blocks = decode_gcb_k_blocks(slab_shape, dtype, page_bytes)
+            min_pages = 2 if self.gcb_k_blocks > 1 else 1
+            if shared_cb.size() < min_pages * page_bytes or shared_cb.size() % page_bytes != 0:
+                raise ValueError(
+                    f"the shared GCB holds {shared_cb.size()} B per receiver, which is not at least {min_pages} "
+                    f"whole {page_bytes} B page(s) -- it was almost certainly sized for a different page size"
+                )
+
+        dram_memory_config = ttnn.MemoryConfig(
+            ttnn.BufferType.DRAM,
+            ttnn.NdShardSpec(
+                ttnn.Shape(list(slab_shape)),
+                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))}),
+                ttnn.ShardOrientation.ROW_MAJOR,
+                ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+            ),
+        )
+
+        cache_file_name = _prefetch_cache_file(cache_file_name)
+        w = _materialize(weight, cache_file_name, dtype)
+        if w is not None:
+            if preprocess is not None:
+                w = preprocess(w)
+            w = fold(w)
+        self.weight = ttnn.as_tensor(
+            w,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=dram_memory_config,
+            cache_file_name=cache_file_name,
+        )
+        if shared_cb is not None:
+            self.global_cb = shared_cb
+        else:
+            ring_cols = _receiver_ring_cols(num_b_cores, self.device, preferred_width=self.n_blocks)
+            self.global_cb = make_matmul_decode_gcb(
+                self.device,
+                self.weight,
+                _bank_to_receivers(num_b_cores, self.device, ring_cols),
+                slab_shape=slab_shape,
+                num_pages=num_slabs,
+            )
+        self.receiver_cores = _receiver_cores_in_order(self.global_cb.receiver_cores())
+
+    def _queue_prefetch(self):
+        """Ask the DRISC senders to push this weight's slabs into the GCB. See
+        :meth:`LinearDecode._queue_prefetch`."""
+        ttnn.experimental.queue_tensor_prefetcher_request(
+            self.device, [(self.weight, self.gcb_k_blocks)], global_cb=self.global_cb, capture_into_trace=True
+        )
+        self.prefetch_queued = True
+
+    def fetch_weights(self):
+        if self.use_prefetcher:
+            self._queue_prefetch()
 
     def deallocate(self):
         pass
@@ -767,6 +915,21 @@ class BatchedLinearDecode(DeepSeekV4Module):
         m = x.shape[-2]
         if not x.is_sharded():
             x = ttnn.to_memory_config(x, self.get_input_memory_config(m))
+        if self.use_prefetcher:
+            # Exactly one queued request per matmul, as in LinearDecode.forward: a missing
+            # request hangs it and a doubled one desynchronises the GCB pointers.
+            if not self.prefetch_queued:
+                self._queue_prefetch()
+            self.prefetch_queued = False
+            try:
+                return ttnn.experimental.matmul_decode(
+                    x, self.weight, global_cb=self.global_cb, global_cb_k_blocks=self.gcb_k_blocks
+                )  # DRAM-interleaved [d0, d1, M, N]
+            except Exception:
+                # See LinearDecode.forward: the request is already with the DRISC senders, so a
+                # rejected call must force-stop rather than leave slabs nothing will ever drain.
+                ttnn.experimental.stop_tensor_prefetcher(self.device, force=True)
+                raise
         l1_weights = ttnn.to_memory_config(self.weight, self.weights_memory_config)
         y = ttnn.experimental.matmul_decode(x, l1_weights)  # DRAM-interleaved [d0, d1, M, N]
         l1_weights.deallocate()
