@@ -14,7 +14,7 @@ namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d {
 namespace {
 
 void validate_dram_row_major(const ttnn::Tensor& t, const char* what) {
-    TT_FATAL(t.storage_type() == tt::tt_metal::StorageType::DEVICE, "combine_fabric2d: {} must be on device", what);
+    TT_FATAL(t.storage_type() == ttnn::StorageType::DEVICE, "combine_fabric2d: {} must be on device", what);
     TT_FATAL(
         t.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM &&
             t.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
@@ -164,7 +164,7 @@ CombineFabric2dDeviceOperation::spec_return_value_t CombineFabric2dDeviceOperati
     // one page per (token, top-k slot), the embedding along the last dim.
     const uint32_t emb_dim = static_cast<uint32_t>(tensor_args.dispatched_buffer.logical_shape()[-1]);
     const ttnn::Shape output_shape({1, 1, args.seq_len_per_chip, args.num_experts_per_tok, emb_dim});
-    return ttnn::TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
