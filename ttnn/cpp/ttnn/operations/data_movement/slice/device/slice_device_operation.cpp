@@ -25,7 +25,8 @@ inline __attribute__((always_inline)) uint32_t get_upper_dims_compressed(const t
     return std::accumulate(shape.cbegin(), shape.cend() - 2, 1, std::multiplies<uint32_t>{});
 }
 
-uint32_t get_upper_start_offset(const ttnn::Shape& shape, Layout layout, const ttnn::Shape& slice_start) {
+inline __attribute__((always_inline)) uint32_t
+get_upper_start_offset(const ttnn::Shape& shape, Layout layout, const ttnn::Shape& slice_start) {
     // offset for every dim except last 2
     // 64-bit: shape.volume() (element count) overflows uint32 for tensors > 4 GB.
     uint64_t start_offset = 0;
@@ -48,7 +49,8 @@ uint32_t get_upper_start_offset(const ttnn::Shape& shape, Layout layout, const t
     return static_cast<uint32_t>(start_offset);  // page index, fits uint32
 }
 
-uint32_t get_upper_start_offset(const Tensor& tensor, const ttnn::Shape& slice_start) {
+inline __attribute__((always_inline)) uint32_t
+get_upper_start_offset(const Tensor& tensor, const ttnn::Shape& slice_start) {
     return get_upper_start_offset(tensor.padded_shape(), tensor.layout(), slice_start);
 }
 
