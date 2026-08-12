@@ -143,11 +143,11 @@ The yamls select by gtest filter from binaries that hold far more than they run.
 
 | | Count |
 |---|---|
-| gtest cases defined under `tests/tt_metal` | 3950 |
-| of those, Quasar-named | 359 |
-| selected by any quasar yaml | 40 |
+| gtest cases defined under `tests/tt_metal` | 3990 |
+| of those, Quasar-named | 375 |
+| selected by any quasar yaml | 37 |
 | selected by the gating sim yaml | 5 |
-| Quasar-named, selected by no yaml | 338 |
+| Quasar-named, selected by no yaml | 354 |
 
 ## Rows by config and runner
 
