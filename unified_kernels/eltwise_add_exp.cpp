@@ -62,8 +62,8 @@ void kernel_main() {
 
     for (uint32_t b = 0; b < num_blocks; ++b) {
         // Reader (DM thread 1) fills these; compute waits on them.
-        u::ComputeBlock a = u::noc_load<1>(in0_storage, in0, static_cast<int>(b));
-        u::ComputeBlock c = u::noc_load<1>(in1_storage, in1, static_cast<int>(b));
+        u::ComputeBlock a = u::noc_load<1>(in0_storage, in0, static_cast<int>(b)).wait();
+        u::ComputeBlock c = u::noc_load<1>(in1_storage, in1, static_cast<int>(b)).wait();
 
         // Compute evaluates the expression; the allocator picks DST slots.
         //   copy a -> dst0, copy c -> dst1, add(dst0,dst1) -> dst0, exp(dst0)
