@@ -116,10 +116,8 @@ inline void CompileProgram(distributed::MeshDevice& unit_mesh, Program& program)
     detail::CompileProgram(physical_device_from_unit_mesh(unit_mesh), program);
 }
 
-inline void LaunchProgram(distributed::MeshDevice& mesh_device, Program program, bool wait_until_cores_done = true) {
-    distributed::MeshWorkload workload;
-    workload.add_program(distributed::MeshCoordinateRange{mesh_device.shape()}, std::move(program));
-    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, wait_until_cores_done);
+inline void LaunchProgram(distributed::MeshDevice& unit_mesh, Program& program, bool wait_until_cores_done = true) {
+    detail::LaunchProgram(physical_device_from_unit_mesh(unit_mesh), program, wait_until_cores_done);
 }
 
 }  // namespace tt::tt_metal::slow_dispatch
