@@ -43,4 +43,5 @@ cycles. Required work: none. Hard-check gaps: none. The final review is recorded
 in `stage_review.md`; the remaining LM-head advisor label is controlled by the
 strict same-run geometry/layout sweep described above.
 
-The stage implementation checkpoint SHA is appended after the local commit.
+Stage implementation checkpoint: `c9cadb86530` (`Optimize Falcon3 full-model
+TP4 path`). No changes were pushed.
