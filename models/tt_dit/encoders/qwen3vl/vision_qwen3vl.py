@@ -28,6 +28,7 @@ import math
 from typing import TYPE_CHECKING, NamedTuple
 
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -1004,6 +1005,17 @@ class Qwen3VlVisionModel(Module):
         for several -- pass it whenever `grid_thw` has more than one row or a `t` above 1.
         """
         hidden_states = ttnn.add(self.patch_embed.forward(patches), pos_embeds)
+
+        # Instrumentation: report the parallel placement and the attention path the blocks will take,
+        # so a caller can confirm the sharded windowed/ring path is actually engaged (vs replicated).
+        _single_block = cu_seqlens is None or len(cu_seqlens) <= 2
+        _path = (
+            ("ring" if _single_block else "windowed_sp") if self._p.sp else ("full" if _single_block else "windowed")
+        )
+        logger.info(
+            f"vision tower: path={_path} tp={self._p.tp_factor} sp={self._p.sp_factor} "
+            f"local_rows={hidden_states.shape[-2]} blocks={(len(cu_seqlens) - 1) if cu_seqlens else 1}"
+        )
 
         deepstack_features: list[ttnn.Tensor] = []
         for layer_idx, block in enumerate(self.blocks):
