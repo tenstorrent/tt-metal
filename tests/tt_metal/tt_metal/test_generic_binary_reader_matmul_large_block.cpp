@@ -123,7 +123,7 @@ TEST_F(UnitMeshFixture, GenericBinaryReaderMatmulLargeBlock) {
         uint32_t dram_buffer_size_out =
             single_tile_size * M * N;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-        // page_size must match each buffer's size (same as previous InterleavedBufferConfig)
+        // The kernels treat each buffer as one page, so each page size must equal its buffer size.
         auto src0_dram_buffer = distributed::MeshBuffer::create(
             distributed::ReplicatedBufferConfig{.size = dram_buffer_size_act},
             {.page_size = dram_buffer_size_act, .buffer_type = BufferType::DRAM},
