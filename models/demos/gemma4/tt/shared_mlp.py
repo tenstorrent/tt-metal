@@ -24,6 +24,7 @@ from models.demos.gemma4.tt.dram_sharded import (
     TILE_SIZE,
     DramShardedLinear,
     can_dram_shard,
+    decode_in0_l1_enabled,
     interleaved_down_proj_prefill_config,
     interleaved_gate_up_prefill_config,
     matmul_rows,
@@ -218,7 +219,19 @@ class SharedMLP:
         """
         if program_config is None:
             if hidden_states.is_sharded():
-                return ttnn.sharded_to_interleaved(hidden_states, ttnn.DRAM_MEMORY_CONFIG), True
+                # Decode (M <= TILE): the tuned prefill config declines, so we land
+                # here with the pre-FF LN's width-sharded L1 island output — and
+                # used to un-shard it into *DRAM*, spilling the activation the
+                # island had just kept on-chip and making gate_up read in0 from
+                # DRAM. The S2I happens either way; only its destination changes,
+                # so retargeting it to L1 is bit-exact and costs no extra op.
+                # The staged activation is [1, 1, 32, hidden_local] regardless of
+                # batch (rows are tile-padded to 32), so the L1 cost does not grow
+                # with batch or context length.
+                dest = ttnn.DRAM_MEMORY_CONFIG
+                if matmul_rows(hidden_states) <= TILE_SIZE and decode_in0_l1_enabled():
+                    dest = ttnn.L1_MEMORY_CONFIG
+                return ttnn.sharded_to_interleaved(hidden_states, dest), True
             return hidden_states, False
         if hidden_states.is_sharded():
             return hidden_states, False

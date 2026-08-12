@@ -805,6 +805,26 @@ def lm_head_decode_config(mesh_device, m, k, n):
     return program_config, ttnn.L1_MEMORY_CONFIG, compute_kernel_config
 
 
+def decode_in0_l1_enabled() -> bool:
+    """Un-shard a decode matmul's in0 into L1 interleaved rather than DRAM.
+
+    Applies only where a ``sharded_to_interleaved`` runs ANYWAY: at decode the
+    tuned prefill matmul configs decline (M <= TILE), so the width-sharded
+    LayerNorm / concat-heads output must be un-sharded before the auto matmul.
+    Both call sites sent it to **DRAM**, which undid the L1 island one op after it
+    was built. Only the destination buffer changes, so this is bit-exact and
+    op-count neutral. ``GEMMA4_DECODE_IN0_L1=0`` opts out.
+
+    Note what this does NOT do: **in0 placement does not move a decode matmul's
+    DRAM% or FLOPs%.** At M=32 the activation is ~1.5% of the bytes the op moves,
+    DRAM% is a ratio over that weight stream and FLOPs% is compute utilisation, so
+    neither can respond to it. Only the weight dtype or the math moves those two.
+    What this buys is the activation's DRAM round-trip on either side of the
+    un-shard, not a faster matmul: chase matmul writebacks (``out``), not reads.
+    """
+    return os.environ.get("GEMMA4_DECODE_IN0_L1", "1").lower() not in ("0", "false", "no")
+
+
 def matmul_rows(x):
     """Row count a matmul sees for ``x``: the product of all but the last dim.
 
