@@ -22,12 +22,13 @@ using namespace tt::tt_metal;
 
 namespace {
 
-// ops/repeat/spec.py: READ_BATCH / WRITE_BATCH / _CB_DEPTH (shared verbatim by repeat_interleave's
-// TILE and RM builders). Prefixed: unity builds merge anonymous namespaces across TUs, so
-// unprefixed names collide with repeat_codegen_program_factory.cpp.
+// ops/repeat/spec.py: READ_BATCH / WRITE_BATCH (shared verbatim by repeat_interleave's TILE and RM
+// builders). Prefixed: unity builds merge anonymous namespaces across TUs, so unprefixed names
+// collide with repeat_codegen_program_factory.cpp.
 constexpr uint32_t kRiReadBatch = 4;
 constexpr uint32_t kRiWriteBatch = 4;
-constexpr uint32_t kRiCbDepth = std::max(2 * std::max(kRiReadBatch, kRiWriteBatch), 8u);
+// Double-buffers whichever side batches more, so one batch fills while the other drains.
+constexpr uint32_t kRiCbDepth = 2 * std::max(kRiReadBatch, kRiWriteBatch);
 
 // sequencers.h SEQ_REPEAT_INTERLEAVE (ops/repeat_interleave/builder.py's SEQ_REPEAT_INTERLEAVE).
 constexpr uint32_t kSeqRepeatInterleave = 9;
