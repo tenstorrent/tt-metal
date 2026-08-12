@@ -17,6 +17,27 @@
 
 The recorded runs used the listed base commit with uncommitted RT-DETR validation changes.
 
+### COCO Validation Data
+
+The detection tests require the COCO `val2017` images. Ground-truth annotations are not required because the tests compare TTNN detections against the PyTorch reference.
+
+From the RT-DETR directory:
+
+```bash
+mkdir -p datasets/coco
+cd datasets/coco
+wget http://images.cocodataset.org/zips/val2017.zip
+unzip val2017.zip
+rm val2017.zip
+cd ../..
+```
+
+The default image path is `./datasets/coco/val2017`. To use another location:
+
+```bash
+export COCO_VAL2017_IMAGES=<path-to-val2017>
+```
+
 ## PCC
 
 ```bash
