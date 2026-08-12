@@ -41,14 +41,23 @@ help. So the pins moved.
 | | advisories | disposition |
 |---|---|---|
 | removed with the package | 1 CRITICAL, 10 HIGH, 6 MEDIUM | `gradio`, `onnx` — never imported |
-| fixed by a version bump | 3 CRITICAL, 6 HIGH, 6 MEDIUM | `torch`, `lightning`, `diffusers`, `pyarrow`, `protobuf`, `modelscope`, `gdown`, `transformers` |
-| **outstanding** | **2 HIGH, 4 MEDIUM** | `transformers` ×3, `torch` ×3 |
+| fixed by a version bump | 3 CRITICAL, 8 HIGH, 7 MEDIUM | `torch`, `lightning`, `diffusers`, `pyarrow`, `protobuf`, `modelscope`, `gdown`, `transformers` |
+| **outstanding** | **3 MEDIUM** | `torch` ×3 |
 
-All four CRITICALs are closed. The six that remain are held open by hard compatibility breaks,
-not by preference — `transformers` 5.x drops top-level `Qwen2ForCausalLM`, and `torch` ≥ 2.8
-needs a `triton` newer than `openai-whisper` pins plus `torchcodec` for `torchaudio.load`.
-`requirements-cosyvoice.txt` records the reasoning per package; it is the file that has to be
+**35 of 38 closed, including every CRITICAL and every HIGH.** The three that remain are all
+`torch` MEDIUM local-DoS: CVE-2025-2998 has no fixed version at any release, and CVE-2025-3730
+and CVE-2025-2999 need torch ≥ 2.8, which breaks this venv twice over — torch ≥ 2.8's inductor
+imports `triton.backends`, which the `triton` that `openai-whisper` pins does not have, and
+`torchaudio` 2.9 removed its native decoder so `torchaudio.load` needs `torchcodec` + FFmpeg.
+`requirements-reference.txt` records the reasoning per package; it is the file that has to be
 right, so it is the file that carries it.
+
+One correction worth recording, because it changed the outcome. An earlier pass here reported
+`transformers` 5.x as incompatible — that `Qwen2ForCausalLM` was no longer importable from the
+top-level namespace. That was measured in an environment that also carried torch 2.9.1, and
+torch 2.9.1 breaks that same import by itself; `transformers` **4.53.0** fails identically
+there. Re-tested against torch 2.6.0, `transformers` 5.5.0 imports cleanly and reproduces the
+goldens bit-for-bit, which closed three advisories that had been written up as unfixable.
 
 What made the bumps safe to take is that they are checked, not asserted: regenerating the full
 golden set on the new pins reproduces all 29 files at **PCC ≥ 0.9999993**, e2e waveform
@@ -66,17 +75,21 @@ A reproduction that needs the reference venv should create it in a container —
 `torch` and `torchaudio` are reported as un-auditable by `pip-audit` (`2.6.0+cpu` is not a PyPI
 version string), so their advisories were tracked from the Cycode scan instead.
 
+The SAST finding (unsanitized input in an OS command, `gen_golden.py`) is closed: the call site
+was removed rather than sanitized — see Input handling below. Tracked separately from the
+dependency advisories above.
+
 ## Input handling
 
 No `subprocess`, no `shell=True`, no `os.system`, no `eval()`, no `exec()`, no `pickle.load` and
 no bare `yaml.load` anywhere in the tree.
 
-* `scripts/gen_golden.py` no longer shells out at all. It used to read the CosyVoice commit with
-  `subprocess.check_output(["git", "-C", path, "rev-parse", "HEAD"])`. The argument-list form does
-  rule out shell metacharacters, but not *argument* injection: `path` arrives from
-  `--cosyvoice-root`/`$COSYVOICE_ROOT`, and a value starting with `-` is parsed by `git` as an
-  option rather than a directory. `_git_head` now reads `.git/HEAD` (and `packed-refs`) directly,
-  so there is no child process and no argument vector to inject into.
+* **No `subprocess`, by rule.** `gen_golden.py` records the CosyVoice commit by reading
+  `.git/HEAD` (and `packed-refs`, when the ref has been packed) rather than by calling `git`.
+  The argv-list form is *not* sufficient grounds to reintroduce one: it rules out shell
+  metacharacters, but the path arrives from `--cosyvoice-root`/`$COSYVOICE_ROOT`, and `git`
+  parses a value beginning with `-` as an option rather than a directory. No child process
+  means no argument vector to inject into.
 * `module.eval()` in `export_weights.py` and `eval_wer_sim.py` is `torch.nn.Module.eval()`, the
   training-mode switch, not Python's `eval`.
 * Every script takes paths through `argparse` and joins them with `os.path.join`.
