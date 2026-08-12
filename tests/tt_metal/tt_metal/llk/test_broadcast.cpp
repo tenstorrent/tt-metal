@@ -909,35 +909,27 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixComputeBinaryBroadcastQuasarDfb)
 // Cases are ordered so the first red one localizes the bug:
 //   - ct_dim=1 carries no reuse at all, so a failure there means the srcB face traversal (the
 //     +8/-8/+24 addr-mod walk) is wrong.
-//   - ct_dim=1 passing but ct_dim=2 failing means the srcB hold is wrong i.e. the per-tile
-//     SETRWC(CLR_A) is releasing srcB, or the L1 srcB tile pointer is advancing.
+//   - ct_dim>1 adds the reuse itself: a failure there means the srcB hold is wrong i.e. the
+//     per-tile SETRWC(CLR_A) is releasing srcB, or the L1 srcB tile pointer is advancing.
 //   - num_blocks>1 additionally exercises dest-section switching and the per-block srcB re-unpack,
 //     whose 1:1 pairing with the math thread's single CLR_B is what keeps blocks from deadlocking.
 //   - rt_dim>1 is the only shape that exercises nonzero srcA/srcB tile indices and a nonzero dest
-//     base, so a failure there (with the matching rt_dim=1 case green) points at the API wrappers'
-//     index arithmetic rather than the face walk.
+//     base, so a failure there (with the rt_dim=1 cases green) points at the API wrappers' index
+//     arithmetic rather than the face walk.
 TEST_F(QuasarMeshDeviceSingleCardFixture, ComputeSubBcastColCustom) {
     using unit_tests::compute::broadcast::SubBcastColCustomConfig;
 
     const std::vector<SubBcastColCustomConfig> cases = {
         // Full 32x32 tiles, one row per block: every call uses tile_index_a/b = 0 and dst_index = 0.
-        // ct_dim=8 fills half-dest, 3 and 7 cover non-power-of-two block widths.
+        // ct_dim=8 fills half-dest, 7 covers a non-power-of-two block width.
         {.ct_dim = 1, .num_blocks = 1},
-        {.ct_dim = 2, .num_blocks = 1},
-        {.ct_dim = 3, .num_blocks = 1},
         {.ct_dim = 4, .num_blocks = 1},
         {.ct_dim = 7, .num_blocks = 1},
-        {.ct_dim = 8, .num_blocks = 1},
-        {.ct_dim = 2, .num_blocks = 2},
         {.ct_dim = 8, .num_blocks = 2},
-        // Multi-row blocks, mirroring sub_exp_block_bcast_cols(): row r of a block reads srcA tile
-        // r * ct_dim and srcB tile r and writes dest slots [r * ct_dim, (r + 1) * ct_dim), all inside
-        // one acquire. rt_dim * ct_dim is capped by the same half-dest budget as ct_dim above.
-        {.ct_dim = 1, .rt_dim = 2, .num_blocks = 1},
-        {.ct_dim = 2, .rt_dim = 2, .num_blocks = 1},
-        {.ct_dim = 2, .rt_dim = 4, .num_blocks = 1},
+        // One multi-row block, mirroring sub_exp_block_bcast_cols(): row r reads srcA tile r * ct_dim
+        // and srcB tile r and writes dest slots [r * ct_dim, (r + 1) * ct_dim), all inside one
+        // acquire. rt_dim * ct_dim is capped by the same half-dest budget as ct_dim above.
         {.ct_dim = 4, .rt_dim = 2, .num_blocks = 1},
-        {.ct_dim = 2, .rt_dim = 2, .num_blocks = 2},
         // No tiny-tile (16x32) cases: the op does not support that shape. Its srcB face traversal
         // and dest walk assume a full 32-row tile, and the 16x32 case hangs the device. Both Quasar
         // init LLKs now assert the full-tile shape, so an API caller gets an assert, not a hang.

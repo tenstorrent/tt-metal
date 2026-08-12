@@ -54,11 +54,9 @@ inline void llk_math_eltwise_binary_sub_bcast_cols_init_custom(
 template <bool is_fp32_dest_acc_en = false>
 inline void llk_math_eltwise_binary_sub_bcast_cols_custom(
     const std::uint32_t operandA, const std::uint32_t dst_index, const std::uint32_t ct_dim = 1) {
-    // Derive the Tile32x32 dest capacity: one section is half the dest register under SyncHalf
-    constexpr std::uint32_t max_dest_tiles =
-        (DST_SYNC_MODE == DstSync::SyncHalf ? ckernel::DEST_NUM_TILES_FP16_HALF : ckernel::DEST_NUM_TILES_FP16) >>
-        (DST_ACCUM_MODE ? 1 : 0);  // and a 32-bit dest halves the tile count again.
-    LLK_ASSERT(dst_index + ct_dim <= max_dest_tiles, "dst range out of bounds");
+    LLK_ASSERT(
+        (dst_index + ct_dim <= get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()),
+        "dst range out of bounds");
 
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operandA_id);
