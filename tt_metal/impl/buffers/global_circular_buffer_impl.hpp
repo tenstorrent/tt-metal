@@ -29,12 +29,11 @@ namespace global_circular_buffer_dram_sender {
 struct GlobalCircularBufferDramSenderInternals;
 }  // namespace global_circular_buffer_dram_sender
 
-// Impl-only backing state for tt-metalium/global_circular_buffer.hpp's GlobalCircularBuffer. The
-// public header holds this by std::shared_ptr (copies of a GlobalCircularBuffer share the same
-// backing buffers, matching the pre-pimpl MeshBuffer/DriscL1Allocation shared-copy semantics), and
-// forwards its public surface to the methods here. Callers inside tt_metal/ that need the
-// INTERNAL-only surface (all_cores(), buffer_address(), get_device()) go
-// through GlobalCircularBuffer::impl().
+// Impl-only backing state for tt-metalium/global_circular_buffer.hpp's GlobalCircularBuffer.
+// The public type holds a unique_ptr to this impl and copies by value (deep-copy of *impl_).
+// MeshBuffer / DriscL1Allocation members still share device resources across copies.
+// Callers inside tt_metal/ that need the INTERNAL-only surface (all_cores(),
+// buffer_address(), get_device()) go through GlobalCircularBuffer::impl().
 class GlobalCircularBufferImpl {
 public:
     GlobalCircularBufferImpl(

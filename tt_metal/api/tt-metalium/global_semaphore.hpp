@@ -66,7 +66,7 @@ public:
     const GlobalSemaphoreImpl& impl() const;
 
 private:
-    std::unique_ptr<GlobalSemaphoreImpl> pimpl_;
+    std::unique_ptr<GlobalSemaphoreImpl> impl_;
 };
 
 }  // namespace tt::tt_metal

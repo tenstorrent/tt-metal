@@ -41,29 +41,19 @@ struct GlobalCircularBufferDramSenderInternals;
 
 class GlobalCircularBuffer {
 public:
-    /**
-     * @brief Allocates a global circular buffer in L1 on the device.
-     *
-     * @param device Mesh device to create the global circular buffer on.
-     * @param sender_receiver_core_mapping The mapping of remote sender to remote receiver cores for the circular
-     * buffer.
-     * @param size Size of the global circular buffer per core in bytes.
-     * @param buffer_type Buffer type to store the global circular buffer. Can only be an L1 buffer type.
-     */
+    explicit GlobalCircularBuffer(GlobalCircularBufferImpl impl);
+
     GlobalCircularBuffer(
         distributed::MeshDevice& device,
         const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
         uint32_t size,
         BufferType buffer_type = BufferType::L1);
 
-    GlobalCircularBuffer(const GlobalCircularBuffer&) = default;
-    GlobalCircularBuffer& operator=(const GlobalCircularBuffer&) = default;
-
-    GlobalCircularBuffer(GlobalCircularBuffer&&) noexcept = default;
-    GlobalCircularBuffer& operator=(GlobalCircularBuffer&&) noexcept = default;
-
-    // Internal constructor (internal use only)
-    explicit GlobalCircularBuffer(GlobalCircularBufferImpl impl);
+    GlobalCircularBuffer(const GlobalCircularBuffer& other);
+    GlobalCircularBuffer& operator=(const GlobalCircularBuffer& other);
+    GlobalCircularBuffer(GlobalCircularBuffer&& other) noexcept;
+    GlobalCircularBuffer& operator=(GlobalCircularBuffer&& other) noexcept;
+    ~GlobalCircularBuffer();
 
     const Buffer& cb_buffer() const;
 
@@ -78,13 +68,11 @@ public:
         std::forward_as_tuple("sender_receiver_core_mapping", "size", "buffer_type");
     std::tuple<std::vector<std::pair<CoreCoord, CoreRangeSet>>, uint32_t, BufferType> attribute_values() const;
 
-    // Internal-only accessors (all_cores(), buffer_address(), get_device()) live on the Impl; see
-    // tt_metal/impl/buffers/global_circular_buffer_impl.hpp.
-    GlobalCircularBufferImpl& impl() { return *impl_; }
-    const GlobalCircularBufferImpl& impl() const { return *impl_; }
+    GlobalCircularBufferImpl& impl();
+    const GlobalCircularBufferImpl& impl() const;
 
 private:
-    std::shared_ptr<GlobalCircularBufferImpl> impl_;
+    std::unique_ptr<GlobalCircularBufferImpl> impl_;
 
     friend struct global_circular_buffer_dram_sender::GlobalCircularBufferDramSenderInternals;
 };
