@@ -23,6 +23,22 @@ from .llk_params import BlocksCalculationAlgorithm, DestAccumulation, DestSync
 RUNTIME_AXES_MARK = "runtime_axes"
 
 
+def compile_item_key(item):
+    """Return a deterministic compile identity for a parametrized pytest item.
+
+    ``None`` means the item has no ``runtime()`` metadata and therefore does not
+    participate in producer collapse or consumer grouping.
+    """
+    marker = item.get_closest_marker(RUNTIME_AXES_MARK)
+    callspec = getattr(item, "callspec", None)
+    if marker is None or callspec is None:
+        return None
+
+    compile_key_fn = marker.kwargs["compile_key_fn"]
+    test_function = item.nodeid.split("[", 1)[0]
+    return test_function, repr(compile_key_fn(callspec.params))
+
+
 class _RuntimeMarker:
     """Wrapper that tags a parameter value as runtime only."""
 

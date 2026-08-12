@@ -3,7 +3,7 @@
 
 import pytest
 from helpers.llk_params import PERF_LOOP_FACTOR_QUASAR, PERF_RUN_TYPES_QUASAR
-from helpers.param_config import parametrize, runtime
+from helpers.param_config import parametrize
 from quasar.test_pack_untilize_quasar import (
     PACK_UNTILIZE_FORMATS,
     pack_untilize_dest_acc_modes,
@@ -23,11 +23,9 @@ from quasar.test_pack_untilize_quasar import (
     formats=lambda: pack_untilize_formats(PACK_UNTILIZE_FORMATS),
     dest_acc=pack_untilize_dest_acc_modes,
     dest_sync_mode=lambda: pack_untilize_dest_sync_modes(is_perf=True),
-    tile_dimensions=runtime(pack_untilize_tile_dimensions),
-    input_dimensions=runtime(
-        lambda dest_acc, dest_sync_mode, tile_dimensions: pack_untilize_input_dimensions(
-            dest_acc, dest_sync_mode, tile_dimensions, is_perf=True
-        )
+    tile_dimensions=pack_untilize_tile_dimensions,
+    input_dimensions=lambda dest_acc, dest_sync_mode, tile_dimensions: pack_untilize_input_dimensions(
+        dest_acc, dest_sync_mode, tile_dimensions, is_perf=True
     ),
     run_types=PERF_RUN_TYPES_QUASAR,
     loop_factor=[PERF_LOOP_FACTOR_QUASAR],

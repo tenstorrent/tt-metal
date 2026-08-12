@@ -10,7 +10,7 @@ from helpers.llk_params import (
     PERF_LOOP_FACTOR_QUASAR,
     PERF_RUN_TYPES_QUASAR,
 )
-from helpers.param_config import parametrize
+from helpers.param_config import parametrize, runtime
 from quasar.test_eltwise_binary_quasar import (
     ELTWISE_FORMATS,
     eltwise_binary_dest_sync_dest_acc,
@@ -35,8 +35,10 @@ from quasar.test_eltwise_binary_quasar import (
     dest_sync_dest_acc=lambda formats: eltwise_binary_dest_sync_dest_acc(
         formats, is_perf=True
     ),
-    input_dimensions=lambda dest_sync_dest_acc: eltwise_binary_input_dimensions(
-        dest_sync_dest_acc, is_perf=True
+    input_dimensions=runtime(
+        lambda dest_sync_dest_acc: eltwise_binary_input_dimensions(
+            dest_sync_dest_acc, is_perf=True
+        )
     ),
     acc_to_dest=valid_acc_to_dest,
     num_faces=[4],

@@ -17,7 +17,6 @@ from helpers.param_config import (
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
-    runtime,
 )
 from helpers.perf import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
@@ -119,11 +118,9 @@ PACK_UNTILIZE_FORMATS = input_output_formats(
     formats=lambda: pack_untilize_formats(PACK_UNTILIZE_FORMATS),
     dest_acc=pack_untilize_dest_acc_modes,
     dest_sync_mode=lambda: pack_untilize_dest_sync_modes(is_perf=False),
-    tile_dimensions=runtime(pack_untilize_tile_dimensions),
-    input_dimensions=runtime(
-        lambda dest_acc, dest_sync_mode, tile_dimensions: pack_untilize_input_dimensions(
-            dest_acc, dest_sync_mode, tile_dimensions, is_perf=False
-        )
+    tile_dimensions=pack_untilize_tile_dimensions,
+    input_dimensions=lambda dest_acc, dest_sync_mode, tile_dimensions: pack_untilize_input_dimensions(
+        dest_acc, dest_sync_mode, tile_dimensions, is_perf=False
     ),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],

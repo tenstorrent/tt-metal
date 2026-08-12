@@ -10,7 +10,7 @@ from helpers.llk_params import (
     ReduceDimension,
     ReducePool,
 )
-from helpers.param_config import parametrize
+from helpers.param_config import parametrize, runtime
 from quasar.test_reduce_quasar import (
     REDUCE_FORMATS,
     reduce_dest_acc_modes,
@@ -31,10 +31,12 @@ from quasar.test_reduce_quasar import (
 @pytest.mark.nightly
 @parametrize(
     formats=REDUCE_FORMATS,
-    tile_dimensions=reduce_perf_tile_dimensions,
+    tile_dimensions=runtime(reduce_perf_tile_dimensions),
     dest_acc=lambda: reduce_dest_acc_modes(is_perf=True),
-    input_dimensions=lambda dest_acc, tile_dimensions: reduce_perf_input_dimensions(
-        dest_acc, tile_dimensions
+    input_dimensions=runtime(
+        lambda dest_acc, tile_dimensions: reduce_perf_input_dimensions(
+            dest_acc, tile_dimensions
+        )
     ),
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
     pool_type_and_math_fidelity=lambda: reduce_pool_type_and_math_fidelity_combinations(
@@ -95,7 +97,7 @@ def test_perf_reduce_quasar(
         ),
     ],
     dest_acc=lambda: reduce_dest_acc_modes(is_perf=True),
-    input_dimensions=lambda dest_acc: reduce_perf_input_dimensions(dest_acc),
+    input_dimensions=runtime(lambda dest_acc: reduce_perf_input_dimensions(dest_acc)),
     reduce_dim=[ReduceDimension.Column],
     pool_type=[ReducePool.Sum, ReducePool.Average],
     math_fidelity=[MathFidelity.LoFi],

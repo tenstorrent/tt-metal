@@ -23,7 +23,6 @@ from helpers.param_config import (
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
-    runtime,
 )
 from helpers.perf import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
@@ -135,15 +134,11 @@ UNPACK_TILIZE_FORMATS = input_output_formats(
     dest_acc=unpack_tilize_dest_acc_modes,
     dest_sync_mode=lambda: unpack_tilize_dest_sync_modes(is_perf=False),
     unpacker_sel=unpack_tilize_unpacker_engines,
-    tile_dimensions=runtime(
-        lambda formats, dest_acc: unpack_tilize_tile_dimensions(
-            formats, dest_acc, is_perf=False
-        )
+    tile_dimensions=lambda formats, dest_acc: unpack_tilize_tile_dimensions(
+        formats, dest_acc, is_perf=False
     ),
-    input_dimensions=runtime(
-        lambda dest_acc, dest_sync_mode, tile_dimensions: unpack_tilize_input_dimensions(
-            dest_acc, dest_sync_mode, tile_dimensions, is_perf=False
-        )
+    input_dimensions=lambda dest_acc, dest_sync_mode, tile_dimensions: unpack_tilize_input_dimensions(
+        dest_acc, dest_sync_mode, tile_dimensions, is_perf=False
     ),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],

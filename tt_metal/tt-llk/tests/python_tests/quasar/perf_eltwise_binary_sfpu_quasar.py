@@ -84,12 +84,12 @@ def test_perf_eltwise_binary_sfpu_int_quasar(
 
 @pytest.mark.perf
 @pytest.mark.quasar
+@pytest.mark.parametrize("tile_indices", [DEFAULT_SFPU_BINARY_TILE_INDICES])
 @pytest.mark.parametrize(
     "binary_op, mathop", _FLOAT_OPS, ids=[op for op, _ in _FLOAT_OPS]
 )
 @pytest.mark.parametrize("formats_dest_acc", _get_valid_float_formats_dest_acc())
 @pytest.mark.parametrize("implied_math_format", [ImpliedMathFormat.Yes])
-@pytest.mark.parametrize("tile_indices", [DEFAULT_SFPU_BINARY_TILE_INDICES])
 @pytest.mark.parametrize("run_types", PERF_RUN_TYPES_QUASAR)
 @pytest.mark.parametrize("loop_factor", [PERF_LOOP_FACTOR_QUASAR])
 def test_perf_eltwise_binary_sfpu_float_quasar(
@@ -123,9 +123,9 @@ def test_perf_eltwise_binary_sfpu_float_quasar(
         formats, (ImpliedMathFormat.Yes,)
     ),
     is_max_op=[True, False],
-    input_dimensions=[[32, 32]],
+    input_dimensions=runtime([[32, 32]]),
+    tile_indices=runtime([DEFAULT_SFPU_BINARY_TILE_INDICES]),
 )
-@pytest.mark.parametrize("tile_indices", [DEFAULT_SFPU_BINARY_TILE_INDICES])
 @pytest.mark.parametrize("run_types", PERF_RUN_TYPES_QUASAR)
 @pytest.mark.parametrize("loop_factor", [PERF_LOOP_FACTOR_QUASAR])
 def test_perf_eltwise_binary_sfpu_max_min_float_quasar(
@@ -161,9 +161,9 @@ def test_perf_eltwise_binary_sfpu_max_min_float_quasar(
         formats, (ImpliedMathFormat.No,)
     ),
     is_max_op=[True, False],
-    input_dimensions=[[32, 32]],
+    input_dimensions=runtime([[32, 32]]),
+    tile_indices=runtime([DEFAULT_SFPU_BINARY_TILE_INDICES]),
 )
-@pytest.mark.parametrize("tile_indices", [DEFAULT_SFPU_BINARY_TILE_INDICES])
 @pytest.mark.parametrize("run_types", PERF_RUN_TYPES_QUASAR)
 @pytest.mark.parametrize("loop_factor", [PERF_LOOP_FACTOR_QUASAR])
 def test_perf_eltwise_binary_sfpu_max_min_int32_quasar(

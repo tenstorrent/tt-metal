@@ -3,7 +3,7 @@
 
 import pytest
 from helpers.llk_params import PERF_LOOP_FACTOR_QUASAR, PERF_RUN_TYPES_QUASAR, Transpose
-from helpers.param_config import parametrize
+from helpers.param_config import parametrize, runtime
 from quasar.test_matmul_quasar import (
     MATMUL_FORMAT,
     matmul_dest_acc_modes,
@@ -24,10 +24,12 @@ from quasar.test_matmul_quasar import test_matmul as run_matmul
     math_fidelity=matmul_math_fidelities,
     dest_sync_mode=lambda: matmul_dest_sync_modes(is_perf=True),
     dest_acc=matmul_dest_acc_modes,
-    dimensions=lambda dest_acc, dest_sync_mode: matmul_dimensions(
-        dest_acc,
-        dest_sync_mode,
-        exact_dest_fill=True,
+    dimensions=runtime(
+        lambda dest_acc, dest_sync_mode: matmul_dimensions(
+            dest_acc,
+            dest_sync_mode,
+            exact_dest_fill=True,
+        )
     ),
     implied_math_format=lambda format: matmul_implied_math_formats(
         format, is_perf=True

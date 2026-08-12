@@ -495,18 +495,16 @@ def _collapse_runtime_only_variants(config, items):
     the compile time subset of each item's params.  Items that share the same compile
     key produce identical ELFs, so only the first is kept for the compile-producer pass.
     """
-    from helpers.param_config import RUNTIME_AXES_MARK
+    from helpers.param_config import compile_item_key
 
     seen = set()
     keep = []
     deselected = []
     for item in items:
-        marker = item.get_closest_marker(RUNTIME_AXES_MARK)
-        if marker is None or not getattr(item, "callspec", None):
+        key = compile_item_key(item)
+        if key is None:
             keep.append(item)
             continue
-        compile_key_fn = marker.kwargs["compile_key_fn"]
-        key = (item.nodeid.split("[")[0], repr(compile_key_fn(item.callspec.params)))
         if key not in seen:
             seen.add(key)
             keep.append(item)
@@ -516,6 +514,37 @@ def _collapse_runtime_only_variants(config, items):
     if deselected:
         config.hook.pytest_deselected(items=deselected)
         items[:] = keep
+
+
+def _group_runtime_variants_by_compile_key(items):
+    """Stably group runtime variants without moving their test functions.
+
+    Compile groups retain first-seen order, and variants within a group retain
+    collection order. Items without ``runtime()`` metadata keep their positions.
+    """
+    from helpers.param_config import compile_item_key
+
+    positions_by_function = {}
+    groups_by_function = {}
+    for position, item in enumerate(items):
+        key = compile_item_key(item)
+        if key is None:
+            continue
+
+        test_function = key[0]
+        positions_by_function.setdefault(test_function, []).append(position)
+        groups_by_function.setdefault(test_function, {}).setdefault(key, []).append(
+            item
+        )
+
+    for test_function, positions in positions_by_function.items():
+        grouped_items = [
+            item
+            for group in groups_by_function[test_function].values()
+            for item in group
+        ]
+        for position, item in zip(positions, grouped_items):
+            items[position] = item
 
 
 def _item_op_names(item) -> set:
@@ -584,6 +613,8 @@ def pytest_collection_modifyitems(config, items):
     test_order_file = config.getoption("--test-order-file")
 
     if not test_order_file:
+        if TestConfig.BUILD_MODE == BuildMode.CONSUME:
+            _group_runtime_variants_by_compile_key(items)
         return
 
     temp_runner_name = config.getoption("--rewind-runner")

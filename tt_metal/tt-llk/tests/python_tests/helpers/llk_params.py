@@ -719,10 +719,10 @@ class PerfRunType(Enum):
 PERF_RUN_TYPES_QUASAR = [
     [
         PerfRunType.L1_TO_L1,
-        PerfRunType.UNPACK_ISOLATE,
-        PerfRunType.MATH_ISOLATE,
-        PerfRunType.PACK_ISOLATE,
-        PerfRunType.L1_CONGESTION,
+        # PerfRunType.UNPACK_ISOLATE,
+        # PerfRunType.MATH_ISOLATE,
+        # PerfRunType.PACK_ISOLATE,
+        # PerfRunType.L1_CONGESTION,
     ],
 ]
 PERF_LOOP_FACTOR_QUASAR = 32

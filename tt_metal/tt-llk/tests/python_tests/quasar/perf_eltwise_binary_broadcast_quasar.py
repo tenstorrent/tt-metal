@@ -12,7 +12,7 @@ from helpers.llk_params import (
     PERF_RUN_TYPES_QUASAR,
     BroadcastType,
 )
-from helpers.param_config import parametrize
+from helpers.param_config import parametrize, runtime
 from quasar.test_eltwise_binary_broadcast_quasar import (
     BINARY_BROADCAST_FORMATS,
     binary_broadcast_dest_sync_modes,
@@ -40,8 +40,10 @@ from quasar.test_eltwise_binary_broadcast_quasar import (
         formats, is_perf=True
     ),
     dest_sync_mode=lambda: binary_broadcast_dest_sync_modes(is_perf=True),
-    input_dimensions=lambda dest_acc, dest_sync_mode: binary_broadcast_input_dimensions(
-        dest_acc, dest_sync_mode, is_perf=True
+    input_dimensions=runtime(
+        lambda dest_acc, dest_sync_mode: binary_broadcast_input_dimensions(
+            dest_acc, dest_sync_mode, is_perf=True
+        )
     ),
     run_types=PERF_RUN_TYPES_QUASAR,
     loop_factor=[PERF_LOOP_FACTOR_QUASAR],
