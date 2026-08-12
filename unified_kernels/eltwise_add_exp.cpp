@@ -56,17 +56,20 @@ void kernel_main() {
     u::Storage in1_storage(kCbIn1, tiles_per_block);
     u::Storage out_storage(kCbOut, tiles_per_block);
 
+    const auto in0 = u::make_accessor(in0_args, in0_addr);
+    const auto in1 = u::make_accessor(in1_args, in1_addr);
+    const auto out = u::make_accessor(out_args, out_addr);
+
     for (uint32_t b = 0; b < num_blocks; ++b) {
-        // Reader (DM thread 1) fills these; compute waits on them. The accessor
-        // is built inside noc_load, which is why the args are passed instead.
-        u::ComputeBlock a = u::noc_load<1>(in0_storage, in0_args, in0_addr, static_cast<int>(b));
-        u::ComputeBlock c = u::noc_load<1>(in1_storage, in1_args, in1_addr, static_cast<int>(b));
+        // Reader (DM thread 1) fills these; compute waits on them.
+        u::ComputeBlock a = u::noc_load<1>(in0_storage, in0, static_cast<int>(b));
+        u::ComputeBlock c = u::noc_load<1>(in1_storage, in1, static_cast<int>(b));
 
         // Compute evaluates the expression; the allocator picks DST slots.
         //   copy a -> dst0, copy c -> dst1, add(dst0,dst1) -> dst0, exp(dst0)
         u::Block result = out_storage.store(u::exp_(a + c));
 
         // Writer (DM thread 0) drains it.
-        u::noc_store<0>(std::move(result), out_args, out_addr, static_cast<int>(b));
+        u::noc_store<0>(std::move(result), out, static_cast<int>(b));
     }
 }
