@@ -72,10 +72,12 @@ requirements have passing test evidence, via
 
 **How "executed successfully" is decided.** Two paths:
 
-1. **Authoritative.** The sim CI embeds its full result set — passes included —
-   in the check's `output.text` as a JSON block (`rtl-sim-results/v1`). When
-   that block is present it is used verbatim and nothing is inferred. Landing
-   via tt-umd-simulators!125.
+1. **Authoritative** — the normal path since 2026-08-12. The sim CI records
+   every outcome in `test_results.tsv` and embeds the full result set — passes
+   included — in the check's `output.text` as a JSON block
+   (`rtl-sim-results/v1`). When that block is present it is used verbatim and
+   nothing is inferred. Landed in tt-umd-simulators!125, verified on real VCS
+   hardware in pipeline 1032806.
 2. **Derived**, for output produced before that block existed. The old manifest
    (`failed_tests.tsv`) listed failures only, so passes were computed as
    *(tests the gate is expected to run)* − *(tests reported failed)*. That is
@@ -94,9 +96,9 @@ saying so is the point.
 
 1. **The growth is on a Slack path, not the Jira path.** The expanded lists run in
    the GitLab `metal_unit_test_emu_quasar` job, which reports to `#tt-qsr-emu-ci`
-   and does not write the `failed_tests.tsv` manifest that feeds the "RTL Sim CI
+   and does not write the `test_results.tsv` manifest that feeds the "RTL Sim CI
    test" check. Only the 5-row `quasar_sim_regresion_tests.yaml` (config 1x3)
-   reaches Jira. Closing this needs a change in `tensix/tt-umd-simulators`:
+   reaches Jira. Closing this needs a further change in `tensix/tt-umd-simulators`:
    either have the emu job emit the manifest, or teach the reporter to read the
    `gtest-summary/summary.json` it already produces. Until then the AIIPSW-4 and
    AIIPSW-13 entries in `ai_ip_tests.json` are staged, not live.

@@ -18,7 +18,7 @@ Regenerate with `python3 tests/scripts/quasar/gen_test_coverage_doc.py`.
 
 ## `quasar_sim_regresion_tests.yaml`
 
-The only list wired to the release gate. The job runs `select_quasar_tests.py <yaml> 1x3` and writes `failed_tests.tsv`, which `report_rtl_sim_failures.py` turns into the "RTL Sim CI test" GitHub check output that this repo's `file_rtl_sim_jira.py` parses. Manifest rows are labelled `1x3` unconditionally.
+The only list wired to the release gate. The job runs `select_quasar_tests.py <yaml> 1x3` and writes `test_results.tsv` (every outcome, passed and failed), which `report_rtl_sim_failures.py` turns into the "RTL Sim CI test" GitHub check output that this repo's `file_rtl_sim_jira.py` parses. Manifest rows are labelled `1x3` unconditionally.
 
 Runs: metal_unit_test_vcs_qsr (VCS) — 1x3 only (hardcoded).
 
@@ -32,7 +32,7 @@ Runs: metal_unit_test_vcs_qsr (VCS) — 1x3 only (hardcoded).
 
 ## `quasar_regression_tests.yaml`
 
-Nightly/triggered emulator run. **Not merged on GitLab main yet** -- it lives on branch `kstevens/emu-quasar-1x3-testing`. Results go to `gtest-summary/summary.json` and Slack `#tt-qsr-emu-ci`; this job does not write `failed_tests.tsv`, so none of these failures reach Jira today.
+Nightly/triggered emulator run. **Not merged on GitLab main yet** -- it lives on branch `kstevens/emu-quasar-1x3-testing`. Results go to `gtest-summary/summary.json` and Slack `#tt-qsr-emu-ci`; this job does not write the `test_results.tsv` manifest, so none of these reach Jira today.
 
 Runs: metal_unit_test_emu_quasar (Zebu/Aether emulator) — all configs present in the yaml.
 

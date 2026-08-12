@@ -10,7 +10,7 @@ How "executed successfully" is determined
 -----------------------------------------
 Preferred: the sim CI embeds the full result set -- passes included -- in the
 check's output.text as a JSON block (schema rtl-sim-results/v1, see
-tt-umd-simulators!125). When that block is present it is authoritative and no
+tt-umd-simulators!125, merged 2026-08-12). When present it is authoritative and no
 inference happens.
 
 Fallback, for check output produced before that block existed: the sim CI

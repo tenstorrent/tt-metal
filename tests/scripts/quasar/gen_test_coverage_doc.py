@@ -35,7 +35,8 @@ YAML_SOURCES = [
         "feeds_release_jira": True,
         "note": (
             "The only list wired to the release gate. The job runs "
-            "`select_quasar_tests.py <yaml> 1x3` and writes `failed_tests.tsv`, "
+            "`select_quasar_tests.py <yaml> 1x3` and writes `test_results.tsv` "
+            "(every outcome, passed and failed), "
             "which `report_rtl_sim_failures.py` turns into the \"RTL Sim CI "
             "test\" GitHub check output that this repo's `file_rtl_sim_jira.py` "
             "parses. Manifest rows are labelled `1x3` unconditionally."
@@ -50,7 +51,7 @@ YAML_SOURCES = [
             "Nightly/triggered emulator run. **Not merged on GitLab main yet** -- "
             "it lives on branch `kstevens/emu-quasar-1x3-testing`. Results go to "
             "`gtest-summary/summary.json` and Slack `#tt-qsr-emu-ci`; this job "
-            "does not write `failed_tests.tsv`, so none of these failures reach "
+            "does not write the `test_results.tsv` manifest, so none of these reach "
             "Jira today."
         ),
     },
