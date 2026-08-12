@@ -1,7 +1,15 @@
-# Item 2 result: sharding plateaus at ~800 ms, and the mesh itself costs 343 ms
+# Item 2 result: trace is the lever, 280 ms is reachable, and T-sharding returns the wrong audio
 
 Measured 2026-08-12 on `bh-glx-110-a09u02`, 4x8 Galaxy (32 chips), T=207, fusion off unless stated.
-Scripts: `factor_scan.py`, `halo_cost.py`, `trace_on_mesh.py`, `fusion_on_mesh.py`.
+Scripts: `factor_scan.py`, `halo_cost.py`, `trace_on_mesh.py`, `fusion_on_mesh.py`,
+`divergence_probe.py`.
+
+**Three things, in order of importance.** (1) Trace is worth **3.14x** on a sharded mesh against 1.04x
+on one chip, which makes **280 ms** the measured floor at factor 8 and 191-281 ms the projection at 32
+-- the target is reachable. (2) **T-sharding is numerically wrong at every factor**, so no sharded
+timing here is a result yet; that, not performance, is the remaining work. (3) Chip count on its own is
+worth almost nothing untraced -- 32 chips project to 822 ms -- so goal.md's "only 10x-shaped lever"
+framing is wrong about the mechanism as well as the size.
 
 ## The numbers
 
@@ -69,12 +77,23 @@ and 3.14x sharded. **Every untraced multi-chip number in this file understates i
 ~3x**, and goal.md's dead-ends list must stop reading "trace (1.00x)" without the single-device
 qualifier.
 
-### The caveat that keeps 280 ms from being a result
+### The caveat that keeps every sharded number from being a result
 
 `PSNR inf` above is traced-vs-plain at the *same* factor -- it proves trace is faithful and nothing
-more. factor 8 is the `KNOWN_BROKEN` config, **-4.0 dB against the single-device path**, so 280 ms is
-currently a fast wrong answer. The quotable number is a traced factor 4, and 280 ms only becomes real
-once factor 8's divergence is fixed.
+more. **T-sharding is numerically broken at every factor, not just the one marked `KNOWN_BROKEN`.**
+With fusion off so the `t_factor=1` baseline actually runs:
+
+    t_factor= 1 axis=1: 1.4556 s   1.00x  PSNR    inf dB
+    t_factor= 4 axis=0: 0.9457 s   1.54x  PSNR  -10.1 dB     <- also broken
+    t_factor= 8 axis=1: 0.8848 s   1.65x  PSNR  -11.0 dB
+
+An earlier run in this session appeared to show factor 4 as correct. It was not: the fusion-on-mesh
+crash (below) killed `t_factor=1`, so factor 4 *became* `baseline_out` and scored PSNR inf against
+itself. Any run where the baseline is skipped will do this -- the test guards against all factors
+failing, but not against the baseline failing while a later factor silently takes its place.
+
+So **469 ms and 280 ms are both timings of a wrong computation**, and `KNOWN_BROKEN = {(8, 1)}`
+understates the problem: `(4, 0)` belongs there too until this is fixed.
 
 ## Two suspects killed by measurement
 
@@ -106,13 +125,60 @@ worth 3.14x, and item 3 becomes margin rather than a prerequisite.
 
 Order of work from here:
 
-1. **Fix factor 8's -4.0 dB divergence.** This is the only thing between 280 ms and a shippable
-   number. The test's own comment names the suspect: 207 frames pad to 256, and 256/8 = 32 is exactly
-   one tile per shard, so a boundary is landing on a tile edge.
-2. **Make trace the default for multi-chip**, and re-measure factor 4 traced as the correctness-clean
-   datapoint.
-3. **Then factor 32** via `AudioTParallelConfig` for the ~191 ms projection.
-4. **Item 3 last**, as goal.md sequences it -- it is now margin, not the critical path.
+1. **Fix T-sharding correctness -- this is the whole critical path.** Not "fix factor 8": every factor
+   is wrong. Start from fault 2 above (shards 1+ saturate, shard 0 does not), because fault 1 is only
+   worth 22 dB of a ~50 dB gap. Then re-enable `t_pad` and fix fault 1.
+2. **Add a baseline-substitution guard to the test.** `assert baseline_ran` catches "everything
+   failed" but not "the baseline failed and factor 4 became the baseline", which is how factor 4 read
+   as correct for most of this session.
+3. **Make trace the default for multi-chip.** Untraced multi-chip understates by ~3x, so any sharded
+   measurement taken without it will mislead the next person the way it misled this session.
+4. **Then factor 32** via `AudioTParallelConfig` for the 191-281 ms projection.
+5. **Item 3 last**, as goal.md sequences it -- it is now margin, not the critical path.
+
+Performance is no longer the risk: 280 ms is already measured at factor 8 and the projection at 32
+clears the original 200 ms target. Correctness is the risk, and it is a bigger job than goal.md's
+"why does the existing T-parallel path hang" suggests, because the answer is that it does not hang --
+it runs, fast, and returns the wrong audio.
+
+## Where the sharding bug is -- localized, not yet fixed
+
+`divergence_probe.py` splits it into two independent faults.
+
+**Fault 1: the T-padding tail, worth ~22 dB.**
+
+    PROBE T= 207  t_pad= 49  32 rows/chip  fully-padding shards=1  PSNR -11.0 dB
+    PROBE T= 256  t_pad=  0  32 rows/chip  fully-padding shards=0  PSNR +11.0 dB
+
+Removing the padding improves PSNR by 22 dB, so the `_set_tpad_tail` path is genuinely wrong. The
+mechanism is not the tile edge the test comment blames ("256/8 = 32 exactly one tile per shard"): at
+factor 8, `t_pad = 49` over 32-row shards leaves **shard 7 holding nothing but padding**, and
+`mode="replicate"` has to materialize "the real last row", which then lives on shard 6. factor 4's
+64-row shards never fully pad, which is why the two factors differ. But note factor 4 is *also* broken,
+so this is not the whole story.
+
+**Fault 2: something structural, present with no padding at all.** T=256 still diverges (+11 dB, far
+below the 40 dB gate). `_localize_divergence` on factor 4 says what it looks like:
+
+    per-shard mean error: ['0.270666', '1.000112', '1.000085', '1.000107']
+    boundary bands (+-128): ['1.004378', '0.993146', '1.004494']  interior 0.816890  ratio 1.23
+    correlation at lag 0: 0.0426; best 0.0426 at lag 0
+
+Shards 1-3 sit at mean error ~**1.000** against a reference whose absmax is 0.2842 -- they are
+**saturated** at the closing `tanh`/`clamp(-1, 1)`, i.e. producing garbage, while shard 0 is different
+(0.271). The boundary-to-interior ratio is only 1.23, so the error is spread through the interior
+rather than concentrated at shard edges, and correlation is 0.04 at lag 0 with the best lag *at* 0 --
+so it is **not** a shift or trim bug, and not a halo-width bug. At factor 8 the correlation is `nan`
+(constant output), consistent with full saturation.
+
+That shape -- only the first shard computing anything sensible, the rest saturating -- points at
+per-shard state rather than at boundary math: weights or activations not valid beyond shard 0. Ruled
+out already by reading: halo width does account for dilation (`eff_k = (kernel_size - 1) * dilation +
+1`, `same_pad = eff_k // 2`, so k=11 d=5 correctly asks for 25); the live conv path does halo when
+sharded; the resample up/down paths use `_t_neighbor_pad` when sharded and `_replicate_pad_t` only
+when not; `_forward_tap_matmul` pads with the local `_zero_pad_t` and would be wrong under sharding,
+but it is gated off by default (`MINIMAX_H3_AUDIO_TAP_MATMUL`, on only in accurate mode) -- **a latent
+sharding bug for accurate mode regardless**.
 
 ## Blockers a 32-chip number has to clear first
 

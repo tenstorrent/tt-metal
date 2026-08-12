@@ -156,6 +156,22 @@ Sum device op time from the profiler CSV; compare against `decode_bench.py`'s 0.
 
 ## Item 2 — 32 chips  (~~the only 10x-shaped lever~~ a ~3x lever, floored at ~260 ms — see item 1)
 
+> **RESULT 2026-08-12 — read `audio_perf/ITEM2_RESULT.md` before touching this section.**
+> The lever is **trace, not chip count**. Traced on the mesh: factor 8 = **0.2800 s** (3.14x), factor 4
+> = 0.4690 s (2.00x), factor 32 projects to 191–281 ms. Untraced, 32 chips project to 822 ms — a
+> plateau — because `factor=1` on 32 chips already costs 1.4409 s against 1.0980 s on one chip: +343 ms
+> of pure 32-wide dispatch, of which trace removes 331 ms.
+>
+> **But T-sharding returns the wrong audio at every factor** — factor 4 is −10.1 dB and factor 8 is
+> −11.0 dB against the single-device path, so both traced timings above are timings of a wrong
+> computation. `KNOWN_BROKEN = {(8,1)}` should include `(4,0)`. Localized in ITEM2_RESULT.md: shards 1+
+> saturate at the closing tanh/clamp while shard 0 does not, error spread through the interior (not
+> boundaries), correlation 0.04 at lag 0 — so not a shift, trim, or halo-width bug. Correctness is now
+> the critical path; performance is not.
+>
+> Also: **the mesh4x8 test does not hang.** It takes ~12 min and CI kills it at 300 s, so
+> `reset_cluster.sh` and the fabric-flakiness branch below are not needed.
+>
 > **Corrected 2026-08-12.** The claim below is false and the reconciliation it asks for is done.
 > `test_audio_minimax_h3.py:729` has `FACTORS = [(1, 1), (4, 0), (8, 1)]`, `KNOWN_BROKEN = {(8, 1)}`,
 > and the comment above it records **t_factor=8 at 0.898 s (1.04x) with PSNR −6.3 dB**. So multi-chip
@@ -242,7 +258,9 @@ The snake rides it for free — the parameter CB is per output column and sized 
 
 ## Do not retry — all measured
 
-`trace (1.00x, but see item 1)` · conv1d L1_FULL (1 of 42 shapes fit) · operand splitting · algebraic
+`trace (1.00x` **on a single device only — 1.30x unsharded and 3.14x sharded on a 32-chip mesh, see
+`audio_perf/ITEM2_RESULT.md`; this entry sent the whole week down the kernel path**`)` · conv1d
+L1_FULL (1 of 42 shapes fit) · operand splitting · algebraic
 band fusion alone (neutral) · L1-sharded intermediates · conv3d UnpackToDestFp32 · act_block_h ·
 merging the paired convs (2C conv is 0.52x the pair at C=8, but the duplicate and channel-halves
 reduce cost it all back) · removing the 252 per-band concats (nothing in ttnn adds rows without
