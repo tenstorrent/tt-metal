@@ -955,6 +955,11 @@ class LTXVideoDecoder(Module):
         # logical_h/logical_w have grown through the upsample blocks
         return out, logical_h, logical_w
 
+    def release_trace(self) -> None:
+        """Free all captured decode traces (call on shutdown or before re-warming)."""
+        for tracer in type(self).decode_device._tracers_keyed.get(self, {}).values():
+            tracer.release_trace()
+
     def forward(self, sample_BCTHW: torch.Tensor, *, output_type: str = "float") -> torch.Tensor:
         """Decode latent (B, 128, F', H', W') → video.
 
