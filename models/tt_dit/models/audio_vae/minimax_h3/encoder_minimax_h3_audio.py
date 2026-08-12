@@ -38,12 +38,13 @@ import torch
 
 import ttnn
 
-from ....layers.audio_ops import Snake, _AlignedOutConv1d, conv_split_mode, conv_tap_matmul_enabled
+from ....layers.audio_ops import DEFAULT_MAX_C_IN_BLOCK, Snake, _AlignedOutConv1d
 from ....layers.module import Module, ModuleList
 from ....layers.normalization import LayerNorm
 from ....parallel.config import ParallelFactor
 from ....parallel.manager import CCLManager
 from ..vocoder_ltx import DilatedConv1d
+from .blockings_minimax_h3_audio import register_h3_audio_blockings
 
 
 def _snake_row_major(snake: Snake, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
@@ -327,6 +328,10 @@ class MiniMaxH3AudioEncoder(Module):
         dtype: ttnn.DataType = ttnn.float32,
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
+        split_mode: str = "full",
+        tap_matmul: bool = True,
+        prefer_mac: bool = True,
+        max_c_in_block: int = DEFAULT_MAX_C_IN_BLOCK,
     ) -> None:
         super().__init__()
         self.mesh_device = mesh_device
@@ -334,13 +339,18 @@ class MiniMaxH3AudioEncoder(Module):
         self.latent_channels = latent_channels
         self.hop_length = math.prod(encoder_rates)
 
-        # The precision levers, resolved from the env helpers once here (same pattern as the
-        # decoder) and passed down as explicit arguments. H3-only opt-in: LTX constructs the same
-        # conv classes without them, so MINIMAX_H3_AUDIO_* cannot change LTX's audio path. The
-        # pipeline's cache key (`audio_weights_variant`) reads the same helpers, keeping the cached
-        # parameter set and this module in step.
-        split_mode = conv_split_mode()
-        tap_matmul = conv_tap_matmul_enabled()
+        # The precision levers default to accurate, same rationale as the decoder. H3-only: LTX
+        # constructs the same conv classes with its own fast defaults. Kept as attributes so the
+        # pipeline's device-weight cache key (`weights_variant`) reads the exact values this module
+        # was built with. `prefer_mac` is accepted for symmetry with the decoder; the DAC trunk has
+        # no depthwise resamplers, so nothing here consumes it.
+        self.split_mode = split_mode
+        self.tap_matmul = tap_matmul
+        self.prefer_mac = prefer_mac
+        self.max_c_in_block = max_c_in_block
+
+        # Every H3 audio conv shape misses _FP32_BLOCKINGS; seed stubs before any conv is built.
+        register_h3_audio_blockings(max_c_in_block=max_c_in_block)
 
         self.encoder = MiniMaxH3AudioDACEncoder(
             encoder_dim=encoder_dim,

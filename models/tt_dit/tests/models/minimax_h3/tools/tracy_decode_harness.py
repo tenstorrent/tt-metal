@@ -46,7 +46,7 @@ def test_tracy_visual_decode_unit(mesh_device):
 
     weights_dir = weights_subdir("vae")
     if weights_dir is None:
-        pytest.skip("MiniMax-H3 vae not found; set MINIMAX_H3_DIFFUSERS_DIR")
+        pytest.skip("MiniMax-H3 vae not found; set MINIMAX_H3_MODEL_PATH")
     config = load_config(weights_dir)
     torch.manual_seed(1)
 
@@ -90,7 +90,7 @@ def test_tracy_audio_decode(mesh_device):
 
     weights_dir = weights_subdir("audio_vae")
     if weights_dir is None:
-        pytest.skip("MiniMax-H3 audio_vae not found; set MINIMAX_H3_DIFFUSERS_DIR")
+        pytest.skip("MiniMax-H3 audio_vae not found; set MINIMAX_H3_MODEL_PATH")
     config = load_config(weights_dir)
     torch.manual_seed(2)
 

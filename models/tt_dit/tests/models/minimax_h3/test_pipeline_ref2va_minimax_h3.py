@@ -8,7 +8,6 @@ Separate file so it runs in its own process: ref2va padded lengths are 1.2-3.0x 
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import numpy as np
@@ -35,8 +34,6 @@ from .common_av import (
     write_artifacts,
 )
 
-ARTIFACT_ENV = "MINIMAX_H3_REF2VA_ARTIFACT_DIR"
-
 WIDTH, HEIGHT, NUM_FRAMES, STEPS, SEED = 1344, 768, 124, 50, 0
 FPS = 24
 
@@ -53,7 +50,7 @@ REF2VA_VBENCH_THRESHOLDS = {
 }
 
 # 16384, not the other gates' 65536: the video VAE's taps=3 encoder (only ref2va reaches it) clashes with L1 above it.
-_L1_SMALL = int(os.environ.get("MINIMAX_H3_L1_SMALL", 16384))
+_L1_SMALL = 16384
 
 # Ring collectives require FABRIC_1D_RING; only `l1_small_size` differs from the other gates.
 MESH_4X8 = [
@@ -65,15 +62,13 @@ MESH_4X8 = [
 ]
 
 
-REFERENCE_MEDIA_ENV = "MINIMAX_H3_REFERENCE_MEDIA"
-DEFAULT_REFERENCE_MEDIA = Path.home() / "h3_fl2va_artifacts" / "fl2va_first.mp4"
+REFERENCE_MEDIA = Path.home() / "h3_fl2va_artifacts" / "fl2va_first.mp4"
 
 
 def reference_video() -> Path:
-    path = Path(os.environ.get(REFERENCE_MEDIA_ENV) or DEFAULT_REFERENCE_MEDIA)
-    if not path.is_file():
-        pytest.skip(f"no reference video at {path}; set {REFERENCE_MEDIA_ENV} to a clip with a soundtrack")
-    return path
+    if not REFERENCE_MEDIA.is_file():
+        pytest.skip(f"no reference video at {REFERENCE_MEDIA}; place a clip with a soundtrack there")
+    return REFERENCE_MEDIA
 
 
 def ref2va_references(case: str) -> list[MiniMaxH3Reference]:
@@ -136,7 +131,7 @@ def _divergence(a: torch.Tensor, b: torch.Tensor) -> float:
 
 
 def _write(output, stem: str) -> dict:
-    directory = artifact_dir(ARTIFACT_ENV, "h3_ref2va_artifacts")
+    directory = artifact_dir("h3_ref2va_artifacts")
     frames = to_uint8_frames(output)
     for index in (0, 17, NUM_FRAMES // 2, NUM_FRAMES - 1):
         Image.fromarray(frames[index]).save(directory / f"{stem}_frame_{index}.png")
@@ -153,9 +148,9 @@ def _record_quality(frames: np.ndarray, paths: dict, case: str) -> None:
 
 
 def _pipeline(mesh_device) -> MiniMaxH3Pipeline:
-    """Pipeline bound to the `transformer_ref` partition (62 GB, fixed at construction; no default snapshot)."""
+    """Pipeline bound to the `transformer_ref` partition (62 GB, fixed at construction)."""
     return MiniMaxH3Pipeline.create_pipeline(
-        mesh_device=mesh_device, weights_dir=weights_dir("transformer_ref", default=""), task="ref2va"
+        mesh_device=mesh_device, weights_dir=weights_dir("transformer_ref"), task="ref2va"
     )
 
 

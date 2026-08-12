@@ -10,8 +10,9 @@ Usage (from the eval venv):
     python vbench_runner.py <video.mp4> <dimension>[,<dimension>...] [--prompt "..."]
 
 Create the venv with:
-    uv venv --python 3.10 /data/kevinmi/vbench_env
-    uv pip install --python /data/kevinmi/vbench_env/bin/python vbench decord
+    uv venv --python 3.10 ~/vbench_env
+    uv pip install --python ~/vbench_env/bin/python vbench decord \
+        "numpy==1.26.4" "opencv-python-headless<4.11" "setuptools<81"
 """
 
 from __future__ import annotations

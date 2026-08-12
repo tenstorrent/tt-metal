@@ -560,26 +560,23 @@ def test_normalize_reference_pixels_uses_imagenet_statistics():
     assert R.normalize_reference_pixels(np.zeros((5, 8, 8, 3), dtype=np.uint8)).shape == (1, 3, 5, 8, 8)
 
 
-WEIGHTS_ENV = "MINIMAX_H3_DIFFUSERS_DIR"
-MEDIA_ENV = "MINIMAX_H3_REFERENCE_MEDIA"
-DEFAULT_MEDIA = Path.home() / "h3_fl2va_artifacts" / "fl2va_first.mp4"
+REFERENCE_MEDIA = Path.home() / "h3_fl2va_artifacts" / "fl2va_first.mp4"
 
 
 def _real_media() -> Path:
-    path = Path(os.environ.get(MEDIA_ENV) or DEFAULT_MEDIA)
-    if not path.is_file():
-        pytest.skip(f"no reference media at {path}; set {MEDIA_ENV} to a video with a soundtrack")
-    return path
+    if not REFERENCE_MEDIA.is_file():
+        pytest.skip(f"no reference media at {REFERENCE_MEDIA}; place a video with a soundtrack there")
+    return REFERENCE_MEDIA
 
 
 def _weights_dir() -> Path:
-    directory = Path(os.environ.get(WEIGHTS_ENV, ""))
+    directory = Path(os.environ.get("MINIMAX_H3_MODEL_PATH", ""))
     if not directory.is_dir():
-        pytest.skip(f"set {WEIGHTS_ENV} to a diffusers snapshot of the checkpoint")
+        pytest.skip("set MINIMAX_H3_MODEL_PATH to a diffusers snapshot of the checkpoint")
     return directory
 
 
-_L1_SMALL = int(os.environ.get("MINIMAX_H3_L1_SMALL", 16384))  # 65536 and 32768 clash with the taps=3 encoder CBs
+_L1_SMALL = 16384  # 65536 and 32768 clash with the taps=3 encoder CBs
 
 # The e2e ring fabric params: a LINE config happens to pass here but production never runs it.
 MESH_4X8 = [
@@ -705,9 +702,9 @@ def test_encode_references_matches_reference(mesh_device, case, reset_seeds):
 
 
 def _tokenizer():
-    weights = os.environ.get("MINIMAX_H3_DIFFUSERS_DIR") or os.environ.get("MINIMAX_H3_MODEL_PATH")
+    weights = os.environ.get("MINIMAX_H3_MODEL_PATH")
     if not weights or not (Path(weights) / "tokenizer").is_dir():
-        pytest.skip("needs MINIMAX_H3_DIFFUSERS_DIR pointing at a diffusers snapshot with tokenizer/")
+        pytest.skip("needs MINIMAX_H3_MODEL_PATH pointing at a diffusers snapshot with tokenizer/")
     from transformers import AutoTokenizer
 
     return AutoTokenizer.from_pretrained(str(weights), subfolder="tokenizer")

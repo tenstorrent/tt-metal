@@ -38,16 +38,12 @@ import torch
 
 import ttnn
 
-from ....layers.audio_ops import _AlignedOutConv1d, conv_split_mode, conv_tap_matmul_enabled, depthwise_mac_preferred
+from ....layers.audio_ops import DEFAULT_MAX_C_IN_BLOCK, _AlignedOutConv1d
 from ....layers.module import Module
 from ....parallel.config import ParallelFactor
 from ....parallel.manager import CCLManager
 from ..vocoder_ltx import Vocoder
 from .blockings_minimax_h3_audio import register_h3_audio_blockings
-
-# H3's audio channel schedule differs from LTX's at both ends, so every conv misses
-# _FP32_BLOCKINGS. Seed stubs at import; see that module for why these are stubs.
-register_h3_audio_blockings()
 
 TILE_HEIGHT = 32
 
@@ -69,6 +65,10 @@ class MiniMaxH3AudioDecoder(Module):
         dtype: ttnn.DataType = ttnn.float32,
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
+        split_mode: str = "full",
+        tap_matmul: bool = True,
+        prefer_mac: bool = True,
+        max_c_in_block: int = DEFAULT_MAX_C_IN_BLOCK,
     ) -> None:
         super().__init__()
         self.mesh_device = mesh_device
@@ -80,13 +80,19 @@ class MiniMaxH3AudioDecoder(Module):
         for rate in decoder_rates:
             self.hop_length *= rate
 
-        # The precision levers, resolved from the env helpers once here (like prefer_mac below) and
-        # passed down as explicit arguments. H3-only opt-in: LTX constructs the same conv classes
-        # without them, so MINIMAX_H3_AUDIO_* cannot change LTX's parameter set or op graph. The
-        # pipeline's device-weight cache key (`audio_weights_variant`) reads the same helpers, so
-        # the cached parameter set and these modules cannot drift apart.
-        split_mode = conv_split_mode()
-        tap_matmul = conv_tap_matmul_enabled()
+        # The precision levers default to accurate: all three on measures 0.0045 rel RMSE /
+        # 99.9990 % PCC / 67.53 dB at 5 s stereo against 0.1046 / 99.5451 % / 40.29 dB all-fast --
+        # 23x less error for ~3x on the stage. H3-only: LTX constructs the same conv classes with
+        # its own fast defaults. Kept as attributes so the pipeline's device-weight cache key
+        # (`weights_variant`) reads the exact values this module was built with.
+        self.split_mode = split_mode
+        self.tap_matmul = tap_matmul
+        self.prefer_mac = prefer_mac
+        self.max_c_in_block = max_c_in_block
+
+        # H3's audio channel schedule differs from LTX's at both ends, so every conv misses
+        # _FP32_BLOCKINGS. Seed stubs before any conv is built; see that module for why stubs.
+        register_h3_audio_blockings(max_c_in_block=max_c_in_block)
 
         # k1 conv, so no padding mode to get wrong. _AlignedOutConv1d rather than the base
         # class per its own docstring: a non-32-multiple out count reaches conv3d and
@@ -118,9 +124,9 @@ class MiniMaxH3AudioDecoder(Module):
             dtype=dtype,
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
-            # Resolved once at construction. H3-only opt-in: LTX's vocoder keeps the default fast
-            # conv1d filters and single-conv weights regardless of env vars.
-            prefer_mac=depthwise_mac_preferred(),
+            # H3-only opt-in: LTX's vocoder keeps the default fast conv1d filters and
+            # single-conv weights.
+            prefer_mac=prefer_mac,
             split_mode=split_mode,
             tap_matmul=tap_matmul,
         )

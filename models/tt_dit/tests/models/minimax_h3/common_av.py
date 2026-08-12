@@ -331,19 +331,18 @@ def decoded_frames(path: Path, count: int) -> np.ndarray:
     return buffer[:usable].reshape(-1, height, width)
 
 
-VBENCH_VENV_ENV = "MINIMAX_H3_VBENCH_PYTHON"
-DEFAULT_VBENCH_PYTHON = "/data/kevinmi/vbench_env/bin/python"
+VBENCH_PYTHON = Path.home() / "vbench_env" / "bin" / "python"
 
 
 def run_vbench(video: Path, prompt: str, dimensions) -> dict[str, float]:
-    """Run VBench in its own interpreter ($MINIMAX_H3_VBENCH_PYTHON): it pins numpy < 2 / transformers 4.33."""
-    interpreter = os.environ.get(VBENCH_VENV_ENV, DEFAULT_VBENCH_PYTHON)
-    if not os.path.isfile(interpreter):
+    """Run VBench in its own interpreter (~/vbench_env): it pins numpy < 2 / transformers 4.33."""
+    if not VBENCH_PYTHON.is_file():
         pytest.skip(
-            f"no VBench interpreter at {interpreter}; set {VBENCH_VENV_ENV}, or create it with "
-            "`uv venv --python 3.10 <path> && uv pip install --python <path>/bin/python vbench decord "
-            "'numpy==1.26.4' 'opencv-python-headless<4.11' 'setuptools<81'` (set RUN_VBENCH=0 to skip)"
+            f"no VBench interpreter at {VBENCH_PYTHON}; create it with "
+            "`uv venv --python 3.10 ~/vbench_env && uv pip install --python ~/vbench_env/bin/python "
+            "vbench decord 'numpy==1.26.4' 'opencv-python-headless<4.11' 'setuptools<81'`"
         )
+    interpreter = str(VBENCH_PYTHON)
     runner = Path(__file__).with_name("tools") / "vbench_runner.py"
     result = subprocess.run(
         [interpreter, str(runner), str(video), ",".join(dimensions), "--prompt", prompt],
@@ -390,42 +389,28 @@ def temporal_seam_score(frames: np.ndarray, period: int) -> float:
 
 # ------------------------------------------------------------------ shared e2e gate scaffolding
 
-WEIGHTS_ENV = "MINIMAX_H3_DIFFUSERS_DIR"
-DEFAULT_WEIGHTS = "/data/cglagovich/MiniMax-H3-diffusers"
-
 # Matched pair with the tier-6 bars (CLIP 37.37, imaging_quality 0.6896); imported by fl2va so it cannot drift.
 CALIBRATED_FOX_PROMPT = (
     "A red fox trots across a snowy field at dawn, its breath visible in the cold air. "
     "The low sun throws long blue shadows behind it, and loose snow lifts from each footfall."
 )
 
-_ENV_TRUTHY = ("1", "true", "True")
 
-
-def clip_gate_enabled() -> bool:
-    """RUN_CLIP, defaulting **on**."""
-    return os.environ.get("RUN_CLIP", "1") in _ENV_TRUTHY
-
-
-def vbench_gate_enabled() -> bool:
-    """RUN_VBENCH, defaulting **on**."""
-    return os.environ.get("RUN_VBENCH", "1") in _ENV_TRUTHY
-
-
-def weights_dir(*required_subdirs: str, default: str = DEFAULT_WEIGHTS) -> Path:
-    """The snapshot dir from MINIMAX_H3_DIFFUSERS_DIR; skips when it or a required partition is missing."""
-    directory = Path(os.environ.get(WEIGHTS_ENV, default))
-    if not directory.is_dir():
-        pytest.skip(f"no MiniMax-H3 snapshot at {directory}; set {WEIGHTS_ENV}")
+def weights_dir(*required_subdirs: str) -> Path:
+    """The snapshot dir from MINIMAX_H3_MODEL_PATH; skips when it or a required partition is missing."""
+    root = os.environ.get("MINIMAX_H3_MODEL_PATH", "")
+    if not root or not Path(root).is_dir():
+        pytest.skip("set MINIMAX_H3_MODEL_PATH to a MiniMax-H3 diffusers snapshot")
+    directory = Path(root)
     missing = [name for name in required_subdirs if not (directory / name).is_dir()]
     if missing:
-        pytest.skip(f"MiniMax-H3 snapshot at {directory} is missing {missing}; set {WEIGHTS_ENV}")
+        pytest.skip(f"MiniMax-H3 snapshot at {directory} is missing {missing}")
     return directory
 
 
-def artifact_dir(env: str, default_name: str) -> Path:
-    """The gate's artifact directory (`$env`, else `~/{default_name}`), created if absent."""
-    directory = Path(os.environ.get(env) or Path.home() / default_name)
+def artifact_dir(name: str) -> Path:
+    """The gate's artifact directory `~/{name}`, created if absent."""
+    directory = Path.home() / name
     directory.mkdir(parents=True, exist_ok=True)
     return directory
 
@@ -507,14 +492,9 @@ def check_written_file(paths: dict, expected_frames: int, seam_period: int = 17)
             )
 
 
-def gate_clip(frames: np.ndarray, prompt: str, threshold: float, label: str, enabled=None):
-    """CLIP prompt-alignment gate. `enabled=None` reads RUN_CLIP (default on); skips if `open_clip` is missing."""
-    if enabled is None:
-        enabled = clip_gate_enabled()
-    if not enabled:
-        logger.info("RUN_CLIP=0, skipping the CLIP prompt-alignment gate")
-        return None
-    pytest.importorskip("open_clip", reason="RUN_CLIP=1 but open_clip is not installed (set RUN_CLIP=0)")
+def gate_clip(frames: np.ndarray, prompt: str, threshold: float, label: str):
+    """CLIP prompt-alignment gate; skips only if `open_clip` is missing."""
+    pytest.importorskip("open_clip", reason="the CLIP gate needs open_clip, which is not installed")
     alignment = clip_prompt_alignment(frames, prompt)
     logger.info(
         f"{label} CLIP prompt alignment: mean={alignment['mean']:.2f} "
@@ -527,15 +507,10 @@ def gate_clip(frames: np.ndarray, prompt: str, threshold: float, label: str, ena
     return alignment
 
 
-def gate_vbench(paths: dict, prompt: str, thresholds: dict, label: str, enabled=None, skip_without_mp4=False):
-    """VBench gate (RUN_VBENCH, default on); a requested dimension with no returned score FAILS, never silently passes."""
-    if enabled is None:
-        enabled = vbench_gate_enabled()
-    if not enabled:
-        logger.info("RUN_VBENCH=0, skipping the VBench gate")
-        return None
+def gate_vbench(paths: dict, prompt: str, thresholds: dict, label: str, skip_without_mp4=False):
+    """VBench gate (skips only when its interpreter is missing); a requested dimension with no returned score FAILS, never silently passes."""
     if "mp4" not in paths:
-        message = "RUN_VBENCH=1 needs the muxed mp4, which ffmpeg did not produce"
+        message = "the VBench gate needs the muxed mp4, which ffmpeg did not produce"
         if skip_without_mp4:
             pytest.skip(message)
         raise AssertionError(message)

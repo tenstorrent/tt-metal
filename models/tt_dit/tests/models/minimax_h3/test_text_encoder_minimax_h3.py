@@ -6,8 +6,6 @@
 # of the 64-layer Qwen3-VL decoder (no LM head, no final norm), vs the HF reference on the
 # released weights. Large-host test: ~62 GiB of shards and RAM; skips when unavailable.
 
-import os
-
 import pytest
 import torch
 import transformers
@@ -23,15 +21,12 @@ from ....utils.check import assert_quality
 from ....utils.tensor import bf16_tensor
 from .common import CONDITIONER_SUBFOLDER, conditioner_checkpoint_dir, load_reference_conditioner
 
-# scoped: an unscoped `snapshot_download` would pull the repository's full ~190 GB
+# scoped: only these text_encoder files must be present for the test to run
 _PATTERNS = [
     f"{CONDITIONER_SUBFOLDER}/config.json",
     f"{CONDITIONER_SUBFOLDER}/*.safetensors",
     f"{CONDITIONER_SUBFOLDER}/model.safetensors.index.json",
 ]
-
-# MINIMAX_H3_RUN_REF=0 skips the golden (shapes/finiteness only); it proves nothing about accuracy
-RUN_REF = os.environ.get("MINIMAX_H3_RUN_REF", "1").strip().lower() not in {"0", "false", "no"}
 
 
 def _rope_params(text_config):
@@ -104,19 +99,15 @@ def test_minimax_h3_text_conditioner(
         )
 
     # golden: a hook, not output_hidden_states, so the capture is unambiguously the layer output
-    golden, out = None, None
-    if RUN_REF:
-        captured: dict[int, torch.Tensor] = {}
-        handle = lm.layers[TAP].register_forward_hook(
-            lambda m, i_, o: captured.__setitem__(TAP, (o[0] if isinstance(o, tuple) else o).detach())
-        )
-        with torch.no_grad():
-            out = lm(input_ids=ids, attention_mask=torch.ones_like(ids), use_cache=False)
-        handle.remove()
-        golden = captured[TAP].float()
-        assert golden.shape == (1, seq_len, cfg.hidden_size)
-    else:
-        logger.warning("MINIMAX_H3_RUN_REF=0: golden skipped, running our implementation only")
+    captured: dict[int, torch.Tensor] = {}
+    handle = lm.layers[TAP].register_forward_hook(
+        lambda m, i_, o: captured.__setitem__(TAP, (o[0] if isinstance(o, tuple) else o).detach())
+    )
+    with torch.no_grad():
+        out = lm(input_ids=ids, attention_mask=torch.ones_like(ids), use_cache=False)
+    handle.remove()
+    golden = captured[TAP].float()
+    assert golden.shape == (1, seq_len, cfg.hidden_size)
 
     enc = Qwen3VlTextEncoder(
         vocab_size=cfg.vocab_size,
@@ -151,11 +142,6 @@ def test_minimax_h3_text_conditioner(
 
     logger.info(f"minimax-h3 conditioner TP={tp_factor} axis={tp_axis} layer {TAP} of {cfg.num_hidden_layers}:")
     assert actual.shape[-2:] == (seq_len, cfg.hidden_size)
-    if not RUN_REF:
-        assert torch.isfinite(actual).all(), "our output contains NaN or Inf"
-        logger.info(f"  no golden (MINIMAX_H3_RUN_REF=0); ours mean |x| {actual.abs().mean():.4f}")
-        return
-
     assert_quality(golden, actual, pcc=0.99)
 
     assert not torch.allclose(golden, out.last_hidden_state.float(), atol=1e-2), (

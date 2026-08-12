@@ -97,20 +97,13 @@ class MiniMaxH3VaeConfig:
 
 # How many mesh-sized waves' worth of *chunks* to decode before stitching and releasing them.
 #
-# **1, measured.** A decoded tile is 22 MB of fp32 pixels and a group's tiles are all held on host
-# until the group is stitched. At 4 (a 5-chunk group, 140 tiles, ~3.1 GB) the readback degraded from
-# 89 ms for the first wave to 215-277 ms for later ones -- host allocator pressure, not transfer:
-#
-#   5 chunks/group   readback per wave [92 223 277 218 223 274 215]  median 223 ms
-#   1 chunk/group    readback per wave [88  89 148 101  89  99  86]  median  89 ms
-#
-# 89 ms is the true cost of the transfer, confirmed by an isolated measurement of the same volume.
-# Device time is identical either way -- the wave count is set by the total unit count and every wave
-# pads to the mesh size regardless -- so the smaller group is free. Stage: 4.3 -> 3.8 s.
-#
-# Note the arithmetic below floors rather than ceils: `ceil(1 * 32 / 28) = 2` could never express one
-# chunk per group, which is the setting that keeps the held pile to a single chunk.
+# 1, measured: larger groups pile decoded tiles on host and degrade readback ~2.5x (allocator
+# pressure, not transfer); stage 4.3 -> 3.8 s at one chunk per group.
 _DECODE_WAVES_IN_FLIGHT = 1
+
+# Decode is host-bound (stitching, unpatchify, readback), so it raises torch's thread count from the
+# single thread a server worker pins for the denoise loop; 8 measured as the knee.
+_DECODE_TORCH_THREADS = 8
 
 
 def split_tiles(length: int, tile_size: int, min_overlap: int, ratio: int) -> tuple[list[int], list[int], list[int]]:
@@ -201,6 +194,8 @@ class MiniMaxH3Vae(Module):
         tile_overlap: int = DEFAULT_TILE_OVERLAP,
         use_tiling: bool = True,
         weight_loader=None,
+        device_stitch: bool = False,
+        profile: bool = False,
     ) -> None:
         super().__init__()
         self.config = config
@@ -217,8 +212,11 @@ class MiniMaxH3Vae(Module):
         self._encoders: dict[tuple[int, int, int, int], MiniMaxH3Encoder3d] = {}
         self._stitcher = None
         # Unproven, so it defaults to the host path. The projection put the stage at 4.3 -> ~2.9 s
-        # from this; `MINIMAX_H3_VAE_DEVICE_STITCH=1` is the A/B.
-        self.device_stitch = os.environ.get("MINIMAX_H3_VAE_DEVICE_STITCH", "0") == "1"
+        # from this; `device_stitch=True` is the A/B.
+        self.device_stitch = device_stitch
+        # Synchronize after each decode forward so `device` and `readback` are separable in the
+        # profile -- which also serializes them, so it is opt-in.
+        self.profile = profile
         self._encoder_state: dict[str, torch.Tensor] | None = None
         self._decoders: dict[tuple[int, int, int], object] = {}
         self._decoder_state: dict[str, torch.Tensor] | None = None
@@ -547,9 +545,9 @@ class MiniMaxH3Vae(Module):
 
         profile = self._profile
         # Synchronizing after each forward is what makes `device` and `readback` separable in the
-        # profile -- and it also serializes them, defeating the pipelining below. So it is opt-in:
-        # set MINIMAX_H3_VAE_PROFILE=1 to attribute time, leave it unset to go fast.
-        attribute = os.environ.get("MINIMAX_H3_VAE_PROFILE", "0") == "1"
+        # profile -- and it also serializes them, defeating the pipelining below. So it is opt-in
+        # via the constructor's `profile` flag; leave it off to go fast.
+        attribute = self.profile
 
         def read_wave(decoded, count: int) -> list[torch.Tensor]:
             mark = time.perf_counter()
@@ -804,12 +802,12 @@ class MiniMaxH3Vae(Module):
         the reference ``_decode``; the trailing repeated latent frames produce pixel frames
         that were never asked for and are cut at the end.
 
-        Runs with raised torch threads. Decode is host-bound -- device compute is ~10 % of the
-        stage and the rest is tile stitching, unpatchify and readback -- and a server worker
-        pins torch to one thread for the denoise loop's benefit. ``MINIMAX_H3_VAE_THREADS``
-        overrides; the previous limit is restored on the way out.
+        Runs with raised torch threads (``_DECODE_TORCH_THREADS``). Decode is host-bound -- device
+        compute is ~10 % of the stage and the rest is tile stitching, unpatchify and readback --
+        and a server worker pins torch to one thread for the denoise loop's benefit. The previous
+        limit is restored on the way out.
         """
-        threads = int(os.environ.get("MINIMAX_H3_VAE_THREADS", "8"))
+        threads = _DECODE_TORCH_THREADS
         previous_threads = torch.get_num_threads()
         if threads > 0 and threads != previous_threads:
             torch.set_num_threads(threads)
@@ -852,13 +850,9 @@ class MiniMaxH3Vae(Module):
             # before stitching any of them would hold 6.8 GB (and ~29 GB at 1440P/10s).
             # Group chunks into a few waves' worth, stitch, release. Groups are whole chunks
             # so a group never straddles a stitch boundary.
-            # Floor, not ceil, and tunable: a group's decoded tiles are all held on host until the
-            # group is stitched, and the readback slows down as that pile grows -- measured 92 ms for
-            # the first wave against 215-277 ms for later ones when a group is 5 chunks (140 tiles,
-            # ~3.1 GB of fp32 pixels). Ceil could never express "one chunk per group", which is the
-            # setting that keeps the pile at one chunk's worth.
-            waves_in_flight = int(os.environ.get("MINIMAX_H3_DECODE_WAVES_IN_FLIGHT", _DECODE_WAVES_IN_FLIGHT))
-            chunks_per_group = max(1, waves_in_flight * wave_size // tiles_per_chunk)
+            # Floor, not ceil: ceil could never express "one chunk per group", the setting that
+            # keeps the held pile at one chunk's worth (see `_DECODE_WAVES_IN_FLIGHT`).
+            chunks_per_group = max(1, _DECODE_WAVES_IN_FLIGHT * wave_size // tiles_per_chunk)
             clips = []
             for group_start in range(0, num_chunks, chunks_per_group):
                 group = chunk_latents[group_start : group_start + chunks_per_group]

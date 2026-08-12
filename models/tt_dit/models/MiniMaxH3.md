@@ -28,7 +28,7 @@ tests/models/minimax_h3/
 ├── test_transformer_minimax_h3.py    # attention, one block, token refiner, precomputed AdaLN, whole DiT
 ├── test_vae_minimax_h3.py            # convs/resnets, encoder, 36-layer ViT decoder, tiling  (SINGLE_DEVICE)
 ├── test_vae_parallel_minimax_h3.py   # H/W sharding, data-parallel independence, device stitch  (mesh)
-├── test_audio_minimax_h3.py          # weight-norm conversion, decode, encode, accurate mode, traced
+├── test_audio_minimax_h3.py          # weight-norm conversion, decode (accurate defaults), encode, traced
 ├── test_performance_minimax_h3.py    # per-block device time (pipeline latency lives in the pipeline tests)
 ├── test_performance_vae_minimax_h3.py    # VAE perf, and the shared VAE test helpers others import
 ├── test_packing_minimax_h3.py        # host-only layout parity (t2va/fl2va)
@@ -43,11 +43,11 @@ golden digests are designed to stand in when the diffusers branch is absent, and
 
 ## Running the transformer tests with real weights
 
-`MINIMAX_H3_MODEL_PATH` points at a MiniMax-H3 diffusers snapshot (`MINIMAX_H3_SUBFOLDER` picks the
-partition, default `transformer`). Without it, the real-weights cases skip and the rest still run.
+`MINIMAX_H3_MODEL_PATH` points at a MiniMax-H3 diffusers snapshot (the transformer tests read its
+`transformer/` partition). Without it, the real-weights cases skip and the rest still run.
 
 ```bash
-export MINIMAX_H3_MODEL_PATH=/data/cglagovich/MiniMax-H3-diffusers
+export MINIMAX_H3_MODEL_PATH=/path/to/MiniMax-H3-diffusers
 TEST=models/tt_dit/tests/models/minimax_h3/test_transformer_minimax_h3.py
 
 # 2 layers, real weights, checked against the torch reference (PCC ~0.9998)
@@ -197,15 +197,15 @@ One command, prompt in and an mp4 with a soundtrack out, at the production worki
 (1344x768, 124 frames @ 24 fps, 50 scheduler steps -> 49 forwards):
 
 ```bash
-export MINIMAX_H3_DIFFUSERS_DIR=/data/cglagovich/MiniMax-H3-diffusers
-export TT_DIT_CACHE_DIR=/data/kevinmi/tt_dit_cache        # see the warning below
+export MINIMAX_H3_MODEL_PATH=/path/to/MiniMax-H3-diffusers
+export TT_DIT_CACHE_DIR=~/tt_dit_cache        # see the warning below
 scripts/run_safe_pytest.sh models/tt_dit/tests/models/minimax_h3/test_pipeline_minimax_h3.py
 ```
 
-Artifacts land in `$MINIMAX_H3_ARTIFACT_DIR` (default `~/h3_t2va_artifacts`): `t2va.mp4` muxed,
-`t2va_silent.mp4`, `t2va.wav`.
+Artifacts land in `~/h3_t2va_artifacts`: `t2va.mp4` muxed, `t2va_silent.mp4`, `t2va.wav`.
 
-`RUN_VBENCH=0` / `RUN_CLIP=0` skip the tier-6 quality gates, which default **on**.
+The tier-6 quality gates (CLIP, VBench) always run; each skips only when its dependency is missing
+(`open_clip` not installed, no `~/vbench_env` interpreter).
 
 ## Running `fl2va` end to end
 
@@ -213,16 +213,17 @@ Same command shape, plus a keyframe. `image=` is `fl2va`, `last_image=` is `fl2v
 both together anchors each end of the clip:
 
 ```bash
-export MINIMAX_H3_DIFFUSERS_DIR=/data/cglagovich/MiniMax-H3-diffusers
-export TT_DIT_CACHE_DIR=/data/kevinmi/tt_dit_cache
-export MINIMAX_H3_ARTIFACT_DIR=~/h3_fl2va_artifacts
+export MINIMAX_H3_MODEL_PATH=/path/to/MiniMax-H3-diffusers
+export TT_DIT_CACHE_DIR=~/tt_dit_cache
 scripts/run_safe_pytest.sh models/tt_dit/tests/models/minimax_h3/test_pipeline_fl2va_minimax_h3.py
 ```
 
-Artifacts land as `fl2va_<case>.mp4` / `_silent.mp4` / `.wav` plus four inspection PNGs per case.
+Artifacts land in `~/h3_t2va_artifacts` as `fl2va_<case>.mp4` / `_silent.mp4` / `.wav` plus four
+inspection PNGs per case (`ref2va` writes to `~/h3_ref2va_artifacts`; the `ref2va` reference media
+is read from `~/h3_fl2va_artifacts/fl2va_first.mp4`, skipping when absent).
 
 **The gated keyframe is frame 0 of the calibrated `t2va` artifact**, read from
-`MINIMAX_H3_T2VA_ARTIFACT_DIR` (default `~/h3_t2va_artifacts`), so run the `t2va` gate first — this one
+`~/h3_t2va_artifacts`, so run the `t2va` gate first — this one
 skips rather than inventing content. The reason: a keyframe forces the content, and
 `imaging_quality` is a no-reference IQA metric, so an arbitrary photograph would invalidate the
 tier-6 calibration outright. Tier-6 numbers are therefore **recorded, not gated**, for `fl2va`.
@@ -251,15 +252,15 @@ numpy < 2 and transformers 4.33, so installing it into `python_env` would downgr
 runs in its own interpreter against the written mp4, which needs no mesh:
 
 ```bash
-uv venv --python 3.10 /data/kevinmi/vbench_env
-uv pip install --python /data/kevinmi/vbench_env/bin/python vbench decord \
+uv venv --python 3.10 ~/vbench_env
+uv pip install --python ~/vbench_env/bin/python vbench decord \
     "numpy==1.26.4" "opencv-python-headless<4.11" "setuptools<81"
 # VBench ships RAFT as a zip and there is no `unzip` on the box:
 python -c "import zipfile; zipfile.ZipFile('$HOME/.cache/vbench/raft_model/models.zip').extractall('$HOME/.cache/vbench/raft_model')"
 ```
 
-Point `MINIMAX_H3_VBENCH_PYTHON` at that interpreter if it is not at the default path. The test
-skips with this command if it is missing, rather than passing.
+The interpreter path is fixed at `~/vbench_env/bin/python`; the test skips with this command if it
+is missing, rather than passing.
 
 **Set `TT_DIT_CACHE_DIR`.** Every component loads through `utils/cache.py`. With it set, end-to-end
 is ~134 s; without it every run re-reads 62 GB of transformer and 50 GB of text encoder and takes
@@ -298,7 +299,7 @@ scripts/run_safe_pytest.sh models/tt_dit/tests/models/minimax_h3/test_performanc
 | Keyframe encode | — | **0.1 s** | keyframe -> VAE moments -> posterior sample -> fp16 round trip -> normalize -> patchify -> `scale_noise` at t = 0.999 |
 | Denoise | 67.0 s | 58.0 s | 49 forwards of the 50-layer DiT over the packed sequence |
 | VAE decode | 4.0 s | 4.1 s | 196 work units in 7 waves of 28 across 32 devices |
-| Audio decode | 1.7 s | 1.7 s | one pass over 207 latents x 2 channels |
+| Audio decode | 1.7 s* | 1.7 s* | one pass over 207 latents x 2 channels. *Measured on the old fast path; the accurate-mode default is ~3x this stage time |
 | **Total (compute)** | **72.7 s** | **63.9 s** | |
 | per forward | 1366.5 ms | 1183.2 ms | |
 | realtime factor | 14.1x | 12.4x | compute / video seconds |
@@ -348,34 +349,36 @@ conditioner fidelity rather than output quality.
 
 ## Audio decode precision
 
-`MINIMAX_H3_AUDIO_ACCURATE=1` takes the audio VAE decode from 10.5 % to **0.45 %** relative RMSE against
-the diffusers reference, for ~3x the stage time. It turns on three independent levers, each of which
-targets a different one of the three error sources the default 10.5 % is made of. They are strongly
-complementary — the chain error is set by whichever source is worst, so enabling one moves the total far
-less than enabling all three:
+The audio VAE constructs in **accurate mode by default**: `MiniMaxH3AudioDecoder` /
+`MiniMaxH3AudioEncoder` take `split_mode="full"`, `tap_matmul=True`, `prefer_mac=True`
+(and `max_c_in_block=128`) as constructor defaults, and register the H3 conv blockings themselves.
+That takes the decode from 10.5 % to **0.45 %** relative RMSE against the diffusers reference, for
+~3x the stage time. The three constructor levers are independent and each targets a different one of
+the three error sources the 10.5 % is made of. They are strongly complementary — the chain error is
+set by whichever source is worst, so enabling one moves the total far less than enabling all three:
 
-| `MINIMAX_H3_AUDIO_CONV_SPLIT` | `..._DEPTHWISE_MAC` | `..._TAP_MATMUL` | rel RMSE | PCC | PSNR | warm |
+| `split_mode` | `prefer_mac` | `tap_matmul` | rel RMSE | PCC | PSNR | warm |
 |---|---|---|---|---|---|---|
 | `off` | 0 | 0 | 0.1046 | 99.5451 % | 40.29 dB | 4.03 s |
 | `full` | 0 | 0 | 0.0538 | 99.8950 % | 46.07 dB | 5.36 s |
 | `off` | 1 | 0 | 0.0920 | 99.6111 % | 41.41 dB | 8.72 s |
 | `full` | 1 | 0 | 0.0320 | 99.9522 % | 50.58 dB | 9.50 s |
 | `full` | 0 | 1 | 0.0371 | 99.9526 % | 49.31 dB | 9.97 s |
-| **`full`** | **1** | **1** | **0.0045** | **99.9990 %** | **67.53 dB** | **13.24 s** |
+| **`full`** | **1** | **1** | **0.0045** | **99.9990 %** | **67.53 dB** | **13.24 s** (default) |
 
 Why each exists — all three answer the same hardware fact, that an fp32 **multiply** on this hardware
 keeps only ~11 significand bits (the FPU takes ~5 mantissa bits per fidelity pass and HiFi4's 4 passes is
 the ceiling), so the error is *flat in reduction depth* and neither `fp32_dest_acc_en` nor a higher
 fidelity can help. Elementwise fp32 ops, by contrast, are exact.
 
-- **`CONV_SPLIT`** (`weight` = 2 convs, `full` = 3) splits an operand into `bf16 hi` plus its exact
+- **`split_mode`** (`weight` = 2 convs, `full` = 3) splits an operand into `bf16 hi` plus its exact
   residual, so a second conv carries the mantissa bits the first dropped. A **3-way** split is
   bit-identical to a 2-way one, so 2-way already recovers the whole operand mantissa.
-- **`DEPTHWISE_MAC`** runs the anti-aliased resample filters as shift-multiply-add instead of
+- **`prefer_mac`** runs the anti-aliased resample filters as shift-multiply-add instead of
   `ttnn.conv1d`. This targets the single largest source: one `Activation1d` injects 1.54e-03, *all* of
   it from its downsampler, against ~7e-08 for `snake_beta` and the upsampler. MAC is elementwise, hence
   exact — 1.5e-03 → 5.3e-08.
-- **`TAP_MATMUL`** runs stride-1 convs as `sum_j W_j @ x[t + dilation*j]`. conv3d's residual *after*
+- **`tap_matmul`** runs stride-1 convs as `sum_j W_j @ x[t + dilation*j]`. conv3d's residual *after*
   splitting is partial-sum rounding across `C_in_block`, which matmul does not have; worth 1.8–3.5x per
   conv.
 
@@ -384,6 +387,6 @@ Two things that look like levers and are not: widening `C_in_block` helps an iso
 widen — and 512 fails outright. And `ttnn.snake_beta` is already fp32-grade at 7.2e-08, so the fused op
 is not worth replacing.
 
-Accurate mode needs a **larger trace region** (375463936 B measured, against the default path's 300 MB)
-and runs long enough to exceed the traced audio decode's 300 s pytest timeout; pass
-`--timeout=1200`. The traced output matches eager exactly (PSNR inf).
+The (default) accurate decode graph needs a **450 MB trace region** (375463936 B measured; the
+retired fast path fit in 300 MB) and runs long enough to exceed the traced audio decode's 300 s
+pytest timeout; pass `--timeout=1200`. The traced output matches eager exactly (PSNR inf).

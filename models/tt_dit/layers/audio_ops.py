@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import math
-import os
 from typing import Sequence
 
 import torch
@@ -25,125 +24,27 @@ _ZEROS_CACHE: dict = {}
 
 CONV_SPLIT_MODES = ("off", "weight", "full")
 
-# Default cap on conv3d's C_in_block for the H3 audio blocking table; see `audio_max_c_in_block`.
+# Default cap on conv3d's C_in_block for the H3 audio blocking table; the sweep that keeps it at
+# 128 lives in `blockings_minimax_h3_audio`.
 DEFAULT_MAX_C_IN_BLOCK = 128
 
 
-def audio_accurate_mode() -> bool:
-    """Whether ``MINIMAX_H3_AUDIO_ACCURATE`` is set, turning on every precision lever at once.
-
-    The three levers below are independent but strongly complementary, because the chain error is set by
-    whichever source is worst -- so enabling one moves the total far less than enabling all three.
-    Measured end to end on the audio VAE decode at 5 s stereo:
-
-        split  mac   tap    rel_rmse     PCC          PSNR
-        off    off   off    0.1046       99.5451 %    40.29 dB    <- default
-        full   off   off    0.0538       99.8950 %    46.07 dB
-        off    on    off    0.0920       99.6111 %    41.41 dB
-        full   on    off    0.0320       99.9522 %    50.58 dB
-        full   off   on     0.0371       99.9526 %    49.31 dB
-        full   on    on     **0.0045**   99.9990 %    67.53 dB    <- MINIMAX_H3_AUDIO_ACCURATE=1
-
-    23x less error for ~3x on the stage. Each lever can still be set individually; this only changes
-    their defaults.
-    """
-    return os.environ.get("MINIMAX_H3_AUDIO_ACCURATE", "0") == "1"
-
-
-def conv_split_mode() -> str:
-    """Operand-splitting mode for the fp32 conv3d paths, from ``MINIMAX_H3_AUDIO_CONV_SPLIT``.
-
-    An fp32 conv3d on this hardware is fp32 *storage* and fp32 *accumulate* with a multiply that keeps
-    only ~11 significand bits (the FPU takes ~5 mantissa bits per fidelity pass, and HiFi4's 4 passes is
-    the ceiling). The resulting relative error is **flat in the reduction depth** -- 1.162e-03 at K=32
-    and 1.169e-03 at K=14336 -- so it is the operands being truncated, not the sum drifting, and
-    ``fp32_dest_acc_en`` cannot help.
-
-    Because the multiply is the bottleneck and conv is linear in both arguments, splitting an operand into
-    ``hi = bf16(v)`` plus the exact residual ``lo = v - hi`` lets a second conv carry the mantissa bits the
-    first one dropped. ``hi`` has 8 significand bits so the multiplier represents it exactly, and
-    ``hi + lo`` reconstructs the input bit-for-bit.
-
-    * ``off`` (default) -- one conv.
-    * ``weight`` -- 2 convs, splitting the weight only. Needs no activation ops at all, just a second
-      prepared weight. Measured 1.5x on ``conv_pre`` at production blocking.
-    * ``full`` -- 3 convs, splitting both. ``lo*lo`` is genuinely negligible (a 4-term form measures
-      identically), so it is omitted. Measured 1.9x.
-
-    The conv classes never read this themselves: they take an explicit ``split_mode`` argument
-    (default ``"off"``), and only the MiniMax-H3 modules derive that argument from this helper --
-    so exporting the env var cannot change LTX's audio path.
-    """
-    mode = os.environ.get("MINIMAX_H3_AUDIO_CONV_SPLIT", "full" if audio_accurate_mode() else "off").lower()
-    if mode not in CONV_SPLIT_MODES:
-        raise ValueError(f"MINIMAX_H3_AUDIO_CONV_SPLIT must be one of {CONV_SPLIT_MODES}, got {mode!r}")
-    return mode
-
-
-def conv_tap_matmul_enabled() -> bool:
-    """Whether stride-1 fp32 convs run as shifted matmuls instead of conv3d.
-
-    From ``MINIMAX_H3_AUDIO_TAP_MATMUL`` (default off). A stride-1 conv needs no im2col matrix to become
-    a matmul, because
-
-        y[t] = sum_j W_j @ x[t + dilation * j]
-
-    is exactly ``kernel_size`` matmuls of ``(C_in, C_out)`` over shifted views, summed in fp32 (which is
-    exact). The shifts are pure data movement.
-
-    Worth doing because conv3d's residual error after operand splitting is *not* the operand mantissa --
-    a 3-way split measures bit-identically to a 2-way one -- but partial-sum rounding across
-    ``C_in_block``, which matmul does not have. Measured at real AMP shapes with the same operand split
-    applied to both formulations:
-
-        C512 k3 d1   conv3d 6.969e-04   tap-matmul 2.833e-04   2.46x
-        C512 k3 d5   conv3d 6.964e-04   tap-matmul 2.832e-04   2.46x
-        C128 k3 d1   conv3d 5.278e-04   tap-matmul 2.808e-04   1.88x
-        C32  k3 d1   conv3d 5.292e-04   tap-matmul 2.702e-04   1.96x
-
-    Costs ``kernel_size`` tilizes plus one untilize per conv on top of the extra matmuls, and this
-    stage profiles as layout-dominated, so the extra layout ops carry a real end-to-end cost.
-
-    Like `conv_split_mode`, the conv classes never read this themselves: they take an explicit
-    ``tap_matmul`` argument (default off) that only the MiniMax-H3 modules derive from this helper.
-    """
-    return os.environ.get("MINIMAX_H3_AUDIO_TAP_MATMUL", "1" if audio_accurate_mode() else "0") == "1"
-
-
-def audio_max_c_in_block() -> int:
-    """Effective cap on conv3d's ``C_in_block`` for the H3 audio blocking table, from
-    ``MINIMAX_H3_AUDIO_MAX_C_IN_BLOCK`` (default 128).
-
-    Consumed by ``blockings_minimax_h3_audio`` when it seeds ``_FP32_BLOCKINGS``. This is a
-    cache-relevant lever, not just a performance knob: `prepare_conv3d_weight_state` blocks the
-    prepared weight **bytes** by ``C_in_block``, so weights prepared under a different cap are not
-    interchangeable even though the parameter names and shapes match -- which is why
-    `audio_weights_variant` folds a non-default cap into the cache suffix.
-    """
-    return int(os.environ.get("MINIMAX_H3_AUDIO_MAX_C_IN_BLOCK", str(DEFAULT_MAX_C_IN_BLOCK)))
-
-
-def audio_weights_variant() -> str:
+def weights_variant(split_mode: str, tap_matmul: bool, max_c_in_block: int = DEFAULT_MAX_C_IN_BLOCK) -> str:
     """Cache-key suffix for the precision levers that change the prepared parameter set.
 
-    `conv_split_mode` decides whether the ``weight_lo`` / ``tap_w{k}_lo`` residual parameters exist, and
-    `conv_tap_matmul_enabled` swaps a stride-1 conv's ``weight`` for per-tap ``tap_w{k}`` matmul weights
-    -- so device-weight caches prepared under different settings hold different ``.tensorbin`` sets and
-    are not interchangeable. `audio_max_c_in_block` changes the prepared weight *bytes* with an
-    unchanged file set (`prepare_conv3d_weight_state` blocks by ``C_in_block``), so it gets a term
-    too. Appending this to the cache subfolder keys the cache by the *effective* configuration
-    (``MINIMAX_H3_AUDIO_ACCURATE`` only moves the two defaults, so it needs no term of its own).
-    The default configuration maps to ``""``, so default-config cache paths carry no suffix.
+    ``split_mode`` decides whether the ``weight_lo`` / ``tap_w{k}_lo`` residual parameters exist, and
+    ``tap_matmul`` swaps a stride-1 conv's ``weight`` for per-tap ``tap_w{k}`` matmul weights -- so
+    device-weight caches prepared under different settings hold different ``.tensorbin`` sets and are
+    not interchangeable. ``max_c_in_block`` changes the prepared weight *bytes* with an unchanged file
+    set (`prepare_conv3d_weight_state` blocks by ``C_in_block``), so it gets a term too.
 
-    The H3 modules resolve the same helpers once at construction and pass them down as explicit
-    conv arguments, so the modules this key describes and the key itself derive from one source.
+    Only the all-fast configuration maps to ``""``; the H3 default (split=full, tap on) yields
+    ``"_split-full_tap1"``, so it can never collide with a stale fast-path cache under the
+    unsuffixed path. The caller must pass the same values it constructed its modules with.
     """
-    split = conv_split_mode()
-    tap = conv_tap_matmul_enabled()
-    suffix = "" if split == "off" and not tap else f"_split-{split}_tap{int(tap)}"
-    c_in_cap = audio_max_c_in_block()
-    if c_in_cap != DEFAULT_MAX_C_IN_BLOCK:
-        suffix += f"_cinb{c_in_cap}"
+    suffix = "" if split_mode == "off" and not tap_matmul else f"_split-{split_mode}_tap{int(tap_matmul)}"
+    if max_c_in_block != DEFAULT_MAX_C_IN_BLOCK:
+        suffix += f"_cinb{max_c_in_block}"
     return suffix
 
 
@@ -167,7 +68,14 @@ def conv3d_maybe_split(
     bias_tensor: ttnn.Tensor | None,
     **conv_kwargs,
 ) -> ttnn.Tensor:
-    """``ttnn.experimental.conv3d``, optionally summed over operand-split terms. See `conv_split_mode`.
+    """``ttnn.experimental.conv3d``, optionally summed over operand-split terms.
+
+    The fp32 conv3d multiply keeps only ~11 significand bits, and its relative error is flat in the
+    reduction depth -- the operands are being truncated, not the sum drifting, so ``fp32_dest_acc_en``
+    cannot help. Conv is linear in both arguments, so splitting an operand into ``hi = bf16(v)`` plus
+    the exact residual ``lo = v - hi`` lets a second conv carry the dropped mantissa bits.
+    ``split_mode="weight"`` splits the weight only (2 convs, measured 1.5x less error on ``conv_pre``);
+    ``"full"`` splits both (3 convs -- the ``lo*lo`` term is negligible and omitted; 1.9x).
 
     ``bias`` is applied to exactly one term, since it is not a factor of the product being split.
     """
@@ -364,35 +272,17 @@ def _t_neighbor_pad(
     )
 
 
-def depthwise_mac_preferred() -> bool:
-    """Whether to take the MAC form of the depthwise filters in preference to ``ttnn.conv1d``.
-
-    From ``MINIMAX_H3_AUDIO_DEPTHWISE_MAC`` (default off). The MAC form is **far** more accurate, and for
-    a reason that is structural rather than incidental: it is a sum of elementwise multiplies and adds,
-    and those are *exact* in fp32 on this hardware, whereas ``ttnn.conv1d`` goes through the FPU multiply
-    that keeps only ~11 significand bits. Measured on one anti-aliased downsampler (K=12, stride 2):
-
-        ttnn.conv1d   1.5437e-03
-        MAC form      5.3334e-08     <- ~29000x better
-
-    That 1.5437e-03 is the *entire* error an `Activation1d` injects -- `snake_beta` and the
-    upsampler both measure at ~7e-08 -- so for the audio decode this matters more than the conv3d
-    operand split does. It is not free: the MAC form does K passes over the tensor.
-
-    Consumed by the MiniMax-H3 call sites, which pass it into `depthwise_tap_filter` as
-    ``prefer_mac``; LTX call sites never read it and keep the fast conv1d path.
-    """
-    return os.environ.get("MINIMAX_H3_AUDIO_DEPTHWISE_MAC", "1" if audio_accurate_mode() else "0") == "1"
-
-
 def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache, prefer_mac: bool = False):
     """Valid depthwise filter (same K taps per channel) on padded ``(B, T_pad, C)`` ROW_MAJOR.
 
     Returns ``(B, T_out, C)`` with ``T_out = (T_pad - K) / stride + 1`` via a single
     ``ttnn.conv1d`` (groups=C) with the prepared weight cached in ``cache``, or via the exact
-    shift-multiply-add form when ``prefer_mac``. ``prefer_mac`` is an explicit opt-in so that
-    only call sites that ask for it (MiniMax-H3, via `depthwise_mac_preferred`) take the slower
-    K-pass MAC form; the default keeps the fast conv1d path regardless of env vars.
+    shift-multiply-add form when ``prefer_mac``. The MAC form is structurally more accurate: it is a
+    sum of elementwise multiplies and adds, which are *exact* in fp32 on this hardware, whereas
+    conv1d's FPU multiply keeps ~11 significand bits -- measured ~29000x less error on one
+    anti-aliased downsampler (K=12, stride 2), at the cost of K passes over the tensor.
+    ``prefer_mac`` is an explicit opt-in (MiniMax-H3 passes it); the default keeps the fast conv1d
+    path for LTX call sites.
     """
     B, T_pad, C = int(x_BTC.shape[0]), int(x_BTC.shape[1]), int(x_BTC.shape[2])
     K = len(taps)
@@ -765,8 +655,8 @@ class Conv2dViaConv3d(Module):
             packer_l1_acc=False,
         )
 
-        # An explicit argument, never the env var, so only call sites that opt in (MiniMax-H3) can
-        # change the parameter set. See `conv_split_mode`; splitting only helps an fp32 datapath.
+        # An explicit constructor argument: MiniMax-H3 opts in, LTX keeps the "off" default. See
+        # `conv3d_maybe_split`; splitting only helps an fp32 datapath.
         self.split_mode = split_mode if dtype == ttnn.float32 else "off"
 
         d = self.kernel_size[0] * self.kernel_size[1] * self.kernel_size[2] * self.in_channels
@@ -959,15 +849,13 @@ class Conv1dViaConv3d(Module):
             packer_l1_acc=True,
         )
 
-        # Both levers are explicit arguments, never the env vars, so only call sites that opt in
-        # (MiniMax-H3, which resolves `conv_split_mode` / `conv_tap_matmul_enabled` once at module
-        # construction) can change the parameter set or op graph -- LTX's audio path keeps the
-        # defaults regardless of env. Splitting only helps an fp32 datapath.
+        # Both levers are explicit constructor arguments: MiniMax-H3 opts in, LTX's audio path keeps
+        # the fast defaults. Splitting only helps an fp32 datapath.
         self.split_mode = split_mode if dtype == ttnn.float32 else "off"
 
         self.same_pad = same_pad
         self.eff_k = eff_k
-        # The shifted-matmul form (see `conv_tap_matmul_enabled`) needs stride 1 to index taps directly,
+        # The shifted-matmul form (see `_forward_tap_matmul`) needs stride 1 to index taps directly,
         # fp32 to be worth doing at all, and the unsharded path: under T- or channel-sharding the conv3d
         # route owns the halo exchange and the C_in gather, and duplicating that here would be a second
         # place for the same invariant to be wrong. Sharded audio decode is off by default.
@@ -1095,7 +983,12 @@ class Conv1dViaConv3d(Module):
         return self.weight.data, weight_lo, bias, self.conv_config, self.out_channels
 
     def _forward_tap_matmul(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
-        """``sum_j x[:, t + dilation*j, :] @ W_j`` -- see `conv_tap_matmul_enabled`.
+        """``sum_j x[:, t + dilation*j, :] @ W_j``: a stride-1 conv as ``kernel_size`` shifted matmuls.
+
+        No im2col matrix is needed at stride 1, and the fp32 matmul sum is exact, so this removes
+        conv3d's residual error source -- partial-sum rounding across ``C_in_block`` -- measured ~2x
+        less error at real AMP shapes. Costs ``kernel_size`` tilizes plus one untilize per conv, which
+        is a real end-to-end cost in this layout-dominated stage.
 
         Slices in ROW_MAJOR and tilizes each tap, rather than tilizing once and slicing in TILE: a
         ``ttnn.slice`` at a non-tile row boundary untilizes its whole input anyway, so slicing first keeps

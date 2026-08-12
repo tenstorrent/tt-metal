@@ -19,8 +19,7 @@ from loguru import logger
 import ttnn
 
 from ....layers.audio_ops import Conv1dViaConv3d
-
-# Import side effect: runs register_h3_audio_blockings(); without it every conv silently falls back to C_in_block=32.
+from ....models.audio_vae.minimax_h3.blockings_minimax_h3_audio import register_h3_audio_blockings
 from ....models.audio_vae.minimax_h3.convert_minimax_h3_audio import (
     assert_weight_norm_axes_consistent,
     convert_minimax_h3_audio_state_dict,
@@ -35,7 +34,9 @@ from .common import build_audio_decoder, load_config, psnr, weights_subdir
 # The vocoder needs extra L1 scratch, as the LTX audio tests do.
 SINGLE_DEVICE = [pytest.param((1, 1), {"l1_small_size": 65536}, id="single_device")]
 
-AUDIO_RELATIVE_RMSE = 0.12  # measured ~0.105 on the default path (fp32 conv multiplier over ~130 convs)
+# Encode floor, calibrated before accurate mode became the constructed default (measured ~0.105 with
+# fp32 conv multipliers over ~130 convs); the accurate defaults only improve on it.
+AUDIO_RELATIVE_RMSE = 0.12
 
 CONV_PRE_SHAPE = (2048, 1024, 7)  # conv_pre: the decoder's widest reduction, Cin 2048 x k 7
 CONV_PRE_LATENT_FRAMES = 207
@@ -51,7 +52,7 @@ def _build_reference(load_weights: bool = True):
     """The reference audio VAE, with weight norm still attached (the converter removes it)."""
     weights_dir = weights_subdir("audio_vae")
     if weights_dir is None:
-        pytest.skip("MiniMax-H3 audio_vae not found; set MINIMAX_H3_DIFFUSERS_DIR")
+        pytest.skip("MiniMax-H3 audio_vae not found; set MINIMAX_H3_MODEL_PATH")
     pytest.importorskip("diffusers", reason="pinned diffusers reference not installed")
     from diffusers import AutoencoderKLMiniMaxH3Audio
 
@@ -92,7 +93,11 @@ def _tt_decoder(config: dict, mesh_device) -> MiniMaxH3AudioDecoder:
 @pytest.mark.parametrize("num_latent_frames", PRODUCTION_LATENT_FRAMES)
 @pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
 def test_decode(mesh_device, num_latent_frames):
-    """The whole decode path against the reference, at a production duration, stereo."""
+    """The whole decode path against the reference, at a production duration, stereo.
+
+    Constructor defaults are accurate mode (split_mode='full', tap_matmul, prefer_mac), so the bars
+    are the accurate-mode ones: measured 0.0045 rel RMSE / 99.9990% PCC / 67.5 dB PSNR.
+    """
     reference, config = _build_reference()
     torch.manual_seed(1)
 
@@ -101,6 +106,12 @@ def test_decode(mesh_device, num_latent_frames):
         expected_proj = reference.dec_in_proj(latents)
 
     tt_decoder = _tt_decoder(config, mesh_device)
+    # The precision levers are the constructed defaults; assert they landed where they matter.
+    assert tt_decoder.dec_in_proj.split_mode == "full", "split_mode='full' did not land on dec_in_proj"
+    assert tt_decoder.dec_in_proj.tap_matmul, "tap_matmul=True did not land on dec_in_proj"
+    assert tt_decoder.decoder.conv_post.split_mode == "full", "split_mode='full' did not land on conv_post"
+    assert tt_decoder.decoder.act_post.downsample.lowpass.prefer_mac, "prefer_mac=True did not land on act_post"
+
     tt_decoder.load_torch_state_dict(convert_minimax_h3_audio_state_dict(dict(reference.state_dict())), strict=False)
 
     projected = tt_decoder._project_latents_device(latents)
@@ -110,11 +121,11 @@ def test_decode(mesh_device, num_latent_frames):
     actual = tt_decoder(latents)
 
     assert actual.shape == expected.shape, f"shape {tuple(actual.shape)} != reference {tuple(expected.shape)}"
-    assert_quality(expected, actual, pcc=0.99, relative_rmse=AUDIO_RELATIVE_RMSE)
+    assert_quality(expected, actual, pcc=0.9999, relative_rmse=0.006)
 
     psnr_db = psnr(expected, actual)
     mel_distance = _log_mel_distance(expected, actual)
-    assert psnr_db >= 28.0, f"decode PSNR {psnr_db:.2f} dB < 28 dB"
+    assert psnr_db >= 60.0, f"decode PSNR {psnr_db:.2f} dB < 60 dB"
     assert mel_distance <= 5.0, f"log-spectrogram distance {mel_distance:.3f} > 5.0"
 
     left, right = actual[0, 0], actual[1, 0]
@@ -122,34 +133,11 @@ def test_decode(mesh_device, num_latent_frames):
 
 
 @pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
-def test_decode_accurate_mode(mesh_device, monkeypatch):
-    """The whole decode path with every precision lever on (``MINIMAX_H3_AUDIO_ACCURATE=1``)."""
-    monkeypatch.setenv("MINIMAX_H3_AUDIO_ACCURATE", "1")
-
-    reference, config = _build_reference()
-    torch.manual_seed(1)
-
-    num_latent_frames = 207  # 5 s, as in test_decode
-    _, latents, expected = _golden_latents(reference, num_latent_frames)
-
-    tt_decoder = _tt_decoder(config, mesh_device)
-    assert tt_decoder.dec_in_proj.split_mode == "full", "split_mode='full' did not land on dec_in_proj"
-    assert tt_decoder.dec_in_proj.tap_matmul, "tap_matmul=True did not land on dec_in_proj"
-    assert tt_decoder.decoder.conv_post.split_mode == "full", "split_mode='full' did not land on conv_post"
-    assert tt_decoder.decoder.act_post.downsample.lowpass.prefer_mac, "prefer_mac=True did not land on act_post"
-
-    tt_decoder.load_torch_state_dict(convert_minimax_h3_audio_state_dict(dict(reference.state_dict())), strict=False)
-    actual = tt_decoder(latents)
-
-    assert actual.shape == expected.shape, f"shape {tuple(actual.shape)} != reference {tuple(expected.shape)}"
-    assert_quality(expected, actual, pcc=0.9999, relative_rmse=0.006)  # measured 0.0045 / 99.9990% / 67.5 dB
-    psnr_db = psnr(expected, actual)
-    assert psnr_db >= 60.0, f"accurate-mode PSNR {psnr_db:.2f} dB < 60 dB"
-
-
-@pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
 def test_conv_operand_split_improves_precision(mesh_device):
     """Operand splitting really does beat the fp32 conv floor, at ``conv_pre``'s production shape."""
+    # Raw Conv1dViaConv3d does not register the H3 conv blockings (the H3 audio module constructors
+    # do); without this, every conv silently falls back to C_in_block=32 and the "off" bar fails.
+    register_h3_audio_blockings()
     in_channels, out_channels, kernel = CONV_PRE_SHAPE
     torch.manual_seed(0)
     reference = torch.nn.Conv1d(in_channels, out_channels, kernel, padding=kernel // 2).float().eval()
@@ -320,7 +308,7 @@ def test_real_checkpoint_fusion_matches_reference_module():
     """Real checkpoint: axes hold, every pair fuses, fused weights equal torch's ``remove_weight_norm``."""
     weights_dir = weights_subdir("audio_vae")
     if weights_dir is None:
-        pytest.skip("MiniMax-H3 audio_vae not found; set MINIMAX_H3_DIFFUSERS_DIR")
+        pytest.skip("MiniMax-H3 audio_vae not found; set MINIMAX_H3_MODEL_PATH")
     pytest.importorskip("diffusers", reason="pinned diffusers reference not installed")
     from diffusers import AutoencoderKLMiniMaxH3Audio
     from safetensors.torch import load_file
@@ -363,7 +351,7 @@ def test_real_checkpoint_fusion_matches_reference_module():
 
 # -------------------------------------------------------------------- traced audio decode
 
-# 450 MB trace region: accurate mode's graph needs 375463936 B; the default path fits in 300 MB.
+# 450 MB trace region: the accurate-mode (default) decode graph needs 375463936 B.
 TRACED = [
     pytest.param((1, 1), {"l1_small_size": 65536, "trace_region_size": 450_000_000}, id="single_device"),
 ]

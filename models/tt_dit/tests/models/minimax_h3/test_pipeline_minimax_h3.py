@@ -22,14 +22,12 @@ from .common_av import (
     check_av_sync,
     check_spatial_seams,
     check_written_file,
-    clip_gate_enabled,
     gate_clip,
     gate_vbench,
     log_spectral_flatness,
     log_timing_table,
     run_warm_generation,
     to_uint8_frames,
-    vbench_gate_enabled,
     weights_dir,
     write_artifacts,
 )
@@ -40,8 +38,6 @@ NUM_INFERENCE_STEPS = 50
 SEED = 0
 
 PROMPT = CALIBRATED_FOX_PROMPT  # tier-6 thresholds are calibrated against this exact prompt
-
-ARTIFACT_ENV = "MINIMAX_H3_ARTIFACT_DIR"
 
 EXPECTED_TOTAL_S = 400.0  # loose did-something-collapse bar, not a perf target
 
@@ -69,19 +65,11 @@ CLIP_THRESHOLD = 33.0  # measured mean 37.05 (2026-08-04, fox prompt, seed 0)
 @pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8, indirect=["mesh_device", "device_params"])
 def test_t2va_end_to_end(mesh_device, reset_seeds):
     weights = weights_dir("transformer", "text_encoder", "vae", "audio_vae")
-    artifacts = artifact_dir(ARTIFACT_ENV, "h3_t2va_artifacts")
+    artifacts = artifact_dir("h3_t2va_artifacts")
+    prompt = PROMPT
 
-    vbench_enabled = vbench_gate_enabled()
-    run_clip = clip_gate_enabled()
-
-    # MINIMAX_H3_PROMPT overrides the gated prompt; the tier-6 bars are prompt-calibrated, so they turn off.
-    prompt = os.environ.get("MINIMAX_H3_PROMPT") or PROMPT
-    if prompt is not PROMPT:
-        logger.info("MINIMAX_H3_PROMPT override in use; disabling the prompt-calibrated tier-6 gates")
-        vbench_enabled = run_clip = False
-    # A missing dependency must report SKIPPED, never silently pass as green.
-    if run_clip:
-        pytest.importorskip("open_clip", reason="RUN_CLIP=1 but open_clip is not installed (set RUN_CLIP=0)")
+    # A missing dependency must report SKIPPED before the long generation, never silently pass as green.
+    pytest.importorskip("open_clip", reason="the CLIP gate needs open_clip, which is not installed")
 
     if not os.environ.get("TT_DIT_CACHE_DIR"):
         logger.warning(
@@ -145,8 +133,8 @@ def test_t2va_end_to_end(mesh_device, reset_seeds):
     paths = write_artifacts(frames, output.audio.cpu().numpy(), output.sampling_rate, artifacts)
     check_written_file(paths, expected_frames)
 
-    gate_clip(frames, prompt, CLIP_THRESHOLD, "t2va", enabled=run_clip)
-    gate_vbench(paths, prompt, VBENCH_THRESHOLDS, "t2va", enabled=vbench_enabled)
+    gate_clip(frames, prompt, CLIP_THRESHOLD, "t2va")
+    gate_vbench(paths, prompt, VBENCH_THRESHOLDS, "t2va")
 
     logger.info(f"artifacts in {artifacts}: {sorted(p.name for p in artifacts.iterdir())}")
     logger.info(

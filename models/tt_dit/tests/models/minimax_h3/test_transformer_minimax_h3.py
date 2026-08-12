@@ -92,14 +92,13 @@ TRANSFORMER_CONFIG = dict(
 )
 
 MODEL_PATH_ENV = "MINIMAX_H3_MODEL_PATH"
-SUBFOLDER_ENV = "MINIMAX_H3_SUBFOLDER"
 
 
 def _checkpoint_dir() -> Path:
     model_root = os.environ.get(MODEL_PATH_ENV)
     if not model_root:
         pytest.skip(f"set {MODEL_PATH_ENV} to a MiniMax-H3 diffusers snapshot to run this")
-    directory = Path(model_root) / os.environ.get(SUBFOLDER_ENV, "transformer")
+    directory = Path(model_root) / "transformer"
     if not directory.is_dir():
         pytest.skip(f"{directory} is not a directory")
     return directory

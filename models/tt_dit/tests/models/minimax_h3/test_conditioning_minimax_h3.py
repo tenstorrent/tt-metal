@@ -253,9 +253,9 @@ PROMPT = (
 
 
 def _weights_dir() -> str:
-    base = os.environ.get("MINIMAX_H3_MODEL_PATH") or os.environ.get(
-        "MINIMAX_H3_DIFFUSERS_DIR", "/data/cglagovich/MiniMax-H3-diffusers"
-    )
+    base = os.environ.get("MINIMAX_H3_MODEL_PATH")
+    if not base:
+        pytest.skip("set MINIMAX_H3_MODEL_PATH to a MiniMax-H3 diffusers snapshot")
     return os.path.join(base, "text_encoder")
 
 

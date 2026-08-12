@@ -6,7 +6,6 @@
 # conditioner is a strict xfail: massive-activation rows disagree; see the xfail reason and
 # git history. Large-host test: ~62 GiB of shards and RAM; skips when unavailable.
 
-import os
 import re
 
 import numpy as np
@@ -34,8 +33,6 @@ _PATTERNS = [f"{CONDITIONER_SUBFOLDER}/*"]
 # the production keyframe canvas; 448x448 is not a canvas `resolve_canvas_size` yields
 KEYFRAME_IMAGE = (1344, 768)
 
-T2VA_ARTIFACT_ENV = "MINIMAX_H3_T2VA_ARTIFACT_DIR"
-
 # per-row bars by row class: whole-tensor PCC is dominated by a few massive rows and only logged
 FUSED_MAX_TEXT_ROW_ERROR = 0.05  # measured max 0.0247 (HiFi2 calibration; HiFi4 is lower)
 FUSED_MAX_MEDIAN_ROW_ERROR = 0.15  # measured median 0.0901 (HiFi2 calibration; HiFi4 is lower)
@@ -50,13 +47,7 @@ def _test_image(size):
 
     from ....pipelines.minimax_h3.packing import prepare_keyframe_image
 
-    # MINIMAX_H3_TEST_CONTENT=noise: diagnostic escape hatch, not for gating
-    if os.environ.get("MINIMAX_H3_TEST_CONTENT") == "noise":
-        generator = torch.Generator().manual_seed(0)
-        pixels = (torch.rand(size[1], size[0], 3, generator=generator) * 255).to(torch.uint8)
-        return Image.fromarray(pixels.numpy())
-
-    source = Path(os.environ.get(T2VA_ARTIFACT_ENV) or Path.home() / "h3_t2va_artifacts") / "t2va.mp4"
+    source = Path.home() / "h3_t2va_artifacts" / "t2va.mp4"
     if not source.is_file():
         pytest.skip(
             f"no calibrated t2va artifact at {source}; run test_pipeline_minimax_h3.py first. These are "
@@ -264,11 +255,6 @@ def test_fused_conditioner_real_weights(conditioner, mesh_device, submesh_shape,
         f"seq={seq_len} ({num_image_tokens} image tokens):"
     )
     assert actual.shape[-2:] == (seq_len, cfg.hidden_size)
-    if os.environ.get("MINIMAX_H3_DUMP_FUSED"):
-        torch.save(
-            {"golden": golden, "actual": actual, "type_ids": type_ids, "label_len": len(label), "size": size},
-            os.environ["MINIMAX_H3_DUMP_FUSED"],
-        )
 
     # per-row relative L2 error: what the DiT's `context_embedder` actually consumes
     g = golden[0].double()

@@ -40,14 +40,11 @@ PRODUCTION_CONFIGS = [
 
 
 def _weights_dir() -> str | None:
-    candidates = [
-        os.environ.get("MINIMAX_H3_DIFFUSERS_DIR", "") and os.path.join(os.environ["MINIMAX_H3_DIFFUSERS_DIR"], "vae"),
-        "/data/cglagovich/MiniMax-H3-diffusers/vae",
-    ]
-    for candidate in candidates:
-        if candidate and os.path.isfile(os.path.join(candidate, "config.json")):
-            return candidate
-    return None
+    base = os.environ.get("MINIMAX_H3_MODEL_PATH")
+    if not base:
+        return None
+    candidate = os.path.join(base, "vae")
+    return candidate if os.path.isfile(os.path.join(candidate, "config.json")) else None
 
 
 def _reference(name: str):
@@ -62,7 +59,7 @@ def _reference(name: str):
 
 def _raw_config(weights_dir: str | None) -> dict:
     if weights_dir is None:
-        pytest.skip("MiniMax-H3 vae/config.json not found; set MINIMAX_H3_DIFFUSERS_DIR")
+        pytest.skip("MiniMax-H3 vae/config.json not found; set MINIMAX_H3_MODEL_PATH")
     return load_config(weights_dir)
 
 
@@ -129,7 +126,7 @@ def test_tiling_geometry_matches_reference(width, height, num_frames):
 @pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
 def test_encode_clip_tiled(mesh_device, num_frames, temporal_taps, expected_latent_frames):
     """Tiled ``encode_clip`` vs the reference's tiled ``_encode_clip``; also the whole-encoder gate."""
-    # Whole-encoder coverage skips without MINIMAX_H3_DIFFUSERS_DIR.
+    # Whole-encoder coverage skips without MINIMAX_H3_MODEL_PATH.
     weights_dir = _weights_dir()
     reference, config = _build_reference(weights_dir)
     torch.manual_seed(4)

@@ -47,6 +47,7 @@ WORK_UNITS = {
 AUDIO_LATENT_FRAMES_5S = 207  # ~5 s at 40 latent fps; budgets were calibrated at 207, not the exact 200
 
 # Seconds per measurement. Generous regression bars, not tuned targets; visual entries gate a 32-unit wave.
+# Audio decode runs the accurate-mode defaults (~13 s eager, ~3x the retired fast path); 60 s stays generous.
 EXPECTED_METRICS = {
     "visual_encoder_clip_wave": 20.0,
     "visual_encoder_keyframe_wave": 5.0,
@@ -99,7 +100,7 @@ def test_visual_data_parallel_throughput(mesh_device):
 
     weights_dir = weights_subdir("vae")
     if weights_dir is None:
-        pytest.skip("MiniMax-H3 vae not found; set MINIMAX_H3_DIFFUSERS_DIR")
+        pytest.skip("MiniMax-H3 vae not found; set MINIMAX_H3_MODEL_PATH")
     config = load_config(weights_dir)
     devices = mesh_device.get_num_devices()
     torch.manual_seed(0)
@@ -164,7 +165,7 @@ def test_audio_baselines(mesh_device):
     """Audio encode/decode timing baselines at 5 s, against their budgets."""
     weights_dir = weights_subdir("audio_vae")
     if weights_dir is None:
-        pytest.skip("MiniMax-H3 audio_vae not found; set MINIMAX_H3_DIFFUSERS_DIR")
+        pytest.skip("MiniMax-H3 audio_vae not found; set MINIMAX_H3_MODEL_PATH")
     from safetensors.torch import load_file
 
     config = load_config(weights_dir)

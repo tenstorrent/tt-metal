@@ -26,7 +26,9 @@ DECODE_LATENT_FRAMES = 7
 
 
 def weights_subdir(subfolder: str) -> str | None:
-    base = os.environ.get("MINIMAX_H3_DIFFUSERS_DIR", "/data/cglagovich/MiniMax-H3-diffusers")
+    base = os.environ.get("MINIMAX_H3_MODEL_PATH")
+    if not base:
+        return None
     candidate = os.path.join(base, subfolder)
     return candidate if os.path.isfile(os.path.join(candidate, "config.json")) else None
 
@@ -269,32 +271,23 @@ def build_audio_decoder(config: dict, mesh_device, **overrides):
     return MiniMaxH3AudioDecoder(**kwargs)
 
 
-CONDITIONER_LOCAL_MIRROR = "/data/cglagovich/MiniMax-H3-diffusers"
-CONDITIONER_HF_REPO = "MiniMaxAI/MiniMax-H3"
 CONDITIONER_SUBFOLDER = "text_encoder"
 
 
 def conditioner_checkpoint_dir(patterns: list[str]) -> str:
-    """Resolve the conditioner directory ($MINIMAX_H3_REPO, local mirror, then Hub snapshot); a missing checkpoint skips."""
-    from huggingface_hub import snapshot_download
-    from loguru import logger
+    """Resolve the conditioner directory from $MINIMAX_H3_MODEL_PATH; a missing checkpoint skips.
 
-    try:
-        ref = os.environ.get("MINIMAX_H3_REPO", "").strip()
-        if ref and os.path.isdir(ref):
-            root = ref
-        elif not ref and os.path.isdir(CONDITIONER_LOCAL_MIRROR):
-            root = CONDITIONER_LOCAL_MIRROR
-        else:
-            repo_id = ref or CONDITIONER_HF_REPO
-            logger.info(f"MiniMax-H3 conditioner not local; fetching {patterns} from {repo_id}")
-            root = snapshot_download(repo_id=repo_id, allow_patterns=patterns)
-        return os.path.join(root, CONDITIONER_SUBFOLDER)
-    except Exception as exc:  # noqa: BLE001 - environment gap is a skip, not a failure
-        pytest.skip(
-            f"MiniMax-H3 conditioner unavailable (tried $MINIMAX_H3_REPO, {CONDITIONER_LOCAL_MIRROR}, then "
-            f"{CONDITIONER_HF_REPO}): {exc}"
-        )
+    `patterns` are the shard patterns the test needs present (validation only, nothing is fetched).
+    """
+    import glob
+
+    root = os.environ.get("MINIMAX_H3_MODEL_PATH", "")
+    if not root or not os.path.isdir(root):
+        pytest.skip("set MINIMAX_H3_MODEL_PATH to a MiniMax-H3 diffusers snapshot")
+    missing = [pattern for pattern in patterns if not glob.glob(os.path.join(root, pattern))]
+    if missing:
+        pytest.skip(f"MiniMax-H3 conditioner checkpoint at {root} is missing {missing}")
+    return os.path.join(root, CONDITIONER_SUBFOLDER)
 
 
 def load_reference_conditioner(path: str):

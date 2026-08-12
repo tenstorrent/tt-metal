@@ -171,7 +171,7 @@ def test_encoder_sharded_matches_unsharded(mesh_device, h_factor, w_factor):
     """Sharding is a decomposition: the encoder's answer must not depend on the factor."""
     weights_dir = weights_subdir("vae")
     if weights_dir is None:
-        pytest.skip("MiniMax-H3 vae not found; set MINIMAX_H3_DIFFUSERS_DIR")
+        pytest.skip("MiniMax-H3 vae not found; set MINIMAX_H3_MODEL_PATH")
     config = load_config(weights_dir)
     torch.manual_seed(0)
 
@@ -249,7 +249,7 @@ def _assert_unit_independence(module, units, out_dp, mesh_device, *, dtype, layo
 def test_encoder_data_parallel_independence(mesh_device):
     weights_dir = weights_subdir("vae")
     if weights_dir is None:
-        pytest.skip("MiniMax-H3 vae not found; set MINIMAX_H3_DIFFUSERS_DIR")
+        pytest.skip("MiniMax-H3 vae not found; set MINIMAX_H3_MODEL_PATH")
     config = load_config(weights_dir)
     num_devices = mesh_device.get_num_devices()
     torch.manual_seed(0)
@@ -289,7 +289,7 @@ def test_decoder_data_parallel_independence(mesh_device):
     """Same independence gate for the ViT decoder: each (chunk, tile) unit is its own decode."""
     weights_dir = weights_subdir("vae")
     if weights_dir is None:
-        pytest.skip("MiniMax-H3 vae not found; set MINIMAX_H3_DIFFUSERS_DIR")
+        pytest.skip("MiniMax-H3 vae not found; set MINIMAX_H3_MODEL_PATH")
     config = load_config(weights_dir)
     num_devices = mesh_device.get_num_devices()
     torch.manual_seed(0)

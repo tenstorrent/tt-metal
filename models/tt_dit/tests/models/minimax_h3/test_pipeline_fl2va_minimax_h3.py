@@ -8,7 +8,6 @@ Separate file so it runs in its own process: DiT programs + CCL buffers at sever
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import numpy as np
@@ -44,10 +43,6 @@ NUM_INFERENCE_STEPS = 50
 SEED = 0
 
 PROMPT = CALIBRATED_FOX_PROMPT  # the tier-6 bars are calibrated against this exact prompt
-
-ARTIFACT_ENV = "MINIMAX_H3_ARTIFACT_DIR"
-# Where the calibrated t2va artifact (the gated keyframe's source) is READ from; ARTIFACT_ENV is where fl2va writes.
-T2VA_ARTIFACT_ENV = "MINIMAX_H3_T2VA_ARTIFACT_DIR"
 
 # Ring collectives require FABRIC_1D_RING.
 MESH_4X8 = [
@@ -132,8 +127,7 @@ def check_tile_boundary_gradient(frames, *, vertical_boundaries, horizontal_boun
 def _gated_keyframe() -> Image.Image:
     """Frame 0 of the calibrated t2va generation -- the only keyframe the tier-6 bars apply to.
     As a conditioning signal it is confounded; `test_fl2va_follows_the_keyframe` rules that out."""
-    source_dir = Path(os.environ.get(T2VA_ARTIFACT_ENV) or Path.home() / "h3_t2va_artifacts")
-    artifact = source_dir / "t2va.mp4"
+    artifact = Path.home() / "h3_t2va_artifacts" / "t2va.mp4"
     if not artifact.is_file():
         pytest.skip(
             f"no calibrated t2va artifact at {artifact}; run test_pipeline_minimax_h3.py first so the "
@@ -225,7 +219,7 @@ def test_fl2va_end_to_end(mesh_device, reset_seeds):
             pcc_floor=ANCHOR_PCC_FLOOR,
         )
 
-    artifacts = artifact_dir(ARTIFACT_ENV, "h3_t2va_artifacts")
+    artifacts = artifact_dir("h3_t2va_artifacts")
     paths = write_artifacts(frames, output.audio.cpu().numpy(), output.sampling_rate, artifacts, stem=f"fl2va_{case}")
     check_written_file(paths, expected_frames)
     if "mp4" in paths:
@@ -300,7 +294,7 @@ def test_fl2va_follows_the_keyframe(mesh_device, reset_seeds):
         f"fl2va keyframe-drives-generation: frame 0 vs fractal keyframe {to_keyframe:.4f}, "
         f"frame 0 vs t2va's own frame 0 {to_t2va:.4f}, frame -1 vs fractal keyframe {tail:.4f}"
     )
-    artifacts = artifact_dir(ARTIFACT_ENV, "h3_t2va_artifacts")
+    artifacts = artifact_dir("h3_t2va_artifacts")
     for index in (0, 17, 62, align_num_frames(NUM_FRAMES) - 1):
         Image.fromarray(frames[index]).save(artifacts / f"fl2va_fractal_frame_{index}.png")
 

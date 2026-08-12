@@ -19,7 +19,7 @@ is a performance-pass job -- these exist only so the correctness gates can run.
 
 from __future__ import annotations
 
-from ....layers.audio_ops import audio_max_c_in_block
+from ....layers.audio_ops import DEFAULT_MAX_C_IN_BLOCK
 from ....utils.conv3d import _FP32_BLOCKINGS, aligned_channels
 
 # 16 overshoots L1 by 1.26x (1979264 B against 1572864 B) at the widest audio convs.
@@ -35,20 +35,19 @@ C_OUT_BLOCK = 32
 # 3.20 % chain RMSE, 256 gives 3.31 % (no better), and 512 fails outright
 # (`program.cpp:1706`). The reason is structural -- the chain is dominated by the 126 AMP convs at
 # Cin 8-512, where the block cannot widen anyway, so only `conv_pre` and `dec_in_proj` would gain and
-# there are two of them against 126. Override with ``MINIMAX_H3_AUDIO_MAX_C_IN_BLOCK`` to re-sweep.
-# The override changes the prepared weight *bytes* (`prepare_conv3d_weight_state` blocks by
-# ``C_in_block``) with an unchanged file set, so `audio_weights_variant` -- which reads the same
-# `audio_max_c_in_block` helper -- keys the device-weight cache on any non-default value.
+# there are two of them against 126. Pass ``max_c_in_block`` to re-sweep. A non-default cap changes
+# the prepared weight *bytes* (`prepare_conv3d_weight_state` blocks by ``C_in_block``) with an
+# unchanged file set, which is why `weights_variant` folds it into the device-weight cache key.
 
 
-def _c_in_block(in_channels: int) -> int:
-    """Largest 32-multiple <= `audio_max_c_in_block` that divides ``in_channels`` evenly.
+def _c_in_block(in_channels: int, max_c_in_block: int = DEFAULT_MAX_C_IN_BLOCK) -> int:
+    """Largest 32-multiple <= ``max_c_in_block`` that divides ``in_channels`` evenly.
 
     The kernel requires ``C_in_block`` to be a multiple of the tile width and to divide the
     padded input channel count.
     """
     aligned = aligned_channels(in_channels)
-    for block in range(min(audio_max_c_in_block(), aligned) // 32 * 32, 0, -32):
+    for block in range(min(max_c_in_block, aligned) // 32 * 32, 0, -32):
         if aligned % block == 0:
             return block
     return 32
@@ -90,7 +89,7 @@ def h3_audio_channel_widths(
     return pairs
 
 
-def register_h3_audio_blockings(**config) -> int:
+def register_h3_audio_blockings(*, max_c_in_block: int = DEFAULT_MAX_C_IN_BLOCK, **config) -> int:
     """Seed ``_FP32_BLOCKINGS`` for every H3 audio conv shape. Returns the number added.
 
     ``setdefault``, so a swept value that later lands in ``conv3d.py`` wins over these.
@@ -102,7 +101,7 @@ def register_h3_audio_blockings(**config) -> int:
     for in_channels, out_channels in h3_audio_channel_widths(**config):
         for kernel in kernels:
             key = (aligned_channels(in_channels), max(32, out_channels), (kernel, 1, 1))
-            blocking = (_c_in_block(in_channels), C_OUT_BLOCK, T_OUT_BLOCK, 1, 1)
+            blocking = (_c_in_block(in_channels, max_c_in_block), C_OUT_BLOCK, T_OUT_BLOCK, 1, 1)
             existing = _FP32_BLOCKINGS.get(key)
             if existing is None:
                 _FP32_BLOCKINGS[key] = blocking
