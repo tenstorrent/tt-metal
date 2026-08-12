@@ -31,8 +31,7 @@ void kernel_main() {
     constexpr bool is_fp32 = get_arg(args::is_fp32) == 1;
     const auto src_in = TensorAccessor(tensor::src);
 
-    // Emit a full/partial MAX-scaler pair only for ragged H. The compute kernel derives the same
-    // predicate from its compile-time mask_h argument and waits for the matching number of tiles.
+    // Generate scaler tiles: MAX needs row-0 fill (reduce LLK), SUM needs col-0 fill (matmul)
     if (mask_h < tt::constants::TILE_HEIGHT) {
         dataflow_kernel_lib::calculate_and_prepare_partial_reduce_scalers<
             dfb_max_scaler,

@@ -33,13 +33,6 @@ void kernel_main() {
     const auto y_in = TensorAccessor(y_args, y_addr);
     const auto dy_in = TensorAccessor(dy_args, dy_addr);
 
-    // The sum reduce's scaler is 1.0 (SUM), which calculate_and_prepare_reduce_scaler computes itself —
-    // the host no longer passes a packed scaler value. When H is ragged the scaler is emitted as a
-    // full/partial pair so the reduce can exclude the padding rows of the last H tile; the compute
-    // kernel derives the same decision from its own mask_h compile-time arg. Both sides compare against
-    // TILE_HEIGHT, and they must agree or one waits for a tile the other never emits.
-    //
-    // The 0/1 mask tile is gone with it: it only ever zeroed padding that fed this reduce.
     if (mask_h < tt::constants::TILE_HEIGHT) {
         dataflow_kernel_lib::calculate_and_prepare_partial_reduce_scalers<
             cb_scaler,

@@ -25,10 +25,6 @@ void kernel_main() {
 #ifdef REDUCE_SCALER
     constexpr uint32_t reduce_factor = get_arg(args::reduce_factor);
 #ifdef DO_MASK_H
-    // Non-tile-aligned H: emit a full scaler (tile 0) plus a partial scaler (tile 1) that fills only
-    // the first partial_h rows. Both carry 1/origin_H, so summing the valid rows and scaling gives
-    // the mean over the true element count. Compute applies tile 1 to the last H tile of a column.
-    // partial_h is origin_H % TILE_HEIGHT, so it is always in [1, 31] here.
     constexpr uint32_t partial_h = get_arg(args::partial_h);
     dataflow_kernel_lib::calculate_and_prepare_partial_reduce_scalers<
         dfb::scaler,
