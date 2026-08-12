@@ -373,6 +373,14 @@ def prepare_inputs_for_operation(
         max_val = 30.0
         src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
         src_A = src_A.to(torch_format)
+    elif mathop == MathOperation.Hardsigmoid:
+        # hardsigmoid(x) = clamp(x/6 + 1/2, 0, 1): span past both knees (x = -3 and x = +3) so the
+        # lower clamp, the affine ramp, and the upper clamp are all covered (mirrors sfpu_domains'
+        # Hardsigmoid spec).
+        min_val = -4.0
+        max_val = 4.0
+        src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
+        src_A = src_A.to(torch_format)
     # else: keep src_A as-is
 
     return src_A
@@ -655,6 +663,9 @@ OP_CONFIGS = [
     OpConfig(MathOperation.Clamp, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Neg, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Softplus, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    OpConfig(
+        MathOperation.Hardsigmoid, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True
+    ),
     OpConfig(MathOperation.Typecast, TENSOR_DIMS, DEST_SYNC_MODES),
     # Trigonometry / inverse-hyperbolic ops: same matrix as the other transcendentals,
     # fed a uniform [0, 1] stimulus that prepare_trig_inputs maps into each op's domain.

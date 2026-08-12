@@ -78,6 +78,16 @@ enum class BinaryOp : std::uint8_t
     DEQUANT,
 };
 
+// Activation selected by the activations kernel; values mirror the other architectures.
+enum class ActivationType
+{
+    Celu        = 0,
+    Elu         = 1,
+    Gelu        = 2,
+    Hardtanh    = 3,
+    Hardsigmoid = 4,
+};
+
 // For instructions that address lower/upper 16 bits of a register
 #define LO_16(REG) (2 * (REG))
 #define HI_16(REG) (2 * (REG) + 1)
