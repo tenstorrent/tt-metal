@@ -323,7 +323,9 @@ models:
     wh_llmbox: 198
     bh_p150b_civ2: 8
     bh_p300: 20
-    bh_loudbox: 193
+    # +1 for bh-lb-kimi-k3-attn-res in tests/pipeline_reorg/blackhole_e2e_tests.yaml,
+    # which is the smallest slot its cold-cache 3:14 fits.
+    bh_loudbox: 194
     bh_quietbox_2: 90
     bh_sc1: 20 # single galaxy MLA chunked prefill
   # Per-tier e2e budgets, consumed by the tiered model pipelines;
