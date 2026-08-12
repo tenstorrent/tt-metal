@@ -1,9 +1,0 @@
-# SFPU Phase 1 — in short
-
-Part of [#49739](https://github.com/tenstorrent/tt-metal/issues/49739) · [PR #52172](https://github.com/tenstorrent/tt-metal/pull/52172) · branch `ldjurovic/sfpu_edge_cases_1` · commits `b0f4ae8`, `1291c7a`
-
-Phase 1 applied Phase 0's reroute to the other three families, which had never imported `sfpu_domains.py` (audit finding #2) and so fed every op a positive-only `uniform(0.1, 1.1)`. Seven float elementwise binary ops now take their registered domain — add/sub/mul/rsub/div go from **0% to 50% negative operands**, and div's divisor spans both sides of the pole it is registered to avoid — while ternary and scalar gained the per-operand spec parameters later phases need. Alongside: the scalar binops sweep `{0, 1, 2, −2, 8, 0.25}` rather than one hard-coded `2.0`; `SfpuElwLt/Gt/Le/Ge` got their **first LLK-level correctness test**, driving the exact tie where lt/gt and le/ge disagree; and recording op arity made the unary sweep's exhaustiveness a collection-time error.
-
-As in Phase 0 the mechanism was small and the fallout was most of the work. **Per-operand pairing had only ever filled the first tile pair** — `face_specs` is applied positionally and not cycled — so `mask`, `isclose` and `eq`/`ne` were each testing one sixteenth of what they appeared to. Fixing that exposed **`calculate_mask`'s one-pair-per-block limit**: the kernel ignores the forwarded dst indices, so 12 of 16 pairs failed until the test moved to a `[64, 32]` buffer. Third, **`pow` and `xlogy` needed accuracy-bounded domains**, neither having ever executed. The suite had also never seeded its stimuli, so a flaky variant was indistinguishable from a real finding.
-
-**Net:** 7 binary ops gained negative-operand and pole-spanning coverage, 4 comparison ops their first test, pairing went from 1-in-16 tile pairs to all of them, and ternary/scalar are plumbed for Phases 2–4. Blackhole, all four suites: **4990 passed, 1700 skipped, 7 xfailed**.
