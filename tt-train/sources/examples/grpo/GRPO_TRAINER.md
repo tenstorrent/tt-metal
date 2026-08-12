@@ -564,11 +564,20 @@ python3 reverse_text/reverse_text_training_example.py
 
 ### Plotting
 
-[`boolq/boolq_plot_example.py`](boolq/boolq_plot_example.py) — plots any column
-of the `grpo_metrics.csv` written by the `GRPOMonitor` callback.
+[`boolq/boolq_plot_example.py`](boolq/boolq_plot_example.py) — plots any column of the `grpo_metrics.csv` written by a `GRPOMonitor` callback.
 
 ```bash
 python3 boolq/boolq_plot_example.py <output_dir>/grpo_metrics.csv reward
+```
+
+[`reverse_text/reverse_text_plot_example.py`](reverse_text/reverse_text_plot_example.py) —
+plots every reverse-text metric (reward, the three eval scores, completion
+length, and the step / generation times) as one grid. With no arguments it picks
+the newest run under `generated/tt-train/grpo_reverse_text_run/` and writes
+`grpo_metrics.png` beside its CSV.
+
+```bash
+python3 reverse_text/reverse_text_plot_example.py
 ```
 
 ---
