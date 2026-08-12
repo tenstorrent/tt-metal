@@ -78,6 +78,12 @@ DEFAULT_LEVERS = {
     "barrier_per_block": 1,  # B7: one barrier per block vs one per transaction
     "noc_split": 1,  # B9: reader NoC0 / writer NoC1 vs swapped
     "double_buffer": 1,  # C16: CB depth 2 vs 1  (also the user-facing kwarg)
+    # A2/C14 off-arm: consume a resident shard through a TensorAccessor instead
+    # of aliasing the CB onto it. 1 = the NON-zero-copy counterfactual (the
+    # interleaved path merely TOLERATING a sharded tensor), 0 = the shipped
+    # zero-copy placement. Only legal where the streamed reader can address the
+    # input (interleaved, or a shard whose width is the full row).
+    "force_streamed": 0,
     "stub_read": 0,  # ablation: drop the NoC read payload
     "stub_compute": 0,  # ablation: drop the tilize math
     "stub_write": 0,  # ablation: drop the NoC write payload
@@ -195,10 +201,25 @@ def tile_geometry(shape, tile_height: int):
     return nt_h, Wt, Hp, Wp
 
 
-def blocking(shape, tile_height: int, elem_size: int, target_read_bytes: int = TARGET_READ_BYTES):
-    """The whole Blocking Model for one call, derived from the knobs above."""
+def blocking(
+    shape,
+    tile_height: int,
+    elem_size: int,
+    target_read_bytes: int = TARGET_READ_BYTES,
+    wt_block_override: int | None = None,
+):
+    """The whole Blocking Model for one call, derived from the knobs above.
+
+    `wt_block_override` is the ONE place the block-width knob can be set by
+    something other than the byte target: on a sharded side the SHARD hands you
+    the block width (op_design.md §6.2 — a narrower block would need a strided
+    CB page, which a shard alias cannot express), so the placement plan passes
+    `wt_shard` here rather than restating the blocking arithmetic.
+    """
     nt_h, Wt, _, _ = tile_geometry(shape, tile_height)
-    wt_block = min(Wt, wt_block_max(elem_size, target_read_bytes))
+    wt_block = (
+        wt_block_override if wt_block_override is not None else min(Wt, wt_block_max(elem_size, target_read_bytes))
+    )
     n_wchunks = _div_up(Wt, wt_block)
     wt_tail = Wt - (n_wchunks - 1) * wt_block
     total_blocks = nt_h * n_wchunks
@@ -212,6 +233,244 @@ def blocking(shape, tile_height: int, elem_size: int, target_read_bytes: int = T
         "total_blocks": total_blocks,
         "tail_block_start": tail_block_start,
     }
+
+
+# ---------------------------------------------------------------------------
+# Placement plan (Refinement 2 — sharded I/O)
+# ---------------------------------------------------------------------------
+#
+# A shard is NOT a memory_config value the interleaved path tolerates: the shard
+# is the per-core BLOCK, already resident in that core's L1 (op_design.md §4.1).
+# So the placement plan picks, per side, between
+#
+#   RESIDENT — the CB is *aliased onto the shard buffer*
+#              (`ttnn.cb_descriptor_from_sharded_tensor`); reader/writer
+#              degenerate to the CB handshake and move ZERO bytes.
+#   STREAMED — the existing `TensorAccessor` path (interleaved, or a shard this
+#              core does not own — the cross-spec / DRAM-shard cases).
+#
+# and the three modes below fall out of that choice. `wt_block` is the shard's
+# own width on any resident side: the shard hands you the block.
+
+LEGACY_SHARD_SCHEMES = (
+    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+    ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+    ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+)
+
+MODE_STREAMED = "streamed"  # both sides through TensorAccessor (Phase 0 path)
+MODE_RESIDENT = "resident"  # same-spec L1 shards: both CBs aliased, zero NoC
+MODE_CROSSOVER_IN = "crossover_in"  # input shard resident, output streamed
+MODE_CROSSOVER_OUT = "crossover_out"  # output shard resident, input streamed
+
+
+def shard_view(memory_config):
+    """`(grid, (shard_h, shard_w), orientation)` in the folded 2-D view.
+
+    ONE view over both sharding APIs, and it must work on a *caller-constructed*
+    MemoryConfig as well as a live tensor's: a constructed nd config answers
+    `shard_spec is None` (only the live one carries the 2-D projection), and a
+    constructed legacy config answers `nd_shard_spec is None`. So take whichever
+    form is present and fold the nd shard shape onto 2-D the same way
+    `tile_geometry` folds the tensor shape.
+    """
+    if not memory_config.is_sharded():
+        return None
+    shard_spec = memory_config.shard_spec
+    if shard_spec is not None:
+        h, w = tuple(shard_spec.shape)
+        return shard_spec.grid, (int(h), int(w)), shard_spec.orientation
+    nd = memory_config.nd_shard_spec
+    shard_shape = [int(d) for d in nd.shard_shape]
+    return nd.grid, (math.prod(shard_shape[:-1]), shard_shape[-1]), nd.orientation
+
+
+def shard_2d(memory_config):
+    """The shard's `(h, w)` in the folded 2-D view, or None when interleaved."""
+    view = shard_view(memory_config)
+    return None if view is None else view[1]
+
+
+def shard_identity(memory_config):
+    """Everything that decides WHICH core holds WHICH region.
+
+    2-D form only, because that is the one form BOTH APIs always answer: a
+    caller-constructed legacy MemoryConfig has `nd_shard_spec is None` while the
+    live tensor's has it filled in, so keying on the nd form would make a spec
+    unequal to itself. `same_shard_placement` compares the nd form separately,
+    and only when both sides expose one.
+    """
+    view = shard_view(memory_config)
+    if view is None:
+        return None
+    grid, shape, orientation = view
+    return (
+        str(memory_config.buffer_type),
+        str(memory_config.memory_layout),
+        str(grid),
+        shape,
+        str(orientation),
+    )
+
+
+def _nd_identity(memory_config):
+    try:
+        nd = memory_config.nd_shard_spec
+    except Exception:  # pragma: no cover - defensive
+        return None
+    if nd is None:
+        return None
+    return (tuple(nd.shard_shape), str(nd.grid), str(nd.orientation))
+
+
+def same_shard_placement(a, b) -> bool:
+    """True when two sharded specs put the same region on the same core.
+
+    That — not "both are sharded" — is what makes a pair zero-copy-able: the
+    input shard and the output shard must be the same logical block, or the
+    core would tilize its own rows into someone else's tiles.
+    """
+    if shard_identity(a) != shard_identity(b) or shard_identity(a) is None:
+        return False
+    nd_a, nd_b = _nd_identity(a), _nd_identity(b)
+    return nd_a is None or nd_b is None or nd_a == nd_b
+
+
+def shard_residency(memory_config, *, tile_height: int):
+    """`(nt_h_shard, wt_shard)` when this shard can BE the per-core block.
+
+    Requires the shard to live in L1 (a DRAM shard is not resident in any
+    worker's L1, so there is nothing to alias) and to be a whole number of
+    tiles in both dimensions — a partial tile-row cannot be a tilize block.
+    """
+    geometry = shard_2d(memory_config)
+    if geometry is None or memory_config.buffer_type != ttnn.BufferType.L1:
+        return None
+    h, w = geometry
+    if h % tile_height or w % TILE_WIDTH:
+        return None
+    return h // tile_height, w // TILE_WIDTH
+
+
+def _input_is_streamable(memory_config, Wt: int) -> bool:
+    """Can the STREAMED reader address this input?
+
+    The reader indexes the source by stick (`page = one row`), which is what a
+    ROW_MAJOR interleaved tensor and a HEIGHT-sharded one both give. A
+    width/block-sharded ROW_MAJOR tensor pages at the SHARD width instead, so
+    its pages are partial rows and the stick indexing would be wrong.
+    """
+    geometry = shard_2d(memory_config)
+    if geometry is None:
+        return True
+    return geometry[1] == Wt * TILE_WIDTH
+
+
+def plan_placement(
+    *,
+    shape,
+    tile_height: int,
+    in_memory_config,
+    out_memory_config,
+    Wt: int,
+    nt_h: int,
+    in_tile_bytes: int,
+    out_tile_bytes: int,
+    cb_budget_bytes: int | None = None,
+    force_streamed: bool = False,
+):
+    """Choose RESIDENT / STREAMED per side. Pure — no tensors, no device.
+
+    Returns a dict with `mode`, `wt_block` (None = use the byte-target clamp),
+    the shard geometry the core planner needs, and `error` (a support-gap
+    message) when neither mechanism can address the call.
+    """
+    in_sharded = in_memory_config.is_sharded()
+    out_sharded = out_memory_config.is_sharded()
+    in_res = None if force_streamed else shard_residency(in_memory_config, tile_height=tile_height)
+    out_res = None if force_streamed else shard_residency(out_memory_config, tile_height=tile_height)
+
+    def _plan(mode, wt_block=None, shard=None, sharded_side=None):
+        return {"mode": mode, "wt_block": wt_block, "shard": shard, "sharded_side": sharded_side, "error": None}
+
+    # (a) Same-spec L1 -> L1: BOTH CBs alias their shard, zero DRAM traffic on
+    #     both sides. No core needs to know which shard it holds — it tilizes
+    #     the block sitting in its own L1 — so orientation is a non-issue here.
+    if in_res is not None and out_res is not None and same_shard_placement(in_memory_config, out_memory_config):
+        nt_h_shard, wt_shard = in_res
+        return _plan(
+            MODE_RESIDENT,
+            wt_block=wt_shard,
+            shard={"nt_h_shard": nt_h_shard, "wt_shard": wt_shard},
+            sharded_side="in",
+        )
+
+    # (b) Crossover: exactly one side sharded. That side is a CB alias pinned to
+    #     its own cores; the other keeps its TensorAccessor. The core's block
+    #     range is its shard's position in the linearization `b = wchunk*nt_h + r`
+    #     — contiguous, because the linearization is column-block-major.
+    crossover_ok = in_sharded != out_sharded
+    res = in_res if in_sharded else out_res
+    if crossover_ok and res is not None:
+        nt_h_shard, wt_shard = res
+        mc = in_memory_config if in_sharded else out_memory_config
+        if nt_h % nt_h_shard == 0 and Wt % wt_shard == 0:
+            n_sh_rows = nt_h // nt_h_shard
+            n_sh_cols = Wt // wt_shard
+            # Shard k -> (row-block, column-block) is row-major over the shard
+            # grid. That is unambiguous for a 1-D shard grid (HEIGHT / WIDTH) and
+            # for ROW_MAJOR; a COL_MAJOR 2-D grid is left to the streamed path
+            # rather than guessed at.
+            mapping_known = n_sh_rows == 1 or n_sh_cols == 1 or shard_view(mc)[2] == ttnn.ShardOrientation.ROW_MAJOR
+            # A3d: the resident side costs no extra L1 (it IS the shard), but the
+            # STREAMED side's CB is `wt_shard` pages — so a wide shard would grow
+            # the CB with W. When it no longer fits the budget, fall back to the
+            # fully-streamed path, whose WT_BLOCK is clamped by the byte target
+            # and therefore constant in W.
+            streamed_tile_bytes = out_tile_bytes if in_sharded else in_tile_bytes
+            fits = cb_budget_bytes is None or wt_shard * streamed_tile_bytes <= cb_budget_bytes
+            streamable = _input_is_streamable(in_memory_config, Wt)
+            if mapping_known and (fits or not streamable):
+                return _plan(
+                    MODE_CROSSOVER_IN if in_sharded else MODE_CROSSOVER_OUT,
+                    wt_block=wt_shard,
+                    shard={
+                        "nt_h_shard": nt_h_shard,
+                        "wt_shard": wt_shard,
+                        "n_sh_rows": n_sh_rows,
+                        "n_sh_cols": n_sh_cols,
+                    },
+                    sharded_side="in" if in_sharded else "out",
+                )
+
+    # (c) Everything else streams through TensorAccessor: interleaved on both
+    #     sides (Phase 0), and the cross-spec / DRAM-shard cases where the bytes
+    #     genuinely live on another core or in DRAM.
+    if not _input_is_streamable(in_memory_config, Wt):
+        h, w = shard_2d(in_memory_config)
+        return {
+            "mode": None,
+            "wt_block": None,
+            "shard": None,
+            "sharded_side": None,
+            "error": (
+                f"tilize: a ROW_MAJOR input sharded {h}x{w} cannot be addressed — its pages are "
+                f"partial rows ({w} of {Wt * TILE_WIDTH} elements) and the shard is not L1-resident "
+                "on the cores that would consume it"
+            ),
+        }
+    return _plan(MODE_STREAMED)
+
+
+def shard_grid_cores(device, tensor):
+    """The cores that actually hold shards, in shard order (master.md A2).
+
+    NOT a re-spread `split_work_to_cores` line: a shard's cores are fixed by its
+    spec, and core k in this list holds shard k.
+    """
+    cores = ttnn.get_optimal_worker_cores_for_sharded_tensor(tensor)
+    all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in cores])
+    return list(cores), all_cores
 
 
 def plan_cores(device, total_blocks: int, *, use_multicore: bool, row_wise: bool = True, max_cores=None):
@@ -264,14 +523,7 @@ def create_program_descriptor(
 
     # ---------- 1. geometry + the block knobs ----------
     elem_size = input_tensor.element_size()
-    blk = blocking(list(input_tensor.shape), tile_height, elem_size, lv["target_read_bytes"])
-    nt_h = blk["nt_h"]
-    Wt = blk["Wt"]
-    wt_block = blk["wt_block"]
-    wt_tail = blk["wt_tail"]
-    n_wchunks = blk["n_wchunks"]
-    total_blocks = blk["total_blocks"]
-    tail_block_start = blk["tail_block_start"]
+    shape = list(input_tensor.shape)
 
     # One tile-column of one stick. The reader derives its per-block transfer
     # size as `w * tile_row_bytes`, so the block width is never restated.
@@ -282,63 +534,163 @@ def create_program_descriptor(
 
     needs_cast = int(output_tensor.dtype != input_tensor.dtype)
 
-    # ---------- 2. CB depth knob (a distinct knob from block factor) ----------
-    # A1/A5 note: on the `*_to_l1` / `l1_to_*` directions the operands live in
-    # the SAME per-core L1 the CBs spend, so the budget subtracts them (Phase 0
-    # could assume DRAM-only operands and did not).
     grid = device.compute_with_storage_grid_size()
     num_l1_banks = grid.x * grid.y
-    l1_resident_bytes = l1_bytes_per_core(input_tensor, num_l1_banks) + l1_bytes_per_core(output_tensor, num_l1_banks)
-    depth2_bytes = 2 * wt_block * (in_tile_bytes + out_tile_bytes)
-    cb_depth = cb_depth_for(
-        want_depth2=use_double_buffer and bool(lv["double_buffer"]),
-        depth2_bytes=depth2_bytes,
-        budget_bytes=cb_budget_bytes(_unreserved_l1_bytes(), l1_resident_bytes),
+    # A1/A5 note: on the `*_to_l1` / `l1_to_*` directions the operands live in
+    # the SAME per-core L1 the CBs spend, so the budget subtracts them (Phase 0
+    # could assume DRAM-only operands and did not). A *sharded* operand is
+    # counted below instead, as the alias bytes of the CB it backs.
+    interleaved_l1_bytes = l1_bytes_per_core(input_tensor, num_l1_banks) + l1_bytes_per_core(
+        output_tensor, num_l1_banks
     )
-    cb_pages = cb_depth * wt_block  # >= wt_block >= wt_tail: no reader deadlock
+    unreserved_bytes = _unreserved_l1_bytes()
 
-    # ---------- 3. core assignment ----------
+    # ---------- 2. placement plan (which side is resident, which streams) ----
+    nt_h_geo, Wt_geo, _, _ = tile_geometry(shape, tile_height)
+    plan = plan_placement(
+        shape=shape,
+        tile_height=tile_height,
+        in_memory_config=input_tensor.memory_config(),
+        out_memory_config=output_tensor.memory_config(),
+        Wt=Wt_geo,
+        nt_h=nt_h_geo,
+        in_tile_bytes=in_tile_bytes,
+        out_tile_bytes=out_tile_bytes,
+        # A3d clamp budget: measured before the alias bytes are known (the alias
+        # IS the shard, already allocated), which is the conservative direction —
+        # it only ever keeps a big crossover CB out, never lets one in.
+        cb_budget_bytes=cb_budget_bytes(unreserved_bytes, interleaved_l1_bytes),
+        force_streamed=bool(lv["force_streamed"]),
+    )
+    if plan["error"] is not None:
+        raise ValueError(plan["error"])  # validate() refuses this before dispatch
+
+    tile_descriptor = ttnn.TileDescriptor(tile_height, TILE_WIDTH)
+    resident_in = plan["mode"] in (MODE_RESIDENT, MODE_CROSSOVER_IN)
+    resident_out = plan["mode"] in (MODE_RESIDENT, MODE_CROSSOVER_OUT)
+
+    # The shard hands you the block width on any resident side (op_design §6.2).
+    blk = blocking(shape, tile_height, elem_size, lv["target_read_bytes"], wt_block_override=plan["wt_block"])
+    nt_h = blk["nt_h"]
+    Wt = blk["Wt"]
+    wt_block = blk["wt_block"]
+    n_wchunks = blk["n_wchunks"]
+    total_blocks = blk["total_blocks"]
+    tail_block_start = blk["tail_block_start"]
+    # Off the fully-streamed path every block is the shard's own width, so the
+    # tail column-block is not a distinct width and `n_tail` is always 0.
+    wt_tail = blk["wt_tail"] if plan["mode"] == MODE_STREAMED else wt_block
+
+    # ---------- 3. circular buffers ----------
+    # A resident CB is ALIASED onto the shard buffer: the shard IS the CB, so
+    # the reader/writer move zero bytes on that side. `total_size=0` asks for the
+    # tensor's own per-bank size, which must be exactly the dense tile block —
+    # a padded shard is not densely addressable and falls back to streaming.
+    def _aliased_cb(index, tensor, page_size, core_ranges, expected_bytes):
+        cb = ttnn.cb_descriptor_from_sharded_tensor(index, tensor, 0, 0, core_ranges)
+        if cb.total_size != expected_bytes:
+            return None
+        cb.format_descriptors = [
+            ttnn.CBFormatDescriptor(
+                buffer_index=index,
+                data_format=tensor.dtype,
+                page_size=page_size,
+                tile=tile_descriptor,
+            )
+        ]
+        return cb
+
+    def _streamed_cb(index, dtype, page_size, core_ranges, num_pages):
+        return ttnn.CBDescriptor(
+            total_size=num_pages * page_size,
+            core_ranges=core_ranges,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(
+                    buffer_index=index,
+                    data_format=dtype,
+                    page_size=page_size,
+                    tile=tile_descriptor,
+                )
+            ],
+        )
+
+    # ---------- 4. core assignment ----------
+    # Sharded: the cores are FIXED by the shard spec (master.md A2) — core k
+    # holds shard k, and its blocks are that shard's own contiguous range of the
+    # `b = wchunk*nt_h + r` linearization. Interleaved: the Phase-0 split.
     # width_split == 0 is the height-only-split off-arm: cap the core count at
     # nt_h, which is byte-identical to the default when n_wchunks == 1 and
     # collapses a wide-short tensor onto min(nt_h, grid) cores — the exact
     # regression the 2-D linearization exists to prevent.
-    cores, all_cores, per_core_blocks = plan_cores(
-        device,
-        total_blocks,
-        use_multicore=use_multicore and bool(lv["multicore"]),
-        row_wise=bool(lv["row_wise"]),
-        max_cores=None if lv["width_split"] else nt_h,
-    )
+    if plan["mode"] == MODE_STREAMED:
+        cores, all_cores, per_core_blocks = plan_cores(
+            device,
+            total_blocks,
+            use_multicore=use_multicore and bool(lv["multicore"]),
+            row_wise=bool(lv["row_wise"]),
+            max_cores=None if lv["width_split"] else nt_h,
+        )
+        assignments = []
+        block_start = 0
+        for core, num_blocks in zip(cores, per_core_blocks):
+            assignments.append((core, block_start, num_blocks))
+            block_start += num_blocks
+    else:
+        sharded_tensor = input_tensor if plan["sharded_side"] == "in" else output_tensor
+        cores, all_cores = shard_grid_cores(device, sharded_tensor)
+        nt_h_shard = plan["shard"]["nt_h_shard"]
+        if plan["mode"] == MODE_RESIDENT:
+            # Every core tilizes the block sitting in its own L1 — it never needs
+            # to know WHICH shard that is, which is why orientation is a non-issue.
+            assignments = [(core, 0, nt_h_shard) for core in cores]
+        else:
+            n_sh_cols = plan["shard"]["n_sh_cols"]
+            assignments = [
+                (core, (k % n_sh_cols) * nt_h + (k // n_sh_cols) * nt_h_shard, nt_h_shard)
+                for k, core in enumerate(cores)
+            ]
 
-    # ---------- 4. circular buffers ----------
-    tile_descriptor = ttnn.TileDescriptor(tile_height, TILE_WIDTH)
-
-    cb_input_sticks = ttnn.CBDescriptor(
-        total_size=cb_pages * in_tile_bytes,
-        core_ranges=all_cores,
-        format_descriptors=[
-            ttnn.CBFormatDescriptor(
-                buffer_index=CB_INPUT_STICKS,
-                data_format=input_tensor.dtype,
-                page_size=in_tile_bytes,
-                tile=tile_descriptor,
+    # ---------- 5. CB depth knob (a distinct knob from block factor) ----------
+    alias_bytes = 0
+    cb_input_sticks = cb_output_tiles = None
+    if resident_in or resident_out:
+        nt_h_shard = plan["shard"]["nt_h_shard"]
+        if resident_in:
+            cb_input_sticks = _aliased_cb(
+                CB_INPUT_STICKS, input_tensor, in_tile_bytes, all_cores, nt_h_shard * wt_block * in_tile_bytes
             )
-        ],
-    )
-    cb_output_tiles = ttnn.CBDescriptor(
-        total_size=cb_pages * out_tile_bytes,
-        core_ranges=all_cores,
-        format_descriptors=[
-            ttnn.CBFormatDescriptor(
-                buffer_index=CB_OUTPUT_TILES,
-                data_format=output_tensor.dtype,
-                page_size=out_tile_bytes,
-                tile=tile_descriptor,
+        if resident_out:
+            cb_output_tiles = _aliased_cb(
+                CB_OUTPUT_TILES, output_tensor, out_tile_bytes, all_cores, nt_h_shard * wt_block * out_tile_bytes
             )
-        ],
-    )
+        if (resident_in and cb_input_sticks is None) or (resident_out and cb_output_tiles is None):
+            # The shard is not a dense whole-tile block (padded per-bank size):
+            # fall back to the streamed path rather than alias a wrong layout.
+            return create_program_descriptor(
+                input_tensor,
+                output_tensor,
+                use_multicore=use_multicore,
+                use_double_buffer=use_double_buffer,
+                tile_height=tile_height,
+                levers=dict(lv, force_streamed=1),
+            )
+        alias_bytes = (cb_input_sticks.total_size if resident_in else 0) + (
+            cb_output_tiles.total_size if resident_out else 0
+        )
 
-    # ---------- 5. kernels ----------
+    streamed_page_bytes = (0 if resident_in else in_tile_bytes) + (0 if resident_out else out_tile_bytes)
+    cb_depth = cb_depth_for(
+        want_depth2=use_double_buffer and bool(lv["double_buffer"]),
+        depth2_bytes=2 * wt_block * streamed_page_bytes,
+        budget_bytes=cb_budget_bytes(unreserved_bytes, interleaved_l1_bytes + alias_bytes),
+    )
+    cb_pages = cb_depth * wt_block  # >= wt_block >= wt_tail: no reader deadlock
+    if cb_input_sticks is None:
+        cb_input_sticks = _streamed_cb(CB_INPUT_STICKS, input_tensor.dtype, in_tile_bytes, all_cores, cb_pages)
+    if cb_output_tiles is None:
+        cb_output_tiles = _streamed_cb(CB_OUTPUT_TILES, output_tensor.dtype, out_tile_bytes, all_cores, cb_pages)
+
+    # ---------- 6. kernels ----------
     # CT args: scalar args first, TensorAccessorArgs appended LAST (master.md
     # D18). RT args carry only buffer addresses + the per-core block range
     # (D19), so a second call with the same spec hits the program cache.
@@ -352,6 +704,7 @@ def create_program_descriptor(
         wt_tail,
         lv["barrier_per_block"],
         lv["stub_read"],
+        int(resident_in),
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
@@ -365,6 +718,7 @@ def create_program_descriptor(
         out_tile_bytes,
         lv["coalesce_writes"],
         lv["stub_write"],
+        int(resident_out),
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
@@ -384,18 +738,21 @@ def create_program_descriptor(
     in_addr = input_tensor.buffer_address()
     out_addr = output_tensor.buffer_address()
 
-    block_start = 0
-    for core, num_blocks in zip(cores, per_core_blocks):
+    for core, block_start, num_blocks in assignments:
         # A core's contiguous [b0, b0+nb) crosses the full/tail column-block
         # boundary at most once, because the tail column-block occupies the
         # contiguous suffix [tail_block_start, total_blocks) of the linear space.
-        n_full = min(max(tail_block_start - block_start, 0), num_blocks)
+        # Off the streamed path every block is the shard's width, so there is no
+        # tail width and n_tail is 0.
+        if plan["mode"] == MODE_STREAMED:
+            n_full = min(max(tail_block_start - block_start, 0), num_blocks)
+        else:
+            n_full = num_blocks
         n_tail = num_blocks - n_full
 
         reader_rt[core.x][core.y] = [in_addr, block_start, num_blocks]
         writer_rt[core.x][core.y] = [out_addr, block_start, num_blocks]
         compute_rt[core.x][core.y] = [n_full, n_tail]
-        block_start += num_blocks
 
     # B9 off-arm: swap the two configs so the read stream lands on the writer's
     # RISC/NoC and vice versa.

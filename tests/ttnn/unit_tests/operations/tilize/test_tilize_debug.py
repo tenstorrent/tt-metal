@@ -43,6 +43,9 @@ from ttnn.operations.tilize.tilize_program_descriptor import (
     create_program_descriptor,
     l1_bytes_per_core,
     plan_cores,
+    plan_placement,
+    shard_residency,
+    shard_view,
     wt_block_max,
 )
 
@@ -427,3 +430,221 @@ def test_a6_l1_bytes_per_core_counts_only_interleaved_l1(device):
     l1_t = _to_device(torch_input, device, memory_config=ttnn.L1_MEMORY_CONFIG)
     expected = -(-l1_t.buffer_num_pages() // banks) * l1_t.buffer_aligned_page_size()
     assert l1_bytes_per_core(l1_t, banks) == expected > 0
+
+
+# ---------------------------------------------------------------------------
+# 6. Refinement 2 (A3 + A3b + A3d + A5c) — sharded placement
+#
+#    The colour of the sharded golden cells does NOT prove sharding: a shard
+#    whose width is the full row passes just as well when re-read through a
+#    TensorAccessor (the interleaved path merely TOLERATING the layout). So
+#    these tests assert the DATAFLOW — which CB is aliased onto which shard
+#    buffer, and which kernel carries `resident == 1` — not the output values.
+#    The values are pinned by test_tilize.py's section 8 and the golden suite.
+# ---------------------------------------------------------------------------
+
+_ROW = ttnn.ShardOrientation.ROW_MAJOR
+_COL = ttnn.ShardOrientation.COL_MAJOR
+
+# CT-arg positions of the `resident` flag (kept next to the kernels' arg lists).
+_READER_RESIDENT_CT = 9
+_WRITER_RESIDENT_CT = 9
+
+
+def _crs(*ranges):
+    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(*s), ttnn.CoreCoord(*e)) for (s, e) in ranges})
+
+
+def _legacy_mem(scheme, grid, shard_shape, orientation=_ROW):
+    return ttnn.MemoryConfig(scheme, ttnn.BufferType.L1, ttnn.ShardSpec(grid, shard_shape, orientation))
+
+
+def _nd_mem(shard_shape, grid, orientation=_ROW):
+    return ttnn.MemoryConfig(ttnn.BufferType.L1, ttnn.NdShardSpec(ttnn.Shape(shard_shape), grid, orientation))
+
+
+def _skip_if_grid_too_small(device, mem):
+    grid = shard_view(mem)[0]
+    dev = device.compute_with_storage_grid_size()
+    for core_range in grid.ranges():
+        if core_range.end.x > dev.x - 1 or core_range.end.y > dev.y - 1:
+            pytest.skip(f"shard grid {core_range} exceeds device grid ({dev.x},{dev.y})")
+
+
+def _descriptor_for(device, shape, in_mem, out_mem, dtype=ttnn.bfloat16):
+    """Build the real program descriptor for a (in_mem -> out_mem) call."""
+    torch.manual_seed(0)
+    tt_input = ttnn.from_torch(
+        torch.randn(shape).bfloat16(), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_mem
+    )
+    tt_output = ttnn.allocate_tensor_on_device(ttnn.Shape(list(shape)), dtype, ttnn.TILE_LAYOUT, device, out_mem)
+    return create_program_descriptor(tt_input, tt_output), tt_input, tt_output
+
+
+_SAME_SPEC_CASES = [
+    pytest.param(
+        (1, 1, 512, 64),
+        lambda: _legacy_mem(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _crs(((0, 0), (3, 0))), (128, 64)),
+        id="height",
+    ),
+    pytest.param(
+        (1, 1, 64, 512),
+        lambda: _legacy_mem(ttnn.TensorMemoryLayout.WIDTH_SHARDED, _crs(((0, 0), (3, 0))), (64, 128)),
+        id="width",
+    ),
+    pytest.param(
+        (1, 1, 128, 128),
+        lambda: _legacy_mem(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _crs(((0, 0), (1, 1))), (64, 64), _COL),
+        id="block_col",
+    ),
+    pytest.param((1, 1, 128, 128), lambda: _nd_mem((1, 1, 64, 64), _crs(((0, 0), (1, 1)))), id="nd_rank4"),
+    pytest.param((4, 32, 64), lambda: _nd_mem((2, 32, 64), _crs(((0, 0), (1, 0)))), id="nd_rank3"),
+]
+
+
+@pytest.mark.parametrize("shape, mem_fn", _SAME_SPEC_CASES)
+def test_r2_same_spec_is_zero_copy_not_merely_tolerated(device, shape, mem_fn):
+    """A3: BOTH CBs must be aliased onto the shard buffers and BOTH dataflow
+    kernels must carry `resident == 1` — i.e. zero NoC bytes on either side.
+    A run that re-reads the local shard through a TensorAccessor produces the
+    same output and would pass every value test; this is what catches it."""
+    mem = mem_fn()
+    _skip_if_grid_too_small(device, mem)
+    descriptor, tt_input, _tt_output = _descriptor_for(device, shape, mem, mem)
+
+    cb_in, cb_out = descriptor.cbs
+    assert cb_in.has_buffer(), "input CB is not aliased onto the shard — this is not zero-copy"
+    assert cb_out.has_buffer(), "output CB is not aliased onto the shard — this is not zero-copy"
+
+    reader, writer, _compute = descriptor.kernels
+    assert reader.compile_time_args[_READER_RESIDENT_CT] == 1
+    assert writer.compile_time_args[_WRITER_RESIDENT_CT] == 1
+
+    # A2: launched on the shard's own cores, not a re-spread split.
+    shard_cores = ttnn.get_optimal_worker_cores_for_sharded_tensor(tt_input)
+    assert reader.core_ranges.num_cores() == len(shard_cores)
+
+    # The shard hands you the block width, and the CB page count IS the shard.
+    nt_h_shard, wt_shard = shard_residency(mem, tile_height=32)
+    assert cb_in.format_descriptors[0].page_size == 32 * 32 * 2
+    assert cb_in.total_size == nt_h_shard * wt_shard * 32 * 32 * 2
+
+
+@pytest.mark.parametrize("direction", ["in", "out"])
+def test_r2_crossover_aliases_only_the_sharded_side(device, direction):
+    """A3b: exactly one side sharded -> that side is a CB alias pinned to the
+    shard's own cores, the other keeps its TensorAccessor."""
+    shape = (1, 1, 128, 64)
+    mem = _legacy_mem(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _crs(((0, 0), (3, 0))), (32, 64))
+    _skip_if_grid_too_small(device, mem)
+    in_mem = mem if direction == "in" else ttnn.DRAM_MEMORY_CONFIG
+    out_mem = mem if direction == "out" else ttnn.DRAM_MEMORY_CONFIG
+
+    descriptor, tt_input, tt_output = _descriptor_for(device, shape, in_mem, out_mem)
+    cb_in, cb_out = descriptor.cbs
+    reader, writer, _compute = descriptor.kernels
+
+    assert cb_in.has_buffer() == (direction == "in")
+    assert cb_out.has_buffer() == (direction == "out")
+    assert reader.compile_time_args[_READER_RESIDENT_CT] == int(direction == "in")
+    assert writer.compile_time_args[_WRITER_RESIDENT_CT] == int(direction == "out")
+
+    sharded = tt_input if direction == "in" else tt_output
+    assert reader.core_ranges.num_cores() == len(ttnn.get_optimal_worker_cores_for_sharded_tensor(sharded))
+
+
+def test_r2_cross_spec_streams_and_does_not_alias(device):
+    """Cross-spec (in spec != out spec) is Refinement 4's designed topology; it
+    must NOT silently take the zero-copy path — a core would tilize its own rows
+    into another core's tiles. Here it falls back to the accessor path (L1->L1
+    over the NoC, still no DRAM staging)."""
+    shape = (1, 1, 128, 64)
+    in_mem = _legacy_mem(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _crs(((0, 0), (3, 0))), (32, 64))
+    out_mem = _legacy_mem(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _crs(((0, 0), (1, 0))), (64, 64))
+    _skip_if_grid_too_small(device, in_mem)
+
+    descriptor, _in, _out = _descriptor_for(device, shape, in_mem, out_mem)
+    cb_in, cb_out = descriptor.cbs
+    reader, writer, _compute = descriptor.kernels
+    assert not cb_in.has_buffer() and not cb_out.has_buffer()
+    assert reader.compile_time_args[_READER_RESIDENT_CT] == 0
+    assert writer.compile_time_args[_WRITER_RESIDENT_CT] == 0
+
+
+def test_r2_plan_is_pure_and_covers_the_four_placements():
+    """The placement plan is host-only, so pin all four outcomes without a
+    device: same-spec -> resident, one side sharded -> crossover, cross-spec ->
+    streamed, and a narrow non-resident RM shard -> a typed support gap."""
+    height = _legacy_mem(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _crs(((0, 0), (3, 0))), (128, 64))
+    other = _legacy_mem(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _crs(((0, 0), (1, 0))), (256, 64))
+    dram = ttnn.DRAM_MEMORY_CONFIG
+    kwargs = dict(shape=[1, 1, 512, 64], tile_height=32, Wt=2, nt_h=16, in_tile_bytes=2048, out_tile_bytes=2048)
+
+    assert plan_placement(in_memory_config=height, out_memory_config=height, **kwargs)["mode"] == "resident"
+    assert plan_placement(in_memory_config=height, out_memory_config=dram, **kwargs)["mode"] == "crossover_in"
+    assert plan_placement(in_memory_config=dram, out_memory_config=height, **kwargs)["mode"] == "crossover_out"
+    assert plan_placement(in_memory_config=height, out_memory_config=other, **kwargs)["mode"] == "streamed"
+    assert plan_placement(in_memory_config=dram, out_memory_config=dram, **kwargs)["mode"] == "streamed"
+
+    # force_streamed is C14's off-arm: the same call, deliberately NOT zero-copy.
+    forced = plan_placement(in_memory_config=height, out_memory_config=height, force_streamed=True, **kwargs)
+    assert forced["mode"] == "streamed" and forced["error"] is None
+
+    # A ROW_MAJOR shard narrower than a row cannot be addressed by the streamed
+    # reader (its pages are partial rows) and is not resident here (DRAM shard).
+    dram_width_shard = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(_crs(((0, 0), (3, 0))), (64, 128), _ROW),
+    )
+    refused = plan_placement(
+        in_memory_config=dram_width_shard,
+        out_memory_config=dram,
+        shape=[1, 1, 64, 512],
+        tile_height=32,
+        Wt=16,
+        nt_h=2,
+        in_tile_bytes=2048,
+        out_tile_bytes=2048,
+    )
+    assert refused["mode"] is None and "partial rows" in refused["error"]
+
+
+def test_r2_a3d_wide_shard_crossover_keeps_the_cb_constant_in_w():
+    """A3d: on a crossover the resident side costs no extra L1, but the STREAMED
+    side's CB is `Wt_shard` pages — so a wide HEIGHT shard would grow it with W.
+    Past the budget the plan falls back to the fully-streamed path, whose
+    WT_BLOCK is the byte-target clamp and therefore constant in W."""
+    tile_bytes = 32 * 32 * 2
+    narrow = _legacy_mem(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _crs(((0, 0), (3, 0))), (32, 512))
+    wide = _legacy_mem(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _crs(((0, 0), (3, 0))), (32, 32768))
+    budget = 64 * 1024
+
+    narrow_plan = plan_placement(
+        shape=[1, 1, 128, 512],
+        tile_height=32,
+        in_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        out_memory_config=narrow,
+        Wt=16,
+        nt_h=4,
+        in_tile_bytes=tile_bytes,
+        out_tile_bytes=tile_bytes,
+        cb_budget_bytes=budget,
+    )
+    assert narrow_plan["mode"] == "crossover_out"
+    assert narrow_plan["wt_block"] * tile_bytes <= budget
+
+    wide_plan = plan_placement(
+        shape=[1, 1, 128, 32768],
+        tile_height=32,
+        in_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        out_memory_config=wide,
+        Wt=1024,
+        nt_h=4,
+        in_tile_bytes=tile_bytes,
+        out_tile_bytes=tile_bytes,
+        cb_budget_bytes=budget,
+    )
+    assert wide_plan["mode"] == "streamed", "a wide shard must not grow the CB past the budget"
+    clamped = blocking([1, 1, 128, 32768], 32, 2)["wt_block"]
+    assert clamped * tile_bytes <= budget

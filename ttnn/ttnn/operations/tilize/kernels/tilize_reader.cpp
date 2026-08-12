@@ -11,6 +11,12 @@
 // `dataflow_kernel_lib::read_sticks_for_tilize<TILE>` implements, which is why
 // the production path is that helper call and nothing else.
 //
+// `resident == 1` (Refinement 2, A3/C14) is the SECOND production path and the
+// only one that is not a NoC read at all: the input shard already sits in this
+// core's L1 and `cb_input_sticks` is aliased onto it, so the reader just arms
+// the CB. That is what implementing sharding means — re-reading a local shard
+// through the TensorAccessor above would re-fetch bytes the core already holds.
+//
 // The two `if constexpr` arms below are LEVER COUNTERFACTUALS, not alternative
 // production paths: `barrier_per_block == 0` is the master.md B7 off-arm (one
 // barrier per transaction instead of per block) and `stub_read == 1` is the
@@ -31,11 +37,24 @@ void kernel_main() {
     constexpr uint32_t wt_tail = get_compile_time_arg_val(6);
     constexpr uint32_t barrier_per_block = get_compile_time_arg_val(7);  // lever B7 (1 = on)
     constexpr uint32_t stub_read = get_compile_time_arg_val(8);          // ablation (0 = off)
-    constexpr auto src_args = TensorAccessorArgs<9>();
+    constexpr uint32_t resident = get_compile_time_arg_val(9);           // A3/C14 zero-copy (1 = on)
+    constexpr auto src_args = TensorAccessorArgs<10>();
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t b0 = get_arg_val<uint32_t>(1);
     const uint32_t nb = get_arg_val<uint32_t>(2);
+
+    // A3/C14 zero-copy: `cb_input_sticks` is ALIASED onto this core's own input
+    // shard, so the block is already in L1 and there is nothing to fetch — the
+    // reader exists only to arm the CB. NO NoC read, no TensorAccessor, and the
+    // shard hands us the block width (`wt_block == Wt_shard`), so the whole
+    // shard is `nb * wt_block` tile-sized pages.
+    if constexpr (resident == 1) {
+        const uint32_t pages = nb * wt_block;
+        cb_reserve_back(cb_input_sticks, pages);
+        cb_push_back(cb_input_sticks, pages);
+        return;
+    }
 
     const auto src = TensorAccessor(src_args, src_addr);
 

@@ -101,3 +101,17 @@
 {"source":"run_safe_pytest","pid":870164,"started_at_ms":1786544938876,"wait_ms":3,"run_ms":15356,"test_path":"tests/ttnn/unit_tests/operations/tilize/_bench_tilize.py","exit_code":0}
 {"source":"run_safe_pytest","pid":871487,"started_at_ms":1786545124049,"wait_ms":3,"run_ms":10990,"test_path":"tests/ttnn/unit_tests/operations/tilize/","exit_code":1}
 {"source":"run_safe_pytest","pid":871824,"started_at_ms":1786545140852,"wait_ms":3,"run_ms":47292,"test_path":"eval/golden_tests/tilize/","exit_code":1}
+{"event": "phase", "phase": "refinement_1_redo", "state": "end", "at_ms": 1786545252219}
+{"event": "phase", "phase": "refinement_1_golden", "state": "start", "at_ms": 1786545252682}
+{"source":"eval_test_runner","pid":873650,"started_at_ms":1786545252685,"wait_ms":2323,"run_ms":31603,"test_path":"eval/golden_tests/tilize/","exit_code":0,"precompile_mode":"local","precompile_reason":"no_server"}
+{"event": "phase", "phase": "refinement_1_golden", "state": "end", "at_ms": 1786545286614}
+{"source":"run_safe_pytest","pid":874625,"started_at_ms":1786545290924,"wait_ms":3,"run_ms":10012,"test_path":"tests/ttnn/unit_tests/operations/tilize/test_tilize.py","exit_code":1}
+{"event": "phase", "phase": "refinement_2", "state": "start", "at_ms": 1786545300949}
+{"source":"tt-probe","pid":877328,"started_at_ms":1786545779234,"wait_ms":178,"run_ms":7135,"test_path":"tilize","exit_code":1}
+{"source":"tt-probe","pid":877581,"started_at_ms":1786545809036,"wait_ms":120,"run_ms":8465,"test_path":"tilize","exit_code":0}
+{"source":"run_safe_pytest","pid":880177,"started_at_ms":1786546389424,"wait_ms":3,"run_ms":10772,"test_path":"-k","exit_code":1}
+{"source":"tt-probe","pid":880830,"started_at_ms":1786546439405,"wait_ms":120,"run_ms":8429,"test_path":"tilize","exit_code":0}
+{"source":"tt-probe","pid":881098,"started_at_ms":1786546471475,"wait_ms":140,"run_ms":8532,"test_path":"tilize","exit_code":0}
+{"source":"run_safe_pytest","pid":881417,"started_at_ms":1786546507588,"wait_ms":3,"run_ms":9775,"test_path":"-k","exit_code":0}
+{"source":"run_safe_pytest","pid":882067,"started_at_ms":1786546588507,"wait_ms":3,"run_ms":9154,"test_path":"-k","exit_code":1}
+{"source":"run_safe_pytest","pid":882565,"started_at_ms":1786546646164,"wait_ms":2,"run_ms":9005,"test_path":"-k","exit_code":0}

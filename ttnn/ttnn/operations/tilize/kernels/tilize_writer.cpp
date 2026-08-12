@@ -14,6 +14,11 @@
 // Transaction shape: whole-page (tile) coalesced writes (master.md B5), `w`
 // writes issued back-to-back with ONE barrier per block (B7).
 //
+// `resident == 1` (Refinement 2, A3/C14) is the SECOND production path: the
+// output shard is this core's own L1 and `cb_output_tiles` is aliased onto it,
+// so compute already packed each tile into its final home and the writer only
+// drains the CB — zero NoC writes.
+//
 // `coalesce_writes == 0` (B5 off-arm) and `stub_write == 1` (the /perf-measure
 // write ablation) are LEVER COUNTERFACTUALS. At their defaults (1, 0) the
 // emitted code is the whole-page write loop and nothing else.
@@ -30,7 +35,8 @@ void kernel_main() {
     constexpr uint32_t out_tile_bytes = get_compile_time_arg_val(6);
     constexpr uint32_t coalesce_writes = get_compile_time_arg_val(7);  // lever B5 (1 = on)
     constexpr uint32_t stub_write = get_compile_time_arg_val(8);       // ablation (0 = off)
-    constexpr auto dst_args = TensorAccessorArgs<9>();
+    constexpr uint32_t resident = get_compile_time_arg_val(9);         // A3/C14 zero-copy (1 = on)
+    constexpr auto dst_args = TensorAccessorArgs<10>();
 
     // B5 off-arm granularity: a tile is four faces, so the non-coalesced arm
     // issues one write per face instead of one per page.
@@ -40,6 +46,16 @@ void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     const uint32_t b0 = get_arg_val<uint32_t>(1);
     const uint32_t nb = get_arg_val<uint32_t>(2);
+
+    // A3/C14 zero-copy: `cb_output_tiles` is ALIASED onto this core's own output
+    // shard, so compute packed the tiles straight into their final L1 home —
+    // there is nothing to write out. The writer exists only to drain the CB.
+    if constexpr (resident == 1) {
+        const uint32_t pages = nb * wt_block;
+        cb_wait_front(cb_output_tiles, pages);
+        cb_pop_front(cb_output_tiles, pages);
+        return;
+    }
 
     const auto dst = TensorAccessor(dst_args, dst_addr);
 

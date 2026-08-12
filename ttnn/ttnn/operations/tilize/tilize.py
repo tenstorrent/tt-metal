@@ -25,19 +25,18 @@ from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
 from .tilize_program_descriptor import (
     DEFAULT_TILE_HEIGHT,
+    LEGACY_SHARD_SCHEMES,
     TILE_WIDTH,
     create_program_descriptor,
+    plan_placement,
+    tile_geometry,
 )
 
 # ---------------------------------------------------------------------------
 # scenario helpers — the one place a MemoryConfig is projected onto a spec dict
 # ---------------------------------------------------------------------------
 
-_LEGACY_SCHEMES = (
-    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-    ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-    ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-)
+_LEGACY_SCHEMES = LEGACY_SHARD_SCHEMES  # one source of truth (program descriptor)
 
 
 def _spec_from_memory_config(memory_config):
@@ -247,19 +246,35 @@ INPUT_TAGGERS = {
 #   double_buffer  += False  CB_DEPTH is already `2 if use_double_buffer and
 #                            depth2_fits_l1 else 1`.
 
+#
+# Refinement 2 (A3 + A3b + A3d + A5c) — sharded placement. Three axes flip, and
+# the mechanism behind them is `plan_placement()` in the program descriptor:
+#   shard_api   += legacy_2d, nd  both APIs project onto one ShardSpec view.
+#   out_scheme  += HEIGHT/WIDTH/BLOCK/nd — the scheme picks the shard's shape,
+#                            and the shard IS the per-core block either way.
+#   orientation += ROW_MAJOR, COL_MAJOR — a non-issue on the zero-copy path
+#                            (each core tilizes the block in its own L1, so it
+#                            never needs to know which shard that is).
+
 SUPPORTED = {
     "dtype": [ttnn.bfloat16],
     "output_dtype": [ttnn.bfloat16],
     "use_multicore": [False, True],
     "double_buffer": [False, True],
-    "shard_api": ["none"],
-    "out_scheme": ["interleaved"],
+    "shard_api": ["none", "legacy_2d", "nd"],
+    "out_scheme": [
+        "interleaved",
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        "nd",
+    ],
     "buffer": ["dram_to_dram", "dram_to_l1", "l1_to_l1", "l1_to_dram"],
     "rank": [2, 3, 4, 5],
     "pad_mode": ["none"],
     "pad_value": ["none"],
     "alignment": ["tile_aligned"],
-    "orientation": ["none"],
+    "orientation": ["none", ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
     "tile_height": [DEFAULT_TILE_HEIGHT],
     "in_layout": [ttnn.ROW_MAJOR_LAYOUT],
     "in_tile_height": ["none"],
@@ -420,7 +435,41 @@ def validate(
         if all(axes.get(k) == v for k, v in exc.items()):
             raise ExcludedCell(f"tilize: unsupported combination (refinement candidate): {exc}")
 
+    # 3. Placement — the ONE sharded property no registry axis can carry, because
+    #    it is a relation between the two specs and the shape rather than a value
+    #    of either. `plan_placement` is the same function the descriptor builds
+    #    from, so a refusal here can never disagree with what the op can do.
+    _check_placement(input_tensor, out_memory_config, tile_height)
+
     return scenario, axes
+
+
+def _check_placement(input_tensor, out_memory_config, tile_height):
+    """Refuse a shard geometry neither placement mechanism can address.
+
+    Every sharded cell in the golden TARGET is either same-spec (zero-copy on
+    both sides), a crossover (zero-copy on the sharded side), or cross-spec with
+    a full-row-width input shard (streamed) — so nothing in SUPPORTED lands here.
+    What does: a ROW_MAJOR input whose shard is NARROWER than a row and is not
+    L1-resident (e.g. a DRAM width-shard), where the streamed reader's stick
+    indexing would silently read the wrong bytes.
+    """
+    elem_size = input_tensor.element_size()
+    shape = list(input_tensor.shape)
+    nt_h, Wt, _, _ = tile_geometry(shape, tile_height)
+    in_tile_bytes = tile_height * TILE_WIDTH * elem_size
+    plan = plan_placement(
+        shape=shape,
+        tile_height=tile_height,
+        in_memory_config=input_tensor.memory_config(),
+        out_memory_config=out_memory_config,
+        Wt=Wt,
+        nt_h=nt_h,
+        in_tile_bytes=in_tile_bytes,
+        out_tile_bytes=in_tile_bytes,  # only the RESIDENT/STREAMED choice matters here
+    )
+    if plan["error"] is not None:
+        raise UnsupportedAxisValue(plan["error"])
 
 
 # ---------------------------------------------------------------------------
