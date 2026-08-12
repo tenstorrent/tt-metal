@@ -575,3 +575,310 @@
   three `RMSN_ABLATE_COMBINE_MATH` / `RMSN_ABLATE_FINALIZE` / `RMSN_ABLATE_GATHER_BYTES` compile-time
   switches are left in the kernels at `0` alongside Refinement 4's: inert, and the harness that
   produced the ablation table.
+
+## Perf 1 — Tournament round 1 of 2 (7 ideas fanned out, 4 graduated)
+
+- **Date**: 2026-08-12
+- **Nothing moved in `SUPPORTED`.** A perf tournament changes no `verify_supported`
+  category; the signal is device-ns. Diff is the three kernels, the program descriptor,
+  a new permanent instrumentation header, and the measurement harness.
+
+### The measured breakdown (Step 1) — and the instrumentation that is now permanent
+
+`ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp` is **new**: `MaybeDeviceZoneScope`
+(a free-when-off alias for `DeviceZoneScopedN`) plus its durability contract. All three
+kernels now carry a zone at **every** stage boundary — **permanently** — with the NoC
+regions split `issue` / `barrier` (a barrier at ≈ 0 means the RISC-serial issue cost was
+paid elsewhere, not that the transfer was hidden) and the combine's peer rendezvous
+hoisted out of `eltwise_chain`'s `WaitPolicy::Upfront` into its own `*_wait` zone, so a
+**starved** stage is not mistaken for an **expensive** one. Zone coverage of the
+`*-KERNEL` span was verified at 93–99 % on every RISC and the marker count at ≤ 32 of
+the 250 cap, because exhausting that budget is silent and invents a dominant stage.
+
+Measured on the **focus shape**, which is the perf-flagged loose case
+`(1,1,32,7168)` INTERLEAVED at its *exact* pinned config — bf16 / TILE / gamma bf16
+TILE / `fp32_dest_acc_en=False` / `MathFidelity.HiFi2` / `pcc_threshold=0.9995`, the one
+carrying `minimum_expected_speedup = 7.0`. Every knob it declares is inside `SUPPORTED`,
+so nothing was proxied. Selected geometry: **G = 110** cores in one 11×10 reduction
+group, C = 2–3 hidden tiles per core, R = 1, **one** block, tree fan-ins 11 then 10.
+
+Per-core zone timeline (ns, critical path, whole op = 8809 ns zone-instrumented):
+
+| stage | ns | note |
+|---|---|---|
+| launch / FW skew to reader start | ~700 | not the op's |
+| `rd_prep_scaler` | 317 | on the critical path, AHEAD of the read |
+| `rd_in_reserve` + `rd_in_issue` | ~200 | 2–3 tiles |
+| `rd_in_barrier` | 858 | 563 KB over 110 cores ⇒ **at the DRAM roofline** |
+| `cp_sumsq` + `cp_reduce_stat` | 395 | |
+| **combine round trip (partial ready → rstd received)** | **~3050** | **40 % of the wall** |
+| `cp_apply_scale` + `cp_apply_gamma` | 420 | |
+| `wr_out_issue` | 141 | |
+| `wr_out_barrier` | 1796 | 563 KB of writes; roofline ≈ 1.1 µs |
+
+The combine, decomposed on the root's own timeline (a strictly serial dependency chain,
+so the zones ARE its attribution): gather-1 rendezvous 682 → combine_l1 (11 tiles) 396 →
+gather-2 rendezvous 1016 → combine_l2 (10 tiles) 361 → finalize 150 → mcast send 391.
+
+**Cumulative ablation** (stub the payload, keep every CB handshake / barrier / trip
+count; peel stages off cumulatively because they overlap):
+
+| variant | ns | attributed drop |
+|---|---|---|
+| baseline | 8719 | — |
+| − input-read payload | 7708 | 1011 (read) |
+| − read − output-write | 5834 | 1874 (write) |
+| − read − write − apply math | 5193 | 641 (apply) |
+| − read − write − apply − combine math − finalize SFPU (**everything at once**) | **4582** | 611 (combine arithmetic) |
+
+So the whole-op-ablated floor is 4582 ns and only **611 ns of the 3050 ns combine region
+is arithmetic** — the rest is rendezvous/hop latency, which no roofline gates.
+
+**Ranked headroom** (roofline-gated): **1.** the cross-core combine round trip;
+**2.** the output write completion (1874 ns, ~1.1 µs of it irreducible DRAM, and it is a
+tail with nothing left to overlap); **3.** the input read — 1011 ns against a 1.1 µs
+roofline, i.e. **already there, no ideas spent**; **4.** apply 641; **5.** launch skew
+~700 (not ours); **6.** `rd_prep_scaler` 317, fully removable from the critical path;
+**7.** sumsq+reduce 395.
+
+Two other geometries were broken down for domain coverage: `(1,1,8192,1024)`
+BLOCK_SHARDED `[1024,128]` on (8,8) = 50597 ns, where the **root's serialized
+`cp_finalize` is 11.9 µs** while 7 cores wait in `wr_mcast_recv` (25–27 µs) — the
+finding Refinement 5 left open; and `(1,1,8192,7168)` = 592392 ns, where `rd_in_issue`
+418 µs / `wr_out_issue` 149 µs restate Refinement 4's result that prefill is **at the
+DRAM peak**.
+
+### The portfolio (Step 2) — 7 ideas, deliberately overlapping
+
+| id | idea | target |
+|---|---|---|
+| I1 | mcast all-gather combine: leaders broadcast branch sums, every core finalizes | the 2 rendezvous + root finalize + return mcast |
+| I2 | column-0-valid gather/mcast payload (faces 0+2 instead of the whole stat tile) | combine NoC bytes + rendezvous |
+| I3 | `c_skip` the finalize SFPU (even-parity vectors: 16/tile, not 32) | root finalize |
+| I4 | move the reduce scaler + tail mask off the reader's pre-read critical path | 317 ns × every core |
+| I5 | fuse the apply's two FPU passes, delete `cb_normed` | apply 641 ns / 23–30 % of prefill |
+| I6 | merge `sumsq` + `reduce_stat` in DEST, delete `cb_stat_sq` | 395 ns per tile-row |
+| I7 | re-tune the work split for the latency-bound regime | the combine cost as a function of G |
+
+I1/I2/I7 all attack the combine (mutually reinforcing or exclusive); I3 lives inside the
+finalize I1 would relocate; I5/I6 both restructure compute phases. Overlap was resolved
+at aggregation, never among subagents. Nothing about the precision contract
+(`fp32_dest_acc_en`, `math_fidelity`, dtypes) was floated as a lever.
+
+### Per-idea verdicts (Step 3–4) — 4 WINS, 3 measured nulls
+
+**I2 — column-0-valid stat payload — WIN, graduated.** A `reduce<SUM, REDUCE_ROW>`
+result carries information in column 0 only, which lives in faces 0 and 2, so half of
+every gathered stat tile need never cross the NoC. Measured (median n=4): BLOCK-sharded
+**50453 → 47935 (−5.0 %)**, WIDTH `[32,128]`(8,1) 4564 → 4421 (−3.1 %), WIDTH
+`[32,256]`(7,4) 5844 → 5698 (−2.5 %), ragged `32×2047` 6506 → 6313 (−3.0 %); flat on the
+focus shape, prefill, ROW_MAJOR and HEIGHT (G=1, no collective). On the BLOCK geometry
+the whole-op delta is the gather rendezvous almost 1:1 (`wr_gather_issue` 6291 → 3839,
+`wr_gather_sem_wait` 5367 → 2655, `cp_gather_wait` 7270 → 4684). Halving the bytes while
+**doubling** the transactions beat the one-transaction three-quarter-tile encoding
+(−2.2 %), so this leg is NoC-byte bound, not issue bound. **Correctness was proven, not
+argued**: with bf16 NaN stamped into face 1 and −Inf into face 3 of every landing slot,
+PCC is unchanged — so no zero-fill is needed (one was priced anyway at +20 µs/+139 µs,
+an order of magnitude more than the win). Domain: **everywhere**, both stat dtypes.
+
+**I3 — even-parity finalize SFPU — WIN, graduated.** `VectorMode::C` (Refinement 5) is
+not the floor: it still walks both column parities of faces 0 and 2, and column 0 lives
+only in the even-parity vectors. `cp_finalize` **math-thread** ns per chain call:
+
+| vectors/tile | 64 (`::RC`, pre-R5) | 32 (`::C`, R5) | **16 (this)** |
+|---|---|---|---|
+| rows_t = 1 | 1011 | 415 | **377** (1.10×) |
+| rows_t = 16 | 14475 | 7568 | **4409** (1.72×) |
+| rows_t = 32 | 28837 | 15156 | **8715** (1.74×) |
+
+whole-kernel at rows_t = 16: 7705 → 4546 (1.69×). Column 0 is **bit-identical** to the
+`::C` chain in **both** `fp32_dest_acc_en` legs over 11 magnitudes plus hostile
+`±inf/nan/±3.4e38` garbage in columns 1–31. Cost is exactly proportional to vector count
+(64:32:16 → 13405:6498:3339 ns with the copy+pack floor removed). Not taken: fusing
+`+eps` with the rsqrt is a further 1.90× at rows_t = 16 but **0.84× at rows_t = 1**,
+which is the decode geometry.
+
+**I4 — reduce constants off the reader's critical path — WIN, graduated.** Both
+`prepare_reduce_*` calls cost ~310 ns and sat ahead of the block read, for buffers whose
+consumers cannot run until the block lands. Isolated (110 cores): C=1 2476 → 2221, C=2
+**3007 → 2779 (1.08×)**, C=3 3425 → 3213, C=3 + ragged tail **3977 → 3353 (1.19×)**,
+8 cores C=2 1953 → 1630; C=16 flat (read-dominated). Reordering *within* the reader is
+worth a third as much (2874) and deferring the **mask** past the block push starves
+`mask_tail_block` (`cp_sumsq` 216 → 616 ns) — which is why the **writer** is the answer,
+not a reorder. Sub-lever measured but **not** taken: `prepare_reduce_scaler`'s whole-tile
+NoC zero-fill is dead work for a *full* SUM/REDUCE_ROW scaler (proven by poisoning the
+tile with +Inf: byte-identical output), worth another 27–95 ns — it needs a helper option
+(see *Helper bypasses*), and it is **incorrect** for a mask or a partial scaler, which
+get their zeros from exactly that fill.
+
+**I7 — combine-tree-level admissibility — WIN off-focus, NULL on the focus shape,
+graduated.** The premise ("shrink G on a latency-bound shape") is **measurably wrong**
+where it was aimed: on a decode shape `tensor_row_tiles == 1`, so G *is* the active-core
+count and shrinking it shrinks parallelism 1:1 — G=110 8606, G=55 8964, G=22 9190,
+G=11 9699, G=10 16606 ns; the level-2 rendezvous it would delete is only 653 ns, while
+`rd_in_issue` grows 201 → 767. `MAX_W_GROUP_SIZE = 0` stands. What the sweep *did* find
+is a real mispick one step down: the second combine level costs ~5 tiles of per-core work
+(measured A/B at W=1024, G=11 flat vs G=22 two-stage: `cp_gather2_wait` 573 +
+`cp_combine_l2` 183 + `wr_mcast_recv` 1823 → 2730, against < 200 ns saved), and the
+occupancy key takes it regardless. `_admissible_by_tree_level` +
+`MIN_TWO_STAGE_TILE_GAIN = 4` (the measured turn sits between gain 2 and gain 4) gives
+**(1,1,32,1024) −9.0 %**, **(1,1,128,1024) −6.1 %**, 32×1536 −5.2 %, 32×1280 −3.2 %, and
+is a byte-identical **no-op** on all four prefill shapes, both collateral shapes, the
+ROW_MAJOR leg, `wtail`, and every sharded geometry (which never runs the selection).
+
+**I1 — mcast all-gather combine — REGRESSION (5.3×).** baseline 3990–4196 ns vs
+allgather **21874** on the focus group; a flat all-gather (110 senders) is 162753 ns
+(~42×). Mechanism, and the reason this idea can never work here: **multicasts into the
+same rectangle do not overlap** — ~13–18 ns per destination per broadcast, additive
+across senders however concurrently they are issued (ny=3 ≈ 350 ns, ny=4 ≈ 960,
+ny=10 ≈ 1990). The baseline already uses the minimum broadcast count (1), so an S-sender
+all-gather costs S broadcasts. On one-broadcast geometries it degenerates to "root
+broadcasts the sum" and is flat. A salvaged sibling, `sum_mcast` (same tree, broadcast
+the SUM, every core finalizes), is flat on every geometry the op actually selects and
+wins only at 4/16 blocks on a 110-core two-stage box — a geometry the selection function
+cannot produce (1 tile-row ⇒ 1 block) ⇒ **NULL in domain**, not graduated.
+
+**I5 — fuse the apply passes — REGRESSION (1.13× on the focus shape).** Per-block ns at
+(1,3): baseline 566, best fused form 642; (1,16) 1777 → 1813; flat at (3,32) and
+(1,112); gamma-expanded 715, SFPU-multiply 1961. Mechanism: `DestReuseBinary` is the only
+chain element that consumes a DEST-resident FPU operand and it has **no `BroadcastDim`**,
+so a fused chain must hold two different math-MOP element types ⇒
+`chain_math_mop_uniform` false ⇒ `hoist_math` false ⇒ both elements re-emit `init()` +
+srcA/srcB reconfig **once per block iteration** (~195 ns). Raw LLK cannot remove it (the
+two ops program the same MOP registers). It also **refuted** Refinement 4's stated
+blocker: dest-reuse costs **zero** precision at bf16 *and* at fp32/HiFi4 (ratio medians
+0.996853 vs 0.996829, and 0.997919 vs 0.997919 with a *lower* max-abs error), so the
+dtype gate R4 feared was never needed — the reason not to fuse is speed, not precision.
+`cb_normed` *can* be deleted (frees `R·(WC−1)` tiles, 222 KB at (1,112)) at a 1.00–1.13×
+apply cost, which may be worth it if L1 is what forces chunking; not taken here.
+
+**I6 — merge sumsq + reduce_stat — REGRESSION.** 407 → 433 ns focus (0.94×), 743 → 766
+decode C16, **2942 → 5574 (0.53×)** on the 16-tile-row block, 14788 → 15537 prefill,
+686 → 808 ragged tail. Mechanism: the SFPU within-tile collapse costs **+115 ns per
+tile-row more** than the pack + unpack + FPU matmul-reduce it deletes, and the `1/W`
+multiply — free inside the reduce scaler — costs another +60 (`::C`) to +107 (`::RC`).
+Against that, the merge saves only ~75–90 ns per **block** (one phase boundary), so
+break-even needs < 1 tile-row per block and there is none. The L1 round trip itself is
+unmeasurable at 1–2 tiles. Accuracy was *better* merged (fp32 column collapse), which is
+not what was being bought.
+
+### What graduated, and how widely
+
+All four are the op's **single unqualified path**; the code they replaced is gone (the
+reader's two `prepare_reduce_*` blocks, the whole-tile `gather_payload_bytes`, the two
+`SFPU_UNARY_CALL` finalize bodies). **One carve-out was earned:**
+
+| carve-out | kind | reason |
+|---|---|---|
+| I3 keeps `VectorMode::C` under `#if defined(ARCH_QUASAR)` | **inexpressible** | Quasar has no `_calculate_sqrt_body_` (its `calculate_sqrt` is a different implementation), so the parity-strided body cannot be built there. The op has no Quasar path today; the guard is written as the narrow exception (`if (cannot) legacy else new`) so it shrinks if Quasar gains the body. |
+
+No predicate was written around any *measured* regime, and no flat regime was fenced off:
+I2 is flat on the focus shape and prefill and rides there anyway; I3's rows_t = 1 win is
+1.10× on the math thread and invisible whole-kernel, and rides anyway; I7's rule is
+inert wherever flat already wins the score.
+
+**Whole-op, zone-instrumented, before → after (one fresh run each; the three that read
+2–3 % slower were re-measured 3× and are flat at the median):**
+
+| geometry | before | after | ratio |
+|---|---|---|---|
+| **decode (1,1,32,7168) — FOCUS** | **8809** | **8244** | **1.069×** |
+| decode (1,1,32,1024) | 6141 | 5430 | 1.131× |
+| **BLOCK (1,1,8192,1024) `[1024,128]`(8,8)** | **50597** | **41089** | **1.231×** |
+| ROW_MAJOR interleaved (128,512) | 9905 | 9415 | 1.052× |
+| prefill (1,1,8192,7168) | 592392 | 586170 | flat (at the DRAM roofline) |
+| prefill (1,1,8192,1024) | 91035 | 90239 | flat |
+| WIDTH (1,1,32,7168) `[32,256]`(7,4) | 5913 | 5903 | flat |
+| WIDTH (1,1,32,1024) `[32,128]`(8,1) | 4781 | 4833 | flat |
+| HEIGHT (1,1,256,512) | 5396 | 5430 | flat |
+| ragged hidden (1,1,32,2047) | 6484 | 6496 | flat |
+
+decode 2304 / 5120 after this round: 6364 / 7419 ns. **Guard-set no-regression result:
+nothing outside the ±2–3 % noise band on any representative** (one per distinct kernel
+path × layout × placement: interleaved TILE tree-combine, interleaved TILE flat-combine
+multi-block, ROW_MAJOR legs, ragged-hidden mask, HEIGHT (G=1 degenerate combine), WIDTH
+and BLOCK pinned-shard zero-copy). All numbers are **zone-instrumented profiled** runs on
+blackhole_p150b @ 1350 MHz and are compared like-for-like; the markers themselves cost
+~0.9 µs on the decode shape (8809 here vs 7904 unzoned in Refinement 5), and cost
+nothing in production, where the profiler is off.
+
+The focus case's goal (`achievable_ns` 104259 ÷ `minimum_expected_speedup` 7.0 ≈
+14894 ns) is cleared by ~1.8× at its exact pinned config.
+
+### Accuracy
+
+Unchanged everywhere. I3 is bit-identical on the only column anyone reads; I2 removes
+bytes that are structurally garbage (proven by poisoning); I4 moves *which kernel* fills
+a buffer; I7 changes only which `(G, C, R)` a shape is computed with. Unit precision
+matrix **140/140** (5 shapes × 3 dtypes × 2 `fp32_dest_acc_en` × {HiFi4, HiFi2} ×
+{normal, uniform}) including its `|ratio_median − 1|` scale tripwire, plus the
+gamma_dtype sweep. Golden `-m perf` **13/13** at `pcc_threshold = 0.9995`,
+`-m pad_poison` **24/24** (so the mask-before-square identity and the true-`W` divisor
+survive the writer-side mask and the short payload).
+
+### Golden test progress
+
+`test_op_loose` **382 / 384** — byte-for-byte the two `W = 11008` TILE HEIGHT cells
+Refinement 2b documented as an L1-capacity limit and Refinements 3/4/5 confirmed;
+unchanged and for the unchanged reason. Cartesian slices: `1x1x64x128` **165 passed /
+39 xfailed / 0 xpass-drift**; `{1x1x32x50, 1x1x17x64, 4x8x32x47}` **351 passed / 117
+xfailed**. Unit: acceptance 82/82, sharded 41/41, precision 140 passed / 36 skipped.
+
+### Helper bypasses
+
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `ckl::Rsqrt` / `ckl::AddUnary` (via `rsqrt_tile` / `add_unary_tile`, and `SFPU_UNARY_CALL` itself) | capability | No handle on the SFPU's **per-face vector walk**. A face is walked `[rg0-even, rg0-odd, rg1-even, …]`, so a column-0-valid tile only needs the even-parity vectors — but `vector_mode` selects whole faces and `ITERATIONS` truncates the *outer* row-group axis contiguously. Parity is the *inner* axis and the only handle is the DEST address stride, which no wrapper exposes. Needs a scope parameter that can express "every other vector", or a `VectorMode::C0`. | 7568 (`VectorMode::C`, rows_t=16) | 4409 | `rms_norm_compute.cpp:200` (`rsqrt_col0_body`, called at `:240`), `:213` (`add_col0_body`, called at `:262`) |
+| `mcast_pipe::SenderPipe::send` | capability | Takes **one contiguous byte count**, so a payload that is valid in faces 0 and 2 but not 1 and 3 is inexpressible: the multicast can only trim the trailing garbage (the last tile's face 3), not the interior. A strided / multi-chunk broadcast (or a `send` taking a stride + chunk length) would let the rstd broadcast carry half the bytes like the gather legs do. | 2048 B/tile broadcast | 1024 B/tile on the gather legs; mcast trimmed to 3/4 | `rms_norm_writer.cpp:560` |
+| `dataflow_kernel_lib::prepare_reduce_scaler` | capability | No way to skip the **whole-tile NoC zero-fill** when the scaler is FULL. For `SUM`/`REDUCE_ROW` with `valid == full_dim` the reduce LLK reads only row 0 of each face, so the fill is dead work — proven by pre-poisoning the tile with +Inf and getting byte-identical output. A `ZeroFill::None` option (legal iff `valid_reduce_dim_elements_in_tile == full_dim`; never for a mask or a partial scaler, which get their zeros from that fill) would save it. **NOT bypassed in this round** — the graduated I4 path calls the unmodified helper from the other kernel — so this row is a gap report with no raw site. | ~310 | ~215–283 (measured in the bench only) | (none — helper kept) |
+
+The gather leg's raw `noc_async_write` is **not** a new bypass: it was already raw before
+this round (`mcast_pipe`'s SenderPipe is one-to-many with an identical destination; the
+gather is many-to-one into disjoint slots — the opposite direction), and I2 only changed
+its byte count plus the split into the two face-sized transfers a single contiguous
+transfer cannot express.
+
+Two helper defects found while measuring I5, neither a bypass and neither in this op's
+path, recorded for the library: **`DestReuseBinary` is numerically incorrect at
+`block_size == 8`** with HiFi2 / `fp32_dest_acc_en=False` (PCC 0.982, max-abs 5.6;
+structurally-invalid rows leak in — `blk ≤ 6` is exact), and **`block_size > 1` with
+`ReservePolicy::PerTile` hangs the device** (`elem_apply_pack` reserves one page per
+block iteration but packs `inner_count` tiles, with no `static_assert`).
+
+### Round-2 leads (measured, not taken)
+
+1. **`mcast_pipe`'s PRE_HANDSHAKE ack is ~520 ns per block** and protects nothing when a
+   core's row assignment is a single block (the rstd landing buffer is never reused):
+   3990 → 3470 ns (**13 %**) on the focus geometry. Needs the `ReceiverPipe` `data_ready`
+   cell host-initialized first, since mcast_pipe's own race argument for that init is
+   "the sender is gated behind the ack". This is the largest single item left on the
+   focus shape.
+2. **The apply's output-CB lifecycle + DEST-lane blocking**, on the *existing* two-pass
+   shape (not the fusion): 1.15–1.26× from the CB lifecycle and 1.1–1.25× from blocking,
+   up to **1.60×** combined at (16,4) and 1.58× at (1,112). The integration-safe form is
+   a `PerChunk` output policy — a bulk output would delay the writer, which is at the
+   DRAM roofline on the interleaved legs — and that form is unmeasured.
+3. **One `eltwise_chain` over the whole hidden slice instead of one per chunk**:
+   **1.436×** on the chunked (wide HEIGHT-shard) geometry, flat in all five other
+   regimes, better PCC, and `cb_stat_sq` shrinks from `rows_t·NUM_CHUNKS` to `rows_t`
+   tiles. Deferred only because it changes `_stat_cols`, which the L1 residency solve
+   consumes, so it re-opens `WC` selection on exactly the L1-critical cells; inexpressible
+   for `IS_RM_IN` (its block is chunk-major).
+4. **Disabling the stat phase-boundary format reconfig**: 1.073× per block / 1.10×
+   one-shot on the focus shape, but correct only at `fp32_dest_acc_en=False` (at `True`
+   the stat CBs are fp32 while the input is bf16, so the unpacker's formats really do
+   change) — a genuine dual path, and the `True` leg was reasoned, not measured.
+
+### Tests added
+
+`tests/ttnn/unit_tests/operations/rms_norm/perf_zone_harness.py` (named-case device-ns +
+raw zone-log capture for every perf geometry and the guard set, at the pinned perf
+config) and `perf_zone_report.py` (per-(RISC, zone) reduction **plus** the marker-cap and
+span-coverage checks that keep a truncated profile from inventing a dominant stage).
+Seven experiment dirs under
+`tests/ttnn/unit_tests/operations/rms_norm/perf_experiments/` — one per floated idea,
+including the three nulls, each carrying its own correctness gate and measured table
+(`allgather_combine`'s pytest entry is 38 passed / 2 skipped). The five `RMSN_ABLATE_*`
+compile-time switches stay in the kernels at `0`: inert, and they are the harness that
+produced the cumulative-ablation table above (`RMSN_ABLATE_GATHER_BYTES` is now
+denominated in faces, since the production payload itself became column-valid).
