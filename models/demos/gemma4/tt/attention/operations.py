@@ -21,6 +21,7 @@ import ttnn
 from models.demos.gemma4.tt.ccl import ccl_allreduce
 from models.demos.gemma4.tt.dram_sharded import (
     DramShardedLinear,
+    decode_in0_l1_enabled,
     in_prefill_l1_matmul_band,
     interleaved_o_proj_prefill_config,
     interleaved_prefill_config,
@@ -701,7 +702,14 @@ def concat_heads(
         out = ttnn.experimental.nlp_concat_heads_decode(tensor_sh, num_heads=num_heads)
         tensor_sh.deallocate(True)
         out_sh = out
-        out = ttnn.sharded_to_interleaved(out_sh, ttnn.DRAM_MEMORY_CONFIG)
+        # The un-shard is required (the auto o_proj wants interleaved in0), but its
+        # destination is free: L1 keeps the [1,1,32,heads*head_dim] result on-chip
+        # for o_proj instead of a DRAM round-trip. Same op, same bits — only the
+        # buffer type moves. See dram_sharded.decode_in0_l1_enabled for the
+        # rationale, and for why this does NOT move DRAM%/FLOPs%.
+        out = ttnn.sharded_to_interleaved(
+            out_sh, ttnn.L1_MEMORY_CONFIG if decode_in0_l1_enabled() else ttnn.DRAM_MEMORY_CONFIG
+        )
         out_sh.deallocate(True)
         # Drop the batch padding (B is padded to 32 by the op) so downstream sees
         # [1, 1, batch, hidden_local] just like the old transpose+concat path.
