@@ -41,6 +41,13 @@ compiled the agent's code and failed on ordinary first-attempt errors: three red
 second iteration is for, and it is the first evidence that the build path works on agent-written
 code rather than on a clean tree.
 
+The second run, the same afternoon, got further and failed for a sibling reason. The agent wrote the
+port, started exactly one build -- the start/collect split working -- and then re-dispatched a
+byte-identical tree rather than reading the compiler diagnostics, because a non-zero exit reaches it
+as a broken tool rather than as an answer. Cancelled once that was diagnosed. Both failures are the
+same shape: the harness was speaking in exit codes and the agent only hears content. Both sections
+below exist because of it.
+
 ## The pipeline is two workflows, and neither can do the other's half
 
 Read this before touching either file, because each half looks incomplete on its own.
@@ -207,6 +214,46 @@ Nothing else in the repo uses `checkout-filter`, so we are the first, and a part
 lazily if something later walks history. Nothing in this build does. If a future step starts reading
 old trees it will silently refetch them and the win will quietly disappear.
 
+## A non-zero exit is not a result, it is a broken tool -- and the agent believes it
+
+Read this with the section below it; they are two halves of one lesson, and between them they
+account for both failed agentic runs.
+
+gh-aw runs an mcp-scripts handler through `execFile` and **rejects the promise on any non-zero
+exit**. What reaches the agent is not our carefully worded report but:
+
+    Command failed: /…/wait.sh (exit code: 4)
+    stdout:
+    build is still running after 8 minutes… Nothing is wrong; it is not finished.
+
+The frame beats the text. The agent is told the tool broke, and the reasonable response to a broken
+tool is to call it again -- which is precisely what it did, twice, in two different ways:
+
+- **2026-08-12, run 1.** The gateway cancelled `build` at 60s. Four retries, four stranded CIv2
+  builds. That one really was a broken tool, and the agent's reading was correct.
+- **2026-08-12, run 2.** `build` returned a genuine compiler diagnostic and exited 1; `wait` said
+  "still going" and exited 4. The agent re-dispatched a **byte-identical tree** twenty seconds
+  later -- same tree object, `9d7c71de75e9`, confirmed by diffing the two scratch commits. It never
+  acted on the diagnostics, because as far as it could tell there weren't any.
+
+So the exit code is no longer allowed to carry meaning to the agent. `--as-tool`, which all three
+tools pass, makes any *delivered* answer exit 0 and puts everything in the text. Three consequences
+worth preserving:
+
+- **A refusal is an answer.** `Refusal` exists as a distinct exception for this: "you changed the
+  pipeline" and "that tree is unchanged" tell the agent what to do, so they exit 0 under the flag.
+  A genuine harness failure -- no credential, push rejected -- keeps its non-zero exit, because
+  that one *is* a broken tool and should look like one.
+- **Workflow steps are unaffected.** They consume exit codes properly and do not pass the flag.
+  `selftest.py` checks both halves.
+- **The reports now say which kind of thing they are** in their first line: `BUILD PASSED`,
+  `BUILD FAILED -- the compiler rejected your code. The tool worked`, `STILL RUNNING -- this is not
+  a result and not a failure`. That phrasing is doing real work; do not trim it for brevity.
+
+`refuse_unchanged_build` backs this with scaffolding rather than words: a second `build` of an
+unchanged tree is refused outright, since compilation is deterministic and the answer cannot differ.
+`verify` is deliberately exempt, because measurement is noisy and re-measuring can be legitimate.
+
 ## A tool call may not last ten minutes, so the launcher cannot wait inside one
 
 This is the constraint that shapes the agent's tool surface, and it is not negotiable from here.
@@ -370,9 +417,10 @@ What that leaves genuinely untested:
 
 - **`verify` mode.** `report_verify` and the `gate.json` it reads have never run. It is the only mode
   whose exit code drives the agent's next move, so it is the highest-value thing left to probe.
-- **The agent collecting a result.** It has started work and started a build; it has never been
-  handed an answer. In particular nothing has yet checked that an agent reads exit 4 as "call again"
-  rather than as a failure -- the prompt says so in three places, but only a real run settles it.
+- **The agent acting on a result.** It has now been handed two -- a failed build and a "still
+  going" -- and misread both, because both arrived framed as tool errors. Whether it reads them
+  correctly now that they arrive as content is the single open question, and the cheapest thing to
+  watch: it shows up within about forty minutes of a run starting, at the first `wait` return.
 - **The token pre-step under a real agent.** It ran and the push worked, so the boundary holds in
   practice, but the credential is `CODEGEN_REPO_TOKEN` and now carries `workflow` scope as well as
   `repo`. `refuse_pipeline_edits` is the only thing standing between that scope and a snapshot that

@@ -115,6 +115,16 @@ class DispatchError(RuntimeError):
     """The launcher could not do its job. Distinct from a failing verdict, which is a result."""
 
 
+class Refusal(DispatchError):
+    """The launcher declined on purpose, and the agent is the one who can resolve it.
+
+    Separate from `DispatchError` only because of how the two are surfaced. A refusal is an answer
+    -- it says what to change -- and must not reach the agent dressed as a broken tool, because the
+    reasonable response to a broken tool is to call it again. A genuine harness failure is a broken
+    tool and should look like one.
+    """
+
+
 class ApiError(DispatchError):
     """A GitHub call that failed. Recoverable at some call sites -- a heartbeat that cannot list
     jobs should say so and keep waiting, not abort a measurement that is still running."""
@@ -224,7 +234,7 @@ def refuse_pipeline_edits(repo: Path, base: str, commit: str) -> None:
     changed = git("diff", "--name-only", base, commit, cwd=repo).splitlines()
     pipeline = sorted(p for p in changed if p.startswith(".github/"))
     if pipeline:
-        raise DispatchError(
+        raise Refusal(
             "refusing to dispatch: this would change the pipeline that measures and grades the "
             "port, and the pushed copy is the one that runs. Revert these and try again:\n  "
             + "\n  ".join(pipeline)
@@ -487,9 +497,15 @@ def adopt_workspace(results: Path, repo: Path) -> list[str]:
 
 def report_build(run: dict, api: Api) -> int:
     if run.get("conclusion") == "success":
-        print("build OK -- the tree compiles and the wheel was produced.")
+        print("BUILD PASSED -- the tree compiles and the wheel was produced.")
         return 0
-    print(f"build FAILED ({run.get('conclusion')}). {run['html_url']}\n")
+    # Said this plainly because the agent has twice now read a delivered answer as a broken tool and
+    # retried it unchanged. A compile is deterministic: the same tree gives the same errors.
+    print(
+        f"BUILD FAILED -- the compiler rejected your code. The tool worked; the diagnostics below "
+        f"are the answer, and rebuilding without editing will reproduce them exactly.\n\n"
+        f"Run: {run['html_url']}\n"
+    )
     print(failure_output(api, run["id"]))
     return 1
 
@@ -591,6 +607,30 @@ def retire_inflight(api: Api, work: Path, repo: Path, remote: str, token_file: P
         record_path.unlink(missing_ok=True)
 
 
+def refuse_unchanged_build(work: Path, repo: Path, mode: str, tree: str) -> None:
+    """Refuse a second `build` of a tree that has not changed since the last one.
+
+    Scaffolding rather than a plea in the prompt, because the prompt already asks for this and it
+    happened anyway: the agent re-dispatched a byte-identical tree twenty seconds after a build
+    failed, and would have spent nine minutes of a card learning the same diagnostics again.
+
+    `build` only, and only against the immediately preceding one. Compilation is deterministic, so
+    an unchanged tree provably cannot compile differently. `verify` is not: it measures, measurement
+    is noisy, and re-measuring is sometimes a legitimate thing to want.
+    """
+    if mode != "build":
+        return
+    marker = work / "last-build-tree"
+    if marker.is_file() and marker.read_text().strip() == tree:
+        raise Refusal(
+            "this is the same tree as the last build, byte for byte, so it would fail in exactly "
+            "the same way -- a compile is deterministic. Nothing was dispatched and no time was "
+            "spent. Read the diagnostics from the previous build, edit the files they name, and "
+            "call `build` again once the tree differs."
+        )
+    marker.write_text(tree)
+
+
 def cleanup_ref(work: Path, repo: Path, remote: str, token_file: Path, branch: str) -> None:
     # Deleting can meet the same check as creating, and a ref left behind is litter rather than a
     # failure -- the agent job sweeps the namespace at the end. So retry, but never raise.
@@ -607,6 +647,22 @@ def report(mode: str, run: dict, api: Api, results: Path | None, repo: Path) -> 
     return report_baseline(run, api, results, repo)
 
 
+def delivered(code: int, as_tool: bool) -> int:
+    """A tool that answered did its job, whatever the answer was.
+
+    gh-aw's mcp-scripts runner hands the handler to `execFile` and rejects the promise on any
+    non-zero exit, so what reaches the agent is `Command failed: build.sh (exit code: 1)` with the
+    real output demoted beneath it. The agent then does the only sensible thing with a broken tool,
+    which is to call it again -- and that is not what you want it to do with a compiler diagnostic.
+    Both of the first two agentic runs died this way: one retrying a 60s gateway timeout, one
+    retrying a perfectly good build failure and a `wait` that had merely said "not finished yet".
+
+    So under `--as-tool` the exit code carries nothing and the text carries everything. The workflow
+    steps, which genuinely do consume exit codes, do not pass the flag and are unaffected.
+    """
+    return 0 if as_tool else code
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Dispatch a build or a measurement onto CIv2 and wait for it.")
     ap.add_argument("--mode", choices=["baseline", "build", "verify"])
@@ -617,6 +673,11 @@ def main() -> int:
     )
     ap.add_argument("--wait", metavar="HANDLE", help="resume waiting on a dispatch started earlier")
     ap.add_argument("--budget", type=int, default=WAIT_BUDGET, help="seconds a single --wait may block")
+    ap.add_argument(
+        "--as-tool",
+        action="store_true",
+        help="exit 0 whenever an answer was delivered; see delivered() for why this is not optional",
+    )
     ap.add_argument("--band", default="both", choices=["correctness", "performance", "both"])
     ap.add_argument("--op", default=os.environ.get("PORT_OP", "untilize"))
     ap.add_argument("--category", default=os.environ.get("PORT_CATEGORY", "data_movement"))
@@ -684,6 +745,7 @@ def main() -> int:
         # difference as the agent writing where it should not have.
         raise DispatchError(f"HEAD moved from {base[:12]} to {parent[:12]} while snapshotting")
     refuse_pipeline_edits(repo, base, commit)
+    refuse_unchanged_build(work, repo, args.mode, git("rev-parse", f"{commit}^{{tree}}", cwd=repo))
     retire_inflight(api, work, repo, remote, token_file)
     log(f"{args.mode} for {args.op}: pushing {commit[:12]} (base {base[:12]}) to {branch}")
 
@@ -733,7 +795,7 @@ def main() -> int:
     finally:
         cleanup_ref(work, repo, remote, token_file, branch)
 
-    return report(args.mode, run, api, results, repo)
+    return delivered(report(args.mode, run, api, results, repo), args.as_tool)
 
 
 def resume(api: Api, args, work: Path, repo: Path, remote: str, token_file: Path) -> int:
@@ -752,10 +814,14 @@ def resume(api: Api, args, work: Path, repo: Path, remote: str, token_file: Path
         if run is None:
             elapsed = (time.time() - record.get("started", time.time())) / 60
             print(
-                f"{record['mode']} is still running after {elapsed:.0f} minutes. {record['run_url']}\n"
-                f"Nothing is wrong; it is not finished. Call `wait` again with handle {args.wait}."
+                f"STILL RUNNING -- this is not a result and not a failure.\n\n"
+                f"The {record['mode']} has been going for {elapsed:.0f} minutes and has not finished. "
+                f"{record['run_url']}\n\n"
+                f"Do exactly one thing: call `wait` again with handle {args.wait}. Do not edit code, "
+                f"do not start another {record['mode']}, and do not draw any conclusion about your "
+                f"port -- nothing has been measured yet. Starting another one cancels this one."
             )
-            return 4
+            return delivered(4, args.as_tool)
 
     log(f"  {record['mode']} finished as {run.get('conclusion')} after {(time.time() - record.get('started', 0)) / 60:.1f} minutes")
     try:
@@ -764,14 +830,22 @@ def resume(api: Api, args, work: Path, repo: Path, remote: str, token_file: Path
         cleanup_ref(work, repo, remote, token_file, record["branch"])
         forget_job(work, args.wait)
 
-    return report(record["mode"], run, api, results, repo)
+    return delivered(report(record["mode"], run, api, results, repo), args.as_tool)
 
 
 if __name__ == "__main__":
+    # Read before argparse, because how the two failure classes below are surfaced depends on it.
+    AS_TOOL = "--as-tool" in sys.argv
     try:
         sys.exit(main())
+    except Refusal as refusal:
+        # An answer, so it exits like one. The launcher did exactly what it meant to do and the
+        # message says what to change; framing that as a crashed tool invites a blind retry.
+        print(f"REFUSED -- nothing was dispatched, and no time was spent.\n\n{refusal}")
+        sys.exit(delivered(1, AS_TOOL))
     except DispatchError as error:
         # stdout, not stderr: this is the only thing the agent will see, and it needs to be able to
-        # tell "the harness could not run" apart from "your port is wrong". Exit 3 says the same.
+        # tell "the harness could not run" apart from "your port is wrong". This one really is the
+        # harness failing, so it keeps its non-zero exit and reaches the agent as a tool error.
         print(f"the dispatch could not complete: {error}")
         sys.exit(3)

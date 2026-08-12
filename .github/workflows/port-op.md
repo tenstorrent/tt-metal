@@ -326,6 +326,14 @@ tools:
 # it in bounded slices. The per-tool timeouts below sit under the gateway's, so the launcher stops
 # itself rather than being killed mid-flight -- being killed is what stranded four builds on CIv2 on
 # the first real run, each holding a card that nobody was left to read.
+#
+# `--as-tool` is not optional and is the other half of that lesson. gh-aw runs these handlers through
+# `execFile` and rejects the promise on a non-zero exit, so the agent is shown `Command failed:
+# wait.sh (exit code: 4)` with the actual answer demoted below it. Twice now the agent has read a
+# delivered answer as a broken tool and called the tool again -- once against the gateway timeout,
+# once against a compiler diagnostic and a `wait` that had only said "not finished yet". Under the
+# flag the exit code says nothing and the text says everything; a genuine harness failure still
+# exits non-zero, because that one really is a broken tool.
 mcp-scripts:
   build:
     description: >-
@@ -334,7 +342,7 @@ mcp-scripts:
       `wait` with the handle. Batch every edit you intend to make before calling this.
     timeout: 540
     run: |
-      python3 "${GITHUB_WORKSPACE}/.github/scripts/port/dispatch.py" --mode build --start
+      python3 "${GITHUB_WORKSPACE}/.github/scripts/port/dispatch.py" --mode build --start --as-tool
   verify:
     description: >-
       Start grading the port on real hardware and return a handle immediately; collect the verdict
@@ -357,7 +365,7 @@ mcp-scripts:
         correctness|performance|both) BAND="$INPUT_BAND" ;;
         *) echo "verify: band must be correctness, performance, or both (got: $INPUT_BAND)" >&2; exit 2 ;;
       esac
-      python3 "${GITHUB_WORKSPACE}/.github/scripts/port/dispatch.py" --mode verify --band "$BAND" --start
+      python3 "${GITHUB_WORKSPACE}/.github/scripts/port/dispatch.py" --mode verify --band "$BAND" --start --as-tool
   wait:
     description: >-
       Collect a build or verify started earlier, given its handle. Blocks for up to seven minutes and
@@ -376,7 +384,7 @@ mcp-scripts:
       case "$INPUT_HANDLE" in
         *[!a-zA-Z0-9-]*|"") echo "wait: '$INPUT_HANDLE' is not a handle; pass the one build or verify printed" >&2; exit 2 ;;
       esac
-      python3 "${GITHUB_WORKSPACE}/.github/scripts/port/dispatch.py" --wait "$INPUT_HANDLE"
+      python3 "${GITHUB_WORKSPACE}/.github/scripts/port/dispatch.py" --wait "$INPUT_HANDLE" --as-tool
 
 safe-outputs:
   mentions: false
