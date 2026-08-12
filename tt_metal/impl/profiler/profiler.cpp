@@ -2140,22 +2140,22 @@ void DeviceProfiler::readTsData16BMarkerData(
         return;
     }
 
-    device_tracy_contexts.try_emplace({device_id, physical_core}, nullptr);
-
-    updateFirstTimestamp(timestamp);
-
 #if defined(TRACY_ENABLE)
     // Emit the NOC-debug event exactly once per genuine device event. The profiler re-parses undrained profiler
     // buffers many times per run (periodic debug-dump polls + force reads + the Tracy marker pass); the persistent
     // marker set (device_markers_per_core_risc_map) deduplicates those re-reads, so pushing only when the marker was
     // newly inserted guarantees each event reaches the NOCDebugState once. This mirrors how readDeviceMarkerData
     // handles scoped-lock events (its push sits after the same new_marker_inserted early-out).
-    if (noc_debug_event) {
+    if (noc_debug_event.has_value()) {
         MetalContext::instance(context_id)
             .noc_debug_state()
             ->push_event(device_id, timestamp, get_processor_id(risc_type), *noc_debug_event);
     }
 #endif
+
+    device_tracy_contexts.try_emplace({device_id, physical_core}, nullptr);
+
+    updateFirstTimestamp(timestamp);
 }
 
 struct DispatchMetaData {
@@ -2967,7 +2967,11 @@ void DeviceProfiler::pollDebugDumpResults(
             for (tracy::RiscType risc_type : enchantum::values_generator<tracy::RiscType>) {
                 if (risc_type == tracy::RiscType::TENSIX_RISC_AGG || risc_type == tracy::RiscType::NONE ||
                     (is_eth && risc_type != tracy::RiscType::ERISC) ||
-                    (!is_eth && risc_type == tracy::RiscType::ERISC)) {
+                    (!is_eth && risc_type == tracy::RiscType::ERISC) ||
+                    // WH/BH and Quasar RiscTypes occupy disjoint enum ranges, and the Quasar DRAM profiler
+                    // buffer is unsupported for now.
+                    (static_cast<uint8_t>(risc_type) >= static_cast<uint8_t>(tracy::RiscType::QUASAR_DM0) &&
+                     static_cast<uint8_t>(risc_type) <= static_cast<uint8_t>(tracy::RiscType::QUASAR_NEO3_TRISC3))) {
                     continue;
                 }
 
@@ -3096,7 +3100,11 @@ void DeviceProfiler::pollDebugDumpResults(
             for (tracy::RiscType risc_type : enchantum::values_generator<tracy::RiscType>) {
                 if (risc_type == tracy::RiscType::TENSIX_RISC_AGG || risc_type == tracy::RiscType::NONE ||
                     (is_eth && risc_type != tracy::RiscType::ERISC) ||
-                    (!is_eth && risc_type == tracy::RiscType::ERISC)) {
+                    (!is_eth && risc_type == tracy::RiscType::ERISC) ||
+                    // WH/BH and Quasar RiscTypes occupy disjoint enum ranges, and the Quasar DRAM profiler
+                    // buffer is unsupported for now.
+                    (static_cast<uint8_t>(risc_type) >= static_cast<uint8_t>(tracy::RiscType::QUASAR_DM0) &&
+                     static_cast<uint8_t>(risc_type) <= static_cast<uint8_t>(tracy::RiscType::QUASAR_NEO3_TRISC3))) {
                     continue;
                 }
 

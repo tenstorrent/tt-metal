@@ -129,7 +129,8 @@ struct ScopedLockEvent {
 
     bool is_lock() const {
         return event_type == NocDebuggingEventMetadata::NocDebugEventType::CB_LOCK ||
-               event_type == NocDebuggingEventMetadata::NocDebugEventType::MEM_LOCK;
+               event_type == NocDebuggingEventMetadata::NocDebugEventType::MEM_LOCK ||
+               event_type == NocDebuggingEventMetadata::NocDebugEventType::DFB_LOCK;
     }
 };
 
@@ -152,6 +153,8 @@ enum class NOCDebugIssueBaseType : uint8_t {
     UNFLUSHED_WRITE_AT_END,
     WRITE_TO_LOCKED_CORE_LOCAL_MEM,
     WRITE_TO_LOCKED_CB,
+    WRITE_TO_LOCKED_DFB,
+    WRITE_TO_UNLOCKED_DFB,
     COUNT,
 };
 
@@ -235,14 +238,21 @@ public:
         bool is_mcast = false;
     };
 
+    struct L1Extent {
+        // 64-bit to match the address fields on the events these extents are compared against (see NocWriteEvent).
+        uint64_t address;
+        uint32_t size;
+        auto operator<=>(const L1Extent&) const = default;
+    };
+
     struct LockedBufferInfo {
         enum class LockType {
             CB,
             MEM,
+            DFB,
         };
 
-        uint64_t address;
-        uint32_t size;
+        L1Extent extent;
         LockType lock_type;
 
         auto operator<=>(const LockedBufferInfo& other) const = default;
@@ -275,10 +285,13 @@ private:
         std::array<bool, MAX_NOCS> any_posted_writes{};
         std::array<bool, MAX_NOCS> any_nonposted_writes{};
 
-        // Captures which buffers are marked as locked for each RISC, with a refcount so nested or duplicate
-        // scoped locks over the same region don't collapse to one entry (which would let the first unlock clear a
-        // region an outer lock still holds). A region is locked while its count is > 0; the entry is erased at 0.
+        // Buffers currently locked by each RISC, reference-counted so nested or duplicate locks over the same
+        // region are only released once the matching number of unlocks arrive.
         std::array<std::map<LockedBufferInfo, uint32_t>, MAX_PROCESSORS> locked_buffers{};
+
+        // Live DFB L1 extents on each RISC. A DFB's constructor declares its ring extent, and the firmware
+        // clears this RISC's whole set once the kernel exits.
+        std::array<std::set<L1Extent>, MAX_PROCESSORS> dfb_regions{};
 
         // Destination programmed by the most recent WRITE_SET_STATE per (processor, noc). Subsequent stateful writes
         // (WRITE_WITH_STATE / WRITE_WITH_TRID_WITH_STATE), whose own event records the destination core as a
@@ -301,8 +314,14 @@ private:
         // Keep track of reported issues for each processor
         std::array<NOCDebugIssue, MAX_PROCESSORS> issue{};
 
-        // Check if a NOC write of [write_start, write_start + write_size) hit a locked buffer in this core
-        const LockedBufferInfo* get_noc_write_to_lock_buffer(uint64_t write_start, uint32_t write_size) const;
+        // Check if a NOC write of [write_start, write_start + write_size) hit a locked buffer in this core.
+        // The extent is passed explicitly rather than read from the event because a stateful write's real
+        // destination is reassembled by the caller (see handle_write_event).
+        const LockedBufferInfo* get_noc_write_to_lock_buffer(
+            uint64_t write_start, uint32_t write_size, int writer_processor_id, bool same_core) const;
+
+        // Check if the write lands in a unlocked live DFB region on this core
+        bool write_into_unlocked_dfb(uint64_t write_start, uint32_t write_size, int writer_processor_id) const;
     };
 
     void handle_write_event(tt_cxy_pair core, int processor_id, uint64_t timestamp, NocWriteEvent event);
