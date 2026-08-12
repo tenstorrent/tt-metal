@@ -41,7 +41,7 @@ in §6.41/§6.43). A probe in `/tmp` cannot be re-run by whoever inherits this.
 | `norm_traced.py` | is the sharded norm faster once traced? | **yes, +5.4 ms/frame** — reverses §6.39/§6.40 (§6.67) |
 | `trace_probe.py` | is the ~68 µs per-op floor device time or host dispatch? | dispatch is **2.8–3.9%**, not 0% and not the ~100 µs others assumed (§6.49) |
 | `seq_len_limits.py` | how long a prompt, how long an utterance, and what does length cost? | prefill has **no ceiling** (clean to 4096; the "~1024" claim was never measured); utterance length is `max_seq_len`, and it costs DRAM, not RTF (§6.69) |
-| `xref_audit.py` | do the `[gpt-26]` / `§6.x` pointers still resolve? **run after any doc edit** | found `[codec-22]` cited twice and defined nowhere. Cannot catch a pointer to a REVERSED section — that stays manual |
+| `xref_audit.py` | do the `[gpt-26]` / `§6.x` pointers still resolve? **run after any doc edit** | found a `codec-22` pointer cited twice and defined nowhere. Cannot catch a pointer to a REVERSED section — that stays manual. (Written WITHOUT brackets on purpose: this file is one of the four the audit scans, so naming a dead pointer in prose re-breaks it — which is exactly what the commit adding this row did.) |
 
 **Read `frame_ab.py` before trusting any block A/B.** A tight loop measures device time with
 dispatch overlapped; the real loop drains at 10 host crossings per frame and can absorb a device

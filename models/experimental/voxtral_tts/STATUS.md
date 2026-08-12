@@ -219,7 +219,8 @@ does. Harness: `scripts/generate_quality_set.py` then `scripts/score_quality_set
 
 **Listening pass: done, informally — verdict "sounds good".** Re-done on the POST-BLOCK-2-SWEEP build
 (2026-08-06, `82d04f977a1`, Block 2 at ~21 ms/frame after §6.30/§6.31) via
-`generated/SAMPLER_current_build.wav` — one 136 s file, 13 clips, both 37 s and 39 s long-form English
+`generated/SAMPLER_current_build.wav` (**no longer on the box** — and its name has been misleading
+since the p150 fork; it is this N150-era pass, not HEAD) — one 136 s file, 13 clips, both 37 s and 39 s long-form English
 cases first, then prosody, then eight languages. Verdict from the author: **"sounds good"**. The earlier
 pass was on the pre-sweep build (2026-07-30, verdict "sounds ok"). That clears the bar of "no audible defect the metrics
 missed", which is what it was for. Read it as exactly that and no further: **it is not evidence of
@@ -529,6 +530,8 @@ verdict, so you can jump rather than read 3,900 lines.
   not RTF ⟵ **corrects a "~1024 tokens" claim that appeared in three places and was never measured**
 - **§6.70** — runs on tt-metal main +777 commits with **no source changes** and the same speed;
   acoustic codes 45→40 (kernel rounding, toward the reference)
+- **§6.71** — the headline REPRODUCED on a clean tree: 27.664 ms/frame, RTF 0.3656, WER 0 of 894.
+  Plus the first decode gate on §6.67's norm, and a listening sampler that exists at last
 
 **Shipped, in order of size:** §6.65 traced frame loop (−4.2 ms), §6.67 sharded decode
 norm (−5.4), §6.52 matmul program configs (−4.2), §6.62 residual-as-bias (−1.9, block only),
@@ -4442,6 +4445,68 @@ against migrating.
 **Do not quote the scorer's own "mean gen ms/frame" line** (35.50 / 36.63 here). It includes case 0,
 which carries kernel compilation and which ONBOARDING §4 says must be excluded. The comparable
 numbers are the cases-2/3/10 means above.
+
+### 6.71 — the headline reproduced on a clean tree by a second party, and the sampler finally exists
+
+Run before starting another optimisation, on the principle that a number nobody has reproduced is a
+number on trust. Full `--tier audio`, 3 seeds, 45 utterances, 1075 s, on a **clean** tree at
+`035983fef2` (the in-flight work was stashed so `_dirty` is false) and an **idle** box per §6.69.
+`generated/quality_shipcheck.json`.
+
+| | on record (§6.67) | measured | |
+|---|---|---|---|
+| **ms/frame** | 27.723 | **27.664** | −0.059, inside §6.63's 0.390 ms floor |
+| **long-form RTF** | 0.3647 | **0.3656** | +0.0009 |
+| **long-form WER** | 0 of 596 (2 seeds) | **0 of 894 (3 seeds)** | a 50% larger corpus, still zero |
+| pytest | 132 | **132, 0 failed** | |
+| `[END_AUDIO]` | 30/30 | **45/45** | |
+| clipping / clicks | 0.00% / 52 | **0.00% / 52** | all case 6: 1 at seed 0, 51 at seed 1 |
+| MOS long-form / mean / min | 4.6050 / 3.9972 / 2.6597 | **4.6101 / 3.9961 / 2.6597** | |
+
+**THE TWO TIMING NUMBERS DIFFER FOR A REASON, and it is worth stating once.** 27.664 ms/frame ÷ 80
+is **0.3458** — that is generation alone. The reported **0.3656** is wall/audio, so it also carries
+prefill, the codec and the trace capture. Per case, at essentially identical per-frame speed:
+
+    case 1   95/119/92 frames    28.25 / 27.93 / 28.18 ms   rtf 0.3628 / 0.3569 / 0.3622
+    case 2  451/475/448          27.52 / 27.44 / 27.42      rtf 0.3905 / 0.3863 / 0.3936
+    case 3  470/488/463          27.42 / 27.46 / 27.37      rtf 0.3461 / 0.3466 / 0.3455
+
+ms/frame is flat to 0.88 ms across all nine; RTF swings 0.346–0.394. **Case 2 is the first
+utterance to reach the 512-frame codec bucket and pays its kernel compiles (~1.6 s); case 3 reuses
+them (~0.13 s).** §6.10 again. This is the concrete demonstration behind ONBOARDING's "quote
+ms/frame, not RTF".
+
+**§6.67's one flag reproduces exactly, and the histogram is why it stays benign.** `codes_real_n`
+is 45/864 (5.2%) against the pre-§6.67 37 — the number §6.67 predicted and adjudicated. Re-reading
+the distribution the JSON does not store:
+
+    case 0   19/288   |delta| histogram {1: 19}   off-by-one 19/19 (100%)   semantic mismatches 0
+    case 2   17/288   |delta| {1: 17}             17/17 (100%)              0
+    case 3    9/288   |delta| { 1: 9}              9/9  (100%)              0
+
+Every difference is one FSQ level of 21, and **zero semantic mismatches** — the integer that
+redirects a whole utterance. The synthetic block read 87/288 (30.2%) with deltas to 6: §6.54's
+artefact, unchanged and correctly labelled by the gate itself.
+
+**FIRST DECODE-GATE READING ON THE SHIPPED SHARDED NORM**, recorded because none existed —
+`quality_e7` predates §6.67. This session: mean **0.97%**, p90 **1.45%**, min PCC **0.999316**.
+It sits within the harness tolerances against both stored runs, and the direction is consistent
+with the same different reduce order that moved the codes 37→45. **Do not read the delta against
+`quality_e7` as a measurement**: §6.15 is explicit that this gate supports paired same-session
+comparison and not absolute levels across sessions. Quote the numbers above as this session's
+level, and re-derive rather than compare if it matters.
+
+**Both `--compare` runs against the stored `baseline` and `e7` tags are cross-session** and are
+used here to confirm REPRODUCTION, not to adjudicate anything. They landed on the recorded values,
+which is the whole point.
+
+**WHAT THIS DOES NOT ESTABLISH, and it is the same sentence §6.58 ended on.** Nothing here is a
+listening result. What has changed is that the obstacle is gone: this run's 45 wavs are HEAD's, so
+`tests/probes/make_sampler.py` (now tag-parameterised — it was pinned to §6.52's `_prg` arm, which
+is how `SAMPLER_p150_HEAD.wav` came to sit beside a HEAD that had moved twice underneath it) built
+**`generated/SAMPLER_shipcheck.wav`, 15 clips, 140.0 s, on this build**. Its index now marks the
+three deliberately adversarial prompts (10, 11, 14) as such — it used to name them by voice alone,
+which invites a listener to read §3.2's known model limitation as a port defect.
 
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
