@@ -1,0 +1,6 @@
+ **Zeroth Law of Thermodynamics:**
+   - **Statement:** If two systems are in thermal equilibrium with a third system, they are in thermal equilibrium with each other.
+   - **Significance:** This law provides a basis for the concept of temperature and allows the use of thermometers.
+
+2. **First Law of Thermodynamics:**
+   - **Statement:** The change in internal energy (\(\Delta U\)) of a system is equal to

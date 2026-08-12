@@ -1,0 +1,6 @@
+ supervised learning is a form of machine learning in which the algorithm is trained on a labeled dataset, while unsupervised learning is a form of machine learning in which the algorithm is trained on an unlabeled dataset.
+
+In the context of the extract, the supervised learning algorithm is used to classify the data into two classes, while the unsupervised learning algorithm is used to identify the structure of the data.
+
+### Conclusion
+The extract provides a detailed explanation of the use of supervised and unsupervised learning algorithms in the

@@ -976,6 +976,7 @@ def build_generator(model_dir: str | Path, mesh_device, **kwargs) -> Generator:
     num_layers = 28 if override_num_layers is None else int(override_num_layers)
     prefill_chunk_size = int(kwargs.pop("prefill_chunk_size", DEFAULT_PREFILL_CHUNK_SIZE))
     weight_cache_path = kwargs.pop("weight_cache_path", Path(model_dir) / "weight_cache")
+    precision_config_path = kwargs.pop("precision_config_path", None)
     if kwargs:
         raise TypeError(f"unsupported build_generator kwargs: {sorted(kwargs)}")
     model = Falcon3Model.from_checkpoint(
@@ -985,6 +986,7 @@ def build_generator(model_dir: str | Path, mesh_device, **kwargs) -> Generator:
         max_cache_len=max_context_len,
         num_layers=num_layers,
         weight_cache_path=weight_cache_path,
+        precision_config_path=precision_config_path,
     )
     return Falcon3Generator(model, tokenizer, prefill_chunk_size=prefill_chunk_size)
 

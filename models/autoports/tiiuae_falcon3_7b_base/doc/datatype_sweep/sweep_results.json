@@ -1,0 +1,472 @@
+[
+  {
+    "config_id": "all_bfp4_all_hifi2",
+    "config_path": "models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/configs/all_bfp4_all_hifi2.json",
+    "dtype_policy": {
+      "weight_groups": {
+        "attention": "bfloat4_b",
+        "mlp_gate_up": "bfloat4_b",
+        "mlp_down": "bfloat4_b",
+        "lm_head": "bfloat4_b",
+        "embedding": "bfloat16",
+        "norms": "bfloat16"
+      },
+      "layer_exceptions": [],
+      "activation_dtype": "bfloat8_b",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": "bfloat8_b",
+      "kv_cache_dtype": "bfloat8_b",
+      "logits_dtype": "bfloat8_b",
+      "sampling_dtype_assumptions": {
+        "local_topk_values": "bfloat16",
+        "packed_rank_candidates": "float32",
+        "token_ids": "uint32",
+        "mode": "Sampling1D split trace"
+      }
+    },
+    "compute_fidelity_policy": {
+      "attention": "HiFi2",
+      "mlp": "HiFi2",
+      "lm_head": "HiFi2"
+    },
+    "top1": 0.94,
+    "top5": 1.0,
+    "top100": 1.0,
+    "tokens": 100,
+    "ttft_ms": 25.231204740703106,
+    "teacher_forcing_decode_t_s_u": 84.14599055059045,
+    "trace_verified": true,
+    "measurement_regime": "batch=1, prompt=128, 128 warmed trace replays, real 28-layer weights",
+    "reference": "models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/reference/aime24_100.refpt",
+    "command": "FALCON3_PRECISION_CONFIG=/home/mvasiljevic/tt-metal/models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/configs/all_bfp4_all_hifi2.json TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\": true}' python -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/tiiuae_falcon3_7b_base --reference models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/reference/aime24_100.refpt --mesh-device P300X2 --fabric-config FABRIC_1D_RING; FALCON3_PRECISION_CONFIG=/home/mvasiljevic/tt-metal/models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/configs/all_bfp4_all_hifi2.json TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\": true}' python models/autoports/tiiuae_falcon3_7b_base/tests/full_model_evidence.py --model-dir models/autoports/tiiuae_falcon3_7b_base --reference models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/reference/aime24_100.refpt --output /home/mvasiljevic/tt-metal/models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/all_bfp4_all_hifi2/full_model_evidence.json --weight-cache-path /tmp/falcon3-datatype-sweep-cache",
+    "hardware": "4x Blackhole p300c",
+    "mesh": "1x4 FABRIC_1D_RING, TP4, two links",
+    "status": "pass",
+    "passed": true,
+    "blocker": null,
+    "evidence": "models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/all_bfp4_all_hifi2/full_model_evidence.json"
+  },
+  {
+    "config_id": "all_bfp4_attention_hifi2",
+    "config_path": "models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/configs/all_bfp4_attention_hifi2.json",
+    "dtype_policy": {
+      "weight_groups": {
+        "attention": "bfloat4_b",
+        "mlp_gate_up": "bfloat4_b",
+        "mlp_down": "bfloat4_b",
+        "lm_head": "bfloat4_b",
+        "embedding": "bfloat16",
+        "norms": "bfloat16"
+      },
+      "layer_exceptions": [],
+      "activation_dtype": "bfloat8_b",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": "bfloat8_b",
+      "kv_cache_dtype": "bfloat8_b",
+      "logits_dtype": "bfloat8_b",
+      "sampling_dtype_assumptions": {
+        "local_topk_values": "bfloat16",
+        "packed_rank_candidates": "float32",
+        "token_ids": "uint32",
+        "mode": "Sampling1D split trace"
+      }
+    },
+    "compute_fidelity_policy": {
+      "attention": "HiFi2",
+      "mlp": "LoFi",
+      "lm_head": "LoFi"
+    },
+    "top1": 0.94,
+    "top5": 1.0,
+    "top100": 1.0,
+    "tokens": 100,
+    "ttft_ms": 23.54058977216482,
+    "teacher_forcing_decode_t_s_u": 108.17539495638015,
+    "trace_verified": true,
+    "measurement_regime": "batch=1, prompt=128, 128 warmed trace replays, real 28-layer weights",
+    "reference": "models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/reference/aime24_100.refpt",
+    "command": "FALCON3_PRECISION_CONFIG=/home/mvasiljevic/tt-metal/models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/configs/all_bfp4_attention_hifi2.json TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\": true}' python -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/tiiuae_falcon3_7b_base --reference models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/reference/aime24_100.refpt --mesh-device P300X2 --fabric-config FABRIC_1D_RING; FALCON3_PRECISION_CONFIG=/home/mvasiljevic/tt-metal/models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/configs/all_bfp4_attention_hifi2.json TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\": true}' python models/autoports/tiiuae_falcon3_7b_base/tests/full_model_evidence.py --model-dir models/autoports/tiiuae_falcon3_7b_base --reference models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/reference/aime24_100.refpt --output /home/mvasiljevic/tt-metal/models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/all_bfp4_attention_hifi2/full_model_evidence.json --weight-cache-path /tmp/falcon3-datatype-sweep-cache",
+    "hardware": "4x Blackhole p300c",
+    "mesh": "1x4 FABRIC_1D_RING, TP4, two links",
+    "status": "pass",
+    "passed": true,
+    "blocker": null,
+    "evidence": "models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/all_bfp4_attention_hifi2/full_model_evidence.json"
+  },
+  {
+    "config_id": "all_bfp4_lofi_bf16_activation",
+    "config_path": "models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/configs/all_bfp4_lofi_bf16_activation.json",
+    "dtype_policy": {
+      "weight_groups": {
+        "attention": "bfloat4_b",
+        "mlp_gate_up": "bfloat4_b",
+        "mlp_down": "bfloat4_b",
+        "lm_head": "bfloat4_b",
+        "embedding": "bfloat16",
+        "norms": "bfloat16"
+      },
+      "layer_exceptions": [],
+      "activation_dtype": "bfloat16",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": "bfloat8_b",
+      "kv_cache_dtype": "bfloat8_b",
+      "logits_dtype": "bfloat8_b",
+      "sampling_dtype_assumptions": {
+        "local_topk_values": "bfloat16",
+        "packed_rank_candidates": "float32",
+        "token_ids": "uint32",
+        "mode": "Sampling1D split trace"
+      }
+    },
+    "compute_fidelity_policy": {
+      "attention": "LoFi",
+      "mlp": "LoFi",
+      "lm_head": "LoFi"
+    },
+    "top1": 0.94,
+    "top5": 1.0,
+    "top100": 1.0,
+    "tokens": 100,
+    "ttft_ms": 24.621040001511574,
+    "teacher_forcing_decode_t_s_u": 106.55277653554415,
+    "trace_verified": true,
+    "measurement_regime": "batch=1, prompt=128, 128 warmed trace replays, real 28-layer weights",
+    "reference": "models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/reference/aime24_100.refpt",
+    "command": "FALCON3_PRECISION_CONFIG=/home/mvasiljevic/tt-metal/models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/configs/all_bfp4_lofi_bf16_activation.json TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\": true}' python -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/tiiuae_falcon3_7b_base --reference models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/reference/aime24_100.refpt --mesh-device P300X2 --fabric-config FABRIC_1D_RING; FALCON3_PRECISION_CONFIG=/home/mvasiljevic/tt-metal/models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/configs/all_bfp4_lofi_bf16_activation.json TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\": true}' python models/autoports/tiiuae_falcon3_7b_base/tests/full_model_evidence.py --model-dir models/autoports/tiiuae_falcon3_7b_base --reference models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/reference/aime24_100.refpt --output /home/mvasiljevic/tt-metal/models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/all_bfp4_lofi_bf16_activation/full_model_evidence.json --weight-cache-path /tmp/falcon3-datatype-sweep-cache",
+    "hardware": "4x Blackhole p300c",
+    "mesh": "1x4 FABRIC_1D_RING, TP4, two links",
+    "status": "pass",
+    "passed": true,
+    "blocker": null,
+    "evidence": "models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/all_bfp4_lofi_bf16_activation/full_model_evidence.json"
+  },
+  {
+    "config_id": "all_bfp4_lofi_bf16_ccl",
+    "config_path": "models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/configs/all_bfp4_lofi_bf16_ccl.json",
+    "dtype_policy": {
+      "weight_groups": {
+        "attention": "bfloat4_b",
+        "mlp_gate_up": "bfloat4_b",
+        "mlp_down": "bfloat4_b",
+        "lm_head": "bfloat4_b",
+        "embedding": "bfloat16",
+        "norms": "bfloat16"
+      },
+      "layer_exceptions": [],
+      "activation_dtype": "bfloat8_b",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": "bfloat16",
+      "kv_cache_dtype": "bfloat8_b",
+      "logits_dtype": "bfloat8_b",
+      "sampling_dtype_assumptions": {
+        "local_topk_values": "bfloat16",
+        "packed_rank_candidates": "float32",
+        "token_ids": "uint32",
+        "mode": "Sampling1D split trace"
+      }
+    },
+    "compute_fidelity_policy": {
+      "attention": "LoFi",
+      "mlp": "LoFi",
+      "lm_head": "LoFi"
+    },
+    "top1": 0.93,
+    "top5": 1.0,
+    "top100": 1.0,
+    "tokens": 100,
+    "ttft_ms": 23.185735987499356,
+    "teacher_forcing_decode_t_s_u": 107.45813751194967,
+    "trace_verified": true,
+    "measurement_regime": "batch=1, prompt=128, 128 warmed trace replays, real 28-layer weights",
+    "reference": "models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/reference/aime24_100.refpt",
+    "command": "FALCON3_PRECISION_CONFIG=/home/mvasiljevic/tt-metal/models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/configs/all_bfp4_lofi_bf16_ccl.json TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\": true}' python -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/tiiuae_falcon3_7b_base --reference models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/reference/aime24_100.refpt --mesh-device P300X2 --fabric-config FABRIC_1D_RING; FALCON3_PRECISION_CONFIG=/home/mvasiljevic/tt-metal/models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/configs/all_bfp4_lofi_bf16_ccl.json TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\": true}' python models/autoports/tiiuae_falcon3_7b_base/tests/full_model_evidence.py --model-dir models/autoports/tiiuae_falcon3_7b_base --reference models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/reference/aime24_100.refpt --output /home/mvasiljevic/tt-metal/models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/all_bfp4_lofi_bf16_ccl/full_model_evidence.json --weight-cache-path /tmp/falcon3-datatype-sweep-cache",
+    "hardware": "4x Blackhole p300c",
+    "mesh": "1x4 FABRIC_1D_RING, TP4, two links",
+    "status": "pass",
+    "passed": true,
+    "blocker": null,
+    "evidence": "models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/all_bfp4_lofi_bf16_ccl/full_model_evidence.json"
+  },
+  {
+    "config_id": "all_bfp4_lofi_bf16_kv",
+    "config_path": "models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/configs/all_bfp4_lofi_bf16_kv.json",
+    "dtype_policy": {
+      "weight_groups": {
+        "attention": "bfloat4_b",
+        "mlp_gate_up": "bfloat4_b",
+        "mlp_down": "bfloat4_b",
+        "lm_head": "bfloat4_b",
+        "embedding": "bfloat16",
+        "norms": "bfloat16"
+      },
+      "layer_exceptions": [],
+      "activation_dtype": "bfloat8_b",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": "bfloat8_b",
+      "kv_cache_dtype": "bfloat16",
+      "logits_dtype": "bfloat8_b",
+      "sampling_dtype_assumptions": {
+        "local_topk_values": "bfloat16",
+        "packed_rank_candidates": "float32",
+        "token_ids": "uint32",
+        "mode": "Sampling1D split trace"
+      }
+    },
+    "compute_fidelity_policy": {
+      "attention": "LoFi",
+      "mlp": "LoFi",
+      "lm_head": "LoFi"
+    },
+    "top1": 0.93,
+    "top5": 1.0,
+    "top100": 1.0,
+    "tokens": 100,
+    "ttft_ms": 23.182059731334448,
+    "teacher_forcing_decode_t_s_u": 110.97164148007047,
+    "trace_verified": true,
+    "measurement_regime": "batch=1, prompt=128, 128 warmed trace replays, real 28-layer weights",
+    "reference": "models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/reference/aime24_100.refpt",
+    "command": "FALCON3_PRECISION_CONFIG=/home/mvasiljevic/tt-metal/models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/configs/all_bfp4_lofi_bf16_kv.json TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\": true}' python -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/tiiuae_falcon3_7b_base --reference models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/reference/aime24_100.refpt --mesh-device P300X2 --fabric-config FABRIC_1D_RING; FALCON3_PRECISION_CONFIG=/home/mvasiljevic/tt-metal/models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/configs/all_bfp4_lofi_bf16_kv.json TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\": true}' python models/autoports/tiiuae_falcon3_7b_base/tests/full_model_evidence.py --model-dir models/autoports/tiiuae_falcon3_7b_base --reference models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/reference/aime24_100.refpt --output /home/mvasiljevic/tt-metal/models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/all_bfp4_lofi_bf16_kv/full_model_evidence.json --weight-cache-path /tmp/falcon3-datatype-sweep-cache",
+    "hardware": "4x Blackhole p300c",
+    "mesh": "1x4 FABRIC_1D_RING, TP4, two links",
+    "status": "pass",
+    "passed": true,
+    "blocker": null,
+    "evidence": "models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/all_bfp4_lofi_bf16_kv/full_model_evidence.json"
+  },
+  {
+    "config_id": "all_bfp4_mlp_hifi2",
+    "config_path": "models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/configs/all_bfp4_mlp_hifi2.json",
+    "dtype_policy": {
+      "weight_groups": {
+        "attention": "bfloat4_b",
+        "mlp_gate_up": "bfloat4_b",
+        "mlp_down": "bfloat4_b",
+        "lm_head": "bfloat4_b",
+        "embedding": "bfloat16",
+        "norms": "bfloat16"
+      },
+      "layer_exceptions": [],
+      "activation_dtype": "bfloat8_b",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": "bfloat8_b",
+      "kv_cache_dtype": "bfloat8_b",
+      "logits_dtype": "bfloat8_b",
+      "sampling_dtype_assumptions": {
+        "local_topk_values": "bfloat16",
+        "packed_rank_candidates": "float32",
+        "token_ids": "uint32",
+        "mode": "Sampling1D split trace"
+      }
+    },
+    "compute_fidelity_policy": {
+      "attention": "LoFi",
+      "mlp": "HiFi2",
+      "lm_head": "LoFi"
+    },
+    "top1": 0.93,
+    "top5": 1.0,
+    "top100": 1.0,
+    "tokens": 100,
+    "ttft_ms": 23.292645579203963,
+    "teacher_forcing_decode_t_s_u": 87.49121656168174,
+    "trace_verified": true,
+    "measurement_regime": "batch=1, prompt=128, 128 warmed trace replays, real 28-layer weights",
+    "reference": "models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/reference/aime24_100.refpt",
+    "command": "FALCON3_PRECISION_CONFIG=/home/mvasiljevic/tt-metal/models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/configs/all_bfp4_mlp_hifi2.json TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\": true}' python -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/tiiuae_falcon3_7b_base --reference models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/reference/aime24_100.refpt --mesh-device P300X2 --fabric-config FABRIC_1D_RING; FALCON3_PRECISION_CONFIG=/home/mvasiljevic/tt-metal/models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/configs/all_bfp4_mlp_hifi2.json TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\": true}' python models/autoports/tiiuae_falcon3_7b_base/tests/full_model_evidence.py --model-dir models/autoports/tiiuae_falcon3_7b_base --reference models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/reference/aime24_100.refpt --output /home/mvasiljevic/tt-metal/models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/all_bfp4_mlp_hifi2/full_model_evidence.json --weight-cache-path /tmp/falcon3-datatype-sweep-cache",
+    "hardware": "4x Blackhole p300c",
+    "mesh": "1x4 FABRIC_1D_RING, TP4, two links",
+    "status": "pass",
+    "passed": true,
+    "blocker": null,
+    "evidence": "models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/all_bfp4_mlp_hifi2/full_model_evidence.json"
+  },
+  {
+    "config_id": "all_bfp4_lofi_bfp8_act_ccl_kv",
+    "config_path": "models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/configs/all_bfp4_lofi_bfp8_act_ccl_kv.json",
+    "dtype_policy": {
+      "weight_groups": {
+        "attention": "bfloat4_b",
+        "mlp_gate_up": "bfloat4_b",
+        "mlp_down": "bfloat4_b",
+        "lm_head": "bfloat4_b",
+        "embedding": "bfloat16",
+        "norms": "bfloat16"
+      },
+      "layer_exceptions": [],
+      "activation_dtype": "bfloat8_b",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": "bfloat8_b",
+      "kv_cache_dtype": "bfloat8_b",
+      "logits_dtype": "bfloat8_b",
+      "sampling_dtype_assumptions": {
+        "local_topk_values": "bfloat16",
+        "packed_rank_candidates": "float32",
+        "token_ids": "uint32",
+        "mode": "Sampling1D split trace"
+      }
+    },
+    "compute_fidelity_policy": {
+      "attention": "LoFi",
+      "mlp": "LoFi",
+      "lm_head": "LoFi"
+    },
+    "top1": 0.93,
+    "top5": 1.0,
+    "top100": 1.0,
+    "tokens": 100,
+    "ttft_ms": 25.044289557263255,
+    "teacher_forcing_decode_t_s_u": 110.81495265632547,
+    "trace_verified": true,
+    "measurement_regime": "batch=1, prompt=128, 128 warmed trace replays, real 28-layer weights",
+    "reference": "models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/reference/aime24_100.refpt",
+    "command": "FALCON3_PRECISION_CONFIG=/home/mvasiljevic/tt-metal/models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/configs/all_bfp4_lofi_bfp8_act_ccl_kv.json TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\": true}' python -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/tiiuae_falcon3_7b_base --reference models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/reference/aime24_100.refpt --mesh-device P300X2 --fabric-config FABRIC_1D_RING; FALCON3_PRECISION_CONFIG=/home/mvasiljevic/tt-metal/models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/configs/all_bfp4_lofi_bfp8_act_ccl_kv.json TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\": true}' python models/autoports/tiiuae_falcon3_7b_base/tests/full_model_evidence.py --model-dir models/autoports/tiiuae_falcon3_7b_base --reference models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/reference/aime24_100.refpt --output /home/mvasiljevic/tt-metal/models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/baseline/full_model_evidence.json --weight-cache-path /tmp/falcon3-datatype-sweep-cache",
+    "hardware": "4x Blackhole p300c",
+    "mesh": "1x4 FABRIC_1D_RING, TP4, two links",
+    "status": "pass",
+    "passed": true,
+    "blocker": null,
+    "evidence": "models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/baseline/full_model_evidence.json"
+  },
+  {
+    "config_id": "bf16_hifi4",
+    "config_path": "models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/configs/bf16_hifi4.json",
+    "dtype_policy": {
+      "weight_groups": {
+        "attention": "bfloat16",
+        "mlp_gate_up": "bfloat16",
+        "mlp_down": "bfloat16",
+        "lm_head": "bfloat16",
+        "embedding": "bfloat16",
+        "norms": "bfloat16"
+      },
+      "layer_exceptions": [],
+      "activation_dtype": "bfloat16",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": "bfloat16",
+      "kv_cache_dtype": "bfloat16",
+      "logits_dtype": "bfloat16",
+      "sampling_dtype_assumptions": {
+        "local_topk_values": "bfloat16",
+        "packed_rank_candidates": "float32",
+        "token_ids": "uint32",
+        "mode": "Sampling1D split trace"
+      }
+    },
+    "compute_fidelity_policy": {
+      "attention": "HiFi4",
+      "mlp": "HiFi4",
+      "lm_head": "HiFi4"
+    },
+    "top1": null,
+    "top5": null,
+    "top100": null,
+    "tokens": null,
+    "ttft_ms": null,
+    "teacher_forcing_decode_t_s_u": null,
+    "trace_verified": false,
+    "measurement_regime": "batch=1, prompt=128, 128 warmed trace replays, real 28-layer weights",
+    "reference": "models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/reference/aime24_100.refpt",
+    "command": "FALCON3_PRECISION_CONFIG=/home/mvasiljevic/tt-metal/models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/configs/bf16_hifi4.json TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\": true}' python -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/tiiuae_falcon3_7b_base --reference models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/reference/aime24_100.refpt --mesh-device P300X2 --fabric-config FABRIC_1D_RING; FALCON3_PRECISION_CONFIG=/home/mvasiljevic/tt-metal/models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/configs/bf16_hifi4.json TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\": true}' python models/autoports/tiiuae_falcon3_7b_base/tests/full_model_evidence.py --model-dir models/autoports/tiiuae_falcon3_7b_base --reference models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/reference/aime24_100.refpt --output /home/mvasiljevic/tt-metal/models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/bf16_hifi4/full_model_evidence.json --weight-cache-path /tmp/falcon3-datatype-sweep-cache",
+    "hardware": "4x Blackhole p300c",
+    "mesh": "1x4 FABRIC_1D_RING, TP4, two links",
+    "status": "runtime_blocker",
+    "passed": false,
+    "blocker": "AutoFix final control: BF16 LM head requires 2,003,712 B/core at the minimum legal in0_block_w=1 for 32768, 16384, and 8192-column splits; hardware L1 is 1,572,864 B/core",
+    "evidence": "models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/bf16_hifi4"
+  },
+  {
+    "config_id": "bfp8_hifi2_bfp8_act_ccl_kv",
+    "config_path": "models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/configs/bfp8_hifi2_bfp8_act_ccl_kv.json",
+    "dtype_policy": {
+      "weight_groups": {
+        "attention": "bfloat8_b",
+        "mlp_gate_up": "bfloat8_b",
+        "mlp_down": "bfloat8_b",
+        "lm_head": "bfloat8_b",
+        "embedding": "bfloat16",
+        "norms": "bfloat16"
+      },
+      "layer_exceptions": [],
+      "activation_dtype": "bfloat8_b",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": "bfloat8_b",
+      "kv_cache_dtype": "bfloat8_b",
+      "logits_dtype": "bfloat8_b",
+      "sampling_dtype_assumptions": {
+        "local_topk_values": "bfloat16",
+        "packed_rank_candidates": "float32",
+        "token_ids": "uint32",
+        "mode": "Sampling1D split trace"
+      }
+    },
+    "compute_fidelity_policy": {
+      "attention": "HiFi2",
+      "mlp": "HiFi2",
+      "lm_head": "HiFi2"
+    },
+    "top1": 0.97,
+    "top5": 1.0,
+    "top100": 1.0,
+    "tokens": 100,
+    "ttft_ms": 24.64717044495046,
+    "teacher_forcing_decode_t_s_u": 82.9849081152903,
+    "trace_verified": true,
+    "measurement_regime": "batch=1, prompt=128, 128 warmed trace replays, real 28-layer weights",
+    "reference": "models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/reference/aime24_100.refpt",
+    "command": "FALCON3_PRECISION_CONFIG=/home/mvasiljevic/tt-metal/models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/configs/bfp8_hifi2_bfp8_act_ccl_kv.json TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\": true}' python -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/tiiuae_falcon3_7b_base --reference models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/reference/aime24_100.refpt --mesh-device P300X2 --fabric-config FABRIC_1D_RING; FALCON3_PRECISION_CONFIG=/home/mvasiljevic/tt-metal/models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/configs/bfp8_hifi2_bfp8_act_ccl_kv.json TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\": true}' python models/autoports/tiiuae_falcon3_7b_base/tests/full_model_evidence.py --model-dir models/autoports/tiiuae_falcon3_7b_base --reference models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/reference/aime24_100.refpt --output /home/mvasiljevic/tt-metal/models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/bfp8_hifi2_bfp8_act_ccl_kv/full_model_evidence.json --weight-cache-path /tmp/falcon3-datatype-sweep-cache",
+    "hardware": "4x Blackhole p300c",
+    "mesh": "1x4 FABRIC_1D_RING, TP4, two links",
+    "status": "pass",
+    "passed": true,
+    "blocker": null,
+    "evidence": "models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/bfp8_hifi2_bfp8_act_ccl_kv/full_model_evidence.json"
+  },
+  {
+    "config_id": "bfp8_lofi_bfp8_act_ccl_kv",
+    "config_path": "models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/configs/bfp8_lofi_bfp8_act_ccl_kv.json",
+    "dtype_policy": {
+      "weight_groups": {
+        "attention": "bfloat8_b",
+        "mlp_gate_up": "bfloat8_b",
+        "mlp_down": "bfloat8_b",
+        "lm_head": "bfloat8_b",
+        "embedding": "bfloat16",
+        "norms": "bfloat16"
+      },
+      "layer_exceptions": [],
+      "activation_dtype": "bfloat8_b",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": "bfloat8_b",
+      "kv_cache_dtype": "bfloat8_b",
+      "logits_dtype": "bfloat8_b",
+      "sampling_dtype_assumptions": {
+        "local_topk_values": "bfloat16",
+        "packed_rank_candidates": "float32",
+        "token_ids": "uint32",
+        "mode": "Sampling1D split trace"
+      }
+    },
+    "compute_fidelity_policy": {
+      "attention": "LoFi",
+      "mlp": "LoFi",
+      "lm_head": "LoFi"
+    },
+    "top1": 0.97,
+    "top5": 1.0,
+    "top100": 1.0,
+    "tokens": 100,
+    "ttft_ms": 24.008428119122982,
+    "teacher_forcing_decode_t_s_u": 103.21000896836024,
+    "trace_verified": true,
+    "measurement_regime": "batch=1, prompt=128, 128 warmed trace replays, real 28-layer weights",
+    "reference": "models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/reference/aime24_100.refpt",
+    "command": "FALCON3_PRECISION_CONFIG=/home/mvasiljevic/tt-metal/models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/configs/bfp8_lofi_bfp8_act_ccl_kv.json TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\": true}' python -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/tiiuae_falcon3_7b_base --reference models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/reference/aime24_100.refpt --mesh-device P300X2 --fabric-config FABRIC_1D_RING; FALCON3_PRECISION_CONFIG=/home/mvasiljevic/tt-metal/models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/configs/bfp8_lofi_bfp8_act_ccl_kv.json TTNN_CONFIG_OVERRIDES='{\"throw_exception_on_fallback\": true}' python models/autoports/tiiuae_falcon3_7b_base/tests/full_model_evidence.py --model-dir models/autoports/tiiuae_falcon3_7b_base --reference models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/reference/aime24_100.refpt --output /home/mvasiljevic/tt-metal/models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/bfp8_lofi_bfp8_act_ccl_kv/full_model_evidence.json --weight-cache-path /tmp/falcon3-datatype-sweep-cache",
+    "hardware": "4x Blackhole p300c",
+    "mesh": "1x4 FABRIC_1D_RING, TP4, two links",
+    "status": "pass",
+    "passed": true,
+    "blocker": null,
+    "evidence": "models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/bfp8_lofi_bfp8_act_ccl_kv/full_model_evidence.json"
+  }
+]

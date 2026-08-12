@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "config_id": "all_bfp4_lofi_bf16_kv",
+  "weight_groups": {
+    "attention": "bfloat4_b",
+    "mlp_gate_up": "bfloat4_b",
+    "mlp_down": "bfloat4_b",
+    "lm_head": "bfloat4_b",
+    "embedding": "bfloat16",
+    "norms": "bfloat16"
+  },
+  "layer_exceptions": [],
+  "compute_fidelities": {
+    "attention": "LoFi",
+    "mlp": "LoFi",
+    "lm_head": "LoFi"
+  },
+  "activation_dtype": "bfloat8_b",
+  "residual_dtype": "bfloat16",
+  "ccl_dtype": "bfloat8_b",
+  "kv_cache_dtype": "bfloat16",
+  "logits_dtype": "bfloat8_b",
+  "sampling_dtype_assumptions": {
+    "local_topk_values": "bfloat16",
+    "packed_rank_candidates": "float32",
+    "token_ids": "uint32",
+    "mode": "Sampling1D split trace"
+  },
+  "loader_flags": {
+    "environment_override": "FALCON3_PRECISION_CONFIG",
+    "default_consumed_by": "tt.generator.build_generator"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "schema_version": 1, "config_id": "bf16_hifi4",
+  "weight_groups": {"attention": "bfloat16", "mlp_gate_up": "bfloat16", "mlp_down": "bfloat16", "lm_head": "bfloat16", "embedding": "bfloat16", "norms": "bfloat16"},
+  "layer_exceptions": [], "compute_fidelities": {"attention": "HiFi4", "mlp": "HiFi4", "lm_head": "HiFi4"},
+  "activation_dtype": "bfloat16", "residual_dtype": "bfloat16", "ccl_dtype": "bfloat16", "kv_cache_dtype": "bfloat16", "logits_dtype": "bfloat16",
+  "sampling_dtype_assumptions": {"local_topk_values": "bfloat16", "packed_rank_candidates": "float32", "token_ids": "uint32", "mode": "Sampling1D split trace"},
+  "loader_flags": {"environment_override": "FALCON3_PRECISION_CONFIG", "default_consumed_by": "tt.generator.build_generator"}
+}

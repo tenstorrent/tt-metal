@@ -17,7 +17,9 @@ the normal token-out path never gathers the full vocabulary.
 from __future__ import annotations
 
 import gc
+import json
 import math
+import os
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
@@ -60,6 +62,80 @@ DEFAULT_ROPE_CACHE_LEN = 256
 # sharded-to-interleaved conversions in every decode replay.  The local vocab
 # is tile aligned on TP4, so no additional padding is required.
 LM_HEAD_COLUMNS_PER_DEVICE = 32768
+DEFAULT_PRECISION_CONFIG_PATH = (
+    Path(__file__).resolve().parents[1] / "doc" / "datatype_sweep" / "selected_precision_config.json"
+)
+
+
+_DTYPES = {
+    "bfloat16": ttnn.bfloat16,
+    "bfloat8_b": ttnn.bfloat8_b,
+    "bfloat4_b": ttnn.bfloat4_b,
+}
+_FIDELITIES = {
+    "LoFi": ttnn.MathFidelity.LoFi,
+    "HiFi2": ttnn.MathFidelity.HiFi2,
+    "HiFi4": ttnn.MathFidelity.HiFi4,
+}
+
+
+def load_precision_config(path: str | Path | None = None) -> tuple[dict, Path]:
+    """Load the required full-model precision policy used by construction."""
+    selected_path = Path(path or os.getenv("FALCON3_PRECISION_CONFIG", DEFAULT_PRECISION_CONFIG_PATH))
+    if not selected_path.is_file():
+        raise FileNotFoundError(f"Falcon3 precision config is required but missing: {selected_path}")
+    payload = json.loads(selected_path.read_text(encoding="utf-8"))
+    required = {
+        "config_id",
+        "weight_groups",
+        "layer_exceptions",
+        "compute_fidelities",
+        "activation_dtype",
+        "residual_dtype",
+        "ccl_dtype",
+        "kv_cache_dtype",
+        "logits_dtype",
+        "sampling_dtype_assumptions",
+    }
+    missing = sorted(required - payload.keys())
+    if missing:
+        raise ValueError(f"precision config {selected_path} is missing fields: {missing}")
+    for name in ("attention", "mlp_gate_up", "mlp_down", "lm_head", "embedding", "norms"):
+        if name not in payload["weight_groups"]:
+            raise ValueError(f"precision config weight_groups is missing {name!r}")
+    for name in ("attention", "mlp", "lm_head"):
+        if name not in payload["compute_fidelities"]:
+            raise ValueError(f"precision config compute_fidelities is missing {name!r}")
+    for field in ("activation_dtype", "residual_dtype", "ccl_dtype", "kv_cache_dtype", "logits_dtype"):
+        if payload[field] not in _DTYPES:
+            raise ValueError(f"unsupported {field}={payload[field]!r}")
+    return payload, selected_path
+
+
+def _runtime_policy(payload: Mapping) -> dict:
+    groups = payload["weight_groups"]
+    fidelities = payload["compute_fidelities"]
+    exceptions = payload["layer_exceptions"]
+    if exceptions:
+        raise ValueError("Falcon3 full-model layer exceptions are not yet supported; expected an empty list")
+    if payload["residual_dtype"] != "bfloat16":
+        raise ValueError("Falcon3 inter-layer residual contract currently requires bfloat16")
+    expected_sampling = {
+        "local_topk_values": "bfloat16",
+        "packed_rank_candidates": "float32",
+        "token_ids": "uint32",
+        "mode": "Sampling1D split trace",
+    }
+    if payload["sampling_dtype_assumptions"] != expected_sampling:
+        raise ValueError("sampling_dtype_assumptions do not match the implemented split-trace sampler")
+    return {
+        "attention": _DTYPES[groups["attention"]],
+        "mlp_gate_up": _DTYPES[groups["mlp_gate_up"]],
+        "mlp_down": _DTYPES[groups["mlp_down"]],
+        "kv_cache": _DTYPES[payload["kv_cache_dtype"]],
+        "attention_fidelity": _FIDELITIES[fidelities["attention"]],
+        "mlp_fidelity": _FIDELITIES[fidelities["mlp"]],
+    }
 
 
 def _validate_mesh(mesh_device) -> None:
@@ -103,6 +179,7 @@ class Falcon3Model:
         num_layers: int = NUM_LAYERS,
         page_block_size: int = DEFAULT_PAGE_BLOCK_SIZE,
         weight_cache_path: str | Path | None = None,
+        precision_config_path: str | Path | None = None,
     ) -> None:
         _validate_mesh(mesh_device)
         if not 1 <= int(max_batch_size) <= 32:
@@ -129,6 +206,8 @@ class Falcon3Model:
         self.weight_cache_path = Path(weight_cache_path) if weight_cache_path is not None else None
         self.rope_cache_len = min(DEFAULT_ROPE_CACHE_LEN, self.max_cache_len)
         self.tt_ccl = get_tt_ccl(mesh_device)
+        self.precision_config, self.precision_config_path = load_precision_config(precision_config_path)
+        self.runtime_precision_policy = _runtime_policy(self.precision_config)
 
         self.embedding = self._build_embedding(state_dict)
         self.layers = self._build_layers(state_dict)
@@ -157,6 +236,26 @@ class Falcon3Model:
 
         self.kv_cache: list[tuple[ttnn.Tensor, ttnn.Tensor]] | None = None
 
+    def precision_summary(self) -> dict:
+        """Return construction-time proof of the complete consumed policy."""
+        first = self.layers[0]
+        return {
+            "config_path": str(self.precision_config_path),
+            "config_id": self.precision_config["config_id"],
+            "weight_groups": dict(self.precision_config["weight_groups"]),
+            "layer_exceptions": list(self.precision_config["layer_exceptions"]),
+            "compute_fidelities": dict(self.precision_config["compute_fidelities"]),
+            "activation_dtype": str(first.attention_activation_dtype),
+            "residual_dtype": self.precision_config["residual_dtype"],
+            "ccl_dtype": str(first.ccl_dtype),
+            "kv_cache_dtype": str(first.kv_cache_dtype),
+            "logits_dtype": self.precision_config["logits_dtype"],
+            "sampling_dtype_assumptions": dict(self.precision_config["sampling_dtype_assumptions"]),
+            "decoder_runtime_policy": {key: str(value) for key, value in first.precision_policy.items()},
+            "lm_head_compute_fidelity": self.precision_config["compute_fidelities"]["lm_head"],
+            "lm_head_geometry": dict(self.lm_head_geometry),
+        }
+
     @classmethod
     def from_checkpoint(
         cls,
@@ -168,6 +267,7 @@ class Falcon3Model:
         num_layers: int = NUM_LAYERS,
         page_block_size: int = DEFAULT_PAGE_BLOCK_SIZE,
         weight_cache_path: str | Path | None = None,
+        precision_config_path: str | Path | None = None,
     ) -> "Falcon3Model":
         checkpoint_path = Path(checkpoint_path)
         hf_config = AutoConfig.from_pretrained(checkpoint_path, trust_remote_code=True)
@@ -182,6 +282,7 @@ class Falcon3Model:
                 num_layers=num_layers,
                 page_block_size=page_block_size,
                 weight_cache_path=weight_cache_path,
+                precision_config_path=precision_config_path,
             )
         finally:
             state.clear_cache()
@@ -200,7 +301,7 @@ class Falcon3Model:
         host = state_dict["model.embed_tokens.weight"].unsqueeze(0).unsqueeze(0)
         weight = LazyWeight(
             source=host,
-            dtype=ttnn.bfloat16,
+            dtype=_DTYPES[self.precision_config["weight_groups"]["embedding"]],
             device=self.mesh_device,
             mesh_mapper_config=ttnn.MeshMapperConfig(
                 placements=[ttnn.PlacementShard(-1)],
@@ -215,7 +316,7 @@ class Falcon3Model:
                 weights=weight,
                 mesh_device=self.mesh_device,
                 embed_scale=1.0,
-                weights_dtype=ttnn.bfloat16,
+                weights_dtype=_DTYPES[self.precision_config["weight_groups"]["embedding"]],
                 weights_memcfg=ttnn.DRAM_MEMORY_CONFIG,
                 output_memcfg=ttnn.DRAM_MEMORY_CONFIG,
             )
@@ -233,7 +334,7 @@ class Falcon3Model:
                 mesh_device=self.mesh_device,
                 batch=self.max_batch_size,
                 max_cache_len=self.max_cache_len,
-                precision_policy="all_bfp4_lofi",
+                precision_policy=self.runtime_precision_policy,
                 decode_matmul_mode="dram_sharded",
                 use_packed_mlp=False,
                 return_sharded_decode_output=True,
@@ -241,11 +342,11 @@ class Falcon3Model:
                 o_target_cores=4,
                 gate_up_target_cores=24,
                 down_target_cores=8,
-                ccl_dtype=ttnn.bfloat8_b,
+                ccl_dtype=_DTYPES[self.precision_config["ccl_dtype"]],
                 ccl_mode="persistent_async",
                 num_links=2,
-                attention_activation_dtype=ttnn.bfloat8_b,
-                mlp_activation_dtype=ttnn.bfloat8_b,
+                attention_activation_dtype=_DTYPES[self.precision_config["activation_dtype"]],
+                mlp_activation_dtype=_DTYPES[self.precision_config["activation_dtype"]],
                 page_block_size=self.page_block_size,
                 rope_cache_len=self.rope_cache_len,
                 rope_cache=rope_cache,
@@ -304,13 +405,25 @@ class Falcon3Model:
     def _build_final_norm(self, state_dict: Mapping[str, torch.Tensor]):
         return _mesh_weight(
             state_dict["model.norm.weight"],
-            dtype=ttnn.bfloat16,
+            dtype=_DTYPES[self.precision_config["weight_groups"]["norms"]],
             mesh_device=self.mesh_device,
             shard_dim=None,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
     def _build_lm_head(self, state_dict: Mapping[str, torch.Tensor]) -> LMHead1D:
+        lm_head_weight_dtype = self.precision_config["weight_groups"]["lm_head"]
+        # The one-piece BFP4 head was optimized with K block width 3.  Real-
+        # weight capacity experiments show BFP8 needs width 1 to fit the same
+        # inherited 32-core residual geometry.  BF16 also uses the smallest
+        # legal width, though that policy remains over the hardware L1 limit.
+        columns_per_device = LM_HEAD_COLUMNS_PER_DEVICE
+        in0_block_w = 3 if lm_head_weight_dtype == "bfloat4_b" else 1
+        self.lm_head_geometry = {
+            "columns_per_device": columns_per_device,
+            "in0_block_w": in0_block_w,
+            "source": "derived_from_lm_head_weight_dtype",
+        }
         host = state_dict["lm_head.weight"].transpose(-2, -1).contiguous()
         if self.padded_vocab_size != self.vocab_size:
             host = torch.cat((host, host.new_zeros(self.hidden_size, self.padded_vocab_size - self.vocab_size)), dim=-1)
@@ -318,14 +431,14 @@ class Falcon3Model:
         weights = []
         memory_configs = []
         program_configs = []
-        for split_start in range(0, self.local_vocab_size, LM_HEAD_COLUMNS_PER_DEVICE):
+        for split_start in range(0, self.local_vocab_size, columns_per_device):
             rank_splits = [
                 host[
                     :,
                     rank * self.local_vocab_size
                     + split_start : rank * self.local_vocab_size
                     + split_start
-                    + LM_HEAD_COLUMNS_PER_DEVICE,
+                    + columns_per_device,
                 ]
                 for rank in range(TENSOR_PARALLEL_SIZE)
             ]
@@ -333,12 +446,12 @@ class Falcon3Model:
             memory_config = _dram_sharded_memory_config(
                 self.mesh_device,
                 self.hidden_size,
-                LM_HEAD_COLUMNS_PER_DEVICE,
+                columns_per_device,
             )
             weights.append(
                 LazyWeight(
                     source=combined,
-                    dtype=ttnn.bfloat4_b,
+                    dtype=_DTYPES[self.precision_config["weight_groups"]["lm_head"]],
                     device=self.mesh_device,
                     mesh_mapper_config=ttnn.MeshMapperConfig(
                         placements=[ttnn.PlacementShard(-1)],
@@ -346,7 +459,9 @@ class Falcon3Model:
                     ),
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=memory_config,
-                    cache_dir_weight_name=self._cache_name(f"lm_head_vocab_split_{split_start}_bfp4"),
+                    cache_dir_weight_name=self._cache_name(
+                        f"lm_head_vocab_split_{split_start}_{self.precision_config['weight_groups']['lm_head']}"
+                    ),
                 )
             )
             memory_configs.append(memory_config)
@@ -354,9 +469,9 @@ class Falcon3Model:
                 _dram_matmul_program_config(
                     32,
                     self.hidden_size,
-                    LM_HEAD_COLUMNS_PER_DEVICE,
+                    columns_per_device,
                     grid,
-                    in0_block_w=3,
+                    in0_block_w=in0_block_w,
                 )
             )
         return LMHead1D.from_config(
@@ -366,8 +481,10 @@ class Falcon3Model:
                 dim=self.hidden_size,
                 max_batch_size=32,
                 program_configs=program_configs,
-                compute_kernel_config=_compute_config(self.mesh_device, ttnn.MathFidelity.LoFi),
-                lm_head_dtype=ttnn.bfloat8_b,
+                compute_kernel_config=_compute_config(
+                    self.mesh_device, _FIDELITIES[self.precision_config["compute_fidelities"]["lm_head"]]
+                ),
+                lm_head_dtype=_DTYPES[self.precision_config["logits_dtype"]],
                 output_memcfg=ttnn.L1_MEMORY_CONFIG,
                 input_memcfg=self.layers[-1].residual_memory_config,
                 weights_memcfgs=memory_configs,

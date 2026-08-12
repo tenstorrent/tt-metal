@@ -1,0 +1,90 @@
+{
+  "findings": [],
+  "measured": [
+    {
+      "artifact": "models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/selected_bf16_kv_qualitative/prompt_00_machine_learning_haiku/autoregressive_meta.json",
+      "label": "tt free-running completion",
+      "source": "words",
+      "num_tokens": 64,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.2812
+    },
+    {
+      "artifact": "models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/selected_bf16_kv_qualitative/prompt_00_machine_learning_haiku/autoregressive_meta.json",
+      "label": "hf/tt token agreement (informational)",
+      "matching_tokens": 7,
+      "compared_tokens": 100
+    },
+    {
+      "artifact": "models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/selected_bf16_kv_qualitative/prompt_01_supervised_vs_unsupervised/autoregressive_meta.json",
+      "label": "tt free-running completion",
+      "source": "words",
+      "num_tokens": 88,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0682
+    },
+    {
+      "artifact": "models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/selected_bf16_kv_qualitative/prompt_01_supervised_vs_unsupervised/autoregressive_meta.json",
+      "label": "hf/tt token agreement (informational)",
+      "matching_tokens": 3,
+      "compared_tokens": 100
+    },
+    {
+      "artifact": "models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/selected_bf16_kv_qualitative/prompt_02_inventor_story/autoregressive_meta.json",
+      "label": "tt free-running completion",
+      "source": "words",
+      "num_tokens": 83,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0361
+    },
+    {
+      "artifact": "models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/selected_bf16_kv_qualitative/prompt_02_inventor_story/autoregressive_meta.json",
+      "label": "hf/tt token agreement (informational)",
+      "matching_tokens": 2,
+      "compared_tokens": 100
+    },
+    {
+      "artifact": "models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/selected_bf16_kv_qualitative/prompt_03_thermodynamics/autoregressive_meta.json",
+      "label": "tt free-running completion",
+      "source": "words",
+      "num_tokens": 60,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.1
+    },
+    {
+      "artifact": "models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/selected_bf16_kv_qualitative/prompt_03_thermodynamics/autoregressive_meta.json",
+      "label": "hf/tt token agreement (informational)",
+      "matching_tokens": 16,
+      "compared_tokens": 100
+    },
+    {
+      "artifact": "models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/selected_bf16_kv_qualitative/prompt_04_english_to_french/autoregressive_meta.json",
+      "label": "tt free-running completion",
+      "source": "words",
+      "num_tokens": 32,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0938
+    },
+    {
+      "artifact": "models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/selected_bf16_kv_qualitative/prompt_04_english_to_french/autoregressive_meta.json",
+      "label": "hf/tt token agreement (informational)",
+      "matching_tokens": 5,
+      "compared_tokens": 100
+    },
+    {
+      "artifact": "models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/selected_bf16_kv_qualitative/prompt_05_fibonacci_python/autoregressive_meta.json",
+      "label": "tt free-running completion",
+      "source": "words",
+      "num_tokens": 41,
+      "adjacent_duplication": 0.025,
+      "trigram_loop_fraction": 0.0732
+    },
+    {
+      "artifact": "models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/selected_bf16_kv_qualitative/prompt_05_fibonacci_python/autoregressive_meta.json",
+      "label": "hf/tt token agreement (informational)",
+      "matching_tokens": 100,
+      "compared_tokens": 100
+    }
+  ],
+  "exit_code": 0
+}

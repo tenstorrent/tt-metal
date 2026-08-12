@@ -29,9 +29,9 @@
       32,
       256
     ],
-    "bfloat8_tile_bytes": 1088,
+    "bf16_tile_bytes": 2048,
     "tiles_per_layer_per_device_each_k_or_v_cache": 8192,
-    "all_layers_both_kv_caches_bytes_per_device": 499122176,
+    "all_layers_both_kv_caches_bytes_per_device": 939524096,
     "bf16_residual_bytes_per_device": 201326592,
     "bf16_rotary_cache_bytes_per_device": 33554432,
     "optimized_active_rope_initial_bytes_per_device": 262144,
@@ -50,15 +50,15 @@
     "calculated_live_chunk_activation_bytes_per_device": 63176704,
     "calculated_full_context_peak_transient_bytes_per_device": 452984832,
     "reserved_transient_activation_bytes_per_device": 536870912,
-    "measured_full_model_weight_and_runtime_bytes_per_device": 2231753216,
-    "measured_full_model_plus_full_context_cache_bytes_per_device": 2730875392,
+    "measured_full_model_weight_and_runtime_bytes_per_device": 2198460928,
+    "measured_full_model_plus_full_context_cache_bytes_per_device": 3137985024,
     "measured_allocatable_dram_after_trace_reservation_bytes_per_device": 30082731008,
-    "measured_free_after_full_context_cache_bytes_per_device": 27351855616,
-    "measured_largest_contiguous_free_after_cache_bytes_per_bank": 3418981952,
-    "measured_full_context_execution_bytes_per_device": 2734023168,
-    "measured_free_after_full_context_execution_bytes_per_device": 27348707840,
-    "measured_free_after_cache_and_transient_reserve_bytes_per_device": 26814984704,
-    "calculated_batch1_resident_plus_reserved_bytes_per_device": 3267746304,
+    "measured_free_after_full_context_cache_bytes_per_device": 26944745984,
+    "measured_largest_contiguous_free_after_cache_bytes_per_bank": 3368093248,
+    "measured_full_context_execution_bytes_per_device": 3174425088,
+    "measured_free_after_full_context_execution_bytes_per_device": 26908305920,
+    "measured_free_after_cache_and_transient_reserve_bytes_per_device": 26407875072,
+    "calculated_batch1_resident_plus_reserved_bytes_per_device": 3674855936,
     "sampled_key_cache_pcc_vs_hf": 0.9964410657318681,
     "sampled_value_cache_pcc_vs_hf": 0.9953481660889436,
     "artifacts": [
@@ -66,12 +66,22 @@
       "models/autoports/tiiuae_falcon3_7b_base/doc/full_model/results/full_context_coverage.json",
       "models/autoports/tiiuae_falcon3_7b_base/doc/optimized_full_model/results/final/full_model_evidence_dynamic_rope.json",
       "models/autoports/tiiuae_falcon3_7b_base/doc/optimized_full_model/results/final/full_context_coverage.json",
+      "models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/results/all_bfp4_lofi_bf16_kv/full_context_coverage.json",
       "models/autoports/tiiuae_falcon3_7b_base/doc/optimized_multichip_decoder/results/final_correctness/max_context_batch1.json"
     ],
     "optimized_rope_note": "Short requests no longer pay 32K-row RoPE lookup cost in every layer. The table remains absolute-position indexed and grows to the complete 32K table for the maximum-context gate; no context capability is reduced.",
-    "explanation": "TP4 stores one of four KV heads per device. BFP8 cache accounting uses the physical 1,088-byte 32x32 tile: 1,024 pages x 1 head x 1 sequence tile x 8 head-dimension tiles = 8,192 tiles for each K or V cache per layer, or 499,122,176 bytes/device for K+V across 28 layers. With every full-model weight, embedding, final norm, TP-vocabulary LM-head, runtime buffer, and all 28 full-context caches resident, the frozen-source allocator run measured 2,730,875,392 bytes/device and 27,351,855,616 free bytes/device. The configured 512,000,000-byte trace region is reserved in each of eight DRAM banks before those allocator totals, or 4,096,000,000 bytes/device. Adding a separate 512 MiB transient reserve leaves 26,814,984,704 measured allocatable bytes/device. The public generator executed all 28 layers for a non-aligned 32,767-token request, owned padding to 32,768, filled sixteen 2,048-token chunks and all 1,024 logical pages, sampled two tokens, and replayed traced decode at position 32,767. The gate checked the final K and V page on every one of four ranks for every layer (224 device tensors), advanced both persistent position tensors to 32,768, and measured a 2,734,023,168-byte execution peak with 27,348,707,840 bytes/device free."
+    "explanation": "TP4 stores one of four KV heads per device. Selected BF16 cache accounting uses the physical 2,048-byte 32x32 tile: 1,024 pages x 1 head x 1 sequence tile x 8 head-dimension tiles = 8,192 tiles for each K or V cache per layer, or 939,524,096 bytes/device for K+V across 28 layers. With every full-model weight, embedding, final norm, TP-vocabulary LM-head, runtime buffer, and all 28 full-context BF16 caches resident, the selected-policy allocator run measured 3,137,985,024 bytes/device and 26,944,745,984 free bytes/device. The configured 512,000,000-byte trace region is reserved in each of eight DRAM banks before those allocator totals, or 4,096,000,000 bytes/device. Adding a separate 512 MiB transient reserve leaves 26,407,875,072 measured allocatable bytes/device. The public generator executed all 28 layers for a non-aligned 32,767-token request, owned padding to 32,768, filled sixteen 2,048-token chunks and all 1,024 logical pages, sampled two tokens, and replayed traced decode at position 32,767. The gate checked the final K and V page on every one of four ranks for every layer (224 device tensors), advanced both persistent position tensors to 32,768, and measured a 3,174,425,088-byte execution peak with 26,908,305,920 bytes/device free."
   },
-  "notes": "The full model preserves the Hugging Face 32,768-token context at batch 1. No capability reduction is needed: complete model state plus full-context KV is 2.731 GB of the measured 30.08 GB/device allocatable after the 4.096 GB/device trace reservation. The 512 MiB transient reserve is additional. BFP8 rank-local paged KV, BFP4/LoFi TP4 projections, BFP8 attention/MLP and asynchronous CCL payloads, two shared persistent CCL buffers, and the replicated-mesh BF16 32-core L1 width-sharded inter-layer residual are unchanged. Batch 32 is serving-contract validated for mixed short prompts and heterogeneous decode positions, but full-context batch 32 is not advertised.",
+  "notes": "The selected BF16-KV full model preserves the Hugging Face 32,768-token context at batch 1. No capability reduction is needed: complete model state plus full-context KV is 3.138 GB of the measured 30.08 GB/device allocatable after the 4.096 GB/device trace reservation. The 512 MiB transient reserve is additional. BF16 rank-local paged KV, BFP4/LoFi TP4 projections, BFP8 attention/MLP and asynchronous CCL payloads, two shared persistent CCL buffers, and the replicated-mesh BF16 32-core L1 width-sharded inter-layer residual are selected. Batch 32 is serving-contract validated for mixed short prompts and heterogeneous decode positions, but full-context batch 32 is not advertised.",
+  "datatype_sweep_revalidation": {
+    "selected_config": "doc/datatype_sweep/selected_precision_config.json",
+    "kv_cache_dtype": "bfloat16",
+    "recomputed_utc": "2026-08-12",
+    "advertised_context_preserved": 32768,
+    "non_aligned_prompt_check": "doc/datatype_sweep/results/all_bfp4_lofi_bf16_kv/non_aligned_contract.json",
+    "full_context_execution": "doc/datatype_sweep/results/all_bfp4_lofi_bf16_kv/full_context_coverage.json",
+    "result": "pass"
+  },
   "inter_layer_residual_contract": {
     "logical_shape": [
       1,
@@ -113,7 +123,7 @@
       ],
       "cache_length": 32768,
       "max_context_validated_batch": 1,
-      "kv_cache_dtype": "bfloat8_b",
+      "kv_cache_dtype": "bfloat16",
       "classification": "Full model TP4: hidden-sharded embedding, 28 preserved optimized decoder layers, final norm and TP-vocabulary LM-head; generator-owned 128-token padding, 2,048-token page-aligned chunks, prompt masking, cache fill, position handling and output slicing"
     },
     "decode": {
@@ -127,7 +137,7 @@
       ],
       "cache_length": 32768,
       "max_context_validated_batch": 1,
-      "kv_cache_dtype": "bfloat8_b",
+      "kv_cache_dtype": "bfloat16",
       "classification": "Full model TP4: rank-local paged_update_cache and decode SDPA with explicit persistent tokens, positions and fixed page table; BFP8 attention/MLP projection activations and persistent asynchronous BFP8 decode all-reduces; replicated-mesh BF16 width-sharded L1 residual; split model/sampling traces feed sampled tokens back on device"
     }
   },

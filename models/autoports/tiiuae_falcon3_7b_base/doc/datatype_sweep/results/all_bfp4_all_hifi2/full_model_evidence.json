@@ -1,0 +1,145 @@
+{
+  "mesh": "4x Blackhole p300c, 1x4 FABRIC_1D_RING, TP4, two links",
+  "num_layers": 28,
+  "prompt_tokens": 128,
+  "workload": {
+    "batch": 1,
+    "prompt_tokens": 128,
+    "generated_tokens": 128,
+    "standard_128_128": true
+  },
+  "context_tokens": 32768,
+  "cache_dtype": "bfloat8_b paged, one KV head/rank",
+  "precision_summary": {
+    "config_path": "models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/configs/all_bfp4_all_hifi2.json",
+    "config_id": "all_bfp4_all_hifi2",
+    "weight_groups": {
+      "attention": "bfloat4_b",
+      "mlp_gate_up": "bfloat4_b",
+      "mlp_down": "bfloat4_b",
+      "lm_head": "bfloat4_b",
+      "embedding": "bfloat16",
+      "norms": "bfloat16"
+    },
+    "layer_exceptions": [],
+    "compute_fidelities": {
+      "attention": "HiFi2",
+      "mlp": "HiFi2",
+      "lm_head": "HiFi2"
+    },
+    "activation_dtype": "DataType.BFLOAT8_B",
+    "residual_dtype": "bfloat16",
+    "ccl_dtype": "DataType.BFLOAT8_B",
+    "kv_cache_dtype": "DataType.BFLOAT8_B",
+    "logits_dtype": "bfloat8_b",
+    "sampling_dtype_assumptions": {
+      "local_topk_values": "bfloat16",
+      "packed_rank_candidates": "float32",
+      "token_ids": "uint32",
+      "mode": "Sampling1D split trace"
+    },
+    "decoder_runtime_policy": {
+      "attention": "DataType.BFLOAT4_B",
+      "mlp_gate_up": "DataType.BFLOAT4_B",
+      "mlp_down": "DataType.BFLOAT4_B",
+      "kv_cache": "DataType.BFLOAT8_B",
+      "attention_fidelity": "MathFidelity.HiFi2",
+      "mlp_fidelity": "MathFidelity.HiFi2"
+    },
+    "lm_head_compute_fidelity": "HiFi2"
+  },
+  "memory_after_weights": {
+    "banks": 8,
+    "total_bytes_per_device": 30082731008,
+    "allocated_bytes_per_device": 2198460928,
+    "free_bytes_per_device": 27884270080,
+    "largest_contiguous_free_per_bank": 3485533760
+  },
+  "memory_after_full_context_cache": {
+    "banks": 8,
+    "total_bytes_per_device": 30082731008,
+    "allocated_bytes_per_device": 2697583104,
+    "free_bytes_per_device": 27385147904,
+    "largest_contiguous_free_per_bank": 3423143488
+  },
+  "samplers": {
+    "split_greedy_token": 2107,
+    "force_argmax_token": 2107,
+    "ttsampling_token": 2107,
+    "semantic_match": true,
+    "iterations": 20,
+    "split_greedy_ms_per_call": 0.8022084832191467,
+    "force_argmax_ms_per_call": 1.0021189227700233,
+    "ttsampling_ms_per_call": 1.0090611409395933,
+    "selected": "Sampling1D exact local argmax plus packed FP32 rank-candidate gather",
+    "rejected": "TTSampling exact greedy full-vocabulary all-gather plus argmax; broader mutable request state and explicit request seeds disable SamplingGenerator internal tracing"
+  },
+  "trace": {
+    "generated_tokens": [
+      2107,
+      2027,
+      4422,
+      6247,
+      2303
+    ],
+    "stats_after_five_tokens": {
+      "captures": 1,
+      "replays": 4,
+      "releases": 0,
+      "decode_warmups": 1,
+      "token_host_copies": 0,
+      "token_device_copies": 4,
+      "position_host_copies": 4,
+      "rotary_position_host_copies": 4,
+      "page_table_host_copies": 4,
+      "sampling_param_host_copies": 0,
+      "caller_token_readbacks": 5,
+      "explicit_synchronizations": 9,
+      "resets": 2,
+      "rng_checkpoints": 0,
+      "rng_restores": 0,
+      "ccl_capture_epoch_resets": 1
+    },
+    "expected_position_after_four_decode_replays": 132,
+    "position_after_generation": 132,
+    "rotary_position_after_generation": 132,
+    "feedback_token_matches_last_output": true,
+    "unchanged_page_table_host_copy_delta": 0,
+    "expanded_page_table_host_copy_delta": 1,
+    "changed_page_table_host_copy_delta": 1,
+    "changed_page_table_persistent_input_matches": true,
+    "changed_page_table_logits_max_abs_delta": 1.5,
+    "changed_page_table_output_token": 2278,
+    "original_page_table_output_token": 2278,
+    "restored_page_table_output_token": 2278,
+    "unchanged_replay_page_table_host_copy_delta": 0,
+    "unchanged_replay_logits_exact_match": true,
+    "unchanged_replay_token_match": true,
+    "restored_page_table_logits_exact_match": true,
+    "restored_page_table_token_match": true,
+    "replay_iterations": 128,
+    "position_after_pair_replays": 256,
+    "rotary_position_after_pair_replays": 256,
+    "final_feedback_token": 21701,
+    "steady_state_host_copy_deltas": {
+      "token_host_copies": 0,
+      "position_host_copies": 0,
+      "rotary_position_host_copies": 0,
+      "page_table_host_copies": 0,
+      "sampling_param_host_copies": 0
+    }
+  },
+  "performance": {
+    "cold_ttft_ms": 76.03242974728346,
+    "warm_ttft_ms": 25.231204740703106,
+    "trace_pair_elapsed_s": 1.521001541055739,
+    "device_only_trace_pair_t_s_u": 84.1550758135026,
+    "caller_visible_token_out_elapsed_s": 1.5284690987318754,
+    "caller_visible_token_out_t_s_u": 83.74392397346975,
+    "teacher_forcing_trace_t_s_u": 84.14599055059045,
+    "model_trace_ms_per_token": 11.048813939851243,
+    "sampling_trace_ms_per_token": 0.8312544159707613,
+    "sampling_fraction": 0.069970507834948
+  },
+  "passed": true
+}

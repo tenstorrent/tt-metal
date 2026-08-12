@@ -1,0 +1,3 @@
+Here is a Python function that calculates the Fibonacci sequence:
+
+```python

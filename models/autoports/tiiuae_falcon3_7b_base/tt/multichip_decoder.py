@@ -199,7 +199,7 @@ class MultichipDecoder(LightweightModule):
             raise ValueError(
                 f"MultichipDecoder requires exactly {TENSOR_PARALLEL_SIZE} host-visible devices, got {visible_devices}"
             )
-        if precision_policy not in MULTICHIP_PRECISION_POLICIES:
+        if not isinstance(precision_policy, Mapping) and precision_policy not in MULTICHIP_PRECISION_POLICIES:
             raise ValueError(f"Unknown precision policy {precision_policy!r}")
         if decode_matmul_mode not in ("dram_sharded", "shard_advisor"):
             raise ValueError("decode_matmul_mode must be 'dram_sharded' or 'shard_advisor'")
@@ -328,7 +328,11 @@ class MultichipDecoder(LightweightModule):
         )
         gate_up_decode_host = _rank_grouped_pair(gate_decode_host, up_decode_host, tp=TENSOR_PARALLEL_SIZE)
 
-        policy = dict(MULTICHIP_PRECISION_POLICIES[precision_policy])
+        policy = dict(
+            precision_policy
+            if isinstance(precision_policy, Mapping)
+            else MULTICHIP_PRECISION_POLICIES[precision_policy]
+        )
         prefill_memcfg = ttnn.DRAM_MEMORY_CONFIG
         self = cls()
         self.mesh_device = mesh_device
@@ -352,7 +356,7 @@ class MultichipDecoder(LightweightModule):
         self.dram_banks = dram_banks
         self.rms_norm_eps = rms_norm_eps
         self.scale = 1.0 / math.sqrt(head_dim)
-        self.precision_policy_name = precision_policy
+        self.precision_policy_name = "external_config" if isinstance(precision_policy, Mapping) else precision_policy
         self.precision_policy = policy
         self.decode_matmul_mode = decode_matmul_mode
         self.advisor_residual_mode = advisor_residual_mode

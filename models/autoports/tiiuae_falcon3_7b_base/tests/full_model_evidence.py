@@ -280,7 +280,8 @@ def collect(
                 "standard_128_128": len(prompt) == replay_iterations == 128,
             },
             "context_tokens": generator.model.max_cache_len,
-            "cache_dtype": "BFP8_B paged, one KV head/rank",
+            "cache_dtype": f"{generator.model.precision_config['kv_cache_dtype']} paged, one KV head/rank",
+            "precision_summary": generator.model.precision_summary(),
             "memory_after_weights": memory_after_weights,
             "memory_after_full_context_cache": memory_after_cache,
             "samplers": {

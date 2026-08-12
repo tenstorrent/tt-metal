@@ -1,0 +1,134 @@
+[
+  {
+    "prompt_id": "machine_learning_haiku",
+    "completion_prompt": "Machine learning\n\nA haiku:\n",
+    "hf_completion": "\nData, patterns,\nAlgorithms learn,\nWisdom unfolds.\n\nA limerick:\n\nThere once was a data set,\nWhose secrets it did hold,\nWith a machine,\nIt was set free,\nAnd wisdom it did unfold.\n\nA sonnet:\n\nIn the realm of data, vast and wide,\nWhere patterns dwell and secrets hide,\nWith algorithms, we can find,\nThe wisdom that lies within.\n\nThrough the power of machine",
+    "tt_completion": "\nIn the heart of a machine,\nData whispers secrets,\nLearning unfolds.\n\nIn the heart of a machine,\nData whispers secrets,\nLearning unfolds.\n\nIn the heart of a machine,\nData whispers secrets,\nLearning unfolds.\n\nIn the heart of a machine,\nData whispers secrets,\nLearning unfolds.\n\nIn the heart of a machine,\nData whispers secrets,\nLearning unfolds.\n\nIn the heart of a machine,\nData",
+    "comparison": {
+      "first_divergence": 1,
+      "matching_tokens": 6,
+      "compared_tokens": 100,
+      "exact_match": false
+    },
+    "review_dimensions": [
+      "coherent_and_on_topic_relative_to_hf_control",
+      "mechanical_repetition_or_token_doubling",
+      "wrong_language_drift",
+      "prompt_echo",
+      "control_or_special_token_leakage",
+      "early_divergence_followed_by_quality_collapse",
+      "cross_request_leakage"
+    ],
+    "verdict": "human_review_required"
+  },
+  {
+    "prompt_id": "supervised_vs_unsupervised",
+    "completion_prompt": "In simple terms, the difference between supervised and unsupervised learning is that",
+    "hf_completion": " supervised learning uses labeled data to train a model, while unsupervised learning uses unlabeled data to find patterns and relationships.\n\n### Clustering\n\nClustering is a type of unsupervised learning that involves grouping similar data points together. The goal of clustering is to find natural groupings in the data, without any prior knowledge of what those groupings might be.\n\nOne popular clustering algorithm is called K-means clustering. The basic idea behind K-means clustering is to divide the data into K clusters,",
+    "tt_completion": " supervised learning is a form of machine learning in which the algorithm is trained on a labeled dataset, while unsupervised learning is a form of machine learning in which the algorithm is trained on an unlabeled dataset.\n\nIn the context of the extract, the supervised learning algorithm is used to classify the data into two classes based on the input features. The algorithm is trained on a dataset that is labeled, meaning that the correct output for each input is known. The algorithm then uses this training to make predictions on",
+    "comparison": {
+      "first_divergence": 2,
+      "matching_tokens": 4,
+      "compared_tokens": 100,
+      "exact_match": false
+    },
+    "review_dimensions": [
+      "coherent_and_on_topic_relative_to_hf_control",
+      "mechanical_repetition_or_token_doubling",
+      "wrong_language_drift",
+      "prompt_echo",
+      "control_or_special_token_leakage",
+      "early_divergence_followed_by_quality_collapse",
+      "cross_request_leakage"
+    ],
+    "verdict": "human_review_required"
+  },
+  {
+    "prompt_id": "inventor_story",
+    "completion_prompt": "Once upon a time, in a faraway kingdom, there lived a curious young inventor who discovered",
+    "hf_completion": " a magical device called the \"Quantum Computer.\" This incredible machine could solve problems faster than any other computer in the world! But what made it truly special was its ability to perform calculations using something called \"quantum bits,\" or \"qubits\" for short.\n\nNow, little ones, imagine you have two boxes - one red and one blue. You can put either a red marble or a blue marble into each box. In our everyday lives, we call these choices \"",
+    "tt_completion": " a magical way to make the most delicious and nutritious food for everyone in the land. This magic was called \"fermentation,\" and it involved mixing certain ingredients together and letting them sit for a while so that they could transform into something even more special.\n\nThe young inventor had a big, beautiful garden where he grew many different plants. One day, as he was tending to his garden, he noticed that some of the plants looked a little sad and droopy. He knew that if he",
+    "comparison": {
+      "first_divergence": 2,
+      "matching_tokens": 2,
+      "compared_tokens": 100,
+      "exact_match": false
+    },
+    "review_dimensions": [
+      "coherent_and_on_topic_relative_to_hf_control",
+      "mechanical_repetition_or_token_doubling",
+      "wrong_language_drift",
+      "prompt_echo",
+      "control_or_special_token_leakage",
+      "early_divergence_followed_by_quality_collapse",
+      "cross_request_leakage"
+    ],
+    "verdict": "human_review_required"
+  },
+  {
+    "prompt_id": "thermodynamics",
+    "completion_prompt": "The three laws of thermodynamics are:\n\n1.",
+    "hf_completion": " **Zeroth Law of Thermodynamics:**\n   - If two systems are each in thermal equilibrium with a third system, they are in thermal equilibrium with each other.\n   - This law allows the definition of temperature.\n\n2. **First Law of Thermodynamics (Conservation of Energy):**\n   - The change in internal energy of a system (\u0394U) is equal to the heat added to the system (Q) minus the work done by the system",
+    "tt_completion": " **Zeroth Law of Thermodynamics:**\n   - **Statement:** If two systems are in thermal equilibrium with a third system, then they are in thermal equilibrium with each other.\n   - **Significance:** This law provides a basis for the concept of temperature and allows the use of thermometers to measure temperature.\n\n2. **First Law of Thermodynamics:**\n   - **Statement:** The change in internal energy (\u0394U) of a system is",
+    "comparison": {
+      "first_divergence": 13,
+      "matching_tokens": 13,
+      "compared_tokens": 100,
+      "exact_match": false
+    },
+    "review_dimensions": [
+      "coherent_and_on_topic_relative_to_hf_control",
+      "mechanical_repetition_or_token_doubling",
+      "wrong_language_drift",
+      "prompt_echo",
+      "control_or_special_token_leakage",
+      "early_divergence_followed_by_quality_collapse",
+      "cross_request_leakage"
+    ],
+    "verdict": "human_review_required"
+  },
+  {
+    "prompt_id": "english_to_french",
+    "completion_prompt": "English: \"Hello, how are you today?\"\nFrench: \"",
+    "hf_completion": "Bonjour, comment \u00e7a va aujourd'hui ?\"\nSpanish: \"Hola, \u00bfc\u00f3mo est\u00e1s hoy?\"\nGerman: \"Hallo, wie geht es heute?\"\nItalian: \"Ciao, come stai oggi?\"\nJapanese: \"\u3053\u3093\u306b\u3061\u306f\u3001\u4eca\u65e5\u306f\u3044\u3044\u3067\u3059\u304b\uff1f(Konnichiwa, kyou wa ii desu ka?)\"\n\nNow, let's try",
+    "tt_completion": "Bonjour, comment vas-tu aujourd'hui ?\"\nSpanish: \"Hola, \u00bfc\u00f3mo est\u00e1s hoy?\"\nGerman: \"Hallo, wie geht es heute?\"\nItalian: \"Ciao, come stai oggi?\"\nJapanese: \"\u3053\u3093\u306b\u3061\u306f\u3001\u4eca\u65e5\u306f\u3069\u3046\u3067\u3059\u304b\uff1f(Konnichiwa, d\u014ddesu ka?)\"\nChinese: \"\u4f60",
+    "comparison": {
+      "first_divergence": 3,
+      "matching_tokens": 8,
+      "compared_tokens": 100,
+      "exact_match": false
+    },
+    "review_dimensions": [
+      "coherent_and_on_topic_relative_to_hf_control",
+      "mechanical_repetition_or_token_doubling",
+      "wrong_language_drift",
+      "prompt_echo",
+      "control_or_special_token_leakage",
+      "early_divergence_followed_by_quality_collapse",
+      "cross_request_leakage"
+    ],
+    "verdict": "human_review_required"
+  },
+  {
+    "prompt_id": "fibonacci_python",
+    "completion_prompt": "Here is a Python function that calculates the Fibonacci sequence:\n\n```python\n",
+    "hf_completion": "def fibonacci(n):\n    if n <= 0:\n        return \"Input should be a positive integer.\"\n    elif n == 1:\n        return 0\n    elif n == 2:\n        return 1\n    else:\n        a, b = 0, 1\n        for _ in range(2, n):\n            a, b = b, a + b\n        return b",
+    "tt_completion": "def fibonacci(n):\n    if n <= 0:\n        return \"Input should be a positive integer.\"\n    elif n == 1:\n        return 0\n    elif n == 2:\n        return 1\n    else:\n        a, b = 0, 1\n        for _ in range(2, n):\n            a, b = b, a + b\n        return b",
+    "comparison": {
+      "first_divergence": null,
+      "matching_tokens": 100,
+      "compared_tokens": 100,
+      "exact_match": true
+    },
+    "review_dimensions": [
+      "coherent_and_on_topic_relative_to_hf_control",
+      "mechanical_repetition_or_token_doubling",
+      "wrong_language_drift",
+      "prompt_echo",
+      "control_or_special_token_leakage",
+      "early_divergence_followed_by_quality_collapse",
+      "cross_request_leakage"
+    ],
+    "verdict": "human_review_required"
+  }
+]
