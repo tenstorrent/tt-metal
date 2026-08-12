@@ -319,10 +319,13 @@ def norm_compute_kernel_config(arch):
     ========  ==========  ==========  ==================  ==============
 
     So it is **free in decode** (the sharded kernel is 3.9 % *faster* with it)
-    and costs 13.5 us on each of the four hidden-size prefill norms, ~54 us of
-    a 49,294 us prefill window plus a few us across the two much smaller
-    per-head QK norms: about **0.12 %** for a 15x smaller worst-case error on
-    the op that feeds every matmul in the layer.
+    and costs 13.5 us on each of the four hidden-size prefill norms, plus a
+    smaller share of the two per-head QK norms -- **0.11-0.16 % of the prefill
+    window**, for a 15x smaller worst-case error on the op that feeds every
+    matmul in the layer.  README limitation 3 carries the in-graph arithmetic
+    against the current committed capture; it is deliberately not repeated here,
+    because a window total moves every time the evidence chain re-runs and this
+    docstring should not.
 
     It reaches *every* ``ttnn.rms_norm`` dispatch -- six in a prefill and six in
     a decode -- which ``test_every_norm_takes_the_uplifted_config`` asserts by
@@ -1315,8 +1318,11 @@ class FusedDecoder(FunctionalDecoder):
         hidden-size norms and the decode QK norms: these two feed Q and K
         straight into SDPA, and on the op default they were the least accurate
         norms in the layer (the isolated probe puts the default's worst-case
-        relative error 15x above the uplifted one).  They are 370 us of a
-        49,294 us prefill window, so the accuracy is nearly free.
+        relative error 15x above the uplifted one).  The two of them together
+        are under 1 % of the prefill window, so the accuracy is nearly free --
+        and it is worth more than that runtime suggests, because these norms
+        write the Q and K prefill stores in the paged cache, so every later
+        decode step reads a more accurate cache.
         """
         shape = tensor.shape
         flat = ttnn.reshape(tensor, (1, 1, shape[0] * shape[1] * shape[2], shape[3]))
