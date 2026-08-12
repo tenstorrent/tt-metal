@@ -113,15 +113,13 @@ namespace unified {
 // pack_tile, tile_regs_*, the SFPU ops, matmul_block, pack_block -- is called
 // as ckernel::* straight from fusion.hpp, inside regions already guarded by
 // `#if IS_COMPUTE_THREAD`.
-inline void compute_init(int in_cb, int out_cb) {
-    ckernel::init_sfpu(static_cast<uint32_t>(in_cb), static_cast<uint32_t>(out_cb));
-}
+inline void compute_init(uint32_t in_cb, uint32_t out_cb) { ckernel::init_sfpu(in_cb, out_cb); }
 
 // TODO: the FPU pack-side epilogue is not bound to metal yet. Declared without a
 // definition so the (uninstantiated) template body type-checks -- a program that
 // actually reaches it fails to LINK with this name, rather than silently doing
 // nothing.
-void relu_from_pack(int base, int count);
+void relu_from_pack(uint32_t base, uint32_t count);
 
 #else
 
@@ -131,7 +129,7 @@ void relu_from_pack(int base, int count);
 
 // The only compute intrinsic a data-movement build needs: kernels call it
 // unconditionally at entry.
-inline void compute_init(int, int) {}
+inline void compute_init(uint32_t, uint32_t) {}
 
 // The CB's *configured* page size, not the data format's tile size --
 // get_tile_size() is derived from unpack_tile_size[] and only coincides with the
@@ -140,9 +138,7 @@ inline void compute_init(int, int) {}
 // fifo_page_size is stored pre-shifted by cb_addr_shift, which is 0 on a
 // data-movement build (bytes) and CIRCULAR_BUFFER_COMPUTE_ADDR_SHIFT on a TRISC
 // (16B words). The shift is written out so this stays right if it ever moves.
-inline uint32_t cb_page_bytes(int cb) {
-    return get_local_cb_interface(static_cast<uint32_t>(cb)).fifo_page_size << cb_addr_shift;
-}
+inline uint32_t cb_page_bytes(uint32_t cb) { return get_local_cb_interface(cb).fifo_page_size << cb_addr_shift; }
 
 #endif
 

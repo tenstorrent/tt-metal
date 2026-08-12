@@ -39,6 +39,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <type_traits>
 
 #include <tt/unified_expr.hpp>
@@ -53,7 +54,7 @@ namespace tt {
 namespace unified {
 
 // Max DST tiles. Halves under fp32 accumulate; see reg_api.h.
-inline constexpr int kMaxDstTiles = 16;
+inline constexpr uint32_t kMaxDstTiles = 16;
 
 // ---------------------------------------------------------------------------
 // Leaves and ops
@@ -64,11 +65,11 @@ inline constexpr int kMaxDstTiles = 16;
 // clobbering intermediates.
 struct TileSource {
     using is_expr_node = std::true_type;
-    static constexpr int need = 1;
+    static constexpr uint32_t need = 1;
 
-    int cb_id;
+    uint32_t cb_id;
 
-    void emit(int dst, int tile) const {
+    void emit(uint32_t dst, uint32_t tile) const {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
         ckernel::copy_tile(cb_id, tile, dst);
 #else
@@ -79,7 +80,7 @@ struct TileSource {
 };
 
 struct AddOp {
-    static void apply(int lhs, int rhs, int out) {
+    static void apply(uint32_t lhs, uint32_t rhs, uint32_t out) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
         ckernel::add_binary_tile_init();
         ckernel::add_binary_tile(lhs, rhs, out);
@@ -92,7 +93,7 @@ struct AddOp {
 };
 
 struct ExpOp {
-    static void apply(int src, int out) {
+    static void apply(uint32_t src, uint32_t out) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
         (void)src;  // == out; SFPU unaries work in place
         ckernel::exp_tile_init();
@@ -102,7 +103,7 @@ struct ExpOp {
         (void)out;
 #endif
     }
-    static void apply_in_place(int slot) { apply(slot, slot); }
+    static void apply_in_place(uint32_t slot) { apply(slot, slot); }
 };
 
 // NOTE: a cross-tile reduction is deliberately absent. It is not an op -- it
@@ -119,7 +120,7 @@ struct ExpOp {
 // metal kernels routinely re-init per use (see SFPU_OP_CHAIN_0 in
 // tests/.../compute/eltwise_sfpu.cpp). Worth hoisting if it shows in a profile.
 struct ReluOp {
-    static void apply(int src, int out) {
+    static void apply(uint32_t src, uint32_t out) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
         (void)src;  // == out; SFPU unaries work in place
         ckernel::relu_tile_init();
@@ -130,12 +131,12 @@ struct ReluOp {
 #endif
     }
 
-    static void apply_in_place(int slot) { apply(slot, slot); }
+    static void apply_in_place(uint32_t slot) { apply(slot, slot); }
 
     // Templated so it is only instantiated when an FPU chain actually uses it;
     // the pack-side epilogue is not yet bound to metal (see unified_metal.hpp).
     template <int = 0>
-    static void apply_from_pack(int base, int count) {
+    static void apply_from_pack(uint32_t base, uint32_t count) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
         relu_from_pack(base, count);
 #else
@@ -155,13 +156,13 @@ struct FPUFusion {};
 
 // Compile-time geometry, so the strategy can unroll and the DST budget is
 // checkable with a static_assert.
-template <int OutSubblockH, int OutSubblockW, int In0BlockW, int NumBlocks>
+template <uint32_t OutSubblockH, uint32_t OutSubblockW, uint32_t In0BlockW, uint32_t NumBlocks>
 struct MatmulGeometry {
-    static constexpr int out_subblock_h = OutSubblockH;
-    static constexpr int out_subblock_w = OutSubblockW;
-    static constexpr int in0_block_w = In0BlockW;
-    static constexpr int num_blocks = NumBlocks;
-    static constexpr int out_subblock_num_tiles = OutSubblockH * OutSubblockW;
+    static constexpr uint32_t out_subblock_h = OutSubblockH;
+    static constexpr uint32_t out_subblock_w = OutSubblockW;
+    static constexpr uint32_t in0_block_w = In0BlockW;
+    static constexpr uint32_t num_blocks = NumBlocks;
+    static constexpr uint32_t out_subblock_num_tiles = OutSubblockH * OutSubblockW;
 };
 
 template <typename Geometry, typename Chain>
@@ -170,8 +171,8 @@ struct MatmulNode {
     using geometry = Geometry;
     using chain = Chain;
 
-    int in0_cb;
-    int in1_cb;
+    uint32_t in0_cb;
+    uint32_t in1_cb;
 };
 
 // ---------------------------------------------------------------------------
@@ -251,14 +252,14 @@ struct Strategy;
 template <>
 struct Strategy<SFPUFusion> {
     template <typename Node>
-    static void run(const Node& node, int cb_id, int num_tiles) {
+    static void run(const Node& node, uint32_t cb_id, uint32_t num_tiles) {
         static_assert(
             expr::need_v<Node> <= kMaxDstTiles,
             "SFPU expression needs more DST slots than the hardware has; "
             "split it across an intermediate Storage");
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
         cb_reserve_back(cb_id, num_tiles);
-        for (int i = 0; i < num_tiles; ++i) {
+        for (uint32_t i = 0; i < num_tiles; ++i) {
             ckernel::tile_regs_acquire();
             expr::emit(node, i);
             ckernel::tile_regs_commit();
@@ -280,14 +281,14 @@ struct Strategy<SFPUFusion> {
 template <>
 struct Strategy<FPUFusion> {
     template <typename Node>
-    static void run(const Node& node, int cb_id, int /*num_tiles*/) {
+    static void run(const Node& node, uint32_t cb_id, uint32_t /*num_tiles*/) {
         using G = typename Node::geometry;
         static_assert(
             G::out_subblock_num_tiles <= kMaxDstTiles,
             "matmul out_subblock_h * out_subblock_w exceeds the DST register file");
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
         using Chain = typename Node::chain;
-        for (int block = 0; block < G::num_blocks; ++block) {
+        for (uint32_t block = 0; block < G::num_blocks; ++block) {
             const bool last_out = (block == G::num_blocks - 1);
             ckernel::tile_regs_acquire();
             // matmul_block self-increments dst_index from 0, so the whole
