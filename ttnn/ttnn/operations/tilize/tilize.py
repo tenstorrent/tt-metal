@@ -27,7 +27,9 @@ from .tilize_program_descriptor import (
     DEFAULT_TILE_HEIGHT,
     LEGACY_SHARD_SCHEMES,
     TILE_WIDTH,
+    auto_padded_shape,
     create_program_descriptor,
+    pad_plan,
     plan_placement,
     tile_geometry,
 )
@@ -247,6 +249,19 @@ INPUT_TAGGERS = {
 #                            depth2_fits_l1 else 1`.
 
 #
+# Refinement 5 (P1 + P2 + P4 + P5) — the padded path. Four axes flip, behind ONE
+# CT-selected reader body (`pad_enabled`), never four features:
+#   pad_mode   += auto, explicit  auto tile-rounds the last two dims; explicit
+#                            honours any tile-multiple target, including one
+#                            BEYOND the tile-rounded shape (whole pad tiles).
+#   pad_value  += zero/positive/negative — the SIGN buckets exist to catch a
+#                            fill written once instead of replicated across the
+#                            32-bit store word (`pad_fill_word`).
+#   alignment  += w/h/hw_non_aligned — the pad is what makes them legal at all;
+#                            without a pad argument they still RAISE.
+#   rank       += 0          the scalar -> one tile case, reachable only with a
+#                            pad (its tile dims are synthesized by the target).
+#
 # Refinement 2 (A3 + A3b + A3d + A5c) — sharded placement. Three axes flip, and
 # the mechanism behind them is `plan_placement()` in the program descriptor:
 #   shard_api   += legacy_2d, nd  both APIs project onto one ShardSpec view.
@@ -270,10 +285,12 @@ SUPPORTED = {
         "nd",
     ],
     "buffer": ["dram_to_dram", "dram_to_l1", "l1_to_l1", "l1_to_dram"],
-    "rank": [2, 3, 4, 5],
-    "pad_mode": ["none"],
-    "pad_value": ["none"],
-    "alignment": ["tile_aligned"],
+    # Rank 0 is padding-only (a scalar has no tile dims of its own), so it
+    # arrives with the pad axes below rather than with Refinement 1's rank flip.
+    "rank": [0, 2, 3, 4, 5],
+    "pad_mode": ["none", "auto", "explicit"],
+    "pad_value": ["none", "zero", "positive", "negative"],
+    "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned", "hw_non_aligned"],
     "orientation": ["none", ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
     "tile_height": [DEFAULT_TILE_HEIGHT],
     "in_layout": [ttnn.ROW_MAJOR_LAYOUT],
@@ -443,12 +460,24 @@ def validate(
     #    it is a relation between the two specs and the shape rather than a value
     #    of either. `plan_placement` is the same function the descriptor builds
     #    from, so a refusal here can never disagree with what the op can do.
-    _check_placement(input_tensor, out_memory_config, tile_height)
+    _check_placement(
+        input_tensor,
+        out_memory_config,
+        tile_height,
+        pad_plan(
+            list(input_tensor.shape),
+            tile_height,
+            output_padded_shape,
+            pad_value,
+            input_tensor.dtype,
+            input_tensor.element_size(),
+        ),
+    )
 
     return scenario, axes
 
 
-def _check_placement(input_tensor, out_memory_config, tile_height):
+def _check_placement(input_tensor, out_memory_config, tile_height, pad=None):
     """Refuse a shard geometry neither placement mechanism can address.
 
     Every sharded cell in the golden TARGET is either same-spec (zero-copy on
@@ -459,7 +488,9 @@ def _check_placement(input_tensor, out_memory_config, tile_height):
     indexing would silently read the wrong bytes.
     """
     elem_size = input_tensor.element_size()
-    shape = list(input_tensor.shape)
+    in_shape = list(input_tensor.shape)
+    pad_enabled = bool(pad is not None and pad["enabled"])
+    shape = list(pad["padded_shape"]) if pad_enabled else in_shape
     nt_h, Wt, _, _ = tile_geometry(shape, tile_height)
     in_tile_bytes = tile_height * TILE_WIDTH * elem_size
     plan = plan_placement(
@@ -471,6 +502,8 @@ def _check_placement(input_tensor, out_memory_config, tile_height):
         nt_h=nt_h,
         in_tile_bytes=in_tile_bytes,
         out_tile_bytes=in_tile_bytes,  # only the RESIDENT/STREAMED choice matters here
+        in_shape=in_shape,
+        pad_enabled=pad_enabled,
     )
     if plan["error"] is not None:
         raise UnsupportedAxisValue(plan["error"])
@@ -509,6 +542,8 @@ def tilize(
         dtype=dtype,
         use_multicore=use_multicore,
         use_double_buffer=use_double_buffer,
+        output_padded_shape=output_padded_shape,
+        pad_value=pad_value,
         tile=tile,
     )
 
@@ -520,6 +555,8 @@ def _dispatch(
     dtype=None,
     use_multicore=True,
     use_double_buffer=True,
+    output_padded_shape=None,
+    pad_value=None,
     tile=None,
     levers=None,
 ):
@@ -537,8 +574,30 @@ def _dispatch(
     out_dtype = dtype if dtype is not None else input_tensor.dtype
     tile_height = int(list(tile.tile_shape)[0]) if tile is not None else DEFAULT_TILE_HEIGHT
 
+    pad = pad_plan(
+        list(input_tensor.shape),
+        tile_height,
+        output_padded_shape,
+        pad_value,
+        input_tensor.dtype,
+        input_tensor.element_size(),
+    )
+
+    # The op's contract (op_design.md §8.3, risk 7): the LOGICAL shape stays the
+    # input's; only the PADDED shape becomes the pad target. Two ways to say
+    # that, and the first covers every cell whose target is the natural tile
+    # rounding of the logical shape — a TILE tensor allocated at the logical
+    # shape ALREADY has that padded shape, so no view is needed and the sharded
+    # padded topologies never go near a reshape. The second is for a target that
+    # exceeds the tile rounding (`50 -> 128`, the whole-pad-tile case): allocate
+    # the buffer the target needs, then take a zero-cost view that keeps the
+    # logical shape (`ttnn.reshape(t, logical, padded)`, same buffer address).
+    logical_shape = pad["logical_shape"] if pad is not None else list(input_tensor.shape)
+    padded_shape = pad["padded_shape"] if pad is not None else None
+    needs_view = padded_shape is not None and auto_padded_shape(logical_shape, tile_height) != padded_shape
+
     output_tensor = ttnn.allocate_tensor_on_device(
-        ttnn.Shape(list(input_tensor.shape)),
+        ttnn.Shape(padded_shape if needs_view else logical_shape),
         out_dtype,
         ttnn.TILE_LAYOUT,
         device,
@@ -551,6 +610,10 @@ def _dispatch(
         use_multicore=use_multicore,
         use_double_buffer=use_double_buffer,
         tile_height=tile_height,
+        pad=pad,
         levers=levers,
     )
-    return ttnn.generic_op([input_tensor, output_tensor], program_descriptor)
+    result = ttnn.generic_op([input_tensor, output_tensor], program_descriptor)
+    if needs_view:
+        result = ttnn.reshape(result, ttnn.Shape(logical_shape), ttnn.Shape(padded_shape))
+    return result

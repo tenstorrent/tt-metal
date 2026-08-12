@@ -31,6 +31,7 @@ degenerates to the pure width split and still fills the grid.
 from pathlib import Path
 
 import math
+import struct
 
 import ttnn
 from ttnn.operations._op_contract import UnsupportedAxisValue
@@ -294,6 +295,125 @@ def tile_geometry(shape, tile_height: int):
     nt_h = nimg * (Hp // tile_height)
     Wt = Wp // TILE_WIDTH
     return nt_h, Wt, Hp, Wp
+
+
+# ---------------------------------------------------------------------------
+# Pad plan (Refinement 5 — the padded path, op_design.md §8.3)
+# ---------------------------------------------------------------------------
+#
+# Padding changes exactly TWO things and nothing else:
+#   (a) the GEOMETRY the whole op is blocked over becomes the PADDED shape (the
+#       output's tile grid is the pad target's, not the input's), and
+#   (b) the reader gains a CT-selected second body that fills the pad positions
+#       in L1 before reading the real sub-rectangle over the top.
+# Everything downstream — blocking, core split, CBs, compute, writer — is
+# unchanged and unaware, because it only ever sees the padded tile grid.
+#
+# `pad_plan` is the ONE place a `(output_padded_shape, pad_value)` pair becomes
+# numbers, so validate(), the output allocation and the kernel args can never
+# disagree about which cell a padded call lands in.
+
+_FLOAT_DTYPES = (ttnn.bfloat16, ttnn.float32)
+
+
+def auto_padded_shape(shape, tile_height: int = DEFAULT_TILE_HEIGHT):
+    """The padded shape `pad_mode="auto"` implies: the last two dims rounded UP
+    to the tile grid, everything else untouched.
+
+    Degenerate ranks SYNTHESIZE their tile dims rather than rounding them (a
+    scalar has no tile dims of its own): rank 0 -> one tile, rank 1 -> one
+    tile-row. `tile_height` (not a hardcoded 32) drives the H axis so a tiny-tile
+    call rounds to the tile it actually asked for.
+    """
+    shape = list(shape)
+    if len(shape) == 0:
+        return [tile_height, TILE_WIDTH]
+    if len(shape) == 1:
+        return [tile_height, _round_up(shape[0], TILE_WIDTH)]
+    out = list(shape)
+    out[-2] = _round_up(out[-2], tile_height)
+    out[-1] = _round_up(out[-1], TILE_WIDTH)
+    return out
+
+
+def _f32_to_bf16_bits(bits: int) -> int:
+    """fp32 bit pattern -> bf16 bit pattern, round-to-nearest-EVEN.
+
+    RNE, not truncation, because the oracle materializes the fill with torch's
+    own float->bfloat16 conversion; a truncating pack differs from it by one ulp
+    on half the fill values and shows up as a nonzero-fill-only mismatch.
+    """
+    lsb = (bits >> 16) & 1
+    return ((bits + 0x7FFF + lsb) >> 16) & 0xFFFF
+
+
+def pad_fill_word(value, dtype, elem_size: int) -> int:
+    """The 32-bit L1 store word the reader writes into pad positions.
+
+    Two rules, both of them the bug the golden `pad_value` sign buckets exist to
+    catch (op_design.md §8.3, risks 5 and 6):
+
+      - packed in the INPUT element format, never the output's. A `dtype=` cast
+        happens later, at pack time, on data that already carries the fill.
+      - REPLICATED across the whole 32-bit word (2x for bf16/uint16, 4x for
+        uint8, 1x for fp32/uint32). The reader stores words, so a fill written
+        once leaves every other pad element stale — invisible at pad_value=0.0
+        and garbage on any nonzero fill.
+
+    A negative integer fill goes through the two's-complement mask, which is the
+    signed->unsigned bit_cast the design names.
+    """
+    mask = (1 << (8 * elem_size)) - 1
+    if dtype in _FLOAT_DTYPES:
+        f32 = struct.unpack("<I", struct.pack("<f", float(value)))[0]
+        raw = _f32_to_bf16_bits(f32) if elem_size == 2 else f32
+    else:
+        raw = int(value)
+    raw &= mask
+    word = 0
+    for k in range(max(1, 4 // elem_size)):
+        word |= raw << (8 * elem_size * k)
+    return word & 0xFFFFFFFF
+
+
+def pad_plan(input_shape, tile_height: int, output_padded_shape, pad_value, dtype, elem_size: int):
+    """Resolve a padded call into the numbers the op needs, or None.
+
+    Returns None when the caller asked for no padding at all (the Track A hot
+    path — `pad` stays None all the way down and every branch below is dead
+    code the compiler never sees).
+
+    `enabled` is the CT flag: it is False for a *degenerate* pad — `pad_mode=
+    "auto"` on an already-aligned input, where the target equals the input shape
+    — so that cell takes the aligned reader byte-for-byte rather than a pad
+    reader that happens to fill nothing. That is what makes "the aligned path is
+    unchanged" structural rather than a convention.
+    """
+    if output_padded_shape is None and pad_value is None:
+        return None
+    padded = (
+        [int(d) for d in output_padded_shape]
+        if output_padded_shape is not None
+        else auto_padded_shape(input_shape, tile_height)
+    )
+    # rank 0/1 have no tile dims of their own; the pad target supplies them, so
+    # the logical view is left-expanded with 1s to meet it.
+    logical = [int(d) for d in input_shape]
+    if len(logical) < len(padded):
+        logical = [1] * (len(padded) - len(logical)) + logical
+    return {
+        "padded_shape": padded,
+        "logical_shape": logical,
+        "enabled": padded != logical,
+        "pad_word": pad_fill_word(pad_value if pad_value is not None else 0, dtype, elem_size),
+        # Reader-side geometry. `hp` is the PADDED rows per image and `h_real`
+        # the real ones, so a row is real iff `img < nimg_real and row < h_real`
+        # — which covers the H tail and whole pad tile-ROWS with one test.
+        "hp": padded[-2],
+        "h_real": logical[-2],
+        "nimg_real": math.prod(logical[:-2]),
+        "real_row_bytes": logical[-1] * elem_size,
+    }
 
 
 def blocking(
@@ -567,23 +687,55 @@ def plan_placement(
     cb_budget_bytes: int | None = None,
     force_streamed: bool = False,
     reshard_pull: "bool | None" = None,
+    in_shape=None,
+    pad_enabled: bool = False,
 ):
     """Choose RESIDENT / STREAMED per side. Pure — no tensors, no device.
 
     Returns a dict with `mode`, `wt_block` (None = use the byte-target clamp),
     the shard geometry the core planner needs, and `error` (a support-gap
     message) when neither mechanism can address the call.
+
+    `shape` is the OUTPUT (padded) tile grid — that is what the blocking and the
+    output shards are stated in. `in_shape` is the input's own logical shape,
+    which differs only on the padded path and is what the READ side is stated in
+    (its pages are real rows of real width). They are the same object off the
+    pad path, so nothing before Refinement 5 can notice the split.
     """
+    in_shape = shape if in_shape is None else in_shape
     in_sharded = in_memory_config.is_sharded()
     out_sharded = out_memory_config.is_sharded()
-    in_res = None if force_streamed else shard_residency(in_memory_config, tile_height=tile_height)
+    # A padded call can never consume the INPUT shard in place: the pad
+    # positions live inside the block, and a resident reader would have to write
+    # the fill into the CALLER'S OWN input tensor to place them. So padding
+    # disqualifies input residency (never output residency — an output tile is
+    # whole, and compute packs the fill into it like any other datum).
+    no_resident_in = force_streamed or pad_enabled
+    in_res = None if no_resident_in else shard_residency(in_memory_config, tile_height=tile_height)
     out_res = None if force_streamed else shard_residency(out_memory_config, tile_height=tile_height)
 
     # The read side's page geometry (R4). `in_tile_bytes` is by construction
     # `tile_height * TILE_WIDTH * elem_size`, so it carries the element size
     # without a second parameter that could disagree with it.
     elem_size = max(1, in_tile_bytes // (tile_height * TILE_WIDTH))
-    bands = source_bands(in_memory_config, shape[-1] if len(shape) else 1, elem_size)
+    bands = source_bands(in_memory_config, in_shape[-1] if len(in_shape) else 1, elem_size)
+    if pad_enabled and bands is not None and bands[0] > 1:
+        # The padded reader assembles each stick from ONE source page (it has to
+        # clamp the read at the real row width); a banded source would need the
+        # clamp applied per segment. Nothing in TARGET reaches this — a padded
+        # cell whose input shard is narrower than a row — so it is refused
+        # rather than guessed at.
+        return {
+            "mode": None,
+            "wt_block": None,
+            "shard": None,
+            "sharded_side": None,
+            "bands": None,
+            "error": (
+                "tilize: a padded call cannot read a source sharded narrower than a row "
+                f"({bands[0]} bands per row) — the pad clamp is stated per source page"
+            ),
+        }
 
     def _plan(mode, wt_block=None, shard=None, sharded_side=None):
         return {
@@ -656,8 +808,9 @@ def plan_placement(
         if nt_h % nt_h_shard or Wt % wt_shard:
             continue
         # This mode places the shard at a POSITION in the global linearization,
-        # so the shard must be one contiguous run of folded tile-rows.
-        if not shard_folds_contiguously(mc, shape):
+        # so the shard must be one contiguous run of folded tile-rows. Each side
+        # is measured against the shape IT is stated in (see `in_shape` above).
+        if not shard_folds_contiguously(mc, in_shape if side == "in" else shape):
             continue
         n_sh_rows = nt_h // nt_h_shard
         n_sh_cols = Wt // wt_shard
@@ -881,6 +1034,7 @@ def create_program_descriptor(
     use_multicore: bool = True,
     use_double_buffer: bool = True,
     tile_height: int = DEFAULT_TILE_HEIGHT,
+    pad=None,
     levers=None,
 ) -> ttnn.ProgramDescriptor:
     device = input_tensor.device()
@@ -888,7 +1042,14 @@ def create_program_descriptor(
 
     # ---------- 1. geometry + the block knobs ----------
     elem_size = input_tensor.element_size()
-    shape = list(input_tensor.shape)
+    # R5: the op is blocked over the OUTPUT's tile grid, which on a padded call
+    # is the pad target rather than the input's own shape. `in_shape` stays the
+    # input's, because the READ side addresses real rows of real width. Off the
+    # pad path the two are the same list and every expression below is
+    # byte-identical to Phase 0's.
+    in_shape = list(input_tensor.shape)
+    pad_enabled = bool(pad is not None and pad["enabled"])
+    shape = list(pad["padded_shape"]) if pad_enabled else in_shape
 
     # One tile-column of one stick. The reader derives its per-block transfer
     # size as `w * tile_row_bytes`, so the block width is never restated.
@@ -937,6 +1098,8 @@ def create_program_descriptor(
         cb_budget_bytes=cb_budget_bytes(unreserved_bytes, interleaved_l1_bytes),
         force_streamed=bool(lv["force_streamed"]),
         reshard_pull=_knob("reshard_pull"),
+        in_shape=in_shape,
+        pad_enabled=pad_enabled,
     )
     if plan["error"] is not None:
         # A support gap, not a contract violation: validate() raises the same
@@ -1069,6 +1232,7 @@ def create_program_descriptor(
                 use_multicore=use_multicore,
                 use_double_buffer=use_double_buffer,
                 tile_height=tile_height,
+                pad=pad,
                 levers=dict(lv, force_streamed=1),
             )
         boxes_per_core = boxes
@@ -1120,6 +1284,15 @@ def create_program_descriptor(
         int(_knob("stagger_reads")),
         n_bands,  # R4: source pages per row (1 = whole-row pages, the Phase-0 path)
         band_bytes,  # R4: bytes per source page
+        # R5 (P1/P2/P4/P5): the pad body's CT selector and its four geometry
+        # terms. `pad_enabled == 0` erases the whole body, so Track A is
+        # unchanged structurally rather than by convention.
+        int(pad_enabled),
+        pad["pad_word"] if pad_enabled else 0,
+        pad["hp"] if pad_enabled else tile_height,  # padded rows per image
+        pad["h_real"] if pad_enabled else tile_height,  # real rows per image
+        pad["nimg_real"] if pad_enabled else 1,  # real images
+        pad["real_row_bytes"] if pad_enabled else tile_row_bytes,  # real bytes per stick
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 

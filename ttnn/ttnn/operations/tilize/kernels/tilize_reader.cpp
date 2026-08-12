@@ -39,6 +39,26 @@
 // helper remains the emitted code on the whole-row path (`n_bands == 1`), which
 // is every pre-R4 shape, byte for byte.
 //
+// `pad_enabled == 1` (Refinement 5, P1/P2/P4/P5) is the FOURTH production path:
+// the output's tile grid is a PAD TARGET larger than the input, so a block can
+// contain positions no input byte maps to. It is a CT-selected second body —
+// at `pad_enabled == 0` the compiler emits none of it, which is what makes
+// "the aligned path is unchanged" structural rather than a convention.
+//
+// HELPER SUBSTITUTION, declared (Refinement 5): only the BOUNDARY blocks of the
+// pad body are hand-written; a fully-interior block still calls
+// `read_sticks_for_tilize` (see the arm below). Neither of the two kernel_lib
+// candidates can serve a boundary block. `l1_helpers.hpp::zero_tile` writes only
+// ZEROS through the NoC's write-zeros engine, and the whole point of the
+// `pad_value` sign buckets is an ARBITRARY fill. `read_sticks_for_tilize` leaves
+// the pad region as STALE L1 (its own doc says so: "untouched rows contain stale
+// data"), and it derives its L1 row stride from the bytes it is asked to read —
+// `round_up(row_bytes, tile_row_bytes)` — which is the block width only when the
+// block ends at the real data; a block that extends into whole pad tile-COLUMNS
+// (`[1,1,32,50] -> [1,1,32,128]`) would get a 2-tile stride for a 4-tile block
+// and scatter the sticks. So the fill is a plain L1 store loop (no NoC traffic
+// at all) and the clamped read is `noc_async_read` + `get_noc_addr(page, off)`.
+//
 // HELPER SUBSTITUTION, declared (Refinement 3): `stagger_reads == 1` issues the
 // same `tile_h` reads to the same L1 destinations in a ROTATED order, and
 // `read_sticks_for_tilize` cannot express that — it walks `start_page ..
@@ -51,6 +71,33 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.hpp"
+
+// Fill `bytes` of L1 at `addr` with `pad_word` (op_design.md §8.3's fill).
+//
+// `pad_word` is the fill value already replicated across the 32-bit word by the
+// host (`pad_fill_word`), so the fast path is a word-store loop. The unaligned
+// head/tail exist because a region can start at the real row WIDTH, which is a
+// multiple of the element size but need not be a multiple of 4 (e.g. an odd W
+// at bf16, or any W at uint8). The element size always DIVIDES 4, so the word
+// repeats with a period that divides 4 and byte `A` of the fill is
+// `pad_word >> ((A & 3) * 8)` — the phase is carried by the address itself.
+FORCE_INLINE void fill_pad_region(uint32_t addr, uint32_t bytes, uint32_t pad_word) {
+    const uint32_t end = addr + bytes;
+    while (addr < end && (addr & 3u) != 0u) {
+        *reinterpret_cast<volatile tt_l1_ptr uint8_t*>(addr) = (pad_word >> ((addr & 3u) * 8)) & 0xFFu;
+        ++addr;
+    }
+    volatile tt_l1_ptr uint32_t* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr);
+    const uint32_t n_words = (end - addr) >> 2;
+    for (uint32_t i = 0; i < n_words; ++i) {
+        words[i] = pad_word;
+    }
+    addr += n_words << 2;
+    while (addr < end) {
+        *reinterpret_cast<volatile tt_l1_ptr uint8_t*>(addr) = (pad_word >> ((addr & 3u) * 8)) & 0xFFu;
+        ++addr;
+    }
+}
 
 void kernel_main() {
     constexpr uint32_t cb_input_sticks = get_compile_time_arg_val(0);
@@ -66,7 +113,13 @@ void kernel_main() {
     constexpr uint32_t stagger_reads = get_compile_time_arg_val(10);     // lever R3/A3 (1 = on)
     constexpr uint32_t n_bands = get_compile_time_arg_val(11);           // R4: source pages per row
     constexpr uint32_t band_bytes = get_compile_time_arg_val(12);        // R4: bytes per source page
-    constexpr auto src_args = TensorAccessorArgs<13>();
+    constexpr uint32_t pad_enabled = get_compile_time_arg_val(13);       // R5: the pad body (1 = on)
+    constexpr uint32_t pad_word = get_compile_time_arg_val(14);          // R5: fill, input format, replicated
+    constexpr uint32_t pad_hp = get_compile_time_arg_val(15);            // R5: PADDED rows per image
+    constexpr uint32_t pad_h_real = get_compile_time_arg_val(16);        // R5: REAL rows per image
+    constexpr uint32_t pad_nimg = get_compile_time_arg_val(17);          // R5: REAL images
+    constexpr uint32_t pad_row_bytes = get_compile_time_arg_val(18);     // R5: REAL bytes per stick
+    constexpr auto src_args = TensorAccessorArgs<19>();
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t b0 = get_arg_val<uint32_t>(1);
@@ -98,7 +151,80 @@ void kernel_main() {
         const uint32_t row_bytes = w * tile_row_bytes;
         const uint32_t byte_offset = wchunk * wt_block * tile_row_bytes;
 
-        if constexpr (n_bands > 1) {
+        if constexpr (pad_enabled == 1) {
+            // R5 (P1/P2/P4/P5) PADDED READER — one body, all three pad regions.
+            //
+            // The block's `tile_h` output rows are the padded rows
+            // `[g0, g0+tile_h)` of the padded grid. Because `pad_hp` is a whole
+            // number of tile-rows, every row of a block belongs to the SAME
+            // image, so the real/pad split is two scalars per block:
+            //   real_rows  — rows of this block that exist in the input
+            //                (0 when the block is a whole pad tile-ROW, or when
+            //                 the image itself is past the input's batch)
+            //   real_bytes — bytes of a real row that exist in the input
+            //                (0 when the block is a whole pad tile-COLUMN)
+            // Their three complements ARE the three pad regions: the H tail and
+            // whole pad tile-rows are `rows >= real_rows`; the W tail and whole
+            // pad tile-columns are `bytes >= real_bytes` of a real row.
+            const uint32_t g0 = r * tile_h;
+            const uint32_t img = g0 / pad_hp;
+            const uint32_t row0 = g0 - img * pad_hp;
+            uint32_t real_rows = 0;
+            if (img < pad_nimg && row0 < pad_h_real) {
+                real_rows = pad_h_real - row0;
+                if (real_rows > tile_h) {
+                    real_rows = tile_h;
+                }
+            }
+            uint32_t real_bytes = 0;
+            if (byte_offset < pad_row_bytes) {
+                real_bytes = pad_row_bytes - byte_offset;
+                if (real_bytes > row_bytes) {
+                    real_bytes = row_bytes;
+                }
+            }
+            // Source stick of output row `g0+s`: the input's rows are dense, so
+            // the padded row index has to be projected back onto them.
+            const uint32_t start_page = img * pad_h_real + row0;
+
+            if (real_rows == tile_h && real_bytes == row_bytes) {
+                // Fully interior block — no pad position in it at all, so it is
+                // the aligned path verbatim, helper and all. This is the common
+                // case (a pad touches only the last tile-row / tile-column), and
+                // it is why a padded call costs the fill only where it must.
+                dataflow_kernel_lib::read_sticks_for_tilize<cb_input_sticks>(
+                    src,
+                    /*total_num_rows*/ tile_h,
+                    /*row_bytes*/ row_bytes,
+                    /*start_page*/ start_page,
+                    /*byte_offset_within_page*/ byte_offset);
+            } else {
+                cb_reserve_back(cb_input_sticks, w);
+                const uint32_t l1_base = get_write_ptr(cb_input_sticks);
+                // Region A — whole pad rows (H tail + whole pad tile-rows).
+                fill_pad_region(l1_base + real_rows * row_bytes, (tile_h - real_rows) * row_bytes, pad_word);
+                // Region B — the tail of each real row (W tail + whole pad
+                // tile-columns, where `real_bytes == 0` and the row is all fill).
+                if (real_bytes < row_bytes) {
+                    for (uint32_t s = 0; s < real_rows; ++s) {
+                        fill_pad_region(l1_base + s * row_bytes + real_bytes, row_bytes - real_bytes, pad_word);
+                    }
+                }
+                // The real sub-rectangle, read into the region the fill left for
+                // it — DISJOINT from both fills, so a store can never land on a
+                // byte an in-flight read owns. Still ONE barrier per block (B7).
+                if (real_bytes > 0) {
+                    for (uint32_t s = 0; s < real_rows; ++s) {
+                        if constexpr (stub_read == 0) {
+                            noc_async_read(
+                                src.get_noc_addr(start_page + s, byte_offset), l1_base + s * row_bytes, real_bytes);
+                        }
+                    }
+                }
+                noc_async_read_barrier();
+                cb_push_back(cb_input_sticks, w);
+            }
+        } else if constexpr (n_bands > 1) {
             // R4 (A3c) CROSS-SPEC RESHARD — the PULL gather.
             //
             // The source is sharded NARROWER than a row, so its pages are bands:
