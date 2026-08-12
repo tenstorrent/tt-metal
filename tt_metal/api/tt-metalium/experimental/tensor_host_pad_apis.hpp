@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/experimental/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
 #include <tt-metalium/shape.hpp>
 
 namespace tt::tt_metal {

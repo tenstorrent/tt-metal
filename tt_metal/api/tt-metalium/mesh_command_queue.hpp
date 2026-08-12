@@ -30,7 +30,10 @@
 #include <tt-metalium/vector_aligned.hpp>
 
 namespace tt::tt_metal {
+class HostTensor;
 class IDevice;
+class MemoryConfig;
+class MeshTensor;
 class SystemMemoryManager;
 class WorkerConfigBufferMgr;
 namespace distributed {
@@ -160,6 +163,15 @@ public:
 #elif defined(__GNUC__)
 #pragma GCC diagnostic pop
 #endif
+
+    // MeshTensor Read/Write APIs
+    tt::tt_metal::HostTensor enqueue_read_tensor(const tt::tt_metal::MeshTensor& device_tensor, bool blocking = true);
+    void enqueue_read_tensor(
+        const tt::tt_metal::MeshTensor& device_tensor, tt::tt_metal::HostTensor& host_tensor, bool blocking = true);
+    tt::tt_metal::MeshTensor enqueue_write_tensor(const tt::tt_metal::HostTensor& host_tensor);
+    tt::tt_metal::MeshTensor enqueue_write_tensor(
+        const tt::tt_metal::HostTensor& host_tensor, const tt::tt_metal::MemoryConfig& memory_config);
+    void enqueue_write_tensor(const tt::tt_metal::HostTensor& host_tensor, tt::tt_metal::MeshTensor& device_tensor);
 
     virtual MeshEvent enqueue_record_event(
         ttsl::Span<const SubDeviceId> sub_device_ids = {},

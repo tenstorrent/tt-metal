@@ -274,6 +274,16 @@ void kernel_main() {
                             }
 
                             if constexpr (is_row_major) {
+                                // pack_untilize_init already calls llk_pack_reconfig_data_format
+                                // internally, so a pack_reconfig_data_format call here would be a
+                                // no-op.  What is actually needed — and what pack_untilize_init
+                                // does not provide — is a full-word PCK_DEST_RD_CTRL reset
+                                // (llk_pack_hw_configure) and a W-counter / dest-offset reset
+                                // (llk_pack_dest_init) to clear the state left by the preceding
+                                // index pack_tile.  There is no public API for just those two
+                                // things yet, so compute_kernel_hw_startup is used as a workaround.
+                                compute_kernel_hw_startup(
+                                    input_tensor_cb_id, index_tensor_cb_id, rm_output_value_cb_id);
                                 // Untilize the 2 sorted tiles into TILE_H pair-rows,
                                 // matching the reader's pair-row input CB layout.
                                 // block_ct_dim=2, block_rt_dim=1 → TILE_H rows of
@@ -287,9 +297,14 @@ void kernel_main() {
                                 input_tensor_output_dfb.pop_front(2);
                                 rm_output_value_dfb.push_back(TILE_H);
                                 pack_untilize_uninit(rm_output_value_cb_id);
+                                // Reconfig the packer to the index-output format before the index
+                                // untilize. The output operand must be the untilize DESTINATION
+                                // (rm_output_index_cb_id), not its source (index_tensor_output_cb_id):
+                                // those two happen to share a data format today, so passing the
+                                // source only works by coincidence.
                                 // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
                                 compute_kernel_hw_startup(
-                                    rm_input_index_cb_id, rm_input_index_cb_id, index_tensor_output_cb_id);
+                                    rm_input_index_cb_id, rm_input_index_cb_id, rm_output_index_cb_id);
 
                                 pack_untilize_init<2>(index_tensor_output_cb_id, rm_output_index_cb_id);
                                 index_tensor_output_dfb.wait_front(2);

@@ -48,8 +48,6 @@ on:
           - llama3_90b_vision
           - llama3_70b
           - resnet50
-          - sd35_large
-          - flux1-dev
           - motif
           - mixtral
           - whisper
@@ -66,9 +64,7 @@ on:
           - disabled
           - all
           - resnet50
-          - stable_diffusion_35_large
           - mochi
-          - flux1-dev
           - motif
       t3000-integration:
         description: "Integration tests: Select 'all', specific model or 'disabled'"
@@ -81,8 +77,6 @@ on:
           - ethernet
           - trace stress
           - resnet
-          - sd35_large
-          - flux1
           - motif
           - mochi
           - deepseek-modules

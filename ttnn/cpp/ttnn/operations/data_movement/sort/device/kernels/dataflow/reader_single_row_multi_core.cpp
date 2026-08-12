@@ -157,45 +157,65 @@ void kernel_main() {
                                         rm_input_value_dfb.push_back(one_tile);
                                     }
                                 } else {
+                                    // Stage all TILE_H pair-rows under one reserve and drain them
+                                    // with a single barrier. A barrier per row serialises a full
+                                    // DRAM round-trip for every pair-row page; batching lets the
+                                    // 2 * TILE_H half-row reads overlap instead.
+                                    //
+                                    // This costs no pipelining: the CB holds exactly TILE_H pages
+                                    // and the compute kernel consumes them as one
+                                    // wait_front(TILE_H)/pop_front(TILE_H), so it could never start
+                                    // on a partially-filled run anyway. Entries form a contiguous
+                                    // run from the write pointer because the entry count is a
+                                    // multiple of TILE_H (a CB pointer resets only on exact
+                                    // equality with the limit, so a block never straddles the end);
+                                    // consecutive entries are get_stride_size() apart, which is the
+                                    // entry size on tt-1xx but not necessarily under a strided
+                                    // multi-producer layout, hence the query.
+                                    ASSERT(rm_input_value_dfb.get_total_num_entries() % TILE_H == 0);
+                                    const uint32_t value_stride = rm_input_value_dfb.get_stride_size();
+                                    rm_input_value_dfb.reserve_back(TILE_H);
                                     for (uint32_t row = 0; row < TILE_H; row++) {
-                                        rm_input_value_dfb.reserve_back(one_tile);
                                         noc.async_read(
                                             input_tensor_addr_gen,
                                             rm_input_value_dfb,
                                             W_tile_bytes,
                                             {.page_id = row_base + row,
                                              .offset_bytes = static_cast<uint32_t>(left_tile_id * W_tile_bytes)},
-                                            {.offset_bytes = 0});
+                                            {.offset_bytes = row * value_stride});
                                         noc.async_read(
                                             input_tensor_addr_gen,
                                             rm_input_value_dfb,
                                             W_tile_bytes,
                                             {.page_id = row_base + row,
                                              .offset_bytes = static_cast<uint32_t>(right_tile_id * W_tile_bytes)},
-                                            {.offset_bytes = W_tile_bytes});
-                                        noc.async_read_barrier();
-                                        rm_input_value_dfb.push_back(one_tile);
+                                            {.offset_bytes = row * value_stride + W_tile_bytes});
                                     }
+                                    noc.async_read_barrier();
+                                    rm_input_value_dfb.push_back(TILE_H);
                                 }
+                                // Same batching as the value pair-rows above.
+                                ASSERT(rm_input_index_dfb.get_total_num_entries() % TILE_H == 0);
+                                const uint32_t index_stride = rm_input_index_dfb.get_stride_size();
+                                rm_input_index_dfb.reserve_back(TILE_H);
                                 for (uint32_t row = 0; row < TILE_H; row++) {
-                                    rm_input_index_dfb.reserve_back(one_tile);
                                     noc.async_read(
                                         index_tensor_addr_gen,
                                         rm_input_index_dfb,
                                         W_index_bytes,
                                         {.page_id = row_base + row,
                                          .offset_bytes = static_cast<uint32_t>(left_tile_id * W_index_bytes)},
-                                        {.offset_bytes = 0});
+                                        {.offset_bytes = row * index_stride});
                                     noc.async_read(
                                         index_tensor_addr_gen,
                                         rm_input_index_dfb,
                                         W_index_bytes,
                                         {.page_id = row_base + row,
                                          .offset_bytes = static_cast<uint32_t>(right_tile_id * W_index_bytes)},
-                                        {.offset_bytes = W_index_bytes});
-                                    noc.async_read_barrier();
-                                    rm_input_index_dfb.push_back(one_tile);
+                                        {.offset_bytes = row * index_stride + W_index_bytes});
                                 }
+                                noc.async_read_barrier();
+                                rm_input_index_dfb.push_back(TILE_H);
                             } else {
                                 if constexpr (is_uint16_fp32_mode) {
                                     // UINT16 TILE path: DMA raw UInt16 tile into staging CB, then

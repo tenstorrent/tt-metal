@@ -53,7 +53,7 @@
 #include <fmt/format.h>
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <tt_metal_profiler.hpp>
+#include <tt-metalium/tt_metal_profiler.hpp>
 #include <program.hpp>
 #include "program/program_impl.hpp"
 #include "impl/buffers/semaphore.hpp"
@@ -66,7 +66,7 @@
 #include "common/tt_backend_api_types.hpp"
 #include <experimental/fabric/control_plane.hpp>
 #include "impl/buffers/circular_buffer.hpp"
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <internal/service/service_core_manager.hpp>
 

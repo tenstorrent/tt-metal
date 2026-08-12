@@ -38,21 +38,6 @@
   team: models
   model-name: mochi
 
-# ─── Wan2.2-T2V-A14B ────────────────────────────────────────────────────────
-
-- name: Wan2.2-T2V-A14B BH QuietBox 2 performance
-  cmd: |
-    set -e
-    export HF_HOME=/localdev/blackhole_demos/huggingface_data
-    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
-    pytest models/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "2x2_sp0tp1 and resolution_480p and t2v" --timeout=1200
-  skus:
-    bh_quietbox_2:
-      timeout: 20
-  owner_id: U08TED0JM9D # Samuel Adesoye
-  team: models
-  model-name: wan2.2-t2v-a14b
-
 # ─── Z-Image-Turbo ──────────────────────────────────────────────────────────
 
 - name: Z-Image-Turbo Text Encoder

@@ -108,6 +108,7 @@ it is classified differently on different systems.
 | Panoptic-DeepLab | BH P150 |
 | BEVFormer | BH P150 |
 | Mistral-Small-3.1-24B | WH LLMBox, BH QuietBox 2 |
+| Stable Diffusion 3.5 Large | WH LLMBox |
 
 
 # Pipelines
