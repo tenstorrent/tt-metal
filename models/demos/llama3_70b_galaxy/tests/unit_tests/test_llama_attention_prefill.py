@@ -144,10 +144,6 @@ def test_llama_attention_inference(
 
     pt_attention_input = (torch.rand(batch_size, max_seq_len, model_args.dim) * 2) - 1
     tt_attention_input = pt_attention_input.clone()
-    attention_input = model_args.prepare_residual_tensor_prefill(
-        tt_attention_input,
-        force_replicated=False if model_args.is_galaxy else True,
-    )
 
     from transformers import DynamicCache
 
@@ -159,7 +155,13 @@ def test_llama_attention_inference(
 
     # Run the TT prefill twice: the second iteration exercises the program-cache-hit /
     # runtime-arg-override path (a stale-runtime-args bug on cache hit must fail this test).
+    # forward_prefill deallocates its input, so build a fresh device tensor each iteration
+    # instead of reusing (and re-feeding) a freed buffer.
     for iteration in range(2):
+        attention_input = model_args.prepare_residual_tensor_prefill(
+            tt_attention_input,
+            force_replicated=False if model_args.is_galaxy else True,
+        )
         tt_out = tt_model(
             attention_input,
             current_pos=None,
