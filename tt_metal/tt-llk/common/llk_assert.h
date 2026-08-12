@@ -4,8 +4,6 @@
 
 #pragma once
 
-#include <cstdint>
-
 // Runtime dest-accumulation-mode tracker for assert-only dest-capacity checks.
 // Exists only when ENABLE_LLK_ASSERT is set; production builds never name the
 // symbol. Call sites read via LLK_ASSERT_DEST_ACC_MODE() so the variable is not
@@ -15,12 +13,12 @@
 #ifdef ENABLE_LLK_ASSERT
 // C++17 inline variable: emitted only in TUs that ODR-use it, weak/merged at
 // link; per-thread storage since each TRISC thread is a separate build.
-inline std::uint32_t dst_fp32_acc_en = 0;
-#define LLK_ASSERT_DEST_ACC_MODE() (dst_fp32_acc_en != 0)
+inline bool dst_fp32_acc_en = false;
+#define LLK_ASSERT_DEST_ACC_MODE() (dst_fp32_acc_en)
 #define LLK_ASSERT_SET_DEST_ACC_MODE(enable) \
     do                                       \
     {                                        \
-        dst_fp32_acc_en = (enable);          \
+        dst_fp32_acc_en = static_cast<bool>(enable); \
     } while (0)
 #else
 // Production LLK_ASSERT is ((void)sizeof(cond)) — the condition is unevaluated,

@@ -161,7 +161,7 @@ using namespace ckernel::sfpu;
 // dispatch below via `SfpuType::typecast` (with IN/OUT supplied as the trailing
 // template parameters). Keep this dispatch in lockstep with typecast.h.
 //
-template <DataFormat IN, DataFormat OUT, bool APPROX_MODE>
+template <DataFormat IN, DataFormat OUT, bool APPROX_MODE, bool DST_ACCUM_MODE>
 void call_unary_typecast_operation_init()
 {
     if constexpr (IN == DataFormat::Float32 && OUT == DataFormat::Float16_b)
@@ -641,7 +641,7 @@ void call_unary_sfpu_operation_init()
     else if constexpr (OPERATION == SfpuType::typecast)
     {
         // Typecast selects its concrete init from the (IN, OUT) format pair.
-        call_unary_typecast_operation_init<TYPECAST_IN, TYPECAST_OUT, APPROX_MODE>();
+        call_unary_typecast_operation_init<TYPECAST_IN, TYPECAST_OUT, APPROX_MODE, is_fp32_dest_acc_en>();
     }
     else if constexpr (
         OPERATION == SfpuType::floor || OPERATION == SfpuType::ceil || OPERATION == SfpuType::trunc || OPERATION == SfpuType::frac ||
@@ -1825,7 +1825,7 @@ void call_binary_sfpu_operation(
                 DST_SYNC_MODE,
                 DST_ACCUM_MODE,
                 calculate_sfpu_binary,
-                (APPROXIMATION_MODE, BINOP, PER_FACE_ITERATIONS),
+                (APPROXIMATION_MODE, BINOP, PER_FACE_ITERATIONS, DST_ACCUM_MODE),
                 dst_index_in0,
                 dst_index_in1,
                 dst_index_out,

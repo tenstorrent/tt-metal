@@ -1127,7 +1127,9 @@ def _classify_edge_pair(mathop, a, b):
     if a == 0.0 and b == 0.0:
         return _EDGE_CLASS_BOTH_ZERO
 
-    golden = get_golden_generator(BinarySFPUGolden)
+    # Instantiate directly: get_golden_generator returns a DummyGoldenGenerator
+    # during compile-producer, which has no ops table.
+    golden = BinarySFPUGolden()
     result = float(golden.ops[mathop](torch.tensor(a), torch.tensor(b)))
     if math.isnan(result):
         return _EDGE_CLASS_NAN
