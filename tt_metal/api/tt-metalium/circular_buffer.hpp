@@ -17,10 +17,11 @@ namespace tt::tt_metal {
 using CBHandle = uintptr_t;
 
 class CircularBufferImpl;
-class Program;
 // Note: this class shares the lifetime of it's associated program.
 class CircularBuffer {
 public:
+    explicit CircularBuffer(const CircularBufferImpl* impl);
+
     CBHandle id() const;
     const CoreRangeSet& core_ranges() const;
     std::size_t size() const;
@@ -31,9 +32,6 @@ public:
     const CircularBufferImpl& impl() const;
 
 private:
-    friend class Program;
-    explicit CircularBuffer(const CircularBufferImpl* impl);
-
     const CircularBufferImpl* impl_;
 };
 
