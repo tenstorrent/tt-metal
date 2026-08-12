@@ -138,7 +138,12 @@ FORCE_INLINE void generate_row0_bcast(const uint32_t cb_id, uint16_t bf16_val) {
 template <bool legacy_compat = true>
 ALWI void sampling_recip_tile_scalar(uint32_t idst) {
     SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sampling_recip_scalar, (legacy_compat), idst, VectorMode::None);
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sampling_recip_scalar,
+        (legacy_compat, DST_ACCUM_MODE),
+        idst,
+        VectorMode::None);
 }
 
 ALWI void sampling_clamp_max_tile_scalar(uint32_t idst, uint32_t param) {

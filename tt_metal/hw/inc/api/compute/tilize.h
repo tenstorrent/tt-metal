@@ -407,7 +407,7 @@ ALWI void fast_tilize_block(
             // Three or more dests
             UNPACK((llk_unpack_fast_tilize_block(icb, read_tile_index, unit_dim, num_units, full_dim)));
             MATH((llk_math_fast_tilize_block_(0, icb, unit_dim, num_units)));
-            PACK((llk_pack_fast_tilize_block<is_fp32_dest_acc_en>(0, ocb, write_tile_index, unit_dim, num_units)));
+            PACK((llk_pack_fast_tilize_block(0, ocb, write_tile_index, unit_dim, num_units)));
             packed_tiles += dest_size;
             remaining_tiles -= dest_size;
         } else if (remaining_tiles > dest_size) {
@@ -416,7 +416,7 @@ ALWI void fast_tilize_block(
             num_units = even_remainder / unit_dim;
             UNPACK((llk_unpack_fast_tilize_block(icb, read_tile_index, unit_dim, num_units, full_dim)));
             MATH((llk_math_fast_tilize_block_(0, icb, unit_dim, num_units)));
-            PACK((llk_pack_fast_tilize_block<is_fp32_dest_acc_en>(0, ocb, write_tile_index, unit_dim, num_units)));
+            PACK((llk_pack_fast_tilize_block(0, ocb, write_tile_index, unit_dim, num_units)));
             packed_tiles += even_remainder;
             remaining_tiles -= even_remainder;
         } else {
@@ -426,22 +426,22 @@ ALWI void fast_tilize_block(
                 num_units = remaining_tiles / unit_dim;
                 UNPACK((llk_unpack_fast_tilize_block(icb, read_tile_index, unit_dim, num_units, full_dim)));
                 MATH((llk_math_fast_tilize_block_(0, icb, unit_dim, num_units)));
-                PACK((llk_pack_fast_tilize_block<is_fp32_dest_acc_en>(0, ocb, write_tile_index, unit_dim, num_units)));
+                PACK((llk_pack_fast_tilize_block(0, ocb, write_tile_index, unit_dim, num_units)));
             } else if (remaining_tiles == 3) {
                 // only odd pack
                 UNPACK((llk_unpack_fast_tilize_block(icb, read_tile_index, 3, 1, full_dim)));
                 MATH((llk_math_fast_tilize_block_(0, icb, 3, 1)));
-                PACK((llk_pack_fast_tilize_block<is_fp32_dest_acc_en>(0, ocb, write_tile_index, 3, 1)));
+                PACK((llk_pack_fast_tilize_block(0, ocb, write_tile_index, 3, 1)));
             } else {
                 // even packs plus odd pack
                 num_units = (remaining_tiles - 3) / unit_dim;
                 UNPACK((llk_unpack_fast_tilize_block(icb, read_tile_index, unit_dim, num_units, full_dim)));
                 MATH((llk_math_fast_tilize_block_(0, icb, unit_dim, num_units)));
-                PACK((llk_pack_fast_tilize_block<is_fp32_dest_acc_en>(0, ocb, write_tile_index, unit_dim, num_units)));
+                PACK((llk_pack_fast_tilize_block(0, ocb, write_tile_index, unit_dim, num_units)));
 
                 UNPACK((llk_unpack_fast_tilize_block(icb, read_tile_index + remaining_tiles - 3, 3, 1, full_dim)));
                 MATH((llk_math_fast_tilize_block_(remaining_tiles - 3, icb, 3, 1)));
-                PACK((llk_pack_fast_tilize_block<is_fp32_dest_acc_en>(
+                PACK((llk_pack_fast_tilize_block(
                     remaining_tiles - 3, ocb, write_tile_index + remaining_tiles - 3, 3, 1)));
             }
             packed_tiles += remaining_tiles;

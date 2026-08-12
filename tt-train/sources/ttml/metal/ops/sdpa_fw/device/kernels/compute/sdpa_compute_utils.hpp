@@ -42,8 +42,10 @@ inline constexpr uint32_t round_up(uint32_t a, uint32_t b) {
 // so we process 4 SFPU iterations (half-face) instead of the standard 8,
 // saving ~75% of SFPU cycles.
 #ifdef TRISC_MATH
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 void recip_tile_first_column(uint32_t idst) {
-    SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_recip_first_column, idst, VectorMode::C);
+    SFPU_UNARY_CALL(
+        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_recip_first_column, (is_fp32_dest_acc_en), idst, VectorMode::C);
 }
 #endif  // TRISC_MATH
 

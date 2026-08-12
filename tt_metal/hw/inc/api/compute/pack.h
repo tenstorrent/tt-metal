@@ -231,9 +231,8 @@ ALWI void pack_rows_init(uint32_t num_rows) {
  */
 // clang-format on
 #ifndef ARCH_QUASAR
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void pack_rows(uint32_t idst, uint32_t ocb, uint32_t output_index = 0) {
-    PACK((llk_pack_rows<is_fp32_dest_acc_en>(idst, ocb, output_index)));
+    PACK((llk_pack_rows(idst, ocb, output_index)));
 }
 #endif
 
