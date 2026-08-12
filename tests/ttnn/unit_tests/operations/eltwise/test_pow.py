@@ -274,6 +274,29 @@ def test_binary_pow_bf16_overflow_to_inf(device, base, exponent):
     assert (result > 0).all(), "overflow produced -inf/NaN instead of +inf"
 
 
+@pytest.mark.parametrize(
+    "base,exponent,expected_ulp",
+    [
+        (2.0, 15.0, 0),  # exact power of two; pre-fix returned 31744 (-3.1%)
+        (0.99609375, 100.0, 3),  # issue repro: pre-fix 0.832 vs true 0.6761 (+23.1%)
+        (0.99609375, 500.0, 3),  # issue repro: pre-fix 0.3295 vs true 0.1413 (+133%)
+        (2.0, 100.0, 3),  # large exponent, exact base
+        (0.49804688, 100.0, 3),  # small base, large exponent
+    ],
+)
+def test_binary_pow_bf16_issue_regressions(device, base, exponent, expected_ulp):
+    torch.manual_seed(0)
+    base_t = torch.full([1, 1, 32, 32], base, dtype=torch.bfloat16)
+    exp = torch.full([1, 1, 32, 32], exponent, dtype=torch.bfloat16)
+    golden = torch.pow(base_t, exp)
+
+    ttnn_base = ttnn.from_torch(base_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_exp = ttnn.from_torch(exp, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.to_torch(ttnn.pow(ttnn_base, ttnn_exp))
+
+    assert_with_ulp(golden, result, expected_ulp)
+
+
 def test_special_input_fp32(device):
     a = torch.tensor(
         [[1.0, 0.999, 0.999, 0.999, 0.999, 0.234, 0.985, 1.456, 0.0, -1.0, 1.2, -5.3, 6.7, 9.8, -10.9, 5.999]],
