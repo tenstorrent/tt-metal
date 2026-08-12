@@ -21,6 +21,7 @@ group is then reported as the sum of the per-op-code medians (which is what the
 config the probe reported as ``BLOCKED`` contributes no rows and is skipped
 automatically.
 """
+
 from __future__ import annotations
 
 import argparse

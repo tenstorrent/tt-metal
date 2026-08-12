@@ -1,0 +1,64 @@
+2026-08-12 03:25:00.415 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-12 03:25:00.536 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-12 03:25:00.536 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-12 03:25:00.536 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-12 03:25:00.536 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-12 03:25:00.548 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-12 03:25:00.548 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-12 03:25:00.626 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-12 03:25:00.626 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-12 03:25:00.626 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-12 03:25:00.626 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-12 03:25:00.627 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-12 03:25:00.841 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-12 03:25:00.957 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-12 03:25:00.957 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-12 03:25:00.957 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-12 03:25:00.957 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-12 03:25:00.957 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-12 03:25:00.996 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+DENSE wqkv     auto (no config)      161.37 us/call  PCC(f64)=0.999907391  max_rel_err=2.899e-02
+DENSE wqkv     shipped explicit      161.26 us/call  PCC(f64)=0.999907391  max_rel_err=2.899e-02
+DENSE attn_gate auto (no config)      140.26 us/call  PCC(f64)=0.999908163  max_rel_err=3.285e-02
+DENSE attn_gate shipped explicit      140.46 us/call  PCC(f64)=0.999908163  max_rel_err=3.285e-02
+DENSE o_proj   auto (no config)      147.27 us/call  PCC(f64)=0.999935707  max_rel_err=2.220e-02
+DENSE o_proj   shipped explicit      147.69 us/call  PCC(f64)=0.999935707  max_rel_err=2.220e-02
+DENSE mlp_gate auto (no config)      695.34 us/call  PCC(f64)=0.999907935  max_rel_err=3.482e-02
+DENSE mlp_gate shipped explicit      695.72 us/call  PCC(f64)=0.999907935  max_rel_err=3.482e-02
+DENSE mlp_down auto (no config)      698.95 us/call  PCC(f64)=0.999763973  max_rel_err=4.815e-02
+DENSE mlp_down shipped explicit      698.87 us/call  PCC(f64)=0.999763973  max_rel_err=4.815e-02
+nanobind: leaked 1 instances!
+ - leaked instance 0x7bdbedaa09d8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 42 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.types.Shape"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - ... skipped remainder
+nanobind: leaked 347 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function "__init__"
+ - leaked function "memory_config"
+ - leaked function ""
+ - leaked function "CloseDevices"
+ - leaked function "buffer_aligned_page_size"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "get_optimal_dram_bank_to_logical_worker_assignment"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-12 03:25:04.319 | info     |    BuildKernels | JIT cache stats: 33/33 hits (100.0%) [33 cached, 3 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-12 03:25:04.319 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-12 03:25:04.332 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-12 03:25:04.332 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-12 03:25:04.732 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-12 03:25:04.732 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-12 03:25:04.732 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

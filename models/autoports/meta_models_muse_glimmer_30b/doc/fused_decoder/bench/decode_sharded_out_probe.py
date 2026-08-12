@@ -13,6 +13,7 @@ Measured on device kernel time (run under ``python -m tracy -r -p -v``), the
 DRAM matmul + reshard pair against the single sharded-output matmul, at the
 shipped decode shapes and the shipped 4x2 norm grid.
 """
+
 from __future__ import annotations
 
 import torch

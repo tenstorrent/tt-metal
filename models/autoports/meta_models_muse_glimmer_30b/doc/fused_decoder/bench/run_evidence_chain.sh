@@ -28,6 +28,15 @@ step () { echo "=== $(date +%H:%M:%S) $* ===" | tee -a "$D/logs/chain.log"; }
 
 : > "$D/logs/chain.log"
 
+# The repo's pre-commit black would reformat the sources at commit time, which
+# would leave every artifact below older than the file that produced it.  Format
+# first so the chain measures exactly what gets committed.
+step "black (so the committed sources are the measured ones)"
+python -m black --quiet --line-length 120 \
+    models/autoports/meta_models_muse_glimmer_30b/tt/fused_decoder.py \
+    models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py \
+    "$B"/*.py || true
+
 step "variant sweep (wall-clock A/B of every candidate topology)"
 python "$B/ab_latency.py" --decode-iters 128 \
     --impl functional,fused,packed_gate_up,swiglu,packed_qkv_gate,fused_kv_update \

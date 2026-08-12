@@ -1,234 +1,235 @@
 # Fused decoder PCC summary
-# 214 asserted checks: 202 HF-vs-TTNN (worst 0.998077, bar 0.995),
-#   12 fused-vs-unfused equivalence (worst 0.996940, bar 0.995)
+# 214 asserted checks: 202 HF-vs-TTNN (worst 0.998152, bar 0.995),
+#   12 fused-vs-unfused equivalence (worst 0.996797, bar 0.995)
 # plus 12 accuracy controls (fused vs unfused, both against the same HF reference)
 # generated from logs/full_test_run.log by bench/summarize_pcc.py
 
-0.996940  fused vs unfused decode[sliding] seq_len=4097
-0.997011  fused vs unfused decode[full] seq_len=4097
-0.997312  fused vs unfused decode[sliding] seq_len=12345
-0.997666  fused vs unfused decode[full] seq_len=12345
-0.997777  fused vs unfused prefill[full] seq_len=12345
-0.997920  fused vs unfused prefill[full] seq_len=4097
-0.998077  fused traced decode[full] pos=2048
-0.998078  fused traced decode replay[sliding] pos=1024
-0.998081  fused stress decode[full] step=32 pos=1056
-0.998125  fused vs unfused prefill[sliding] seq_len=12345
-0.998172  fused vs unfused prefill[sliding] seq_len=4097
-0.998173  fused decode[full] prompt=2048 pos=2049
-0.998179  fused traced decode replay[sliding] pos=1025
-0.998217  fused stress decode[full] step=16 pos=1040
-0.998285  fused decode[full] prompt=2048 pos=2051
-0.998299  fused decode[full] prompt=3000 pos=3003
-0.998318  fused decode[full] prompt=3000 pos=3000
-0.998336  fused decode[full] prompt=3000 pos=3001
-0.998343  fused decode after continuation prefill[full] pos=7096
-0.998384  fused decode[full] prompt=3000 pos=3002
-0.998424  fused decode[sliding] prompt=3000 pos=3003
-0.998427  fused decode[full] batch=13 ragged positions
-0.998449  fused decode[full] vs FP32 HF reference pos=2049
-0.998469  fused decode[sliding] prompt=2048 pos=2048
-0.998486  fused decode[sliding] prompt=2048 pos=2049
-0.998502  fused traced decode replay[full] pos=1024
-0.998508  fused decode[full] batch=32 ragged positions
-0.998525  fused decode[sliding] batch=13 ragged positions
-0.998548  fused stress decode[full] step=0 pos=1024
-0.998560  fused decode[full] batch=4 ragged positions
-0.998573  fused stress decode[sliding] step=63 pos=1087
-0.998597  fused vs unfused decode[full] seq_len=100
-0.998617  fused vs unfused decode[sliding] seq_len=100
-0.998621  fused stress decode[full] step=48 pos=1072
-0.998625  fused traced decode replay[full] pos=1025
-0.998626  fused decode[sliding] batch=4 ragged positions
-0.998648  fused prefill[full] batch=32 user=26 seq_len=2962
-0.998654  fused prefill[full] batch=32 user=28 seq_len=3036
-0.998658  fused prefill[full] batch=32 user=25 seq_len=2925
-0.998661  fused prefill[full] batch=32 user=24 seq_len=2888
-0.998661  fused decode[sliding] vs FP32 HF reference pos=2049
-0.998661  fused prefill[full] batch=32 user=27 seq_len=2999
-0.998661  fused traced decode[sliding] pos=2048
-0.998662  fused prefill[full] batch=32 user=19 seq_len=2703
-0.998662  fused prefill[full] batch=32 user=16 seq_len=2592
-0.998663  fused prefill[full] batch=32 user=22 seq_len=2814
-0.998665  fused prefill[full] batch=32 user=20 seq_len=2740
-0.998666  fused prefill[full] batch=32 user=17 seq_len=2629
-0.998669  fused prefill[full] batch=32 user=23 seq_len=2851
-0.998669  fused prefill[full] batch=32 user=18 seq_len=2666
-0.998669  fused decode[full] prompt=2048 pos=2048
-0.998670  fused prefill[full] batch=13 user=12 seq_len=2444
-0.998670  fused prefill[full] batch=32 user=12 seq_len=2444
-0.998671  fused prefill[full] batch=32 user=14 seq_len=2518
-0.998672  fused prefill[full] batch=32 user=21 seq_len=2777
-0.998673  fused prefill[full] batch=32 user=15 seq_len=2555
-0.998675  fused prefill[full] batch=13 user=11 seq_len=2407
-0.998675  fused prefill[full] batch=32 user=11 seq_len=2407
-0.998678  fused prefill[full] batch=13 user=9 seq_len=2333
-0.998678  fused prefill[full] batch=32 user=9 seq_len=2333
-0.998680  fused prefill[full] batch=32 user=13 seq_len=2481
-0.998681  fused prefill[full] batch=13 user=8 seq_len=2296
-0.998681  fused prefill[full] batch=32 user=8 seq_len=2296
-0.998682  fused prefill[full] batch=13 user=6 seq_len=2222
-0.998682  fused prefill[full] batch=32 user=6 seq_len=2222
-0.998683  fused stress decode[full] step=63 pos=1087
-0.998690  fused prefill[full] batch=13 user=10 seq_len=2370
-0.998690  fused prefill[full] batch=32 user=10 seq_len=2370
-0.998691  fused prefill[full] batch=13 user=7 seq_len=2259
-0.998691  fused prefill[full] batch=32 user=7 seq_len=2259
-0.998697  fused stress decode[sliding] step=0 pos=1024
-0.998699  fused decode[sliding] batch=32 ragged positions
-0.998701  fused vs unfused prefill[full] seq_len=100
-0.998717  fused stress decode[sliding] step=32 pos=1056
-0.998733  fused prefill[full] batch=13 user=5 seq_len=2185
-0.998733  fused prefill[full] batch=32 user=5 seq_len=2185
-0.998734  fused decode[full] user_id=2 pos=12345
-0.998740  fused prefill[full] batch=13 user=0 seq_len=2000
-0.998740  fused prefill[full] batch=32 user=0 seq_len=2000
-0.998740  fused prefill[full] batch=4 user=0 seq_len=2000
-0.998742  fused prefill[full] seq_len=2048
-0.998742  fused prefill[full] batch=13 user=2 seq_len=2074
-0.998742  fused prefill[full] batch=32 user=2 seq_len=2074
-0.998742  fused prefill[full] batch=4 user=2 seq_len=2074
-0.998744  fused prefill[full] seq_len=2049
-0.998745  fused prefill[full] batch=13 user=4 seq_len=2148
-0.998745  fused prefill[full] batch=32 user=4 seq_len=2148
-0.998750  fused prefill[full] batch=13 user=3 seq_len=2111
-0.998750  fused prefill[full] batch=32 user=3 seq_len=2111
-0.998750  fused prefill[full] batch=4 user=3 seq_len=2111
-0.998752  fused decode[sliding] prompt=2048 pos=2050
-0.998754  fused continuation prefill[full] 1024+1024
-0.998755  fused prefill[full] batch=13 user=1 seq_len=2037
-0.998755  fused prefill[full] batch=32 user=1 seq_len=2037
-0.998755  fused prefill[full] batch=4 user=1 seq_len=2037
-0.998771  fused prefill[full] vs FP32 HF reference seq_len=2049
-0.998786  fused vs unfused prefill[sliding] seq_len=100
-0.998819  fused prefill[sliding] batch=32 user=22 seq_len=2814
-0.998821  fused prefill[sliding] batch=32 user=28 seq_len=3036
-0.998822  fused prefill[sliding] batch=32 user=26 seq_len=2962
-0.998822  fused prefill[sliding] batch=32 user=25 seq_len=2925
-0.998823  fused prefill[sliding] batch=32 user=27 seq_len=2999
-0.998825  fused prefill[sliding] batch=32 user=20 seq_len=2740
-0.998827  fused prefill[sliding] batch=32 user=17 seq_len=2629
-0.998827  fused prefill[sliding] batch=32 user=23 seq_len=2851
-0.998827  fused prefill[sliding] batch=32 user=19 seq_len=2703
-0.998828  fused decode after continuation prefill[sliding] pos=7096
-0.998828  fused prefill[sliding] batch=32 user=13 seq_len=2481
-0.998830  fused decode[sliding] prompt=3000 pos=3002
-0.998832  fused prefill[sliding] batch=32 user=18 seq_len=2666
-0.998833  fused prefill[sliding] batch=32 user=24 seq_len=2888
-0.998833  fused prefill[sliding] batch=13 user=8 seq_len=2296
-0.998833  fused prefill[sliding] batch=32 user=8 seq_len=2296
-0.998834  fused prefill[sliding] batch=13 user=12 seq_len=2444
-0.998834  fused prefill[sliding] batch=32 user=12 seq_len=2444
-0.998834  fused prefill[sliding] batch=32 user=21 seq_len=2777
-0.998834  fused prefill[sliding] batch=32 user=16 seq_len=2592
-0.998835  fused prefill[sliding] batch=32 user=15 seq_len=2555
-0.998835  fused prefill[sliding] batch=32 user=14 seq_len=2518
-0.998837  fused prefill[sliding] batch=13 user=11 seq_len=2407
-0.998837  fused prefill[sliding] batch=32 user=11 seq_len=2407
-0.998837  fused prefill[sliding] batch=13 user=9 seq_len=2333
-0.998837  fused prefill[sliding] batch=32 user=9 seq_len=2333
-0.998841  fused prefill[sliding] batch=13 user=10 seq_len=2370
-0.998841  fused prefill[sliding] batch=32 user=10 seq_len=2370
-0.998845  fused prefill[sliding] batch=13 user=7 seq_len=2259
-0.998845  fused prefill[sliding] batch=32 user=7 seq_len=2259
-0.998846  fused prefill[sliding] batch=13 user=6 seq_len=2222
-0.998846  fused prefill[sliding] batch=32 user=6 seq_len=2222
-0.998849  fused traced decode replay[full] pos=1026
-0.998885  fused prefill[sliding] seq_len=2048
-0.998887  fused prefill[sliding] batch=13 user=4 seq_len=2148
-0.998887  fused prefill[sliding] batch=32 user=4 seq_len=2148
-0.998890  fused prefill[sliding] batch=13 user=5 seq_len=2185
-0.998890  fused prefill[sliding] batch=32 user=5 seq_len=2185
-0.998890  fused continuation prefill[sliding] 1024+1024
-0.998890  fused prefill[sliding] seq_len=2049
-0.998892  fused prefill[sliding] batch=13 user=1 seq_len=2037
-0.998892  fused prefill[sliding] batch=32 user=1 seq_len=2037
-0.998892  fused prefill[sliding] batch=4 user=1 seq_len=2037
-0.998893  fused prefill[sliding] batch=13 user=3 seq_len=2111
-0.998893  fused prefill[sliding] batch=32 user=3 seq_len=2111
-0.998893  fused prefill[sliding] batch=4 user=3 seq_len=2111
-0.998895  fused prefill[sliding] batch=13 user=2 seq_len=2074
-0.998895  fused prefill[sliding] batch=32 user=2 seq_len=2074
-0.998895  fused prefill[sliding] batch=4 user=2 seq_len=2074
-0.998896  fused traced decode replay[sliding] pos=1026
-0.998903  fused prefill[sliding] batch=13 user=0 seq_len=2000
-0.998903  fused prefill[sliding] batch=32 user=0 seq_len=2000
-0.998903  fused prefill[sliding] batch=4 user=0 seq_len=2000
-0.998908  fused decode[sliding] user_id=2 pos=12345
-0.998913  fused stress decode[sliding] step=48 pos=1072
-0.998932  fused decode[full] prompt=2048 pos=2050
-0.998934  fused prefill[sliding] vs FP32 HF reference seq_len=2049
-0.998941  fused prefill[full] full-context seq_len=131072 (last 32 rows)
-0.998942  fused decode[sliding] prompt=3000 pos=3000
-0.998950  fused decode[sliding] prompt=3000 pos=3001
-0.998977  fused prefill[full] full-context seq_len=131072 (interior @65536 32 rows)
-0.998995  fused stress decode[sliding] step=16 pos=1040
-0.998997  fused prefill[full] full-context seq_len=130073 (last 32 rows)
-0.999002  fused decode after continuation prefill[full] pos=2048
-0.999004  fused decode[full] full-context pos=131071
-0.999022  fused decode after continuation prefill[full] pos=164
-0.999026  fused decode[sliding] prompt=2048 pos=2051
-0.999103  fused continuation prefill[full] 4096+3000
-0.999108  fused real-weights prefill[sliding] seq_len=2049
-0.999133  fused decode[sliding] full-context pos=131071
-0.999159  fused decode[full] prompt=100 pos=103
-0.999162  fused real-weights decode[full] pos=2049
-0.999173  fused real-weights prefill[full] seq_len=2049
-0.999180  fused decode[sliding] prompt=100 pos=102
-0.999189  fused continuation prefill[sliding] 4096+3000
-0.999210  fused decode after continuation prefill[sliding] pos=164
-0.999211  fused decode[full] prompt=100 pos=100
-0.999218  fused decode[full] prompt=100 pos=101
-0.999270  fused decode[full] prompt=100 pos=102
-0.999306  fused multi-chunk prefill[full] user_id=2 seq_len=12345
-0.999307  fused prefill[full] max_seq_len==seq_len==12416 (194 pages, 2 chunks)
-0.999308  fused decode after continuation prefill[sliding] pos=2048
-0.999310  fused prefill[full] seq_len=12345
-0.999319  fused decode[sliding] prompt=100 pos=101
-0.999335  fused continuation prefill[full] 64+100
-0.999338  fused prefill[full] seq_len=8192
-0.999341  fused prefill[full] seq_len=8193
-0.999344  fused prefill[full] seq_len=128
-0.999347  fused decode[sliding] prompt=100 pos=100
-0.999369  fused prefill[sliding] full-context seq_len=131072 (last 32 rows)
-0.999379  fused prefill[full] seq_len==max_seq_len==chunk==4096 attempt=0
-0.999382  fused prefill[full] seq_len=4097
-0.999383  fused prefill[full] seq_len=100
-0.999384  fused prefill[full] seq_len==max_seq_len==chunk==4096 attempt=1
-0.999392  fused decode[sliding] prompt=100 pos=103
-0.999393  fused prefill[full] batch=32 user=30 seq_len=3110
-0.999399  fused prefill[full] batch=32 user=29 seq_len=3073
-0.999399  fused prefill[full] batch=32 user=31 seq_len=3147
-0.999418  fused prefill[sliding] full-context seq_len=131072 (interior @65536 32 rows)
-0.999420  fused prefill[sliding] max_seq_len==seq_len==12416 (194 pages, 2 chunks)
-0.999421  fused multi-chunk prefill[sliding] user_id=2 seq_len=12345
-0.999422  fused prefill[sliding] seq_len=12345
-0.999423  fused continuation prefill[sliding] 64+100
-0.999426  fused prefill[sliding] seq_len=128
-0.999426  fused prefill[sliding] seq_len=8193
-0.999427  fused prefill[sliding] seq_len=8192
-0.999439  fused prefill[sliding] full-context seq_len=130073 (last 32 rows)
-0.999440  fused prefill[sliding] seq_len==max_seq_len==chunk==4096 attempt=0
-0.999441  fused prefill[sliding] seq_len=4097
-0.999443  fused prefill[sliding] seq_len==max_seq_len==chunk==4096 attempt=1
-0.999447  fused prefill[sliding] batch=32 user=31 seq_len=3147
-0.999450  fused prefill[sliding] batch=32 user=30 seq_len=3110
-0.999454  fused prefill[sliding] batch=32 user=29 seq_len=3073
-0.999465  fused prefill[sliding] seq_len=100
-0.999525  fused real-weights decode[sliding] pos=2049
-0.999738  fused prefill[full] seq_len=1
+0.996797  fused vs unfused decode[full] seq_len=4097
+0.997334  fused vs unfused decode[sliding] seq_len=12345
+0.997547  fused vs unfused decode[sliding] seq_len=4097
+0.997792  fused vs unfused decode[full] seq_len=12345
+0.997884  fused vs unfused prefill[full] seq_len=12345
+0.997997  fused vs unfused prefill[full] seq_len=4097
+0.998152  fused decode[full] prompt=3000 pos=3002
+0.998194  fused vs unfused prefill[sliding] seq_len=12345
+0.998213  fused decode[full] prompt=2048 pos=2051
+0.998233  fused traced decode replay[sliding] pos=1025
+0.998235  fused vs unfused prefill[sliding] seq_len=4097
+0.998264  fused decode[sliding] prompt=2048 pos=2048
+0.998281  fused traced decode replay[sliding] pos=1024
+0.998333  fused stress decode[full] step=32 pos=1056
+0.998362  fused decode[full] prompt=2048 pos=2049
+0.998371  fused decode[full] prompt=3000 pos=3003
+0.998396  fused traced decode[sliding] pos=2048
+0.998423  fused stress decode[full] step=16 pos=1040
+0.998442  fused decode[full] vs FP32 HF reference pos=2049
+0.998445  fused decode[sliding] prompt=3000 pos=3003
+0.998476  fused decode[full] prompt=3000 pos=3000
+0.998498  fused stress decode[full] step=48 pos=1072
+0.998531  fused vs unfused decode[full] seq_len=100
+0.998556  fused decode[sliding] vs FP32 HF reference pos=2049
+0.998558  fused decode[full] batch=13 ragged positions
+0.998580  fused traced decode[full] pos=2048
+0.998584  fused stress decode[full] step=0 pos=1024
+0.998585  fused decode[full] prompt=2048 pos=2048
+0.998598  fused stress decode[sliding] step=32 pos=1056
+0.998609  fused stress decode[full] step=63 pos=1087
+0.998611  fused decode[full] batch=32 ragged positions
+0.998620  fused decode[sliding] prompt=3000 pos=3002
+0.998624  fused decode[full] batch=4 ragged positions
+0.998650  fused vs unfused decode[sliding] seq_len=100
+0.998662  fused traced decode replay[full] pos=1024
+0.998664  fused decode[full] full-context pos=131071
+0.998700  fused decode[sliding] batch=13 ragged positions
+0.998719  fused stress decode[sliding] step=0 pos=1024
+0.998723  fused vs unfused prefill[full] seq_len=100
+0.998729  fused prefill[full] batch=32 user=28 seq_len=3036
+0.998730  fused prefill[full] batch=32 user=26 seq_len=2962
+0.998735  fused decode[full] user_id=2 pos=12345
+0.998737  fused prefill[full] batch=32 user=25 seq_len=2925
+0.998737  fused prefill[full] batch=32 user=27 seq_len=2999
+0.998739  fused prefill[full] batch=32 user=16 seq_len=2592
+0.998740  fused prefill[full] batch=32 user=19 seq_len=2703
+0.998741  fused prefill[full] batch=32 user=22 seq_len=2814
+0.998741  fused prefill[full] batch=32 user=24 seq_len=2888
+0.998741  fused prefill[full] batch=32 user=17 seq_len=2629
+0.998742  fused prefill[full] batch=32 user=20 seq_len=2740
+0.998744  fused prefill[full] batch=32 user=15 seq_len=2555
+0.998746  fused prefill[full] batch=32 user=18 seq_len=2666
+0.998747  fused prefill[full] batch=32 user=14 seq_len=2518
+0.998748  fused prefill[full] batch=32 user=21 seq_len=2777
+0.998749  fused prefill[full] batch=13 user=11 seq_len=2407
+0.998749  fused prefill[full] batch=32 user=11 seq_len=2407
+0.998749  fused prefill[full] batch=13 user=12 seq_len=2444
+0.998749  fused prefill[full] batch=32 user=12 seq_len=2444
+0.998750  fused prefill[full] batch=32 user=23 seq_len=2851
+0.998750  fused decode[sliding] user_id=2 pos=12345
+0.998752  fused prefill[full] batch=13 user=8 seq_len=2296
+0.998752  fused prefill[full] batch=32 user=8 seq_len=2296
+0.998752  fused prefill[full] batch=13 user=9 seq_len=2333
+0.998752  fused prefill[full] batch=32 user=9 seq_len=2333
+0.998753  fused prefill[full] batch=13 user=6 seq_len=2222
+0.998753  fused prefill[full] batch=32 user=6 seq_len=2222
+0.998755  fused prefill[full] batch=32 user=13 seq_len=2481
+0.998757  fused prefill[full] batch=13 user=10 seq_len=2370
+0.998757  fused prefill[full] batch=32 user=10 seq_len=2370
+0.998759  fused decode[full] prompt=3000 pos=3001
+0.998761  fused prefill[full] batch=13 user=7 seq_len=2259
+0.998761  fused prefill[full] batch=32 user=7 seq_len=2259
+0.998779  fused decode[sliding] prompt=2048 pos=2050
+0.998786  fused decode[sliding] batch=32 ragged positions
+0.998790  fused stress decode[sliding] step=63 pos=1087
+0.998801  fused decode after continuation prefill[sliding] pos=7096
+0.998802  fused vs unfused prefill[sliding] seq_len=100
+0.998803  fused decode[sliding] prompt=3000 pos=3001
+0.998806  fused prefill[full] batch=13 user=5 seq_len=2185
+0.998806  fused prefill[full] batch=32 user=5 seq_len=2185
+0.998810  fused prefill[full] batch=13 user=2 seq_len=2074
+0.998810  fused prefill[full] batch=32 user=2 seq_len=2074
+0.998810  fused prefill[full] batch=4 user=2 seq_len=2074
+0.998811  fused prefill[full] batch=13 user=0 seq_len=2000
+0.998811  fused prefill[full] batch=32 user=0 seq_len=2000
+0.998811  fused prefill[full] batch=4 user=0 seq_len=2000
+0.998813  fused prefill[full] batch=13 user=4 seq_len=2148
+0.998813  fused prefill[full] batch=32 user=4 seq_len=2148
+0.998813  fused prefill[full] seq_len=2048
+0.998814  fused prefill[full] seq_len=2049
+0.998822  fused prefill[full] batch=13 user=3 seq_len=2111
+0.998822  fused prefill[full] batch=32 user=3 seq_len=2111
+0.998822  fused prefill[full] batch=4 user=3 seq_len=2111
+0.998825  fused continuation prefill[full] 1024+1024
+0.998827  fused prefill[full] batch=13 user=1 seq_len=2037
+0.998827  fused prefill[full] batch=32 user=1 seq_len=2037
+0.998827  fused prefill[full] batch=4 user=1 seq_len=2037
+0.998831  fused stress decode[sliding] step=16 pos=1040
+0.998837  fused decode[sliding] batch=4 ragged positions
+0.998837  fused decode after continuation prefill[full] pos=7096
+0.998844  fused prefill[full] vs FP32 HF reference seq_len=2049
+0.998864  fused decode[sliding] prompt=2048 pos=2049
+0.998885  fused prefill[sliding] batch=32 user=26 seq_len=2962
+0.998885  fused prefill[sliding] batch=32 user=20 seq_len=2740
+0.998886  fused prefill[sliding] batch=32 user=25 seq_len=2925
+0.998886  fused prefill[sliding] batch=32 user=22 seq_len=2814
+0.998888  fused prefill[sliding] batch=32 user=17 seq_len=2629
+0.998888  fused prefill[sliding] batch=32 user=28 seq_len=3036
+0.998888  fused prefill[sliding] batch=32 user=19 seq_len=2703
+0.998889  fused decode[full] prompt=2048 pos=2050
+0.998890  fused prefill[sliding] batch=32 user=13 seq_len=2481
+0.998891  fused prefill[sliding] batch=32 user=27 seq_len=2999
+0.998894  fused prefill[sliding] batch=32 user=24 seq_len=2888
+0.998894  fused prefill[sliding] batch=32 user=23 seq_len=2851
+0.998895  fused prefill[sliding] batch=32 user=18 seq_len=2666
+0.998895  fused prefill[sliding] batch=32 user=15 seq_len=2555
+0.998895  fused prefill[sliding] batch=13 user=12 seq_len=2444
+0.998895  fused prefill[sliding] batch=32 user=12 seq_len=2444
+0.998896  fused prefill[sliding] batch=32 user=21 seq_len=2777
+0.998897  fused prefill[sliding] batch=13 user=8 seq_len=2296
+0.998897  fused prefill[sliding] batch=32 user=8 seq_len=2296
+0.998898  fused prefill[sliding] batch=13 user=9 seq_len=2333
+0.998898  fused prefill[sliding] batch=32 user=9 seq_len=2333
+0.998898  fused prefill[sliding] batch=32 user=14 seq_len=2518
+0.998901  fused prefill[sliding] batch=32 user=16 seq_len=2592
+0.998901  fused prefill[sliding] batch=13 user=11 seq_len=2407
+0.998901  fused prefill[sliding] batch=32 user=11 seq_len=2407
+0.998902  fused prefill[sliding] batch=13 user=10 seq_len=2370
+0.998902  fused prefill[sliding] batch=32 user=10 seq_len=2370
+0.998902  fused stress decode[sliding] step=48 pos=1072
+0.998906  fused prefill[sliding] batch=13 user=6 seq_len=2222
+0.998906  fused prefill[sliding] batch=32 user=6 seq_len=2222
+0.998909  fused prefill[sliding] batch=13 user=7 seq_len=2259
+0.998909  fused prefill[sliding] batch=32 user=7 seq_len=2259
+0.998944  fused prefill[sliding] seq_len=2048
+0.998948  fused prefill[sliding] seq_len=2049
+0.998949  fused prefill[sliding] batch=13 user=5 seq_len=2185
+0.998949  fused prefill[sliding] batch=32 user=5 seq_len=2185
+0.998950  fused prefill[sliding] batch=13 user=4 seq_len=2148
+0.998950  fused prefill[sliding] batch=32 user=4 seq_len=2148
+0.998951  fused continuation prefill[sliding] 1024+1024
+0.998951  fused prefill[sliding] batch=13 user=2 seq_len=2074
+0.998951  fused prefill[sliding] batch=32 user=2 seq_len=2074
+0.998951  fused prefill[sliding] batch=4 user=2 seq_len=2074
+0.998951  fused prefill[sliding] batch=13 user=3 seq_len=2111
+0.998951  fused prefill[sliding] batch=32 user=3 seq_len=2111
+0.998951  fused prefill[sliding] batch=4 user=3 seq_len=2111
+0.998951  fused traced decode replay[sliding] pos=1026
+0.998951  fused prefill[sliding] batch=13 user=1 seq_len=2037
+0.998951  fused prefill[sliding] batch=32 user=1 seq_len=2037
+0.998951  fused prefill[sliding] batch=4 user=1 seq_len=2037
+0.998952  fused decode after continuation prefill[full] pos=2048
+0.998960  fused decode after continuation prefill[full] pos=164
+0.998962  fused prefill[sliding] batch=13 user=0 seq_len=2000
+0.998962  fused prefill[sliding] batch=32 user=0 seq_len=2000
+0.998962  fused prefill[sliding] batch=4 user=0 seq_len=2000
+0.998979  fused traced decode replay[full] pos=1025
+0.998989  fused prefill[sliding] vs FP32 HF reference seq_len=2049
+0.999003  fused decode[sliding] prompt=3000 pos=3000
+0.999054  fused decode[sliding] prompt=2048 pos=2051
+0.999072  fused real-weights decode[full] pos=2049
+0.999095  fused traced decode replay[full] pos=1026
+0.999164  fused real-weights prefill[sliding] seq_len=2049
+0.999190  fused prefill[full] full-context seq_len=130073 (last 32 rows)
+0.999200  fused prefill[full] full-context seq_len=131072 (last 32 rows)
+0.999202  fused continuation prefill[full] 4096+3000
+0.999222  fused prefill[full] full-context seq_len=131072 (interior @65536 32 rows)
+0.999223  fused real-weights prefill[full] seq_len=2049
+0.999235  fused decode[sliding] full-context pos=131071
+0.999252  fused decode[full] prompt=100 pos=102
+0.999253  fused decode[full] prompt=100 pos=101
+0.999261  fused continuation prefill[sliding] 4096+3000
+0.999267  fused decode after continuation prefill[sliding] pos=2048
+0.999274  fused decode[full] prompt=100 pos=100
+0.999275  fused decode[sliding] prompt=100 pos=100
+0.999287  fused decode[full] prompt=100 pos=103
+0.999287  fused decode[sliding] prompt=100 pos=102
+0.999316  fused decode[sliding] prompt=100 pos=101
+0.999358  fused continuation prefill[full] 64+100
+0.999370  fused prefill[full] seq_len=128
+0.999391  fused decode[sliding] prompt=100 pos=103
+0.999399  fused decode after continuation prefill[sliding] pos=164
+0.999405  fused prefill[full] seq_len=100
+0.999420  fused prefill[full] max_seq_len==seq_len==12416 (194 pages, 2 chunks)
+0.999421  fused multi-chunk prefill[full] user_id=2 seq_len=12345
+0.999425  fused prefill[full] seq_len=12345
+0.999441  fused prefill[full] seq_len=8192
+0.999442  fused prefill[full] seq_len=8193
+0.999447  fused continuation prefill[sliding] 64+100
+0.999451  fused prefill[sliding] seq_len=128
+0.999467  fused prefill[full] seq_len==max_seq_len==chunk==4096 attempt=1
+0.999467  fused prefill[full] seq_len==max_seq_len==chunk==4096 attempt=0
+0.999469  fused prefill[full] seq_len=4097
+0.999471  fused prefill[sliding] full-context seq_len=131072 (last 32 rows)
+0.999476  fused prefill[full] batch=32 user=30 seq_len=3110
+0.999479  fused prefill[full] batch=32 user=29 seq_len=3073
+0.999480  fused prefill[full] batch=32 user=31 seq_len=3147
+0.999484  fused prefill[sliding] seq_len=100
+0.999496  fused prefill[sliding] full-context seq_len=131072 (interior @65536 32 rows)
+0.999496  fused prefill[sliding] max_seq_len==seq_len==12416 (194 pages, 2 chunks)
+0.999497  fused multi-chunk prefill[sliding] user_id=2 seq_len=12345
+0.999497  fused prefill[sliding] seq_len=12345
+0.999500  fused prefill[sliding] seq_len=8193
+0.999501  fused prefill[sliding] seq_len=8192
+0.999505  fused prefill[sliding] full-context seq_len=130073 (last 32 rows)
+0.999508  fused prefill[sliding] seq_len=4097
+0.999510  fused prefill[sliding] seq_len==max_seq_len==chunk==4096 attempt=0
+0.999511  fused prefill[sliding] seq_len==max_seq_len==chunk==4096 attempt=1
+0.999515  fused prefill[sliding] batch=32 user=30 seq_len=3110
+0.999517  fused prefill[sliding] batch=32 user=31 seq_len=3147
+0.999517  fused prefill[sliding] batch=32 user=29 seq_len=3073
+0.999693  fused real-weights decode[sliding] pos=2049
+0.999742  fused prefill[full] seq_len=1
 0.999786  fused prefill[sliding] seq_len=1
 
-# accuracy controls: prefill must strictly improve; decode has a 5e-4 BF16 band
-  prefill[sliding] seq_len=100                 unfused=0.999102 fused=0.999459 delta=+0.000357
-  decode[sliding] seq_len=100                  unfused=0.999049 fused=0.999405 delta=+0.000356
-  prefill[full] seq_len=100                    unfused=0.999076 fused=0.999396 delta=+0.000320
-  decode[full] seq_len=100                     unfused=0.998999 fused=0.999288 delta=+0.000288
-  prefill[sliding] seq_len=4097                unfused=0.998519 fused=0.999445 delta=+0.000926
-  decode[sliding] seq_len=4097                 unfused=0.998843 fused=0.998410 delta=-0.000433
-  prefill[full] seq_len=4097                   unfused=0.998327 fused=0.999382 delta=+0.001055
-  decode[full] seq_len=4097                    unfused=0.998342 fused=0.998808 delta=+0.000467
-  prefill[sliding] seq_len=12345               unfused=0.998480 fused=0.999423 delta=+0.000944
-  decode[sliding] seq_len=12345                unfused=0.997622 fused=0.998954 delta=+0.001333
-  prefill[full] seq_len=12345                  unfused=0.998233 fused=0.999310 delta=+0.001076
-  decode[full] seq_len=12345                   unfused=0.998569 fused=0.998701 delta=+0.000132
+# accuracy controls: prefill must strictly improve; decode has a small BF16
+# re-association band (ACCURACY_REGRESSION_TOL in tests/test_fused_decoder.py)
+  prefill[sliding] seq_len=100                 unfused=0.999102 fused=0.999471 delta=+0.000369
+  decode[sliding] seq_len=100                  unfused=0.999049 fused=0.999457 delta=+0.000408
+  prefill[full] seq_len=100                    unfused=0.999076 fused=0.999409 delta=+0.000334
+  decode[full] seq_len=100                     unfused=0.998999 fused=0.999302 delta=+0.000302
+  prefill[sliding] seq_len=4097                unfused=0.998519 fused=0.999511 delta=+0.000992
+  decode[sliding] seq_len=4097                 unfused=0.998843 fused=0.998797 delta=-0.000046
+  prefill[full] seq_len=4097                   unfused=0.998327 fused=0.999465 delta=+0.001138
+  decode[full] seq_len=4097                    unfused=0.998342 fused=0.998827 delta=+0.000485
+  prefill[sliding] seq_len=12345               unfused=0.998480 fused=0.999498 delta=+0.001018
+  decode[sliding] seq_len=12345                unfused=0.997622 fused=0.998957 delta=+0.001335
+  prefill[full] seq_len=12345                  unfused=0.998233 fused=0.999423 delta=+0.001190
+  decode[full] seq_len=12345                   unfused=0.998569 fused=0.998770 delta=+0.000201

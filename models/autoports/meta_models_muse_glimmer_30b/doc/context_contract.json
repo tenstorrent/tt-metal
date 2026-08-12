@@ -41,12 +41,12 @@
         "full"
       ],
       "pcc": {
-        "sliding@131072_last32rows": 0.999369,
-        "full@131072_last32rows": 0.998941,
-        "sliding@130073_last32rows": 0.999439,
-        "full@130073_last32rows": 0.998997,
-        "sliding@131072_interior65536_32rows": 0.999418,
-        "full@131072_interior65536_32rows": 0.998977
+        "sliding@131072_last32rows": 0.999471,
+        "full@131072_last32rows": 0.9992,
+        "sliding@130073_last32rows": 0.999505,
+        "full@130073_last32rows": 0.99919,
+        "sliding@131072_interior65536_32rows": 0.999496,
+        "full@131072_interior65536_32rows": 0.999222
       },
       "command": "pytest models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py -k full_context_prefill",
       "reference_harness": "reduced layer-level: the HF cache is filled with the K/V of every position before the compared block by the real MuseGlimmerTextAttention K/V path, then the real HF MuseGlimmerTextDecoderLayer runs that 32-query block against the full prefix. Two blocks are checked at 131072 - the last 32 rows and an interior block at row 65536 (first row of internal prefill chunk 9, entirely dependent on the 8th carried sliding window). A 131072-query HF forward is not tractable on CPU."
@@ -59,8 +59,8 @@
         "full"
       ],
       "pcc": {
-        "sliding@pos131071": 0.999133,
-        "full@pos131071": 0.999004
+        "sliding@pos131071": 0.999235,
+        "full@pos131071": 0.998664
       },
       "command": "pytest models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py -k full_context_decode"
     },
@@ -124,10 +124,10 @@
       "user_id": 2,
       "max_batch_size": 4,
       "pcc": {
-        "prefill_sliding": 0.999421,
-        "prefill_full": 0.999306,
-        "decode_sliding": 0.998908,
-        "decode_full": 0.998734
+        "prefill_sliding": 0.999497,
+        "prefill_full": 0.999421,
+        "decode_sliding": 0.99875,
+        "decode_full": 0.998735
       },
       "note": "Multi-chunk prefill plus decode off cache slot 2, exercising page-table row slicing and the chunked paged read from a non-zero row."
     }
@@ -155,8 +155,8 @@
   "performance": {
     "note": "Warmed, signposted Tracy windows; Device Time column from tt-perf-report --csv, microseconds. 8 trace replays per decode window; all ten committed captures (eight fused windows plus the two multi-chunk functional baselines) are free of dropped profiler markers. 'baseline' is the functional decoder measured the same way.",
     "prefill_8192_tokens_batch1_ms": {
-      "sliding": 49.294,
-      "full": 47.996
+      "sliding": 49.341,
+      "full": 47.981
     },
     "prefill_8192_tokens_batch1_ms_baseline": {
       "sliding": 101.23,
@@ -164,9 +164,9 @@
     },
     "traced_decode_ms_per_token": {
       "sliding@2048": 2.710,
-      "sliding@131071": 2.710,
-      "full@2048": 2.685,
-      "full@131071": 3.182
+      "sliding@131071": 2.71,
+      "full@2048": 2.687,
+      "full@131071": 3.181
     },
     "traced_decode_ms_per_token_baseline": {
       "sliding@2048": 3.163,
@@ -192,14 +192,14 @@
     },
     "context_scaling": "sliding decode is context-independent (SDPA reads at most the 2048 window); full (NoPE) decode SDPA goes 36 us -> 529 us between 2048 and 131071.",
     "decode_roofline": "One decode step streams 967,835,648 B of BF16 weights; at the 383 GB/s the six matmuls achieve that is 2.526 ms, i.e. 93 % of the 2.710 ms fused decode step. Further decode gains require moving fewer bytes (weight dtype) or a higher-efficiency matmul config.",
-    "fidelity_policy": "Unchanged from the functional stage: the prefill dense projections pin the same HiFi2 / fp32_dest_acc_en=False / packer_l1_acc=True compute-kernel config that ttnn.linear selects by default for BF16, so the before/after is a pure topology comparison. minimal_matmul's own default is more accurate (PCC 0.999994 vs 0.999947 vs FP32) and 2.3-2.5 ms slower per 8192-token prefill; that choice belongs to the optimized-decoder stage. ONE fidelity knob was turned: every RMSNorm runs HiFi4/math_approx_mode=False/fp32_dest_acc_en=True/packer_l1_acc=True instead of ttnn.rms_norm's own default (HiFi4/approx=True/fp32_acc=False/l1_acc=False, rmsnorm.cpp:16-20). Measured against float64: prefill norm 978.27 -> 991.78 us with max relative error 6.5e-2 -> 4.2e-3; sharded decode norm 15.53 -> 14.92 us (faster) and 1.0e-2 -> 4.8e-3. Cost 81 us of a 49,294 us prefill window (0.16 %), nothing in decode; worth ~+3.5e-4 of the accuracy gain where no matmul kernel changes (doc/fused_decoder/logs/norm_fidelity_control.log).",
+    "fidelity_policy": "Unchanged from the functional stage: the prefill dense projections pin the same HiFi2 / fp32_dest_acc_en=False / packer_l1_acc=True compute-kernel config that ttnn.linear selects by default for BF16, so the before/after is a pure topology comparison. minimal_matmul's own default is more accurate (PCC 0.999994 vs 0.999947 vs FP32) and 2.3-2.5 ms slower per 8192-token prefill; that choice belongs to the optimized-decoder stage. ONE fidelity knob was turned: every RMSNorm runs HiFi4/math_approx_mode=False/fp32_dest_acc_en=True/packer_l1_acc=True instead of ttnn.rms_norm's own default (HiFi4/approx=True/fp32_acc=False/l1_acc=False, rmsnorm.cpp:16-20). Measured against float64: prefill norm 978.27 -> 991.78 us with max relative error 6.5e-2 -> 4.2e-3; sharded decode norm 15.53 -> 14.92 us (faster) and 1.0e-2 -> 4.8e-3. Cost ~79 us of a 49,341 us prefill window (0.16 %), nothing in decode; worth ~+3.5e-4 of the accuracy gain where no matmul kernel changes (doc/fused_decoder/logs/norm_fidelity_control.log).",
     "prefill_16384_tokens_batch1_ms": {
-      "sliding": 104.648,
-      "full": 111.146
+      "sliding": 104.790,
+      "full": 111.035
     },
     "prefill_16384_tokens_batch1_ms_baseline": {
-      "sliding": 212.502,
-      "full": 221.614
+      "sliding": 214.579,
+      "full": 221.932
     }
   },
   "tests": {
@@ -207,11 +207,11 @@
     "passed": 94,
     "asserted_pcc_checks": 214,
     "hf_vs_ttnn_checks": 202,
-    "min_pcc_vs_hf": 0.998077,
+    "min_pcc_vs_hf": 0.998152,
     "fused_vs_unfused_checks": 12,
-    "min_pcc_fused_vs_unfused": 0.99694,
+    "min_pcc_fused_vs_unfused": 0.996797,
     "accuracy_controls": 12,
-    "accuracy_controls_note": "All six prefill controls show the fused graph closer to the HF reference by +3.2e-4 to +1.1e-3 (the test allows no prefill regression at all). Five of six decode controls improve; one drifts by -4.3e-4, inside the 5e-4 BF16 re-association band the test allows for decode, which never changes matmul kernel.",
+    "accuracy_controls_note": "All six prefill controls show the fused graph closer to the HF reference by +3.3e-4 to +1.2e-3 (the test allows no prefill regression at all). Five of six decode controls improve; one drifts by -4.6e-5, inside the 2e-4 BF16 re-association band the test allows for decode, which never changes matmul kernel. That band was 5e-4 until the prefill per-head QK norms took the same compute-kernel config as every other norm in the layer: those norms write the KV cache a decode step reads, and including them shrank the worst decode drift 10x.",
     "junit": "doc/fused_decoder/test_results.xml",
     "log": "doc/fused_decoder/logs/full_test_run.log",
     "pcc_summary": "doc/fused_decoder/logs/pcc_summary.txt"
@@ -232,6 +232,6 @@
       "pytest models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py -k full_context"
     ],
     "log": "doc/fused_decoder/logs/full_test_run.log",
-    "result": "8 full-context checks, all >= 0.998941 (see tested.prefill.pcc / tested.decode.pcc)"
+    "result": "8 full-context checks, all >= 0.998664 (see tested.prefill.pcc / tested.decode.pcc)"
   }
 }

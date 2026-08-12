@@ -25,6 +25,7 @@ chunk it measures, under the shipped HiFi2 / ``fp32_dest_acc_en=False`` /
 Any config that the op rejects prints its exact error, which is the
 op-contract blocker the optimization standard asks for.
 """
+
 from __future__ import annotations
 
 import time

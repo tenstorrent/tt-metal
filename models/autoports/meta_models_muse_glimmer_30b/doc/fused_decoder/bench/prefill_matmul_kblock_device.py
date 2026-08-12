@@ -18,6 +18,7 @@ order printed to stdout, so the companion parser can label them.  The default
 is re-emitted between every candidate, so drift shows up as a spread across
 the default groups rather than as a fake candidate win.
 """
+
 from __future__ import annotations
 
 import torch

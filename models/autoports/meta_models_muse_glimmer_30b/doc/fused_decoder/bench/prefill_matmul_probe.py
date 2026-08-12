@@ -10,6 +10,7 @@ explicit ``MatmulMultiCoreReuseMultiCastProgramConfig`` tilings (and
 stage can either take the win or hand the geometry sweep to the optimized stage
 with numbers attached.
 """
+
 from __future__ import annotations
 
 import math

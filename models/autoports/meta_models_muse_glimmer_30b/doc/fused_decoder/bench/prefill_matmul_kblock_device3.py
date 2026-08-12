@@ -12,6 +12,7 @@ the exact 8192-row chunk or on every ``minimal_matmul`` call.
 
 Run under ``python -m tracy -r -p -v``.
 """
+
 from __future__ import annotations
 
 import torch

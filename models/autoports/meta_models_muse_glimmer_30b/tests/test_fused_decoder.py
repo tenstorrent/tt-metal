@@ -85,19 +85,18 @@ EQUIVALENCE_PCC = 0.995
 #: activation rewrites — i.e. the same class of rewrite decode has, and it still
 #: lands on the right side.
 #:
-#: **Decode: 5e-4, and the margin is thin.**  Decode keeps ``ttnn.linear`` (a
-#: step is 32 rows, below the ``minimal_matmul`` crossover), so its rewrites —
-#: the RoPE op, the sharded norm and the activation merges — only *re-associate*
-#: BF16 rounding rather than changing precision, and the result can land either
-#: side of the baseline's.  Five of the six measured decode comparisons improve
-#: and one drifts by -4.3e-4, so 5e-4 bounds the observed negative drift by only
-#: about 1.15x: another ~0.7e-4 of re-association would fail this assertion.
-#: That is deliberate — it is a tight guard, not a comfortable one — and it is
-#: still about 6x inside the headroom from the suite's worst decode PCC
-#: (0.998077) to the 0.995 acceptance bar — a full 5e-4 drift would land at
-#: 0.997577.  See ``doc/fused_decoder/logs/pcc_summary.txt`` for all twelve
-#: controls.
-ACCURACY_REGRESSION_TOL = {"prefill": 0.0, "decode": 5e-4}
+#: **Decode: 2e-4.**  Decode keeps ``ttnn.linear`` (a step is 32 rows, below the
+#: ``minimal_matmul`` crossover), so its own rewrites only *re-associate* BF16
+#: rounding rather than changing precision, and the result can land either side
+#: of the baseline's.  Five of the six measured decode comparisons improve and
+#: one drifts by -4.6e-5, so 2e-4 bounds the observed negative drift by about
+#: 4.3x.  It was 5e-4 while the prefill per-head QK norms still ran on
+#: ``ttnn.rms_norm``'s default config: those norms write the KV cache a decode
+#: step then reads, and giving them the same uplift as every other norm in the
+#: layer shrank the worst decode drift 10x, from -4.3e-4 to -4.6e-5, which is
+#: what let this guard tighten.  See ``doc/fused_decoder/logs/pcc_summary.txt``
+#: for all twelve controls.
+ACCURACY_REGRESSION_TOL = {"prefill": 0.0, "decode": 2e-4}
 
 
 def build_fused(
@@ -1016,23 +1015,56 @@ def test_norm_compute_kernel_config_is_the_documented_uplift(mesh_device):
 
 
 @pytest.mark.parametrize("kind", LAYER_KINDS)
-def test_every_norm_takes_the_uplifted_config(mesh_device, decoder_cache, kind):
-    """All four hidden-size norms and the two QK norms carry it."""
+def test_every_norm_takes_the_uplifted_config(mesh_device, decoder_cache, reference_layers, kind):
+    """*Every* ``ttnn.rms_norm`` dispatch carries it, in prefill and in decode.
+
+    Asserted at the **call site**, not on an attribute: an earlier version of
+    this test checked ``decoder.norm_compute_kernel_config`` and so passed while
+    the prefill per-head QK norms — which reach ``ttnn.rms_norm`` through a
+    different code path — were still on the op's own default. Patching the op
+    is the only form of this assertion that can tell those two states apart,
+    and it is the same trick ``_OpTrace`` uses for the op-level audit.
+    """
     decoder = build_fused(mesh_device, decoder_cache, kind)
     expected = norm_compute_kernel_config(mesh_device.arch())
-    norms = [
-        decoder.input_layernorm,
-        decoder.post_attention_layernorm,
-        decoder.pre_feedforward_layernorm,
-        decoder.post_feedforward_layernorm,
-    ]
-    for norm in norms:
-        assert norm.compute_kernel_config is not None
-        assert norm.compute_kernel_config.fp32_dest_acc_en == expected.fp32_dest_acc_en
-        assert norm.compute_kernel_config.math_approx_mode == expected.math_approx_mode
-    # the per-head QK norms go through the decoder's own handle
-    assert decoder.norm_compute_kernel_config.fp32_dest_acc_en == expected.fp32_dest_acc_en
-    assert decoder.norm_compute_kernel_config.math_approx_mode == expected.math_approx_mode
+    seen: list[object] = []
+
+    original = ttnn.rms_norm
+
+    def traced(*args, **kwargs):
+        seen.append(kwargs.get("compute_kernel_config"))
+        return original(*args, **kwargs)
+
+    hidden = R.synthetic_hidden_states(1, 128, seed=4242)
+    page_table = make_page_table(mesh_device, 1, SHORT_MAX_SEQ)
+    ttnn.rms_norm = traced
+    try:
+        ttnn.deallocate(
+            decoder.prefill_forward(to_device_hidden(mesh_device, hidden), page_table=page_table, user_id=0)
+        )
+        prefill_dispatches = len(seen)
+        token = R.synthetic_hidden_states(1, 1, seed=4243)
+        current_pos, rope_pos_ids = decode_position_tensors(mesh_device, torch.tensor([128], dtype=torch.int32))
+        ttnn.deallocate(
+            decoder.decode_forward(
+                to_device_hidden(mesh_device, token),
+                current_pos=current_pos,
+                page_table=page_table,
+                rope_pos_ids=rope_pos_ids,
+            )
+        )
+    finally:
+        ttnn.rms_norm = original
+
+    # 4 hidden-size norms + 2 per-head QK norms, in each of prefill and decode.
+    assert prefill_dispatches == 6, f"prefill dispatched {prefill_dispatches} rms_norm calls, expected 6"
+    assert len(seen) == 12, f"prefill+decode dispatched {len(seen)} rms_norm calls, expected 12"
+    for index, config in enumerate(seen):
+        assert config is not None, f"rms_norm dispatch {index} passed no compute_kernel_config"
+        assert config.math_fidelity == expected.math_fidelity
+        assert config.math_approx_mode == expected.math_approx_mode
+        assert config.fp32_dest_acc_en == expected.fp32_dest_acc_en
+        assert config.packer_l1_acc == expected.packer_l1_acc
 
 
 @pytest.mark.parametrize("kind", LAYER_KINDS)

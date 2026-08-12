@@ -7,6 +7,7 @@ which is a pure transcription of the ``assert_pcc`` and accuracy-control lines
 in ``logs/full_test_run.log``.  Generating it with a committed script (rather
 than an ad-hoc snippet) is what makes those numbers re-derivable.
 """
+
 from __future__ import annotations
 
 import pathlib
@@ -38,7 +39,10 @@ def main() -> int:
         f.write("# generated from logs/full_test_run.log by bench/summarize_pcc.py\n\n")
         for pcc, label in rows:
             f.write(f"{pcc:.6f}  {label}\n")
-        f.write("\n# accuracy controls: prefill must strictly improve; decode has a 5e-4 BF16 band\n")
+        f.write(
+            "\n# accuracy controls: prefill must strictly improve; decode has a small BF16\n"
+            "# re-association band (ACCURACY_REGRESSION_TOL in tests/test_fused_decoder.py)\n"
+        )
         for window, unfused, fused, delta in controls:
             f.write(f"  {window:44s} unfused={unfused} fused={fused} delta={delta}\n")
 

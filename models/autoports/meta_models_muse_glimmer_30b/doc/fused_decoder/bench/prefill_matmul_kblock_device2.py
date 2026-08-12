@@ -17,6 +17,7 @@ instead of a bare "failed".
 Run under ``python -m tracy -r -p -v``; groups are labelled on stdout in
 emission order, parsed by the companion summary script.
 """
+
 from __future__ import annotations
 
 import torch

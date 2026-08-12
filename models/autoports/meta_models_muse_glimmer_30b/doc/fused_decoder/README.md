@@ -13,7 +13,7 @@ larger device ops.
 | candidate rewrites that lost | `doc/fused_decoder/bench/variants.py`, `logs/variant_sweep.log`, `logs/op_merge_probes.log` |
 | device | 1 x Blackhole (`ttnn.MeshShape(1, 1)`, 11x10 compute grid) |
 | dtypes | BF16 weights / activations / KV cache, TILE layout, DRAM interleaved — **unchanged** |
-| acceptance bar | PCC >= 0.995 vs HF (the functional stage's bar), plus fused-vs-unfused >= 0.995 **and** no accuracy regression vs HF (strict in prefill, 5e-4 BF16 band in decode) |
+| acceptance bar | PCC >= 0.995 vs HF (the functional stage's bar), plus fused-vs-unfused >= 0.995 **and** no accuracy regression vs HF (strict in prefill, 2e-4 BF16 band in decode) |
 
 
 ## Result
@@ -24,19 +24,19 @@ signposted, in runs separate from the watcher run:
 
 | kind | window | device ops / iter | device time / iter | speedup |
 | --- | --- | --- | --- | --- |
-| sliding | prefill, 8192 tokens (1 chunk) | 42 -> **24** | 101.23 -> **49.29 ms** | **2.05x** |
-| full | prefill, 8192 tokens (1 chunk) | 24 -> **22** | 99.38 -> **48.00 ms** | **2.07x** |
-| sliding | prefill, 16384 tokens (2 chunks) | 95 -> **61** | 212.50 -> **104.65 ms** | **2.03x** |
-| full | prefill, 16384 tokens (2 chunks) | 51 -> **47** | 221.61 -> **111.15 ms** | **1.99x** |
+| sliding | prefill, 8192 tokens (1 chunk) | 42 -> **24** | 101.23 -> **49.34 ms** | **2.05x** |
+| full | prefill, 8192 tokens (1 chunk) | 24 -> **22** | 99.38 -> **47.98 ms** | **2.07x** |
+| sliding | prefill, 16384 tokens (2 chunks) | 95 -> **61** | 214.58 -> **104.79 ms** | **2.05x** |
+| full | prefill, 16384 tokens (2 chunks) | 51 -> **47** | 221.93 -> **111.04 ms** | **2.00x** |
 | sliding | traced decode @ 2048 | 64 -> **44** | 3.163 -> **2.710 ms/token** | **1.17x** |
 | sliding | traced decode @ 131071 | 64 -> **44** | 3.160 -> **2.710 ms/token** | **1.17x** |
-| full | traced decode @ 2048 | 32 -> **34** | 3.080 -> **2.685 ms/token** | **1.15x** |
-| full | traced decode @ 131071 | 32 -> **34** | 3.575 -> **3.182 ms/token** | **1.12x** |
+| full | traced decode @ 2048 | 32 -> **34** | 3.080 -> **2.687 ms/token** | **1.15x** |
+| full | traced decode @ 131071 | 32 -> **34** | 3.575 -> **3.181 ms/token** | **1.12x** |
 
 And it is *more accurate* than the graph it replaces. All six head-to-head
-prefill accuracy controls improve (+3.2e-4 to +1.1e-3); five of six decode
-controls improve and one drifts by -4.3e-4. The worst HF-vs-TTNN check in the
-whole suite goes 0.997422 (functional) -> 0.998077 (fused).
+prefill accuracy controls improve (+3.3e-4 to +1.2e-3); five of six decode
+controls improve and one drifts by -4.6e-5. The worst HF-vs-TTNN check in the
+whole suite goes 0.997422 (functional) -> 0.998152 (fused).
 
 Two things drive that, and the stage separates them rather than claiming it all
 for the topology:
@@ -48,7 +48,7 @@ for the topology:
   op's default, which is the one place this stage changes precision rather than
   topology (limitation 3). `logs/norm_fidelity_control.log` is the same graph
   with the norms on the op default: the 100-token prefill controls fall to
-  -8e-6 and +0.0 there, so that uplift is worth about +3.5e-4 wherever no matmul
+  -8e-6 and +0.0 there, so that uplift is worth about +3.7e-4 wherever no matmul
   kernel changes.
 
 The `full` decode op count goes *up* by two: the sharded-residual rewrite adds
@@ -130,14 +130,14 @@ SDPA scale, the centered-RMSNorm `1 + w` fold, the page-table row slicing, the
 
 `pytest models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py`
 
--> **94 passed** in 477 s (`test_results.xml`, `logs/full_test_run.log`).
+-> **94 passed** in 474 s (`test_results.xml`, `logs/full_test_run.log`).
 `logs/pcc_summary.txt` holds **214 asserted PCC checks** — 202 HF-vs-TTNN (worst
-**0.998077**, bar 0.995) and 12 fused-vs-unfused equivalence (worst 0.996940,
+**0.998152**, bar 0.995) and 12 fused-vs-unfused equivalence (worst 0.996797,
 bar 0.995) — plus 12 accuracy controls comparing both graphs to the same HF
 reference.
 
 The functional decoder's worst HF-vs-TTNN check was 0.997422; the fused
-decoder's is 0.998077, i.e. the accuracy floor moved *up*.
+decoder's is 0.998152, i.e. the accuracy floor moved *up*.
 
 ### The fused graph is asserted, not assumed
 
@@ -184,20 +184,20 @@ baseline's error. What it must not do is drift *away* from the reference:
 
 | seq_len | kind | mode | unfused vs HF | fused vs HF | delta |
 | --- | --- | --- | --- | --- | --- |
-| 100 | sliding | prefill | 0.999102 | 0.999459 | +0.000357 |
-| 100 | full | prefill | 0.999076 | 0.999396 | +0.000320 |
-| 4097 | sliding | prefill | 0.998519 | 0.999445 | +0.000926 |
-| 4097 | full | prefill | 0.998327 | 0.999382 | +0.001055 |
-| 12345 | sliding | prefill | 0.998480 | 0.999423 | +0.000944 |
-| 12345 | full | prefill | 0.998233 | 0.999310 | +0.001076 |
-| 100 | sliding | decode | 0.999049 | 0.999405 | +0.000356 |
-| 100 | full | decode | 0.998999 | 0.999288 | +0.000288 |
-| 4097 | sliding | decode | 0.998843 | 0.998410 | **-0.000433** |
-| 4097 | full | decode | 0.998342 | 0.998808 | +0.000467 |
-| 12345 | sliding | decode | 0.997622 | 0.998954 | +0.001333 |
-| 12345 | full | decode | 0.998569 | 0.998701 | +0.000132 |
+| 100 | sliding | prefill | 0.999102 | 0.999471 | +0.000369 |
+| 100 | full | prefill | 0.999076 | 0.999409 | +0.000334 |
+| 4097 | sliding | prefill | 0.998519 | 0.999511 | +0.000992 |
+| 4097 | full | prefill | 0.998327 | 0.999465 | +0.001138 |
+| 12345 | sliding | prefill | 0.998480 | 0.999498 | +0.001018 |
+| 12345 | full | prefill | 0.998233 | 0.999423 | +0.001190 |
+| 100 | sliding | decode | 0.999049 | 0.999457 | +0.000408 |
+| 100 | full | decode | 0.998999 | 0.999302 | +0.000302 |
+| 4097 | sliding | decode | 0.998843 | 0.998797 | **-0.000046** |
+| 4097 | full | decode | 0.998342 | 0.998827 | +0.000485 |
+| 12345 | sliding | decode | 0.997622 | 0.998957 | +0.001335 |
+| 12345 | full | decode | 0.998569 | 0.998770 | +0.000201 |
 
-**All six prefill comparisons improve**, by +3.2e-4 to +1.1e-3, so the prefill
+**All six prefill comparisons improve**, by +3.3e-4 to +1.2e-3, so the prefill
 tolerance is zero — that is what the evidence supports, and any future drift
 should be re-examined rather than absorbed. Note the two regimes the table
 covers: at 4097 and 12345 tokens prefill also *changes matmul kernel* (rows >=
@@ -205,16 +205,17 @@ covers: at 4097 and 12345 tokens prefill also *changes matmul kernel* (rows >=
 runs the baseline's kernel and improves purely from the RoPE, norm and
 activation rewrites.
 
-One of the six decode comparisons drifts, by -4.3e-4. Decode never changes
+One of the six decode comparisons drifts, by -4.6e-5. Decode never changes
 matmul kernel (a step is 32 rows), so apart from the norm-fidelity uplift
 (limitation 3, which is *free* in decode) its rewrites only re-associate BF16
 rounding and can land either side of the baseline's; the decode tolerance is
-5e-4, which bounds that observed drift by only about **1.15x** — another
-~0.7e-4 of re-association would fail the assertion, so it is a tight guard, not
-a comfortable one — while still sitting about **6x** inside the headroom from
-the suite's worst decode PCC (0.998077) to the 0.995 bar (a full 5e-4 drift
-would land at 0.997577). The suite's *worst* HF-vs-TTNN check still moves up,
-0.997422 (functional) -> 0.998077 (fused).
+**2e-4**, which bounds that observed drift by about **4.3x**. It was 5e-4 —
+a 1.15x margin — while the prefill per-head QK norms were still on the op's
+default config: those norms write the Q and K that prefill stores in the paged
+cache, so giving them the same uplift as every other norm made the decode a
+step reads from measurably more accurate, and the worst drift fell 10x. The
+suite's *worst* HF-vs-TTNN check moves up either way, 0.997422 (functional) ->
+0.998152 (fused).
 
 ### Coverage inherited from the functional stage
 
@@ -250,19 +251,19 @@ tile-aligned for the new sharded RoPE gather and width-sharded norms.
 
 | PCC | check |
 | --- | --- |
-| 0.998077 | fused traced decode[full] pos=2048 |
-| 0.998078 | fused traced decode replay[sliding] pos=1024 |
-| 0.998081 | fused stress decode[full] step=32 pos=1056 |
-| 0.998173 | fused decode[full] prompt=2048 pos=2049 |
-| 0.998179 | fused traced decode replay[sliding] pos=1025 |
-| 0.998217 | fused stress decode[full] step=16 pos=1040 |
-| 0.998285 | fused decode[full] prompt=2048 pos=2051 |
-| 0.998299 | fused decode[full] prompt=3000 pos=3003 |
+| 0.998152 | fused decode[full] prompt=3000 pos=3002 |
+| 0.998213 | fused decode[full] prompt=2048 pos=2051 |
+| 0.998233 | fused traced decode replay[sliding] pos=1025 |
+| 0.998264 | fused decode[sliding] prompt=2048 pos=2048 |
+| 0.998281 | fused traced decode replay[sliding] pos=1024 |
+| 0.998333 | fused stress decode[full] step=32 pos=1056 |
+| 0.998362 | fused decode[full] prompt=2048 pos=2049 |
+| 0.998371 | fused decode[full] prompt=3000 pos=3003 |
 
 All eight are decode, where the fused graph's accuracy gain is smallest: decode
 keeps `ttnn.linear` (a decode step is 32 rows, below the `minimal_matmul`
 crossover), so only the RoPE, norm and activation rewrites apply there. Across
-the whole suite decode spans 0.998077-0.999525 and prefill — which switches
+the whole suite decode spans 0.998152-0.999693 and prefill — which switches
 matmul kernel at and above 3072 rows — spans 0.998648-0.999786.
 
 ## Performance
@@ -287,22 +288,22 @@ grep -c "markers were dropped" doc/fused_decoder/logs/tracy_*.log   # all 0
 
 | kind | mode | context | ops/iter | device time / iter | incl. op-to-op gaps | vs functional |
 | --- | --- | --- | --- | --- | --- | --- |
-| sliding | prefill, 8192 tokens (1 chunk), batch 1 | — | 42 -> 24 | 101.23 -> **49.29 ms** | 101.26 -> 49.31 ms | **2.05x** |
-| full | prefill, 8192 tokens (1 chunk), batch 1 | — | 24 -> 22 | 99.38 -> **48.00 ms** | 99.39 -> 48.01 ms | **2.07x** |
-| sliding | prefill, 16384 tokens (2 chunks), batch 1 | — | 95 -> 61 | 212.50 -> **104.65 ms** | 214.72 -> 106.44 ms | **2.04x** |
-| full | prefill, 16384 tokens (2 chunks), batch 1 | — | 51 -> 47 | 221.61 -> **111.15 ms** | 221.64 -> 111.18 ms | **1.99x** |
+| sliding | prefill, 8192 tokens (1 chunk), batch 1 | — | 42 -> 24 | 101.23 -> **49.34 ms** | 101.26 -> 49.36 ms | **2.05x** |
+| full | prefill, 8192 tokens (1 chunk), batch 1 | — | 24 -> 22 | 99.38 -> **47.98 ms** | 99.39 -> 47.99 ms | **2.07x** |
+| sliding | prefill, 16384 tokens (2 chunks), batch 1 | — | 95 -> 61 | 214.58 -> **104.79 ms** | 216.80 -> 106.63 ms | **2.04x** |
+| full | prefill, 16384 tokens (2 chunks), batch 1 | — | 51 -> 47 | 221.93 -> **111.04 ms** | 221.96 -> 111.07 ms | **1.99x** |
 | sliding | traced decode, batch 1 | 2048 | 64 -> 44 | 3.163 -> **2.710 ms/token** | 3.226 -> 2.760 | **1.17x** |
 | sliding | traced decode, batch 1 | 131071 | 64 -> 44 | 3.160 -> **2.710 ms/token** | 3.223 -> 2.759 | **1.17x** |
-| full | traced decode, batch 1 | 2048 | 32 -> 34 | 3.080 -> **2.685 ms/token** | 3.114 -> 2.721 | **1.15x** |
-| full | traced decode, batch 1 | 131071 | 32 -> 34 | 3.575 -> **3.182 ms/token** | 3.608 -> 3.217 | **1.12x** |
+| full | traced decode, batch 1 | 2048 | 32 -> 34 | 3.080 -> **2.687 ms/token** | 3.114 -> 2.722 | **1.15x** |
+| full | traced decode, batch 1 | 131071 | 32 -> 34 | 3.575 -> **3.181 ms/token** | 3.608 -> 3.215 | **1.12x** |
 
-At 8192 tokens per layer that is 166.2 k tok/s of layer prefill throughput for
+At 8192 tokens per layer that is 166.0 k tok/s of layer prefill throughput for
 `sliding` (was 80.9 k) and 170.7 k for `full` (was 82.4 k).
 
 The 16384-token rows are the *multi-chunk* regime — the one a long prompt
 actually runs, and the only one in which a `full` layer touches the paged
 `chunked_scaled_dot_product_attention` at all. The `full` kind's two SDPA calls in that window go
-45,716 -> 27,706 us — both are retuned (the in-memory chunk-0 call and the paged
+45,773 -> 27,703 us — both are retuned (the in-memory chunk-0 call and the paged
 one at `chunk_start_idx=8192`), and the paged call is the one the functional
 layer left at 128. Both 16384 captures use the same signposted window and replay
 count as the 8192 ones, and the baseline captures are committed alongside them
@@ -312,16 +313,16 @@ as `prefill_16384_baseline_*`.
 
 | share | op | x | device time | note |
 | --- | --- | --- | --- | --- |
-| 65.0 % | `MinimalMatmulDeviceOperation` | 6 | 32,053 us | 228.9-255.6 TFLOPs (was 95.7-214.1 on `ttnn.linear`) |
-| 15.4 % | `SDPAOperation` | 1 | 7,596 us | `q_chunk == k_chunk == 256` (was 11,838 us at 128) |
-| 8.6 % | `BinaryNgDeviceOperation` | 4 | 4,243 us | 2 residual adds + gating mul + SwiGLU mul (sigmoid/SiLU folded in) |
-| 7.9 % | `LayerNormDeviceOperation` | 6 | 3,868 us | 110 cores, DRAM-bandwidth bound (and the one fidelity uplift, limitation 3) |
-| 1.6 % | `RotaryEmbeddingHfDeviceOperation` | 2 | 782 us | was 2,355 us of primitive ops + 2 tilizes |
-| 1.5 % | heads split/concat, paged fill, page-table slice | 5 | 752 us | |
+| 65.0 % | `MinimalMatmulDeviceOperation` | 6 | 32,066 us | 228.8-255.6 TFLOPs (was 95.7-214.1 on `ttnn.linear`) |
+| 15.4 % | `SDPAOperation` | 1 | 7,601 us | `q_chunk == k_chunk == 256` (was 11,838 us at 128) |
+| 8.6 % | `BinaryNgDeviceOperation` | 4 | 4,251 us | 2 residual adds + gating mul + SwiGLU mul (sigmoid/SiLU folded in) |
+| 7.9 % | `LayerNormDeviceOperation` | 6 | 3,893 us | 110 cores, DRAM-bandwidth bound (and the one fidelity uplift, limitation 3) |
+| 1.6 % | `RotaryEmbeddingHfDeviceOperation` | 2 | 781 us | was 2,355 us of primitive ops + 2 tilizes |
+| 1.5 % | heads split/concat, paged fill, page-table slice | 5 | 750 us | |
 
-In the 8192 window the six `MinimalMatmul` rows run at 228.9-255.6 TFLOPs on the
-`sliding` kind and 228.9-255.6 on `full` (in the 16384 window, twelve rows,
-228.4-255.6 and 228.5-255.6); the functional graph's six matmuls were 95.7-214.1
+In the 8192 window the six `MinimalMatmul` rows run at 228.8-255.6 TFLOPs on the
+`sliding` kind and 228.9-255.4 on `full` (in the 16384 window, twelve rows,
+228.4-255.5 and 228.6-255.6); the functional graph's six matmuls were 95.7-214.1
 and 93.7-214.3, and `tt-perf-report` no longer marks any matmul row `SLOW`. Prefill is now genuinely compute-bound on the matmuls, and the next
 lever on them is precision, not topology. The blocking itself has been taken as
 far as this op allows: `MinimalMatmulConfig` was swept over the whole legal
@@ -344,7 +345,7 @@ with *"Statically allocated circular buffers on core range [0-0 - 10-9] grow to
 
 | share | op | x | device time | note |
 | --- | --- | --- | --- | --- |
-| 93.2 % / 79.4 % | `MatmulDeviceOperation` | 6 | 2,526 / 2,528 us | weight-bandwidth bound at 383 GB/s |
+| 93.2 % / 79.4 % | `MatmulDeviceOperation` | 6 | 2,526 / 2,527 us | weight-bandwidth bound at 383 GB/s |
 | 2.2 % / 1.9 % | `LayerNormDeviceOperation` | 6 | 59 us | **was 447 us** — 4 hidden-size norms on 8 cores + 2 tiny QK norms |
 | 1.4 % / 16.6 % | `SdpaDecodeDeviceOperation` | 1 | 37 / 529 us | the only op that scales with context |
 | 0.9 % / 0.8 % | `BinaryNgDeviceOperation` | 4 | 24 us | |
@@ -412,15 +413,15 @@ reasoning in [`work_log.md`](work_log.md) section 4.
 
 ### Measured and rejected
 
-| candidate | verdict (sliding: prefill / decode; shipped = 64.78 ms / 2.734 ms per token) |
+| candidate | verdict (sliding: prefill / decode; shipped = 64.93 ms / 2.735 ms per token) |
 | --- | --- |
 | `ttnn.linear(..., activation="silu"/"sigmoid")` | **worse**: does not actually fuse on this build — a separate 2,128 us `UnaryDeviceOperation` still runs alongside the activation-carrying matmul — and the same shape measured in isolation goes 23.964 -> 26.461 ms |
 | `minimal_matmul(..., fused_activation=SILU)` | the same idea on the kernel prefill actually uses: it *does* fuse, but costs 12.101 vs 10.283 ms on the MLP gate shape |
-| shared-LHS packing of `wqkv` + attention gate | 65.81 / 2.738 — the decision rests on traced decode, which reproduces to +-0.001 ms/token and is a consistent loss on both kinds (2.738 vs 2.734 sliding, 2.709 vs 2.707 full); the prefill wall-clock A/B has a +-2 % round spread, so it only says "not faster". The slices cost what the dispatch saves, and decode matmuls are weight-bandwidth bound so packing moves no bytes |
-| shared-LHS packing of the MLP gate/up | 67.11 / 2.758 — same reason, and the slices are on a 19968-wide tensor |
-| `ttnn.swiglu` | 68.34 / 2.768 — a composite (2 slices + swish + multiply) |
+| shared-LHS packing of `wqkv` + attention gate | 65.87 / 2.737 — the decision rests on traced decode, which reproduces to +-0.001 ms/token and is a consistent loss on both kinds (2.737 vs 2.735 sliding, 2.709 vs 2.708 full); the prefill wall-clock A/B has a +-2 % round spread, so it only says "not faster". The slices cost what the dispatch saves, and decode matmuls are weight-bandwidth bound so packing moves no bytes |
+| shared-LHS packing of the MLP gate/up | 66.94 / 2.758 — same reason, and the slices are on a 19968-wide tensor |
+| `ttnn.swiglu` | 67.97 / 2.767 — a composite (2 slices + swish + multiply) |
 | `minimal_matmul(fuse_swiglu=True)` | faster in prefill (24.682 vs 25.718 ms at 8192 rows) but 84 % **slower** in decode (2.593 vs 1.406 ms at 32 rows), so the layer would need both weight layouts: +531 MB per layer, +27 GB over 52 layers |
-| `paged_fused_update_cache` + the V reshard this layout forces | 65.14 / 2.736 sliding and 64.95 / 2.704 full — +0.002 ms/token on one kind and -0.004 on the other, i.e. ~0.1 % and sign-flipping between the two layer kinds, so the reshard costs what the dispatch saves. A per-kind selection was considered and rejected: the fused op swaps two 3.58 us cache dispatches for one write plus a ~1.4 us reshard, so it removes no device work and the delta is dispatch overlap — not worth forking the cache write by layer kind (`logs/kv_update_ab.log`, 5 rounds x 256 iters). See the contract row below for why the reshard is unavoidable here |
+| `paged_fused_update_cache` + the V reshard this layout forces | 64.76 / 2.737 sliding and 64.14 / 2.705 full — +0.002 ms/token on one kind and -0.003 on the other, i.e. ~0.1 % and sign-flipping between the two layer kinds, so the reshard costs what the dispatch saves. A per-kind selection was considered and rejected: the fused op swaps two 3.58 us cache dispatches for one write plus a ~1.4 us reshard, so it removes no device work and the delta is dispatch overlap — not worth forking the cache write by layer kind (`logs/kv_update_ab.log`, 5 rounds x 256 iters). See the contract row below for why the reshard is unavoidable here |
 | explicit 2D matmul program configs | 28 attempts (7 rectangles x 4 projections), all exceed the L1 circular-buffer budget |
 | explicit `MinimalMatmulConfig` on `wqkv`, the attention gate and `mlp_down` | all three are fastest on the op's own default; the best candidate is 2.6 % worse on `wqkv`, 0.01 % on the attention gate (where the best candidate is the default itself) and 0.1 % on `mlp_down`, so those three pass no `config=` (the other two shapes do take one — see the prefill table) |
 | `o_proj`'s `M16 K4 N8` on tail chunks | wins 2.80 % at the full 8192-row chunk but loses 6.3 % at 4096 and 6.0 % at 6144, so the entry carries a minimum row count instead of applying everywhere (the MLP entry was measured at all four heights — +2.61/+0.92/+1.49/+2.92 % at 3072/4096/6144/8192 — and needs no such gate) |
@@ -467,7 +468,7 @@ it is why `minimal_matmul(fuse_swiglu=True)` — which would have needed a secon
    peak). No graph rewrite can move that; the remaining levers are weight dtype
    and matmul config, i.e. the optimized-decoder stage.
 2. **Prefill is compute-bound on `minimal_matmul`.** 65 % of prefill is six
-   `MinimalMatmul` ops at 228.9-255.6 TFLOPs on `sliding` and 228.9-255.6 on
+   `MinimalMatmul` ops at 228.8-255.6 TFLOPs on `sliding` and 228.9-255.4 on
    `full` (the functional graph's six matmuls were 95.7-214.1 / 93.7-214.3). `tt-perf-report` no longer marks any matmul `SLOW`. The
    next lever is again precision.
 3. **`minimal_matmul` is not bit-identical to `ttnn.linear`** — it accumulates
@@ -492,14 +493,27 @@ it is why `minimal_matmul(fuse_swiglu=True)` — which would have needed a secon
    (`bench/norm_fidelity_probe.py`): the prefill norm goes 978.27 -> 991.78 us
    with max relative error 6.5e-2 -> 4.2e-3, and the sharded decode norm is
    *faster* as well as more accurate, 15.53 -> 14.92 us and 1.0e-2 -> 4.8e-3.
-   So it costs 81 us of a 49,294 us prefill window (0.16 %), nothing in decode,
-   and buys a 15x smaller worst-case error on the op feeding every matmul.
+   So it costs ~54 us across the four hidden-size norms and ~25 us across the
+   two much smaller per-head QK norms (the prefill `LayerNorm` total moved
+   3,868 -> 3,893 us when those two were included) — about 0.16 % of a 49,341 us
+   prefill window — nothing in decode, and buys a 15x smaller worst-case error on the
+   op feeding every matmul. It reaches *every* `ttnn.rms_norm` dispatch, six per
+   prefill and six per decode, which
+   `test_every_norm_takes_the_uplifted_config` asserts by patching the op
+   rather than by reading an attribute — the prefill per-head QK norms reach it
+   through the inherited call path, and an earlier revision left exactly those
+   two on the default while claiming otherwise.
    It is worth ~+3.5e-4 of the accuracy gain wherever no matmul kernel changes
-   (`logs/norm_fidelity_control.log`), it is pinned by
+   (`logs/norm_fidelity_control.log`), and it improves *decode* indirectly by
+   more than it improves prefill: the per-head QK norms write the Q and K that
+   prefill stores in the paged cache, so a decode step reads a more accurate
+   cache. Extending the uplift to those two took the worst decode accuracy
+   control from -4.3e-4 to **-4.6e-5**, which is what let the decode tolerance
+   tighten from 5e-4 to 2e-4. Pinned by
    `test_norm_compute_kernel_config_is_the_documented_uplift` and
-   `test_every_norm_takes_the_uplifted_config`, and it is called out here
-   because "the fused graph is more accurate" would otherwise read as a pure
-   topology result.
+   `test_every_norm_takes_the_uplifted_config`; called out here because "the
+   fused graph is more accurate" would otherwise read as a pure topology
+   result.
 4. **The decode RoPE cos/sin gather costs ~19 us, 0.7 % of the step, in ops the
    layer cannot remove or the op trace cannot see.** Two
    `TilizeWithValPaddingDeviceOperation` (5.6 us each) live *inside*
@@ -584,7 +598,7 @@ it is why `minimal_matmul(fuse_swiglu=True)` — which would have needed a secon
    shapes, the fused-vs-unfused comparison and the 64-step stress soak — but not
    the full-131072-context paths (a
    watcher-instrumented 131072-token prefill is minutes of runtime per case).
-   `watcher/watcher.log.gz` is 20501 lines with 38 periodic dumps and zero hits
+   `watcher/watcher.log.gz` is 20489 lines with 38 periodic dumps and zero hits
    for `Watcher detected`, `tripped`, `sanitize`, `TT_ASSERT`, `DEBUG_ASSERT`,
    `out of bounds`, `fault` or `Error`.
 

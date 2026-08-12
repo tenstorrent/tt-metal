@@ -16,6 +16,7 @@ Usage::
 Prose fields, the capability contract itself and the performance block are left
 alone: this only touches values that have a single source of truth in the run.
 """
+
 from __future__ import annotations
 
 import argparse

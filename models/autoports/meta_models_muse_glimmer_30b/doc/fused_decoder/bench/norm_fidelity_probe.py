@@ -21,6 +21,7 @@ the whole graph with the norms on the op default.
 Run under ``python -m tracy -r -p -v`` for device kernel time; the wall-clock
 numbers it prints are also usable because the gap here is large.
 """
+
 from __future__ import annotations
 
 import time

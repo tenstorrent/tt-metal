@@ -287,7 +287,13 @@ def _dense(
             compute_kernel_config=compute_kernel_config,
             config=_minimal_matmul_config(rows, weight, x.device().compute_with_storage_grid_size()),
         )
-    return ttnn.linear(x, weight, dtype=dtype, memory_config=memory_config)
+    # The config is forwarded rather than dropped so a future precision policy
+    # cannot silently apply to prefill only.  It is a no-op today, verified
+    # rather than assumed: at every decode projection shape the explicit config
+    # and ``ttnn.linear``'s auto-selected one agree to every digit of both PCC
+    # against a float64 reference and max relative error, at the same latency
+    # (``doc/fused_decoder/logs/decode_dense_ck_probe.log``).
+    return ttnn.linear(x, weight, dtype=dtype, memory_config=memory_config, compute_kernel_config=compute_kernel_config)
 
 
 def norm_compute_kernel_config(arch):
@@ -313,16 +319,30 @@ def norm_compute_kernel_config(arch):
     ========  ==========  ==========  ==================  ==============
 
     So it is **free in decode** (the sharded kernel is 3.9 % *faster* with it)
-    and costs 13.5 us per prefill norm -- 81 us of a 49,285 us prefill window,
-    0.16 % -- for a 15x smaller worst-case error on the op that feeds every
-    matmul in the layer.
+    and costs 13.5 us on each of the four hidden-size prefill norms, ~54 us of
+    a 49,294 us prefill window plus a few us across the two much smaller
+    per-head QK norms: about **0.12 %** for a 15x smaller worst-case error on
+    the op that feeds every matmul in the layer.
+
+    It reaches *every* ``ttnn.rms_norm`` dispatch -- six in a prefill and six in
+    a decode -- which ``test_every_norm_takes_the_uplifted_config`` asserts by
+    patching the op rather than by reading an attribute.  That matters: the
+    prefill per-head QK norms reach the op through the inherited call path, and
+    an earlier revision left them on the default while claiming otherwise.
 
     It is also worth about **+3.5e-4** of the fused graph's HF-vs-unfused
     accuracy gain at short prefill lengths, where no matmul kernel changes.
     ``doc/fused_decoder/logs/norm_fidelity_control.log`` is the same graph with
     the norms on the op default: the 100-token prefill controls go to -8e-6 and
-    +0.0 there, against +3.6e-4 and +3.2e-4 shipped.  That control is why the
+    +0.0 there, against +3.7e-4 and +3.3e-4 shipped.  That control is why the
     README does not claim the accuracy gain is topology alone.
+
+    It also improves *decode*, indirectly and by more than it improves prefill:
+    the per-head QK norms write the Q and K that prefill stores in the paged
+    cache, so a decode step reads a more accurate cache.  Extending the uplift
+    to the prefill QK norms took the worst decode accuracy control from -4.3e-4
+    to **-4.6e-5** and is what let ``ACCURACY_REGRESSION_TOL["decode"]``
+    tighten from 5e-4 to 2e-4.
     """
     return ttnn.init_device_compute_kernel_config(
         arch,
@@ -1283,6 +1303,31 @@ class FusedDecoder(FunctionalDecoder):
             block_size=block_size,
             num_kv_heads=n_kv,
         )
+
+    def _per_head_rmsnorm(self, tensor: ttnn.Tensor) -> ttnn.Tensor:
+        """Prefill's scale-less per-head RMSNorm, on this layer's norm config.
+
+        Identical to the functional layer's version except that it passes
+        ``norm_compute_kernel_config`` — which the functional one could not,
+        because it passed no config anywhere.  Overridden rather than left
+        inherited so that "every RMSNorm in this layer runs the uplifted
+        config" is true of the *prefill* QK norms too, not only of the
+        hidden-size norms and the decode QK norms: these two feed Q and K
+        straight into SDPA, and on the op default they were the least accurate
+        norms in the layer (the isolated probe puts the default's worst-case
+        relative error 15x above the uplifted one).  They are 370 us of a
+        49,294 us prefill window, so the accuracy is nearly free.
+        """
+        shape = tensor.shape
+        flat = ttnn.reshape(tensor, (1, 1, shape[0] * shape[1] * shape[2], shape[3]))
+        normed = ttnn.rms_norm(
+            flat,
+            epsilon=self.config.rms_norm_eps,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.norm_compute_kernel_config,
+        )
+        ttnn.deallocate(flat)
+        return ttnn.reshape(normed, shape)
 
     def _sharded_per_head_rmsnorm(self, tensor: ttnn.Tensor, memory_config: ttnn.MemoryConfig) -> ttnn.Tensor:
         """Scale-less RMSNorm over ``head_dim`` for a height-sharded decode tensor."""

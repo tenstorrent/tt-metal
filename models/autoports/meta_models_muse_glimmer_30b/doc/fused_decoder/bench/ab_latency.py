@@ -13,6 +13,7 @@ several of the rejected candidates' deltas.
 
     python .../bench/ab_latency.py [--impl functional,fused] [--kinds sliding,full]
 """
+
 from __future__ import annotations
 
 import argparse

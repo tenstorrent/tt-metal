@@ -9,6 +9,7 @@ sweep measures every ``q == k`` chunk against a PyTorch masked-softmax
 reference (correctness) and against wall time (speed), for the sliding
 (windowed) and full (plain causal) kinds at several prefill-chunk lengths.
 """
+
 from __future__ import annotations
 
 import time

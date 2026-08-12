@@ -17,6 +17,7 @@ candidate.
 Run under ``python -m tracy -r -p -v``; summarize with
 ``summarize_device_probe.py``.
 """
+
 from __future__ import annotations
 
 import torch

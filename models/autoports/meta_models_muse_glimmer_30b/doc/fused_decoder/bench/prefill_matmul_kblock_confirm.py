@@ -15,6 +15,7 @@ chunk heights ``_dense`` can see (a full 8192-row chunk and a 4096-row tail;
 A candidate is only shipped if it wins at both heights by more than the paired
 default-vs-default noise band this script also measures.
 """
+
 from __future__ import annotations
 
 import time
