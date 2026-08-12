@@ -101,14 +101,14 @@ runs:
 
         # Workers + runner local copy for runtime (local disk).
         cp -r "$GITHUB_WORKSPACE" /ci/tt-metal
-        cp -r "${BUILD_ARCHIVE}" /ci/tt-metal 
-        cp -r "${ttnn_wheels[0]}" /ci/tt-metal
+        cp -r "${BUILD_ARCHIVE}" /ci/tt-metal/ 
+        cp -r "${ttnn_wheels[0]}" /ci/tt-metal/
         tar --zstd -xf "${BUILD_ARCHIVE}" -C /home/user/tt-metal
 
         mpirun --pernode bash -lc 'cp -r /ci/tt-metal /home/user/'
         mpirun --pernode git -C /home/user/tt-metal submodule update --init --recursive
-        mpirun --pernode tar --zstd -xf "/home/user/tt-metal/" -C /home/user/tt-metal
-        mpirun --pernode uv pip install "${ttnn_wheels[@]}" ${EXTRA_PIP_PACKAGES}
+        mpirun --pernode tar --zstd -xf "/home/user/tt-metal/$(basename "${BUILD_ARCHIVE}")" -C /home/user/tt-metal
+        mpirun --pernode uv pip install "/home/user/tt-metal/$(basename "${ttnn_wheels[0]}"" ${EXTRA_PIP_PACKAGES}
 
          if [ "${CREATE_PIPELINE_DIR}" = "true" ] && [ -n "${PIPELINE_DIR:-}" ]; then
           # Per-job NFS scratch (ranklogs, automapper cwd). Do NOT copy the full
