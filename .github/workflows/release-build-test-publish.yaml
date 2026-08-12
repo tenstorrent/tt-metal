@@ -314,7 +314,10 @@ jobs:
     needs: [check-rtl-sim-status, release-demo-tests]
     if: ${{ always() && needs.check-rtl-sim-status.outputs.sha != '' }}
     runs-on: ubuntu-slim
+    # Reporting only: it must not fail or stall the release. Steps are
+    # individually non-fatal so a broken report does not redden the run.
     continue-on-error: true
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -335,6 +338,7 @@ jobs:
           merge-multiple: false
 
       - name: Build report
+        continue-on-error: true
         env:
           JIRA_BASE_URL: "https://tenstorrent.atlassian.net"
           JIRA_USER_EMAIL: ${{ secrets.JIRA_RELEASE_USER_EMAIL }}
@@ -360,6 +364,7 @@ jobs:
           cat release-test-evidence.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Generate the Quasar test coverage inventory
+        continue-on-error: true
         run: python3 tests/scripts/quasar/gen_test_coverage_doc.py
 
       - name: Upload report

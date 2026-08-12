@@ -62,6 +62,9 @@ def _api(base, email, token, method, path, body=None):
             return json.loads(raw) if raw else {}
     except urllib.error.HTTPError as e:
         sys.exit(f"error: Jira {method} {path} -> {e.code} {e.reason}\n{e.read().decode(errors='replace')}")
+    except urllib.error.URLError as e:
+        # HTTPError subclasses URLError, so this is network-level only.
+        sys.exit(f"error: cannot reach Jira ({method} {path}): {e.reason}")
 
 
 def _adf(text):
