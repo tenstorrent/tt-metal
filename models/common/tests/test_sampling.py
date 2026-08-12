@@ -10,13 +10,50 @@ import torch.nn.functional as F
 import ttnn
 from models.common.sampling import (
     LogProbsCalculator,
+    SamplingGenerator,
     SamplingParams,
     SeedManager,
     broadcast_sampling_params,
     format_sampling_params,
 )
+from models.common.sampling.generator import _mark_trace_buffers_corruptible
 from models.common.sampling.tt_log_probs import MAX_TOP_LOGPROBS, LogProbsResult
 from models.common.utility_functions import comp_pcc
+
+
+def test_sampling_trace_buffer_reuse_is_bucket_only(monkeypatch):
+    marked = []
+    monkeypatch.setattr(ttnn, "mark_corruptible", marked.append, raising=False)
+
+    _mark_trace_buffers_corruptible(None, ["default"])
+    _mark_trace_buffers_corruptible(1, ["input", None, ("output",)])
+
+    assert marked == ["input", "output"]
+
+
+def test_sampling_trace_bucket_isolation():
+    """Default users keep one flat namespace; Qwen bucket widths get distinct slots."""
+    sampling = SamplingGenerator.__new__(SamplingGenerator)
+    sampling._trace_states = {}
+    sampling._active_trace_bucket = None
+
+    default_key, default_slot = sampling._trace_slot(False, False, True)
+    assert default_key.bucket is None
+    assert sampling._trace_slot(False, False, True)[1] is default_slot
+
+    sampling.set_trace_bucket(1)
+    width1_key, width1_slot = sampling._trace_slot(False, False, True)
+    sampling.set_trace_bucket(8)
+    width8_key, width8_slot = sampling._trace_slot(False, False, True)
+
+    assert width1_key.bucket == 1 and width8_key.bucket == 8
+    assert width1_slot is not default_slot
+    assert width8_slot is not default_slot
+    assert width8_slot is not width1_slot
+
+    sampling.set_trace_bucket(None)
+    assert sampling._trace_slot(False, False, True)[1] is default_slot
+    assert len(sampling._trace_states) == 3
 
 
 # ---------------------------------------------------------------------------
