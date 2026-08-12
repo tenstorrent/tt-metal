@@ -61,6 +61,15 @@
 // which; every phase addresses the block through it. The two coincide at
 // NUM_CHUNKS == 1.
 //
+// PER-STAGE INSTRUMENTATION (PERMANENT — see perf_instrumentation.hpp's
+// durability contract). Every zone below is recorded THREE times, once per TRISC
+// (unpack / math / pack); read each as that thread's OCCUPANCY, not as one
+// "stage cost". Only unpack blocks on tiles arriving and only pack on space, so
+// the waits that can be hoisted out of a phase are hoisted into their own
+// `*_wait` zone (device-zone-scope-attribution.md §2-§3) — notably the combine's
+// gather wait, which is a peer rendezvous and would otherwise be
+// indistinguishable from the combine's arithmetic.
+//
 // Helper substitutions: none. Every phase is a kernel_lib helper call
 // (eltwise_chain / eltwise_convenience / reduce / tilize / untilize). The
 // caller-managed (None, None) CB policies on sumsq_block and mask_tail_block are
@@ -73,6 +82,7 @@
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
@@ -81,6 +91,12 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
+
+// Perf 1, idea I3: the column-valid finalize elements below hand a raw sfpi body to
+// the SAME wrapper the stock SFPU ops use. `_calculate_sqrt_body_` lives here.
+#if defined(TRISC_MATH) && !defined(ARCH_QUASAR)
+#include "ckernel_sfpu_sqrt.h"
+#endif
 
 // TEMPORARY ablation switch (Refinement 4 measurement) — MUST be 0 in committed
 // code. 1 drops the apply pass's MATH (scale_block + gamma_block) while keeping
@@ -142,18 +158,87 @@ namespace ckl = compute_kernel_lib;
 // the pinned perf geometry): the finalize chain was 31.1 us of a 76.9 us wall —
 // 23.1 us of it the Rsqrt alone, at ~720 ns per one-tile-row stat tile — because
 // it is on the ROOT and every other core in the group waits for it.
+//
+// ---------------------------------------------------------------------------
+// PERF 1 (idea I3): `VectorMode::C` IS NOT THE FLOOR — the EVEN-PARITY VECTORS ARE.
+//
+// RAW-LLK JUSTIFICATION (do not "fix" this back to a plain `SFPU_UNARY_CALL`; that
+// undoes a measured win). `VectorMode::C` still runs BOTH column parities of faces
+// 0 and 2, but one SFPU vector op covers 4 rows x 8 STRIDE-2 columns and a face is
+// walked `[rg0-even, rg0-odd, rg1-even, ...]` — column 0 lives ONLY in the
+// even-parity vectors. A column-0-valid result therefore needs 4 vectors per face,
+// not 8. `ITERATIONS` cannot express it (it truncates the OUTER, row-group axis
+// contiguously); parity is the INNER axis, so the only handle is the DEST address
+// stride, which NO wrapper exposes — hence the hand-written `sfpi` body handed to
+// `_llk_math_eltwise_unary_sfpu_params_`, the same wrapper `SFPU_UNARY_CALL` itself
+// uses, so DEST addressing, the STALLWAIT and the face stepping are unchanged.
+// The body reuses `_calculate_sqrt_body_<APPROX, true, false>` — the exact body the
+// stock non-legacy `calculate_rsqrt` calls, at the same precision — so this changes
+// WHICH vectors run, never the arithmetic inside one.
+// NET `dst_reg` ADVANCE MUST STAY +8 (== the stock `ITERATIONS = 8` == one face) or
+// `VectorMode::C`'s face0 -> face2 stepping desynchronizes: these bodies do 4 x (+2).
+//
+// MEASURED (isolated bake-off, blackhole_p150b @1350 MHz, bf16 / HiFi2 /
+// fp32_dest_acc_en=False, `cp_finalize` TRISC_1 occupancy per chain call):
+//   vectors/tile   64 (`::RC`, pre-R5)   32 (`::C`, R5)   16 (this)
+//   rows_t = 1          1011 ns               415 ns        377 ns  (1.10x)
+//   rows_t = 16       14475 ns              7568 ns       4409 ns  (1.72x)
+//   rows_t = 32       28837 ns             15156 ns       8715 ns  (1.74x)
+// With the copy+pack floor removed the cost is exactly proportional to the vector
+// count (64:32:16 -> 13405:6498:3339 ns). Whole-kernel at rows_t=16: 7705 -> 4546 ns.
+// Column 0 is BIT-IDENTICAL to the `VectorMode::C` chain in BOTH `fp32_dest_acc_en`
+// legs, over 11 magnitudes (0, 1e-30 ... 1e18) plus hostile `-1/0/+-inf/nan/+-3.4e38`
+// garbage in columns 1..31, with no faults and no leakage into column 0.
+// NOT taken: the same skip with the `+eps` and the rsqrt FUSED into one element is a
+// further 1.90x at rows_t=16 but a MEASURED REGRESSION at rows_t=1 (0.84x: 8 long
+// dependent vectors pipeline worse than 16 short independent ones), and rows_t=1 is
+// the decode geometry — so the two elements stay separate.
 namespace {
+// Even-parity walk of a `VectorMode::C` face pair: 4 vectors instead of 8, net +8.
+#if defined(TRISC_MATH) && !defined(ARCH_QUASAR)
+template <int STEP, int ITER>
+sfpi_inline void rsqrt_col0_body() {
+    for (int i = 0; i < ITER; i++) {
+        sfpi::vFloat t =
+            ckernel::sfpu::_calculate_sqrt_body_<APPROX, true /*RECIPROCAL*/, false /*FAST_APPROX*/>(sfpi::dst_reg[0]);
+        if constexpr (!DST_ACCUM_MODE) {
+            t = sfpi::convert<sfpi::vFloat16b>(t, sfpi::RoundMode::Nearest);
+        }
+        sfpi::dst_reg[0] = t;
+        sfpi::dst_reg += STEP;
+    }
+}
+
+template <int STEP, int ITER>
+sfpi_inline void add_col0_body(uint32_t param) {
+    const sfpi::vFloat parameter = ckernel::sfpu::Converter::as_float(param);
+    for (int i = 0; i < ITER; i++) {
+        sfpi::vFloat val = sfpi::dst_reg[0];
+        sfpi::dst_reg[0] = val + parameter;
+        sfpi::dst_reg += STEP;
+    }
+}
+#endif
+
 template <ckl::Dst Slot = ckl::Dst::D0>
 struct RsqrtColValid : ckl::UnaryOp<RsqrtColValid<Slot>, Slot> {
     static ALWI void init() { ckernel::rsqrt_tile_init<false>(); }
     static ALWI void exec_impl(uint32_t slot_offset) {
+        [[maybe_unused]] const uint32_t slot = ckl::to_u32(Slot) + slot_offset;
+#if defined(ARCH_QUASAR)
+        // CARVE-OUT (inexpressible, not slower): Quasar has no `_calculate_sqrt_body_`
+        // — its `calculate_sqrt` is a different implementation — so the parity-strided
+        // body cannot be built there. Keep the `VectorMode::C` pair.
         MATH(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_rsqrt,
             (APPROX, 8 /* ITERATIONS */, DST_ACCUM_MODE, false /* FAST_APPROX */, false /* legacy */),
-            ckl::to_u32(Slot) + slot_offset,
+            slot,
             VectorMode::C));
+#else
+        MATH((_llk_math_eltwise_unary_sfpu_params_((rsqrt_col0_body<2, 4>), slot, VectorMode::C)));
+#endif
     }
 };
 
@@ -163,14 +248,19 @@ struct AddUnaryColValid : ckl::UnaryOp<AddUnaryColValid<Slot>, Slot> {
     constexpr explicit AddUnaryColValid(uint32_t p) noexcept : param(p) {}
     static ALWI void init() { ckernel::binop_with_scalar_tile_init(); }
     ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const {
+        [[maybe_unused]] const uint32_t slot = ckl::to_u32(Slot) + slot_offset;
+#if defined(ARCH_QUASAR)
         MATH(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_binop_with_scalar,
             (APPROX, ckernel::ADD_UNARY, 8 /* ITERATIONS */),
-            ckl::to_u32(Slot) + slot_offset,
+            slot,
             VectorMode::C,
             param));
+#else
+        MATH((_llk_math_eltwise_unary_sfpu_params_((add_col0_body<2, 4>), slot, VectorMode::C, param)));
+#endif
     }
 };
 }  // namespace
@@ -216,7 +306,10 @@ void kernel_main() {
     const uint32_t is_root = get_arg_val<uint32_t>(5);
     const uint32_t is_leader = get_arg_val<uint32_t>(6);
 
-    compute_kernel_hw_startup(cb_input_tiles, cb_scaler, cb_stat_sq);
+    {
+        MaybeDeviceZoneScope("cp_hw_startup");
+        compute_kernel_hw_startup(cb_input_tiles, cb_scaler, cb_stat_sq);
+    }
 
     // A mcast-box FILLER core: inside a reduction group's broadcast rectangle (a
     // physical shard grid is not always a rectangle) but owning no shard, so it
@@ -254,6 +347,7 @@ void kernel_main() {
     // one chunk's slice is resident at a time, so the reader re-feeds it per chunk
     // inside the block loop and `apply_chunk` pops it there.
     if constexpr (HAS_GAMMA && IS_RM_GAMMA && !CHUNKED) {
+        MaybeDeviceZoneScope("cp_gamma_tilize");
         ckl::tilize<CB_W_TILES, cb_gamma_stage, cb_gamma_tiles>(1);
     }
 
@@ -265,6 +359,7 @@ void kernel_main() {
         // chunks land back-to-back in cb_input_tiles (the chunk-major layout
         // `in_ref` decodes). NUM_CHUNKS == 1 is the single unchunked call.
         if constexpr (IS_RM_IN) {
+            MaybeDeviceZoneScope("cp_tilize_in");
             for (uint32_t k = 0; k < NUM_CHUNKS; ++k) {
                 ckl::tilize<CB_CHUNK_TILES, cb_input_rm, cb_input_tiles>(rows_t);
             }
@@ -274,11 +369,15 @@ void kernel_main() {
         // chunk, popped exactly once at the end of the block.
         const uint32_t in_block_pages = rows_t * (IS_RM_IN ? (NUM_CHUNKS * CB_CHUNK_TILES) : CB_W_TILES);
         {
+            // STARVATION, not work: how long unpack sat waiting for the reader's
+            // block. This is the reader's number, read from the consumer side.
+            MaybeDeviceZoneScope("cp_wait_in");
             cb_wait_front(cb_input_tiles, in_block_pages);
         }
 
         // ---------------- sumsq_block + mask_tail_block ----------------
         {
+            MaybeDeviceZoneScope("cp_sumsq");
             cb_reserve_back(cb_stat_sq, rows_t * nc);
             for (uint32_t k = 0; k < bulk_cols; ++k) {
                 const uint32_t chunk_base = k * CB_CHUNK_TILES;
@@ -349,6 +448,7 @@ void kernel_main() {
         // Scaler is a plain 1.0: the hidden padding was already zeroed above, so
         // no partial scaler is needed here.
         {
+            MaybeDeviceZoneScope("cp_reduce_stat");
             ckl::reduce<
                 ckernel::PoolType::SUM,
                 ckernel::ReduceDim::REDUCE_ROW,
@@ -389,6 +489,15 @@ void kernel_main() {
                     ckl::DestAccumulation::PerRow)>{});
             cb_pop_front(cb_stat_gather, rows_t * W_GROUP_SIZE);
 #else
+            {
+                // The PEER RENDEZVOUS, hoisted out of the chain's own
+                // WaitPolicy::Upfront so the group's gather latency is a separate
+                // number from the root's tile-add arithmetic. Waiting for the same
+                // count twice is idempotent — the helper's wait is then satisfied.
+                MaybeDeviceZoneScope("cp_gather_wait");
+                cb_wait_front(cb_stat_gather, rows_t * W_GROUP_SIZE);
+            }
+            MaybeDeviceZoneScope("cp_combine_l1");
             ckl::eltwise_chain(
                 ckl::EltwiseShape::grid(rows_t, W_GROUP_SIZE),
                 ckl::BinaryFpu<
@@ -416,6 +525,13 @@ void kernel_main() {
         // half running in parallel on every leader.
         if constexpr (TWO_STAGE) {
             if (is_root) {
+                {
+                    // Level-2 peer rendezvous, split from the arithmetic for the
+                    // same reason as level 1.
+                    MaybeDeviceZoneScope("cp_gather2_wait");
+                    cb_wait_front(cb_stat_gather2, rows_t * STAGE2_SPAN);
+                }
+                MaybeDeviceZoneScope("cp_combine_l2");
                 ckl::eltwise_chain(
                     ckl::EltwiseShape::grid(rows_t, STAGE2_SPAN),
                     ckl::BinaryFpu<
@@ -441,6 +557,7 @@ void kernel_main() {
         if (is_root) {
             // finalize: rsqrt(sum * (1/W_true) + eps) -> the multicast source.
             // The 1/W uses the TRUE, unpadded W.
+            MaybeDeviceZoneScope("cp_finalize");
 #if RMSN_ABLATE_FINALIZE == 1
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(rows_t),
@@ -468,6 +585,10 @@ void kernel_main() {
         // resident input block serve EVERY chunk, so both are caller-managed here:
         // waited once, popped once, after the last chunk.
         {
+            // The whole cross-core round trip, seen from the consumer: gather +
+            // combine + finalize + multicast. On a NON-root member this is the
+            // single number that says how much of the wall the combine costs.
+            MaybeDeviceZoneScope("cp_wait_rstd");
             cb_wait_front(cb_rstd, rows_t);
         }
         if constexpr (OUT_STRIDED) {
@@ -523,12 +644,20 @@ void kernel_main() {
                     // This chunk's gamma slice, re-fed by the reader per chunk.
                     ckl::tilize<CB_CHUNK_TILES, cb_gamma_stage, cb_gamma_tiles>(1);
                 }
-                cb_wait_front(cb_gamma_tiles, CB_CHUNK_TILES);
-                ckl::eltwise_chain(
-                    ckl::EltwiseShape::grid(rows_t, cols),
-                    ckl::BinaryFpu<in_spec, rstd_spec, ckl::BinaryFpuOp::Mul, ckl::BroadcastDim::Col>{src},
-                    ckl::PackTile<ckl::output(cb_normed)>{});
+                {
+                    MaybeDeviceZoneScope("cp_wait_gamma");
+                    cb_wait_front(cb_gamma_tiles, CB_CHUNK_TILES);
+                }
+                {
+                    // Pass 1 of the apply: x * rstd (Col broadcast) -> cb_normed.
+                    MaybeDeviceZoneScope("cp_apply_scale");
+                    ckl::eltwise_chain(
+                        ckl::EltwiseShape::grid(rows_t, cols),
+                        ckl::BinaryFpu<in_spec, rstd_spec, ckl::BinaryFpuOp::Mul, ckl::BroadcastDim::Col>{src},
+                        ckl::PackTile<ckl::output(cb_normed)>{});
+                }
 
+                MaybeDeviceZoneScope("cp_apply_gamma");
                 if constexpr (OUT_STRIDED) {
                     ckl::eltwise_chain(
                         ckl::EltwiseShape::grid(rows_t, cols),
@@ -554,11 +683,13 @@ void kernel_main() {
                     cb_pop_front(cb_gamma_tiles, CB_CHUNK_TILES);
                 }
             } else if constexpr (OUT_STRIDED) {
+                MaybeDeviceZoneScope("cp_apply_scale");
                 ckl::eltwise_chain(
                     ckl::EltwiseShape::grid(rows_t, cols),
                     ckl::BinaryFpu<in_spec, rstd_spec, ckl::BinaryFpuOp::Mul, ckl::BroadcastDim::Col>{src},
                     ckl::PackTile<out_strided>{ckl::StridedTileRange{chunk_base, CB_W_TILES}});
             } else {
+                MaybeDeviceZoneScope("cp_apply_scale");
                 ckl::eltwise_chain(
                     ckl::EltwiseShape::grid(rows_t, cols),
                     ckl::BinaryFpu<in_spec, rstd_spec, ckl::BinaryFpuOp::Mul, ckl::BroadcastDim::Col>{src},
@@ -568,6 +699,7 @@ void kernel_main() {
 
             // ---------------- untilize_out_block (RM output only) ------------
             if constexpr (IS_RM_OUT) {
+                MaybeDeviceZoneScope("cp_untilize_out");
                 ckl::untilize<CB_CHUNK_TILES, cb_output_tiles, cb_output_rm>(rows_t);
             }
         }

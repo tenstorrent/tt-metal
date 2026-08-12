@@ -4,8 +4,6 @@
 // rms_norm reader (NCRISC / NoC0).
 //
 // Per kernel, once:
-//   prepare_constants()  — cb_scaler (reduce scaler 1/W_true), cb_wmask (0/1 column
-//                          mask for the ragged hidden tile), cb_zero_tile.
 //   load_gamma_slice()   — cb_gamma_tiles: this core's gamma slice, resident for
 //                          the whole kernel (never popped by compute), so gamma
 //                          crosses DRAM once per core.
@@ -72,7 +70,14 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+
+// PER-STAGE INSTRUMENTATION (PERMANENT — see perf_instrumentation.hpp's
+// durability contract; the macro is free when the profiler is off, and every new
+// path must carry the same zone names or per-stage observability regresses).
+// The reader's NoC region is split into ISSUE and BARRIER because a barrier at
+// ~0 does not mean the read was hidden — it means the RISC-serial issue cost was
+// paid in the issue zone (device-zone-scope-attribution.md §4).
 
 // TEMPORARY ablation switch (Refinement 4 measurement) — MUST be 0 in committed
 // code. 1 drops the input DRAM read PAYLOAD while keeping every barrier and CB
@@ -82,9 +87,9 @@
 namespace {
 constexpr uint32_t cb_input_rm = 0;
 constexpr uint32_t cb_input_tiles = 1;
-constexpr uint32_t cb_scaler = 2;
-constexpr uint32_t cb_wmask = 3;
-constexpr uint32_t cb_zero_tile = 4;
+// cb_scaler (2), cb_wmask (3) and cb_zero_tile (4) are all produced by the WRITER
+// (see the note in kernel_main and the writer's prepare_constants) — this kernel
+// touches none of them.
 constexpr uint32_t cb_gamma_rm = 12;
 constexpr uint32_t cb_gamma_tiles = 13;
 constexpr uint32_t TILE_HW_DIM = 32;
@@ -212,7 +217,7 @@ void kernel_main() {
     constexpr bool IS_RM_IN = get_compile_time_arg_val(2) != 0;
     constexpr bool HAS_GAMMA = get_compile_time_arg_val(3) != 0;
     constexpr bool IS_RM_GAMMA = get_compile_time_arg_val(4) != 0;
-    constexpr bool HAS_ANY_TAIL = get_compile_time_arg_val(5) != 0;
+    [[maybe_unused]] constexpr bool HAS_ANY_TAIL = get_compile_time_arg_val(5) != 0;
     constexpr bool IS_SHARDED_IN = get_compile_time_arg_val(6) != 0;
     // The ROW_MAJOR gamma stick is staged in cb_input_rm when the two CBs share a
     // page format: cb_gamma_rm dies (tilized) strictly before cb_input_rm's first
@@ -238,7 +243,7 @@ void kernel_main() {
     const uint32_t last_block_row_tiles = get_arg_val<uint32_t>(5);
     const uint32_t w_tile_start = get_arg_val<uint32_t>(6);
     const uint32_t core_w = get_arg_val<uint32_t>(7);
-    const uint32_t core_partial_w = get_arg_val<uint32_t>(8);
+    [[maybe_unused]] const uint32_t core_partial_w = get_arg_val<uint32_t>(8);
     const uint32_t num_sticks = get_arg_val<uint32_t>(9);
     const uint32_t stick_start = get_arg_val<uint32_t>(10);
     const uint32_t in_slice_bytes = get_arg_val<uint32_t>(11);
@@ -247,9 +252,11 @@ void kernel_main() {
     [[maybe_unused]] const uint32_t gamma_read_offset = get_arg_val<uint32_t>(14);
     [[maybe_unused]] const uint32_t gamma_lead_bytes = get_arg_val<uint32_t>(15);
     [[maybe_unused]] const uint32_t shard_row_bytes = get_arg_val<uint32_t>(16);
-    // 1/W_true, as fp32 bits. It rides in the REDUCE SCALER (see prepare_constants)
-    // rather than in a MulUnary on the root's finalize chain.
-    const uint32_t inv_w_bits = get_arg_val<uint32_t>(17);
+    // 1/W_true, as fp32 bits. It rides in the REDUCE SCALER rather than in a
+    // MulUnary on the root's finalize chain — but the scaler is now prepared by the
+    // WRITER (Perf 1, I4), so this kernel only carries the arg to keep the host's
+    // runtime-arg layout stable across the three kernels.
+    [[maybe_unused]] const uint32_t inv_w_bits = get_arg_val<uint32_t>(17);
 
     // A mcast-box FILLER core: inside a reduction group's broadcast rectangle (a
     // shard grid is not always a rectangle) but owning no shard, so it carries no
@@ -273,23 +280,21 @@ void kernel_main() {
     // put at ~0.25 us per tile-row of every reduction group's critical path.
     // Every core's partial is then already its share of the MEAN, so the gathered
     // sum is the mean itself.
-    {
-        float inv_w;
-        __builtin_memcpy(&inv_w, &inv_w_bits, sizeof(inv_w));
-        dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
-            inv_w);
-    }
-
-    if constexpr (HAS_ANY_TAIL) {
-        if (core_partial_w != 0) {
-            // 1.0 in columns [0, core_partial_w), 0 elsewhere, in the row-0
-            // broadcast layout the compute kernel consumes with BroadcastDim::Row.
-            // PER-CORE, not per-tensor: a ROW_MAJOR WIDTH/BLOCK shard's width
-            // granule is the L1 alignment, so EVERY core's hidden slice can end
-            // mid-tile, not just the one owning the tensor's last tile.
-            dataflow_kernel_lib::prepare_reduce_mask<cb_wmask, ckernel::ReduceDim::REDUCE_ROW>(core_partial_w);
-        }
-    }
+    // cb_scaler and cb_wmask are NOT filled here. MEASURED (Perf 1, idea I4;
+    // isolated bake-off at 110 cores x C tiles, blackhole_p150b): the two helper
+    // calls cost ~310 ns EACH and sat AHEAD of the input block read, which gates
+    // every downstream stage — while their consumers do not run until the whole
+    // block has landed (the reduce needs the scaler ~1.2 us later; mask_tail_block
+    // needs the mask right after the block). Both moved to the WRITER, whose BRISC
+    // is idle until this core's first partial exists (>= 1.1 us of slack on every
+    // geometry measured). Whole-kernel effect, 110 cores: C=1 2476 -> 2221,
+    // C=2 3007 -> 2779 (1.08x), C=3 3425 -> 3213, C=3 + ragged tail 3977 -> 3353
+    // (1.19x), 8 cores C=2 1953 -> 1630; C=16 flat (read-dominated).
+    // Reordering them WITHIN this kernel is worth only a third as much (2874), and
+    // deferring the MASK past the block push STARVES mask_tail_block (cp_sumsq
+    // 216 -> 616 ns) — which is why the writer, not a reorder, is the answer.
+    // Producer is still exactly one kernel per CB, just a different one; the same
+    // argument Refinement 3 used to move cb_zero_tile's fill to the writer.
 
     // cb_zero_tile is NOT filled here. MEASURED (zone timeline, (1,1,32,7168)
     // interleaved decode, blackhole_p150b): a whole-tile scalar fill of the fp32
@@ -383,6 +388,7 @@ void kernel_main() {
     // dies before the input's first push. Reordering it produced PCC ~ 0 (compute
     // tilized input sticks as gamma).
     if constexpr (HAS_GAMMA && !CHUNKED && IS_RM_GAMMA) {
+        MaybeDeviceZoneScope("rd_gamma_rm");
         load_gamma_chunk(0);
     }
 
@@ -398,6 +404,7 @@ void kernel_main() {
         const uint32_t rows_t = (b + 1 == num_blocks) ? last_block_row_tiles : block_row_tiles;
 
         if constexpr (IS_RM_IN) {
+            MaybeDeviceZoneScope("rd_in_rm_restride");
             constexpr uint32_t in_chunk_bytes = (get_tile_size(cb_input_rm) / TILE_HW_DIM) * CB_CHUNK_TILES;
             // ROW_MAJOR input, resident shard or DRAM: `rows_t` 32-row groups of
             // one hidden chunk each, re-strided into the group-uniform tile-row
@@ -437,30 +444,47 @@ void kernel_main() {
             // >= the whole row assignment, so the per-block push walks straight through
             // it and never wraps.
             const uint32_t pages = rows_t * CB_W_TILES;
-            cb_reserve_back(cb_input_tiles, pages);
+            {
+                MaybeDeviceZoneScope("rd_in_pin_reserve");
+                cb_reserve_back(cb_input_tiles, pages);
+            }
             cb_push_back(cb_input_tiles, pages);
         } else {
             const uint32_t tile_bytes = get_tile_size(cb_input_tiles);
             const uint32_t pages = rows_t * CB_W_TILES;
-            cb_reserve_back(cb_input_tiles, pages);
-            const uint32_t dst = get_write_ptr(cb_input_tiles);
-#if !RMSN_ABLATE_INPUT_READ
-            for (uint32_t r = 0; r < rows_t; ++r) {
-                const uint32_t row_tile = row_tile_start + b * block_row_tiles + r;
-                const uint32_t base = row_tile * TENSOR_W_TILES + w_tile_start;
-                for (uint32_t c = 0; c < core_w; ++c) {
-                    noc_async_read_tile(base + c, acc_tiles, dst + (r * CB_W_TILES + c) * tile_bytes);
-                }
+            {
+                // Back-pressure: blocked here means the CONSUMER (compute/writer)
+                // has not drained block b-1, not that this read is expensive.
+                MaybeDeviceZoneScope("rd_in_reserve");
+                cb_reserve_back(cb_input_tiles, pages);
             }
+            const uint32_t dst = get_write_ptr(cb_input_tiles);
+            {
+                // RISC-serial address generation + command-buffer writes. Scales
+                // with the TRANSACTION COUNT (rows_t * core_w), not with bytes.
+                MaybeDeviceZoneScope("rd_in_issue");
+#if !RMSN_ABLATE_INPUT_READ
+                for (uint32_t r = 0; r < rows_t; ++r) {
+                    const uint32_t row_tile = row_tile_start + b * block_row_tiles + r;
+                    const uint32_t base = row_tile * TENSOR_W_TILES + w_tile_start;
+                    for (uint32_t c = 0; c < core_w; ++c) {
+                        noc_async_read_tile(base + c, acc_tiles, dst + (r * CB_W_TILES + c) * tile_bytes);
+                    }
+                }
 #endif
-            // The whole block behind one barrier — never one barrier per tile.
-            noc_async_read_barrier();
+            }
+            {
+                // The whole block behind one barrier — never one barrier per tile.
+                MaybeDeviceZoneScope("rd_in_barrier");
+                noc_async_read_barrier();
+            }
             cb_push_back(cb_input_tiles, pages);
         }
 
         // Chunked gamma is consumed by the apply pass of THIS block, after every
         // input chunk — the same order the reader pushes them in.
         if constexpr (HAS_GAMMA && CHUNKED) {
+            MaybeDeviceZoneScope("rd_gamma_chunked");
             for (uint32_t k = 0; k < NUM_CHUNKS; ++k) {
                 load_gamma_chunk(k);
             }
@@ -470,6 +494,7 @@ void kernel_main() {
             // The reader cannot deadlock here: it only ever waits on cb_input_tiles
             // space, and the next such wait is block b+1's, strictly after this push.
             if (b == 0) {
+                MaybeDeviceZoneScope("rd_gamma_tile");
                 load_gamma_chunk(0);
             }
         }

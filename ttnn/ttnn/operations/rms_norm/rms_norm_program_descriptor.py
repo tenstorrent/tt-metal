@@ -80,8 +80,8 @@ SEM_GATHER2 = 3  # two-stage combine only: row leaders -> root
 # instead of silently shifting a peer's args.
 # --------------------------------------------------------------------------
 READER_ACCESSOR_CT_BASE = 9  # rms_norm_reader.cpp: TensorAccessorArgs<9>
-WRITER_MCAST_CT_BASE = 9  # rms_norm_writer.cpp: MCAST_CT_BASE
-WRITER_MCAST_RT_BASE = 20  # rms_norm_writer.cpp: MCAST_RT_BASE
+WRITER_MCAST_CT_BASE = 10  # rms_norm_writer.cpp: MCAST_CT_BASE
+WRITER_MCAST_RT_BASE = 22  # rms_norm_writer.cpp: MCAST_RT_BASE
 _READER_NUM_ARGS = 18  # rms_norm_reader.cpp get_arg_val<uint32_t>(0..17)
 _COMPUTE_NUM_ARGS = 7  # rms_norm_compute.cpp get_arg_val<uint32_t>(0..6)
 
@@ -203,6 +203,44 @@ BALANCE_SLACK_PCT = 15
 # (99991,64) has C<=2, (1,1,3232,96) has C=2) the band is skipped and Phase 0's
 # choice stands, which is why the blast radius of this refinement is small.
 MIN_CORE_W_TILES = 16
+
+# Perf knob (Perf 1, idea I7) — the per-core TILE GAIN that a SECOND combine
+# LEVEL must buy before it is worth taking, in tiles of the busiest core.
+#
+# `_tree_for_box` returns `stage2_span > 1` for a group whose box is more than one
+# grid row tall. That second level is one extra grid-wide rendezvous round on the
+# critical path; the only thing it buys is a smaller `max_tiles_per_core` (more
+# cores over the same hidden axis). MEASURED cost of the level, per-zone A/B on
+# (1,1,32,1024) at the pinned perf config (bf16 / TILE / INTERLEAVED / gamma bf16
+# TILE / fp32_dest_acc_en=False / HiFi2), G=11 (flat) vs G=22 (two-stage):
+#   cp_gather2_wait 573 + cp_combine_l2 183 ns of new combine chain, and
+#   wr_mcast_recv 1823 -> 2730 ns (the mcast box grows 11 -> 11x2),
+# against a saving of < 200 ns from C = 3 -> 2 (rd_in_issue 198 -> 158,
+# cp_sumsq 253 -> 206). Net +602 ns, i.e. the level costs about as much as 5 tiles
+# of per-core hidden work on the decode profile.
+#
+# MEASURED TURN (device kernel ns, median of >=2 fresh runs, best FLAT candidate vs
+# best TWO-STAGE candidate; `gain` = flat's max_tiles_per_core - two-stage's):
+#   (1,1,32,1024) gain  1   flat 5520   two-stage 5980   flat wins 7.7%
+#   (1,1,32,1280) gain  2   flat 5820   two-stage 5870   flat/tied
+#   (1,1,32,1536) gain  2   flat 6040   two-stage 6270   flat wins 3.7%
+#   (1,1,32,2047) gain  4   flat 6510   two-stage 6215   two-stage wins 4.5%
+#   (1,1,32,2304) gain  5   flat 6453   two-stage 6444   tied
+#   (1,1,32,3072) gain  7   flat 7118   two-stage 6740   two-stage wins 5.3%
+#   (1,1,32,5120) gain 13   flat 8296   two-stage 7730   two-stage wins 6.8%
+#   (1,1,32,7168) gain 18   flat 9699   two-stage 8606   two-stage wins 11.3%
+# so the crossover sits between gain 2 and gain 4. 4 is the smallest value that
+# keeps every measured two-stage winner (2047 at exactly 4 is a 4.5% win) and
+# rejects every measured two-stage loser.
+#
+# BLAST RADIUS. The filter is a no-op unless a two-stage candidate would actually
+# WIN the score, which needs the OCCUPANCY key to be doing the choosing — i.e.
+# `tensor_row_tiles` too small to fill the grid on the row axis alone (the decode
+# regime). Every geometry whose winner is already flat is byte-identical: all four
+# prefill shapes (G=2), (3,1,736,5119) and (1,1,4096,4096) (G=5), the ROW_MAJOR
+# interleaved leg (G=11), and every sharded geometry (which never runs this
+# selection at all).
+MIN_TWO_STAGE_TILE_GAIN = 4
 
 
 # Buffer-depth ladder, tried in order by the residency solve. Depth buys overlap,
@@ -734,6 +772,39 @@ def _admissible_by_balance(candidates):
     return [c for c in candidates if c[0][0] < best_occupancy] + kept
 
 
+def _admissible_by_tree_level(candidates):
+    """Drop the two-stage-combine candidates when the extra LEVEL buys too few tiles.
+
+    The occupancy key alone will always prefer more cores over the hidden axis, and
+    past `w_group_cols` cores that means a taller group box, which `_tree_for_box`
+    answers with a SECOND combine level. The level is not free (one more grid-wide
+    rendezvous round plus a wider multicast), so it has to earn its place: it must
+    take at least `MIN_TWO_STAGE_TILE_GAIN` tiles off the busiest core.
+
+    A no-op whenever the flat candidate already wins the score (every prefill /
+    wide-hidden / ROW_MAJOR geometry), so this only ever moves the latency-bound
+    decode picks. See `MIN_TWO_STAGE_TILE_GAIN` for the measured turn.
+    """
+    if not candidates:
+        return candidates
+
+    def stage2(c):
+        gc, gr = c[1][0], c[1][1]
+        return _tree_for_box(gc * gr, gc, gr)[1]
+
+    flat = [c for c in candidates if stage2(c) == 1]
+    two_stage = [c for c in candidates if stage2(c) > 1]
+    if not flat or not two_stage:
+        return candidates
+    best_flat = max(flat, key=lambda c: c[0])
+    best_two = max(two_stage, key=lambda c: c[0])
+    if best_two[0] <= best_flat[0]:
+        return candidates  # flat already wins the score; nothing to arbitrate
+    if best_flat[2] - best_two[2] < MIN_TWO_STAGE_TILE_GAIN:
+        return flat
+    return candidates
+
+
 def _select_regime(geo, grid_x, grid_y, is_rm_out, budget):
     """Exact, deterministic regime-selection function (op_design.md).
 
@@ -748,6 +819,7 @@ def _select_regime(geo, grid_x, grid_y, is_rm_out, budget):
     if not candidates and (MAX_W_GROUP_SIZE or MIN_W_GROUP_SIZE > 1):
         candidates = _select_candidates(geo, grid_x, grid_y, is_rm_out, budget, 0, 1)
     candidates = _admissible_by_balance(candidates)
+    candidates = _admissible_by_tree_level(candidates)
     if not candidates:
         raise RuntimeError(
             "rms_norm: no work split fits L1 for shape "
@@ -1444,6 +1516,9 @@ def create_program_descriptor(
                 int(leader_virtual.y),
                 is_leader,
                 s2_slot,
+                # Perf 1 (I4): the two reduce constants moved here from the reader.
+                core_partial_w,
+                inv_w_bits,
             ]
             # The writer kernel reads the mcast runtime args from a hardcoded
             # offset (`MCAST_RT_BASE`), so the count of the writer's own args is
@@ -1519,6 +1594,10 @@ def create_program_descriptor(
         W_CHUNK,
         STAGE2_SPAN,
         SEM_GATHER2,
+        # Perf 1 (I4): the reduce SCALER and the ragged-hidden MASK are prepared by
+        # the WRITER now, not the reader — so the writer carries the same
+        # HAS_ANY_TAIL gate the reader does.
+        has_tail_global,
     ]
     assert len(writer_ct) == WRITER_MCAST_CT_BASE, (
         f"rms_norm: writer compile-time-arg layout drifted ({len(writer_ct)} own args); "

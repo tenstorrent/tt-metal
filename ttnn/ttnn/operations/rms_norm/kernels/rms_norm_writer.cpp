@@ -1,8 +1,14 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
-// rms_norm writer (BRISC / NoC1). Owns BOTH halves of the cross-core combine
-// and the output drain.
+// rms_norm writer (BRISC / NoC1). Owns BOTH halves of the cross-core combine,
+// the output drain, and every kernel-scope CONSTANT the compute kernel consumes.
+//
+// Per kernel, once (all three were on the reader's pre-read critical path before;
+// this BRISC is idle until the first stat partial exists, so they are free here):
+//   prepare_constants()  — cb_wmask (0/1 column mask for a ragged hidden tile),
+//                          cb_scaler (the reduce scaler, carrying 1/W_true), and
+//                          cb_zero_tile (the combine's identity operand, leaders only).
 //
 // Per block:
 //   combine_stat_block (gather) — every member unicasts its block_row_tiles
@@ -54,19 +60,31 @@
 #include "api/tensor/noc_traits.h"
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+
+// PER-STAGE INSTRUMENTATION (PERMANENT — see perf_instrumentation.hpp's
+// durability contract). The gather and the output drain are each split into
+// WAIT / ISSUE / BARRIER: a barrier at ~0 does not mean the transfer was hidden,
+// it means the RISC-serial issue cost was paid in the issue zone
+// (device-zone-scope-attribution.md §4), and a `*_wait` zone is a rendezvous or
+// back-pressure number, never work.
 
 // TEMPORARY ablation switch (Refinement 4 measurement) — MUST be 0 in committed
 // code. 1 drops the output DRAM write PAYLOAD while keeping every barrier and CB
 // handshake, so the diff against the baseline is the write's contribution.
 #define RMSN_ABLATE_OUTPUT_WRITE 0
 // TEMPORARY ablation switch (Refinement 5 measurement) — MUST be 0 in committed
-// code. 1 shrinks the gather leg's PAYLOAD to 128 bytes per stat tile (a
-// REDUCE_ROW result is column-0-valid, so 128 B is its information content)
-// while keeping the transaction count, the barrier and every semaphore, so the
-// diff against the baseline is the gather's NoC-byte contribution.
+// code. 1 shrinks the gather leg's PAYLOAD to a quarter tile (one face) per stat
+// tile while keeping the transaction count, the barrier and every semaphore, so the
+// diff against the baseline is the gather's NoC-byte contribution. Perf 1 made the
+// production payload itself column-valid (see `write_stat_payload`), so this switch
+// now ablates on top of that and is expressed in FACES rather than in a byte literal.
 #define RMSN_ABLATE_GATHER_BYTES 0
 
 namespace {
+constexpr uint32_t cb_scaler = 2;
+constexpr uint32_t cb_wmask = 3;
 constexpr uint32_t cb_zero_tile = 4;
 constexpr uint32_t cb_stat_partial = 7;
 constexpr uint32_t cb_stat_gather = 8;
@@ -77,6 +95,54 @@ constexpr uint32_t cb_rstd = 11;
 constexpr uint32_t cb_output_tiles = 16;
 constexpr uint32_t cb_output_rm = 17;
 constexpr uint32_t TILE_HW_DIM = 32;
+
+// ---- COLUMN-VALID CROSS-CORE STAT PAYLOAD (Perf 1, idea I2) ----------------
+//
+// Every tile that crosses the NoC in the combine is a `reduce<SUM, REDUCE_ROW>`
+// result, i.e. COLUMN-0-VALID: only column 0 of each of the 32 rows carries
+// information. In a tile's face order (four 16x16 faces, row-major within a face)
+// column 0 lives in FACE 0 (rows 0..15) and FACE 2 (rows 16..31) — byte ranges
+// [0, T/4) and [T/2, 3T/4). So half of every stat tile need never be sent.
+//
+// Faces 1 and 3 of a destination slot are then never written and hold arbitrary
+// pre-existing L1. That is safe, and it was PROVEN rather than argued: with bf16 NaN
+// stamped into face 1 and -Inf into face 3 of every gather slot and of the rstd
+// landing tile, PCC is UNCHANGED on decode7168 / wshard1024 / bshard1024. Three
+// independent reasons — the combine's FPU Add is elementwise (garbage cannot migrate
+// into column 0), the finalize SFPU runs `VectorMode::C` (faces 0+2 only), and the
+// apply consumes rstd as `OperandKind::Col` (column 0 alone). No zero-fill is needed;
+// one was priced anyway at +20.3 us (decode7168) / +139 us (bshard1024), an order of
+// magnitude more than the win, so if it WERE needed this idea would be dead.
+//
+// MEASURED (blackhole_p150b, bf16 / TILE / HiFi2 / fp32_dest_acc_en=False, median n=4):
+//   (1,1,8192,1024) BLOCK_SHARDED [1024,128] (8,8)  50453 -> 47935 ns  (-5.0 %)
+//   (1,1,32,1024)   WIDTH_SHARDED [32,128]  (8,1)    4564 ->  4421 ns  (-3.1 %)
+//   (1,1,32,7168)   WIDTH_SHARDED [32,256]  (7,4)    5844 ->  5698 ns  (-2.5 %)
+//   (1,1,32,2047)   interleaved, ragged hidden       6506 ->  6313 ns  (-3.0 %)
+//   interleaved decode/prefill, HEIGHT (G=1)         flat, inside the noise band
+// The whole-op delta on the BLOCK geometry is the gather rendezvous almost 1:1
+// (`wr_gather_issue` 6291 -> 3839, `wr_gather_sem_wait` 5367 -> 2655, `cp_gather_wait`
+// 7270 -> 4684 ns). This leg is destination-L1/NoC-BYTE bound, not issue bound:
+// halving the bytes while DOUBLING the transactions beats the 1-transaction
+// three-quarter-tile encoding (which measured only -2.2 % on the same geometry).
+//
+// RAW-NoC JUSTIFICATION: the gather leg was already raw `noc_async_write` (see the
+// header note — mcast_pipe's SenderPipe is one-to-many with an identical dst, the
+// gather is many-to-one into disjoint slots). This only changes its byte count, plus
+// the split into the two face-sized transfers that ONE contiguous transfer cannot
+// express (faces 0 and 2 are T/2 apart). The MULTICAST stays on the helper:
+// `SenderPipe::send(src, dst, size)` takes one contiguous byte count, so a
+// strided/multi-chunk broadcast is inexpressible with it — there, the lever is only
+// the trailing-garbage trim (drop the LAST tile's face 3), which it expresses natively.
+FORCE_INLINE void write_stat_payload(uint32_t src, uint64_t dst, uint32_t tile_bytes) {
+    const uint32_t face = tile_bytes >> 2;
+#if RMSN_ABLATE_GATHER_BYTES
+    noc_async_write(src, dst, face);  // ablation: face 0 only (numerically wrong)
+#else
+    noc_async_write(src, dst, face);                        // face 0 == rows 0..15, col 0
+    noc_async_write(src + 2 * face, dst + 2 * face, face);  // face 2 == rows 16..31, col 0
+#endif
+}
 
 // A resident-shard "accessor" with the same page/offset shape as TensorAccessor,
 // resolving to THIS core's own L1 (the mirror of the reader's). Lets
@@ -162,9 +228,12 @@ void kernel_main() {
     // kernel is byte-identical to the Phase 0 one.
     constexpr uint32_t STAGE2_SPAN = get_compile_time_arg_val(7);
     constexpr uint32_t SEM_GATHER2 = get_compile_time_arg_val(8);
+    // Perf 1 (I4): this kernel prepares the reduce scaler and the ragged-hidden mask,
+    // so it carries the reader's old HAS_ANY_TAIL gate.
+    constexpr bool HAS_ANY_TAIL = get_compile_time_arg_val(9) != 0;
     constexpr bool TWO_STAGE = STAGE2_SPAN > 1;
-    constexpr uint32_t MCAST_CT_BASE = 9;
-    constexpr uint32_t MCAST_RT_BASE = 20;
+    constexpr uint32_t MCAST_CT_BASE = 10;
+    constexpr uint32_t MCAST_RT_BASE = 22;
     constexpr auto mc = McastArgs<MCAST_CT_BASE, MCAST_RT_BASE>();
     constexpr auto dst_args = TensorAccessorArgs<mc.next_compile_time_args_offset()>();
 
@@ -191,6 +260,9 @@ void kernel_main() {
     const uint32_t leader_y = get_arg_val<uint32_t>(17);
     const uint32_t is_leader = get_arg_val<uint32_t>(18);
     [[maybe_unused]] const uint32_t my_row_slot = get_arg_val<uint32_t>(19);  // level-2 slot on the root
+    // Perf 1 (I4): the two reduce constants, moved here from the reader.
+    const uint32_t core_partial_w = get_arg_val<uint32_t>(20);
+    const uint32_t inv_w_bits = get_arg_val<uint32_t>(21);
 
     // A mcast-box FILLER core (see the reader): inside a group's broadcast rectangle
     // but owning no shard. It carries no work, never gathers and never acks — the
@@ -203,6 +275,42 @@ void kernel_main() {
     Semaphore<> gather_sem(SEM_GATHER);
     [[maybe_unused]] Semaphore<> gather2_sem(SEM_GATHER2);
 
+    // ---- prepare_constants (cb_wmask, cb_scaler) — MOVED FROM THE READER --------
+    // Perf 1, idea I4. These two helper calls cost ~310 ns EACH and used to sit in
+    // the reader AHEAD of the input block read, i.e. on the critical path of every
+    // core, for buffers whose consumers cannot run until the whole block has landed.
+    // This BRISC is idle until this core's first stat partial exists (measured
+    // `wr_partial_wait` p50 >= 1.1 us on every geometry), so the fill is free here.
+    // MEASURED (110 cores, blackhole_p150b, bf16/HiFi2/fp32_dest_acc_en=False):
+    // C=1 2476 -> 2221, C=2 3007 -> 2779 (1.08x), C=3 3425 -> 3213,
+    // C=3 with a ragged tail 3977 -> 3353 (1.19x), 8 cores C=2 1953 -> 1630 ns.
+    // MASK FIRST, and both BEFORE the cb_zero_tile fill below: the mask's consumer
+    // (mask_tail_block, inside sumsq) has the earliest deadline of the three, the
+    // scaler's (the reduce) is next, and cb_zero_tile is not read until the combine.
+    // Producer is still exactly one kernel per CB, just a different one.
+    if constexpr (HAS_ANY_TAIL) {
+        if (core_partial_w != 0) {
+            MaybeDeviceZoneScope("wr_prep_mask");
+            // 1.0 in columns [0, core_partial_w), 0 elsewhere, in the row-0 broadcast
+            // layout the compute kernel consumes with BroadcastDim::Row. PER-CORE, not
+            // per-tensor: a ROW_MAJOR WIDTH/BLOCK shard's width granule is the L1
+            // alignment, so EVERY core's hidden slice can end mid-tile.
+            dataflow_kernel_lib::prepare_reduce_mask<cb_wmask, ckernel::ReduceDim::REDUCE_ROW>(core_partial_w);
+        }
+    }
+    {
+        // Pool-type-aware overload: SUM/REDUCE_ROW fills the matmul-path scaler
+        // layout. The scaler is 1/W_true, not 1.0 (Refinement 5) — the NON-STANDARD
+        // scaler case the reduce helpers' own header names ("the scaler combines
+        // reduction with another factor"), which is what lets the divisor ride a
+        // multiply the reduce performs anyway instead of an SFPU pass on the root.
+        MaybeDeviceZoneScope("wr_prep_scaler");
+        float inv_w;
+        __builtin_memcpy(&inv_w, &inv_w_bits, sizeof(inv_w));
+        dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
+            inv_w);
+    }
+
     // ---- prepare_constants (cb_zero_tile), ROOT ONLY ------------------------
     // The identity B operand of the combine's Add accumulation (BinaryFpu needs two
     // CB inputs), read by the compute kernel of every core that runs a combine
@@ -214,6 +322,7 @@ void kernel_main() {
     // until the first partial is ready (~6 us on the root at the decode geometry),
     // so the fill is free here and lands long before the combine chain waits on it.
     if (is_leader) {
+        MaybeDeviceZoneScope("wr_zero_fill");
         cb_reserve_back(cb_zero_tile, 1);
         volatile tt_l1_ptr uint32_t* zp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_zero_tile));
         for (uint32_t i = 0, n = get_tile_size(cb_zero_tile) / 4; i < n; ++i) {
@@ -223,11 +332,6 @@ void kernel_main() {
     }
 
     const uint32_t stat_tile_bytes = get_tile_size(cb_stat_gather);
-#if RMSN_ABLATE_GATHER_BYTES
-    const uint32_t gather_payload_bytes = 128;
-#else
-    const uint32_t gather_payload_bytes = stat_tile_bytes;
-#endif
     // cb_stat_gather holds exactly block_row_tiles * W_GROUP_SIZE pages and the
     // leader pushes/pops that many per block, so its write pointer is back at the
     // CB base at the start of every block — identical on every group member,
@@ -255,6 +359,7 @@ void kernel_main() {
     uint32_t sticks_done = 0;
     auto store_block = [&](uint32_t b, uint32_t rows_t) {
         if constexpr (IS_RM_OUT) {
+            MaybeDeviceZoneScope("wr_out_rm_restride");
             constexpr uint32_t out_chunk_bytes = (get_tile_size(cb_output_rm) / TILE_HW_DIM) * CB_CHUNK_TILES;
             // ROW_MAJOR output, resident shard or DRAM. untilize emits the
             // group-uniform tile-row stride, which is neither the shard's stick
@@ -292,21 +397,33 @@ void kernel_main() {
             // "store_block" is the CB handshake alone — zero NoC traffic. The pad
             // columns / padded tile-rows compute also wrote land in the shard's own
             // padding, which is outside the logical tensor and never read back.
+            MaybeDeviceZoneScope("wr_out_pin_wait");
             cb_wait_front(cb_output_tiles, rows_t * CB_W_TILES);
             cb_pop_front(cb_output_tiles, rows_t * CB_W_TILES);
         } else {
             for (uint32_t r = 0; r < rows_t; ++r) {
-                cb_wait_front(cb_output_tiles, CB_W_TILES);
+                {
+                    // Starved on the APPLY pass, not on the NoC.
+                    MaybeDeviceZoneScope("wr_out_wait");
+                    cb_wait_front(cb_output_tiles, CB_W_TILES);
+                }
                 const uint32_t src = get_read_ptr(cb_output_tiles);
                 const uint32_t row_tile = row_tile_start + b * block_row_tiles + r;
                 const uint32_t base = row_tile * TENSOR_W_TILES + w_tile_start;
+                {
+                    // RISC-serial issue; scales with core_w transactions.
+                    MaybeDeviceZoneScope("wr_out_issue");
 #if !RMSN_ABLATE_OUTPUT_WRITE
-                for (uint32_t c = 0; c < core_w; ++c) {
-                    noc_async_write_tile(base + c, out_acc, src + c * out_tile_bytes);
-                }
+                    for (uint32_t c = 0; c < core_w; ++c) {
+                        noc_async_write_tile(base + c, out_acc, src + c * out_tile_bytes);
+                    }
 #endif
-                // One barrier per tile-row (core_w tiles), never per tile.
-                noc_async_write_barrier();
+                }
+                {
+                    // One barrier per tile-row (core_w tiles), never per tile.
+                    MaybeDeviceZoneScope("wr_out_barrier");
+                    noc_async_write_barrier();
+                }
                 cb_pop_front(cb_output_tiles, CB_W_TILES);
             }
         }
@@ -333,14 +450,23 @@ void kernel_main() {
     // Phase 0 gather verbatim.
     auto gather_partials = [&](uint32_t b, uint32_t rows_t) {
         {
+            // Starved on this core's OWN statistics pipeline (reader read ->
+            // sumsq -> reduce). On a member this is the whole pre-combine chain.
+            MaybeDeviceZoneScope("wr_partial_wait");
             cb_wait_front(cb_stat_partial, rows_t);
         }
         const uint32_t src = get_read_ptr(cb_stat_partial);
-        for (uint32_t r = 0; r < rows_t; ++r) {
-            const uint32_t dst = gather_base + (r * W_GROUP_SIZE + my_slot) * stat_tile_bytes;
-            noc_async_write(src + r * stat_tile_bytes, get_noc_addr(leader_x, leader_y, dst), gather_payload_bytes);
+        {
+            MaybeDeviceZoneScope("wr_gather_issue");
+            for (uint32_t r = 0; r < rows_t; ++r) {
+                const uint32_t dst = gather_base + (r * W_GROUP_SIZE + my_slot) * stat_tile_bytes;
+                write_stat_payload(src + r * stat_tile_bytes, get_noc_addr(leader_x, leader_y, dst), stat_tile_bytes);
+            }
         }
-        noc_async_write_barrier();
+        {
+            MaybeDeviceZoneScope("wr_gather_barrier");
+            noc_async_write_barrier();
+        }
         cb_pop_front(cb_stat_partial, rows_t);
         if constexpr (W_GROUP_SIZE > 1) {
             if (!is_leader) {
@@ -360,6 +486,7 @@ void kernel_main() {
             }
         }
         if (is_leader) {
+            MaybeDeviceZoneScope("wr_gather_sem_wait");
             cb_reserve_back(cb_stat_gather, rows_t * W_GROUP_SIZE);
             if constexpr (W_GROUP_SIZE > 1) {
                 gather_sem.wait_min((b + 1) * (W_GROUP_SIZE - 1));
@@ -379,18 +506,25 @@ void kernel_main() {
             if (!is_leader) {
                 return;
             }
-            cb_wait_front(cb_branch_sum, rows_t);
-            const uint32_t src = get_read_ptr(cb_branch_sum);
-            for (uint32_t r = 0; r < rows_t; ++r) {
-                const uint32_t dst = gather2_base + (r * STAGE2_SPAN + my_row_slot) * stat_tile_bytes;
-                noc_async_write(src + r * stat_tile_bytes, get_noc_addr(root_x, root_y, dst), gather_payload_bytes);
+            {
+                MaybeDeviceZoneScope("wr_branch_wait");
+                cb_wait_front(cb_branch_sum, rows_t);
             }
-            noc_async_write_barrier();
+            const uint32_t src = get_read_ptr(cb_branch_sum);
+            {
+                MaybeDeviceZoneScope("wr_gather2_issue");
+                for (uint32_t r = 0; r < rows_t; ++r) {
+                    const uint32_t dst = gather2_base + (r * STAGE2_SPAN + my_row_slot) * stat_tile_bytes;
+                    write_stat_payload(src + r * stat_tile_bytes, get_noc_addr(root_x, root_y, dst), stat_tile_bytes);
+                }
+                noc_async_write_barrier();
+            }
             cb_pop_front(cb_branch_sum, rows_t);
             if (!is_root) {
                 gather2_sem.up(noc, root_x, root_y, 1);
             }
             if (is_root) {
+                MaybeDeviceZoneScope("wr_gather2_sem_wait");
                 cb_reserve_back(cb_stat_gather2, rows_t * STAGE2_SPAN);
                 gather2_sem.wait_min((b + 1) * (STAGE2_SPAN - 1));
                 cb_push_back(cb_stat_gather2, rows_t * STAGE2_SPAN);
@@ -410,11 +544,21 @@ void kernel_main() {
             cb_reserve_back(cb_rstd, rows_t);
             const uint32_t rstd_dst = get_write_ptr(cb_rstd);
             {
+                // Starved on the root's own combine + finalize chain.
+                MaybeDeviceZoneScope("wr_rstd_send_wait");
                 cb_wait_front(cb_rstd_send, rows_t);
             }
-            // src != dst selects INCLUDE_SRC loopback, so the root lands its own
-            // copy in cb_rstd through the same path as every other member.
-            sender.send(get_read_ptr(cb_rstd_send), rstd_dst, rows_t * stat_tile_bytes);
+            {
+                // src != dst selects INCLUDE_SRC loopback, so the root lands its own
+                // copy in cb_rstd through the same path as every other member.
+                MaybeDeviceZoneScope("wr_mcast_send");
+                // Column-valid trim (Perf 1, I2): the LAST tile's face 3 is trailing
+                // garbage nobody reads, and SenderPipe's one contiguous byte count is
+                // exactly able to drop it. The interior faces 1/3 must still ride along
+                // (a single transfer cannot skip them), which is why the multicast keeps
+                // ~3/4 of the payload while the gather legs keep 1/2.
+                sender.send(get_read_ptr(cb_rstd_send), rstd_dst, rows_t * stat_tile_bytes - (stat_tile_bytes >> 2));
+            }
             cb_pop_front(cb_rstd_send, rows_t);
             cb_push_back(cb_rstd, rows_t);
             store_block(b, rows_t);
@@ -427,6 +571,9 @@ void kernel_main() {
             gather_rows(b, rows_t);
             cb_reserve_back(cb_rstd, rows_t);
             {
+                // The member's view of the WHOLE combine round: it blocks here
+                // until the root has gathered, summed, finalized and broadcast.
+                MaybeDeviceZoneScope("wr_mcast_recv");
                 receiver.receive();
             }
             cb_push_back(cb_rstd, rows_t);
