@@ -204,7 +204,7 @@ You read the subagent's summary and decide what to do next. If you then need to 
 **Output**: write the **Legacy Inventory** section of `METAL2_PORT_PLAN.md` to the op's directory. Record:
 
 - **Legacy factory shape**: which `ttnn::device_operation` concept the legacy factory currently satisfies (`ProgramFactoryConcept` / `ProgramDescriptorFactoryConcept` / `MeshWorkloadFactoryConcept`). For each variant (if the device-operation is multi-variant), record separately. *(The Metal 2.0 factory concept the port lands on was chosen during the audit — see the brief's TTNN factory analysis section. The recipe inherits that decision; carry it forward to the [TTNN ProgramFactory port-plan section](#ttnn-programfactory) below.)*
-- **Custom `compute_program_hash`**: does the device-operation define a custom `compute_program_hash` (overriding the default reflection-based hash)? If yes, record file:line — **the port deletes it**, reverting to the default hash. This is one of the two sanctioned device-op-class edits the port forces; the rationale and procedure live in the [TTNN integration doc — Delete a custom `compute_program_hash`](../shared/ttnn_factory.md#1-delete-a-custom-compute_program_hash). Record the deletion in the port report.
+- **Custom `compute_program_hash`**: does the device-operation define a custom `compute_program_hash` (overriding the default reflection-based hash), or reach one through the backdoor route (`attribute_values` / `to_hash`)? If yes, record file:line — **and leave it alone.** The port never edits the op's cache key; you are recording it so you know not to touch it, and so a later `UpdateTensorArgs` legality failure has a named suspect. See [TTNN integration doc — The cache key: leave the custom hash alone](../shared/ttnn_factory.md#the-cache-key-leave-the-custom-hash-alone).
 - **Kernels**: every `KernelDescriptor` (one row per descriptor):
   - `kernel_source` (file path; flag any path outside the op's own directory, and any path bound by another of this op's factories — both are shared-kernel Caution cases — and note whether a `_metal2` fork already exists beside it).
   - `core_ranges` (verbatim).
@@ -252,7 +252,7 @@ You read the subagent's summary and decide what to do next. If you then need to 
 Carry forward the audit's factory decision. This section is brief — the audit confirmed the concept and the recipe inherits the result; the recipe is *not* the place to re-derive the choice.
 
 - **Concept (inherited from audit)**: copy the concept name from the brief's TTNN factory analysis section (`ProgramSpecFactoryConcept` for every portable op today).
-- **Custom `compute_program_hash`**: note whether the audit flagged one for deletion (carried from the Legacy Inventory).
+- **Custom `compute_program_hash`**: note whether the op has one — it stays intact; this is a heads-up, not a task.
 - **Implementation notes** (optional): anything specific to how this op will realize the concept that's worth surfacing before construction. Most ports don't need this.
 
 If you find yourself disagreeing with the audit's choice, **stop and surface the disagreement to the invoker** — do not unilaterally override. The audit is the source of truth for the chosen concept; an in-port revision is a signal the audit was incomplete and the invoker needs to know. See the [TTNN integration doc](../shared/ttnn_factory.md) for the concept and the device-op-class edits the port forces.
@@ -345,11 +345,12 @@ The host-side discipline divides cleanly along a line between *the program facto
 
 - **The op-level host code outside the factory is off-limits.** The device-operation class itself (`validate`, `invoke`, `compute_output_specs`, attribute parsing, the `OpInputs` / `OpParams` definitions, runtime-arg validation, tensor-dtype checks, etc.) is *not* part of the Metal 2.0 port. Do not edit it. Even if the change seems trivial, even if it seems correct, even if you can see exactly what it should say. If you encounter something here that wants changing — a too-tight validation, a stale comment, a `TT_FATAL` whose message is wrong, a missing check — write it up in the port report under findings. Do not change the file.
 
-There are three *documented* exceptions to the off-limits rule — each a device-op-class edit the port forces, each recorded prominently in the port report. The full rationale and procedure for each live in the [TTNN integration doc — Device-operation-class edits the port forces](../shared/ttnn_factory.md#device-operation-class-edits-the-port-forces); in brief:
+There are two *documented* exceptions to the off-limits rule — each a device-op-class edit the port forces, each recorded prominently in the port report. The full rationale and procedure for each live in the [TTNN integration doc — Device-operation-class edits the port forces](../shared/ttnn_factory.md#device-operation-class-edits-the-port-forces); in brief:
 
-1. **A custom `compute_program_hash`** — delete it, reverting to the default TTNN hash (when the audit flagged one). Don't patch it to add `TensorSpec`; delete it.
-2. **Pybind lines for a legacy factory entry point the port makes vanish** (`create_descriptor` is the canonical case) — deletion is mandatory to keep the build green, and it's a user-visible surface change worth a Handoff-points entry.
-3. **A factory parameter that exists only for a pybind hook** (e.g. layernorm's `create_descriptor` taking an extra `core_range_set` used only by its pybind hook) — drop the parameter, inline its production default in the factory body, and delete the pybind hook that passed it (mechanically exception 2 with an extra parameter to unwind).
+1. **Pybind lines for a legacy factory entry point the port makes vanish** (`create_descriptor` is the canonical case) — deletion is mandatory to keep the build green, and it's a user-visible surface change worth a Handoff-points entry.
+2. **A factory parameter that exists only for a pybind hook** (e.g. layernorm's `create_descriptor` taking an extra `core_range_set` used only by its pybind hook) — drop the parameter, inline its production default in the factory body, and delete the pybind hook that passed it (mechanically exception 1 with an extra parameter to unwind).
+
+**The op's cache key is not an exception.** A custom `compute_program_hash` — or a backdoor `attribute_values` / `to_hash` — stays exactly as it is, on every port path. See [The cache key: leave the custom hash alone](../shared/ttnn_factory.md#the-cache-key-leave-the-custom-hash-alone).
 
 None of these extend to any other device-op-class edit. Everything else here stays exactly as it is, routed to the report.
 
@@ -803,7 +804,9 @@ If compilation passes but the test fails with a `TT_FATAL` from `program_spec.cp
 
 For symptom-organized lookup (errors whose fix isn't obvious from the message text), see the [migration guide's troubleshooting table](../shared/migration_guide.md#cryptic-error--likely-cause).
 
-**Custom `compute_program_hash` failure mode.** The port should already have deleted any custom `compute_program_hash` (reverting to the default) per the [TTNN integration doc](../shared/ttnn_factory.md#1-delete-a-custom-compute_program_hash) — it's proactive port work, not a wait-and-see. The signature of one that survived: `UpdateTensorArgs` `TensorSpec` legality failures on the *second and later* test invocations (program cache hot), not the first. If you see that, find the surviving custom hash and delete it; do not patch it to include `TensorSpec`. Confirm the deletion is recorded in `METAL2_PORT_REPORT.md`.
+**Custom `compute_program_hash` failure mode.** Signature: `UpdateTensorArgs` `TensorSpec` legality failures on the *second and later* test invocations (program cache hot), not the first. That means the op's cache key admits a `TensorSpec` deviation the strict `TensorParameter` match won't accept. **This is a stop-and-report, not a fix** — do not delete the hash, and do not patch it to include `TensorSpec`; either one silently changes the op's cache-equivalence class to make a symptom go away. Record the hash's file:line, what the legality check rejected, and the invocation it fired on, then stop.
+
+Why this one is worth aborting for rather than working around: an ops-team expert analysed this op's hash before the port and cleared it, and that verdict is what your cleared audit is carrying. This failure is *evidence that the vetting was wrong* — an upstream error, not a porter-resolvable snag. Flag it loudly. See [The cache key: leave the custom hash alone](../shared/ttnn_factory.md#the-cache-key-leave-the-custom-hash-alone), which also covers the case where you spot the same defect by reading the hash instead of by running the tests.
 
 ### Anti-pattern self-audit
 
@@ -948,7 +951,7 @@ Written during the inventory and planning steps; committed alongside the port fo
 ### Legacy factory shape
 - Concept: <ProgramFactoryConcept | ProgramDescriptorFactoryConcept | MeshWorkloadFactoryConcept>
 - Variants: <list, or "single">
-- Custom `compute_program_hash`: <deleted → default (sanctioned exception), was at file:line | none — already default reflection-based hash>
+- Custom `compute_program_hash`: <present at file:line — left intact | backdoor (attribute_values | to_hash) at file:line — left intact | none — default reflection-based hash>
 
 *(The Metal 2.0 factory concept the port targets was chosen during the audit — see the brief's TTNN factory analysis section. Carried forward in the [TTNN ProgramFactory](#ttnn-programfactory) section below.)*
 
@@ -1003,7 +1006,7 @@ Anything the inventory step noticed but didn't classify — unreferenced kernel 
 *Filled in during the planning step. The concept itself was chosen in the audit; this section carries it forward.*
 
 - **Concept (inherited from audit)**: <ProgramSpecFactoryConcept>
-- **Custom `compute_program_hash`**: <delete (was at file:line) | none>
+- **Custom `compute_program_hash`**: <present at file:line — leave intact | none>
 - **Implementation notes** (optional): <anything specific to how this op will realize the concept that's worth surfacing before construction>
 
 (If you find yourself disagreeing with the audit's choice, stop and surface to the invoker — do not override.)
