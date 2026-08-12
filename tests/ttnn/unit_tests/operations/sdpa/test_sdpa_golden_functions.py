@@ -136,7 +136,7 @@ def test_sparse_sdpa_goldens_host_only(expect_error):
         expected[0, 0, row] = probabilities @ keys[:, :1]
     assert torch.allclose(actual, expected)
 
-    with expect_error(ValueError, match="block-cyclic"):
+    with expect_error(ValueError, "block-cyclic"):
         sparse(
             q,
             kv,
