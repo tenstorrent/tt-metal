@@ -18,6 +18,8 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -29,16 +31,10 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     "mesh_device, device_params",
     [
         pytest.param(
-            (1, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="linear"),
-            id="linear-4",
-        ),
-        pytest.param(
-            (1, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="ring"),
-            id="ring-4",
+            (2, 2),
+            fabric2d_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
+            id="fabric2d-2x2",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -47,31 +43,30 @@ def test_rmsnorm_distributed(mesh_device, device_params, isl_per_chip, emb_dim, 
     """
     Test distributed RMSNorm against PyTorch reference.
 
-    Input tensor is sharded across 4 chips along embedding dimension.
+    Input tokens are sharded over mesh rows and the embedding is sharded over columns.
     Each chip computes local statistics, then all-gather combines them
     for global normalization.
 
     Configuration:
-    - Input shape: (1, 1, isl_per_chip, 7168) - 4D format
-    - Per device: (1, 1, isl_per_chip, 1792) - 7168 / 4 = 1792
+    - Input shape: (SP, 1, isl_per_chip, 7168) - 4D format
+    - Per device: (1, 1, isl_per_chip, 3584) - 7168 / TP=2
     - Stats gathered along cluster_axis=1 (mesh columns)
     """
     torch.manual_seed(42)
 
     num_devices = mesh_device.get_num_devices()
     mesh_shape = mesh_device.shape
-    per_device_width = emb_dim // num_devices
+    per_device_width = emb_dim // mesh_shape[1]
 
     # 4D shapes for distributed RMSNorm
-    inp_shape_full = (1, 1, isl_per_chip, emb_dim)
+    inp_shape_full = (mesh_shape[0], 1, isl_per_chip, emb_dim)
     inp_shape_per_device = (1, 1, isl_per_chip, per_device_width)
 
     logger.debug(f"Testing with mesh_shape={mesh_shape}, num_devices={num_devices}")
     logger.debug(f"Full input: {inp_shape_full}, per-device: {inp_shape_per_device}")
 
     # Determine topology from fabric config
-    fabric_config = device_params.get("fabric_config", ttnn.FabricConfig.FABRIC_1D)
-    topology = ttnn.Topology.Ring if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING else ttnn.Topology.Linear
+    topology = per_axis_topology(device_params["fabric_config"])[1]
     logger.debug(f"Using topology: {topology}")
 
     signpost(f"RMSNorm PCC test - {mesh_shape=} {isl_per_chip=} {emb_dim=} {num_links=} {topology=}")
@@ -109,7 +104,7 @@ def test_rmsnorm_distributed(mesh_device, device_params, isl_per_chip, emb_dim, 
     # Shard input across devices along width dimension (dim=3)
     tt_input_sharded = ttnn.from_torch(
         torch_input,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(None, 3)),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(0, 3)),
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         dtype=ttnn.bfloat16,

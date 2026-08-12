@@ -24,6 +24,7 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.common.prefill.topology import per_axis_topology
 
 
 class TtReduceModule(LightweightModule):
@@ -35,7 +36,7 @@ class TtReduceModule(LightweightModule):
         topk_dim: int = 2,
         cluster_axis: int = 1,
         num_links: int = 1,
-        topology: ttnn.Topology = ttnn.Topology.Linear,
+        topology: ttnn.Topology | None = None,
     ):
         """
         Initialize reduce module.
@@ -50,6 +51,8 @@ class TtReduceModule(LightweightModule):
             topology: Ring or Linear topology for reduce_scatter
         """
         super().__init__()
+        if topology is None:
+            topology = per_axis_topology()[cluster_axis]
         self.mesh_device = mesh_device
         self.topk_dim = topk_dim
         self.cluster_axis = cluster_axis

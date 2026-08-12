@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-PCC test for TtFFN module (TP=4).
+PCC test for the tensor-parallel TtFFN module.
 
 Compares TorchExpert (reference) against TtFFN (multi-chip TTNN)
 to verify correctness with DeepSeek 671B FFN dimensions.
@@ -16,6 +16,8 @@ from tracy import signpost
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_ffn import EMB_DIM, HIDDEN_DIM, TtFfn
 from models.tt_transformers.tt.ccl import get_num_links
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -23,23 +25,14 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 @pytest.mark.parametrize("batch_seq_len", [4096, 3200], ids=["4K", "3.2K"])
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     [
         pytest.param(
-            (1, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            (2, 2),
+            fabric2d_device_params(),
             1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="linear"),
-            id="linear-4",
-        ),
-        pytest.param(
-            (1, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
-            1,
-            ttnn.Topology.Ring,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="ring"),
-            id="ring-4",
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
+            id="fabric2d-2x2",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -49,7 +42,6 @@ def test_ffn_pcc(
     device_params,
     batch_seq_len: int,
     num_links: int,
-    topology: ttnn.Topology,
 ):
     """
     Test TtFfn PCC against TorchExpert reference.
@@ -63,6 +55,7 @@ def test_ffn_pcc(
 
     activations_dtype = ttnn.bfloat16
     weights_dtype = ttnn.bfloat8_b
+    topology = per_axis_topology(device_params["fabric_config"])[1]
 
     num_devices = mesh_device.get_num_devices()
     mesh_shape = mesh_device.shape
@@ -96,18 +89,18 @@ def test_ffn_pcc(
         weights_dtype=weights_dtype,
     )
 
-    # Create input tensor (replicated across all devices)
-    torch_input = torch.randn(batch_seq_len, EMB_DIM, dtype=torch.float32)
+    # Shard tokens over SP rows and replicate each shard over TP columns.
+    torch_input = torch.randn(mesh_shape[0], batch_seq_len, EMB_DIM, dtype=torch.float32)
     logger.debug(f"Created torch input: {torch_input.shape}")
 
     tt_input = ttnn.from_torch(
         torch_input,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(0, None)),
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         dtype=activations_dtype,
     )
-    logger.debug(f"Created ttnn input (replicated): {tt_input.shape}")
+    logger.debug(f"Created ttnn input (SP-sharded, TP-replicated): {tt_input.shape}")
 
     # Run forward passes
     logger.debug("Running torch forward pass")

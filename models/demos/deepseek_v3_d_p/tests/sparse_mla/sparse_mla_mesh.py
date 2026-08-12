@@ -2,15 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Hardware-adaptive mesh parametrization for the DeepSeek V3.2 device tests.
+Hardware-adaptive Fabric2D mesh parametrization for the sparse-MLA vs-trace diagnostics.
 
 The tests are written for a `mesh_device` whose shape is ``(sp_size, tp_size)``
 (``sp_axis, tp_axis = 0, 1``). Which shapes are valid depends on the box the
-suite runs on, so instead of hard-coding ``[(1, 4), (2, 2)]`` every test pulls
+suite runs on, so instead of hard-coding one box every test pulls
 its parametrization from here:
 
-    QuietBox  (4 chips):  single chip, TP=4,        SP=2 × TP=2
-    LoudBox   (8 chips):  SP=8,        SP=4 × TP=2,  SP=2 × TP=4
+    QuietBox  (4 chips):  SP=2 × TP=2
+    LoudBox   (8 chips):  SP=4 × TP=2, SP=2 × TP=4
     Galaxy   (32 chips):  SP=8 × TP=4   (production layout)
 
 Detection mirrors ``tests/nightly/sdpa_perf_utils.MeshConfig.detect()``: it
@@ -42,9 +42,8 @@ def detect_num_devices() -> int:
 # (sp_size, tp_size) shapes per box, keyed by exact physical device count.
 # In production (Galaxy) the layout is TP=4, SP=8.
 MESH_SHAPES_BY_DEVICE_COUNT = {
-    1: [(1, 1)],  # single chip
-    4: [(1, 1), (1, 4), (2, 2)],  # QuietBox: single, TP=4, SP2×TP2
-    8: [(8, 1), (4, 2), (2, 4)],  # LoudBox: SP=8, SP4×TP2, SP2×TP4
+    4: [(2, 2)],  # QuietBox
+    8: [(4, 2), (2, 4)],  # LoudBox: axis-sensitive and canonical profiles
     32: [(8, 4)],  # Galaxy (prod): SP=8, TP=4
 }
 
@@ -75,12 +74,16 @@ def _shape_id(shape) -> str:
 def supported_mesh_shapes(num_devices: int = None):
     """(shapes, ids) — SP×TP shape set for the detected box.
 
-    Unknown box: a single pure-TP plane spanning every chip, so the suite still runs (and is
-    clearly labelled) on non-standard machines.
+    Unknown boxes return one collection-time skipped 2x2 sentinel; they never open a degenerate
+    Fabric2D mesh merely to keep the parametrization nonempty.
     """
     if num_devices is None:
         num_devices = detect_num_devices()
-    shapes = MESH_SHAPES_BY_DEVICE_COUNT.get(num_devices) or [(1, max(num_devices, 1))]
+    shapes = MESH_SHAPES_BY_DEVICE_COUNT.get(num_devices)
+    if shapes is None:
+        return [pytest.param((2, 2), marks=pytest.mark.skip(reason=f"unsupported device count {num_devices}"))], [
+            "unsupported"
+        ]
     return shapes, [_shape_id(s) for s in shapes]
 
 

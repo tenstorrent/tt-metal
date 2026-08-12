@@ -12,6 +12,7 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.common.prefill.topology import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     NullIndexer,
     ReuseIndexer,
@@ -257,7 +258,7 @@ class ttMLA:
         sp_axis: int = 0,
         tp_axis: int = 1,
         is_balanced: bool = False,
-        topology=ttnn.Topology.Linear,
+        topology=None,
         weight_cache_path: Optional[Path] = None,
         is_chunked: bool = False,
         slot_num: int = 1,
@@ -369,6 +370,8 @@ class ttMLA:
         # TP axis is Ring but the SP axis has no physical wrap, so a TP-Ring topology on the SP-axis
         # SDPA waits forever on a missing wrap link. A scalar applies to both axes (preserves 1D-ring /
         # non-torus behavior).
+        if topology is None:
+            topology = per_axis_topology()
         if isinstance(topology, tuple):
             # The tuple is (dim0, dim1); unpacking as (sp, tp) is only correct when sp_axis=0/tp_axis=1.
             # Guard it so a future sp_axis/tp_axis swap fails loudly here instead of silently cross-

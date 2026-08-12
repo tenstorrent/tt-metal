@@ -91,7 +91,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.common.prefill.adapter import DEFAULT_MODEL, get_adapter
+from models.demos.common.prefill.adapter import get_adapter, require_prefill_model_name
 from models.demos.common.prefill.runners.runner_utils import load_trace_token_ids, resolve_trace_dir
 
 
@@ -167,13 +167,13 @@ def _apply_manifest_env(manifest_path: str) -> dict:
 METADATA_SIZE_BYTES = 12
 
 
-def _load_env_config() -> None:
+def _load_env_config(*, require_model: bool = False) -> None:
     """(Re)bind the transport/model constants below from the CURRENT environment.
 
-    Called once at import so a plain ``import prefill_producer`` still yields usable constants, and again
-    from ``main()`` right after the manifest is applied — the manifest only reaches the env at that point,
-    so the import-time values would otherwise be pre-manifest defaults. Importing this module never
-    MUTATES the environment; only ``main()`` does, via _apply_manifest_env."""
+    Called once at import for model-independent constants, and again from ``main()`` right after the
+    manifest is applied. A plain import intentionally leaves ``ADAPTER`` unset when ``PREFILL_MODEL``
+    is absent; executable startup calls this with ``require_model=True`` and fails closed. Importing
+    this module never MUTATES the environment; only ``main()`` does, via _apply_manifest_env."""
     global SP_AXIS, TP_AXIS, GLOBAL_MESH_SHAPE, CHUNK_SIZE, MAX_SEQ_LEN, NUM_LAYERS, ADAPTER
     SP_AXIS = int(os.environ.get("PREFILL_SP", 8))
     TP_AXIS = int(os.environ.get("PREFILL_TP", 4))
@@ -181,7 +181,10 @@ def _load_env_config() -> None:
     CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
     MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", 60 * 1024))
     NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", 61))
-    ADAPTER = get_adapter(os.environ.get("PREFILL_MODEL", DEFAULT_MODEL))
+    model_name = os.environ.get("PREFILL_MODEL", "").strip()
+    if require_model:
+        model_name = require_prefill_model_name()
+    ADAPTER = get_adapter(model_name) if model_name else None
 
 
 _load_env_config()
@@ -1107,7 +1110,7 @@ def main() -> None:
     # (bound to pre-manifest defaults at import) and _config_from_env() reads the schedule knobs.
     if args.manifest:
         _apply_manifest_env(args.manifest)
-    _load_env_config()
+    _load_env_config(require_model=True)
 
     mr_rank, world_size = _mr_config()
     if mr_rank != 0:

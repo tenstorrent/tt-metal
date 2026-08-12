@@ -36,14 +36,14 @@ from tests.ttnn.utils_for_testing import comp_pcc
 
 REDUCE_MESH_PARAMS = [
     pytest.param(
-        (4, 1),
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="linear"),
-        id="linear-4",
+        (2, 2),
+        {"fabric_config": ttnn.FabricConfig.FABRIC_2D, "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT},
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
+        id="fabric2d-mesh-2x2",
     ),
     pytest.param(
         (4, 2),
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        {"fabric_config": ttnn.FabricConfig.FABRIC_2D, "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT},
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
         id="mesh-4x2",
     ),
@@ -63,8 +63,6 @@ def run_reduce(
 
     signpost(f"reduce-{mesh_device.shape}-seq{seq_len}-{'weighted' if use_weights else 'unweighted'}")
 
-    # Set topology and num_links
-    topology = ttnn.Topology.Linear
     num_links = 1
 
     num_devices = mesh_device.get_num_devices()
@@ -182,7 +180,6 @@ def run_reduce(
         topk_dim=2,  # topk is dim 2 in [1, seq, topk, hidden]
         cluster_axis=1,
         num_links=num_links,
-        topology=topology,
     )
 
     tt_output = tt_reduce(

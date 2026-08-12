@@ -21,6 +21,7 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.common.prefill.topology import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import create_balanced_chunk_order, reverse_reorder_tensor_chunks
@@ -117,7 +118,7 @@ class TtPrefillTransformer(LightweightModule):
         seq_len: int,
         dispatch_buffer_capacity_factor: int = 2,
         num_links: int = 1,
-        topology: TopologyArg = ttnn.Topology.Linear,
+        topology: TopologyArg | None = None,
         sp_axis: int = 0,
         tp_axis: int = 1,
         is_balanced: bool = False,
@@ -159,6 +160,8 @@ class TtPrefillTransformer(LightweightModule):
         self.first_layer_idx = first_layer_idx
         self.indexer_types = getattr(config, "indexer_types", None)
 
+        if topology is None:
+            topology = per_axis_topology()
         # The blocks take the full per-axis topology (they split SP/TP internally for the MoE).
         # The final norm and LM head are pure TP-axis (cluster_axis=tp_axis) collectives, so they
         # take the scalar TP element.

@@ -34,6 +34,7 @@ except ImportError:
     from transformers.modeling_utils import no_init_weights
 
 import ttnn
+from models.demos.common.prefill.topology import per_axis_topology
 
 
 @dataclass
@@ -443,7 +444,7 @@ def load_and_compute_layer_by_layer(
     mesh_device: ttnn.MeshDevice | None = None,
     seq_len: int = 1024,
     num_links: int = 2,
-    topology: ttnn.Topology = ttnn.Topology.Linear,
+    topology: ttnn.Topology | tuple[ttnn.Topology, ttnn.Topology] | None = None,
     sp_axis: int = 0,
     tp_axis: int = 1,
     gate_fallback_mode=None,
@@ -482,6 +483,8 @@ def load_and_compute_layer_by_layer(
     from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
     from models.demos.deepseek_v3_d_p.utils.test_utils import convert_state_dict, detect_language_model_prefix
 
+    if topology is None:
+        topology = per_axis_topology()
     if gate_fallback_mode is None:
         gate_fallback_mode = GateComputeMode.HOST_ALL
 

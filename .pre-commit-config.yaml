@@ -56,6 +56,12 @@ repos:
       # Override on the same line:  with pytest.raises(...):  # allow-pytest.raises: <why>
 - repo: local
   hooks:
+    - id: validate-prefill-fabric-policy
+      name: Enforce Fabric2D-only prefill profiles and exact CI selectors
+      entry: python3 scripts/validate_prefill_fabric_policy.py
+      language: system
+      pass_filenames: false
+      files: ^(\.github/workflows/blaze-models-prefill-tests-impl\.yaml$|models/demos/common/prefill/|models/demos/deepseek_v3_d_p/|tests/pipeline_reorg/(blackhole_e2e_tests|blaze_models_prefill_tests|demo_sp_release_tests|t3k_e2e_tests)\.yaml$|scripts/validate_prefill_fabric_policy\.py$)
     - id: check-large-files
       name: check for large files (>500 KB)
       entry: python3 scripts/check_file_size.py

@@ -19,6 +19,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     extract_mesh_config,
     get_max_payload_size,
 )
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 
 
 def torch_offset_cumsum(
@@ -73,49 +74,38 @@ def torch_offset_cumsum(
     [256],
 )
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     [
         pytest.param(
-            (2, 1),
+            (2, 2),
             {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 1), topology="linear"),
-            id="linear-2x1",
-        ),
-        pytest.param(
-            (4, 1),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="linear"),
-            id="linear-4x1",
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
+            id="fabric2d-mesh-2x2",
         ),
         pytest.param(
             (4, 2),
             {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             1,
-            ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
             id="mesh-4x2",
         ),
         pytest.param(
             (2, 4),
             {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             1,
-            ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-4x2"),
             id="mesh-2x4",
         ),
@@ -124,11 +114,12 @@ def torch_offset_cumsum(
 )
 def test_offset_cumsum(
     mesh_device,
+    device_params,
     n_routed_experts,
     num_links,
-    topology,
 ):
     """Test ttnn.offset_cumsum against PyTorch reference."""
+    topology = per_axis_topology(device_params["fabric_config"])[0]
     mesh_config = extract_mesh_config(mesh_device)
     sp_axis = mesh_config.sp_axis
     dispatch_group_size = mesh_config.dispatch_group_size

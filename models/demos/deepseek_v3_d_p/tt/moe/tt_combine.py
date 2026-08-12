@@ -34,6 +34,7 @@ TtDispatchModule produces the dispatched_buffer and metadata consumed here.
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.common.prefill.topology import per_axis_topology
 
 
 class TtCombineModule(LightweightModule):
@@ -56,7 +57,7 @@ class TtCombineModule(LightweightModule):
         seq_len_per_chip: int,
         cluster_axis: int = 0,
         num_links: int = 1,
-        topology: ttnn.Topology = ttnn.Topology.Linear,
+        topology: ttnn.Topology | None = None,
         memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
         init_zeros: bool = True,
         fp8_output: bool = False,
@@ -81,6 +82,8 @@ class TtCombineModule(LightweightModule):
         if fp8_output and mesh_device.arch() != ttnn.Arch.BLACKHOLE:
             raise ValueError("fp8_output requires Blackhole hardware")
         super().__init__()
+        if topology is None:
+            topology = per_axis_topology()[cluster_axis]
         self.mesh_device = mesh_device
         self.dispatch_group_size = dispatch_group_size
         self.num_dispatch_groups = num_dispatch_groups

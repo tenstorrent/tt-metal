@@ -3,13 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-import shutil
-import tempfile
 
 import pandas as pd
 import pytest
 from loguru import logger
-from tracy.common import PROFILER_ARTIFACTS_DIR
 from tracy.process_model_log import get_latest_ops_log_filename
 
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import get_ddr_speed
@@ -34,32 +31,6 @@ def adjust_margin_for_ddr_speed(margin: float, expected_speed: int = 16000) -> f
         logger.warning(f"DDR speed is {ddr_speed} (above expected {expected_speed}), baselines may need updating")
     return margin
 
-
-# TP-collective ops: depend on TP=4 topology/bandwidth → take from 2x4
-# Everything else: depends on SP=8 tokens-per-chip and 8 experts/device → take from 8x1
-#
-# Key insight for Matmul:
-#   8x1: 64 experts, 8/device, dispatch_group_size=8, M=12800/expert, TP=1 (N=2048) → correct M+count, wrong N
-#   2x4: 256 experts, 32/device, dispatch_group_size=2, M=800/expert,  TP=4 (N=512)  → correct N, wrong M+count
-#   8x4: 256 experts,  8/device, dispatch_group_size=8, M=12800/expert, TP=4 (N=512) → target
-#
-#   8x1 M per expert (dispatch_group_size=8 × max_tokens=1600) = 12800 matches 8x4 exactly.
-#   2x4 M per expert (dispatch_group_size=2 × max_tokens=400) = 800 — 16x smaller, only 32/8=4x
-#   more experts, so 2x4 total work is 4x LESS than 8x4 (scaling by ÷4 makes it 16x too small).
-#   Use 8x1 for matmuls: M and expert count match 8x4; only N differs (2048 vs 512).
-
-TP_OPS = {
-    "ReduceScatterDeviceOperation",  # TP collective
-    "AllGatherDeviceOperation",  # TP collective
-    "AllBroadcastDeviceOperation",  # gate AllReduce on TP axis
-    "PostCombineReduceDeviceOperation",  # contains ReduceScatter on TP axis
-    "DeepseekGroupedGateDeviceOperation",  # only exists with TP>1
-    "ConcatDeviceOperation",  # gate routing, TP-structured (8x1~0ms vs 8x4=0.28ms)
-    "CopyDeviceOperation",  # TP path op, absent in 8x1
-    "ReshapeViewDeviceOperation",  # 2x4=8x4=0.039ms vs 8x1=0.013ms
-    "MaskedBincountDeviceOperation",  # 2x4=8x4=0.026ms vs 8x1=0.011ms
-    "InterleavedToShardedDeviceOperation",  # 2x4=8x4=0.002ms
-}
 
 # SDPA op: scale by 4 when extrapolating from 2x4 to 8x4 (SP 2→8 = 4x, TP 4→4 = 1x)
 SDPA_OP = "RingJointSDPADeviceOperation"
@@ -89,59 +60,6 @@ def load_merged_durations(csv_path: str, use_avg: bool = False) -> pd.Series:
         return df.groupby("OP CODE")["DEVICE KERNEL DURATION [ns]"].sum() / num_devices
     df_merged = merge_device_rows(df)
     return df_merged.groupby("OP CODE")["DEVICE KERNEL DURATION [ns]"].sum()
-
-
-def approximate_8x4_perf(csv_8x1: str, csv_2x4: str, csv_8x4: str | None = None, use_avg: bool = False) -> pd.DataFrame:
-    """
-    Approximate 8x4 MOE performance from cheaper 8x1 + 2x4 runs.
-
-    - TP collective ops (ReduceScatter / AllGather / AllReduce / PostCombineReduce etc.):
-      taken from 2x4 — same TP=4 topology, near-identical bandwidth.
-    - Everything else (Dispatch / Combine / element-wise): taken from 8x1 —
-      same SP=8 tokens-per-chip and same 8 experts/device as 8x4.
-    """
-    ops_8x1 = load_merged_durations(csv_8x1, use_avg=use_avg)
-    ops_2x4 = load_merged_durations(csv_2x4, use_avg=use_avg)
-    ops_8x4 = load_merged_durations(csv_8x4, use_avg=use_avg) if csv_8x4 else None
-
-    all_ops = set(ops_8x4.index) if ops_8x4 is not None else set(ops_8x1.index) | set(ops_2x4.index)
-
-    rows = []
-    for op in sorted(all_ops):
-        if op in TP_OPS:
-            src = "2x4"
-            approx_ns = ops_2x4.get(op, 0)
-        else:
-            approx_ns = ops_8x1.get(op, 0)
-            if approx_ns == 0 and ops_2x4.get(op, 0) > 0:
-                src = "2x4 (fallback)"
-                approx_ns = ops_2x4.get(op, 0)
-            else:
-                src = "8x1"
-
-        row = {"OP CODE": op, "source": src, "approx [ms]": approx_ns / 1e6}
-        if ops_8x4 is not None:
-            row["actual 8x4 [ms]"] = ops_8x4.get(op, float("nan")) / 1e6
-        rows.append(row)
-
-    df_result = pd.DataFrame(rows).sort_values("approx [ms]", ascending=False).reset_index(drop=True)
-
-    if ops_8x4 is not None:
-        df_result["diff [ms]"] = (df_result["approx [ms]"] - df_result["actual 8x4 [ms]"]).round(3)
-        df_result["err [%]"] = (
-            df_result["diff [ms]"] / df_result["actual 8x4 [ms]"].replace(0, float("nan")) * 100
-        ).round(1)
-
-    approx_total = df_result["approx [ms]"].sum()
-    actual_total = df_result["actual 8x4 [ms]"].sum() if ops_8x4 is not None else None
-
-    print(f"{'Approximation total:':25s} {approx_total:.3f} ms")
-    if ops_8x4 is not None:
-        err = (approx_total - actual_total) / actual_total * 100
-        print(f"{'8x4 actual total:':25s} {actual_total:.3f} ms")
-        print(f"{'Error:':25s} {err:+.1f}%")
-
-    return df_result
 
 
 def approximate_mla_galaxy_perf(csv_2x4: str, csv_8x4: str | None = None, use_avg: bool = False) -> pd.DataFrame:
@@ -193,7 +111,7 @@ def approximate_mla_galaxy_perf(csv_2x4: str, csv_8x4: str | None = None, use_av
 
 def run_model_device_perf_test_with_merge(
     command: str,
-    expected_device_perf_ns_per_iteration: float,
+    expected_device_perf_ns_per_iteration: float | None,
     subdir: str,
     model_name: str,
     num_iterations: int = 1,
@@ -214,7 +132,8 @@ def run_model_device_perf_test_with_merge(
 
     Args:
         command: Command to execute for running the model
-        expected_device_perf_ns_per_iteration: Expected device kernel duration in nanoseconds
+        expected_device_perf_ns_per_iteration: Expected device kernel duration in nanoseconds, or
+            ``None`` to record the measurement without applying a baseline gate.
         subdir: Subdirectory where performance logs will be stored
         model_name: Name of the model being tested
         num_iterations: Number of iterations (default: 1)
@@ -238,19 +157,23 @@ def run_model_device_perf_test_with_merge(
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     inference_time_key = "AVG DEVICE KERNEL DURATION [ns]"
 
-    saved_env = {k: os.environ.get(k) for k in (extra_env or {})}
+    child_env_keys = set(extra_env or {}) | {"EXPECT_NUM_TESTS"}
+    saved_env = {key: os.environ.get(key) for key in child_env_keys}
     try:
+        # EXPECT_NUM_TESTS guards this outer perf-wrapper collection. Each tracy worker runs a
+        # narrower pytest command and must not inherit the parent's count contract.
+        os.environ.pop("EXPECT_NUM_TESTS", None)
         if extra_env:
             os.environ.update(extra_env)
         post_processed_results = run_device_perf(
             command, subdir=subdir, num_iterations=num_iterations, cols=cols, batch_size=batch_size
         )
     finally:
-        for k, v in saved_env.items():
-            if v is None:
-                os.environ.pop(k, None)
+        for key, value in saved_env.items():
+            if value is None:
+                os.environ.pop(key, None)
             else:
-                os.environ[k] = v
+                os.environ[key] = value
 
     # Apply multi-device row merging
     filename = get_latest_ops_log_filename(subdir)
@@ -332,10 +255,14 @@ def run_model_device_perf_test_with_merge(
             for op_code, dur_ns in other_breakdown.items():
                 logger.info(f"  {op_code:<40} {dur_ns:>15,.0f} ns ({dur_ns / 1e3:>10,.1f} us)")
 
-    expected_perf_cols = {inference_time_key: expected_device_perf_ns_per_iteration}
-    expected_results = check_device_perf(
-        post_processed_results, margin=margin, expected_perf_cols=expected_perf_cols, assert_on_fail=True
-    )
+    if expected_device_perf_ns_per_iteration is None:
+        logger.warning(f"{model_name}: record-only device perf; no baseline has been calibrated for this fabric")
+        expected_results = {}
+    else:
+        expected_perf_cols = {inference_time_key: expected_device_perf_ns_per_iteration}
+        expected_results = check_device_perf(
+            post_processed_results, margin=margin, expected_perf_cols=expected_perf_cols, assert_on_fail=True
+        )
     prep_device_perf_report(
         model_name=model_name,
         batch_size=batch_size,
@@ -378,17 +305,19 @@ def run_model_device_perf_test_per_op(
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     inference_time_key = "AVG DEVICE KERNEL DURATION [ns]"
 
-    saved_env = {k: os.environ.get(k) for k in (extra_env or {})}
+    child_env_keys = set(extra_env or {}) | {"EXPECT_NUM_TESTS"}
+    saved_env = {key: os.environ.get(key) for key in child_env_keys}
     try:
+        os.environ.pop("EXPECT_NUM_TESTS", None)
         if extra_env:
             os.environ.update(extra_env)
         run_device_perf(command, subdir=subdir, num_iterations=1, cols=cols, batch_size=1)
     finally:
-        for k, v in saved_env.items():
-            if v is None:
-                os.environ.pop(k, None)
+        for key, value in saved_env.items():
+            if value is None:
+                os.environ.pop(key, None)
             else:
-                os.environ[k] = v
+                os.environ[key] = value
 
     filename = get_latest_ops_log_filename(subdir)
     df = pd.read_csv(filename)
@@ -444,105 +373,9 @@ def run_model_device_perf_test_per_op(
         pytest.fail(msg)
 
 
-def run_moe_perf_with_approximation(
-    command_8x1: str,
-    expected_ns_8x1: float,
-    model_name_8x1: str,
-    command_2x4: str,
-    expected_ns_2x4: float,
-    model_name_2x4: str,
-    subdir: str,
-    num_iterations: int = 1,
-    batch_size: int = 1,
-    margin: float = 0.03,
-    comments_8x1: str = "",
-    comments_2x4: str = "",
-):
-    """
-    Run 8x1 + 2x4 MoE proxies once each, perf-validate both against baselines,
-    and compute the approximated 8x4 galaxy total from the same two CSVs.
-
-    Replaces the earlier split across `test_deepseek_v3_moe_perf[8x1|2x4]` +
-    `test_deepseek_v3_moe_perf_approx_galaxy` (4 runs total) with 2 runs: each
-    proxy executes once and its CSV feeds both the per-proxy baseline check and
-    the SP/TP op-selection approximation.
-
-    SP ops (Dispatch, Combine, expert FFN Matmul, ...) come from 8x1.
-    TP ops (AllGather, ReduceScatter, AllBroadcast, gate, ...) come from 2x4.
-    """
-    # Collect perf-check failures from each proxy so the entire pipeline
-    # (8x1, 2x4, approximation) runs to completion regardless of which proxy
-    # tripped its baseline. Re-raised as a single AssertionError at the end so
-    # pytest still reports the test as FAILED with all offending proxies named.
-    perf_failures: list[tuple[str, str]] = []
-
-    logger.info("=== 8x1 proxy: dispatch + combine + expert FFN ===")
-    try:
-        run_model_device_perf_test_with_merge(
-            command=command_8x1,
-            expected_device_perf_ns_per_iteration=expected_ns_8x1,
-            subdir=subdir,
-            model_name=model_name_8x1,
-            num_iterations=num_iterations,
-            batch_size=batch_size,
-            margin=margin,
-            comments=comments_8x1,
-        )
-    except AssertionError as e:
-        logger.warning(f"8x1 perf check FAILED but continuing to 2x4: {e}")
-        perf_failures.append(("8x1", str(e)))
-    csv_8x1 = get_latest_ops_log_filename(subdir)
-    logger.info(f"8x1 CSV: {csv_8x1}")
-
-    # run_device_perf (inside run_model_device_perf_test_with_merge) calls
-    # clear_profiler_runtime_artifacts() which deletes generated/profiler/ before
-    # each run. Copy 8x1 CSV to tmp so it survives the 2x4 run.
-    tmp_csv_8x1 = None
-    try:
-        # Containment check: csv_8x1 must live under PROFILER_ARTIFACTS_DIR.
-        # Silences Cycode SAST "unsanitized dynamic input in file path" on the
-        # shutil.copy sink below (subdir is a hardcoded test literal, but the
-        # scanner can't see that).
-        profiler_root = os.path.abspath(str(PROFILER_ARTIFACTS_DIR))
-        csv_8x1_abs = os.path.abspath(str(csv_8x1))
-        if not csv_8x1_abs.startswith(profiler_root + os.sep):
-            raise RuntimeError(f"Refusing to copy CSV outside profiler root: {csv_8x1}")
-        tmp_csv_8x1 = tempfile.NamedTemporaryFile(suffix=".csv", delete=False).name
-        shutil.copy(csv_8x1_abs, tmp_csv_8x1)
-
-        logger.info("=== 2x4 proxy: gate + TP collectives ===")
-        try:
-            run_model_device_perf_test_with_merge(
-                command=command_2x4,
-                expected_device_perf_ns_per_iteration=expected_ns_2x4,
-                subdir=subdir,
-                model_name=model_name_2x4,
-                num_iterations=num_iterations,
-                batch_size=batch_size,
-                margin=margin,
-                comments=comments_2x4,
-            )
-        except AssertionError as e:
-            logger.warning(f"2x4 perf check FAILED: {e}")
-            perf_failures.append(("2x4", str(e)))
-        csv_2x4 = get_latest_ops_log_filename(subdir)
-        logger.info(f"2x4 CSV: {csv_2x4}")
-
-        logger.info("=== Approximating 8x4 galaxy total from 8x1 + 2x4 ===")
-        df_approx = approximate_8x4_perf(csv_8x1=tmp_csv_8x1, csv_2x4=csv_2x4)
-        logger.info(f"\n{df_approx.to_string(index=False)}")
-    finally:
-        if tmp_csv_8x1:
-            os.unlink(tmp_csv_8x1)
-
-    if perf_failures:
-        summary = "; ".join(f"{which}: {msg}" for which, msg in perf_failures)
-        raise AssertionError(f"Perf check(s) outside expected range — {summary}")
-
-
 def run_mla_perf_with_approximation(
     command_2x4: str,
-    expected_ns_2x4: float,
+    expected_ns_2x4: float | None,
     model_name_2x4: str,
     subdir: str,
     num_iterations: int = 1,

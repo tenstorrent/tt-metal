@@ -33,156 +33,54 @@ TestVariant = PrefillModelAdapter
 TEST_VARIANTS = {name: get_adapter(name) for name in ADAPTER_PATHS}
 DSV3 = get_adapter("deepseek_v3_d_p")
 
-# glm_5_2 is a TEST-ONLY variant here: its adapter is intentionally kept out of the shared common
-# ADAPTER_PATHS (prefill serving is not wired), so register it locally for the `variant` fixture
-# without modifying the common prefill registry.
-from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_2 import GLM52Adapter
-
-TEST_VARIANTS["glm_5_2"] = GLM52Adapter()
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.utils.test_utils import convert_state_dict, detect_language_model_prefix
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import download_infinitebench_subset
 
-# Shared FABRIC_2D parametrize entries for the prefill block + transformer tests.
-# Minimum CI-gated coverage: (4,2) on BH LoudBox, (8,4) on BH Galaxy. (2,4) included
-# for asymmetry coverage. RELAXED_INIT matches the canonical pattern in test_prefill_block.py
-# and is required on BH Galaxy for FABRIC_2D bring-up.
+# Shared production-policy params for prefill block + transformer tests. LoudBox executes canonical
+# 2x4 Fabric2D and one 4x2 axis-order diagnostic. The 8x4 Fabric2D row is a temporary baseline
+# shadow only; Galaxy production executes the 8x4 TorusXY row.
 FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS = [
     pytest.param(
         (4, 2),
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-        },
+        fabric2d_device_params(),
         1,
-        ttnn.Topology.Linear,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
         id="fabric2d-mesh-4x2",
     ),
     pytest.param(
         (2, 4),
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-        },
+        fabric2d_device_params(),
         1,
-        ttnn.Topology.Linear,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
         id="fabric2d-mesh-2x4",
     ),
     pytest.param(
         (8, 4),
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-        },
+        fabric2d_device_params(),
         2,
-        ttnn.Topology.Linear,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-        id="fabric2d-mesh-8x4",
+        id="fabric2d-shadow-8x4",
     ),
-    # FABRIC_2D_TORUS_Y: single-galaxy 8x4 with the SP axis (mesh dim 0, 8-long) closed into a
-    # ring; the TP axis (dim 1, 4-wide) stays a line. Per-axis topology (SP, TP) = (Ring, Linear):
-    # Ring drives the SP-axis MoE dispatch/combine, Linear the TP-axis collectives (RMS-norm, MLA,
-    # shared-expert, gate). A scalar Ring here would deadlock the TP-axis all-gathers on a column
-    # wrap link that has no physical fabric edge. 2-link mirrors the fabric2d-mesh-8x4 sibling.
+    # Unscheduled differential diagnostic retained for the known SP-wrap MoE hang.
     pytest.param(
         (8, 4),
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-        },
+        fabric2d_device_params(
+            fabric_config=ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+            reliability_mode=ttnn.FabricReliabilityMode.RELAXED_INIT,
+        ),
         2,
-        (ttnn.Topology.Ring, ttnn.Topology.Linear),
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-        # Id omits `fabric2d-`/`mesh-` so it stays out of the count-guarded `-k "8x4 and fabric2d"`
-        # (EXPECT_NUM_TESTS=1) CI selectors that target the fabric2d-mesh siblings; select via `-k torus-y`.
-        id="torus-y-8x4",
-    ),
-    # FABRIC_2D_TORUS_X: single-galaxy 8x4 with the TP axis (mesh dim 1, 4-wide) closed into a ring;
-    # the SP axis (dim 0, 8-long) stays a line. Per-axis topology (SP, TP) = (Linear, Ring): Ring
-    # drives the TP-axis collectives (RMS-norm, MLA, dense-FFN, shared-expert, gate), Linear the
-    # SP-axis MoE dispatch/combine. This is the production full-galaxy X-ring case — it matches the
-    # [LINE,RING] pipeline-prefill descriptors and needs no sub-torus carve (uses all 32 chips).
-    pytest.param(
-        (8, 4),
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-        },
-        2,
-        (ttnn.Topology.Linear, ttnn.Topology.Ring),
-        marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-        id="torus-x-8x4",
+        id="torus-y-diagnostic-8x4",
     ),
     # FABRIC_2D_TORUS_XY on the full 8x4 galaxy: Ring on BOTH axes (SP dim 0 = Ring-8, TP dim 1 =
     # Ring-4). SP-axis MoE dispatch/combine ride #48225's ring-aware kernels; TP-axis collectives ring.
     pytest.param(
         (8, 4),
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-        },
+        torus_xy_device_params(),
         2,
-        (ttnn.Topology.Ring, ttnn.Topology.Ring),
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
         id="torus-xy-8x4",
-    ),
-    # FABRIC_2D_TORUS_Y on a 4x4 sub-torus (16 of the galaxy's 32 chips). Same [RING, LINE]
-    # shape as the 8x4 torus but with a Ring-4 on the SP axis (dim 0). Requires carving the
-    # sub-torus at runtime via TT_VISIBLE_DEVICES (16 chips) + TT_MESH_GRAPH_DESC_PATH pointing at
-    # models/demos/deepseek_v3_d_p/experimental_descriptors/single_bh_galaxy_subtorus_y4_graph_descriptor.textproto
-    # (channels count: 2 -> 2 links).
-    # Per-axis topology (SP, TP) = (Ring, Linear), as for the 8x4 torus.
-    pytest.param(
-        (4, 4),
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-        },
-        2,
-        (ttnn.Topology.Ring, ttnn.Topology.Linear),
-        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
-        id="torus-y-4x4",
-    ),
-    # FABRIC_2D_TORUS_X on a 4x4 sub-torus: Ring-4 on the TP/X axis (dim 1), Linear on the SP/Y axis
-    # (dim 0). The mirror of torus-y — wraps the columns instead of the rows, so the TP-axis
-    # collectives (RMS-norm, MLA, dense-FFN, shared-expert, gate) ring while the SP-axis MoE
-    # dispatch/combine stay a line. Carve via TT_VISIBLE_DEVICES (16 chips) + TT_MESH_GRAPH_DESC_PATH
-    # pointing at single_bh_galaxy_subtorus_x4_graph_descriptor.textproto.
-    pytest.param(
-        (4, 4),
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-        },
-        2,
-        (ttnn.Topology.Linear, ttnn.Topology.Ring),
-        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
-        id="torus-x-4x4",
-    ),
-    # FABRIC_2D_TORUS_XY on a 4x4 sub-torus: Ring-4 on BOTH axes (full 2D torus). The SP-axis MoE
-    # dispatch/combine ride the ring-aware kernels and the TP-axis collectives ring too. Carve via
-    # TT_VISIBLE_DEVICES (16 chips) + TT_MESH_GRAPH_DESC_PATH=...subtorus_xy4...
-    pytest.param(
-        (4, 4),
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-        },
-        2,
-        (ttnn.Topology.Ring, ttnn.Topology.Ring),
-        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
-        id="torus-xy-4x4",
     ),
 ]
 
@@ -209,32 +107,53 @@ def pytest_collection_modifyitems(config, items):
     GALAXY board that wrap is subtorus wiring that CI galaxy runners do not have — the native
     galaxy mesh is 32x4 across 4 hosts, so an 8-ring or 4-ring on a single galaxy is a sub-torus
     (and the 4-ring exists ONLY on a subtorus-wired galaxy, not on a LoudBox). Opening such a
-    fabric on a CI galaxy just hangs. So on CI + galaxy we skip EVERY torus
-    (FABRIC_2D_TORUS_{X,Y,XY}) and FABRIC_1D_RING config. LoudBox is untouched: its ring is
-    native there, and galaxy-only torus configs can't be collected on it anyway (device count).
+    fabric on a CI galaxy just hangs. So on CI + generic galaxy we skip every retained torus config;
+    certification admits TorusXY only, while TorusX/TorusY remain manual diagnostics.
+    LoudBox never selects a torus config: its local production-policy coverage is unwrapped Fabric2D.
     None of this fires off CI, so a subtorus-wired host (CI unset) still runs everything.
     """
     on_ci = os.getenv("CI") == "true" or "TT_GH_CI_INFRA" in os.environ
+    torus_xy_certified = os.getenv("PREFILL_TORUS_XY_CERTIFIED") == "1"
     ring_or_torus_fabrics = {
         ttnn.FabricConfig.FABRIC_2D_TORUS_X,
         ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
         ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
-        ttnn.FabricConfig.FABRIC_1D_RING,
     }
 
-    def _is_ring_or_torus(item):
+    def _fabric_config(item):
         params = getattr(getattr(item, "callspec", None), "params", {})
         dp = params.get("device_params")
-        return isinstance(dp, dict) and dp.get("fabric_config") in ring_or_torus_fabrics
+        return dp.get("fabric_config") if isinstance(dp, dict) else None
 
-    # Only skip ring/torus on a galaxy; LoudBox rings are native. Galaxy detection via
+    def _is_ring_or_torus(item):
+        return _fabric_config(item) in ring_or_torus_fabrics
+
+    def _is_torus_xy(item):
+        return _fabric_config(item) == ttnn.FabricConfig.FABRIC_2D_TORUS_XY
+
+    torus_items_collected = any(_is_ring_or_torus(item) for item in items)
+    torus_xy_items_collected = any(_is_torus_xy(item) for item in items)
+    if torus_xy_items_collected and torus_xy_certified and not os.getenv("TT_MESH_GRAPH_DESC_PATH"):
+        pytest.exit("PREFILL_TORUS_XY_CERTIFIED=1 requires explicit TT_MESH_GRAPH_DESC_PATH", returncode=2)
+    if torus_xy_items_collected and torus_xy_certified:
+        from models.demos.common.prefill.runners.runner_utils import parse_mesh_descriptor_topologies
+
+        descriptors = parse_mesh_descriptor_topologies(os.environ["TT_MESH_GRAPH_DESC_PATH"])
+        incompatible = [d for d in descriptors if d.dim_types != ("RING", "RING")]
+        if incompatible:
+            pytest.exit(
+                f"certified TorusXY requires Ring/Ring descriptor, got {incompatible}",
+                returncode=2,
+            )
+
+    # Generic CI galaxies are not wrap-cabling certified. Galaxy detection via
     # get_cluster_type() OPENS the chip cluster as a side effect, so only call it when this session
     # actually collects a ring/torus config to decide on. Otherwise a device-free session — notably the
     # tracy-based perf tests, which spawn a child pytest — would open the device here in the PARENT and
     # hold CHIP_IN_USE, deadlocking the child (get_num_devices() below is likewise gated by a marker).
     # On detection failure default to skipping (a missed skip on a galaxy hangs, worse than over-skip on LB).
     skip_rings = False
-    if on_ci and any(_is_ring_or_torus(item) for item in items):
+    if on_ci and not torus_xy_certified and torus_items_collected:
         try:
             skip_rings = ttnn.cluster.get_cluster_type() in (
                 ttnn.cluster.ClusterType.GALAXY,
@@ -247,13 +166,27 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         # Galaxy ring/subtorus guard — runs before the marker check so it catches configs whether or
         # not they carry a requires_mesh_topology mark.
+        fabric_config = _fabric_config(item)
+        if (
+            on_ci
+            and torus_xy_certified
+            and fabric_config in ring_or_torus_fabrics
+            and fabric_config != ttnn.FabricConfig.FABRIC_2D_TORUS_XY
+        ):
+            item.add_marker(
+                pytest.mark.skip(
+                    reason="certified production CI admits only FABRIC_2D_TORUS_XY; "
+                    "TorusX/TorusY are manual diagnostics"
+                )
+            )
+            continue
         if skip_rings:
             if _is_ring_or_torus(item):
                 item.add_marker(
                     pytest.mark.skip(
                         reason="ring/subtorus config on a CI galaxy runner: an 8-/4-ring on one galaxy "
                         "needs subtorus wrap cabling that CI galaxies lack -> would hang. Runs only on a "
-                        "subtorus-wired galaxy (CI unset), or — for a native ring — a LoudBox."
+                        "cabling-certified torus galaxy allocation."
                     )
                 )
                 continue
@@ -294,6 +227,24 @@ def pytest_collection_modifyitems(config, items):
 
         if skip_reason:
             item.add_marker(pytest.mark.skip(reason=skip_reason))
+
+
+@pytest.fixture(autouse=True)
+def _assert_certified_torus_profile(request):
+    """Fail closed after mesh open for every certified TorusXY parametrized case."""
+    params = getattr(getattr(request.node, "callspec", None), "params", {})
+    device_params = params.get("device_params")
+    if not isinstance(device_params, dict):
+        return
+    if device_params.get("fabric_config") != ttnn.FabricConfig.FABRIC_2D_TORUS_XY:
+        return
+    if os.getenv("PREFILL_TORUS_XY_CERTIFIED") != "1":
+        return
+    request.getfixturevalue("mesh_device")
+    assert ttnn.get_fabric_config() == ttnn.FabricConfig.FABRIC_2D_TORUS_XY
+    from models.demos.deepseek_v3_d_p.tt.tt_ccl import assert_torus_xy_topology
+
+    assert_torus_xy_topology()
 
 
 @pytest.fixture
@@ -990,44 +941,3 @@ def infinitebench_prompt(request):
         data = json.load(f)
 
     return data["subset"], data["prompt"]
-
-
-def pytest_collection_finish(session):
-    """Optional CI guardrail: warn (do NOT fail) when the number of selected
-    deepseek_v3_d_p tests differs from EXPECT_NUM_TESTS.
-
-    Inert unless EXPECT_NUM_TESTS is set, so it has zero effect on normal runs.
-    Intended for pipeline commands whose ``-k`` filter must resolve to a known
-    count — e.g. topology-gated tests that can silently collect 0 on the wrong
-    mesh. Emits a GitHub Actions ``::warning::`` annotation but never changes the
-    exit code, so the job still passes."""
-    expected_raw = os.getenv("EXPECT_NUM_TESTS")
-    if not expected_raw:
-        return
-    try:
-        expected = int(expected_raw)
-    except ValueError:
-        print(f"::warning title=Test count check::EXPECT_NUM_TESTS={expected_raw!r} is not an integer; skipping check")
-        return
-    actual = len(session.items)
-    if actual == expected:
-        return
-    invocation = " ".join(session.config.invocation_params.args)
-    msg = f"expected {expected} test(s) to be collected but got {actual} (pytest {invocation})"
-    annotation = f"::warning title=Unexpected test count::{msg}"
-
-    # The annotation must reach the step's live log stream for GitHub to parse it,
-    # so emit it with pytest's output capture suspended (a plain print() here can be
-    # swallowed by capturing and never appear in the runner log).
-    capman = session.config.pluginmanager.get_plugin("capturemanager")
-    if capman is not None:
-        with capman.global_and_fixture_disabled():
-            print(annotation, flush=True)
-    else:
-        print(annotation, flush=True)
-
-    # Also surface it on the GitHub job-summary page when available.
-    summary_path = os.getenv("GITHUB_STEP_SUMMARY")
-    if summary_path:
-        with open(summary_path, "a") as fh:
-            fh.write(f"⚠️ **Unexpected test count** — {msg}\n")

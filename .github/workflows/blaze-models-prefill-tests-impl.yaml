@@ -332,6 +332,26 @@ jobs:
           echo "ERROR: Recovery failed after $MAX_RECOVERY_ATTEMPTS attempts"
           exit 1
 
+      - name: Probe XY-torus cabling for scoped prefill rows
+        if: ${{ contains(matrix.test-group.cmd, 'single_bh_galaxy_torus_xy_graph_descriptor') || contains(matrix.test-group.cmd, 'PREFILL_FABRIC_MODE=2d_torus_xy') }}
+        working-directory: /home/user/tt-metal
+        timeout-minutes: 10
+        run: |
+          # This probe is deliberately separate from the deployment-matched shared health gate.
+          # A generic allocation remains usable by out-of-scope rows, but scoped TorusXY pytest
+          # commands fail closed through their EXPECT_NUM_TESTS guard when certification is absent.
+          if mpirun --pernode --tag-output \
+            ./build/tools/scaleout/run_cluster_validation \
+            --cabling-descriptor-path tools/tests/scaleout/cabling_descriptors/bh_galaxy_xy_torus.textproto \
+            --hard-fail \
+            --send-traffic \
+            --num-iterations 1; then
+            echo "PREFILL_TORUS_XY_CERTIFIED=1" >> "$GITHUB_ENV"
+            echo "XY-torus cabling/traffic certification passed"
+          else
+            echo "::warning::XY-torus certification failed; scoped TorusXY rows will fail closed"
+          fi
+
       - name: Verify ttnn imports on workers
         working-directory: /tmp
         run: |

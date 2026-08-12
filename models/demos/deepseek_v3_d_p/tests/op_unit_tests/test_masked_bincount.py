@@ -49,27 +49,27 @@ def torch_masked_bincount(
     [
         pytest.param(
             (1, 1),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            {"fabric_config": ttnn.FabricConfig.DISABLED},
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 1), topology="linear"),
             id="single",
         ),
         pytest.param(
             (1, 2),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            {"fabric_config": ttnn.FabricConfig.DISABLED},
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 2), topology="linear"),
-            id="linear-1x2",
+            id="disabled-1x2",
         ),
         pytest.param(
             (1, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            {"fabric_config": ttnn.FabricConfig.DISABLED},
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="mesh-1x4"),
-            id="linear-1x4",
+            id="disabled-1x4",
         ),
         pytest.param(
             (2, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
-            id="mesh-4x2",
+            {"fabric_config": ttnn.FabricConfig.FABRIC_2D, "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT},
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="fabric2d-2x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -193,7 +193,7 @@ def test_masked_bincount(
     [
         pytest.param(
             (1, 1),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            {"fabric_config": ttnn.FabricConfig.DISABLED},
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 1), topology="linear"),
             id="single",
         ),

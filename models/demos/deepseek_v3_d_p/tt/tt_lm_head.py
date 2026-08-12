@@ -32,6 +32,7 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.common.prefill.topology import per_axis_topology
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tt.mla.utils import global_to_local_token_id
 
@@ -166,7 +167,7 @@ class TtLMHead(LightweightModule):
         vocab_size: int = DeepSeekV3Config.VOCAB_SIZE,
         torch_weight: torch.Tensor = None,
         num_links: int = 1,
-        topology: ttnn.Topology = ttnn.Topology.Ring,
+        topology: ttnn.Topology | None = None,
         activations_dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat16,
         compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_HIFI2,
@@ -184,7 +185,7 @@ class TtLMHead(LightweightModule):
             torch_weight: Optional weight tensor [vocab_size, emb_dim].
                           If None, loads from cache or creates random weight.
             num_links: Number of ethernet links to use for CCL (default: 1)
-            topology: CCL topology - Linear or Ring (default: Ring)
+            topology: CCL topology; when omitted it is derived from the active FabricConfig
             activations_dtype: Data type for activations (default: bfloat16)
             weights_dtype: Data type for weights (default: bfloat16)
             compute_kernel_config: Compute kernel configuration
@@ -196,6 +197,8 @@ class TtLMHead(LightweightModule):
                                 (matmul partials + all_reduce, output TP-replicated).
         """
         super().__init__()
+        if topology is None:
+            topology = per_axis_topology()[tp_axis]
         self.mesh_device = mesh_device
         self.emb_dim = emb_dim
         self.vocab_size = vocab_size

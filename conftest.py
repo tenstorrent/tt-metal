@@ -25,6 +25,78 @@ from tests.scripts.common import get_updated_device_params, run_process_and_get_
 SIX_U_NUM_PCIE_DEVICES = 32
 
 
+def pytest_collection_finish(session):
+    """Fail count-guarded pytest invocations whose final selection changed or became empty."""
+    expected_raw = os.getenv("EXPECT_NUM_TESTS")
+    if not expected_raw:
+        return
+    try:
+        expected = int(expected_raw)
+    except ValueError:
+        pytest.exit(f"EXPECT_NUM_TESTS={expected_raw!r} is not an integer", returncode=2)
+
+    actual = len(session.items)
+    if actual == expected:
+        return
+    invocation = " ".join(session.config.invocation_params.args)
+    msg = f"expected {expected} test(s) to be collected but got {actual} (pytest {invocation})"
+    annotation = f"::error title=Unexpected test count::{msg}"
+    capman = session.config.pluginmanager.get_plugin("capturemanager")
+    if capman is not None:
+        with capman.global_and_fixture_disabled():
+            print(annotation, flush=True)
+    else:
+        print(annotation, flush=True)
+
+    summary_path = os.getenv("GITHUB_STEP_SUMMARY")
+    if summary_path:
+        with open(summary_path, "a") as summary:
+            summary.write(f"❌ **Unexpected test count** — {msg}\n")
+    pytest.exit(msg, returncode=2)
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Fail count-guarded runs unless every selected test actually passed."""
+    expected_raw = os.getenv("EXPECT_NUM_TESTS")
+    if not expected_raw or session.config.option.collectonly:
+        return
+
+    try:
+        expected = int(expected_raw)
+    except ValueError:
+        # pytest_collection_finish reports this with the invocation details.
+        return
+
+    terminalreporter = session.config.pluginmanager.get_plugin("terminalreporter")
+    stats = terminalreporter.stats if terminalreporter is not None else {}
+    passed = len(stats.get("passed", []))
+    skipped = len(stats.get("skipped", []))
+    xfailed = len(stats.get("xfailed", []))
+    xpassed = len(stats.get("xpassed", []))
+
+    if passed == expected and skipped == 0 and xfailed == 0 and xpassed == 0:
+        return
+
+    invocation = " ".join(session.config.invocation_params.args)
+    msg = (
+        f"expected {expected} selected test(s) to pass but got passed={passed}, skipped={skipped}, "
+        f"xfailed={xfailed}, xpassed={xpassed} (pytest {invocation})"
+    )
+    annotation = f"::error title=Unexpected test execution count::{msg}"
+    capman = session.config.pluginmanager.get_plugin("capturemanager")
+    if capman is not None:
+        with capman.global_and_fixture_disabled():
+            print(annotation, flush=True)
+    else:
+        print(annotation, flush=True)
+
+    summary_path = os.getenv("GITHUB_STEP_SUMMARY")
+    if summary_path:
+        with open(summary_path, "a") as summary:
+            summary.write(f"❌ **Unexpected test execution count** — {msg}\n")
+    session.exitstatus = pytest.ExitCode.TESTS_FAILED
+
+
 @pytest.fixture(scope="function")
 def reset_seeds():
     torch.manual_seed(213919)

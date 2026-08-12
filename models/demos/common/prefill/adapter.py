@@ -272,6 +272,25 @@ ADAPTER_PATHS = {
 _ADAPTER_INSTANCES: dict = {}
 
 
+def require_prefill_model_name(environ=None) -> str:
+    """Return the explicitly selected model or fail before model/device construction.
+
+    ``DEFAULT_MODEL`` remains import-level compatibility metadata. Production runner entry points must
+    use this helper so an omitted per-rank ``PREFILL_MODEL`` cannot silently select Kimi K2.7.
+    """
+    import os
+
+    environ = os.environ if environ is None else environ
+    name = environ.get("PREFILL_MODEL", "").strip()
+    if not name:
+        raise RuntimeError(
+            "PREFILL_MODEL is required for prefill runner/producer execution; no production default is permitted"
+        )
+    if name not in ADAPTER_PATHS:
+        raise KeyError(f"Unknown PREFILL_MODEL={name!r}; valid: {sorted(ADAPTER_PATHS)}")
+    return name
+
+
 def get_adapter(name: str) -> PrefillModelAdapter:
     """Resolve (and memoize) a registered adapter by name; raises KeyError listing
     the valid set. The adapter class is imported lazily from ``ADAPTER_PATHS``."""

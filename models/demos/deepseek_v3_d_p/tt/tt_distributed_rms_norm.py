@@ -21,6 +21,7 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.common.prefill.topology import per_axis_topology
 
 # DeepSeek 671B RMSNorm dimensions
 EMB_DIM = 7168
@@ -139,7 +140,7 @@ class TtDistributedRmsNorm(LightweightModule):
         torch_weight: torch.Tensor = None,
         cluster_axis: int = 1,
         num_links: int = 1,
-        topology: ttnn.Topology = ttnn.Topology.Linear,
+        topology: ttnn.Topology | None = None,
         input_memcfg: ttnn.MemoryConfig = None,
         sharded_progcfg: ttnn.LayerNormShardedMultiCoreProgramConfig = None,
         stats_memcfg: ttnn.MemoryConfig = None,
@@ -156,12 +157,14 @@ class TtDistributedRmsNorm(LightweightModule):
             torch_weight: Optional torch tensor of shape [emb_dim] for gamma weights
             cluster_axis: Mesh dimension to gather along (default: 1 for columns)
             num_links: Number of ethernet links for CCL (default: 1)
-            topology: CCL topology - Linear or Ring (default: Linear)
+            topology: CCL topology; when omitted it is derived from the active FabricConfig
             input_memcfg: Optional memory config for input (e.g., L1 sharded)
             sharded_progcfg: Optional sharded program config for layernorm
             stats_memcfg: Optional memory config for gathered stats (e.g., L1 sharded)
         """
         super().__init__()
+        if topology is None:
+            topology = per_axis_topology()[cluster_axis]
         self.mesh_device = mesh_device
         self.emb_dim = emb_dim
         self.epsilon = epsilon

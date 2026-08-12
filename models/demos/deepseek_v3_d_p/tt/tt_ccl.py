@@ -1,11 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Optional
-
-from loguru import logger
-
 import ttnn
+from models.demos.common.prefill.topology import assert_torus_xy_topology, per_axis_topology
+
+__all__ = ["assert_torus_xy_topology", "per_axis_topology"]
 
 # NOTE: This file is forked from models/common/modules/tt_ccl.py
 #       This is done to include logic for divifing the grid of cores for ring attention
@@ -299,71 +298,6 @@ class TT_CCL:
     def get_num_links(self, cluster_axis=None):
         """Get the number of available Ethernet links for CCL operations on this mesh device."""
         return get_num_links(self.mesh_device, cluster_axis)
-
-
-# =============================================================================
-# Topology auto-detection
-# =============================================================================
-
-
-# todo)) work with the CCL team to find opportunity to simplify this --> e.g., build into TTNN APIs?
-def default_topology(mesh_device: ttnn.MeshDevice) -> Optional[ttnn.Topology]:
-    """Auto-detect CCL topology based on cluster type and device count."""
-    num_devices = mesh_device.get_num_devices()
-    if num_devices == 8 and ttnn.cluster.get_cluster_type() in [
-        ttnn.cluster.ClusterType.T3K,
-        ttnn.cluster.ClusterType.GALAXY,
-    ]:
-        # NOTE: we always want to do ring if it is available
-        return ttnn.Topology.Ring
-    elif num_devices > 1:
-        # NOTE: this should be a fallback when the ring is not available
-        return ttnn.Topology.Linear
-    return None
-
-
-# Per-axis CCL topology. Mesh dim 0 = rows = "Y" = sp_axis; dim 1 = cols = "X" = tp_axis.
-# A torus fabric physically wraps a given axis; Ring is only valid on a wrapped axis (otherwise the
-# collective hangs forever on a wrap link the fabric does not service — get_usable_topology() keeps
-# Ring because the coords span the axis). Reading the *active* fabric config keeps the returned
-# topology consistent with whatever was opened, so a (descriptor, fabric, topology) mismatch can't
-# silently ask Ring on an unwrapped axis.
-_FABRIC_PER_AXIS_TOPOLOGY = {
-    # fabric_config: (sp_topology [dim 0 / Y], tp_topology [dim 1 / X])
-    ttnn.FabricConfig.FABRIC_2D_TORUS_X: (ttnn.Topology.Linear, ttnn.Topology.Ring),
-    ttnn.FabricConfig.FABRIC_2D_TORUS_Y: (ttnn.Topology.Ring, ttnn.Topology.Linear),
-    ttnn.FabricConfig.FABRIC_2D_TORUS_XY: (ttnn.Topology.Ring, ttnn.Topology.Ring),
-    ttnn.FabricConfig.FABRIC_1D_RING: (ttnn.Topology.Ring, ttnn.Topology.Linear),
-}
-
-
-def per_axis_topology(
-    fabric_config: Optional[ttnn.FabricConfig] = None,
-) -> tuple[ttnn.Topology, ttnn.Topology]:
-    """Return the per-axis CCL topology ``(sp_topology, tp_topology)`` for the fabric.
-
-    ``sp_topology`` drives cluster_axis=0 (rows / Y) collectives, ``tp_topology`` drives
-    cluster_axis=1 (cols / X). Ring is returned only for an axis the fabric physically wraps; every
-    other axis is Linear. When ``fabric_config`` is None the currently-active fabric is queried so
-    the result always matches the opened fabric.
-    """
-    if fabric_config is None:
-        fabric_config = ttnn.get_fabric_config()
-    mapped = _FABRIC_PER_AXIS_TOPOLOGY.get(fabric_config)
-    if mapped is not None:
-        return mapped
-    # Unknown fabric → all-Linear. If the fabric name looks ring/torus-capable, this means a wrap-
-    # capable fabric was opened but has no per-axis mapping here: collectives would silently run
-    # all-Linear (correct but no ring speedup, and a likely sign the mapping needs updating). Warn
-    # loudly rather than degrade silently.
-    name = getattr(fabric_config, "name", str(fabric_config))
-    if "TORUS" in name.upper() or "RING" in name.upper():
-        logger.warning(
-            f"per_axis_topology: fabric {name} is ring/torus-capable but has no entry in "
-            "_FABRIC_PER_AXIS_TOPOLOGY; defaulting to (Linear, Linear) so no axis will ring. "
-            "Add it to the mapping if a ring topology is intended."
-        )
-    return (ttnn.Topology.Linear, ttnn.Topology.Linear)
 
 
 # =============================================================================

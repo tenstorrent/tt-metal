@@ -46,6 +46,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     validate_combine_output,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert_dispatch_table, log_validation_results
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 
 
 def run_combine(
@@ -384,7 +385,7 @@ def combine_shape_params():
     combine_shape_params(),
 )
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     ALL_MESH_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
@@ -397,13 +398,13 @@ def combine_shape_params():
 @pytest.mark.parametrize("use_fp8_output", [False, True], ids=["bf16_out", "fp8_out"])
 def test_ttnn_combine(
     mesh_device,
+    device_params,
     seq_len_per_chip,
     emb_dim,
     num_routed_experts,
     num_experts_per_tok,
     dispatch_buffer_capacity_factor,
     num_links,
-    topology,
     use_predictable_data,
     run_pcc_check,
     dispatched_buffer_layout,
@@ -411,6 +412,7 @@ def test_ttnn_combine(
     is_ci_env,
     is_ci_v2_env,
 ):
+    topology = per_axis_topology(device_params["fabric_config"])[0]
     run_combine(
         mesh_device,
         seq_len_per_chip,

@@ -1027,7 +1027,7 @@ def main() -> None:
     apply_manifest_env(manifest)
     if args.migrations is not None:
         os.environ["PREFILL_MIGRATION_PAIRS"] = args.migrations  # CLI beats manifest + env
-    producer._load_env_config()
+    producer._load_env_config(require_model=True)
 
     # Rank split. Under an MPI launcher every non-zero rank is a read-back-only validator for its OWN
     # host's layers; standalone this is (0, 1) and nothing below changes. Done AFTER the manifest lands in

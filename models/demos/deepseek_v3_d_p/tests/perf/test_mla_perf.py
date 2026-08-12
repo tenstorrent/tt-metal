@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import pytest
 
 from models.demos.deepseek_v3_d_p.utils.perf_utils import (
@@ -13,15 +15,20 @@ from models.demos.deepseek_v3_d_p.utils.perf_utils import (
 
 _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_mla.py::test_ds_mla"
 
-_CMD_2X4 = f"pytest {_TEST_PATH} -k 'balanced-skip_check-seq100k-scaled_sl-random-line-2x4'"
-_CMD_8X4 = f"pytest {_TEST_PATH} -k 'balanced-skip_check-seq100k-scaled_sl-random-line-8x4'"
+_CMD_2X4 = f"pytest {_TEST_PATH} -k 'balanced and skip_check and seq100k and scaled_sl and random and fabric2d-2x4'"
+_CMD_8X4 = f"pytest {_TEST_PATH} -k 'balanced and skip_check and seq100k and scaled_sl and random and torus-xy-8x4'"
 
 # Kimi K2.6 chunked prefill: 50k KV-cache prefix + one fresh 5k chunk (chunk_size_global=5120). On
 # the 8x4 Galaxy (sp=8) this lands chunk_local=640 per chip, exercising the num_heads=64 chunked-only
 # 640 matmul/SDPA configs. Functional reference (no PCC) keeps the measured region to the single
 # forward (the 50k prefix is preloaded host->device before the MLA_START signpost, so it is not timed).
 _CHUNKED_TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill"
-_CMD_CHUNKED_8X4 = f"pytest {_CHUNKED_TEST_PATH} -k 'deep-50k+5k and kimi and func and 8x4 and fabric2d'"
+_CMD_CHUNKED_8X4 = f"pytest {_CHUNKED_TEST_PATH} -k 'deep-50k+5k and kimi and func and torus-xy-8x4'"
+
+
+def _require_certified_torus_xy():
+    if os.getenv("PREFILL_TORUS_XY_CERTIFIED") != "1" or not os.getenv("TT_MESH_GRAPH_DESC_PATH"):
+        pytest.skip("TorusXY perf requires a certified Galaxy and explicit mesh graph descriptor")
 
 
 @pytest.mark.timeout(0)
@@ -32,7 +39,8 @@ def test_deepseek_v3_mla_perf_loudbox():
     """
     run_mla_perf_with_approximation(
         command_2x4=_CMD_2X4,
-        expected_ns_2x4=8_244_047,  # Recalibrated 2026-06-10 on BH LoudBox 2x4.
+        # Record-only until calibrated on Fabric2D; 8,244,047 ns was measured on Fabric1D.
+        expected_ns_2x4=None,
         model_name_2x4="deepseek_v3_mla_lb_2x4",
         subdir="deepseek_v3_mla",
         margin=0.03,
@@ -42,6 +50,7 @@ def test_deepseek_v3_mla_perf_loudbox():
 
 @pytest.mark.timeout(0)
 def test_deepseek_v3_mla_perf_galaxy():
+    _require_certified_torus_xy()
     if not _is_galaxy_env():
         pytest.skip("This test requires 8x4 mesh - galaxy. (set MESH_DEVICE=TG)")
 
@@ -49,7 +58,8 @@ def test_deepseek_v3_mla_perf_galaxy():
 
     run_model_device_perf_test_with_merge(
         command=_CMD_8X4,
-        expected_device_perf_ns_per_iteration=14_252_829,  # Recalibrated 2026-06-10 on bh-glx-110-c08u02; FABRIC_1D.
+        # Record-only until calibrated on TorusXY; 14,252,829 ns was measured on Fabric1D.
+        expected_device_perf_ns_per_iteration=None,
         subdir="deepseek_v3_mla",
         model_name="deepseek_v3_mla_glx_8x4",
         num_iterations=1,
@@ -64,6 +74,7 @@ def test_kimi_mla_chunked_perf_galaxy():
     """Kimi K2.6 chunked-prefill MLA perf on the 8x4 Galaxy: 50k KV-cache prefix + one fresh 5k chunk
     (640 tokens/chip). Functional (no reference), so the single timed forward exercises the chunked
     640 matmul/SDPA configs end to end. Ground-truth 8x4 measurement (no 2x4 approximation)."""
+    _require_certified_torus_xy()
     if not _is_galaxy_env():
         pytest.skip("This test requires 8x4 mesh - galaxy. (set MESH_DEVICE=TG)")
 
@@ -71,7 +82,8 @@ def test_kimi_mla_chunked_perf_galaxy():
 
     run_model_device_perf_test_with_merge(
         command=_CMD_CHUNKED_8X4,
-        expected_device_perf_ns_per_iteration=7_118_649,
+        # Record-only until recalibrated; 7,118,649 ns was measured on unwrapped Fabric2D.
+        expected_device_perf_ns_per_iteration=None,
         subdir="deepseek_v3_mla",
         model_name="kimi_mla_chunked_glx_8x4",
         num_iterations=1,

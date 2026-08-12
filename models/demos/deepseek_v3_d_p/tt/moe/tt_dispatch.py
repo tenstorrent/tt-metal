@@ -40,6 +40,7 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.common.prefill.topology import per_axis_topology
 
 
 class TtDispatchModule(LightweightModule):
@@ -64,7 +65,7 @@ class TtDispatchModule(LightweightModule):
         emb_dim: int = 7 * 1024,
         cluster_axis: int = 0,
         num_links: int = 1,
-        topology: ttnn.Topology = ttnn.Topology.Linear,
+        topology: ttnn.Topology | None = None,
         fp8_output: bool = False,
         subdevice_id=None,
         num_workers_per_sender: int = 2,
@@ -93,6 +94,8 @@ class TtDispatchModule(LightweightModule):
         if fp8_output and "blackhole" not in ttnn.get_arch_name():
             raise ValueError("fp8_output requires Blackhole hardware")
         super().__init__()
+        if topology is None:
+            topology = per_axis_topology()[cluster_axis]
         self.mesh_device = mesh_device
         self.dispatch_group_size = dispatch_group_size
         self.experts_per_chip = experts_per_chip

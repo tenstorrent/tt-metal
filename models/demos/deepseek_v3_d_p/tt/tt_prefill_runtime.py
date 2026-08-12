@@ -24,6 +24,8 @@ from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceCo
 class TtPrefillRuntimeConfig:
     num_layers: int  # layers built by THIS runtime (the rank's slice; == model total for single-rank)
     max_seq_len: int  # per-user KV-cache length (tokens), e.g. 60 * 1024
+    # Required production contract, resolved from the opened FabricConfig by the adapter.
+    topology: Union[ttnn.Topology, Tuple[ttnn.Topology, ttnn.Topology]]
     mesh_shape: tuple = (32, 4)
     # Chunked prefill streams tokens in chunks of `chunk_size`, with `num_users` independent cache
     # slots (user-major batch). The full cache holds num_users * num_layers slots of max_seq_len each.
@@ -32,9 +34,6 @@ class TtPrefillRuntimeConfig:
     sp_axis: int = 0
     tp_axis: int = 1
     num_links: int = 1
-    # Scalar applies to both mesh axes; a (sp_axis_0, tp_axis_1) tuple configures each independently.
-    # Derived from the opened fabric via tt_ccl.per_axis_topology() in the runner.
-    topology: Union[ttnn.Topology, Tuple[ttnn.Topology, ttnn.Topology]] = ttnn.Topology.Linear
     capacity_factor: int = 2
     gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL
     routed_expert_activations_dtype: ttnn.DataType = ttnn.bfloat8_b

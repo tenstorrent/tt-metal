@@ -12,6 +12,7 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.common.prefill.topology import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import compute_constants, extract_mesh_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
@@ -98,7 +99,7 @@ class TtPrefillBlock(LightweightModule):
         seq_len: int = 1024,
         dispatch_buffer_capacity_factor: int = 2,
         num_links: int = 2,
-        topology: TopologyArg = ttnn.Topology.Linear,
+        topology: TopologyArg | None = None,
         sp_axis: int = 0,
         tp_axis: int = 1,
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
@@ -210,7 +211,7 @@ class TtPrefillBlock(LightweightModule):
         seq_len: int,
         dispatch_buffer_capacity_factor: int = 2,
         num_links: int = 1,
-        topology: TopologyArg = ttnn.Topology.Linear,
+        topology: TopologyArg | None = None,
         sp_axis: int = 0,
         tp_axis: int = 1,
         is_balanced: bool = False,
@@ -240,6 +241,8 @@ class TtPrefillBlock(LightweightModule):
         assert not is_chunked or layer_num is not None, "chunked prefill requires layer_num (model layer count)"
         self.mesh_device = mesh_device
         self.num_links = num_links
+        if topology is None:
+            topology = per_axis_topology()
         # Per-axis CCL topology. A (row=SP-axis-0, col=TP-axis-1) tuple configures each mesh
         # axis independently; a scalar applies to both. FABRIC_2D_TORUS_Y wraps ONLY the SP
         # axis into a ring, so TP-axis collectives (RMS-norm, MLA, dense-FFN all-gather — all

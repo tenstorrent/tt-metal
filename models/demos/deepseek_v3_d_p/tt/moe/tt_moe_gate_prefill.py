@@ -15,6 +15,7 @@ from loguru import logger
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
+from models.demos.common.prefill.topology import per_axis_topology
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_real_token_counts
@@ -59,9 +60,9 @@ class TtMoEGateConfig:
             "DISPATCH_AXIS": 0,
             "TP_AXIS": 1,
             "NUM_LINKS": 2,
-            # CCL topology for the TP-axis gate all-reduce. Ring requires the TP axis to be physically
-            # wrapped (FABRIC_2D_TORUS_X / _XY); set from TtMoe's col_topology. Defaults to Linear.
-            "TOPOLOGY": ttnn.Topology.Linear,
+            # CCL topology for the TP-axis gate all-reduce. TtMoe sets this explicitly; standalone
+            # users derive it from the active FabricConfig when the gate is initialized.
+            "TOPOLOGY": None,
         }
     )
     mm_configs: dict = field(
@@ -307,6 +308,9 @@ class TtMoEGatePrefill(LightweightModule):
         """
         self.config = config
         self.mesh_device = mesh_device
+        if self.config.ccl_config["TOPOLOGY"] is None:
+            tp_axis = self.config.ccl_config["TP_AXIS"]
+            self.config.ccl_config["TOPOLOGY"] = per_axis_topology()[tp_axis]
         # Shared per-mesh CCL singleton: provides persistent global semaphores for the gate's TP
         # all-reduce so the op reuses them instead of allocating fresh L1 semaphores every layer
         # (those leaked, pinning the L1 floor and clashing with the next layer's ring_mla CBs).
@@ -570,7 +574,7 @@ class TtMoEGatePrefill(LightweightModule):
                 num_links=self.config.ccl_config["NUM_LINKS"],
                 math_op=ttnn.ReduceType.Sum,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
-                topology=self.config.ccl_config.get("TOPOLOGY", ttnn.Topology.Linear),
+                topology=self.config.ccl_config["TOPOLOGY"],
             )
         return logits
 

@@ -24,6 +24,7 @@ from tracy import signpost
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.common.prefill.topology import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_ep_mesh_mapper
 from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
@@ -146,7 +147,7 @@ class TtMoe(LightweightModule):
         n_limited_groups: int,
         route_scale: float,
         num_links: Union[int, tuple[int, int]] = 1,
-        topology: Union[ttnn.Topology, tuple[ttnn.Topology, ttnn.Topology]] = ttnn.Topology.Linear,
+        topology: Union[ttnn.Topology, tuple[ttnn.Topology, ttnn.Topology], None] = None,
         routed_expert_weights: list[dict] = None,
         shared_expert_weights: dict = None,
         routed_expert_activations_dtype=ttnn.bfloat8_b,
@@ -218,6 +219,8 @@ class TtMoe(LightweightModule):
         else:
             self.row_num_links = self.col_num_links = num_links
 
+        if topology is None:
+            topology = per_axis_topology()
         if isinstance(topology, tuple):
             self.row_topology, self.col_topology = topology
         else:

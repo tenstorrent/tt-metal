@@ -479,7 +479,9 @@ def test_producer_runner_pcc(scenario, tmp_path):
     prod_log = os.path.join(_REPORT_DIR, f"ci_producer_{scenario}.log")
     trace_env = {}
     if "prompt_file" in sc:
-        model = os.environ.get("PREFILL_MODEL", "kimi_k2_7")
+        model = os.environ.get("PREFILL_MODEL", "").strip()
+        if not model:
+            raise RuntimeError("PREFILL_MODEL must be explicit for producer/runner e2e scenarios")
         trace_env["PREFILL_MODEL"] = model
         reuse_dir = os.environ.get("PREFILL_REUSE_TRACE_DIR")
         if reuse_dir and os.path.exists(os.path.join(reuse_dir, "metadata.json")):

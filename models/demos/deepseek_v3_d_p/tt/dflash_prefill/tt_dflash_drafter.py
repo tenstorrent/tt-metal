@@ -27,6 +27,7 @@ from __future__ import annotations
 from typing import Optional
 
 import ttnn
+from models.demos.common.prefill.topology import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import (
     DFlashDrafterConfig,
     build_drafter_rope_hf_config,
@@ -55,10 +56,12 @@ class TtDFlashDrafter:
         tp_axis: int = 1,
         max_seq_len: Optional[int] = None,
         num_links: int = 1,
-        topology: ttnn.Topology = ttnn.Topology.Linear,
+        topology: ttnn.Topology | None = None,
         fc_mode: str = "sliced",
     ):
         self.mesh_device = mesh_device
+        if topology is None:
+            topology = per_axis_topology()[tp_axis]
         self.config = config
         self.sp_axis = sp_axis
         self.tp_axis = tp_axis

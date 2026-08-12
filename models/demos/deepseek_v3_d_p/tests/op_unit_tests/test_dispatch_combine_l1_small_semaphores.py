@@ -20,6 +20,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.common.prefill.topology import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
     compute_constants,
@@ -146,7 +147,7 @@ def run_dispatch_op(mesh_device, use_l1_small):
         max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
         cluster_axis=sp_axis,
         num_links=1,
-        topology=ttnn.Topology.Linear,
+        topology=per_axis_topology()[sp_axis],
         use_l1_small_for_semaphores=use_l1_small,
     )
     ttnn.synchronize_device(mesh_device)
@@ -191,7 +192,7 @@ def run_combine_op(
         seq_len_per_chip=seq_len_per_chip,
         cluster_axis=sp_axis,
         num_links=1,
-        topology=ttnn.Topology.Linear,
+        topology=per_axis_topology()[sp_axis],
         init_zeros=False,
         use_l1_small_for_semaphores=use_l1_small,
     )
@@ -203,14 +204,15 @@ def run_combine_op(
     "mesh_device, device_params",
     [
         pytest.param(
-            (4, 1),
+            (2, 2),
             {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
                 "l1_small_size": 512,
             },
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="linear"),
-            id="linear-4x1",
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
+            id="fabric2d-mesh-2x2",
         ),
     ],
     indirect=["mesh_device", "device_params"],

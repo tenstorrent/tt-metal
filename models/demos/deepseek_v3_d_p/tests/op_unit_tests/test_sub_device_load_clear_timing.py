@@ -92,7 +92,7 @@ def _two_ops_subdevice(mesh_device, x, w, sd_id, core_grid, ckc):
     [
         pytest.param(
             (4, 2),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            {"fabric_config": ttnn.FabricConfig.FABRIC_2D, "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT},
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
             id="mesh-4x2",
         ),

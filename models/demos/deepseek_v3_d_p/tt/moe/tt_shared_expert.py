@@ -20,6 +20,7 @@ from loguru import logger
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
+from models.demos.common.prefill.topology import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
 COMPUTE_KERNEL_CONFIG_HIFI2 = ttnn.WormholeComputeKernelConfig(
@@ -231,7 +232,7 @@ class TtSharedExpert(LightweightModule):
         hidden_dim: int = 2 * 1024,
         torch_weights: dict = None,
         num_links: int = 1,
-        topology: ttnn.Topology = ttnn.Topology.Linear,
+        topology: ttnn.Topology | None = None,
         activations_dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat8_b,
         compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_HIFI2,
@@ -249,7 +250,7 @@ class TtSharedExpert(LightweightModule):
             hidden_dim: Hidden dimension (default: 2048)
             torch_weights: Optional dict with keys 'gate_proj', 'up_proj', 'down_proj' containing torch tensors
             num_links: Number of ethernet links to use for CCL (default: 1)
-            topology: CCL topology - Linear or Ring (default: Linear)
+            topology: CCL topology; when omitted it is derived from the active FabricConfig
             activations_dtype: Data type for activations (default: bfloat16)
             weights_dtype: Data type for weights (default: bfloat8_b)
             compute_kernel_config: Compute kernel configuration
@@ -257,6 +258,8 @@ class TtSharedExpert(LightweightModule):
             cache_name_prefix: Optional prefix for cache file names
         """
         super().__init__()
+        if topology is None:
+            topology = per_axis_topology()[1]
         self.mesh_device = mesh_device
         self.emb_dim = emb_dim
         self.hidden_dim = hidden_dim

@@ -30,7 +30,8 @@ PCC_REQUIRED = 0.99
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
         }
     ],
     indirect=True,

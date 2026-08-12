@@ -91,13 +91,13 @@ Copy `topology_configuration/pipeline_prefill_request_1rank.yaml` and add what m
 ```yaml
 rank_bindings:
   - {rank: 0, mesh_id: 0, mesh_host_rank: 0, env_overrides: {}}
-mesh_graph_desc_path: tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_x_graph_descriptor.textproto
+mesh_graph_desc_path: tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto
 global_env:
   PREFILL_MANIFEST: "models/demos/my_model/tt/runners/manifests/my_model.json"
   PREFILL_NUM_LAYERS: "<L>"        # the runner defaults to 61 — pin the real depth
   PREFILL_MAX_SEQ_LEN: "<S>"
   PREFILL_CHUNK_SIZE: "<C>"        # defaults to 5*1024
-  PREFILL_FABRIC_MODE: "2d"
+  PREFILL_FABRIC_MODE: "2d_torus_xy"
   PREFILL_H2D_SERVICE_ID: "my_prefill"
   PREFILL_NUM_USERS: "4"           # must cover every dst slot: src 0,1 -> dst 2,3
 

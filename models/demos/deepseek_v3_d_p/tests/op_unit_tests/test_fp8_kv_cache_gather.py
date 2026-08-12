@@ -16,6 +16,7 @@ import torch
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import PrefillRunParams
+from models.demos.common.prefill.topology import per_axis_topology
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import glm_hf_config
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_1 import GLM51Adapter
 from models.demos.deepseek_v3_d_p.tt.runners.kv_chunk_table import (
@@ -143,7 +144,7 @@ def test_fp8_row_major_kv_cache_all_gather(mesh_device, tmp_path):
         barrier_semaphore=barrier_semaphore,
         num_links=1,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        topology=ttnn.Topology.Linear,
+        topology=per_axis_topology()[sp_axis],
         cluster_axis=sp_axis,
     )
     ttnn.synchronize_device(mesh_device)

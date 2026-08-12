@@ -40,13 +40,15 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
-from models.demos.common.prefill.adapter import DEFAULT_MODEL, PrefillRunParams, get_adapter
+from models.demos.common.prefill.adapter import PrefillRunParams, get_adapter, require_prefill_model_name
 from models.demos.common.prefill.runners.migration import serialize_device_map
 from models.demos.common.prefill.runners.runner_utils import (
+    PrefillTopologyProfile,
     activation_global_spec,
     build_h2d_service,
     load_trace_token_ids,
     open_mesh_device,
+    resolve_prefill_topology_profile,
     resolve_trace_dir,
 )
 
@@ -150,7 +152,8 @@ H2D_MAPPER_CONFIG = ttnn.MeshMapperConfig(placements=[ttnn.PlacementShard(0), tt
 
 D2D_FIFO_SIZE_BYTES = int(os.environ.get("PREFILL_PP_D2D_FIFO_BYTES", 64 * 1024))
 
-ADAPTER = get_adapter(os.environ.get("PREFILL_MODEL", DEFAULT_MODEL))
+PREFILL_MODEL = require_prefill_model_name()
+ADAPTER = get_adapter(PREFILL_MODEL)
 MODEL_CFG = ADAPTER.model_config
 
 # D2D socket transport (>1 rank): one sender/receiver pair per rank boundary carries the hidden state
@@ -824,7 +827,7 @@ def _print_config() -> None:
         ("PREFILL_NUM_USERS", str(NUM_USERS)),
         ("PREFILL_CAPACITY_FACTOR", str(CAPACITY_FACTOR)),
         ("PREFILL_GATE_FALLBACK_MODE", _gate_mode_name),
-        ("PREFILL_FABRIC_MODE", os.environ.get("PREFILL_FABRIC_MODE", "<auto: 1d if sp<=8 else 2d>")),
+        ("PREFILL_FABRIC_MODE", os.environ.get("PREFILL_FABRIC_MODE", "<missing: startup will fail>")),
         ("PREFILL_STANDALONE (pipeline/bring-up mode)", os.environ.get("PREFILL_STANDALONE", "0")),
         ("PREFILL_PP_D2D_FIFO_BYTES", str(D2D_FIFO_SIZE_BYTES)),
         ("PREFILL_H2D_SERVICE_ID", os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")),
@@ -853,16 +856,20 @@ def _print_config() -> None:
     logger.info("\n" + "\n".join(lines))
 
 
-def _assert_ranks_agree_on_config(rank: int, num_ranks: int) -> None:
+def _assert_ranks_agree_on_config(
+    rank: int,
+    num_ranks: int,
+    topology_profile: PrefillTopologyProfile,
+) -> None:
     """Fail fast when the ranks of a pipeline did not resolve the SAME model/shape config.
 
     Every PREFILL_* knob is read from this process's environment, and tt-run only guarantees
     per-rank delivery for what a rank binding puts in `global_env` (it auto-propagates just the
     TT_/ARCH_/WH_/TTNN_/DEEPSEEK_/MESH_ prefixes, and an `-x FOO` in --mpi-args lands in mpirun's
     FIRST application context -> rank 0 only). So exporting PREFILL_MANIFEST in the launching shell
-    sets rank 0 and silently leaves every other rank on adapter.py's DEFAULT_MODEL -- a DIFFERENT,
-    perfectly valid model, whose weight cache is equally "complete". Nothing errors: the pipeline
-    just runs one model's layers into another's, and only the downstream ranks' KV fails PCC.
+    used to set rank 0 and silently leave every other rank on adapter.py's default model. Model
+    selection is now fail-closed, and this fingerprint additionally catches ranks that resolve two
+    different explicit model/config values before model construction.
 
     A one-int allgather of a config fingerprint turns that into an immediate, named failure.
     """
@@ -871,13 +878,17 @@ def _assert_ranks_agree_on_config(rank: int, num_ranks: int) -> None:
     import zlib
 
     fields = {
-        "PREFILL_MODEL": os.environ.get("PREFILL_MODEL") or f"<unset -> default:{DEFAULT_MODEL}>",
+        "PREFILL_MODEL": PREFILL_MODEL,
         "adapter": ADAPTER.name,
         "num_layers": NUM_LAYERS,
         "chunk_size": CHUNK_SIZE,
         "max_seq_len": MAX_SEQ_LEN,
         "num_users": NUM_USERS,
         "mesh_shape": GLOBAL_MESH_SHAPE,
+        "fabric_mode": topology_profile.fabric_mode,
+        "descriptor_path": str(topology_profile.descriptor_path) if topology_profile.descriptor_path else "<none>",
+        "per_axis_topology": tuple(str(topology) for topology in topology_profile.per_axis_topology),
+        "reliability_mode": str(topology_profile.reliability_mode),
     }
     fingerprint = "|".join(f"{k}={v}" for k, v in fields.items())
     digest = zlib.crc32(fingerprint.encode()) & 0x7FFFFFFF
@@ -908,7 +919,8 @@ def main() -> None:
         ttnn.init_distributed_context()
     rank = int(ttnn.distributed_context_get_rank())
     num_ranks = int(ttnn.distributed_context_get_size())
-    _assert_ranks_agree_on_config(rank, num_ranks)
+    topology_profile = resolve_prefill_topology_profile(GLOBAL_MESH_SHAPE, PREFILL_MODEL)
+    _assert_ranks_agree_on_config(rank, num_ranks, topology_profile)
 
     layer_split = compute_layer_split(NUM_LAYERS, num_ranks, ADAPTER.layer_split_boundaries(NUM_LAYERS))
     first_layer_idx, num_my_layers = layer_split[rank]
@@ -921,7 +933,11 @@ def main() -> None:
     )
 
     mesh_device = open_mesh_device(
-        GLOBAL_MESH_SHAPE, MODEL_CFG, l1_small_size=_L1_SMALL_SIZE, trace_region_size=_TRACE_REGION_SIZE
+        GLOBAL_MESH_SHAPE,
+        MODEL_CFG,
+        l1_small_size=_L1_SMALL_SIZE,
+        trace_region_size=_TRACE_REGION_SIZE,
+        model_name=PREFILL_MODEL,
     )
 
     hf_config = ADAPTER.load_hf_config()

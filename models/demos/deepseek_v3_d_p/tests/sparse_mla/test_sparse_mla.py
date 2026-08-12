@@ -31,6 +31,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import num_full_indexer_layers
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup, interleaved_to_halfsplit_perm
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions, rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -58,15 +59,17 @@ def _collect_kvpe_cache(cache, mesh_device):
 # thin per-chip head shard at tp=4 (64/4=16 < 32) is handled by the head→sequence reshard in
 # ttMLA._sparse_mla (#48727) + the head-replicated seq-sharded indexer, so GLM is no longer TP-capped.
 # Coverage rationale:
-#   QuietBox (4):  (2,2) TP=2 and (1,4) TP=4 — both variants at both TP.
+#   QuietBox (4):  (2,2) — the only non-degenerate Fabric2D shape.
 #   LoudBox  (8):  (2,4) TP=4 and (4,2) TP=2 — both variants at both TP.
-#   Galaxy   (32): (8,4) production TP=4 + (8,2) TP=2 plane.
+#   Galaxy   (32): (8,4) production TP=4.
 # Mesh shape is NOT correctness-invariant, so accuracy sweeps the whole box set; determinism and
 # chunked pin to each variant's anchor (highest supported TP) — see _sparse_cases(anchor_only=True).
 SPARSE_MESH_BY_DEVICES = {
-    4: [(2, 2), (1, 4)],
+    4: [(2, 2)],
     8: [(2, 4), (4, 2)],
-    32: [(8, 4), (8, 2)],
+    # Production Galaxy uses the complete wrapped view. An 8x2 sub-mesh cannot carry the
+    # descriptor's TP wrap edge and therefore must not inherit the TorusXY profile.
+    32: [(8, 4)],
 }
 
 # seq_len is a sparsity-regime axis (not a code path): accuracy keeps one inert-top-k point (256,
@@ -77,9 +80,8 @@ SPARSE_SEQS_ANCHOR = [5120]
 
 
 def _sparse_meshes():
-    """Current box's candidate (sp, tp) meshes; best-effort single TP plane on non-standard boxes."""
-    n = detect_num_devices()
-    return SPARSE_MESH_BY_DEVICES.get(n, [(1, max(n, 1))])
+    """Current box's supported (sp, tp) meshes, or None for an unsupported device count."""
+    return SPARSE_MESH_BY_DEVICES.get(detect_num_devices())
 
 
 def _seq_ok_for_mesh(seq_len, mesh):
@@ -96,6 +98,17 @@ def _sparse_cases(seqs, anchor_only):
     """Generate (variant, mesh, seq_len) params for the CURRENT box — only valid combos, so the
     collected matrix equals the run matrix (validity is enforced here, not via runtime skips)."""
     meshes = _sparse_meshes()
+    if meshes is None:
+        num_devices = detect_num_devices()
+        return [
+            pytest.param(
+                SPARSE_VARIANTS[0],
+                (2, 2),
+                seqs[-1],
+                marks=pytest.mark.skip(reason=f"unsupported device count {num_devices}"),
+                id="unsupported-fabric2d",
+            )
+        ]
     chosen = [_anchor_mesh(meshes)] if (anchor_only and meshes) else meshes
     cases = []
     for mesh in chosen:
@@ -104,7 +117,12 @@ def _sparse_cases(seqs, anchor_only):
                 continue
             for variant_name in SPARSE_VARIANTS:
                 cases.append(
-                    pytest.param(variant_name, mesh, seq_len, id=f"{variant_name}-{mesh[0]}x{mesh[1]}-seq{seq_len}")
+                    pytest.param(
+                        variant_name,
+                        mesh,
+                        seq_len,
+                        id=f"{variant_name}-shape-{mesh[0]}x{mesh[1]}-seq{seq_len}",
+                    )
                 )
     return cases
 
@@ -124,6 +142,7 @@ def _sparse_accuracy_cases():
                     mesh,
                     seq_len,
                     cache_format,
+                    marks=case.marks,
                     id=f"{case.id}-kv_{cache_format.value}",
                 )
             )
@@ -133,50 +152,33 @@ def _sparse_accuracy_cases():
 SPARSE_ACCURACY_CASES = _sparse_accuracy_cases()
 SPARSE_ANCHOR_CASES = _sparse_cases(SPARSE_SEQS_ANCHOR, anchor_only=True)
 
-# All three fabric transports, keyed by name. Fabric is NOT swept: correctness is ~invariant to the
-# transport, so the suite pins one fabric (PREFERRED below) and lets a dedicated fabric test cover
-# multi-transport bring-up. The ids/dicts are kept so DS_SPARSE_FABRIC can select any of them.
+# Fabric is not swept. LoudBox defaults to unwrapped Fabric2D; a cabling-certified Galaxy selects
+# TorusXY explicitly. No Fabric1d compatibility mode exists in this scoped suite.
 _SPARSE_FABRICS = {
-    "line": {
-        "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-        "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-    },
-    "ring": {
-        "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-        "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-    },
     "fabric2d": {
         "fabric_config": ttnn.FabricConfig.FABRIC_2D,
         "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
         "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
         "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
     },
+    "torus_xy": {
+        "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+        "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+        "reliability_mode": ttnn.FabricReliabilityMode.STRICT_INIT,
+        "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
+    },
 }
-# Auto-pin the fabric: priority fabric2d > ring > line (fabric2d is the Galaxy/production bring-up).
-# Override with DS_SPARSE_FABRIC=line|ring|fabric2d. TODO: replace the priority default with a real
-# per-box capability probe; for now it defaults to the top-priority (production) transport.
-_SPARSE_FABRIC_PRIORITY = ["fabric2d", "ring", "line"]
 
 
 def _preferred_fabric_name() -> str:
-    env = os.environ.get("DS_SPARSE_FABRIC")
-    if env:
-        assert env in _SPARSE_FABRICS, f"DS_SPARSE_FABRIC={env!r} must be one of {sorted(_SPARSE_FABRICS)}"
-        return env
-    return _SPARSE_FABRIC_PRIORITY[0]
+    fabric = os.environ.get("DS_SPARSE_FABRIC", "fabric2d").strip().lower()
+    assert fabric in _SPARSE_FABRICS, f"DS_SPARSE_FABRIC={fabric!r} must be one of {sorted(_SPARSE_FABRICS)}"
+    return fabric
 
 
 PREFERRED_FABRIC = _preferred_fabric_name()
 SPARSE_DEVICE_PARAMS = [_SPARSE_FABRICS[PREFERRED_FABRIC]]
 SPARSE_DEVICE_IDS = [PREFERRED_FABRIC]
-
-
-def _topology_from_device_params(device_params):
-    return (
-        ttnn.Topology.Ring
-        if device_params.get("fabric_config") == ttnn.FabricConfig.FABRIC_1D_RING
-        else ttnn.Topology.Linear
-    )
 
 
 def _init_index_kv_cache(config, mesh_device, seq_len, mesh_shape, sp_axis, slot_num=1):
@@ -745,7 +747,7 @@ def test_sparse_mla_accuracy(
         return original(q, *args, **kwargs)
 
     monkeypatch.setattr(ttnn.experimental, "ring_indexer_score_dsa", check_indexer_q_format)
-    topology = _topology_from_device_params(device_params)
+    topology = per_axis_topology(device_params["fabric_config"])
     run_sparse_mla_accuracy_case(
         variant,
         config_only,
@@ -778,7 +780,7 @@ def test_sparse_mla_indexer_reuse(
     weights, _ = build_weights(variant, config, layer=ds_layer, checkpoint_path=ds_checkpoint, repo=ds_repo)
     mesh_shape = list(mesh_device.shape)
     sp_axis, tp_axis = 0, 1
-    topology = _topology_from_device_params(device_params)
+    topology = per_axis_topology(device_params["fabric_config"])
 
     def _kvpe():
         return init_mla_kv_cache(
@@ -826,7 +828,7 @@ def test_sparse_mla_indexer_reuse(
 def test_sparse_mla_determinism(
     mesh_device, seq_len, n_runs, device_params, variant, config_only, ds_layer, ds_checkpoint, ds_repo
 ):
-    topology = _topology_from_device_params(device_params)
+    topology = per_axis_topology(device_params["fabric_config"])
     run_sparse_mla_determinism_case(
         variant, config_only, mesh_device, seq_len, n_runs, topology, ds_layer, ds_checkpoint, ds_repo
     )

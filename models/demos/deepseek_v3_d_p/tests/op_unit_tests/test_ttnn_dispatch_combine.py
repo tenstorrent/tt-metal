@@ -50,6 +50,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     validate_roundtrip_output,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert_dispatch_table, log_validation_results
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 
 
 def run_dispatch_combine(
@@ -410,7 +411,7 @@ def dispatch_combine_shape_params():
     dispatch_combine_shape_params(),
 )
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     ALL_MESH_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
@@ -422,18 +423,19 @@ def dispatch_combine_shape_params():
 )
 def test_ttnn_dispatch_combine(
     mesh_device,
+    device_params,
     seq_len_per_chip,
     emb_dim,
     num_routed_experts,
     num_experts_per_tok,
     dispatch_buffer_capacity_factor,
     num_links,
-    topology,
     use_predictable_data,
     dispatched_buffer_layout,
     is_ci_env,
     is_ci_v2_env,
 ):
+    topology = per_axis_topology(device_params["fabric_config"])[0]
     run_dispatch_combine(
         mesh_device,
         seq_len_per_chip,
@@ -493,24 +495,24 @@ def test_ttnn_dispatch_combine(
 # (guarantees overflow); < 1.0 so A fits fully and the overflow lands inside B.
 # ------------------------------------------------------------------------------
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     [
         pytest.param(
-            (8, 1),
+            (2, 4),
             {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
-            id="linear-8-1link",
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="fabric2d-mesh-2x4-1link",
         ),
     ],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("overflow_mode", ["cut_short_last", "omit_last"])
-def test_ttnn_dispatch_combine_overflow(mesh_device, num_links, topology, overflow_mode):
+def test_ttnn_dispatch_combine_overflow(mesh_device, device_params, num_links, overflow_mode):
     """Verify dispatch/combine does not hang when the flat dispatch buffer overflows.
 
     The dispatch buffer is a flat shared region sized
@@ -524,6 +526,7 @@ def test_ttnn_dispatch_combine_overflow(mesh_device, num_links, topology, overfl
 
     Verifies completion only (no hang); output correctness is not checked.
     """
+    topology = per_axis_topology(device_params["fabric_config"])[0]
     seq_len_per_chip = 256
     emb_dim = 256
     num_routed_experts = 16
@@ -659,18 +662,18 @@ def test_ttnn_dispatch_combine_overflow(mesh_device, num_links, topology, overfl
 
 
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     [
         pytest.param(
-            (8, 1),
+            (2, 4),
             {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
-            id="linear-8-1link",
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="fabric2d-mesh-2x4-1link",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -681,9 +684,10 @@ def test_ttnn_dispatch_combine_overflow(mesh_device, num_links, topology, overfl
     ids=["dispatched_buffer_tile", "dispatched_buffer_row_major"],
 )
 def test_ttnn_dispatch_combine_top4(
-    mesh_device, num_links, topology, dispatched_buffer_layout, is_ci_env, is_ci_v2_env
+    mesh_device, device_params, num_links, dispatched_buffer_layout, is_ci_env, is_ci_v2_env
 ):
     """Regression test for num_experts_per_tok > 2 (previously caused hangs due to undersized CB buffering)."""
+    topology = per_axis_topology(device_params["fabric_config"])[0]
     # dispatch_buffer_capacity_factor: ceil(N/2) of the most conservative integer
     # N such that dgs*seq*N >= theoretical worst-case dispatch buffer. Real traffic
     # never approaches the worst case, so half-capacity is sufficient.

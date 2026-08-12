@@ -17,6 +17,7 @@ from typing import Optional
 from loguru import logger
 
 import ttnn
+from models.demos.common.prefill.topology import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import COMPUTE_KERNEL_CONFIG_HIFI2, TtSharedExpert
 
 # DeepSeek 671B FFN dimensions
@@ -46,7 +47,7 @@ class TtFfn(TtSharedExpert):
         emb_dim: int = EMB_DIM,
         hidden_dim: int = HIDDEN_DIM,
         num_links: int = 1,
-        topology: ttnn.Topology = ttnn.Topology.Linear,
+        topology: ttnn.Topology | None = None,
         activations_dtype=ttnn.bfloat16,
         weights_dtype: ttnn.DataType = ttnn.bfloat8_b,
         compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_HIFI2,
@@ -54,6 +55,8 @@ class TtFfn(TtSharedExpert):
         cache_name_prefix: Optional[str] = None,
     ):
         """Initialize TtFfn — same signature as before, no sub-device parameters."""
+        if topology is None:
+            topology = per_axis_topology()[1]
         super().__init__(
             mesh_device=mesh_device,
             emb_dim=emb_dim,

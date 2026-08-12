@@ -40,6 +40,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 
 # Geometry of the replay, not of any model: LB 8x1 stands in for ONE column of the Galaxy the
 # capture was taken on, which has 4 columns of 8 chips.
@@ -77,23 +78,24 @@ _CHUNK_MODELS = [("dsv3", DeepSeekV3Config), ("kimi26", KimiK26Config), ("glm52"
     ],
 )
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     ALL_MESH_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.timeout(0)
 def test_ttnn_dispatch_combine(
     mesh_device,
+    device_params,
     seq_len_per_chip,
     emb_dim,
     num_routed_experts,
     num_experts_per_tok,
     dispatch_buffer_capacity_factor,
     num_links,
-    topology,
     experts_per_chip_override,
     model,
 ):
+    topology = per_axis_topology(device_params["fabric_config"])[0]
     layer_str = os.getenv("TT_DS_CAPTURED_LAYER")
     col_str = os.getenv("TT_DS_CAPTURED_COL")
     if layer_str is None or col_str is None:
