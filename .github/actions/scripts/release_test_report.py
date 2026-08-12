@@ -180,6 +180,7 @@ def classify(expected, failed_rows, conclusion, detail):
 
 def build(mapping, expected, passed, failed, verdict, suites=None):
     """Group the run's tests under the requirement each one serves."""
+
     def req_of(row):
         entry = match_entry(row["config"], row["group"], row["filter"], row["runner"], mapping)
         return (entry or {}).get("requirement")
@@ -227,9 +228,7 @@ def render_plain(report, meta):
     if verdict == PASSED:
         out.append(f"RESULT: all {len(report['passed'])} gating RTL sim test(s) passed.")
     elif verdict == FAILED:
-        out.append(
-            f"RESULT: {len(report['passed'])} test(s) passed, {len(report['failed'])} failed."
-        )
+        out.append(f"RESULT: {len(report['passed'])} test(s) passed, {len(report['failed'])} failed.")
     else:
         out.append(
             "RESULT: INCONCLUSIVE -- the RTL sim check was not green and carried no "
@@ -268,8 +267,11 @@ def render_plain(report, meta):
     suites = report.get("suites") or []
     if suites:
         t = suite_totals(suites)
-        out += ["", "--- Other release testing (model e2e suites) ---",
-                f"{t['suites']} suite(s): {t['passed']} passed, {t['failed']} failed, {t['skipped']} skipped."]
+        out += [
+            "",
+            "--- Other release testing (model e2e suites) ---",
+            f"{t['suites']} suite(s): {t['passed']} passed, {t['failed']} failed, {t['skipped']} skipped.",
+        ]
         for s_ in suites:
             line = f"{s_['name']}: {s_['passed']} passed, {s_['failed']} failed, {s_['skipped']} skipped"
             out.append(line)
@@ -291,7 +293,9 @@ def render_plain(report, meta):
 
 def render_markdown(report, meta):
     verdict = report["verdict"]
-    badge = {PASSED: "✅ all gating tests passed", FAILED: "❌ failures present", INCONCLUSIVE: "⚠️ inconclusive"}[verdict]
+    badge = {PASSED: "✅ all gating tests passed", FAILED: "❌ failures present", INCONCLUSIVE: "⚠️ inconclusive"}[
+        verdict
+    ]
     with_evidence = [r for r in report["requirements"] if r["passed"]]
 
     out = [
@@ -322,12 +326,10 @@ def render_markdown(report, meta):
             "|---|---|---|---|---|",
         ]
         for req in with_evidence:
+
             def cell(rows):
                 return (
-                    "<br>".join(
-                        f"`{format_test(r['config'], r['group'], r['filter'], r['runner'])}`"
-                        for r in rows
-                    )
+                    "<br>".join(f"`{format_test(r['config'], r['group'], r['filter'], r['runner'])}`" for r in rows)
                     or "—"
                 )
 
@@ -411,8 +413,10 @@ def main():
     suites = parse_junit_dir(_env("TEST_REPORTS_DIR", ""))
     if suites:
         t = suite_totals(suites)
-        print(f"read {t['suites']} test suite(s) from TEST_REPORTS_DIR: "
-              f"{t['passed']} passed, {t['failed']} failed, {t['skipped']} skipped")
+        print(
+            f"read {t['suites']} test suite(s) from TEST_REPORTS_DIR: "
+            f"{t['passed']} passed, {t['failed']} failed, {t['skipped']} skipped"
+        )
     report = build(mapping, expected, passed, failed, verdict, suites)
 
     meta = {

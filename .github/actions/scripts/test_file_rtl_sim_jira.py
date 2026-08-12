@@ -100,14 +100,10 @@ def test_shipped_map_is_valid_and_ordered(relevance_map):
     """The config-only 2x3_DISPATCH wildcard must not shadow specific entries."""
     entries = relevance_map["relevant_tests"]
     wildcard_idx = [
-        i
-        for i, e in enumerate(entries)
-        if e.get("config") == "2x3_DISPATCH" and "group" not in e and "filter" not in e
+        i for i, e in enumerate(entries) if e.get("config") == "2x3_DISPATCH" and "group" not in e and "filter" not in e
     ]
     assert len(wildcard_idx) == 1, "expected exactly one config-only 2x3_DISPATCH entry"
-    specific_at_dispatch = [
-        i for i, e in enumerate(entries) if e.get("group") and e.get("config") != "1x3"
-    ]
+    specific_at_dispatch = [i for i, e in enumerate(entries) if e.get("group") and e.get("config") != "1x3"]
     assert all(i < wildcard_idx[0] for i in specific_at_dispatch)
 
 

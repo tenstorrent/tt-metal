@@ -33,7 +33,7 @@ YAML_SOURCES = [
         "note": (
             "The only list wired to the release gate. Writes `test_results.tsv` "
             "(every outcome), which `report_rtl_sim_failures.py` turns into the "
-            "\"RTL Sim CI test\" check output. Rows are labelled `1x3` unconditionally."
+            '"RTL Sim CI test" check output. Rows are labelled `1x3` unconditionally.'
         ),
     },
     {
@@ -178,11 +178,7 @@ def render():
 
     watched = sum(1 for rows in all_rows.values() for r in rows if match(r, entries))
     total = sum(len(rows) for rows in all_rows.values())
-    gated = sum(
-        len(all_rows.get(s["file"], []))
-        for s in YAML_SOURCES
-        if s["feeds_release_jira"]
-    )
+    gated = sum(len(all_rows.get(s["file"], [])) for s in YAML_SOURCES if s["feeds_release_jira"])
     out += [
         "",
         f"**{total}** test rows across all lists; **{gated}** of them run in the job that "
@@ -206,8 +202,7 @@ def render():
             flag = f"✅ {e.get('requirement', 'yes')}" if e else "—"
             b2b = " _(back2back)_" if r["back2back"] else ""
             out.append(
-                f"| `{r['group']}` | `{md_escape(r['filter'])}`{b2b} | {r['config']} | "
-                f"{r['runner']} | {flag} |"
+                f"| `{r['group']}` | `{md_escape(r['filter'])}`{b2b} | {r['config']} | " f"{r['runner']} | {flag} |"
             )
         out.append("")
 
@@ -231,9 +226,7 @@ def render():
     ]
     gating = {s["file"] for s in YAML_SOURCES if s["feeds_release_jira"]}
     known = {r["key"] for r in inventory}
-    rows_out = list(inventory) + [
-        {"key": k, "milestone": "?", "owner": "?"} for k in sorted(by_req) if k not in known
-    ]
+    rows_out = list(inventory) + [{"key": k, "milestone": "?", "owner": "?"} for k in sorted(by_req) if k not in known]
     for req in rows_out:
         hits = by_req.get(req["key"], [])
         live = any(f in gating for f, _ in hits)
@@ -287,9 +280,7 @@ def render():
         "",
     ]
 
-    counts = Counter(
-        (r["config"], r["runner"]) for rows in all_rows.values() for r in rows
-    )
+    counts = Counter((r["config"], r["runner"]) for rows in all_rows.values() for r in rows)
     out += ["## Rows by config and runner", "", "| Config | Runner | Rows |", "|---|---|---|"]
     for (config, runner), n in sorted(counts.items()):
         out.append(f"| {config} | {runner} | {n} |")

@@ -58,9 +58,15 @@ jobs:
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          # Failed job names (optionally filtered to the watched set).
-          mapfile -t failed < <(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs" --paginate \
-            --jq '.jobs[] | select(.conclusion=="failure") | .name')
+          # Failed job names (optionally filtered to the watched set). Capture
+          # first: a gh failure inside <(...) would leave `failed` empty and be
+          # read as "nothing to file".
+          if ! names=$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs" --paginate \
+            --jq '.jobs[] | select(.conclusion=="failure" or .conclusion=="timed_out") | .name'); then
+            echo "::error::could not list jobs for run $RUN_ID"
+            exit 1
+          fi
+          mapfile -t failed < <(printf '%s' "$names")
           if [ -n "${WATCH_JOBS}" ]; then
             filtered=()
             IFS=',' read -ra pats <<< "$WATCH_JOBS"

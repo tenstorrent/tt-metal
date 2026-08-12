@@ -303,7 +303,7 @@ jobs:
       - name: Re-assert sim failure
         if: ${{ always() && steps.rtl-sim.outputs.sim-failed == 'true' }}
         run: |
-          echo "RTL sim check failed on stable HEAD; a RELEASE Jira issue was filed/updated."
+          echo "RTL sim check failed on stable HEAD. See the Jira step above for whether an issue was filed."
           exit 1
 
 

@@ -162,6 +162,7 @@ def test_renderers_cover_every_requirement(mapping):
 
 # --- the sim CI's authoritative result block (rtl-sim-results/v1) -------------
 
+
 def _block(passed, failed, extra=""):
     payload = {
         "schema": "rtl-sim-results/v1",
