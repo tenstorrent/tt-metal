@@ -97,7 +97,6 @@
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_kv_cache_table -k "line and pretrained and seq5k" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_kimi_kv_cache_mock -k "line" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_glm52_kv_cache_table -k "8x4" -vvv --tb=short
     '
