@@ -262,6 +262,8 @@ jobs:
     runs-on: ubuntu-slim
     outputs:
       sanity-skus: ${{ steps.parse.outputs.sanity-skus }}
+      wh-skus: ${{ steps.parse.outputs.wh-skus }}
+      bh-skus: ${{ steps.parse.outputs.bh-skus }}
       sim-skus: ${{ steps.parse.outputs.sim-skus }}
       run-wormhole: ${{ steps.parse.outputs.run-wormhole }}
       run-blackhole: ${{ steps.parse.outputs.run-blackhole }}
@@ -293,12 +295,16 @@ jobs:
           fi
 
           sanity_skus=()
+          wh_skus=()
+          bh_skus=()
           sim_skus=()
           if [[ "$run_wormhole" == "true" ]]; then
-            sanity_skus+=("wh_n300_civ2")
+            wh_skus+=("wh_n300_civ2")
+            sanity_skus+=("${wh_skus[@]}")
           fi
           if [[ "$run_blackhole" == "true" ]]; then
-            sanity_skus+=("bh_p150b_civ2" "bh_p150b_civ2_viommu" "bh_quietbox_2" "bh_p300")
+            bh_skus+=("bh_p150b_civ2" "bh_p150b_civ2_viommu" "bh_quietbox_2" "bh_p300")
+            sanity_skus+=("${bh_skus[@]}")
           fi
           if [[ "$run_sim" == "true" ]]; then
             sim_skus+=("sim_wormhole_b0" "sim_wormhole_b0_galaxy" "sim_blackhole" "sim_blackhole_galaxy")
@@ -307,7 +313,12 @@ jobs:
 
           sanity_skus_str=$(IFS=,; echo "${sanity_skus[*]}")
           echo "sanity-skus=$sanity_skus_str" >> "$GITHUB_OUTPUT"
-          # sim-only subset, for suites whose tests yaml also defines HW SKUs we do not want here.
+          # Per-arch subsets, for suites whose tests yaml also defines SKUs of another arch that this
+          # pipeline does not want to schedule.
+          wh_skus_str=$(IFS=,; echo "${wh_skus[*]}")
+          echo "wh-skus=$wh_skus_str" >> "$GITHUB_OUTPUT"
+          bh_skus_str=$(IFS=,; echo "${bh_skus[*]}")
+          echo "bh-skus=$bh_skus_str" >> "$GITHUB_OUTPUT"
           sim_skus_str=$(IFS=,; echo "${sim_skus[*]}")
           echo "sim-skus=$sim_skus_str" >> "$GITHUB_OUTPUT"
 
@@ -365,14 +376,14 @@ jobs:
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       ref: ${{ inputs.ref || github.sha }}
 
-  # UMD sanity (Blackhole + Wormhole n300 via umd_sanity_tests.yaml)
+  # UMD sanity (Blackhole only)
   umd-sanity-tests:
     needs: [resolve-docker-pull-refs, build-artifact, generate-sku-matrix]
     secrets: inherit
-    if: ${{ always() && !cancelled() && needs.resolve-docker-pull-refs.result == 'success' && needs.build-artifact.result == 'success' && (needs.generate-sku-matrix.outputs.run-wormhole == 'true' || needs.generate-sku-matrix.outputs.run-blackhole == 'true') && toJSON(inputs.run-umd-sanity-tests) != 'false' }}
+    if: ${{ always() && !cancelled() && needs.resolve-docker-pull-refs.result == 'success' && needs.build-artifact.result == 'success' && needs.generate-sku-matrix.outputs.run-blackhole == 'true' && toJSON(inputs.run-umd-sanity-tests) != 'false' }}
     uses: ./.github/workflows/umd-sanity-tests-impl.yaml
     with:
-      enabled-skus: ${{ needs.generate-sku-matrix.outputs.sanity-skus }}
+      enabled-skus: ${{ needs.generate-sku-matrix.outputs.bh-skus }}
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
