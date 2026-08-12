@@ -648,7 +648,6 @@ jobs:
             ${args_fixme}
             "--enable-ccache"
             "--configure-only"
-            "--use-system-sfpi"
           )
 
           echo "Build tracy: ${{ inputs.tracy }}"
