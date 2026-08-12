@@ -9,7 +9,7 @@ from loguru import logger
 import tests.ttnn.unit_tests.kernel_lib.chain_test_lib as lib
 from tests.ttnn.utils_for_testing import comp_pcc
 
-KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/accumulation.cpp"
+KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/accumulation.cpp"
 
 
 def _run_configuration(

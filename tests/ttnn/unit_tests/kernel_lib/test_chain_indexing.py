@@ -23,10 +23,10 @@ from loguru import logger
 from tests.ttnn.utils_for_testing import comp_pcc
 import tests.ttnn.unit_tests.kernel_lib.chain_test_lib as lib
 
-OFFSET_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/axes/tile_offset.cpp"
-INDEX_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/axes/index_2d.cpp"
-STRIDED_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/axes/strided_tile_range.cpp"
-BCAST_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/axes/bcast_binary_add.cpp"
+OFFSET_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/axes/tile_offset.cpp"
+INDEX_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/axes/index_2d.cpp"
+STRIDED_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/axes/strided_tile_range.cpp"
+BCAST_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/axes/bcast_binary_add.cpp"
 MODE = {"row": 2, "col": 1}
 
 
