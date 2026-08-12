@@ -41,6 +41,10 @@ KERNEL_DIR = Path(__file__).parent / "kernels"
 # --- CB slots (semantic names are the primary identifier) -------------------
 CB_INPUT_STICKS = 0  # reader -> compute : row-major sticks, tile-sized pages
 CB_OUTPUT_TILES = 16  # compute -> writer : tiled output pages
+# R7 (A5b) reader-private scratch: a DRAM-aligned staging area for the
+# narrow-stick read (1-byte datum at an odd block width). Never pushed or
+# popped, and only allocated on that path.
+CB_READ_STAGE = 1
 # CB slots the per-CB `unpack_to_dest_mode` vector (R7) must cover. 64, not 32:
 # `data_format.cpp` requires `size() >= buf_formats.size()`, and that is the
 # ARCH's CB count (32 on Wormhole, 64 on Blackhole) — `circular_buffer_constants.h`
@@ -442,6 +446,20 @@ def tile_geometry(shape, tile_height: int):
 # disagree about which cell a padded call lands in.
 
 _FLOAT_DTYPES = (ttnn.bfloat16, ttnn.float32)
+# Block-float formats: 16 datums share one exponent, so there is no fixed
+# per-datum size and `Tensor.element_size()` RAISES on them. Output-only for
+# this op (a ROW_MAJOR input can never be block-float).
+_BLOCK_FLOAT_DTYPES = (ttnn.bfloat8_b, ttnn.bfloat4_b)
+
+
+def element_size_or_zero(tensor) -> int:
+    """`tensor.element_size()`, or 0 for a block-float dtype where it raises.
+
+    0 is a sentinel, never an arithmetic value: the only consumers are R7's
+    output-format pad rewrite (which excludes block-float structurally — raw
+    stores cannot address a shared-exponent tile) and the CT arg feeding it.
+    """
+    return 0 if tensor.dtype in _BLOCK_FLOAT_DTYPES else int(tensor.element_size())
 
 
 def numeric_policy(in_dtype, out_dtype, in_elem_size, levers=None) -> dict:
@@ -555,6 +573,58 @@ def pad_fill_word(value, dtype, elem_size: int) -> int:
     return word & 0xFFFFFFFF
 
 
+def format_roundtrip(value, dtype, elem_size: int):
+    """The value an L1 element of `dtype` actually holds after packing `value`.
+
+    The fill's precision oracle: `pad_cast_fix` compares the input format's
+    round-trip against the output format's to decide whether the pad positions
+    are worth rewriting at output precision.
+    """
+    if dtype in _FLOAT_DTYPES:
+        f32 = struct.unpack("<I", struct.pack("<f", float(value)))[0]
+        if elem_size == 2:
+            return struct.unpack("<f", struct.pack("<I", _f32_to_bf16_bits(f32) << 16))[0]
+        return float(struct.unpack("<f", struct.pack("<I", f32))[0])
+    mask = (1 << (8 * elem_size)) - 1
+    return int(value) & mask
+
+
+def pad_cast_fix(pad, in_dtype, in_elem_size, out_dtype, out_elem_size):
+    """R7: does this padded call need its pad positions rewritten in the OUTPUT
+    format, and with which word?
+
+    The reader's fill lands in the INPUT circular buffer and is therefore packed
+    in the INPUT format (op_design.md §8.3 — correct, and unavoidable: the CB
+    carries the input tensor's raw bytes). On a WIDENING cast that rounds the
+    caller's number before the output ever sees it —
+    `tilize(bf16, dtype=float32, pad_value=10.2)` produced 10.1875, one bf16 ulp
+    off the fp32 10.2 both the caller and the golden oracle ask for.
+
+    Armed ONLY when the output format holds the fill STRICTLY better than the
+    input's does, so:
+      - same dtype, or any integer pair -> off (both round-trips are identical);
+      - a NARROWING cast -> off (the pack already lands on the output's own
+        nearest value, which is what the oracle compares against);
+      - an exactly-representable fill (0, 10.0, 42.0, 3.5, -18.0, -32.5) -> off,
+        even on a widening cast. The rewrite is paid for by the ONE case that
+        needs it, never by the padded path at large.
+    Block-float output is excluded structurally: a bfp8_b tile has shared
+    exponents, so its pad positions cannot be written with raw stores at all —
+    and it is a narrowing cast anyway, so the gate below never reaches it.
+    """
+    off = (0, 0)
+    if pad is None or not pad["enabled"] or out_dtype == in_dtype:
+        return off
+    if out_dtype == ttnn.bfloat8_b:
+        return off
+    value = pad["pad_value"]
+    held_in = format_roundtrip(value, in_dtype, in_elem_size)
+    held_out = format_roundtrip(value, out_dtype, out_elem_size)
+    if held_out == held_in or abs(held_out - value) >= abs(held_in - value):
+        return off
+    return 1, pad_fill_word(value, out_dtype, out_elem_size)
+
+
 def pad_plan(input_shape, tile_height: int, output_padded_shape, pad_value, dtype, elem_size: int):
     """Resolve a padded call into the numbers the op needs, or None.
 
@@ -584,6 +654,9 @@ def pad_plan(input_shape, tile_height: int, output_padded_shape, pad_value, dtyp
         "padded_shape": padded,
         "logical_shape": logical,
         "enabled": padded != logical,
+        # The raw fill, kept alongside the packed word so `pad_cast_fix` can ask
+        # what the OUTPUT format would hold (R7).
+        "pad_value": pad_value if pad_value is not None else 0,
         "pad_word": pad_fill_word(pad_value if pad_value is not None else 0, dtype, elem_size),
         # Reader-side geometry. `hp` is the PADDED rows per image and `h_real`
         # the real ones, so a row is real iff `img < nimg_real and row < h_real`
@@ -1267,6 +1340,10 @@ def create_program_descriptor(
     # argument come from the SAME dict, so they cannot drift apart.
     numeric = numeric_policy(input_tensor.dtype, output_tensor.dtype, elem_size, lv)
     needs_cast = numeric["needs_cast"]
+    out_elem_size = element_size_or_zero(output_tensor)
+    # R7: only a widening cast whose fill the OUTPUT format holds strictly
+    # better arms the writer's pad rewrite (see `pad_cast_fix`).
+    out_pad_fix, out_pad_word = pad_cast_fix(pad, input_tensor.dtype, elem_size, output_tensor.dtype, out_elem_size)
 
     grid = device.compute_with_storage_grid_size()
     num_l1_banks = grid.x * grid.y
@@ -1333,6 +1410,25 @@ def create_program_descriptor(
     # actually the emitted code (no pad body, no band gather, not resident) and
     # where the R3 stagger — which owns the issue ORDER — is off.
     in_mem = input_tensor.memory_config()
+
+    # R7 (A5b): the NARROW-STICK ALIGNMENT GAP, and whether this call falls in it.
+    #
+    # The reader's per-stick DRAM->L1 destination is `l1_base + s * w *
+    # tile_row_bytes`, and a DRAM read requires a DRAM-ALIGNED L1 destination
+    # (64 B here). `w * tile_row_bytes` is fixed by the tile layout — the tilize
+    # LLK derives its own row stride from the block width, so padding the L1
+    # stride is not available. At >= 2 bytes per datum every legal `w` clears 64
+    # B; at ONE byte an odd `w` gives 32 / 96 / 160 ... and the odd sticks land
+    # at phase 32. `wt_block_max`'s `max(2, ...)` floor does NOT save it, because
+    # `WT_BLOCK = min(Wt, WT_BLOCK_MAX)` clamps to Wt (Wt == 1 is the extreme).
+    # Measured before the fix: watcher "invalid address alignment in NOC
+    # transaction", uint8 `[1,1,32,32]` / `[1,1,32,96]` wrong, `[1,1,32,64]` /
+    # `[1,1,32,128]` clean. The reader stages such a block through a scratch CB.
+    #
+    # Only the DRAM source is affected: an L1 source needs L1 alignment (16 B),
+    # which every whole tile-column clears. A resident side reads nothing.
+    dram_align = int(ttnn.get_dram_alignment())
+    src_is_dram = (not resident_in) and in_mem.buffer_type == ttnn.BufferType.DRAM
     stateful_knob = STATEFUL_READS if lv["stateful_reads"] is None else lv["stateful_reads"]
     addrgen_knob = FAST_ADDRGEN if lv["fast_addrgen"] is None else lv["fast_addrgen"]
     bank_period = 0
@@ -1365,6 +1461,18 @@ def create_program_descriptor(
     # Off the fully-streamed path every block is the shard's own width, so the
     # tail column-block is not a distinct width and `n_tail` is always 0.
     wt_tail = blk["wt_tail"] if plan["mode"] == MODE_STREAMED else wt_block
+
+    # R7 (A5b), continued: both block widths are read with the same stride rule,
+    # so either one being off the alignment grid arms the staged reader for the
+    # whole kernel. `stage_stride_max` is what the scratch has to hold per stick
+    # (+ one unit of slack, because a CB base is only L1-aligned).
+    stage_unaligned = int(src_is_dram and any((w * tile_row_bytes) % dram_align for w in (wt_block, wt_tail)))
+    stage_bytes = tile_height * _round_up(max(wt_block, wt_tail) * tile_row_bytes, dram_align) + dram_align
+    if stage_unaligned:
+        # The B13/D21 issue-cost levers write straight into the tile-layout
+        # destination, which is exactly what is illegal here. They are a
+        # low-work-regime optimization, so the correct read wins.
+        stateful_reads = fast_addrgen = bank_period = 0
 
     # ---------- 3. circular buffers ----------
     # A resident CB is ALIASED onto the shard buffer: the shard IS the CB, so
@@ -1501,6 +1609,31 @@ def create_program_descriptor(
     if cb_output_tiles is None:
         cb_output_tiles = _streamed_cb(CB_OUTPUT_TILES, output_tensor.dtype, out_tile_bytes, all_cores, cb_pages)
 
+    # R7 (A5b): the narrow-stick scratch. READER-PRIVATE — it is never pushed or
+    # popped, so it has no producer/consumer pair to synchronize; it is a named
+    # L1 region the reader stages one block into. Allocated ONLY on the path that
+    # uses it, so no other dtype pays L1 for it. Bounded by a constant, like
+    # every other CB here: `wt_block <= WT_BLOCK_MAX` is a byte target, so
+    # `stage_bytes <= tile_h * (TARGET_READ_BYTES + dram_align) + dram_align`
+    # regardless of W.
+    # No tile descriptor: this CB holds raw staged sticks, not tiles, so its one
+    # page is the whole staging area.
+    cb_read_stage = (
+        ttnn.CBDescriptor(
+            total_size=stage_bytes,
+            core_ranges=all_cores,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(
+                    buffer_index=CB_READ_STAGE,
+                    data_format=input_tensor.dtype,
+                    page_size=stage_bytes,
+                )
+            ],
+        )
+        if stage_unaligned
+        else None
+    )
+
     # ---------- 6. kernels ----------
     # CT args: scalar args first, TensorAccessorArgs appended LAST (master.md
     # D18). RT args carry only buffer addresses + the per-core block range
@@ -1534,6 +1667,10 @@ def create_program_descriptor(
         int(stateful_reads),
         bank_period,
         int(fast_addrgen),
+        # R7 (A5b): the narrow-stick staging path and its scratch.
+        stage_unaligned,
+        CB_READ_STAGE,
+        dram_align,
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
@@ -1548,6 +1685,17 @@ def create_program_descriptor(
         lv["coalesce_writes"],
         lv["stub_write"],
         int(resident_out),
+        # R7: the output-format pad rewrite. `pad` is None off the padded path,
+        # so the geometry terms fall back to values that make the (erased) body
+        # trivially interior.
+        out_pad_fix,
+        out_pad_word,
+        pad["hp"] if pad_enabled else tile_height,
+        pad["h_real"] if pad_enabled else tile_height,
+        pad["nimg_real"] if pad_enabled else 1,
+        (pad["real_row_bytes"] // elem_size) if pad_enabled else TILE_WIDTH,
+        tile_height,
+        out_elem_size,
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
@@ -1652,5 +1800,5 @@ def create_program_descriptor(
     return ttnn.ProgramDescriptor(
         kernels=kernels,
         semaphores=[],
-        cbs=[cb_input_sticks, cb_output_tiles],
+        cbs=[cb_input_sticks, cb_output_tiles] + ([cb_read_stage] if cb_read_stage is not None else []),
     )

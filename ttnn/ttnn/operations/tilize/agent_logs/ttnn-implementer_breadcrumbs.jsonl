@@ -34,3 +34,4 @@
 {"event":"device_print_observation","refinement":7,"probe":"probe_026","observed":"uint8 reader L1 correct (0x03020100) but writer OUT words all zero -> compute, not dataflow","ts":"2026-08-12T18:31:08+00:00"}
 {"event":"fix_applied","refinement":7,"what":"numeric_policy(): fp32_dest_acc_en for 1-byte datums (uint8 exact, was all-zero) + Fp32Mode::Lossless triple for fp32 identity (bit-exact, was maxdiff 1.6e-2) + bfp8_pack_precise gated on fp32 input","ts":"2026-08-12T18:31:08+00:00"}
 {"event":"test_run","refinement":7,"test":"tests/ttnn/unit_tests/operations/tilize/test_tilize.py","status":"pass","detail":"51 passed / 8 xfailed / 0 failed (was 32p/27x)","ts":"2026-08-12T18:31:08+00:00"}
+{"event":"test_run","refinement":7,"test":"eval/golden_tests/tilize/test_golden.py","status":"pass","detail":"332 passed / 0 failed / 48 xfailed (was 42 passed at R6)","ts":"2026-08-12T18:52:17+00:00"}

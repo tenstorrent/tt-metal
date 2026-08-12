@@ -61,6 +61,9 @@ from ttnn.operations.tilize.tilize_program_descriptor import (
     WAIT_UPFRONT_RESIDENT,
     read_bank_period,
     blocking,
+    numeric_policy,
+    pad_cast_fix,
+    format_roundtrip,
     cb_budget_bytes,
     cb_depth_for,
     auto_padded_shape,
@@ -340,25 +343,115 @@ def test_b11_transfers_are_alignment_clean(elem_size):
         assert write_bytes % align == 0
 
 
-def test_b11_uint8_narrow_stick_is_the_known_alignment_gap():
-    """The ONE alignment case this op does not cover, recorded so it cannot ship
-    silently: a 1-byte dtype whose `Wt == 1` gives a 32 B read, below this part's
-    DRAM alignment unit. WT_BLOCK_MAX's `max(2, ...)` floor does not save it
-    because `WT_BLOCK = min(Wt, WT_BLOCK_MAX)` clamps to Wt.
+def test_b11_uint8_narrow_stick_alignment_gap_is_closed_by_the_staged_reader(device):
+    """R7/A5b. The gap this test used to DOCUMENT is now CLOSED, so it pins the
+    closure from both ends.
 
-    uint8 is out of SUPPORTED at Phase 0, and refinement A5b explicitly owns the
-    alignment-aware narrow-stick reader. If a future change adds uint8 to
-    SUPPORTED without that reader, this test is the pin that says so."""
+    The gap: a 1-byte dtype at an odd block width puts the reader's per-stick L1
+    destination (`l1_base + s * w * 32 * elem`) off the 64 B DRAM alignment grid
+    — 32, 96, 160 ... — and a DRAM read requires a DRAM-aligned destination.
+    `WT_BLOCK_MAX`'s `max(2, ...)` floor does not save it, because
+    `WT_BLOCK = min(Wt, WT_BLOCK_MAX)` clamps to Wt.
+
+    Both halves are asserted: the geometry still produces the unaligned stride
+    (so the hazard is real, not hypothetical), and the descriptor arms the
+    staged reader for it while leaving every aligned width alone."""
     align = ttnn.get_dram_alignment()
+
+    # 1. the hazard is still reachable — the blocking is unchanged by the fix.
     blk = blocking([1, 1, 32, 32], tile_height=32, elem_size=1)  # uint8, Wt == 1
     assert blk["wt_block"] == 1
-    narrow_read = blk["wt_block"] * 32 * 1
-    assert narrow_read < align, (
-        f"uint8 Wt==1 now reads {narrow_read} B >= alignment {align} B — the gap this "
-        "test documents has been closed; update the A5b note and the B11 ledger row"
-    )
-    # Wt >= 2 is already clean at 1 byte, so the gap is confined to Wt == 1.
-    assert (blocking([1, 1, 32, 64], 32, 1)["wt_block"] * 32) % align == 0
+    assert (blk["wt_block"] * 32 * 1) % align != 0
+
+    # 2. the reader is armed for it, and NOT for an aligned width. The CT arg
+    #    index is derived from the vector the descriptor builds, so this reads
+    #    the real program rather than a re-derivation of the rule.
+    def staged(shape, dtype):
+        torch_in = torch.zeros(shape, dtype=torch.uint8 if dtype == ttnn.uint8 else torch.bfloat16)
+        tt_in = ttnn.from_torch(
+            torch_in,
+            dtype=dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        out = ttnn.allocate_tensor_on_device(
+            ttnn.Shape(shape), dtype, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+        )
+        pd = create_program_descriptor(tt_in, out, use_multicore=True)
+        reader = pd.kernels[0]
+        return int(reader.compile_time_args[22])
+
+    assert staged([1, 1, 32, 32], ttnn.uint8) == 1, "uint8 Wt==1 must take the staged reader"
+    assert staged([1, 1, 32, 96], ttnn.uint8) == 1, "uint8 Wt==3 must take the staged reader"
+    assert staged([1, 1, 32, 64], ttnn.uint8) == 0, "uint8 Wt==2 is already aligned"
+    assert staged([1, 1, 32, 32], ttnn.bfloat16) == 0, "a 2-byte datum is never unaligned"
+
+
+def test_r7_numeric_policy_arms_exactly_the_formats_that_need_it():
+    """R7. The dtype surface is ONE decision table, so pin it directly rather
+    than only through the values it produces on device.
+
+    Each row is a measured fact from the probes: fp32 identity needs the whole
+    Lossless triple (Fast gave max diff 1.6e-2), a 1-byte datum needs a 32-bit
+    DEST (a 16-bit DEST gave an all-ZERO tile), and only an fp32 input pays for
+    the precise bfp8 packer."""
+
+    def pol(a, b, elem):
+        return numeric_policy(a, b, elem)
+
+    fp32 = pol(ttnn.float32, ttnn.float32, 4)
+    assert fp32["fp32_lossless"] == 1 and fp32["unpack_to_dest_fp32"] == 1 and fp32["fp32_dest_acc_en"]
+    assert fp32["needs_cast"] == 0
+
+    # A narrowing fp32 cast lands in <= 7 mantissa bits either way -> Fast.
+    for out in (ttnn.bfloat16, ttnn.bfloat8_b):
+        p = pol(ttnn.float32, out, 4)
+        assert p["fp32_lossless"] == 0 and p["unpack_to_dest_fp32"] == 0
+
+    u8 = pol(ttnn.uint8, ttnn.uint8, 1)
+    assert u8["fp32_dest_acc_en"] and u8["fp32_lossless"] == 0
+
+    bf16 = pol(ttnn.bfloat16, ttnn.bfloat16, 2)
+    assert not bf16["fp32_dest_acc_en"] and bf16["needs_cast"] == 0 and not bf16["bfp8_pack_precise"]
+
+    assert pol(ttnn.float32, ttnn.bfloat8_b, 4)["bfp8_pack_precise"]
+    assert not pol(ttnn.bfloat16, ttnn.bfloat8_b, 2)["bfp8_pack_precise"]
+
+    # Both knobs are live: forcing them off restores the pre-R7 configuration.
+    off = numeric_policy(ttnn.float32, ttnn.float32, 4, {"fp32_lossless": 0})
+    assert off["fp32_lossless"] == 0 and not off["fp32_dest_acc_en"]
+    assert not numeric_policy(ttnn.uint8, ttnn.uint8, 1, {"fp32_dest_acc_8bit": 0})["fp32_dest_acc_en"]
+
+
+def test_r7_pad_cast_fix_arms_only_where_the_output_holds_the_fill_better():
+    """R7. The pad fill is packed in the INPUT format, so a WIDENING cast
+    rounds the caller's number before the output ever sees it (bf16 holds 10.2
+    as 10.1875 — the measured 0.0125 delta). The writer rewrites the pad
+    positions in the output format, but ONLY where that is strictly better, so
+    the padded path at large pays nothing."""
+
+    def plan(value, dtype, elem):
+        return pad_plan([1, 30, 32], 32, [1, 32, 32], value, dtype, elem)
+
+    # the one case that needs it
+    fix, word = pad_cast_fix(plan(10.2, ttnn.bfloat16, 2), ttnn.bfloat16, 2, ttnn.float32, 4)
+    assert fix == 1 and word == pad_fill_word(10.2, ttnn.float32, 4)
+
+    # ... and everything that does not
+    assert pad_cast_fix(plan(10.2, ttnn.bfloat16, 2), ttnn.bfloat16, 2, ttnn.bfloat16, 2)[0] == 0
+    assert pad_cast_fix(plan(10.0, ttnn.bfloat16, 2), ttnn.bfloat16, 2, ttnn.float32, 4)[0] == 0
+    assert pad_cast_fix(plan(10.2, ttnn.float32, 4), ttnn.float32, 4, ttnn.bfloat16, 2)[0] == 0
+    assert pad_cast_fix(plan(10.2, ttnn.float32, 4), ttnn.float32, 4, ttnn.bfloat8_b, 0)[0] == 0
+    assert pad_cast_fix(plan(7, ttnn.uint16, 2), ttnn.uint16, 2, ttnn.uint32, 4)[0] == 0
+    assert pad_cast_fix(None, ttnn.bfloat16, 2, ttnn.float32, 4)[0] == 0
+
+    # the oracle underneath it
+    assert format_roundtrip(10.2, ttnn.bfloat16, 2) == 10.1875
+    # fp32 cannot hold 10.2 exactly either, but it is ~5 orders of magnitude
+    # closer than bf16 — which is exactly the "strictly better" the gate tests.
+    assert format_roundtrip(10.2, ttnn.float32, 4) == pytest.approx(10.2, abs=1e-6)
+    assert abs(format_roundtrip(10.2, ttnn.float32, 4) - 10.2) < abs(format_roundtrip(10.2, ttnn.bfloat16, 2) - 10.2)
 
 
 def test_multicore_fills_the_grid_on_wide_short(device):
