@@ -1,5 +1,11 @@
 """Attribute the sharded path's cost: T-sweep at a given t_factor, same method as t_sweep.py.
 
+NEVER RUN -- written, then superseded before execution by `factor_scan.py`, once it turned out the
+T-shard factor must equal the mesh axis length (so sweeping T at a fixed factor is not the useful axis;
+sweeping the factor is). Kept only because the docstring records the reasoning. Treat as unverified
+code: it has no measured output behind it. Safe to delete.
+
+
 Item 1 split the single-chip decode into ~260 ms fixed + ~670 ms data-proportional by sweeping T,
 which works because op count does not depend on T. The same trick attributes the sharded path's
 overhead without relying on absolute profiler totals (which are not calibrated for this stage).
