@@ -20,6 +20,15 @@ if TYPE_CHECKING:
 
 CACHE_DICT_FILE = "cache_dict.json"
 
+# On-disk weight format version, part of every cache key. Cached tensors are raw
+# device bytes whose interpretation depends on packing conventions baked into the
+# layers' _prepare_torch_state hooks and the kernels that consume them (e.g. the
+# fused-swiglu gate/up tile interleave). Loading bytes packed under a different
+# convention silently corrupts the model — no shape or dtype check can catch it.
+# Bump this whenever any packing convention changes; old cache dirs then simply
+# never match and rebuild from the source weights.
+WEIGHT_FORMAT_VERSION = 2
+
 
 class MissingCacheError(Exception):
     def __init__(self, path: str | Path) -> None:
@@ -150,7 +159,7 @@ def model_cache_dir(
     parallel_key = config_id(parallel_config)
     mesh_key = "x".join(str(x) for x in mesh_shape)
 
-    key = f"{parallel_key}mesh{mesh_key}_{dtype}"
+    key = f"{parallel_key}mesh{mesh_key}_{dtype}_wf{WEIGHT_FORMAT_VERSION}"
     if is_fsdp:
         key += "_FSDP"
 
