@@ -17,6 +17,21 @@
 
 namespace ttnn::operations::wavelet::kernels::primitives {
 
+class ConfigWords {
+public:
+    template <uint32_t WordCount>
+    ALWI explicit ConfigWords(const uint32_t (&words)[WordCount]) : words_(words), word_count_(WordCount) {}
+
+    ALWI ConfigWords(const uint32_t* words, const uint32_t word_count) : words_(words), word_count_(word_count) {}
+
+    [[nodiscard]] ALWI uint32_t operator[](const uint32_t index) const { return words_[index]; }
+    [[nodiscard]] ALWI uint32_t size() const { return word_count_; }
+
+private:
+    const uint32_t* words_;
+    uint32_t word_count_;
+};
+
 template <typename Accessor>
 ALWI void load_config_page(
     const Accessor& accessor,

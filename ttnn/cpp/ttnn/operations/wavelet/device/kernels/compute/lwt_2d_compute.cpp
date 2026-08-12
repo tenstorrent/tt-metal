@@ -166,11 +166,14 @@ struct CompactInverseScalePolicy {
     uint32_t source_scale_bits;
     uint32_t base_scale_bits;
 
-    inline void apply(const uint32_t source0, const uint32_t source1, const uint32_t base) const {
+    inline void scale_sources(const uint32_t source0, const uint32_t source1) const {
         if (source_scale_bits != 0) {
             scale_tile(source0, source_scale_bits);
             scale_tile(source1, source_scale_bits);
         }
+    }
+
+    inline void scale_base(const uint32_t base) const {
         if (base_scale_bits != 0) {
             scale_tile(base, base_scale_bits);
         }
@@ -179,11 +182,14 @@ struct CompactInverseScalePolicy {
 
 template <bool ScaleSource, bool ScaleBase, uint32_t SourceScaleBits, uint32_t BaseScaleBits>
 struct SpecializedScalePolicy {
-    inline void apply(const uint32_t source0, const uint32_t source1, const uint32_t base) const {
+    inline void scale_sources(const uint32_t source0, const uint32_t source1) const {
         if constexpr (ScaleSource) {
             scale_tile(source0, SourceScaleBits);
             scale_tile(source1, SourceScaleBits);
         }
+    }
+
+    inline void scale_base(const uint32_t base) const {
         if constexpr (ScaleBase) {
             scale_tile(base, BaseScaleBits);
         }
@@ -220,7 +226,8 @@ WAVELET_2D_STENCIL_ATTRIBUTES void run_stencil(
         copy_tile(cb_base, 0, 2);
         base_buffer.pop_front(1);
 
-        scale_policy.apply(0, 1, 2);
+        scale_policy.scale_sources(0, 1);
+        scale_policy.scale_base(2);
         if constexpr (Vertical) {
             vstencil_init();
             vstencil_tile<K>(coefficients, 0, 1, 3, 2);

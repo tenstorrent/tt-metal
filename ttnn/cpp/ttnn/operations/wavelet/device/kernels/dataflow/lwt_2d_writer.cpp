@@ -16,6 +16,7 @@
 
 namespace {
 
+using ttnn::operations::wavelet::kernels::primitives::ConfigWords;
 using ttnn::operations::wavelet::kernels::primitives::kFaceSide;
 using ttnn::operations::wavelet::kernels::primitives::kTileBytes;
 using ttnn::operations::wavelet::kernels::primitives::kTileSide;
@@ -24,20 +25,19 @@ using ttnn::operations::wavelet::kernels::primitives::tile_element_offset;
 using ttnn::operations::wavelet::kernels::primitives::tiled_element_offset;
 
 struct Rect {
-    uint32_t y_begin;
-    uint32_t y_length;
-    uint32_t x_begin;
-    uint32_t x_length;
-};
+    uint32_t y_begin{0};
+    uint32_t y_length{0};
+    uint32_t x_begin{0};
+    uint32_t x_length{0};
 
-[[nodiscard]] ALWI Rect load_rect(const uint32_t* words, const uint32_t offset) {
-    return Rect{
-        .y_begin = words[offset + ttnn::operations::wavelet::device_protocol::kLwt2DRectYBegin],
-        .y_length = words[offset + ttnn::operations::wavelet::device_protocol::kLwt2DRectYLength],
-        .x_begin = words[offset + ttnn::operations::wavelet::device_protocol::kLwt2DRectXBegin],
-        .x_length = words[offset + ttnn::operations::wavelet::device_protocol::kLwt2DRectXLength],
-    };
-}
+    Rect() = default;
+
+    ALWI Rect(const ConfigWords words, const uint32_t offset) :
+        y_begin(words[offset + ttnn::operations::wavelet::device_protocol::kLwt2DRectYBegin]),
+        y_length(words[offset + ttnn::operations::wavelet::device_protocol::kLwt2DRectYLength]),
+        x_begin(words[offset + ttnn::operations::wavelet::device_protocol::kLwt2DRectXBegin]),
+        x_length(words[offset + ttnn::operations::wavelet::device_protocol::kLwt2DRectXLength]) {}
+};
 
 [[nodiscard]] ALWI uint32_t aligned_begin(const uint32_t value) { return (value / kTileSide) * kTileSide; }
 
@@ -504,13 +504,14 @@ void kernel_main() {
             const auto* route_words = reinterpret_cast<const uint32_t*>(
                 writer_config_addr +
                 route_index * ttnn::operations::wavelet::device_protocol::kLwt2DRouteConfigPageBytes);
+            const ConfigWords route_config{
+                route_words, ttnn::operations::wavelet::device_protocol::kLwt2DRouteConfigWordCount};
             const uint32_t flags = route_words[ttnn::operations::wavelet::device_protocol::kLwt2DRouteFlags];
             if ((flags & ttnn::operations::wavelet::device_protocol::kLwt2DRouteFlagMetadataOnly) != 0) {
                 continue;
             }
             const uint32_t output_slot = route_words[ttnn::operations::wavelet::device_protocol::kLwt2DRouteOutputSlot];
-            const Rect output =
-                load_rect(route_words, ttnn::operations::wavelet::device_protocol::kLwt2DRouteOutputRect);
+            const Rect output{route_config, ttnn::operations::wavelet::device_protocol::kLwt2DRouteOutputRect};
             write_local_output(cb_output, plane_addrs[output_slot], plane_tile_columns[output_slot], output);
             sync_buffer.reserve_back(1);
             sync_buffer.push_back(1);
@@ -535,6 +536,7 @@ void kernel_main() {
             ttnn::operations::wavelet::device_protocol::kLwt2DBandHl,
             ttnn::operations::wavelet::device_protocol::kLwt2DBandHh,
         };
+        const ConfigWords band_config{band_words};
 #ifdef ILWT_2D
         uint32_t parity_slots[4];
         Rect parity_sources[4];
@@ -543,7 +545,7 @@ void kernel_main() {
             parity_slots[parity] =
                 band_words[band_offset + ttnn::operations::wavelet::device_protocol::kLwt2DBandSourceSlot];
             parity_sources[parity] =
-                load_rect(band_words, band_offset + ttnn::operations::wavelet::device_protocol::kLwt2DBandSourceRect);
+                Rect{band_config, band_offset + ttnn::operations::wavelet::device_protocol::kLwt2DBandSourceRect};
         }
         write_interleaved_output(
             output_args,
@@ -566,8 +568,8 @@ void kernel_main() {
             const uint32_t band_offset = band_offsets[band];
             const uint32_t source_slot =
                 band_words[band_offset + ttnn::operations::wavelet::device_protocol::kLwt2DBandSourceSlot];
-            const Rect source =
-                load_rect(band_words, band_offset + ttnn::operations::wavelet::device_protocol::kLwt2DBandSourceRect);
+            const Rect source{
+                band_config, band_offset + ttnn::operations::wavelet::device_protocol::kLwt2DBandSourceRect};
             write_band(
                 output_args,
                 output_addrs[band],

@@ -18,6 +18,7 @@
 
 namespace {
 
+using ttnn::operations::wavelet::kernels::primitives::ConfigWords;
 using ttnn::operations::wavelet::kernels::primitives::kFaceSide;
 using ttnn::operations::wavelet::kernels::primitives::kTileBytes;
 using ttnn::operations::wavelet::kernels::primitives::kTileElements;
@@ -29,10 +30,18 @@ using ttnn::operations::wavelet::kernels::primitives::tile_face_row_offset;
 using ttnn::operations::wavelet::kernels::primitives::tiled_element_offset;
 
 struct Rect {
-    uint32_t y_begin;
-    uint32_t y_length;
-    uint32_t x_begin;
-    uint32_t x_length;
+    uint32_t y_begin{0};
+    uint32_t y_length{0};
+    uint32_t x_begin{0};
+    uint32_t x_length{0};
+
+    Rect() = default;
+
+    ALWI Rect(const ConfigWords words, const uint32_t offset) :
+        y_begin(words[offset + ttnn::operations::wavelet::device_protocol::kLwt2DRectYBegin]),
+        y_length(words[offset + ttnn::operations::wavelet::device_protocol::kLwt2DRectYLength]),
+        x_begin(words[offset + ttnn::operations::wavelet::device_protocol::kLwt2DRectXBegin]),
+        x_length(words[offset + ttnn::operations::wavelet::device_protocol::kLwt2DRectXLength]) {}
 };
 
 #if defined(LWT_2D_COMPACT_BOUNDARY_CODE) || defined(ILWT_2D_COMPACT_BOUNDARY_CODE)
@@ -40,15 +49,6 @@ struct Rect {
 #else
 #define LWT_2D_BOUNDARY_FUNCTION ALWI
 #endif
-
-[[nodiscard]] ALWI Rect load_rect(const uint32_t* words, const uint32_t offset) {
-    return Rect{
-        .y_begin = words[offset + ttnn::operations::wavelet::device_protocol::kLwt2DRectYBegin],
-        .y_length = words[offset + ttnn::operations::wavelet::device_protocol::kLwt2DRectYLength],
-        .x_begin = words[offset + ttnn::operations::wavelet::device_protocol::kLwt2DRectXBegin],
-        .x_length = words[offset + ttnn::operations::wavelet::device_protocol::kLwt2DRectXLength],
-    };
-}
 
 [[nodiscard]] ALWI uint32_t aligned_begin(const uint32_t value) { return (value / kTileSide) * kTileSide; }
 
@@ -1287,11 +1287,12 @@ void kernel_main() {
             chunk_words,
             ttnn::operations::wavelet::device_protocol::kLwt2DChunkConfigWordCount);
 
+        const ConfigWords chunk_config{chunk_words};
         Rect stored[ttnn::operations::wavelet::device_protocol::kLwt2DPlaneCount];
-        stored[0] = load_rect(chunk_words, ttnn::operations::wavelet::device_protocol::kLwt2DInitialEe);
-        stored[1] = load_rect(chunk_words, ttnn::operations::wavelet::device_protocol::kLwt2DInitialEo);
-        stored[2] = load_rect(chunk_words, ttnn::operations::wavelet::device_protocol::kLwt2DInitialOe);
-        stored[3] = load_rect(chunk_words, ttnn::operations::wavelet::device_protocol::kLwt2DInitialOo);
+        stored[0] = Rect{chunk_config, ttnn::operations::wavelet::device_protocol::kLwt2DInitialEe};
+        stored[1] = Rect{chunk_config, ttnn::operations::wavelet::device_protocol::kLwt2DInitialEo};
+        stored[2] = Rect{chunk_config, ttnn::operations::wavelet::device_protocol::kLwt2DInitialOe};
+        stored[3] = Rect{chunk_config, ttnn::operations::wavelet::device_protocol::kLwt2DInitialOo};
         stored[4] = Rect{};
 
 #ifdef ILWT_2D
@@ -1343,6 +1344,8 @@ void kernel_main() {
             const auto* route_words = reinterpret_cast<const uint32_t*>(
                 reader_config_addr +
                 route_index * ttnn::operations::wavelet::device_protocol::kLwt2DRouteConfigPageBytes);
+            const ConfigWords route_config{
+                route_words, ttnn::operations::wavelet::device_protocol::kLwt2DRouteConfigWordCount};
             const uint32_t flags = route_words[ttnn::operations::wavelet::device_protocol::kLwt2DRouteFlags];
             if ((flags & ttnn::operations::wavelet::device_protocol::kLwt2DRouteFlagMetadataOnly) != 0) {
                 continue;
@@ -1351,11 +1354,9 @@ void kernel_main() {
             const uint32_t source_slot = route_words[ttnn::operations::wavelet::device_protocol::kLwt2DRouteSourceSlot];
             const uint32_t base_slot = route_words[ttnn::operations::wavelet::device_protocol::kLwt2DRouteBaseSlot];
             const uint32_t output_slot = route_words[ttnn::operations::wavelet::device_protocol::kLwt2DRouteOutputSlot];
-            const Rect source =
-                load_rect(route_words, ttnn::operations::wavelet::device_protocol::kLwt2DRouteSourceRect);
-            const Rect base = load_rect(route_words, ttnn::operations::wavelet::device_protocol::kLwt2DRouteBaseRect);
-            const Rect output =
-                load_rect(route_words, ttnn::operations::wavelet::device_protocol::kLwt2DRouteOutputRect);
+            const Rect source{route_config, ttnn::operations::wavelet::device_protocol::kLwt2DRouteSourceRect};
+            const Rect base{route_config, ttnn::operations::wavelet::device_protocol::kLwt2DRouteBaseRect};
+            const Rect output{route_config, ttnn::operations::wavelet::device_protocol::kLwt2DRouteOutputRect};
             const uint32_t output_tile_rows =
                 (aligned_end(output.y_begin, output.y_length) - aligned_begin(output.y_begin)) / kTileSide;
             const uint32_t output_tile_columns =
