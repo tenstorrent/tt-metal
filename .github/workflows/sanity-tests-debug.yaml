@@ -100,5 +100,6 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
       enable-watcher: ${{ needs.determine-debug-flags.outputs.enable-watcher == 'true' }}
       enable-llk-asserts: ${{ needs.determine-debug-flags.outputs.enable-llk-asserts == 'true' }}
-      run-ops-unit-tests: ${{ needs.determine-debug-flags.outputs.enable-watcher != 'true' }}
+      run-wormhole: ${{ inputs.run-wormhole-tests || github.event_name == 'schedule' }}
+      run-blackhole: ${{ inputs.run-blackhole-tests || github.event_name == 'schedule' }}
       run-ttsim-tests: false # ttsim requires gcc-12 which is not available on Ubuntu 24.04
