@@ -325,6 +325,19 @@ public:
         }
     }
 
+    // Grid-native form of the independent rotating-sender topology above. The receiver grid defines
+    // the fixed multicast lines, while every core in sender_grid takes one sender turn on its aligned
+    // receiver line. Sender order is increasing logical coordinate along the broadcast axis. This is
+    // the common shape for a sharded input feeding a differently-sized output-work grid; callers that
+    // need a non-geometric sender order can use the explicit sender-lines overload.
+    Mcast1D(
+        tt::tt_metal::IDevice* device,
+        const tt::tt_metal::CoreRangeSet& receiver_grid,
+        const tt::tt_metal::CoreRangeSet& sender_grid,
+        Mcast1DShape shape,
+        const McastConfig& cfg) :
+        Mcast1D(device, receiver_grid, shape, sender_lines_from_grid_(receiver_grid, sender_grid, shape), cfg) {}
+
     // ---- args (the wire) -----------------------------------------------------
 
     // The semaphores THIS helper created, for the factory to add to the program. Empty when sem_ids
@@ -438,6 +451,13 @@ public:
 
     bool active() const { return active_; }
 
+    // Logical topology partitions. These let a program factory place operation work on the receiver
+    // grid while still launching sender-only participants and allocating shared resources on the
+    // complete topology, without reconstructing the helper's sender/receiver union itself.
+    const tt::tt_metal::CoreRangeSet& receiver_cores() const { return receiver_grid_; }
+    const tt::tt_metal::CoreRangeSet& participating_cores() const { return grid_; }
+    tt::tt_metal::CoreRangeSet sender_only_cores() const { return grid_.subtract(receiver_grid_); }
+
     // Semaphores this helper created from base_sem_id: 0 (sem_ids adopted) | 1 (no handshake) | 2.
     // Answers "how many did this family consume".
     uint32_t num_semaphores() const { return owns_sems_ ? (cfg_.handshake ? 2u : 1u) : 0u; }
@@ -454,6 +474,53 @@ public:
     }
 
 private:
+    static std::vector<std::vector<tt::tt_metal::CoreCoord>> sender_lines_from_grid_(
+        const tt::tt_metal::CoreRangeSet& receiver_grid,
+        const tt::tt_metal::CoreRangeSet& sender_grid,
+        Mcast1DShape shape) {
+        TT_FATAL(sender_grid.num_cores() > 0, "Mcast1D: sender grid must not be empty");
+
+        const auto receiver_bb = receiver_grid.bounding_box();
+        const uint32_t num_lines = shape == Mcast1DShape::PerRow
+                                       ? static_cast<uint32_t>(receiver_bb.end_coord.y - receiver_bb.start_coord.y) + 1
+                                       : static_cast<uint32_t>(receiver_bb.end_coord.x - receiver_bb.start_coord.x) + 1;
+        std::vector<std::vector<tt::tt_metal::CoreCoord>> sender_lines(num_lines);
+
+        for (const auto& range : sender_grid.ranges()) {
+            for (std::size_t y = range.start_coord.y; y <= range.end_coord.y; ++y) {
+                for (std::size_t x = range.start_coord.x; x <= range.end_coord.x; ++x) {
+                    const tt::tt_metal::CoreCoord sender{x, y};
+                    const bool aligned = shape == Mcast1DShape::PerRow
+                                             ? y >= receiver_bb.start_coord.y && y <= receiver_bb.end_coord.y
+                                             : x >= receiver_bb.start_coord.x && x <= receiver_bb.end_coord.x;
+                    TT_FATAL(
+                        aligned,
+                        "Mcast1D: sender ({},{}) does not align with any receiver {}",
+                        x,
+                        y,
+                        shape == Mcast1DShape::PerRow ? "row" : "column");
+                    const uint32_t line = shape == Mcast1DShape::PerRow
+                                              ? static_cast<uint32_t>(y - receiver_bb.start_coord.y)
+                                              : static_cast<uint32_t>(x - receiver_bb.start_coord.x);
+                    sender_lines[line].push_back(sender);
+                }
+            }
+        }
+
+        for (uint32_t line = 0; line < num_lines; ++line) {
+            auto& senders = sender_lines[line];
+            TT_FATAL(!senders.empty(), "Mcast1D: receiver line {} has no sender cores", line);
+            std::sort(senders.begin(), senders.end(), [shape](const auto& lhs, const auto& rhs) {
+                return shape == Mcast1DShape::PerRow ? lhs.x < rhs.x : lhs.y < rhs.y;
+            });
+            TT_FATAL(
+                std::adjacent_find(senders.begin(), senders.end()) == senders.end(),
+                "Mcast1D: sender grid contains a duplicate core on line {}",
+                line);
+        }
+        return sender_lines;
+    }
+
     // logical -> virtual (worker) coord.
     std::pair<uint32_t, uint32_t> virt_(const tt::tt_metal::CoreCoord& logical) const {
         return detail::virt_coord(device_, logical);

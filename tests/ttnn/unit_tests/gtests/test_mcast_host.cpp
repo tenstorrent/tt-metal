@@ -44,6 +44,12 @@ CoreRangeSet make_grid(CoreCoord origin, uint32_t gc, uint32_t gr) {
     return CoreRangeSet(CoreRange(origin, CoreCoord(origin.x + gc - 1, origin.y + gr - 1)));
 }
 
+void expect_same_cores(const CoreRangeSet& actual, const CoreRangeSet& expected) {
+    EXPECT_EQ(actual.num_cores(), expected.num_cores());
+    EXPECT_EQ(actual.subtract(expected).num_cores(), 0u);
+    EXPECT_EQ(expected.subtract(actual).num_cores(), 0u);
+}
+
 std::vector<uint32_t> expected_bbox(tt::tt_metal::IDevice* dev, const std::vector<CoreCoord>& logical_cores, NOC noc) {
     std::vector<std::pair<uint32_t, uint32_t>> virtual_cores;
     virtual_cores.reserve(logical_cores.size());
@@ -730,6 +736,60 @@ TEST_F(McastHostFixture, Mcast1DRotatingSendersIndependentOfReceiverLines) {
         EXPECT_EQ(semaphores[0].core_ranges.num_cores(), 6u);
         EXPECT_EQ(semaphores[1].core_ranges.num_cores(), 6u);
     }
+}
+
+TEST_F(McastHostFixture, Mcast1DRotatingSenderAndReceiverGrids) {
+    auto* dev = device_;
+    const auto row_receivers = make_grid(CoreCoord(1, 1), /*gc=*/2, /*gr=*/2);
+    const auto row_senders = make_grid(CoreCoord(1, 1), /*gc=*/3, /*gr=*/2);
+    const std::vector<std::vector<CoreCoord>> row_sender_lines = {
+        {CoreCoord(1, 1), CoreCoord(2, 1), CoreCoord(3, 1)},
+        {CoreCoord(1, 2), CoreCoord(2, 2), CoreCoord(3, 2)},
+    };
+
+    const auto column_receivers = make_grid(CoreCoord(1, 1), /*gc=*/2, /*gr=*/2);
+    const auto column_senders = make_grid(CoreCoord(1, 1), /*gc=*/2, /*gr=*/3);
+    const std::vector<std::vector<CoreCoord>> column_sender_lines = {
+        {CoreCoord(1, 1), CoreCoord(1, 2), CoreCoord(1, 3)},
+        {CoreCoord(2, 1), CoreCoord(2, 2), CoreCoord(2, 3)},
+    };
+
+    for (const auto noc : {NOC::NOC_0, NOC::NOC_1}) {
+        McastConfig cfg;
+        cfg.noc = noc;
+        cfg.rotating_sender = true;
+
+        const Mcast1D row_from_grids(dev, row_receivers, row_senders, Mcast1DShape::PerRow, cfg);
+        const Mcast1D row_from_lines(dev, row_receivers, Mcast1DShape::PerRow, row_sender_lines, cfg);
+        EXPECT_EQ(row_from_grids.compile_time_args(), row_from_lines.compile_time_args());
+        EXPECT_EQ(row_from_grids.runtime_args(CoreCoord(3, 1)), row_from_lines.runtime_args(CoreCoord(3, 1)));
+        expect_same_cores(row_from_grids.receiver_cores(), row_receivers);
+        expect_same_cores(row_from_grids.participating_cores(), row_receivers.merge(row_senders));
+        expect_same_cores(row_from_grids.sender_only_cores(), row_senders.subtract(row_receivers));
+
+        const Mcast1D column_from_grids(dev, column_receivers, column_senders, Mcast1DShape::PerColumn, cfg);
+        const Mcast1D column_from_lines(dev, column_receivers, Mcast1DShape::PerColumn, column_sender_lines, cfg);
+        EXPECT_EQ(column_from_grids.compile_time_args(), column_from_lines.compile_time_args());
+        EXPECT_EQ(column_from_grids.runtime_args(CoreCoord(1, 3)), column_from_lines.runtime_args(CoreCoord(1, 3)));
+        expect_same_cores(column_from_grids.participating_cores(), column_receivers.merge(column_senders));
+        expect_same_cores(column_from_grids.sender_only_cores(), column_senders.subtract(column_receivers));
+    }
+}
+
+TEST_F(McastHostFixture, Mcast1DRotatingSenderGridMustAlignWithReceiverLines) {
+    auto* dev = device_;
+    const auto receivers = make_grid(CoreCoord(1, 1), /*gc=*/2, /*gr=*/2);
+    McastConfig cfg;
+    cfg.rotating_sender = true;
+
+    const auto sender_on_unmatched_row = make_grid(CoreCoord(1, 3), /*gc=*/2, /*gr=*/1);
+    EXPECT_ANY_THROW({ Mcast1D mc(dev, receivers, sender_on_unmatched_row, Mcast1DShape::PerRow, cfg); });
+
+    const CoreRangeSet unequal_sender_lines(std::vector<CoreRange>{
+        CoreRange(CoreCoord(1, 1), CoreCoord(2, 1)),
+        CoreRange(CoreCoord(1, 2), CoreCoord(1, 2)),
+    });
+    EXPECT_ANY_THROW({ Mcast1D mc(dev, receivers, unequal_sender_lines, Mcast1DShape::PerRow, cfg); });
 }
 
 TEST_F(McastHostFixture, Mcast2DRotatingSendersIndependentOfReceiverRect) {

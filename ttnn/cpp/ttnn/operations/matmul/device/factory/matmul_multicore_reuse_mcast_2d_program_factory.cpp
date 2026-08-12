@@ -204,45 +204,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
         {(std::size_t)start_core_x, (std::size_t)start_core_y},
         {(std::size_t)start_core_x + num_cores_with_work_c - 1, (std::size_t)start_core_y + num_cores_with_work_r - 1});
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                      IN0 SHARDED SENDER/RECEIVER
-    ////////////////////////////////////////////////////////////////////////////
-    uint32_t num_cores_c = num_cores_with_work_c;
-    uint32_t num_cores_r = num_cores_with_work_r;
-    uint32_t in0_sender_num_cores_along_width = 0;
-
-    // Only used for in0 block sharded
-    std::optional<CoreRange> in0_mcast_cores_without_work;
-    if (in0_block_sharded) {
-        CoreCoord in0_shard_grid = in0_tensor.shard_spec()->grid.bounding_box().grid_size();
-        // in0 shard grid already accounts for transpose_mcast
-        // ie. If transpose_mcast, in0 width is along y
-        in0_sender_num_cores_along_width = transpose_mcast ? in0_shard_grid.y : in0_shard_grid.x;
-        if (in0_sender_num_cores_along_width > num_blocks_x) {
-            in0_mcast_cores_without_work =
-                transpose_mcast ? CoreRange(
-                                      {(std::size_t)start_core_x, (std::size_t)start_core_y + num_blocks_x},
-                                      {(std::size_t)start_core_x + num_blocks_y - 1,
-                                       (std::size_t)start_core_y + in0_sender_num_cores_along_width - 1})
-                                : CoreRange(
-                                      {(std::size_t)start_core_x + num_blocks_x, (std::size_t)start_core_y},
-                                      {(std::size_t)start_core_x + in0_sender_num_cores_along_width - 1,
-                                       (std::size_t)start_core_y + num_blocks_y - 1});
-        }
-
-        // Set in0 sender/receiver cores to be maximum
-        if (transpose_mcast) {
-            num_cores_r = std::max(num_cores_r, in0_sender_num_cores_along_width);
-        } else {
-            num_cores_c = std::max(num_cores_c, in0_sender_num_cores_along_width);
-        }
-    }
-
-    // Used for setting up CBs and semaphores by both in0 interleaved or sharded
-    CoreRange all_cores(
-        {(std::size_t)start_core_x, (std::size_t)start_core_y},
-        {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y + num_cores_r - 1});
-    const auto& cores = grid_to_cores(all_cores.start_coord, all_cores.end_coord, true);
+    const CoreRangeSet output_work_grid(all_cores_with_work);
     //////////////////////////////////////////////////////////////////////////////////////////
     //       IN0 SENDER (interleaved only) and IN1 SENDER (both interleaved and sharded)
     //////////////////////////////////////////////////////////////////////////////////////////
@@ -319,39 +281,24 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     const tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
     const auto in0_mcast_shape = transpose_mcast ? ttnn::kernel_lib::host::Mcast1DShape::PerColumn
                                                  : ttnn::kernel_lib::host::Mcast1DShape::PerRow;
-    std::vector<std::vector<CoreCoord>> in0_mcast_sender_lines;
-    if (in0_block_sharded) {
-        const uint32_t num_lines = transpose_mcast ? num_cores_with_work_c : num_cores_with_work_r;
-        in0_mcast_sender_lines.resize(num_lines);
-        for (uint32_t line = 0; line < num_lines; ++line) {
-            auto& senders = in0_mcast_sender_lines[line];
-            senders.reserve(in0_sender_num_cores_along_width);
-            for (uint32_t sender = 0; sender < in0_sender_num_cores_along_width; ++sender) {
-                senders.push_back(
-                    transpose_mcast ? CoreCoord{start_core_x + line, start_core_y + sender}
-                                    : CoreCoord{start_core_x + sender, start_core_y + line});
-            }
-        }
-    }
     const auto in0_mcast_config =
         ttnn::kernel_lib::host::McastConfig{.noc = in0_noc, .rotating_sender = in0_block_sharded, .base_sem_id = 0};
     const ttnn::kernel_lib::host::Mcast1D in0_mcast =
         in0_block_sharded
             ? ttnn::kernel_lib::host::Mcast1D(
-                  device, CoreRangeSet(all_cores_with_work), in0_mcast_shape, in0_mcast_sender_lines, in0_mcast_config)
+                  device, output_work_grid, in0_tensor.shard_spec()->grid, in0_mcast_shape, in0_mcast_config)
             : ttnn::kernel_lib::host::Mcast1D(
-                  device,
-                  CoreRangeSet(all_cores_with_work),
-                  in0_mcast_shape,
-                  /*starting_sender_index=*/0,
-                  in0_mcast_config);
+                  device, output_work_grid, in0_mcast_shape, /*starting_sender_index=*/0, in0_mcast_config);
     const ttnn::kernel_lib::host::Mcast1D in1_mcast(
         device,
-        CoreRangeSet(all_cores_with_work),
+        output_work_grid,
         transpose_mcast ? ttnn::kernel_lib::host::Mcast1DShape::PerRow
                         : ttnn::kernel_lib::host::Mcast1DShape::PerColumn,
         /*starting_sender_index=*/0,
         ttnn::kernel_lib::host::McastConfig{.noc = in1_noc, .base_sem_id = in0_mcast.next_base_sem_id()});
+    const CoreRangeSet all_cores = in0_mcast.participating_cores();
+    const CoreRangeSet in0_mcast_cores_without_work = in0_mcast.sender_only_cores();
+    const auto& cores = corerange_to_cores(all_cores, std::nullopt, true);
     bool in1_is_dram = in1_tensor.mesh_buffer().device_local_config().buffer_type == tt_metal::BufferType::DRAM;
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
@@ -738,7 +685,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
         in0_sender_kernel_desc.config =
             DataMovementConfigDescriptor{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc};
 
-        if (in0_mcast_cores_without_work.has_value()) {
+        if (in0_mcast_cores_without_work.num_cores() > 0) {
             has_in0_mcast_no_work_kernel = true;
             auto no_work_ct_args = in0_sender_compile_time_args;
             no_work_ct_args[0] = 0;  // core_has_output_block_work
@@ -746,7 +693,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                 "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
                 "reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp";
             in0_mcast_no_work_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-            in0_mcast_no_work_kernel_desc.core_ranges = CoreRangeSet(in0_mcast_cores_without_work.value());
+            in0_mcast_no_work_kernel_desc.core_ranges = in0_mcast_cores_without_work;
             in0_mcast_no_work_kernel_desc.compile_time_args = no_work_ct_args;
             in0_mcast_no_work_kernel_desc.defines = map_to_defines(mm_kernel_in0_sender_sharded_defines);
             in0_mcast_no_work_kernel_desc.named_compile_time_args = {
@@ -970,7 +917,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     {
         CBDescriptor cb_desc;
         cb_desc.total_size = in0_CB_size;
-        cb_desc.core_ranges = CoreRangeSet(all_cores);
+        cb_desc.core_ranges = all_cores;
         cb_desc.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = tt::CBIndex::c_0,
             .data_format = in0_data_format,
@@ -986,7 +933,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     {
         CBDescriptor cb_desc;
         cb_desc.total_size = in1_CB_size;
-        cb_desc.core_ranges = CoreRangeSet(all_cores);
+        cb_desc.core_ranges = all_cores;
         cb_desc.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = tt::CBIndex::c_1,
             .data_format = in1_data_format,
@@ -1003,7 +950,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
         {
             CBDescriptor cb_desc;
             cb_desc.total_size = in2_CB_size;
-            cb_desc.core_ranges = CoreRangeSet(all_cores);
+            cb_desc.core_ranges = all_cores;
             cb_desc.format_descriptors.push_back(CBFormatDescriptor{
                 .buffer_index = tt::CBIndex::c_2,
                 .data_format = in0_data_format,
@@ -1017,7 +964,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
         {
             CBDescriptor cb_desc;
             cb_desc.total_size = 32 * 2;
-            cb_desc.core_ranges = CoreRangeSet(all_cores);
+            cb_desc.core_ranges = all_cores;
             cb_desc.format_descriptors.push_back(CBFormatDescriptor{
                 .buffer_index = tt::CBIndex::c_6, .data_format = tt::DataFormat::Float16_b, .page_size = 32 * 2});
             desc.cbs.push_back(std::move(cb_desc));
@@ -1032,7 +979,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
         {
             CBDescriptor cb_desc;
             cb_desc.total_size = out_CB_size;
-            cb_desc.core_ranges = CoreRangeSet({all_cores});
+            cb_desc.core_ranges = all_cores;
             cb_desc.format_descriptors.push_back(CBFormatDescriptor{
                 .buffer_index = tt::CBIndex::c_4,
                 .data_format = output_data_format,
@@ -1047,7 +994,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
         {
             CBDescriptor cb_desc;
             cb_desc.total_size = interm0_CB_size;
-            cb_desc.core_ranges = CoreRangeSet({all_cores});
+            cb_desc.core_ranges = all_cores;
             cb_desc.format_descriptors.push_back(CBFormatDescriptor{
                 .buffer_index = tt::CBIndex::c_5,
                 .data_format = interm0_data_format,
@@ -1067,7 +1014,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
         // share buffer
         CBDescriptor cb_desc;
         cb_desc.total_size = out_CB_size;
-        cb_desc.core_ranges = CoreRangeSet({all_cores});
+        cb_desc.core_ranges = all_cores;
         cb_desc.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = tt::CBIndex::c_4,
             .data_format = output_data_format,
@@ -1096,7 +1043,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     if (bias_mesh.has_value()) {
         CBDescriptor cb_desc;
         cb_desc.total_size = in3_CB_size;
-        cb_desc.core_ranges = CoreRangeSet(all_cores);
+        cb_desc.core_ranges = all_cores;
         cb_desc.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = tt::CBIndex::c_3,
             .data_format = bias_data_format,
@@ -1110,7 +1057,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     if (in0_transpose_tile) {
         CBDescriptor cb_desc;
         cb_desc.total_size = in0_CB_size;
-        cb_desc.core_ranges = CoreRangeSet(all_cores);
+        cb_desc.core_ranges = all_cores;
         cb_desc.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = tt::CBIndex::c_10,
             .data_format = in0_data_format,
@@ -1661,45 +1608,7 @@ create_program_mcast_in0_in1(
         {(std::size_t)start_core_x, (std::size_t)start_core_y},
         {(std::size_t)start_core_x + num_cores_with_work_c - 1, (std::size_t)start_core_y + num_cores_with_work_r - 1});
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                      IN0 SHARDED SENDER/RECEIVER
-    ////////////////////////////////////////////////////////////////////////////
-    uint32_t num_cores_c = num_cores_with_work_c;
-    uint32_t num_cores_r = num_cores_with_work_r;
-    uint32_t in0_sender_num_cores_along_width = 0;
-
-    // Only used for in0 block sharded
-    std::optional<CoreRange> in0_mcast_cores_without_work;
-    if (in0_block_sharded) {
-        CoreCoord in0_shard_grid = in0_tensor.shard_spec()->grid.bounding_box().grid_size();
-        // in0 shard grid already accounts for transpose_mcast
-        // ie. If transpose_mcast, in0 width is along y
-        in0_sender_num_cores_along_width = transpose_mcast ? in0_shard_grid.y : in0_shard_grid.x;
-        if (in0_sender_num_cores_along_width > num_blocks_x) {
-            in0_mcast_cores_without_work =
-                transpose_mcast ? CoreRange(
-                                      {(std::size_t)start_core_x, (std::size_t)start_core_y + num_blocks_x},
-                                      {(std::size_t)start_core_x + num_blocks_y - 1,
-                                       (std::size_t)start_core_y + in0_sender_num_cores_along_width - 1})
-                                : CoreRange(
-                                      {(std::size_t)start_core_x + num_blocks_x, (std::size_t)start_core_y},
-                                      {(std::size_t)start_core_x + in0_sender_num_cores_along_width - 1,
-                                       (std::size_t)start_core_y + num_blocks_y - 1});
-        }
-
-        // Set in0 sender/receiver cores to be maximum
-        if (transpose_mcast) {
-            num_cores_r = std::max(num_cores_r, in0_sender_num_cores_along_width);
-        } else {
-            num_cores_c = std::max(num_cores_c, in0_sender_num_cores_along_width);
-        }
-    }
-
-    // Used for setting up CBs and semaphores by both in0 interleaved or sharded
-    CoreRange all_cores(
-        {(std::size_t)start_core_x, (std::size_t)start_core_y},
-        {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y + num_cores_r - 1});
-    const auto& cores = grid_to_cores(all_cores.start_coord, all_cores.end_coord, true);
+    const CoreRangeSet output_work_grid(all_cores_with_work);
     //////////////////////////////////////////////////////////////////////////////////////////
     //       IN0 SENDER (interleaved only) and IN1 SENDER (both interleaved and sharded)
     //////////////////////////////////////////////////////////////////////////////////////////
@@ -1776,41 +1685,26 @@ create_program_mcast_in0_in1(
     const tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
     const auto in0_mcast_shape = transpose_mcast ? ttnn::kernel_lib::host::Mcast1DShape::PerColumn
                                                  : ttnn::kernel_lib::host::Mcast1DShape::PerRow;
-    std::vector<std::vector<CoreCoord>> in0_mcast_sender_lines;
-    if (in0_block_sharded) {
-        const uint32_t num_lines = transpose_mcast ? num_cores_with_work_c : num_cores_with_work_r;
-        in0_mcast_sender_lines.resize(num_lines);
-        for (uint32_t line = 0; line < num_lines; ++line) {
-            auto& senders = in0_mcast_sender_lines[line];
-            senders.reserve(in0_sender_num_cores_along_width);
-            for (uint32_t sender = 0; sender < in0_sender_num_cores_along_width; ++sender) {
-                senders.push_back(
-                    transpose_mcast ? CoreCoord{start_core_x + line, start_core_y + sender}
-                                    : CoreCoord{start_core_x + sender, start_core_y + line});
-            }
-        }
-    }
     const auto in0_mcast_config =
         ttnn::kernel_lib::host::McastConfig{.noc = in0_noc, .rotating_sender = in0_block_sharded, .base_sem_id = 0};
     const ttnn::kernel_lib::host::Mcast1D in0_mcast =
         in0_block_sharded
             ? ttnn::kernel_lib::host::Mcast1D(
-                  device, CoreRangeSet(all_cores_with_work), in0_mcast_shape, in0_mcast_sender_lines, in0_mcast_config)
+                  device, output_work_grid, in0_tensor.shard_spec()->grid, in0_mcast_shape, in0_mcast_config)
             : ttnn::kernel_lib::host::Mcast1D(
-                  device,
-                  CoreRangeSet(all_cores_with_work),
-                  in0_mcast_shape,
-                  /*starting_sender_index=*/0,
-                  in0_mcast_config);
+                  device, output_work_grid, in0_mcast_shape, /*starting_sender_index=*/0, in0_mcast_config);
     ttnn::kernel_lib::host::create_owned_semaphores(program, in0_mcast.owned_semaphores());
     const ttnn::kernel_lib::host::Mcast1D in1_mcast(
         device,
-        CoreRangeSet(all_cores_with_work),
+        output_work_grid,
         transpose_mcast ? ttnn::kernel_lib::host::Mcast1DShape::PerRow
                         : ttnn::kernel_lib::host::Mcast1DShape::PerColumn,
         /*starting_sender_index=*/0,
         ttnn::kernel_lib::host::McastConfig{.noc = in1_noc, .base_sem_id = in0_mcast.next_base_sem_id()});
     ttnn::kernel_lib::host::create_owned_semaphores(program, in1_mcast.owned_semaphores());
+    const CoreRangeSet all_cores = in0_mcast.participating_cores();
+    const CoreRangeSet in0_mcast_cores_without_work = in0_mcast.sender_only_cores();
+    const auto& cores = corerange_to_cores(all_cores, std::nullopt, true);
 
     const uint32_t in1_mcast_runtime_arg_count = in1_mcast.runtime_args(CoreCoord{start_core_x, start_core_y}).size();
     const uint32_t in1_sender_operation_args_offset = 2 + in1_mcast_runtime_arg_count;
@@ -2168,13 +2062,13 @@ create_program_mcast_in0_in1(
                     {"cb_in0_sharded", tt::CBIndex::c_2},
                     {"cb_l1_array", tt::CBIndex::c_6},
                 }});
-        if (in0_mcast_cores_without_work.has_value()) {
+        if (in0_mcast_cores_without_work.num_cores() > 0) {
             in0_sender_compile_time_args[0] = 0;  // core_has_output_block_work
             mm_kernel_in0_mcast_cores_without_work_id = tt_metal::CreateKernel(
                 program,
                 "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
                 "reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp",
-                in0_mcast_cores_without_work.value(),
+                in0_mcast_cores_without_work,
                 tt_metal::DataMovementConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_1,
                     .noc = in0_noc,
@@ -2192,7 +2086,7 @@ create_program_mcast_in0_in1(
                 // Create semaphores
                 fused_op_signaler->init_fused_op(program, device, in0_sender_interleaved);
             } else if (fused_op_signaler->is_reduce_scatter()) {
-                fused_op_signaler->init_fused_op(program, device, all_cores, cores);
+                fused_op_signaler->init_fused_op(program, device, output_work_grid.bounding_box(), cores);
             } else {
                 TT_FATAL(false, "Fused operation must be either all_gather or reduce_scatter.");
             }
@@ -2495,7 +2389,7 @@ create_program_mcast_in0_in1(
                     .set_tile_dims(static_cast<uint8_t>(cb_intermed0_alias), output_tile);
         }
 
-        tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), interm0_cb_config);
+        tt_metal::CreateCircularBuffer(program, all_cores, interm0_cb_config);
         log_debug(
             LogOp,
             "CB {} :: PS = {}, NP = {}, TOTAL = {}",
@@ -2526,7 +2420,7 @@ create_program_mcast_in0_in1(
     if (output_is_sharded) {
         output_cb_config = output_cb_config.set_globally_allocated_address(out_tensor);
     }
-    auto cb_output = tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), output_cb_config);
+    auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
     log_debug(
         LogOp,
         "CB {} :: PS = {}, NP = {}, TOTAL = {}",

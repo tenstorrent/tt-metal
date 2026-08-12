@@ -180,7 +180,10 @@ def test_block_sharded_matmul_keeps_receiver_geometry_separate_from_sender_span(
 
     assert "CoreRange in0_mcast_rect = all_cores_with_work.bounding_box();" in factory_1d
     assert "in0_mcast_senders" in factory_1d
-    assert "in0_mcast_sender_lines" in factory_2d
+    assert factory_2d.count("device, output_work_grid, in0_tensor.shard_spec()->grid") == 2
+    assert factory_2d.count("in0_mcast.participating_cores()") == 2
+    assert factory_2d.count("in0_mcast.sender_only_cores()") == 2
+    assert "in0_mcast_sender_lines" not in factory_2d
     assert not re.search(r"Mcast[12]D\([^;]+CoreRangeSet\(all_cores\)", factory_1d, re.DOTALL)
     assert not re.search(r"Mcast[12]D\([^;]+CoreRangeSet\(all_cores\)", factory_2d, re.DOTALL)
 
