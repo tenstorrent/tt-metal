@@ -103,7 +103,7 @@ struct Block {
 
     // TODO: does not disengage the source, so a moved-from Block is
     // indistinguishable from a live one and a second consumer silently issues a
-    // duplicate cb_pop. See the debug-guard note in the design discussion.
+    // duplicate cb_pop_front. See the debug-guard note in the design discussion.
     Block(Block&& o) {
         cb_id = o.cb_id;
         num_tiles = o.num_tiles;
@@ -133,13 +133,13 @@ class ComputeBlock {
 public:
     ComputeBlock(Block block) : cb_id(block.cb_id), num_tiles(block.num_tiles) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
-        cb_wait(cb_id, num_tiles);
+        cb_wait_front(cb_id, num_tiles);
 #endif
     }
 
     ~ComputeBlock() {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
-        cb_pop(cb_id, num_tiles);
+        cb_pop_front(cb_id, num_tiles);
 #endif
     }
 
@@ -200,7 +200,7 @@ struct NocAsyncReadTx {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
         if constexpr (thread == TT_DM_THREAD_ID) {
             noc_read_barrier();
-            cb_push(cb_id, num_tiles);
+            cb_push_back(cb_id, num_tiles);
         }
 #if defined(IS_DM_THREAD) && IS_DM_THREAD && defined(ASSERT_ENABLED) && ASSERT_ENABLED
         waited = true;
@@ -231,7 +231,7 @@ struct NocAsyncWriteTx {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
         if constexpr (thread == TT_DM_THREAD_ID) {
             noc_writes_flushed();
-            cb_pop(cb_id, num_tiles);
+            cb_pop_front(cb_id, num_tiles);
         }
 #endif
     }
@@ -274,7 +274,7 @@ struct NocAsyncCopyTx {
             if constexpr (SrcIsLocal) {
                 noc_writes_flushed();
             }
-            cb_pop(src_cb, src_tiles);
+            cb_pop_front(src_cb, src_tiles);
         }
 #if defined(ASSERT_ENABLED) && ASSERT_ENABLED
         ASSERT(waited);
@@ -290,7 +290,7 @@ struct NocAsyncCopyTx {
             } else {
                 noc_read_barrier();
             }
-            cb_push(dst_cb, dst_tiles);
+            cb_push_back(dst_cb, dst_tiles);
         }
 #if defined(ASSERT_ENABLED) && ASSERT_ENABLED
         waited = true;
@@ -323,7 +323,7 @@ template <int thread, typename Accessor>
 NocAsyncReadTx<thread> noc_load(const Storage& storage, const Accessor& acc, int block_idx) {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
-        cb_reserve(storage.cb_id, storage.num_tiles);
+        cb_reserve_back(storage.cb_id, storage.num_tiles);
         uint32_t l1 = cb_write_addr(storage.cb_id);
         const uint32_t bytes = cb_page_bytes(storage.cb_id);
         const uint32_t first = static_cast<uint32_t>(block_idx * storage.num_tiles);
@@ -344,7 +344,7 @@ template <int thread, typename Accessor>
 NocAsyncWriteTx<thread> noc_store(Block block, const Accessor& acc, int block_idx) {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
-        cb_wait(block.cb_id, block.num_tiles);
+        cb_wait_front(block.cb_id, block.num_tiles);
         uint32_t l1 = cb_read_addr(block.cb_id);
         const uint32_t bytes = cb_page_bytes(block.cb_id);
         const uint32_t first = static_cast<uint32_t>(block_idx * block.num_tiles);
@@ -382,8 +382,8 @@ template <int thread>
 NocAsyncCopyTx<thread, /*SrcIsLocal=*/false> noc_read(const Storage& storage, Block block, Coord coord, int offset) {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
-        cb_wait(block.cb_id, block.num_tiles);
-        cb_reserve(storage.cb_id, storage.num_tiles);
+        cb_wait_front(block.cb_id, block.num_tiles);
+        cb_reserve_back(storage.cb_id, storage.num_tiles);
         const uint32_t bytes = cb_page_bytes(storage.cb_id);
         const uint64_t src =
             noc_addr_on_core(coord.x, coord.y, cb_read_addr(block.cb_id) + static_cast<uint32_t>(offset));
@@ -400,8 +400,8 @@ template <int thread>
 NocAsyncCopyTx<thread, /*SrcIsLocal=*/true> noc_write(const Storage& storage, Block block, Coord coord, int offset) {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
-        cb_wait(block.cb_id, block.num_tiles);
-        cb_reserve(storage.cb_id, storage.num_tiles);
+        cb_wait_front(block.cb_id, block.num_tiles);
+        cb_reserve_back(storage.cb_id, storage.num_tiles);
         const uint32_t bytes = cb_page_bytes(storage.cb_id);
         const uint64_t dst =
             noc_addr_on_core(coord.x, coord.y, cb_write_addr(storage.cb_id) + static_cast<uint32_t>(offset));

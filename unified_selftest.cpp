@@ -29,10 +29,10 @@ static std::string n(int v) { return std::to_string(v); }
 static void T2(const std::string& s) { trace.push_back(s); }
 
 // ---- CB protocol -----------------------------------------------------------
-inline void cb_reserve(int cb, int p) { T("cb_reserve(cb" + n(cb) + "," + n(p) + ")"); }
-inline void cb_push(int cb, int p) { T("cb_push   (cb" + n(cb) + "," + n(p) + ")"); }
-inline void cb_wait(int cb, int p) { T("cb_wait   (cb" + n(cb) + "," + n(p) + ")"); }
-inline void cb_pop(int cb, int p) { T("cb_pop    (cb" + n(cb) + "," + n(p) + ")"); }
+inline void cb_reserve_back(int cb, int p) { T("cb_reserve_back(cb" + n(cb) + "," + n(p) + ")"); }
+inline void cb_push_back(int cb, int p) { T("cb_push_back   (cb" + n(cb) + "," + n(p) + ")"); }
+inline void cb_wait_front(int cb, int p) { T("cb_wait_front  (cb" + n(cb) + "," + n(p) + ")"); }
+inline void cb_pop_front(int cb, int p) { T("cb_pop_front   (cb" + n(cb) + "," + n(p) + ")"); }
 
 // ---- NOC -------------------------------------------------------------------
 inline void noc_async_read() { T("noc_async_read()"); }
@@ -205,13 +205,13 @@ static bool report(const char* title) {
             if (s.find(tag) == std::string::npos) {
                 continue;
             }
-            if (s.rfind("cb_reserve", 0) == 0) {
+            if (s.rfind("cb_reserve_back", 0) == 0) {
                 res++;
-            } else if (s.rfind("cb_push", 0) == 0) {
+            } else if (s.rfind("cb_push_back", 0) == 0) {
                 push++;
-            } else if (s.rfind("cb_wait", 0) == 0) {
+            } else if (s.rfind("cb_wait_front", 0) == 0) {
                 wait++;
-            } else if (s.rfind("cb_pop", 0) == 0) {
+            } else if (s.rfind("cb_pop_front", 0) == 0) {
                 pop++;
             }
         }
