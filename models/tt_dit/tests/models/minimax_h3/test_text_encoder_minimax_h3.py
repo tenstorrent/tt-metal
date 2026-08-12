@@ -30,7 +30,6 @@ import os
 import pytest
 import torch
 import transformers
-from huggingface_hub import snapshot_download
 from loguru import logger
 
 import ttnn
@@ -41,17 +40,15 @@ from ....parallel.manager import CCLManager
 from ....utils import tensor
 from ....utils.check import assert_quality
 from ....utils.tensor import bf16_tensor
+from .common import CONDITIONER_SUBFOLDER, conditioner_checkpoint_dir, load_reference_conditioner
 
-_LOCAL_MIRROR = "/data/cglagovich/MiniMax-H3-diffusers"
-_HF_REPO = "MiniMaxAI/MiniMax-H3"
-_SUBFOLDER = "text_encoder"
 # Scoped to the conditioner: the repository carries ~190 GB across three partitions
 # (`transformer/`, `transformer_ref/`, `text_encoder/`) and an unscoped `snapshot_download`
 # would pull all of it.
 _PATTERNS = [
-    f"{_SUBFOLDER}/config.json",
-    f"{_SUBFOLDER}/*.safetensors",
-    f"{_SUBFOLDER}/model.safetensors.index.json",
+    f"{CONDITIONER_SUBFOLDER}/config.json",
+    f"{CONDITIONER_SUBFOLDER}/*.safetensors",
+    f"{CONDITIONER_SUBFOLDER}/model.safetensors.index.json",
 ]
 
 # `MINIMAX_H3_RUN_REF=0` skips the golden: no reference forward, no comparison, just our
@@ -66,30 +63,6 @@ _PATTERNS = [
 # transformers version, say), keeping the CPU forward out of a `python -m tracy` capture, and
 # smoke-testing plumbing changes. A green run under it proves nothing about accuracy.
 RUN_REF = os.environ.get("MINIMAX_H3_RUN_REF", "1").strip().lower() not in {"0", "false", "no"}
-
-
-def _conditioner_dir() -> str:
-    """The directory holding the Qwen3-VL conditioner.
-
-    `MINIMAX_H3_REPO` (a local directory or a Hub repo id), then the local mirror, then a scoped Hub
-    snapshot. A missing checkpoint is a skip, not a failure: there is nothing to compare against, and
-    that is an environment gap rather than a defect in the port.
-    """
-    try:
-        ref = os.environ.get("MINIMAX_H3_REPO", "").strip()
-        if ref and os.path.isdir(ref):
-            root = ref
-        elif not ref and os.path.isdir(_LOCAL_MIRROR):
-            root = _LOCAL_MIRROR
-        else:
-            repo_id = ref or _HF_REPO
-            logger.info(f"MiniMax-H3 conditioner not local; fetching {_PATTERNS} from {repo_id}")
-            root = snapshot_download(repo_id=repo_id, allow_patterns=_PATTERNS)
-        return os.path.join(root, _SUBFOLDER)
-    except Exception as exc:  # noqa: BLE001 - transport/auth/gating failures are a skip, not a failure
-        pytest.skip(
-            f"MiniMax-H3 conditioner unavailable (tried $MINIMAX_H3_REPO, {_LOCAL_MIRROR}, then " f"{_HF_REPO}): {exc}"
-        )
 
 
 def _rope_params(text_config):
@@ -116,16 +89,7 @@ def _reference_lm(path: str):
     The checkpoint is already bf16 on disk (1058/1058 tensors), so `dtype` loads it as-is rather than
     materializing fp32 first the way `from_config(...).to(bf16)` would.
     """
-    hf, info = transformers.Qwen3VLForConditionalGeneration.from_pretrained(
-        path, dtype=torch.bfloat16, output_loading_info=True
-    )
-    # Prove the shipped weights actually landed, rather than leaving parts of the reference on its
-    # fresh init -- a silently partial load is the one way this comparison could go green without
-    # having tested the checkpoint.
-    # `loading_info` values are *sets*, so they are sorted before slicing; indexing a set raises, and
-    # this runs on the failure path where a crash would hide the mismatch it is meant to report.
-    bad = {k: sorted(info[k])[:5] for k in ("missing_keys", "unexpected_keys", "mismatched_keys") if info[k]}
-    assert not bad, f"conditioner load key mismatch: {bad}"
+    hf = load_reference_conditioner(path)
     lm = hf.language_model if hasattr(hf, "language_model") else hf.model.language_model
     return lm.eval()
 
@@ -166,7 +130,7 @@ def test_minimax_h3_text_conditioner(
     submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     tp_factor = tuple(submesh.shape)[tp_axis]
 
-    path = _conditioner_dir()
+    path = conditioner_checkpoint_dir(_PATTERNS)
     text_config = transformers.AutoConfig.from_pretrained(path).text_config
     # The guard `encoders.py::encode_prompt` raises: reading `hidden_states[50]` needs *more* than 50
     # decoder layers, because a stack truncated to exactly 50 ends post-norm.
@@ -251,16 +215,13 @@ def test_minimax_h3_text_conditioner(
     )
     enc.load_torch_state_dict(lm.state_dict())
 
-    print("Create Rope Tensors")
     cos, sin = create_rope_tensors(1, seq_len, None, head_dim, rope_theta, mrope_section)
     tt_ids = ttnn.from_torch(ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=submesh)
-    print("Encoder Forward")
     tt_caps = enc.forward(
         tt_ids,
         attention_mask=None,
         pos_embeds=(bf16_tensor(cos, device=submesh), bf16_tensor(sin, device=submesh)),
     )
-    print("Encoder Done")
 
     assert len(tt_caps) == 1, f"expected a single tap at layer {TAP}, got {len(tt_caps)}"
     actual = tensor.to_torch(tt_caps[0], mesh_axes=[None, None, None])

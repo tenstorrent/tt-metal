@@ -36,11 +36,11 @@ import torch
 import ttnn
 
 from models.tt_dit.models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
-from models.tt_dit.models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
-from models.tt_dit.models.vae.minimax_h3.decoder_minimax_h3 import MiniMaxH3ViTDecoder3d
 from models.tt_dit.tests.models.minimax_h3.common import (
     DECODE_LATENT_FRAMES,
     LATENT_TILE,
+    build_audio_decoder,
+    build_visual_decoder,
     load_config,
     random_decoder_state,
     weights_subdir,
@@ -69,23 +69,7 @@ def test_tracy_visual_decode_unit(mesh_device):
     config = load_config(weights_dir)
     torch.manual_seed(1)
 
-    decoder = MiniMaxH3ViTDecoder3d(
-        num_frames=DECODE_LATENT_FRAMES,
-        height=LATENT_TILE,
-        width=LATENT_TILE,
-        in_channels=config["latent_channels"],
-        out_channels=config["out_channels"],
-        patch_size=16,
-        patch_size_t=4,
-        num_layers=config["decoder_num_layers"],
-        num_heads=config["decoder_num_attention_heads"],
-        head_dim=config["decoder_attention_head_dim"],
-        num_register_tokens=config["decoder_num_register_tokens"],
-        rope_theta=config["decoder_rope_theta"],
-        rope_dim_ratio=config["decoder_rope_dim_ratio"],
-        eps=config["decoder_norm_eps"],
-        mesh_device=mesh_device,
-    )
+    decoder = build_visual_decoder(config, mesh_device)
     decoder.load_torch_state_dict(random_decoder_state(config))
     num_patches = DECODE_LATENT_FRAMES * LATENT_TILE * LATENT_TILE
     tokens = ttnn.from_torch(
@@ -135,16 +119,7 @@ def test_tracy_audio_decode(mesh_device):
     config = load_config(weights_dir)
     torch.manual_seed(2)
 
-    decoder = MiniMaxH3AudioDecoder(
-        latent_channels=config["latent_channels"],
-        latent_dim=config["latent_dim"],
-        decoder_dim=config["decoder_dim"],
-        decoder_rates=tuple(config["decoder_rates"]),
-        decoder_kernel_sizes=tuple(config["decoder_kernel_sizes"]),
-        resblock_kernel_sizes=tuple(config["resblock_kernel_sizes"]),
-        resblock_dilation_sizes=tuple(tuple(d) for d in config["resblock_dilation_sizes"]),
-        mesh_device=mesh_device,
-    )
+    decoder = build_audio_decoder(config, mesh_device)
     from safetensors.torch import load_file
 
     # `strict=False` matches the audio baselines: the converted dict carries the encoder's tensors too.

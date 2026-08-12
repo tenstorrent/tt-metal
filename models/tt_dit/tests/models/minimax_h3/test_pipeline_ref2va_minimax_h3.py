@@ -68,21 +68,24 @@ import torch
 from loguru import logger
 from PIL import Image
 
-from ....pipelines.minimax_h3.packing_ref2va import MiniMaxH3Reference
+from ....pipelines.minimax_h3.packing_ref2va import MiniMaxH3Reference, reference_from_video_file
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
 from ....utils.test import ring_params_req_exact_devices
+from .common import create_fractal_image
 from .common_av import (
+    artifact_dir,
     check_audio_sanity,
     check_av_sync,
     check_spatial_seams,
-    clip_prompt_alignment,
-    ref2va_references,
-    reference_video,
-    run_vbench,
+    gate_clip,
+    gate_vbench,
+    log_timing_table,
+    run_warm_generation,
+    to_uint8_frames,
+    weights_dir,
     write_artifacts,
 )
 
-WEIGHTS_ENV = "MINIMAX_H3_DIFFUSERS_DIR"
 ARTIFACT_ENV = "MINIMAX_H3_REF2VA_ARTIFACT_DIR"
 
 # The working point. Fixed: changing it invalidates the numbers below.
@@ -135,19 +138,43 @@ MESH_4X8 = [
 ]
 
 
-def _weights_dir() -> Path:
-    directory = Path(os.environ.get(WEIGHTS_ENV, ""))
-    if not directory.is_dir():
-        pytest.skip(f"set {WEIGHTS_ENV} to a diffusers snapshot holding transformer_ref/")
-    if not (directory / "transformer_ref").is_dir():
-        pytest.skip(f"{directory} has no transformer_ref/; ref2va runs against that partition")
-    return directory
+REFERENCE_MEDIA_ENV = "MINIMAX_H3_REFERENCE_MEDIA"
+DEFAULT_REFERENCE_MEDIA = Path.home() / "h3_fl2va_artifacts" / "fl2va_first.mp4"
 
 
-def _artifact_dir() -> Path:
-    directory = Path(os.environ.get(ARTIFACT_ENV) or Path.home() / "h3_ref2va_artifacts")
-    directory.mkdir(parents=True, exist_ok=True)
-    return directory
+def reference_video() -> Path:
+    path = Path(os.environ.get(REFERENCE_MEDIA_ENV) or DEFAULT_REFERENCE_MEDIA)
+    if not path.is_file():
+        pytest.skip(f"no reference video at {path}; set {REFERENCE_MEDIA_ENV} to a clip with a soundtrack")
+    return path
+
+
+def ref2va_references(case: str) -> list[MiniMaxH3Reference]:
+    """The reference set per e2e case.
+
+    ``one_image`` and ``mixed`` condition on a Mandelbrot fractal: for a shape-and-sanity gate the
+    useful property is a reference nothing in the prompt could produce. It is also the most
+    adversarial of the three and sits at the bottom of the quality table above -- 0.4826
+    imaging_quality is this case, not ref2va generally, which reaches 0.6575 on a photographic
+    reference. The discriminator uses real photographs instead.
+    """
+    if case == "one_image":
+        return [MiniMaxH3Reference(image=create_fractal_image(1024, 1024))]
+    if case == "video_with_sound":
+        return [reference_from_video_file(reference_video())]
+    if case == "mixed":
+        # One of each, and in an order that is not the natural one: the image first,
+        # then a SILENT video, then a standalone audio reference. So the request
+        # exercises a video block with no soundtrack rows of its own next to an audio
+        # block with no video rows, which is where the per-modality row cursors of
+        # `split_condition_blocks` can disagree with the layout.
+        sounded = reference_from_video_file(reference_video())
+        return [
+            MiniMaxH3Reference(image=create_fractal_image(1024, 1024)),
+            reference_from_video_file(reference_video(), with_audio=False),
+            MiniMaxH3Reference(audio=sounded.audio, sample_rate=sounded.sample_rate),
+        ]
+    raise ValueError(case)
 
 
 def _real_frame_image() -> Image.Image:
@@ -169,11 +196,6 @@ def _inverted(image: Image.Image) -> Image.Image:
     return Image.fromarray(255 - np.asarray(image.convert("RGB")))
 
 
-def _frames_of(output) -> np.ndarray:
-    """``(F, H, W, 3)`` uint8 frames from a pipeline output."""
-    return (output.video[0].permute(1, 2, 3, 0).float().cpu().numpy() * 255).astype(np.uint8)
-
-
 def _clip_resemblance(output, image: Image.Image, num_frames: int = 8) -> float:
     """Mean CLIP image-image cosine similarity between sampled output frames and a reference.
 
@@ -183,7 +205,7 @@ def _clip_resemblance(output, image: Image.Image, num_frames: int = 8) -> float:
     from ...dataset_eval.clip_encoder import CLIPEncoder
 
     encoder = CLIPEncoder()
-    frames = _frames_of(output)
+    frames = to_uint8_frames(output)
     indices = np.linspace(0, frames.shape[0] - 1, num_frames).round().astype(int)
 
     with torch.no_grad():
@@ -205,7 +227,7 @@ def _colour_distance(output, image: Image.Image) -> float:
     measures directly whether the palette carried across. Logged, not asserted -- see the
     module docstring on why no direction check is a gate here.
     """
-    output_mean = _frames_of(output).reshape(-1, 3).mean(axis=0) / 255.0
+    output_mean = to_uint8_frames(output).reshape(-1, 3).mean(axis=0) / 255.0
     reference_mean = np.asarray(image.convert("RGB")).reshape(-1, 3).mean(axis=0) / 255.0
     return float(np.linalg.norm(output_mean - reference_mean))
 
@@ -221,8 +243,8 @@ def _write(output, stem: str) -> dict:
     The mp4 comes from the shared `write_artifacts` the t2va and fl2va gates use, so VBench
     scores every task from the same kind of file and the numbers stay comparable.
     """
-    directory = _artifact_dir()
-    frames = _frames_of(output)
+    directory = artifact_dir(ARTIFACT_ENV, "h3_ref2va_artifacts")
+    frames = to_uint8_frames(output)
     for index in (0, 17, NUM_FRAMES // 2, NUM_FRAMES - 1):
         Image.fromarray(frames[index]).save(directory / f"{stem}_frame_{index}.png")
     paths = write_artifacts(frames, output.audio.cpu().numpy(), output.sampling_rate, directory, stem=stem)
@@ -237,45 +259,22 @@ def _record_quality(frames: np.ndarray, paths: dict, case: str) -> None:
     transfer to reference-driven content: `imaging_quality` scored 0.4884 on a visually perfect
     night scene against a 0.64 bar, and the seam ratio gave a false failure at 2.29x.
     """
-    if os.environ.get("RUN_CLIP", "1") in ("1", "true", "True"):
-        pytest.importorskip("open_clip", reason="RUN_CLIP=1 but open_clip is missing (set RUN_CLIP=0)")
-        alignment = clip_prompt_alignment(frames, PROMPT)
-        logger.info(
-            f"QUALITY ref2va[{case}] CLIP prompt alignment: mean={alignment['mean']:.2f} "
-            f"min={alignment['min']:.2f} max={alignment['max']:.2f} (bar {REF2VA_CLIP_THRESHOLD})"
-        )
-        if REF2VA_CLIP_THRESHOLD is not None:
-            assert alignment["mean"] >= REF2VA_CLIP_THRESHOLD, (
-                f"CLIP prompt alignment {alignment['mean']:.2f} is below the {REF2VA_CLIP_THRESHOLD} bar; "
-                "the video no longer matches the prompt"
-            )
-    else:
-        logger.info("RUN_CLIP=0, skipping the CLIP prompt-alignment measurement")
-
-    if os.environ.get("RUN_VBENCH", "1") not in ("1", "true", "True"):
-        logger.info("RUN_VBENCH=0, skipping the VBench measurement")
-        return
-    if "mp4" not in paths:
-        pytest.skip("RUN_VBENCH=1 needs the muxed mp4, which ffmpeg did not produce")
-    scores = run_vbench(paths["mp4"], PROMPT, tuple(REF2VA_VBENCH_THRESHOLDS))
-    for dimension, value in scores.items():
-        bar = REF2VA_VBENCH_THRESHOLDS.get(dimension)
-        logger.info(f"QUALITY ref2va[{case}] VBench {dimension} = {value:.4f} (bar {bar})")
-    for dimension, bar in REF2VA_VBENCH_THRESHOLDS.items():
-        if bar is None:
-            continue
-        value = scores.get(dimension)
-        assert value is not None, f"VBench produced no {dimension} score"
-        assert value >= bar, f"VBench {dimension} {value:.4f} is below the {bar} bar"
+    gate_clip(frames, PROMPT, REF2VA_CLIP_THRESHOLD, f"QUALITY ref2va[{case}]")
+    # A missing muxed mp4 skips rather than fails here: unlike t2va, this gate's own ffmpeg step is
+    # allowed to be absent on the host.
+    gate_vbench(paths, PROMPT, REF2VA_VBENCH_THRESHOLDS, f"QUALITY ref2va[{case}]", skip_without_mp4=True)
 
 
 def _pipeline(mesh_device) -> MiniMaxH3Pipeline:
     """A pipeline bound to the `transformer_ref` partition.
 
     Fixed at construction rather than per call: each partition is 62 GB, so switching inside
-    one process would mean a full reload.
+    one process would mean a full reload. No default snapshot path: ref2va runs against the
+    `transformer_ref` partition, which the shared `weights_dir` helper requires explicitly.
     """
-    return MiniMaxH3Pipeline.create_pipeline(mesh_device=mesh_device, weights_dir=_weights_dir(), task="ref2va")
+    return MiniMaxH3Pipeline.create_pipeline(
+        mesh_device=mesh_device, weights_dir=weights_dir("transformer_ref", default=""), task="ref2va"
+    )
 
 
 # The gated e2e case and the padded packed length it runs at, MEASURED end to end and asserted
@@ -302,28 +301,19 @@ def test_ref2va_end_to_end(mesh_device, reset_seeds):
     references = ref2va_references(case)
     pipeline = _pipeline(mesh_device)
 
-    # ---- fully-warm latency, `pipelines/ltx`'s method. The same two warmth conditions as the
-    # fl2va gate, sharpened for ref2va:
+    # ---- fully-warm latency, `pipelines/ltx`'s method via `run_warm_generation`. The same two
+    # warmth conditions as the fl2va gate, sharpened for ref2va:
     # 1. The warmup must be ref2va-shaped, with the SAME references: `padded_len` depends on the
     #    number and resolution of the references, so warming with different ones warms nothing.
     # 2. The warmup must run at the same prompt length, which for ref2va means the same
     #    presentation -- a 2048 px image reference contributes ~4096 vision tokens and a video
-    #    reference ~1008 per merged frame pair. Asserted below via `last_padded_len`.
+    #    reference ~1008 per merged frame pair. Asserted by the helper via `last_padded_len`.
     # The measured run pays the full device conditioner encode -- vision tower included -- inside
     # the timed Encoder row: there is no prompt-embedding cache. No reference number is recorded
     # for the ref2va encode (t2va's text-only encode measures ~2.8 s; the vision tower adds to
-    # that here), and the warmup above already compiled the encoder path at this presentation.
-    pipeline.warmup(
-        prompt=PROMPT,
-        references=references,
-        num_frames=NUM_FRAMES,
-        height=HEIGHT,
-        width=WIDTH,
-        num_inference_steps=STEPS,
-    )
-    warm_padded_len = pipeline.last_padded_len
-
-    output = pipeline(
+    # that here), and the warmup already compiled the encoder path at this presentation.
+    output = run_warm_generation(
+        pipeline,
         PROMPT,
         references=references,
         num_frames=NUM_FRAMES,
@@ -331,11 +321,6 @@ def test_ref2va_end_to_end(mesh_device, reset_seeds):
         width=WIDTH,
         num_inference_steps=STEPS,
         seed=SEED,
-    )
-
-    assert pipeline.last_padded_len == warm_padded_len, (
-        f"warmup ran at padded_len {warm_padded_len} but the measured call ran at "
-        f"{pipeline.last_padded_len}; this number is not warm"
     )
 
     assert output.video.shape == (1, 3, NUM_FRAMES, HEIGHT, WIDTH), tuple(output.video.shape)
@@ -347,30 +332,23 @@ def test_ref2va_end_to_end(mesh_device, reset_seeds):
         pipeline.last_padded_len == EXPECTED_PADDED_LEN
     ), f"{case} ran at padded_len {pipeline.last_padded_len}, not the probed {EXPECTED_PADDED_LEN}"
 
-    frames = _frames_of(output)
+    frames = to_uint8_frames(output)
     # Artifacts before the checks: a check that fires first leaves no frames to inspect, and the
     # frames are what a seam reading has to be judged against.
     paths = _write(output, f"ref2va_{case}")
 
-    rows = pipeline.last_timings
-    total = sum(seconds for _, seconds in rows)
     num_forwards = STEPS - 1
-    logger.info(
-        f"MEASUREMENT ref2va[{case}] fully warm | mesh 4x8 Blackhole, TP=4 axis 0 / SP=8 axis 1, ring, "
-        f"2 links, l1_small_size {_L1_SMALL} | {WIDTH}x{HEIGHT}, {NUM_FRAMES} frames @ {FPS} fps "
-        f"({NUM_FRAMES / FPS:.2f} s), {num_forwards} forwards, padded_len {warm_padded_len} "
-        f"| warm window: one full warmup generation at this shape, prepares and export excluded"
+    # No tuned perf target for ref2va: the timing is logged, not gated (no `expected_total_s`).
+    log_timing_table(
+        pipeline,
+        f"ref2va[{case}]",
+        num_forwards=num_forwards,
+        video_seconds=NUM_FRAMES / FPS,
+        extra=(
+            f", l1_small_size {_L1_SMALL} | {WIDTH}x{HEIGHT}, {NUM_FRAMES} frames @ {FPS} fps "
+            f"({NUM_FRAMES / FPS:.2f} s), {num_forwards} forwards, padded_len {pipeline.last_padded_len}"
+        ),
     )
-    for label, seconds in rows:
-        logger.info(f"  {label:<18} {seconds:8.1f} s  ({100 * seconds / total:4.1f} %)")
-    logger.info(f"  {'Total (compute)':<18} {total:8.1f} s")
-    denoise = dict(rows).get("Denoise")
-    if denoise:
-        logger.info(
-            f"  per forward        {denoise / num_forwards * 1000:8.1f} ms  "
-            f"({num_forwards} forwards over {denoise:.1f} s)"
-        )
-    logger.info(f"  realtime factor    {total / (NUM_FRAMES / FPS):8.1f} x  (compute / video seconds)")
 
     check_audio_sanity(
         output.audio, sampling_rate=output.sampling_rate, expected_seconds=NUM_FRAMES / FPS, tolerance_seconds=0.05

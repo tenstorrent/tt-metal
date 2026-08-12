@@ -38,21 +38,23 @@ import transformers
 import ttnn
 
 from ....encoders.qwen3vl.vision_qwen3vl import Qwen3VlVisionModel, vision_cu_seqlens
-from ....parallel.config import EncoderParallelConfig, ParallelFactor
-from ....parallel.manager import CCLManager
 from ....utils import tensor
 from ....utils.check import assert_quality
-from ....utils.tensor import bf16_tensor
-
-HIDDEN_SIZE = 1152
-NUM_HEADS = 16
-HEAD_DIM = HIDDEN_SIZE // NUM_HEADS
-INTERMEDIATE_SIZE = 4304
-SPATIAL_MERGE_SIZE = 2
-OUT_HIDDEN_SIZE = 5120
-NUM_POSITION_EMBEDDINGS = 2304
-NORM_EPS = 1e-6
-HIDDEN_ACT = "gelu_pytorch_tanh"
+from .common import (
+    HIDDEN_ACT,
+    HIDDEN_SIZE,
+    INTERMEDIATE_SIZE,
+    NORM_EPS,
+    NUM_HEADS,
+    NUM_POSITION_EMBEDDINGS,
+    OUT_HIDDEN_SIZE,
+    SPATIAL_MERGE_SIZE,
+    VISION_PARAMS,
+    resolve_parallel,
+    skip_if_sp_misaligned,
+    sp_shard,
+    vision_config,
+)
 
 # The released tower: 27 blocks with deepstack taps at 8, 16 and 24. The whole 595M model, so a
 # dummy-weight copy is affordable and there is no reason to run a shallower one.
@@ -112,28 +114,11 @@ _MULTI = {
 GRIDS = {**_CANVAS, **_REFERENCE, **_MULTI}
 
 
-def _config():
-    return transformers.Qwen3VLVisionConfig(
-        depth=DEPTH,
-        hidden_size=HIDDEN_SIZE,
-        num_heads=NUM_HEADS,
-        intermediate_size=INTERMEDIATE_SIZE,
-        in_channels=3,
-        patch_size=16,
-        temporal_patch_size=2,
-        spatial_merge_size=SPATIAL_MERGE_SIZE,
-        num_position_embeddings=NUM_POSITION_EMBEDDINGS,
-        out_hidden_size=OUT_HIDDEN_SIZE,
-        hidden_act=HIDDEN_ACT,
-        deepstack_visual_indexes=DEEPSTACK_INDEXES,
-        initializer_range=0.02,
-    )
-
-
 @pytest.fixture(scope="module")
 def reference():
     torch.manual_seed(0)
-    return transformers.models.qwen3_vl.modeling_qwen3_vl.Qwen3VLVisionModel._from_config(_config()).eval()
+    config = vision_config(depth=DEPTH, deepstack_visual_indexes=DEEPSTACK_INDEXES)
+    return transformers.models.qwen3_vl.modeling_qwen3_vl.Qwen3VLVisionModel._from_config(config).eval()
 
 
 def _tower(reference, submesh, parallel_config=None, ccl_manager=None):
@@ -158,29 +143,8 @@ def _tower(reference, submesh, parallel_config=None, ccl_manager=None):
 
 # ------------------------------------------------------------------------- device
 
-# TP fractures heads/intermediate/merger; SP splits patch rows and ring-attends. Different axes, so
-# the 8x4 system gives TP=8 x SP=4.
+# Mesh/parallel configs are the shared `VISION_PARAMS` from common.py.
 #
-# Only TP=8 is deployed, with SP either off or 4, so the configs are named for both factors. SP alone
-# (TP=1) is not a configuration this model will ever run in and is not covered.
-#
-# `device_params` is per-config: FABRIC_1D has no ethernet partner on a 1x1 mesh and times out in
-# router init.
-_L1_SMALL = 32768
-_FABRIC = {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": _L1_SMALL}
-_NO_FABRIC = {"l1_small_size": _L1_SMALL}
-
-_MESH = [
-    pytest.param((1, 1), (1, 1), None, None, 1, _NO_FABRIC, id="single"),
-    pytest.param((8, 4), (8, 4), 0, None, 2, _FABRIC, id="tp8_sp1"),
-    pytest.param((8, 4), (8, 4), 0, 1, 2, _FABRIC, id="tp8_sp4"),
-]
-_PARAMS = pytest.mark.parametrize(
-    ("mesh_device", "submesh_shape", "tp_axis", "sp_axis", "num_links", "device_params"),
-    _MESH,
-    indirect=["mesh_device", "device_params"],
-)
-
 # `check` computes the CPU golden and asserts PCC; `perf` skips both and runs only our implementation,
 # asserting shapes and finiteness. Same ids as the other tt_dit tests -- see
 # models/wan2_2/test_all_gather_minimal_matmul_async.py.
@@ -199,40 +163,7 @@ _CASES = [pytest.param(name, True, id=f"check-{name}") for name in GRIDS] + [
 ]
 
 
-def _parallel_args(submesh, tp_axis, sp_axis, num_links):
-    """`(parallel_config, ccl_manager)` for `Qwen3VlVisionModel`, or `(None, None)` when replicated."""
-    if tp_axis is None and sp_axis is None:
-        return None, None
-    shape = tuple(submesh.shape)
-    cfg = EncoderParallelConfig(
-        tensor_parallel=ParallelFactor(factor=shape[tp_axis] if tp_axis is not None else 1, mesh_axis=tp_axis),
-        sequence_parallel=(ParallelFactor(factor=shape[sp_axis], mesh_axis=sp_axis) if sp_axis is not None else None),
-    )
-    return cfg, CCLManager(submesh, num_links=num_links, topology=ttnn.Topology.Linear)
-
-
-def _skip_if_sp_misaligned(total, submesh, sp_axis):
-    """Ring SDPA needs `N_local_q % 32 == 0`, stricter than the merger's 4-row merge group.
-
-    At SP=4 that means a multiple of 128 patches. Every grid here satisfies it except the four
-    area-capped canvases, which are all 4032 = 31.5 x 128 -- so at the largest output canvas, in any
-    aspect ratio, SP=4 is unavailable. That is a property of the model's geometry, not of the test.
-    """
-    if sp_axis is None:
-        return
-    sp = tuple(submesh.shape)[sp_axis]
-    if total % (sp * 32) != 0:
-        pytest.skip(f"{total} patches do not divide into {sp} tile-aligned shards (needs a multiple of {sp * 32})")
-
-
-def _shard(x, submesh, sp_axis):
-    """Upload row-sharded on the SP axis; the tower gathers its own output, so only inputs shard."""
-    if sp_axis is None:
-        return bf16_tensor(x, device=submesh)
-    return bf16_tensor(x, device=submesh, mesh_axis=sp_axis, shard_dim=0)
-
-
-@_PARAMS
+@VISION_PARAMS
 @pytest.mark.parametrize(("name", "check_pcc"), _CASES)
 def test_tower_on_device(reference, mesh_device, submesh_shape, tp_axis, sp_axis, num_links, name, check_pcc):
     """The full tower: patch embed, position embeddings, every block, all four mergers.
@@ -249,7 +180,7 @@ def test_tower_on_device(reference, mesh_device, submesh_shape, tp_axis, sp_axis
     submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     grid = torch.tensor(GRIDS[name], dtype=torch.long)
     total = sum(t * h * w for t, h, w in GRIDS[name])
-    _skip_if_sp_misaligned(total, submesh, sp_axis)
+    skip_if_sp_misaligned(total, submesh, sp_axis)
     patch_dim = 3 * 2 * 16 * 16
 
     torch.manual_seed(0)
@@ -267,19 +198,16 @@ def test_tower_on_device(reference, mesh_device, submesh_shape, tp_axis, sp_axis
     assert len(cu_seqlens) - 1 == int(grid[:, 0].sum()), f"expected one block per frame, got {cu_seqlens}"
     assert cu_seqlens[0] == 0 and cu_seqlens[-1] == total, f"cu_seqlens must span [0, {total}]: {cu_seqlens}"
 
-    tower = _tower(reference, submesh, *_parallel_args(submesh, tp_axis, sp_axis, num_links))
-    print("Prepare Vision Rope")
+    tower = _tower(reference, submesh, *resolve_parallel(submesh, tp_axis, sp_axis, num_links))
     cos, sin = tower.prepare_rope(grid)
     pos = tower.prepare_pos_embeds(grid)
-    # Inputs shard on rows under SP; the tower's outputs come back gathered and replicated.
-    print("Tower Forward")
+    # Inputs shard on rows under SP; the tower gathers its own output, so only inputs shard.
     tokens, deepstack = tower.forward(
-        _shard(patches, submesh, sp_axis),
-        pos_embeds=_shard(pos, submesh, sp_axis),
-        rope=(_shard(cos, submesh, sp_axis), _shard(sin, submesh, sp_axis)),
+        sp_shard(patches, submesh, sp_axis),
+        pos_embeds=sp_shard(pos, submesh, sp_axis),
+        rope=(sp_shard(cos, submesh, sp_axis), sp_shard(sin, submesh, sp_axis)),
         cu_seqlens=cu_seqlens,
     )
-    print("Tower Done")
 
     merged = total // SPATIAL_MERGE_SIZE**2
     actual_tokens = tensor.to_torch(tokens, mesh_axes=[None, None])

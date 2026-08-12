@@ -56,23 +56,16 @@ from ....pipelines.minimax_h3 import references as R
 from ....utils.check import assert_quality
 from ....utils.test import ring_params_req_exact_devices
 
-reference_before_encoder = pytest.importorskip(
-    "diffusers.modular_pipelines.minimax_h3.before_encoder",
-    reason="requires the minimax-h3 diffusers branch",
-)
-reference_packing = pytest.importorskip(
-    "diffusers.modular_pipelines.minimax_h3.packing_ref2va",
-    reason="requires the minimax-h3 diffusers branch",
-)
-reference_encoders = pytest.importorskip(
-    "diffusers.modular_pipelines.minimax_h3.encoders",
-    reason="requires the minimax-h3 diffusers branch",
-)
-# The base half too: the two `_temporal_position_span` implementations live one in
-# each module, and the rotary-clock gate pins ours against *both*.
-reference_base_packing = pytest.importorskip(
-    "diffusers.modular_pipelines.minimax_h3.packing",
-    reason="requires the minimax-h3 diffusers branch",
+# The base `packing` half too: the two `_temporal_position_span` implementations live one
+# in each module, and the rotary-clock gate pins ours against *both*.
+reference_before_encoder, reference_packing, reference_encoders, reference_base_packing = (
+    pytest.importorskip(module, reason="requires the minimax-h3 diffusers branch")
+    for module in (
+        "diffusers.modular_pipelines.minimax_h3.before_encoder",
+        "diffusers.modular_pipelines.minimax_h3.packing_ref2va",
+        "diffusers.modular_pipelines.minimax_h3.encoders",
+        "diffusers.modular_pipelines.minimax_h3.packing",
+    )
 )
 
 AUDIO_RATE = 32000
@@ -112,10 +105,10 @@ def _waveform(seconds: float, sample_rate: int = AUDIO_RATE, channels: int = 2) 
     return torch.randn(channels, int(seconds * sample_rate)) * 0.1
 
 
-def _pair(spec: dict):
-    """One spec into ``(our reference, the reference implementation's reference)``."""
-    ours = rp.MiniMaxH3Reference(**spec)
-    theirs = reference_packing.MiniMaxH3Reference(**spec)
+def _pair(specs: list[dict]):
+    """``(ours, theirs)`` reference lists built from one spec list, as ``_both`` does below."""
+    ours = [rp.MiniMaxH3Reference(**spec) for spec in specs]
+    theirs = [reference_packing.MiniMaxH3Reference(**spec) for spec in specs]
     return ours, theirs
 
 
@@ -185,8 +178,7 @@ def test_prepare_references_matches_reference(name):
     # An audio reference may not be alone, so pair it with an image; the image is
     # prepared identically either way and the pairing is what the reference allows.
     specs = [spec] if "audio" not in name else [SPECS["image"], spec]
-    ours = [_pair(s)[0] for s in specs]
-    theirs = [_pair(s)[1] for s in specs]
+    ours, theirs = _pair(specs)
 
     got, got_frames = R.prepare_references(ours, TARGET_FRAMES, AUDIO_RATE)
     want, want_frames = reference_before_encoder.MiniMaxH3Ref2VASetupStep.prepare_references(

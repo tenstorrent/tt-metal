@@ -40,15 +40,15 @@ import torch
 import ttnn
 
 from ....models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
-from ....models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
 from ....models.audio_vae.minimax_h3.encoder_minimax_h3_audio import MiniMaxH3AudioEncoder
-from ....models.vae.minimax_h3.decoder_minimax_h3 import MiniMaxH3ViTDecoder3d
-from ....models.vae.minimax_h3.encoder_minimax_h3 import MiniMaxH3Encoder3d
 from .common import (
     CLIP_FRAMES,
     DECODE_LATENT_FRAMES,
     LATENT_TILE,
     TILE,
+    build_audio_decoder,
+    build_visual_decoder,
+    build_visual_encoder,
     load_config,
     random_decoder_state,
     random_encoder_state,
@@ -156,19 +156,7 @@ def test_visual_data_parallel_throughput(mesh_device):
         ("visual_encoder_clip_wave", CLIP_FRAMES, 3),
         ("visual_encoder_keyframe_wave", 1, 1),
     ):
-        encoder = MiniMaxH3Encoder3d(
-            num_frames=num_frames,
-            height=TILE,
-            width=TILE,
-            in_channels=3,
-            out_channels=2 * config["latent_channels"],
-            block_out_channels=tuple(config["block_out_channels"]),
-            layers_per_block=config["layers_per_block"],
-            spatial_downsample_factors=tuple(config["spatial_downsample_factors"]),
-            temporal_downsample_factors=tuple(config["temporal_downsample_factors"]),
-            temporal_taps=taps,
-            mesh_device=mesh_device,
-        )
+        encoder = build_visual_encoder(config, mesh_device, num_frames, temporal_taps=taps)
         # Random-init weights: timing does not depend on their values, and skipping the
         # 10.4 GB checkpoint read is what keeps this baseline quick enough to iterate on.
         encoder.load_torch_state_dict(random_encoder_state(config))
@@ -184,15 +172,7 @@ def test_visual_data_parallel_throughput(mesh_device):
         logger.info(f"PERF {label} of {devices} units: {seconds:.3f} s ({seconds / devices:.4f} s/unit)")
         measurements[label] = seconds
 
-    decoder = MiniMaxH3ViTDecoder3d(
-        num_frames=DECODE_LATENT_FRAMES,
-        height=LATENT_TILE,
-        width=LATENT_TILE,
-        in_channels=config["latent_channels"],
-        out_channels=config["out_channels"],
-        num_layers=config["decoder_num_layers"],
-        mesh_device=mesh_device,
-    )
+    decoder = build_visual_decoder(config, mesh_device)
     decoder.load_torch_state_dict(random_decoder_state(config))
     tokens = torch.randn(devices, DECODE_LATENT_FRAMES * LATENT_TILE * LATENT_TILE, config["latent_channels"])
     tokens_device = ttnn.from_torch(
@@ -259,16 +239,7 @@ def test_audio_baselines(mesh_device):
         num_attention_heads=config["num_attention_heads"],
         mesh_device=mesh_device,
     )
-    decoder = MiniMaxH3AudioDecoder(
-        latent_channels=config["latent_channels"],
-        latent_dim=config["latent_dim"],
-        decoder_dim=config["decoder_dim"],
-        decoder_rates=tuple(config["decoder_rates"]),
-        decoder_kernel_sizes=tuple(config["decoder_kernel_sizes"]),
-        resblock_kernel_sizes=tuple(config["resblock_kernel_sizes"]),
-        resblock_dilation_sizes=tuple(tuple(d) for d in config["resblock_dilation_sizes"]),
-        mesh_device=mesh_device,
-    )
+    decoder = build_audio_decoder(config, mesh_device)
     # `strict=False`: the converted dict carries both halves' tensors.
     encoder.load_torch_state_dict(converted, strict=False)
     decoder.load_torch_state_dict(converted, strict=False)

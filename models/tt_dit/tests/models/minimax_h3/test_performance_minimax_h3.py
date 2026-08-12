@@ -64,18 +64,22 @@ from ....pipelines.minimax_h3.packing import (
     video_latent_num_frames,
 )
 from ....utils.tensor import bf16_tensor_2dshard, from_torch
-from ....utils.test import ring_params_req_exact_devices, skip_if_unsupported_num_links
+from ....utils.test import skip_if_unsupported_num_links
+from .common import (
+    GALAXY_4X8_RING,
+    REAL_BLOCK_CONFIG,
+    ROPE_FREQ_DIM,
+    ROPE_THETA,
+    TT_BLOCK_CONFIG,
+    packed_layout,
+    upload_rope,
+)
 
-# Real MiniMax-H3 block config.
-HIDDEN_SIZE = 5376
-NUM_HEADS = 56
-HEAD_DIM = 128
-FFN_DIM = 14336
-TIME_EMBED_DIM = 2688
-NORM_EPS = 1e-5
-QK_NORM_EPS = 1e-5
-ROPE_FREQ_DIM = 16
-ROPE_THETA = 10000.0
+# Real MiniMax-H3 block dims come from `REAL_BLOCK_CONFIG` in `common.py`, shared with the
+# correctness tests; only the ones used outside the constructors are aliased here.
+HIDDEN_SIZE = REAL_BLOCK_CONFIG["hidden_size"]
+HEAD_DIM = REAL_BLOCK_CONFIG["attention_head_dim"]
+TIME_EMBED_DIM = REAL_BLOCK_CONFIG["time_embed_dim"]
 
 PATCH_SIZE = (1, 2, 2)
 # prod(spatial_downsample_factors) from the video VAE config: [2, 2, 2, 2, 1, 1].
@@ -84,8 +88,6 @@ VAE_SPATIAL_DOWNSAMPLE = 16
 NUM_TEXT_TOKENS = 512
 # 768P at 16:9. resolve_canvas_size caps the area at 768 * 1344, so this is the widest 768P canvas.
 ASPECT = (16, 9)
-
-TAG_VIDEO, TAG_TEXT, TAG_AUDIO = 0, 1, 2
 
 
 def _packed_sizes(duration_s: float) -> dict:
@@ -117,61 +119,7 @@ def _packed_sizes(duration_s: float) -> dict:
     }
 
 
-def _packed_metadata(sizes: dict, padded_len: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """`(position_ids, token_tags, timestep_indices)` for the padded packed sequence.
-
-    Same layout as the correctness test: text, then audio, then video, with the first video frame at
-    timestep 0 (clean conditioning) and everything else at timestep 1. The values do not affect
-    device timing, but keeping them realistic avoids degenerate index patterns.
-    """
-    n_text, n_audio, n_video = sizes["num_text"], sizes["num_audio"], sizes["num_video"]
-    frame = sizes["grid_h"] * sizes["grid_w"]
-
-    def clock(n: int) -> torch.Tensor:
-        return torch.stack([torch.arange(n), torch.zeros(n, dtype=torch.long), torch.zeros(n, dtype=torch.long)], -1)
-
-    vt, vh, vw = torch.meshgrid(
-        torch.arange(sizes["latent_frames"]),
-        torch.arange(sizes["grid_h"]),
-        torch.arange(sizes["grid_w"]),
-        indexing="ij",
-    )
-    position_ids = torch.cat(
-        [clock(n_text), clock(n_audio), torch.stack([vt.reshape(-1), vh.reshape(-1), vw.reshape(-1)], -1)]
-    )
-    tags = torch.cat(
-        [
-            torch.full((n_text,), TAG_TEXT, dtype=torch.long),
-            torch.full((n_audio,), TAG_AUDIO, dtype=torch.long),
-            torch.full((n_video,), TAG_VIDEO, dtype=torch.long),
-        ]
-    )
-    timestep_indices = torch.cat(
-        [
-            torch.zeros(n_text, dtype=torch.long),
-            torch.ones(n_audio, dtype=torch.long),
-            torch.zeros(frame, dtype=torch.long),
-            torch.ones(n_video - frame, dtype=torch.long),
-        ]
-    )
-
-    pad = padded_len - position_ids.shape[0]
-    if pad:
-        position_ids = torch.cat([position_ids, torch.zeros((pad, 3), dtype=position_ids.dtype)])
-        tags = torch.cat([tags, torch.zeros(pad, dtype=tags.dtype)])
-        timestep_indices = torch.cat([timestep_indices, torch.zeros(pad, dtype=timestep_indices.dtype)])
-    return position_ids, tags, timestep_indices
-
-
-@pytest.mark.parametrize(
-    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
-    [
-        pytest.param(
-            (4, 8), 1, 0, 2, ring_params_req_exact_devices, ttnn.Topology.Ring, False, id="4x8sp1tp0nl2_ring_is_fsdp0"
-        ),
-    ],
-    indirect=["mesh_device", "device_params"],
-)
+@GALAXY_4X8_RING
 @pytest.mark.parametrize(
     "duration_s",
     [
@@ -207,27 +155,23 @@ def test_minimax_h3_transformer_block_perf(
     )
 
     num_timesteps = 2
-    position_ids, tags, timestep_indices = _packed_metadata(sizes, padded_len)
+    # Same layout as the correctness test: text, then audio, then video, with the first video frame
+    # at timestep 0 (clean conditioning) and everything else at timestep 1. The values do not affect
+    # device timing, but keeping them realistic avoids degenerate index patterns.
+    position_ids, tags, timestep_indices = packed_layout(
+        sizes["num_text"], sizes["num_audio"], sizes["num_video"], (sizes["grid_h"], sizes["grid_w"]), padded_len
+    )
     adaln_indices = timestep_indices * MINIMAX_H3_MODALITY_NUM + tags.clamp(min=0)
 
     # The reference block is built only to source a correctly-keyed random state dict; its forward is
     # never called. Weight *values* do not affect device timing.
-    torch_block = TorchMiniMaxH3Block(
-        hidden_size=HIDDEN_SIZE,
-        num_attention_heads=NUM_HEADS,
-        attention_head_dim=HEAD_DIM,
-        ffn_dim=FFN_DIM,
-        time_embed_dim=TIME_EMBED_DIM,
-        norm_eps=NORM_EPS,
-        qk_norm_eps=QK_NORM_EPS,
-    ).to(torch.float32)
+    torch_block = TorchMiniMaxH3Block(**REAL_BLOCK_CONFIG).to(torch.float32)
 
     rope = MiniMaxH3RotaryPosEmbed(rope_freq_dim=ROPE_FREQ_DIM, rope_theta=ROPE_THETA)
     with torch.no_grad():
         rope_cos, rope_sin = rope(position_ids)
     # The fused RoPE consumes head_dim-wide tables in the interleaved layout.
     rope_cos, rope_sin = prepare_rope_tables(rope_cos, rope_sin, HEAD_DIM)
-    rotary_dim = rope_cos.shape[-1]
 
     ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
     parallel_config = DiTParallelConfig(
@@ -237,14 +181,8 @@ def test_minimax_h3_transformer_block_perf(
     )
 
     tt_block = MiniMaxH3TransformerBlock(
-        hidden_size=HIDDEN_SIZE,
-        num_heads=NUM_HEADS,
-        head_dim=HEAD_DIM,
+        **TT_BLOCK_CONFIG,
         rotary_dim=2 * 3 * ROPE_FREQ_DIM,
-        ffn_dim=FFN_DIM,
-        time_embed_dim=TIME_EMBED_DIM,
-        norm_eps=NORM_EPS,
-        qk_norm_eps=QK_NORM_EPS,
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
@@ -266,18 +204,7 @@ def test_minimax_h3_transformer_block_perf(
         layout=ttnn.Layout.ROW_MAJOR,
         mesh_axes=[..., None, sp_axis],
     )
-    tt_rope_cos = from_torch(
-        rope_cos.reshape(1, 1, padded_len, rotary_dim),
-        device=mesh_device,
-        dtype=ttnn.float32,
-        mesh_axes=[..., sp_axis, None],
-    )
-    tt_rope_sin = from_torch(
-        rope_sin.reshape(1, 1, padded_len, rotary_dim),
-        device=mesh_device,
-        dtype=ttnn.float32,
-        mesh_axes=[..., sp_axis, None],
-    )
+    tt_rope_cos, tt_rope_sin = upload_rope(rope_cos, rope_sin, mesh_device=mesh_device, sp_axis=sp_axis)
 
     def run_block() -> ttnn.Tensor:
         out = tt_block(

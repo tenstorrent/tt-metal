@@ -28,8 +28,6 @@ helper) and the halo isolation gate ``test_neighbor_pad_t_minimax_h3.py`` from g
 from __future__ import annotations
 
 import copy
-import json
-import math
 import os
 import time
 
@@ -54,6 +52,7 @@ from ....models.audio_vae.minimax_h3.convert_minimax_h3_audio import (
 )
 from ....models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
 from ....utils.check import assert_quality
+from .common import build_audio_decoder, load_config, psnr, weights_subdir
 
 # The vocoder needs extra L1 scratch, as the LTX audio tests do.
 SINGLE_DEVICE = [pytest.param((1, 1), {"l1_small_size": 65536}, id="single_device")]
@@ -92,26 +91,15 @@ SAMPLING_RATE = 32000
 PRODUCTION_LATENT_FRAMES = [pytest.param(207, id="5s")]
 
 
-def _weights_dir() -> str | None:
-    base = os.environ.get("MINIMAX_H3_DIFFUSERS_DIR", "/data/cglagovich/MiniMax-H3-diffusers")
-    candidate = os.path.join(base, "audio_vae")
-    return candidate if os.path.isfile(os.path.join(candidate, "config.json")) else None
-
-
-def _config(weights_dir: str) -> dict:
-    raw = json.loads(open(os.path.join(weights_dir, "config.json")).read())
-    return {k: v for k, v in raw.items() if not k.startswith("_")}
-
-
 def _build_reference(load_weights: bool = True):
     """The reference audio VAE, with weight norm still attached (the converter removes it)."""
-    weights_dir = _weights_dir()
+    weights_dir = weights_subdir("audio_vae")
     if weights_dir is None:
         pytest.skip("MiniMax-H3 audio_vae not found; set MINIMAX_H3_DIFFUSERS_DIR")
     pytest.importorskip("diffusers", reason="pinned diffusers reference not installed")
     from diffusers import AutoencoderKLMiniMaxH3Audio
 
-    config = _config(weights_dir)
+    config = load_config(weights_dir)
     reference = AutoencoderKLMiniMaxH3Audio(**config).eval()
     if load_weights:
         from safetensors.torch import load_file
@@ -120,15 +108,18 @@ def _build_reference(load_weights: bool = True):
     return reference, config
 
 
-def _psnr(reference: torch.Tensor, test: torch.Tensor) -> float:
-    """Peak relative to the reference's own dynamic range, as ``test_audio_ltx.py`` does."""
-    mse = torch.mean((reference.float() - test.float()) ** 2).item()
-    if mse == 0.0:
-        return float("inf")
-    peak = reference.abs().max().item()
-    if peak == 0.0:
-        return float("inf")
-    return 20.0 * math.log10(peak) - 10.0 * math.log10(mse)
+def _golden_latents(reference, num_latent_frames: int):
+    """``(waveform, latents, expected_decode)`` for one production-duration stereo clip.
+
+    The latent is drawn from the reference *encoder* rather than from ``randn``: BigVGAN's
+    behaviour on out-of-distribution latents is not representative of what it will see.
+    """
+    waveform = torch.randn(2, 1, num_latent_frames * HOP_LENGTH) * 0.1
+    with torch.no_grad():
+        posterior = reference.encode(waveform).latent_dist
+        latents = posterior.mode()[..., :num_latent_frames]
+        expected = reference.decode(latents).sample
+    return waveform, latents, expected
 
 
 def _log_mel_distance(a: torch.Tensor, b: torch.Tensor, *, n_fft: int = 1024, hop: int = 256) -> float:
@@ -147,16 +138,7 @@ def _log_mel_distance(a: torch.Tensor, b: torch.Tensor, *, n_fft: int = 1024, ho
 
 
 def _tt_decoder(config: dict, mesh_device) -> MiniMaxH3AudioDecoder:
-    return MiniMaxH3AudioDecoder(
-        latent_channels=config["latent_channels"],
-        latent_dim=config["latent_dim"],
-        decoder_dim=config["decoder_dim"],
-        decoder_rates=tuple(config["decoder_rates"]),
-        decoder_kernel_sizes=tuple(config["decoder_kernel_sizes"]),
-        resblock_kernel_sizes=tuple(config["resblock_kernel_sizes"]),
-        resblock_dilation_sizes=tuple(tuple(d) for d in config["resblock_dilation_sizes"]),
-        mesh_device=mesh_device,
-    )
+    return build_audio_decoder(config, mesh_device)
 
 
 @pytest.mark.parametrize("num_latent_frames", PRODUCTION_LATENT_FRAMES)
@@ -173,12 +155,8 @@ def test_decode(mesh_device, num_latent_frames):
     reference, config = _build_reference()
     torch.manual_seed(1)
 
-    num_samples = num_latent_frames * HOP_LENGTH
-    waveform = torch.randn(2, 1, num_samples) * 0.1
+    _, latents, expected = _golden_latents(reference, num_latent_frames)
     with torch.no_grad():
-        posterior = reference.encode(waveform).latent_dist
-        latents = posterior.mode()[..., :num_latent_frames]
-        expected = reference.decode(latents).sample
         expected_proj = reference.dec_in_proj(latents)
 
     tt_decoder = _tt_decoder(config, mesh_device)
@@ -193,9 +171,9 @@ def test_decode(mesh_device, num_latent_frames):
     assert actual.shape == expected.shape, f"shape {tuple(actual.shape)} != reference {tuple(expected.shape)}"
     assert_quality(expected, actual, pcc=0.99, relative_rmse=AUDIO_RELATIVE_RMSE)
 
-    psnr = _psnr(expected, actual)
+    psnr_db = psnr(expected, actual)
     mel_distance = _log_mel_distance(expected, actual)
-    assert psnr >= 28.0, f"decode PSNR {psnr:.2f} dB < 28 dB"
+    assert psnr_db >= 28.0, f"decode PSNR {psnr_db:.2f} dB < 28 dB"
     assert mel_distance <= 5.0, f"log-spectrogram distance {mel_distance:.3f} > 5.0"
 
     # The two stereo channels share one mono decoder, so they must track their own latents
@@ -237,11 +215,7 @@ def test_decode_accurate_mode(mesh_device, monkeypatch):
     torch.manual_seed(1)
 
     num_latent_frames = 207  # 5 s, as in test_decode
-    waveform = torch.randn(2, 1, num_latent_frames * HOP_LENGTH) * 0.1
-    with torch.no_grad():
-        posterior = reference.encode(waveform).latent_dist
-        latents = posterior.mode()[..., :num_latent_frames]
-        expected = reference.decode(latents).sample
+    _, latents, expected = _golden_latents(reference, num_latent_frames)
 
     tt_decoder = _tt_decoder(config, mesh_device)
     # The constructor resolved the env helpers once; confirm the explicit kwargs reached the leaves.
@@ -256,8 +230,8 @@ def test_decode_accurate_mode(mesh_device, monkeypatch):
     assert actual.shape == expected.shape, f"shape {tuple(actual.shape)} != reference {tuple(expected.shape)}"
     # Measured 0.0045 / 99.9990 % / 67.5 dB; rel_rmse carries ~1.3x margin, PSNR is floored at 60 dB.
     assert_quality(expected, actual, pcc=0.9999, relative_rmse=0.006)
-    psnr = _psnr(expected, actual)
-    assert psnr >= 60.0, f"accurate-mode PSNR {psnr:.2f} dB < 60 dB"
+    psnr_db = psnr(expected, actual)
+    assert psnr_db >= 60.0, f"accurate-mode PSNR {psnr_db:.2f} dB < 60 dB"
 
 
 @pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
@@ -378,10 +352,7 @@ def test_roundtrip(mesh_device):
     torch.manual_seed(3)
     num_latent_frames = 207
 
-    waveform = torch.randn(2, 1, num_latent_frames * HOP_LENGTH) * 0.1
-    with torch.no_grad():
-        latents = reference.encode(waveform).latent_dist.mode()
-        expected = reference.decode(latents).sample
+    waveform, _, expected = _golden_latents(reference, num_latent_frames)
 
     tt_encoder = _tt_encoder(config, mesh_device)
     tt_decoder = _tt_decoder(config, mesh_device)
@@ -393,8 +364,8 @@ def test_roundtrip(mesh_device):
     actual = tt_decoder(mean)
 
     assert actual.shape == expected.shape, f"shape {tuple(actual.shape)} != {tuple(expected.shape)}"
-    psnr = _psnr(expected, actual)
-    assert psnr >= 28.0, f"round-trip PSNR {psnr:.2f} dB < 28 dB"
+    psnr_db = psnr(expected, actual)
+    assert psnr_db >= 28.0, f"round-trip PSNR {psnr_db:.2f} dB < 28 dB"
     assert _log_mel_distance(expected, actual) <= 5.0, "round-trip spectrum drifted"
 
 
@@ -486,18 +457,14 @@ def test_real_checkpoint_fusion_matches_reference_module():
     One checkpoint load carries both the key-accounting asserts and the value comparison
     against torch's own arithmetic.
     """
-    weights_dir = _weights_dir()
+    weights_dir = weights_subdir("audio_vae")
     if weights_dir is None:
         pytest.skip("MiniMax-H3 audio_vae not found; set MINIMAX_H3_DIFFUSERS_DIR")
     pytest.importorskip("diffusers", reason="pinned diffusers reference not installed")
     from diffusers import AutoencoderKLMiniMaxH3Audio
     from safetensors.torch import load_file
 
-    config = {
-        k: v
-        for k, v in json.loads(open(os.path.join(weights_dir, "config.json")).read()).items()
-        if not k.startswith("_")
-    }
+    config = load_config(weights_dir)
     reference = AutoencoderKLMiniMaxH3Audio(**config)
     state = load_file(os.path.join(weights_dir, "diffusion_pytorch_model.safetensors"))
     reference.load_state_dict(state)
@@ -573,32 +540,11 @@ def _best(fn) -> float:
 
 @pytest.mark.parametrize(("mesh_device", "device_params"), TRACED, indirect=["mesh_device", "device_params"])
 def test_audio_decode_traced(mesh_device):
-    weights_dir = _weights_dir()
-    if weights_dir is None:
-        pytest.skip("MiniMax-H3 audio_vae not found; set MINIMAX_H3_DIFFUSERS_DIR")
-    pytest.importorskip("diffusers", reason="pinned diffusers reference not installed")
-    from diffusers import AutoencoderKLMiniMaxH3Audio
-    from loguru import logger
-    from safetensors.torch import load_file
-
-    from ....models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
-
-    config = _config(weights_dir)
-    reference = AutoencoderKLMiniMaxH3Audio(**config).eval()
-    reference.load_state_dict(load_file(os.path.join(weights_dir, "diffusion_pytorch_model.safetensors")))
+    reference, config = _build_reference()
     converted = convert_minimax_h3_audio_state_dict(dict(reference.state_dict()))
 
     torch.manual_seed(2)
-    decoder = MiniMaxH3AudioDecoder(
-        latent_channels=config["latent_channels"],
-        latent_dim=config["latent_dim"],
-        decoder_dim=config["decoder_dim"],
-        decoder_rates=tuple(config["decoder_rates"]),
-        decoder_kernel_sizes=tuple(config["decoder_kernel_sizes"]),
-        resblock_kernel_sizes=tuple(config["resblock_kernel_sizes"]),
-        resblock_dilation_sizes=tuple(tuple(d) for d in config["resblock_dilation_sizes"]),
-        mesh_device=mesh_device,
-    )
+    decoder = _tt_decoder(config, mesh_device)
     decoder.load_torch_state_dict(converted, strict=False)
 
     latents = torch.randn(2, config["latent_channels"], NUM_LATENT_FRAMES) * 0.1
@@ -616,8 +562,8 @@ def test_audio_decode_traced(mesh_device):
     assert tracers, "traced=True captured no trace; the PSNR below would be meaningless"
     assert plain.abs().max() > 1e-6, "decoder produced all-zero output; PSNR would be vacuous"
 
-    psnr = _psnr(plain, traced)
-    logger.info(f"traced vs untraced PSNR: {psnr:.2f} dB ({len(tracers)} trace(s) captured)")
+    psnr_db = psnr(plain, traced)
+    logger.info(f"traced vs untraced PSNR: {psnr_db:.2f} dB ({len(tracers)} trace(s) captured)")
 
     untraced_s = _best(lambda: decoder(latents))
     traced_s = _best(lambda: decoder(latents, traced=True))
@@ -627,4 +573,4 @@ def test_audio_decode_traced(mesh_device):
     )
     decoder.release_trace()
 
-    assert psnr > 60.0, f"traced output diverges from untraced: PSNR {psnr:.2f} dB"
+    assert psnr_db > 60.0, f"traced output diverges from untraced: PSNR {psnr_db:.2f} dB"

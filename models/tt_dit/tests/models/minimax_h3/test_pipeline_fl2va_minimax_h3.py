@@ -64,23 +64,24 @@ import torch
 from loguru import logger
 from PIL import Image
 
-import ttnn
-
 from ....pipelines.minimax_h3.packing import align_num_frames, prepare_keyframe_image
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
+from ....utils.test import ring_params_req_exact_devices
 from ..wan2_2.common import check_output_sanity
 from .common import create_fractal_image
 from .common_av import (
+    CALIBRATED_FOX_PROMPT,
+    artifact_dir,
     check_audio_sanity,
     check_av_sync,
-    check_keyframe_anchor,
     check_spatial_seams,
-    check_tile_boundary_gradient,
-    clip_prompt_alignment,
-    decoded_frames,
+    check_written_file,
+    gate_clip,
     log_spectral_flatness,
-    probe_streams,
-    temporal_seam_score,
+    log_timing_table,
+    run_warm_generation,
+    to_uint8_frames,
+    weights_dir,
     write_artifacts,
 )
 
@@ -90,30 +91,22 @@ NUM_FRAMES = 124
 NUM_INFERENCE_STEPS = 50
 SEED = 0
 
-# The prompt the t2va tier-6 thresholds were calibrated against, kept verbatim for the reason in the
-# module docstring.
-PROMPT = (
-    "A red fox trots across a snowy field at dawn, its breath visible in the cold air. "
-    "The low sun throws long blue shadows behind it, and loose snow lifts from each footfall."
-)
+# The prompt the t2va tier-6 thresholds were calibrated against. Imported rather than copied, so
+# it stays identical to t2va's by construction (see the module docstring on why it must).
+PROMPT = CALIBRATED_FOX_PROMPT
 
-WEIGHTS_ENV = "MINIMAX_H3_DIFFUSERS_DIR"
-DEFAULT_WEIGHTS = "/data/cglagovich/MiniMax-H3-diffusers"
 ARTIFACT_ENV = "MINIMAX_H3_ARTIFACT_DIR"
 # Where the *calibrated t2va* artifact lives, which is where the gated keyframe comes from. Separate
 # from ARTIFACT_ENV: that one says where fl2va *writes*, and pointing it at a fresh
 # directory must not silently turn the keyframe source into a missing file.
 T2VA_ARTIFACT_ENV = "MINIMAX_H3_T2VA_ARTIFACT_DIR"
 
-# Ring collectives, so the fabric must be FABRIC_1D_RING -- same as the t2va gate.
+# Ring collectives, so the fabric must be FABRIC_1D_RING -- taken from the shared helper, same as
+# the t2va gate.
 MESH_4X8 = [
     pytest.param(
         (4, 8),
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-            "require_exact_physical_num_devices": True,
-            "l1_small_size": 65536,
-        },
+        {**ring_params_req_exact_devices, "l1_small_size": 65536},
         id="4x8",
     )
 ]
@@ -142,17 +135,111 @@ CLIP_THRESHOLD = 33.0
 EXPECTED_TOTAL_S = 400.0
 
 
-def _weights_dir() -> Path:
-    directory = Path(os.environ.get(WEIGHTS_ENV, DEFAULT_WEIGHTS))
-    if not directory.is_dir():
-        pytest.skip(f"no MiniMax-H3 snapshot at {directory}; set {WEIGHTS_ENV}")
-    return directory
+# ------------------------------------------------------------------ checkers only this gate uses
 
 
-def _artifact_dir() -> Path:
-    directory = Path(os.environ.get(ARTIFACT_ENV) or Path.home() / "h3_t2va_artifacts")
-    directory.mkdir(parents=True, exist_ok=True)
-    return directory
+def check_keyframe_anchor(frames, keyframe, *, index, stretch, width, height, pcc_floor=0.3):
+    """A decoded frame must correlate with the keyframe that anchored it.
+
+    The `fl2va` analogue of `wan2_2.common.check_first_frame_matches_seed`, and it exists separately
+    because that helper resizes the seed with a plain `PIL.resize`, i.e. a **stretch**. That is right
+    for MiniMax-H3's *first* keyframe and wrong for any other: `prepare_keyframe_image` stretches only
+    the geometry anchor (the first keyframe given) and **cover-crops** every later one -- scale by
+    `max(W/w, H/h)`, then centre-crop. Comparing a cover-cropped keyframe against a stretched
+    reference would fail on a correct pipeline.
+
+    So the canvas rule is applied here rather than assumed, by calling `prepare_keyframe_image`
+    itself. That also means this helper cannot drift from the pipeline's own preparation.
+
+    This is a real correctness signal rather than a formality: the anchors are noised only to
+    `t = 0.999`, so `0.999 * x0 + 0.001 * noise` is essentially the clean VAE latent of the keyframe,
+    and a decoded anchor frame that does not resemble it means the conditioning path is broken --
+    wrong rows written, anchors overwritten during denoising, or the conditioning block placed at the
+    wrong sequence position.
+
+    Args:
+        frames: decoded video, `(F, H, W, 3)`, batch dim removed.
+        keyframe: the PIL keyframe *as supplied to the pipeline*, before preparation.
+        index: which decoded frame to compare -- `0` for a `first` anchor, `-1` for a `last` one.
+        stretch: how the pipeline prepared this keyframe. `True` for the first keyframe given.
+        pcc_floor: minimum Pearson correlation. Provisional; tighten once real values are recorded.
+    """
+    frame = frames[index]
+    if isinstance(frame, torch.Tensor):
+        frame = frame.cpu().numpy()
+    frame = np.asarray(frame).astype(np.float64)
+
+    prepared = prepare_keyframe_image(keyframe.convert("RGB"), height, width, stretch)
+    expected = np.asarray(prepared).astype(np.float64)
+    assert frame.shape == expected.shape, f"frame {index} shape {frame.shape} != keyframe {expected.shape}"
+
+    pcc = float(np.corrcoef(frame.ravel(), expected.ravel())[0, 1])
+    label = "first" if index == 0 else "last"
+    logger.info(f"fl2va {label}-keyframe anchor: decoded frame {index} vs keyframe PCC = {pcc:.4f}")
+    assert pcc > pcc_floor, (
+        f"decoded frame {index} barely correlates with the {label} keyframe (PCC={pcc:.3f}); "
+        "the fl2va conditioning path is likely broken"
+    )
+    return pcc
+
+
+def check_tile_boundary_gradient(frames, *, vertical_boundaries, horizontal_boundaries, max_ratio=3.0):
+    """One-pixel gradient at each tile boundary against its own neighbourhood.
+
+    The sensitive complement to :func:`common_av.check_spatial_seams`, which compares *block-mean*
+    activity either side of a boundary and therefore cannot see a seam narrower than its blocks.
+    Measured on a clean production frame: `check_spatial_seams` reports 1.03 while every one of the
+    six vertical boundaries carries a per-column gradient 1.2-1.5x its neighbourhood. Both numbers
+    are correct; they measure different things, and only this one would notice a one-pixel
+    discontinuity from the tiled VAE decode.
+
+    A control matters here and is built in: non-boundary columns are measured the same way and must sit
+    near 1.0, otherwise the statistic is picking up ordinary image structure rather than a seam.
+
+    The bar is loose (3.0) because a ratio of 1.2-1.5 is the *known good* state, not a
+    defect: linear cross-fading two independently decoded tiles leaves a derivative discontinuity at the
+    ends of the blend, and at production geometry that measures ~0.3/255 of luma step -- 0.12 % of full
+    scale, invisible at 8x zoom, and identical in `t2va`. This gate exists to catch that becoming
+    *visible*, which is a several-fold change, not to police the floor.
+    """
+    frames = np.asarray(frames)
+    luma = frames.astype(np.float64).mean(-1) if frames.ndim == 4 else frames.astype(np.float64)
+    gx = np.abs(np.diff(luma, axis=2)).mean(axis=(0, 1))
+    gy = np.abs(np.diff(luma, axis=1)).mean(axis=(0, 2))
+
+    def ratio(profile, index):
+        near = np.concatenate([profile[index - 12 : index - 3], profile[index + 3 : index + 12]])
+        return float(profile[index - 1] / max(float(np.median(near)), 1e-9))
+
+    results = {}
+    for name, profile, boundaries in (("vertical", gx, vertical_boundaries), ("horizontal", gy, horizontal_boundaries)):
+        ratios = {int(b): ratio(profile, int(b)) for b in boundaries if 12 < int(b) < len(profile) - 12}
+        results[name] = ratios
+        if ratios:
+            logger.info(
+                f"{name} tile-boundary gradient ratios (1.0 = no seam): "
+                + ", ".join(f"x={b}:{r:.3f}" if name == "vertical" else f"y={b}:{r:.3f}" for b, r in ratios.items())
+            )
+
+    # Control: columns that are not boundaries must read ~1.0, or the measurement is meaningless.
+    generator = np.random.default_rng(0)
+    candidates = generator.integers(30, len(gx) - 30, 24)
+    control = [c for c in candidates if all(abs(int(c) - int(b)) > 16 for b in vertical_boundaries)][:12]
+    control_ratios = [ratio(gx, int(c)) for c in control]
+    mean_control = float(np.mean(control_ratios))
+    logger.info(f"control non-boundary columns: mean ratio {mean_control:.3f}, max {max(control_ratios):.3f}")
+    assert mean_control < 1.15, (
+        f"control columns average {mean_control:.3f}; this statistic is tracking image structure rather "
+        "than tile boundaries, so its boundary numbers mean nothing"
+    )
+
+    worst = max((r, f"{n} {b}") for n, rs in results.items() for b, r in rs.items())
+    assert worst[0] < max_ratio, (
+        f"tile-boundary gradient at {worst[1]} is {worst[0]:.2f}x its neighbourhood (control "
+        f"{mean_control:.2f}); a visible seam. See the artifact rubric"
+    )
+    results["control"] = mean_control
+    return results
 
 
 def _gated_keyframe() -> Image.Image:
@@ -200,31 +287,21 @@ def test_fl2va_end_to_end(mesh_device, reset_seeds):
     image = keyframe
     last_image = keyframe
 
-    pipeline = MiniMaxH3Pipeline.create_pipeline(mesh_device=mesh_device, weights_dir=_weights_dir())
+    pipeline = MiniMaxH3Pipeline.create_pipeline(mesh_device=mesh_device, weights_dir=weights_dir())
 
-    # ---- fully-warm latency, `pipelines/ltx`'s method. Two things have to be right or the
-    # number means nothing:
+    # ---- fully-warm latency, `pipelines/ltx`'s method, via `run_warm_generation`. Two things have
+    # to be right or the number means nothing:
     # 1. The warmup must be fl2va-shaped, keyframes included: every program in the 50-block stack
     #    is keyed on the padded packed length, so a t2va warmup warms nothing for fl2va.
-    # 2. The warmup must run at the same prompt length -- asserted below rather than assumed. For
-    #    t2va a one-token "warmup" prompt works purely by coincidence (1 and 39 tokens both round up
-    #    to 37888); with two ~1008-row vision blocks it does not.
+    # 2. The warmup must run at the same prompt length -- asserted by the helper rather than
+    #    assumed. For t2va a one-token "warmup" prompt works purely by coincidence (1 and 39 tokens
+    #    both round up to 37888); with two ~1008-row vision blocks it does not.
     # The measured run pays the full device conditioner encode -- vision tower included -- inside the
     # timed Encoder row: there is no prompt-embedding cache, so that row is a genuine measurement.
     # No reference number is recorded for the fl2va encode (t2va's text-only encode measures ~2.8 s;
-    # the vision tower adds to that here), and the warmup above already compiled the encoder path.
-    pipeline.warmup(
-        prompt=PROMPT,
-        image=image,
-        last_image=last_image,
-        num_frames=NUM_FRAMES,
-        height=HEIGHT,
-        width=WIDTH,
-        num_inference_steps=NUM_INFERENCE_STEPS,
-    )
-    warm_padded_len = pipeline.last_padded_len
-
-    output = pipeline(
+    # the vision tower adds to that here), and the warmup already compiled the encoder path.
+    output = run_warm_generation(
+        pipeline,
         PROMPT,
         image=image,
         last_image=last_image,
@@ -235,42 +312,31 @@ def test_fl2va_end_to_end(mesh_device, reset_seeds):
         seed=SEED,
     )
 
-    assert pipeline.last_padded_len == warm_padded_len, (
-        f"warmup ran at padded_len {warm_padded_len} but the measured call ran at "
-        f"{pipeline.last_padded_len}; this number is not warm"
-    )
-
     expected_frames = align_num_frames(NUM_FRAMES)
     logger.info(
         f"fl2va[{case}] padded_len={pipeline.last_padded_len} "
         f"video={tuple(output.video.shape)} audio={tuple(output.audio.shape)}"
     )
 
-    rows = pipeline.last_timings
-    total = sum(seconds for _, seconds in rows)
     num_forwards = NUM_INFERENCE_STEPS - 1
-    logger.info(
-        f"MEASUREMENT fl2va fully warm | mesh 4x8 Blackhole, TP=4 axis 0 / SP=8 axis 1, ring, 2 links "
-        f"| {WIDTH}x{HEIGHT}, {expected_frames} frames @ {output.fps} fps "
-        f"({expected_frames / output.fps:.2f} s), {num_forwards} forwards, first+last anchors, "
-        f"padded_len {warm_padded_len} "
-        f"| warm window: one full warmup generation at this shape, prepares and export excluded"
+    video_seconds = expected_frames / output.fps
+    # No tuned target yet (bringup at current perf); EXPECTED_TOTAL_S is a loose
+    # did-something-collapse bar.
+    log_timing_table(
+        pipeline,
+        "fl2va",
+        num_forwards=num_forwards,
+        video_seconds=video_seconds,
+        expected_total_s=EXPECTED_TOTAL_S,
+        extra=(
+            f" | {WIDTH}x{HEIGHT}, {expected_frames} frames @ {output.fps} fps "
+            f"({video_seconds:.2f} s), {num_forwards} forwards, first+last anchors, "
+            f"padded_len {pipeline.last_padded_len}"
+        ),
     )
-    for label, seconds in rows:
-        logger.info(f"  {label:<18} {seconds:8.1f} s  ({100 * seconds / total:4.1f} %)")
-    logger.info(f"  {'Total (compute)':<18} {total:8.1f} s")
-    denoise = dict(rows).get("Denoise")
-    if denoise:
-        logger.info(
-            f"  per forward        {denoise / num_forwards * 1000:8.1f} ms  "
-            f"({num_forwards} forwards over {denoise:.1f} s)"
-        )
-    logger.info(f"  realtime factor    {total / (expected_frames / output.fps):8.1f} x  (compute / video seconds)")
-    # No tuned target yet (bringup at current perf); a loose did-something-collapse bar.
-    assert total < EXPECTED_TOTAL_S, f"fully-warm total {total:.1f} s exceeds the {EXPECTED_TOTAL_S:.0f} s floor bar"
     assert output.video.shape[2] == expected_frames, f"{output.video.shape[2]} frames, expected {expected_frames}"
 
-    frames = (output.video[0].permute(1, 2, 3, 0).clamp(0, 1) * 255).round().to(torch.uint8).numpy()
+    frames = to_uint8_frames(output)
 
     # ---- tier 4: reference-free sanity, shared with t2va ----
     check_output_sanity(frames, num_frames=expected_frames, height=HEIGHT, width=WIDTH)
@@ -307,32 +373,10 @@ def test_fl2va_end_to_end(mesh_device, reset_seeds):
         )
 
     # ---- tier 5: the written file, not just the tensor ----
-    artifacts = _artifact_dir()
+    artifacts = artifact_dir(ARTIFACT_ENV, "h3_t2va_artifacts")
     paths = write_artifacts(frames, output.audio.cpu().numpy(), output.sampling_rate, artifacts, stem=f"fl2va_{case}")
+    check_written_file(paths, expected_frames)
     if "mp4" in paths:
-        streams = probe_streams(paths["mp4"])
-        if streams:
-            assert "video" in streams and "audio" in streams, f"muxed file is missing a stream: {list(streams)}"
-            durations = {k: float(v["duration"]) for k, v in streams.items() if v.get("duration")}
-            if {"video", "audio"} <= set(durations):
-                skew = durations["audio"] - durations["video"]
-                # AAC pads to a frame boundary, so a little more slack than the tensor-level check.
-                assert abs(skew) < 0.15, f"muxed A/V skew {skew:+.3f} s"
-                logger.info(f"muxed A/V skew: {skew:+.4f} s")
-
-        decoded = decoded_frames(paths["mp4"], count=1)
-        if decoded.size:
-            assert (
-                decoded.shape[0] >= expected_frames - 1
-            ), f"the written mp4 decodes to {decoded.shape[0]} frames, expected ~{expected_frames}"
-            seam = temporal_seam_score(decoded, period=17)
-            logger.info(f"temporal seam score at the 17-frame chunk period: {seam:.3f} (1.0 = no seam)")
-            if np.isfinite(seam):
-                assert seam < 3.0, (
-                    f"inter-frame delta at chunk boundaries is {seam:.2f}x the delta elsewhere; "
-                    "suspect temporal stitching (see the artifact rubric)"
-                )
-
         # Frames for the artifact rubric. Statistics average away exactly the two defects that matter
         # -- a seam and a flicker -- so the reminder below is not rhetorical.
         for index in (0, 17, 62, expected_frames - 1):
@@ -344,16 +388,7 @@ def test_fl2va_end_to_end(mesh_device, reset_seeds):
     # That the keyframe is frame 0 of the calibrated t2va generation is what makes this legitimate --
     # the recorded counterexample is a night scene that scored imaging_quality 0.4884 against a
     # 0.64 bar while being visually perfect, purely because the content moved.
-    if os.environ.get("RUN_CLIP", "1") == "1":
-        alignment = clip_prompt_alignment(frames, PROMPT)
-        logger.info(
-            f"fl2va[{case}] CLIP prompt alignment: mean={alignment['mean']:.2f} "
-            f"min={alignment['min']:.2f} max={alignment['max']:.2f} (bar {CLIP_THRESHOLD})"
-        )
-        assert alignment["mean"] > CLIP_THRESHOLD, (
-            f"CLIP prompt alignment {alignment['mean']:.2f} is below {CLIP_THRESHOLD}; the video may not "
-            "follow the prompt"
-        )
+    gate_clip(frames, PROMPT, CLIP_THRESHOLD, f"fl2va[{case}]")
 
     logger.info(
         "REMINDER: read the artifact rubric against these frames -- seams and flicker are what every "
@@ -437,7 +472,7 @@ def test_fl2va_follows_the_keyframe(mesh_device, reset_seeds):
     keyframe leaves the prompt to win outright.
     """
     fractal = create_fractal_image(WIDTH, HEIGHT)
-    pipeline = MiniMaxH3Pipeline.create_pipeline(mesh_device=mesh_device, weights_dir=_weights_dir())
+    pipeline = MiniMaxH3Pipeline.create_pipeline(mesh_device=mesh_device, weights_dir=weights_dir())
     output = pipeline(
         PROMPT,
         image=fractal,
@@ -447,7 +482,7 @@ def test_fl2va_follows_the_keyframe(mesh_device, reset_seeds):
         num_inference_steps=NUM_INFERENCE_STEPS,
         seed=SEED,
     )
-    frames = (output.video[0].permute(1, 2, 3, 0).clamp(0, 1) * 255).round().to(torch.uint8).numpy()
+    frames = to_uint8_frames(output)
 
     def pcc(a, b):
         a = np.asarray(a, dtype=np.float64).ravel()
@@ -463,8 +498,9 @@ def test_fl2va_follows_the_keyframe(mesh_device, reset_seeds):
         f"fl2va keyframe-drives-generation: frame 0 vs fractal keyframe {to_keyframe:.4f}, "
         f"frame 0 vs t2va's own frame 0 {to_t2va:.4f}, frame -1 vs fractal keyframe {tail:.4f}"
     )
+    artifacts = artifact_dir(ARTIFACT_ENV, "h3_t2va_artifacts")
     for index in (0, 17, 62, align_num_frames(NUM_FRAMES) - 1):
-        Image.fromarray(frames[index]).save(_artifact_dir() / f"fl2va_fractal_frame_{index}.png")
+        Image.fromarray(frames[index]).save(artifacts / f"fl2va_fractal_frame_{index}.png")
 
     # (1) the anchor followed the supplied keyframe.
     assert to_keyframe > ANCHOR_PCC_FLOOR, (

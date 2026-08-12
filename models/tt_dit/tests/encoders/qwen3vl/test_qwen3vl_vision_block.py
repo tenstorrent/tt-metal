@@ -39,20 +39,24 @@ from ....encoders.qwen3vl.vision_qwen3vl import (
     vision_cu_seqlens,
     vision_rope_tensors,
 )
-from ....parallel.config import EncoderParallelConfig, ParallelFactor
-from ....parallel.manager import CCLManager
 from ....utils import tensor
 from ....utils.check import assert_quality
-from ....utils.tensor import bf16_tensor
+from .common import (
+    HEAD_DIM,
+    HIDDEN_ACT,
+    HIDDEN_SIZE,
+    INTERMEDIATE_SIZE,
+    NORM_EPS,
+    NUM_HEADS,
+    SPATIAL_MERGE_SIZE,
+    VISION_PARAMS,
+    resolve_parallel,
+    skip_if_sp_misaligned,
+    sp_shard,
+    vision_config,
+)
 
-HIDDEN_SIZE = 1152
-NUM_HEADS = 16
-HEAD_DIM = HIDDEN_SIZE // NUM_HEADS  # 72 -- deliberately not tile-aligned
 PADDED_HEAD_DIM = 96
-INTERMEDIATE_SIZE = 4304
-SPATIAL_MERGE_SIZE = 2
-NORM_EPS = 1e-6
-HIDDEN_ACT = "gelu_pytorch_tanh"
 
 # Real shapes, measured end to end through the checkpoint's own image processor. Two sizing rules feed
 # this block, and they differ by 4x on the short edge:
@@ -80,28 +84,10 @@ GRIDS = {
 }
 
 
-def _config(depth=1):
-    return transformers.Qwen3VLVisionConfig(
-        depth=depth,
-        hidden_size=HIDDEN_SIZE,
-        num_heads=NUM_HEADS,
-        intermediate_size=INTERMEDIATE_SIZE,
-        in_channels=3,
-        patch_size=16,
-        temporal_patch_size=2,
-        spatial_merge_size=SPATIAL_MERGE_SIZE,
-        num_position_embeddings=2304,
-        out_hidden_size=5120,
-        hidden_act=HIDDEN_ACT,
-        deepstack_visual_indexes=[0],
-        initializer_range=0.02,
-    )
-
-
 @pytest.fixture(scope="module")
 def reference():
     torch.manual_seed(0)
-    return transformers.models.qwen3_vl.modeling_qwen3_vl.Qwen3VLVisionModel._from_config(_config()).eval()
+    return transformers.models.qwen3_vl.modeling_qwen3_vl.Qwen3VLVisionModel._from_config(vision_config(depth=1)).eval()
 
 
 def _golden_pos_embeds(grid):
@@ -117,30 +103,8 @@ def _golden_pos_embeds(grid):
 
 # ------------------------------------------------------------------------- device
 
-# `single` is the replicated reference. The parallel configs shard the block itself: TP fractures the
-# 16 heads (2/device at TP=8) and the MLP's intermediate; SP splits the patch rows and runs ring SDPA.
-# TP and SP must occupy different mesh axes, so the 8x4 system covers TP=8 x SP=4.
+# Mesh/parallel configs are the shared `VISION_PARAMS` from common.py.
 #
-# Only TP=8 is deployed, with SP either off or 4, so the configs are named for both factors. SP alone
-# (TP=1) is not a configuration this model will ever run in and is not covered.
-#
-# `device_params` is per-config: the CCL paths need FABRIC_1D, but requesting it on a 1x1 mesh has no
-# remote ethernet partner and times out in router init.
-_L1_SMALL = 32768
-_FABRIC = {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": _L1_SMALL}
-_NO_FABRIC = {"l1_small_size": _L1_SMALL}
-
-_MESH = [
-    pytest.param((1, 1), (1, 1), None, None, 1, _NO_FABRIC, id="single"),
-    pytest.param((8, 4), (8, 4), 0, None, 2, _FABRIC, id="tp8_sp1"),
-    pytest.param((8, 4), (8, 4), 0, 1, 2, _FABRIC, id="tp8_sp4"),
-]
-_PARAMS = pytest.mark.parametrize(
-    ("mesh_device", "submesh_shape", "tp_axis", "sp_axis", "num_links", "device_params"),
-    _MESH,
-    indirect=["mesh_device", "device_params"],
-)
-
 # Every case here checks PCC against the CPU golden; both grids are small enough that the quadratic
 # CPU attention is affordable. The `perf` mode (no golden, shape/finiteness only, for the capacity
 # grids and `python -m tracy`) lives in test_qwen3vl_vision_tower.py.
@@ -148,41 +112,13 @@ _PARAMS = pytest.mark.parametrize(
 
 def _parallel(submesh, tp_axis, sp_axis, num_links):
     """The resolved `VisionParallel` these submodules take, or `None` when fully replicated."""
-    if tp_axis is None and sp_axis is None:
+    cfg, ccl = resolve_parallel(submesh, tp_axis, sp_axis, num_links)
+    if cfg is None:
         return None
-    shape = tuple(submesh.shape)
-    cfg = EncoderParallelConfig(
-        tensor_parallel=ParallelFactor(factor=shape[tp_axis] if tp_axis is not None else 1, mesh_axis=tp_axis),
-        sequence_parallel=(ParallelFactor(factor=shape[sp_axis], mesh_axis=sp_axis) if sp_axis is not None else None),
-    )
-    ccl = CCLManager(submesh, num_links=num_links, topology=ttnn.Topology.Linear)
     return resolve_vision_parallel(submesh, cfg, ccl)
 
 
-def _skip_if_sp_misaligned(total, submesh, sp_axis):
-    """SP needs a tile-aligned per-device row count.
-
-    Ring SDPA requires `N_local_q % 32 == 0`, which at SP=4 means a multiple of 128 patches. Every grid
-    here satisfies that, so nothing currently skips -- but the area-capped canvases do not (4032 is
-    31.5 x 128), so this fires as soon as one of those is added. A misaligned grid is a skip, not a
-    failure: it says the shape cannot be sequence-parallel at this factor, which is a property of the
-    shape rather than of the port.
-    """
-    if sp_axis is None:
-        return
-    sp = tuple(submesh.shape)[sp_axis]
-    if total % (sp * 32) != 0:
-        pytest.skip(f"{total} patches do not divide into {sp} tile-aligned shards (needs a multiple of {sp * 32})")
-
-
-def _sp_shard(x, submesh, sp_axis):
-    """Upload row-sharded on the SP axis (replicated when SP is off)."""
-    if sp_axis is None:
-        return bf16_tensor(x, device=submesh)
-    return bf16_tensor(x, device=submesh, mesh_axis=sp_axis, shard_dim=0)
-
-
-@_PARAMS
+@VISION_PARAMS
 @pytest.mark.parametrize("name", list(GRIDS))
 def test_block_on_device(reference, mesh_device, submesh_shape, tp_axis, sp_axis, num_links, name):
     """The whole pre-norm block: LayerNorm + attention + LayerNorm + MLP, both residuals.
@@ -202,7 +138,7 @@ def test_block_on_device(reference, mesh_device, submesh_shape, tp_axis, sp_axis
     submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     grid = torch.tensor(GRIDS[name], dtype=torch.long)
     total = sum(t * h * w for t, h, w in GRIDS[name])
-    _skip_if_sp_misaligned(total, submesh, sp_axis)
+    skip_if_sp_misaligned(total, submesh, sp_axis)
 
     assert HEAD_DIM == 72 and HEAD_DIM % 32 != 0, "the whole padding question presumes a misaligned 72"
     assert math.ceil(HEAD_DIM / 32) * 32 == PADDED_HEAD_DIM
@@ -233,15 +169,12 @@ def test_block_on_device(reference, mesh_device, submesh_shape, tp_axis, sp_axis
         parallel=_parallel(submesh, tp_axis, sp_axis, num_links),
     )
     block.load_torch_state_dict(reference.blocks[0].state_dict())
-    print("Prepare Vision Rope")
     tt_cos, tt_sin = vision_rope_tensors(grid, head_dim=HEAD_DIM, spatial_merge_size=SPATIAL_MERGE_SIZE)
-    print("Block Forward")
     out = block.forward(
-        _sp_shard(x, submesh, sp_axis),
-        pos_embeds=(_sp_shard(tt_cos, submesh, sp_axis), _sp_shard(tt_sin, submesh, sp_axis)),
+        sp_shard(x, submesh, sp_axis),
+        pos_embeds=(sp_shard(tt_cos, submesh, sp_axis), sp_shard(tt_sin, submesh, sp_axis)),
         cu_seqlens=cu_seqlens,
     )
-    print("Block Done")
     actual = tensor.to_torch(out, mesh_axes=[sp_axis, None])
 
     assert_quality(golden, actual, pcc=0.99)

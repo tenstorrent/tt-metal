@@ -27,11 +27,12 @@ from loguru import logger
 
 import ttnn
 
-from ....encoders.qwen3vl.model_qwen3vl import Qwen3VlTextEncoder, _scatter_rows, create_rope_tensors, vision_token_runs
+from ....encoders.qwen3vl.model_qwen3vl import _scatter_rows, create_rope_tensors, vision_token_runs
 from ....parallel.config import EncoderParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils import tensor
 from ....utils.tensor import bf16_tensor
+from .common import encoder_from_hf_config
 
 IMAGE_TOKEN_ID = 151655  # <|image_pad|>
 HIDDEN = 128
@@ -101,24 +102,16 @@ def _reference_text_model(layers):
 
 
 def _encoder(submesh, *, layers, activation_layers):
-    enc = Qwen3VlTextEncoder(
-        vocab_size=256,
-        hidden_size=HIDDEN,
-        intermediate_size=256,
-        hidden_act="silu",
-        num_hidden_layers=layers,
-        num_attention_heads=4,
-        num_key_value_heads=2,
-        rms_norm_eps=1e-6,
-        rope_theta=10000.0,
-        mrope_section=[6, 5, 5],
+    reference = _reference_text_model(layers)
+    enc = encoder_from_hf_config(
+        reference.config,
         head_dim=32,
         activation_layers=activation_layers,
         device=submesh,
         parallel_config=EncoderParallelConfig(tensor_parallel=ParallelFactor(factor=1, mesh_axis=0)),
         ccl_manager=CCLManager(submesh, num_links=1, topology=ttnn.Topology.Linear),
     )
-    enc.load_torch_state_dict(_reference_text_model(layers).state_dict())
+    enc.load_torch_state_dict(reference.state_dict())
     return enc
 
 

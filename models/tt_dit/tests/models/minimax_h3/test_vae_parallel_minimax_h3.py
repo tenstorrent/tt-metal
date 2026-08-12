@@ -39,8 +39,6 @@ from loguru import logger
 import ttnn
 
 from ....models.vae.minimax_h3.conv_minimax_h3 import MiniMaxH3CausalConv3d
-from ....models.vae.minimax_h3.decoder_minimax_h3 import MiniMaxH3ViTDecoder3d
-from ....models.vae.minimax_h3.encoder_minimax_h3 import MiniMaxH3Encoder3d
 from ....parallel.config import ParallelFactor, VaeHWParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils.check import assert_quality
@@ -49,6 +47,8 @@ from .common import (
     DECODE_LATENT_FRAMES,
     LATENT_TILE,
     TILE,
+    build_visual_decoder,
+    build_visual_encoder,
     load_config,
     random_decoder_state,
     random_encoder_state,
@@ -237,21 +237,8 @@ def test_encoder_sharded_matches_unsharded(mesh_device, h_factor, w_factor):
     torch.manual_seed(0)
 
     state = random_encoder_state(config)
-    common = dict(
-        num_frames=CLIP_FRAMES,
-        height=TILE,
-        width=TILE,
-        in_channels=3,
-        out_channels=2 * config["latent_channels"],
-        block_out_channels=tuple(config["block_out_channels"]),
-        layers_per_block=config["layers_per_block"],
-        spatial_downsample_factors=tuple(config["spatial_downsample_factors"]),
-        temporal_downsample_factors=tuple(config["temporal_downsample_factors"]),
-        temporal_taps=3,
-        mesh_device=mesh_device,
-    )
 
-    reference_encoder = MiniMaxH3Encoder3d(**common)
+    reference_encoder = build_visual_encoder(config, mesh_device, CLIP_FRAMES, temporal_taps=3)
     reference_encoder.load_torch_state_dict(dict(state))
     x = torch.randn(1, CLIP_FRAMES, TILE, TILE, reference_encoder.conv_in.in_channels)
     x_replicated = ttnn.from_torch(
@@ -266,8 +253,13 @@ def test_encoder_sharded_matches_unsharded(mesh_device, h_factor, w_factor):
     )[:1].float()
 
     ccl = CCLManager(mesh_device=mesh_device, topology=ttnn.Topology.Linear)
-    sharded_encoder = MiniMaxH3Encoder3d(
-        **common, parallel_config=_parallel_config(h_factor, w_factor), ccl_manager=ccl
+    sharded_encoder = build_visual_encoder(
+        config,
+        mesh_device,
+        CLIP_FRAMES,
+        temporal_taps=3,
+        parallel_config=_parallel_config(h_factor, w_factor),
+        ccl_manager=ccl,
     )
     sharded_encoder.load_torch_state_dict(dict(state))
     actual = _gather_hw(sharded_encoder(_shard_hw(x, mesh_device, h_factor, w_factor)), mesh_device, h_factor, w_factor)
@@ -315,6 +307,37 @@ MESH_4X8 = [
 PROBE_UNITS = (0, 7, 31)
 
 
+def _assert_unit_independence(module, units, out_dp, mesh_device, *, dtype, layout, label="unit"):
+    """Re-run each probe unit replicated across the mesh and hold the data-parallel run to it.
+
+    A unit's result must not depend on what its neighbours hold, so the replicated result
+    must equal the data-parallel one -- and the replicas must first agree with each other,
+    which is the same-program-same-answer check. The per-unit logging stays inside so a
+    failure reads the same as it always has.
+    """
+    for unit in PROBE_UNITS:
+        x_rep = ttnn.from_torch(
+            units[unit],
+            dtype=dtype,
+            device=mesh_device,
+            layout=layout,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        out_rep = ttnn.to_torch(module(x_rep), mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)).float()
+
+        # Same program, same input, 32 devices: the replicas must agree with each other.
+        spread = (out_rep - out_rep[0:1]).abs().max().item()
+        logger.info(f"{label} {unit}: replica spread {spread:.3e}")
+        assert spread == 0.0, f"unit {unit}: replicas disagree by {spread:.3e} across devices"
+
+        # And the data-parallel run must reproduce it, i.e. device `unit`'s answer does
+        # not depend on the different units its neighbours were holding.
+        delta = (out_dp[unit] - out_rep[0]).abs().max().item()
+        logger.info(f"{label} {unit}: data-parallel vs replicated max abs diff {delta:.3e}")
+        assert out_dp[unit].shape == out_rep[0].shape
+        assert_quality(out_rep[0], out_dp[unit], pcc=0.999_999)
+
+
 @pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8, indirect=["mesh_device", "device_params"])
 def test_encoder_data_parallel_independence(mesh_device):
     weights_dir = weights_subdir("vae")
@@ -324,19 +347,7 @@ def test_encoder_data_parallel_independence(mesh_device):
     num_devices = mesh_device.get_num_devices()
     torch.manual_seed(0)
 
-    encoder = MiniMaxH3Encoder3d(
-        num_frames=CLIP_FRAMES,
-        height=TILE,
-        width=TILE,
-        in_channels=3,
-        out_channels=2 * config["latent_channels"],
-        block_out_channels=tuple(config["block_out_channels"]),
-        layers_per_block=config["layers_per_block"],
-        spatial_downsample_factors=tuple(config["spatial_downsample_factors"]),
-        temporal_downsample_factors=tuple(config["temporal_downsample_factors"]),
-        temporal_taps=3,
-        mesh_device=mesh_device,
-    )
+    encoder = build_visual_encoder(config, mesh_device, CLIP_FRAMES, temporal_taps=3)
     # Random weights: independence is a property of the program, not of the values, and
     # skipping the 10.4 GB checkpoint read is what keeps this gate quick.
     encoder.load_torch_state_dict(random_encoder_state(config))
@@ -364,27 +375,7 @@ def test_encoder_data_parallel_independence(mesh_device):
     out_dp = ttnn.to_torch(encoder(x_dp), mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)).float()
     assert out_dp.shape[0] == num_devices, f"expected {num_devices} gathered units, got {out_dp.shape[0]}"
 
-    for unit in PROBE_UNITS:
-        x_rep = ttnn.from_torch(
-            units[unit],
-            dtype=ttnn.float32,
-            device=mesh_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
-        out_rep = ttnn.to_torch(encoder(x_rep), mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)).float()
-
-        # Same program, same input, 32 devices: the replicas must agree with each other.
-        spread = (out_rep - out_rep[0:1]).abs().max().item()
-        logger.info(f"unit {unit}: replica spread {spread:.3e}")
-        assert spread == 0.0, f"unit {unit}: replicas disagree by {spread:.3e} across devices"
-
-        # And the data-parallel run must reproduce it, i.e. device `unit`'s answer does
-        # not depend on the 31 different units its neighbours were holding.
-        delta = (out_dp[unit] - out_rep[0]).abs().max().item()
-        logger.info(f"unit {unit}: data-parallel vs replicated max abs diff {delta:.3e}")
-        assert out_dp[unit].shape == out_rep[0].shape
-        assert_quality(out_rep[0], out_dp[unit], pcc=0.999_999)
+    _assert_unit_independence(encoder, units, out_dp, mesh_device, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
 
 # Two layers, not 36: independence is a property of the program, and two exercises every op
@@ -404,15 +395,7 @@ def test_decoder_data_parallel_independence(mesh_device):
     num_devices = mesh_device.get_num_devices()
     torch.manual_seed(0)
 
-    decoder = MiniMaxH3ViTDecoder3d(
-        num_frames=DECODE_LATENT_FRAMES,
-        height=LATENT_TILE,
-        width=LATENT_TILE,
-        in_channels=config["latent_channels"],
-        out_channels=config["out_channels"],
-        num_layers=DECODER_PROBE_LAYERS,
-        mesh_device=mesh_device,
-    )
+    decoder = build_visual_decoder(config, mesh_device, num_layers=DECODER_PROBE_LAYERS)
     decoder.load_torch_state_dict(random_decoder_state(config, num_layers=DECODER_PROBE_LAYERS))
 
     tokens = DECODE_LATENT_FRAMES * LATENT_TILE * LATENT_TILE
@@ -431,21 +414,6 @@ def test_decoder_data_parallel_independence(mesh_device):
     out_dp = ttnn.to_torch(decoder(x_dp), mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)).float()
     assert out_dp.shape[0] == num_devices
 
-    for unit in PROBE_UNITS:
-        x_rep = ttnn.from_torch(
-            units[unit],
-            dtype=ttnn.bfloat16,
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
-        out_rep = ttnn.to_torch(decoder(x_rep), mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)).float()
-
-        spread = (out_rep - out_rep[0:1]).abs().max().item()
-        logger.info(f"decoder unit {unit}: replica spread {spread:.3e}")
-        assert spread == 0.0, f"unit {unit}: replicas disagree by {spread:.3e}"
-
-        delta = (out_dp[unit] - out_rep[0]).abs().max().item()
-        logger.info(f"decoder unit {unit}: data-parallel vs replicated max abs diff {delta:.3e}")
-        assert out_dp[unit].shape == out_rep[0].shape
-        assert_quality(out_rep[0], out_dp[unit], pcc=0.999_999)
+    _assert_unit_independence(
+        decoder, units, out_dp, mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, label="decoder unit"
+    )

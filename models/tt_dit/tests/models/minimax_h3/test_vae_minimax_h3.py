@@ -49,7 +49,7 @@ from ....models.vae.minimax_h3.rope_minimax_h3 import (
 )
 from ....models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae, MiniMaxH3VaeConfig, split_tiles
 from ....utils.check import assert_quality
-from .common import psnr
+from .common import load_config, psnr
 
 SINGLE_DEVICE = [pytest.param((1, 1), {}, id="single_device")]
 
@@ -74,14 +74,22 @@ def _weights_dir() -> str | None:
     return None
 
 
-def _reference_vae_cls():
+def _reference(name: str):
+    """A class or function off the pinned diffusers reference module, or a skip."""
     pytest.importorskip("diffusers", reason="pinned diffusers reference not installed")
     from diffusers.models.autoencoders import autoencoder_kl_minimax_h3 as ref
 
-    cls = getattr(ref, "AutoencoderKLMiniMaxH3", None)
-    if cls is None:
-        pytest.skip("AutoencoderKLMiniMaxH3 missing -- diffusers is not at the pinned commit")
-    return cls
+    attribute = getattr(ref, name, None)
+    if attribute is None:
+        pytest.skip(f"{name} missing -- diffusers is not at the pinned MiniMax-H3 commit")
+    return attribute
+
+
+def _raw_config(weights_dir: str | None) -> dict:
+    """The checkpoint's raw config dict; a missing checkpoint is a skip, not a failure."""
+    if weights_dir is None:
+        pytest.skip("MiniMax-H3 vae/config.json not found; set MINIMAX_H3_DIFFUSERS_DIR")
+    return load_config(weights_dir)
 
 
 def _build_reference(weights_dir: str | None):
@@ -90,21 +98,15 @@ def _build_reference(weights_dir: str | None):
     Only the encoder side is needed, so the 2.4 B-parameter ViT decoder is left at its
     random initialisation rather than read off disk.
     """
-    cls = _reference_vae_cls()
-    if weights_dir is None:
-        pytest.skip("MiniMax-H3 vae/config.json not found; set MINIMAX_H3_DIFFUSERS_DIR")
+    cls = _reference("AutoencoderKLMiniMaxH3")
+    raw = _raw_config(weights_dir)
     config = MiniMaxH3VaeConfig.from_pretrained(weights_dir)
-    import json
-
-    raw = {
-        k: v
-        for k, v in json.loads(open(os.path.join(weights_dir, "config.json")).read()).items()
-        if not k.startswith("_")
-    }
     reference = cls(**raw).eval()
 
     index_path = os.path.join(weights_dir, "diffusion_pytorch_model.safetensors.index.json")
     if os.path.isfile(index_path):
+        import json
+
         from safetensors.torch import load_file
 
         weight_map = json.loads(open(index_path).read())["weight_map"]
@@ -123,7 +125,7 @@ def _build_reference(weights_dir: str | None):
 @pytest.mark.parametrize(("width", "height", "num_frames"), PRODUCTION_CONFIGS)
 def test_tiling_geometry_matches_reference(width, height, num_frames):
     """Host-only: our tile solver and derived geometry equal the reference's."""
-    reference_cls = _reference_vae_cls()
+    reference_cls = _reference("AutoencoderKLMiniMaxH3")
     reference = reference_cls()
     config = MiniMaxH3VaeConfig()
 
@@ -189,8 +191,7 @@ def test_encode_clip_tiled(mesh_device, num_frames, temporal_taps, expected_late
     assert (
         actual.shape[2] == expected_latent_frames
     ), f"{actual.shape[2]} latent frames, expected {expected_latent_frames}"
-    assert actual.shape == expected.shape, f"shape {tuple(actual.shape)} != reference {tuple(expected.shape)}"
-    assert_quality(expected, actual, pcc=0.99)
+    _assert_same(expected, actual, pcc=0.99)
 
 
 def _shallow_decoder_reference(num_layers: int):
@@ -202,17 +203,8 @@ def _shallow_decoder_reference(num_layers: int):
     over 9 tiles on host would be ~95 TFLOP to prove something a 2-layer decoder proves
     just as well.
     """
-    cls = _reference_vae_cls()
-    weights_dir = _weights_dir()
-    if weights_dir is None:
-        pytest.skip("MiniMax-H3 vae/config.json not found; set MINIMAX_H3_DIFFUSERS_DIR")
-    import json
-
-    raw = {
-        k: v
-        for k, v in json.loads(open(os.path.join(weights_dir, "config.json")).read()).items()
-        if not k.startswith("_")
-    }
+    cls = _reference("AutoencoderKLMiniMaxH3")
+    raw = _raw_config(_weights_dir())
     raw["decoder_num_layers"] = num_layers
     reference = cls(**raw).eval()
     with torch.no_grad():
@@ -244,8 +236,7 @@ def test_decode_clip_tiled(mesh_device):
     tt_vae.load_decoder_state(dict(reference.state_dict()))
     actual = tt_vae.decode_clip(z)
 
-    assert actual.shape == expected.shape, f"shape {tuple(actual.shape)} != reference {tuple(expected.shape)}"
-    assert_quality(expected, actual, pcc=0.99)
+    _assert_same(expected, actual, pcc=0.99)
 
 
 @pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
@@ -287,16 +278,14 @@ def test_visual_roundtrip_quality(mesh_device):
     assert (
         moments.shape[2] == expected_latent_frames
     ), f"{moments.shape[2]} latent frames, expected {expected_latent_frames}"
-    assert moments.shape == expected_moments.shape, f"{tuple(moments.shape)} != {tuple(expected_moments.shape)}"
     # Gate the encode half on its own before composing, so a failure names its path.
-    assert_quality(expected_moments, moments, pcc=0.99)
+    _assert_same(expected_moments, moments, pcc=0.99)
 
     actual = tt_vae.decode(moments.chunk(2, dim=1)[0])
 
-    assert actual.shape == expected.shape, f"shape {tuple(actual.shape)} != {tuple(expected.shape)}"
+    _assert_same(expected, actual, pcc=0.99)
     psnr_db = psnr(expected, actual)
     logger.info(f"ROUNDTRIP visual PSNR: {psnr_db:.2f} dB")
-    assert_quality(expected, actual, pcc=0.99)
     assert psnr_db >= 25.0, f"visual roundtrip PSNR {psnr_db:.2f} dB < 25 dB"
 
 
@@ -336,16 +325,6 @@ def test_visual_roundtrip_quality(mesh_device):
 
 # A single device has no ring partner: requesting a fabric ring makes the ethernet
 # handshake time out before any kernel runs.
-
-
-def _reference_module(name):
-    pytest.importorskip("diffusers", reason="pinned diffusers reference not installed")
-    from diffusers.models.autoencoders import autoencoder_kl_minimax_h3 as ref
-
-    module = getattr(ref, name, None)
-    if module is None:
-        pytest.skip(f"{name} missing -- diffusers is not at the pinned MiniMax-H3 commit")
-    return module
 
 
 def _to_device(x_BCTHW: torch.Tensor, mesh_device, aligned_channels: int) -> ttnn.Tensor:
@@ -408,7 +387,7 @@ def test_causal_conv3d(
     torch.manual_seed(0)
 
     if trailing_pad:
-        reference_cls = _reference_module("MiniMaxH3VideoDownsample3d")
+        reference_cls = _reference("MiniMaxH3VideoDownsample3d")
         reference = reference_cls(
             in_channels,
             out_channels,
@@ -419,7 +398,7 @@ def test_causal_conv3d(
         # The reference wraps its conv; the tt module under test *is* the conv.
         state = {k.removeprefix("conv."): v for k, v in reference.state_dict().items()}
     else:
-        reference_cls = _reference_module("MiniMaxH3VideoCausalConv3d")
+        reference_cls = _reference("MiniMaxH3VideoCausalConv3d")
         # k1 convs carry no temporal extent; k3 convs prepend kernel_t - 1 = 2 zero frames.
         temporal_padding = 0 if kernel_size == 1 else 2
         reference = reference_cls(
@@ -473,7 +452,7 @@ def test_resnet_block(mesh_device, in_channels, out_channels, num_frames, height
     The bar is looser than for a bare conv: ``ttnn.group_norm`` has no fp32 path, so each
     of the two norms is a bf16 island and that is the block's precision floor.
     """
-    reference_cls = _reference_module("MiniMaxH3VideoResnetBlock3d")
+    reference_cls = _reference("MiniMaxH3VideoResnetBlock3d")
     torch.manual_seed(2)
     temporal_taps = 3
 
@@ -532,16 +511,6 @@ EPS = 1e-5
 ROPE_THETA, ROPE_DIM_RATIO = 100.0, 0.75
 
 
-def _reference(name):
-    pytest.importorskip("diffusers", reason="pinned diffusers reference not installed")
-    from diffusers.models.autoencoders import autoencoder_kl_minimax_h3 as ref
-
-    attribute = getattr(ref, name, None)
-    if attribute is None:
-        pytest.skip(f"{name} missing -- diffusers is not at the pinned MiniMax-H3 commit")
-    return attribute
-
-
 def _reference_rope(num_suffix_tokens: int):
     """The reference module's own ``(cos, sin)`` for the production latent shape."""
     rope_cls = _reference("MiniMaxH3VideoRotaryPosEmbed")
@@ -550,6 +519,20 @@ def _reference_rope(num_suffix_tokens: int):
     positions = torch.cat([positions, positions.new_zeros((num_suffix_tokens, 3))], dim=0).unsqueeze(0)
     cos, sin = module(positions)
     return cos[0, :, 0, :], sin[0, :, 0, :]
+
+
+def _rope_tables(permuted: bool):
+    """Our ``rope_tables`` at the production latent tile -- the kwargs every call here shares."""
+    return rope_tables(
+        LATENT_FRAMES,
+        LATENT_H,
+        LATENT_W,
+        num_suffix_tokens=NUM_SUFFIX_TOKENS,
+        attention_head_dim=HEAD_DIM,
+        rope_dim_ratio=ROPE_DIM_RATIO,
+        theta=ROPE_THETA,
+        permuted=permuted,
+    )
 
 
 def test_rope_tables_are_bit_exact():
@@ -561,16 +544,7 @@ def test_rope_tables_are_bit_exact():
     untouched, and the suffix rows are the identity.
     """
     reference_cos, reference_sin = _reference_rope(NUM_SUFFIX_TOKENS)
-    cos, sin = rope_tables(
-        LATENT_FRAMES,
-        LATENT_H,
-        LATENT_W,
-        num_suffix_tokens=NUM_SUFFIX_TOKENS,
-        attention_head_dim=HEAD_DIM,
-        rope_dim_ratio=ROPE_DIM_RATIO,
-        theta=ROPE_THETA,
-        permuted=False,
-    )
+    cos, sin = _rope_tables(permuted=False)
     assert cos.shape == reference_cos.shape, f"{tuple(cos.shape)} != {tuple(reference_cos.shape)}"
     assert torch.equal(cos, reference_cos), f"cos differs by {(cos - reference_cos).abs().max()}"
     assert torch.equal(sin, reference_sin), f"sin differs by {(sin - reference_sin).abs().max()}"
@@ -583,16 +557,7 @@ def test_rope_tables_are_bit_exact():
     expected = reference_rotate(x, reference_cos.unsqueeze(1), reference_sin.unsqueeze(1))
 
     permutation = head_lane_permutation(HEAD_DIM, ROPE_DIM_RATIO)
-    cos, sin = rope_tables(
-        LATENT_FRAMES,
-        LATENT_H,
-        LATENT_W,
-        num_suffix_tokens=NUM_SUFFIX_TOKENS,
-        attention_head_dim=HEAD_DIM,
-        rope_dim_ratio=ROPE_DIM_RATIO,
-        theta=ROPE_THETA,
-        permuted=True,
-    )
+    cos, sin = _rope_tables(permuted=True)
     rotated = permuted_rotate(x.index_select(-1, permutation), cos.unsqueeze(1), sin.unsqueeze(1))
     actual = rotated.index_select(-1, torch.argsort(permutation))
 
@@ -640,16 +605,7 @@ def test_transformer_block(mesh_device):
     )
     tt_block.load_torch_state_dict(dict(reference.state_dict()))
 
-    cos, sin = rope_tables(
-        LATENT_FRAMES,
-        LATENT_H,
-        LATENT_W,
-        num_suffix_tokens=NUM_SUFFIX_TOKENS,
-        attention_head_dim=HEAD_DIM,
-        rope_dim_ratio=ROPE_DIM_RATIO,
-        theta=ROPE_THETA,
-        permuted=True,
-    )
+    cos, sin = _rope_tables(permuted=True)
     actual = ttnn.to_torch(
         tt_block(
             _to_device_tiled(x, mesh_device),
@@ -658,8 +614,7 @@ def test_transformer_block(mesh_device):
         )
     ).float()
 
-    assert actual.shape == expected.shape, f"shape {tuple(actual.shape)} != {tuple(expected.shape)}"
-    assert_quality(expected, actual, pcc=0.998)
+    _assert_same(expected, actual, pcc=0.998)
 
 
 @pytest.mark.parametrize("num_layers", [pytest.param(36, id="full_36_layers")])
@@ -718,5 +673,4 @@ def test_decoder(mesh_device, num_layers):
     out_tokens = ttnn.to_torch(tt_decoder(_to_device_tiled(tokens, mesh_device))).float()
     actual = unpatchify(out_tokens, num_frames=LATENT_FRAMES, height=LATENT_H, width=LATENT_W, out_channels=3)
 
-    assert actual.shape == expected.shape, f"shape {tuple(actual.shape)} != {tuple(expected.shape)}"
-    assert_quality(expected, actual, pcc=0.99)
+    _assert_same(expected, actual, pcc=0.99)

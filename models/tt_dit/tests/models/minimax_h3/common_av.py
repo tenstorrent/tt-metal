@@ -18,8 +18,9 @@ trained to guarantee (generated audio need not be causally tied to visible motio
 reported as a diagnostic and never asserted on.
 
 The artifact and metric helpers shared by the e2e gates (`write_artifacts`, `run_vbench`,
-`clip_prompt_alignment`, the ref2va reference sets) also live here, so no test module has to
-import from another test module.
+`clip_prompt_alignment`, the warm-generation / timing-table / tier-5 / tier-6 scaffolding at the
+bottom of this module) also live here, so no test module has to import from another test module.
+Helpers used by a single gate live in that gate's file, not here.
 """
 
 from __future__ import annotations
@@ -27,7 +28,6 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -35,9 +35,7 @@ import pytest
 import torch
 from loguru import logger
 
-from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, prepare_keyframe_image
-from ....pipelines.minimax_h3.packing_ref2va import MiniMaxH3Reference, reference_from_video_file
-from .common import create_fractal_image
+from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS
 
 
 def check_audio_sanity(audio, *, sampling_rate, expected_seconds, tolerance_seconds=0.05):
@@ -234,110 +232,7 @@ def log_spectral_flatness(audio, *, sampling_rate, num_bands=64):
         f"Audio log-spectrum: flatness={flatness:.4f}, "
         f"band dB range=[{10 * np.log10(bands.min() + 1e-20):.1f}, {10 * np.log10(bands.max() + 1e-20):.1f}]"
     )
-    return {"flatness": flatness, "bands_db": 10 * np.log10(bands + 1e-20)}
-
-
-def check_keyframe_anchor(frames, keyframe, *, index, stretch, width, height, pcc_floor=0.3):
-    """A decoded frame must correlate with the keyframe that anchored it.
-
-    The `fl2va` analogue of `wan2_2.common.check_first_frame_matches_seed`, and it exists separately
-    because that helper resizes the seed with a plain `PIL.resize`, i.e. a **stretch**. That is right
-    for MiniMax-H3's *first* keyframe and wrong for any other: `prepare_keyframe_image` stretches only
-    the geometry anchor (the first keyframe given) and **cover-crops** every later one -- scale by
-    `max(W/w, H/h)`, then centre-crop. Comparing a cover-cropped keyframe against a stretched
-    reference would fail on a correct pipeline.
-
-    So the canvas rule is applied here rather than assumed, by calling `prepare_keyframe_image`
-    itself. That also means this helper cannot drift from the pipeline's own preparation.
-
-    This is a real correctness signal rather than a formality: the anchors are noised only to
-    `t = 0.999`, so `0.999 * x0 + 0.001 * noise` is essentially the clean VAE latent of the keyframe,
-    and a decoded anchor frame that does not resemble it means the conditioning path is broken --
-    wrong rows written, anchors overwritten during denoising, or the conditioning block placed at the
-    wrong sequence position.
-
-    Args:
-        frames: decoded video, `(F, H, W, 3)`, batch dim removed.
-        keyframe: the PIL keyframe *as supplied to the pipeline*, before preparation.
-        index: which decoded frame to compare -- `0` for a `first` anchor, `-1` for a `last` one.
-        stretch: how the pipeline prepared this keyframe. `True` for the first keyframe given.
-        pcc_floor: minimum Pearson correlation. Provisional; tighten once real values are recorded.
-    """
-    frame = frames[index]
-    if isinstance(frame, torch.Tensor):
-        frame = frame.cpu().numpy()
-    frame = np.asarray(frame).astype(np.float64)
-
-    prepared = prepare_keyframe_image(keyframe.convert("RGB"), height, width, stretch)
-    expected = np.asarray(prepared).astype(np.float64)
-    assert frame.shape == expected.shape, f"frame {index} shape {frame.shape} != keyframe {expected.shape}"
-
-    pcc = float(np.corrcoef(frame.ravel(), expected.ravel())[0, 1])
-    label = "first" if index == 0 else "last"
-    logger.info(f"fl2va {label}-keyframe anchor: decoded frame {index} vs keyframe PCC = {pcc:.4f}")
-    assert pcc > pcc_floor, (
-        f"decoded frame {index} barely correlates with the {label} keyframe (PCC={pcc:.3f}); "
-        "the fl2va conditioning path is likely broken"
-    )
-    return pcc
-
-
-def check_tile_boundary_gradient(frames, *, vertical_boundaries, horizontal_boundaries, max_ratio=3.0):
-    """One-pixel gradient at each tile boundary against its own neighbourhood.
-
-    The sensitive complement to :func:`check_spatial_seams`, which compares *block-mean* activity either
-    side of a boundary and therefore cannot see a seam narrower than its blocks. Measured on a clean
-    production frame: `check_spatial_seams` reports 1.03 while every one of the six vertical boundaries
-    carries a per-column gradient 1.2-1.5x its neighbourhood. Both numbers are correct; they measure
-    different things, and only this one would notice a one-pixel discontinuity from the tiled VAE decode.
-
-    A control matters here and is built in: non-boundary columns are measured the same way and must sit
-    near 1.0, otherwise the statistic is picking up ordinary image structure rather than a seam.
-
-    The bar is loose (3.0) because a ratio of 1.2-1.5 is the *known good* state, not a
-    defect: linear cross-fading two independently decoded tiles leaves a derivative discontinuity at the
-    ends of the blend, and at production geometry that measures ~0.3/255 of luma step -- 0.12 % of full
-    scale, invisible at 8x zoom, and identical in `t2va`. This gate exists to catch that becoming
-    *visible*, which is a several-fold change, not to police the floor.
-    """
-    frames = np.asarray(frames)
-    luma = frames.astype(np.float64).mean(-1) if frames.ndim == 4 else frames.astype(np.float64)
-    gx = np.abs(np.diff(luma, axis=2)).mean(axis=(0, 1))
-    gy = np.abs(np.diff(luma, axis=1)).mean(axis=(0, 2))
-
-    def ratio(profile, index):
-        near = np.concatenate([profile[index - 12 : index - 3], profile[index + 3 : index + 12]])
-        return float(profile[index - 1] / max(float(np.median(near)), 1e-9))
-
-    results = {}
-    for name, profile, boundaries in (("vertical", gx, vertical_boundaries), ("horizontal", gy, horizontal_boundaries)):
-        ratios = {int(b): ratio(profile, int(b)) for b in boundaries if 12 < int(b) < len(profile) - 12}
-        results[name] = ratios
-        if ratios:
-            logger.info(
-                f"{name} tile-boundary gradient ratios (1.0 = no seam): "
-                + ", ".join(f"x={b}:{r:.3f}" if name == "vertical" else f"y={b}:{r:.3f}" for b, r in ratios.items())
-            )
-
-    # Control: columns that are not boundaries must read ~1.0, or the measurement is meaningless.
-    generator = np.random.default_rng(0)
-    candidates = generator.integers(30, len(gx) - 30, 24)
-    control = [c for c in candidates if all(abs(int(c) - int(b)) > 16 for b in vertical_boundaries)][:12]
-    control_ratios = [ratio(gx, int(c)) for c in control]
-    mean_control = float(np.mean(control_ratios))
-    logger.info(f"control non-boundary columns: mean ratio {mean_control:.3f}, max {max(control_ratios):.3f}")
-    assert mean_control < 1.15, (
-        f"control columns average {mean_control:.3f}; this statistic is tracking image structure rather "
-        "than tile boundaries, so its boundary numbers mean nothing"
-    )
-
-    worst = max((r, f"{n} {b}") for n, rs in results.items() for b, r in rs.items())
-    assert worst[0] < max_ratio, (
-        f"tile-boundary gradient at {worst[1]} is {worst[0]:.2f}x its neighbourhood (control "
-        f"{mean_control:.2f}); a visible seam. See the artifact rubric"
-    )
-    results["control"] = mean_control
-    return results
+    return {"flatness": flatness}
 
 
 def _ffmpeg():
@@ -348,15 +243,7 @@ def _ffmpeg():
     try:
         import imageio_ffmpeg
     except ImportError:
-        subprocess.run(
-            [sys.executable, "-m", "pip", "install", "-q", "imageio-ffmpeg"],
-            check=False,
-            capture_output=True,
-        )
-        try:
-            import imageio_ffmpeg
-        except ImportError:
-            return None
+        return None
     return imageio_ffmpeg.get_ffmpeg_exe()
 
 
@@ -475,12 +362,14 @@ def probe_streams(path: Path) -> dict:
     return streams
 
 
-def decoded_frames(path: Path, count: int, *, fallback_height: int = 768, fallback_width: int = 1344) -> np.ndarray:
-    """Sample `count` frames evenly out of the written file, as uint8 luma.
+# Only reached when ffprobe is unavailable: the production 768x1344 working point every e2e gate
+# runs at.
+_FALLBACK_HEIGHT = 768
+_FALLBACK_WIDTH = 1344
 
-    The fallbacks are only reached when ffprobe is unavailable, and default to the production
-    768x1344 working point every e2e gate runs at.
-    """
+
+def decoded_frames(path: Path, count: int) -> np.ndarray:
+    """Sample `count` frames evenly out of the written file, as uint8 luma."""
     exe = _ffmpeg()
     if exe is None:
         return np.empty((0,))
@@ -505,8 +394,8 @@ def decoded_frames(path: Path, count: int, *, fallback_height: int = 768, fallba
         capture_output=True,
     )
     probe = probe_streams(path).get("video", {})
-    height = int(probe.get("height") or fallback_height)
-    width = int(probe.get("width") or fallback_width)
+    height = int(probe.get("height") or _FALLBACK_HEIGHT)
+    width = int(probe.get("width") or _FALLBACK_WIDTH)
     buffer = np.frombuffer(result.stdout, dtype=np.uint8)
     usable = (buffer.size // (height * width)) * height * width
     return buffer[:usable].reshape(-1, height, width)
@@ -584,41 +473,218 @@ def temporal_seam_score(frames: np.ndarray, period: int) -> float:
     return float(at_boundary.mean() / elsewhere.mean())
 
 
-REFERENCE_MEDIA_ENV = "MINIMAX_H3_REFERENCE_MEDIA"
-DEFAULT_REFERENCE_MEDIA = Path.home() / "h3_fl2va_artifacts" / "fl2va_first.mp4"
+# ------------------------------------------------------------------ shared e2e gate scaffolding
+#
+# The pieces every pipeline e2e gate (t2va / fl2va / ref2va) runs the same way. Per-pipeline
+# judgement -- gate values, header wording, which tiers run -- stays at the call sites; what lives
+# here is only the mechanics all three had verbatim.
+
+WEIGHTS_ENV = "MINIMAX_H3_DIFFUSERS_DIR"
+DEFAULT_WEIGHTS = "/data/cglagovich/MiniMax-H3-diffusers"
+
+# Dense: a moving camera, a reflective wet surface, several independent light sources at
+# different colour temperatures, volumetric haze, and foreground/background motion at different depths.
+# Those are the things a video model is most likely to get wrong, and they are also what the artifact
+# rubric reads best -- banding shows in the haze gradients, seams show in the reflections, and flicker
+# shows in the neon.
+# The gated prompt and the t2va tier-6 thresholds are a **matched pair**. Both were calibrated
+# together on this prompt; swapping one without recalibrating the other breaks the gate. Measured
+# on it: CLIP 37.37, VBench imaging_quality 0.6896.
+#
+# `imaging_quality` in particular is prompt-dependent, not just model-dependent: it is a no-reference
+# IQA model that rewards sharp, well-lit frames. A dark rain-at-night scene scored **0.4884** against
+# this same 0.64 bar while looking entirely correct. So a showcase prompt belongs in a
+# manual run, not in this constant.
+#
+# Exported from here so the fl2va gate, whose keyframe is frame 0 of the calibrated t2va generation,
+# uses the *identical* string by import rather than by a copy that can drift.
+CALIBRATED_FOX_PROMPT = (
+    "A red fox trots across a snowy field at dawn, its breath visible in the cold air. "
+    "The low sun throws long blue shadows behind it, and loose snow lifts from each footfall."
+)
+
+# One truthy set for the RUN_CLIP / RUN_VBENCH switches, so every gate parses them identically.
+_ENV_TRUTHY = ("1", "true", "True")
 
 
-def reference_video() -> Path:
-    path = Path(os.environ.get(REFERENCE_MEDIA_ENV) or DEFAULT_REFERENCE_MEDIA)
-    if not path.is_file():
-        pytest.skip(f"no reference video at {path}; set {REFERENCE_MEDIA_ENV} to a clip with a soundtrack")
-    return path
+def clip_gate_enabled() -> bool:
+    """RUN_CLIP, defaulting **on**."""
+    return os.environ.get("RUN_CLIP", "1") in _ENV_TRUTHY
 
 
-def ref2va_references(case: str) -> list[MiniMaxH3Reference]:
-    """The reference set per e2e case, shared by the ref2va correctness and perf gates.
+def vbench_gate_enabled() -> bool:
+    """RUN_VBENCH, defaulting **on**."""
+    return os.environ.get("RUN_VBENCH", "1") in _ENV_TRUTHY
 
-    ``one_image`` and ``mixed`` condition on a Mandelbrot fractal: for a shape-and-sanity gate the
-    useful property is a reference nothing in the prompt could produce. It is also the most
-    adversarial of the three and sits at the bottom of the quality table in
-    `test_pipeline_ref2va_minimax_h3.py` -- 0.4826 imaging_quality is this case, not ref2va
-    generally, which reaches 0.6575 on a photographic reference. The discriminator uses real
-    photographs instead.
+
+def weights_dir(*required_subdirs: str, default: str = DEFAULT_WEIGHTS) -> Path:
+    """The diffusers snapshot directory; `pytest.skip`s when it or a required subdir is missing.
+
+    `required_subdirs` are the partitions the caller's gate actually loads (the ref2va gate
+    requires `transformer_ref`, and passes `default=""` because it has no default snapshot).
     """
-    if case == "one_image":
-        return [MiniMaxH3Reference(image=create_fractal_image(1024, 1024))]
-    if case == "video_with_sound":
-        return [reference_from_video_file(reference_video())]
-    if case == "mixed":
-        # One of each, and in an order that is not the natural one: the image first,
-        # then a SILENT video, then a standalone audio reference. So the request
-        # exercises a video block with no soundtrack rows of its own next to an audio
-        # block with no video rows, which is where the per-modality row cursors of
-        # `split_condition_blocks` can disagree with the layout.
-        sounded = reference_from_video_file(reference_video())
-        return [
-            MiniMaxH3Reference(image=create_fractal_image(1024, 1024)),
-            reference_from_video_file(reference_video(), with_audio=False),
-            MiniMaxH3Reference(audio=sounded.audio, sample_rate=sounded.sample_rate),
-        ]
-    raise ValueError(case)
+    directory = Path(os.environ.get(WEIGHTS_ENV, default))
+    if not directory.is_dir():
+        pytest.skip(f"no MiniMax-H3 snapshot at {directory}; set {WEIGHTS_ENV}")
+    missing = [name for name in required_subdirs if not (directory / name).is_dir()]
+    if missing:
+        pytest.skip(f"MiniMax-H3 snapshot at {directory} is missing {missing}; set {WEIGHTS_ENV}")
+    return directory
+
+
+def artifact_dir(env: str, default_name: str) -> Path:
+    """The gate's artifact directory (`$env`, else `~/{default_name}`), created if absent."""
+    directory = Path(os.environ.get(env) or Path.home() / default_name)
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def run_warm_generation(pipeline, prompt: str, *, seed: int, **gen_kwargs):
+    """One full warmup at the real shape, then the timed generation, asserted to be warm.
+
+    `gen_kwargs` is everything that shapes the request (num_frames/height/width/steps, plus
+    keyframes or references), passed identically to `pipeline.warmup` and to the timed call --
+    every program in the 50-block stack is keyed on the padded packed length, so a warmup at any
+    other shape warms nothing. The padded-length agreement is asserted rather than assumed;
+    it is what makes `pipeline.last_timings` a fully-warm measurement.
+    """
+    pipeline.warmup(prompt=prompt, **gen_kwargs)
+    warm_padded_len = pipeline.last_padded_len
+
+    output = pipeline(prompt, seed=seed, **gen_kwargs)
+
+    assert pipeline.last_padded_len == warm_padded_len, (
+        f"warmup ran at padded_len {warm_padded_len} but the measured call ran at "
+        f"{pipeline.last_padded_len}; this number is not warm"
+    )
+    return output
+
+
+def log_timing_table(pipeline, label: str, num_forwards: int, video_seconds: float, expected_total_s=None, extra=""):
+    """The MEASUREMENT block: per-stage rows, total, per-forward, realtime factor.
+
+    `extra` is spliced into the header right after "2 links" and carries everything that
+    differs per gate -- geometry, anchors, `l1_small_size` -- so those meaningful differences
+    stay at the call site instead of being regenerated here. `expected_total_s`, when given,
+    asserts the total against the gate's did-something-collapse bar. Returns the total.
+    """
+    rows = pipeline.last_timings
+    total = sum(seconds for _, seconds in rows)
+    logger.info(
+        f"MEASUREMENT {label} fully warm | mesh 4x8 Blackhole, TP=4 axis 0 / SP=8 axis 1, ring, 2 links{extra} "
+        f"| warm window: one full warmup generation at this shape, prepares and export excluded"
+    )
+    for row_label, seconds in rows:
+        logger.info(f"  {row_label:<18} {seconds:8.1f} s  ({100 * seconds / total:4.1f} %)")
+    logger.info(f"  {'Total (compute)':<18} {total:8.1f} s")
+    denoise = dict(rows).get("Denoise")
+    if denoise:
+        logger.info(
+            f"  per forward        {denoise / num_forwards * 1000:8.1f} ms  "
+            f"({num_forwards} forwards over {denoise:.1f} s)"
+        )
+    logger.info(f"  realtime factor    {total / video_seconds:8.1f} x  (compute / video seconds)")
+    if expected_total_s is not None:
+        assert (
+            total < expected_total_s
+        ), f"fully-warm total {total:.1f} s exceeds the {expected_total_s:.0f} s floor bar"
+    return total
+
+
+def to_uint8_frames(output) -> np.ndarray:
+    """`output.video` `(1, 3, F, H, W)` in [0, 1] -> `(F, H, W, 3)` uint8, which is what the checkers take.
+
+    Clamps then rounds before the uint8 cast: a plain `.astype(np.uint8)` truncates and, worse,
+    *wraps around* on any value that strays outside [0, 1], turning a barely-out-of-range white
+    pixel into a black one.
+    """
+    video = output.video
+    assert video.ndim == 5 and video.shape[0] == 1, f"unexpected video shape {tuple(video.shape)}"
+    frames = video[0].permute(1, 2, 3, 0).clamp(0, 1).mul(255).round().to(torch.uint8)
+    return frames.cpu().numpy()
+
+
+def check_written_file(paths: dict, expected_frames: int, seam_period: int = 17):
+    """Tier 5: gate the written *file*, not just the tensor. No-op when ffmpeg produced no mp4.
+
+    Probes the container (both streams present, muxed A/V skew), re-decodes it (frame count), and
+    scores the temporal seam at the video VAE's chunk period.
+    """
+    if "mp4" not in paths:
+        return
+    streams = probe_streams(paths["mp4"])
+    if streams:
+        logger.info(f"container streams: { {k: v.get('duration') for k, v in streams.items()} }")
+        assert "video" in streams and "audio" in streams, f"muxed file is missing a stream: {list(streams)}"
+        durations = {k: float(v["duration"]) for k, v in streams.items() if v.get("duration")}
+        if {"video", "audio"} <= set(durations):
+            skew = durations["audio"] - durations["video"]
+            # AAC pads to a frame boundary, so allow a little more than the tensor-level check.
+            assert abs(skew) < 0.15, f"muxed A/V skew {skew:+.3f} s"
+            logger.info(f"muxed A/V skew: {skew:+.4f} s")
+
+    decoded = decoded_frames(paths["mp4"], count=1)
+    if decoded.size:
+        assert (
+            decoded.shape[0] >= expected_frames - 1
+        ), f"the written mp4 decodes to {decoded.shape[0]} frames, expected ~{expected_frames}"
+        # The VAE's temporal chunk covers clip_length (17) pixel frames.
+        seam = temporal_seam_score(decoded, period=seam_period)
+        logger.info(f"temporal seam score at the {seam_period}-frame chunk period: {seam:.3f} (1.0 = no seam)")
+        if np.isfinite(seam):
+            assert seam < 3.0, (
+                f"inter-frame delta at chunk boundaries is {seam:.2f}x the delta elsewhere; "
+                "suspect temporal stitching (see the artifact rubric)"
+            )
+
+
+def gate_clip(frames: np.ndarray, prompt: str, threshold: float, label: str, enabled=None):
+    """The CLIP prompt-alignment gate. May `pytest.skip` when `open_clip` is missing.
+
+    `enabled=None` reads RUN_CLIP (default on); a caller that computes its own switch (the t2va
+    gate forces tier 6 off under a prompt override) passes it explicitly. `threshold` stays at
+    the call site because the bars are calibrated per pipeline.
+    """
+    if enabled is None:
+        enabled = clip_gate_enabled()
+    if not enabled:
+        logger.info("RUN_CLIP=0, skipping the CLIP prompt-alignment gate")
+        return None
+    pytest.importorskip("open_clip", reason="RUN_CLIP=1 but open_clip is not installed (set RUN_CLIP=0)")
+    alignment = clip_prompt_alignment(frames, prompt)
+    logger.info(
+        f"{label} CLIP prompt alignment: mean={alignment['mean']:.2f} "
+        f"min={alignment['min']:.2f} max={alignment['max']:.2f} (bar {threshold})"
+    )
+    assert alignment["mean"] >= threshold, (
+        f"{label} CLIP prompt alignment {alignment['mean']:.2f} is below the {threshold} bar; "
+        "the video does not match the prompt"
+    )
+    return alignment
+
+
+def gate_vbench(paths: dict, prompt: str, thresholds: dict, label: str, enabled=None, skip_without_mp4=False):
+    """The VBench gate, with the per-dimension failure list in the assert message.
+
+    `enabled=None` reads RUN_VBENCH (default on). A requested dimension with no returned score is
+    an *ungated* dimension, not a pass, so it fails. `skip_without_mp4` chooses what a missing
+    muxed mp4 means: the t2va gate fails (its own ffmpeg step should have produced it), the ref2va
+    gate skips.
+    """
+    if enabled is None:
+        enabled = vbench_gate_enabled()
+    if not enabled:
+        logger.info("RUN_VBENCH=0, skipping the VBench gate")
+        return None
+    if "mp4" not in paths:
+        message = "RUN_VBENCH=1 needs the muxed mp4, which ffmpeg did not produce"
+        if skip_without_mp4:
+            pytest.skip(message)
+        raise AssertionError(message)
+    scores = run_vbench(paths["mp4"], prompt, tuple(thresholds))
+    for dimension, bar in thresholds.items():
+        assert dimension in scores, f"VBench returned no score for {dimension}"
+        logger.info(f"{label} VBench {dimension} = {scores[dimension]:.4f} (bar {bar})")
+    failures = [f"{d} = {scores[d]:.4f} < {bar:.4f}" for d, bar in thresholds.items() if scores[d] < bar]
+    assert not failures, "VBench below threshold: " + "; ".join(failures)
+    return scores

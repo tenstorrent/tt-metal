@@ -52,6 +52,7 @@ from ....parallel.manager import CCLManager
 from ....utils import tensor
 from ....utils.check import assert_quality
 from ....utils.tensor import bf16_tensor
+from .common import FABRIC, NO_FABRIC
 
 # MiniMax-H3's `text_encoder/config.json` (text_config).
 HIDDEN_SIZE = 5120
@@ -70,20 +71,13 @@ SEQ_LEN = 128  # == SEQ_BUCKET_SIZE, so the encoder's prompt bucketing does not 
 
 # `single` is the profiling target and runs anywhere. The TP=8 configs mirror
 # `test_text_encoder_minimax_h3.py` and need a 32-chip mesh; they are what
-# reproduce the sharded matmul shapes listed in the header.
-#
-# Each config carries its own `device_params`, because fabric is not universally
-# safe to request: `FABRIC_1D` on a 1x1 mesh has no remote ethernet partner, so
-# router init fails the handshake and times out ("Fabric Router Sync: Timeout").
-# The TP configs need it for the CCL all-gathers; `single` has no CCL at all.
-_L1_SMALL = 32768
-_FABRIC = {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": _L1_SMALL}
-_NO_FABRIC = {"l1_small_size": _L1_SMALL}
-
+# reproduce the sharded matmul shapes listed in the header. Per-config
+# `device_params` (fabric only where there is CCL) is explained on the dicts
+# in common.py.
 _MESH = [
-    pytest.param((1, 1), (1, 1), None, 1, _NO_FABRIC, id="single"),
-    pytest.param((4, 8), (4, 8), 1, 2, _FABRIC, id="tp8_axis1"),
-    pytest.param((8, 4), (8, 4), 0, 2, _FABRIC, id="tp8_axis0"),
+    pytest.param((1, 1), (1, 1), None, 1, NO_FABRIC, id="single"),
+    pytest.param((4, 8), (4, 8), 1, 2, FABRIC, id="tp8_axis1"),
+    pytest.param((8, 4), (8, 4), 0, 2, FABRIC, id="tp8_axis0"),
 ]
 # The layer test runs the full matrix; the attention/MLP isolation tests keep debugging granularity
 # but only one representative mesh config. `tp8_axis1` is the (4, 8) mesh the MiniMax-H3 pipeline

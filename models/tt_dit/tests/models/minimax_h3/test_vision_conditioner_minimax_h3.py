@@ -63,7 +63,6 @@ import numpy as np
 import pytest
 import torch
 import transformers
-from huggingface_hub import snapshot_download
 from loguru import logger
 from PIL import Image
 
@@ -78,11 +77,11 @@ from ....parallel.manager import CCLManager
 from ....utils import tensor
 from ....utils.check import assert_quality
 from ....utils.tensor import bf16_tensor
+from .common import CONDITIONER_SUBFOLDER, conditioner_checkpoint_dir, load_reference_conditioner
 
-_LOCAL_MIRROR = "/data/cglagovich/MiniMax-H3-diffusers"
-_HF_REPO = "MiniMaxAI/MiniMax-H3"
-_SUBFOLDER = "text_encoder"
-_PATTERNS = [f"{_SUBFOLDER}/*"]
+# The whole subfolder, unlike the text-encoder gates' narrower pattern set: the vision tests
+# also need the image processor and tokenizer files that live beside the shards.
+_PATTERNS = [f"{CONDITIONER_SUBFOLDER}/*"]
 
 # The canvases `resolve_canvas_size` actually produces, as `(width, height)`. A keyframe is put onto
 # one of these *before* the processor sees it, so these are the only grids `fl2va` ever presents:
@@ -168,32 +167,11 @@ def _test_image(size):
     return prepare_keyframe_image(frame, height, width, True)
 
 
-def _conditioner_dir() -> str:
-    """`MINIMAX_H3_REPO`, then the local mirror, then a scoped Hub snapshot. Missing is a skip."""
-    try:
-        ref = os.environ.get("MINIMAX_H3_REPO", "").strip()
-        if ref and os.path.isdir(ref):
-            root = ref
-        elif not ref and os.path.isdir(_LOCAL_MIRROR):
-            root = _LOCAL_MIRROR
-        else:
-            repo_id = ref or _HF_REPO
-            logger.info(f"MiniMax-H3 conditioner not local; fetching {_PATTERNS} from {repo_id}")
-            root = snapshot_download(repo_id=repo_id, allow_patterns=_PATTERNS)
-        return os.path.join(root, _SUBFOLDER)
-    except Exception as exc:  # noqa: BLE001 - transport/auth/gating failures are a skip, not a failure
-        pytest.skip(f"MiniMax-H3 conditioner unavailable ({_LOCAL_MIRROR}, then {_HF_REPO}): {exc}")
-
-
 @pytest.fixture(scope="module")
 def conditioner():
     """The released conditioner, loaded once. `dtype` matches the checkpoint's own bf16."""
-    path = _conditioner_dir()
-    hf, info = transformers.Qwen3VLForConditionalGeneration.from_pretrained(
-        path, dtype=torch.bfloat16, output_loading_info=True
-    )
-    bad = {k: sorted(info[k])[:5] for k in ("missing_keys", "unexpected_keys", "mismatched_keys") if info[k]}
-    assert not bad, f"conditioner load key mismatch: {bad}"
+    path = conditioner_checkpoint_dir(_PATTERNS)
+    hf = load_reference_conditioner(path)
     return path, hf.model.eval()
 
 

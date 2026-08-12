@@ -25,7 +25,7 @@ from safetensors.torch import load_file
 
 import ttnn
 
-from ....encoders.qwen3vl.model_qwen3vl import Qwen3VlTextEncoder, create_rope_tensors
+from ....encoders.qwen3vl.model_qwen3vl import create_rope_tensors
 from ....parallel.config import EncoderParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....reference.ideogram4.constants import QWEN3_VL_ACTIVATION_LAYERS
@@ -33,6 +33,7 @@ from ....reference.ideogram4.dequant import dequant_fp8_state_dict
 from ....utils import tensor
 from ....utils.check import assert_quality
 from ....utils.tensor import bf16_tensor
+from .common import capture_layer_outputs, encoder_from_hf_config, hf_rope_params
 
 REPO = "Qwen/Qwen3-VL-8B-Instruct"
 FP8 = os.environ.get("IDEOGRAM4_WEIGHTS")
@@ -98,38 +99,16 @@ def test_qwen3vl_text_encoder(
     lm = _reference_lm(weights)
     cfg = lm.config
     head_dim = cfg.hidden_size // cfg.num_attention_heads
-    # In transformers >=5, `rope_theta` lives inside `rope_parameters` and there is no top-level
-    # attribute, so it must not be used as a `dict.get` default: Python evaluates defaults eagerly, and
-    # `cfg.rope_theta` raises AttributeError on a Qwen3-VL config before `.get` ever runs.
-    rope_params = getattr(cfg, "rope_parameters", None) or cfg.rope_scaling
-    mrope_section = rope_params["mrope_section"]
-    rope_theta = rope_params["rope_theta"] if "rope_theta" in rope_params else cfg.rope_theta
+    rope_theta, mrope_section = hf_rope_params(cfg)
 
     ids = torch.randint(0, cfg.vocab_size, (1, seq_len))
-    caps: dict[int, torch.Tensor] = {}
-    handles = [
-        lm.layers[i].register_forward_hook(
-            lambda m, i_, o, i=i: caps.__setitem__(i, (o[0] if isinstance(o, tuple) else o).detach())
-        )
-        for i in QWEN3_VL_ACTIVATION_LAYERS
-    ]
-    with torch.no_grad():
-        lm(input_ids=ids, attention_mask=torch.ones_like(ids), use_cache=False)
-    for h in handles:
-        h.remove()
+    with capture_layer_outputs(lm, QWEN3_VL_ACTIVATION_LAYERS) as caps:
+        with torch.no_grad():
+            lm(input_ids=ids, attention_mask=torch.ones_like(ids), use_cache=False)
     golden = [caps[i].float() for i in QWEN3_VL_ACTIVATION_LAYERS]
 
-    enc = Qwen3VlTextEncoder(
-        vocab_size=cfg.vocab_size,
-        hidden_size=cfg.hidden_size,
-        intermediate_size=cfg.intermediate_size,
-        hidden_act="silu",
-        num_hidden_layers=cfg.num_hidden_layers,
-        num_attention_heads=cfg.num_attention_heads,
-        num_key_value_heads=cfg.num_key_value_heads,
-        rms_norm_eps=cfg.rms_norm_eps,
-        rope_theta=rope_theta,
-        mrope_section=mrope_section,
+    enc = encoder_from_hf_config(
+        cfg,
         activation_layers=QWEN3_VL_ACTIVATION_LAYERS,
         device=submesh,
         parallel_config=EncoderParallelConfig(tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis)),
