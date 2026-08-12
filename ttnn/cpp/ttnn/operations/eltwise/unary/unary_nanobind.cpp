@@ -2020,8 +2020,9 @@ void py_module(nb::module_& mod) {
     bind_unary_operation_with_float_parameter<"softcap", &ttnn::softcap>(
         mod,
         "beta",
-        "The beta parameter. Bounds the output to +/-beta. Must be non-zero.",
-        "Bounds the input smoothly to +/-beta: near-linear for |input| << beta, saturating at the limits. Known as "
+        "The beta parameter. Bounds the output to +/-beta. Must be non-zero",
+        // No pipe-delimited absolute values here: Sphinx reads |x| as an rST substitution.
+        "Bounds the input smoothly to +/-beta: near-linear well inside beta, saturating at the limits. Known as "
         "soft capping (e.g. Gemma logit softcapping); also the up half of Moonshot's SiTU activation.",
         R"doc(BFLOAT16, BFLOAT8_B)doc",
         "",
