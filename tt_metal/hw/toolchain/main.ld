@@ -170,6 +170,20 @@ SECTIONS
     /* .gnu.warning sections are handled specially by elf32.em.  */
     *(.gnu.warning)
     . = ALIGN(4);
+#if defined(TYPE_KERNEL) && defined(COMPILE_FOR_TRISC) && defined(TTNOP_CAVE_BYTES)
+    /* Scratch space for the ttnop timing-perturbation tool (tt-llk/tests/
+       python_tests/ttnop).  Never defined by the normal build, so production
+       images are byte-identical; ttnop's `make metal_cave` regenerates these
+       scripts with it defined.  It lives inside .text so that both jumps of a
+       detour stay PC-relative through XIPify, which is what lets the tool poke
+       the host-side kernel image without resolving kernel_config_base.
+       FILL emits RISC-V nop (0x00000013), so an unarmed cave is inert.  */
+    FILL(0x13000000)
+    . = ALIGN(16);
+    __kernel_cave_start = .;
+    . = . + TTNOP_CAVE_BYTES;
+    __kernel_cave_end = .;
+#endif
   } :text
   .empty.init.fini :
   {

@@ -95,11 +95,18 @@ def _run(*command) -> str:
         return ""
 
 
-def environment(arch: str, site_mode: str, filler: str, drift: bool = True) -> dict:
+def environment(
+    arch: str,
+    site_mode: str,
+    filler: str,
+    drift: bool = True,
+    backend: str = "llk",
+) -> dict:
     sfpi_version = LLK_DIR / SFPI_VERSION
     boards = sorted(TENSTORRENT_DEVICES.glob("*/device/device"))
     return {
         "arch": arch,
+        "backend": backend,
         "site_mode": site_mode,
         "filler_policy": filler,
         "drift": "on (frozen stimuli)" if drift else "off (rolling stimuli)",

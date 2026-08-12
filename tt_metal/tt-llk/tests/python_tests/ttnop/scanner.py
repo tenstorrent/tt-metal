@@ -42,6 +42,10 @@ class Site:
 class Scan:
     elf: str
     mode: str
+    text_start: int
+    body_start: int
+    body_end: int
+    body_source: str
     cave_start: int
     cave_limit: int
     unpacker_mask: int
@@ -93,6 +97,10 @@ def scan(elf: str, mode: str = "sync") -> Scan:
     result = Scan(
         elf=elf,
         mode=raw["mode"],
+        text_start=raw["text"]["start"],
+        body_start=raw["body"]["start"],
+        body_end=raw["body"]["end"],
+        body_source=raw["body"]["source"],
         cave_start=cave["start"],
         cave_limit=cave["limit"],
         unpacker_mask=raw["unpacker_mask"],
