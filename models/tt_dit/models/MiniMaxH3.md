@@ -274,6 +274,31 @@ therefore every program in the 50-layer stack, is keyed differently on the two m
 
 ### Meshes
 
+Measured warm (`test_t2va_warm_latency`), 768P/15s, 362 frames, 49 forwards:
+
+| | 4x8 Galaxy | 4x32 quad (traced) | speedup |
+|---|---|---|---|
+| denoise | 252.3 s (5149 ms/fwd) | **93.6 s (1910 ms/fwd)** | 2.70x |
+| VAE decode | 11.5 s | 12.1 s | 0.95x |
+| audio decode | 4.7 s | 5.2 s | 0.90x |
+| **total** | **268.5 s** | **110.9 s** | **2.42x** |
+
+At 768P/5s the quad is 41.5 s against 72.7 s, i.e. 1.75x. Two things the numbers say plainly:
+
+* **Tracing is what makes the quad pay at 5s and does nothing for it at 15s.** Untraced, 4x32/5s was
+  *slower* than one Galaxy (134.0 s), because at 1184 rows/device a step is dispatch-bound; tracing
+  took it to 41.5 s. At 15s each device holds 3424 rows, the loop is compute-bound, and the traced
+  steady state (1835 ms/step) matches the untraced one (1745 ms/step). The first step still collapses
+  79.0 s -> 5.4 s, since capture allocates the CCL persistent buffers once.
+* **VAE and audio do not scale.** They are data-parallel over a fixed 28-tile work set, so they cost
+  the same on 128 chips as on 32 and are now 16 % of the quad's total. Reaching 4x end to end needs
+  denoise at ~50 s *and* something done about those 17 s.
+
+Not yet swept at SP=32, and the reason denoise is not lower: the matmul blockings (the log carries
+`No known best blocking` at M=1184 and M=3424) and `MiniMaxH3Attention.measured_sdpa_chunk_sizes`,
+which has no SP=32 entry, so ring SDPA takes the generic (256, 512) fallback.
+
+
 | mesh | TP | SP | topology | links | rows/device at 5 s / 15 s |
 |---|---|---|---|---|---|
 | 4x8 Blackhole Galaxy | 4, axis 0 | 8, axis 1 | ring | 2 | 4736 / 13664 |
