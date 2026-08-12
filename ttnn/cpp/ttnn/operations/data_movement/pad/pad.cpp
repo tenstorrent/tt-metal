@@ -10,6 +10,7 @@
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operation.hpp"
+#include <numeric>
 #include <ttnn/tensor/types.hpp>
 
 #include "pad.hpp"
@@ -110,22 +111,16 @@ ttnn::Tensor pad_leading_dimension_via_reshape(
         dim,
         rank);
 
-    uint32_t before = 1;
-    for (int i = 0; i < dim; i++) {
-        before *= shape[i];
-    }
-
-    uint32_t middle = 1;
-    for (int i = dim; i < rank - 2; i++) {
-        middle *= shape[i];
-    }
+    const auto shape_view = shape.view();
+    const uint32_t before =
+        std::accumulate(shape_view.begin(), shape_view.begin() + dim, 1u, std::multiplies<uint32_t>());
+    const uint32_t middle =
+        std::accumulate(shape_view.begin() + dim, shape_view.begin() + rank - 2, 1u, std::multiplies<uint32_t>());
 
     auto reshaped = ttnn::reshape(input_tensor, ttnn::Shape({before, middle, shape[-2], shape[-1]}));
 
-    uint32_t inner_extent = 1;
-    for (int i = dim + 1; i < rank - 2; i++) {
-        inner_extent *= shape[i];
-    }
+    const uint32_t inner_extent =
+        std::accumulate(shape_view.begin() + dim + 1, shape_view.begin() + rank - 2, 1u, std::multiplies<uint32_t>());
 
     ttsl::SmallVector<PadSpecDim> padding_4d = {
         {0, 0}, {pad_spec.before_elements * inner_extent, pad_spec.after_elements * inner_extent}, {0, 0}, {0, 0}};
@@ -330,10 +325,7 @@ ttnn::Tensor pad_impl(
     }
     if (original_rank > 4) {
         // Only padding[extra_index .. extra_index + 3] reaches the 4D kernel. Dims below extra_index have no
-        // slot in the 4D spec at all, and axis 0 of the squeezed tensor may be several original dims folded
-        // together -- padding applied there would stretch the whole merged axis instead of one dimension.
-        // pad_leading_dimensions() consumes those dims before we get here; this guard is what the removed
-        // "only supports padding on the lowest 3 dimensions" TT_FATAL used to provide.
+        // slot in the 4D spec, and axis 0 of the squeezed tensor may fold several original dims together.
         const auto is_unpadded = [](const PadSpecDim& p) { return p.before_elements == 0 && p.after_elements == 0; };
         const bool axis0_is_merged =
             input_tensor_4D.logical_shape()[0] != input_tensor.logical_shape()[static_cast<int>(extra_index)];
