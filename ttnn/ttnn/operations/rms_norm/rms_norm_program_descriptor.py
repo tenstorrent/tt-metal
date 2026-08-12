@@ -1170,11 +1170,34 @@ def create_program_descriptor(
             row_count = rows_per_group + (1 if gi < rows_extra else 0)
             stick_start = row_start * TILE_HW
             members = []
+            # Perf 2, idea I10 — SPREAD the ragged hidden tiles instead of packing
+            # them onto the first `w_rem` slots. The combine cannot start until the
+            # LAST contributor's partial lands, so a straggler is paid by all G cores:
+            # on the focus shape (224 hidden tiles over G=110) `cp_wait_rstd` measured
+            # p50 3574 ns with min 735 / max 4371 — the spread IS the cost. Placing the
+            # +1-tile cores evenly over the slot order (rather than adjacent at the
+            # front) also spreads their DRAM start offsets across banks.
+            # MEASURED (blackhole_p150b @1350 MHz, bf16/TILE/HiFi2/fp32_dest_acc_en=False,
+            # whole-op device kernel ns, median of 3; `spread` was strictly below every
+            # `front` run): decode7168 (focus) 8014 -> 7774 (1.031x), decode5120
+            # 6919 -> 6743 (1.026x), decode2304 6110 -> 6086, decode1024 5067 -> 5017,
+            # rows128_5120 13525 -> 13419, prefill 8192x1024 89251 -> 89479 (all flat,
+            # inside noise). Alternatives measured and REJECTED: `rowend` 7883,
+            # `byrow` 8067, `back` 8204, and equalizing C by shrinking G outright
+            # (G=55 8790, G=22 8763, G=2 27511 — 3.4x worse; the lost parallelism
+            # dwarfs the straggler).
+            # This is a pure reindexing of WHICH slot takes the ceil width: the cover is
+            # still contiguous and max(core_w) is unchanged, so it is correct for every
+            # interleaved geometry and a literal no-op when w_rem == 0 (all prefill
+            # picks). Sharded geometries never run this split — the shard spec supplies
+            # the widths.
+            wide_slots = {(i * G) // w_rem for i in range(w_rem)} if w_rem else set()
+            widths = [w_floor + (1 if slot in wide_slots else 0) for slot in range(G)]
+            starts = [0] * G
+            for slot in range(1, G):
+                starts[slot] = starts[slot - 1] + widths[slot - 1]
             for slot in range(G):
-                if slot < w_rem:
-                    core_w, w_start = w_floor + 1, slot * (w_floor + 1)
-                else:
-                    core_w, w_start = w_floor, w_rem * (w_floor + 1) + (slot - w_rem) * w_floor
+                core_w, w_start = widths[slot], starts[slot]
                 members.append(
                     {
                         "core": cores[slot],

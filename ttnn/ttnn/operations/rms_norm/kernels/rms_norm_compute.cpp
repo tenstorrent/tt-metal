@@ -615,6 +615,32 @@ void kernel_main() {
                 ckl::input(cb_rstd, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Col);
             constexpr auto gamma_spec =
                 ckl::input(cb_gamma_tiles, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Row);
+            // Perf 2, idea I11 — DEST-lane BLOCKING for the apply pass.
+            // The apply is the op's dominant compute stage on every multi-tile-row
+            // geometry (`cp_apply_scale` math = 27880 ns of a 40657 ns kernel span on
+            // BLOCK_SHARDED (1,1,8192,1024)). Processing `APPLY_BLK` tiles per DEST-sync
+            // window instead of one collapses the per-tile acquire/commit overhead.
+            // MEASURED (blackhole_p150b @1350 MHz, bf16/TILE/HiFi2/fp32_dest_acc_en=False,
+            // ns per apply chunk, PCC identical to the per-tile baseline to six digits —
+            // this REORDERS identical FPU work and touches no precision knob):
+            //   streaming out (PerChunk + blocking): (1,3) 567 -> 503 (1.13x),
+            //     (16,4) 6527 -> 4091 (1.60x), (32,4) 12763 -> 7784 (1.64x),
+            //     (1,112) 10666 -> 6804 (1.57x)
+            //   OUT_STRIDED (blocking only; its reserve is already caller-hoisted):
+            //     (32,4) 11199 -> 7786 (1.44x), (16,4) 5733 -> 4096 (1.40x),
+            //     (1,112) 9526 -> 6814 (1.40x)
+            // `PerChunk` (not a bulk output) is deliberate AND is the fastest form
+            // measured: it reserves/pushes exactly `APPLY_BLK` pages per window, so the
+            // writer is never delayed by more than a block, and `cb_output_tiles` keeps
+            // its OUTPUT_CB_DEPTH sizing (a bulk output would need rows_t*WC pages — a
+            // 16x L1 blow-up on the block-sharded leg, and a deadlock at depth 2).
+            // 8 is the measured knee; the chain clamps it to what DEST holds, and to
+            // `cols` via the min below, so a narrow chunk simply runs unblocked.
+            // HARD CONTRACT: a chain-owned output at blk > 1 MUST be PerChunk.
+            // `ReservePolicy/PushPolicy::PerTile` reserves one page per block iteration
+            // but packs `inner_count` tiles — a CB overrun that HANGS the device with no
+            // static_assert (confirmed on device in round 1 and again here).
+            const uint32_t apply_blk = cols < 8u ? cols : 8u;
             constexpr auto out_strided = ckl::output(
                 cb_output_tiles,
                 ckl::ReservePolicy::None,
@@ -652,15 +678,16 @@ void kernel_main() {
                     // Pass 1 of the apply: x * rstd (Col broadcast) -> cb_normed.
                     MaybeDeviceZoneScope("cp_apply_scale");
                     ckl::eltwise_chain(
-                        ckl::EltwiseShape::grid(rows_t, cols),
+                        ckl::EltwiseShape::grid(rows_t, cols, apply_blk),
                         ckl::BinaryFpu<in_spec, rstd_spec, ckl::BinaryFpuOp::Mul, ckl::BroadcastDim::Col>{src},
-                        ckl::PackTile<ckl::output(cb_normed)>{});
+                        ckl::PackTile<ckl::output(
+                            cb_normed, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk)>{});
                 }
 
                 MaybeDeviceZoneScope("cp_apply_gamma");
                 if constexpr (OUT_STRIDED) {
                     ckl::eltwise_chain(
-                        ckl::EltwiseShape::grid(rows_t, cols),
+                        ckl::EltwiseShape::grid(rows_t, cols, apply_blk),
                         ckl::BinaryFpu<
                             ckl::input(
                                 cb_normed, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
@@ -670,14 +697,15 @@ void kernel_main() {
                         ckl::PackTile<out_strided>{ckl::StridedTileRange{chunk_base, CB_W_TILES}});
                 } else {
                     ckl::eltwise_chain(
-                        ckl::EltwiseShape::grid(rows_t, cols),
+                        ckl::EltwiseShape::grid(rows_t, cols, apply_blk),
                         ckl::BinaryFpu<
                             ckl::input(
                                 cb_normed, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
                             gamma_spec,
                             ckl::BinaryFpuOp::Mul,
                             ckl::BroadcastDim::Row>{},
-                        ckl::PackTile<ckl::output(cb_output_tiles)>{});
+                        ckl::PackTile<ckl::output(
+                            cb_output_tiles, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk)>{});
                 }
                 if constexpr (CHUNKED) {
                     cb_pop_front(cb_gamma_tiles, CB_CHUNK_TILES);
@@ -685,15 +713,16 @@ void kernel_main() {
             } else if constexpr (OUT_STRIDED) {
                 MaybeDeviceZoneScope("cp_apply_scale");
                 ckl::eltwise_chain(
-                    ckl::EltwiseShape::grid(rows_t, cols),
+                    ckl::EltwiseShape::grid(rows_t, cols, apply_blk),
                     ckl::BinaryFpu<in_spec, rstd_spec, ckl::BinaryFpuOp::Mul, ckl::BroadcastDim::Col>{src},
                     ckl::PackTile<out_strided>{ckl::StridedTileRange{chunk_base, CB_W_TILES}});
             } else {
                 MaybeDeviceZoneScope("cp_apply_scale");
                 ckl::eltwise_chain(
-                    ckl::EltwiseShape::grid(rows_t, cols),
+                    ckl::EltwiseShape::grid(rows_t, cols, apply_blk),
                     ckl::BinaryFpu<in_spec, rstd_spec, ckl::BinaryFpuOp::Mul, ckl::BroadcastDim::Col>{src},
-                    ckl::PackTile<ckl::output(cb_output_tiles)>{});
+                    ckl::PackTile<ckl::output(
+                        cb_output_tiles, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk)>{});
             }
 #endif
 

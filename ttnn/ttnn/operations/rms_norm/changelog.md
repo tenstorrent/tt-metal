@@ -882,3 +882,247 @@ including the three nulls, each carrying its own correctness gate and measured t
 compile-time switches stay in the kernels at `0`: inert, and they are the harness that
 produced the cumulative-ablation table above (`RMSN_ABLATE_GATHER_BYTES` is now
 denominated in faces, since the production payload itself became column-valid).
+
+## Perf 2 — Tournament round 2 of 2 (5 ideas fanned out, 2 graduated)
+
+- **Date**: 2026-08-12
+- **Nothing moved in `SUPPORTED`.** A perf tournament changes no `verify_supported`
+  category; the signal is device-ns. Diff is `rms_norm_compute.cpp` (the apply phase) and
+  `rms_norm_program_descriptor.py` (the ragged-hidden slot placement), plus five
+  experiment dirs.
+
+### The re-measured breakdown (Step 1) — the critical path moved after round 1
+
+Round 1's four graduations shifted the critical path, so the whole breakdown was re-run on
+the now-instrumented op. Focus shape unchanged and un-proxied: the perf-flagged loose case
+`(1,1,32,7168)` INTERLEAVED at its *exact* pinned config — bf16 / TILE / gamma bf16 TILE /
+`fp32_dest_acc_en=False` / `MathFidelity.HiFi2` / `pcc_threshold=0.9995`, the one carrying
+`minimum_expected_speedup = 7.0`. Every knob it declares is inside `SUPPORTED`. Geometry:
+G = 110 cores, 11×10 tree, C = 2–3 hidden tiles/core, R = 1, one block.
+
+Zone coverage of the `*-KERNEL` span re-verified at 93.6–98.7 % on every RISC, markers at
+≤ 36 of the 250 cap — the truncation check that keeps a clipped profile from inventing a
+dominant stage.
+
+Whole op = 8476 ns zone-instrumented. Per-stage p50 ns (a compute zone is read per THREAD
+— unpack / math / pack — as that thread's occupancy, not as one stage cost):
+
+| stage | RISC | p50 ns | note |
+|---|---|---|---|
+| `cp_wait_rstd` | TRISC_0 | **3574** | **42 % of the wall**; max 4371 / min 735 — a huge contributor skew |
+| `wr_mcast_recv` | BRISC | 3072 | the members' view of the same round trip |
+| `cp_apply_scale` | TRISC_1 (math) | 3871 | mostly starvation behind rstd on this geometry |
+| `wr_out_barrier` | BRISC | 1036 | write tail, ≈ 1.1 µs of it irreducible DRAM |
+| `rd_in_barrier` | NCRISC | 887 | **at the DRAM roofline — no ideas spent** |
+| `cp_gather2_wait` / `wr_gather2_sem_wait` | | 1218 / 992 | the second rendezvous |
+| `cp_combine_l1` / `cp_combine_l2` / `cp_finalize` | TRISC_0 | 394 / 363 / 150 | the combine's actual arithmetic |
+| `rd_gamma_tile` | NCRISC | 801 | **not** on the critical path — NCRISC's whole span is 2178 of 8476 |
+
+Second geometry, BLOCK_SHARDED `(1,1,8192,1024)` `[1024,128]` on (8,8), 2 blocks,
+rows_t = 32, whole op 41021 ns — a *different* ranking, which is why it was broken down
+too: `cp_apply_scale` math **27880 ns of a 40657 ns kernel span** (the dominant compute
+stage anywhere in the op), `cp_wait_rstd` 21499, `wr_out_pin_wait` 13352, `cp_finalize`
+6840 on the 8 leaders. Third: `(1,1,8192,7168)` = 593393 ns, still at the DRAM peak.
+
+**Ranked headroom** (roofline-gated): **1.** the cross-core combine round trip — but round
+1's cumulative ablation already showed only ~611 ns of its ~3050 ns is *arithmetic*, the
+rest being rendezvous/hop latency; **2.** the apply pass, #1 on every multi-tile-row
+geometry; **3.** contributor skew feeding the combine (min 735 vs max 4371);
+**4.** the root finalize on wide-row geometries; **5.** read and write — **both at the
+DRAM roofline, gated, no ideas spent**.
+
+### The portfolio (Step 2) — 5 ideas, deliberately overlapping
+
+| id | idea | target |
+|---|---|---|
+| I8 | elide the rstd multicast's `mcast_pipe` PRE_HANDSHAKE receiver ack | the return broadcast |
+| I9 | pipelined/incremental leader combine + cheaper partial delivery | the two rendezvous |
+| I10 | spread the ragged hidden tiles so no core is a straggler | contributor skew into the combine |
+| I11 | apply-pass `PerChunk` output lifecycle + DEST-lane blocking | the apply |
+| I12 | batch the root finalize across tile-rows; fuse add-eps + rsqrt | the root finalize |
+
+I9 and I10 deliberately overlap (both attack the rendezvous wait, from the delivery side
+and the arrival-time side); I12 overlaps round 1's graduated column-parity finalize body.
+No idea touched `fp32_dest_acc_en`, `math_fidelity`, `math_approx_mode` or a dtype — the
+precision contract is fixed, and every subagent reported PCC per option.
+
+### Per-idea verdicts (Step 3–4) — 2 graduated WINS, 1 WIN not graduated, 2 measured nulls
+
+**I11 — apply `PerChunk` + DEST blocking. WIN → GRADUATED.** Isolated, ns per apply chunk,
+PCC identical to the per-tile baseline to six digits at every geometry (this reorders
+identical FPU work): (1,3) focus 567 → 503 (**1.13×**), (1,2) 482 → 415, (16,4)
+6527 → 4091 (**1.60×**), (32,4) 12763 → 7784 (**1.64×**), (1,112) 10666 → 6804 (1.57×).
+On the `OUT_STRIDED` legs (pinned/row-major-C output, incl. BLOCK_SHARDED) the reserve is
+already caller-hoisted so only the blocking half applies: (32,4) 11199 → 7786 (1.44×),
+(1,112) 9526 → 6814 (1.40×). **The key result**: the integration-safe `PerChunk` output
+*matches or beats* a bulk output (7783 vs 7802 at (32,4)) — so nothing was given up to
+keep the writer un-delayed, and `cb_output_tiles` needs **no resizing** (a bulk output
+would have wanted `rows_t*WC` instead of `OUTPUT_CB_DEPTH*WC` — a 16× L1 blow-up on the
+block-sharded leg and a deadlock at depth 2). Pure `eltwise_chain` API; no raw LLK.
+
+**I10 — spread the ragged hidden tiles. WIN → GRADUATED.** Whole-op ns, median of 3, the
+spread variant strictly below every baseline run: decode7168 (focus) 8014 → 7774
+(**1.031×**), decode5120 6919 → 6743 (1.026×); decode2304/decode1024/rows128_5120/prefill
+all flat. Rejected alternatives, measured: `rowend` 7883, `byrow` 8067, `back` 8204, and
+equalizing C by shrinking G outright — G=55 8790, G=22 8763, **G=2 27511 ns (3.4× worse)**;
+the lost parallelism dwarfs the straggler.
+
+**I8 — elide the multicast PRE_HANDSHAKE ack. WIN in isolation, NOT GRADUATED.** The
+isolated bench is a real, correct win that scales with the ack count: decode110 1 block
+7907 → 7276 (1.09×), 2 blocks 12770 → 11610 (1.10×), 4 blocks 22644 → 20054 (1.13×), and
+flat at G=8 (bshard64 1.00×, wshard8 1.00×) — ~600–650 ns per block. It is also correct
+**multi-block** with a single-slot landing buffer (poison-proved at 2 and 4 blocks): the
+ack's "my slot is free" is already implied by a strictly stronger edge, since the root
+cannot send block b+1 until every member has written its block-(b+1) gather partial, which
+it cannot reach until it has consumed its block-b landing tile. **But on the real op it
+does not move the wall**: measured whole-op, decode7168 7896 → 7837, decode1024
+5387 → 5286, wshard7168 5854 → 5733, bshard1024 41130 → 36235 (unchanged by this idea) —
+0.7–2 %, at or inside the noise band, because in the op the members ack long before the
+root finishes its combine and arrives at `send()`. Honest data, recorded, not forced in:
+graduating it would also require a semantic change to a *shared* `kernel_lib` helper
+(this op's non-rectangular shard grids have mcast-box **filler cores** that receive but
+never gather, so with the handshake off the stock `ReceiverPipe` ctor's unconditional
+`data_ready_.set(INVALID)` races the broadcast). The library gap is filed below.
+*Also corrected by this subagent*: `wr_rstd_send_wait` (821 ns focus / 15196 ns bshard) is
+**not** the ack wait — it is `cb_wait_front(cb_rstd_send)`, the root starving on its own
+combine+finalize. The ack lives inside `wr_mcast_send` (386 ns). The breakdown table above
+carries the corrected attribution.
+
+**I9 — pipelined combine + cheaper delivery. NULL.** A 1.11–1.14× exists *only* in a
+zero-skew regime that does not describe the op. Under the op's real arrival spread
+(`cp_wait_rstd` min 735 / max 4371) every variant is flat: baseline 6699 ns vs `incr` 6590
+(1.02×), `incr_sem` 6544 (1.02×), and `flag` delivery is a genuine **measured regression**
+(6801, 0.98×) because on Blackhole an inline L1 dword write bounces through an L1 scratch
+location and costs the critical *last* contributor more than the NoC atomic it replaces.
+The mechanism is structural: the gather's cost is set by the last contributor, so a
+receive-side barrier everyone else already satisfied is free, and pipelining can hide only
+the single tile-add that follows the last arrival. Flat on all 9 geometries. `incr` is
+additionally **inexpressible at rows_t > 1** (the gather CB is `(r*fan_in + slot)`-major,
+so a per-slot incremental push is only front-contiguous at rows_t == 1). Not graduated.
+Reusable byproduct: the bench carries a calibrated arrival-skew injector (5.91 ns/iter) —
+any future combine bench should use it, because a zero-skew combine bench systematically
+overstates rendezvous ideas.
+
+**I12 — batched finalize. NULL.** Batching is pure public helper API
+(`EltwiseShape::tiles(n, B)` + block-capable CB policies — today's finalize uses default
+Streaming policies, which make `chain_supports_block_v` false and clamp `block_size` to 1),
+but it doesn't pay: rows_t=32 8807 → 8591 ns (1.025×, on the noise edge), rows_t=64
+17410 → 16659, rows_t=1 flat (B clamps to 1). It cuts UNPACK hard (7710 → 6374) but unpack
+is not the critical path — the finalize is SFPU-math-throughput bound. `B=8` is a
+**measured regression** at rows_t 8 and 16. The add-eps+rsqrt fusion re-measures as a real
+1.13× but is the same option round 1 declined for its rows_t=1 math regression (408 → 484
+ns, i.e. the decode geometry), and batching does not rescue it. Not graduated. Every
+variant PCC 1.000000 vs an fp64 reference; `chunk_pair`/`upfront_pair` are bit-exact
+against today's op.
+
+### What graduated, and how widely
+
+Both graduations are the op's **single unqualified path**; the code they replaced is gone
+(the per-tile apply lifecycle, the `slot < w_rem` front-packed ragged split).
+**No carve-out was earned this round** — no supported cell measured a material regression,
+and nothing was fenced off:
+
+- **I11** rides on **every** apply, every layout, every placement, every dtype and every
+  precision corner, chunked and unchunked, gamma and no-gamma. `block_size` is
+  `min(8, cols)` and the chain clamps it further to what DEST holds, so a narrow chunk
+  simply runs unblocked — that is the pattern degrading gracefully, **not** a predicate.
+  `cols < 8` regimes (incl. the focus shape at cols=3, where the win is 1.13×) are IN the
+  domain. The `OUT_STRIDED` legs take the blocking half only because their lifecycle is
+  already caller-managed — a *smaller* win (1.40–1.44×), not an exception.
+- **I10** rides on every interleaved geometry and is a literal no-op when `w_rem == 0`
+  (all prefill picks). Sharded geometries never run this split at all — the shard spec
+  supplies the widths — so they are untouched, not excluded.
+
+**Whole-op, zone-instrumented, matched before → after (one fresh-cache run each, both
+halves measured back-to-back through the same harness on the same box):**
+
+| geometry | before | after | ratio |
+|---|---|---|---|
+| **decode (1,1,32,7168) — FOCUS** | **8110** | **7879** | **1.029×** |
+| decode (1,1,32,5120) | 7303 | 6926 | 1.054× |
+| decode (1,1,32,2304) | 6465 | 6409 | flat |
+| decode (1,1,32,1024) | 5578 | 5484 | 1.017× |
+| **BLOCK (1,1,8192,1024) `[1024,128]`(8,8)** | **41130** | **36273** | **1.134×** |
+| HEIGHT (1,1,256,512) | 5473 | 5087 | 1.076× |
+| ROW_MAJOR interleaved (128,512) | 9576 | 9189 | 1.042× |
+| WIDTH (1,1,32,7168) `[32,256]`(7,4) | 6059 | 5949 | 1.018× |
+| WIDTH (1,1,32,1024) `[32,128]`(8,1) | 4769 | 4659 | 1.024× |
+| prefill (1,1,8192,1024) | 90420 | 88924 | 1.017× |
+| prefill (1,1,8192,7168) | 593393 | 584467 | flat (at the DRAM roofline) |
+| ragged hidden (1,1,32,2047) | 6687 | 6649 | flat |
+
+**Guard-set no-regression result: nothing regressed on any representative** — the 12 rows
+above are one per distinct kernel path × layout × placement (interleaved TILE tree-combine,
+interleaved TILE multi-block, ROW_MAJOR legs, ragged-hidden mask, HEIGHT (G=1 degenerate
+combine), WIDTH and BLOCK pinned-shard zero-copy, prefill). Every row is flat or faster;
+the two biggest movers are the geometries whose breakdown named the apply as dominant.
+blackhole_p150b @ 1350 MHz. The zone markers cost ~0.9 µs on the decode shape and cost
+nothing in production, where the profiler is off.
+
+The focus case's goal (`achievable_ns` 104259 ÷ `minimum_expected_speedup` 7.0 ≈ 14894 ns)
+is cleared by ~1.9× at its exact pinned config.
+
+### Accuracy
+
+Unchanged everywhere. Both graduations are structural, not numerical: I11 reorders
+identical FPU work into wider DEST windows (PCC identical to the baseline to six digits at
+every geometry measured in isolation), and I10 changes only *which core* owns which hidden
+tile. Precision matrix **140 passed / 36 skipped**, unchanged. Golden `-m perf` and
+`-m pad_poison` **37/37**. Unit acceptance 82/82, sharded 41/41, shapes 184/184,
+regression 15/15.
+
+### Golden test progress
+
+`test_op_loose` **382 / 384** — byte-for-byte the two `W = 11008` TILE HEIGHT-shard cells
+Refinement 2b documented as an L1-capacity limit and every refinement since has confirmed;
+unchanged and for the unchanged reason (the two resident shards alone take 1409024 of the
+1441792-byte budget).
+
+### Helper bypasses
+
+**None.** Both graduated paths are plain `compute_kernel_lib` / host API — I11 is
+`EltwiseShape::grid(H, W, blk)` plus an `output(..., ReservePolicy::PerChunk,
+PushPolicy::PerChunk)` spec, and I10 is host-side work-split arithmetic. Round 1's two
+raw-LLK sites (`rsqrt_col0_body` / `add_col0_body`) are untouched and keep their kernel-head
+justification comments.
+
+Three library gaps found while measuring, none of which produced a bypass in this op, all
+recorded as feedback:
+
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `mcast_pipe::ReceiverPipe` | ergonomics | The ctor **unconditionally** kernel-inits `data_ready` to INVALID, justified in `mcast_pipe.hpp:27-29` by "the sender is gated behind that ack" — an argument that is false once `PRE_HANDSHAKE` is off. So the fire-and-forget path silently inherits a race for any receiver that is not itself ordered ahead of the sender (mcast-box **filler cores** on a non-rectangular shard grid receive but never gather, so nothing orders them). Fix is one line — `if constexpr (DATA_READY_SIGNAL == Flag && PRE_HANDSHAKE) data_ready_.set(INVALID);` — plus a header note that the no-handshake path takes its INVALID from the host `CreateSemaphore` initial value. This gap is why measured-correct idea I8 was left on the shelf. | n/a (elision measured 1.09–1.13× isolated, 0.7–2 % whole-op) | n/a — **not bypassed**, helper kept | (none) |
+| `eltwise_chain` | ergonomics | A chain-owned output at `block_size > 1` **must** be `PerChunk`. With `ReservePolicy/PushPolicy::PerTile` the chain reserves one page per block iteration but packs `inner_count` tiles — a CB overrun whose only symptom is a **device hang**, with no `static_assert`. Two independent rounds hit it. The pairing is statically knowable and should be asserted. | n/a | n/a — **not bypassed**; the graduated path uses `PerChunk` and the kernel documents the contract | `rms_norm_compute.cpp:648` (the `apply_blk` comment) |
+| `eltwise_chain` | capability | Default (Streaming) CB policies make `chain_supports_block_v` false, so `block_size` is silently clamped to 1 (`eltwise_chain.inl:3054`). A caller who asks for blocking and gets none has no diagnostic — the only evidence is that perf didn't move. A warning, or an opt-in `static_assert`, would have saved I12 a measurement cycle. | n/a | n/a — **not bypassed** | (none) |
+
+### Round-3 leads (measured, not taken)
+
+1. **The combine round trip is now ~42 % of the focus wall and is LATENCY, not
+   arithmetic** — round 1's ablation put only ~611 ns of ~3050 ns in the FPU, and I9 showed
+   the rendezvous itself cannot be pipelined away because the cost is set by the last
+   contributor. The remaining lever is reducing the number of *hops* (a one-stage gather at
+   G=110, or fewer, wider-C cores) — but I10 measured G-reduction as strictly worse
+   (G=55 8790, G=22 8763 vs G=110 8014), so this needs a topology idea, not a knob.
+2. **I8's ack elision** becomes graduatable for free the moment `ReceiverPipe` takes the
+   one-line ctor fix above; worth ~0.7–2 % here and more on any op with a bigger fan-out.
+3. **I12's add-eps + rsqrt fusion**: 1.13× on the root finalize at rows_t ≥ 8 (rows_t=32
+   math 8684 → 7653) and strictly *closer* to the fp64 reference (it keeps `x+eps` in an
+   fp32 LREG instead of round-tripping the 16-bit DEST), but it regresses rows_t=1 math
+   408 → 484 ns, i.e. the focus geometry. It is the one place in this op where a genuine
+   dual path might be worth its debt — measure the whole-op effect on the wide-row
+   geometries before deciding.
+4. **`cp_apply_scale` math is still 27.9 µs of the 40.7 µs block-sharded kernel span**
+   *before* I11; re-break-down that geometry now that I11 landed (whole op 41130 → 36273)
+   to see what took over as dominant.
+
+### Tests added
+
+Five experiment dirs under `tests/ttnn/unit_tests/operations/rms_norm/perf_experiments/` —
+one per floated idea, including the two nulls, each carrying its own correctness gate and
+measured table: `mcast_ack_elision/`, `pipelined_combine/` (64 correctness cells green),
+`combine_skew/`, `apply_lifecycle/`, `batched_finalize/`. They live in the tests tree
+rather than under `ttnn/ttnn/operations/rms_norm/perf_experiments/` because
+`scripts/validate_no_global_torch_imports.py` forbids a global `import torch` under
+`ttnn/ttnn/`; the op-side README already points there. The measurement harness
+(`perf_zone_harness.py` + `perf_zone_report.py`) is unchanged and produced every number
+above.
