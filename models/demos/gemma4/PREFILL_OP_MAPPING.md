@@ -17,7 +17,10 @@ tt-perf-report "$CSV" --start-signpost start --end-signpost stop > prefill/exp1.
 - Signposts: CSV has `start` @ row 1664, `stop` @ 2081 (no `end`)
 - Mesh: Wormhole 1×8 (T3K), TP=8
 - Stack: `num_layers=1` (sliding layer 0 only) + embed + final norm + lm_head
-- Prompt pad: logical seq **96** tiles (report shapes `…x96x…`), not 128 — Tracy kernel pad / valid length
+- Prompt pad (exp0–exp4): logical seq **96** tiles — `_build_tokens` used a short prompt, so
+  `prompt_lens` padded to the 96 bucket even for `-k prefill_128`.
+- **Tracy fixtures now fill `prompt_lens` to the padded kernel** (`tracy_prefill_common.build_prefill_trace_fixtures`)
+  so `sliding-prefill_2048` is actually 2048-row (exp5). Parity tests still use the short prompt.
 
 ## Run configuration
 
@@ -147,17 +150,93 @@ Net epilogue: removed AG+Untilize (~1.6 ms), paid sampling (~0.35 ms) → **~1.2
 
 Demo: set `GEMMA4_HOST_SAMPLE=0` so Generator passes `sampling_params` and takes the skip-AG path.
 
-### Later phases
+### Phase 2 (exp3/exp4, committed `1d6f0372919`)
 
-1. **Per-layer RS+AG (~200 μs/layer)** — ×60 on full model; tune split-AR worker knobs; keep Linear on T3K.
-2. **Prefill matmuls under-cored (24–42)** — Phase 3 at ISL≥2k with 2D-mcast.
-3. **SDPA** — ignore until ISL 2048 capture.
-4. **Host gap ~50 ms** — investigate Python before first device op inside signposted replay; not a matmul config issue.
+LN/residual island on dense prefill at **M≤128** only (full-model L1/CB clash at demo warmup 512→1024 input LN). Prefill gate_up S2I's sharded in0 when M>TILE. Split RS height-aware: `w=1,c=1` below 2048, `w=2,c=2` at T3K chunk height. Topology: Ring for dense WH 8, Linear for MoE (test was stale).
 
-## Next measurement
+| Metric | exp2 | exp4 (island @96) | Δ |
+|--------|-----:|------------------:|--:|
+| Device sum | 2,744 μs | 2,641 μs | **−103 μs** |
+| Ops | 59 | 53 | −6 |
+
+Demo batch-1 (31B 1×8): TTFT 75.8 ms, 22.33 tok/s/user. Layer PCC prefill_1024 0.997.
+
+### Phase 0 leftovers — 2048 sliding + 128 full group (2026-08-12)
 
 ```bash
-# Optional Phase 0 matrix (same recipe, correct stop)
--k "sliding-prefill_2048-1x8 or full-prefill_128-1x8"
-tt-perf-report … --start-signpost start --end-signpost stop
+GEMMA4_TRACY_DEVICE_SAMPLE=1 python -m tracy -p -r -v -m pytest \
+  models/demos/gemma4/tests/unit/test_prefill_single_layer_tracy.py \
+  -k "sliding-prefill_2048-1x8 or full-prefill_128-1x8" -v -s --timeout=1800
+tt-perf-report CSV --start-signpost start --end-signpost stop
 ```
+
+**exp5** `sliding-prefill_2048-1x8` (1 sliding layer, **real M=2048**, device sample):
+
+| Bucket | Device μs | Notes |
+|--------|----------:|-------|
+| Device sum | **18,243** | 51 ops; host gap @ Embeddings **27.7 ms** (Phase 5) |
+| AllGather | 5,883 (32%) | 2× layer AR gather ~1.9–2.0 ms, 1 core |
+| Layer matmuls (DRAM in0) | 4,212 (23%) | **64 cores** (not the 24–42 from ISL 96) |
+| ReduceScatter | 2,856 (16%) | 6 cores — height-aware `w=2,c=2` |
+| LayerNorm | 1,465 (8%) | DRAM-IL (island off at M=2048) |
+| lm_head | 887 (5%) | still `32×5376×32768` DRAM 69% |
+| SDPA | 648 (3.6%) | 64 cores; Phase 4 |
+
+Layer matmuls (all HiFi2, BFP8 weights, **in0 DRAM-IL**):
+
+| Op | Shape | μs | Cores | DRAM% | FLOPs% |
+|----|-------|---:|------:|------:|-------:|
+| QKV | 2048×5376×2048 | 552 | 64 | 26 | 62 |
+| gate+up | 2048×5376×5376 | 1,633 | 64 | 16 | 55 |
+| down | 2048×2688×5376 | 1,445 | 64 | 11 | 31 |
+| O-proj | 2048×1024×5376 | 582 | 64 | 19 | 29 |
+
+`tt-perf-report` says “place in0 in L1”. Interleaved L1 cannot: `[2048,5376]` bf16 ≈ **21 MiB** vs `prefill_tensor_memcfg` 4 MiB cap (`operations.py`). Per-core if block-sharded: ~336 KB — that **does** fit. Phase 3 lever is **2D-mcast / block-shard in0**, not flipping the 4 MiB hoist. down_proj also has `in0_block_w=1` (try ≥2).
+
+**exp6** `full-prefill_128-1x8` (6 layers: 5 sliding + 1 global, **M=128**):
+
+| | |
+|--|--:|
+| Device sum | 9,389 μs / 216 ops |
+| Matmul (L1 in0) | 40% — short-ISL hoist still on |
+| AG+RS | ~33% |
+| SDPA ×6 | 360 μs (~60 μs/layer) |
+| Full-attn QKV | `128×5376×3072` 200 μs, **32 cores** |
+| Full-attn O | `128×2048×5376` 101 μs, 56 cores |
+
+At M=128 the 24–42-core under-core is real (sliding QKV 32, MLP 42). At M=2048 the grid is full; the remaining matmul issue is DRAM-streaming in0 + 1D blocking.
+
+## Phase 3 — long-prefill 2D (cutoff reshape)
+
+Isolation `test_prefill_matmul_2048_isolate` (WH 1x8, metal-trace, PCC vs auto ≥0.9998):
+
+| Op | auto | reshape_cutoff | block-shard in0 | Winner |
+|----|-----:|---------------:|----------------:|--------|
+| gate_up 2048×5376×5376 | 2187 µs | 2303 | 2363 (I2S tax) | **auto** |
+| QKV 2048×5376×2048 | 726 | 798 | 786 | **auto** |
+| down 2048×2688×5376 | 1672 | **1198 (1.42×)** | 1303 | reshape; `dram_bw2/4/7` also beat auto (`in0_block_w=1`) |
+| o_proj 2048×1024×5376 | 646 | **576 (1.12×)** | 768 | reshape |
+
+Block-shard in0 compiled (`fuse_batch=True`) but lost to I2S on every shape. Do not raise the 4 MiB interleaved-L1 cap.
+
+Wired: `prefill_linear_above_cutoff` on **down_proj and o_proj only** (default on; `GEMMA4_PREFILL_LONG_2D=0` to opt out). Layer PCC: 2048 0.9967, 4096 0.9966 / shared-MLP 4096 0.9989.
+
+**exp8** `prefill/exp8_long2d_2048.txt` — same Tracy window as exp5:
+
+| | exp5 | exp8 | Δ |
+|--|-----:|-----:|--:|
+| Device sum | 18,243 µs | **17,437 µs** | **−806 µs (−4.4%)** |
+| down | 1,445 (`2048×2688×5376`, 31% FLOPs, bw=1) | **877** (`1024×2688×5376`, 59% FLOPs, bw=4, 56 cores) | −568 |
+| o_proj | 582 (`2048×1024×5376`, 29% FLOPs) | **508** (`1024×1024×5376`, 39% FLOPs, bw=4) | −74 |
+| gate_up / QKV | 1,633 / 552 | 1,636 / 539 | noise (left on auto) |
+| AG+RS | 8,739 | 8,561 | variance |
+| ops | 51 | 51 | reshape is metadata |
+
+Tracy shows M=1024 on down/o_proj because the kernel iterates a batched cutoff; logical seq is still 2048.
+
+## Remaining levers
+
+1. **gate_up / QKV at 2048** — auto already wins; L1 in0 needs a producer that lands block-sharded (island is capped at M≤128).
+2. **CCL still ~49% of the 2048 window** — height-aware knobs already shipped; further RS/AG only if a new isolate beats `w=2,c=2`.
+3. **SDPA 648 µs** — Phase 4; chunk policy stays 2048 on T3K.
+4. **Host gap ~28 ms** — Phase 5 / demo-optimization (exp5 Embeddings gap; not in the exp8 device sum).

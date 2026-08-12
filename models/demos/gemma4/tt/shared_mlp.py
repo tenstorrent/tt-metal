@@ -27,7 +27,9 @@ from models.demos.gemma4.tt.dram_sharded import (
     interleaved_down_proj_prefill_config,
     interleaved_gate_up_prefill_config,
     matmul_rows,
+    prefill_linear_above_cutoff,
     prefill_progcfg_1d_for_width_sharded_in0,
+    should_prefill_long_2d,
 )
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
@@ -288,6 +290,14 @@ class SharedMLP:
         m = matmul_rows(hidden)
         k = int(hidden.shape[-1])
         n = int(self.down_proj.shape[-1])
+        # Above the 1D-tuned band, auto streams in0 from DRAM with in0_block_w=1.
+        # Cutoff-reshape 2D is the isolate winner (see prefill_linear_above_cutoff).
+        if should_prefill_long_2d(m):
+            act, owned = self._prepare_prefill_act(hidden, None)
+            output = prefill_linear_above_cutoff(act, self.down_proj)
+            if owned:
+                act.deallocate(True)
+            return output
         program_config, out_memcfg, compute_kernel_config = interleaved_down_proj_prefill_config(m, k, n)
         # Decode: L1 writeback, same lever (and same bit-exactness) as o_proj —
         # 82.9 -> 78.7 us in isolation. Consumer is the all-reduce.
