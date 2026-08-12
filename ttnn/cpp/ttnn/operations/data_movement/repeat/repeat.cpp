@@ -285,7 +285,7 @@ ttnn::Tensor repeat_via_codegen(
     const ttnn::Tensor& tensor,
     const ttsl::SmallVector<uint32_t>& repetition_vector,
     const MemoryConfig& output_mem_config,
-    std::optional<Tensor> optional_output_tensor = std::nullopt) {
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
     ttnn::Tensor working_tensor = tensor;
     for (auto it = repetition_vector.crbegin(); it != repetition_vector.crend(); ++it) {
         if (*it == 1) {
@@ -539,7 +539,7 @@ ttnn::Tensor repeat(
         }
         auto i2s_out = optional_output_tensor.has_value() ? optional_output_tensor : std::nullopt;
         working_tensor = ttnn::interleaved_to_sharded(
-            working_tensor, final_mc, /*data_type=*/std::nullopt, /*keep_l1_aligned=*/std::nullopt, i2s_out);
+            working_tensor, final_mc, /*data_type_arg=*/std::nullopt, /*keep_l1_aligned=*/std::nullopt, i2s_out);
     }
 
     return finalize_into_preallocated(working_tensor);
