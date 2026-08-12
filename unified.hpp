@@ -35,12 +35,17 @@
 #include <type_traits>
 #include <utility>
 
+// Binds the model's intrinsics to a backend. Define TT_UNIFIED_CUSTOM_BINDING to
+// supply your own (the host trace harness does) before including this header.
+#ifndef TT_UNIFIED_CUSTOM_BINDING
+#include "unified_metal.hpp"
+#endif
+
 #include "fusion.hpp"
 
 namespace tt {
 namespace unified {
 
-class Tensor;
 struct Block;
 class ComputeBlock;
 
@@ -128,13 +133,13 @@ class ComputeBlock {
 public:
     ComputeBlock(Block block) : cb_id(block.cb_id), num_tiles(block.num_tiles) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
-        cb_wait(cb_id);
+        cb_wait(cb_id, num_tiles);
 #endif
     }
 
     ~ComputeBlock() {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
-        cb_pop(cb_id);
+        cb_pop(cb_id, num_tiles);
 #endif
     }
 
@@ -147,9 +152,7 @@ public:
 
     int get_num_tiles() const { return num_tiles; }
 
-    // TODO: reduces within a tile, not across them. A cross-tile reduction wants
-    // its own Strategy that accumulates over the tile loop and packs once.
-    expr::Un<SumOp, TileSource> sum() const { return {TileSource{cb_id}}; }
+    expr::Un<ExpOp, TileSource> exp() const { return {TileSource{cb_id}}; }
 
 private:
     int cb_id;
@@ -172,6 +175,8 @@ inline TileSource as_node(const ComputeBlock& b) { return TileSource{b.get_cb_id
 
 inline auto relu(const ComputeBlock& b) { return expr::Un<ReluOp, TileSource>{as_node(b)}; }
 
+inline auto exp_(const ComputeBlock& b) { return expr::Un<ExpOp, TileSource>{as_node(b)}; }
+
 template <typename Geometry>
 auto matmul(const ComputeBlock& a, const ComputeBlock& b) {
     return matmul<Geometry>(as_node(a), as_node(b));
@@ -182,48 +187,97 @@ auto matmul(const ComputeBlock& a, const ComputeBlock& b) {
 // compiles away entirely on every other thread.
 // ---------------------------------------------------------------------------
 
-template <int thread>
-Block noc_load(const Storage& storage, const Tensor& t, int idx) {
+// Reads `storage.num_tiles` pages into the buffer, starting at page
+// `block_idx * storage.num_tiles`, then pushes.
+//
+// Takes TensorAccessorArgs plus a base address rather than a constructed
+// accessor: the full accessor does not compile on a TRISC, so it is built here,
+// inside the data-movement region, from args the shared source can name on any
+// projection.
+template <int thread, typename Args>
+Block noc_load(const Storage& storage, Args args, uint32_t base_addr, int block_idx) {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
-        cb_reserve(storage.cb_id);
-        noc_async_read();
-        cb_push(storage.cb_id);
+        const auto acc = make_accessor(args, base_addr);
+        cb_reserve(storage.cb_id, storage.num_tiles);
+        uint32_t l1 = cb_write_addr(storage.cb_id);
+        const uint32_t bytes = cb_page_bytes(storage.cb_id);
+        const uint32_t first = static_cast<uint32_t>(block_idx * storage.num_tiles);
+        for (int p = 0; p < storage.num_tiles; ++p) {
+            noc_read_page(acc, first + static_cast<uint32_t>(p), l1, bytes);
+            l1 += bytes;
+        }
+        noc_read_barrier();
+        cb_push(storage.cb_id, storage.num_tiles);
     }
+#else
+    (void)args;
+    (void)base_addr;
+    (void)block_idx;
 #endif
     return Block(storage);
 }
 
-template <int thread>
-Block noc_load_mcast(const Storage& storage, Mcast mcast, const Tensor& t, int idx);
-
-template <int thread>
-void noc_store(Block block, const Tensor& t, int idx) {
+// Drains a Block to a tensor. Takes the Block by value: this call consumes it.
+template <int thread, typename Args>
+void noc_store(Block block, Args args, uint32_t base_addr, int block_idx) {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
-        cb_wait(block.cb_id);
-        noc_async_write();
-        cb_pop(block.cb_id);
+        const auto acc = make_accessor(args, base_addr);
+        cb_wait(block.cb_id, block.num_tiles);
+        uint32_t l1 = cb_read_addr(block.cb_id);
+        const uint32_t bytes = cb_page_bytes(block.cb_id);
+        const uint32_t first = static_cast<uint32_t>(block_idx * block.num_tiles);
+        for (int p = 0; p < block.num_tiles; ++p) {
+            noc_write_page(acc, first + static_cast<uint32_t>(p), l1, bytes);
+            l1 += bytes;
+        }
+        noc_write_barrier();
+        cb_pop(block.cb_id, block.num_tiles);
     }
+#else
+    (void)block;
+    (void)args;
+    (void)base_addr;
+    (void)block_idx;
 #endif
 }
 
-// TODO: core-to-core movement. `cb_wait(block.cb_id)` is correct (the source is
-// local) but cb_reserve/cb_push on the *destination* id are not -- CB ids are
-// per-core, so the peer's pointers have to be updated over the NOC. See
-// api/remote_circular_buffer.h (remote_cb_reserve_back /
-// remote_cb_push_back_and_write_pages), which is asymmetric between sender and
-// receiver, or the explicit semaphore handshake the matmul mcast kernels use.
+template <int thread, typename Args>
+Block noc_load_mcast(const Storage& storage, Mcast mcast, Args args, uint32_t base_addr, int block_idx);
+
+// ---------------------------------------------------------------------------
+// Core-to-core movement.
+//
+// Pulls a peer core's block into this core's Storage (noc_read), or pushes this
+// core's block into a peer's Storage (noc_write). Both consume the incoming
+// Block and yield one for the destination Storage.
+//
+// NOTE: the reserve/push below act on the *local* view of the destination CB.
+// For a genuine peer buffer the far side's pointers have to be advanced too --
+// see api/remote_circular_buffer.h (remote_cb_reserve_back /
+// remote_cb_push_back_and_write_pages, which are asymmetric between sender and
+// receiver) or the explicit semaphore handshake the matmul mcast kernels use.
+// ---------------------------------------------------------------------------
+
 template <int thread>
 Block noc_read(const Storage& storage, Block block, Coord coord, int offset) {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
-        cb_wait(block.cb_id);
-        cb_reserve(storage.cb_id);
-        noc_async_read();
-        cb_push(storage.cb_id);
-        cb_pop(block.cb_id);
+        cb_wait(block.cb_id, block.num_tiles);
+        cb_reserve(storage.cb_id, storage.num_tiles);
+        const uint32_t bytes = cb_page_bytes(storage.cb_id);
+        const uint64_t src =
+            noc_addr_on_core(coord.x, coord.y, cb_read_addr(block.cb_id) + static_cast<uint32_t>(offset));
+        noc_read_from(src, cb_write_addr(storage.cb_id), bytes * static_cast<uint32_t>(storage.num_tiles));
+        noc_read_barrier();
+        cb_push(storage.cb_id, storage.num_tiles);
+        cb_pop(block.cb_id, block.num_tiles);
     }
+#else
+    (void)block;
+    (void)coord;
+    (void)offset;
 #endif
     return Block(storage);
 }
@@ -232,12 +286,20 @@ template <int thread>
 Block noc_write(const Storage& storage, Block block, Coord coord, int offset) {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
-        cb_wait(block.cb_id);
-        cb_reserve(storage.cb_id);
-        noc_async_write();
-        cb_push(storage.cb_id);
-        cb_pop(block.cb_id);
+        cb_wait(block.cb_id, block.num_tiles);
+        cb_reserve(storage.cb_id, storage.num_tiles);
+        const uint32_t bytes = cb_page_bytes(storage.cb_id);
+        const uint64_t dst =
+            noc_addr_on_core(coord.x, coord.y, cb_write_addr(storage.cb_id) + static_cast<uint32_t>(offset));
+        noc_write_to(cb_read_addr(block.cb_id), dst, bytes * static_cast<uint32_t>(block.num_tiles));
+        noc_write_barrier();
+        cb_push(storage.cb_id, storage.num_tiles);
+        cb_pop(block.cb_id, block.num_tiles);
     }
+#else
+    (void)block;
+    (void)coord;
+    (void)offset;
 #endif
     return Block(storage);
 }
