@@ -150,6 +150,10 @@ void kernel_main() {
     // input cbs
     constexpr uint32_t dfb_in0_id = tt::CBIndex::c_0;
     constexpr uint32_t dfb_in_id = tt::CBIndex::c_29;
+#ifdef TILIZE_IN
+    // Holds the whole per-core group, tilized once and kept in L1 for all three passes.
+    constexpr uint32_t dfb_in_resident_id = tt::CBIndex::c_17;
+#endif
     constexpr uint32_t dfb_scaler_id = tt::CBIndex::c_2;
     constexpr uint32_t dfb_scaler_global_id = tt::CBIndex::c_4;
     constexpr uint32_t dfb_eps_id = tt::CBIndex::c_3;
@@ -181,6 +185,10 @@ void kernel_main() {
     constexpr uint32_t dfb_fusion_id = dfb_xmm_id;
     constexpr uint32_t dfb_reread_out_id = tt::CBIndex::c_23;
     constexpr uint32_t dfb_reread_write_out_id = tt::CBIndex::c_22;
+#ifdef UNTILIZE_OUT
+    // Scratch for the row-major output reread; tilized into c_23 below.
+    constexpr uint32_t dfb_reread_rm_id = tt::CBIndex::c_20;
+#endif
 
     // output cb
     constexpr uint32_t dfb_out0_id = tt::CBIndex::c_16;
@@ -206,23 +214,18 @@ void kernel_main() {
     bool apply_gamma_beta[block_w];
     constexpr uint32_t data_per_core_N_per_group = (per_core_N * tile_width / group);
 
-#ifdef UNTILIZE_OUT
-    constexpr int dfb_outgamma_id = dfb_in_id;
+    constexpr int dfb_outgamma_id = do_beta ? dfb_in_id : dfb_out0_id;
     constexpr int dfb_inbeta_id = do_gamma ? dfb_outgamma_id : dfb_reread_write_out_id;
-    constexpr int dfb_outbeta_id = do_gamma ? dfb_out_id : dfb_in_id;
-    constexpr int dfb_untilize_in_id = (do_gamma and not do_beta) ? dfb_outgamma_id
-                                       : do_beta                  ? dfb_outbeta_id
-                                                                  : dfb_reread_write_out_id;
+    constexpr int dfb_outbeta_id = dfb_out0_id;
+#ifdef UNTILIZE_OUT
+    // Untilize the tiled result into the row-major output c_30.
+    constexpr int dfb_untilize_in_id = (do_gamma or do_beta) ? dfb_out0_id : dfb_reread_write_out_id;
     constexpr int dfb_untilize_out_id =
 #ifdef READER_REPACK
         dfb_repack_out_id;
 #else
-        dfb_out0_id;
+        dfb_out_id;
 #endif
-#else
-    constexpr int dfb_outgamma_id = do_beta ? dfb_in_id : dfb_out0_id;
-    constexpr int dfb_inbeta_id = do_gamma ? dfb_outgamma_id : dfb_reread_write_out_id;
-    constexpr int dfb_outbeta_id = dfb_out0_id;
 #endif
 
     DataflowBuffer dfb_beta(dfb_beta_id);
@@ -237,6 +240,9 @@ void kernel_main() {
     DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
     DataflowBuffer dfb_gamma(dfb_gamma_id);
     DataflowBuffer dfb_in(dfb_in_id);
+#ifdef TILIZE_IN
+    DataflowBuffer dfb_in_resident(dfb_in_resident_id);
+#endif
     DataflowBuffer dfb_in0(dfb_in0_id);
     DataflowBuffer dfb_inbeta(dfb_inbeta_id);
     DataflowBuffer dfb_input_mask(dfb_input_mask_id);
@@ -252,32 +258,19 @@ void kernel_main() {
     DataflowBuffer dfb_msq(dfb_msq_id);
     DataflowBuffer dfb_kmsq(dfb_kmsq_id);
 
-// tilize input from RM to tile layout
 #ifdef TILIZE_IN
-    compute_kernel_hw_startup(dfb_in0_id, dfb_in0_id, dfb_in_id);
-// Tilize in0 -> in (row-major to tiled)
 #ifdef READER_REPACK
     constexpr uint32_t dfb_in_rm_id = dfb_repack_id;
-    compute_kernel_lib::tilize<
-        per_core_N,
-        dfb_in_rm_id,
-        dfb_in_id,
-        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
-        compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #else
     constexpr uint32_t dfb_in_rm_id = dfb_in0_id;
-    compute_kernel_lib::tilize<
-        per_core_N,
-        dfb_in_rm_id,
-        dfb_in_id,
-        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
-        compute_kernel_lib::tilize_config::WaitMode::NoWait,
-        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #endif
-    dfb_in.wait_front(per_core_MN);
+    // Tilize the whole group once and reuse it for all three passes.
+    compute_kernel_hw_startup(dfb_in0_id, dfb_in0_id, dfb_in_resident_id);
+    constexpr uint32_t dfb_input_id = dfb_in_resident_id;
 #else
+    // Already tiled, so feed compute directly.
     compute_kernel_hw_startup(dfb_in0_id, dfb_input_mask_id, dfb_x_id);
+    constexpr uint32_t dfb_input_id = dfb_in0_id;
 #endif
 
     index_b_offset = 0;
@@ -324,25 +317,36 @@ void kernel_main() {
                     out_block_h_actual = out_block_h_normal;
                     out_block_hw_actual = out_block_hw_normal;
                 }
+#ifdef TILIZE_IN
+                // Append this out-block; no pop, so the whole group stays available.
+                compute_kernel_lib::tilize<
+                    block_w,
+                    dfb_in_rm_id,
+                    dfb_in_resident_id,
+                    compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+                    compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+                    compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
+                    out_block_h_normal);
+                dfb_in_resident.wait_front((out_block_index + 1) * out_block_hw_normal);
+                uint32_t out_block_base = out_block_index * out_block_hw_normal;
+#else
                 dfb_in0.wait_front(out_block_hw_normal);
+                constexpr uint32_t out_block_base = 0;
+#endif
 
                 index_h_offset = 0;
                 reconfig_data_format_srcb(dfb_in0_id, dfb_input_mask_id);
                 // mask input
-                mul_init(dfb_in0_id, dfb_input_mask_id);
+                mul_init(dfb_input_id, dfb_input_mask_id);
                 dfb_x.reserve_back(out_block_hw_normal);
                 for (uint32_t i = 0; i < out_block_h_actual; ++i) {
                     index_subblock_w_offset = 0;
                     for (uint32_t j = 0; j < num_subblocks_w; ++j) {
                         tile_regs_acquire();
                         for (uint32_t w = 0; w < subblock_w; ++w) {
-                            uint32_t index = w + index_subblock_w_offset + index_h_offset;
+                            uint32_t index = w + index_subblock_w_offset + index_h_offset + out_block_base;
                             uint32_t index_mask = w + index_subblock_w_offset;
-#ifdef TILIZE_IN
-                            mul_tiles(dfb_in_id, dfb_input_mask_id, index, index_mask, w);
-#else
-                            mul_tiles(dfb_in0_id, dfb_input_mask_id, index, index_mask, w);
-#endif
+                            mul_tiles(dfb_input_id, dfb_input_mask_id, index, index_mask, w);
                         }
                         tile_regs_commit();
                         tile_regs_wait();
@@ -354,9 +358,8 @@ void kernel_main() {
                     }
                     index_h_offset += block_w;
                 }
-#ifdef TILIZE_IN
-                dfb_in.pop_front(out_block_hw_actual);
-#else
+                // Only the tiled path pops here; the row-major group stays resident.
+#ifndef TILIZE_IN
                 dfb_in0.pop_front(out_block_hw_normal);
 #endif
                 dfb_x.push_back(out_block_hw_normal);
@@ -409,12 +412,15 @@ void kernel_main() {
                     out_block_hw_actual = out_block_hw_normal;
                 }
 
+                // The resident group is already there; only the tiled path waits on new rows.
+#ifndef TILIZE_IN
                 dfb_in0.wait_front(out_block_hw_normal);
+#endif
                 // x - E[x]
-                sub_bcast_scalar_init(dfb_in0_id, dfb_ex_global_id);
+                sub_bcast_scalar_init(dfb_input_id, dfb_ex_global_id);
                 // fp32: reset both srcs so fp32 input/mean aren't read through the stale bf16 scaler format.
                 if constexpr (enable_fp32_reconfig) {
-                    reconfig_data_format_srca(dfb_in0_id);
+                    reconfig_data_format_srca(dfb_input_id);
                     reconfig_data_format_srcb(dfb_ex_global_id);
                 }
 
@@ -422,11 +428,16 @@ void kernel_main() {
                 dfb_ex_global.wait_front(1);
                 for (uint32_t i = 0; i < out_block_h_actual; i++) {
                     index_subblock_w_offset = 0;
+#ifdef TILIZE_IN
+                    uint32_t row_base = out_block_index * out_block_hw_normal + i * block_w;
+#else
+                    constexpr uint32_t row_base = 0;
+#endif
                     for (uint32_t j = 0; j < num_subblocks_w; j++) {
                         tile_regs_acquire();
                         for (uint32_t w = 0; w < subblock_w; w++) {
-                            uint32_t index = w + index_subblock_w_offset;
-                            sub_tiles_bcast_scalar(dfb_in0_id, dfb_ex_global_id, index, 0, w);
+                            uint32_t index = w + index_subblock_w_offset + row_base;
+                            sub_tiles_bcast_scalar(dfb_input_id, dfb_ex_global_id, index, 0, w);
                         }
                         tile_regs_commit();
                         tile_regs_wait();
@@ -436,10 +447,14 @@ void kernel_main() {
                         tile_regs_release();
                         index_subblock_w_offset += subblock_w;
                     }
+#ifndef TILIZE_IN
                     dfb_in0.pop_front(block_w);
+#endif
                 }
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
+#ifndef TILIZE_IN
                     dfb_in0.pop_front(out_block_hw_normal - out_block_hw_last);
+#endif
                 }
                 dfb_xmm.push_back(out_block_hw_normal);
 
@@ -620,23 +635,30 @@ void kernel_main() {
                     out_block_hw_actual = out_block_hw_normal;
                 }
 
+#ifndef TILIZE_IN
                 dfb_in0.wait_front(out_block_hw_normal);
+#endif
                 // x - E[x]
-                sub_bcast_scalar_init(dfb_in0_id, dfb_ex_global_id);
+                sub_bcast_scalar_init(dfb_input_id, dfb_ex_global_id);
                 // fp32: reset both srcs so fp32 input/mean aren't read through the stale rsqrt/eps format.
                 if constexpr (enable_fp32_reconfig) {
-                    reconfig_data_format_srca(dfb_in0_id);
+                    reconfig_data_format_srca(dfb_input_id);
                     reconfig_data_format_srcb(dfb_ex_global_id);
                 }
                 dfb_xmm.reserve_back(out_block_hw_normal);
                 dfb_ex_global.wait_front(1);
                 for (uint32_t i = 0; i < out_block_h_actual; i++) {
                     index_subblock_w_offset = 0;
+#ifdef TILIZE_IN
+                    uint32_t row_base = out_block_index * out_block_hw_normal + i * block_w;
+#else
+                    constexpr uint32_t row_base = 0;
+#endif
                     for (uint32_t j = 0; j < num_subblocks_w; j++) {
                         tile_regs_acquire();
                         for (uint32_t w = 0; w < subblock_w; w++) {
-                            uint32_t index = w + index_subblock_w_offset;
-                            sub_tiles_bcast_scalar(dfb_in0_id, dfb_ex_global_id, index, 0, w);
+                            uint32_t index = w + index_subblock_w_offset + row_base;
+                            sub_tiles_bcast_scalar(dfb_input_id, dfb_ex_global_id, index, 0, w);
                         }
                         tile_regs_commit();
                         tile_regs_wait();
@@ -646,10 +668,14 @@ void kernel_main() {
                         tile_regs_release();
                         index_subblock_w_offset += subblock_w;
                     }
+#ifndef TILIZE_IN
                     dfb_in0.pop_front(block_w);
+#endif
                 }
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
+#ifndef TILIZE_IN
                     dfb_in0.pop_front(out_block_hw_normal - out_block_hw_last);
+#endif
                 }
                 dfb_xmm.push_back(out_block_hw_normal);
 
@@ -722,6 +748,18 @@ void kernel_main() {
 
                 // add or copy with previous output results
                 uint32_t block_w_curr = index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;
+
+#ifdef UNTILIZE_OUT
+                // Tilize the reread rows so the accumulation below sees tiles.
+                compute_kernel_lib::tilize<
+                    block_w,
+                    dfb_reread_rm_id,
+                    dfb_reread_out_id,
+                    compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+                    compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+                    compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
+                    out_block_h_normal);
+#endif
 
                 dfb_reread_out.wait_front(out_block_hw_normal);
                 dfb_reread_write_out.reserve_back(out_block_hw_normal);
@@ -859,17 +897,22 @@ void kernel_main() {
                 // End Optional Beta
 
 #ifdef UNTILIZE_OUT
-                // untilize - DEST capacity auto-detected
+                // untilize - DEST capacity auto-detected.
                 compute_kernel_lib::untilize<
-                    per_core_N,
+                    block_w,
                     dfb_untilize_in_id,
                     dfb_untilize_out_id,
                     compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
-                    compute_kernel_lib::untilize_config::WaitMode::WaitUpfront,
-                    compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
+                    compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
+                    compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(
+                    out_block_h_normal);
 #endif
             }
             // End Final Val Calc
+#ifdef TILIZE_IN
+            // All passes done with the group, resident group popped.
+            dfb_in_resident.pop_front(num_out_blocks_padded * out_block_hw_normal);
+#endif
             if constexpr (GROUP_SIZE_IS_POWER_OF_2) {
                 if (row_offset == tile_width) {
                     index_g_offset += block_w;
