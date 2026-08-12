@@ -11,9 +11,9 @@ from typing import Any, Iterable, Sequence
 import torch
 
 from models.common.llm_runtime.config import PageTableLayout
-from models.common.llm_runtime.prefill import assembly as prefill_assembly
 from models.common.llm_runtime.prefill import postprocess as prefill_postprocess
-from models.common.llm_runtime.prefill import sequence as prefill_sequence
+from models.common.llm_runtime.prefill import result_collector as prefill_result_collector
+from models.common.llm_runtime.prefill import sequence_runner as prefill_sequence_runner
 from models.common.llm_runtime.prefill import trace as prefill_trace
 from models.common.llm_runtime.prefill.config import PrefillRuntimeConfig
 from models.common.llm_runtime.prefill.inputs import (
@@ -77,12 +77,12 @@ class PrefillRuntime:
             ),
             copy_into_device_tensors=copy_into_device_tensors,
         )
-        self.assembler = prefill_assembly.PrefillResultAssembler(
+        self.assembler = prefill_result_collector.PrefillResultAssembler(
             config,
             postprocessor=self.postprocessor,
             release_transient=lambda values: self._release_or_retain_transient(values),
         )
-        self.sequence = prefill_sequence.PrefillSequenceExecutor(
+        self.sequence_runner = prefill_sequence_runner.PrefillSequenceRunner(
             input_stager=self.inputs,
             postprocessor=self.postprocessor,
             run_hidden_body=lambda *args, **kwargs: self._run_hidden_body(*args, **kwargs),
@@ -223,11 +223,11 @@ class PrefillRuntime:
             )
         return tuple(prepared)
 
-    def invoke(self, prepared: PreparedPrefill) -> prefill_assembly.InvocationResult:
+    def invoke(self, prepared: PreparedPrefill) -> prefill_result_collector.InvocationResult:
         """Run a prepared request eagerly without replanning or reclassification."""
 
         self._ensure_usable()
-        return self.sequence.invoke(prepared)
+        return self.sequence_runner.run(prepared)
 
     def capture_plan(self, prepared: PreparedPrefill) -> prefill_trace.PrefillCapturePlan:
         """Describe persistent inputs and capture work for one eligible request."""
@@ -251,14 +251,14 @@ class PrefillRuntime:
         prepared: PreparedPrefill,
         hidden: Any,
         workspace: prefill_trace.PrefillReplayState,
-    ) -> prefill_assembly.InvocationResult:
+    ) -> prefill_result_collector.InvocationResult:
         """Post-process a replayed hidden-state tensor into a normal result."""
 
         return self.trace.finish(prepared, hidden, workspace)
 
     def assemble(
         self,
-        prepared_results: Iterable[tuple[PreparedPrefill, prefill_assembly.InvocationResult]],
+        prepared_results: Iterable[tuple[PreparedPrefill, prefill_result_collector.InvocationResult]],
         *,
         batch_size: int,
         sampling_params: SamplingParams | None = None,

@@ -171,6 +171,9 @@ released.
 
 ## Module map
 
+For the package's internal planning, eager-sequence, trace, postprocessing, and
+ownership contracts, see the [prefill runtime README](prefill/README.md).
+
 | Module | Main responsibility |
 | --- | --- |
 | `config.py` | Trace policy, warmup policy, paged-KV policy, and canonical page-table geometry |
@@ -180,8 +183,8 @@ released.
 | `prefill/inputs.py` | Host/device input values, staging, in-place replay refresh, and rotary handling |
 | `prefill/trace.py` | Trace capture plans, mutable replay state, input refresh, and replay ownership |
 | `prefill/postprocess.py` | Sampling classification, K/P/T state, output extraction, and device sampling |
-| `prefill/assembly.py` | Streaming synchronized readback, source-row restoration, and result release |
-| `prefill/sequence.py` | Eager regular/chunk lifecycle and failure-safe ownership transfer |
+| `prefill/result_collector.py` | Streaming synchronized readback, source-row restoration, and result release |
+| `prefill/sequence_runner.py` | Run eager prefill sequence chunks with failure-safe ownership transfer |
 | `prefill/runtime.py` | Stable public facade, collaborator composition, model-body calls, and transient cleanup |
 | `prefill/sampling_helpers.py` | Stateless prefill sampling parameter and log-probability helpers |
 | `decode.py` | Decode preparation, signatures, eager invocation, trace refresh, output leases, and cleanup |

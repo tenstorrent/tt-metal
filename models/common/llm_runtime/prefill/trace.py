@@ -8,7 +8,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from models.common.llm_runtime.prefill.assembly import InvocationResult
 from models.common.llm_runtime.prefill.inputs import (
     PrefillDeviceInputs,
     PrefillInputStager,
@@ -23,6 +22,7 @@ from models.common.llm_runtime.prefill.postprocess import (
     new_logprob_output,
     without_borrowed,
 )
+from models.common.llm_runtime.prefill.result_collector import InvocationResult
 from models.common.llm_runtime.prefill.sampling_helpers import _formatted_sampling_values
 from models.common.llm_runtime.prefill.signatures import (
     PrefillTraceSignature,

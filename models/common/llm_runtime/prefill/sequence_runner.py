@@ -7,15 +7,15 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from models.common.llm_runtime.prefill.assembly import InvocationResult
 from models.common.llm_runtime.prefill.inputs import PrefillDeviceInputs, PrefillInputStager, PrefillPositionInputs
 from models.common.llm_runtime.prefill.plan import PrefillChunk, PrefillRequest
 from models.common.llm_runtime.prefill.postprocess import PrefillPostprocessor, retain_owned
+from models.common.llm_runtime.prefill.result_collector import InvocationResult
 from models.common.llm_runtime.prefill.signatures import PreparedPrefill
 from models.common.llm_runtime.tensor_resources import attach_cleanup_failures, raise_cleanup_failures
 
 
-class PrefillSequenceExecutor:
+class PrefillSequenceRunner:
     """Execute one prepared eager request while preserving tensor ownership."""
 
     def __init__(
@@ -33,7 +33,7 @@ class PrefillSequenceExecutor:
         self.run_chunk_body = run_chunk_body
         self.release_transient = release_transient
 
-    def invoke(self, prepared: PreparedPrefill) -> InvocationResult:
+    def run(self, prepared: PreparedPrefill) -> InvocationResult:
         """Execute the request's planned chunks as one eager prefill sequence."""
 
         request = prepared.request

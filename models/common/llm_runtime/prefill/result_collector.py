@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Synchronized host readback and prefill result assembly."""
+"""Streaming synchronized readback and prefill result collection."""
 
 from __future__ import annotations
 
