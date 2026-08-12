@@ -153,7 +153,11 @@ def test_shared_expert_prefetched_pcc(device):
     """
     from types import SimpleNamespace
 
-    from models.experimental.deepseek_v4_flash.tt.decode_prefetch import make_decode_prefetch_buffers
+    from models.experimental.deepseek_v4_flash.tt.decode_prefetch import (
+        DECODE_GCB_GROUP,
+        KV_GCB_GROUP,
+        make_decode_prefetch_buffers,
+    )
     from models.experimental.deepseek_v4_flash.tt.moe import DeepSeekV4MLP
 
     tokens, hidden, inter = 32, 4096, 2048
@@ -161,7 +165,12 @@ def test_shared_expert_prefetched_pcc(device):
     # Four pages rather than the model's 16: a bf16 page is 64 KB, and the point here is the
     # sharing and the layouts, not the run-ahead depth.
     buffers = make_decode_prefetch_buffers(device, dtype, num_prefetch_pages=4)
-    assert len({id(cb) for cb in buffers.values()}) == 1, "every decode weight must share one GCB"
+    # Two buffers: the main one every 64-receiver weight shares, and kv_proj's, which is held
+    # apart so it can run beside the Q chain (see decode_prefetch.KV_GCB_GROUP).
+    assert len({id(buffers[name]) for name in DECODE_GCB_GROUP}) == 1, "the main group must share one GCB"
+    assert {id(buffers[name]) for name in KV_GCB_GROUP}.isdisjoint(
+        {id(buffers[name]) for name in DECODE_GCB_GROUP}
+    ), "kv_proj must be on its own GCB"
 
     torch.manual_seed(0)
     pt_x = torch.randn((tokens, hidden), dtype=torch.bfloat16)

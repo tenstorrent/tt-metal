@@ -110,9 +110,15 @@ def matmul_decode(
     # global_cb identity (address, not just shape) already folds into the device hash (see
     # MatmulDecodeDeviceOperation::compute_program_hash); batch/b_blocks/n_blocks/K/N/
     # partial_width_sharded are all plain attribute fields the default hash already covers too,
-    # so no extra fusion-cache key material is needed here (unlike plain matmul's core_range_set,
-    # which the device hash omits).
-    program_cache_key = extend_branch_program_cache_key(h)
+    # so no extra fusion-cache key material is needed for them (unlike plain matmul's
+    # core_range_set, which the device hash omits).
+    #
+    # M is the exception. The device hash leaves it out, correctly: activations differing only
+    # in M occupy the same tile-padded rows and compile to the same program, so the device
+    # program cache should hit. But the fusion cache reuses the branch's *output tensors* along
+    # with its program, and their logical shape is M-dependent -- so without this, a decode step
+    # for one user would be handed the previous eight-user step's output.
+    program_cache_key = extend_branch_program_cache_key(h, M)
 
     inputs = {"input_tensor_a": input_tensor_a, "input_tensor_b": input_tensor_b}
 

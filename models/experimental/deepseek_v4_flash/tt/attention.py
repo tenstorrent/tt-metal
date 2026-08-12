@@ -13,6 +13,7 @@ from .decode_prefetch import (
 from .layers import BatchedLinearDecode, DeepSeekV4RMSNorm, LinearDecode, _rms_norm_unweighted
 from .paged_cache import PagedLayerView
 from .weight_cache import WeightCache, _as_cache, _load_weight, _materialize
+from models.experimental.ops.descriptors.fusion import Parallel, fusion_enabled
 
 
 # ---------------------------------------------------------------------------- #
@@ -894,7 +895,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
             prefetch = {"use_prefetcher": use_prefetcher}
             if use_prefetcher:
                 prefetch["global_cb"] = prefetch_buffers[name]
-                prefetch["global_cb_page_bytes"] = decode_prefetch_page_bytes(weight_dtype)
+                prefetch["global_cb_page_bytes"] = decode_prefetch_page_bytes(weight_dtype, name)
             return LinearDecode(
                 weights[f"{name}.weight"],
                 device,
@@ -914,6 +915,12 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         self.kv_norm = DeepSeekV4RMSNorm(
             weights["kv_norm.weight"], self.eps, device, cache.file("kv_norm"), sharded=True
         )
+        # Fusing the Q chain with kv_proj needs the prefetcher, since that is the residency
+        # whose weights arrive without an op of their own to run, and needs fusion to be
+        # opted into. Without both, ``_project_q_and_kv`` issues the same projections one
+        # after another, which is the layout's own fallback rather than a different one:
+        # the two GCBs and the 32-core kv_proj are how the weights are laid out either way.
+        self._fuse_q_and_kv = use_prefetcher and fusion_enabled()
 
         # Grouped output projection (``DeepseekV4GroupedLinear``): block-diagonal over o_groups,
         # run as a single batched ``matmul_decode`` (batch axis = group). ``BatchedLinearDecode``
@@ -1011,12 +1018,14 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         session (see the class docstring), and every queued request must be consumed by a
         matching ``decode``: queueing without the follow-up matmul leaves pages nobody drains.
 
-        Every projection shares one GCB, hence one FIFO, so they are queued here in the order
-        ``decode`` calls them -- which puts the compressor between kv_proj and o_a_proj, since
-        ``decode_static`` runs it after ``_qkv`` and before ``_attend`` reaches the output
-        projections (o_a_proj, then o_b_proj -- see ``_grouped_output``). Nothing checks this:
-        a projection whose matmul runs out of turn pops its own page size off the head of
-        another weight's slab, which is wrong results rather than an error.
+        Every projection but kv_proj shares one GCB, hence one FIFO, so they are queued here in
+        the order ``decode`` calls them -- which puts the compressor between q_b_proj and
+        o_a_proj, since ``decode_static`` runs it after ``_qkv`` and before ``_attend`` reaches
+        the output projections (o_a_proj, then o_b_proj -- see ``_grouped_output``). Nothing
+        checks this: a projection whose matmul runs out of turn pops its own page size off the
+        head of another weight's slab, which is wrong results rather than an error. kv_proj has
+        a buffer to itself and is the only consumer of it, so where it falls in this sequence
+        does not matter.
         """
         self.q_a_proj.fetch_weights()
         self.q_b_proj.fetch_weights()
@@ -1169,16 +1178,46 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         _, _, tokens_n, _ = tokens.shape
         h, dh = self.num_heads, self.head_dim
         _profile(self.device)
-        q_a = self.q_a_norm(self.q_a_proj(tokens))
-        q = self.q_b_proj(q_a)  # [1, 1, B, H*Dh]
+        q, kv = self._project_q_and_kv(tokens)
         q = ttnn.reshape(q, [1, tokens_n, h, dh], memory_config=width_sharded_l1_config(tokens_n * h, dh, self.device))
 
         q = _rms_norm_unweighted(q, self.eps)
         q = _apply_rope(q, cos, sin, self.rot, self.rope_dim)  # [1, B, H, Dh]
 
-        kv = self.kv_norm(self.kv_proj(tokens))  # [1, 1, B, Dh]
+        kv = self.kv_norm(kv)  # [1, 1, B, Dh]
 
         kv = _apply_rope(kv, cos, sin, self.rot, self.rope_dim)
+        return q, kv
+
+    def _project_q_and_kv(self, tokens: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """The two projection chains behind ``_qkv``: ``q_b_proj``'s result and ``kv_proj``'s.
+
+        K depends only on ``tokens``, so it is free to run at any point in the Q chain
+        (``q_a_proj`` -> ``q_a_norm`` -> ``q_b_proj``). When fusion is available it is paired
+        with ``q_b_proj`` into one program: the two sit on disjoint cores -- 64 for Q, 32 for
+        K, see ``decode_prefetch.KV_GCB_GROUP`` -- and ``q_b_proj`` is much the larger matmul
+        (K=1024 by N=32768 against K's 4096 by 512), so K runs in its shadow.
+
+        Only ``q_b_proj`` and not the whole Q chain, because ``q_a_norm`` sits between the two
+        q projections and cannot be fused with them: ``Sequential`` merges the kernels its ops
+        put on the same RISC into one binary, and rms_norm's dataflow kernel pins a different
+        NOC than matmul_decode's, which a single binary cannot express. So the chain is cut
+        before the norm and only its tail is fused.
+
+        The norms that follow each projection stay outside either way -- they feed reshapes
+        and RoPE, which are not descriptors.
+        """
+        if not self._fuse_q_and_kv:
+            q_a = self.q_a_norm(self.q_a_proj(tokens))
+            return self.q_b_proj(q_a), self.kv_proj(tokens)
+
+        q_a = self.q_a_norm(self.q_a_proj(tokens))
+        q_b_desc = self.q_b_proj.descriptor(q_a)
+        kv_desc = self.kv_proj.descriptor(tokens)
+        # The results come from run(), not from the descriptors' own output_tensors: once the
+        # fused program is cached those slots hold a deferred placeholder rather than the
+        # tensor this call produced. run() returns one result per branch, in branch order.
+        q, kv = Parallel(q_b_desc, kv_desc).run()
         return q, kv
 
     def decode(

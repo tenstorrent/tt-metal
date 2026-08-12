@@ -429,11 +429,16 @@ class OpDescriptor:
             def _inline_cache_key_and_refs(args, kwargs):
                 """Cheap fingerprint + list of objects that need pinning.
 
-                Tensors use ``hash(tensor.spec)`` (content-based).  Other
-                args use ``hash()`` if the type provides a content-based
-                ``__hash__``, otherwise ``id()`` — and those objects are
-                collected into ``refs`` for strong-reference pinning in
-                the cache entry.
+                Tensors use ``hash(tensor.spec)`` paired with the logical
+                shape (content-based).  The shape is not redundant: a spec
+                hashes its *padded* shape, so activations differing only
+                within a tile — a one-user decode step against an
+                eight-user one — hash alike, and a factory whose output
+                shape follows the logical one would be reused wrongly.
+                Other args use ``hash()`` if the type provides a
+                content-based ``__hash__``, otherwise ``id()`` — and those
+                objects are collected into ``refs`` for strong-reference
+                pinning in the cache entry.
 
                 Iterates kwargs in signature-defined ``param_names`` order
                 (deterministic, avoids ``sorted()`` per call).
@@ -444,7 +449,7 @@ class OpDescriptor:
                 refs = []
                 for i, a in enumerate(args):
                     if isinstance(a, ttnn.Tensor):
-                        parts.append((i, hash(a.spec)))
+                        parts.append((i, hash(a.spec), tuple(a.shape)))
                     else:
                         h = _content_hash(a)
                         if h is not None:
@@ -456,7 +461,7 @@ class OpDescriptor:
                     if k in kwargs:
                         v = kwargs[k]
                         if isinstance(v, ttnn.Tensor):
-                            parts.append((k, hash(v.spec)))
+                            parts.append((k, hash(v.spec), tuple(v.shape)))
                         else:
                             h = _content_hash(v)
                             if h is not None:

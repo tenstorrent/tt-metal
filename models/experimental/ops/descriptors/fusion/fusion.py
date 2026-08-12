@@ -81,8 +81,17 @@ _ENABLE_ENV_VAR = "TT_METAL_ENABLE_PARALLEL_SEQUENTIAL"
 _ENABLE_TRUTHY_VALUES = frozenset({"1", "true", "yes", "on"})
 
 
+def fusion_enabled() -> bool:
+    """Whether ``Sequential`` / ``Parallel`` may be constructed on this process.
+
+    For callers that have a working unfused path and want to take it rather than fail when
+    fusion is not opted into.
+    """
+    return os.environ.get(_ENABLE_ENV_VAR, "").strip().lower() in _ENABLE_TRUTHY_VALUES
+
+
 def _check_fusion_enabled() -> None:
-    if os.environ.get(_ENABLE_ENV_VAR, "").strip().lower() not in _ENABLE_TRUTHY_VALUES:
+    if not fusion_enabled():
         raise RuntimeError(
             f"Sequential/Parallel fusion is disabled until ProgramSpec is exposed to Python. Set {_ENABLE_ENV_VAR}=1 to opt in."
         )

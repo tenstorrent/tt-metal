@@ -14,6 +14,7 @@ from models.experimental.ops.descriptors.fusion.fusion import (
     Parallel,
     Sequential,
     clear_build_cache,
+    fusion_enabled,
 )
 from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
 from models.experimental.ops.descriptors.fusion.graph import (
@@ -56,6 +57,7 @@ __all__ = [
     "extract_cb_names_from_kernel",
     "num_cbs_for_device",
     "clear_build_cache",
+    "fusion_enabled",
     # C++ parsing
     "inline_local_includes",
     "collect_includes",

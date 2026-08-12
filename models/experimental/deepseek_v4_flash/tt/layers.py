@@ -8,6 +8,8 @@ from .weight_cache import _CachePath, _load_weight, _materialize
 import torch
 
 from ttnn._experimental.tensor_prefetcher_matmul_decode import make_matmul_decode_gcb
+from models.experimental.ops.descriptors.matmul_decode import matmul_decode
+from models.experimental.ops.descriptors.normalization.rms_norm import rms_norm
 
 
 def get_width_shard_num_cores(width: int, device, num_cores: Optional[int] = None) -> int:
@@ -44,42 +46,64 @@ def to_ttnn_device(
     return _load_weight(tensor, device, cache_file_name=cache_file_name, layout=layout)
 
 
-def _receiver_ring_cols(num_cores: int, device, preferred_width: Optional[int] = None) -> int:
-    """Width of a ``num_cores`` rectangle of receiver cores anchored at (0, 0).
+def _receiver_ring_cols(
+    num_cores: int, device, preferred_width: Optional[int] = None, origin: "ttnn.CoreCoord" = None
+) -> int:
+    """Width of the ``num_cores`` block of receiver cores anchored at ``origin``.
 
     ``matmul_decode`` walks the GCB's receiver cores row-major and treats position ``p`` as
-    weight slab ``p``, so the receivers must form a full rectangle: only then does a core's
-    row-major index equal ``row * width + col``, which is what ``_bank_receivers_strided``
-    assumes when it places ring position ``p`` at ``(p % width, p // width)``. A ragged set
-    (what ``num_cores_to_corerangeset`` yields for a non-multiple of the grid width) would
-    shift the mapping and silently pair receivers with the wrong slab.
+    weight slab ``p``, so a core's row-major index has to equal ``row * width + col`` -- what
+    ``_bank_receivers_strided`` assumes when it places ring position ``p`` at
+    ``(p % width, p // width)``. That holds for the first ``num_cores`` positions of a
+    ``width``-wide enumeration whether or not they fill the last row, so the receivers need
+    only be a *prefix* of a rectangle, not a whole one: a partial final row is enumerated
+    last and in order, exactly where the mapping expects it. What would break the mapping is
+    a set whose width differs from the one the ring positions were computed with, which is
+    why the width is chosen here and passed to both.
 
-    ``preferred_width`` is used when it yields a rectangle that fits, so the partial mode can
-    keep its natural ``n_blocks``-wide by ``k_blocks``-tall arrangement; otherwise the widest
-    divisor that fits the device grid is used.
+    Allowing that ragged tail is what lets two buffers share a grid too narrow to hold two
+    full rectangles side by side -- see ``decode_prefetch.KV_GCB_ORIGIN``.
+
+    ``preferred_width`` is used when a block that wide fits, so the partial mode can keep its
+    natural ``n_blocks``-wide arrangement; otherwise the widest that fits is used.
+
+    ``origin`` is the block's top-left corner: the room available is measured from there, so a
+    buffer placed beside another cannot silently pick a width that runs off the grid.
     """
     grid = device.compute_with_storage_grid_size()
+    origin = origin or ttnn.CoreCoord(0, 0)
+    avail_x, avail_y = grid.x - origin.x, grid.y - origin.y
 
     def fits(w):
-        return w is not None and 0 < w <= grid.x and num_cores % w == 0 and num_cores // w <= grid.y
+        return w is not None and 0 < w <= avail_x and -(-num_cores // w) <= avail_y
 
-    width = preferred_width if fits(preferred_width) else next((w for w in range(grid.x, 0, -1) if fits(w)), None)
+    width = preferred_width if fits(preferred_width) else next((w for w in range(avail_x, 0, -1) if fits(w)), None)
     if width is None:
-        raise ValueError(f"cannot form a rectangle of {num_cores} cores within a {grid.x}x{grid.y} device grid")
+        raise ValueError(
+            f"cannot place {num_cores} cores within the {avail_x}x{avail_y} of a "
+            f"{grid.x}x{grid.y} device grid left of ({origin.x}, {origin.y})"
+        )
     return width
 
 
-def _bank_receivers_strided(bank_idx: int, recv_per_bank: int, num_dram_banks: int, ring_cols: int):
+def _bank_receivers_strided(
+    bank_idx: int, recv_per_bank: int, num_dram_banks: int, ring_cols: int, origin: "ttnn.CoreCoord" = None
+):
     """Receivers fed by DRAM bank ``bank_idx``, matching ROUND_ROBIN_1D shard placement.
 
     Under ROUND_ROBIN_1D, weight shard ``s`` lands on bank ``s % num_dram_banks``. Giving bank
     ``b`` the ring positions ``b, b + num_dram_banks, ...`` therefore makes shard index equal
     ring position, so no permutation of the weight is needed.
+
+    ``origin`` translates the whole block, which is how two buffers get disjoint receiver
+    sets. It shifts every position equally, so ring position, slab index and row-major
+    receiver index still coincide.
     """
+    origin = origin or ttnn.CoreCoord(0, 0)
     cores = []
     for s in range(recv_per_bank):
         ring_pos = bank_idx + s * num_dram_banks
-        coord = ttnn.CoreCoord(ring_pos % ring_cols, ring_pos // ring_cols)
+        coord = ttnn.CoreCoord(origin.x + ring_pos % ring_cols, origin.y + ring_pos // ring_cols)
         cores.append(ttnn.CoreRange(coord, coord))
     return ttnn.CoreRangeSet(cores)
 
@@ -207,7 +231,14 @@ def _receiver_cores_in_order(core_range_set: ttnn.CoreRangeSet):
     return cores
 
 
-def make_shared_decode_gcb(device, specs, dtype: ttnn.DataType, num_pages: int = 2):
+def make_shared_decode_gcb(
+    device,
+    specs,
+    dtype: ttnn.DataType,
+    num_pages: int = 2,
+    origin: "ttnn.CoreCoord" = None,
+    ring_cols: Optional[int] = None,
+):
     """One GCB that several :class:`LinearDecode` weights can be prefetched through.
 
     ``specs`` is a list of ``decode_weight_layout`` keyword dicts (``K``, ``N``,
@@ -238,6 +269,14 @@ def make_shared_decode_gcb(device, specs, dtype: ttnn.DataType, num_pages: int =
     in the same order the matmuls consume them; a consumer that runs out of turn pops a
     page belonging to another weight, which is wrong results rather than an error. Keep
     ``specs``, the queueing order, and the forward order in agreement.
+
+    ``origin`` and ``ring_cols`` place and shape the receiver block. They exist so two buffers
+    can hold disjoint receiver sets, which is what lets the weights on them be the two
+    branches of a fused ``Parallel``: a branch's whole footprint is its receivers, so
+    non-overlapping receiver sets are non-overlapping branches. Giving each buffer its own
+    column band is the usual way to do that, since two bands can be any height without
+    colliding. ``ring_cols`` is only a preference -- it is used when a block that wide fits
+    below ``origin``.
     """
     if not specs:
         raise ValueError("make_shared_decode_gcb needs at least one weight spec")
@@ -252,8 +291,8 @@ def make_shared_decode_gcb(device, specs, dtype: ttnn.DataType, num_pages: int =
     num_b_cores = core_counts.pop()
     # The per-spec preferred widths can disagree, so fall back to the common rectangle rather
     # than letting whichever weight is built first pick the receiver set for the others.
-    ring_cols = _receiver_ring_cols(num_b_cores, device, preferred_width=None)
-    bank_to_receivers = _bank_to_receivers(num_b_cores, device, ring_cols)
+    ring_cols = _receiver_ring_cols(num_b_cores, device, preferred_width=ring_cols, origin=origin)
+    bank_to_receivers = _bank_to_receivers(num_b_cores, device, ring_cols, origin)
     size = num_pages * decode_gcb_page_bytes(specs, dtype)
     return ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher(device, bank_to_receivers, size)
 
@@ -268,12 +307,12 @@ def _dram_banks_for(num_b_cores: int, device) -> int:
     return num_dram_banks
 
 
-def _bank_to_receivers(num_b_cores: int, device, ring_cols: int):
+def _bank_to_receivers(num_b_cores: int, device, ring_cols: int, origin: "ttnn.CoreCoord" = None):
     """``(dram_bank, receivers)`` pairs placing slab ``p`` on the ``p``-th receiver."""
     num_dram_banks = _dram_banks_for(num_b_cores, device)
     recv_per_bank = num_b_cores // num_dram_banks
     return [
-        (bank, _bank_receivers_strided(bank, recv_per_bank, num_dram_banks, ring_cols))
+        (bank, _bank_receivers_strided(bank, recv_per_bank, num_dram_banks, ring_cols, origin))
         for bank in range(num_dram_banks)
     ]
 
@@ -292,16 +331,28 @@ def _coalesced_core_range_set(cores) -> ttnn.CoreRangeSet:
     return core_range_set
 
 
-def _prefetch_cache_file(cache_file_name: Optional[str]) -> Optional[str]:
-    """A distinct cache path for the prefetcher weight layout.
+def _layout_cache_file(cache_file_name: Optional[str], slab_shape=None, prefetch: bool = False) -> Optional[str]:
+    """A cache path that identifies the weight layout it holds.
 
-    The DRAM ND-sharded weight is a different tensor from the DRAM-interleaved one the
-    L1-copy path caches (and in partial mode a different element order too, since the
-    prefetcher layout is not K-block-folded), so the two must not share a cache file.
+    A cache hit restores a tensor from the file's own serialized spec, not from the layout
+    asked for here, so any layout the path does not distinguish is a weight silently loaded
+    in the wrong shape. Two things have to be distinguished.
+
+    ``prefetch``: the DRAM ND-sharded weight is a different tensor from the DRAM-interleaved
+    one the L1-copy path caches, and in partial mode a different element order too, since the
+    prefetcher layout is not K-block-folded.
+
+    ``slab_shape``: it fixes how the weight is cut across cores -- the number of ND shards on
+    the prefetcher path, the fold width on the L1 one. Re-cutting a weight (a different
+    ``k_blocks``, say) without this loads the previous cut, which surfaces as a shard or
+    receiver-count mismatch far from the change that caused it.
     """
     if cache_file_name is None:
         return None
-    return _CachePath(f"{cache_file_name}_prefetch", getattr(cache_file_name, "require_cache", False))
+    suffix = "_prefetch" if prefetch else ""
+    if slab_shape is not None:
+        suffix += f"_{slab_shape[0]}x{slab_shape[1]}"
+    return _CachePath(f"{cache_file_name}{suffix}", getattr(cache_file_name, "require_cache", False))
 
 
 class Linear(DeepSeekV4Module):
@@ -433,6 +484,7 @@ class LinearDecode(DeepSeekV4Module):
             use_height_and_width_as_shard_shape=True,
         )
         # The decode op wants the weight as [K, N]; torch nn.Linear stores [out=N, in=K].
+        cache_file_name = _layout_cache_file(cache_file_name, shard_shape)
         w = _materialize(weight, cache_file_name, dtype)
         if w is None:
             # Cache hit: the tilized, width-sharded weight is already on disk and its
@@ -526,7 +578,7 @@ class LinearDecode(DeepSeekV4Module):
             ),
         )
 
-        cache_file_name = _prefetch_cache_file(cache_file_name)
+        cache_file_name = _layout_cache_file(cache_file_name, slab_shape, prefetch=True)
         w = _materialize(weight, cache_file_name, dtype)
         if w is not None:
             # torch nn.Linear stores [out=N, in=K]; the op wants [K, N]. Unlike the L1 partial
@@ -614,9 +666,23 @@ class LinearDecode(DeepSeekV4Module):
         # self.weight.deallocate()
 
     def get_input_memory_config(self, m: int, k: int) -> ttnn.MemoryConfig:
-        a_core_range_set = ttnn.num_cores_to_corerangeset(
-            self.num_inputA_cores, self.device.compute_with_storage_grid_size(), row_wise=True
-        )
+        if self.use_prefetcher:
+            # Onto the first num_inputA_cores receivers rather than a fresh rectangle at the
+            # grid origin. The op reads the activation wherever it is, so this is free -- but
+            # it confines the whole call to the receiver set, which is what lets two weights
+            # on disjoint receiver rectangles be disjoint fused branches. Anchoring at the
+            # origin instead spreads the activation row-wise across the *device* grid, so
+            # every projection's activation would overlap every other's.
+            if self.num_inputA_cores > len(self.receiver_cores):
+                raise ValueError(
+                    f"the activation wants {self.num_inputA_cores} cores but this weight only has "
+                    f"{len(self.receiver_cores)} receivers to place it on"
+                )
+            a_core_range_set = _coalesced_core_range_set(self.receiver_cores[: self.num_inputA_cores])
+        else:
+            a_core_range_set = ttnn.num_cores_to_corerangeset(
+                self.num_inputA_cores, self.device.compute_with_storage_grid_size(), row_wise=True
+            )
         a_memory_config = ttnn.create_sharded_memory_config(
             (32, k // self.num_inputA_cores),
             core_grid=a_core_range_set,
@@ -625,6 +691,51 @@ class LinearDecode(DeepSeekV4Module):
             use_height_and_width_as_shard_shape=True,
         )
         return a_memory_config
+
+    def _matmul_decode_kwargs(self, m_padded: int) -> dict:
+        """The prefetched ``matmul_decode`` call's arguments, shared by ``forward`` and
+        :meth:`descriptor` so the fused and unfused paths cannot drift apart.
+
+        ``n_blocks`` is deliberately left at its default: outside the batched factory the op
+        ignores it and reads the partial layout off the shard specs instead (see the
+        non-batched attribute construction in ``matmul_decode.cpp``), so passing this layer's
+        value would describe the weight differently than an unfused call does.
+        """
+        return dict(
+            partial_width_sharded=self.partial_width_sharded,
+            global_cb=self.global_cb,
+            global_cb_k_blocks=self.gcb_k_blocks,
+            output_mem_config=self._prefetch_output_memory_config(m_padded),
+        )
+
+    def descriptor(self, x: ttnn.Tensor):
+        """This projection as a fusion ``OpDescriptor`` rather than an immediate call.
+
+        For composing projections with ``Parallel`` / ``Sequential``: the returned descriptor
+        is not executed until the enclosing graph is run, so its output tensor is a placeholder
+        to wire into the next descriptor rather than a result to read.
+
+        Only the prefetcher path is supported. The L1 path copies the weight in per call, and
+        that copy is a plain op that could not sit inside the fused program.
+
+        The activation is resharded *here*, before the descriptor exists, because a reshard is
+        itself an op and cannot be part of the fused program. An activation that already has
+        the layout this projection wants -- an upstream stage's output in a ``Sequential``
+        chain, which is the usual case -- is left alone, since a deferred output cannot be
+        resharded at all.
+        """
+        if not self.use_prefetcher:
+            raise ValueError("fusing a LinearDecode needs the prefetcher path (use_prefetcher=True)")
+        want = self.get_input_memory_config(x.shape[-2], x.shape[-1])
+        if not x.is_sharded() or x.memory_config() != want:
+            x = ttnn.to_memory_config(x, want)
+        # Same one-request-per-matmul contract as forward: the fused program's matmul waits on
+        # its page exactly as a standalone one does.
+        if not self.prefetch_queued:
+            self._queue_prefetch()
+        self.prefetch_queued = False
+        m_padded = ((x.shape[-2] + 31) // 32) * 32
+        return matmul_decode(x, self.weight, K=self.K, N=self.N, **self._matmul_decode_kwargs(m_padded))
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         if self.use_prefetcher:
@@ -638,14 +749,7 @@ class LinearDecode(DeepSeekV4Module):
             self.prefetch_queued = False
             m_padded = ((x.shape[-2] + 31) // 32) * 32
             try:
-                return ttnn.experimental.matmul_decode(
-                    x,
-                    self.weight,
-                    partial_width_sharded=self.partial_width_sharded,
-                    global_cb=self.global_cb,
-                    global_cb_k_blocks=self.gcb_k_blocks,
-                    output_mem_config=self._prefetch_output_memory_config(m_padded),
-                )
+                return ttnn.experimental.matmul_decode(x, self.weight, **self._matmul_decode_kwargs(m_padded))
             except Exception:
                 # The request is already with the DRISC senders, and matmul_decode does most
                 # of its validation while building the program -- so a rejected call leaves
@@ -796,6 +900,7 @@ class BatchedLinearDecode(DeepSeekV4Module):
             use_height_and_width_as_shard_shape=True,
         )
 
+        cache_file_name = _layout_cache_file(cache_file_name, (self.bc * K, self.nc))
         w = _materialize(weight, cache_file_name, dtype)
         if w is not None:
             if preprocess is not None:
@@ -853,7 +958,7 @@ class BatchedLinearDecode(DeepSeekV4Module):
             ),
         )
 
-        cache_file_name = _prefetch_cache_file(cache_file_name)
+        cache_file_name = _layout_cache_file(cache_file_name, slab_shape, prefetch=True)
         w = _materialize(weight, cache_file_name, dtype)
         if w is not None:
             if preprocess is not None:
@@ -981,6 +1086,18 @@ class DeepSeekV4RMSNorm(DeepSeekV4Module):
         assert x.is_sharded(), "input must be sharded"
         out = ttnn.rms_norm(x, weight=self.weight, epsilon=self.eps, memory_config=x.memory_config())
         return out if caller_shape is None else ttnn.reshape(out, caller_shape)
+
+    def descriptor(self, x: ttnn.Tensor):
+        """This norm as a fusion ``OpDescriptor``, for chaining between two fused projections.
+
+        Runs on ``x``'s own layout. :meth:`forward` would first reshard a single-tile-row
+        activation onto the canonical ``width_sharded_l1_config`` grid, but a reshard is an op
+        of its own and cannot sit inside the fused program -- and the layout it would move to
+        is not wanted here anyway, since staying put is what keeps the norm on the producing
+        projection's cores and its result already shaped as the consuming one's activation.
+        """
+        assert x.is_sharded(), "input must be sharded"
+        return rms_norm(x, weight=self.weight, epsilon=self.eps, memory_config=x.memory_config())
 
 
 def _rms_norm_unweighted(x: ttnn.Tensor, eps: float) -> ttnn.Tensor:
