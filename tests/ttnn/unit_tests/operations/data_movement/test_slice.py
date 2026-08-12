@@ -8,6 +8,7 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
+from tests.ttnn.unit_tests.operations.data_movement.test_slice_write import offset_increment_tensor
 from tests.ttnn.unit_tests.operations.test_utils import round_up
 import math
 
@@ -1193,6 +1194,8 @@ def test_slice_tensor_args_device_path(input_shape, dim, start, end, step, layou
 @pytest.mark.parametrize(
     "input_shape, dim, start, end",
     (
+        # Rank 3: single upper dim — forward/reverse Horner coincide (CI miss explanation)
+        ([4, 64, 64], 0, [2, 0, 0], [4, 64, 64]),
         # Rank 4: non-zero start on dim 0 (minimal repro for Horner loop fix)
         ([2, 3, 64, 64], 0, [1, 0, 0, 0], [2, 3, 64, 64]),
         # Rank 4: different upper-dim sizes to distinguish forward vs reverse Horner
@@ -1210,7 +1213,8 @@ def test_slice_tensor_args_upper_dim_offset(input_shape, dim, start, end, device
     used a reverse Horner loop to compute the upper-dimension start offset,
     producing wrong tile-page IDs for rank >= 4 tensors with non-zero start on
     upper dimensions."""
-    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    # Distinct row-major values so a wrong tile-page offset is an exact mismatch.
+    torch_input = offset_increment_tensor(input_shape, dtype=torch.float32)
 
     torch_start_tensor = torch.tensor(start)
     torch_end_tensor = torch.tensor(end)
@@ -1221,7 +1225,7 @@ def test_slice_tensor_args_upper_dim_offset(input_shape, dim, start, end, device
     ttnn_start_tensor = ttnn.from_torch(torch_start_tensor, device=device)
     ttnn_end_tensor = ttnn.from_torch(torch_end_tensor, device=device)
 
-    ttnn_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    ttnn_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, dtype=ttnn.float32, device=device)
 
     num_devices_calc = input_shape[dim] // (end[dim] - start[dim])
     ttnn_output = ttnn.slice(
@@ -1230,7 +1234,7 @@ def test_slice_tensor_args_upper_dim_offset(input_shape, dim, start, end, device
 
     ttnn_output_tensor = ttnn.to_torch(ttnn_output)
 
-    assert_with_pcc(torch_output_tensor, ttnn_output_tensor, 0.999)
+    assert_equal(torch_output_tensor, ttnn_output_tensor)
 
 
 @pytest.mark.parametrize(
