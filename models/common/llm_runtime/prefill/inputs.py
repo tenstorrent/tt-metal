@@ -335,6 +335,8 @@ class PrefillInputStager:
         rot_mats = None
         try:
             rot_mats = tuple(self.model.prepare_prefill_rot_mats(device_inputs.position_indices))
+            if len(rot_mats) != 2:
+                raise ValueError("prepare_prefill_rot_mats() must return cosine and sine tensors")
             ttnn.copy(input_a=rot_mats[0], input_b=device_inputs.rotary_cos)
             ttnn.copy(input_a=rot_mats[1], input_b=device_inputs.rotary_sin)
         except BaseException as primary:
@@ -363,10 +365,15 @@ def allocate_device_tensors(host_tensors: Sequence[Any], *, mesh_device: Any) ->
 def copy_into_device_tensors(host_tensors: Sequence[Any], device_tensors: Sequence[Any]) -> Sequence[Any]:
     """Refresh an existing device tensor structure without allocating it."""
 
+    if len(host_tensors) != len(device_tensors):
+        raise ValueError("host/device tensor structures must have equal length")
+    if any(
+        (host_tensor is None) != (device_tensor is None)
+        for host_tensor, device_tensor in zip(host_tensors, device_tensors)
+    ):
+        raise ValueError("host/device optional tensor structure changed")
     for host_tensor, device_tensor in zip(host_tensors, device_tensors):
         if host_tensor is None:
-            if device_tensor is not None:
-                raise ValueError("host/device optional tensor structure changed")
             continue
         ttnn.copy_host_to_device_tensor(host_tensor, device_tensor)
     return device_tensors
