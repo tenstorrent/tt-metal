@@ -2875,3 +2875,14 @@ def test_softcap_bfloat16_full_domain(device):
     assert tiny_max <= 4.0 * SOFTCAP_FLUSH_FLOOR, f"negligible-reference region returned {tiny_max:.4e}"
 
     assert_with_pcc(g, r, pcc=0.9999)
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="softcap is implemented for Blackhole only")
+def test_softcap_zero_beta_guard(device, expect_error):
+    input_tensor = ttnn.from_torch(
+        torch.zeros([32, 32], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    # 1/beta is precomputed host-side, so a zero beta would reach the SFPU as inf.
+    with expect_error(RuntimeError, "SOFTCAP requires a non-zero beta"):
+        ttnn.softcap(input_tensor, 0.0)

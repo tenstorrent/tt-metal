@@ -932,3 +932,16 @@ def test_situ_glu(input_shape, ttnn_dtype, device):
     assert max_abs <= bound, f"situ_glu overshoot: max |out| {max_abs:.4f} > bound {bound:.4f}"
 
     assert_with_pcc(golden, tt_res, pcc=0.99 if is_bfp8 else 0.999)
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="situ_glu builds on softcap, which is Blackhole only")
+def test_situ_glu_zero_beta_guard(device, expect_error):
+    shape = torch.Size([1, 1, 32, 32])
+    gate = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    # Both betas are inverted before reaching the SFPU, so neither may be zero.
+    for beta1, beta2 in [(0.0, SITU_GLU_BETA2), (SITU_GLU_BETA1, 0.0)]:
+        with expect_error(RuntimeError, "beta1 and beta2 must be non-zero"):
+            ttnn.situ_glu(gate, gate, beta1, beta2)

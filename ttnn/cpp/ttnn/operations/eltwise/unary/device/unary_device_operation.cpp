@@ -68,6 +68,11 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
                 input_tensor.device()->arch() == tt::ARCH::BLACKHOLE,
                 "Unary: SOFTCAP is implemented for Blackhole only, got arch {}",
                 input_tensor.device()->arch());
+            // beta reaches the kernel as (beta, 1/beta), so zero would hand the SFPU inf and
+            // return something that is not beta * tanh(x / beta). Guards the fused chains too.
+            const auto beta = op.get_param_if<float>(0);
+            TT_FATAL(beta.has_value(), "Unary: SOFTCAP requires a float beta parameter");
+            TT_FATAL(*beta != 0.0f, "Unary: SOFTCAP requires a non-zero beta");
             break;
         }
     }
