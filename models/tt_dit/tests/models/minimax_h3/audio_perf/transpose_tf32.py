@@ -1,6 +1,6 @@
 """Is ttnn.transpose the actual source of the fp32 -> TF32 truncation?
 
-`concat_error_pattern.py` showed ttnn.concat at C=8 returns `ref & 0xFFFFE000` -- the low 13 mantissa
+A bit-pattern probe showed ttnn.concat at C=8 returns `ref & 0xFFFFE000` -- the low 13 mantissa
 bits zeroed, i.e. TF32, truncated rather than rounded. concat itself is a pure NOC copy and its CB is
 Float32, so it cannot do that. But concat.cpp:186 `build_non_aligned_last_dim_concat` routes last-dim
 concats through a `ttnn.transpose(-2,-1)` round trip whenever
