@@ -12,7 +12,6 @@ on:
           - all
           - resnet50
           - sd35_large
-          - flux1-dev
           - motif
           - qwenimage
           - mochi

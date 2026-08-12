@@ -194,6 +194,7 @@
     pytest --timeout 90 models/demos/blackhole/qwen36/tests/test_gdn_tp.py
     pytest --timeout 60 models/demos/blackhole/qwen36/tests/test_mlp_tp.py
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_model_tp.py
+    pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_decode_bucketing.py -k "test_bucket_warmup_compiles_all_widths_before_capture or test_all_buckets_fit_trace_region or test_bucket_trace_teardown_releases_all_stores"
     pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_mlp.py
     pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_patch_merger.py
     pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_vision_attention.py
@@ -946,11 +947,13 @@
     export NO_PROMPT=1
     pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k flux_dev
     pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_transformer_flux1.py -k flux_dev
+    pytest --timeout 300 models/tt_dit/tests/models/flux1/test_attention_flux1.py
+    pytest --timeout 300 models/tt_dit/tests/models/flux1/test_transformer_block_flux1.py
   model: flux.1-dev
   model_family: Flux
   skus:
     bh_quietbox_2:
-      timeout: 20
+      timeout: 40
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
@@ -1137,6 +1140,9 @@
     #   tier: 1
     wh_galaxy:
       timeout: 150
+      tier: 1
+    bh_quietbox_2:
+      timeout: 105
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
