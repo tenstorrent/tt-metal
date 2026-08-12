@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
-"""Kimi-K3 MLA + MoE adapter (test-only).
+"""Kimi-K3 component adapter (test-only).
 
 Kimi-K3 is a **hybrid**: 93 layers, of which only 24 are full-attention (MLA) layers and 69 are KDA
-linear-attention layers. No KDA module exists in this package, so K3 cannot yet be served end to
-end; a serving adapter would have to subclass ``PrefillModelAdapter`` directly and build its own
-runtime with a hybrid layer schedule.
+linear-attention layers. The TT KDA, MLA, AttnRes, and LatentMoE components exist, but no production
+runtime composes their hybrid layer schedule and state ownership yet. K3 therefore cannot be served
+end to end; a serving adapter must subclass ``PrefillModelAdapter`` directly and build that runtime.
 
 This adapter therefore exists to give the MLA and MoE layers a first-class ``variant`` fixture: the
 test suite's ``TEST_VARIANTS`` registers it locally (the same test-only pattern GLM-5.2 uses) and it
@@ -130,6 +130,7 @@ class KimiK3Adapter(MLAPrefillAdapter):
 
     def build_runtime(self, **kwargs):
         raise NotImplementedError(
-            "Kimi-K3 has no prefill runtime: 69 of its 93 layers are KDA linear-attention layers "
-            "with no TT implementation. This adapter is MLA-test-only."
+            "Kimi-K3 has no composed prefill runtime: its KDA, MLA, AttnRes, and LatentMoE "
+            "components are implemented, but their 93-layer hybrid schedule, KDA state, and "
+            "compact 24-slot MLA cache are not yet wired together. This adapter is test-only."
         )
