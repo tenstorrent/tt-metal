@@ -124,22 +124,58 @@ def wt_block_max(elem_size: int, target_read_bytes: int = TARGET_READ_BYTES) -> 
     return max(2, target_read_bytes // (TILE_WIDTH * elem_size))
 
 
-def _cb_budget_bytes() -> int:
-    """Per-core L1 bytes this op may spend on CBs.
+def _unreserved_l1_bytes() -> int:
+    """Per-core unreserved L1, queried from the device.
 
-    Queried from the device (`ttnn.get_max_worker_l1_unreserved_size`, scaled by
-    `_CB_BUDGET_L1_FRACTION`); the module constant is the fallback when the
-    binding is absent. Only ever used to decide whether depth-2 fits (never to
-    size a CB), so a conservative value degrades to depth-1 rather than to a
-    wrong CB.
+    The module constant is the fallback when the binding is absent. Only ever
+    used to decide whether depth-2 fits (never to size a CB), so a conservative
+    value degrades to depth-1 rather than to a wrong CB.
     """
     unreserved = getattr(ttnn, "get_max_worker_l1_unreserved_size", None)
     if unreserved is not None:
         try:
-            return int(int(unreserved()) * _CB_BUDGET_L1_FRACTION)
+            return int(unreserved())
         except Exception:  # pragma: no cover - the query is best-effort
             pass
-    return _CB_BUDGET_FALLBACK_BYTES
+    return int(_CB_BUDGET_FALLBACK_BYTES / _CB_BUDGET_L1_FRACTION)
+
+
+def l1_bytes_per_core(tensor, num_l1_banks: int) -> int:
+    """Per-core L1 the TENSOR ITSELF occupies — L1 the CBs cannot have.
+
+    - DRAM tensor -> 0 (it costs no worker L1 at all).
+    - L1 INTERLEAVED -> its pages are round-robined over the L1 banks (one bank
+      per worker core), so the worst-case per-core footprint is
+      `ceil(pages / banks) * aligned_page_size`.
+    - L1 SHARDED -> 0 **by design**, not by omission: the sharded path (op_design
+      §4.2, Refinement 2) aliases the CB directly onto the shard buffer, so the
+      shard's L1 *is* the CB's L1 and counting it would double-count.
+
+    This is what makes the depth-2 decision below honest on the `dram_to_l1` /
+    `l1_to_l1` / `l1_to_dram` directions: `get_max_worker_l1_unreserved_size()`
+    is a static device property, so without this subtraction a large
+    L1-interleaved operand would be invisible to the fallback.
+    """
+    memory_config = tensor.memory_config()
+    if memory_config.buffer_type != ttnn.BufferType.L1 or memory_config.is_sharded():
+        return 0
+    return _div_up(tensor.buffer_num_pages(), max(1, num_l1_banks)) * tensor.buffer_aligned_page_size()
+
+
+def cb_budget_bytes(unreserved_bytes: int, l1_resident_bytes: int) -> int:
+    """Per-core L1 bytes this op may spend on CBs.
+
+    Two bounds, whichever is tighter: a fixed share of unreserved L1 (headroom
+    for fragmentation and anything else the program allocates), and what is
+    actually left once the L1-resident operands are paid for.
+    """
+    return max(0, min(int(unreserved_bytes * _CB_BUDGET_L1_FRACTION), unreserved_bytes - l1_resident_bytes))
+
+
+def cb_depth_for(*, want_depth2: bool, depth2_bytes: int, budget_bytes: int) -> int:
+    """The CB-depth knob's value: 2 only when the caller asked for it AND it
+    fits the budget. Pure so the L1 fallback is unit-testable without a device."""
+    return 2 if (want_depth2 and depth2_bytes <= budget_bytes) else 1
 
 
 def tile_geometry(shape, tile_height: int):
@@ -247,10 +283,18 @@ def create_program_descriptor(
     needs_cast = int(output_tensor.dtype != input_tensor.dtype)
 
     # ---------- 2. CB depth knob (a distinct knob from block factor) ----------
+    # A1/A5 note: on the `*_to_l1` / `l1_to_*` directions the operands live in
+    # the SAME per-core L1 the CBs spend, so the budget subtracts them (Phase 0
+    # could assume DRAM-only operands and did not).
+    grid = device.compute_with_storage_grid_size()
+    num_l1_banks = grid.x * grid.y
+    l1_resident_bytes = l1_bytes_per_core(input_tensor, num_l1_banks) + l1_bytes_per_core(output_tensor, num_l1_banks)
     depth2_bytes = 2 * wt_block * (in_tile_bytes + out_tile_bytes)
-    depth2_fits_l1 = depth2_bytes <= _cb_budget_bytes()
-    want_depth2 = use_double_buffer and bool(lv["double_buffer"])
-    cb_depth = 2 if (want_depth2 and depth2_fits_l1) else 1
+    cb_depth = cb_depth_for(
+        want_depth2=use_double_buffer and bool(lv["double_buffer"]),
+        depth2_bytes=depth2_bytes,
+        budget_bytes=cb_budget_bytes(_unreserved_l1_bytes(), l1_resident_bytes),
+    )
     cb_pages = cb_depth * wt_block  # >= wt_block >= wt_tail: no reader deadlock
 
     # ---------- 3. core assignment ----------
