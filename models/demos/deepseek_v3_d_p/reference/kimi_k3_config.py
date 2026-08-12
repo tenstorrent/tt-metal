@@ -1,5 +1,4 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
-
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -12,7 +11,7 @@ Values from HuggingFace config.json for Kimi-K3 (``text_config``), whose ``model
 the TT stack reads lives under ``text_config``.
 
 K3 is a **hybrid**: of its 93 layers only 24 are full-attention (MLA) layers, the rest are KDA
-linear-attention layers. Only the MLA side is modelled here.
+linear-attention layers. The shared model dimensions and both attention schedules are modelled here.
 
 MLA deltas vs Kimi-K2.6:
   * 96 attention heads (K2.6: 64)
@@ -30,10 +29,17 @@ included, is plain bf16. Only the MoE routed experts are quantized.
 """
 
 import types
+from typing import Any
+
+from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 
 
 class KimiK3Config:
     """Kimi K3 model dimensions."""
+
+    HF_REPO_ID = "moonshotai/Kimi-K3"
+    HF_REVISION = "9f62e4e9fffbd0a83ddd60e1c209d828994b3569"
+    FIRST_KDA_LAYER = 1
 
     # Core dimensions
     EMB_SIZE = 7168  # embedding dimension
@@ -82,10 +88,13 @@ class KimiK3Config:
                                52, 56, 60, 64, 68, 72, 76, 80, 84, 88, 92, 93]
     # fmt: on
 
-    # KDA (linear attention) sizing, recorded for completeness; no TT implementation exists yet.
+    # KDA (linear attention) sizing.
     KDA_NUM_HEADS = 96
     KDA_HEAD_DIM = 128
     KDA_SHORT_CONV_KERNEL_SIZE = 4
+    KDA_SUMMARY_GROUP_CHUNKS = 20
+    KDA_OUTPUT_PROJECTION_OUT_BLOCK_W = 4
+    KDA_USE_FULL_RANK_GATE = True
     KDA_GATE_LOWER_BOUND = -5.0
 
     # AttnRes / LatentMoE (out of scope for the MLA work; recorded so the deltas are not lost)
@@ -168,3 +177,25 @@ def kimi_k3_hf_config(max_seq: int = 8192):
         first_k_dense_replace=KimiK3Config.NUM_DENSE_LAYERS,
         n_routed_experts=KimiK3Config.NUM_ROUTED_EXPERTS,
     )
+
+
+def kimi_k3_model_config() -> dict[str, Any]:
+    """Return the HF JSON-shaped fields consumed by :class:`KDAConfig`."""
+    return {
+        "hidden_size": KimiK3Config.EMB_SIZE,
+        "num_hidden_layers": KimiK3Config.NUM_LAYERS,
+        "num_attention_heads": KimiK3Config.NUM_ATTENTION_HEADS,
+        "rms_norm_eps": KimiK3Config.RMS_NORM_EPS,
+        "linear_attn_config": {
+            "num_heads": KimiK3Config.KDA_NUM_HEADS,
+            "head_dim": KimiK3Config.KDA_HEAD_DIM,
+            "short_conv_kernel_size": KimiK3Config.KDA_SHORT_CONV_KERNEL_SIZE,
+            "use_full_rank_gate": KimiK3Config.KDA_USE_FULL_RANK_GATE,
+            "gate_lower_bound": KimiK3Config.KDA_GATE_LOWER_BOUND,
+        },
+    }
+
+
+def kimi_k3_kda_config() -> KDAConfig:
+    """Build the TT KDA configuration from the pinned Kimi-K3 constants."""
+    return KDAConfig.from_model_config(kimi_k3_model_config())
