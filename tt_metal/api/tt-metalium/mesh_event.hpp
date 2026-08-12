@@ -22,6 +22,9 @@ public:
     MeshEvent& operator=(MeshEvent&& other) noexcept;
     ~MeshEvent();
 
+    // Internal constructor (internal use only)
+    explicit MeshEvent(std::unique_ptr<MeshEventImpl> impl);
+
     MeshDevice* device() const;
 
     // debug/test/internal usage.
@@ -31,12 +34,7 @@ public:
     friend std::ostream& operator<<(std::ostream& os, const MeshEvent& event);
 
 private:
-    explicit MeshEvent(std::unique_ptr<MeshEventImpl> impl);
-
     std::unique_ptr<MeshEventImpl> pimpl_;
-
-    friend MeshEvent make_mesh_event(
-        uint32_t id, MeshDevice* device, uint32_t mesh_cq_id, const MeshCoordinateRange& device_range);
 };
 
 }  // namespace tt::tt_metal::distributed

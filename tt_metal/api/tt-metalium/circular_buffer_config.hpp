@@ -33,6 +33,9 @@ public:
     // User is expected to use the builder here.
     CircularBufferConfig(uint32_t total_size);
 
+    // Internal constructor (internal use only)
+    explicit CircularBufferConfig(std::unique_ptr<CircularBufferConfigImpl> impl);
+
     CircularBufferConfig(const CircularBufferConfig& other);
     CircularBufferConfig& operator=(const CircularBufferConfig& other);
     CircularBufferConfig(CircularBufferConfig&& other) noexcept;
@@ -82,16 +85,16 @@ public:
     CircularBufferConfigImpl& impl();
     const CircularBufferConfigImpl& impl() const;
 
-private:
-    // Takes ownership of impl (flatbuffer deserialize / descriptor / tests).
-    explicit CircularBufferConfig(std::unique_ptr<CircularBufferConfigImpl> impl);
+    friend bool operator==(const CircularBufferConfig& lhs, const CircularBufferConfig& rhs);
+    friend bool operator!=(const CircularBufferConfig& lhs, const CircularBufferConfig& rhs);
 
+private:
     // May be nullptr if the CircularBufferConfig is in a moved-from state.
     // Avoid using pimpl_ directly; use the impl() accessor instead.
     std::unique_ptr<CircularBufferConfigImpl> pimpl_;
-
-    friend class CircularBufferImpl;
-    friend CircularBufferConfig make_circular_buffer_config(std::unique_ptr<CircularBufferConfigImpl> impl);
 };
+
+bool operator==(const CircularBufferConfig& lhs, const CircularBufferConfig& rhs);
+bool operator!=(const CircularBufferConfig& lhs, const CircularBufferConfig& rhs);
 
 }  // namespace tt::tt_metal
