@@ -93,6 +93,7 @@ enum class SfpuType : std::uint32_t
     clamp,
     negative,
     softplus,
+    remainder,
     sine,
     cosine,
     acosh,

@@ -22,6 +22,7 @@
 #include "llk_sfpu/ckernel_sfpu_gelu.h"
 #include "llk_sfpu/ckernel_sfpu_negative.h"
 #include "llk_sfpu/ckernel_sfpu_recip.h"
+#include "llk_sfpu/ckernel_sfpu_remainder.h"
 #include "llk_sfpu/ckernel_sfpu_rsqrt.h"
 #include "llk_sfpu/ckernel_sfpu_softplus.h"
 #include "llk_sfpu/ckernel_sfpu_square.h"
@@ -299,6 +300,20 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
             VectorMode::RC,
             static_cast<std::uint32_t>(0xBF800000),  // min = -1.0 (fp32)
             static_cast<std::uint32_t>(0x3F800000)); // max = +1.0 (fp32)
+    }
+    else if constexpr (OPERATION == SfpuType::remainder)
+    {
+        // Divisor fixed to 2.0 as fp32 bit patterns, matching UnarySFPUGolden._REMAINDER_DIVISOR.
+        // There is no init: both the divisor and its reciprocal are runtime arguments of the functor.
+        SFPU_UNARY_CALL(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            calculate_remainder,
+            (false /* APPROX */, ITERATIONS),
+            dst_index,
+            VectorMode::RC,
+            static_cast<std::uint32_t>(0x40000000),  // divisor = 2.0 (fp32)
+            static_cast<std::uint32_t>(0x3F000000)); // 1/divisor = 0.5 (fp32)
     }
     else if constexpr (is_zero_comp_op(OPERATION))
     {

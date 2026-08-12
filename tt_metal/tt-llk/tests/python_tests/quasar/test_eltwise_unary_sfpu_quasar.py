@@ -373,6 +373,14 @@ def prepare_inputs_for_operation(
         max_val = 30.0
         src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
         src_A = src_A.to(torch_format)
+    elif mathop == MathOperation.Remainder:
+        # Divisor is fixed to 2.0; span both signs across several divisor periods so all four
+        # sign quadrants of torch.remainder are exercised — the negative half is what drives the
+        # kernel's `signs differ -> |b| - m` fix-up (mirrors sfpu_domains' Remainder spec).
+        min_val = -5.0
+        max_val = 5.0
+        src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
+        src_A = src_A.to(torch_format)
     # else: keep src_A as-is
 
     return src_A
@@ -655,6 +663,7 @@ OP_CONFIGS = [
     OpConfig(MathOperation.Clamp, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Neg, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Softplus, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    OpConfig(MathOperation.Remainder, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Typecast, TENSOR_DIMS, DEST_SYNC_MODES),
     # Trigonometry / inverse-hyperbolic ops: same matrix as the other transcendentals,
     # fed a uniform [0, 1] stimulus that prepare_trig_inputs maps into each op's domain.
