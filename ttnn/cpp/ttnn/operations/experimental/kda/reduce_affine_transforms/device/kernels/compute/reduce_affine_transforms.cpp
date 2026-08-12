@@ -27,7 +27,8 @@ inline void wait(uint32_t cb, uint32_t tiles) { CircularBuffer(cb).wait_front(ti
 inline void pop(uint32_t cb, uint32_t tiles) { CircularBuffer(cb).pop_front(tiles); }
 
 void matmul(uint32_t a, uint32_t b, uint32_t out, uint32_t Mt, uint32_t Kt, uint32_t Nt) {
-    cb_reserve_back(out, Mt * Nt);
+    CircularBuffer output(out);
+    output.reserve_back(Mt * Nt);
     pack_reconfig_data_format(out);
     reconfig_data_format(b, a);
     matmul_init(a, b);
@@ -43,11 +44,12 @@ void matmul(uint32_t a, uint32_t b, uint32_t out, uint32_t Mt, uint32_t Kt, uint
             tile_regs_release();
         }
     }
-    cb_push_back(out, Mt * Nt);
+    output.push_back(Mt * Nt);
 }
 
 void add(uint32_t a, uint32_t b, uint32_t out, uint32_t tiles) {
-    cb_reserve_back(out, tiles);
+    CircularBuffer output(out);
+    output.reserve_back(tiles);
     pack_reconfig_data_format(out);
     reconfig_data_format(a, b);
     add_init(a, b);
@@ -59,11 +61,12 @@ void add(uint32_t a, uint32_t b, uint32_t out, uint32_t tiles) {
         pack_tile(0, out, tile);
         tile_regs_release();
     }
-    cb_push_back(out, tiles);
+    output.push_back(tiles);
 }
 
 void copy(uint32_t in, uint32_t out, uint32_t tiles) {
-    cb_reserve_back(out, tiles);
+    CircularBuffer output(out);
+    output.reserve_back(tiles);
     pack_reconfig_data_format(out);
     reconfig_data_format_srca(in);
     copy_tile_to_dst_init_short(in);
@@ -75,7 +78,7 @@ void copy(uint32_t in, uint32_t out, uint32_t tiles) {
         pack_tile(0, out, tile);
         tile_regs_release();
     }
-    cb_push_back(out, tiles);
+    output.push_back(tiles);
 }
 }  // namespace
 
