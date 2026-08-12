@@ -148,22 +148,7 @@ private:
         ASSERT(size_in_bytes % sizeof(T) == 0);
     }
 
-    // constexpr note:
-    // The following members could be `constexpr` if `CoreLocalMem<T>` supported constexpr
-    // construction/copy and a constexpr `get_address()`:
-    //   - Scratchpad(pointer, size_type)
-    //   - size(), size_in_bytes()
-    //   - get_base_address(), local_mem()
-    //   - begin(), end()
-    // They are currently runtime-only because `CoreLocalMem<T>` does not provide constexpr support
-    // for those operations.
-
-    // Invariant:
-    // - `start_addr_` and `sentinel_addr_` are always aligned to the alignment of T.
-    // - `sentinel_addr_` - `start_addr_` is always a multiple of sizeof(T).
-    //
-    // Note:
-    // sentinel_addr_ could be omitted in class layout if we inject the size information as a template parameter.
+    // A Scratchpad's location and size may vary between Program invocations, so its pointers are not constexpr.
     pointer start_addr_, sentinel_addr_;
 };
 
