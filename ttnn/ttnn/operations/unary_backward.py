@@ -871,4 +871,54 @@ def _golden_function(grad_tensor, input_tensor, *args, value=2.0, **kwargs):
 
 ttnn.attach_golden_function(ttnn.fill_bw, golden_function=_golden_function)
 
+
+def _golden_embedding_bw(
+    input_tensor,
+    weight_tensor,
+    output_gradient_tensor,
+    *,
+    dtype=None,
+    output_tensor=None,
+    **_,
+):
+    import torch
+
+    embedding_dim = weight_tensor.shape[-1]
+    torch_dtype = {
+        ttnn.bfloat16: torch.bfloat16,
+        ttnn.bfloat8_b: torch.bfloat16,
+        ttnn.bfloat4_b: torch.bfloat16,
+        ttnn.float32: torch.float32,
+        ttnn.int32: torch.int32,
+        ttnn.uint32: torch.uint32,
+    }.get(dtype)
+    result = torch.zeros_like(weight_tensor, dtype=torch_dtype)
+    result.reshape(-1, embedding_dim).index_add_(
+        0,
+        input_tensor.reshape(-1).to(torch.int64),
+        output_gradient_tensor.reshape(-1, embedding_dim).to(result.dtype),
+    )
+    if output_tensor is not None:
+        output_tensor.copy_(result)
+        return output_tensor
+    return result
+
+
+ttnn.attach_golden_function(ttnn.embedding_bw, golden_function=_golden_embedding_bw)
+
+
+def _golden_prod_bw(grad_tensor, input_tensor, *, dim=None, **_):
+    import torch
+
+    differentiable_input = input_tensor.detach().clone().requires_grad_(True)
+    if dim is None:
+        output = torch.prod(differentiable_input)
+    else:
+        output = torch.prod(differentiable_input, dim=dim, keepdim=True)
+    gradient = torch.autograd.grad(output, differentiable_input, grad_outputs=grad_tensor.reshape(output.shape))[0]
+    return [gradient]
+
+
+ttnn.attach_golden_function(ttnn.prod_bw, golden_function=_golden_prod_bw)
+
 __all__ = []

@@ -234,6 +234,37 @@ ttnn.attach_golden_function(ttnn.reshape, golden_function=_golden_function)
 ttnn.register_python_operation(name="ttnn.unsqueeze_to_4D")(ttnn._ttnn.operations.core.unsqueeze_to_4D)
 
 
+def _golden_unsqueeze_to_4d(input_tensor, *args, **kwargs):
+    while input_tensor.ndim < 4:
+        input_tensor = input_tensor.unsqueeze(0)
+    return input_tensor
+
+
+ttnn.attach_golden_function(ttnn.unsqueeze_to_4D, golden_function=_golden_unsqueeze_to_4d)
+
+
+def _golden_reshape_on_device(input_tensor, W, Z, Y, X, *args, **kwargs):
+    return input_tensor.reshape(W, Z, Y, X)
+
+
+ttnn.attach_golden_function(ttnn.reshape_on_device, golden_function=_golden_reshape_on_device)
+
+
+def _golden_view(input_tensor, shape, *args, **kwargs):
+    return input_tensor.reshape(tuple(shape))
+
+
+ttnn.attach_golden_function(ttnn.view, golden_function=_golden_view)
+
+
+def _golden_copy(input_a, input_b, *args, **kwargs):
+    input_b.copy_(input_a)
+    return input_b
+
+
+ttnn.attach_golden_function(ttnn.copy, golden_function=_golden_copy)
+
+
 def _golden_function(input_tensor, *args, **kwargs):
     return input_tensor
 

@@ -14,6 +14,70 @@ from models.common.utility_functions import skip_for_wormhole_b0
 from models.common.utility_functions import torch_random
 
 
+NON_COMPARABLE_STABLE_OPERATIONS = {
+    # Host/device lifecycle, transfers, serialization, and control.
+    "ttnn.allocate_tensor_on_device",
+    "ttnn.allocate_tensor_on_host",
+    "ttnn.as_tensor",
+    "ttnn.composite_example",
+    "ttnn.composite_example_multiple_return",
+    "ttnn.copy_device_to_host_tensor",
+    "ttnn.copy_host_to_device_tensor",
+    "ttnn.copy_host_to_device_tensor_partial",
+    "ttnn.deallocate",
+    "ttnn.dram_prefetcher",
+    "ttnn.dump_tensor",
+    "ttnn.from_buffer",
+    "ttnn.generic_op",
+    "ttnn.load_tensor",
+    "ttnn.manual_seed",
+    "ttnn.move",
+    "ttnn.test_hang_device_operation",
+    "ttnn.unary_chain",
+    # Stochastic operations cannot reproduce the device RNG stream in Torch.
+    "ttnn.bernoulli",
+    "ttnn.rand",
+    "ttnn.randn",
+    "ttnn.sampling",
+    "ttnn.uniform",
+    # Cache and padding-buffer operations only mutate existing device state.
+    "ttnn.fill_cache",
+    "ttnn.fill_implicit_tile_padding",
+    "ttnn.fill_ones_rm",
+    "ttnn.fill_rm",
+    "ttnn.kv_cache.fill_cache_for_user_",
+    "ttnn.kv_cache.update_cache_for_token_",
+    "ttnn.update_cache",
+    # Model-oriented fused operations are outside stable golden coverage.
+    "ttnn.moe",
+    "ttnn.moe_expert_token_remap",
+    "ttnn.moe_routing_remap",
+    "ttnn.plus_one",
+    "ttnn.fused_rms_minimal",
+    "ttnn.transformer.chunk_gated_delta_rule",
+    "ttnn.transformer.chunked_flash_mla_prefill",
+    "ttnn.transformer.exp_ring_joint_scaled_dot_product_attention",
+    "ttnn.transformer.flash_mla_prefill",
+    "ttnn.transformer.flash_multi_latent_attention_decode",
+    "ttnn.transformer.gated_delta_attn_seq",
+    "ttnn.transformer.paged_flash_multi_latent_attention_decode",
+    "ttnn.transformer.ring_distributed_scaled_dot_product_attention",
+    "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+    "ttnn.transformer.ring_mla",
+    # These collectives expose device-local or partially unspecified values that
+    # cannot be represented by comparison mode's single composed CPU tensor.
+    "ttnn.all_broadcast",
+    "ttnn.all_reduce",
+    "ttnn.all_to_all_combine",
+    "ttnn.all_to_all_dispatch",
+    "ttnn.point_to_point",
+    "ttnn.reduce_scatter",
+    "ttnn.reduce_to_root",
+    # This operation returns a Python float rather than a comparable tensor.
+    "ttnn.pearson_correlation_coefficient",
+}
+
+
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [32])
@@ -99,3 +163,24 @@ def test_dump_all_operations(tmp_path):
             expected_has_golden_function = False
 
         assert row["has_golden_function"] == str(expected_has_golden_function)
+
+
+def test_stable_tensor_operations_have_golden_functions():
+    operations = {
+        operation.python_fully_qualified_name: operation
+        for operation in ttnn.query_registered_operations(include_experimental=True)
+    }
+
+    assert NON_COMPARABLE_STABLE_OPERATIONS <= operations.keys()
+
+    missing_golden_functions = sorted(
+        name
+        for name, operation in operations.items()
+        if not name.startswith("ttnn.experimental.")
+        and name not in NON_COMPARABLE_STABLE_OPERATIONS
+        and operation.golden_function is None
+    )
+
+    assert (
+        not missing_golden_functions
+    ), "Stable tensor operations must provide golden functions. Missing: " + ", ".join(missing_golden_functions)

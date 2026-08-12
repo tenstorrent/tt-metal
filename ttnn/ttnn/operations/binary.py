@@ -187,7 +187,38 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     return torch.divide(input_tensor_a, input_tensor_b)
 
 
+ttnn.attach_golden_function(ttnn.divide, golden_function=_golden_function)
 ttnn.attach_golden_function(ttnn.divide_, golden_function=_golden_function)
+
+
+def _golden_function_assign(
+    input_tensor=None,
+    input_a=None,
+    input_b=None,
+    *args,
+    dtype=None,
+    output_tensor=None,
+    **kwargs,
+):
+    import torch
+
+    input_tensor = input_tensor if input_tensor is not None else input_a
+    destination = input_b if input_b is not None else output_tensor
+    if destination is not None:
+        destination.copy_(input_tensor)
+        return destination
+    torch_dtype = {
+        ttnn.bfloat16: torch.bfloat16,
+        ttnn.bfloat8_b: torch.bfloat16,
+        ttnn.bfloat4_b: torch.bfloat16,
+        ttnn.float32: torch.float32,
+        ttnn.int32: torch.int32,
+        ttnn.uint32: torch.uint32,
+    }.get(dtype)
+    return input_tensor.clone() if torch_dtype is None else input_tensor.to(torch_dtype)
+
+
+ttnn.attach_golden_function(ttnn.assign, golden_function=_golden_function_assign)
 
 
 def _golden_function(a, b, *args, **kwargs):

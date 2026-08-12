@@ -88,4 +88,16 @@ def _golden_function(input_tensor_a, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.reciprocal, golden_function=_golden_function)
 
 
+def _golden_complex_tensor(real, imag, **_):
+    import torch
+
+    if real.dtype not in (torch.float32, torch.float64):
+        real = real.float()
+        imag = imag.float()
+    return torch.complex(real, imag)
+
+
+ttnn.attach_golden_function(ttnn.complex_tensor, golden_function=_golden_complex_tensor)
+
+
 __all__ = []

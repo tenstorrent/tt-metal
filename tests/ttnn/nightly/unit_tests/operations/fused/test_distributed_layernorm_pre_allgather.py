@@ -1161,3 +1161,70 @@ def test_pre_all_gather_non_welford_fp32_requires_fp32_dest_acc(device, op, expe
     )
     with expect_error(RuntimeError, "requires fp32_dest_acc_en=true"):
         op(tt_inp, dtype=ttnn.float32, compute_kernel_config=kernel_config)
+
+
+def test_distributed_norm_golden_contract_host_only():
+    from types import SimpleNamespace
+
+    layer_pre = ttnn.get_golden_function(ttnn.layer_norm_pre_all_gather)
+    layer_post = ttnn.get_golden_function(ttnn.layer_norm_post_all_gather)
+    rms_pre = ttnn.get_golden_function(ttnn.rms_norm_pre_all_gather)
+    rms_post = ttnn.get_golden_function(ttnn.rms_norm_post_all_gather)
+
+    local_0 = torch.tensor([[[[1.0, 2.0, 3.0, 4.0]]]])
+    local_1 = torch.tensor([[[[5.0, 6.0, 7.0, 8.0]]]])
+    full = torch.cat((local_0, local_1), dim=-1)
+
+    layer_stats = torch.cat((layer_pre(local_0), layer_pre(local_1)), dim=-1)
+    actual = layer_post(local_0, layer_stats, epsilon=1e-5)
+    expected = torch.nn.functional.layer_norm(full, (full.shape[-1],), eps=1e-5)[..., : local_0.shape[-1]]
+    assert torch.allclose(actual, expected)
+
+    rms_stats = torch.cat((rms_pre(local_0), rms_pre(local_1)), dim=-1)
+    actual = rms_post(local_0, rms_stats, epsilon=1e-5)
+    expected = local_0 * torch.rsqrt(full.square().mean(dim=-1, keepdim=True) + 1e-5)
+    assert torch.allclose(actual, expected)
+
+    welford = SimpleNamespace(use_welford=True)
+    packed = layer_pre(full, program_config=welford)
+    assert torch.equal(packed[..., 0], full.mean(dim=-1))
+    assert torch.equal(packed[..., 32], full.var(dim=-1, unbiased=False))
+
+
+def test_batch_norm_golden_contract_host_only():
+    golden = ttnn.get_golden_function(ttnn.batch_norm)
+    input_tensor = torch.arange(2 * 3 * 2 * 2, dtype=torch.float32).reshape(2, 3, 2, 2)
+    running_mean = torch.tensor([0.5, 1.0, 1.5]).reshape(1, 3, 1, 1)
+    running_var = torch.tensor([1.0, 2.0, 4.0]).reshape(1, 3, 1, 1)
+
+    actual = golden(input_tensor, running_mean=running_mean, running_var=running_var, eps=1e-4)
+    expected = torch.nn.functional.batch_norm(
+        input_tensor,
+        running_mean.reshape(-1),
+        running_var.reshape(-1),
+        eps=1e-4,
+    )
+    assert torch.equal(actual, expected)
+
+    output = torch.empty_like(input_tensor)
+    result = golden(
+        input_tensor,
+        running_mean=running_mean,
+        running_var=running_var,
+        eps=1e-4,
+        output=output,
+    )
+    assert result is output
+    assert torch.equal(result, expected)
+
+    actual_mean = torch.zeros(1, 3, 1, 1)
+    actual_var = torch.ones(1, 3, 1, 1)
+    expected_mean = actual_mean.clone()
+    expected_var = actual_var.clone()
+    golden(input_tensor, running_mean=actual_mean, running_var=actual_var, training=True, momentum=0.25)
+    batch_mean = input_tensor.mean(dim=(0, 2, 3))
+    batch_var = (input_tensor - batch_mean.reshape(1, 3, 1, 1)).square().mean(dim=(0, 2, 3))
+    expected_mean.copy_((0.75 * expected_mean.reshape(-1) + 0.25 * batch_mean).reshape_as(expected_mean))
+    expected_var.copy_((0.75 * expected_var.reshape(-1) + 0.25 * batch_var).reshape_as(expected_var))
+    assert torch.equal(actual_mean, expected_mean)
+    assert torch.equal(actual_var, expected_var)

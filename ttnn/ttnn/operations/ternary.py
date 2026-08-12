@@ -64,4 +64,20 @@ def _golden_function_where(input_tensor_a, input_tensor_b, input_tensor_c, *args
 ttnn.attach_golden_function(ttnn.where, golden_function=_golden_function_where)
 
 
+def _golden_function_snake_beta(input_tensor, alpha, beta, *args, output_tensor=None, **kwargs):
+    import torch
+
+    output_dtype = input_tensor.dtype
+    input_float = input_tensor.float()
+    sine = torch.sin(alpha.float() * input_float)
+    result = (input_float + sine.square() / beta.float()).to(output_dtype)
+    if output_tensor is not None:
+        output_tensor.copy_(result)
+        return output_tensor
+    return result
+
+
+ttnn.attach_golden_function(ttnn.snake_beta, golden_function=_golden_function_snake_beta)
+
+
 __all__ = []

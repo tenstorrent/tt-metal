@@ -124,6 +124,208 @@ def _golden_function(input_tensor: ttnn.Tensor, weight=None, *, epsilon=1e-12, *
 
 ttnn.attach_golden_function(ttnn.rms_norm, golden_function=_golden_function)
 
+
+def _golden_function_batch_norm(
+    input,
+    *,
+    running_mean=None,
+    running_var=None,
+    training=False,
+    eps=1e-5,
+    momentum=0.1,
+    weight=None,
+    bias=None,
+    output=None,
+    **_,
+):
+    import torch
+
+    channels = input.shape[1]
+
+    def channel_vector(tensor):
+        return None if tensor is None else tensor.reshape(channels)
+
+    mean = channel_vector(running_mean)
+    variance = channel_vector(running_var)
+    mean_fp32 = None if mean is None else mean.float()
+    variance_fp32 = None if variance is None else variance.float()
+    normalized = torch.nn.functional.batch_norm(
+        input.float(),
+        None if training else mean_fp32,
+        None if training else variance_fp32,
+        None if weight is None else channel_vector(weight).float(),
+        None if bias is None else channel_vector(bias).float(),
+        training=training,
+        momentum=momentum,
+        eps=eps,
+    )
+    if training:
+        reduction_dims = (0, *range(2, input.ndim))
+        input_fp32 = input.float()
+        batch_mean = input_fp32.mean(dim=reduction_dims)
+        batch_variance = (
+            (input_fp32 - batch_mean.reshape(1, channels, *([1] * (input.ndim - 2)))).square().mean(dim=reduction_dims)
+        )
+        if mean is not None:
+            updated_mean = (1.0 - momentum) * mean_fp32 + momentum * batch_mean
+            mean.copy_(updated_mean.to(mean.dtype))
+        if variance is not None:
+            # TTNN's running-statistics kernel consumes the same biased variance
+            # used for normalization (unlike torch.batch_norm's unbiased update).
+            updated_variance = (1.0 - momentum) * variance_fp32 + momentum * batch_variance
+            variance.copy_(updated_variance.to(variance.dtype))
+
+    normalized = normalized.to(input.dtype)
+    if output is not None:
+        if output.shape != normalized.shape or output.dtype != normalized.dtype:
+            raise ValueError("batch_norm output must match the input shape and dtype")
+        output.copy_(normalized)
+        return output
+    return normalized
+
+
+ttnn.attach_golden_function(ttnn.batch_norm, golden_function=_golden_function_batch_norm)
+
+
+def _distributed_norm_uses_welford(program_config):
+    return bool(program_config is not None and getattr(program_config, "use_welford", False))
+
+
+def _golden_function_norm_pre_all_gather(
+    input_tensor,
+    *,
+    residual_input_tensor=None,
+    program_config=None,
+    rms_norm=False,
+    **_,
+):
+    import torch
+
+    value = input_tensor if residual_input_tensor is None else input_tensor + residual_input_tensor
+    value_fp32 = value.float()
+    zeros = torch.zeros(*value.shape[:-1], 31, dtype=value_fp32.dtype, device=value.device)
+
+    if rms_norm:
+        sum_square = value_fp32.square().sum(dim=-1, keepdim=True)
+        return torch.cat((sum_square, zeros), dim=-1)
+
+    if _distributed_norm_uses_welford(program_config):
+        mean = value_fp32.mean(dim=-1, keepdim=True)
+        variance = value_fp32.var(dim=-1, keepdim=True, unbiased=False)
+        return torch.cat((mean, zeros, variance, zeros), dim=-1)
+
+    sum_square = value_fp32.square().sum(dim=-1, keepdim=True)
+    value_sum = value_fp32.sum(dim=-1, keepdim=True)
+    return torch.cat((sum_square, zeros, value_sum, zeros), dim=-1)
+
+
+def _golden_function_layer_norm_pre_all_gather(input_tensor, **kwargs):
+    return _golden_function_norm_pre_all_gather(input_tensor, rms_norm=False, **kwargs)
+
+
+def _golden_function_rms_norm_pre_all_gather(input_tensor, **kwargs):
+    return _golden_function_norm_pre_all_gather(input_tensor, rms_norm=True, **kwargs)
+
+
+ttnn.attach_golden_function(
+    ttnn.layer_norm_pre_all_gather,
+    golden_function=_golden_function_layer_norm_pre_all_gather,
+)
+ttnn.attach_golden_function(
+    ttnn.rms_norm_pre_all_gather,
+    golden_function=_golden_function_rms_norm_pre_all_gather,
+)
+
+
+def _apply_distributed_norm_affine(output, weight, bias):
+    if weight is not None:
+        output = output * weight.reshape(-1).to(output.dtype)
+    if bias is not None:
+        output = output + bias.reshape(-1).to(output.dtype)
+    return output
+
+
+def _cast_distributed_norm_output(output, dtype, input_dtype):
+    import torch
+
+    if dtype == ttnn.float32:
+        return output.to(torch.float32)
+    if dtype == ttnn.bfloat16:
+        return output.to(torch.bfloat16)
+    return output.to(input_dtype)
+
+
+def _golden_function_layer_norm_post_all_gather(
+    input_tensor,
+    stats,
+    *,
+    epsilon=1e-12,
+    weight=None,
+    bias=None,
+    program_config=None,
+    dtype=None,
+    **_,
+):
+    import torch
+
+    stats = stats.float()
+    if stats.shape[-1] % 64 != 0:
+        raise ValueError("layer_norm_post_all_gather expects one 64-column stats block per device")
+
+    blocks = stats.reshape(*stats.shape[:-1], -1, 64)
+    if _distributed_norm_uses_welford(program_config):
+        local_mean = blocks[..., 0]
+        local_variance = blocks[..., 32]
+        mean = local_mean.mean(dim=-1, keepdim=True)
+        variance = (local_variance + local_mean.square()).mean(dim=-1, keepdim=True) - mean.square()
+    else:
+        global_width = input_tensor.shape[-1] * blocks.shape[-2]
+        sum_square = blocks[..., 0].sum(dim=-1, keepdim=True)
+        value_sum = blocks[..., 32].sum(dim=-1, keepdim=True)
+        mean = value_sum / global_width
+        variance = sum_square / global_width - mean.square()
+
+    output = (input_tensor.float() - mean) * torch.rsqrt(variance.clamp_min(0) + epsilon)
+    output = _apply_distributed_norm_affine(output, weight, bias)
+    return _cast_distributed_norm_output(output, dtype, input_tensor.dtype)
+
+
+def _golden_function_rms_norm_post_all_gather(
+    input_tensor,
+    stats,
+    *,
+    epsilon=1e-12,
+    weight=None,
+    bias=None,
+    dtype=None,
+    **_,
+):
+    import torch
+
+    stats = stats.float()
+    if stats.shape[-1] % 32 != 0:
+        raise ValueError("rms_norm_post_all_gather expects one 32-column stats block per device")
+    blocks = stats.reshape(*stats.shape[:-1], -1, 32)
+    global_width = input_tensor.shape[-1] * blocks.shape[-2]
+    mean_square = blocks[..., 0].sum(dim=-1, keepdim=True) / global_width
+    output = input_tensor.float() * torch.rsqrt(mean_square + epsilon)
+    output = _apply_distributed_norm_affine(output, weight, bias)
+    return _cast_distributed_norm_output(output, dtype, input_tensor.dtype)
+
+
+ttnn.attach_golden_function(
+    ttnn.layer_norm_post_all_gather,
+    golden_function=_golden_function_layer_norm_post_all_gather,
+)
+ttnn.attach_golden_function(
+    ttnn.rms_norm_post_all_gather,
+    golden_function=_golden_function_rms_norm_post_all_gather,
+)
+
+# fused_rms_minimal is deliberately left unattached. Its observable contract includes
+# mutation of the caller-owned stats/global-CB buffer and a topology-dependent fused
+# all-gather. A single CPU tensor cannot represent those device-local state transitions.
+
 LayerNormProgramConfig = ttnn._ttnn.operations.normalization.LayerNormProgramConfig
 LayerNormDefaultProgramConfig = ttnn._ttnn.operations.normalization.LayerNormDefaultProgramConfig
 LayerNormShardedMultiCoreProgramConfig = ttnn._ttnn.operations.normalization.LayerNormShardedMultiCoreProgramConfig
