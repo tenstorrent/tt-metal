@@ -689,8 +689,14 @@ TEST_F(MeshTensorDeviceTest, UniformCopyToHost_ReusesPinnedMemoryCacheEntries) {
     auto& cq = mesh_device_->mesh_command_queue();
     MeshTensor device_tensor = cq.enqueue_write_tensor(host_tensor);
 
-    const size_t entries_before = cache.num_entries();
+    // The returning enqueue_read_tensor overload allocates fresh host buffers and reads straight into
+    // them without consulting the pin cache, so it is used here only to allocate the destination. The
+    // in-place overload is the one that pins, and is what this test measures.
     auto result = cq.enqueue_read_tensor(device_tensor);
+    cq.finish();
+
+    const size_t entries_before = cache.num_entries();
+    cq.enqueue_read_tensor(device_tensor, result);
     cq.finish();
     EXPECT_EQ(cache.num_entries(), entries_before + shard_count);
 
@@ -967,11 +973,11 @@ TEST_F(MeshTensorPinnedMemoryBudgetTest, LargeReadOnlyFileBackedWriteUsesReadOnl
     const auto coord = *distributed::MeshCoordinateRange(mesh_device_->shape()).begin();
     distributed_buffer.emplace_shard(coord, [&file_buffer]() { return file_buffer; });
     auto spec = TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{}));
-    auto host_tensor = HostTensor::from_buffer(
-        std::move(distributed_buffer), spec, TensorTopology::create_sharded_tensor_topology(mesh_device_->shape()));
+    auto topology = TensorTopology::create_sharded_tensor_topology(mesh_device_->shape());
+    auto host_tensor = host_tensor_from_buffer_with_topology(std::move(distributed_buffer), spec, topology);
 
     auto& cq = mesh_device_->mesh_command_queue();
-    MeshTensor device_tensor = enqueue_write_tensor(cq, host_tensor, *mesh_device_);
+    MeshTensor device_tensor = cq.enqueue_write_tensor(host_tensor);
     cq.finish();
 
     auto shard = host_tensor.buffer().get_shard(coord);
@@ -982,7 +988,7 @@ TEST_F(MeshTensorPinnedMemoryBudgetTest, LargeReadOnlyFileBackedWriteUsesReadOnl
     ASSERT_TRUE(pinned);
     EXPECT_EQ(pinned->get_device_access(), tt::tt_metal::experimental::PinnedMemoryDeviceAccess::ReadOnly);
 
-    HostTensor result = enqueue_read_tensor(cq, device_tensor);
+    HostTensor result = cq.enqueue_read_tensor(device_tensor);
     expect_host_tensors_eq(host_tensor, result);
 }
 
