@@ -88,6 +88,71 @@ class _TtHCABase(LightweightModule):
             mesh_mapper=mesh_mapper,
         )
 
+    def _sp_shard_mapper(self, dim: int = 2):
+        if not (self.is_mesh and self.sp_factor > 1):
+            return ttnn.ReplicateTensorToMesh(self.device) if self.is_mesh else None
+        dims = [None, None]
+        dims[self.sp_axis] = dim
+        return ttnn.ShardTensor2dMesh(self.device, mesh_shape=tuple(self.device.shape), dims=dims)
+
+    def _f32(self, x: torch.Tensor, mesh_mapper=None):
+        """float32 on device; replicated unless a mapper is given. The mask comparisons run in float32
+        because bf16 is only exact on integers to 256."""
+        if mesh_mapper is None and self.is_mesh:
+            mesh_mapper = ttnn.ReplicateTensorToMesh(self.device)
+        return ttnn.from_torch(
+            x,
+            device=self.device,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=self.memory_config,
+            mesh_mapper=mesh_mapper,
+        )
+
+    def _build_mask_consts(self, seq_global: int, width: int):
+        """Index vectors for the compressed mask block. ``thr`` and ``ic`` are indexed by the GLOBAL query
+        row, so they are SP-sharded exactly like the mask they feed; ``w`` is replicated.
+
+        float32, not the block dtype: the comparison is on integers up to width-1 and bf16 is only exact to
+        256 -- measured, bf16 misses 640 of 328K elements at entry_count 300 and 4480 of 5M at 7863."""
+        shard = self._sp_shard_mapper(dim=2)
+        rate = self.compress_rate if hasattr(self, "compress_rate") else self.compressor.compress_rate
+        return {
+            "seq": seq_global,
+            "width": width,
+            "thr": self._f32(((torch.arange(seq_global) + 1) // rate).float().view(1, 1, seq_global, 1), shard),
+            "ic": self._f32(torch.arange(seq_global).float().view(1, 1, seq_global, 1), shard),
+            "w": self._f32(torch.arange(width).float().view(1, 1, 1, width)),
+        }
+
+    def _scalar(self, v: float):
+        """1-element float32 on device. The only thing forward pushes from host, 4 bytes, the same shape
+        MLA's per-chunk metadata uses (tt_prefill_runtime.py:481)."""
+        return self._f32(torch.full((1, 1, 1, 1), float(v)))
+
+    def _mask_block(self, seq: int, width: int, first_window_position: int, seq_len_actual: int):
+        """The mask's compressed columns, built on device: 0 where a query may attend an entry, -inf else.
+        Replaces the host ``hca_block_bias``, which now only serves the tests as a reference.
+
+        A query in global row j may attend entry w while ``w < entry_count + (j+1)//compress_rate``, so with
+        ``thr[j] = (j+1)//compress_rate`` the whole block is ONE broadcast comparison against a 1-element
+        tensor. The zeros over older entries, the staircase over this chunk's, and the -inf tail over
+        entries not written yet all fall out of that one condition -- which is what lets the width stay at
+        the cache capacity and the shape stay constant across chunks.
+
+        ``log`` turns the 1/0 a comparison returns into the 0/-inf an additive mask wants: ttnn gives
+        log(1) = 0 and log(0) = -inf exactly, in both float32 and bfloat16."""
+        rate = self.compress_rate if hasattr(self, "compress_rate") else self.compressor.compress_rate
+        # seq arrives LOCAL (the chip's slab rows); the index vectors carry GLOBAL rows and are sharded,
+        # so a chip compares its own rows against the global entry_count and real_len.
+        seq_global = seq * self.sp_factor
+        c = self._mask_consts
+        if c is None or c["seq"] != seq_global or c["width"] != width:
+            c = self._mask_consts = self._build_mask_consts(seq_global, width)
+        within = ttnn.lt(c["w"], ttnn.add(c["thr"], self._scalar(first_window_position // rate)))
+        live = ttnn.lt(c["ic"], self._scalar(seq_len_actual))  # pad query rows attend nothing
+        return ttnn.typecast(ttnn.log(ttnn.multiply(within, live)), self.dtype)
+
     def _build_rope_table(self, count: int, stride: int):
         """cos/sin for every position this layer can ever rotate by, REPLICATED so each chip can reach any
         row. Built once; forward only gathers from it.
@@ -229,6 +294,8 @@ class TtHCACompressor(_TtHCABase):
         self.trans_mat = self._from_torch(get_rot_transformation_mat())
         self._entry_rope = None  # set by TtHCA.alloc_state; None means build on host (standalone use)
         self._entry_index = None
+        self._mask_width = None  # set by TtHCA.alloc_state to the cache capacity; None = this call's entries
+        self._mask_consts = None
 
     @classmethod
     def from_reference(cls, device, reference, config, **kwargs) -> "TtHCACompressor":
@@ -359,11 +426,13 @@ class TtHCACompressor(_TtHCABase):
         # Must span every entry the queries can see -- under chunked prefill that includes earlier
         # chunks', not just this call's. total_entries=None -> single-shot, where the two coincide.
         bias_entries = t_real if total_entries is None else total_entries
-        block_bias = None
+        mask_block = None
         if seq_len_actual > 1 and bias_entries > 0:
-            block_bias = hca_block_bias(position_ids, bias_entries, self.compress_rate)
+            mask_block = self._mask_block(
+                seq_len, self._mask_width or bias_entries, first_window_position, seq_len_actual
+            )
 
-        return compressed_kv, block_bias
+        return compressed_kv, mask_block
 
 
 class TtHCAState:
@@ -475,6 +544,52 @@ class TtHCA(_TtHCABase):
         self._carry_index = {}
         self._slab_rope = None  # set by alloc_state for chunked use; None means build per call
         self._slab_index = None
+        self._mask = None  # persistent additive mask; forward overwrites only the moving columns
+        self._mask_col = None
+        self._carry_cols = None
+
+    def _build_masks(self, seq_global: int, cap: int):
+        """Two persistent additive masks over the key layout ``[carry | chunk | compressed | pad]``. The
+        carry, chunk and pad columns are constant across chunks and written here; forward only overwrites
+        the compressed columns, at a FIXED offset, so nothing recompiles.
+
+        Two of them because chunk 0's carry holds zeros for positions that do not exist yet. In
+        ``allowed = (j >= 0) & (j <= i) & (i - j < sw)`` the global offset kv_actual CANCELS in the last two
+        -- verified bit-exact against the old host mask -- and survives only in ``j >= 0``, which reduces to
+        ``jc >= carry`` at kv_actual = 0 and holds trivially after. So the first chunk masks its carry
+        columns and every later chunk does not; nothing else differs, and the shape is the same for both.
+
+        Built from four small index vectors, so no large host tensor is created anywhere."""
+        carry, sw = self.sliding_window, self.sliding_window
+        raw = carry + seq_global
+        sk_pad = -(-(raw + cap) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+        shard = self._sp_shard_mapper(dim=2)
+
+        ic = self._f32(torch.arange(seq_global).float().view(1, 1, seq_global, 1), shard)
+        ic_lo = self._f32((torch.arange(seq_global) - sw).float().view(1, 1, seq_global, 1), shard)
+        jc = self._f32((torch.arange(raw) - carry).float().view(1, 1, 1, raw))
+
+        # j <= i  and  i - j < sw, both with kv_actual cancelled
+        sliding = ttnn.typecast(ttnn.log(ttnn.multiply(ttnn.le(jc, ic), ttnn.gt(jc, ic_lo))), self.dtype)
+
+        zero_seq = ttnn.multiply(ic, 0.0)
+        blank = ttnn.typecast(ttnn.add(zero_seq, self._f32(torch.zeros(1, 1, 1, cap))), self.dtype)
+        parts = [sliding, blank]
+        pad_w = sk_pad - raw - cap
+        if pad_w:
+            parts.append(
+                ttnn.typecast(ttnn.log(ttnn.add(zero_seq, self._f32(torch.zeros(1, 1, 1, pad_w)))), self.dtype)
+            )
+        self._mask = ttnn.concat(parts, dim=3)
+        self._mask_col = raw
+
+        # ONE mask, not two: the first chunk differs only in its carry columns, whose positions do not exist
+        # yet, so both variants of that [seq, carry] slab are kept and forward writes the right one. Building
+        # a second full mask instead cost 1.1 ms of BinaryNg on device for the same information.
+        self._carry_cols = {
+            False: ttnn.slice(sliding, [0, 0, 0, 0], [1, 1, sliding.shape[2], carry]),
+            True: ttnn.typecast(ttnn.log(ttnn.multiply(zero_seq, self._f32(torch.zeros(1, 1, 1, carry)))), self.dtype),
+        }
 
     def alloc_state(self, max_seq_len: int, batch: int = 1, chunk_tokens: int | None = None) -> TtHCAState:
         """Size the state once for the longest context this layer will serve, so its shape is fixed for
@@ -500,6 +615,8 @@ class TtHCA(_TtHCABase):
         )
         if chunk_tokens is not None:
             self._build_carry_index(chunk)
+        self._build_masks(chunk, capacity)
+        self.compressor._mask_width = capacity
 
         # Rope tables for every position this state can serve, so forward gathers instead of building.
         # The slab needs one row per TOKEN and the compressor one per ENTRY; both are sized on chunk-padded
@@ -642,43 +759,12 @@ class TtHCA(_TtHCABase):
         rope = ttnn.experimental.rotary_embedding_llama(rope, cos, sin, self.trans_mat, is_decode_mode=False)
         return ttnn.concat([nope, rope], dim=-1)
 
-    def _attn_mask(
-        self,
-        batch: int,
-        seq_len: int,
-        block_bias: torch.Tensor,
-        sk_pad: int,
-        kv_actual: int = 0,
-        carry_len: int = 0,
-    ):
-        """Additive mask [B, 1, S, sk_pad] over the key layout ``[carry | chunk | compressed | pad]``:
-        sliding-causal on the raw keys, block_bias on the compressed ones, -inf on the rest.
-
-        ``seq_len`` and ``kv_actual`` are GLOBAL (query length of this chunk, and the position of its
-        first query); ``carry_len`` is how many raw keys precede it. Built on host and SP-sharded on
-        query rows to match q; head-independent, so TP-replicated."""
-        t_len = block_bias.shape[-1]
-        raw = carry_len + seq_len
-        i = torch.arange(seq_len).view(-1, 1) + kv_actual
-        j = torch.arange(raw).view(1, -1) + (kv_actual - carry_len)
-        # j >= 0 drops the carry columns of chunk 0, whose positions do not exist yet.
-        allowed = (j >= 0) & (j <= i) & (i - j < self.sliding_window)
-        full = torch.full((batch, 1, seq_len, sk_pad), float("-inf"))
-        full[..., :raw] = torch.zeros(seq_len, raw).masked_fill(~allowed, float("-inf")).view(1, 1, seq_len, raw)
-        full[:, :, : block_bias.shape[2], raw : raw + t_len] = block_bias.to(torch.float32)
-        mesh_mapper = None
-        if self.is_mesh and self.sp_factor > 1:
-            dims = [None, None]
-            dims[self.sp_axis] = 2
-            mesh_mapper = ttnn.ShardTensor2dMesh(self.device, mesh_shape=tuple(self.device.shape), dims=dims)
-        return self._from_torch(full, mesh_mapper=mesh_mapper)
-
     def _attention(
         self,
         q,
         sliding_kv,
         compressed_kv,
-        block_bias: torch.Tensor,
+        mask_block,
         cos,
         sin,
         carry=None,
@@ -727,7 +813,7 @@ class TtHCA(_TtHCABase):
             next_carry = ttnn.slice(sliding_kv, start, end, slice_dim=2, num_devices=seq_len // self.sliding_window)
 
         # Pad Sk to a multiple of 32 explicitly: SDPA tile-pads a non-aligned Sk with zeros, and a
-        # provided mask's pad columns default to 0 (= attend), which pollutes the softmax. _attn_mask
+        # provided mask's pad columns default to 0 (= attend), which pollutes the softmax. The mask
         # -infs the columns we add here.
         sk = carry_len + seq_len + compressed_kv.shape[2]
         sk_pad = ((sk + 31) // 32) * 32
@@ -735,7 +821,23 @@ class TtHCA(_TtHCABase):
         if sk_pad > sk:
             parts.append(self._from_torch(torch.zeros(batch, 1, sk_pad - sk, self.head_dim)))
         kv = ttnn.concat(parts, dim=2)
-        mask = self._attn_mask(batch, seq_len, block_bias, sk_pad, kv_actual=kv_actual, carry_len=carry_len)
+
+        # Only the compressed columns move between chunks, and their column range is fixed, so the mask is
+        # persistent and this overwrites that range in place. A slice offset lands in the program hash, but
+        # this one never changes, so one program serves every chunk.
+        mask = self._mask
+        rows = mask_block.shape[2]
+        carry_cols = self._carry_cols[kv_actual == 0]
+        ttnn.experimental.slice_write(
+            carry_cols, mask, start=[0, 0, 0, 0], end=[batch, 1, rows, carry_cols.shape[3]], step=[1, 1, 1, 1]
+        )
+        ttnn.experimental.slice_write(
+            mask_block,
+            mask,
+            start=[0, 0, 0, self._mask_col],
+            end=[batch, 1, rows, self._mask_col + mask_block.shape[3]],
+            step=[1, 1, 1, 1],
+        )
 
         attn = ttnn.transformer.scaled_dot_product_attention(
             q,
@@ -969,7 +1071,7 @@ class TtHCA(_TtHCABase):
             cos, sin = self._cos_sin(pos_padded)
         q = self._q_stem(hidden_states, cos, sin)
         sliding_kv = self._kv_stem(hidden_states, cos, sin)
-        new_entries, block_bias = self.compressor(
+        new_entries, mask_block = self.compressor(
             hidden_states,
             position_ids,
             seq_len_actual=seq_len_actual,
@@ -984,7 +1086,7 @@ class TtHCA(_TtHCABase):
             q,
             sliding_kv,
             state.compressed_kv,
-            block_bias,
+            mask_block,
             cos,
             sin,
             carry=state.sliding_carry,
