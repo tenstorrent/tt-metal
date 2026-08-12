@@ -339,3 +339,5 @@
 {"source":"tt-probe","pid":1170359,"started_at_ms":1786564165240,"wait_ms":188,"run_ms":16991,"test_path":"tilize","exit_code":0}
 {"source":"run_safe_pytest","pid":1172309,"started_at_ms":1786564209624,"wait_ms":3,"run_ms":21138,"test_path":"tests/ttnn/unit_tests/operations/tilize/_bench_tilize.py","exit_code":0}
 {"source":"run_safe_pytest","pid":1174019,"started_at_ms":1786564328459,"wait_ms":2,"run_ms":10222,"test_path":"tests/ttnn/unit_tests/operations/tilize/_bench_tilize.py","exit_code":0}
+{"source":"run_safe_pytest","pid":1175069,"started_at_ms":1786564385966,"wait_ms":3,"run_ms":9823,"test_path":"tests/ttnn/unit_tests/operations/tilize/_bench_tilize.py","exit_code":0}
+{"source":"run_safe_pytest","pid":1175765,"started_at_ms":1786564458115,"wait_ms":3,"run_ms":11769,"test_path":"tests/ttnn/unit_tests/operations/tilize/_bench_tilize.py","exit_code":0}

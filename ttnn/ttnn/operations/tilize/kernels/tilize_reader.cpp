@@ -241,6 +241,14 @@ void kernel_main() {
     // ONE call here re-lanes every subsequent read of this kernel, INCLUDING the
     // `read_sticks_for_tilize` helper's. That is the point: B10 is applied
     // without substituting the helper or perturbing the issue path at all.
+    //
+    // ...and it is exactly why the arm must RESTORE the register before it ends
+    // (see the end of this function). MEASURED, not assumed: `brisc.cc` only
+    // calls `noc_init` when the NoC MODE changes between launches, so NOC_CTRL
+    // survives the program — the first bench run showed a byte-identical control
+    // arm at 1.14x purely because it ran after a VC arm on the same cores.
+    // A lever that silently re-lanes the NEXT op's reads is not a lever, so this
+    // arm owns the register for its own duration and hands it back.
     if constexpr (vc_mode == 1) {
         noc_async_read_one_packet_set_state<true /* use_vc */>(src.get_noc_addr(0), tile_row_bytes, read_vc);
     }
@@ -611,5 +619,13 @@ void kernel_main() {
             }
             cb_push_back(cb_input_sticks, w);
         }
+    }
+
+    // R9/B10, the other half of the arm: put the read command buffer back on the
+    // arch default VC (`noc_init`'s `NOC_CMD_STATIC_VC(1)`), because nothing
+    // else will — see the comment at the set_state above. One register write per
+    // CALL, after every read of this kernel has been issued and barriered.
+    if constexpr (vc_mode == 1) {
+        noc_async_read_one_packet_set_state<true /* use_vc */>(src.get_noc_addr(0), tile_row_bytes, 1);
     }
 }
