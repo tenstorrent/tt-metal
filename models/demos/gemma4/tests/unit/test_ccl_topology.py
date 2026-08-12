@@ -188,6 +188,18 @@ def test_down_proj_prefill_progcfg_1d_matches_sweep_winner():
     assert interleaved_down_proj_prefill_config(2048, 2688, 5376) == (None, None, None)
 
 
+def test_should_prefill_long_2d_above_cutoff(monkeypatch):
+    """Long-prefill 2D reshape is on by default for M > cutoff when M divides the cutoff."""
+    from models.demos.gemma4.tt.dram_sharded import _PREFILL_CUTOFF, TILE_SIZE, should_prefill_long_2d
+
+    assert not should_prefill_long_2d(32)
+    assert not should_prefill_long_2d(_PREFILL_CUTOFF)
+    assert should_prefill_long_2d(_PREFILL_CUTOFF * 2)
+    assert not should_prefill_long_2d(_PREFILL_CUTOFF + TILE_SIZE)
+    monkeypatch.setenv("GEMMA4_PREFILL_LONG_2D", "0")
+    assert not should_prefill_long_2d(_PREFILL_CUTOFF * 2)
+
+
 def test_o_proj_prefill_config_l1_in0_block_sharded_out(monkeypatch):
     """31B attention o_proj @ TP=8 → 2d_8x8_bw4 + L1 block-sharded out + HiFi2.
 
