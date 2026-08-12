@@ -294,6 +294,40 @@ At 768P/5s the quad is 41.5 s against 72.7 s, i.e. 1.75x. Two things the numbers
   the same on 128 chips as on 32 and are now 16 % of the quad's total. Reaching 4x end to end needs
   denoise at ~50 s *and* something done about those 17 s.
 
+### Where the VAE and audio stages go on the quad
+
+Measured at 15s (`MINIMAX_H3_VAE_PROFILE` is always on for decode), VAE decode is 10.4 s of which
+**0.82 s is device**:
+
+| | | |
+|---|---|---|
+| device | 0.82 s | 7.9 %, 137 ms/wave -- the mesh is doing its job |
+| readback | 5.15 s | 49.7 %, 859 ms/wave, **8.61 GB** |
+| stitch | 1.57 s | 15.2 %, host |
+| unpatchify | 1.49 s | 14.4 %, host |
+| residual | 1.28 s | 12.3 %, host |
+
+So the stage is host-data-path bound, not compute bound, which is why it costs the same on 128 chips as
+on 32. Two measured inefficiencies to attack, in order:
+
+1. **23 % of the readback is padding.** 588 real units go over 6 waves of 128 slots = 768 transferred.
+   A wave must fill the mesh (`ShardTensorToMesh(dim=0)` needs `dim0 == num_devices`) and groups are
+   whole chunks, so 4 chunks x 28 tiles = 112 of 128 is the best whole-chunk packing at 768P.
+2. **stitch + unpatchify are 3.1 s of host work that device code already exists for** --
+   `unpatchify_device` and `DeviceTileStitcher` in `stitch_device_minimax_h3.py`, behind
+   `MINIMAX_H3_VAE_DEVICE_STITCH=1`. Reading back one blended canvas per chunk instead of 28 tiles
+   also cuts the transfer. The blocker at 128 devices is that path's two-axis all-gather, which
+   materialises ~1.4 GB/chip of which most is padding repeats; it wants a submesh or a per-chunk
+   regroup before it is usable here.
+
+Audio decode is 5.2 s and also does not scale -- the vocoder is single-device work replicated on every
+chip. `MiniMaxH3AudioDecoder` accepts a T-parallel `ParallelFactor` and the pipeline now plumbs it
+(`audio_t_factor` in `_PRESETS_BH`), but the key is **off** for the quad: at factor 4 on the TP axis --
+the configuration `test_audio_minimax_h3.py` gates at 4x8 -- all four ranks hang together in
+`_all_gather_t -> get_ag_ping_pong_buffer -> synchronize_device`. Same frame on every rank, so a CCL
+hang rather than divergence; the difference from the passing 4x8 case is that the test runs
+`FABRIC_1D`/Linear while the quad runs `FABRIC_1D_RING`/Ring.
+
 Not yet swept at SP=32, and the reason denoise is not lower: the matmul blockings (the log carries
 `No known best blocking` at M=1184 and M=3424) and `MiniMaxH3Attention.measured_sdpa_chunk_sizes`,
 which has no SP=32 entry, so ring SDPA takes the generic (256, 512) fallback.

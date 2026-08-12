@@ -157,7 +157,23 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
     # (4, 32)`. At SP=32 a step is dispatch-bound rather than compute-bound, so the trace is what
     # makes the extra devices pay; at 4x8 there is enough work per chip that it is not needed, and
     # leaving it off there keeps the measured working point exactly as it was.
-    (4, 32): {"tp_axis": 0, "sp_axis": 1, "num_links": 2, "topology": ttnn.Topology.Ring, "trace_denoise": True},
+    (4, 32): {
+        "tp_axis": 0,
+        "sp_axis": 1,
+        "num_links": 2,
+        "topology": ttnn.Topology.Ring,
+        "trace_denoise": True,
+        # `audio_t_factor: 4` is deliberately **absent**. The plumbing below is complete and the
+        # configuration is the one `test_audio_minimax_h3.py` gates at 4x8 (`FACTORS` entry `(4, 0)`),
+        # but on the quad it hangs: all four ranks block together in
+        # `_all_gather_t -> get_ag_ping_pong_buffer -> synchronize_device`, so a device op never
+        # retires. Same place on every rank, so it is a CCL hang rather than rank divergence. The
+        # difference from the passing 4x8 case is the fabric -- that test runs `FABRIC_1D`/Linear
+        # while the quad runs `FABRIC_1D_RING`/Ring. Set the key to 4 to reproduce.
+        #
+        # Audio decode is 5.2 s of a 110.9 s generation, so this is worth ~5 % and not worth shipping
+        # a hang for.
+    },
 }
 
 
@@ -263,6 +279,16 @@ class MiniMaxH3Pipeline:
         num_links = preset["num_links"] if num_links is None else num_links
         topology = preset["topology"] if topology is None else topology
         self.trace_denoise = preset.get("trace_denoise", False)
+        # T-parallelism for the audio decoder, or None to run it replicated. The vocoder is otherwise
+        # single-device work duplicated on every chip, which costs the same on 128 as on 32 -- 5.2 s of
+        # a 110.9 s quad generation. Factor 4 on the TP axis is the configuration
+        # `test_audio_minimax_h3.py` gates (`FACTORS`/`KNOWN_BROKEN`: `(4, 0)` passes, `(8, 1)` is
+        # xfail with a real numerics bug), and axis 0 is 4 on both the Galaxy and the quad.
+        audio_t_factor = preset.get("audio_t_factor")
+        self.audio_t_parallel = ParallelFactor(factor=audio_t_factor, mesh_axis=tp_axis) if audio_t_factor else None
+        self.audio_cache_parallel_config = VAEParallelConfig(
+            tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=audio_t_factor or 1)
+        )
         # Denoise generations completed. Tracing engages only after one untraced pass; see `_denoise`.
         self._generations_run = 0
         # One repository holds both partitions -- `transformer/` for t2va/fl2va and
@@ -1248,6 +1274,8 @@ class MiniMaxH3Pipeline:
                 resblock_kernel_sizes=tuple(config["resblock_kernel_sizes"]),
                 resblock_dilation_sizes=tuple(tuple(d) for d in config["resblock_dilation_sizes"]),
                 mesh_device=self.mesh_device,
+                ccl_manager=self.ccl_manager,
+                parallel_config=self.audio_t_parallel,
             )
 
             def read_state() -> dict[str, torch.Tensor]:
@@ -1266,7 +1294,11 @@ class MiniMaxH3Pipeline:
                 decoder,
                 model_name=MODEL_NAME,
                 subfolder="audio_decoder",
-                parallel_config=self.vae_parallel_config,
+                # Keyed on the audio T factor, not `vae_parallel_config`'s factor 1. Sharding T
+                # changes the per-shard conv3d shape, and `prepare_conv3d_weights` lays the weight out
+                # for a specific `C_in_block` from that shape's blocking -- so a factor-4 run must not
+                # load a factor-1 cache entry. Silent wrong numerics otherwise, not a failure.
+                parallel_config=self.audio_cache_parallel_config,
                 mesh_shape=tuple(self.mesh_device.shape),
                 mesh_device=self.mesh_device,
                 dtype="fp32",
