@@ -71,6 +71,14 @@ enum class Transpose : std::uint8_t
     Both      = 3,
 };
 
+// Dest row arrangement an SFPU reduction expects. TILE = natural face layout;
+// ROW_MAJOR = face-interleaved (F0R0, F1R0, F0R1, F1R1, ...).
+enum class DataLayout : std::uint8_t
+{
+    TILE      = 0,
+    ROW_MAJOR = 1,
+};
+
 enum class SfpuType : std::uint32_t
 {
     tanh,
@@ -120,6 +128,7 @@ enum class SfpuType : std::uint32_t
     greater_than_zero,
     less_than_equal_zero,
     greater_than_equal_zero,
+    max_pool_with_indices,
 };
 
 enum class DstSync : std::uint8_t

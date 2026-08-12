@@ -5000,6 +5000,45 @@ class SdpaExpUnclampedGolden:
 
 
 @register_golden
+class MaxPoolWithIndicesGolden:
+    """Column-wise max and its carried index over the first ``num_rows`` rows."""
+
+    def __call__(
+        self,
+        values,
+        indices,
+        num_rows: int,
+        data_format: DataFormat,
+        index_encoding: str = "bits",
+        tile_dimensions=TILE_DIMENSIONS,
+    ):
+        torch_format = format_dict[data_format]
+        rows, cols = tile_dimensions
+        values = torch.as_tensor(values, dtype=torch.float32).reshape(rows, cols)
+        indices = torch.as_tensor(indices, dtype=torch.int64).reshape(rows, cols)
+
+        window = values[:num_rows]
+        winner_rows = torch.argmax(window, dim=0)
+        columns = torch.arange(cols)
+        max_values = window[winner_rows, columns].to(torch_format)
+        max_indices = indices[winner_rows, columns]
+
+        if index_encoding == "bits":
+            index_dtype = (
+                torch.int32
+                if torch.empty(0, dtype=torch_format).element_size() == 4
+                else torch.int16
+            )
+            index_part = max_indices.to(index_dtype).contiguous().view(torch_format)
+        elif index_encoding == "value":
+            index_part = max_indices.to(torch_format)
+        else:
+            raise ValueError(f"Unsupported index encoding: {index_encoding}")
+
+        return torch.cat([max_values, index_part])
+
+
+@register_golden
 class SamplingGolden:
     """Golden for the sampling SFPU helpers
     (experimental/llk_sfpu/ckernel_sfpu_sampling.h).
