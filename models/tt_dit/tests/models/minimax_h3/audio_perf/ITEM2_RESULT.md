@@ -220,6 +220,38 @@ sharding bug for accurate mode regardless**.
    first/last rows, which are not the global ones on a T-shard. Lifting it means moving that padding
    onto `_t_neighbor_pad`.
 
+## 32 chips cannot beat 8 chips at this sequence length
+
+The 283 ms above uses `ParallelFactor(factor=8, mesh_axis=1)` on a 4x8 mesh, which shards T across the
+8-wide axis and **replicates** across the 4-wide one -- `halo_correctness.py` prints the proof,
+"replication groups: [4, 4, 4, 4, 4, 4, 4, 4]". So it is 8-way parallelism with 24 of the 32 chips doing
+redundant work, and the obvious next move is `AudioTParallelConfig`, which shards both axes for
+factor = 4 * 8 = 32.
+
+It does not help, and the reason is arithmetic rather than a bug. `_upload_BCT` pads T up to a multiple
+of `32 * factor`, because a shard cannot be smaller than one 32-row tile:
+
+    factor  8:  T 207 -> padded  256,  256/8  = **32 rows/chip**,  1.24x padding waste
+    factor 32:  T 207 -> padded 1024, 1024/32 = **32 rows/chip**,  4.95x padding waste
+
+**Per-chip row count is identical**, so per-chip work -- and therefore latency -- is identical. The
+padding grows exactly as fast as the parallelism. At 207 latents there is no way to hand 32 chips less
+than 32 rows each of real work, so the extra 24 chips cannot reduce latency. `mesh32.py` measures this;
+it also currently dies in `_partition_t` at slice_device_operation.cpp:164 partway through the graph,
+but fixing that crash would buy nothing at this T, which is why it is recorded rather than chased.
+
+Two things follow:
+
+* **Longer clips are different.** Past ~256 latents (~6.4 s) factor 8's per-chip rows start climbing
+  (T=1000 -> 128 rows/chip) while factor 32 stays at 32, a real 4x. Keep this path in mind for long-form
+  audio; it is dead only for the 5.17 s working point.
+* **The 24 redundant chips are throughput, not latency.** Keeping the 8-way shard and using the 4
+  replicated rows for 4 concurrent clips gives 4 clips per 283 ms at unchanged latency. That is the
+  honest use of a 4x8 mesh for this workload.
+
+The earlier "factor 32 projects to 191-281 ms" fit is therefore **wrong** -- it extrapolated
+`t = F + D/factor` while assuming rows scale as 1/factor, which the tile-alignment padding breaks.
+
 ## Gate
 
     25 passed, 13 warnings in 670.78s (0:11:10)

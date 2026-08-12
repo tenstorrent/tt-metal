@@ -169,6 +169,13 @@ Sum device op time from the profiler CSV; compare against `decode_bench.py`'s 0.
 > uninitialized memory under T-sharding while every other conv was bit-exact, which is why every
 > sharded decode was wrong. Item 3 was never needed.
 >
+> **This uses 8 chips of parallelism, not 32** — `factor=8 axis=1` shards the 8-wide axis and replicates
+> across the 4-wide one, so 24 of 32 chips repeat work. That cannot be improved at this sequence length:
+> T pads to `32 * factor`, so factor 8 and factor 32 both land on **32 rows per chip** (256 vs 1024
+> padded) and therefore the same latency. The idle 24 chips are worth 4x *throughput* (4 concurrent
+> clips at 283 ms), not lower latency. Factor 32 only pays past ~256 latents (~6.4 s). See
+> ITEM2_RESULT.md, "32 chips cannot beat 8 chips at this sequence length".
+>
 > **RESULT 2026-08-12 — read `audio_perf/ITEM2_RESULT.md` before touching this section.**
 > The lever is **trace, not chip count**. Traced on the mesh: factor 8 = **0.2800 s** (3.14x), factor 4
 > = 0.4690 s (2.00x), factor 32 projects to 191–281 ms. Untraced, 32 chips project to 822 ms — a
