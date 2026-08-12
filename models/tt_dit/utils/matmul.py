@@ -264,6 +264,11 @@ class FusedMMRSConfig(NamedTuple):
     subblock_w: int
     num_buffers_per_channel: int | None
     chunk_width_in_mm_blocks: int
+    # The op keeps the matmul output L1-resident per core; at large M the full
+    # shard exceeds the bank and every blocking fails the CB-vs-L1 clash check.
+    # A window bounds the shard to this many M blocks, recycled via the RS->MM
+    # credit handshake. None = fully resident (fine for small M).
+    mm_window_blocks: int | None = None
 
     def get_params(self, core_grid, num_links):
         rs_zone_capacity = (core_grid.y - self.compute_with_storage_grid_size.y) * core_grid.x
@@ -271,6 +276,7 @@ class FusedMMRSConfig(NamedTuple):
         config_dict = self._asdict()
         num_buffers_per_channel = config_dict.pop("num_buffers_per_channel")
         chunk_width_in_mm_blocks = config_dict.pop("chunk_width_in_mm_blocks")
+        mm_window_blocks = config_dict.pop("mm_window_blocks")
 
         # Order is important. Guaranteed for python 3.7+
         return {
@@ -280,6 +286,7 @@ class FusedMMRSConfig(NamedTuple):
             "num_buffers_per_channel": num_buffers_per_channel,
             "chunk_width_in_mm_blocks": chunk_width_in_mm_blocks,
             "num_workers_per_link": num_workers_per_link,
+            "mm_window_blocks": mm_window_blocks,
         }
 
 
@@ -305,9 +312,14 @@ fused_mmrs_configs = {
     #    (frame std 46 vs 71 gold) isolated by per-shape trunk bisect; the
     #    mechanism is trunk-context-dependent and unreproduced at unit level.
     # Repro suite: tests/nightly/tg/ccl/test_mmrs_cosmos3_repro.py.
-    ttnn.CoreCoord(10, 10): {
-        (22144, 3200, 5120): FusedMMRSConfig(ttnn.CoreCoord(10, 8), 8, 4, 8, 2, 1, None, 1),
-    },
+    # Cosmos3 down_proj (22144, 3200, 5120) on the 10x10 clamp is deliberately
+    # ABSENT. The windowed op passes its full unit ladder at that shape
+    # (window 2; 35-replay trace, adjacency, batch protocol — see the repro
+    # suite), but in the traced trunk its L1-resident MM window (512 KB/core,
+    # alive across the captured graph) clashes with downstream matmul CBs at
+    # capture. Re-adding it needs DRAM staging or window/CB budget coordination
+    # with every op captured alongside.
+    ttnn.CoreCoord(10, 10): {},
 }
 
 

@@ -114,7 +114,7 @@ byte-identical whether or not the positive is JSON.
 | `TT_COSMOS3_SDPA_FP32_ACC` | `1` | `0` disables the fp32 SDPA accumulator, which is what unlocks the ring-joint op's streaming compute path (`use_streaming_compute = !fp32_dest_acc_en`): 32.2 → 23.8 ms/layer at 720p with `K_CHUNK=512`. bf16 accumulation matches the wan production config; NaN-free and visually gated at 720p/35 steps. |
 | `TT_COSMOS3_SDPA_Q_CHUNK` / `TT_COSMOS3_SDPA_K_CHUNK` | `256` / `384` | SDPA tiling chunk sizes. With the streaming path (`SDPA_FP32_ACC=0`), `K_CHUNK=512` is fastest at 720p/189f; `Q_CHUNK=512` and `K_CHUNK=768` overflow L1. `k_chunk` also sets the N_gen padding granularity (`k_chunk * sp_factor`) — small shapes may prefer the defaults. |
 | `TT_COSMOS3_SDPA_EXP_APPROX` | unset | `1` uses the SFPU approx exp in the SDPA softmax (the op's own default). Measured −0.8% — kept off. |
-| `TT_COSMOS3_RS_FUSED` | unset | `1` routes trunk RowParallel layers with a validated `(M,K,N)` entry (down_proj) over fused matmul+strided-reduce-scatter. Ring topology only. |
+| `TT_COSMOS3_RS_FUSED` | unset | `1` routes trunk RowParallel layers with a validated `(M,K,N)` entry over fused matmul+strided-reduce-scatter (ring topology only). Currently a no-op on the BH-Galaxy 10x10 clamp: the fused-table entry is withheld because the op's L1-resident MM window clashes with downstream matmul CBs in the traced trunk (see `utils/matmul.py`). |
 
 ## Cache
 
@@ -126,12 +126,11 @@ minutes.
 
 ## Performance notes
 
-- 720p / 189 frames / 35 steps on a BH Galaxy 4×8: warm gen + decode ≈ 199s
+- 720p / 189 frames / 35 steps on a BH Galaxy 4×8: warm gen + decode ≈ 196s
   with the full recipe — `TT_COSMOS3_SDPA_FP32_ACC=0 TT_COSMOS3_SDPA_K_CHUNK=512
-  TT_COSMOS3_GQA_KV=1 TT_COSMOS3_CCL_RING=1 TT_COSMOS3_RS_FUSED=1
-  TT_COSMOS3_SDPA_HIFI2=1`, a short negative prompt, resident weights, and
-  per-generation trace re-capture (see `demo/serve.py`). Cold runs pay a
-  one-time kernel JIT on the first step.
+  TT_COSMOS3_GQA_KV=1 TT_COSMOS3_CCL_RING=1 TT_COSMOS3_SDPA_HIFI2=1`, a short
+  negative prompt, resident weights, and per-generation trace re-capture (see
+  `demo/serve.py`). Cold runs pay a one-time kernel JIT on the first step.
 - The mesh is fully occupied: TP=8 × SP=2 per submesh × 2 submeshes = 32 chips.
   CFG parallelism is not spare capacity — it *is* what fills the second half of
   the mesh. There is no fourth parallel axis to add; the remaining win is moving
