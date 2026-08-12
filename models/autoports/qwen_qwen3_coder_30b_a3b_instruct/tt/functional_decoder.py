@@ -168,10 +168,62 @@ def _concat_heads_decode(attn: ttnn.Tensor, config: AttentionConfig) -> ttnn.Ten
     return out
 
 
-def create_kv_cache(device, config: AttentionConfig, max_batch: int, max_seq_len: int):
-    """Allocate ``(k_cache, v_cache)``, each ``[max_batch, n_kv_heads, max_seq, head_dim]``."""
-    shape = (max_batch, config.num_key_value_heads, max_seq_len, config.head_dim)
-    return tuple(
+@dataclass
+class KVCache:
+    """K/V cache, either contiguous per user or paged through a block table.
+
+    Paged mode is what a serving stack actually uses: logical positions are
+    mapped to physical blocks by ``page_table``, so users can share a block pool
+    instead of each reserving ``max_seq_len``. Both modes are kept because they
+    exercise different kernels -- ``paged_*`` ops versus their contiguous
+    counterparts -- and the contiguous path is the simpler thing to bisect
+    against when a paged result looks wrong.
+    """
+
+    k: ttnn.Tensor
+    v: ttnn.Tensor
+    page_table: ttnn.Tensor | None = None
+    block_size: int = 0
+
+    @property
+    def is_paged(self) -> bool:
+        return self.page_table is not None
+
+
+def create_kv_cache(
+    device,
+    config: AttentionConfig,
+    max_batch: int,
+    max_seq_len: int,
+    block_size: int | None = None,
+) -> KVCache:
+    """Allocate a KV cache.
+
+    ``block_size=None`` gives a contiguous cache of
+    ``[max_batch, n_kv_heads, max_seq_len, head_dim]``. Passing a block size
+    switches to a paged cache of ``[num_blocks, n_kv_heads, block_size,
+    head_dim]`` with an identity page table -- block ``b`` of user ``u`` lives
+    at physical block ``u * blocks_per_seq + b``. A real scheduler would hand
+    out blocks from a free pool; the identity mapping keeps the plumbing honest
+    (every op still goes through the table) without pulling a block allocator
+    into the decoder.
+    """
+    n_kv, head_dim = config.num_key_value_heads, config.head_dim
+
+    if block_size is None:
+        shape = (max_batch, n_kv, max_seq_len, head_dim)
+        page_table = None
+    else:
+        blocks_per_seq = math.ceil(max_seq_len / block_size)
+        shape = (max_batch * blocks_per_seq, n_kv, block_size, head_dim)
+        page_table = ttnn.from_torch(
+            torch.arange(max_batch * blocks_per_seq, dtype=torch.int32).reshape(max_batch, blocks_per_seq),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+        )
+
+    k, v = (
         ttnn.from_torch(
             torch.zeros(shape),
             dtype=ttnn.bfloat16,
@@ -181,6 +233,31 @@ def create_kv_cache(device, config: AttentionConfig, max_batch: int, max_seq_len
         )
         for _ in range(2)
     )
+    return KVCache(k=k, v=v, page_table=page_table, block_size=block_size or 0)
+
+
+def _fill_cache(kv_cache: KVCache, k: ttnn.Tensor, v: ttnn.Tensor, user_id: int) -> None:
+    """Write a whole prompt's K/V into the cache.
+
+    The paged kernel writes block-at-a-time, so a prompt that does not fill its
+    last block is zero-padded up to a block boundary first. Those trailing
+    positions are never read: decode passes ``cur_pos``, and SDPA only attends
+    up to it.
+    """
+    if not kv_cache.is_paged:
+        ttnn.fill_cache(kv_cache.k, k, user_id)
+        ttnn.fill_cache(kv_cache.v, v, user_id)
+        return
+
+    seq_len = k.shape[2]
+    padded = math.ceil(seq_len / kv_cache.block_size) * kv_cache.block_size
+    if padded != seq_len:
+        pad = [(0, 0), (0, 0), (0, padded - seq_len), (0, 0)]
+        k = ttnn.pad(k, pad, value=0.0)
+        v = ttnn.pad(v, pad, value=0.0)
+
+    ttnn.experimental.paged_fill_cache(kv_cache.k, k, kv_cache.page_table, batch_idx=user_id)
+    ttnn.experimental.paged_fill_cache(kv_cache.v, v, kv_cache.page_table, batch_idx=user_id)
 
 
 def attention_decode(
@@ -189,7 +266,7 @@ def attention_decode(
     config: AttentionConfig,
     cos_cache: ttnn.Tensor,
     sin_cache: ttnn.Tensor,
-    kv_cache: tuple[ttnn.Tensor, ttnn.Tensor],
+    kv_cache: KVCache,
     current_pos: ttnn.Tensor,
     token_index: int,
 ) -> ttnn.Tensor:
@@ -200,7 +277,7 @@ def attention_decode(
     ``token_index`` is the same value as a Python int, needed because the
     rotary op takes a scalar rather than a tensor.
     """
-    k_cache, v_cache = kv_cache
+    k_cache, v_cache, page_table = kv_cache.k, kv_cache.v, kv_cache.page_table
 
     xqkv = ttnn.linear(x, weights.wqkv, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
@@ -232,19 +309,31 @@ def attention_decode(
     k = _apply_rope(k, cos_cache, sin_cache, token_index=token_index)
 
     k = ttnn.to_memory_config(k, kv_sharded_mem)  # v never left the sharded layout
-    ttnn.experimental.paged_update_cache(k_cache, k, update_idxs_tensor=current_pos, page_table=None)
-    ttnn.experimental.paged_update_cache(v_cache, v, update_idxs_tensor=current_pos, page_table=None)
+    # page_table=None is the contiguous path; the same op serves both.
+    ttnn.experimental.paged_update_cache(k_cache, k, update_idxs_tensor=current_pos, page_table=page_table)
+    ttnn.experimental.paged_update_cache(v_cache, v, update_idxs_tensor=current_pos, page_table=page_table)
     ttnn.deallocate(k)
     ttnn.deallocate(v)
 
-    attn = ttnn.transformer.scaled_dot_product_attention_decode(
-        q,
-        k_cache,
-        v_cache,
-        cur_pos_tensor=current_pos,
-        scale=config.head_dim**-0.5,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    if kv_cache.is_paged:
+        attn = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+            q,
+            k_cache,
+            v_cache,
+            page_table_tensor=page_table,
+            cur_pos_tensor=current_pos,
+            scale=config.head_dim**-0.5,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+    else:
+        attn = ttnn.transformer.scaled_dot_product_attention_decode(
+            q,
+            k_cache,
+            v_cache,
+            cur_pos_tensor=current_pos,
+            scale=config.head_dim**-0.5,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
     ttnn.deallocate(q)
 
     attn = _concat_heads_decode(attn, config)
@@ -259,7 +348,7 @@ def attention_prefill(
     config: AttentionConfig,
     cos_cache: ttnn.Tensor,
     sin_cache: ttnn.Tensor,
-    kv_cache: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
+    kv_cache: KVCache | None = None,
 ) -> ttnn.Tensor:
     """Causal self-attention over a full sequence. ``x``/return ``[1, 1, S, hidden]``.
 
@@ -286,8 +375,7 @@ def attention_prefill(
 
     # Seed the cache with the prompt's post-RoPE K/V so decode can continue.
     if kv_cache is not None:
-        ttnn.fill_cache(kv_cache[0], k, 0)
-        ttnn.fill_cache(kv_cache[1], v, 0)
+        _fill_cache(kv_cache, k, v, user_id=0)
 
     # GQA is handled inside SDPA: it broadcasts the 4 KV heads across 32 Q heads.
     # Default scale is head_dim ** -0.5, which is what Qwen3 uses.
@@ -733,7 +821,7 @@ def decoder_layer_prefill(
     cos_cache: ttnn.Tensor,
     sin_cache: ttnn.Tensor,
     sparsity: ttnn.Tensor,
-    kv_cache: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
+    kv_cache: KVCache | None = None,
 ) -> ttnn.Tensor:
     """One full decoder layer. ``x`` / return ``[1, 1, S, hidden]``.
 
@@ -777,7 +865,7 @@ def decoder_layer_decode(
     config: DecoderLayerConfig,
     cos_cache: ttnn.Tensor,
     sin_cache: ttnn.Tensor,
-    kv_cache: tuple[ttnn.Tensor, ttnn.Tensor],
+    kv_cache: KVCache,
     current_pos: ttnn.Tensor,
     token_index: int,
 ) -> ttnn.Tensor:

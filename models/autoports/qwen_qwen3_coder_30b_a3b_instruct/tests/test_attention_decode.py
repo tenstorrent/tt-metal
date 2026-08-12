@@ -72,12 +72,12 @@ def _to_device(t, mesh_device, dtype=ttnn.bfloat16):
     )
 
 
-def _prefill_then_decode(mesh_device, hf_config, torch_weights, hidden_full, prompt_len):
+def _prefill_then_decode(mesh_device, hf_config, torch_weights, hidden_full, prompt_len, block_size=None):
     """Prefill ``prompt_len`` tokens, then decode the token at ``prompt_len``."""
     config = AttentionConfig.from_hf(hf_config)
     weights = upload_attention_weights(torch_weights, mesh_device)
     cos_cache, sin_cache = build_rope_cache(hf_config, MAX_SEQ, mesh_device)
-    kv_cache = create_kv_cache(mesh_device, config, max_batch=1, max_seq_len=MAX_SEQ)
+    kv_cache = create_kv_cache(mesh_device, config, max_batch=1, max_seq_len=MAX_SEQ, block_size=block_size)
 
     prompt = hidden_full[:, :prompt_len, :]
     attention_prefill(_to_device(prompt.unsqueeze(0), mesh_device), weights, config, cos_cache, sin_cache, kv_cache)
@@ -100,19 +100,21 @@ def _prefill_then_decode(mesh_device, hf_config, torch_weights, hidden_full, pro
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=True)
 @pytest.mark.parametrize("prompt_len", [32, 128], ids=["p32", "p128"])
-def test_decode_matches_prefill_at_same_position(mesh_device, reference, torch_weights, prompt_len):
+@pytest.mark.parametrize("block_size", [None, 32, 64], ids=["contiguous", "paged32", "paged64"])
+def test_decode_matches_prefill_at_same_position(mesh_device, reference, torch_weights, prompt_len, block_size):
     layer, hf_config = reference
     hidden_full = _hidden(hf_config, prompt_len + 1)
 
     # Reference: run the whole prompt+1 through prefill and take the last row.
     ref_out = _reference_attention(layer, hf_config, hidden_full)[:, prompt_len, :]
 
-    tt_out = _prefill_then_decode(mesh_device, hf_config, torch_weights, hidden_full, prompt_len)
+    tt_out = _prefill_then_decode(mesh_device, hf_config, torch_weights, hidden_full, prompt_len, block_size)
 
     passing, pcc_message = comp_pcc(ref_out, tt_out, PCC_REQUIRED)
     logger.info(comp_allclose(ref_out, tt_out))
-    logger.info(f"decode at pos {prompt_len}: {pcc_message}")
-    assert passing, f"decode at position {prompt_len} below {PCC_REQUIRED}: {pcc_message}"
+    kind = "contiguous" if block_size is None else f"paged(block={block_size})"
+    logger.info(f"decode at pos {prompt_len} [{kind}]: {pcc_message}")
+    assert passing, f"decode at position {prompt_len} [{kind}] below {PCC_REQUIRED}: {pcc_message}"
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=True)

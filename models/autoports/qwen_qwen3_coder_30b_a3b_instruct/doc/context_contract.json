@@ -1,0 +1,55 @@
+{
+  "hf_model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+  "hf_advertised_context": 262144,
+  "current_supported_context": 262144,
+  "capability_reduction": false,
+  "limiting_reason": null,
+  "stage": "functional_decoder",
+  "scope": "single decoder layer (layer 0) on one Blackhole p300c die, batch 1",
+  "device": {
+    "arch": "blackhole",
+    "board": "p300c",
+    "mesh": "1x1",
+    "dram_per_die_gb": 32
+  },
+  "measured": {
+    "decode_context_tokens": 262144,
+    "decode_probe": "paged KV cache allocated to depth 262144 (block_size=32); decode step executed at position 262143; output finite; 2.42 s",
+    "prefill_context_tokens": 262144,
+    "prefill_probe": "single-shot prefill of a 262144-token sequence through the full decoder layer; output finite; 192.23 s",
+    "prefill_sweep_seconds": {
+      "512": 0.51,
+      "1024": 4.7,
+      "2048": 5.35,
+      "4096": 7.92,
+      "8192": 10.24,
+      "16384": 14.87,
+      "32768": 23.79,
+      "65536": 42.05,
+      "131072": 85.85,
+      "262144": 192.23
+    },
+    "decode_sweep_seconds": {
+      "4096": 1.19,
+      "16384": 1.21,
+      "65536": 1.45,
+      "131072": 1.77,
+      "262144": 2.42
+    }
+  },
+  "kv_cache": {
+    "dtype": "bfloat16",
+    "bytes_per_token_per_layer": 2048,
+    "formula": "num_key_value_heads(4) * head_dim(128) * 2 bytes * 2 tensors (K and V)",
+    "bytes_at_full_context_per_layer": 536870912,
+    "paged": true,
+    "default_block_size": 32
+  },
+  "pcc_validated_context_tokens": 512,
+  "pcc_validation_note": "PCC against the HuggingFace reference is verified up to 512 tokens; longer lengths are capacity/liveness probes only, because a full-length torch reference for 262144 tokens does not fit in host RAM. This is a limit of the reference, not of the TTNN decoder.",
+  "forward_looking_note": "Not a current limitation. At full context one layer holds 512 MiB of KV; the full 48-layer model would need ~24 GiB on a 32 GiB die, so the full-model stage (05) will have to weigh KV dtype, paging across dice, or a served-context cap. The functional decoder itself imposes no reduction.",
+  "evidence": [
+    "doc/functional_decoder/work_log.md (context probe section)",
+    "scratchpad logs: context_probe.log, prefill_sweep.log"
+  ]
+}

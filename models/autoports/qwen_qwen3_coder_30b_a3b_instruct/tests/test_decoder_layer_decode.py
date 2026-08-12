@@ -71,12 +71,12 @@ def _to_device(t, mesh_device):
     )
 
 
-def _setup(mesh_device, hf_config, torch_weights):
+def _setup(mesh_device, hf_config, torch_weights, block_size=None):
     config = DecoderLayerConfig.from_hf(hf_config)
     weights = upload_layer_weights(torch_weights, mesh_device, config)
     cos_cache, sin_cache = build_rope_cache(hf_config, MAX_SEQ, mesh_device)
     sparsity = build_expert_sparsity(mesh_device, config.moe.num_experts)
-    kv_cache = create_kv_cache(mesh_device, config.attention, max_batch=1, max_seq_len=MAX_SEQ)
+    kv_cache = create_kv_cache(mesh_device, config.attention, max_batch=1, max_seq_len=MAX_SEQ, block_size=block_size)
     return config, weights, cos_cache, sin_cache, sparsity, kv_cache
 
 
@@ -92,12 +92,13 @@ def _decode_step(mesh_device, hf_config, ctx, token_hidden, position):
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=True)
 @pytest.mark.parametrize("prompt_len", [32, 128], ids=["p32", "p128"])
-def test_decode_layer_matches_prefill(mesh_device, reference, torch_weights, prompt_len):
+@pytest.mark.parametrize("block_size", [None, 32], ids=["contiguous", "paged32"])
+def test_decode_layer_matches_prefill(mesh_device, reference, torch_weights, prompt_len, block_size):
     layer, hf_config = reference
     hidden_full = _hidden(hf_config, prompt_len + 1)
     ref_out = _reference_layer(layer, hf_config, hidden_full)[:, prompt_len, :]
 
-    ctx = _setup(mesh_device, hf_config, torch_weights)
+    ctx = _setup(mesh_device, hf_config, torch_weights, block_size)
     config, weights, cos_cache, sin_cache, sparsity, kv_cache = ctx
 
     # Prefill the prompt through the full layer so the cache is populated.
@@ -115,8 +116,9 @@ def test_decode_layer_matches_prefill(mesh_device, reference, torch_weights, pro
 
     passing, pcc_message = comp_pcc(ref_out, tt_out, PCC_REQUIRED)
     logger.info(comp_allclose(ref_out, tt_out))
-    logger.info(f"decode layer at pos {prompt_len}: {pcc_message}")
-    assert passing, f"decode layer at position {prompt_len} below {PCC_REQUIRED}: {pcc_message}"
+    kind = "contiguous" if block_size is None else f"paged(block={block_size})"
+    logger.info(f"decode layer at pos {prompt_len} [{kind}]: {pcc_message}")
+    assert passing, f"decode layer at pos {prompt_len} [{kind}] below {PCC_REQUIRED}: {pcc_message}"
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=True)
@@ -131,7 +133,8 @@ def test_multi_step_decode(mesh_device, reference, torch_weights):
     hidden_full = _hidden(hf_config, prompt_len + steps)
     ref_out = _reference_layer(layer, hf_config, hidden_full)
 
-    ctx = _setup(mesh_device, hf_config, torch_weights)
+    # Paged: multi-step is where a block-table mapping error would surface.
+    ctx = _setup(mesh_device, hf_config, torch_weights, block_size=32)
     config, weights, cos_cache, sin_cache, sparsity, kv_cache = ctx
 
     decoder_layer_prefill(
