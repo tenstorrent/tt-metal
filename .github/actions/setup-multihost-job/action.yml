@@ -114,7 +114,7 @@ runs:
         mpirun --pernode bash -lc 'cp -r /ci/tt-metal /home/user/'
         mpirun --pernode git -C /home/user/tt-metal submodule update --init --recursive
         mpirun --pernode tar --zstd -xf "/home/user/tt-metal/$(basename "${BUILD_ARCHIVE}")" -C /home/user/tt-metal
-        mpirun --pernode uv pip install "/home/user/tt-metal/$(basename "${ttnn_wheels[0]}"" ${EXTRA_PIP_PACKAGES}
+        mpirun --pernode uv pip install "/home/user/tt-metal/$(basename "${ttnn_wheels[0]}")" ${EXTRA_PIP_PACKAGES}
 
          if [ "${CREATE_PIPELINE_DIR}" = "true" ] && [ -n "${PIPELINE_DIR:-}" ]; then
           # Per-job NFS scratch (ranklogs, automapper cwd). Do NOT copy the full
