@@ -532,8 +532,8 @@ def depthwise_tap_filter_snake(x_BTC, taps, *, alpha, inv_beta, mesh_device, dty
 
     One op where the unfused form is two (conv, then `ttnn.snake_beta`) plus the tilize/untilize the
     activation needs around it. The parameters ride as two extra tile-rows appended to the *prepared*
-    weight, which the reader fetches into a dedicated CB and mcasts to the receiver cores; see
-    `audio_perf/START_HERE_FUSION.md`.
+    weight, which the reader fetches into a dedicated CB and mcasts to the receiver cores; the device
+    side is `compute_depthwise_conv1d.cpp`'s `apply_snake_beta`, gated on `TT_CONV1D_SNAKE_PARAMS`.
 
     Deliberately not routed through `depthwise_tap_filter`: that function carries the L1-probe,
     operand-split and C-chunk machinery, none of which composes with an appended weight (the probe

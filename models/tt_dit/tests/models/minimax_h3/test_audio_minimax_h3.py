@@ -222,9 +222,10 @@ def test_decode(mesh_device, num_latent_frames):
 
     psnr = _psnr(expected, actual)
     mel_distance = _log_mel_distance(expected, actual)
-    # Log it: this is the only PSNR measured against the *CPU* reference. The figure quoted in
-    # AUDIO_RESULTS.md is scored against `MINIMAX_H3_AUDIO_ACCURATE=1`, i.e. device against device,
-    # which cannot see an error that both device paths share. Keep the two distinguishable.
+    # Log it: this is the only PSNR in the suite measured against the *CPU* reference. Figures scored
+    # against `MINIMAX_H3_AUDIO_ACCURATE=1` are device against device, which cannot see an error that
+    # both device paths share. Keep the two distinguishable -- `audio_perf/cpu_vs_device.py` is the
+    # vs-CPU measurement that the acceptance criterion uses.
     logger.info(f"decode {num_latent_frames} latents: PSNR {psnr:.2f} dB vs CPU reference, log-mel {mel_distance:.3f}")
     assert psnr >= 28.0, f"decode PSNR {psnr:.2f} dB < 28 dB"
     assert mel_distance <= 5.0, f"log-spectrogram distance {mel_distance:.3f} > 5.0"
