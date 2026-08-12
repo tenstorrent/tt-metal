@@ -25,8 +25,15 @@ MESH_DEVICE=N150 HF_MODEL=deepseek-community/Janus-Pro-7B pytest models/experime
 ```
 MESH_DEVICE=N150 HF_MODEL=deepseek-community/Janus-Pro-7B pytest models/experimental/janus_pro/demo/text_demo.py -k notrace
 ```
+- Vision model profile (device execution only)
+```
+MESH_DEVICE=N150 HF_MODEL=deepseek-community/Janus-Pro-7B \
+  python -m tracy -p -r -v --op-support-count 10000 -m pytest \
+  models/experimental/janus_pro/tests/test_vision_model_profile.py::test_janus_vision_model_profile -v
+```
 Notes:
 - Use `-k notrace` for text Top-1/Top-5 accuracy (Debug build is fine); use `-k trace` for perf (Release build required).
+- The vision model profile excludes warmup and measures only the operation between the `start` and `stop` signposts. It is not an end-to-end TTFT or decode benchmark.
 - Text accuracy needs a one-time HF reference: see [demo/README.md](demo/README.md).
 - Demos are manual-run only (not wired into CI e2e yaml). More detail: [demo/README.md](demo/README.md).
 
