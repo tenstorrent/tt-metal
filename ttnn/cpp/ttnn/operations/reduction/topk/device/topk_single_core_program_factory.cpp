@@ -362,7 +362,6 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
                 {"Wt", Wt},                                           // Width in tiles
                 {"output_tiles", Ktiles},                             // K value in tiles
                 {"largest", static_cast<uint32_t>(args.largest)},     // Sort order: largest (true) or smallest (false)
-                {"stable_sort", static_cast<uint32_t>(args.stable)},  // Stable sort: ties keep the lowest index
             },
         .runtime_arg_schema = {.runtime_arg_names = {"work_per_core"}},
         // A 32-bit dest register is needed in two independent cases: a UInt32 index output (wide

@@ -135,18 +135,6 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(args.k != 0, "K must be non-zero");
 
-    // The stable bitonic network is only implemented in the WH/BH LLKs; the Quasar LLK
-    // static_asserts STABLE_SORT == false. Reject it here so the caller gets an actionable error
-    // instead of a kernel JIT failure.
-    if (args.stable) {
-        const auto arch = input_tensor.device()->arch();
-        TT_FATAL(
-            arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE,
-            "TopK stable=true is not supported on {}: the bitonic top-k LLK only implements the stable "
-            "network on Wormhole and Blackhole",
-            arch);
-    }
-
     {
         const int8_t logical_rank = static_cast<int8_t>(input_tensor.logical_shape().rank());
         const int8_t last_dim = logical_rank - 1;
@@ -328,7 +316,6 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> topk(
     int8_t dim,
     bool largest,
     bool sorted,
-    bool stable,
     const tt::tt_metal::MemoryConfig& memory_config,
     const tt::tt_metal::CoreRangeSet& sub_core_grids,
     const std::optional<Tensor>& indices_tensor,
@@ -339,7 +326,6 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> topk(
             .dim = dim,
             .largest = largest,
             .sorted = sorted,
-            .stable = stable,
             .output_memory_config = memory_config,
             .sub_core_grids = sub_core_grids},
         TopkInputs{

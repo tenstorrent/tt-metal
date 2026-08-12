@@ -194,8 +194,7 @@ std::vector<Tensor> topk(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<Tensor>& indices_tensor,
-    std::optional<std::tuple<Tensor&, Tensor&>> preallocated_output_tensors,
-    const bool stable) {
+    std::optional<std::tuple<Tensor&, Tensor&>> preallocated_output_tensors) {
     // Store original shape for final output validation
     const ttnn::Shape& original_lshape = input_tensor.logical_shape();
 
@@ -372,7 +371,6 @@ std::vector<Tensor> topk(
         -1,
         largest,
         sorted,
-        stable,
         input_memory_config,
         used_sub_core_grids,
         indices_tensor,

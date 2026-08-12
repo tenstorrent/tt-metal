@@ -213,8 +213,7 @@ template <
     uint32_t values_dfb_index,
     uint32_t output_ind_dfb_index,
     uint32_t tile_width,
-    bool first_call,
-    bool stable_sort>
+    bool first_call>
 void top_k() {
     // dest indices for where to unpack the tiles for the llk
     // the input goes in index 0,1 and the index goes in index 2,3
@@ -257,9 +256,7 @@ void top_k() {
             transpose_tile(index_dfb_index, 1, 3);
 
             // llk_topk_sort -> inplace
-            // stable_sort: equal values keep their original (lowest) position, so the candidate the
-            // top-k keeps for a tie does not depend on how the bitonic network happens to swap.
-            ckernel::topk_local_sort<stable_sort>(0, (int)ascending, logk - 1);
+            ckernel::topk_local_sort(0, (int)ascending, logk - 1);
 
             tile_regs_commit();
 
@@ -305,9 +302,9 @@ void top_k() {
                 copy_tile(index_transposed_dfb_index, right_ind, index_dest_end);
 
                 // merge values - move larger 32 values into 0th dest and lower 32 values into 1st dest
-                ckernel::topk_merge<false, stable_sort>(0, m_iter, K);
+                ckernel::topk_merge(0, m_iter, K);
                 // sort within the larger 32 values
-                ckernel::topk_rebuild<stable_sort>(0, (uint32_t)a, m_iter, K, logk, true);
+                ckernel::topk_rebuild(0, (uint32_t)a, m_iter, K, logk, true);
 
                 tile_regs_commit();
                 tile_regs_wait();
@@ -423,11 +420,6 @@ void kernel_main() {
     constexpr auto logWt = get_arg(args::logWt);
     constexpr auto seed = get_arg(args::seed);
     constexpr auto tile_width = get_arg(args::tile_width);
-    // Stable top-k: on exact value ties the candidate at the lowest position wins, so the sampled
-    // token does not depend on how the bitonic network happens to swap equal values. Set by the
-    // host only on architectures whose top-k LLK implements a stable network; elsewhere it is 0
-    // and ties keep the previous (network-order) behaviour rather than failing to compile.
-    constexpr bool stable_sort = get_arg(args::stable_sort) == 1;
     generate_rand_tile(dfb::rand_tile, seed);
 
     const uint32_t nearest32_K = 32;
@@ -448,8 +440,7 @@ void kernel_main() {
         dfb::values,
         dfb::output_ind,
         tile_width,
-        true,
-        stable_sort>();
+        true>();
     constexpr uint32_t Kt = nearest32_K / tile_width;
 
     // scale temperature

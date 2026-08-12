@@ -135,7 +135,6 @@ void kernel_main() {
     constexpr uint32_t Wt = get_arg(args::Wt);                      // Width in tiles
     constexpr uint32_t output_tiles = get_arg(args::output_tiles);  // Number of output tiles (ceil(K/32))
     constexpr uint32_t largest = get_arg(args::largest);            // 1 for largest K, 0 for smallest K
-    constexpr bool stable_sort = get_arg(args::stable_sort) == 1;   // Ties keep the lowest index
 
     // Initialize kernel components
     compute_kernel_hw_startup(input_val_dfb_index, input_ind_dfb_index, output_val_dfb_index);
@@ -349,7 +348,7 @@ void kernel_main() {
                 // Merge and sort 64 elements (32 existing + 32 new) using topk_local_sort
                 // Results: dest reg 0 = top 32 elements, dest reg 1 = bottom 32 elements
                 // largest flag determines ascending (0) vs descending (1) sort order
-                ckernel::topk_local_sort<stable_sort>(0, (int)!largest, end_phase);
+                ckernel::topk_local_sort(0, (int)!largest, end_phase);
 
                 // Pack sorted results: dest reg 0 -> result buffer, dest reg 1 -> secondary buffer
                 tile_regs_commit();
