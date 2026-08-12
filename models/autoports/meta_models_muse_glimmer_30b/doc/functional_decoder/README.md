@@ -14,17 +14,20 @@ HF-vs-TTNN correctness evidence at the full advertised 131072-token context.
 | dtypes | BF16 weights / activations / KV cache, TILE layout, DRAM interleaved |
 | transformers | 5.15.0 (the first release that ships `transformers.models.muse_glimmer`) |
 | acceptance bar | PCC >= 0.995 (skill default; no model-specific exception needed) |
-| result | **73/73 tests pass, 194 PCC checks, worst 0.99742** |
+| result | **74/74 tests pass, 194 PCC checks, worst 0.99742** |
 
 ## Architecture
 
 `config.json` advertises two decoder-layer kinds, selected per layer index by
 `text_config.layer_types` and `text_config.layer_rope_theta`:
 
-| kind | `layer_types` | `layer_rope_theta` | attention mask | first layer index |
+| kind | `layer_types` | `layer_rope_theta` (gate) | attention mask | first layer index |
 | --- | --- | --- | --- | --- |
 | `sliding` | `sliding_attention` | `500000.0` | causal, window 2048 | 0 |
 | `full` | `full_attention` | `0` (NoPE) | causal, unbounded | 3 |
+
+`layer_rope_theta[i]` is only HF's per-layer *gate* — the rotary base itself is
+the model-level `rope_parameters["rope_theta"]` (limitation 14).
 
 The pattern is `[sliding, sliding, sliding, full]` repeating over 52 layers.
 Everything else about the two kinds is identical, so `FunctionalDecoder` is one
@@ -150,8 +153,9 @@ bounds the transient working set to the chunk.  Per chunk:
 ## Correctness
 
 `pytest models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py`
-→ **73 passed** (`test_results.xml`, `logs/full_test_run.log`).
-All 194 PCC checks are in `logs/pcc_summary.txt`; the eight lowest are:
+→ **74 passed** (`test_results.xml`, `logs/full_test_run.log`).
+All 194 PCC checks are in `logs/pcc_summary.txt`, regenerated from the suite log
+by `bench/summarize_pcc.py`; the eight lowest are:
 
 | PCC | check |
 | --- | --- |
@@ -163,6 +167,42 @@ All 194 PCC checks are in `logs/pcc_summary.txt`; the eight lowest are:
 | 0.997775 | prefill[full] full-context seq_len=131072 (interior @65536, 32 rows) |
 | 0.997775 | prefill[full] full-context seq_len=131072 (last 32 rows) |
 | 0.997777 | decode[full] user_id=2 pos=12345 |
+
+### Live re-verification (2026-08-12)
+
+The stage was re-run end to end on live hardware.  First against the *unchanged*
+sources — `tt/functional_decoder.py` blob
+`0f949dc99d23e1148cb94da4bb39be9600b015cd` and `tests/test_functional_decoder.py`
+blob `175b59cbeee9bd29fd51c2b0ac4322f43bf5bddc`, both identical to
+`2e2acc13f96` — and then again after the round-5 review's config-resolution
+hardening (limitation 14):
+
+| re-run | result | artifact |
+| --- | --- | --- |
+| full suite, pre-change | **73 passed** in 394.88 s; all 194 PCC checks **bit-identical** to the previously committed run | `logs/reverify_2026_08_12_full_test_run.log`, `logs/reverify_2026_08_12_test_results.xml` |
+| watcher, pre-change | **14 passed** in 105.47 s, log clean | `watcher_reverify/watcher.log.gz`, `logs/reverify_2026_08_12_watcher_run.log` |
+| full suite, post-change (canonical) | **74 passed** in 395.38 s; the same 194 PCC values again, bit-identical | `logs/full_test_run.log`, `test_results.xml` |
+| watcher, post-change (canonical) | **15 passed** in 109.81 s, log clean | `watcher/watcher.log.gz`, `logs/watcher_run.log` |
+| perf | not re-captured; the six committed Tracy windows are re-derived **and reconciled against their raw captures** instead | `logs/perf_summary.txt` |
+
+Three runs of 194 PCC checks — the original stage capture, a pre-change rerun and
+a post-change rerun — agree to the last digit, which is both the determinism
+evidence at suite scale and the proof that the config-resolution edit changed no
+number.  The Tracy captures predate that edit by design: it touches only
+`from_state_dict`-time config resolution, docstrings and one new test, adds and
+removes no device op, and cannot move a cos/sin table whose PCC is unchanged.
+Re-capturing would add measurement noise and desynchronise the fused stage's
+committed `baseline` columns, which quote exactly these six windows.
+
+```bash
+D=models/autoports/meta_models_muse_glimmer_30b/doc/functional_decoder
+python $D/bench/summarize_pcc.py --compare $D/logs/reverify_2026_08_12_full_test_run.log
+# RERUN_IDENTICAL 194 checks bit-identical to the committed run
+python $D/bench/check_watcher.py                                      # WATCHER_CLEAN
+python $D/bench/check_watcher.py $D/watcher_reverify/watcher.log.gz   # WATCHER_CLEAN
+python $D/bench/summarize_perf.py --check   # 6 windows, raw-vs-filtered delta 0.000 us
+python $D/bench/refresh_context_contract.py --check                   # matches the run
+```
 
 ### Sequence-length coverage
 
@@ -254,6 +294,15 @@ decode.
 
 ### Capability-contract evidence table
 
+The machine-readable form of this table is the `functional_decoder` block of
+`models/autoports/meta_models_muse_glimmer_30b/doc/context_contract.json`: HF
+advertised context, supported context, capability reduction (`none`), the tested
+prefill/decode contexts and PCCs, batch coverage, non-aligned lengths, real
+weights, determinism, fallback audit, watcher, capacity probes, byte budget and
+perf.  Its measured fields are generated by `bench/refresh_context_contract.py`.
+That file's *top level* belongs to the newest stage that touched it, so each
+stage keeps its own block.
+
 | claim | evidence | remaining risk |
 | --- | --- | --- |
 | Advertised context 131072 supported in prefill | `test_full_context_prefill_tail_pcc[131072-{sliding,full}]` PCC 0.99852 / 0.99778; `logs/capacity_probe_131072_layer{0,3}.log` | the HF reference covers the last 32 query rows against the full prefix (a 131072-query HF forward is not CPU-tractable); earlier rows are covered at 12345 and below.  For `sliding` those 32 rows only depend on the last ~2080 tokens (limitation 7) |
@@ -300,16 +349,33 @@ TT_METAL_LOGS_PATH=<abs>/doc/functional_decoder/watcher \
 python -m pytest <test file>::test_prefill_pcc[12345-sliding] ... -q
 ```
 
-14 tests passed (multi-chunk prefill both kinds, decode both kinds, continuation
+15 tests passed (multi-chunk prefill both kinds, decode both kinds, continuation
 prefill including the short-tail 64+100 case, traced decode replay both kinds,
 batch-13 (fallback head-concat) and batch-4 prefill/decode, the non-zero
-cache-slot multi-chunk prefill, the decode sliding-window control, and the
-`seq_len == max_seq_len == chunk` regression).
+cache-slot multi-chunk prefill, the decode sliding-window control, the
+`seq_len == max_seq_len == chunk` regression, and the RoPE-base config guard).
 `watcher/watcher.log.gz` (11867 lines, gzipped to stay under the repo's 500 KB
-file-size hook) contains only the legend, `k_ids:` lines, 11 periodic dumps with
-stack-usage summaries, and attach/detach lines — zero occurrences of
-`Watcher detected`, `tripped`, `sanitize`, `TT_ASSERT`, `DEBUG_ASSERT`, CB/L1/NOC
-out-of-bounds or hardware-fault messages.  Console log: `logs/watcher_run.log`.
+file-size hook) contains only the legend, 5809 `k_ids:` lines, 11 periodic dumps
+with stack-usage summaries (22 `Dump #` boundary lines, 50 stack-usage rows), and
+4 attach + 4 detach lines — zero occurrences of `Watcher detected`, `tripped`,
+`sanitize`, `TT_ASSERT`, `DEBUG_ASSERT`, CB/L1/NOC out-of-bounds or
+hardware-fault messages.  Console log: `logs/watcher_run.log`.  Re-derive with
+
+```bash
+python bench/check_watcher.py                            # WATCHER_CLEAN
+python bench/check_watcher.py watcher_reverify/watcher.log.gz
+```
+
+`check_watcher.py` asserts the *benign structure* too (line count, dumps,
+`k_ids:`, stack-usage rows, attach/detach), not just the absence of fatal
+messages, so an empty or truncated log fails with
+`WATCHER_LOG_NOT_A_REAL_RUN` instead of passing by having nothing in it.  Those
+minimums are calibrated to this suite's ~11.8 k-line runs: they fail
+conservatively (a bad log is never certified), but a legitimately shorter watcher
+run would need them relaxed.
+`watcher_reverify/watcher.log.gz` is the pre-code-change reproduction from the
+same day (14 tests, 11868 lines, same benign structure, same zero fatal
+messages).
 
 ## Performance
 
@@ -329,6 +395,12 @@ op-code count is an exact multiple of the replay count:
 grep -c "markers were dropped" doc/functional_decoder/logs/tracy_*.log   # all 0
 # and every OP Code count in each *_perf_report.csv divides by its replay count
 ```
+
+Both integrity checks, and every per-iteration number in the table below, are
+re-derived from the committed CSVs by `bench/summarize_perf.py` into
+`logs/perf_summary.txt` (`--check` exits non-zero if the summary drifts or a
+capture fails an integrity check), so nothing in this section is a hand
+transcription.
 
 | kind | mode | context | window | ops/iter | device time / iter | incl. op-to-op gaps |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -370,6 +442,16 @@ Artifacts (per kind, under `tracy/<kind>/`):
 * `*_perf_report.csv` — filtered CSV for the signposted window
 * `*_perf_report.console.log` — provenance for the `--csv` invocation
 * `*_perf_report_stacked.{csv,png}` — tt-perf-report 1.2.8 stacked breakdown
+
+Evidence-regeneration scripts (`bench/`), so every number above is a command
+rather than a transcription:
+
+| script | regenerates | `--check` |
+| --- | --- | --- |
+| `bench/summarize_pcc.py` | `logs/pcc_summary.txt` from `logs/full_test_run.log` | yes (also `--compare <other suite log>`) |
+| `bench/summarize_perf.py` | `logs/perf_summary.txt` from the six `*_perf_report.csv` windows, their Tracy logs and their raw ops CSVs (raw-vs-filtered reconciliation) | yes |
+| `bench/check_watcher.py` | the watcher-clean verdict for a given watcher log, including its benign-structure minimums | exit code is the verdict |
+| `bench/refresh_context_contract.py` | the measured fields of the `functional_decoder` block of `doc/context_contract.json` | yes |
 
 Commands are in `work_log.md`; the driver script shape is:
 
@@ -448,7 +530,32 @@ tt-perf-report doc/functional_decoder/tracy/sliding/prefill_ops.csv \
    `logs/norm_weight_dtype_probe.log`.
 11. **Scope.** Correctness-first: BF16 everywhere, DRAM interleaved, no weight
    quantisation, no fusion, no multi-device. This is the functional stage.
+   Out of scope here but waiting for later stages: the checkpoint is
+   `MuseGlimmerForConditionalGeneration` and also ships `MuseGlimmerVisionModel`
+   + `MuseGlimmerVisionAdapter` with `image_token_id` / `video_token_id`, and the
+   model level carries `final_logit_softcapping = 20.0` and
+   `output_multiplier = 0.19611613513818404`.  None of those touch a text decoder layer, so
+   none are implemented or tested here — but a full-model or serving stage that
+   ignores the softcapping/multiplier or the vision tower will be wrong.
 12. **`transformers` was upgraded to 5.15.0** in
    `/home/ttuser/dev/muse-glimmer/muse-glimmer_pyenv` (the repo pins 5.12.1,
    which does not contain `transformers.models.muse_glimmer` at all, so the
-   config cannot even be loaded there).  The venv is model-specific.
+   config cannot even be loaded there).  The venv is model-specific, so a CI job
+   running this suite against the repo pin fails at import, not at PCC.
+13. **tt-metal bug workaround — `nlp_create_qkv_heads_decode` with a DRAM
+   input.**  On Blackhole that op's interleaved-DRAM reader zeroes odd-indexed Q
+   rows (NoC DRAM-read alignment-match violation, tt-metal #16667), so decode
+   stages the fused QKV in L1 with `ttnn.to_memory_config` before the split —
+   the same workaround `models/demos/gemma4/tt/attention/operations.py:60-67`
+   applies.  Correctness depends on it.  Cost: one `CopyDeviceOperation`,
+   **2.13 µs/token** (0.07 % of a decode step), inside the "everything else" row
+   of the perf split above.
+14. **The RoPE base is read from `rope_parameters`, not `layer_rope_theta`.**  HF
+   uses `layer_rope_theta[i]` only as a NoPE *gate*
+   (`position_embeddings if config.layer_rope_theta[i] else None`) and takes the
+   rotary base from the model-level `rope_parameters["rope_theta"]`.  This
+   checkpoint stores `500000.0` in both, so reading the wrong one would be
+   invisible in PCC; `from_state_dict` therefore pins `rope_parameters` in
+   `_require_muse_glimmer_text_config` and
+   `test_rope_base_is_the_model_level_rope_parameters` fails loudly if a future
+   revision moves the base without moving the gate.

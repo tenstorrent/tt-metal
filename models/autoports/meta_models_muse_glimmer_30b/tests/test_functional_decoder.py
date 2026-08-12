@@ -398,6 +398,57 @@ def test_resolve_layer_kind_rejects_unsupported_pairings(expect_error):
         resolve_layer_kind(broken, 1)
 
 
+def test_rope_base_is_the_model_level_rope_parameters(mesh_device, decoder_cache, expect_error):
+    """The rotary base is ``rope_parameters``, not the per-layer NoPE gate.
+
+    HF's ``MuseGlimmerTextRotaryEmbedding`` reads
+    ``config.rope_parameters["rope_theta"]``, while
+    ``MuseGlimmerTextModel.forward`` uses ``layer_rope_theta[i]`` only as a
+    boolean gate.  This checkpoint stores 500000.0 in both, so reading the wrong
+    one is invisible in PCC — pin the distinction instead.
+    """
+    from copy import deepcopy
+
+    from models.autoports.meta_models_muse_glimmer_30b.tt.functional_decoder import FunctionalDecoder
+
+    config = R.hf_config()
+    layer_idx = layer_idx_for(LAYER_KIND_SLIDING)
+    state_dict = R.synthetic_state_dict(layer_idx)
+    decoder = build_decoder(mesh_device, decoder_cache, LAYER_KIND_SLIDING)
+    assert decoder.config.rope_theta == config.text_config.rope_parameters["rope_theta"]
+
+    # Discriminate the *read site*: move the per-layer gate to a different truthy
+    # value and leave rope_parameters alone.  The layer must still be `sliding`
+    # (the gate is truthy) and must still take 500000.0 as its base.  Reading the
+    # gate as the base — which is what this checkpoint's equal values would hide —
+    # would give 12345.0 here.
+    gate_moved = deepcopy(config)
+    gate_moved.text_config.layer_rope_theta = list(gate_moved.text_config.layer_rope_theta)
+    gate_moved.text_config.layer_rope_theta[layer_idx] = 12345.0
+    gated = FunctionalDecoder.from_state_dict(
+        state_dict,
+        hf_config=gate_moved,
+        layer_idx=layer_idx,
+        mesh_device=mesh_device,
+        max_seq_len=SHORT_MAX_SEQ,
+    )
+    assert gated.config.layer_kind == LAYER_KIND_SLIDING
+    assert gated.config.rope_theta == config.text_config.rope_parameters["rope_theta"] != 12345.0
+
+    # And a revision that moved the base must fail loudly rather than silently
+    # building the wrong cos/sin tables.
+    broken = deepcopy(config)
+    broken.text_config.rope_parameters = {"rope_theta": 10000.0, "rope_type": "default"}
+    with expect_error(ValueError, "rope_parameters"):
+        FunctionalDecoder.from_state_dict(
+            state_dict,
+            hf_config=broken,
+            layer_idx=layer_idx,
+            mesh_device=mesh_device,
+            max_seq_len=SHORT_MAX_SEQ,
+        )
+
+
 @pytest.mark.timeout(1800)
 @pytest.mark.parametrize("kind", LAYER_KINDS)
 @pytest.mark.parametrize("prompt_len", (100, 2048, 3000))

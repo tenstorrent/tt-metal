@@ -16,11 +16,14 @@ Two decoder-layer *kinds* are selected by ``config.layer_types[layer_idx]`` and
 ``config.layer_rope_theta[layer_idx]``; every other computation is identical:
 
 ===================  ==================  ==========================
-layer kind           ``layer_types``     ``layer_rope_theta``
+layer kind           ``layer_types``     ``layer_rope_theta`` (gate)
 ===================  ==================  ==========================
 ``sliding``          sliding_attention   500000.0  (RoPE applied)
 ``full``             full_attention      0         (NoPE, no rotary)
 ===================  ==================  ==========================
+
+``layer_rope_theta[i]`` is only a *gate* in HF: the rotary base itself is the
+model-level ``rope_parameters["rope_theta"]`` (see ``_rope_theta``).
 
 Per layer::
 
@@ -205,6 +208,9 @@ def _text_config(hf_config: Any) -> Any:
 def _require_muse_glimmer_text_config(text_config: Any) -> None:
     expected = {
         "model_type": "muse_glimmer_text",
+        # The RoPE base lives here, once for the whole model.  ``layer_rope_theta``
+        # is only HF's NoPE gate (see ``_rope_theta``), so both are pinned.
+        "rope_parameters": {"rope_theta": 500000.0, "rope_type": "default"},
         "hidden_size": 6656,
         "intermediate_size": 19968,
         "num_attention_heads": 32,
@@ -225,8 +231,26 @@ def _require_muse_glimmer_text_config(text_config: Any) -> None:
             raise ValueError(f"{MODEL_ID} functional decoder expects {name}={expected_value!r}, got {actual!r}")
 
 
+def _rope_theta(text_config: Any) -> float:
+    """The model-level RoPE base, the way HF's rotary module reads it.
+
+    ``MuseGlimmerTextRotaryEmbedding`` takes its base from
+    ``config.rope_parameters["rope_theta"]`` — a single value for the whole
+    model.  The per-layer ``layer_rope_theta`` list is used by
+    ``MuseGlimmerTextModel.forward`` only as a *boolean* NoPE gate
+    (``position_embeddings if config.layer_rope_theta[i] else None``), so it must
+    not be read as the base even though this checkpoint happens to store the same
+    number in both places.  ``_require_muse_glimmer_text_config`` pins both.
+    """
+    return float(text_config.rope_parameters["rope_theta"])
+
+
 def resolve_layer_kind(hf_config: Any, layer_idx: int) -> str:
-    """Map an HF layer index to this module's layer kind."""
+    """Map an HF layer index to this module's layer kind.
+
+    ``layer_rope_theta[layer_idx]`` is HF's NoPE gate, so only its truthiness is
+    used here; the RoPE base comes from ``_rope_theta``.
+    """
     text_config = _text_config(hf_config)
     layer_type = text_config.layer_types[layer_idx]
     rope_theta = text_config.layer_rope_theta[layer_idx]
@@ -483,7 +507,7 @@ class FunctionalDecoder(LightweightModule):
             post_norm_eps=text_config.post_norm_eps,
             qk_scale_factor=text_config.qk_scale_factor,
             sliding_window=text_config.sliding_window if layer_kind == LAYER_KIND_SLIDING else None,
-            rope_theta=(float(text_config.layer_rope_theta[layer_idx]) if layer_kind == LAYER_KIND_SLIDING else None),
+            rope_theta=(_rope_theta(text_config) if layer_kind == LAYER_KIND_SLIDING else None),
             max_seq_len=max_seq_len,
             max_batch_size=max_batch_size,
             paged_attention_config=PagedAttentionConfig(

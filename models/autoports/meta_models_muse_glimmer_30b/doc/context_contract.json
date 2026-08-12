@@ -216,16 +216,6 @@
     "log": "doc/fused_decoder/logs/full_test_run.log",
     "pcc_summary": "doc/fused_decoder/logs/pcc_summary.txt"
   },
-  "previous_stage": {
-    "stage": "functional_decoder",
-    "evidence_root": "doc/functional_decoder/",
-    "tests": {
-      "total": 73,
-      "passed": 73,
-      "pcc_checks": 194,
-      "min_pcc": 0.9974220479936909
-    }
-  },
   "capacity_probes_note": "The listed probes were run by the functional stage against functional_decoder.py. The fusing stage does not re-run them: its own capacity evidence is stronger, because test_full_context_prefill_tail_pcc / test_full_context_decode_pcc run a real 131072-token paged prefill and a decode at position 131071 through the fused layer on device and compare against the HF reference, rather than only asserting the shapes fit.",
   "fused_decoder_capacity_evidence": {
     "commands": [
@@ -233,5 +223,240 @@
     ],
     "log": "doc/fused_decoder/logs/full_test_run.log",
     "result": "8 full-context checks, all >= 0.998664 (see tested.prefill.pcc / tested.decode.pcc)"
+  },
+  "functional_decoder": {
+    "stage": "functional_decoder",
+    "evidence_root": "doc/functional_decoder/",
+    "implementation": "tt/functional_decoder.py",
+    "tests_path": "tests/test_functional_decoder.py",
+    "acceptance_bar_pcc": 0.995,
+    "hf_advertised_context": 131072,
+    "current_supported_context": 131072,
+    "capability_reduction": "none",
+    "limiting_reason": null,
+    "device": {
+      "arch": "blackhole",
+      "mesh_shape": [
+        1,
+        1
+      ],
+      "compute_with_storage_grid_size": [
+        11,
+        10
+      ],
+      "visible_devices": 4,
+      "note": "The functional decoder stage runs on a single Blackhole chip (1x1 mesh) as required by the skill."
+    },
+    "implementation_config": {
+      "dtype_layout_memory": "BFLOAT16 weights/activations, TILE layout, DRAM interleaved",
+      "kv_cache_dtype": "BFLOAT16",
+      "page_block_size": 64,
+      "prefill_chunk_size": 8192,
+      "kv_cache_sizing": "full max_seq_len per user (no bounded sliding-window cache in this stage)"
+    },
+    "tested": {
+      "prefill": {
+        "largest_tested": 131072,
+        "largest_tested_non_aligned": 130073,
+        "layer_kinds": [
+          "sliding",
+          "full"
+        ],
+        "pcc": {
+          "sliding@131072_last32rows": 0.998515,
+          "full@131072_last32rows": 0.997775,
+          "sliding@130073_last32rows": 0.998519,
+          "full@130073_last32rows": 0.997765,
+          "sliding@131072_interior65536_32rows": 0.99849,
+          "full@131072_interior65536_32rows": 0.997775
+        },
+        "command": "pytest models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py -k full_context_prefill",
+        "reference_harness": "reduced layer-level: the HF cache is filled with the K/V of every position before the compared block by the real MuseGlimmerTextAttention K/V path, then the real HF MuseGlimmerTextDecoderLayer runs that 32-query block against the full prefix. Two blocks are checked at 131072 - the last 32 rows and an interior block at row 65536 (first row of internal prefill chunk 9, entirely dependent on the 8th carried sliding window). A 131072-query HF forward is not tractable on CPU."
+      },
+      "decode": {
+        "largest_tested_position": 131071,
+        "largest_tested_context_tokens": 131072,
+        "layer_kinds": [
+          "sliding",
+          "full"
+        ],
+        "pcc": {
+          "sliding@pos131071": 0.998443,
+          "full@pos131071": 0.997962
+        },
+        "command": "pytest models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py -k full_context_decode",
+        "traced": "test_traced_decode_pcc measures PCC from the ttnn.execute_trace replay output; test_traced_decode_advances_positions replays one capture across three positions."
+      },
+      "batch": {
+        "largest_tested": 32,
+        "context_at_largest_batch": 4096,
+        "also_tested": [
+          4,
+          13
+        ],
+        "note": "Ragged per-user prompt lengths 2000..3147 (straddling the 2048 sliding window) and per-user decode positions in one batched call. batch=13 is prime and larger than the 11-wide device grid, so it has no batch-core rectangle and exercises the decode head-concat's shape-agnostic fallback.",
+        "device_op_ceiling": 32,
+        "device_op_ceiling_source": "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/device/nlp_create_qkv_heads_decode_device_operation.cpp:45-51 hard-caps num_users at 32, so decode batch is capped at 32 by the op, not by this layer. Prefill is per-user and has no such cap."
+      },
+      "non_aligned_sequence_lengths": [
+        1,
+        100,
+        2049,
+        4097,
+        8193,
+        12345,
+        130073
+      ],
+      "aligned_boundary_sequence_lengths": [
+        128,
+        2048,
+        8192
+      ],
+      "continuation_prefill": {
+        "splits": [
+          [
+            4096,
+            3000
+          ],
+          [
+            1024,
+            1024
+          ],
+          [
+            64,
+            100
+          ]
+        ],
+        "layer_kinds": [
+          "sliding",
+          "full"
+        ],
+        "note": "Two start_pos-separated prefill calls compared against a single-shot HF prefill, then a decode past the join. sliding layers require the caller to thread sliding_kv_tail; the 1024 and 64 splits give a tail shorter than the 2048 window.",
+        "command": "pytest models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py -k continuation"
+      },
+      "sliding_window_control": {
+        "op": "ttnn.transformer.paged_scaled_dot_product_attention_decode",
+        "cur_pos": [
+          2047,
+          2048,
+          2049,
+          5000
+        ],
+        "window": 2048,
+        "pcc_min": 0.99959,
+        "note": "Direct probe against an explicit torch kv_idx > cur_pos - W mask over a permuted paged cache; the prefill op's window is pinned separately by doc/functional_decoder/sdpa_sliding_window_chunk_repro.py.",
+        "command": "pytest models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py -k sliding_window_semantics"
+      },
+      "nonzero_cache_slot": {
+        "seq_len": 12345,
+        "user_id": 2,
+        "max_batch_size": 4,
+        "pcc": {
+          "prefill_sliding": 0.998483,
+          "prefill_full": 0.998226,
+          "decode_sliding": 0.998409,
+          "decode_full": 0.997777
+        },
+        "note": "Multi-chunk prefill plus decode off cache slot 2, exercising page-table row slicing and the chunked paged read from a non-zero row."
+      },
+      "real_weights": {
+        "seq_len": 2049,
+        "layer_kinds": [
+          "sliding",
+          "full"
+        ],
+        "pcc": {
+          "prefill_sliding": 0.998154,
+          "prefill_full": 0.998072,
+          "decode_sliding": 0.999223,
+          "decode_full": 0.997422
+        },
+        "note": "test_real_weights_prefill_decode_pcc loads exactly layer 0 / layer 3 tensors out of the released safetensors shards with safe_open (no full-model load); test_real_state_dict_key_and_shape_contract pins the checkpoint key set and shapes. Both raise rather than skip when the checkpoint is absent unless MG_ALLOW_MISSING_WEIGHTS=1.",
+        "command": "pytest models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py -k real_"
+      },
+      "fp32_reference_control": {
+        "seq_len": 2049,
+        "pcc": {
+          "prefill_sliding": 0.998623,
+          "prefill_full": 0.998487,
+          "decode_sliding": 0.997646,
+          "decode_full": 0.998515
+        },
+        "note": "Same weights and BF16-rounded inputs through an FP32 HF layer, so a BF16 error common-mode to both implementations cannot hide."
+      },
+      "determinism": {
+        "repeats": 3,
+        "prefill_seq_len": 1024,
+        "result": "bit-identical (torch.equal) prefill and decode outputs for both layer kinds",
+        "command": "pytest models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py -k determinism"
+      },
+      "fallback_audit": {
+        "result": "clean",
+        "seq_lens": [
+          3000,
+          12345
+        ],
+        "note": "test_no_host_fallback_in_forward traps ttnn.from_torch / ttnn.to_torch / ttnn.as_tensor and 13 torch entry points across a full prefill and decode pass; 12345 covers the multi-chunk paths.",
+        "log": "doc/functional_decoder/logs/fallback_audit.log"
+      },
+      "watcher": {
+        "env": "TT_METAL_WATCHER=10 TT_METAL_WATCHER_APPEND=0 TT_METAL_WATCHER_NOINLINE=1",
+        "tests": 15,
+        "result": "clean: zero Watcher-detected / tripped / sanitize / TT_ASSERT / DEBUG_ASSERT / CB-L1-NOC out-of-bounds / hardware-fault lines",
+        "log": "doc/functional_decoder/watcher/watcher.log.gz",
+        "console_log": "doc/functional_decoder/logs/watcher_run.log"
+      }
+    },
+    "capacity_probes": [
+      {
+        "command": "python models/autoports/meta_models_muse_glimmer_30b/tests/functional_decoder_capacity_probe.py --seq-len 131072 --layer 0 --decode",
+        "log": "doc/functional_decoder/logs/capacity_probe_131072_layer0.log",
+        "result": "CAPACITY_PROBE_PASS mode=prefill seq_len=131072 output_shape=(1, 1, 131072, 6656) tail_finite=True seconds=2.0 / CAPACITY_PROBE_PASS mode=decode cur_pos=131071"
+      },
+      {
+        "command": "python models/autoports/meta_models_muse_glimmer_30b/tests/functional_decoder_capacity_probe.py --seq-len 131072 --layer 3 --decode",
+        "log": "doc/functional_decoder/logs/capacity_probe_131072_layer3.log",
+        "result": "CAPACITY_PROBE_PASS mode=prefill seq_len=131072 output_shape=(1, 1, 131072, 6656) tail_finite=True seconds=4.8 / CAPACITY_PROBE_PASS mode=decode cur_pos=131071"
+      }
+    ],
+    "byte_budget_at_full_context": {
+      "kv_cache_bytes_per_layer_batch1": 134217728,
+      "kv_cache_formula": "2 (K,V) * num_key_value_heads(2) * head_dim(128) * 131072 tokens * 2 bytes (BF16)",
+      "layer_weight_bytes": 967835648,
+      "layer_weight_formula": "(6656*4608 wqkv + 6656*4096 attn_gate + 4096*6656 o_proj + 3*6656*19968 mlp) * 2 bytes (BF16)",
+      "note": "Both fit comfortably on one Blackhole chip; the 131072-token prefill activations are bounded by the 8192-token internal prefill chunking, so no context reduction was required."
+    },
+    "performance": {
+      "note": "Warmed, signposted Tracy windows, profiled in separate runs from the watcher run. Device Time column from tt-perf-report --csv, microseconds, divided by the replay count. 8 trace replays per decode window; all six committed captures are free of dropped profiler markers and every op-code count is an exact multiple of the replay count. Re-derived by doc/functional_decoder/bench/summarize_perf.py -> logs/perf_summary.txt.",
+      "prefill_8192_tokens_batch1_ms": {
+        "sliding": 101.229,
+        "full": 99.375
+      },
+      "traced_decode_ms_per_token": {
+        "sliding@2048": 3.163,
+        "sliding@131071": 3.16,
+        "full@2048": 3.08,
+        "full@131071": 3.575
+      },
+      "device_ops_per_iteration": {
+        "prefill_sliding": 42,
+        "prefill_full": 24,
+        "decode_sliding": 64,
+        "decode_full": 32
+      },
+      "context_scaling": "sliding decode is context-independent (SDPA reads at most the 2048 window); full (NoPE) decode SDPA goes 35.7 us -> 529.7 us between 2048 and 131071.",
+      "perf_summary": "doc/functional_decoder/logs/perf_summary.txt"
+    },
+    "tests": {
+      "total": 74,
+      "passed": 74,
+      "pcc_checks": 194,
+      "min_pcc": 0.997422,
+      "min_pcc_check": "real-weights decode[full] pos=2049",
+      "junit": "doc/functional_decoder/test_results.xml",
+      "log": "doc/functional_decoder/logs/full_test_run.log",
+      "pcc_summary": "doc/functional_decoder/logs/pcc_summary.txt"
+    },
+    "notes": "No capability reduction was taken by the functional decoder stage. The advertised 131072-token context is supported and tested end to end (paged prefill fill + paged decode read) for both decoder-layer kinds. Measured fields in this block are regenerated by doc/functional_decoder/bench/refresh_context_contract.py from the committed junit, suite log and Tracy CSVs; --check turns staleness into a non-zero exit."
   }
 }

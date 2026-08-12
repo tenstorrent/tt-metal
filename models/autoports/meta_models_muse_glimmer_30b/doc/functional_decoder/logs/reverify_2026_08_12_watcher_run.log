@@ -1,0 +1,234 @@
+2026-08-12 07:56:44.310 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+collecting ... collected 14 items
+
+models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_prefill_pcc[12345-sliding] 2026-08-12 07:56:45.905 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-12 07:56:45.905 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-12 07:56:45.905 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-12 07:56:45.905 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-12 07:56:45.917 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-12 07:56:45.917 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-12 07:56:45.995 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-12 07:56:45.995 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-12 07:56:45.995 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-12 07:56:45.995 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-12 07:56:45.996 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-12 07:56:46.077 | warning  |             UMD | AICLK settled at 1337 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (tt_device.cpp:322)
+2026-08-12 07:56:46.077 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-12 07:56:46.202 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-12 07:56:46.202 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-12 07:56:46.202 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-12 07:56:46.202 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-12 07:56:46.202 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-12 07:56:46.262 | info     |       LLRuntime | Watcher log file: /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/functional_decoder/watcher_reverify/generated/watcher/watcher.log (watcher_server.cpp:296)
+2026-08-12 07:56:46.262 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:133)
+2026-08-12 07:56:46.262 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:133)
+2026-08-12 07:56:46.262 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:133)
+2026-08-12 07:56:46.262 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:133)
+2026-08-12 07:56:46.262 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-12 07:56:46.262 | info     |       LLRuntime | Watcher server initialized, disabled features: None (watcher_server.cpp:565)
+2026-08-12 07:56:46.262 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:415)
+2026-08-12 07:56:46.267 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:415)
+2026-08-12 07:56:46.273 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:415)
+2026-08-12 07:56:46.278 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:415)
+2026-08-12 07:56:56.288 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:415)
+2026-08-12 07:56:56.294 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:415)
+2026-08-12 07:56:56.300 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:415)
+2026-08-12 07:56:56.306 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:415)
+2026-08-12 07:57:05.075 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - prefill[sliding] seq_len=12345: 0.9984810498497454
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_prefill_pcc[12345-full] 2026-08-12 07:57:06.318 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:415)
+2026-08-12 07:57:06.324 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:415)
+2026-08-12 07:57:06.329 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:415)
+2026-08-12 07:57:06.335 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:415)
+2026-08-12 07:57:16.328 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - prefill[full] seq_len=12345: 0.998230050771467
+2026-08-12 07:57:16.346 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:415)
+2026-08-12 07:57:16.352 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:415)
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_decode_pcc[3000-sliding] 2026-08-12 07:57:16.357 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:415)
+2026-08-12 07:57:16.363 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:415)
+2026-08-12 07:57:18.233 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - decode[sliding] prompt=3000 pos=3000: 0.9985582835999192
+2026-08-12 07:57:18.276 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - decode[sliding] prompt=3000 pos=3001: 0.9982965866455252
+2026-08-12 07:57:18.318 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - decode[sliding] prompt=3000 pos=3002: 0.9987566008714128
+2026-08-12 07:57:18.362 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - decode[sliding] prompt=3000 pos=3003: 0.9984509817644709
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_decode_pcc[3000-full] 2026-08-12 07:57:20.096 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - decode[full] prompt=3000 pos=3000: 0.9979968542631275
+2026-08-12 07:57:20.139 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - decode[full] prompt=3000 pos=3001: 0.9986734742206068
+2026-08-12 07:57:20.181 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - decode[full] prompt=3000 pos=3002: 0.9983035333460725
+2026-08-12 07:57:20.220 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - decode[full] prompt=3000 pos=3003: 0.9983573957982511
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_continuation_prefill_pcc[64-100-sliding] 2026-08-12 07:57:20.537 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - continuation prefill[sliding] 64+100: 0.9991096497016291
+2026-08-12 07:57:20.646 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - decode after continuation prefill[sliding] pos=164: 0.9990135181094499
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_continuation_prefill_pcc[4096-3000-sliding] 2026-08-12 07:57:26.033 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - continuation prefill[sliding] 4096+3000: 0.9984940044352174
+2026-08-12 07:57:26.374 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:415)
+2026-08-12 07:57:26.382 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:415)
+2026-08-12 07:57:26.389 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:415)
+2026-08-12 07:57:26.395 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:415)
+2026-08-12 07:57:30.074 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - decode after continuation prefill[sliding] pos=7096: 0.9986455526342077
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_continuation_prefill_pcc[4096-3000-full] 2026-08-12 07:57:34.929 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - continuation prefill[full] 4096+3000: 0.9982869767096085
+2026-08-12 07:57:36.407 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:415)
+2026-08-12 07:57:36.413 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:415)
+2026-08-12 07:57:36.419 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:415)
+2026-08-12 07:57:36.426 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:415)
+2026-08-12 07:57:38.474 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - decode after continuation prefill[full] pos=7096: 0.9983749511589121
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_traced_decode_advances_positions[sliding] 2026-08-12 07:57:39.213 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - traced decode replay[sliding] pos=1024: 0.9983419142491227
+2026-08-12 07:57:39.253 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - traced decode replay[sliding] pos=1025: 0.9984110790452639
+2026-08-12 07:57:39.293 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - traced decode replay[sliding] pos=1026: 0.9986719168535795
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_traced_decode_advances_positions[full] 2026-08-12 07:57:40.002 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - traced decode replay[full] pos=1024: 0.9980223712575532
+2026-08-12 07:57:40.041 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - traced decode replay[full] pos=1025: 0.9987334291072704
+2026-08-12 07:57:40.080 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - traced decode replay[full] pos=1026: 0.9983481878182155
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_batched_prefill_decode_pcc[13-sliding] 2026-08-12 07:57:44.331 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - prefill[sliding] batch=13 user=0 seq_len=2000: 0.9986011821773847
+2026-08-12 07:57:45.521 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - prefill[sliding] batch=13 user=1 seq_len=2037: 0.9986005514575629
+2026-08-12 07:57:46.438 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:415)
+2026-08-12 07:57:46.445 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:415)
+2026-08-12 07:57:46.452 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:415)
+2026-08-12 07:57:46.459 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:415)
+2026-08-12 07:57:46.782 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - prefill[sliding] batch=13 user=2 seq_len=2074: 0.9985846520701657
+2026-08-12 07:57:48.048 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - prefill[sliding] batch=13 user=3 seq_len=2111: 0.9985918650475811
+2026-08-12 07:57:49.303 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - prefill[sliding] batch=13 user=4 seq_len=2148: 0.9985925147610922
+2026-08-12 07:57:50.714 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - prefill[sliding] batch=13 user=5 seq_len=2185: 0.9985893875331165
+2026-08-12 07:57:52.058 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - prefill[sliding] batch=13 user=6 seq_len=2222: 0.9985472636587159
+2026-08-12 07:57:53.473 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - prefill[sliding] batch=13 user=7 seq_len=2259: 0.9985537404725106
+2026-08-12 07:57:54.831 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - prefill[sliding] batch=13 user=8 seq_len=2296: 0.998540925958306
+2026-08-12 07:57:56.185 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - prefill[sliding] batch=13 user=9 seq_len=2333: 0.998536274436903
+2026-08-12 07:57:56.471 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:415)
+2026-08-12 07:57:56.478 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:415)
+2026-08-12 07:57:56.484 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:415)
+2026-08-12 07:57:56.490 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:415)
+2026-08-12 07:57:57.634 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - prefill[sliding] batch=13 user=10 seq_len=2370: 0.9985441426328879
+2026-08-12 07:57:59.206 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - prefill[sliding] batch=13 user=11 seq_len=2407: 0.998550436389233
+2026-08-12 07:58:00.720 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - prefill[sliding] batch=13 user=12 seq_len=2444: 0.9985475654270347
+2026-08-12 07:58:01.111 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - decode[sliding] batch=13 ragged positions: 0.9984233221470087
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_batched_prefill_decode_pcc[4-full] 2026-08-12 07:58:05.045 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - prefill[full] batch=4 user=0 seq_len=2000: 0.9984495461947848
+2026-08-12 07:58:06.189 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - prefill[full] batch=4 user=1 seq_len=2037: 0.9984582001396624
+2026-08-12 07:58:06.503 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:415)
+2026-08-12 07:58:06.510 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:415)
+2026-08-12 07:58:06.516 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:415)
+2026-08-12 07:58:06.523 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:415)
+2026-08-12 07:58:07.363 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - prefill[full] batch=4 user=2 seq_len=2074: 0.9984369889840266
+2026-08-12 07:58:08.503 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - prefill[full] batch=4 user=3 seq_len=2111: 0.9984542348754558
+2026-08-12 07:58:08.630 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - decode[full] batch=4 ragged positions: 0.9982338827585544
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_multi_chunk_prefill_nonzero_user[sliding] 2026-08-12 07:58:16.535 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:415)
+2026-08-12 07:58:16.542 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:415)
+2026-08-12 07:58:16.548 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:415)
+2026-08-12 07:58:16.553 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:415)
+2026-08-12 07:58:21.918 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - multi-chunk prefill[sliding] user_id=2 seq_len=12345: 0.9984832899801521
+2026-08-12 07:58:21.984 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - decode[sliding] user_id=2 pos=12345: 0.9984092636956847
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_decode_sdpa_sliding_window_semantics[2049] 2026-08-12 07:58:22.202 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - decode SDPA sliding-window control cur_pos=2049 (window=2048): 0.999593756408443
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_prefill_seq_len_equals_max_and_chunk[sliding] 2026-08-12 07:58:26.566 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:415)
+2026-08-12 07:58:26.572 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:415)
+2026-08-12 07:58:26.579 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:415)
+2026-08-12 07:58:26.585 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:415)
+2026-08-12 07:58:27.568 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - prefill[sliding] seq_len==max_seq_len==chunk==4096 attempt=0: 0.9985141176424294
+2026-08-12 07:58:29.990 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:assert_pcc:188 - prefill[sliding] seq_len==max_seq_len==chunk==4096 attempt=1: 0.9985121489236811
+PASSED
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+../muse-glimmer_pyenv/lib/python3.12/site-packages/pydantic/_internal/_config.py:291
+  /home/ttuser/dev/muse-glimmer/muse-glimmer_pyenv/lib/python3.12/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/ttuser/dev/muse-glimmer/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+20.82s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_batched_prefill_decode_pcc[13-sliding]
+13.16s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_multi_chunk_prefill_nonzero_user[sliding]
+12.71s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_prefill_pcc[12345-sliding]
+11.05s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_prefill_pcc[12345-full]
+9.24s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_continuation_prefill_pcc[4096-3000-sliding]
+8.20s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_continuation_prefill_pcc[4096-3000-full]
+7.58s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_prefill_seq_len_equals_max_and_chunk[sliding]
+7.32s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_batched_prefill_decode_pcc[4-full]
+6.49s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_prefill_pcc[12345-sliding]
+1.80s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_decode_pcc[3000-sliding]
+1.65s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_decode_pcc[3000-full]
+0.59s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_traced_decode_advances_positions[sliding]
+0.58s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_traced_decode_advances_positions[full]
+0.33s teardown models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_prefill_seq_len_equals_max_and_chunk[sliding]
+0.22s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_continuation_prefill_pcc[64-100-sliding]
+0.21s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_decode_pcc[3000-sliding]
+0.21s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_prefill_seq_len_equals_max_and_chunk[sliding]
+0.21s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_batched_prefill_decode_pcc[13-sliding]
+0.21s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_continuation_prefill_pcc[4096-3000-sliding]
+0.21s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_traced_decode_advances_positions[sliding]
+0.20s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_prefill_pcc[12345-full]
+0.20s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_decode_pcc[3000-full]
+0.20s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_continuation_prefill_pcc[4096-3000-full]
+0.20s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_batched_prefill_decode_pcc[4-full]
+0.20s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_traced_decode_advances_positions[full]
+=========================== short test summary info ============================
+PASSED models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_prefill_pcc[12345-sliding]
+PASSED models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_prefill_pcc[12345-full]
+PASSED models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_decode_pcc[3000-sliding]
+PASSED models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_decode_pcc[3000-full]
+PASSED models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_continuation_prefill_pcc[64-100-sliding]
+PASSED models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_continuation_prefill_pcc[4096-3000-sliding]
+PASSED models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_continuation_prefill_pcc[4096-3000-full]
+PASSED models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_traced_decode_advances_positions[sliding]
+PASSED models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_traced_decode_advances_positions[full]
+PASSED models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_batched_prefill_decode_pcc[13-sliding]
+PASSED models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_batched_prefill_decode_pcc[4-full]
+PASSED models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_multi_chunk_prefill_nonzero_user[sliding]
+PASSED models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_decode_sdpa_sliding_window_semantics[2049]
+PASSED models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_prefill_seq_len_equals_max_and_chunk[sliding]
+================== 14 passed, 3 warnings in 105.47s (0:01:45) ==================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+nanobind: leaked 4 instances!
+ - leaked instance 0x721b4f485698 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x721ba24fc048 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x721b4f0452e8 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x721ba24fc228 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+nanobind: leaked 26 types!
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.multi_device.MeshMapperConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - ... skipped remainder
+nanobind: leaked 282 functions!
+ - leaked function "get_current_command_queue_id_for_thread"
+ - leaked function ""
+ - leaked function "to_json"
+ - leaked function "get_device_ids"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "to_torch_with_padded_shape"
+ - leaked function "from_json"
+ - leaked function "__eq__"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-12 07:58:32.160 | info     |    BuildKernels | JIT cache stats: 1127/1127 hits (100.0%) [1127 cached, 1171 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-12 07:58:32.160 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-12 07:58:32.162 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:613)
+2026-08-12 07:58:32.162 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:191)
+2026-08-12 07:58:32.162 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:191)
+2026-08-12 07:58:32.162 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:191)
+2026-08-12 07:58:32.162 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:191)
+2026-08-12 07:58:32.177 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-12 07:58:32.177 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-12 07:58:32.607 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-12 07:58:32.607 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-12 07:58:32.607 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

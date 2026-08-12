@@ -1,0 +1,29 @@
+# Functional decoder performance summary
+# generated from the committed tt-perf-report CSVs by bench/summarize_perf.py
+# 'Device Time' column, microseconds, divided by the replay count in the Tracy log
+
+window                                 reps ops/iter   ms/iter incl gaps  integrity
+prefill 8192 tok, batch 1  [sliding]      1       42   101.229   101.257  ok
+prefill 8192 tok, batch 1  [full]         1       24    99.375    99.388  ok
+traced decode @2048        [sliding]      8       64     3.163     3.226  ok
+traced decode @131071      [sliding]      8       64     3.160     3.223  ok
+traced decode @2048        [full]         8       32     3.080     3.114  ok
+traced decode @131071      [full]         8       32     3.575     3.608  ok
+
+# raw-capture reconciliation: DEVICE KERNEL DURATION [ns] summed between the
+# signposts of the raw ops CSV vs the filtered report's Device Time [us]
+window                                  raw ops       raw us  filtered us  delta us
+prefill 8192 tok, batch 1  [sliding]         42   101228.708   101228.708     0.000
+prefill 8192 tok, batch 1  [full]            24    99375.273    99375.273     0.000
+traced decode @2048        [sliding]        512    25307.245    25307.245     0.000
+traced decode @131071      [sliding]        512    25280.469    25280.469     0.000
+traced decode @2048        [full]           256    24641.572    24641.572     0.000
+traced decode @131071      [full]           256    28599.490    28599.490     0.000
+
+# per-iteration device time of the four heaviest op codes in each window
+prefill 8192 tok, batch 1  [sliding]   MatmulDeviceOperation=75462.8us, SDPAOperation=11837.5us, BinaryNgDeviceOperation=5220.5us, LayerNormDeviceOperation=4111.9us
+prefill 8192 tok, batch 1  [full]      MatmulDeviceOperation=76230.3us, SDPAOperation=11647.1us, LayerNormDeviceOperation=4098.6us, BinaryNgDeviceOperation=3829.7us
+traced decode @2048        [sliding]   MatmulDeviceOperation=2533.2us, LayerNormDeviceOperation=446.8us, BinaryNgDeviceOperation=40.7us, SdpaDecodeDeviceOperation=36.1us
+traced decode @131071      [sliding]   MatmulDeviceOperation=2530.6us, LayerNormDeviceOperation=446.8us, BinaryNgDeviceOperation=40.6us, SdpaDecodeDeviceOperation=35.1us
+traced decode @2048        [full]      MatmulDeviceOperation=2529.2us, LayerNormDeviceOperation=447.8us, SdpaDecodeDeviceOperation=35.7us, BinaryNgDeviceOperation=25.5us
+traced decode @131071      [full]      MatmulDeviceOperation=2530.8us, SdpaDecodeDeviceOperation=529.7us, LayerNormDeviceOperation=446.8us, BinaryNgDeviceOperation=25.5us
