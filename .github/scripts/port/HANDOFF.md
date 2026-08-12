@@ -23,6 +23,10 @@ the recent history is a run of failures: four of them, three ours and one not, e
 The harness fixes are described below; the one that is not ours turned out to be unfixable from this
 side, and the pipeline is now split in two because of it.
 
+As of 2026-08-11 that run of failures is over. Both halves of the split pipeline work against real
+hardware: the launcher pushes, the workflow builds and measures on CIv2, and the results come back.
+What has never been tried is the only part that was ever the point -- the agent driving it.
+
 ## The pipeline is two workflows, and neither can do the other's half
 
 Read this before touching either file, because each half looks incomplete on its own.
@@ -181,6 +185,10 @@ the target commit and defers only historical trees, so the wheel version is unch
 --abbrev=10 --first-parent`, the command in `cmake/version.cmake`, returns the identical string under
 `tree:0` and under a full clone. That equivalence was checked directly rather than assumed.
 
+Measured in production across the next two runs: checkout went from 7m48s to **32 seconds**, twice,
+and a whole `build` round trip now costs 8.5 minutes against the 57 the first baseline took. The debs
+came out stamped `0.77.0~dev20260810+44.964eda5eba`, which is the same string a full clone produces.
+
 Nothing else in the repo uses `checkout-filter`, so we are the first, and a partial clone does fetch
 lazily if something later walks history. Nothing in this build does. If a future step starts reading
 old trees it will silently refetch them and the win will quietly disappear.
@@ -254,7 +262,9 @@ files. That grep is the check.
 
 ## What is *not* verified
 
-**No full cycle has ever run.** Nothing that needs a card has executed even once.
+**Everything except the agent now runs.** The launcher drove a full `build` and a full `baseline`
+against a card on 2026-08-11; what has never run is the agent driving the launcher. See below for
+exactly where the proven part stops.
 
 What *is* checked, beyond `selftest.py`: both workflow files pass `actionlint`. The token boundary
 was established by compiling and reading the lock file. The whole parameter round trip -- the JSON
@@ -280,44 +290,63 @@ green on `needs.resolve.outputs.*`. Cancelled once the docker job started, since
 minutes of CPU pool would have proved nothing further. Two minutes of hosted runner, no card, no
 credits -- do this again after any change to the trigger, the message format or the resolve job.
 
-The untested surface, roughly in the order a first run will meet it:
+### The launcher is proven, and here is what proved it
 
-- **The rest of the round trip.** Find-the-run-by-SHA, poll, artifact download, scratch-ref cleanup.
-- **The `/codegen` volume in the device job.** It is mounted from a checkout path the way
-  `test-dispatch.yaml` mounts `docker-job`, but Docker creates the host directory before the
-  checkout step runs, so an image that does not run as root could fail to write into it.
-- **Whether the harness dependencies install.** `uv pip install graphviz pyyaml` in a job that is
-  not the long-lived `portdev` container. The in-container version needed `--python` to find the
-  right interpreter; this one follows `test-dispatch.yaml`'s plain form instead.
+Run `dispatch.py` from a laptop against a normal checkout. It needs only `GITHUB_REPOSITORY` and a
+token file, so it does not need the agent, the sandbox or a workflow to exercise it:
 
-And, unchanged from before the split, the things a device was always going to have to settle:
+    GITHUB_REPOSITORY=tenstorrent/tt-metal \
+    GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0= \
+    python3 .github/scripts/port/dispatch.py --mode build --op untilize --repo-path .
 
-- **Scale.** 208 cases against `pad`'s 196, so comparable, but the correctness band calls native for
-  every case here because there is no golden to compare against instead. It is uncapped by deliberate
-  design -- the routing claim only means something over the whole out-of-scope set -- so if anything
-  times out, it is this.
-- **No golden.** `ttnn.untilize` has no golden function registered, so correctness means *matches
-  native output*, not *matches torch*. A port that faithfully reproduces a native bug will pass.
-  `pad` had a real torch golden, so this weaker oracle is new, and the PR body should not be read as
-  claiming more than it measures.
-- **Everything from the agent onward.** The agent has never reached a model, so it has never taken a
-  single action. The deliverable contract, the demotion logic and the per-stratum grading have still
-  only been exercised against synthetic fixtures.
+Neutralising `credential.helper` matters: without it a developer's keychain answers the push and
+`GIT_ASKPASS` -- the path that actually runs in CI -- is never taken. A `gh` OAuth token stands in
+for `CODEGEN_REPO_TOKEN` faithfully, since it carries the same `repo` and `workflow` scope, and
+locally uninitialised submodules reproduce the agent job's `submodules: false` exactly.
 
-### How to run the dry run once it is unblocked
+[Build 31548702163](https://github.com/tenstorrent/tt-metal/actions/runs/31548702163) went green in
+8.5 minutes and [baseline 31549316125](https://github.com/tenstorrent/tt-metal/actions/runs/31549316125)
+in 19. Between them they covered the whole round trip: `commit_worktree`, the `refuse_pipeline_edits`
+guard, the `GIT_ASKPASS` push, `find_run` by head SHA, the heartbeat, both verdict reports, artifact
+download and unzip, `adopt_workspace` laying the 259-line routing test into the checkout at its
+repo-relative path, and scratch-ref deletion in the `finally`. HEAD never moved and the index was
+never touched. `measure` correctly skipped itself in `build` mode.
 
-Cheapest first, so each failure costs the least it can. Step 1 is already done, above.
+Two things that were guesses are now settled: the `/codegen` volume mounts and is writable, and
+`uv pip install graphviz pyyaml` works in a job that is not the long-lived `portdev` container.
 
-1. ~~A manual scratch push with `mode: build`.~~ Done: the trigger, `resolve` and the front of
-   `build-artifact.yaml` are proven.
-2. A manual scratch push with `"mode":"baseline"` from a scaffolded tree, letting the build run to
-   completion this time. Exercises the device job, the `/codegen` mount, the wheel install and the
-   results artifact -- the whole half that has never executed. Still no agent and no credits.
-3. Push the branch to `ebanerjee/port-op-dryrun` to trigger `port-op` itself, which runs step 2 as
-   its own pre-agent step and then hands over to the agent.
+What that leaves genuinely untested:
 
-Record the per-cycle wall times from step 3 here afterwards. The design assumed 20 minutes for a
-build and 35-45 for a verify, and the whole budget argument rests on those two numbers.
+- **`verify` mode.** `report_verify` and the `gate.json` it reads have never run. It is the only mode
+  whose exit code drives the agent's next move, so it is the highest-value thing left to probe.
+- **The agent driving any of this.** The pre-step that writes the token, the sandbox boundary it
+  relies on, and the agent calling the launcher as a tool. The agent has still never reached a model.
+- **Scale.** Both runs sampled 24 cases. The correctness band over all 208 is uncapped by design --
+  the routing claim only means something across the whole out-of-scope set -- so if anything times
+  out, it is still that.
+- **No golden.** Confirmed live rather than assumed: the golden check emitted its warning and fell
+  back to native, so correctness here means *matches native output*, not *matches torch*. A port that
+  faithfully reproduces a native bug will pass, and the PR body should not be read as claiming more.
+- **The deliverable contract, demotion logic and per-stratum grading**, which have still only been
+  exercised against synthetic fixtures.
+
+### How to run the dry run
+
+Cheapest first, so each failure costs the least it can. Steps 1 to 3 are done.
+
+1. ~~A manual scratch push with `mode: build`.~~ Done: trigger, `resolve`, front of `build-artifact`.
+2. ~~A `baseline` on a card.~~ Done, twice -- once by hand and once through the launcher.
+3. ~~`dispatch.py` end to end from a laptop.~~ Done: `build` in 8.5 minutes, `baseline` in 19.
+4. Next: a `verify` through the launcher, which is the only mode left whose report path has never
+   run. It needs a tree with a real ported leg, so it cannot be driven from a clean checkout the way
+   the other two were -- which makes it the natural first thing to watch inside a real agentic run
+   rather than something to rehearse separately.
+5. Then push the branch to `ebanerjee/port-op-dryrun` to trigger `port-op` itself, which runs the
+   baseline as its own pre-agent step and then hands over to the agent.
+
+Measured per-cycle wall times, which the budget argument rests on: a `build` is 8.5 minutes and a
+`baseline` 19, both well inside the 20 and 35-45 the design assumed. A `verify` is still unmeasured,
+but it is a `baseline` plus the correctness band over 208 cases, so 19 minutes is its floor.
 
 ## The hard part of the `untilize` port itself
 
