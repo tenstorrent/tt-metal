@@ -2,7 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Device-perf for the HCA block at the runner's chunk width (5120 tokens) on the 8x4 galaxy."""
+"""Device-perf for the HCA block over a chunked prefill at the runner's chunk width (5120) on 8x4.
+
+Chunked and not single-shot: single-shot passes state=None, so forward allocates the state itself and
+every table and mask built there lands between the signposts. The chunked test allocates before
+HCA_START, so what is measured is the per-chunk work -- which is what the block actually does in the
+runner, and the only thing a gate on this block can defend."""
 
 import pytest
 
@@ -12,8 +17,8 @@ from models.demos.deepseek_v3_d_p.utils.perf_utils import (
     run_model_device_perf_test_with_merge,
 )
 
-_TEST_PATH = "models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_hca.py::test_hca_forward_mesh"
-_CMD_8X4 = f"pytest {_TEST_PATH} -k 'seq5120 and 8x4'"
+_TEST_PATH = "models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_hca.py::test_hca_chunked_prefill_mesh"
+_CMD_8X4 = f"pytest {_TEST_PATH} -k 'chunk5120-full and 8x4'"  # two 5120-token chunks
 
 
 @pytest.mark.timeout(0)
@@ -25,15 +30,19 @@ def test_hca_block_perf_galaxy():
 
     run_model_device_perf_test_with_merge(
         command=_CMD_8X4,
-        # Highest of three 8x4 runs (4,255,437 / 4,267,156 / 4,291,993), which the 5% margin covers.
-        # Up from 3,237,000 at seq4096: the widening is SDPA, 1,020 us -> 1,789 us, since Sk carries both
-        # the longer chunk and the deeper compressed cache.
-        expected_device_perf_ns_per_iteration=4_292_000,
+        # Two chunks, so ~4.54 ms of device a chunk. Highest of three 8x4 runs
+        # (9,054,311 / 9,060,226 / 9,079,936), which the 5% margin covers.
+        #
+        # Not comparable to the old 4,292,000: that measured ONE single-shot chunk, and its region included
+        # the state allocation because single-shot allocates inside forward. This measures two chunks with
+        # the allocation outside. On this same leg the mask move cost 8,620,131 -> 9,054,311 ns, +217 us a
+        # chunk, in exchange for 102 ms a chunk of host time (wall 122.0 -> 20.0 ms).
+        expected_device_perf_ns_per_iteration=9_080_000,
         subdir="deepseek_v4_hca_block",
         model_name="deepseek_v4_hca_glx_8x4",
         num_iterations=1,
         batch_size=1,
         margin=margin,
         between_signposts=("HCA_START", "HCA_END"),
-        comments="chunk5120_hca_prefill_glx_8x4_ground_truth",
+        comments="chunk5120_x2_hca_chunked_prefill_glx_8x4_ground_truth",
     )
