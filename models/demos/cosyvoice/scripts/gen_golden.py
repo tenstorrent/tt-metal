@@ -460,10 +460,36 @@ def main() -> int:
 
 
 def _git_head(path: str) -> str:
-    try:
-        import subprocess
+    """The checked-out commit of the CosyVoice tree, read straight off disk.
 
-        return subprocess.check_output(["git", "-C", path, "rev-parse", "HEAD"], text=True).strip()
+    This deliberately does not shell out to `git`. `path` arrives from `--cosyvoice-root`
+    or `$COSYVOICE_ROOT`, and `git -C <path> ...` would parse a value beginning with `-`
+    as an option rather than a directory -- argument injection, which the argv-list form
+    does nothing to prevent (it only rules out *shell* metacharacters). Reading `.git`
+    directly removes the process spawn, so there is no argument vector at all.
+
+    Handles the two HEAD forms and the `gitdir:` indirection a submodule checkout uses.
+    """
+    try:
+        dot = os.path.join(path, ".git")
+        if os.path.isfile(dot):  # submodule / worktree: "gitdir: <path>"
+            with open(dot) as fh:
+                dot = os.path.join(path, fh.read().split(":", 1)[1].strip())
+        with open(os.path.join(dot, "HEAD")) as fh:
+            head = fh.read().strip()
+        if not head.startswith("ref:"):
+            return head  # detached HEAD -- the raw SHA, which is how CosyVoice is pinned
+        ref = head.split(":", 1)[1].strip()
+        loose = os.path.join(dot, *ref.split("/"))
+        if os.path.isfile(loose):
+            with open(loose) as fh:
+                return fh.read().strip()
+        with open(os.path.join(dot, "packed-refs")) as fh:  # ref was packed away by gc
+            for line in fh:
+                sha, _, name = line.partition(" ")
+                if name.strip() == ref:
+                    return sha.strip()
+        return "unknown"
     except Exception:
         return "unknown"
 
