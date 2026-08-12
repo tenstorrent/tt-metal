@@ -47,6 +47,12 @@ struct ExpressRingTopology {
     int ring_distance(int domain, int from, int to) const;
     // Which end a run is entered by depends only on `dst`, which is what keeps routes suffix-consistent.
     int next_row(int src, int dst) const;
+
+    // Directed row-hops that take part in a dependency cycle across the generated routes yet are not
+    // protected-ring edges. Empty means no unprotected cycle can form (the CDG/SCC condition); a
+    // non-empty result is a deadlock risk. Built by walking next_row over every ordered row pair,
+    // forming the edge-level control-dependency graph, and running SCC over it.
+    std::vector<std::pair<int, int>> cyclic_non_ring_hops() const;
 };
 
 // std::nullopt when the mesh declares no express links, leaving base routing untouched. Throws on any
