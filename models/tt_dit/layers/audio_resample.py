@@ -404,6 +404,10 @@ class Activation1d(Module):
         """
         if not fuse_snake_into_conv_enabled() or not isinstance(self.act, SnakeBeta):
             return None
+        # Declines under T-sharding because `_forward_fused` builds its boundary padding from the
+        # *local* tensor's first/last rows (`_replicate_pad_t` plus the slice/concat pad split below),
+        # and on a T-shard those are not the global first/last rows. Lifting this gate needs that
+        # padding moved onto `_t_neighbor_pad`; it is not just a flag.
         if self.act.parallel_config is not None and getattr(self.act.parallel_config, "factor", 1) > 1:
             return None
         # Wider than one tile of channel used to be silently wrong: the reader fetched only column 0
@@ -416,9 +420,17 @@ class Activation1d(Module):
             return None
         cached = getattr(self, "_snake_conv_ab", None)
         if cached is None:
-            alpha = ttnn.to_torch(self.act.alpha.data).float().reshape(-1)
-            beta = ttnn.to_torch(self.act.beta.data).float().reshape(-1)
-            cached = (alpha, 1.0 / beta)
+            # These parameters are replicated across the mesh, so on any multi-device mesh a bare
+            # `ttnn.to_torch` hits `buffers.size() == 1` (pytensor.cpp:299) and the whole decode dies
+            # -- fusion plus a mesh was an unreachable combination before this. Read one shard, the
+            # same shape as `Vocoder._device_to_host` and `_project_latents_device`. Note the gate
+            # above means only the unsharded-on-a-mesh case gets here today, which is exactly the
+            # t_factor=1 baseline of `test_audio_decode_t_parallel`.
+            def _param(t: ttnn.Tensor) -> torch.Tensor:
+                shards = ttnn.get_device_tensors(t)
+                return ttnn.to_torch(shards[0] if len(shards) > 1 else t).float().reshape(-1)
+
+            cached = (_param(self.act.alpha.data), 1.0 / _param(self.act.beta.data))
             self._snake_conv_ab = cached
         return cached
 
