@@ -92,6 +92,22 @@ _FACES_PER_TILE = 4
 _ELEMENTS_PER_TILE = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
 
 
+def _build_paired_tile_override(pairs, dtype):
+    """Two-tile raw override from a list of (A, B) pairs: tile 0 holds every A, tile 1
+    every B, paired by index (tilize pairs them that way).
+
+    *pairs* is cycled to fill a whole tile rather than zero-padded, so the override
+    divides evenly into whatever buffer the driver picks and every element is a pair the
+    caller meant to drive. The three edge builders below all need exactly this — an
+    interesting pair list is always far shorter than a tile — and differ only in *dtype*.
+    """
+    if not pairs:
+        raise ValueError("_build_paired_tile_override() needs at least one pair")
+    a = [pairs[i % len(pairs)][0] for i in range(_ELEMENTS_PER_TILE)]
+    b = [pairs[i % len(pairs)][1] for i in range(_ELEMENTS_PER_TILE)]
+    return torch.tensor(a + b, dtype=dtype)
+
+
 def _pair_operand_specs(spec_A, spec_B, input_dimensions):
     """Interleave two per-operand specs across *every* tile pair in the buffer.
 
@@ -1036,10 +1052,7 @@ def _build_shift_edge_case_src(mathop):
         for v, s in itertools.product(_SHIFT_EDGE_VALUES, _SHIFT_EDGE_AMOUNTS)
         if v != _INT32_MIN and _shift_reference(mathop, v, s) != _INT32_MIN
     ]
-    num_elements = 32 * 32
-    value_grid = [pairs[i % len(pairs)][0] for i in range(num_elements)]
-    shift_grid = [pairs[i % len(pairs)][1] for i in range(num_elements)]
-    return torch.tensor(value_grid + shift_grid, dtype=torch.int32)
+    return _build_paired_tile_override(pairs, torch.int32)
 
 
 @parametrize(
@@ -1136,29 +1149,31 @@ def _classify_edge_pair(mathop, a, b):
     return _EDGE_CLASS_ORDINARY
 
 
-def _build_edge_pair_src(mathop, formats, edge_class):
+def _build_edge_pair_src(mathop, formats, edge_class, dest_acc):
     """Two-tile override: tile 0 holds operand A, tile 1 holds operand B, paired by index.
 
     Only the pairs in *edge_class* are driven, so each class fails or passes on its own
     evidence. Returns None when neither operand has an edge worth probing, or when this
-    class is empty for this op — both are the caller's cue to skip. Cycles the pair list to
-    fill a full tile the way the shift builder does, so the override divides evenly into
-    whatever buffer sfpu_binary picks.
+    class is empty for this op — both are the caller's cue to skip.
+
+    *dest_acc* sizes the ULP steps around each pole: at dest_acc=No the DEST is 16-bit, so
+    a probe stepped by an fp32 ULP lands back on the pole it was straddling. See
+    sfpu_domains.probe_spacing_format().
     """
     pairs = [
         pair
         for pair in edge_pair_values(
-            mathop, formats.input_format, formats.output_format
+            mathop,
+            formats.input_format,
+            formats.output_format,
+            dest_acc=dest_acc,
         )
         if _classify_edge_pair(mathop, *pair) == edge_class
     ]
     if not pairs:
         return None
-    num_elements = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
-    a = [pairs[i % len(pairs)][0] for i in range(num_elements)]
-    b = [pairs[i % len(pairs)][1] for i in range(num_elements)]
     dtype = torch.int32 if formats.input_format.is_integer() else torch.float32
-    return torch.tensor(a + b, dtype=dtype)
+    return _build_paired_tile_override(pairs, dtype)
 
 
 # The ops this suite drives on an integer format. This sweep is float — its format axis is
@@ -1356,7 +1371,7 @@ def test_sfpu_binary_edges(request, formats, dest_acc, mathop, edge_class):
     ):
         request.node.add_marker(pytest.mark.xfail(reason=reason, strict=False))
 
-    src = _build_edge_pair_src(mathop, formats, edge_class)
+    src = _build_edge_pair_src(mathop, formats, edge_class, dest_acc)
     if src is None:
         pytest.skip(
             reason=f"{mathop.name} has no {edge_class} pair among its registered "
@@ -1395,10 +1410,7 @@ def _build_int_extremes_src():
     """Two-tile Int32 override walking the product of the int32 extremes, minus INT32_MIN."""
     vals = [v for v in integer_specials(DataFormat.Int32) if v != _INT32_MIN]
     pairs = [(a, b) for a in vals for b in vals]
-    num_elements = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
-    a = [pairs[i % len(pairs)][0] for i in range(num_elements)]
-    b = [pairs[i % len(pairs)][1] for i in range(num_elements)]
-    return torch.tensor(a + b, dtype=torch.int32)
+    return _build_paired_tile_override(pairs, torch.int32)
 
 
 @pytest.mark.nightly

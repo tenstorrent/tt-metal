@@ -205,7 +205,7 @@ def test_sfpu_binop_scalar_values(formats, dest_acc, mathop, scalar):
 #             formats.input_format, formats.output_format, dest_acc
 #         )
 #         spec_A = edge_spec(mathop, formats.input_format, formats.output_format,
-#                            specials=specials)
+#                            specials=specials, dest_acc=dest_acc)
 #         ...
 #         _run_sfpu_binop_scalar(formats, dest_acc, mathop,
 #                                scalar=_PRESUBMIT_SCALAR, spec_A=spec_A)

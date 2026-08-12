@@ -480,23 +480,56 @@ _EDGE_SWEEP_OPS = sorted(
 #
 # DOCUMENTED, and the ISA is the authority:
 #
-#   -0.0 through a comparison. SFPSETCC is specified only "provided that VC is neither
-#   negative zero nor any kind of NaN" (WormholeB0/.../VectorUnit.md, and identically on
-#   Blackhole). So sign(-0.0) -> -1 and heaviside(-0.0) -> 0 are *outside the documented
-#   contract* of the primitive those kernels are built on, not hardware faults. The golden
-#   follows torch/IEEE-1985 and is right about the mathematics; the hardware was never
-#   promised to agree.
+#   -0.0 through a comparison, on the one path where -0.0 actually arrives. SFPSETCC is
+#   specified only "provided that VC is neither negative zero nor any kind of NaN"
+#   (WormholeB0/.../VectorUnit.md, and identically on Blackhole). So sign(-0.0) -> -1 and
+#   heaviside(-0.0) -> 0 are *outside the documented contract* of the primitive those
+#   kernels are built on, not hardware faults. The golden follows torch/IEEE-1985 and is
+#   right about the mathematics; the hardware was never promised to agree.
 #
-#   Note -0.0 *is* delivered correctly — verified host-side that the stimulus pipeline
-#   preserves it into both Float32 and Float16_b — so the divergence is downstream of the
-#   test, in the SFPU primitives.
+# THE -0.0 PROBE REACHES THE SFPU ON ONLY TWO OF THE EIGHT COMBINATIONS:
+#
+#   The three signed-zero ops partition *exactly* on unpack_to_dest, which
+#   eltwise_unary_sfpu sets to (input.is_32_bit() and dest_acc == Yes) — the only path on
+#   which the datum skips SrcA and the datacopy:
+#
+#     * Sign and Heaviside diverge on exactly the 2 combinations where unpack_to_dest is
+#       True, and nowhere else. Their two sets are identical.
+#     * Signbit diverges on exactly the complementary 6.
+#
+#   Asserted, not just observed — see _assert_signed_zero_partition_valid below.
+#
+#   One cause explains all three. Neither calculate_sign nor calculate_heaviside guards
+#   |v| != 0 on its v_if(v < 0.0F), so a real -0.0 in the LREG would make them diverge on
+#   all 8; passing on 6 says the LREG holds +0.0 there. Signbit reads the sign bit
+#   directly, so on those same 6 it returns 0 — and it returns 1, correctly, on the 2 where
+#   the datum does arrive intact, which is why it passes exactly where the other two fail.
+#   A genuinely broken sign-bit read would fail on all 8, so the implementation is not the
+#   suspect.
+#
+#   Two consequences, neither cosmetic:
+#
+#     * Signbit's 6 entries can never XPASS. The input never arrives, so they record a
+#       *stimulus* limitation rather than a kernel defect, and no kernel fix can clear
+#       them. The earlier reading of this as "a kernel-contract bug" was wrong.
+#     * Sign and Heaviside *passing* on those same 6 is vacuous. The golden's answers for
+#       -0.0 (0 for sign, 0.5 for heaviside) coincide with the hardware's answers for
+#       +0.0, so those cases agree without ever having tested what they name.
+#
+#   NOT DIRECTLY MEASURED, and worth doing before anything is built on it: drive datacopy
+#   with custom(values=[0.0, -0.0]) and read the DEST sign bit on a (Float16_b, *, No)
+#   variant. If DEST holds +0.0 the above is confirmed and the -0.0 probe should be scoped
+#   to the unpack-to-dest combinations, which turns Signbit's 6 xfails and Sign/Heaviside's
+#   6 vacuous passes into honest skips. The probe is left in place until then: dropping it
+#   on an unmeasured hypothesis would lose real coverage silently if the hypothesis is wrong,
+#   and the non-strict xfails still report XPASS if delivery ever changes.
+#
+#   The host-side check on record establishes L1 only. -0.0 leaves the *host* correctly —
+#   verified that the stimulus pipeline preserves it into both Float32 and Float16_b
+#   buffers — which says nothing about unpack -> SrcA -> DEST, so it does not contradict
+#   any of the above.
 #
 # STILL OPEN — not explained by the ISA:
-#
-#   signbit(-0.0) returns 0 where the kernel's own docstring promises 1 ("logical-shift the
-#   fp32 bit pattern right by 31 ... incl. -0.0"). Unlike sign/heaviside this op claims to
-#   read the sign bit directly, so either the claim or the implementation is wrong. A
-#   kernel-contract bug rather than a hardware one.
 #
 #   rsqrt at 0 saturates instead of returning inf. RsqrtCompat returns 1.7014118e38
 #   (0x7F000000) where the golden gives inf, on all 8 combinations, while plain Rsqrt over
@@ -539,19 +572,86 @@ _EDGE_KNOWN_DIVERGENCES = {
 }
 
 _EDGE_DIVERGENCE_REASON = {
-    MathOperation.Signbit: "signbit(-0.0) returns 0; the kernel docstring promises 1 "
-    "('incl. -0.0') and IEEE agrees. Not explained by the ISA — this op claims to read "
-    "the sign bit directly, so the claim or the implementation is wrong.",
+    MathOperation.Signbit: "The -0.0 probe is not delivered on this pipeline: "
+    "unpack_to_dest is False here, so the datum passes through SrcA and the datacopy and "
+    "the LREG holds +0.0. signbit(+0.0) is 0 against the golden's 1 for -0.0. This is a "
+    "stimulus limitation, not a kernel defect — it cannot XPASS, because no kernel change "
+    "can make an input arrive. Signbit is correct on the 2 combinations where -0.0 does "
+    "arrive. See the signed-zero section above.",
     MathOperation.Sign: "sign(-0.0) returns -1; torch and IEEE give 0. Outside the "
     "documented contract: SFPSETCC is specified only for inputs that are not negative "
-    "zero (tt-isa-documentation WormholeB0/.../VectorUnit.md).",
+    "zero (tt-isa-documentation WormholeB0/.../VectorUnit.md). These are the 2 "
+    "unpack-to-dest combinations, the only ones where -0.0 reaches the LREG — the other 6 "
+    "pass vacuously.",
     MathOperation.Heaviside: "heaviside(-0.0) returns 0; -0.0 == 0 makes it 0.5. Same "
-    "SFPSETCC negative-zero caveat as Sign.",
+    "SFPSETCC negative-zero caveat as Sign, and the same unpack-to-dest scoping.",
     MathOperation.RsqrtCompat: "rsqrt(0) saturates to 1.7014118e38 (0x7F000000) instead "
     "of inf, while plain Rsqrt does not diverge at the same pole. Not prescribed by the "
     "ISA either way.",
     MathOperation.Erfinv: "erfinv(±1) saturates instead of returning ±inf.",
 }
+
+
+def _unpack_to_dest(input_format: DataFormat, dest_acc: DestAccumulation) -> bool:
+    """Mirror of the unpack_to_dest expression eltwise_unary_sfpu passes to TestConfig.
+
+    Kept as one expression rather than two literals so the claim below is checked against
+    the driver's actual routing, not against a copy of it that can drift.
+    """
+    return input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+
+
+def _assert_signed_zero_partition_valid():
+    """The three signed-zero ops must partition on unpack_to_dest, exactly.
+
+    This is the whole basis for reading Signbit's six entries as "the probe is not
+    delivered" rather than as a kernel-contract bug, and for calling Sign's and Heaviside's
+    other six vacuous. It is an inference from *which* combinations diverge, so it stops
+    being load-bearing the moment the sets stop lining up — and a reason string is prose,
+    which no run checks. Assert the shape instead, so editing a table without revisiting the
+    explanation fails at collection.
+
+    Deliberately not asserting the *count*: what matters is that each op's divergent set is
+    precisely one side of the unpack_to_dest split, which stays true if the format axis grows.
+    """
+    all_combos = [
+        (fmt.input_format, fmt.output_format, dest_acc)
+        for fmt in input_output_formats([DataFormat.Float16_b, DataFormat.Float32])
+        for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
+    ]
+
+    expectations = {
+        # -0.0 never reaches the LREG on the datacopy path, so signbit reads +0.0 there.
+        MathOperation.Signbit: False,
+        # SFPSETCC mishandles a -0.0 that does arrive, which is the unpack-to-dest path.
+        MathOperation.Sign: True,
+        MathOperation.Heaviside: True,
+    }
+
+    for op, diverges_when_unpack_to_dest in expectations.items():
+        expected = {
+            combo
+            for combo in all_combos
+            if _unpack_to_dest(combo[0], combo[2]) == diverges_when_unpack_to_dest
+        }
+        recorded = set(_EDGE_KNOWN_DIVERGENCES.get(op, ()))
+        assert recorded == expected, (
+            f"{op.name}'s recorded divergences no longer match the unpack_to_dest "
+            f"partition (expected unpack_to_dest == "
+            f"{diverges_when_unpack_to_dest}).\n"
+            f"  missing: {sorted(str(c) for c in expected - recorded)}\n"
+            f"  extra:   {sorted(str(c) for c in recorded - expected)}\n"
+            "The signed-zero explanation above rests on this partition — if the "
+            "measurement really moved, re-derive the explanation rather than only "
+            "editing the table."
+        )
+
+    assert set(_EDGE_KNOWN_DIVERGENCES[MathOperation.Sign]) == set(
+        _EDGE_KNOWN_DIVERGENCES[MathOperation.Heaviside]
+    ), "Sign and Heaviside share one SFPSETCC cause, so their sets must stay identical"
+
+
+_assert_signed_zero_partition_valid()
 
 
 @pytest.mark.nightly
@@ -595,6 +695,7 @@ def test_eltwise_unary_sfpu_edges(
         formats.input_format,
         formats.output_format,
         specials=specials,
+        dest_acc=dest_acc,
     )
     if spec_A is None:
         # Smooth everywhere: no singularity, no knee, and specials not carryable here.
@@ -801,7 +902,23 @@ _THRESHOLD_OPS = [
 def _threshold_op_stimuli_spec(mathop):
     # Force a regular subset onto the op's threshold so both the equal and not-equal
     # branches fire and the output is non-constant.
-    threshold = 0.0 if mathop == MathOperation.LogicalNotUnary else 0.5
+    #
+    # The threshold comes from op_edge_points() rather than a local literal. These three
+    # ops are outside _OP_DOMAIN_REGISTRY, so sfpu_unary_ops() keeps them out of the edge
+    # sweep and edge_spec() never sees them — this is the only consumer of their
+    # _OP_EDGE_POINTS entry, the same arrangement the int32 comparison ops have. A local
+    # 0.5 could drift from UNARY_COMP_THRESHOLD, which the golden reads, with no test
+    # noticing: the stimuli would stop landing on the threshold and the output would
+    # quietly collapse to a constant again.
+    edges = op_edge_points(mathop)
+    if not edges:
+        raise AssertionError(
+            f"{mathop.name} has no op_edge_points() entry, so the threshold sweep cannot "
+            "land on its comparison threshold — add one in sfpu_domains._OP_EDGE_POINTS"
+        )
+    # logical_not's entry is the signed-zero pair (+0.0, -0.0); both are the same
+    # threshold, so the first element is the value to hit in every case.
+    threshold = edges[0]
 
     def dist(size, dtype, generator):
         idx = torch.arange(size, dtype=torch.float32)
@@ -861,10 +978,18 @@ def eltwise_unary_sfpu(
     # register it rather than falling back to the positive-only default.
     # The domain has to hold for the whole pipeline, so for_op_pipeline resolves against
     # both formats and keeps the tighter — see its docstring for why both matter.
+    # approx_mode is passed because the exp family's positive side is bounded twice: by
+    # range always, and by the approximation's accuracy only in ApproximationMode.Yes. The
+    # registry carries the first; for_op applies the second from _APPROX_ACCURACY_MAX.
     if spec_A is None:
         spec_A = exclude_undefined(
             mathop,
-            for_op_pipeline(mathop, formats.input_format, formats.output_format).spec_A,
+            for_op_pipeline(
+                mathop,
+                formats.input_format,
+                formats.output_format,
+                approx_mode=approx_mode,
+            ).spec_A,
         )
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(

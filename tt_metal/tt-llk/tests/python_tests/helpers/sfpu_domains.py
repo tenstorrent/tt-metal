@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import copy
 import math
+import struct
 from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, Dict, FrozenSet, List, Optional, Tuple, Union
@@ -105,6 +106,34 @@ def narrowest_range_format(*formats: Optional[DataFormat]) -> DataFormat:
     )
 
 
+def _two_state_flag(value: Union[bool, Enum, None], param: str, enum_name: str) -> bool:
+    """Normalise a two-state Enum-or-bool test flag to a plain bool.
+
+    Both DestAccumulation and ApproximationMode are Enums whose two members wrap True and
+    False, so ``bool(member)`` is True for *both* of them — the ``.No`` member included. A
+    caller that passes the member directly rather than comparing it therefore gets no error,
+    it gets every case evaluated as the True branch, which silently flips whole rows of
+    behaviour. Read ``.value`` when handed an enum, take a bool as-is, and reject anything
+    else rather than guessing.
+
+    The enums themselves are not imported here: this module deliberately carries no
+    llk_params test-side types beyond MathOperation, and duck-typing on ``.value`` keeps it
+    that way.
+    """
+    flag = getattr(value, "value", value)
+    if not isinstance(flag, bool):
+        raise TypeError(
+            f"{param} must be a bool or a {enum_name} member, got "
+            f"{value!r} ({type(value).__name__})"
+        )
+    return flag
+
+
+def _approx_mode_flag(approx_mode: Union[bool, Enum]) -> bool:
+    """Normalise an approximation-mode flag to a plain bool. See _two_state_flag."""
+    return _two_state_flag(approx_mode, "approx_mode", "ApproximationMode")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Format-specific domain builders
 # ─────────────────────────────────────────────────────────────────────────────
@@ -118,8 +147,48 @@ _E4M3_FORMATS = (DataFormat.MxFp8P, DataFormat.Fp8_e4m3)
 _E5M2_AND_FLOAT16 = (DataFormat.Float16, DataFormat.MxFp8R)
 
 
+# ── Exp family: range on the registry, accuracy behind ApproximationMode.Yes ──
+#
+# Two different ceilings bound the exp family's positive side, and they belong in two
+# different places:
+#
+#   * **Range** — exp overflows an 8-bit exponent near x = 88.7. That is a property of the
+#     op and the format, true in both approximation modes, so it lives in the registry
+#     entries below.
+#   * **Accuracy** — the *approximation* overshoots the golden by ~5.7% once its argument
+#     passes ~8 (measured on Wormhole; see _APPROX_EXP_ACCURACY_XFAIL in test_sfpu_unary).
+#     That is a property of one mode only, so it lives in _APPROX_ACCURACY_MAX and is
+#     applied by for_op() when the caller says ApproximationMode.Yes.
+#
+# Keeping the accuracy bound on the shared registry entry was the bug: one entry is consumed
+# by both modes, so narrowing it to 16 also took (16, 80] away from the *accurate* path —
+# with it the whole exponent-overflow region and all large-exp saturation into Float16_b and
+# Bfp8_b. ExpWithBase was the sharper case still: it sits in STANDARD_SWEEP_OPS, which runs
+# ApproximationMode.No only, so its bound was narrowed from 160 to 32 for a limit the op
+# never executes.
+#
+# NOT YET MEASURED: the accurate path over (16, 80] has never been isolated on hardware. The
+# evidence on record is approximation-specific — the xfail is gated on
+# ApproximationMode.Yes and names "Approximate exp" — and phase 1 (#52172) shipped high=80
+# for both modes, so this restores a previously-shipped domain rather than inventing one. It
+# still wants a run of the Exp/Exp2 broad sweep at ApproximationMode.No before being called
+# green; if the accurate path does drift here, the fix is a mode-conditional custom_rtol,
+# not a re-narrowed registry entry.
+_APPROX_ACCURACY_MAX: Dict[MathOperation, float] = {
+    MathOperation.Exp: 16.0,
+    # exp2(x) = exp(x * ln2), so exp's argument ceiling of 16 lands at x = 16 / ln2 ~ 23.
+    MathOperation.Exp2: 23.0,
+    # exp_with_base computes exp(0.5*x), so double exp's ceiling puts its argument on it.
+    MathOperation.ExpWithBase: 32.0,
+}
+
+
 def _exp_spec(fmt: DataFormat) -> OperandSpecs:
-    """Safe input range for exp(x) per format to avoid overflow."""
+    """Safe input range for exp(x) per format to avoid overflow.
+
+    Range-bound only; the approximation's accuracy ceiling is applied on top by for_op()
+    from _APPROX_ACCURACY_MAX. See the section comment above.
+    """
     if fmt in _E4M3_FORMATS:
         spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
     elif fmt in _E5M2_AND_FLOAT16:
@@ -129,11 +198,10 @@ def _exp_spec(fmt: DataFormat) -> OperandSpecs:
         # sanitization boundary near x ≈ -88.5 (where InputClamping::ClampToNegative saturates inputs
         # in the fast/approx exp path).
         #
-        # The positive side stops at 16 for accuracy, not range: the approximation's
-        # relative error grows with x, exceeding the default 5% rtol on the fp32
-        # (dest_acc=Yes) path well before x=80. Narrower output formats pull this in
+        # The positive side is bounded by range: exp overflows an 8-bit exponent near
+        # x = 88.7, and 80 leaves margin below it. Narrower output formats pull this in
         # further through for_op_pipeline.
-        spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-100.0, high=16.0)
+        spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-100.0, high=80.0)
     return OperandSpecs(spec_A=spec)
 
 
@@ -142,32 +210,36 @@ def _exp_with_base_spec(fmt: DataFormat) -> OperandSpecs:
 
     Keep the negative reach of _exp_spec (low=-100 crosses the SFPU's negative-side
     sanitization boundary near x ~ -88.5). The 0.5 scale halves the argument, so the
-    positive side is double _exp_spec's to put the argument under the same ceiling --
-    which is now the accuracy one at 16, not the overflow one at 80, so 32 rather
-    than 160.
+    positive side is double _exp_spec's to put the argument under the same ceiling -- in
+    either mode, since _APPROX_ACCURACY_MAX doubles it the same way.
     """
     if fmt in _E4M3_FORMATS:
         spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
     elif fmt in _E5M2_AND_FLOAT16:
         spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
     else:
-        spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-100.0, high=32.0)
+        spec = StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-100.0, high=160.0
+        )
     return OperandSpecs(spec_A=spec)
 
 
 def _exp2_spec(fmt: DataFormat) -> OperandSpecs:
-    """Safe input range for exp2(x) = 2^x per format to avoid overflow."""
+    """Safe input range for exp2(x) = 2^x per format to avoid overflow.
+
+    Range-bound only, as _exp_spec; the approximation ceiling comes from
+    _APPROX_ACCURACY_MAX.
+    """
     if fmt in _E4M3_FORMATS:
         spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-7.0, high=7.0)
     elif fmt in _E5M2_AND_FLOAT16:
         spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-14.0, high=14.0)
     else:
-        # 2^100 still fits an 8-bit exponent, so the positive side is not range-bound
-        # the way _exp_spec is. It is accuracy-bound instead: exp2(x) = exp(x * ln2),
-        # so the argument ceiling _exp_spec puts at 16 lands at x = 16 / ln2 ~ 23 here.
-        # Above that the shared approximation drifts past the default rtol on the fp32
-        # dst path. The negative side matches _exp_spec's reach past the clamp.
-        spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-100.0, high=23.0)
+        # 2^100 still fits an 8-bit exponent, so the positive side is not range-bound the
+        # way _exp_spec is; the negative side matches its reach past the clamp.
+        spec = StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-100.0, high=100.0
+        )
     return OperandSpecs(spec_A=spec)
 
 
@@ -276,10 +348,10 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Exp: _exp_spec,
     # exp2: format-specific overflow threshold
     MathOperation.Exp2: _exp2_spec,
-    # exp_with_base computes exp(0.5*x). It needs its own (tighter-on-the-positive-side)
-    # domain: reusing plain exp's high=80 gives an argument of ~40, and exp's condition
-    # number (~ the argument) amplifies the approximation error past 10% on the largest
-    # outputs. See _exp_with_base_spec.
+    # exp_with_base computes exp(0.5*x). It needs its own (wider-on-the-positive-side)
+    # domain: the 0.5 scale halves the argument, so reusing plain exp's high would cap the
+    # argument at half the reach exp's own domain is allowed. Doubling it puts the argument
+    # back on the same ceiling, in both modes. See _exp_with_base_spec.
     MathOperation.ExpWithBase: _exp_with_base_spec,
     # fill: the hardware ignores the input value; any range is fine
     MathOperation.Fill: OperandSpecs(
@@ -738,11 +810,58 @@ _OP_DOMAIN_REGISTRY: Dict[
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def _clip_high(spec: StimuliSpec, ceiling: float, op: MathOperation) -> None:
+    """Lower *spec*'s upper bound to *ceiling* in place, if it reaches past it.
+
+    Only low/high specs are supported, which is what every _APPROX_ACCURACY_MAX op uses.
+    An interval spec raises rather than being silently left unclipped — that would hand the
+    approximation the very region the ceiling exists to withhold.
+    """
+    if spec.intervals:
+        raise ValueError(
+            f"MathOperation.{op.name} has an approximation-mode ceiling in "
+            f"_APPROX_ACCURACY_MAX but an interval-based domain, which _clip_high cannot "
+            f"narrow. Clip the intervals explicitly, or drop the table entry."
+        )
+    if spec.high is not None and spec.high > ceiling:
+        spec.high = ceiling
+
+
+def _apply_approx_ceiling(
+    result: OperandSpecs,
+    op: MathOperation,
+    approx_mode: Union[bool, Enum, None],
+) -> None:
+    """Narrow *result* to *op*'s approximation-mode accuracy ceiling, in place.
+
+    A no-op unless *approx_mode* normalises to True and *op* has an entry. The ceiling only
+    ever narrows, so a format branch already tighter than it (the e4m3 exp domain stops at
+    5.0) is left alone.
+    """
+    if approx_mode is None:
+        return
+    if not _approx_mode_flag(approx_mode):
+        return
+    ceiling = _APPROX_ACCURACY_MAX.get(op)
+    if ceiling is None:
+        return
+    if result.spec_B is not None and result.spec_B != result.spec_A:
+        raise ValueError(
+            f"MathOperation.{op.name} has an approximation-mode ceiling but distinct "
+            f"per-operand domains. _APPROX_ACCURACY_MAX is written for the unary exp "
+            f"family; decide per operand before adding a binary op to it."
+        )
+    _clip_high(result.spec_A, ceiling, op)
+    if result.spec_B is not None:
+        _clip_high(result.spec_B, ceiling, op)
+
+
 def for_op(
     op: MathOperation,
     data_format: DataFormat = DataFormat.Float16_b,
     distribution_a: Optional[Union[DistributionKind, Callable]] = None,
     distribution_b: Optional[Union[DistributionKind, Callable]] = None,
+    approx_mode: Union[bool, Enum, None] = None,
 ) -> OperandSpecs:
     """Return OperandSpecs with safe input domains for *op* and *data_format*.
 
@@ -763,6 +882,14 @@ def for_op(
         distribution_b: Same as distribution_a, applied to spec_B. To
             apply the same override to both operands, pass it explicitly
             on both arguments.
+        approx_mode: The approximation mode the variant will run in, as an
+            ApproximationMode member or a bool. When it is the approximating
+            mode, ops in _APPROX_ACCURACY_MAX have their positive side
+            narrowed to the ceiling their approximation stays accurate to;
+            the registry entry itself carries only the range bound. Leaving
+            it None applies no narrowing, which is right for callers that
+            check no tolerance (the accuracy harness) and for the pre-existing
+            format-only behaviour.
 
     Returns:
         OperandSpecs with per-operand domain specs.
@@ -800,6 +927,8 @@ def for_op(
         _validate_distribution_override(distribution_b, result.spec_B)
         result.spec_B.distribution = distribution_b
 
+    _apply_approx_ceiling(result, op, approx_mode)
+
     return result
 
 
@@ -829,7 +958,7 @@ def for_op_pipeline(
     either one alone drops the other:
 
     * **Range** is bounded by the narrowest exponent range anywhere in the
-      pipeline. exp over (-100, 16) is fine into a Float32 output and saturates
+      pipeline. exp over (-100, 80) is fine into a Float32 output and saturates
       a Float16 one, so the *output* format has to be able to narrow the domain.
     * **Precision** is a property of the *input* format alone. A block-float
       input has already spent its relative precision by the time the op runs,
@@ -1181,6 +1310,11 @@ _FORMAT_MANTISSA_BITS: Dict[DataFormat, int] = {
 # common float formats, so a probe spaced for it is spaced widely enough for the rest.
 _DEFAULT_MANTISSA_BITS = 7
 
+# Stimuli are built as fp32 host-side, so it is fp32's mantissa a narrower format's width is
+# subtracted from to get the number of bits the datapath drops. Read from the table rather
+# than written as 23 twice.
+_FLOAT32_MANTISSA_BITS = _FORMAT_MANTISSA_BITS[DataFormat.Float32]
+
 
 def format_ulp(fmt: DataFormat, magnitude: float = 1.0) -> float:
     """Distance to the next representable value of *fmt* near |*magnitude*|.
@@ -1203,6 +1337,100 @@ def format_ulp(fmt: DataFormat, magnitude: float = 1.0) -> float:
         # float format and is a visible distance from zero in all of them.
         return 2.0**-bits
     return 2.0 ** (math.floor(math.log2(magnitude)) - bits)
+
+
+def probe_spacing_format(
+    fmt: DataFormat,
+    dest_acc: Optional[Union[bool, Enum]] = None,
+) -> DataFormat:
+    """Which format's ULP a boundary probe has to step by to survive the datapath.
+
+    Two formats bound a probe, and the one the caller resolves first is only half of it.
+    narrowest_range_format() ranks on _FORMAT_MAX_MAGNITUDE, i.e. exponent range, and so
+    bounds a probe's **magnitude**. Its **spacing** is a mantissa question, and neither the
+    input nor the output format settles that one: with ``dest_acc=No`` the DEST holds 16 bits
+    whatever the input format is, so an fp32 probe stepped by an fp32 ULP is truncated
+    straight back onto the boundary it was meant to straddle. The goldens model the same
+    truncation as ``& 0xFFFF0000``.
+
+    Acosh is the op this bites today. Its singularity is (1.0, ABOVE), and
+    ``(Float32, Float16_b)`` ties on the bfloat16 ceiling and resolves to Float32, so
+    ``eps = 2 * 2**-23`` and the above-pole probe is ``0x3F800002``. Under ``dest_acc=No``
+    that arrives as 1.0 — a second copy of the pole probe, which is exactly the collapse
+    format_ulp() exists to prevent. Both ``(Float32 -> Float16_b, No)`` and
+    ``(Float32 -> Float32, No)`` are collected by test_eltwise_unary_sfpu_edges, so a
+    mantissa-keyed choice of format alone would not fix it. Nothing false-passes either way:
+    the probe simply stops probing.
+
+    Only a 32-bit *float* fmt is coarsened, and only to Float16_b. A format that is already
+    16-bit or narrower keeps its own spacing, because the DEST it lands in is no coarser than
+    it is (Tf32 reports ``is_32_bit() == False``, so it is not caught here either). An integer
+    format keeps its own too: mantissa truncation is not what a 16-bit integer DEST does, and
+    substituting a float format's ULP there would be meaningless rather than conservative.
+
+    ``dest_acc=None`` keeps the format-only behaviour, for callers that have no dest_acc to
+    give.
+
+    This is the *format* half of the rule. probe_beside() applies it per boundary **and per
+    side**, because whether the narrowing actually destroys a probe depends on both.
+    """
+    if dest_acc is None or _dest_acc_flag(dest_acc):
+        return fmt
+    if fmt.is_integer() or not fmt.is_32_bit():
+        return fmt
+    return DataFormat.Float16_b
+
+
+def _truncate_mantissa(value: float, fmt: DataFormat) -> float:
+    """*value* with its mantissa truncated to *fmt*'s width, keeping its exponent.
+
+    Models what a narrower DEST does to a wider datum, which the goldens spell for the
+    bfloat16 case as ``& 0xFFFF0000``. Round-toward-zero rather than round-to-nearest: this
+    is only ever used to ask "is this probe still distinct from its boundary", and nearest
+    can move a probe *away* from the boundary but never onto it, so truncating is the
+    conservative direction.
+
+    In practice only the bfloat16 width is exercised — probe_spacing_format() either returns
+    Float16_b or the format it was given, and in the latter case probe_beside() never asks.
+    """
+    if not math.isfinite(value):
+        return value
+    dropped = _FLOAT32_MANTISSA_BITS - _FORMAT_MANTISSA_BITS.get(
+        fmt, _DEFAULT_MANTISSA_BITS
+    )
+    if dropped <= 0:
+        return value
+    raw = struct.unpack("<I", struct.pack("<f", value))[0]
+    raw &= 0xFFFFFFFF ^ ((1 << dropped) - 1)
+    return struct.unpack("<f", struct.pack("<I", raw))[0]
+
+
+def probe_beside(
+    point: float,
+    direction: int,
+    range_fmt: DataFormat,
+    step_fmt: DataFormat,
+    ulps: int = 1,
+) -> float:
+    """A probe *direction* (+1 / -1) off *point*: the tightest one that still arrives distinct.
+
+    Steps by *ulps* ULPs of *range_fmt* first, which is the closest to the boundary the
+    stimulus format can express. Widens to *step_fmt*'s ULP only when that fine probe would
+    be quantized back onto *point* by a narrower datapath.
+
+    Deciding per **side** is what keeps this to the one probe that was actually collapsing.
+    At a pole of 1.0 the two sides behave differently under a 16-bit DEST: stepping up gives
+    ``0x3F800002``, same binade, and truncation returns it to 1.0 — a second copy of the pole
+    probe, which is Acosh's ``(1.0, ABOVE)`` and the whole of the collapse. Stepping *down*
+    crosses into the next binade (``0x3F7FFFFF`` -> 0.99609375) and stays distinct, so asin,
+    acos, atanh, erfinv and log1p keep their tighter below-1.0 probes rather than being
+    loosened along with it. Zero-poles keep theirs for the same reason: bfloat16 carries
+    fp32's full exponent range, so 2**-23 survives as a visible distance from zero.
+    """
+    fine = point + direction * ulps * format_ulp(range_fmt, point)
+    if _truncate_mantissa(fine, step_fmt) != point:
+        return fine
+    return point + direction * ulps * format_ulp(step_fmt, point)
 
 
 # Exact singular points of each op, per operand — the pole, the branch cut, the value
@@ -1293,7 +1521,8 @@ def _dedup_representable(values: List[float], fmt: DataFormat) -> List[float]:
 
     Two probes closer together than half a ULP quantize to the same value on the way to
     the device, so keeping both spends a stimulus slot on a duplicate. Non-finite values
-    are kept verbatim and sorted to the front/back by Python's own ordering.
+    are kept verbatim and appended after the sorted finite values, in their original
+    relative order.
 
     **-0.0 is exempt.** It compares equal to +0.0 and is zero ULPs away from it, so a
     plain numeric dedup discards it — and for signbit, sign, heaviside and reciprocal the
@@ -1328,6 +1557,7 @@ def boundary_probes(
     fmt: DataFormat = DataFormat.Float16_b,
     ulps: int = 2,
     include_undefined: bool = False,
+    step_fmt: Optional[DataFormat] = None,
 ) -> List[float]:
     """Values straddling every boundary of *op*'s defined region for *operand*.
 
@@ -1350,35 +1580,42 @@ def boundary_probes(
     ``eps`` is *ulps* steps of *fmt* at the boundary's own magnitude (see format_ulp),
     not a fixed constant, so the probes stay distinct in low-precision formats.
 
+    *step_fmt* widens that step where the datapath is coarser than *fmt* — pass
+    probe_spacing_format(fmt, dest_acc) to account for a 16-bit DEST holding a 32-bit
+    format. It defaults to *fmt*, which is the format-only behaviour. See probe_step().
+
     Returns a sorted list with format-indistinguishable duplicates removed. Values are
     *not* clipped to what *fmt* can represent or to the op's registered domain — that is
     the caller's job, and for a sweep pairing input with output formats it has to be done
     against the narrowest format in the pipeline, not against one end of it.
     """
     probes: List[float] = []
+    step_fmt = fmt if step_fmt is None else step_fmt
 
     singularities = _OP_SINGULARITIES.get(op, {}).get(operand, ())
     if singularities:
         for point, side in singularities:
-            eps = ulps * format_ulp(fmt, point)
             probes.append(point)
             if include_undefined or side in (
                 SingularitySide.BOTH,
                 SingularitySide.BELOW,
             ):
-                probes.append(point - eps)
+                probes.append(probe_beside(point, -1, fmt, step_fmt, ulps))
             if include_undefined or side in (
                 SingularitySide.BOTH,
                 SingularitySide.ABOVE,
             ):
-                probes.append(point + eps)
+                probes.append(probe_beside(point, +1, fmt, step_fmt, ulps))
     else:
         for lo, hi in _SFPU_UNDEFINED_RANGES.get(op, {}).get(operand, ()):
             if math.isfinite(lo):
-                probes += [lo - ulps * format_ulp(fmt, lo), lo]
+                probes += [probe_beside(lo, -1, fmt, step_fmt, ulps), lo]
             if math.isfinite(hi):
-                probes += [hi, hi + ulps * format_ulp(fmt, hi)]
+                probes += [hi, probe_beside(hi, +1, fmt, step_fmt, ulps)]
 
+    # Dedup against *fmt*, not *step_fmt*: probe_beside() has already guaranteed every probe
+    # survives the datapath, and a step_fmt dedup would then discard the tight below-boundary
+    # probes it deliberately kept (1.0 and 0.99999976 are under half a bfloat16 ULP apart).
     return _dedup_representable(probes, fmt)
 
 
@@ -1483,10 +1720,18 @@ _COMPARISON_EDGE_OPS = (
 
 _OP_EDGE_POINTS: Dict[MathOperation, Tuple[float, ...]] = {
     **{op: (0.0, -0.0) for op in _ZERO_EDGE_OPS},
+    # UnaryGt/Lt/Ge/Le reach the edge sweep through edge_spec() like everything else.
+    # UnaryEq and UnaryNe do not: they are outside _OP_DOMAIN_REGISTRY, so sfpu_unary_ops()
+    # never puts them in _EDGE_SWEEP_OPS. Their consumer is
+    # test_sfpu_unary._threshold_op_stimuli_spec, which reads op_edge_points() directly to
+    # place the exact threshold in its stimuli — the same arrangement as the int32
+    # comparison ops below. Dropping these entries makes that test raise rather than
+    # silently drift off the threshold.
     **{op: (UNARY_COMP_THRESHOLD,) for op in _COMPARISON_EDGE_OPS},
     # logical_not(x) = (x == 0). Same shape as _ZERO_EDGE_OPS but it is a threshold op
     # rather than a sign op, so keep it named. (LogicalNotUnary is an alias of this
-    # member — see the note in llk_params.py — so listing both would be one key.)
+    # member — see the note in llk_params.py — so listing both would be one key.) Also
+    # outside the registry, and read by _threshold_op_stimuli_spec as above.
     MathOperation.LogicalNot: (0.0, -0.0),
     # unary max/min compare x against UNARY_MAX_MIN_VALUE. Keyed on the constant rather
     # than folded into _ZERO_EDGE_OPS: it happens to be 0.0 today, and if it moves the
@@ -1612,13 +1857,7 @@ def _dest_acc_flag(dest_acc: Union[bool, Enum]) -> bool:
     carries no llk_params test-side types beyond MathOperation, and duck-typing on
     ``.value`` keeps it that way.
     """
-    value = getattr(dest_acc, "value", dest_acc)
-    if not isinstance(value, bool):
-        raise TypeError(
-            "dest_acc must be a bool or a DestAccumulation member, got "
-            f"{dest_acc!r} ({type(dest_acc).__name__})"
-        )
-    return value
+    return _two_state_flag(dest_acc, "dest_acc", "DestAccumulation")
 
 
 def specials_safe(
@@ -1699,6 +1938,7 @@ def edge_values(
     operand: Operand = Operand.A,
     specials: bool = False,
     include_undefined: bool = False,
+    dest_acc: Optional[Union[bool, Enum]] = None,
 ) -> List[float]:
     """Every value worth hitting on purpose for (*op*, *operand*) in this pipeline.
 
@@ -1715,16 +1955,31 @@ def edge_values(
     spec to a driver bypasses the driver's own for_op_pipeline() resolution entirely
     (eltwise_unary_sfpu only resolves when spec_A is None), so a probe near a format
     ceiling would otherwise reach a Float16 or MxFp4 output unclipped and overflow.
+
+    Range and spacing are then resolved separately — *range_fmt* clips magnitudes,
+    *step_fmt* sizes the ULP steps and the dedup. Pass *dest_acc* to get the second one
+    right; see probe_spacing_format() for the collapse that follows from leaving it out.
     """
-    fmt = narrowest_range_format(input_format, output_format)
-    vals = list(boundary_probes(op, operand, fmt, include_undefined=include_undefined))
+    range_fmt = narrowest_range_format(input_format, output_format)
+    step_fmt = probe_spacing_format(range_fmt, dest_acc)
+    vals = list(
+        boundary_probes(
+            op,
+            operand,
+            range_fmt,
+            include_undefined=include_undefined,
+            step_fmt=step_fmt,
+        )
+    )
     if operand == Operand.A:
         # _OP_EDGE_POINTS describes the op's own input, i.e. operand A. A binary op's
         # B-side knees, where they exist, are domain boundaries and come from cat A.
         vals += list(op_edge_points(op))
     if specials:
-        vals += list(format_specials(fmt))
-    return _dedup_representable(clip_to_format(vals, fmt), fmt)
+        # Specials are an exponent-range property, so they key off range_fmt: it is what
+        # decides integer extremes vs IEEE non-finites, and what clip_to_format honours.
+        vals += list(format_specials(range_fmt))
+    return _dedup_representable(clip_to_format(vals, range_fmt), range_fmt)
 
 
 def edge_spec(
@@ -1734,6 +1989,7 @@ def edge_spec(
     operand: Operand = Operand.A,
     specials: bool = False,
     include_undefined: bool = False,
+    dest_acc: Optional[Union[bool, Enum]] = None,
     **kwargs,
 ) -> Optional[StimuliSpec]:
     """edge_values() as a StimuliSpec, or None if *op* has no edge worth probing.
@@ -1753,7 +2009,13 @@ def edge_spec(
     instead (see _build_shift_edge_case_src); this raises rather than silently clamping.
     """
     vals = edge_values(
-        op, input_format, output_format, operand, specials, include_undefined
+        op,
+        input_format,
+        output_format,
+        operand,
+        specials,
+        include_undefined,
+        dest_acc,
     )
     if not vals:
         return None
@@ -1809,6 +2071,7 @@ def edge_pair_values(
     output_format: Optional[DataFormat] = None,
     specials: bool = False,
     include_undefined: bool = False,
+    dest_acc: Optional[Union[bool, Enum]] = None,
 ) -> List[Tuple[float, float]]:
     """Cartesian product of both operands' edge values, for a binary op.
 
@@ -1822,10 +2085,22 @@ def edge_pair_values(
     skip rather than drive a meaningless variant.
     """
     a = edge_values(
-        op, input_format, output_format, Operand.A, specials, include_undefined
+        op,
+        input_format,
+        output_format,
+        Operand.A,
+        specials,
+        include_undefined,
+        dest_acc,
     )
     b = edge_values(
-        op, input_format, output_format, Operand.B, specials, include_undefined
+        op,
+        input_format,
+        output_format,
+        Operand.B,
+        specials,
+        include_undefined,
+        dest_acc,
     )
     if not a and not b:
         return []
