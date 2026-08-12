@@ -74,9 +74,11 @@ void kernel_main() {
         u::ComputeBlock a = u::noc_load<1>(in0_storage, in0, k).wait();
         u::ComputeBlock b = u::noc_load<1>(in1_storage, in1, k).wait();
 
-#ifdef MM_EPILOGUE_RELU
-        // relu() appends to the node's epilogue chain; the strategy folds it
-        // into DST on the final block.
+#if defined(MM_RELU_EPILOGUE)
+        // finish-only: relu once, on the completed accumulator
+        u::Block result = acc.accumulate(u::matmul<Geom>(a, b), finish, [](auto mm) { return u::relu(mm); });
+#elif defined(MM_RELU_PER_STEP)
+        // per-step: relu on every k-block, carried forward in the accumulator
         u::Block result = acc.accumulate(u::relu(u::matmul<Geom>(a, b)), finish);
 #else
         u::Block result = acc.accumulate(u::matmul<Geom>(a, b), finish);

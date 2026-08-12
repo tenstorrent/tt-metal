@@ -239,7 +239,7 @@ void example_matmul_acc() {
         const bool finish = (k == Geom::num_blocks - 1);
         ComputeBlock a = noc_load<1>(a_storage, t0, k).wait();
         ComputeBlock b = noc_load<1>(b_storage, t1, k).wait();
-        Block result = acc.accumulate(relu(matmul<Geom>(a, b)), finish);
+        Block result = acc.accumulate(matmul<Geom>(a, b), finish, [](auto mm) { return relu(mm); });
         if (finish) {
             noc_store<0>(std::move(result), t2, 0);
         }
