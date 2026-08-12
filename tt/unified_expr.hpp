@@ -14,11 +14,11 @@
 // POLICIES the domain header must satisfy
 //
 //   Leaf node L:
-//       static constexpr int need = 1;          // DST slots it occupies
-//       void emit(int dst, int tile) const;     // materialise tile -> dst
+//       static constexpr uint32_t need = 1;          // DST slots it occupies
+//       void emit(uint32_t dst, uint32_t tile) const;  // materialise tile -> dst
 //
-//   Binary op Op:  static void apply(int lhs_dst, int rhs_dst, int out_dst);
-//   Unary  op Op:  static void apply(int src_dst, int out_dst);
+//   Binary op Op:  static void apply(uint32_t lhs_dst, uint32_t rhs_dst, uint32_t out_dst);
+//   Unary  op Op:  static void apply(uint32_t src_dst, uint32_t out_dst);
 //
 // ---------------------------------------------------------------------------
 // ALLOCATION
@@ -46,6 +46,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <type_traits>
 
 namespace tt {
@@ -115,11 +116,11 @@ using kind_of_t = typename kind_of<Node>::type;
 template <typename... Ops>
 struct UnaryChain {
     static constexpr bool empty = (sizeof...(Ops) == 0);
-    static constexpr int size = sizeof...(Ops);
+    static constexpr uint32_t size = sizeof...(Ops);
 
-    static void apply_in_place(int slot) { (Ops::apply_in_place(slot), ...); }
+    static void apply_in_place(uint32_t slot) { (Ops::apply_in_place(slot), ...); }
 
-    static void apply_from_pack(int base, int count) { (Ops::apply_from_pack(base, count), ...); }
+    static void apply_from_pack(uint32_t base, uint32_t count) { (Ops::apply_from_pack(base, count), ...); }
 };
 
 template <typename Chain, typename Op>
@@ -137,19 +138,19 @@ using chain_append_t = typename chain_append<Chain, Op>::type;
 
 template <typename Node>
 struct Need {
-    static constexpr int value = Node::need;  // leaf
+    static constexpr uint32_t value = Node::need;  // leaf
 };
 
 template <typename Op, typename C>
 struct Need<Un<Op, C>> {
-    static constexpr int value = Need<C>::value;
+    static constexpr uint32_t value = Need<C>::value;
 };
 
 template <typename Op, typename L, typename R>
 struct Need<Bin<Op, L, R>> {
-    static constexpr int left = Need<L>::value;
-    static constexpr int right = 1 + Need<R>::value;
-    static constexpr int value = left > right ? left : right;
+    static constexpr uint32_t left = Need<L>::value;
+    static constexpr uint32_t right = 1 + Need<R>::value;
+    static constexpr uint32_t value = left > right ? left : right;
 };
 
 // ------------------------------------------------------------ emission ---
@@ -157,25 +158,25 @@ struct Need<Bin<Op, L, R>> {
 // Emit<Base, Node>::result is the slot holding the node's value.
 // Emit<Base, Node>::run(node, tile) emits the ops for one tile.
 
-template <int Base, typename Node>
+template <uint32_t Base, typename Node>
 struct Emit {  // leaf
-    static constexpr int result = Base;
-    static void run(const Node& n, int tile) { n.emit(Base, tile); }
+    static constexpr uint32_t result = Base;
+    static void run(const Node& n, uint32_t tile) { n.emit(Base, tile); }
 };
 
-template <int Base, typename Op, typename C>
+template <uint32_t Base, typename Op, typename C>
 struct Emit<Base, Un<Op, C>> {
-    static constexpr int result = Base;
-    static void run(const Un<Op, C>& n, int tile) {
+    static constexpr uint32_t result = Base;
+    static void run(const Un<Op, C>& n, uint32_t tile) {
         Emit<Base, C>::run(n.child, tile);
         Op::apply(Emit<Base, C>::result, Base);
     }
 };
 
-template <int Base, typename Op, typename L, typename R>
+template <uint32_t Base, typename Op, typename L, typename R>
 struct Emit<Base, Bin<Op, L, R>> {
-    static constexpr int result = Base;
-    static void run(const Bin<Op, L, R>& n, int tile) {
+    static constexpr uint32_t result = Base;
+    static void run(const Bin<Op, L, R>& n, uint32_t tile) {
         Emit<Base, L>::run(n.lhs, tile);      // left result lands in Base
         Emit<Base + 1, R>::run(n.rhs, tile);  // right starts above it
         Op::apply(Base, Base + 1, Base);      // fold in place
@@ -186,15 +187,15 @@ struct Emit<Base, Bin<Op, L, R>> {
 
 // DST slots this expression needs.
 template <typename Node>
-constexpr int need_v = Need<Node>::value;
+constexpr uint32_t need_v = Need<Node>::value;
 
 // Slot the result ends up in.
 template <typename Node>
-constexpr int result_slot_v = Emit<0, Node>::result;
+constexpr uint32_t result_slot_v = Emit<0, Node>::result;
 
 // Emit the whole expression for one tile index.
 template <typename Node>
-void emit(const Node& node, int tile) {
+void emit(const Node& node, uint32_t tile) {
     Emit<0, Node>::run(node, tile);
 }
 
