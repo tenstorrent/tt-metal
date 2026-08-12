@@ -259,7 +259,7 @@ public:
         void* buffer,
         size_t sysmem_buffer_size,
         bool map_to_noc = false,
-        tt::umd::DeviceBufferAccess access = tt::umd::DeviceBufferAccess::ReadWrite) const;
+        tt::umd::DeviceBufferAccess device_access = tt::umd::DeviceBufferAccess::READ_WRITE) const;
 
     int get_device_aiclk(const ChipId& chip_id) const;
 

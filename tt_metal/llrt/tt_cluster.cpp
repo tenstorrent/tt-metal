@@ -34,7 +34,6 @@
 #include "tracy/Tracy.hpp"
 #include "tt_metal/llrt/tlb_config.hpp"
 #include "tunnels_from_mmio_device.hpp"
-#include "umd/device/utils/kmd_versions.hpp"
 #include "umd/device/utils/semver.hpp"
 #include <umd/device/cluster.hpp>
 #include <umd/device/cluster_descriptor.hpp>
@@ -341,9 +340,11 @@ void Cluster::initialize_device_drivers() {
             auto* pci = this->driver_->get_chip(mmio_id)->get_tt_device()->get_pci_device();
             if (pci) {
                 this->iommu_enabled_ = pci->is_iommu_enabled();
-                this->read_only_page_pinning_supported_ =
-                    this->iommu_enabled_ &&
-                    tt::umd::PCIDevice::read_kmd_version() >= tt::umd::KMD_READ_ONLY_PAGE_PINNING;
+            }
+            // Ask through the same handle map_sysmem_buffer() goes through, rather than re-deriving the
+            // IOMMU and KMD version gate here.
+            if (auto* sysmem_manager = this->driver_->get_chip(mmio_id)->get_sysmem_manager()) {
+                this->read_only_page_pinning_supported_ = sysmem_manager->is_read_only_page_pinning_supported();
             }
         }
     }
@@ -1064,12 +1065,12 @@ std::unique_ptr<tt::umd::SysmemBuffer> Cluster::map_sysmem_buffer(
     void* buffer,
     size_t sysmem_buffer_size,
     bool map_to_noc,
-    tt::umd::DeviceBufferAccess access) const {
+    tt::umd::DeviceBufferAccess device_access) const {
     tt::umd::SysmemManager* sysmem_manager = this->driver_->get_chip(device_id)->get_sysmem_manager();
     if (!sysmem_manager) {
         TT_THROW("Failed to get SysmemManager for device {}", device_id);
     }
-    return sysmem_manager->map_sysmem_buffer(buffer, sysmem_buffer_size, map_to_noc, access);
+    return sysmem_manager->map_sysmem_buffer(buffer, sysmem_buffer_size, map_to_noc, device_access);
 }
 
 std::optional<tt::umd::semver_t> Cluster::get_ethernet_firmware_version() const {
