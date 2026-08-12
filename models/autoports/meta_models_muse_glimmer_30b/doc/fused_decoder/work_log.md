@@ -88,9 +88,9 @@ merging.
 
 | # | rewrite | evidence |
 | --- | --- | --- |
-| A | RoPE `slice,slice,neg,concat,mul,mul,add` (x Q,K) -> `ttnn.experimental.rotary_embedding_hf` | in-graph 2.39 -> 0.79 ms; isolated 0.301 -> 0.114 ms at 1024x32x128, PCC 0.999996 vs a torch rotate-half reference (`logs/op_merge_probes.log`) |
+| A | RoPE `slice,slice,neg,concat,mul,mul,add` (x Q,K) -> `ttnn.experimental.rotary_embedding_hf` | in-graph 2.39 -> 0.78 ms; isolated 0.301 -> 0.114 ms at 1024x32x128, PCC 0.999996 vs a torch rotate-half reference (`logs/op_merge_probes.log`) |
 | B | `ttnn.linear` -> `ttnn.experimental.minimal_matmul` for the dense projections at prefill row counts | `logs/minimal_matmul_sweep.log`, `logs/prefill_matmul_probe.log`: 1.11-2.36x on all five projections at the 8192-token internal chunk, and *better* PCC at the same math fidelity (see 3.4) |
-| C | decode RMSNorm -> width-sharded multi-core `ttnn.rms_norm` program config | `logs/norm_shard_probe.log`: 134.4 -> 22.8 us/call wall (min of 3 x 200 calls, including both reshards); in the real graph 110 -> 12 us device |
+| C | decode RMSNorm -> width-sharded multi-core `ttnn.rms_norm` program config | `logs/norm_shard_probe.log`: 134.4 -> 22.8 us/call wall (min of 3 x 200 calls, including both reshards); in the real graph 109.9-110.0 -> 12.3-13.4 us device per hidden-size norm |
 
 **A. RoPE.** Three candidate ops exist. `ttnn.experimental.rotary_embedding`
 takes cos/sin but no per-user position tensor in the form decode needs;
@@ -256,7 +256,7 @@ rather than from a grid-shape argument.
 | I | `silu(gate) * up` -> `ttnn.mul(gate, up, input_tensor_a_activations=[SILU])` | isolated 4.458 -> 2.539 ms at 8192x19968, identical PCC (`logs/op_merge_probes.log`) |
 | J | `heads * sigmoid(gate_proj(h))` -> `ttnn.mul(heads, gate, input_tensor_b_activations=[SIGMOID])` | removes the 0.40 ms prefill `UnaryDeviceOperation` |
 | K | prefill SDPA `q_chunk == k_chunk` 128 -> **256**, at **both** call sites | in-memory op at 8192 tokens: 12.368 -> 8.155 ms (sliding), 12.253 -> 7.730 (full), PCC unchanged. Paged `chunked_scaled_dot_product_attention` (every `full` chunk after the first): 36.204 -> 22.831 ms at `chunk_start_idx=8192` and 109.992 -> 72.277 at 32768 — **1.59x**, PCC 0.99978 -> 0.99982 / 0.99965 -> 0.99975 |
-| L | explicit `MinimalMatmulConfig` blocking on the two projection shapes that want one: `o_proj` -> `M16 K4 N8` (full 8192-row chunk only), MLP gate/up -> `M8 K4 N16` | device kernel time at 8192 rows: `o_proj` 2011.9 -> 1957.1 us (+2.80 %), MLP gate/up 9052.9 -> 8795.7 us (+2.92 %), and the MLP win holds on tail chunks too (+0.92 % at 4096, +1.49 % at 6144). Three dispatches per chunk take it, so about 570 us of an 8192-token chunk — visible in the window total, 49.89 -> 49.32 ms |
+| L | explicit `MinimalMatmulConfig` blocking on the two projection shapes that want one: `o_proj` -> `M16 K4 N8` (full 8192-row chunk only), MLP gate/up -> `M8 K4 N16` | device kernel time at 8192 rows: `o_proj` 2011.9 -> 1957.1 us (+2.80 %), MLP gate/up 9052.9 -> 8795.7 us (+2.92 %), and the MLP win holds on tail chunks too (+0.92 % at 4096, +1.49 % at 6144). Three dispatches per chunk take it, so about 570 us of an 8192-token chunk: the committed window is 49.32 ms, and adding the three measured per-shape deltas back gives 49.89 ms — that is arithmetic on this capture, not a second one |
 
 **K** deserves a note.  The functional stage pinned `q_chunk == k_chunk`
 because `q_chunk == 2 * k_chunk` silently mis-masks the sliding window

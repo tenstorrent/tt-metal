@@ -48,7 +48,7 @@ for the topology:
   op's default, which is the one place this stage changes precision rather than
   topology (limitation 3). `logs/norm_fidelity_control.log` is the same graph
   with the norms on the op default: the 100-token prefill controls fall to
-  -8e-6 and +0.0 there, so that uplift is worth about +3.7e-4 wherever no matmul
+  -8e-6 and +0.0 there, so that uplift is worth +3.3e-4 to +3.8e-4 wherever no matmul
   kernel changes.
 
 The `full` decode op count goes *up* by two: the sharded-residual rewrite adds
@@ -84,7 +84,8 @@ SDPA scale, the centered-RMSNorm `1 + w` fold, the page-table row slicing, the
    This is the single biggest prefill win.
 3. **Decode RMSNorm** runs the sharded multi-core `ttnn.rms_norm` program config
    on a `4x2` core grid instead of landing on one core. This is the single
-   biggest decode win: 110 -> 12 us per norm, four norms per layer. 13/26/52/104
+   biggest decode win: the four hidden-size norms go 109.9-110.0 -> 12.3-13.4 us
+   each (per-instance means over the committed capture's eight replays). 13/26/52/104
    -core *non-rectangular* grids are legal for this op and were built and
    measured too; all are slower (limitation 6).
 
@@ -321,7 +322,7 @@ as `prefill_16384_baseline_*`.
 | 8.6 % | `BinaryNgDeviceOperation` | 4 | 4,240 us | 2 residual adds + gating mul + SwiGLU mul (sigmoid/SiLU folded in) |
 | 7.9 % | `LayerNormDeviceOperation` | 6 | 3,890 us | 110 cores, DRAM-bandwidth bound (and the one fidelity uplift, limitation 3) |
 | 1.6 % | `RotaryEmbeddingHfDeviceOperation` | 2 | 780 us | was 2,355 us of primitive ops + 2 tilizes |
-| 1.5 % | heads split/concat, paged fill, page-table slice | 5 | 741 us | |
+| 1.5 % | heads split/concat, paged fill, page-table slice | 5 | 742 us | |
 
 In the 8192 window the six `MinimalMatmul` rows run at 228.5-255.5 TFLOPs on the
 `sliding` kind and 228.6-255.5 on `full` (in the 16384 window, twelve rows,
@@ -404,6 +405,16 @@ python bench/summarize_device_probe.py logs/decode_sharded_out_probe.log \
 Driver: `bench/run_tracy.sh` (all eight fused windows and the two multi-chunk
 functional baselines, one device job at a time, plus the dropped-marker
 integrity check).
+
+The **8192-token and decode baselines are the functional stage's own committed
+captures** (`../functional_decoder/tracy/`), not re-taken here; only the two
+16384 baselines are re-captured by this stage's chain, because the functional
+test takes that length from an env var. The two agree: this stage's own
+pre-`minimal_matmul` capture
+(`logs/rejected/prefill_perf_report_matmul_activation_sliding.txt`) reproduces
+the functional baseline's matmul rows to within 5 us (2,441 vs 2,440; 4,672 vs
+4,667; 21,323 vs 21,322), and the freshly captured 16384 baselines give the same
+2.05x / 2.00x ratios as the inherited 8192 ones.
 
 ## Rejected rewrites
 
@@ -514,7 +525,7 @@ it is why `minimal_matmul(fuse_swiglu=True)` — which would have needed a secon
    rather than by reading an attribute — the prefill per-head QK norms reach it
    through the inherited call path, and an earlier revision left exactly those
    two on the default while claiming otherwise.
-   It is worth ~+3.5e-4 of the accuracy gain wherever no matmul kernel changes
+   It is worth +3.3e-4 to +3.8e-4 of the accuracy gain wherever no matmul kernel changes
    (`logs/norm_fidelity_control.log`), and it improves *decode* indirectly by
    more than it improves prefill: the per-head QK norms write the Q and K that
    prefill stores in the paged cache, so a decode step reads a more accurate
@@ -545,7 +556,7 @@ it is why `minimal_matmul(fuse_swiglu=True)` — which would have needed a secon
    inside another op's kernel, so this pair is disclosed rather than asserted.
    Two smaller decode items are recorded here rather than left silent: the
    `SliceDeviceOperation` that trims the head-concat output back to `batch`
-   (2.08 us, 0.08 % of the step), and the fact that asking
+   (1.99 us mean over the eight replays, 0.07 % of the step), and the fact that asking
    `nlp_create_qkv_heads_decode` for an interleaved output would remove two of
    the four QK-norm reshards (~1.1 us) — neither was pursued, both are under
    0.1 % of a decode step.
