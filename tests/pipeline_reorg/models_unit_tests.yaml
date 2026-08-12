@@ -1098,7 +1098,7 @@
   model_family: Stable Diffusion
   skus:
     wh_llmbox:
-      timeout: 20
+      timeout: 10
       tier: 3
   owner_id: U0ATR08RCQ0 # James Lee
   team: models

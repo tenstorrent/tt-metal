@@ -976,7 +976,7 @@
   model_family: Stable Diffusion
   skus:
     wh_llmbox_perf:
-      timeout: 85
+      timeout: 20
       tier: 3
       release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee

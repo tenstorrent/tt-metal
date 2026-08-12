@@ -344,7 +344,7 @@ models:
     bh_p300: 42
     bh_quietbox_2: 186
   e2e_tier3:
-    wh_llmbox_perf: 140
+    wh_llmbox_perf: 75
     wh_n150: 62
     wh_n300: 60
     bh_p150: 7
@@ -373,7 +373,7 @@ models:
     bh_p150: 20
     bh_quietbox_2: 50
   unit_tier3:
-    wh_llmbox: 40
+    wh_llmbox: 30
     wh_llmbox_perf: 58
     wh_n150: 41
     wh_n300: 33
