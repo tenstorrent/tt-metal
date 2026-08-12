@@ -1,0 +1,20 @@
+{
+  "generated_at_utc": "2026-07-18T06:56:32Z",
+  "repo_head": "b35b3c1cbf7610b87f2813448f6d11f6df502b0c",
+  "hardware": "4x Blackhole p300c, mesh 1x4, FABRIC_1D_RING",
+  "firmware_bundle": "19.8.0.0",
+  "profiler_command": "FALCON3_RUN_MULTICHIP_PROFILE=1 python -m tracy -r -p -v -o models/autoports/tiiuae_falcon3_7b_base/doc/multichip_decoder/tracy/tp4_selected -m pytest -q -s models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder.py::test_multichip_profile_signposts",
+  "prefill_report_command": "tt-perf-report <ops_csv> --start-signpost MULTICHIP_PREFILL --end-signpost MULTICHIP_PREFILL_END --no-color --csv prefill_perf_report.csv",
+  "decode_report_command": "tt-perf-report <ops_csv> --start-signpost MULTICHIP_DECODE --end-signpost MULTICHIP_DECODE_END --no-color --csv decode_perf_report.csv",
+  "tt_perf_report_format": "v2.1",
+  "architecture": "blackhole",
+  "worker_cores_per_device": 110,
+  "implementation_sha256": "b249847705594bbf49e795eecdc1669a0016929929952d0767c9939cef1dd573",
+  "test_sha256_at_profile_time": "b6b10e32580ff5e4f9fdb465099272727a147049d5f191e91bd0dcae91ded557",
+  "source_ops_csv": "reports/2026_07_18_06_56_32/ops_perf_results_2026_07_18_06_56_32.csv",
+  "source_ops_csv_sha256": "181fb8acb8614c403404146b2cbafafa4106974da781bf667cf972798b0dfa25",
+  "prefill_csv_sha256": "bdd88a6391532e3520c8bd80c115a1ab379e2d1c68f05670a994979ab4ed750c",
+  "decode_csv_sha256": "f55bfb3a55b41fa6120bba08ea42beda7e84273c1218cce6d1f993a80c6ff894",
+  "selected_decode_geometry": "QKV 8 cores, O 8 cores, gate/up 24 cores, down 8 cores; BF16 CCL over two Ring links",
+  "notes": "Profiler collection was run separately from watcher validation and profiles the exact production 8/8/24/8 geometry."
+}

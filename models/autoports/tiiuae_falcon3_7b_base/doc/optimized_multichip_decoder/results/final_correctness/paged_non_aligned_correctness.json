@@ -1,0 +1,64 @@
+{
+  "batch": 1,
+  "ccl_dtype": "bfp8",
+  "decode_cache_pcc_vs_hf": {
+    "31": {
+      "key": 0.9967678327812376,
+      "value": 0.9955734069251301
+    },
+    "32": {
+      "key": 0.9967682231283361,
+      "value": 0.9955511424364519
+    }
+  },
+  "decode_pcc_vs_hf": {
+    "31": 0.9991133562991602,
+    "32": 0.998935751775476
+  },
+  "generated_at_utc": "2026-07-18T19:36:20.547425+00:00",
+  "hardware": "4x Blackhole p300c, mesh 1x4, FABRIC_1D_RING",
+  "implementation_sha256": "1bb774f48c3dd19e9c4ba0550e6eb279809973ff0fc856552cd06f16d2b1a199",
+  "inter_layer_residual_contract": {
+    "core_grid": [
+      8,
+      4
+    ],
+    "device_layout": "WIDTH_SHARDED",
+    "device_memory": "L1",
+    "dtype": "bfloat16",
+    "inter_layer_collective": null,
+    "inter_layer_reshard": null,
+    "mesh_placement": "replicated",
+    "shard_shape": [
+      32,
+      96
+    ]
+  },
+  "mesh": [
+    1,
+    4
+  ],
+  "page_table": [
+    2,
+    0,
+    3,
+    1
+  ],
+  "prefill_key_cache_pcc_vs_hf": 0.9967752804772304,
+  "prefill_pcc_vs_hf": 0.9999348221475352,
+  "prefill_sequence_length": 31,
+  "prefill_value_cache_pcc_vs_hf": 0.9955550684770795,
+  "rank_outputs_bitwise_equal": true,
+  "repo_head": "74b73791498c5e838ebcfb6266c71324424a7bbf",
+  "stacked_decoder_layout": [
+    1,
+    1,
+    1,
+    3072
+  ],
+  "test_sha256": "c7701566daa7895b2cb1f4940dd8cca4a4243ade11c0e16c2b97900ea1b98b38",
+  "trace_program_cache_entries_stable": true,
+  "trace_replay_bitwise_deterministic": true,
+  "trace_replays": 8,
+  "weights": "real_layer_14"
+}

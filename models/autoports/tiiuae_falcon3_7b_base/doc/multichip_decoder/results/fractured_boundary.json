@@ -1,0 +1,44 @@
+{
+  "boundary": "row-parallel partial -> residual add -> distributed RMSNorm -> next QKV",
+  "ccl_dtype": "bfloat16",
+  "effective_topology": "Ring",
+  "fractured_over_replicated_ratio": 1.1264556578143334,
+  "fractured_reduce_scatter_add_distributed_rmsnorm_all_gather_qkv_ms": 0.10995415039360523,
+  "fractured_samples": [
+    0.10995474644005299,
+    0.10995415039360523,
+    0.10992799885571003,
+    0.10997589211910963,
+    0.10989113245159388
+  ],
+  "fused_mm_rs_blocker": "Blackhole race reads matmul blocks before they are fully written; repository gate returns false",
+  "fused_mm_rs_issue": "#46181",
+  "fused_mm_rs_rejected_source": "models/demos/gpt_oss/tt/attention/operations.py:is_shape_fused_mm_rs_supported",
+  "generated_at_utc": "2026-07-18T06:54:45.662175+00:00",
+  "hardware": "4x Blackhole p300c, mesh 1x4, FABRIC_1D_RING",
+  "implementation_sha256": "b249847705594bbf49e795eecdc1669a0016929929952d0767c9939cef1dd573",
+  "mesh": [
+    1,
+    4
+  ],
+  "num_links": 2,
+  "output_pcc": 0.9998980261235911,
+  "replicated_all_reduce_add_rmsnorm_qkv_ms": 0.09761072229593992,
+  "replicated_samples": [
+    0.09762763977050781,
+    0.09766662027686834,
+    0.09752203710377216,
+    0.0975959887728095,
+    0.09761072229593992
+  ],
+  "repo_head": "b35b3c1cbf7610b87f2813448f6d11f6df502b0c",
+  "selected": "replicated",
+  "shape": [
+    1,
+    1,
+    32,
+    3072
+  ],
+  "test_sha256": "b6b10e32580ff5e4f9fdb465099272727a147049d5f191e91bd0dcae91ded557",
+  "weights": "real layer-14 RMSNorm and QKV"
+}

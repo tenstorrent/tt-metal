@@ -1,0 +1,30 @@
+{
+  "inputs": "recorded_layer14_activations",
+  "results": {
+    "advisor_bfp4": {
+      "attention_residual_pcc": 0.9999995935868322,
+      "full_output_pcc": 0.9999860274584622,
+      "key_cache_pcc": 0.99988097059191,
+      "value_cache_pcc": 0.9998598158543409
+    },
+    "dram_bfp4_24c": {
+      "attention_residual_pcc": 0.9999995935868322,
+      "full_output_pcc": 0.9999860274584622,
+      "key_cache_pcc": 0.99988097059191,
+      "value_cache_pcc": 0.9998598158543409
+    },
+    "dram_bfp4_48c": {
+      "attention_residual_pcc": 0.9999995935868322,
+      "full_output_pcc": 0.9999860274584622,
+      "key_cache_pcc": 0.99988097059191,
+      "value_cache_pcc": 0.9998598158543409
+    },
+    "dram_bfp8": {
+      "attention_residual_pcc": 0.9999996277520529,
+      "full_output_pcc": 0.9999963731009338,
+      "key_cache_pcc": 0.9998719026070503,
+      "value_cache_pcc": 0.9998517619227837
+    }
+  },
+  "weights": "real_layer_14"
+}

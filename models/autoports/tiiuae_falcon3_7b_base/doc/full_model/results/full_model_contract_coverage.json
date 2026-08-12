@@ -1,0 +1,96 @@
+{
+  "mesh": "4x Blackhole p300c, 1x4 FABRIC_1D_RING, TP4",
+  "layers_executed": 1,
+  "fixed_slots": 32,
+  "active_slots": 2,
+  "rounded_sdpa_page_validation": {
+    "decode_position": 64,
+    "logical_pages": 3,
+    "mapped_sdpa_read_pages": 4,
+    "valid_mapping_accepted": true,
+    "missing_rounded_tail_rejected": true,
+    "out_of_range_tail_rejected": true,
+    "aliased_tail_rejected": true
+  },
+  "prompt_lens": [
+    33,
+    47
+  ],
+  "non_aligned_prompts": true,
+  "prefill_tokens": [
+    5051,
+    33423
+  ],
+  "decode_tokens": [
+    55721,
+    56569
+  ],
+  "active_positions_after_trace_replay": [
+    34,
+    48
+  ],
+  "expected_active_positions": [
+    34,
+    48
+  ],
+  "inactive_cache_positions_unchanged": true,
+  "inactive_rotary_positions_are_nonnegative": true,
+  "page_table_shape": [
+    32,
+    128
+  ],
+  "inactive_page_rows_unmapped": true,
+  "trace_captures": 1,
+  "trace_replays": 1,
+  "traces_released_by_reset": true,
+  "trace_buffers_preserved_by_reset": true,
+  "reset_release_delta": 1,
+  "cache_zero_after_reset": true,
+  "reset_device_state_cleared": true,
+  "next_prefill_tokens": [
+    5051,
+    33423
+  ],
+  "trace_released_before_allocating_prefill": true,
+  "allocating_prefill_release_delta": 0,
+  "trace_buffers_preserved_across_allocating_prefill": true,
+  "host_sampling_compatibility_tokens": [
+    5051,
+    55721
+  ],
+  "chunk_boundary_prompt_lens": [
+    2049,
+    2079
+  ],
+  "chunk_boundary_tokens": [
+    5051,
+    33423
+  ],
+  "chunk_boundary_crossed": true,
+  "chunk_boundary_inactive_page_rows_unmapped": true,
+  "public_device_tokens": [
+    5051,
+    55721,
+    107993
+  ],
+  "public_token_host_copy_delta": 0,
+  "public_token_device_copy_delta": 4,
+  "public_feedback_matches_last_token": true,
+  "stochastic_device_tokens": [
+    61796,
+    61213,
+    36172
+  ],
+  "stochastic_token_host_copy_delta": 0,
+  "stochastic_feedback_matches_last_token": true,
+  "stochastic_tokens_after_recapture": [
+    61796,
+    61213,
+    36172
+  ],
+  "stochastic_same_seed_matches_first_capture": true,
+  "stochastic_trace_recaptured_after_safe_prefill": true,
+  "stochastic_rng_checkpoints": 1,
+  "stochastic_rng_restores": 1,
+  "passed": true
+}

@@ -1,0 +1,36 @@
+Falcon3-7B TP4 selected prefill — tt-perf-report 2.1
+====================================================
+
+Source signposts: MULTICHIP_PREFILL .. MULTICHIP_PREFILL_END
+Target: 4x Blackhole p300c, mesh 1x4, FABRIC_1D_RING, 110 worker cores/chip
+Workload: real layer 14, batch 1, logical sequence length 17 (32 physical rows)
+Report merge: four devices; 27 device ops; 0 host ops
+
+Summary
+-------
+Device time:       444 us
+Op-to-op gaps:     981 us (profiler dispatch gaps; warmed wall timing is authoritative)
+Overall DRAM:       72 GB/s (14.0%)
+
+Selected rows
+-------------
+Operation                         Device time  DRAM BW   DRAM util  FLOPs       Compute util
+QKV  [32 x 3072 x 1280]                19 us   116 GB/s      22.7%  13.0 TF/s          23.6%
+SDPA prefill                             8 us          -          -          -              -
+O    [32 x 768 x 3072]                  12 us   121 GB/s      23.6%  12.8 TF/s          21.1%
+attention reduce-scatter                26 us          -          -          -              -
+attention all-gather                    15 us          -          -          -              -
+gate [32 x 3072 x 5760]                 61 us   155 GB/s      30.3%  18.6 TF/s          30.7%
+up   [32 x 3072 x 5760]                 62 us   152 GB/s      29.7%  18.3 TF/s          30.1%
+down [32 x 5760 x 3072]                 65 us   144 GB/s      28.2%  17.3 TF/s          28.5%
+MLP reduce-scatter                      23 us          -          -          -              -
+MLP all-gather                          14 us          -          -          -              -
+
+Interpretation
+--------------
+The short prefill is neither close to the Blackhole DRAM ceiling nor compute
+ceiling. Dispatch/data movement and the two CCL pairs dominate at this size.
+The production implementation therefore keeps arbitrary row chunking for long
+prefills and does not expose the 32-row physical alignment as a public limit.
+
+Exact reproduction command and source hashes are in profile_provenance.json.

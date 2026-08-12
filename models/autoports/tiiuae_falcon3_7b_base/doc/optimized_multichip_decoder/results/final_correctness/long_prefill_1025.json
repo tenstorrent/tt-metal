@@ -1,0 +1,24 @@
+{
+  "batch": 1,
+  "finite_replicated_output": true,
+  "first_multichip_execution_seconds": 0.07753880508244038,
+  "generated_at_utc": "2026-07-18T19:36:08.115985+00:00",
+  "hardware": "4x Blackhole p300c, mesh 1x4, FABRIC_1D_RING",
+  "hf_reference_seconds": 0.20418291818350554,
+  "implementation_sha256": "1bb774f48c3dd19e9c4ba0550e6eb279809973ff0fc856552cd06f16d2b1a199",
+  "internal_mlp_chunk_rows": 1024,
+  "internal_mlp_chunks": 2,
+  "key_cache_pcc_vs_hf": 0.9967925285498994,
+  "logical_sequence_length": 1025,
+  "mesh": [
+    1,
+    4
+  ],
+  "output_pcc_vs_hf": 0.9999443767437448,
+  "page_block_size": 32,
+  "page_table": "cyclic_permutation_shift_3",
+  "repo_head": "74b73791498c5e838ebcfb6266c71324424a7bbf",
+  "test_sha256": "c7701566daa7895b2cb1f4940dd8cca4a4243ade11c0e16c2b97900ea1b98b38",
+  "value_cache_pcc_vs_hf": 0.9955543191187961,
+  "weights": "real_layer_14"
+}

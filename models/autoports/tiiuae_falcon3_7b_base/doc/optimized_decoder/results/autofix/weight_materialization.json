@@ -1,0 +1,74 @@
+{
+  "results": {
+    "advisor_bfp4": {
+      "down_weight": {
+        "actual_abs_max": 1.25,
+        "actual_mean": -2.3912223696243018e-05,
+        "actual_std": 0.04105612263083458,
+        "expected_abs_max": 1.203125,
+        "pcc": 0.9934493246105328
+      },
+      "gate_weight": {
+        "actual_abs_max": 0.875,
+        "actual_mean": 3.585269223549403e-05,
+        "actual_std": 0.04428290203213692,
+        "expected_abs_max": 0.87109375,
+        "pcc": 0.9931840379234409
+      },
+      "up_weight": {
+        "actual_abs_max": 0.75,
+        "actual_mean": -1.1913064099644544e-06,
+        "actual_std": 0.042265526950359344,
+        "expected_abs_max": 0.7734375,
+        "pcc": 0.9935554594034037
+      }
+    },
+    "dram_bfp4": {
+      "down_weight": {
+        "actual_abs_max": 1.25,
+        "actual_mean": -2.3912223696243018e-05,
+        "actual_std": 0.04105612263083458,
+        "expected_abs_max": 1.203125,
+        "pcc": 0.9934493246105328
+      },
+      "gate_weight": {
+        "actual_abs_max": 0.875,
+        "actual_mean": 3.585269223549403e-05,
+        "actual_std": 0.04428290203213692,
+        "expected_abs_max": 0.87109375,
+        "pcc": 0.9931840379234409
+      },
+      "up_weight": {
+        "actual_abs_max": 0.75,
+        "actual_mean": -1.1913064099644544e-06,
+        "actual_std": 0.042265526950359344,
+        "expected_abs_max": 0.7734375,
+        "pcc": 0.9935554594034037
+      }
+    },
+    "dram_bfp8": {
+      "down_weight": {
+        "actual_abs_max": 1.203125,
+        "actual_mean": -2.3923672415548936e-05,
+        "actual_std": 0.04097062721848488,
+        "expected_abs_max": 1.203125,
+        "pcc": 0.9999719255693279
+      },
+      "gate_weight": {
+        "actual_abs_max": 0.875,
+        "actual_mean": 3.5596352972788736e-05,
+        "actual_std": 0.04420263320207596,
+        "expected_abs_max": 0.87109375,
+        "pcc": 0.9999709693696908
+      },
+      "up_weight": {
+        "actual_abs_max": 0.7734375,
+        "actual_mean": -2.5528026981191942e-06,
+        "actual_std": 0.04218583554029465,
+        "expected_abs_max": 0.7734375,
+        "pcc": 0.9999723801547014
+      }
+    }
+  },
+  "weights": "real_layer_14"
+}

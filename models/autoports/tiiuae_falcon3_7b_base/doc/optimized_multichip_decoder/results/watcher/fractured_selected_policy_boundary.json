@@ -1,0 +1,63 @@
+{
+  "boundary": "row-parallel partial -> residual add -> distributed RMSNorm -> next QKV",
+  "cluster_axis": 1,
+  "fractured": {
+    "all_gather_output_buffer_api": "not exposed",
+    "bfp8_full_hidden_physical_bytes": 104448,
+    "bfp8_local_hidden_physical_bytes": 26112,
+    "bfp8_local_stats_physical_bytes": 1088,
+    "collectives": [
+      "persistent-buffer reduce_scatter_minimal_async BFP8",
+      "persistent-semaphore statistics all_gather_async BFP8",
+      "persistent-semaphore hidden all_gather_async BFP8"
+    ],
+    "preallocated_reduce_scatter_buffers": 2,
+    "residual_layout": "hidden-sharded mesh; BF16 DRAM interleaved per rank",
+    "ring_bytes_sent_per_rank": 159936,
+    "samples": [
+      0.6917384499683976,
+      0.6918703997507691,
+      0.6919324165210128,
+      0.6918114889413118,
+      0.6917871395125985
+    ],
+    "trace_ms": 0.6918114889413118
+  },
+  "fractured_over_selected_ratio": 1.4233324788155237,
+  "fractured_over_selected_ring_bytes_ratio": 1.0208333333333333,
+  "fused_mmrs_selected_program_blocker": "MatmulReduceScatterAsync validates only MatmulMultiCoreReuseMultiCastProgramConfig (2D multicast); selected decode uses MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig",
+  "generated_at_utc": "2026-07-18T19:41:39.486758+00:00",
+  "hardware": "4x Blackhole p300c, mesh 1x4, FABRIC_1D_RING",
+  "implementation_sha256": "1bb774f48c3dd19e9c4ba0550e6eb279809973ff0fc856552cd06f16d2b1a199",
+  "next_layer_compatibility": "both execute the selected real QKV; fractured gathers only normalized input while retaining a hidden-sharded residual",
+  "num_links": 2,
+  "output_pcc": 0.9998514809593944,
+  "repo_head": "74b73791498c5e838ebcfb6266c71324424a7bbf",
+  "selected": "replicated",
+  "selected_replicated": {
+    "bfp8_full_hidden_physical_bytes": 104448,
+    "collectives": [
+      "persistent all_reduce_async BFP8"
+    ],
+    "preallocated_buffers": 1,
+    "residual_layout": "replicated mesh; BF16 L1 width-sharded on 32 cores",
+    "ring_bytes_sent_per_rank": 156672,
+    "samples": [
+      0.4860846931114793,
+      0.48603809904307127,
+      0.485949432477355,
+      0.48605051822960377,
+      0.4861310822889209
+    ],
+    "trace_ms": 0.48605051822960377
+  },
+  "shape": [
+    1,
+    1,
+    32,
+    3072
+  ],
+  "test_sha256": "c7701566daa7895b2cb1f4940dd8cca4a4243ade11c0e16c2b97900ea1b98b38",
+  "topology": "Ring",
+  "weights": "real layer-14 RMSNorm and QKV"
+}

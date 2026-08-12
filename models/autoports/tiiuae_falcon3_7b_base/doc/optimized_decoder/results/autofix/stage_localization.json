@@ -1,0 +1,22 @@
+{
+  "inputs": "recorded_layer14_activations",
+  "results": {
+    "advisor_bfp4": {
+      "attention_residual_pcc": 0.999999980792211,
+      "full_output_pcc": 0.9999990974504989
+    },
+    "dram_bfp4_24c": {
+      "attention_residual_pcc": 0.9999999783321177,
+      "full_output_pcc": 0.9999990351883183
+    },
+    "dram_bfp4_48c": {
+      "attention_residual_pcc": 0.9999999783321177,
+      "full_output_pcc": 0.9999990832896025
+    },
+    "dram_bfp8": {
+      "attention_residual_pcc": 0.9999999783321177,
+      "full_output_pcc": 0.9999999380209582
+    }
+  },
+  "weights": "real_layer_14"
+}

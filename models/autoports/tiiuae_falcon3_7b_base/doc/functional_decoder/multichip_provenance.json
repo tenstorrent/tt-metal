@@ -1,0 +1,659 @@
+{
+  "schema_version": 1,
+  "hf_model": "tiiuae/Falcon3-7B-Base",
+  "source_ir": {
+    "prefill": "ttnn_falcon3_7b_tp_qb2_bs32_isl128_run386f_g0_1784005179360.mlir",
+    "decode": "ttnn_falcon3_7b_tp_qb2_bs32_isl128_run386f_g1_1784005341441.mlir"
+  },
+  "mesh": {
+    "source_name": "mesh",
+    "shape": [
+      1,
+      4
+    ],
+    "axes": [
+      {
+        "name": "data",
+        "size": 1,
+        "cluster_axis": 0
+      },
+      {
+        "name": "tensor",
+        "size": 4,
+        "cluster_axis": 1
+      }
+    ],
+    "axis_name_provenance": "The TTNN IR names the 1x4 mesh but exposes its dimensions numerically. Axis 1 is named tensor because every model shard and layer collective uses cluster_axis=1; singleton axis 0 is named data.",
+    "tp_degree": 4,
+    "tp_mesh_dim": 1
+  },
+  "layer_index": 14,
+  "tensor_conventions": {
+    "shard_axes": "Zero-based axes of the canonical dense tensor before compiler const-eval transposes or QKV fusion.",
+    "mesh_dims": "Zero-based dimensions of mesh.shape; dimension 1 is the four-rank tensor-parallel axis.",
+    "kind": "tensor_column shards a projection output/head dimension; tensor_row shards a projection input dimension; replicated has an identical value on every TP rank."
+  },
+  "tensors": [
+    {
+      "name": "model.layers.14.input_layernorm.weight",
+      "kind": "replicated",
+      "shard_axes": [],
+      "shard_axis_names": [],
+      "mesh_dims": [],
+      "dense_shape": [
+        3072
+      ],
+      "ir_shape_per_rank": [
+        3072
+      ],
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "model.layers.14.self_attn.q_proj.weight",
+      "kind": "tensor_column",
+      "shard_axes": [
+        0
+      ],
+      "shard_axis_names": [
+        "out_features/query_heads"
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "dense_shape": [
+        3072,
+        3072
+      ],
+      "ir_shape_per_rank": [
+        768,
+        3072
+      ],
+      "head_ownership": {
+        "dense_query_heads": 12,
+        "query_heads_per_rank": 3,
+        "head_dim": 256
+      },
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "model.layers.14.self_attn.k_proj.weight",
+      "kind": "tensor_column",
+      "shard_axes": [
+        0
+      ],
+      "shard_axis_names": [
+        "out_features/kv_heads"
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "dense_shape": [
+        1024,
+        3072
+      ],
+      "ir_shape_per_rank": [
+        256,
+        3072
+      ],
+      "head_ownership": {
+        "dense_kv_heads": 4,
+        "kv_heads_per_rank": 1,
+        "head_dim": 256
+      },
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "model.layers.14.self_attn.v_proj.weight",
+      "kind": "tensor_column",
+      "shard_axes": [
+        0
+      ],
+      "shard_axis_names": [
+        "out_features/kv_heads"
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "dense_shape": [
+        1024,
+        3072
+      ],
+      "ir_shape_per_rank": [
+        256,
+        3072
+      ],
+      "head_ownership": {
+        "dense_kv_heads": 4,
+        "kv_heads_per_rank": 1,
+        "head_dim": 256
+      },
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "model.layers.14.self_attn.o_proj.weight",
+      "kind": "tensor_row",
+      "shard_axes": [
+        1
+      ],
+      "shard_axis_names": [
+        "in_features/query_heads"
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "dense_shape": [
+        3072,
+        3072
+      ],
+      "ir_shape_per_rank": [
+        3072,
+        768
+      ],
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "model.layers.14.post_attention_layernorm.weight",
+      "kind": "replicated",
+      "shard_axes": [],
+      "shard_axis_names": [],
+      "mesh_dims": [],
+      "dense_shape": [
+        3072
+      ],
+      "ir_shape_per_rank": [
+        3072
+      ],
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "model.layers.14.mlp.gate_proj.weight",
+      "kind": "tensor_column",
+      "shard_axes": [
+        0
+      ],
+      "shard_axis_names": [
+        "out_features/intermediate"
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "dense_shape": [
+        23040,
+        3072
+      ],
+      "ir_shape_per_rank": [
+        5760,
+        3072
+      ],
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "model.layers.14.mlp.up_proj.weight",
+      "kind": "tensor_column",
+      "shard_axes": [
+        0
+      ],
+      "shard_axis_names": [
+        "out_features/intermediate"
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "dense_shape": [
+        23040,
+        3072
+      ],
+      "ir_shape_per_rank": [
+        5760,
+        3072
+      ],
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "model.layers.14.mlp.down_proj.weight",
+      "kind": "tensor_row",
+      "shard_axes": [
+        1
+      ],
+      "shard_axis_names": [
+        "in_features/intermediate"
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "dense_shape": [
+        3072,
+        23040
+      ],
+      "ir_shape_per_rank": [
+        3072,
+        5760
+      ],
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "model.rotary_emb.inv_freq",
+      "kind": "replicated",
+      "shard_axes": [],
+      "shard_axis_names": [],
+      "mesh_dims": [],
+      "dense_shape": [
+        128
+      ],
+      "ir_shape_per_rank": [
+        128
+      ],
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "prefill.rope_cos",
+      "kind": "replicated",
+      "shard_axes": [],
+      "shard_axis_names": [],
+      "mesh_dims": [],
+      "dense_shape": [
+        1,
+        1,
+        17,
+        256
+      ],
+      "ir_shape_per_rank": [
+        1,
+        1,
+        17,
+        256
+      ],
+      "derived_from": "model.rotary_emb.inv_freq"
+    },
+    {
+      "name": "prefill.rope_sin",
+      "kind": "replicated",
+      "shard_axes": [],
+      "shard_axis_names": [],
+      "mesh_dims": [],
+      "dense_shape": [
+        1,
+        1,
+        17,
+        256
+      ],
+      "ir_shape_per_rank": [
+        1,
+        1,
+        17,
+        256
+      ],
+      "derived_from": "model.rotary_emb.inv_freq"
+    },
+    {
+      "name": "decode.rope_cos",
+      "kind": "replicated",
+      "shard_axes": [],
+      "shard_axis_names": [],
+      "mesh_dims": [],
+      "dense_shape": [
+        1,
+        1,
+        1,
+        256
+      ],
+      "ir_shape_per_rank": [
+        1,
+        1,
+        1,
+        256
+      ],
+      "derived_from": "model.rotary_emb.inv_freq"
+    },
+    {
+      "name": "decode.rope_sin",
+      "kind": "replicated",
+      "shard_axes": [],
+      "shard_axis_names": [],
+      "mesh_dims": [],
+      "dense_shape": [
+        1,
+        1,
+        1,
+        256
+      ],
+      "ir_shape_per_rank": [
+        1,
+        1,
+        1,
+        256
+      ],
+      "derived_from": "model.rotary_emb.inv_freq"
+    },
+    {
+      "name": "layer.14.self_attn.key_cache",
+      "kind": "tensor_column",
+      "shard_axes": [
+        1
+      ],
+      "shard_axis_names": [
+        "kv_heads"
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "dense_shape": [
+        32,
+        4,
+        128,
+        256
+      ],
+      "ir_shape_per_rank": [
+        32,
+        1,
+        128,
+        256
+      ],
+      "head_ownership": {
+        "dense_kv_heads": 4,
+        "kv_heads_per_rank": 1
+      },
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "layer.14.self_attn.value_cache",
+      "kind": "tensor_column",
+      "shard_axes": [
+        1
+      ],
+      "shard_axis_names": [
+        "kv_heads"
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "dense_shape": [
+        32,
+        4,
+        128,
+        256
+      ],
+      "ir_shape_per_rank": [
+        32,
+        1,
+        128,
+        256
+      ],
+      "head_ownership": {
+        "dense_kv_heads": 4,
+        "kv_heads_per_rank": 1
+      },
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "prefill.attention_mask",
+      "kind": "replicated",
+      "shard_axes": [],
+      "shard_axis_names": [],
+      "mesh_dims": [],
+      "dense_shape": [
+        1,
+        1,
+        17,
+        128
+      ],
+      "ir_shape_per_rank": [
+        1,
+        1,
+        17,
+        128
+      ]
+    },
+    {
+      "name": "decode.attention_mask",
+      "kind": "tensor_column",
+      "shard_axes": [
+        2
+      ],
+      "shard_axis_names": [
+        "query_heads"
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "dense_shape": [
+        1,
+        1,
+        12,
+        128
+      ],
+      "ir_shape_per_rank": [
+        1,
+        1,
+        3,
+        128
+      ]
+    },
+    {
+      "name": "decode.cache_position",
+      "kind": "replicated",
+      "shard_axes": [],
+      "shard_axis_names": [],
+      "mesh_dims": [],
+      "dense_shape": [
+        32
+      ],
+      "ir_shape_per_rank": [
+        32
+      ]
+    }
+  ],
+  "activations": [
+    {
+      "name": "prefill.layer_input_residual",
+      "kind": "replicated",
+      "mesh_dims": [],
+      "logical_shape": [
+        1,
+        32,
+        17,
+        3072
+      ],
+      "ir_shape_per_rank": [
+        544,
+        3072
+      ]
+    },
+    {
+      "name": "prefill.layer_output_residual",
+      "kind": "replicated",
+      "mesh_dims": [],
+      "logical_shape": [
+        1,
+        32,
+        17,
+        3072
+      ],
+      "ir_shape_per_rank": [
+        544,
+        3072
+      ]
+    },
+    {
+      "name": "decode.layer_input_residual",
+      "kind": "replicated",
+      "mesh_dims": [],
+      "logical_shape": [
+        1,
+        32,
+        1,
+        3072
+      ],
+      "ir_shape_per_rank": [
+        32,
+        3072
+      ]
+    },
+    {
+      "name": "decode.layer_output_residual",
+      "kind": "replicated",
+      "mesh_dims": [],
+      "logical_shape": [
+        1,
+        32,
+        1,
+        3072
+      ],
+      "ir_shape_per_rank": [
+        32,
+        3072
+      ]
+    }
+  ],
+  "collectives": [
+    {
+      "op": "ttnn.all_reduce",
+      "cluster_axis": 1,
+      "mesh_dim": 1,
+      "mesh_dim_name": "tensor",
+      "reduce": "sum",
+      "topology": "ring",
+      "where": "prefill layer 14 after self_attn.o_proj",
+      "ir_shape_per_rank": [
+        1,
+        1,
+        544,
+        3072
+      ]
+    },
+    {
+      "op": "ttnn.all_reduce",
+      "cluster_axis": 1,
+      "mesh_dim": 1,
+      "mesh_dim_name": "tensor",
+      "reduce": "sum",
+      "topology": "ring",
+      "where": "prefill layer 14 after mlp.down_proj",
+      "ir_shape_per_rank": [
+        1,
+        1,
+        544,
+        3072
+      ]
+    },
+    {
+      "op": "ttnn.all_reduce",
+      "cluster_axis": 1,
+      "mesh_dim": 1,
+      "mesh_dim_name": "tensor",
+      "reduce": "sum",
+      "topology": "ring",
+      "where": "decode layer 14 after self_attn.o_proj",
+      "ir_shape_per_rank": [
+        1,
+        1,
+        32,
+        3072
+      ]
+    },
+    {
+      "op": "ttnn.all_reduce",
+      "cluster_axis": 1,
+      "mesh_dim": 1,
+      "mesh_dim_name": "tensor",
+      "reduce": "sum",
+      "topology": "ring",
+      "where": "decode layer 14 after mlp.down_proj",
+      "ir_shape_per_rank": [
+        1,
+        1,
+        32,
+        3072
+      ]
+    }
+  ],
+  "collective_audit": {
+    "prefill_layer_14_count": 2,
+    "decode_layer_14_count": 2,
+    "present_ops": [
+      "ttnn.all_reduce"
+    ],
+    "absent_ops": [
+      "ttnn.mesh_shard",
+      "ttnn.all_gather",
+      "ttnn.reduce_scatter",
+      "ttnn.all_to_all",
+      "ttnn.collective_permute"
+    ]
+  },
+  "architecture_absences": {
+    "projection_biases": "No layer-14 bias keys are present in either emit.",
+    "qk_norm_weights": "Falcon3 layer 14 has no q_norm or k_norm weight in either emit.",
+    "moe_router_or_expert_tensors": "The layer is dense SwiGLU; no MoE router or expert tensor is present."
+  },
+  "tp_collapse_cross_check": {
+    "functional_decoder_mode": "single-device dense 1x1",
+    "query_heads": {
+      "dense": 12,
+      "per_tp_rank": 3
+    },
+    "kv_heads": {
+      "dense": 4,
+      "per_tp_rank": 1
+    },
+    "projection_widths": {
+      "q_dense_and_per_rank": [
+        3072,
+        768
+      ],
+      "k_dense_and_per_rank": [
+        1024,
+        256
+      ],
+      "v_dense_and_per_rank": [
+        1024,
+        256
+      ],
+      "mlp_dense_and_per_rank": [
+        23040,
+        5760
+      ]
+    },
+    "row_parallel_reductions": [
+      "self_attn.o_proj",
+      "mlp.down_proj"
+    ],
+    "consistency": "Matches the functional decoder's recorded TP collapse: full canonical HF weights replace the four column/row shards, the two axis-1 sums are removed, and the dense cache owns all four KV heads."
+  }
+}

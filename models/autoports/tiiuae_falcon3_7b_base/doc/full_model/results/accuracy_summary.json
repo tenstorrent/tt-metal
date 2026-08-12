@@ -1,0 +1,25 @@
+{
+  "reference": "aime24_plain_100.refpt",
+  "reference_sha256": "45637a3d5f7c41146d267fe6eb0678d48e588fb9d3a6d7d3a2ca32838de720fa",
+  "prompt_tokens": 155,
+  "evaluated_tokens": 100,
+  "prefill": {
+    "runner": "run_prefill_check",
+    "top1": 92,
+    "top5": 100,
+    "top100": 100
+  },
+  "decode": {
+    "runner": "run_teacher_forcing",
+    "top1": 93,
+    "top5": 100,
+    "top100": 100,
+    "ttft_ms": 3686.51,
+    "decode_t_s_u": 40.85
+  },
+  "required": {
+    "top5_min_percent": 98,
+    "top100_percent": 100
+  },
+  "passed": true
+}

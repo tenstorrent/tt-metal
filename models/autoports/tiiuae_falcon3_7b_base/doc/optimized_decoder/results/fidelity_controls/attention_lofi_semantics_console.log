@@ -1,0 +1,268 @@
+2026-07-16 05:17:08.567 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/mvasiljevic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: github-actions-annotate-failures-0.3.0, anyio-4.14.2, dash-2.15.0, split-0.11.0, timeout-2.4.0, benchmark-5.2.3, cov-7.0.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/autoports/tiiuae_falcon3_7b_base/tests/test_optimized_decoder.py::test_selected_decoder_semantics_cache_and_repeated_decode 2026-07-16 05:17:10.062 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-16 05:17:10.062 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-16 05:17:10.062 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-16 05:17:10.062 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-16 05:17:10.065 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:569)
+2026-07-16 05:17:10.065 | info     |             UMD | Firmware bundle version 19.8.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-16 05:17:10.068 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-16 05:17:10.179 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1}/[2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-07-16 05:17:10.179 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-16 05:17:10.179 | info     |             UMD | KMD version: 2.8.0 (cluster.cpp:145)
+2026-07-16 05:17:10.179 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-16 05:17:10.180 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-16 05:17:10.317 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-07-16 05:17:10.394 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-16 05:17:10.394 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-16 05:17:10.394 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-16 05:17:10.394 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-16 05:17:10.394 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-16 05:17:10.394 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-16 05:17:10.394 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-16 05:17:10.394 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-16 05:17:10.395 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {1:2} (topology_mapper_utils.cpp:2342)
+2026-07-16 05:17:10.395 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {1:2} (topology_mapper_utils.cpp:2350)
+2026-07-16 05:17:10.398 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-16 05:17:10.398 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-16 05:17:10.413 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-16 05:17:10.452 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681929601_memory' (shm_resource_tracker.cpp:282)
+2026-07-16 05:17:11.030 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349993 GHz, device_time_at_sync=1770718800258 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-16 05:17:13.909 | INFO     | models.autoports.tiiuae_falcon3_7b_base.tests.test_functional_decoder:_assert_pcc:158 - selected prefill seq=17: PCC=0.99067203 target=0.99
+2026-07-16 05:17:14.931 | INFO     | models.autoports.tiiuae_falcon3_7b_base.tests.test_functional_decoder:_assert_pcc:158 - selected prefill seq=31: PCC=0.98992913 target=0.99
+FAILED2026-07-16 05:17:15.085 | INFO     | conftest:pytest_runtest_teardown:1140 - In custom teardown, open device ids: {0}
+
+
+=================================== FAILURES ===================================
+__________ test_selected_decoder_semantics_cache_and_repeated_decode ___________
+
+device = MeshDevice(1x1 grid, 1 devices)
+
+    @pytest.mark.use_module_device
+    @pytest.mark.timeout(1800)
+    def test_selected_decoder_semantics_cache_and_repeated_decode(device):
+        """Re-run the functional contract on the selected optimized defaults."""
+        config = _config()
+        batch = 32
+        state_dict = _real_layer_state_dict(IR_REPRESENTATIVE_LAYER)
+        hf_layer = _hf_layer(config, state_dict, IR_REPRESENTATIVE_LAYER)
+        model = OptimizedDecoder.from_state_dict(
+            state_dict,
+            hf_config=config,
+            layer_idx=IR_REPRESENTATIVE_LAYER,
+            mesh_device=device,
+            batch=batch,
+        )
+
+        generator = torch.Generator().manual_seed(86)
+        for seq_len in (EMITTED_PREFILL_SEQUENCE, 31, EMITTED_CACHE_LENGTH):
+            hidden = torch.randn((batch, seq_len, config.hidden_size), generator=generator, dtype=torch.bfloat16)
+            expected = _hf_prefill(hf_layer, config, hidden)
+            actual, key_cache, value_cache = _run_prefill(model, device, hidden)
+>           _assert_pcc(f"selected prefill seq={seq_len}", expected, actual, SYNTHETIC_PCC)
+
+models/autoports/tiiuae_falcon3_7b_base/tests/test_optimized_decoder.py:326:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+name = 'selected prefill seq=31'
+expected = tensor([[[ 2.2969e+00,  2.6250e+00,  6.4062e+00,  ..., -1.4219e+00,
+          -1.7578e-02,  7.1875e-01],
+         [ 2.9375e+00, -4.7188e+00,  1.3625e+01,  ...,  2.4844e+00,
+          -2.3438e+00,  7.6562e-01],
+         [ 6.1562e+00,  1.2734e+00,  3.0625e+00,  ...,  2.7031e+00,
+          -1.0500e+01,  3.4375e+00],
+         ...,
+         [-3.0625e+00, -6.9062e+00,  6.9062e+00,  ..., -3.6719e-01,
+           4.2500e+00,  1.9766e+00],
+         [ 1.6406e+00, -3.2344e+00,  6.6875e+00,  ...,  2.6406e+00,
+           2.5625e+00, -1.5156e+00],
+         [-2.3047e-01, -5.5469e-01,  1.3188e+01,  ...,  3.6094e+00,
+          -4.7812e+00,  3.5938e+00]],
+
+        [[ 6.0000e+00, -1.7188e-01,  1.0750e+01,  ..., -4.7812e+00,
+          -1.8828e+00, -2.2344e+00],
+         [-4.0938e+00,  2.8125e+00, -2.2969e+00,  ..., -9.3750e+00,
+          -2.2500e+00,  2.8438e+00],
+         [ 4.8750e+00, -3.6562e+00,  6.5000e+00,  ..., -5.2500e+00,
+          -7.8125e+00, -2.0938e+00],
+         ...,
+         [-7.4688e+00,  2.5312e+00,  8.1250e+00,  ...,  1.2500e-01,
+           8.1250e+00, -1.3828e+00],
+         [-7.7188e+00, -6.1562e+00,  9.2500e+00,  ..., -2.5469e+00,
+          -5.1758e-02,  1.8750e+00],
+         [-5.6250e+00, -2.7656e+00,  5.8125e+00,  ...,  9.9609e-01,
+           1.7734e+00,  2.6719e+00]],
+
+        [[-6.1875e+00,  2.2812e+00,  5.3438e+00,  ..., -9.2969e-01,
+           2.9062e+00, -3.7500e+00],
+         [-4.3438e+00,  3.2812e+00, -1.8750e-01,  ..., -2.0156e+00,
+           2.8125e+00, -1.7578e-01],
+         [ 6.8125e+00, -2.0625e+00,  3.1250e-01,  ...,  3.7656e+00,
+           2.8594e+00,  8.2500e+00],
+         ...,
+         [-6.5938e+00,  4.5938e+00,  1.0438e+01,  ...,  1.2891e+00,
+          -1.1188e+01, -1.7422e+00],
+         [-4.2188e+00, -2.6562e+00,  6.7500e+00,  ..., -2.8750e+00,
+           7.3750e+00, -6.4844e-01],
+         [-2.1094e-01,  2.1562e+00,  1.7500e+01,  ..., -1.0312e+00,
+           3.5625e+00, -1.2266e+00]],
+
+        ...,
+
+        [[ 3.9375e+00, -1.8125e+00,  4.4062e+00,  ..., -7.2656e-01,
+           4.4688e+00, -1.0547e+00],
+         [-6.6250e+00, -2.5000e+00,  1.8594e+00,  ..., -3.5000e+00,
+          -6.5625e+00,  7.3438e-01],
+         [-1.9219e+00, -1.0156e+00,  5.3125e+00,  ..., -1.9141e+00,
+          -2.0938e+00, -4.7188e+00],
+         ...,
+         [-5.4062e+00,  3.4375e+00,  7.9375e+00,  ...,  2.7031e+00,
+           2.4219e+00,  3.5156e-02],
+         [ 5.0625e+00, -6.4375e+00,  7.6250e+00,  ..., -2.2500e+00,
+          -1.0547e+00,  1.5078e+00],
+         [-1.4688e+00,  2.9219e+00,  5.9688e+00,  ...,  5.3125e+00,
+           2.6875e+00,  8.8281e-01]],
+
+        [[-8.5938e-01,  5.7031e-01,  7.9062e+00,  ...,  3.8906e+00,
+           5.5938e+00, -3.1250e-01],
+         [ 6.6875e+00,  5.8750e+00,  1.3062e+01,  ...,  2.0312e-01,
+           3.2031e+00,  4.4375e+00],
+         [-2.9688e+00,  1.5938e+00,  1.1375e+01,  ...,  3.6562e+00,
+           5.2344e-01,  2.3750e+00],
+         ...,
+         [-1.6625e+01, -3.9062e-01,  1.7750e+01,  ...,  1.1875e+00,
+          -6.1875e+00,  5.8125e+00],
+         [-7.5000e+00, -5.3125e-01,  1.4375e+01,  ..., -2.7188e+00,
+           4.4375e+00, -4.5000e+00],
+         [-2.5938e+00,  8.4375e-01,  1.6250e+01,  ...,  2.1719e+00,
+           9.5312e-01, -2.8125e+00]],
+
+        [[ 3.1562e+00, -4.4688e+00,  1.4562e+01,  ..., -4.2500e+00,
+           4.6875e-02,  2.5000e-01],
+         [-3.1250e+00, -5.6250e+00,  1.7750e+01,  ..., -5.5625e+00,
+           8.6875e+00,  1.9219e+00],
+         [-1.0375e+01,  3.4375e+00,  5.6875e+00,  ..., -4.5312e+00,
+           1.5156e+00, -5.9766e-01],
+         ...,
+         [-4.4375e+00, -2.5000e+00,  3.9219e+00,  ..., -5.2344e-01,
+          -5.4375e+00, -4.5625e+00],
+         [-7.2812e+00, -1.3594e+00, -2.5781e+00,  ...,  9.2188e-01,
+          -4.0625e+00,  2.8906e+00],
+         [-2.3906e+00,  1.1953e+00,  9.3750e+00,  ...,  5.8984e-01,
+          -7.8750e+00, -4.6562e+00]]], dtype=torch.bfloat16)
+actual = tensor([[[  2.2812,   3.1719,   6.4375,  ...,  -0.8203,  -0.5391,   0.0469],
+         [  3.7812,  -4.4062,  15.4375,  ...,   1.3672,  -3.1719,   1.3750],
+         [  5.6875,   2.1250,   2.5625,  ...,   3.3750,  -9.3750,   3.1719],
+         ...,
+         [ -3.2969,  -7.1250,   6.8125,  ...,  -0.4453,   5.1562,   2.0469],
+         [  2.4062,  -2.6562,   6.7812,  ...,   2.0781,   2.4531,  -0.3438],
+         [ -0.3086,  -1.0000,  12.8125,  ...,   2.8125,  -5.6250,   4.4062]],
+
+        [[  6.1875,  -0.8672,  11.1250,  ...,  -4.7812,  -2.7344,  -2.3281],
+         [ -4.3750,   4.1562,  -0.8438,  ...,  -9.5000,  -1.4688,   2.1250],
+         [  4.6250,  -3.7812,   6.5312,  ...,  -4.6562,  -7.1250,  -1.5547],
+         ...,
+         [ -7.8438,   2.6562,   6.9688,  ...,   0.0742,   8.6250,  -1.0938],
+         [ -7.8750,  -5.2500,   7.9062,  ...,  -2.4062,   0.2539,   2.0312],
+         [ -5.4375,  -2.7656,   6.1562,  ...,   0.8516,   3.8125,   3.2344]],
+
+        [[ -6.9688,   1.0938,   5.3125,  ...,  -0.7305,   2.2812,  -2.8750],
+         [ -3.3594,   2.3906,   0.6250,  ...,  -1.5312,   3.5938,  -0.3086],
+         [  5.1875,  -2.0156,   1.0625,  ...,   2.7031,   1.5938,   8.8750],
+         ...,
+         [ -5.6562,   4.7812,   8.5625,  ...,   1.7031, -10.5625,  -1.4453],
+         [ -3.8750,  -2.3281,   6.3438,  ...,  -2.7812,   5.0625,  -0.9062],
+         [  0.6328,   3.1406,  16.1250,  ...,  -1.4375,   3.6875,  -1.6953]],
+
+        ...,
+
+        [[  4.0000,  -1.2109,   4.2188,  ...,  -0.9102,   4.6562,  -0.1934],
+         [ -7.4375,  -2.5781,   2.4062,  ...,  -3.7188,  -6.7188,   1.0469],
+         [ -1.7422,  -1.2969,   4.8750,  ...,  -2.3594,  -1.3281,  -4.9062],
+         ...,
+         [ -5.1250,   2.9375,   9.0000,  ...,   2.7969,   2.1719,   0.6211],
+         [  6.3438,  -6.3125,   7.7500,  ...,  -2.3438,  -0.9844,   2.0469],
+         [ -1.5391,   2.3750,   6.7188,  ...,   4.0625,   2.2656,   0.3516]],
+
+        [[ -1.3047,   0.5898,   7.0625,  ...,   4.3438,   3.4219,  -0.7188],
+         [  6.6875,   6.1562,  12.2500,  ...,  -0.3203,   2.8125,   3.8750],
+         [ -1.9297,   1.8516,  10.4375,  ...,   4.0938,   0.8906,   1.5469],
+         ...,
+         [-16.2500,   0.2188,  17.0000,  ...,   0.9102,  -4.5625,   5.0625],
+         [ -7.8438,  -0.6094,  12.6250,  ...,  -2.8125,   4.4062,  -4.2188],
+         [ -2.7344,   0.2197,  14.2500,  ...,   2.7656,   1.0234,  -3.7344]],
+
+        [[  3.3438,  -4.8438,  13.0000,  ...,  -4.0312,   0.1406,  -0.6719],
+         [ -3.0781,  -5.0625,  15.8750,  ...,  -5.5625,   8.8750,   2.1250],
+         [-10.5625,   3.3438,   3.9688,  ...,  -4.1875,   1.2188,  -1.1406],
+         ...,
+         [ -4.0312,  -2.7656,   4.4375,  ...,  -0.5781,  -4.6250,  -4.5625],
+         [ -6.3438,  -2.7188,  -2.1562,  ...,   0.8398,  -3.5625,   3.3125],
+         [ -2.6094,   0.3203,   9.6250,  ...,   0.3086,  -7.0000,  -3.4844]]],
+       dtype=torch.bfloat16)
+threshold = 0.99
+
+    def _assert_pcc(name: str, expected, actual, threshold: float):
+        passed, pcc = comp_pcc(expected.float(), actual.float(), pcc=threshold)
+        logger.info(f"{name}: PCC={pcc:.8f} target={threshold}")
+>       assert passed, f"{name}: PCC={pcc:.8f} below {threshold}"
+E       AssertionError: selected prefill seq=31: PCC=0.98992913 below 0.99
+E       assert False
+
+models/autoports/tiiuae_falcon3_7b_base/tests/test_functional_decoder.py:159: AssertionError
+- generated xml file: /home/mvasiljevic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+3.89s call     models/autoports/tiiuae_falcon3_7b_base/tests/test_optimized_decoder.py::test_selected_decoder_semantics_cache_and_repeated_decode
+1.18s setup    models/autoports/tiiuae_falcon3_7b_base/tests/test_optimized_decoder.py::test_selected_decoder_semantics_cache_and_repeated_decode
+0.12s teardown models/autoports/tiiuae_falcon3_7b_base/tests/test_optimized_decoder.py::test_selected_decoder_semantics_cache_and_repeated_decode
+=========================== short test summary info ============================
+FAILED models/autoports/tiiuae_falcon3_7b_base/tests/test_optimized_decoder.py::test_selected_decoder_semantics_cache_and_repeated_decode - AssertionError: selected prefill seq=31: PCC=0.98992913 below 0.99
+assert False
+============================== 1 failed in 5.88s ===============================
+nanobind: leaked 2 instances!
+ - leaked instance 0x74a23b8b0108 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x74a23c029e78 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 20 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - ... skipped remainder
+nanobind: leaked 247 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "contains"
+ - leaked function "__repr__"
+ - leaked function ""
+ - leaked function "create_submesh"
+ - leaked function ""
+ - leaked function "__ne__"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-07-16 05:17:16.761 | info     |    BuildKernels | JIT cache stats: 124/130 hits (95.4%) [124 cached, 161 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-16 05:17:16.761 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-16 05:17:16.769 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-16 05:17:16.769 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-16 05:17:17.051 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-16 05:17:17.051 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-16 05:17:17.051 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

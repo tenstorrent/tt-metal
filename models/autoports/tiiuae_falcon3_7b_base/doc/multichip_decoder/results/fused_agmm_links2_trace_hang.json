@@ -1,0 +1,34 @@
+{
+  "candidate": "fractured residual -> distributed RMSNorm -> two-link fused all-gather plus real next QKV",
+  "command": "FALCON3_RUN_MULTICHIP_FUSED_AGMM=1 timeout 900 python -m pytest -q -s models/autoports/tiiuae_falcon3_7b_base/tests/test_multichip_decoder_agmm_probe.py::test_fractured_residual_fused_all_gather_qkv",
+  "durable_one_link_probe_sha256": "3cad18bf78b30efb54e853077a6cf8feef09c7925c6704d3840e71438611b998",
+  "hardware": "4x Blackhole p300c, mesh 1x4, FABRIC_1D_RING",
+  "implementation_sha256": "b249847705594bbf49e795eecdc1669a0016929929952d0767c9939cef1dd573",
+  "observed": "The temporary dual-link probe compiled and passed its eager PCC assertions, then made no progress during its trace phase for more than three minutes. The previously measured replicated, explicit-all-gather, and one-link fused traces complete in seconds; the added two-link fused trace is therefore the isolated suspect.",
+  "outcome": "rejected_trace_hang",
+  "processes_terminated": [
+    1509224,
+    1509225
+  ],
+  "recovery": {
+    "mesh_open_close": "MESH_SMOKE_OK",
+    "reset_exit_code": 0,
+    "visible_devices_after_reset": [
+      0,
+      1,
+      2,
+      3
+    ]
+  },
+  "repo_head": "069f3fc3fc2ac9f6ffcaa7da15059f64efd251d7",
+  "test_sha256": "b6b10e32580ff5e4f9fdb465099272727a147049d5f191e91bd0dcae91ded557",
+  "temporary_dual_link_probe_sha256": "8f501b918edbf4b6d3cfb7e2b33b4204f453b3d13ca06be4434960df42795665",
+  "termination_elapsed_seconds": 229,
+  "triage": {
+    "full_report": "../triage/fused-agmm-links2-tt-triage.txt",
+    "full_report_sha256": "8c69c6ab17be399d7eec9fdfdb5677cf03bde0fc023243eedb3705d64a659789",
+    "summary": "../triage/fused-agmm-links2-summary.txt",
+    "summary_sha256": "4e3af757dab0977d7aa34aff44c52d0fad4aad2971d611ba7cedfe8db11242d9",
+    "tool_limitation": "Several detailed NoC reads were skipped because the installed tt-exalens binding rejected the memoryview overload; ARC, Ethernet, configuration, binary, Watcher-ring, and broken-component summary checks passed."
+  }
+}

@@ -1,0 +1,102 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Warning: 'HOST START TS' column not found. CSV will not be sorted.
+No signposts found in the file. Using the entire file for analysis.
+Detected data from 4 devices. Merging device data...
+
+🚀 Performance Report 🚀
+========================
+
+ID  Total %  Bound  OP Code                                                   Device   Device Time  Op-to-Op Gap  Cores  DRAM     DRAM %  FLOPs        FLOPs %  Math Fidelity            
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ 2    1.0 %   SLOW  MatmulReduceScatterAsyncDeviceOperation 32 x 768 x 3072         0        41 μs                   20  35 GB/s   6.8 %   3.7 TFLOPs   13.4 %  HiFi4 BF16 x BFP4 => BF16
+ 6   13.1 %   SLOW  MatmulReduceScatterAsyncDeviceOperation 32 x 768 x 3072         0        39 μs        480 μs     20  37 GB/s   7.2 %   3.9 TFLOPs   14.1 %  HiFi4 BF16 x BFP4 => BF16
+10    0.0 %   SLOW  MatmulReduceScatterAsyncDeviceOperation 32 x 768 x 3072         0         0 μs                                                              HiFi4 BF16 x BFP4 => BF16
+14    0.0 %   SLOW  MatmulReduceScatterAsyncDeviceOperation 32 x 768 x 3072         0         0 μs                                                              HiFi4 BF16 x BFP4 => BF16
+24   32.8 %   SLOW  MatmulReduceScatterAsyncDeviceOperation 32 x 768 x 3072         0        38 μs      1,262 μs     20  37 GB/s   7.3 %   3.9 TFLOPs   14.3 %  HiFi4 BF16 x BFP4 => BF16
+25    1.0 %   SLOW  MatmulReduceScatterAsyncDeviceOperation 32 x 768 x 3072         0        37 μs          1 μs     20  38 GB/s   7.5 %   4.1 TFLOPs   14.7 %  HiFi4 BF16 x BFP4 => BF16
+26    2.9 %   SLOW  MatmulReduceScatterAsyncDeviceOperation 32 x 6144 x 3072        0       115 μs          0 μs     20  88 GB/s  17.1 %  10.5 TFLOPs   38.2 %  HiFi4 BF16 x BFP4 => BF16
+30   13.5 %   SLOW  MatmulReduceScatterAsyncDeviceOperation 32 x 6144 x 3072        0       115 μs        420 μs     20  88 GB/s  17.1 %  10.5 TFLOPs   38.1 %  HiFi4 BF16 x BFP4 => BF16
+34    0.0 %   SLOW  MatmulReduceScatterAsyncDeviceOperation 32 x 6144 x 3072        0         0 μs                                                              HiFi4 BF16 x BFP4 => BF16
+38    0.0 %   SLOW  MatmulReduceScatterAsyncDeviceOperation 32 x 6144 x 3072        0         0 μs                                                              HiFi4 BF16 x BFP4 => BF16
+48   33.0 %   SLOW  MatmulReduceScatterAsyncDeviceOperation 32 x 6144 x 3072        0       113 μs      1,196 μs     20  88 GB/s  17.3 %  10.7 TFLOPs   38.5 %  HiFi4 BF16 x BFP4 => BF16
+49    2.8 %   SLOW  MatmulReduceScatterAsyncDeviceOperation 32 x 6144 x 3072        0       112 μs          1 μs     20  89 GB/s  17.4 %  10.8 TFLOPs   38.9 %  HiFi4 BF16 x BFP4 => BF16
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    100.0 %         12 device ops, 0 host ops, 0 signposts                                  610 μs      3,359 μs         113 GB/s  14.7 %                                                 
+
+💡 Advice 💡
+============
+
+High Op-to-Op Gap
+----------------
+ 6   13.1 %   SLOW  MatmulReduceScatterAsyncDeviceOperation 32 x 768 x 3072         0        39 μs        480 μs     20  37 GB/s   7.2 %   3.9 TFLOPs   14.1 %  HiFi4 BF16 x BFP4 => BF16
+24   32.8 %   SLOW  MatmulReduceScatterAsyncDeviceOperation 32 x 768 x 3072         0        38 μs      1,262 μs     20  37 GB/s   7.3 %   3.9 TFLOPs   14.3 %  HiFi4 BF16 x BFP4 => BF16
+30   13.5 %   SLOW  MatmulReduceScatterAsyncDeviceOperation 32 x 6144 x 3072        0       115 μs        420 μs     20  88 GB/s  17.1 %  10.5 TFLOPs   38.1 %  HiFi4 BF16 x BFP4 => BF16
+48   33.0 %   SLOW  MatmulReduceScatterAsyncDeviceOperation 32 x 6144 x 3072        0       113 μs      1,196 μs     20  88 GB/s  17.3 %  10.7 TFLOPs   38.5 %  HiFi4 BF16 x BFP4 => BF16
+
+These ops have a >6 μs gap since the previous operation. Running with tracing could save 3334 μs (84.0% of overall time)
+Alternatively ensure device is not waiting for the host. Experts can try moving runtime args in the kernels to compile-time args.
+
+Matmul Optimization
+-------------------
+ 2    1.0 %   SLOW  MatmulReduceScatterAsyncDeviceOperation 32 x 768 x 3072         0        41 μs                   20  35 GB/s   6.8 %   3.7 TFLOPs   13.4 %  HiFi4 BF16 x BFP4 => BF16
+- If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED)
+- Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible
+- HiFi2 may also work, it discards the lowest bit of the activations and has 2x the throughput of HiFi4
+
+ 6   13.1 %   SLOW  MatmulReduceScatterAsyncDeviceOperation 32 x 768 x 3072         0        39 μs        480 μs     20  37 GB/s   7.2 %   3.9 TFLOPs   14.1 %  HiFi4 BF16 x BFP4 => BF16
+- If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED)
+- Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible
+- HiFi2 may also work, it discards the lowest bit of the activations and has 2x the throughput of HiFi4
+
+10    0.0 %   SLOW  MatmulReduceScatterAsyncDeviceOperation 32 x 768 x 3072         0         0 μs                                                              HiFi4 BF16 x BFP4 => BF16
+- If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED)
+- Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible
+- HiFi2 may also work, it discards the lowest bit of the activations and has 2x the throughput of HiFi4
+
+14    0.0 %   SLOW  MatmulReduceScatterAsyncDeviceOperation 32 x 768 x 3072         0         0 μs                                                              HiFi4 BF16 x BFP4 => BF16
+- If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED)
+- Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible
+- HiFi2 may also work, it discards the lowest bit of the activations and has 2x the throughput of HiFi4
+
+24   32.8 %   SLOW  MatmulReduceScatterAsyncDeviceOperation 32 x 768 x 3072         0        38 μs      1,262 μs     20  37 GB/s   7.3 %   3.9 TFLOPs   14.3 %  HiFi4 BF16 x BFP4 => BF16
+- If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED)
+- Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible
+- HiFi2 may also work, it discards the lowest bit of the activations and has 2x the throughput of HiFi4
+
+25    1.0 %   SLOW  MatmulReduceScatterAsyncDeviceOperation 32 x 768 x 3072         0        37 μs          1 μs     20  38 GB/s   7.5 %   4.1 TFLOPs   14.7 %  HiFi4 BF16 x BFP4 => BF16
+- If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED)
+- Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible
+- HiFi2 may also work, it discards the lowest bit of the activations and has 2x the throughput of HiFi4
+
+26    2.9 %   SLOW  MatmulReduceScatterAsyncDeviceOperation 32 x 6144 x 3072        0       115 μs          0 μs     20  88 GB/s  17.1 %  10.5 TFLOPs   38.2 %  HiFi4 BF16 x BFP4 => BF16
+- If possible place input 0 in L1 (currently in DEV_1_DRAM_INTERLEAVED)
+- Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible
+- HiFi2 may also work, it discards the lowest bit of the activations and has 2x the throughput of HiFi4
+
+30   13.5 %   SLOW  MatmulReduceScatterAsyncDeviceOperation 32 x 6144 x 3072        0       115 μs        420 μs     20  88 GB/s  17.1 %  10.5 TFLOPs   38.1 %  HiFi4 BF16 x BFP4 => BF16
+- If possible place input 0 in L1 (currently in DEV_1_DRAM_INTERLEAVED)
+- Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible
+- HiFi2 may also work, it discards the lowest bit of the activations and has 2x the throughput of HiFi4
+
+34    0.0 %   SLOW  MatmulReduceScatterAsyncDeviceOperation 32 x 6144 x 3072        0         0 μs                                                              HiFi4 BF16 x BFP4 => BF16
+- If possible place input 0 in L1 (currently in DEV_1_DRAM_INTERLEAVED)
+- Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible
+- HiFi2 may also work, it discards the lowest bit of the activations and has 2x the throughput of HiFi4
+
+38    0.0 %   SLOW  MatmulReduceScatterAsyncDeviceOperation 32 x 6144 x 3072        0         0 μs                                                              HiFi4 BF16 x BFP4 => BF16
+- If possible place input 0 in L1 (currently in DEV_1_DRAM_INTERLEAVED)
+- Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible
+- HiFi2 may also work, it discards the lowest bit of the activations and has 2x the throughput of HiFi4
+
+48   33.0 %   SLOW  MatmulReduceScatterAsyncDeviceOperation 32 x 6144 x 3072        0       113 μs      1,196 μs     20  88 GB/s  17.3 %  10.7 TFLOPs   38.5 %  HiFi4 BF16 x BFP4 => BF16
+- If possible place input 0 in L1 (currently in DEV_1_DRAM_INTERLEAVED)
+- Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible
+- HiFi2 may also work, it discards the lowest bit of the activations and has 2x the throughput of HiFi4
+
+49    2.8 %   SLOW  MatmulReduceScatterAsyncDeviceOperation 32 x 6144 x 3072        0       112 μs          1 μs     20  89 GB/s  17.4 %  10.8 TFLOPs   38.9 %  HiFi4 BF16 x BFP4 => BF16
+- If possible place input 0 in L1 (currently in DEV_1_DRAM_INTERLEAVED)
+- Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible
+- HiFi2 may also work, it discards the lowest bit of the activations and has 2x the throughput of HiFi4
+

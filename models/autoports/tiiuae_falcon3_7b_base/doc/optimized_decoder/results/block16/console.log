@@ -1,0 +1,349 @@
+2026-07-16 04:40:59.981 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/mvasiljevic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: github-actions-annotate-failures-0.3.0, anyio-4.14.2, dash-2.15.0, split-0.11.0, timeout-2.4.0, benchmark-5.2.3, cov-7.0.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 9 items / 8 deselected / 1 selected
+
+models/autoports/tiiuae_falcon3_7b_base/tests/test_optimized_decoder.py::test_decode_candidate_sweep[device_params0] 2026-07-16 04:41:01.483 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-16 04:41:01.483 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-16 04:41:01.483 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-16 04:41:01.483 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-16 04:41:01.486 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:569)
+2026-07-16 04:41:01.486 | info     |             UMD | Firmware bundle version 19.8.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-16 04:41:01.489 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-16 04:41:01.600 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1}/[2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-07-16 04:41:01.600 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-16 04:41:01.600 | info     |             UMD | KMD version: 2.8.0 (cluster.cpp:145)
+2026-07-16 04:41:01.600 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-16 04:41:01.601 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-16 04:41:01.667 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-07-16 04:41:01.746 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-16 04:41:01.747 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-16 04:41:01.747 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-16 04:41:01.747 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-16 04:41:01.747 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-16 04:41:01.747 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-16 04:41:01.747 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-16 04:41:01.747 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-16 04:41:01.747 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {1:2} (topology_mapper_utils.cpp:2342)
+2026-07-16 04:41:01.747 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {1:2} (topology_mapper_utils.cpp:2350)
+2026-07-16 04:41:01.751 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-16 04:41:01.751 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-16 04:41:01.765 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-16 04:41:01.805 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681929601_memory' (shm_resource_tracker.cpp:282)
+2026-07-16 04:41:02.383 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349998 GHz, device_time_at_sync=913880607770 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-16 04:41:05.194 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-8] grow to 1729280 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+FAILED2026-07-16 04:41:05.645 | INFO     | conftest:pytest_runtest_teardown:1140 - In custom teardown, open device ids: {0}
+
+
+=================================== FAILURES ===================================
+_________________ test_decode_candidate_sweep[device_params0] __________________
+
+device = MeshDevice(1x1 grid, 1 devices)
+
+    @pytest.mark.skipif(os.getenv("FALCON3_RUN_CANDIDATE_SWEEP") != "1", reason="manual optimization sweep")
+    @pytest.mark.parametrize("device_params", [{"trace_region_size": 64_000_000}], indirect=True)
+    @pytest.mark.timeout(1800)
+    def test_decode_candidate_sweep(device):
+        config = _config()
+        batch = 32
+        seq_len = EMITTED_PREFILL_SEQUENCE
+        use_real_weights = os.getenv("FALCON3_REAL_WEIGHTS") == "1"
+        state_dict = (
+            _real_layer_state_dict(IR_REPRESENTATIVE_LAYER)
+            if use_real_weights
+            else _synthetic_state_dict(config, IR_REPRESENTATIVE_LAYER)
+        )
+        hf_layer = _hf_layer(config, state_dict, IR_REPRESENTATIVE_LAYER)
+        hidden, decode_hidden = _recorded_layer14_inputs(batch)
+        hf_cache = DynamicCache(config=config)
+        expected_prefill = _hf_prefill(hf_layer, config, hidden, cache=hf_cache)
+        expected_decode = _hf_decode(hf_layer, config, decode_hidden, hf_cache, seq_len)
+
+        candidates = {
+            "advisor_bfp8": {},
+            "advisor_bfp8_lofi": {"precision_policy": "bfp8_lofi"},
+            "advisor_attention_bfp8_lofi": {"precision_policy": "attention_bfp8_lofi"},
+            "advisor_mlp_bfp8_lofi": {"precision_policy": "mlp_bfp8_lofi"},
+            "advisor_attention_bfp4": {"precision_policy": "attention_bfp4_lofi"},
+            "advisor_mlp_bfp4": {"precision_policy": "mlp_bfp4_lofi"},
+            "selected_attention_lofi": {"precision_policy": "mlp_bfp4_attention_lofi"},
+            "selected_mlp_hifi2": {"precision_policy": "mlp_bfp4_hifi2"},
+            "advisor_all_bfp4": {"precision_policy": "all_bfp4_lofi"},
+            "advisor_explicit_mask": {"use_explicit_decode_mask": True},
+            "advisor_wide_blocks": {
+                "precision_policy": "mlp_bfp4_lofi",
+                "advisor_mlp_geometry": "wide_blocks",
+            },
+            "advisor_wider_blocks": {
+                "precision_policy": "mlp_bfp4_lofi",
+                "advisor_mlp_geometry": "wider_blocks",
+            },
+            "advisor_packed_mlp": {
+                "precision_policy": "mlp_bfp4_lofi",
+                "use_packed_mlp": True,
+                "prefill_in0_block_w": 1,
+            },
+            "advisor_residual_legacy": {
+                "precision_policy": "mlp_bfp4_lofi",
+                "advisor_residual_mode": "legacy_32core",
+            },
+            "advisor_residual_report": {
+                "precision_policy": "mlp_bfp4_lofi",
+                "advisor_residual_mode": "report",
+            },
+            "advisor_report_sharded_inputs": {
+                "precision_policy": "mlp_bfp4_lofi",
+                "advisor_residual_mode": "report",
+                "advisor_matmul_input_mode": "report_sharded",
+            },
+            "advisor_large_prefill_grid": {"precision_policy": "mlp_bfp4_lofi", "prefill_grid_x": 11},
+            "prefill_grid8": {
+                "precision_policy": "mlp_bfp4_lofi",
+                "prefill_grid_x": 8,
+                "prefill_in0_block_w": 8,
+            },
+            "prefill_block1": {"precision_policy": "mlp_bfp4_lofi", "prefill_in0_block_w": 1},
+            "prefill_block2": {"precision_policy": "mlp_bfp4_lofi", "prefill_in0_block_w": 2},
+            "prefill_block4": {"precision_policy": "mlp_bfp4_lofi", "prefill_in0_block_w": 4},
+            "prefill_block8": {"precision_policy": "mlp_bfp4_lofi", "prefill_in0_block_w": 8},
+            "prefill_block16": {"precision_policy": "mlp_bfp4_lofi", "prefill_in0_block_w": 16},
+            "dram_packed_bfp8": {"decode_matmul_mode": "dram_sharded", "use_packed_mlp": True},
+            "dram_mlp_bfp4_24c": {
+                "decode_matmul_mode": "dram_sharded",
+                "precision_policy": "mlp_bfp4_lofi",
+                "dram_mlp_target_cores": 24,
+            },
+            "dram_mlp_bfp4_48c": {
+                "decode_matmul_mode": "dram_sharded",
+                "precision_policy": "mlp_bfp4_lofi",
+                "dram_mlp_target_cores": 48,
+            },
+        }
+        selected_candidates = os.getenv("FALCON3_CANDIDATES")
+        if selected_candidates:
+            selected_candidates = {name.strip() for name in selected_candidates.split(",") if name.strip()}
+            candidates = {name: value for name, value in candidates.items() if name in selected_candidates}
+            assert candidates, f"FALCON3_CANDIDATES selected no known candidate: {selected_candidates}"
+        results = {}
+        for name, overrides in candidates.items():
+            options = dict(overrides)
+            precision_policy = options.pop("precision_policy", "bfp8_hifi2")
+            options.setdefault("prefill_in0_block_w", 8 if precision_policy in ("mlp_bfp4_lofi", "all_bfp4_lofi") else 1)
+            options.setdefault("prefill_grid_x", 11 if precision_policy in ("mlp_bfp4_lofi", "all_bfp4_lofi") else 8)
+            model = OptimizedDecoder.from_state_dict(
+                state_dict,
+                hf_config=config,
+                layer_idx=IR_REPRESENTATIVE_LAYER,
+                mesh_device=device,
+                batch=batch,
+                precision_policy=precision_policy,
+                **options,
+            )
+>           actual_prefill, key_cache, value_cache = _run_prefill(model, device, hidden)
+                                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+models/autoports/tiiuae_falcon3_7b_base/tests/test_optimized_decoder.py:683:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+models/autoports/tiiuae_falcon3_7b_base/tests/test_optimized_decoder.py:140: in _run_prefill
+    tt_output = model.prefill_forward(tt_hidden, key_cache=key_cache, value_cache=value_cache)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+models/autoports/tiiuae_falcon3_7b_base/tt/optimized_decoder.py:1138: in prefill_forward
+    residual = self._prefill_mlp(residual)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+models/autoports/tiiuae_falcon3_7b_base/tt/optimized_decoder.py:1043: in _prefill_mlp
+    return self._prefill_mlp_chunk(residual)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+models/autoports/tiiuae_falcon3_7b_base/tt/optimized_decoder.py:991: in _prefill_mlp_chunk
+    gate = ttnn.matmul(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = FastOperation(python_fully_qualified_name='ttnn.matmul', function=<ttnn._ttnn.operations.matmul.matmul_t object at 0x7f7d39977750>, preprocess_golden_function_inputs=<function default_preprocess_golden_function_inputs at 0x7f7d395237e0>, golden_function=<function _golden_function at 0x7f7d393e1b20>, postprocess_golden_function_outputs=<function default_postprocess_golden_function_outputs at 0x7f7d39523880>, is_cpp_operation=True, is_experimental=False)
+function_args = (ttnn.Tensor([[[[-5.0293e-02, -1.2512e-02,  ...,  3.5400e-02,  2.0142e-02],
+               [ 1.2793e-01,  9.3262e-02,  ...,  1.2500e-01,  5.1172e-01],
+               ...,
+               [ 7.9346e-03,  3.5889e-02,  ..., -7.2632e-03,  9.3079e-04],
+               [ 5.5542e-03,  3.6865e-02,  ..., -2.3651e-03,  1.2283e-03]]]], shape=Shape([1, 1, 544, 3072]), dtype=DataType::BFLOAT16, layout=Layout::TILE), ttnn.Tensor([[-0.0625,  0.0312,  ..., -0.0312,  0.0625],
+             [ 0.0156,  0.0156,  ...,  0.0469, -0.0625],
+             ...,
+             [ 0.0469,  0.0312,  ..., -0.0781,  0.0156],
+             [ 0.0000,  0.0312,  ...,  0.0469,  0.0312]], shape=Shape([3072, 23040]), dtype=DataType::BFLOAT4_B, layout=Layout::TILE))
+function_kwargs = {'compute_kernel_config': <ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7f7d33710540>, 'dtype': DataType.BFLOAT16, 'memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), 'program_config': MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=16,out_subblock_h=1,out_subblock_w=3,out_block_h=2,out_block_w=66,per_core_M=2,per_core_N=66,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)}
+cq_id = None, recording = False
+
+    def __call__(self, *function_args, **function_kwargs):
+        cq_id = None
+        if "queue_id" in function_kwargs:
+            cq_id = function_kwargs.pop("queue_id")
+        elif "cq_id" in function_kwargs:
+            cq_id = function_kwargs.pop("cq_id")
+
+        recording = ttnn.graph.is_python_io_recording_enabled()
+        if recording:
+            ttnn.graph.track_function_start(self.python_fully_qualified_name)
+            ttnn.graph.record_python_operation(self.python_fully_qualified_name, function_args, function_kwargs)
+            input_tensors = get_all_tensors((function_args, function_kwargs))
+            set_tensor_id(input_tensors)
+
+        try:
+            if cq_id is None:
+>               result = self.function(*function_args, **function_kwargs)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               RuntimeError: TT_THROW @ /home/mvasiljevic/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception
+E               info:
+E               Statically allocated circular buffers on core range [0-0 - 10-8] grow to 1729280 B which is beyond max L1 size of 1572864 B
+E               backtrace:
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x164e4ca) [0x7f7d85e4e4ca]
+E                --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)
+E                --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)
+E                --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x3de) [0x7f7d85ff823e]
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1804698) [0x7f7d86004698]
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0xe6) [0x7f7d85ff79e6]
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x16e) [0x7f7d85ff647e]
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x4ea) [0x7f7d85ff537a]
+E                --- ttnn::prim::matmul(tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, std::optional<tt::tt_metal::Tensor> const&, std::optional<tt::tt_metal::Tensor> const&, ttnn::prim::MatmulParams const&)
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x178a65a) [0x7f7d85f8a65a]
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6matmulERKN2tt8tt_metal6TensorES6_bbRKSt8optionalIKNS3_12MemoryConfigEES7_IKNS3_8DataTypeEERKS7_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS7_IKSG_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES7_IKNS_19ComputeKernelConfigEES7_IKNS_5types8CoreGridEERKS7_IKNS3_4TileEES7_IS4_ERKS7_IKNS3_12experimental20GlobalCircularBufferEERKS7_IN4ttsl10StrongTypeIhNS3_14SubDeviceIdTagEEEE+0x373) [0x7f7d85f89a43]
+E                --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x4e433f) [0x7f7d86ae433f]
+E                --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x4e3a6b) [0x7f7d86ae3a6b]
+E                --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x315575) [0x7f7d86915575]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(PyEval_EvalCode+0xde) [0x18931a0]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18b12c9]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2b145]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_SimpleFileObject+0x106) [0x1a2af06]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_AnyFileObject+0x4a) [0x1a2ac8a]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ac10]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ab1d]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ae1fe3]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c298]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c0ac]
+E                --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7f7dcd12c1ca]
+E                --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7f7dcd12c28b]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_start+0x29) [0x19a4a69]
+
+ttnn/ttnn/decorators.py:473: RuntimeError
+- generated xml file: /home/mvasiljevic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+2.80s call     models/autoports/tiiuae_falcon3_7b_base/tests/test_optimized_decoder.py::test_decode_candidate_sweep[device_params0]
+1.13s setup    models/autoports/tiiuae_falcon3_7b_base/tests/test_optimized_decoder.py::test_decode_candidate_sweep[device_params0]
+0.12s teardown models/autoports/tiiuae_falcon3_7b_base/tests/test_optimized_decoder.py::test_decode_candidate_sweep[device_params0]
+=========================== short test summary info ============================
+FAILED models/autoports/tiiuae_falcon3_7b_base/tests/test_optimized_decoder.py::test_decode_candidate_sweep[device_params0] - RuntimeError: TT_THROW @ /home/mvasiljevic/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception
+info:
+Statically allocated circular buffers on core range [0-0 - 10-8] grow to 1729280 B which is beyond max L1 size of 1572864 B
+backtrace:
+ --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x164e4ca) [0x7f7d85e4e4ca]
+ --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)
+ --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)
+ --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)
+ --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x3de) [0x7f7d85ff823e]
+ --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1804698) [0x7f7d86004698]
+ --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0xe6) [0x7f7d85ff79e6]
+ --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x16e) [0x7f7d85ff647e]
+ --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x4ea) [0x7f7d85ff537a]
+ --- ttnn::prim::matmul(tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, std::optional<tt::tt_metal::Tensor> const&, std::optional<tt::tt_metal::Tensor> const&, ttnn::prim::MatmulParams const&)
+ --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x178a65a) [0x7f7d85f8a65a]
+ --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6matmulERKN2tt8tt_metal6TensorES6_bbRKSt8optionalIKNS3_12MemoryConfigEES7_IKNS3_8DataTypeEERKS7_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS7_IKSG_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES7_IKNS_19ComputeKernelConfigEES7_IKNS_5types8CoreGridEERKS7_IKNS3_4TileEES7_IS4_ERKS7_IKNS3_12experimental20GlobalCircularBufferEERKS7_IN4ttsl10StrongTypeIhNS3_14SubDeviceIdTagEEEE+0x373) [0x7f7d85f89a43]
+ --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x4e433f) [0x7f7d86ae433f]
+ --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x4e3a6b) [0x7f7d86ae3a6b]
+ --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x315575) [0x7f7d86915575]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3(PyEval_EvalCode+0xde) [0x18931a0]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18b12c9]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2b145]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_SimpleFileObject+0x106) [0x1a2af06]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_AnyFileObject+0x4a) [0x1a2ac8a]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ac10]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ab1d]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ae1fe3]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c298]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c0ac]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7f7dcd12c1ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7f7dcd12c28b]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_start+0x29) [0x19a4a69]
+======================= 1 failed, 8 deselected in 5.02s ========================
+nanobind: leaked 2 instances!
+ - leaked instance 0x7f7d399d6058 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x7f7d3925c108 of type "ttnn._ttnn.tensor.MemoryConfig"
+nanobind: leaked 20 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - ... skipped remainder
+nanobind: leaked 247 functions!
+ - leaked function "update_tensor_topology"
+ - leaked function ""
+ - leaked function "__repr__"
+ - leaked function ""
+ - leaked function "buffer_page_size"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "load_sub_device_manager"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-07-16 04:41:07.288 | info     |    BuildKernels | JIT cache stats: 78/78 hits (100.0%) [78 cached, 73 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-16 04:41:07.288 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-16 04:41:07.296 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-16 04:41:07.296 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-16 04:41:07.595 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-16 04:41:07.595 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-16 04:41:07.595 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

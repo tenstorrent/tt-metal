@@ -1,0 +1,71 @@
+{
+  "batch": 32,
+  "inputs": "recorded",
+  "results": {
+    "advisor_all_bfp4": {
+      "decode_ms": 0.7736631575971842,
+      "decode_pcc": 0.9999984175677775,
+      "decode_query_pcc": 0.9910271390238737,
+      "key_cache_pcc": 0.9966165337119968,
+      "options": {
+        "decode_matmul_mode": "shard_advisor",
+        "prefill_grid_x": 11,
+        "prefill_in0_block_w": 8
+      },
+      "precision_policy": "all_bfp4_lofi",
+      "prefill_ms": 3.2589524053037167,
+      "prefill_pcc": 0.9999818853727185,
+      "value_cache_pcc": 0.9954348181180206
+    },
+    "advisor_all_bfp4_grid8": {
+      "decode_ms": 0.7737604388967156,
+      "decode_pcc": 0.9999984175677775,
+      "decode_query_pcc": 0.9910271390238737,
+      "key_cache_pcc": 0.9966165337119968,
+      "options": {
+        "decode_matmul_mode": "shard_advisor",
+        "prefill_grid_x": 8,
+        "prefill_in0_block_w": 8
+      },
+      "precision_policy": "all_bfp4_lofi",
+      "prefill_ms": 3.5462789237499237,
+      "prefill_pcc": 0.9999818853727185,
+      "value_cache_pcc": 0.9954348181180206
+    },
+    "dram_all_bfp4_48c": {
+      "decode_ms": 0.7733797095716,
+      "decode_pcc": 0.9999983882601708,
+      "decode_query_pcc": 0.9910325274054042,
+      "key_cache_pcc": 0.9966165337119968,
+      "options": {
+        "decode_matmul_mode": "dram_sharded",
+        "dram_mlp_target_cores": 48,
+        "prefill_grid_x": 11,
+        "prefill_in0_block_w": 8
+      },
+      "precision_policy": "all_bfp4_lofi",
+      "prefill_ms": 3.248190972954035,
+      "prefill_pcc": 0.9999818853727185,
+      "value_cache_pcc": 0.9954348181180206
+    },
+    "dram_all_bfp4_48c_packed": {
+      "decode_ms": 0.9384051617234945,
+      "decode_pcc": 0.9999983528196952,
+      "decode_query_pcc": 0.9910325274054042,
+      "key_cache_pcc": 0.9965762967948275,
+      "options": {
+        "decode_matmul_mode": "dram_sharded",
+        "dram_mlp_target_cores": 48,
+        "prefill_grid_x": 11,
+        "prefill_in0_block_w": 1,
+        "use_packed_mlp": true
+      },
+      "precision_policy": "all_bfp4_lofi",
+      "prefill_ms": 5.109318997710943,
+      "prefill_pcc": 0.9999813044963989,
+      "value_cache_pcc": 0.9954057780055168
+    }
+  },
+  "sequence_length": 17,
+  "weights": "real_layer_14"
+}
