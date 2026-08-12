@@ -1625,3 +1625,148 @@ parameter it keys on (1, 2, 4 bytes and block-float), not at one point.
    any dtype. The candidate is a multi-tile coalesced write where output tiles are contiguous in the
    destination (they are, within a block, only when `n_wchunks == 1`), which is a real transaction-
    shape change and belongs to a perf round with a fresh whole-op breakdown.
+
+---
+
+## Refinement 8 — Tile geometry: tiny tiles and retile (prompt T1 + T2)
+
+- **Date**: 2026-08-12
+
+### What was done
+
+Two axes, one shared pipeline. The design's claim — that a tiny tile is a **CB-descriptor change
+only** and that retile is a **new reader behind the same `cb_input_sticks` contract** — held, so
+compute and the writer took **zero** structural changes and the block model, the core split, the
+placement plan and every lever knob are untouched.
+
+| Reused unchanged | Added |
+|---|---|
+| the whole Blocking Model (`tile_geometry` / `blocking` / `plan_cores`), `plan_placement`'s four modes, the CB builders, the writer kernel (not one line), every lever knob and its bench arm, `tag_alignment` (already measured against the REQUESTED tile height, never a literal 32) | `output_tensor_spec()` (host), one `if constexpr (tile_h == 1)` branch in compute, one `if constexpr (retile == 1)` arm in the reader, `copy_l1_bytes()` shared with R7's staged compaction, `_check_retile()`, and 6 reader CT args |
+
+**T1 — tiny tiles.** `SUPPORTED["tile_height"] += 16, 8, 4, 2, 1`. Two things the design did not
+predict, both found by measurement:
+
+1. **The requested tile never reached the output BUFFER.**
+   `ttnn.allocate_tensor_on_device(shape, dtype, layout, device, mem_config)` builds its spec through
+   `PageConfig(layout)` with no tile — always the default 32×32 one. Every CB, the reader's stick
+   count and the LLK would have used `tile_height` rows while the output buffer's page stayed a
+   32-row tile: a **silent** geometry disagreement, not an error. Only the `TensorSpec` overload can
+   carry `tile=`, so `output_tensor_spec()` is now the single allocation path for *every* tile height
+   including 32 (three constructor overloads mirroring the three placements
+   `_spec_from_memory_config` already distinguishes). With that one fix, heights 32/16/8/4/2 were
+   **bit-exact immediately** — the design's "CB-descriptor change only" was right.
+2. **`tile_height=1` does not COMPILE through `tilize`.** `tilize_init` routes the packer through
+   `llk_pack_init<PackMode::Tilize>`, whose MOP is a replay buffer of `face_r_dim − 1` instructions
+   and which asserts `face_r_dim ∈ {2,4,8,16}` (`llk_pack.h`). A 1×32 tile has
+   `face_shape == {1,16}`, so that length is **zero** and TRISC2 fails to link:
+   `lltt.h:28: argument 2 '0' is out of range [1, 32]`.
+   It is also the one height where tilize has nothing to do: a 1×32 tile is two 1×16 faces laid
+   consecutively — columns 0..15 then 16..31 of the same row — i.e. byte-for-byte the row-major stick
+   the reader already produced. So the interleave is the **identity** and the phase becomes a
+   datum-preserving copy that still carries the `dtype=` cast: `compute_kernel_lib::copy`
+   (`CopyTile → PackTile`, kernel_lib, not raw LLK), whose PackMode::Default packer arm handles
+   `face_r_dim == 1` explicitly (`PACK_INTF_SEL = SINGLE_INTF_ACTIVE`).
+
+**T2 — retile.** `SUPPORTED["in_layout"] += TILE_LAYOUT`, `SUPPORTED["in_tile_height"] += 32/16/8/4/2/1`.
+A fifth reader arm that emits the **same** `cb_input_sticks` contract. Output row
+`g = r*tile_h + s` lives in source tile-row `g / src_tile_h` at row `g % src_tile_h`; within that
+tile the row is split across a **face pair** (columns 0..15 in the even face, 16..31 in the odd),
+`face_shape = {min(h,16), 16}` — *not* `{h, 16}`, which is the whole trap at `src_tile_h = 32`.
+
+Deviation from `op_design.md` §8.4, declared: the design sketches **two 16-wide face reads per
+(stick, tile-column)**, and that is **not legal from DRAM**. A face half is `16*elem` bytes and its
+L1 destination inside the stick block sits at `t*tile_row_bytes`, i.e. off the 64 B DRAM alignment
+grid — exactly the hazard R7 measured for narrow sticks ("invalid address alignment in NOC
+transaction"). So the arm stages the block's **source tiles** whole (page-aligned source,
+DRAM-aligned destination stride — a 1×32 uint8 tile is 32 B, half an alignment unit, so the stride
+round-up is load-bearing) and the face walk becomes local L1 stores through `copy_l1_bytes`, shared
+with R7's compaction loop. Same §8.4 verdict either way: Track T is correctness-gated, so no DM
+lever was spent on it and no NoC ceiling is claimed for it.
+
+One structural gate the design did not name: a **same-spec sharded retile is indistinguishable from
+the zero-copy case** to `shard_identity` — the two specs differ only in a tile height no `ShardSpec`
+records — so `plan_placement` would have aliased `cb_input_sticks` onto a buffer holding
+`in_tile_height`-row TILES while compute expects row-major sticks. `retile` therefore disqualifies
+**input** residency (like `pad_enabled` does, for a different reason); the **output** shard stays
+resident, so the sharded retile is still zero-copy on the half where it can be. `source_bands` is
+also bypassed there — it describes a row-major source, and a TILE source's page is a tile.
+
+### Accuracy achieved
+
+**Bit-exact (`torch.equal`) everywhere it is defined to be**, on `[1,1,128,256]` unless noted:
+
+- T1, `tile_height` ∈ {32, 16, 8, 4, 2, 1}: bf16, fp32, uint32, uint16, uint8 (incl. the
+  W=96 narrow-stick staged path), and the bf16→fp32 cast; interleaved DRAM/L1 and a WIDTH-sharded
+  L1 pair `[1,1,32,1024]`.
+- T2, `in→out` tile height ∈ {32→8, 1→32, 32→16, 16→32, 8→32, 2→4, 4→2, 32→1, 1→16}; plus
+  BLOCK-sharded L1 `[1,1,256,256]` 32→16 and 32→8, rank 3, uint8, fp32, L1 interleaved.
+- Golden suite: PCC gate met on every runnable cell (`assert_with_pcc`, thresholds unchanged).
+
+### Golden test progress
+
+**374 passed / 580 skipped (INVALID) / 6 xfailed / 0 failed** — the whole suite, in one run.
+The 6 xfails are the new EXCLUSIONS below. Unit tests: **172 passed, 1 xfailed** (the pre-existing
+`pytest.approx` × torch defect in the immutable spec).
+
+### Issues encountered
+
+- **`bfloat8_b` OUTPUT below a 16-row face is broken — EXCLUDED (4 cells).** A block-float tile
+  carries a shared-exponent section of `face_r_dim * num_faces` bytes (`Tile::get_tile_size`), while
+  the packer programs `exp_section_size = partial_face ? 1 : num_faces` (`cpack_common.h`) — which
+  cannot describe it once `face_r_dim < 16`. Measured, bf16→bfloat8_b on `[1,1,128,256]`, max |diff|
+  vs the source (a correct round-trip is ~0.03):
+
+  | `tile_height` | 32 | 16 | 8 | 4 | 2 | 1 |
+  |---|---:|---:|---:|---:|---:|---:|
+  | max abs diff | **0.037** | **0.037** | 7.15 | 6.55 | 6.46 | 6.63 |
+
+  Not a packer-mode question: `bfp8_precise` 0/1 and an fp32 vs bf16 input give the *identical* wrong
+  number, and every non-block-float dtype is bit-exact at all six heights. `tile.cpp`'s
+  `TILE_FACE_HW_CHOICES` says the same thing in words — 8×32 and below are "not supported yet on llk,
+  just for host loopback" — so this is an LLK gap, not a kernel one, and it is recorded rather than
+  filed as a follow-up. `tile_height=16` keeps `face_r_dim == 16` and is deliberately **not**
+  excluded.
+- The acceptance test's `retile[shrink_32_to_8]` case **passed on PCC before retile existed** (the
+  reader was addressing tile pages as sticks). Caught only because `grow_1_to_32` failed next to it;
+  the new debug tests assert the CT-arg geometry and the probes assert `torch.equal`, so neither the
+  reader arm nor the face geometry can silently regress to that state.
+
+### Perf (no regression; T is correctness-gated by §8.4)
+
+All **19** prior bench shapes re-measured at `base` in one run, vs Refinement 7 — every delta inside
+the ±2 % noise band (largest: `sharded_small` +1.7 %, `wide_short` +1.5 %, `dtype_uint8_narrow`
++1.3 %; `square` 44 282 → 44 158 ns, `dtype_fp32` 87 815 → 87 135 ns). Nothing regressed, which is
+the structural expectation: `tile_height == 32` with a ROW_MAJOR input emits Refinement 7's kernel
+byte-for-byte (`retile == 0` and the `tile_h == 1` branch are both `if constexpr`-discarded, and the
+allocation path produces the identical 32×32 spec).
+
+Four bench rows added, with `_TILE_BY_SHAPE` as their single source of truth (same shape as
+`_MEM_BY_SHAPE` / `_PAD_BY_SHAPE` / `_DTYPE_BY_SHAPE`) and the reported block geometry now derived
+from the row's own tile height rather than a literal 32:
+
+| row | shape | ns | reading |
+|---|---|---:|---|
+| `tile_16` | `(1,1,2048,2048)` th=16 | 44 441 | = `square` (44 158) at **2×** the block count — the extra blocks are free on a DM-bound shape, i.e. the tiny tile costs nothing until the block count is extreme |
+| `tile_1` | `(1,1,2048,2048)` th=1 | 101 585 | 8 192 blocks, 75/core: per-block fixed cost **is** the wall (2.3× `square` for identical bytes) |
+| `retile_shrink` | `(1,1,1024,1024)` 32→8 | 72 213 | the staged reader's over-read direction (`src_tile_h/tile_h` = 4×) |
+| `retile_grow` | `(1,1,1024,1024)` 8→32 | 83 863 | each source tile read exactly once; the per-datum face copy dominates |
+
+No lever ledger row changed: this refinement lands no DM lever (`verify_levers --bench` reports
+**0 BLOCKING, 0 signal, clean**). The retile reader's known headroom — the shrink over-read and the
+per-datum face copy — is recorded as a FINDING; the candidate fix is reading contiguous face runs
+instead of whole source tiles, which is a transaction-shape change on the one path `op_design` §8.4
+puts outside the DM budget.
+
+### Tests added
+
+- `test_tilize_debug.py::test_r8_the_requested_tile_reaches_the_output_buffer` (×6 heights) — asserts
+  the property on the **buffer** (`tile_shape`, `buffer_page_size`) and on both CB format
+  descriptors, because the CB was already right before the fix and only the buffer was wrong.
+- `::test_r8_tile_height_one_takes_the_copy_chain_not_tilize` — pins the CT arg that selects the
+  copy branch, so the gate cannot be lost without a compile failure being re-introduced.
+- `::test_r8_retile_never_consumes_the_input_shard_in_place` — the same-spec-sharded-retile trap,
+  asserted on the reader/writer residency CT args *and* on which CBs are aliased.
+- `::test_r8_retile_reader_gets_the_source_face_geometry` (×6 source heights) — `min(h,16)`, not `h`;
+  also asserts R7's staging rule and the B13/D21 issue levers are disarmed on this path.
+- `::test_r8_block_float_below_a_16_row_face_is_declared_excluded` — pins the four EXCLUSIONS and,
+  equally, that `tile_height=16` stays **claimed**.

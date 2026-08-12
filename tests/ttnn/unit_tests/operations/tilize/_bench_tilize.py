@@ -160,7 +160,45 @@ SHAPES = {
     "dtype_uint8": (1, 1, 2048, 2048),
     "dtype_uint8_narrow": (1, 1, 65536, 32),
     "dtype_bf16_to_bf8b": (1, 1, 2048, 2048),
+    # Refinement 8 (T1/T2) adds the TILE GEOMETRY axis. All four rows sit on the
+    # square's logical shape so the only variable is the tile, and the block
+    # geometry the tile height implies is readable straight off `square`:
+    #   tile_16 / tile_1  the TINY-TILE path. Same bytes, same Wt, but `tile_h`
+    #                     sticks per block instead of 32 -> 2x / 32x the block
+    #                     COUNT at the same block width, i.e. the regime where a
+    #                     per-block fixed cost is multiplied. `tile_1` also takes
+    #                     the `copy`-chain compute branch rather than `tilize`.
+    #   retile_shrink     TILE(32) in -> tile 8 out. The staged face-walk reader,
+    #                     in its OVER-READ direction: a block of 8 output sticks
+    #                     stages whole 32-row source tiles, so it reads 4x the
+    #                     bytes. op_design §8.4 rules Track T correctness-gated,
+    #                     so this row is a WATCHED number, not a ceiling target.
+    #   retile_grow       TILE(8) in -> tile 32 out. The mirror direction, where
+    #                     the same reader reads each source tile exactly once.
+    # A smaller logical shape than the square's, because the face walk is a
+    # per-datum L1 copy and the row is here to be re-measurable, not to be fast.
+    "tile_16": (1, 1, 2048, 2048),
+    "tile_1": (1, 1, 2048, 2048),
+    "retile_shrink": (1, 1, 1024, 1024),
+    "retile_grow": (1, 1, 1024, 1024),
 }
+
+# R8: per-shape TILE GEOMETRY — `(in_tile_height | None, out_tile_height)`. One
+# source of truth in the same shape as `_MEM_BY_SHAPE` / `_PAD_BY_SHAPE` /
+# `_DTYPE_BY_SHAPE`. `None` on the input side is a ROW_MAJOR input (every shape
+# absent here); an int is the RETILE path, where the bench has to build the
+# input already tiled at that height.
+_TILE_BY_SHAPE = {
+    "tile_16": (None, 16),
+    "tile_1": (None, 1),
+    "retile_shrink": (32, 8),
+    "retile_grow": (8, 32),
+}
+
+
+def _tiles_for(shape_name):
+    return _TILE_BY_SHAPE.get(shape_name, (None, 32))
+
 
 # R7: per-shape (input dtype, output dtype). One source of truth, in the same
 # shape as `_MEM_BY_SHAPE` / `_PAD_BY_SHAPE`; a shape absent here is the bf16
@@ -381,7 +419,7 @@ def _selected(env_name, universe):
     return names
 
 
-def _bench_input(shape, device, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+def _bench_input(shape, device, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG, in_tile_height=None):
     torch.manual_seed(0)
     if dtype == ttnn.uint8:
         source = torch.randint(0, 256, shape, dtype=torch.uint8)
@@ -391,6 +429,17 @@ def _bench_input(shape, device, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEM
         source = torch.randn(shape, dtype=torch.float32)
     else:
         source = torch.randn(shape).bfloat16()
+    # R8 (T2): the retile rows need the input ALREADY tiled, at its own tile
+    # height. Every other row is the ROW_MAJOR input every earlier phase measured.
+    if in_tile_height is not None:
+        return ttnn.from_torch(
+            source,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=memory_config,
+            tile=ttnn.Tile([in_tile_height, 32]),
+        )
     return ttnn.from_torch(
         source,
         dtype=dtype,
@@ -438,10 +487,15 @@ def test_bench(device):
         shape = SHAPES[shape_name]
         in_mem, out_mem = _mem_for(shape_name)
         in_dtype, out_dtype = _dtypes_for(shape_name)
-        tt_input = _bench_input(shape, device, dtype=in_dtype, memory_config=in_mem)
+        in_tile_h, out_tile_h = _tiles_for(shape_name)
+        tt_input = _bench_input(shape, device, dtype=in_dtype, memory_config=in_mem, in_tile_height=in_tile_h)
         pad_kwargs = _pad_for(shape_name)
         if out_dtype != in_dtype:
             pad_kwargs = dict(pad_kwargs, dtype=out_dtype)
+        # R8: `tile=` is passed only for a non-default geometry, so every earlier
+        # phase's row keeps exercising the exact call shape it was measured with.
+        if out_tile_h != 32 or in_tile_h is not None:
+            pad_kwargs = dict(pad_kwargs, tile=ttnn.Tile([out_tile_h, 32]))
         for arm in arm_names:
             kwargs = dict(ARMS[arm], **pad_kwargs)
             run_fn = lambda kw=kwargs, t=tt_input, om=out_mem: _dispatch(t, om, use_multicore=True, **kw)
@@ -460,7 +514,10 @@ def test_bench(device):
         shape = SHAPES[shape_name]
         in_dtype, out_dtype = _dtypes_for(shape_name)
         elem_bytes = _ELEM_BYTES[in_dtype]
-        blk = blocking(list(shape), 32, int(elem_bytes))
+        # R8: the reported block geometry is the one the row actually ran with,
+        # so the tile height comes from `_TILE_BY_SHAPE` rather than a literal 32.
+        row_tile_h = _tiles_for(shape_name)[1]
+        blk = blocking(list(shape), row_tile_h, int(elem_bytes))
         in_mem, out_mem = _mem_for(shape_name)
         if in_mem.is_sharded() or out_mem.is_sharded():
             # A shard's cores are fixed by its spec (master.md A2), and the shard
@@ -469,13 +526,13 @@ def test_bench(device):
             # over (the output, under R4's pull topology), not the input.
             plan = plan_placement(
                 shape=list(shape),
-                tile_height=32,
+                tile_height=row_tile_h,
                 in_memory_config=in_mem,
                 out_memory_config=out_mem,
                 Wt=blk["Wt"],
                 nt_h=blk["nt_h"],
-                in_tile_bytes=1024 * int(elem_bytes),
-                out_tile_bytes=1024 * int(elem_bytes),
+                in_tile_bytes=row_tile_h * 32 * int(elem_bytes),
+                out_tile_bytes=row_tile_h * 32 * int(elem_bytes),
             )
             side_mem = in_mem if plan["sharded_side"] == "in" else out_mem
             nt_h_shard = plan["shard"]["nt_h_shard"]

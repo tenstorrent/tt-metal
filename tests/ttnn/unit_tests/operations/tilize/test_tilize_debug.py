@@ -48,7 +48,7 @@ import torch
 
 import ttnn
 from ttnn.operations.tilize import tilize
-from ttnn.operations.tilize.tilize import _dispatch
+from ttnn.operations.tilize.tilize import EXCLUSIONS, _dispatch
 from ttnn.operations.tilize.tilize_program_descriptor import (
     MIN_BLOCKS_PER_CORE,
     SPREAD_CORES,
@@ -69,6 +69,7 @@ from ttnn.operations.tilize.tilize_program_descriptor import (
     auto_padded_shape,
     create_program_descriptor,
     l1_bytes_per_core,
+    output_tensor_spec,
     pad_fill_word,
     pad_plan,
     pipeline_capped_cores,
@@ -1521,3 +1522,152 @@ def test_r6_fold_removes_the_kernels_and_only_on_the_resident_path(device):
     # not the same spec -> not foldable, whichever side is resident.
     assert len(kernels_for(shard, ttnn.DRAM_MEMORY_CONFIG, dict(fold_resident=1))) == 3
     assert len(kernels_for(ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, dict(fold_resident=1))) == 3
+
+
+# ---------------------------------------------------------------------------
+# Refinement 8 (T1 + T2) — tile geometry: tiny tiles and retile
+# ---------------------------------------------------------------------------
+
+_READER_RETILE_CT = 25
+_READER_SRC_TILE_H_CT = 26
+_READER_SRC_FACE_H_CT = 27
+_COMPUTE_TILE_H_CT = 10
+
+
+def _tile_descriptor_for(device, shape, tile_height, in_mem, out_mem, in_tile_height=None):
+    """The real descriptor for a tile-geometry call, allocated through the op's
+    OWN output path (`output_tensor_spec`) — the point of the T1 fix is that the
+    tile reaches the buffer, so a test that allocated the output some other way
+    would not observe it."""
+    torch.manual_seed(0)
+    kwargs = {}
+    if in_tile_height is not None:
+        kwargs["tile"] = ttnn.Tile([in_tile_height, 32])
+    tt_input = ttnn.from_torch(
+        torch.randn(shape).bfloat16(),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT if in_tile_height is not None else ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=in_mem,
+        **kwargs,
+    )
+    tt_output = ttnn.allocate_tensor_on_device(
+        output_tensor_spec(ttnn.Shape(list(shape)), ttnn.bfloat16, out_mem, tile_height), device
+    )
+    return create_program_descriptor(tt_input, tt_output, tile_height=tile_height), tt_input, tt_output
+
+
+@pytest.mark.parametrize("tile_height", [32, 16, 8, 4, 2, 1])
+def test_r8_the_requested_tile_reaches_the_output_buffer(device, tile_height):
+    """T1's whole defect class in one assertion.
+
+    `ttnn.allocate_tensor_on_device(shape, dtype, layout, device, mem_config)`
+    builds its spec through `PageConfig(layout)` with no tile, i.e. always the
+    default 32x32 one. Asking for a tiny tile through that overload is SILENT:
+    the CBs, the reader's stick count and the LLK would all use `tile_height`
+    rows while the output buffer's page stayed a 32-row tile. So the property is
+    asserted on the BUFFER (its page size) and on the tensor's own tile, not on
+    the CB — the CB was already right before the fix."""
+    descriptor, _tt_in, tt_out = _tile_descriptor_for(
+        device, (1, 1, 128, 256), tile_height, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG
+    )
+    assert list(tt_out.tile.tile_shape) == [tile_height, 32]
+    assert tt_out.buffer_page_size() == tile_height * 32 * 2
+
+    cb_in, cb_out = descriptor.cbs[0], descriptor.cbs[1]
+    for cb in (cb_in, cb_out):
+        fmt = cb.format_descriptors[0]
+        assert fmt.tile.height == tile_height and fmt.tile.width == 32
+        assert fmt.page_size == tile_height * 32 * 2
+
+    # The block model is stated in the OUTPUT tile grid, so the tile-row count
+    # scales with the tile height while the block WIDTH (a byte target) does not.
+    reader = descriptor.kernels[0]
+    assert reader.compile_time_args[1] == (128 // tile_height)  # nt_h
+    assert reader.compile_time_args[3] == tile_height  # sticks per block
+
+
+def test_r8_tile_height_one_takes_the_copy_chain_not_tilize(device):
+    """The 1x32 tile is the ONE height `tilize` cannot pack: `tilize_init` routes
+    the packer through `llk_pack_init<PackMode::Tilize>`, whose MOP is a replay
+    buffer of `face_r_dim - 1` instructions and which asserts
+    `face_r_dim in {2,4,8,16}` — at `face_r_dim == 1` the kernel does not COMPILE.
+    It is also the one height where the interleave is the identity (a 1x32 tile is
+    two 1x16 faces laid consecutively = the row-major stick), so the phase is a
+    datum-preserving copy that still carries the `dtype=` cast.
+
+    Asserted on the CT arg that selects the branch, so the compute kernel cannot
+    lose the gate without this failing."""
+    for tile_height in (32, 16, 2, 1):
+        descriptor, _in, _out = _tile_descriptor_for(
+            device, (1, 1, 128, 256), tile_height, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG
+        )
+        assert descriptor.kernels[2].compile_time_args[_COMPUTE_TILE_H_CT] == tile_height
+
+
+def test_r8_retile_never_consumes_the_input_shard_in_place(device):
+    """T2's structural gate. A same-spec sharded retile looks EXACTLY like the
+    zero-copy case to `shard_identity` — the two specs differ only in a tile
+    height no ShardSpec records — so without the gate `plan_placement` would
+    alias `cb_input_sticks` onto a buffer holding TILES of `in_tile_height` rows
+    while compute expects row-major sticks. The output side stays resident (an
+    output tile is whole), which is what keeps the sharded retile zero-copy on
+    the half where it can be."""
+    shard = _legacy_mem(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _crs(((0, 0), (7, 7))), (32, 32))
+    _skip_if_grid_too_small(device, shard)
+
+    descriptor, _in, _out = _tile_descriptor_for(device, (1, 1, 256, 256), 16, shard, shard, in_tile_height=32)
+    reader, writer = descriptor.kernels[0], descriptor.kernels[1]
+    assert reader.compile_time_args[_READER_RETILE_CT] == 1
+    assert reader.compile_time_args[_READER_RESIDENT_CT] == 0, "a TILE input must never be aliased onto the CB"
+    assert writer.compile_time_args[_WRITER_RESIDENT_CT] == 1, "the output shard is still consumed in place"
+    assert not descriptor.cbs[0].has_buffer()
+    assert descriptor.cbs[1].has_buffer()
+
+
+@pytest.mark.parametrize("in_tile_height", [32, 16, 8, 4, 2, 1])
+def test_r8_retile_reader_gets_the_source_face_geometry(device, in_tile_height):
+    """The reader walks FACES of the source tile, and `face_shape` for a 32-wide
+    tile is `{min(h, 16), 16}` (tile.cpp's TILE_FACE_HW_CHOICES) — not `h`. A
+    reader given `h` as its face height would read the right bytes only at
+    `h <= 16` and scatter every row of a 32-row source tile."""
+    descriptor, _in, _out = _tile_descriptor_for(
+        device,
+        (1, 1, 128, 256),
+        32 if in_tile_height != 32 else 8,
+        ttnn.DRAM_MEMORY_CONFIG,
+        ttnn.DRAM_MEMORY_CONFIG,
+        in_tile_height=in_tile_height,
+    )
+    reader = descriptor.kernels[0]
+    assert reader.compile_time_args[_READER_RETILE_CT] == 1
+    assert reader.compile_time_args[_READER_SRC_TILE_H_CT] == in_tile_height
+    assert reader.compile_time_args[_READER_SRC_FACE_H_CT] == min(in_tile_height, 16)
+    # The R7 narrow-stick staging rule describes a stick read and does not apply
+    # here; the retile arm owns its own (source-tile) staging.
+    assert reader.compile_time_args[22] == 0  # stage_unaligned
+    assert reader.compile_time_args[19] == 0 and reader.compile_time_args[21] == 0  # B13 / D21 disarmed
+
+
+def test_r8_block_float_below_a_16_row_face_is_declared_excluded():
+    """The one cell T1 refuses, pinned so it cannot drift.
+
+    A bfloat8_b tile carries a shared-exponent section sized
+    `face_r_dim * num_faces` bytes, while the packer programs
+    `exp_section_size = partial_face ? 1 : num_faces` — which cannot describe it
+    once `face_r_dim < 16`. MEASURED (bf16 -> bfloat8_b, [1,1,128,256], max
+    |diff| vs source; a correct round-trip is ~0.03): tile_height 32 -> 0.037,
+    16 -> 0.037, 8 -> 7.15, 4 -> 6.55, 2 -> 6.46, 1 -> 6.63. Every non-block-float
+    dtype is bit-exact at all of those heights, so the gap is the exponent
+    section and nothing else."""
+    excluded = {tuple(sorted(e.items(), key=lambda kv: kv[0])) for e in EXCLUSIONS}
+
+    def is_excluded(**axes):
+        return any(all(axes.get(k) == v for k, v in e.items()) for e in EXCLUSIONS)
+
+    for tile_height in (8, 4, 2, 1):
+        assert is_excluded(output_dtype=ttnn.bfloat8_b, tile_height=tile_height)
+    # 16 keeps face_r_dim == 16 and measures correct — it must stay claimed.
+    assert not is_excluded(output_dtype=ttnn.bfloat8_b, tile_height=16)
+    assert not is_excluded(output_dtype=ttnn.bfloat8_b, tile_height=32)
+    assert excluded  # the set is non-empty, i.e. the entries above are real rows

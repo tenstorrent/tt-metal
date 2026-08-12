@@ -600,7 +600,7 @@ transaction-shape change that belongs to a perf round starting from a fresh whol
 
 ---
 
-### [ ] Refinement 8 — Tile geometry: tiny tiles and retile (prompt T1 + T2)
+### [x] Refinement 8 — Tile geometry: tiny tiles and retile (prompt T1 + T2)
 
 **Goal**:
 
@@ -635,6 +635,32 @@ stay refused.
 sharded output; retile passes shrink (32→8) and grow (1→32), interleaved and BLOCK-sharded, on
 Blackhole and **skips** cleanly elsewhere; retile + pad is still refused with a message mentioning
 `pad`.
+
+**Outcome**: all of it landed. `tile_height` += 16/8/4/2/1, `in_layout` += TILE, `in_tile_height` +=
+32/16/8/4/2/1; golden suite 374 passed / 0 failed, 172 unit tests green, and every retile pair
+measured **bit-exact** (32→8, 1→32, 32→16, 16→32, 8→32, 2→4, 4→2, 32→1, 1→16, plus BLOCK-sharded
+L1, rank 3, uint8, fp32). Two things the design did not predict, both measured rather than reasoned:
+(1) the requested tile never reached the output BUFFER, because
+`allocate_tensor_on_device(shape, …)` hardcodes a 32×32 `PageConfig` — a silent geometry
+disagreement, now routed through `output_tensor_spec`; (2) `tile_height=1` does not COMPILE through
+`tilize`: the Blackhole pack-tilize MOP is a replay buffer of `face_r_dim − 1` instructions and
+asserts `face_r_dim ∈ {2,4,8,16}`. A 1×32 tile is two 1×16 faces laid consecutively, i.e. the
+row-major stick itself, so that height takes the kernel_lib `copy` chain (identity + the `dtype=`
+cast) and the packer's PackMode::Default arm, which handles `face_r_dim == 1` explicitly.
+**One cell-level EXCLUSION added**: `bfloat8_b` OUTPUT at `tile_height < 16`. The packer programs
+`exp_section_size = partial_face ? 1 : num_faces`, which cannot describe the `face_r_dim*num_faces`
+byte exponent section a sub-16 face needs — measured max|diff| 7.15/6.55/6.46/6.63 at heights
+8/4/2/1 against 0.037 at 32 and 16, identical under both packer modes and both input dtypes, while
+every non-block-float dtype is bit-exact at all of them. Not filed as a follow-up: `tile.cpp`'s
+TILE_FACE_HW_CHOICES marks those shapes "not supported yet on llk", so it is an LLK gap, not a
+kernel one. Perf (T is correctness-gated by §8.4, so no DM lever was spent and no NoC ceiling is
+claimed): all 19 prior bench shapes re-measured within ±1.7 % of Refinement 7; four rows added —
+`tile_16` 44 441 ns (= `square`'s 44 158 at 2× the block count, i.e. the extra blocks are free on a
+DM-bound shape), `tile_1` 101 585 ns (8192 blocks, 75/core — per-block fixed cost is the wall),
+`retile_shrink` 72 213 ns and `retile_grow` 83 863 ns on `[1,1,1024,1024]`. The retile reader's
+known headroom is the shrink direction's `src_tile_h / tile_h` over-read (4× here — it stages whole
+source tiles) and the per-datum face copy; the fix would be reading contiguous face runs, which is a
+transaction-shape change on a path the design rules out of the DM budget.
 
 ---
 
