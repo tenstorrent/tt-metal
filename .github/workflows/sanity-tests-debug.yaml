@@ -81,6 +81,7 @@ jobs:
     with:
       build-type: RelWithDebInfo
       platform: "Ubuntu 22.04"
+      build-inplace-wheel: true
       enable-lto: ${{ inputs.enable-lto || false }}
       enable-watcher: ${{ needs.determine-debug-flags.outputs.enable-watcher == 'true' }}
       enable-llk-asserts: ${{ needs.determine-debug-flags.outputs.enable-llk-asserts == 'true' }}
@@ -97,6 +98,7 @@ jobs:
     with:
       build-type: RelWithDebInfo
       platform: "Ubuntu 24.04"
+      build-inplace-wheel: false
       enable-lto: ${{ inputs.enable-lto || false }}
       enable-watcher: ${{ needs.determine-debug-flags.outputs.enable-watcher == 'true' }}
       enable-llk-asserts: ${{ needs.determine-debug-flags.outputs.enable-llk-asserts == 'true' }}
