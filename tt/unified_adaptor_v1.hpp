@@ -26,10 +26,11 @@
 // compute intrinsic is only ever called from inside a `#if IS_COMPUTE_THREAD`
 // region (in fusion.hpp's Strategy and op guards), and every data-movement
 // intrinsic only from inside a `#if IS_DM_THREAD` region (in unified.hpp's
-// noc_*). So each projection declares only its own half. The one exception is
-// `compute_init`, which kernels call unconditionally and so needs a
-// data-movement no-op. `TensorAccessor` is also named on a shared path, but it
-// is a *type*, and compute simply gets an empty one under the same name.
+// noc_*). So each projection declares only its own half, and there are no
+// cross-projection no-op functions left. `TensorAccessor` is named on a shared
+// path, but it is a *type*, and compute simply gets an empty one under the same
+// name. The hardware-startup entry points live in tt/unified_math.hpp, where
+// they self-guard.
 
 #pragma once
 
@@ -67,6 +68,7 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/exp.h"
 #include "api/compute/eltwise_unary/relu.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/matmul.h"
 #include "api/compute/pack.h"
 #include "api/compute/tile_move_copy.h"
@@ -108,13 +110,6 @@ namespace unified {
 // Compute
 // ---------------------------------------------------------------------------
 
-// Only `compute_init` needs binding: kernels call it unconditionally, so a
-// data-movement build needs a no-op counterpart. Everything else -- copy_tile,
-// pack_tile, tile_regs_*, the SFPU ops, matmul_block, pack_block -- is called
-// as ckernel::* straight from fusion.hpp, inside regions already guarded by
-// `#if IS_COMPUTE_THREAD`.
-inline void compute_init(uint32_t in_cb, uint32_t out_cb) { ckernel::init_sfpu(in_cb, out_cb); }
-
 // TODO: the FPU pack-side epilogue is not bound to metal yet. Declared without a
 // definition so the (uninstantiated) template body type-checks -- a program that
 // actually reaches it fails to LINK with this name, rather than silently doing
@@ -126,10 +121,6 @@ void relu_from_pack(uint32_t base, uint32_t count);
 // ---------------------------------------------------------------------------
 // Data movement
 // ---------------------------------------------------------------------------
-
-// The only compute intrinsic a data-movement build needs: kernels call it
-// unconditionally at entry.
-inline void compute_init(uint32_t, uint32_t) {}
 
 // The CB's *configured* page size, not the data format's tile size --
 // get_tile_size() is derived from unpack_tile_size[] and only coincides with the
