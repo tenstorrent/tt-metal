@@ -111,6 +111,7 @@ class TTPhi1Attention:
         hidden_size: int = 2048,
         rotary_dim: int = 32,
         dtype: ttnn.DataType = ttnn.bfloat16,
+        max_seq_len: int = 2048,
     ):
         self.device = device
         self.n_heads = n_heads
@@ -118,6 +119,7 @@ class TTPhi1Attention:
         self.head_dim = hidden_size // n_heads  # 2048 // 32 = 64
         self.rotary_dim = rotary_dim
         self.dtype = dtype
+        self.max_seq_len = max_seq_len
 
         # Load Wqkv combined projection weights (MixFormer format)
         if f"{base_address}.self_attn.Wqkv.weight" in state_dict:
@@ -187,11 +189,29 @@ class TTPhi1Attention:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+        cache_shape = (1, n_heads, max_seq_len, self.head_dim)
+        self.k_cache = ttnn.from_torch(
+            torch.zeros(cache_shape, dtype=torch.bfloat16),
+            dtype=self.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self.v_cache = ttnn.from_torch(
+            torch.zeros(cache_shape, dtype=torch.bfloat16),
+            dtype=self.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
     def __call__(
         self,
         x: ttnn.Tensor,
         cos_cache: typing.Optional[ttnn.Tensor] = None,
         sin_cache: typing.Optional[ttnn.Tensor] = None,
+        current_pos: int = 0,
+        use_cache: bool = False,
     ) -> ttnn.Tensor:
         """Forward pass for Phi-1 attention with Partial RoPE.
 
@@ -215,6 +235,7 @@ class TTPhi1Attention:
             qkv,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             num_heads=self.n_heads,
+            transpose_key=False,
         )
         ttnn.deallocate(qkv)
 
@@ -251,14 +272,33 @@ class TTPhi1Attention:
             ttnn.deallocate(k)
             k = k_new
 
-        # Hardware-accelerated SDPA on Tensix cores
-        attn_out = ttnn.transformer.scaled_dot_product_attention(
-            q,
-            k,
-            v,
-            is_causal=True,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
+        if use_cache:
+            seq_len_here = q.shape[2]
+            if seq_len_here > 1:
+                # Prefill: seed the cache with this call's full K/V, then attend over
+                # the full sequence exactly as before (unchanged SDPA call/is_causal=True).
+                ttnn.fill_cache(self.k_cache, k, batch_idx=0, update_idx=0)
+                ttnn.fill_cache(self.v_cache, v, batch_idx=0, update_idx=0)
+                attn_out = ttnn.transformer.scaled_dot_product_attention(
+                    q, k, v, is_causal=True, memory_config=ttnn.L1_MEMORY_CONFIG,
+                )
+            else:
+                # Decode: write this single new token's K/V at current_pos, then
+                # attend the new query against every cached position [0 : current_pos+1].
+                ttnn.update_cache(self.k_cache, k, current_pos, batch_offset=0)
+                ttnn.update_cache(self.v_cache, v, current_pos, batch_offset=0)
+                k_valid = ttnn.slice(self.k_cache, [0, 0, 0, 0], [1, self.n_heads, current_pos + 1, self.head_dim])
+                v_valid = ttnn.slice(self.v_cache, [0, 0, 0, 0], [1, self.n_heads, current_pos + 1, self.head_dim])
+                attn_out = ttnn.transformer.scaled_dot_product_attention(
+                    q, k_valid, v_valid, is_causal=False, memory_config=ttnn.L1_MEMORY_CONFIG,
+                )
+                ttnn.deallocate(k_valid)
+                ttnn.deallocate(v_valid)
+        else:
+            # Existing no-cache path, byte-for-byte identical to current behavior.
+            attn_out = ttnn.transformer.scaled_dot_product_attention(
+                q, k, v, is_causal=True, memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
 
         # Free intermediate Q, K, V from L1
         ttnn.deallocate(q)
@@ -372,6 +412,7 @@ class TTPhi1DecoderLayer:
         hidden_size: int = 2048,
         rotary_dim: int = 32,
         dtype: ttnn.DataType = ttnn.bfloat16,
+        max_seq_len: int = 2048,
     ):
         self.device = device
 
@@ -427,6 +468,7 @@ class TTPhi1DecoderLayer:
             hidden_size=hidden_size,
             rotary_dim=rotary_dim,
             dtype=dtype,
+            max_seq_len=max_seq_len,
         )
         self.mlp = TTPhi1MLP(device, state_dict, self.base_address, hidden_size=hidden_size, dtype=dtype)
 
@@ -435,12 +477,16 @@ class TTPhi1DecoderLayer:
         x: ttnn.Tensor,
         cos_cache: typing.Optional[ttnn.Tensor] = None,
         sin_cache: typing.Optional[ttnn.Tensor] = None,
+        current_pos: int = 0,
+        use_cache: bool = False,
     ) -> ttnn.Tensor:
         # Layer Normalization
         normed_x = ttnn.layer_norm(x, weight=self.ln_weight, bias=self.ln_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # Parallel Attention & MLP on the same normed input
-        attn_out = self.self_attn(normed_x, cos_cache=cos_cache, sin_cache=sin_cache)
+        attn_out = self.self_attn(
+            normed_x, cos_cache=cos_cache, sin_cache=sin_cache, current_pos=current_pos, use_cache=use_cache
+        )
         mlp_out = self.mlp(normed_x)
         ttnn.deallocate(normed_x)
 
@@ -472,6 +518,7 @@ class TTPhi1Model:
         rotary_dim: int = 32,
         max_position_embeddings: int = 2048,
         dtype: ttnn.DataType = ttnn.bfloat16,
+        max_seq_len: int = 2048,
     ):
         self.device = device
         self.base_address = base_address
@@ -524,6 +571,7 @@ class TTPhi1Model:
                     hidden_size=hidden_size,
                     rotary_dim=rotary_dim,
                     dtype=dtype,
+                    max_seq_len=max_seq_len,
                 )
             )
 
@@ -561,6 +609,7 @@ class TTPhi1Model:
         self,
         x: typing.Union[ttnn.Tensor, torch.Tensor],
         start_pos: int = 0,
+        use_cache: bool = False,
     ) -> ttnn.Tensor:
         """Forward pass through the Phi-1 backbone.
 
@@ -606,7 +655,13 @@ class TTPhi1Model:
         # Forward through all decoder layers
         for i, layer in enumerate(self.layers):
             prev_hidden_state = hidden_state
-            hidden_state = layer(hidden_state, cos_cache=cos_cache, sin_cache=sin_cache)
+            hidden_state = layer(
+                hidden_state,
+                cos_cache=cos_cache,
+                sin_cache=sin_cache,
+                current_pos=start_pos,
+                use_cache=use_cache,
+            )
             if (i > 0 or can_deallocate) and isinstance(prev_hidden_state, ttnn.Tensor):
                 ttnn.deallocate(prev_hidden_state)
 
@@ -655,6 +710,7 @@ class TTPhi1ForCausalLM:
             rotary_dim=rotary_dim,
             max_position_embeddings=max_position_embeddings,
             dtype=dtype,
+            max_seq_len=max_position_embeddings,
         )
 
         # LM Head (lm_head.linear for MixFormer, lm_head for native HF)
@@ -693,8 +749,9 @@ class TTPhi1ForCausalLM:
         self,
         x: typing.Union[ttnn.Tensor, torch.Tensor],
         start_pos: int = 0,
+        use_cache: bool = False,
     ) -> ttnn.Tensor:
-        hidden_states = self.model(x, start_pos=start_pos)
+        hidden_states = self.model(x, start_pos=start_pos, use_cache=use_cache)
         logits = ttnn.linear(
             hidden_states,
             self.lm_head_weight,

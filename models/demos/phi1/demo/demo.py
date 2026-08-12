@@ -242,34 +242,46 @@ def _run_pcc_verification(tt_model, hf_model, tokenizer, device, args):
 
 
 def _run_generation(tt_model, tokenizer, device, args):
-    """Run greedy causal text generation."""
+    """Run greedy causal text generation using a persistent KV-cache (prefill once, decode per token)."""
     print(f"\n[4/5] Running greedy causal text generation (max_new_tokens={args.max_new_tokens})...")
     print(f"      -> Input Prompt: '{args.prompt}'")
     input_ids = tokenizer(args.prompt, return_tensors="pt").input_ids
     generated_ids = input_ids.clone()
+    prompt_len = input_ids.shape[1]
 
     t_gen_start = time.time()
-    for step in range(args.max_new_tokens):
-        seq_len = generated_ids.shape[1]
 
-        # Pad to tile boundary (multiple of 32)
-        pad_len = (32 - (seq_len % 32)) % 32
-        if pad_len > 0:
-            padded_ids = torch.nn.functional.pad(generated_ids, (0, pad_len), value=tokenizer.pad_token_id)
-        else:
-            padded_ids = generated_ids
+    # Prefill: pad the prompt to a tile boundary, run once, seed the KV-cache.
+    pad_len = (32 - (prompt_len % 32)) % 32
+    padded_prompt = (
+        torch.nn.functional.pad(input_ids, (0, pad_len), value=tokenizer.pad_token_id) if pad_len > 0 else input_ids
+    )
+    logits_tt = tt_model(padded_prompt, start_pos=0, use_cache=True)
+    if hasattr(ttnn, "synchronize_device"):
+        ttnn.synchronize_device(device)
+    logits_torch = ttnn.to_torch(logits_tt)
+    ttnn.deallocate(logits_tt)
+    next_token_logits = logits_torch[:, prompt_len - 1, :]
+    next_token = torch.argmax(next_token_logits, dim=-1, keepdim=True)
+    generated_ids = torch.cat([generated_ids, next_token], dim=-1)
+    print(
+        f"         [Step 1/{args.max_new_tokens}] "
+        f"Token ID: {next_token.item()} -> '{tokenizer.decode([next_token.item()])}'"
+    )
+    current_pos = prompt_len
 
-        # Forward pass — RoPE is computed internally from real cos/sin caches
-        logits_tt = tt_model(padded_ids)
+    # Decode: one new token per step, O(1) work per step via the KV-cache.
+    for step in range(1, args.max_new_tokens):
+        new_token_input = generated_ids[:, -1:]
+        logits_tt = tt_model(new_token_input, start_pos=current_pos, use_cache=True)
         if hasattr(ttnn, "synchronize_device"):
             ttnn.synchronize_device(device)
         logits_torch = ttnn.to_torch(logits_tt)
         ttnn.deallocate(logits_tt)
-
-        # Extract logits at the actual last token position (not padding)
-        next_token_logits = logits_torch[:, seq_len - 1, :]
+        next_token_logits = logits_torch[:, -1, :]
         next_token = torch.argmax(next_token_logits, dim=-1, keepdim=True)
         generated_ids = torch.cat([generated_ids, next_token], dim=-1)
+        current_pos += 1
         print(
             f"         [Step {step + 1}/{args.max_new_tokens}] "
             f"Token ID: {next_token.item()} -> '{tokenizer.decode([next_token.item()])}'"
