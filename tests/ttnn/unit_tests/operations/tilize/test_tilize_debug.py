@@ -1778,3 +1778,58 @@ def test_r9_no_block_to_core_mapping_can_give_a_reader_its_own_dram_bank(device)
         blk = blocking(list(shape), 32, 2)
         touches_all_banks = 32 >= num_banks or blk["wt_block"] >= num_banks
         assert touches_all_banks, f"{shape}: a block would fit inside {num_banks} banks — re-open A3's first degree"
+
+
+# ---------------------------------------------------------------------------
+# 12. Refinement 10 (Mode D completeness audit) — the two knob-turns the audit
+#     MEASURED as wins on regimes added after their lever was last swept, but
+#     deliberately did NOT ship (Mode D records, it does not file or fix). Both
+#     are recorded in `lever_ledger.json` (B6's retile default, B9's staged
+#     narrow-stick default) as open regimes on closed rows, and the one thing a
+#     later run needs from this phase is the guarantee that turning the knob is
+#     a pure PERF change: bit-identical output, on device, at the same setting
+#     the bench measured. That is what this test pins — not the speedup (perf is
+#     the bench's job), the EXACTNESS.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "name, shape, in_tile_h, out_tile_h, dtype, levers",
+    [
+        # B6 on the R8 retile path, both directions. Measured 1.27x (shrink) and
+        # 1.48x (grow) faster than the shipped byte target on the bench shapes.
+        ("retile_shrink_read128", (1, 1, 256, 256), 32, 8, ttnn.bfloat16, dict(target_read_bytes=128)),
+        ("retile_grow_read128", (1, 1, 256, 256), 8, 32, ttnn.bfloat16, dict(target_read_bytes=128)),
+        # B9 on the R7 staged narrow-stick path (Wt == 1, 95% read-bound).
+        # Measured 1.043x faster with the NoC assignment swapped.
+        ("uint8_narrow_noc_swap", (1, 1, 2048, 32), None, 32, ttnn.uint8, dict(noc_split=0)),
+    ],
+)
+def test_r10_the_recorded_knob_turns_are_bit_exact(device, name, shape, in_tile_h, out_tile_h, dtype, levers):
+    """A recorded opportunity is only safe to take if its arm is EXACT."""
+    torch.manual_seed(0)
+    if dtype == ttnn.uint8:
+        source = torch.randint(0, 256, shape, dtype=torch.uint8)
+    else:
+        source = torch.randn(shape).bfloat16()
+
+    if in_tile_h is None:
+        tt_input = ttnn.from_torch(
+            source, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+    else:
+        tt_input = ttnn.from_torch(
+            source,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            tile=ttnn.Tile([in_tile_h, 32]),
+        )
+
+    kwargs = dict(tile=ttnn.Tile([out_tile_h, 32]))
+    shipped = ttnn.to_torch(_dispatch(tt_input, ttnn.DRAM_MEMORY_CONFIG, levers=dict(), **kwargs))
+    turned = ttnn.to_torch(_dispatch(tt_input, ttnn.DRAM_MEMORY_CONFIG, levers=levers, **kwargs))
+
+    assert torch.equal(shipped.to(source.dtype), source), f"{name}: the shipped path is already wrong"
+    assert torch.equal(turned, shipped), f"{name}: {levers} is not bit-identical to the shipped setting"

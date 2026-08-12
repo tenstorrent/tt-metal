@@ -716,7 +716,7 @@ control arm read 1.14x and nearly produced a false verdict on `block_order`.
 
 ---
 
-### [ ] Refinement 10 — Perf completeness audit (run-closing, prompt A7)
+### [x] Refinement 10 — Perf completeness audit (run-closing, prompt A7)
 
 **Type**: perf (retrospective — **no** SUPPORTED change, no new capability)
 
@@ -738,6 +738,30 @@ across any split, so there is nothing to fan out) and **C17** in-place (the tili
 applied → reason`) covering every master.md lever, plus a ranked list of the real remaining
 opportunities; anything *missed* or *deferred* with a large predicted delta is surfaced as a concrete
 follow-up for the next run rather than silently dropped; no regression on any prior bench.
+
+**Outcome**: the audit closed **17 of 24** catalog levers with evidence (up from 16) and, more
+importantly, caught three verdicts that had gone **stale** against regimes Refinements 7–8 added
+(`tile_1`: 8 192 blocks / 75 per core; `dtype_uint8_narrow`: Wt == 1, 95 % read-bound) — which is the
+exact failure mode master.md B8 documents. (a) **C16 double-buffer moves `measured-no-payoff` →
+`applied`**: depth-1 costs **1.226×** on `tile_1` (103 000 on / 126 239 off), where the CB depth *is*
+the read/compute/write overlap; the R3 null was correct only for ≤ 5-blocks-per-core shapes. (b) **B8
+trid double-issue re-sized 10 % → 20 %** and now bench-visible: `tile_1` moves the square's bytes in
+104 209 vs 44 532 ns with `ablate_read` 0.643× / `ablate_write` 0.634× over a 3 576 ns `ablate_all`
+floor, and the **B7 arm is a wash (0.988×)** there — barrier-per-block already *is* barrier-per-read
+on a 1-stick block, so the only overlap left is across blocks; `dtype_uint8_narrow` agrees from the
+read side (`ablate_read` **0.054×**, 28 GB/s vs 356 GB/s on the aligned uint8 square). (c) Two shipped
+**defaults** are measurably wrong on regimes added after their lever was last swept, both **bit-exact**
+on device (new test + probe 046): `target_read_bytes=128` on the retile path is **1.27× / 1.48×**
+(`retile_shrink` / `retile_grow`) and `noc_split=0` on the staged narrow-stick path is **1.043×**.
+Bottleneck picture after the audit: the DRAM square is unchanged at 84 % of theoretical peak (R9), and
+the op's real remaining headroom has moved to the **block-serialized regimes** — per-block read
+serialization (B8) and two per-regime defaults — not to the shape the queue spent R9 on. Not chased
+here because Mode D files nothing and fixes nothing: B8 is a reader-kernel change (new work), and
+re-defaulting the retile knob belongs to a round that owns §8.4's correctness-gated path. All three
+are recorded in `lever_ledger.json` with the knob, the gate to edit, and the measured arms, so each is
+one edit plus one bench row for whoever takes it. No regression: all 23 bench shapes re-measured at
+`base`, every row inside ±2 % of R9 except an 862 ns launch at +3.4 % (its own no-change history is
+829/834/862 ns); unit dir 194 passed / 1 xfailed; no op code changed this phase.
 
 ---
 

@@ -1994,3 +1994,188 @@ Three shapes got faster (the gated B10 wins), nothing regressed outside the nois
    future refinement ever makes a core's traffic bank-local (which would require a different
    block↔page mapping than a bijection over 32-stick blocks allows), the VC arm is already built and
    one bench row away from being re-measured there.
+
+---
+
+## Refinement 10 — Perf completeness audit (run-closing, prompt A7)
+
+- **Date**: 2026-08-12
+- **Type**: perf, retrospective — **no** SUPPORTED change, no kernel change, no host-code change.
+- **What was done**: ran `/perf-ceiling-dm` **Mode D** over the full `master.md` Part-2 catalog,
+  re-reading every open row's disqualifier against the topologies added *after* it was written, and
+  re-sweeping closed rows on the regimes that did not exist when they were measured. Four device runs
+  (one cumulative `base` pass + three lever/ablation passes), one probe, one test added. The
+  completeness table below is **generated** from `lever_ledger.json`
+  (`python3 -m eval.verify_levers ttnn/ttnn/operations/tilize/lever_ledger.json --report`), not typed.
+- **Accuracy achieved**: unchanged — nothing in the op moved. The new test asserts `torch.equal`
+  (bit-exact) on the two knob settings the audit measured, so the recorded opportunities are proven
+  to be pure-perf turns rather than accuracy trades.
+- **Golden test progress**: unchanged (332/332 registry cells; no SUPPORTED change by construction).
+  Unit dir: **194 passed, 1 xfailed**.
+- **Issues encountered**: none functional. One measurement note below (`sharded_small`).
+- **Tests added**: `test_tilize_debug.py::test_r10_the_recorded_knob_turns_are_bit_exact` (×3).
+
+### What the audit actually found (it is not bookkeeping)
+
+Mode D's own warning is that a run-closing pass lets an early verdict go stale. Three of this op's
+rows had gone stale in exactly that way, because Refinements 7 and 8 added two regimes that did not
+exist when those rows were measured — `tile_1` (tile_height 1 → **8 192 blocks, 75 per core**) and
+`dtype_uint8_narrow` (Wt == 1, **2 048 blocks, 19 per core**, 95 % read-bound):
+
+1. **C16 (double-buffer) was `measured-no-payoff` and is now `applied` with a number.** The R3
+   verdict was measured on shapes with ≤ 5 blocks per core, where compute is overlap-hidden and a
+   deeper CB has nothing to overlap. Re-swept on `tile_1`, depth-1 costs **1.226×**
+   (103 000 on / 126 239 off) — the shipped depth-2 carries 18.4 % of that wall. The op did not
+   change; only the regime set did. **Closed count 16 → 17 of 24.**
+2. **B8 (trid double-issue) is re-sized 10 % → 20 %, and the bench can now SEE it.** At R3 it was
+   deferred partly because three of four shapes were one-block cores — the exact bench gap master.md
+   B8 names. Now: `tile_1` moves the same bytes as `square` in **104 209 ns vs 44 532**, with
+   `ablate_read` 0.643× and `ablate_write` 0.634× (≈ 37 / 38 µs of exposed payload) over an
+   `ablate_all` floor of 3 576 ns; and the **B7 arm is a wash there (0.988×)** because a 1-stick
+   block issues ~1 read, so barrier-per-block *already is* barrier-per-read and the only overlap left
+   is **across** blocks — precisely what trid buys. `dtype_uint8_narrow` says the same from the other
+   side: `ablate_read` **0.054×** (the read is 95 % of a 150 µs wall, 28 GB/s against 356 GB/s on the
+   aligned uint8 square), with its 32 reads/block already batched under one barrier.
+3. **Two shipped DEFAULTS are wrong on regimes added after their lever was last swept** — measured,
+   bit-exact, and recorded as open regimes on closed rows (Mode D records; it does not file or fix):
+   - **B6** `target_read_bytes` on the **retile** path: 128 B (WT_BLOCK 16 → 2) measures
+     `retile_shrink` 72 249 → **56 742 ns (1.27×)** and `retile_grow` 83 837 → **56 508 ns (1.48×)**.
+     256 B gives 1.15× / 1.19×, 512 B gives 1.15× / 0.94×. On `tile_1` the shipped default is already
+     best (512 B is 1.414× *worse*) and on `dtype_uint8_narrow` the knob is inert (Wt == 1 clamps
+     WT_BLOCK), so this is a **regime-gated default**, not a global re-tune.
+   - **B9** `noc_split` on the **staged narrow-stick** path: the OFF arm (swapped NoC assignment) is
+     **4.1 % faster** (148 803 → 142 749 ns) on `dtype_uint8_narrow`, the one path whose writer is
+     nearly idle — while it stays right everywhere else (`retile_grow` swap costs 1.070×, `tile_1`
+     wash).
+
+   Both settings are **bit-identical to the shipped path on device** (probe 046 and the new test), so
+   a later run can take them as pure knob-turns. Where to turn them is named in the ledger rows.
+
+### Ablation table (the measurements this audit's sizing rests on)
+
+| shape | base | ablate_read | ablate_write | ablate_compute | ablate_all | B7 off |
+|---|---:|---:|---:|---:|---:|---:|
+| `square` (256 blk / 3 per core) | 44 532 | 0.719× | 0.573× | 0.992× | 0.012× | 1.231× |
+| `tile_1` (8 192 blk / 75 per core) | 104 209 | 0.643× | 0.634× | 0.900× | 0.034× | 0.988× |
+| `dtype_uint8_narrow` (2 048 blk / 19) | 150 297 | **0.054×** | 0.978× | 1.003× | 0.008× | 0.991× |
+| `retile_shrink` (256 blk / 3) | 72 147 | 0.774× | 0.965× | 1.026× | 0.753× | 1.004× |
+
+Reading: the square is the balanced DM-bound case R9 characterised (read and write both load-bearing,
+compute hidden, barriers load-bearing). `tile_1` is the same bytes with 32× the blocks and is
+*per-block-serialization* bound (both halves exposed, barriers no longer the lever). The narrow-stick
+row is almost purely read. `retile_shrink`'s `ablate_all` of **0.753×** is the outlier and is the
+face-walk's per-datum L1 copy, which no NoC lever touches — R8 already recorded it as correctness-gated.
+
+### A0 re-graded per regime (Mode D requires it; every regime added since R3)
+
+Straight off the bench header, 110-core grid: `padded_h/w_tail` 256 blocks → 110 cores;
+`padded_row_vector` 32 → 32; `smallest_padded` 1 → 1; `dtype_fp32` 512 → 110; `dtype_uint8` 128 → 110;
+`dtype_uint8_narrow` 2 048 → 110; `dtype_bf16_to_bf8b` 256 → 110; `tile_16` 512 → 110; `tile_1`
+8 192 → 110; `retile_shrink` 256 → 110; `retile_grow` 64 → 64; `reshard` 256 → 8 and
+`reshard_rowwise` 32 → 8 (the shard's own cores, A2). All satisfy `active == min(grid, total_blocks)`;
+the two deliberate exceptions are the measured gates (`l1_to_l1` 64 → 32, R3's pipeline cap, 1.295×;
+`sharded_small` 16 → 4, the shard's cores).
+
+**One thing A0's criterion structurally cannot see**: `retile_grow` passes at 64 of 110 cores *only
+because the block count is 64* — and the block count is itself a knob. At `target_read_bytes=128` the
+same shape yields 512 blocks, fills 110 cores, and runs 1.48× faster. A0's fill check is only as good
+as the block-width knob feeding it; that is recorded on both the A0 and B6 rows.
+
+### Completeness ledger — `master.md` Part 2, all 24 levers
+
+| lever | status | evidence | reason |
+|---|---|---|---|
+| **A0** | applied | on 44,317 / off 334,309 ns — lever saves 86.7% @ `[1, 1, 2048, 2048]`, knob `multicore` | Active-core count checked PER REGIME against A0's criterion (interleaved: active == min(grid, total_blocks)) on this 11x10=110 grid: square 256 blocks -> 110 cores; wide_short 32 blocks -> 32 cores; tall_narrow 64 -> 64; |
+| **A1** | applied | on 7,321 / off 8,121 ns — lever saves 9.8% @ `[1, 1, 32, 16384]`, knob `row_wise` | split_work_to_cores(..., row_wise=True) AND grid_to_cores(..., row_wise=True) — the same flag on both calls, or the runtime-arg assignment order silently mismatches the split's group order (op_design risk 18). Pays on th |
+| **A2** | applied | on 2,093 / off 21,235 ns — lever saves 90.1% @ `[1, 1, 2048, 2048]`, knob `force_streamed` | Sharded calls launch on the shard's OWN cores via get_optimal_worker_cores_for_sharded_tensor (shard_grid_cores in the program descriptor) — core k holds shard k — instead of re-spreading the linear block space with spli |
+| **A3** | applied | on 6,866 / off 7,338 ns — lever saves 6.4% @ `[1, 1, 32, 16384]`, knob `spread_cores` | A3 is about WHERE the readers sit relative to the DRAM banks. It only has a degree of freedom when active_cores < grid_cores, which is exactly the wide-short regime Refinement 3 targets (32 blocks -> 32 of 110 cores). `g |
+| **A4** | deferred | predicted 1% | The two-group split already carries the remainder in a runtime arg, and the tail column-block is a second COMPILE-TIME instantiation of the same compute kernel (WT_TAIL), so there is no cliff kernel to skip and no idle c |
+| **B0** | applied | on 1,867 / off 11,251 ns — lever saves 83.4% @ `[1, 1, 32, 32]`, knob `barrier_per_block` | The discipline itself: every per-core-overhead lever in this ledger (B5, B7, and B9) is counterfactualed on the smallest regime the op runs in as well as on the square, so a lever that pays at several blocks/core cannot  |
+| **B5** | applied | on 1,899 / off 2,006 ns — lever saves 5.3% @ `[1, 1, 30, 32]`, knob `coalesce_writes` | The writer writes each output tile as ONE whole-page noc_async_write instead of four face-sized writes. Small but consistent, and it pays on the smallest regime too, which is B0's requirement for a per-core-overhead leve |
+| **B6** | applied | on 44,590 / off 55,278 ns — lever saves 19.3% @ `[1, 1, 2048, 2048]`, knob `target_read_bytes` | TARGET_READ_BYTES is a BYTE target (so every dtype lands on the same sweet spot) and the sweep MOVED it: 512 B — the Wormhole one-packet value op_design.md specified — is wrong on this Blackhole part, where NOC_MAX_BURST |
+| **B7** | applied | on 1,867 / off 11,251 ns — lever saves 83.4% @ `[1, 1, 32, 32]`, knob `barrier_per_block` | One noc_async_read_barrier per BLOCK (tile_h reads in flight), which is exactly what dataflow_kernel_lib::read_sticks_for_tilize<TILE> does; the off-arm barriers every transaction. The largest transaction-shape lever in  |
+| **B8** | deferred | predicted 20% | R10: OPEN, re-sized 10% -> 20% on regimes that did not exist when it was deferred. tile_1 (75 blocks/core) and dtype_uint8_narrow (19 blocks/core) both measure per-block read serialization as the wall, and the B7 arm is  |
+| **B9** | applied | on 7,321 / off 13,649 ns — lever saves 46.4% @ `[1, 1, 32, 16384]`, knob `noc_split` | Reader on NCRISC/NoC0 (ReaderConfigDescriptor) and writer on BRISC/NoC1 (WriterConfigDescriptor); the off-arm swaps the two configs so the read stream runs on the writer's NoC. Pays in every regime, including the smalles |
+| **B10** | applied | on 1,942 / off 1,892 ns — lever COSTS 2.6% @ `[1, 1, 30, 32]`, knob `per_core_vc` | BUILT on BOTH NoC halves and shipped REGIME-GATED, because the sign flips on grid fill. Mechanism, and why the arms differ: `noc_async_read`'s `read_req_vc` argument is a NO-OP in DM_DEDICATED_NOC (`ncrisc_noc_fast_read` |
+| **B11** | applied | on 151,153 / off 129,353 ns — lever COSTS 16.9% @ `[1, 1, 65536, 32]`, knob `stage_reads` | REOPENED by Refinement 7 and then APPLIED — the row's own Phase-0 text said "no misalignment at any element width the current or next refinement reaches" and named the ONE exception it could not yet reach (a 1-byte dtype |
+| **B12** | structurally-impossible | pinned by `tests/ttnn/unit_tests/operations/tilize/test_tilize_debug.py::test_b12_multicast_is_structurally_absent` | tilize's map is a BIJECTION on byte positions and its single input operand varies along BOTH split axes, so no core reads a byte another core reads and there is no fan-out to multicast. Pinned by asserting the program de |
+| **B13** | deferred | on 2,378 / off 1,924 ns — lever COSTS 23.6% @ `[1, 1, 32, 64]`, knob `stateful_reads` | BUILT and measured in both orderings, and it LOSES in both. `set_state` programs the source NODE, so it only amortizes if consecutive issues share a bank — which means issuing the block's sticks in bank-phase order. (a)  |
+| **C14** | applied | on 2,093 / off 21,235 ns — lever saves 90.1% @ `[1, 1, 2048, 2048]`, knob `force_streamed` | FIRST degree taken: both CBs are aliased onto the resident L1 shards with ttnn.cb_descriptor_from_sharded_tensor, so the reader issues no NoC read (it only arms the CB), tilize packs straight into the output shard, and t |
+| **C15** | deferred | predicted 95% | R10: OPEN but CALLER-SIDE — the 95% is the size of the caller's placement choice, not an op-side lever. Measured on one logical shape: [1,1,2048,2048] interleaved 44 008 ns vs the same shape L1-sharded on both sides 2 11 |
+| **C16** | applied | on 103,000 / off 126,239 ns — lever saves 18.4% @ `[1, 1, 2048, 2048]`, knob `double_buffer` | R10: APPLIED — depth-2 saves 18.4% on the tiny-tile regime (tile_1, 75 blocks/core: 103 000 on / 126 239 off). The earlier measured-no-payoff verdict was correct for the <=5-blocks-per-core regimes it was measured on and |
+| **C17** | structurally-impossible | pinned by `tests/ttnn/unit_tests/operations/tilize/test_tilize_debug.py::test_c17_in_place_is_structurally_impossible` | A layout conversion cannot be in-place: RM->TILE moves every byte, and the tilize LLK helper itself static_asserts input_dfb != output_dfb (tilize_helpers.inl:116). Pinned by asserting the two CB slots differ and that th |
+| **D18** | deferred | predicted 0% | Predicted ~0 on device kernel time; the payoff is dispatch/program-cache, which tests/ttnn/unit_tests/operations/tilize/test_tilize.py::test_tilize_program_cache_hit exercises together with D19. OBSERVED: a probe (tests/ |
+| **D19** | deferred | predicted 0% | Applied in code, unmeasurable in device kernel duration by construction. Recorded as open rather than claimed as a measured win. OBSERVED: a probe (tests/ttnn/unit_tests/operations/tilize/probes/probe_002.py) shows num_p |
+| **D20** | applied | on 22,851 / off 35,603 ns — lever saves 35.8% @ `[1, 1, 1024, 1024]`, knob `reshard_pull` | Refinement 4 lands the data path this row was deferred FOR (its own follow-up named A3c). `plan_placement` now selects between four schemes (resident / crossover / reshard / streamed) and, inside the reshard, `reshard_di |
+| **D21** | measured-no-payoff | on 2,074 / off 1,924 ns — lever COSTS 7.8% @ `[1, 1, 32, 64]`, knob `fast_addrgen` | The row's own follow-up asked: does TensorAccessor already specialize the address arithmetic? MEASURED: yes. A hand-rolled replacement — one running address per bank phase, advanced by a stride derived from two real acce |
+| **E22** | deferred | predicted 0% | The smallest regime shows the shape of the cost it targets (ablate_all is 0.32us of a 1.87us launch, 17%), so the lever is real at model level — but it is not this op's to apply. |
+
+**End state:** 17 of 24 levers closed with evidence (7 open). Generated from `tilize/lever_ledger.json` by `eval.verify_levers --report`.
+
+### Ranked remaining opportunities
+
+| # | lever | status | predicted | regime / follow-up |
+|---|---|---|---|---|
+| 1 | **C15** | deferred | 95% | CALLER-SIDE, not an op lever: the op already consumes and produces shards natively (A2 + C14 applied and measured), so there is nothing left for the kernel to apply — the choice is the caller's memory |
+| 2 | **B8** | deferred | 20% | Build the trid double-issue in the reader: tag each block's reads with a transaction id and barrier on the PREVIOUS block's id (`noc_async_read_barrier_with_trid` family), so one block's reads are alw |
+| 3 | **A4** | deferred | 1% | Only worth building if a per-core zone profile ever shows the tail-block cores idling: specialize them into their own kernel instead of carrying (n_full, n_tail) as runtime args. R10 bounds the prize  |
+| 4 | **B13** | deferred | 0% | Unchanged from R6 and still the only open part: route the pad-boundary reader body through the same issue branch the aligned path uses, so `stateful_reads` / `fast_addrgen` / `barrier_per_block` are l |
+| 5 | **D18** | deferred | 0% | BENCH GAP, unchanged in kind and now stated with its fix: device kernel duration cannot see this lever (it moves address-gen code and program-cache behaviour, not kernel ns), so the arm has to be a HO |
+| 6 | **D19** | deferred | 0% | Same bench gap as D18 and the same fix (a host-side dispatch arm). The kernel side is already at the lever's endpoint — runtime args are only (buffer address, b0, nb), every shape-derived quantity is  |
+| 7 | **E22** | deferred | 0% | Out of single-op scope by construction: Metal Trace + multi-CQ removes HOST dispatch, which device kernel duration does not measure. R10 re-states the size of what it targets from the op's own smalles |
+
+**The generated table shows open rows only, so the two measured opportunities that sit on CLOSED rows
+are ranked here** (they are in the B6 / B9 `reason` fields, with the knob and the gate named):
+
+| # | where | measured now | prize | why it is not shipped |
+|---|---|---|---|---|
+| 1 | **B6 default on the retile path** (`target_read_bytes` 1024 → 128) | 72 249 / 83 837 ns | **1.27× / 1.48×** on `retile_shrink` / `retile_grow`, bit-exact | Mode D files nothing and fixes nothing; and R8's §8.4 puts the retile path outside the DM budget, so re-defaulting it belongs to a round that owns that path. |
+| 2 | **B8 trid double-issue** (needs building) | — | predicted **20 %** (10–30 %) on `tile_1` + `dtype_uint8_narrow` | It is a reader kernel change, i.e. new work, not an audit. Off-arm shape named in the ledger row. |
+| 3 | **B9 default on the staged narrow-stick path** (`noc_split` → 0 when Wt == 1) | 148 803 ns | **1.043×**, bit-exact | Same rule; also wants the staged path's own regime predicate rather than a global flip. |
+
+### Perf — cumulative bench, all 23 shapes re-measured at `base` (no-regression gate)
+
+No op code changed this phase, so this table is a pure measurement-stability check against R9.
+
+| shape | R9 base | R10 base | delta |
+|---|---:|---:|---:|
+| `square` | 44 389 | 44 008 | -0.9 % |
+| `wide_short` | 6 603 | 6 711 | +1.6 % |
+| `tall_narrow` | 4 681 | 4 736 | +1.2 % |
+| `l1_to_l1` | 4 722 | 4 731 | +0.2 % |
+| `smallest` | 1 904 | 1 918 | +0.7 % |
+| `smallest_aligned` | 1 838 | 1 830 | -0.4 % |
+| `smallest_padded` | 1 903 | 1 936 | +1.7 % |
+| `sharded_big` | 2 110 | 2 117 | +0.3 % |
+| `sharded_small` | 834 | 862 | +3.4 % |
+| `reshard` | 22 837 | 22 669 | -0.7 % |
+| `reshard_rowwise` | 15 899 | 15 775 | -0.8 % |
+| `padded_h_tail` | 44 138 | 44 361 | +0.5 % |
+| `padded_w_tail` | 44 520 | 44 710 | +0.4 % |
+| `padded_noop` | 44 295 | 44 315 | +0.0 % |
+| `padded_row_vector` | 28 985 | 28 929 | -0.2 % |
+| `dtype_fp32` | 87 229 | 87 207 | -0.0 % |
+| `dtype_uint8` | 23 620 | 23 529 | -0.4 % |
+| `dtype_uint8_narrow` | 149 361 | 149 329 | -0.0 % |
+| `dtype_bf16_to_bf8b` | 36 246 | 36 455 | +0.6 % |
+| `tile_16` | 44 121 | 44 431 | +0.7 % |
+| `tile_1` | 104 629 | 103 880 | -0.7 % |
+| `retile_shrink` | 72 173 | 72 525 | +0.5 % |
+| `retile_grow` | 84 021 | 84 023 | +0.0 % |
+
+Every row inside ±2 % except `sharded_small` at +3.4 % — a **862 ns** launch whose own history across
+phases is 829 / 834 / 862 ns with no code change between them, i.e. the run-to-run floor of a
+sub-microsecond call rather than a regression (nothing in the op differs from R9 by a single byte).
+
+### Issues encountered
+
+None functional. Two methodology notes worth keeping:
+
+- **A stale verdict looks exactly like a settled one.** C16 and B8 were both closed/sized correctly
+  *for the regimes that existed when they were written*, and neither row was wrong at the time. The
+  only thing that surfaced them was re-running their arms on the shapes added two refinements later —
+  one bench row each, which is the entire argument for keeping the forcing arms alive.
+- **A "closed" row can still hide an open regime.** B6 and B9 are both `applied` with real wins, and
+  both have a regime where the shipped DEFAULT is measurably wrong. The ledger's status is about the
+  *lever*, not about its per-regime setting, so those findings are recorded in the rows' reasons and
+  ranked above rather than being invisible behind a green status.
