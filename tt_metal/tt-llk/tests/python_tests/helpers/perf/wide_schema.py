@@ -21,7 +21,7 @@ Imports no device libraries, so it loads without hardware.
 
 from dataclasses import dataclass
 
-from .perf_schema import MEAN, STD, stat_column
+from .schema import MEAN, STD, stat_column
 
 
 @dataclass(frozen=True)
