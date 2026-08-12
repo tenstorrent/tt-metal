@@ -133,20 +133,20 @@ class Api:
         _, _, body = self._request("GET", url)
         return json.loads(body)
 
-    def token_scopes(self) -> str:
-        """What the credential is actually allowed to do, straight from GitHub.
+    def token_scopes(self) -> str | None:
+        """What the credential is allowed to do, straight from GitHub, or None if it will not say.
 
-        Only ever called to explain a failure. A classic PAT's scopes come back in a header; a fine
-        grained token or an App token has none and says so by omission, which is not the same as
-        having none of the permissions.
+        Only ever called to explain a failure. A classic PAT's scopes come back in a header. A
+        fine-grained or App token sends no such header, and that silence means *unknown*, not
+        *none* -- reading it as none would condemn exactly the tokens worth preferring here.
         """
         try:
             _, headers, _ = self._request("GET", f"{self.base}/")
-        except ApiError as exc:
-            return f"could not be read ({exc})"
+        except ApiError:
+            return None
         scopes = headers.get("x-oauth-scopes")
         if scopes is None:
-            return "not reported, so this is a fine-grained or App token rather than a classic PAT"
+            return None
         return scopes or "(none)"
 
     def download(self, url: str) -> bytes:
@@ -292,7 +292,9 @@ def push_ref(
             retryable = any(m in str(exc) for m in PUSH_RETRY_MESSAGES)
             if retryable and attempt == 1 and scopes is not None:
                 held = scopes()
-                if "workflow" not in held:
+                # None means GitHub did not report scopes, which a fine-grained or App token never
+                # does. Unknown is not missing, so those keep their retries.
+                if held is not None and "workflow" not in held:
                     retryable = False
                     exc = DispatchError(
                         f"{exc}\n\nthe push credential holds only: {held}\n"
