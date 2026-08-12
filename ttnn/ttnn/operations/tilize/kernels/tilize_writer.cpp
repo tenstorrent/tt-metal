@@ -211,4 +211,15 @@ void kernel_main() {
         noc_async_write_barrier();
         cb_pop_front(cb_output_tiles, w);
     }
+
+    // R9/B10, the writer's half of the hand-back. A plain `noc_async_write`
+    // reprograms NOC_CTRL on every call, so this is not load-bearing for the
+    // next *write* — but a later kernel that issues `*_with_state` writes
+    // without its own `set_state` would inherit our VC, and `noc_init` does not
+    // run between launches (`brisc.cc` calls it only on a NoC-MODE change). The
+    // reader arm proved that hazard is real (a byte-identical control arm
+    // measured 1.14x after a VC arm), so both halves hand the register back.
+    if constexpr (vc_mode == 1) {
+        noc_async_write_one_packet_set_state(dst.get_noc_addr(0), out_tile_bytes, noc_index, NOC_UNICAST_WRITE_VC);
+    }
 }

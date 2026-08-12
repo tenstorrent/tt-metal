@@ -216,12 +216,34 @@ FP32_DEST_ACC_8BIT = 1
 # neighbours on a shared link agree, whatever core subset the placement picked.
 #
 # A BITMASK over the two NoC halves, because they are separately measurable and
-# measured to behave differently: bit 0 = the reader's read-request VC, bit 1 =
+# measured to behave OPPOSITELY: bit 0 = the reader's read-request VC, bit 1 =
 # the writer's write VC. 0 = every core on the arch default (read VC 1, write
 # `NOC_UNICAST_WRITE_VC`), i.e. the pre-R9 program byte-for-byte; 3 = both.
-PER_CORE_VC = 0
 VC_READER = 1
 VC_WRITER = 2
+#
+# Measured (R9, BH 11x10, DEVICE KERNEL DURATION, off-arm = per_core_vc=0):
+#
+#   regime                       cores      reader VC      writer VC
+#   square      DRAM  [1,1,2048,2048]  110   1.148x WORSE  2.464x WORSE
+#   dtype_fp32  DRAM  same shape       110   1.090x WORSE  2.869x WORSE
+#   dtype_uint8 DRAM  same shape       110   1.286x WORSE  1.403x WORSE
+#   wide_short  DRAM  [1,1,32,16384]    32   **0.948x**    0.994x
+#   tall_narrow DRAM  [1,1,2048,64]     64   **0.980x**    0.998x
+#   l1_to_l1    L1    [1,1,512,2048]    32   0.993x        **0.937x**
+#   smallest    DRAM  [1,1,32,64]        1   0.999x        0.992x  (inert: 1 core)
+#
+# The sign flips on GRID FILL, and master.md's own text says why: B10 breaks
+# first-come-first-serve serialization *when readers share a route*, and A3 (its
+# stated partner — "the tech report applies them together") is what makes the
+# routes disjoint in the first place. With all 110 cores round-robining all 7
+# DRAM banks, no VC assignment can separate the routes; splitting the traffic
+# over four STATIC VCs just fragments the per-VC buffering at each shared link,
+# so it is a large LOSS. Below full grid the same assignment has room to help,
+# and on the all-L1 path (where the "banks" are the worker cores themselves) it
+# is the WRITE half that decongests. Hence a regime gate, never a global default.
+PER_CORE_VC_DRAM_PARTIAL_GRID = VC_READER
+PER_CORE_VC_ALL_L1 = VC_WRITER
 # Unicast VCs are 0..3 (`dataflow_api.h`'s read/write `vc` argument doc); 4/5 are
 # the multicast and dispatch-multicast channels and are NOT ours to take.
 NUM_UNICAST_VCS = 4
@@ -1333,6 +1355,32 @@ def block_order_row_major(*, mode: str, wt_block: int, wt_tail: int, knob) -> in
     return int(bool(want) and mode == MODE_STREAMED and wt_block == wt_tail)
 
 
+def per_core_vc_default(in_memory_config, out_memory_config, *, active_cores: int, grid_cores: int) -> int:
+    """The regime-selected per-core VC mask (R9 / master.md B10), 0 = arch default.
+
+    Same shape as `placement_defaults` and for the same reason — the knob's sign
+    depends on the data path — but it needs one thing that function deliberately
+    does not take: the ACTIVE CORE COUNT. B10 only has room to work while the
+    routes are separable, and a grid-filling interleaved-DRAM call is the case
+    where they provably are not (every core reads every bank). The numbers behind
+    each arm are next to `PER_CORE_VC_DRAM_PARTIAL_GRID` above.
+
+    Pure (memory configs + two ints) so the gate is unit-testable without a
+    device. A sharded side gets 0: its dataflow kernels are CB handshakes on the
+    resident half, and the gather/scatter half is L1<->L1 between shard cores,
+    which no arm here was measured on.
+    """
+    if in_memory_config.is_sharded() or out_memory_config.is_sharded():
+        return 0
+    types = (in_memory_config.buffer_type, out_memory_config.buffer_type)
+    mask = 0
+    if all(t == ttnn.BufferType.DRAM for t in types) and active_cores < grid_cores:
+        mask |= PER_CORE_VC_DRAM_PARTIAL_GRID
+    if all(t == ttnn.BufferType.L1 for t in types):
+        mask |= PER_CORE_VC_ALL_L1
+    return mask
+
+
 def read_bank_period(num_banks: int, tile_height: int, is_dram_interleaved: bool) -> int:
     """Source pages per bank cycle for the R6 stateful-read arm, or 0 = off.
 
@@ -1837,7 +1885,16 @@ def create_program_descriptor(
     # ---------- 6. kernels ----------
     # R9 (master.md B10 + A3), resolved once so the reader, the writer and the
     # per-core runtime args cannot disagree about either knob.
-    vc_mask = int(PER_CORE_VC if lv["per_core_vc"] is None else lv["per_core_vc"])
+    vc_mask = int(
+        per_core_vc_default(
+            input_tensor.memory_config(),
+            output_tensor.memory_config(),
+            active_cores=len(cores),
+            grid_cores=grid.x * grid.y,
+        )
+        if lv["per_core_vc"] is None
+        else lv["per_core_vc"]
+    )
     reader_vc_mode = int(bool(vc_mask & VC_READER))
     writer_vc_mode = int(bool(vc_mask & VC_WRITER))
     block_order = block_order_row_major(mode=plan["mode"], wt_block=wt_block, wt_tail=wt_tail, knob=lv["block_order"])

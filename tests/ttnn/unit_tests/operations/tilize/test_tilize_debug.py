@@ -50,6 +50,7 @@ import ttnn
 from ttnn.operations.tilize import tilize
 from ttnn.operations.tilize.tilize import EXCLUSIONS, _dispatch
 from ttnn.operations.tilize.tilize_program_descriptor import (
+    BLOCK_ORDER_ROW_MAJOR,
     MIN_BLOCKS_PER_CORE,
     SPREAD_CORES,
     FAST_ADDRGEN,
@@ -59,7 +60,12 @@ from ttnn.operations.tilize.tilize_program_descriptor import (
     TARGET_READ_BYTES,
     TILIZE_UNINIT,
     WAIT_UPFRONT_RESIDENT,
+    VC_READER,
+    VC_WRITER,
     read_bank_period,
+    per_core_vc,
+    per_core_vc_default,
+    block_order_row_major,
     blocking,
     numeric_policy,
     pad_cast_fix,
@@ -1671,3 +1677,101 @@ def test_r8_block_float_below_a_16_row_face_is_declared_excluded():
     assert not is_excluded(output_dtype=ttnn.bfloat8_b, tile_height=16)
     assert not is_excluded(output_dtype=ttnn.bfloat8_b, tile_height=32)
     assert excluded  # the set is non-empty, i.e. the entries above are real rows
+
+
+# ---------------------------------------------------------------------------
+# 10. Refinement 9 (perf) — the two placement/VC knobs, their regime gate, and
+#     the structural reason A3's "one reader <-> one bank" degree does not exist
+#     on this op no matter how the blocks are dealt out.
+# ---------------------------------------------------------------------------
+
+_READER_VC_CT = 31
+_READER_BLOCK_ORDER_CT = 32
+_WRITER_VC_CT = 18
+_WRITER_BLOCK_ORDER_CT = 19
+
+
+def test_r9_per_core_vc_gate_arms_only_where_it_measured_positive():
+    """B10 ships GATED, and the gate is the measurement (see the table in the
+    descriptor next to `PER_CORE_VC_DRAM_PARTIAL_GRID`).
+
+    Host-only: `per_core_vc_default` is pure, which is the point — the sign of
+    this lever flips on grid fill, so the condition has to be checkable without
+    a device."""
+    dram, l1 = ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG
+    # Grid-filling interleaved DRAM: every core reads every bank, the routes are
+    # not separable, and both halves measured 1.15-2.87x WORSE -> off.
+    assert per_core_vc_default(dram, dram, active_cores=110, grid_cores=110) == 0
+    # Partially-filled DRAM grid (wide_short 0.948x, tall_narrow 0.980x): the
+    # READ half only.
+    assert per_core_vc_default(dram, dram, active_cores=32, grid_cores=110) == VC_READER
+    # All-L1 (l1_to_l1 0.937x): the WRITE half, at any core count.
+    assert per_core_vc_default(l1, l1, active_cores=32, grid_cores=110) == VC_WRITER
+    assert per_core_vc_default(l1, l1, active_cores=110, grid_cores=110) == VC_WRITER
+    # A mixed direction was not measured, so it inherits nothing.
+    assert per_core_vc_default(dram, l1, active_cores=32, grid_cores=110) == 0
+    assert per_core_vc_default(l1, dram, active_cores=32, grid_cores=110) == 0
+
+
+def test_r9_per_core_vc_is_wired_to_both_kernels_and_is_a_live_knob(device):
+    """The gate reaches the CT args of BOTH halves, and the lever can force or
+    silence it anywhere (which is what keeps its off-arm re-runnable)."""
+    grid = device.compute_with_storage_grid_size()
+    # [1,1,32,16384] is the wide-short regime: 32 blocks -> 32 of 110 cores, so
+    # the DRAM partial-grid arm is the one that ships here.
+    descriptor, _in, _out = _descriptor_for(device, (1, 1, 32, 16384), ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG)
+    reader, writer = descriptor.kernels[0], descriptor.kernels[1]
+    assert reader.compile_time_args[_READER_VC_CT] == 1
+    assert writer.compile_time_args[_WRITER_VC_CT] == 0
+    # ... and the per-core VC really is per core: (x + y) & 3 over the four
+    # unicast VCs, so no two cores sharing a NoC row or column agree.
+    assert per_core_vc(ttnn.CoreCoord(0, 0)) == 0
+    assert per_core_vc(ttnn.CoreCoord(1, 0)) == 1
+    assert per_core_vc(ttnn.CoreCoord(0, 1)) == 1
+    assert per_core_vc(ttnn.CoreCoord(3, 2)) == 1
+    assert {per_core_vc(ttnn.CoreCoord(x, 0)) for x in range(grid.x)} == {0, 1, 2, 3}
+
+    # The grid-filling square is the regime where the lever LOSES: gated off.
+    square, _in2, _out2 = _descriptor_for(device, (1, 1, 2048, 2048), ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG)
+    assert square.kernels[0].compile_time_args[_READER_VC_CT] == 0
+    assert square.kernels[1].compile_time_args[_WRITER_VC_CT] == 0
+
+
+def test_r9_block_order_is_a_live_knob_parked_at_the_phase0_order(device):
+    """A3's residual degree: the block -> core mapping. Measured a null on every
+    multi-core regime (0.99-1.01x), so it ships at the Phase-0 column-major
+    order and stays forceable — this pins BOTH halves of that."""
+    assert BLOCK_ORDER_ROW_MAJOR == 0
+    descriptor, _in, _out = _descriptor_for(
+        device, (1, 1, 2048, 2048), ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG
+    )
+    assert descriptor.kernels[0].compile_time_args[_READER_BLOCK_ORDER_CT] == 0
+    assert descriptor.kernels[1].compile_time_args[_WRITER_BLOCK_ORDER_CT] == 0
+
+    # The gate, host-only: row-major is only legal while the two block widths
+    # agree, because compute runs `n_full` blocks at WT_BLOCK and then `n_tail`
+    # at WT_TAIL and never sees `b` at all.
+    assert block_order_row_major(mode="streamed", wt_block=16, wt_tail=16, knob=1) == 1
+    assert block_order_row_major(mode="streamed", wt_block=16, wt_tail=3, knob=1) == 0
+    assert block_order_row_major(mode="resident", wt_block=16, wt_tail=16, knob=1) == 0
+    assert block_order_row_major(mode="streamed", wt_block=16, wt_tail=16, knob=None) == BLOCK_ORDER_ROW_MAJOR
+
+
+def test_r9_no_block_to_core_mapping_can_give_a_reader_its_own_dram_bank(device):
+    """master.md A3's *first* degree — "one reader <-> one bank" — is structurally
+    unavailable to this op, and this is the pin for that ledger claim.
+
+    An interleaved buffer round-robins page `p` onto bank `p % num_banks`. A
+    block is `tile_h` consecutive source sticks (read side) and `wt_block`
+    consecutive tile pages (write side); as long as EITHER count is >= the bank
+    count, every block touches every bank, so no assignment of blocks to cores
+    can make a core's traffic bank-local. The only A3 degree left is WHICH cores
+    run (`spread_cores`, applied) and in which ORDER they take the blocks
+    (`block_order`, measured null) — which is exactly what R9 measured."""
+    banks = device.dram_grid_size()
+    num_banks = banks.x * banks.y
+    assert num_banks > 1
+    for shape in ((1, 1, 2048, 2048), (1, 1, 32, 16384), (1, 1, 2048, 64)):
+        blk = blocking(list(shape), 32, 2)
+        touches_all_banks = 32 >= num_banks or blk["wt_block"] >= num_banks
+        assert touches_all_banks, f"{shape}: a block would fit inside {num_banks} banks — re-open A3's first degree"
