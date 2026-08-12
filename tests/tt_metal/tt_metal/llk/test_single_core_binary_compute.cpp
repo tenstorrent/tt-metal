@@ -254,10 +254,12 @@ static BinaryStimulus generate_binary_stimulus(const SingleCoreBinaryConfig& tes
         return s;
     }
 
-    const auto golden_input0 = test_config.col_broadcast ? apply_col_broadcast_to_tiled_input(input0)
-                               : test_config.row_broadcast
-                                   ? apply_row_broadcast_to_tiled_input(input0, test_config.tile)
-                                   : input0;
+    auto golden_input0 = input0;
+    if (test_config.col_broadcast) {
+        golden_input0 = apply_col_broadcast_to_tiled_input(input0);
+    } else if (test_config.row_broadcast) {
+        golden_input0 = apply_row_broadcast_to_tiled_input(input0, test_config.tile);
+    }
     std::vector<float> temp_golden(golden_input0.size());
     std::transform(
         golden_input0.begin(),
