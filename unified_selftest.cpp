@@ -1,9 +1,13 @@
-// Compile + trace harness for unified.hpp / unified_expr.hpp.
+// Compile + trace harness for the unified programming model.
 //
-// unified.hpp is a design sketch: the CB / NOC / Tensix intrinsics it calls come
-// from the metal kernel headers in a real build. This file supplies traced
-// versions of just those, so the *structure* of each thread projection can be
-// checked on the host.
+//   unified_expr.hpp  -- domain-free expression tree + DST register allocator
+//   fusion.hpp        -- leaves, ops, fusion kinds, driver strategies
+//   unified.hpp       -- core API (Storage / Block / ComputeBlock / noc_*)
+//
+// Those headers are a design sketch: the CB / NOC / Tensix intrinsics they call
+// come from the metal kernel headers in a real build. This file supplies traced
+// versions of just those, then runs the example kernels once per thread
+// projection and checks that every circular buffer balances.
 //
 //   for s in "DM0 -DIS_DM_THREAD=1 -DTT_DM_THREAD_ID=0" \
 //            "DM1 -DIS_DM_THREAD=1 -DTT_DM_THREAD_ID=1" \
@@ -15,6 +19,7 @@
 
 #include <cstdio>
 #include <string>
+#include <utility>
 #include <vector>
 
 static std::vector<std::string> trace;
@@ -42,6 +47,7 @@ inline void copy_tile(int cb, int tile, int dst) {
 inline void pack_tile(int dst, int cb) { T("  pack_tile(dst" + n(dst) + " -> cb" + n(cb) + ")"); }
 inline void sfpu_add(int a, int b, int o) { T("    sfpu_add (dst" + n(a) + ",dst" + n(b) + " -> dst" + n(o) + ")"); }
 inline void sfpu_relu(int a, int o) { T("    sfpu_relu(dst" + n(a) + " -> dst" + n(o) + ")"); }
+inline void sfpu_sum(int a, int o) { T("    sfpu_sum (dst" + n(a) + " -> dst" + n(o) + ")"); }
 inline void relu_from_pack(int base, int count) {
     T("  relu_from_pack(dst" + n(base) + "..dst" + n(base + count - 1) + ")  [replaces tile_regs_wait]");
 }
@@ -52,33 +58,91 @@ inline void matmul_block(int in0, int in1, int h, int w, int kt) {
 inline void pack_block(int dst, int cb, int count) {
     T("  pack_block(dst" + n(dst) + ".." + n(dst + count - 1) + " -> cb" + n(cb) + ")");
 }
-inline void sfpu_sum(int a, int o) { T("    sfpu_sum (dst" + n(a) + " -> dst" + n(o) + ")"); }
-
-// ---- operands referenced by test() / reduce(), declared before the include
-// because those functions live inside the header ----------------------------
-namespace tt {
-namespace unified {
-class Tensor {};
-struct Coord;
-extern Tensor t0;
-extern Tensor t1;
-extern Tensor t2;
-extern Coord coord_0x0;
-extern int offset;
-}  // namespace unified
-}  // namespace tt
 
 #include "unified.hpp"
 
 namespace tt {
 namespace unified {
-Tensor t0, t1, t2;
-Coord coord_0x0{0, 0};
-int offset = 0;
+
+// Tensor is only forward-declared by the core header; the DM bodies never
+// dereference it, so an empty definition is enough to run the examples.
+class Tensor {};
+
+// ===========================================================================
+//  Example kernels
+//
+//  Each is written as if single-threaded. The same source is compiled once per
+//  baby RISC-V thread, and each statement lowers to that thread's half of the
+//  circular-buffer protocol.
+// ===========================================================================
+
+// INPUT + INTERMED + OUTPUT: two DRAM loads, an SFPU add into an intermediate,
+// a second add, then a DRAM store.
+void example_eltwise() {
+    Tensor t0, t1, t2;
+    Storage lhs_storage(0, 2);
+    Storage rhs_storage(1, 2);
+    Storage tmp_storage(2, 2);
+    Storage out_storage(3, 2);
+
+    for (int i = 0; i < 1; ++i) {
+        ComputeBlock lhs = noc_load<0>(lhs_storage, t0, i);
+        ComputeBlock rhs = noc_load<1>(rhs_storage, t1, i);
+
+        ComputeBlock tmp = tmp_storage.store(lhs + rhs);
+
+        Block result = out_storage.store(tmp + lhs);
+        noc_store<0>(std::move(result), t2, i);
+    }
+}
+
+// Two-stage reduction with a core-to-core hop in the middle.
+// NOTE: the hop is not yet correct -- see the noc_write TODO in unified.hpp.
+void example_reduce() {
+    Tensor t0, t2;
+    Coord coord_0x0{0, 0};
+    Storage stage0_storage(0, 8);
+    Storage stage1_storage(1, 8);
+    Storage tmp_storage(2, 2);
+    Storage out1_storage(3, 8);
+
+    for (int i = 0; i < 1; ++i) {
+        ComputeBlock s0 = noc_load<0>(stage0_storage, t0, i);
+
+        Block tmp = tmp_storage.store(s0.sum());
+
+        ComputeBlock s1 = noc_write<0>(stage1_storage, std::move(tmp), coord_0x0, /*offset=*/0);
+
+        noc_store<0>(out1_storage.store(s1.sum()), t2, i);
+    }
+}
+
+// The FPU path: matmul with a fused relu epilogue, then the SFPU path consuming
+// its result out of an intermediate Storage.
+void example_matmul_relu() {
+    Tensor t0, t1, t2;
+    Storage a_storage(0, 1);
+    Storage b_storage(1, 1);
+    Storage mm_storage(2, 1);
+    Storage out_storage(3, 1);
+
+    // out_subblock 2x2 = 4 DST tiles, k-dim 2, 2 inner blocks
+    using Geom = MatmulGeometry</*h=*/2, /*w=*/2, /*in0_block_w=*/2, /*num_blocks=*/2>;
+
+    ComputeBlock a = noc_load<0>(a_storage, t0, 0);
+    ComputeBlock b = noc_load<1>(b_storage, t1, 0);
+
+    // relu folds into the matmul's pack-side epilogue rather than wrapping it
+    ComputeBlock mm = mm_storage.store(relu(matmul<Geom>(a, b)));
+
+    // ... and the SFPU path picks it up from there
+    noc_store<0>(out_storage.store(mm + a), t2, 0);
+}
+
 }  // namespace unified
 }  // namespace tt
 
-static void report(const char* title) {
+static bool report(const char* title) {
     printf("\n===== %s :: %s =====\n", TT_LABEL, title);
     if (trace.empty()) {
         printf("  <nothing on this thread>\n");
@@ -119,14 +183,17 @@ static void report(const char* title) {
     }
     printf("  RESULT: %s\n", bad ? "*** PROTOCOL IMBALANCE ***" : "protocol balanced");
     trace.clear();
+    return !bad;
 }
 
 int main() {
-    tt::unified::test();
-    report("test");
-    tt::unified::reduce();
-    report("reduce");
-    tt::unified::matmul_relu();
-    report("matmul_relu");
-    return 0;
+    bool ok = true;
+    tt::unified::example_eltwise();
+    ok &= report("eltwise");
+    tt::unified::example_reduce();
+    ok &= report("reduce");
+    tt::unified::example_matmul_relu();
+    ok &= report("matmul_relu");
+    printf("\n%s: %s\n", TT_LABEL, ok ? "ALL BALANCED" : "FAILURES PRESENT");
+    return ok ? 0 : 1;
 }

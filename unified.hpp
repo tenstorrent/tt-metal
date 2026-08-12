@@ -149,7 +149,7 @@ public:
 
     // TODO: reduces within a tile, not across them. A cross-tile reduction wants
     // its own Strategy that accumulates over the tile loop and packs once.
-    expr::Un<SumOp, TileSource> sum() const { return {ld()}; }
+    expr::Un<SumOp, TileSource> sum() const { return {TileSource{cb_id}}; }
 
 private:
     int cb_id;
@@ -162,7 +162,13 @@ private:
 // only place the fusion layer needs to know about a core type.
 // ---------------------------------------------------------------------------
 
-inline TileSource as_node(const ComputeBlock& b) { return TileSource{b.get_num_tiles()}; }
+// Declares ComputeBlock usable as an expression operand; without this the
+// operator+ in fusion.hpp is SFINAE'd out and `lhs + rhs` does not resolve.
+template <>
+struct is_operand<ComputeBlock> : std::true_type {};
+
+// TileSource identifies a circular buffer, so this must be the cb id.
+inline TileSource as_node(const ComputeBlock& b) { return TileSource{b.get_cb_id()}; }
 
 inline auto relu(const ComputeBlock& b) { return expr::Un<ReluOp, TileSource>{as_node(b)}; }
 
@@ -234,65 +240,6 @@ Block noc_write(const Storage& storage, Block block, Coord coord, int offset) {
     }
 #endif
     return Block(storage);
-}
-
-// ===========================================================================
-// Examples
-// ===========================================================================
-
-void test() {
-    Storage lhs_storage(0, 2);
-    Storage rhs_storage(1, 2);
-    Storage tmp_storage(2, 2);
-    Storage out_storage(3, 2);
-
-    for (int i = 0; i < 1; ++i) {
-        ComputeBlock lhs = noc_load<0>(lhs_storage, t0, i);
-        ComputeBlock rhs = noc_load<1>(rhs_storage, t1, i);
-
-        ComputeBlock tmp = tmp_storage.store(lhs + rhs);
-
-        Block result = out_storage.store(tmp + lhs);
-        noc_store<0>(std::move(result), t2, i);
-    }
-}
-
-void reduce() {
-    Storage stage0_storage(0, 8);
-    Storage stage1_storage(1, 8);
-    Storage tmp_storage(2, 2);
-    Storage out1_storage(3, 8);
-
-    for (int i = 0; i < 1; ++i) {
-        ComputeBlock s0 = noc_load<0>(stage0_storage, t0, i);
-
-        Block tmp = tmp_storage.store(s0.sum());
-
-        ComputeBlock s1 = noc_write<0>(stage1_storage, std::move(tmp), coord_0x0, offset);
-
-        noc_store<0>(out1_storage.store(s1.sum()), t2, i);
-    }
-}
-
-// The FPU path: matmul with a fused relu epilogue, then the SFPU path consuming
-// its result out of an intermediate Storage.
-void matmul_relu() {
-    Storage a_storage(0, 1);
-    Storage b_storage(1, 1);
-    Storage mm_storage(2, 1);
-    Storage out_storage(3, 1);
-
-    // out_subblock 2x2 = 4 DST tiles, k-dim 2, 2 inner blocks
-    using Geom = MatmulGeometry</*h=*/2, /*w=*/2, /*in0_block_w=*/2, /*num_blocks=*/2>;
-
-    ComputeBlock a = noc_load<0>(a_storage, t0, 0);
-    ComputeBlock b = noc_load<1>(b_storage, t1, 0);
-
-    // relu folds into the matmul's pack-side epilogue rather than wrapping it
-    ComputeBlock mm = mm_storage.store(relu(matmul<Geom>(a, b)));
-
-    // ... and the SFPU path picks it up from there
-    noc_store<0>(out_storage.store(mm + a), t2, 0);
 }
 
 }  // namespace unified
