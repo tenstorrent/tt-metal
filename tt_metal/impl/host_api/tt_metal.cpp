@@ -1968,14 +1968,6 @@ uint8_t GetCurrentCommandQueueIdForThread() {
 
 namespace experimental {
 
-GlobalCircularBuffer CreateGlobalCircularBuffer(
-    IDevice* device,
-    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
-    uint32_t size,
-    BufferType buffer_type) {
-    return GlobalCircularBuffer(device, sender_receiver_core_mapping, size, buffer_type);
-}
-
 CBHandle CreateCircularBuffer(
     Program& program,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,

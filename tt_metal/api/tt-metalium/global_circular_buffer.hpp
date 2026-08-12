@@ -25,31 +25,6 @@ namespace experimental {
 
 class GlobalCircularBufferImpl;
 
-// Forward declarations for the experimental DRAM-sender extension defined in
-// tt-metalium/experimental/global_circular_buffer.hpp. The DRAM-sender feature is an
-// opt-in mode that is not part of the public GlobalCircularBuffer API surface; existing
-// callers continue to see the original public interface unchanged.
-class GlobalCircularBuffer;
-enum class SenderCoreType : uint8_t;
-namespace global_circular_buffer_dram_sender {
-struct GlobalCircularBufferDramSenderInternals;
-}  // namespace global_circular_buffer_dram_sender
-
-/**
- * @brief Allocates a global circular buffer in L1 on the device.
- *
- * @param device The device to create the global circular buffer on.
- * @param sender_receiver_core_mapping The mapping of remote sender to remote receiver cores for the circular buffer.
- * @param size Size of the global circular buffer per core in bytes.
- * @param buffer_type Buffer type to store the global circular buffer. Can only be an L1 buffer type.
- * @return The allocated global circular buffer.
- */
-GlobalCircularBuffer CreateGlobalCircularBuffer(
-    IDevice* device,
-    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
-    uint32_t size,
-    BufferType buffer_type = BufferType::L1);
-
 class GlobalCircularBuffer {
 public:
     explicit GlobalCircularBuffer(GlobalCircularBufferImpl impl);
@@ -77,21 +52,23 @@ public:
     const GlobalCircularBufferImpl& impl() const;
 
 private:
-    GlobalCircularBuffer(
-        IDevice* device,
-        const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
-        uint32_t size,
-        BufferType buffer_type = BufferType::L1);
-
     std::unique_ptr<GlobalCircularBufferImpl> impl_;
-
-    friend GlobalCircularBuffer CreateGlobalCircularBuffer(
-        IDevice* device,
-        const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
-        uint32_t size,
-        BufferType buffer_type);
-    friend struct global_circular_buffer_dram_sender::GlobalCircularBufferDramSenderInternals;
 };
+
+/**
+ * @brief Allocates a global circular buffer in L1 on the device.
+ *
+ * @param device The device to create the global circular buffer on.
+ * @param sender_receiver_core_mapping The mapping of remote sender to remote receiver cores for the circular buffer.
+ * @param size Size of the global circular buffer per core in bytes.
+ * @param buffer_type Buffer type to store the global circular buffer. Can only be an L1 buffer type.
+ * @return The allocated global circular buffer.
+ */
+GlobalCircularBuffer CreateGlobalCircularBuffer(
+    IDevice* device,
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
+    uint32_t size,
+    BufferType buffer_type = BufferType::L1);
 
 /**
  * @brief Creates a Circular Buffer in L1 memory of specified cores using the address space of the
