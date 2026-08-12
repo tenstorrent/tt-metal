@@ -110,6 +110,84 @@ template <
     uint32_t CONSUMER_READY_SEM_ID,
     DataReadySignal DATA_READY_SIGNAL,
     bool ROTATING_SENDER>
+template <uint32_t PAGE_COUNT, uint32_t PAGE_SIZE, uint32_t MAX_CHUNK_BYTES, SourceL1Guard SOURCE_GUARD>
+FORCE_INLINE void
+SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, ROTATING_SENDER>::
+    send_from_cb(DataflowBuffer& src_cb, uint32_t dst_l1) {
+    static_assert(PAGE_COUNT > 0, "send_from_cb requires a non-empty block");
+    static_assert(PAGE_SIZE > 0, "send_from_cb requires a non-zero page size");
+    static_assert(MAX_CHUNK_BYTES > 0, "send_from_cb requires a non-zero chunk size");
+
+    constexpr uint32_t total_bytes = PAGE_COUNT * PAGE_SIZE;
+    constexpr uint32_t full_chunks = total_bytes / MAX_CHUNK_BYTES;
+    constexpr uint32_t leftover_bytes = total_bytes % MAX_CHUNK_BYTES;
+    constexpr uint32_t pages_per_full_chunk = (MAX_CHUNK_BYTES + PAGE_SIZE - 1) / PAGE_SIZE;
+    constexpr uint32_t full_wait_done =
+        full_chunks * pages_per_full_chunk < PAGE_COUNT ? full_chunks * pages_per_full_chunk : PAGE_COUNT;
+    constexpr bool uniform_full_waits = full_chunks * pages_per_full_chunk <= PAGE_COUNT;
+    constexpr uint32_t uniform_wait_iters = full_wait_done == 0 ? 0 : (full_wait_done / pages_per_full_chunk) - 1;
+
+    if (degenerate_ && !in_rect_) {
+        return;
+    }
+    if constexpr (PRE_HANDSHAKE) {
+        if (!degenerate_) {
+            consumer_ready_.wait(ack_count_);
+            consumer_ready_.set(0);
+        }
+    }
+
+    const uint32_t src_l1 = src_cb.get_read_ptr();
+    const bool loopback = !degenerate_ && in_rect_ && src_l1 != dst_l1;
+    const uint32_t mcast_dests = loopback ? num_dests_incl_ : num_dests_excl_;
+    uint32_t src_offset = 0;
+    uint32_t wait_pages = PAGE_COUNT < pages_per_full_chunk ? PAGE_COUNT : pages_per_full_chunk;
+
+    for (uint32_t chunk = 0; chunk < full_chunks; ++chunk) {
+        src_cb.wait_front(wait_pages);
+        if (degenerate_) {
+            local_copy_(src_l1 + src_offset, dst_l1 + src_offset, MAX_CHUNK_BYTES);
+        } else {
+            send_data_(src_l1 + src_offset, dst_l1 + src_offset, MAX_CHUNK_BYTES, loopback, mcast_dests);
+        }
+        src_offset += MAX_CHUNK_BYTES;
+        if constexpr (uniform_full_waits) {
+            wait_pages += pages_per_full_chunk;
+        } else if (chunk < uniform_wait_iters) {
+            wait_pages += pages_per_full_chunk;
+        } else {
+            wait_pages = PAGE_COUNT;
+        }
+    }
+    if constexpr (leftover_bytes > 0) {
+        src_cb.wait_front(PAGE_COUNT);
+        if (degenerate_) {
+            local_copy_(src_l1 + src_offset, dst_l1 + src_offset, leftover_bytes);
+        } else {
+            send_data_(src_l1 + src_offset, dst_l1 + src_offset, leftover_bytes, loopback, mcast_dests);
+        }
+    }
+
+    if (degenerate_) {
+        if (src_l1 != dst_l1) {
+            noc_.async_write_barrier();
+        }
+        return;
+    }
+    signal_ready_(loopback, mcast_dests);
+    fence_<SOURCE_GUARD>(loopback);
+    if constexpr (ROTATING_SENDER && DATA_READY_SIGNAL == DataReadySignal::Flag) {
+        data_ready_.set(INVALID);
+    }
+}
+
+template <
+    uint8_t NOC_ID,
+    uint32_t DATA_READY_SEM_ID,
+    bool PRE_HANDSHAKE,
+    uint32_t CONSUMER_READY_SEM_ID,
+    DataReadySignal DATA_READY_SIGNAL,
+    bool ROTATING_SENDER>
 void SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, ROTATING_SENDER>::
     send_signal(uint32_t value) {
     if (degenerate_) {

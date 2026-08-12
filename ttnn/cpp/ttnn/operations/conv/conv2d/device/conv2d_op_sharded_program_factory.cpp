@@ -690,15 +690,12 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     emit_cb_descriptors(cb_info, desc, all_cores, a.buffer(), output.buffer(), conv_reader_indices_buffer);
 
     const CoreCoord top_left_core = {(std::size_t)0, (std::size_t)0};
-    const CoreCoord top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
 
     CoreRangeSet mcast_sender_cores =
         CoreRangeSet(CoreRange(top_left_core, top_left_core));  // If single core, this kernel doesn't do mcasting
     CoreRangeSet mcast_receiver_cores;
     uint32_t weights_mcast_sender_semaphore_id = 0;
     uint32_t weights_mcast_receiver_semaphore_id = 0;
-    uint32_t act_mcast_sender_semaphore_id = 0;
-    uint32_t act_mcast_receiver_semaphore_id = 0;
     uint32_t act_split_reader_reserve_done_semaphore_id = 0;
     uint32_t act_split_reader_write_done_semaphore_id = 0;
 
@@ -725,6 +722,29 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         return id;
     };
 
+    const tt::tt_metal::NOC writer_mcast_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    const tt::tt_metal::NOC reader_noc =
+        writer_mcast_noc == tt::tt_metal::NOC::NOC_0 ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
+
+    // Activations rotate over the input-shard cores, but land on the independently sized output-work
+    // lines. Mcast1D owns that two-grid topology, its shared semaphores, and the complete host/device
+    // wire; the Conv factory only retains operation roles and its config-reader line index.
+    std::optional<ttnn::kernel_lib::host::Mcast1D> activation_mcast;
+    if (block_sharded) {
+        activation_mcast.emplace(
+            device,
+            output_cores,
+            input_cores,
+            transpose_mcast ? ttnn::kernel_lib::host::Mcast1DShape::PerColumn
+                            : ttnn::kernel_lib::host::Mcast1DShape::PerRow,
+            ttnn::kernel_lib::host::McastConfig{
+                .noc = reader_noc,
+                .rotating_sender = true,
+                .base_sem_id = static_cast<uint32_t>(desc.semaphores.size())});
+        auto activation_semaphores = activation_mcast->owned_semaphores();
+        desc.semaphores.insert(desc.semaphores.end(), activation_semaphores.begin(), activation_semaphores.end());
+    }
+
     if (block_sharded) {
         const CoreCoord out_bottom_right_core = {(std::size_t)num_cores_x - 1, (std::size_t)num_cores_y - 1};
         // 2D mcast
@@ -742,8 +762,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         if (populate_skipped_work_cores) {
             mcast_sender_cores = input_cores.subtract(mcast_receiver_cores);
         }
-        act_mcast_sender_semaphore_id = push_semaphore(all_cores);
-        act_mcast_receiver_semaphore_id = push_semaphore(all_cores);
 
         if (split_reader_cb_shared) {
             weights_mcast_sender_semaphore_id = push_semaphore(all_cores);
@@ -762,10 +780,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
             weights_mcast_receiver_semaphore_id = push_semaphore(output_cores);
         }
     }
-
-    const tt::tt_metal::NOC writer_mcast_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
-    const tt::tt_metal::NOC reader_noc =
-        writer_mcast_noc == tt::tt_metal::NOC::NOC_0 ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
 
     // The block-sharded output grid is produced by determine_output_parallel_config as one dense,
     // zero-anchored rectangle. The weights channel uses one fixed sender per row/column of that output
@@ -883,8 +897,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         (uint32_t)conv_act_c_blocks,                                      // act_w_num_outer
         (uint32_t)(transpose_mcast ? num_cores_y - 1 : num_cores_x - 1),  // act_mcast_num_dests
         (uint32_t)(transpose_mcast ? num_cores_y - 1 : num_cores_x - 1),  // act_mcast_num_cores
-        (uint32_t)act_mcast_sender_semaphore_id,
-        (uint32_t)act_mcast_receiver_semaphore_id,
+        0,                                // legacy activation-mcast semaphore slot (block reader uses McastArgs)
+        0,                                // legacy activation-mcast semaphore slot (block reader uses McastArgs)
         (uint32_t)tilized_act_tile_size,  // act_mcast_tile_size_bytes
         (uint32_t)(transpose_mcast ? 1 : 0),
         (uint32_t)needs_act_block_zero_out,  // zero_out_act_cb
@@ -906,7 +920,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         reader_defines["CONFIG_TENSOR_IN_DRAM"] = "1";
         writer_defines["CONFIG_TENSOR_IN_DRAM"] = "1";               // Needed for split reader
         writer_mcast_sender_defines["CONFIG_TENSOR_IN_DRAM"] = "1";  // Needed for split reader
-        reader_compile_time_args.push_back(conv_reader_indices_buffer->address());
+        reader_compile_time_args.push_back(
+            conv_reader_indices_buffer->address());  // smuggled-rta-ok: pre-existing compile-time config address
         reader_compile_time_args.push_back(conv_reader_indices_buffer->page_size());
         tt::tt_metal::TensorAccessorArgs(conv_reader_indices_buffer).append_to(reader_compile_time_args);
     } else {
@@ -937,6 +952,12 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         std::vector<uint32_t> activation_reuse_dummy_args(8, 0);
         reader_compile_time_args.insert(
             reader_compile_time_args.end(), activation_reuse_dummy_args.begin(), activation_reuse_dummy_args.end());
+    }
+
+    if (block_sharded) {
+        const auto activation_mcast_args = activation_mcast->compile_time_args();
+        reader_compile_time_args.insert(
+            reader_compile_time_args.end(), activation_mcast_args.begin(), activation_mcast_args.end());
     }
 
     if (split_reader_cb_shared) {
@@ -1219,68 +1240,16 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         .fp32_dest_acc_en = fp32_dest_acc_en,
     };
 
-    // Helper lambda to setup mcast arguments
-    auto setup_mcast_args = [&](bool is_noc_0, uint32_t start_x, uint32_t start_y, uint32_t end_x, uint32_t end_y) {
-        return is_noc_0 ? std::vector<uint32_t>{start_x, start_y, end_x, end_y}
-                        : std::vector<uint32_t>{end_x, end_y, start_x, start_y};
-    };
-
     // Setup reader runtime arguments
     if (block_sharded) {
-        const uint32_t in_num_cores_x = input_cores.bounding_box().end_coord.x + 1;
-        const uint32_t in_num_cores_y = input_cores.bounding_box().end_coord.y + 1;
-        std::vector<uint32_t> act_mcast_noc_y;
-        if (transpose_mcast) {
-            act_mcast_noc_y.reserve(in_num_cores_y);
-            for (uint32_t core_idx_y = 0; core_idx_y < in_num_cores_y; ++core_idx_y) {
-                act_mcast_noc_y.push_back(device->worker_core_from_logical_core({0, core_idx_y}).y);
-            }
-        } else {
-            // NOTE: using same var for x as well, this is intentional
-            act_mcast_noc_y.reserve(in_num_cores_x);
-            for (int32_t core_idx_x = 0; core_idx_x < in_num_cores_x; ++core_idx_x) {
-                act_mcast_noc_y.push_back(device->worker_core_from_logical_core({core_idx_x, 0}).x);
-            }
-        }
-
-        const CoreCoord out_bottom_right_core = {(std::size_t)num_cores_x - 1, (std::size_t)num_cores_y - 1};
-        const CoreCoord out_bottom_right_core_physical = device->worker_core_from_logical_core(out_bottom_right_core);
-        const bool reader_is_noc_0 = reader_noc == tt::tt_metal::NOC::NOC_0;
-
         for (const CoreRange& core_range : all_cores.ranges()) {
             for (const CoreCoord& core : core_range) {
                 const bool is_receiver_core = output_cores.contains(core);
                 const bool is_sender_core = input_cores.contains(core);
-                std::vector<uint32_t> reader_rt_args;
-                if (transpose_mcast) {
-                    CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)num_cores_y - 1};
-                    CoreCoord bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
-
-                    reader_rt_args = setup_mcast_args(
-                        reader_is_noc_0,
-                        bottom_core_physical.x,
-                        top_left_core_physical.y,
-                        bottom_core_physical.x,
-                        bottom_core_physical.y);
-
-                    reader_rt_args.push_back(core.y);                  // act_mcast_sender_id
-                    reader_rt_args.push_back(bottom_core_physical.x);  // act_mcast_sender_noc_x
-                } else {
-                    CoreCoord core_physical = device->worker_core_from_logical_core(core);
-
-                    reader_rt_args = setup_mcast_args(
-                        reader_is_noc_0,
-                        top_left_core_physical.x,
-                        core_physical.y,
-                        out_bottom_right_core_physical.x,
-                        core_physical.y);
-                    reader_rt_args.push_back(core.x);           // act_mcast_sender_id
-                    reader_rt_args.push_back(core_physical.y);  // act_mcast_sender_noc_x
-                }
-                reader_rt_args.push_back(static_cast<uint32_t>(is_receiver_core));  // is_receiver_core
-                reader_rt_args.push_back(static_cast<uint32_t>(is_sender_core));    // is_receiver_core
-                reader_rt_args.push_back(transpose_mcast ? core.x : core.y);        // dram config reader index
-                reader_rt_args.insert(reader_rt_args.end(), act_mcast_noc_y.begin(), act_mcast_noc_y.end());
+                auto reader_rt_args = activation_mcast->runtime_args(core);
+                reader_rt_args.push_back(static_cast<uint32_t>(is_receiver_core));
+                reader_rt_args.push_back(static_cast<uint32_t>(is_sender_core));
+                reader_rt_args.push_back(transpose_mcast ? core.x : core.y);  // config-reader line index
                 reader_desc.runtime_args.emplace_back(core, std::move(reader_rt_args));
             }
         }
