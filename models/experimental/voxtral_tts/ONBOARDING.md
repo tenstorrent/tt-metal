@@ -8,7 +8,7 @@ will be able to run everything and change something without breaking it.
 | file | what it is | when to read it |
 |---|---|---|
 | **`ONBOARDING.md`** (this) | how to run things, how to prove you didn't break them, the method | first, once |
-| **`STATUS.md`** | the running log, `§1`–`§6.53`. `§1`–`§6.38` are N150; `§6.39+` is this fork. Every experiment with its numbers, **including the rejected ones** | before trying anything, to check it isn't already settled |
+| **`STATUS.md`** | the running log, `§1`–`§6.72`. `§1`–`§6.38` are N150; `§6.39+` is this fork. Every experiment with its numbers, **including the rejected ones** | before trying anything, to check it isn't already settled |
 | **`tt/NOTES.md`** | the prose that used to live in the code. Grep-able IDs `[gpt-04]`, `[flow-10]`, `[codec-12]`, `[pipe-02]` | when a line of code carries a `NOTES.md [id]` pointer |
 
 The `tt/*.py` files are deliberately thin — one-line pointers, no essays. **If you find yourself
@@ -33,8 +33,8 @@ python $V/scripts/generate_quality_set.py --tag mychange   # audio; NOTE: writes
 python $V/scripts/score_quality_set.py $V/generated/resultsmychange.json
 ```
 
-Current on the **p150**: **27.7 ms/frame on the long-form cases, RTF 0.365**. Long-form WER
-**0 wrong of 596**, MOS long-form 4.61. Beat that without breaking it.
+Current on the **p150**: **26.9 ms/frame on the long-form cases, RTF 0.357**. Long-form WER
+**0 wrong of 894**, MOS long-form 4.61. Beat that without breaking it.
 
 > **Quote ms/frame, not RTF, when comparing builds.** ms/frame is repeatable to 0.390 ms; RTF also
 > carries prefill, the codec and the trace capture, which amortise differently as frame counts
@@ -54,11 +54,11 @@ Text + a voice preset in, 24 kHz audio out. Three stages per utterance:
 
 | block | what it does | size | file | cost/frame |
 |---|---|---|---|---|
-| **Block 1** | autoregressive backbone. Prefills the prompt, then emits one hidden state per audio frame | 3.4B, 26 layers, DIM 3072 | `tt/ttnn_voxtral_gpt.py` | ~17.9 ms |
-| **Block 2** | flow-matching acoustic transformer. Hidden state → 36 acoustic codes, by solving an ODE in 7 Euler steps over 3 layers | 390M | `tt/ttnn_voxtral_flow.py` | ~19.1 ms |
+| **Block 1** | autoregressive backbone. Prefills the prompt, then emits one hidden state per audio frame | 3.4B, 26 layers, DIM 3072 | `tt/ttnn_voxtral_gpt.py` | ~15.9 ms |
+| **Block 2** | flow-matching acoustic transformer. Hidden state → 36 acoustic codes, by solving an ODE in 7 Euler steps over 3 layers | 390M | `tt/ttnn_voxtral_flow.py` | ~14.2 ms |
 | **Codec** | codes → waveform. Once per utterance, not per frame | | `tt/ttnn_voxtral_codec.py` | ~3.5 ms total |
 
-One frame is **80 ms of audio**, so real-time is 80 ms/frame and we are at ~27.7, RTF ~0.36.
+One frame is **80 ms of audio**, so real-time is 80 ms/frame and we are at ~26.9, RTF ~0.36.
 
 `tt/ttnn_voxtral_pipeline.py` wires the three together. `reference/` is a pure-fp32 PyTorch
 implementation — **it is the ground truth, not the device.**
@@ -67,13 +67,15 @@ implementation — **it is the ground truth, not the device.**
 **367 GB/s** (§6.41/§6.53) and a **~68 µs per-op floor** (§6.45). Those two numbers together are the
 single most useful fact on this fork, and they invert the N150's: bytes are cheap and launches are
 expensive, so **deleting ops wins where the N150 wanted fewer, bigger kernels**. Seven N150 decisions
-have already reversed here — §6.39, §6.40, §6.43, §6.44, two in §6.45, and §6.52.
+have already reversed here — §6.39, §6.40, §6.43, §6.44, two in §6.45, and §6.52. **One of those
+has since reversed BACK**: §6.72 restores the hand-rolled head split §6.45 removed, because §6.65
+traced away the per-op launch cost the reversal was made on.
 **But the chip's real limit is §6.53: this workload uses 0.37% of its compute and ~49% of its
 DRAM, so single-stream latency is nearly done and batching is the only order-of-magnitude lever.**
 
 > **Every tuned constant here has now been re-derived on the p150, and most of the N150's did not
 > survive.** Gone: both width-sharded norms (§6.39/§6.40), `_WO_PRG` (§6.43), `_V_SHARD` and the
-> fused cache write (§6.44), Block 2's hand-rolled head split and row fold (§6.45). Changed:
+> fused cache write (§6.44), Block 2's row fold (§6.45; its head-split half is BACK, §6.72). Changed:
 > `_QKV_GRID_X` 8 → 1. Kept and re-verified: `_SDPA_PRG`'s `k_chunk_size=512` on 8×2, the only
 > config exact at all 13 positions — and **a position sweep, not a gate run, is what makes an sdpa
 > config safe** (§6.27, reproduced here on a different config).
@@ -214,11 +216,11 @@ must name a generation you actually ran. `SAMPLER_p150_HEAD.wav` is the older `�
 
 ## 4. Where we are now — the numbers to beat
 
-| | current (p150, `§6.67`) |
+| | current (p150, `§6.72`) |
 |---|---|
-| per frame | **27.723 ms** — Block 1 ~15.9, Block 2 ~15.0, host ~2 |
-| long-form RTF | **0.3647** |
-| long-form WER | **0 wrong words of 596** |
+| per frame | **26.928 ms** — Block 1 ~15.9, Block 2 ~14.2, host ~2 |
+| long-form RTF | **0.3567** |
+| long-form WER | **0 wrong words of 894** (3 seeds, `§6.71`/`§6.72`) |
 | MOS long-form / min / mean | 4.6050 / 2.6597 / 3.9972 |
 | clicks / natural `[END_AUDIO]` | 52 / 30 |
 | utterance length ceiling | `max_seq_len`, holding prompt + frames; 2048 ≈ 136 s. Costs DRAM, not RTF (`§6.69`) |
@@ -420,7 +422,7 @@ here. The parent branch's verdict is wrong on this chip; do not restore any of t
 | `wo` needs a tuned program config (`§6.25`) | **no config** — inert on the step, and removing it is bit-exact (`§6.43`) |
 | fused KV cache write + `_V_SHARD` (`§6.20`/`§6.22`) | **two plain writes** — the fused one is 0.687 ms/step slower (`§6.44`) |
 | `_QKV_GRID_X = 8`, 1 core is worse (`§6.19`) | **1 core**, 0.461 ms/step better (`§6.44`) |
-| hand-rolled 9-op head split in Block 2 (`§6.31`) | **fused op** — +3.836 ms/frame at identical accuracy (`§6.45`) |
+| hand-rolled 9-op head split in Block 2 (`§6.31`) | **hand-rolled again** — `§6.45` shipped the fused op, then `§6.65` traced away the launch cost it was chosen for; traced, fused is 90.5 µs against nine ops' 48.6, so `§6.72` reverses it BACK for −0.775 ms/frame, bit-exact |
 | `sdpa` for Block 2's interior REJECTED (`§6.37`) | **shipped** — +2.555 ms/frame; 1.57× the fp64 error here, not 6.48×, codes unmoved (`§6.45`) |
 
 **The reason they flipped is one pair of numbers (`§6.41`/`§6.45`): the p150 has ~367 GB/s and
