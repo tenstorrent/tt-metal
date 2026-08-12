@@ -22,7 +22,8 @@ while ``SnakeBeta`` keeps 8, so that boundary gets its own case.
 T-parallel decode is deliberately not gated here: it is not wired into the pipeline (which
 passes ``parallel_config=None``), and its 8-way shard layout was known-broken when its gate
 was removed. Resurrect ``test_audio_decode_t_parallel`` (and its ``_localize_divergence``
-helper) from git history if T-parallel ever ships.
+helper) and the halo isolation gate ``test_neighbor_pad_t_minimax_h3.py`` from git history
+if T-parallel ever ships.
 """
 
 from __future__ import annotations

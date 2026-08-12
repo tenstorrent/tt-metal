@@ -152,6 +152,11 @@ def build_minimax_h3_text_encoder(
         parallel_config=parallel_config,
         ccl_manager=ccl_manager,
         is_fsdp=is_fsdp,
+        # HiFi4 decoder linears, unconditionally: measured on the fl2va conditioner at production
+        # shape and content, they take the fused-conditioner PCC from 70.89 % to 85.82 % and recover
+        # massive-activation rows 102 and 128, at no measurable cost (1184.2 vs 1183.2 ms/forward).
+        # Scoped here so other Qwen3-VL users (Ideogram-4) keep the tt_dit-wide default.
+        high_fidelity_linears=True,
     )
 
     if load_weights:

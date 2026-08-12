@@ -39,6 +39,10 @@ class Qwen3VlContext:
     tp_axis: int | None
     ccl_manager: CCLManager | None
     fsdp_mesh_axis: int | None = None
+    # When set, every decoder linear (qkv/o/gate/up/down projections) is built with this compute
+    # kernel config instead of the tt_dit-wide default from `linear_compute_config`. See
+    # `Qwen3VlTextEncoder`'s `high_fidelity_linears`.
+    linear_compute_kernel_config: object | None = None
 
 
 def vision_token_runs(input_ids: torch.Tensor, image_token_id: int | Sequence[int]) -> list[tuple[int, int]]:
@@ -136,6 +140,7 @@ class Qwen3VlTextEncoder(Module):
         parallel_config: EncoderParallelConfig | None = None,
         ccl_manager: CCLManager | None = None,
         is_fsdp: bool = False,
+        high_fidelity_linears: bool = False,
     ) -> None:
         super().__init__()
 
@@ -169,11 +174,26 @@ class Qwen3VlTextEncoder(Module):
                 f"tensor-parallel axis has size > 1 (mesh shape {tuple(device.shape)})."
             )
 
+        # `high_fidelity_linears` builds every decoder linear at HiFi4 instead of the tt_dit-wide
+        # HiFi2 default. Everything else (fp32 DEST accumulate, packer L1 accumulate, non-approx)
+        # matches the default. Off by default: one model's measurement is not evidence about the
+        # others sharing this module.
+        linear_compute_kernel_config = None
+        if high_fidelity_linears:
+            linear_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
+
         ctx = Qwen3VlContext(
             device=device,
             tp_axis=parallel_config.tensor_parallel.mesh_axis if parallel_config is not None else None,
             ccl_manager=ccl_manager,
             fsdp_mesh_axis=fsdp_mesh_axis,
+            linear_compute_kernel_config=linear_compute_kernel_config,
         )
 
         if ctx.tp_axis is not None and ctx.ccl_manager is None:
@@ -395,6 +415,7 @@ class Qwen3VlAttention(Module):
             mesh_axis=ctx.tp_axis,
             fsdp_mesh_axis=ctx.fsdp_mesh_axis,
             ccl_manager=ctx.ccl_manager,
+            compute_kernel_config=ctx.linear_compute_kernel_config,
         )
         self.o_proj = ColParallelLinear(
             padded_heads * head_dim,
@@ -404,6 +425,7 @@ class Qwen3VlAttention(Module):
             mesh_axis=ctx.tp_axis,
             fsdp_mesh_axis=ctx.fsdp_mesh_axis,
             ccl_manager=ctx.ccl_manager,
+            compute_kernel_config=ctx.linear_compute_kernel_config,
         )
 
         self._sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -562,6 +584,7 @@ class Qwen3VlMlp(Module):
             mesh_axis=ctx.tp_axis,
             fsdp_mesh_axis=ctx.fsdp_mesh_axis,
             ccl_manager=ctx.ccl_manager,
+            compute_kernel_config=ctx.linear_compute_kernel_config,
         )
         self.up_proj = ColParallelLinear(
             hidden_size,
@@ -571,6 +594,7 @@ class Qwen3VlMlp(Module):
             mesh_axis=ctx.tp_axis,
             fsdp_mesh_axis=ctx.fsdp_mesh_axis,
             ccl_manager=ctx.ccl_manager,
+            compute_kernel_config=ctx.linear_compute_kernel_config,
         )
         self.down_proj = RowParallelLinear(
             intermediate_size,
@@ -580,6 +604,7 @@ class Qwen3VlMlp(Module):
             mesh_axis=ctx.tp_axis,
             fsdp_mesh_axis=ctx.fsdp_mesh_axis,
             ccl_manager=ctx.ccl_manager,
+            compute_kernel_config=ctx.linear_compute_kernel_config,
         )
 
         if hidden_act != "silu":

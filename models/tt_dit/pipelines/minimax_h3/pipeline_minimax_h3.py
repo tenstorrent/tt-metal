@@ -34,7 +34,8 @@ projections are resident --- this transformer computes modulation on device) and
 replicates ~9.8 GB of fp32 weights per device for its data-parallel fan-out. They are therefore
 paged: each stage loads what it needs and releases the previous stage's weights first. The text
 encoder is the cheap one --- FSDP over the non-TP axis puts it at ~1.6 GB/device --- but its 50 GB
-disk read is not, which is why prompt embeddings are disk-cached.
+disk read is not, which is why it is kept co-resident by default: every request pays the encode
+itself (~2.8 s), never the reload.
 """
 
 from __future__ import annotations
@@ -47,7 +48,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import numpy as np
 import torch
 from loguru import logger
 from PIL import Image, ImageOps
@@ -372,10 +372,11 @@ class MiniMaxH3Pipeline:
         than a re-read from disk.
 
         **The text encoder is kept co-resident too.** Measured on a 4x8 Blackhole mesh with the
-        precomputed AdaLN path: encoder, DiT and VAE fit together, and a novel prompt's Encoder row
-        drops from **23.9 s to 2.8 s** because the 50 GB reload disappears. The embedding cache only
-        spares repeated prompts, so this is on the critical path of essentially every served
-        request. `MINIMAX_H3_CORESIDENT=0` restores eviction for a mesh where they do not fit.
+        precomputed AdaLN path: encoder, DiT and VAE fit together, and a prompt's Encoder row
+        drops from **23.9 s to 2.8 s** because the 50 GB reload disappears. Every request pays the
+        encode itself -- there is no embedding cache -- so this is on the critical path of
+        essentially every served request. `MINIMAX_H3_CORESIDENT=0` restores eviction for a mesh
+        where they do not fit.
 
         **The DiT and the video VAE are kept co-resident**, which is measured, not assumed: on a 4x8
         Blackhole mesh they fit together with no allocation failure. Eviction costs a per-shape decoder
@@ -596,58 +597,14 @@ class MiniMaxH3Pipeline:
             )
         return self._vision_tower
 
-    def _embed_cache_path(
-        self,
-        prompt: str,
-        keyframes: Sequence[Image.Image] = (),
-        references: Sequence[MiniMaxH3PreparedReference] = (),
-    ) -> Path:
-        """Disk cache path for one prompt presentation.
-
-        The `t2va` key is byte-identical to what it was before keyframes existed, so an already
-        populated cache stays valid and the two tasks' latency numbers stay comparable. An `fl2va` key
-        folds in a digest of each **prepared** keyframe -- prepared, not source, because the same image
-        on a different canvas yields a different vision-token grid and therefore different embeddings.
-
-        A `ref2va` key folds in each **prepared** reference's kind, its position, and a digest of its
-        media. Position is part of the key because reference order is semantic: it renumbers the
-        `"<Picture i>"` / `"<Audio j>"` / `"<Video k>"` labels, so the same references in a different
-        order tokenize differently and must not share a cache entry. An audio reference contributes its
-        waveform digest even though a waveform never reaches the conditioner -- it still shifts the
-        `"<Audio j>"` numbering of everything after it.
-        """
-        cache_dir = Path(os.environ.get("TT_DIT_CACHE_DIR") or Path.home() / ".cache/tt-dit") / "minimax-h3-embeddings"
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        if references:
-            parts = []
-            for index, reference in enumerate(references):
-                if reference.kind == "image":
-                    payload = np.asarray(reference.image).tobytes()
-                elif reference.kind == "video":
-                    payload = np.ascontiguousarray(reference.frames).tobytes()
-                else:
-                    payload = reference.waveform.numpy().tobytes()
-                digest = hashlib.md5(payload).hexdigest()
-                # `has_audio` too: a video with and without its soundtrack are different
-                # presentations, one carrying an extra "<Audio j>: " label.
-                parts.append(f"{index}:{reference.kind}:{int(reference.has_audio)}:{digest}")
-            raw = "ref2va-device||" + prompt + "||" + "|".join(parts)
-        elif keyframes:
-            digests = [hashlib.md5(np.asarray(k.convert("RGB")).tobytes()).hexdigest() for k in keyframes]
-            raw = "fl2va-device||" + prompt + "||" + "|".join(digests)
-        else:
-            raw = f"t2va-device||{prompt}"
-        return cache_dir / f"{hashlib.md5(raw.encode()).hexdigest()}.device.pt"
-
     def encode_prompt(
         self,
         prompt: str,
         *,
         keyframes: Sequence[Image.Image] = (),
         references: Sequence[MiniMaxH3PreparedReference] = (),
-        use_cache: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Prompt to `(prompt_embeds [1, L, 5120], text_token_tags [L])`, disk-cached.
+        """Prompt to `(prompt_embeds [1, L, 5120], text_token_tags [L])`, encoded on device.
 
         The presentation has no chat template and no special tokens. For `t2va` it is the verbatim
         prompt and every row is text-tagged. For `fl2va` each keyframe contributes
@@ -660,18 +617,13 @@ class MiniMaxH3Pipeline:
         an audio reference is a label alone, because a waveform never reaches the conditioner.
         `keyframes` and `references` are mutually exclusive.
 
-        A cache hit skips a 50 GB weight read, which is why a tensor this small is cached.
+        Every call runs the encoder; with the default co-residency the weights are already on
+        device, so this costs the ~2.8 s forward, not the 50 GB reload.
         """
         if not isinstance(prompt, str) or not prompt.strip():
             raise ValueError("prompt must be a non-empty string")
         if keyframes and references:
             raise ValueError("keyframes (fl2va) and references (ref2va) are different tasks; pass one or neither")
-
-        cache_path = self._embed_cache_path(prompt, keyframes, references)
-        if use_cache and cache_path.is_file():
-            logger.info(f"prompt embeddings from cache: {cache_path}")
-            embeds, tags = torch.load(cache_path, weights_only=False)
-            return embeds, tags
 
         if references:
             input_ids, tags, type_ids, pixel_values, grid_thw, vision_kinds = self._build_ref2va_presentation(
@@ -801,10 +753,6 @@ class MiniMaxH3Pipeline:
         )
         # Replicated across the mesh: read one replica rather than composing all 32 and discarding 31.
         embeds = ttnn.to_torch(ttnn.get_device_tensors(taps[0])[0]).float()
-
-        if use_cache:
-            torch.save((embeds, tags), cache_path)
-            logger.info(f"cached prompt embeddings to {cache_path}")
         return embeds, tags
 
     # ------------------------------------------------------------------ denoiser
@@ -1214,7 +1162,6 @@ class MiniMaxH3Pipeline:
         width: int | None = None,
         num_inference_steps: int = 50,
         seed: int = 0,
-        use_prompt_cache: bool = True,
     ) -> MiniMaxH3Output:
         """`image` and/or `last_image` select `fl2va`; `references` selects `ref2va`; neither `t2va`.
 
@@ -1226,9 +1173,9 @@ class MiniMaxH3Pipeline:
         # (label, seconds) rows counted toward the total; **prepares and export excluded**, matching
         # `pipelines/ltx/pipeline_ltx_distilled.py`. Weight upload is one-time construction cost and
         # the measurement contract never counts it (`.claude/skills/README.md`), so every
-        # `_prepare_*` happens outside a timed window. The one exception mirrors LTX exactly: a
-        # prompt-cache *miss* loads the text encoder inside the Encoder row, which is why that row
-        # carries a `(cache)` label when it was a hit.
+        # `_prepare_*` happens outside a timed window. The one exception: the first Encoder row of a
+        # fresh pipeline loads the text encoder inside the timed window; after that the encoder stays
+        # resident and the row measures the ~2.8 s encode alone.
         timings: list[tuple[str, float]] = []
 
         if references is not None:
@@ -1243,7 +1190,6 @@ class MiniMaxH3Pipeline:
                 width=width,
                 num_inference_steps=num_inference_steps,
                 seed=seed,
-                use_prompt_cache=use_prompt_cache,
                 timings=timings,
             )
         if num_frames is None:
@@ -1284,12 +1230,11 @@ class MiniMaxH3Pipeline:
         )
 
         # 2. Text (plus the vision block, for fl2va).
-        cached = use_prompt_cache and self._embed_cache_path(prompt, keyframes).is_file()
         t0 = time.time()
-        prompt_embeds, text_token_tags = self.encode_prompt(prompt, keyframes=keyframes, use_cache=use_prompt_cache)
+        prompt_embeds, text_token_tags = self.encode_prompt(prompt, keyframes=keyframes)
         t_encode = time.time() - t0
-        timings.append(("Encoder (cache)" if cached else "Encoder", t_encode))
-        logger.info(f"Encoding ({'cache' if cached else 'device'}): {t_encode:.1f}s")
+        timings.append(("Encoder", t_encode))
+        logger.info(f"Encoding: {t_encode:.1f}s")
 
         # Both schedules. Built here rather than after the layout because the keyframe step below needs
         # `scale_noise`, which takes its `t` at face value and works before `set_timesteps` -- but they
@@ -1386,7 +1331,6 @@ class MiniMaxH3Pipeline:
         width: int | None,
         num_inference_steps: int,
         seed: int,
-        use_prompt_cache: bool,
         timings: list[tuple[str, float]],
     ) -> MiniMaxH3Output:
         """`ref2va`: an ordered list of references in, a video and its soundtrack out.
@@ -1421,12 +1365,11 @@ class MiniMaxH3Pipeline:
         )
 
         # 2. Text, plus one vision block per image reference and one per merged frame pair of a video.
-        cached = use_prompt_cache and self._embed_cache_path(prompt, (), prepared).is_file()
         t0 = time.time()
-        prompt_embeds, text_token_tags = self.encode_prompt(prompt, references=prepared, use_cache=use_prompt_cache)
+        prompt_embeds, text_token_tags = self.encode_prompt(prompt, references=prepared)
         t_encode = time.time() - t0
-        timings.append(("Encoder (cache)" if cached else "Encoder", t_encode))
-        logger.info(f"Encoding ({'cache' if cached else 'device'}): {t_encode:.1f}s")
+        timings.append(("Encoder", t_encode))
+        logger.info(f"Encoding: {t_encode:.1f}s")
 
         scheduler = MiniMaxH3Scheduler(shift=VIDEO_SHIFT)
         audio_scheduler = MiniMaxH3Scheduler(shift=AUDIO_SHIFT)
@@ -1625,10 +1568,10 @@ class MiniMaxH3Pipeline:
     ) -> None:
         """Compile and allocate everything a real call needs, so the next call measures compute only.
 
-        The analogue of `LTXPipeline.warmup_buffers`. Runs one full generation at the target shape
-        with `use_prompt_cache=False`, which is what forces the text encoder's own kernels to compile
-        rather than being skipped by a cache hit. Every program, every per-shape conv3d blocking and
-        every persistent buffer this working point touches is resident afterwards.
+        The analogue of `LTXPipeline.warmup_buffers`. Runs one full generation at the target shape,
+        including the text-encoder forward, so the encoder's own kernels compile here too. Every
+        program, every per-shape conv3d blocking and every persistent buffer this working point
+        touches is resident afterwards.
 
         "Fully warm" in every number this pipeline reports means *after* this.
 
@@ -1656,7 +1599,6 @@ class MiniMaxH3Pipeline:
             width=width,
             aspect_ratio=aspect_ratio,
             num_inference_steps=num_inference_steps,
-            use_prompt_cache=False,
         )
         logger.info(f"warmup ({task}) done in {time.time() - t0:.1f}s, padded_len={self.last_padded_len}")
 

@@ -95,8 +95,9 @@ WEIGHTS_ENV = "MINIMAX_H3_DIFFUSERS_DIR"
 DEFAULT_WEIGHTS = "/data/cglagovich/MiniMax-H3-diffusers"
 ARTIFACT_ENV = "MINIMAX_H3_ARTIFACT_DIR"
 
-# Generous: a regression bar, not a target. Measured fully-warm total is well inside this, and the
-# point is to notice a collapse (a lost cache, a fallback kernel) rather than to police seconds.
+# Generous: a regression bar, not a target. Measured fully-warm total is well inside this even with
+# the ~2.8 s encoder forward now inside the timed window (there is no prompt-embedding cache), and
+# the point is to notice a collapse (a lost cache, a fallback kernel) rather than to police seconds.
 EXPECTED_TOTAL_S = 400.0
 
 # The pipeline's CCLManager runs ring collectives, so the fabric must be FABRIC_1D_RING. Taken from
@@ -199,10 +200,10 @@ def test_t2va_end_to_end(mesh_device, reset_seeds):
         prompt=prompt, num_frames=NUM_FRAMES, height=HEIGHT, width=WIDTH, num_inference_steps=NUM_INFERENCE_STEPS
     )
     warm_padded_len = pipeline.last_padded_len
-    # Prime the disk cache so the Encoder row is the cache-hit row every reported number quotes;
-    # `warmup` runs with `use_prompt_cache=False`, so it compiles the conditioner but writes nothing.
-    pipeline.encode_prompt(prompt, use_cache=True)
 
+    # The timed run below pays the real encoder forward: there is no prompt-embedding cache, so the
+    # Encoder row is a genuine measurement (~2.8 s for t2va with the encoder co-resident), and the
+    # warmup above already compiled the conditioner's kernels at this padded length.
     output = pipeline(
         prompt,
         num_frames=NUM_FRAMES,

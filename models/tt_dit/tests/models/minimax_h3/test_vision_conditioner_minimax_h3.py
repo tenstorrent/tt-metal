@@ -5,30 +5,28 @@
 # =============================================================================
 # MiniMax-H3 conditioner with an image, on the RELEASED weights: the fl2va path.
 #
-# WIP: test_fused_conditioner_real_weights FAILS at PCC 98.6224% against the
-# 0.99 threshold, and the cause is NOT established. The two vision-tower cases
-# pass. Do not read a green run of this file as fl2va being verified end to end.
+# Status: the two vision-tower cases pass; test_fused_conditioner_real_weights
+# is a strict xfail on its massive-activation row check. Do not read a green
+# run of this file as fl2va being verified end to end.
 #
-# What is known about the failure:
-#   - reproducible: 98.4764% measured four times before the vision attention got
-#     its HiFi4 + fp32-accumulate SDPA config, and 98.6224% after. In-suite and
-#     in isolation (-k fused), before and after a device reboot. Not flaky, not
-#     cross-test interference, not hardware.
-#   - the gap is mostly NOT the vision tower. Giving the tower fp32 accumulation
-#     roughly halved its hidden-state error (block 26: 99.6893% -> 99.8272% on a
-#     784-patch image) and moved this number by only 0.146 points. If inherited
-#     tower error dominated, that change should have moved it far more, so the
-#     bulk of the ~1.4% shortfall lives downstream -- in the decoder with vision
+# What is known about the remaining gap:
+#   - the pipeline decoder now runs HiFi4 linears (build_minimax_h3_text_encoder
+#     opts in unconditionally; the tt_dit-wide default in layers/linear.py is
+#     HiFi2 and unchanged). Measured at production shape and content, that took
+#     the fused conditioner from whole-tensor PCC 70.8949% to 85.8171% and
+#     recovered massive-activation rows 102 and 128. Row 63 is still missing
+#     and one spurious massive row appears at 156, hence the xfail.
+#   - the linear lever is exhausted: HiFi4 with packer_l1_acc off measured
+#     bit-identical to HiFi4, and HiFi4 itself cost nothing (1184.2 vs
+#     1183.2 ms/forward).
+#   - reproducible, in-suite and in isolation (-k fused), before and after a
+#     device reboot. Not flaky, not cross-test interference, not hardware.
+#   - the gap is mostly NOT the vision tower (which keeps the HiFi2 default
+#     linears -- HiFi4 left it unchanged, 99.6116% -> 99.6055%). Giving the
+#     tower fp32 accumulation roughly halved its hidden-state error (block 26:
+#     99.6893% -> 99.8272% on a 784-patch image) and moved the fused number
+#     only slightly, so the residual error lives in the decoder with vision
 #     injected.
-#   - the next precision lever is layers/linear.py, documented as "HiFi2 +
-#     packer_l1_acc + bf16 acc". Every qkv, proj and MLP matmul still accumulates
-#     in bf16 and those carry most of the FLOPs. Changing it affects every tt_dit
-#     model, so it has not been touched here.
-#   - a standalone script feeding the SAME decoder the reference's own vision
-#     output scored 99.8789%, and our tower's 99.8006% -- which would say the
-#     injection is correct. But that script disagrees with this test by 1.3
-#     points on nominally identical work and had two defects of its own, so it is
-#     recorded as a lead, not a finding.
 #   - a reduced-geometry fused-conditioner parity test (4 layers, tap at 3) --
 #     a bring-up test since removed from tests/encoders/qwen3vl/, whose
 #     remaining per-module tests cover the same structure -- passed at
@@ -45,9 +43,10 @@
 #     rest of this port reaches:
 #         448x448    tokens 99.6532%   deepstack 99.9341 / 99.9046 / 99.7551
 #         1344x768   tokens 99.5953%   deepstack 99.8910 / 99.8719 / 99.6651
-#     Every block scores ~99.999% in isolation, so this is bf16 accumulation over
-#     27 of them rather than a bad op -- see the linear.py note above for the
-#     remaining lever;
+#     Every block scores ~99.999% in isolation, so this is low-fidelity
+#     accumulation over 27 of them rather than a bad op -- and HiFi4 linears
+#     measured no change for the tower (99.6116% -> 99.6055%), so no lever
+#     remains here;
 #   - the fused conditioner, with MiniMax-H3's exact presentation built by the
 #     real tokenizer and the real image processor, tapped at hidden_states[50]
 #     -- currently FAILING, see above.
@@ -106,14 +105,17 @@ T2VA_ARTIFACT_ENV = "MINIMAX_H3_T2VA_ARTIFACT_DIR"
 # Whole-tensor PCC is NOT one of them, which is the main thing this gate learned. The
 # tap's row norms span 177 to 20612 -- a 79x spread, because a handful of rows carry massive activations
 # -- so a single flattened correlation over all 5.2 M elements is dominated by those few rows and says
-# almost nothing about the other 1011. Measured at production shape and content: whole-tensor PCC
-# 70.8949 % while the *median* per-row relative error is 9.0 % and the text rows are within 2.5 %.
+# almost nothing about the other 1011. Measured at production shape and content with the pre-HiFi4
+# decoder: whole-tensor PCC 70.8949 % (85.8171 % with the HiFi4 linears the pipeline now always runs)
+# while the *median* per-row relative error is 9.0 % and the text rows are within 2.5 %.
 # Excluding the largest rows makes whole-tensor PCC *worse* (57 %, 50 %, 39 % as the top 1, 3, 5 are
 # dropped), which is the tell that the statistic is unstable here rather than informative.
 #
-# So the gate is per-row, split by row class, which is both robust and diagnostic.
-FUSED_MAX_TEXT_ROW_ERROR = 0.05  # measured median 0.0197, max 0.0247
-FUSED_MAX_MEDIAN_ROW_ERROR = 0.15  # measured median 0.0901 over all rows
+# So the gate is per-row, split by row class, which is both robust and diagnostic. The bars below were
+# calibrated on the pre-HiFi4 measurement; HiFi4 only lowers per-row error, so they remain valid (loose)
+# upper bounds and are deliberately not retightened until a fresh calibration run.
+FUSED_MAX_TEXT_ROW_ERROR = 0.05  # measured median 0.0197, max 0.0247 (pre-HiFi4; HiFi4 is lower)
+FUSED_MAX_MEDIAN_ROW_ERROR = 0.15  # measured median 0.0901 over all rows (pre-HiFi4; HiFi4 is lower)
 # Rows whose norm exceeds this multiple of the median are "massive activations". Emergent and
 # threshold-like: a small numerical difference decides whether a row blows up at all.
 MASSIVE_ROW_MULTIPLE = 10.0
@@ -273,10 +275,11 @@ def test_vision_tower_real_weights(conditioner, mesh_device, submesh_shape, tp_a
     strict=True,
     reason=(
         "Massive-activation rows disagree: the reference produces 7 rows whose norm exceeds 10x the "
-        "median (up to 79x) and we reproduce 4 of them, missing 3 and inventing 1. Cause IS now "
-        "established, unlike the version of this xfail it replaces. Text "
-        "rows (2.5% max) and the median vision row (9.0%) both pass; the shape, content and tap are all "
-        "production now. strict=True so improving the conditioner's precision forces a return here."
+        "median (up to 79x). With the HiFi4 decoder linears the pipeline now always runs (whole-tensor "
+        "PCC 85.82%, up from 70.89%), we reproduce 6 of them -- rows 102 and 128 recovered, row 63 "
+        "still missing -- and invent 1 (row 156). Text rows and the median vision row both pass; the "
+        "shape, content and tap are all production. strict=True so improving the conditioner's "
+        "precision further forces a return here."
     ),
 )
 @pytest.mark.parametrize("size", [KEYFRAME_IMAGE], ids=["keyframe_768x1344"])

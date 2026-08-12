@@ -252,10 +252,9 @@ python -c "import zipfile; zipfile.ZipFile('$HOME/.cache/vbench/raft_model/model
 Point `MINIMAX_H3_VBENCH_PYTHON` at that interpreter if it is not at the default path. The test
 skips with this command if it is missing, rather than passing.
 
-**Set `TT_DIT_CACHE_DIR`.** Every component loads through `utils/cache.py`, and prompt embeddings
-are disk-cached alongside. With it set, end-to-end is ~134 s; without it every run re-reads 62 GB of
-transformer and 50 GB of text encoder and takes ~713 s. Unset degrades *silently* — one log line, no
-error. First run populates ~68 GB of cache.
+**Set `TT_DIT_CACHE_DIR`.** Every component loads through `utils/cache.py`. With it set, end-to-end
+is ~134 s; without it every run re-reads 62 GB of transformer and 50 GB of text encoder and takes
+~713 s. Unset degrades *silently* — one log line, no error. First run populates ~68 GB of cache.
 
 ## Working point
 
@@ -268,8 +267,8 @@ The gates run at one shape:
 | packed sequence | 37749 rows for a 39-token prompt (38222 at 512 tokens), padded to a multiple of SP x TILE |
 | mesh | 4x8 Blackhole Galaxy, TP=4 axis 0, SP=8 axis 1, ring, 2 links |
 
-Note the video VAE tiles this canvas **4x6 = 24** ways, and `test_performance_vae_minimax_h3.py`'s
-`WORK_UNITS` table says 28. The projections in that file are slightly optimistic as a result.
+The video VAE tiles this canvas **4x7 = 28** ways (256px tiles, overlap 64), matching
+`test_performance_vae_minimax_h3.py`'s `WORK_UNITS` table and the wave math below.
 
 ## Fully-warm latency
 
@@ -286,7 +285,7 @@ scripts/run_safe_pytest.sh models/tt_dit/tests/models/minimax_h3/test_performanc
 
 | stage | t2va | `fl2va` | what it is |
 |---|---|---|---|
-| Encoder (cache) | 0.0 s | 0.0 s | prompt embeddings from disk; a *miss* pays a full device conditioner encode here, and for `fl2va` that includes the vision tower |
+| Encoder | 0.0 s* | 0.0 s* | *measured with the since-removed embedding cache. A current run pays the full conditioner encode here — ~2.8 s text-only with the encoder co-resident, plus the vision tower for `fl2va` — on top of the totals below |
 | Keyframe encode | — | **0.1 s** | keyframe -> VAE moments -> posterior sample -> fp16 round trip -> normalize -> patchify -> `scale_noise` at t = 0.999 |
 | Denoise | 67.0 s | 58.0 s | 49 forwards of the 50-layer DiT over the packed sequence |
 | VAE decode | 4.0 s | 4.1 s | 196 work units in 7 waves of 28 across 32 devices |
@@ -298,7 +297,9 @@ scripts/run_safe_pytest.sh models/tt_dit/tests/models/minimax_h3/test_performanc
 **Do not read this as `fl2va` being faster than `t2va`.** It is one run of each, and run-to-run variance
 at identical shape and seed is **±8 %** (denoise measured between 56.6 and 71.3 s across repeats).
 What the numbers do establish is that `fl2va` is **not materially slower** despite a 5.4 % longer packed
-sequence. Claiming a direction needs repeats.
+sequence. Claiming a direction needs repeats. The co-residency notes in
+`pipeline_minimax_h3.py` quote a different run of the same working point (total 69.1 s, VAE decode
+6.0 s) — the two tables were measured on different days and sit within the variance band above.
 
 Where the time goes, from Tracy captures:
 
@@ -319,20 +320,22 @@ got away without that by luck, since 1 and 39 tokens both round up to 37888.
 
 ## Precision
 
-`TT_DIT_LINEAR_PRECISION` (in `layers/linear.py`, shared by every tt_dit model) raises the math fidelity
-of every linear. Unset keeps the long-standing config. Measured on the `fl2va` conditioner:
+The conditioner's decoder linears run at **HiFi4** instead of the tt_dit-wide HiFi2 default.
+`build_minimax_h3_text_encoder` opts in unconditionally (via `Qwen3VlTextEncoder`'s
+`high_fidelity_linears`, which threads an explicit compute-kernel config to every qkv/o/gate/up/down
+projection); there is no knob. Measured on the `fl2va` conditioner:
 
-| | fused conditioner PCC | massive-activation rows (reference has 7) | per forward |
+| decoder linears | fused conditioner PCC | massive-activation rows (reference has 7) | per forward |
 |---|---|---|---|
-| unset | 70.89 % | 5 | 1183.2 ms |
-| `hifi4` | **85.82 %** | **7** | 1184.2 ms |
-| `max` | identical to `hifi4` | identical | — |
+| HiFi2 (tt_dit default) | 70.89 % | 5 | 1183.2 ms |
+| HiFi4 (what runs) | **85.82 %** | **7** | 1184.2 ms |
+| HiFi4 + no packer L1 acc | identical to HiFi4 | identical | — |
 
 So it is free at this shape, `packer_l1_acc` has no effect, and the vision tower is unchanged — the gain
-is all in the 50-layer decoder. **The default is deliberately left alone**: one model's measurement is
-not evidence about LTX, Wan or Ideogram-4. And it changes the video not at all (40-48 dB PSNR
-frame-to-frame, identical anchor and CLIP numbers), so this is a conditioner-fidelity knob rather than a
-quality one.
+is all in the 50-layer decoder. **The shared default in `layers/linear.py` is deliberately left alone**:
+one model's measurement is not evidence about LTX, Wan or Ideogram-4, which keep HiFi2. And it changes
+the video not at all (40-48 dB PSNR frame-to-frame, identical anchor and CLIP numbers), so this is
+conditioner fidelity rather than output quality.
 
 ## Audio decode precision
 

@@ -16,8 +16,9 @@ for the same reason: reference order is bit-exact host-gated (``nine_mixed_rever
 no-op discriminator already proves layout differences reach the output.
 
 The e2e folds the fully-warm latency measurement and the quality gates into one weight load:
-warmup at the real shape with the real references, prime the prompt cache, then time the measured
-generation and gate its output. The timing method is ``pipelines/ltx``'s -- prepares and export
+warmup at the real shape with the real references, then time the measured generation and gate its
+output. The timed Encoder row is a real device encode, vision tower included -- there is no
+prompt-embedding cache. The timing method is ``pipelines/ltx``'s -- prepares and export
 excluded, ``Total (compute)`` = the sum of ``pipeline.last_timings`` rows -- so the number is
 comparable to the t2va and fl2va rows. A cold total says almost nothing about the loop: at 81664
 padded rows the shape probe measured a cold forward of 114 s against a warm 3.26 s, the
@@ -302,15 +303,17 @@ def test_ref2va_end_to_end(mesh_device, reset_seeds):
     references = ref2va_references(case)
     pipeline = _pipeline(mesh_device)
 
-    # ---- fully-warm latency, `pipelines/ltx`'s method. The same three warmth conditions as the
+    # ---- fully-warm latency, `pipelines/ltx`'s method. The same two warmth conditions as the
     # fl2va gate, sharpened for ref2va:
     # 1. The warmup must be ref2va-shaped, with the SAME references: `padded_len` depends on the
     #    number and resolution of the references, so warming with different ones warms nothing.
     # 2. The warmup must run at the same prompt length, which for ref2va means the same
     #    presentation -- a 2048 px image reference contributes ~4096 vision tokens and a video
     #    reference ~1008 per merged frame pair. Asserted below via `last_padded_len`.
-    # 3. The embedding cache must be populated: `warmup` runs with `use_prompt_cache=False`. The
-    #    references have to be *prepared* first, because that is what the cache key digests.
+    # The measured run pays the full device conditioner encode -- vision tower included -- inside
+    # the timed Encoder row: there is no prompt-embedding cache. No reference number is recorded
+    # for the ref2va encode (t2va's text-only encode measures ~2.8 s; the vision tower adds to
+    # that here), and the warmup above already compiled the encoder path at this presentation.
     pipeline.warmup(
         prompt=PROMPT,
         references=references,
@@ -320,11 +323,6 @@ def test_ref2va_end_to_end(mesh_device, reset_seeds):
         num_inference_steps=STEPS,
     )
     warm_padded_len = pipeline.last_padded_len
-
-    from ....pipelines.minimax_h3.references import prepare_references
-
-    prepared, _ = prepare_references(references, NUM_FRAMES, pipeline.audio_sampling_rate)
-    pipeline.encode_prompt(PROMPT, references=prepared, use_cache=True)
 
     output = pipeline(
         PROMPT,

@@ -13,12 +13,12 @@ that `first_and_last` cannot -- a lone `last_image` being the geometry anchor an
 `test_lone_last_keyframe_is_stretched_not_cover_cropped`, for free.
 
 The test folds the fully-warm latency measurement and the quality gates into one weight load:
-warmup at the real shape (keyframes included), prime the prompt cache, then time the measured
-generation and gate its output. The timing method is `pipelines/ltx`'s -- prepares and export
-excluded, `Total (compute)` = the sum of `pipeline.last_timings` rows -- so the number is
-comparable to the t2va row in `test_pipeline_minimax_h3.py`. Three warmth conditions are asserted
-rather than assumed (see the comments in the test); each has bitten a measurement in this model's
-bringup or its sibling's.
+warmup at the real shape (keyframes included), then time the measured generation and gate its
+output. The timing method is `pipelines/ltx`'s -- prepares and export excluded,
+`Total (compute)` = the sum of `pipeline.last_timings` rows -- so the number is comparable to the
+t2va row in `test_pipeline_minimax_h3.py`. The timed Encoder row is a real device encode, vision
+tower included. Two warmth conditions are asserted rather than assumed (see the comments in the
+test); each has bitten a measurement in this model's bringup or its sibling's.
 
 A separate file from `test_pipeline_minimax_h3.py` rather than more cases in it, so the
 two e2e gates default to separate processes. One process holding the 50-block DiT's programs *and*
@@ -138,7 +138,8 @@ ANCHOR_PCC_FLOOR = 0.95
 CLIP_THRESHOLD = 33.0
 
 # Generous: a regression bar, not a target -- same convention as the t2va gate's. There is no tuned
-# perf target yet; the point is to notice a collapse (a lost cache, a fallback kernel).
+# perf target yet; the point is to notice a collapse (a lost cache, a fallback kernel). Comfortable
+# even though the timed window now includes the real conditioner encode (vision tower included).
 EXPECTED_TOTAL_S = 400.0
 
 
@@ -202,17 +203,17 @@ def test_fl2va_end_to_end(mesh_device, reset_seeds):
 
     pipeline = MiniMaxH3Pipeline.create_pipeline(mesh_device=mesh_device, weights_dir=_weights_dir())
 
-    # ---- fully-warm latency, `pipelines/ltx`'s method. Three things have to be right or the
+    # ---- fully-warm latency, `pipelines/ltx`'s method. Two things have to be right or the
     # number means nothing:
     # 1. The warmup must be fl2va-shaped, keyframes included: every program in the 50-block stack
     #    is keyed on the padded packed length, so a t2va warmup warms nothing for fl2va.
     # 2. The warmup must run at the same prompt length -- asserted below rather than assumed. t2va
     #    got away with a one-token "warmup" prompt purely by luck (1 and 39 tokens both round up to
     #    37888); with two ~1008-row vision blocks that luck is gone.
-    # 3. The embedding cache must be populated: `warmup` runs with `use_prompt_cache=False`, so it
-    #    compiles the conditioner and writes nothing. Without the priming call the measured run
-    #    would pay a full device conditioner encode -- vision tower included -- inside the timed
-    #    Encoder row.
+    # The measured run pays the full device conditioner encode -- vision tower included -- inside the
+    # timed Encoder row: there is no prompt-embedding cache, so that row is a genuine measurement.
+    # No reference number is recorded for the fl2va encode (t2va's text-only encode measures ~2.8 s;
+    # the vision tower adds to that here), and the warmup above already compiled the encoder path.
     pipeline.warmup(
         prompt=PROMPT,
         image=image,
@@ -223,9 +224,6 @@ def test_fl2va_end_to_end(mesh_device, reset_seeds):
         num_inference_steps=NUM_INFERENCE_STEPS,
     )
     warm_padded_len = pipeline.last_padded_len
-    # (3): the gated keyframe is already at canvas size (asserted in `_gated_keyframe`), so the
-    # pipeline's preparation is the identity and these are the keyframes its cache key digests.
-    pipeline.encode_prompt(PROMPT, keyframes=[image, last_image], use_cache=True)
 
     output = pipeline(
         PROMPT,
