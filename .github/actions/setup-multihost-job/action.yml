@@ -58,7 +58,7 @@ runs:
     - name: Create user directory
       shell: bash
       run: |
-        sudo mkdir -p /home/user
+        sudo mkdir -p /home/user/tt-metal
         sudo chown "$(id -u):$(id -g)" /home/user
 
     - name: Download Build Artifact
@@ -107,6 +107,7 @@ runs:
 
         # Workers + runner local copy for runtime (local disk).
         cp -r "$GITHUB_WORKSPACE" /ci/tt-metal
+        cp -r "$GITHUB_WORKSPACE" /home/user/tt-metal
         cp -r "${BUILD_ARCHIVE}" /ci/tt-metal/ 
         cp -r "${ttnn_wheels[0]}" /ci/tt-metal/
         tar --zstd -xf "${BUILD_ARCHIVE}" -C /home/user/tt-metal
