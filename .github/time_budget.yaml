@@ -313,6 +313,11 @@ llk:
   bit_exact:
     wh_n150_civ2: 90
     bh_p150b_civ2: 180
+  # Manual ttnop WH dry-run (4-way split). verify_time_budget sums every
+  # shard's timeout for the SKU (4 × 1800 = 7200), even though the shards
+  # run in parallel. UNKNOWN: raise/lower after first run.
+  ttnop:
+    wh_n150_civ2: 7200
   merge_gate:
     wh_n150_civ2: 300
     bh_p150b_civ2_viommu: 70

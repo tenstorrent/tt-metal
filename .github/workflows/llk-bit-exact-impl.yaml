@@ -1,18 +1,18 @@
 name: "LLK bit-exact impl"
-# Entry points: workflow_call only. Schedule / workflow_dispatch live in llk-bit-exact.yaml.
+# Entry points: workflow_call only. Dispatch lives in llk-bit-exact.yaml.
+#
+# TEMPORARY BRANCH OVERRIDE — see banner in llk-bit-exact.yaml.
+# This impl currently loads llk_ttnop_tests.yaml and runs ttnop/ci.sh (WH).
+# Restore TESTS_YAML_PATH=llk_bit_exact_tests.yaml + bit_exact budget + JUnit
+# upload before merging to main.
 
 on:
   workflow_call:
     inputs:
       architecture:
-        description: "Architecture to run: all, wormhole, or blackhole"
+        description: "Architecture to run (ttnop dry-run: wormhole only)"
         required: false
-        default: all
-        type: string
-      bit-exact-runs:
-        description: "Times each variant is executed on device and compared"
-        required: false
-        default: "100"
+        default: wormhole
         type: string
       pytest-markers:
         description: "Pytest mark expression for LLK python_tests"
@@ -27,6 +27,10 @@ permissions:
 
 env:
   LLK_PATH: tt_metal/tt-llk
+  # ttnop defaults (ttnop/README.md). TEMP override for this branch.
+  TTNOP_THREADS: unpack,math
+  TTNOP_SITE_MODE: sync
+  TTNOP_DELAYS: 1-100
 
 jobs:
   build-images:
@@ -40,7 +44,8 @@ jobs:
     outputs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/llk_bit_exact_tests.yaml
+      # TEMP: was ./tests/pipeline_reorg/llk_bit_exact_tests.yaml
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/llk_ttnop_tests.yaml
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -55,27 +60,23 @@ jobs:
       - name: Verify test timeouts against budget
         run: |
           set -e
+          # TEMP: was "bit_exact"
           python3 .github/scripts/utils/verify_time_budget.py \
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
-            "bit_exact"
+            "ttnop"
       - name: Build test matrix
         id: build-matrix
         env:
           ARCHITECTURE: ${{ inputs.architecture }}
         run: |
+          set -euo pipefail
           case "$ARCHITECTURE" in
-            all)
-              ENABLED_SKUS="ALL_SKUS_IN_TESTS"
-              ;;
             wormhole)
               ENABLED_SKUS="wh_n150_civ2"
               ;;
-            blackhole)
-              ENABLED_SKUS="bh_p150b_civ2"
-              ;;
             *)
-              echo "::error::Unsupported architecture '$ARCHITECTURE'"
+              echo "::error::This branch override is Wormhole-only (got '$ARCHITECTURE')"
               exit 1
               ;;
           esac
@@ -111,46 +112,35 @@ jobs:
           cd ..
       - name: Set CHIP_ARCH for logs and artifacts
         shell: bash
-        env:
-          RUN_ON_LABELS: ${{ join(matrix.test-group.runs_on, ' ') }}
-        run: |
-          RUN_LABEL="${RUN_ON_LABELS%% *}"
-          if [[ "$RUN_LABEL" =~ N150 ]]; then
-            echo "CHIP_ARCH=wormhole" >> "$GITHUB_ENV"
-          elif [[ "$RUN_LABEL" =~ P150 ]]; then
-            echo "CHIP_ARCH=blackhole" >> "$GITHUB_ENV"
-          else
-            echo "CHIP_ARCH=unknown" >> "$GITHUB_ENV"
-          fi
-      - name: Run tests
+        run: echo "CHIP_ARCH=wormhole" >> "$GITHUB_ENV"
+      # TEMP ttnop: continue-on-error so a red case does not abort the shard.
+      # UNKNOWN: drop continue-on-error if the workflow should go red on races.
+      - name: Run ttnop sweep
+        id: ttnop
         shell: bash
         working-directory: ${{ env.LLK_PATH }}
+        continue-on-error: true
         env:
           PYTEST_MARKERS: ${{ inputs.pytest-markers }}
-          BIT_EXACT_RUNS: ${{ inputs.bit-exact-runs }}
         run: |
           ${{ matrix.test-group.cmd }}
 
+      - name: Upload ttnop failure report
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: ttnop-report-wormhole-${{ matrix.test-group.split_group }}
+          path: |
+            ${{ env.LLK_PATH }}/tests/python_tests/ttnop/reports/**/report.md
+            ${{ env.LLK_PATH }}/tests/python_tests/ttnop/reports/**/failures.jsonl
+          if-no-files-found: warn
+
       - name: Upload test logs on failure
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        if: failure()
+        if: failure() || steps.ttnop.outcome == 'failure'
         with:
-          name: test-logs-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
+          name: ttnop-logs-wormhole-${{ matrix.test-group.split_group }}
           path: |
             ${{ env.LLK_PATH }}/tests/python_tests/test_run*.log
             ${{ env.LLK_PATH }}/tests/python_tests/test_errors*.log
-
-      - name: Upload JUnit report
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        if: always()
-        with:
-          name: bit-exact-junit-report-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
-          path: ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}.xml
-
-      - name: Publish Test Results
-        uses: mikepenz/action-junit-report@v5
-        if: always()
-        with:
-          report_paths: ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}.xml
-          include_passed: true
-          annotate_only: true
+          if-no-files-found: ignore

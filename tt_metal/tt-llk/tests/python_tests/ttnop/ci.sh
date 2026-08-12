@@ -6,18 +6,22 @@
 # (thread, site, delay) exactly once behind a clean baseline pass.
 #
 #   ./ci.sh --test test_eltwise_unary_datacopy.py [--k EXPR]
+#           [--markers 'not perf and not nightly and not accuracy and not quasar']
 #           [--splits N --group G] [--report-dir DIR] [--jobs N]
 #           [--device-jobs N] [--collect-to FILE] [--nodeids FILE]
 #
-# --splits/--group divide one suite across machines, pytest-split style.
-# Give each machine its own --report-dir.
+# --test . (from python_tests/) runs the whole suite. --splits/--group divide
+# one suite across machines, pytest-split style. Give each machine its own
+# --report-dir.
 #
 # Env (see README): TTNOP_DELAYS TTNOP_THREADS TTNOP_SITE_MODE TTNOP_FILLER
+# Markers also accepted via PYTEST_MARKERS / TTNOP_MARKERS (CI sets PYTEST_MARKERS).
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/env.sh"
 
 TESTS=()
 K=""
+MARKERS="${TTNOP_MARKERS:-${PYTEST_MARKERS:-}}"
 SPLITS=""
 GROUP=""
 JOBS="${TTNOP_JOBS:-15}"
@@ -31,6 +35,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --test) TESTS+=("$2"); shift 2 ;;
         --k) K="$2"; shift 2 ;;
+        --markers) MARKERS="$2"; shift 2 ;;
         --splits) SPLITS="$2"; shift 2 ;;
         --group) GROUP="$2"; shift 2 ;;
         --jobs) JOBS="$2"; shift 2 ;;
@@ -55,12 +60,14 @@ SPLIT_ARGS=()
 [[ -n "$SPLITS" ]] && SPLIT_ARGS+=(--splits "$SPLITS" --group "${GROUP:-1}")
 FILTER_ARGS=()
 [[ -n "$K" ]] && FILTER_ARGS+=(-k "$K")
+[[ -n "$MARKERS" ]] && FILTER_ARGS+=(-m "$MARKERS")
 XDIST_ARGS=()
 [[ "$DEVICE_JOBS" -gt 1 ]] && XDIST_ARGS=(-n "$DEVICE_JOBS")
 
 echo ">> delays=${TTNOP_DELAYS:-1-100} threads=${TTNOP_THREADS:-unpack,math}" \
      "sites=${TTNOP_SITE_MODE:-sync} filler=${TTNOP_FILLER:-auto}"
 echo ">> test=${TESTS[*]:-$NODEIDS} compile_jobs=${JOBS} device_jobs=${DEVICE_JOBS}"
+[[ -z "$MARKERS" ]] || echo ">> markers=${MARKERS}"
 [[ -z "$SPLITS" ]] || echo ">> splits=${SPLITS} group=${GROUP:-1}"
 
 compile_s=0

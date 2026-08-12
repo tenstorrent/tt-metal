@@ -1,25 +1,28 @@
 name: "LLK bit-exact"
 
+# =============================================================================
+# TEMPORARY BRANCH OVERRIDE — ttnop WH dry-run (manual only)
+# =============================================================================
+# This file normally runs nightly LLK bit-exactness. On THIS BRANCH it is
+# temporarily pointed at a Wormhole-only ttnop sweep so you can dispatch the
+# already-registered "LLK bit-exact" workflow without landing a new workflow
+# on main first:
+#
+#   gh workflow run llk-bit-exact.yaml --ref <this-branch>
+#   # or Actions UI → LLK bit-exact → Run workflow → pick this branch
+#
+# BEFORE MERGING TO MAIN: restore the original bit-exact nightly (cron
+# '0 3 * * *', bit-exact-runs input, alls-green + Slack report-status) OR
+# replace this with a dedicated llk-ttnop.yaml. Do NOT merge this override
+# as-is or you will replace nightly bit-exact with ttnop.
+#
+# UNKNOWN (ask tomorrow):
+#   - 1800 min/shard timeout enough?
+#   - Does dispatching 4 SKU jobs reserve machines, or need an infra ticket?
+# =============================================================================
+
 on:
-  schedule:
-    # Run every night at 3AM UTC
-    - cron: '0 3 * * *'
   workflow_dispatch:
-    inputs:
-      architecture:
-        description: "Architecture to run bit-exactness tests on"
-        required: true
-        default: all
-        type: choice
-        options:
-          - all
-          - wormhole
-          - blackhole
-      bit-exact-runs:
-        description: "Times each variant is executed on device and compared"
-        required: false
-        default: "500"
-        type: string
 
 permissions:
   checks: write
@@ -27,47 +30,17 @@ permissions:
   packages: write
 
 concurrency:
-  group: ${{ github.workflow }}-${{ inputs.architecture || 'all' }}-${{
+  group: ${{ github.workflow }}-wormhole-${{
     github.ref_protected && github.run_id || github.ref }}
   cancel-in-progress: true
 
 jobs:
   llk-bit-exact-tests:
-    name: "LLK bit-exact tests"
+    name: "LLK ttnop tests (WH, via bit-exact workflow)"
     uses: ./.github/workflows/llk-bit-exact-impl.yaml
     with:
-      # Scheduled runs have no dispatch inputs, so fall back to the defaults.
-      architecture: ${{ inputs.architecture || 'all' }}
-      bit-exact-runs: ${{ inputs.bit-exact-runs || '500' }}
+      architecture: wormhole
     secrets: inherit
 
-  llk-bit-exact-summary:
-    name: "LLK bit-exact summary"
-    if: always()
-    needs:
-      - llk-bit-exact-tests
-    runs-on: ubuntu-slim
-    steps:
-      - name: Check bit-exactness test results
-        uses: re-actors/alls-green@release/v1
-        with:
-          jobs: ${{ toJSON(needs) }}
-
-  report-status:
-    name: "Report status"
-    runs-on: ubuntu-slim
-    if: always()
-    needs: llk-bit-exact-summary
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        timeout-minutes: 20
-        with:
-          fetch-depth: 1
-      - name: Report status
-        uses: ./.github/actions/report-failure
-        with:
-          test_name: "LLK bit-exact tests"
-          slack_bot_token: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
-          slack_channel_id: ${{ secrets.LLK_CI_STATUS_CHANNEL_ID }}
-          status: ${{ needs.llk-bit-exact-summary.result }}
+  # TEMP: no alls-green / Slack — deliverable is the ttnop report artifact.
+  # Restore report-status when reverting this file to real bit-exact.
