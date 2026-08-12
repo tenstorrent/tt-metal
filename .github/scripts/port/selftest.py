@@ -493,6 +493,124 @@ for label, message in [
     code, _ = _resolve(message)
     check(f"the workflow rejects {label}", code != 0, "it was accepted")
 
+# --------------------------------------------------------------------------------------------
+# Starting and collecting are separate calls, because the MCP gateway will not let one tool call
+# last as long as a build. That split is only safe if a `wait` that runs out of budget is clearly
+# distinguishable from a `wait` that found a failure -- otherwise the agent reads "not finished" as
+# "your port is broken" and starts editing working code.
+
+
+class _FakeApi:
+    """Enough of `Api` for the waiter: a scripted sequence of run statuses."""
+
+    repo = "owner/repo"
+
+    def __init__(self, statuses: list[str]) -> None:
+        self.statuses = statuses
+        self.polls = 0
+
+    def get_json(self, _url: str) -> dict:
+        status = self.statuses[min(self.polls, len(self.statuses) - 1)]
+        self.polls += 1
+        return {
+            "id": 1,
+            "status": status,
+            "html_url": "https://example.invalid/run/1",
+            "conclusion": "success" if status == "completed" else None,
+        }
+
+
+def _with_fake_clock(fn):
+    """Run `fn` with time advancing only when the code under test sleeps."""
+    clock = {"now": 0.0}
+    real_sleep, real_monotonic = dispatch.time.sleep, dispatch.time.monotonic
+    dispatch.time.sleep = lambda seconds: clock.__setitem__("now", clock["now"] + seconds)
+    dispatch.time.monotonic = lambda: clock["now"]
+    try:
+        return fn(), clock["now"]
+    finally:
+        dispatch.time.sleep, dispatch.time.monotonic = real_sleep, real_monotonic
+
+
+run = {"id": 1, "html_url": "https://example.invalid/run/1"}
+
+outcome, spent = _with_fake_clock(
+    lambda: dispatch.wait_for_completion(_FakeApi(["in_progress"]), dict(run), "build", budget=420)
+)
+check("a run still going returns nothing rather than a verdict", outcome is None, repr(outcome))
+check("and gives up inside its budget", spent <= 420, f"blocked for {spent}s against a 420s budget")
+
+outcome, _ = _with_fake_clock(
+    lambda: dispatch.wait_for_completion(
+        _FakeApi(["queued", "in_progress", "completed"]), dict(run), "build", budget=420
+    )
+)
+check("a run that lands inside the budget comes back", (outcome or {}).get("status") == "completed", repr(outcome))
+
+# The run's own life, not this slice of it, is what decides it has hung -- otherwise a run polled in
+# seven-minute slices could never exceed any ceiling and would be waited on forever.
+try:
+    _with_fake_clock(
+        lambda: dispatch.wait_for_completion(
+            _FakeApi(["in_progress"]), dict(run), "verify", budget=420, age=dispatch.RUN_COMPLETE_TIMEOUT
+        )
+    )
+    check("a run past the overall ceiling is abandoned", False, "it kept waiting")
+except dispatch.ApiError as exc:
+    check("a run past the overall ceiling is abandoned", "has not finished" in str(exc), str(exc))
+
+with tempfile.TemporaryDirectory() as tmp:
+    work = Path(tmp)
+    dispatch.save_job(work, "1-abcd", {"handle": "1-abcd", "mode": "build", "run_id": 7})
+    check("a handle survives to the next call", dispatch.load_job(work, "1-abcd")["run_id"] == 7)
+    try:
+        dispatch.load_job(work, "1-wrong")
+        check("an unknown handle is refused", False, "it was accepted")
+    except dispatch.DispatchError as exc:
+        check("an unknown handle is refused, and says what is in flight", "1-abcd" in str(exc), str(exc))
+    dispatch.forget_job(work, "1-abcd")
+    try:
+        dispatch.load_job(work, "1-abcd")
+        check("a collected handle is not reusable", False, "it was accepted")
+    except dispatch.DispatchError as exc:
+        check("a collected handle is not reusable", "start one first" in str(exc), str(exc))
+
+# The handle is agent-supplied text that reaches a command line, so the guard is lifted out of the
+# workflow rather than reimplemented, exactly as the resolve check above is.
+PORT_OP = Path(__file__).resolve().parents[2] / "workflows" / "port-op.md"
+
+
+def _wait_guard(handle: str) -> int:
+    frontmatter = yaml.safe_load(PORT_OP.read_text().split("---", 2)[1])
+    script = frontmatter["mcp-scripts"]["wait"]["run"]
+    return subprocess.run(
+        ["bash", "-c", script],
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "INPUT_HANDLE": handle,
+            "GITHUB_WORKSPACE": str(Path(__file__).resolve().parents[3]),
+            # So a developer's own dispatch credential cannot turn this into a live API call.
+            "PORT_DISPATCH_TOKEN_FILE": "/nonexistent/token",
+        },
+    ).returncode
+
+
+for label, handle in [
+    ("a command substitution", "$(id)"),
+    ("a chained command", "1-abc; rm -rf /"),
+    ("a path traversal", "../../../etc/passwd"),
+    ("an empty handle", ""),
+]:
+    check(f"the wait tool rejects {label}", _wait_guard(handle) == 2, "it was accepted")
+
+check(
+    "the wait tool accepts a handle the launcher would emit",
+    _wait_guard("31599281955-82f8157f") != 2,
+    "a well-formed handle was rejected",
+)
+
 print()
 print(f"{len(failures)} failure(s)" + (": " + ", ".join(failures) if failures else ""))
 sys.exit(1 if failures else 0)
