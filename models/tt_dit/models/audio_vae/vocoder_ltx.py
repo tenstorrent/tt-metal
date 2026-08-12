@@ -32,6 +32,7 @@ from ...layers.audio_resample import Activation1d
 from ...layers.module import Module, ModuleList
 from ...parallel.config import ParallelFactor
 from ...parallel.manager import CCLManager
+from ...utils.tensor import local_device_to_torch
 from ...utils.tracing import traced_function
 
 
@@ -499,7 +500,7 @@ class Vocoder(Module):
     def _device_to_host(self, x_dev: ttnn.Tensor) -> torch.Tensor:
         """Readback + host crop. Trims padded out-channels and the upsampled image of the
         input T-padding (``self._t_pad``), then returns ``(B, out_channels, T_out)``."""
-        x_host = ttnn.to_torch(ttnn.get_device_tensors(x_dev)[0])
+        x_host = local_device_to_torch(x_dev)
         x_host = x_host[..., : self.out_channels]  # trim any padded out channels
         # Crop the upsampled image of the input T-padding.
         if self._t_pad > 0:

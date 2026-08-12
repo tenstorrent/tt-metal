@@ -333,16 +333,33 @@ def pad_single(
 
 
 def local_device_to_torch(tt_tensor: ttnn.Tensor) -> torch.Tensor:
-    """Convert a ttnn device tensor to a torch tensor by reading from the local device.
+    """Read one shard of a **replicated** device tensor back to torch, without any collective.
 
-    In a distributed environment, iterates over the mesh coordinates to find the
-    tensor shard that belongs to the local device before calling ``ttnn.to_torch``.
+    This is the safe readback for a tensor every device holds a copy of. `ttnn.to_torch` requires
+    the host tensor to carry exactly one shard (`pytensor.cpp`: "Can't convert a tensor distributed
+    on ... mesh to row-major logical tensor"), so the whole job is handing it a single-device tensor.
+    `ttnn.get_device_tensors` slices the local device storage into exactly those, and on a
+    multi-host mesh it returns this host's shards only -- so any element of it is both local and,
+    for a replicated tensor, the whole answer.
+
+    Prefer this over `to_torch(...)` in this module for replicated tensors: that one builds a mesh
+    composer, and a composer on a multi-host mesh runs `host_ccl::all_gather`, an MPI collective.
+    Prefer `fast_device_to_host` when the tensor is genuinely *sharded* and the host needs all of it.
+
+    **Replicated only.** For a sharded tensor this returns one arbitrary shard rather than failing,
+    which is silent and wrong; use `fast_device_to_host` there instead.
     """
     mesh_device = tt_tensor.device()
     view = mesh_device.get_view() if ttnn.using_distributed_env() else None
     coords = list(tt_tensor.tensor_topology().mesh_coords())
     device_tensors = ttnn.get_device_tensors(tt_tensor)
 
+    # The `is_local` filter is load-bearing, not defensive. `get_device_tensors` enumerates the
+    # *whole* mesh -- measured on a 4x32 quad it returns 128 shards on every rank, matching the 128
+    # coordinates `mesh_coords()` lists -- so taking `[0]` grabs the shard at global coord (0, 0).
+    # That shard is local on exactly one rank; on the other three, converting it makes the host
+    # gather and `ttnn.to_torch` then rejects the result as multi-buffer. Measured: `[0]` passed on
+    # rank 2 (which owns column 0) and raised `buffers.size() == 1` on ranks 0, 1 and 3.
     torch_tensor = None
     for coord, device_tensor in zip(coords, device_tensors):
         if view is None or view.is_local(coord):

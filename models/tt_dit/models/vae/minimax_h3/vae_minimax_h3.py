@@ -45,7 +45,7 @@ from loguru import logger
 import ttnn
 
 from ....layers.module import Module
-from ....utils.tensor import fast_device_to_host
+from ....utils.tensor import fast_device_to_host, local_device_to_torch
 from .encoder_minimax_h3 import MiniMaxH3Encoder3d
 
 DEFAULT_TILE_SIZE = 256
@@ -751,12 +751,10 @@ class MiniMaxH3Vae(Module):
         profile["device_each"].append(elapsed)
 
         mark = time.perf_counter()
-        # One replica: the gather made every device identical, which amendment 105 asserts.
-        # Multi-host-safe as written, and deliberately not `local_device_to_torch`:
-        # `get_device_tensors` on a device tensor already returns this host's shards only, so `[0]`
-        # is local by construction, whereas `local_device_to_torch` zips the *global* coordinate
-        # list against that local list and so picks the wrong index on any rank but 0.
-        out = ttnn.to_torch(ttnn.get_device_tensors(canvas)[0]).float()
+        # One replica: the two gathers above made every device identical, which amendment 105
+        # asserts, so this is the replicated case `local_device_to_torch` is for -- a single-shard
+        # read with no collective.
+        out = local_device_to_torch(canvas).float()
         elapsed = time.perf_counter() - mark
         profile["readback"] += elapsed
         profile["readback_each"].append(elapsed)

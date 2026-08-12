@@ -74,7 +74,7 @@ from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, Paralle
 from ...parallel.manager import CCLManager
 from ...utils import cache
 from ...utils.conv3d import conv3d_blocking_hash
-from ...utils.tensor import bf16_tensor, from_torch, to_torch
+from ...utils.tensor import bf16_tensor, from_torch, local_device_to_torch
 from .adaln_precompute import precompute_adaln_table, request_step_timesteps
 from .conditioning import MINIMAX_H3_PIXEL_MEAN as _MINIMAX_H3_PIXEL_MEAN
 from .conditioning import MINIMAX_H3_PIXEL_STD as _MINIMAX_H3_PIXEL_STD
@@ -871,7 +871,7 @@ class MiniMaxH3Pipeline:
         # on a 4x32 mesh the bare call fails with "Can't convert a tensor distributed on
         # MeshShape([4, 32]) mesh to row-major logical tensor". The helper builds an all-replicated
         # composer instead, which is the same one-replica read expressed in a way the converter accepts.
-        embeds = to_torch(taps[0]).float()
+        embeds = local_device_to_torch(taps[0]).float()
 
         if use_cache:
             # Rank 0 writes; the rest wait for it. Every rank computed the same replicated embeds, so
@@ -1878,8 +1878,8 @@ class MiniMaxH3Pipeline:
             # round trips the 4x8 path never paid, and it wedges the whole run if any rank leaves the
             # loop first. The tensor is replicated after the model's SP gather, so one local shard is
             # the whole answer and no collective is needed to get it.
-            v = ttnn.to_torch(ttnn.get_device_tensors(video_velocity)[0]).reshape(-1, video_rows.shape[-1]).float()
-            a = ttnn.to_torch(ttnn.get_device_tensors(audio_velocity)[0]).reshape(-1, audio_rows.shape[-1]).float()
+            v = local_device_to_torch(video_velocity).reshape(-1, video_rows.shape[-1]).float()
+            a = local_device_to_torch(audio_velocity).reshape(-1, audio_rows.shape[-1]).float()
 
             # tt_dit's scheduler returns the next sample directly; only the diffusers one wraps it.
             # Each stream steps its own schedule -- shift 12.0 for video, 3.0 for audio.

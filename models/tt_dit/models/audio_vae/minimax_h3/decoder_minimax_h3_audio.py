@@ -42,6 +42,7 @@ from ....layers.audio_ops import _AlignedOutConv1d
 from ....layers.module import Module
 from ....parallel.config import ParallelFactor
 from ....parallel.manager import CCLManager
+from ....utils.tensor import local_device_to_torch
 from ..vocoder_ltx import Vocoder
 from .blockings_minimax_h3_audio import register_h3_audio_blockings
 
@@ -129,9 +130,13 @@ class MiniMaxH3AudioDecoder(Module):
         # so only ever worked on a single-device mesh -- which is what kept this decoder off
         # the mesh entirely, ``parallel_config`` or not. Same shape as the vocoder's own
         # ``_device_to_host``.
-        if self.mesh_device.get_num_devices() > 1:
-            projected_device = ttnn.get_device_tensors(projected_device)[0]
-        projected = ttnn.to_torch(projected_device).float()
+        # `utils.tensor.to_torch`, not `ttnn.to_torch(get_device_tensors(t)[0])`: slicing one
+        # coordinate out of the device storage keeps the parent's distribution metadata, so on a
+        # multi-host mesh the bare call fails with "Can't convert a tensor distributed on
+        # MeshShape([4, 32]) mesh to row-major logical tensor". The helper builds an all-replicated
+        # composer, which is the same one-replica read in a form the converter accepts. Once per
+        # generation, so the composer's collective costs nothing worth avoiding here.
+        projected = local_device_to_torch(projected_device).float()
         if t_pad:
             # Crop the alignment padding back off before handing T to the vocoder, which
             # applies its own padding for its own sharding.
