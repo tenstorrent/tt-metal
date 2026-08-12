@@ -115,10 +115,15 @@ def _run_case(
     num_workers_per_link,
     cluster_axis,
     enable_trace,
-    mm_block_m=256,
+    # This suite reproduces credit/replay protocol bugs, not blocking perf: small M
+    # blocks + a 2-deep window keep the L1-resident MM shard far from the CB region
+    # on every case (the op keeps its output L1-resident; at M=22144 a full shard
+    # is ~2x the bank).
+    mm_block_m=128,
     sub_h=2,
     sub_w=1,
     ops_per_trace=1,
+    mm_window_blocks=2,
 ):
     run_minimal_matmul_strided_reduce_scatter_impl(
         mesh_device,
@@ -141,6 +146,7 @@ def _run_case(
         num_iters=35 if enable_trace else 1,
         num_workers_per_link=num_workers_per_link,
         ops_per_trace=ops_per_trace,
+        mm_window_blocks=mm_window_blocks,
         num_buffers_per_channel=None,
         mm_block_m=mm_block_m,
         mm_block_k=128,
@@ -182,7 +188,10 @@ def test_fused_mmrs_table_excludes_corrupting_shape():
     from models.tt_dit.utils.matmul import fused_mmrs_configs
 
     table = fused_mmrs_configs.get(ttnn.CoreCoord(10, 10), {})
-    assert (22144, 3200, 5120) in table  # down_proj stays fused
+    # down_proj is also out for now: op-level green at window 2, but the L1-resident
+    # MM window clashes with downstream matmul CBs in the traced trunk (see the
+    # table comment). Nothing on the 10x10 clamp may be fused until that lands.
+    assert (22144, 3200, 5120) not in table
     assert (22144, 1024, 5120) not in table
 
 

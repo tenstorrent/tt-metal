@@ -138,17 +138,20 @@ void kernel_main() {
     constexpr auto intermediate_tensor_args = TensorAccessorArgs<ct_idx + ct_offset>();
     auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_tensor_address);
 #endif
+    // Rolling-window return path: this reader's credit slot on every MM core, published by
+    // multicast SET once per M block so the matmul knows when a window slot is free to recycle.
+    // Declared outside FUSE_MM_OP_SIGNALER: the window loop below is discarded via
+    // `if constexpr (mm_window_blocks > 0)` on the standalone build, but discarded branches
+    // still parse, so the names must exist.
+    uint32_t rs_credit_counters = 0;
+    uint32_t num_mm_cores = 0;
+    uint32_t rs_credit_mm_coords_arg_base = 0;
 #ifdef FUSE_MM_OP_SIGNALER
     // Per-core MM progress counters (replaces the old single aggregate semaphore)
     const uint32_t mm_progress_counters = get_arg_val<uint32_t>(arg_idx++);  // L1 base addr
     // mm_cores_x = number of MM cores along N
     const uint32_t mm_cores_x = (input_tensor_Wt + mm_N_full_block_wt - 1) / mm_N_full_block_wt;
     uint32_t mm_sem_target = 0;
-    // Rolling-window return path: this reader's credit slot on every MM core, published by
-    // multicast SET once per M block so the matmul knows when a window slot is free to recycle.
-    uint32_t rs_credit_counters = 0;
-    uint32_t num_mm_cores = 0;
-    uint32_t rs_credit_mm_coords_arg_base = 0;
     if constexpr (mm_window_blocks > 0) {
         rs_credit_counters = get_arg_val<uint32_t>(arg_idx++);
         num_mm_cores = get_arg_val<uint32_t>(arg_idx++);
