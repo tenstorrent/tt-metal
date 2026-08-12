@@ -108,7 +108,7 @@ runs:
         # Workers + runner local copy for runtime (local disk).
         cp -r "$GITHUB_WORKSPACE" /ci/tt-metal
         cp -r "$GITHUB_WORKSPACE" /home/user/
-        cp "${BUILD_ARCHIVE}" /ci/tt-metal/ 
+        cp "${BUILD_ARCHIVE}" /ci/tt-metal/
         cp "${ttnn_wheels[0]}" /ci/tt-metal/
         tar --zstd -xf "${BUILD_ARCHIVE}" -C /home/user/tt-metal
 
