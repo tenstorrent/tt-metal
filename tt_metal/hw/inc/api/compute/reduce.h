@@ -186,7 +186,7 @@ ALWI void reduce_tile(
  * | Function   | ntiles       | The number of consecutive tiles to reduce                        | uint32_t  | start_idst + ntiles <= acquired DST REG size   | True     |
  */
 // clang-format on
-template <PoolType reduce_type, ReduceDim reduce_dim>
+template <PoolType reduce_type, ReduceDim reduce_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reduce_block(
     std::uint32_t icb,
     std::uint32_t icb_scaler,
@@ -195,7 +195,8 @@ ALWI void reduce_block(
     std::uint32_t start_idst,
     std::uint32_t ntiles) {
     for (std::uint32_t i = 0; i < ntiles; ++i) {
-        reduce_tile<reduce_type, reduce_dim>(icb, icb_scaler, start_itile + i, itile_scaler, start_idst + i);
+        reduce_tile<reduce_type, reduce_dim, is_fp32_dest_acc_en>(
+            icb, icb_scaler, start_itile + i, itile_scaler, start_idst + i);
     }
 }
 

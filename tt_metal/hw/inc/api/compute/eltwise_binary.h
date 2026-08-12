@@ -427,33 +427,37 @@ ALWI void binary_reuse_dest_tiles(uint32_t in_cb_id, uint32_t in_tile_index, uin
  * populated DST[dst_tile_index], else it reads zeroes. Pair with add_reuse_dest_init<reuse_dest>. The DST
  * register buffer must be in acquired state via *acquire_dst*. Blocking; compute engine only.
  *
- * | Param Type | Name           | Description                                                          | Type                       | Valid Range | Required |
- * |------------|----------------|----------------------------------------------------------------------|----------------------------|-------------|----------|
- * | Template   | reuse_dest     | Which source register the DST operand is loaded into (non-NONE)      | EltwiseBinaryReuseDestType | N/A         | True     |
- * | Function   | in_cb_id       | CB whose tile is unpacked into the source register not fed by DST    | uint32_t                   | 0 to 31     | True     |
- * | Function   | in_tile_index  | Index of the tile within in_cb_id                                    | uint32_t                   | < CB size   | True     |
- * | Function   | dst_tile_index | Index of the DST tile used as the other operand and as the result    | uint32_t                   | < DST size  | True     |
+ * | Param Type | Name                 | Description                                                          | Type                       | Valid Range | Required |
+ * |------------|----------------------|----------------------------------------------------------------------|----------------------------|-------------|----------|
+ * | Template   | reuse_dest           | Which source register the DST operand is loaded into (non-NONE)      | EltwiseBinaryReuseDestType | N/A         | True     |
+ * | Template   | is_fp32_dest_acc_en  | DEST accumulation mode (must match hardware after a mode switch)     | bool                       | true/false  | False    |
+ * | Function   | in_cb_id             | CB whose tile is unpacked into the source register not fed by DST    | uint32_t                   | 0 to 31     | True     |
+ * | Function   | in_tile_index        | Index of the tile within in_cb_id                                    | uint32_t                   | < CB size   | True     |
+ * | Function   | dst_tile_index       | Index of the DST tile used as the other operand and as the result    | uint32_t                   | < DST size  | True     |
  */
 // clang-format on
-template <EltwiseBinaryReuseDestType reuse_dest>
+template <EltwiseBinaryReuseDestType reuse_dest, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void add_reuse_dest_tiles(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
-    detail::binary_reuse_dest_tiles<EltwiseBinaryType::ELWADD, reuse_dest>(in_cb_id, in_tile_index, dst_tile_index);
+    detail::binary_reuse_dest_tiles<EltwiseBinaryType::ELWADD, reuse_dest, is_fp32_dest_acc_en>(
+        in_cb_id, in_tile_index, dst_tile_index);
 }
 
 // clang-format off
 /** Dest-reuse element-wise subtract. See add_reuse_dest_tiles; pair with sub_reuse_dest_init<reuse_dest>. */
 // clang-format on
-template <EltwiseBinaryReuseDestType reuse_dest>
+template <EltwiseBinaryReuseDestType reuse_dest, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sub_reuse_dest_tiles(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
-    detail::binary_reuse_dest_tiles<EltwiseBinaryType::ELWSUB, reuse_dest>(in_cb_id, in_tile_index, dst_tile_index);
+    detail::binary_reuse_dest_tiles<EltwiseBinaryType::ELWSUB, reuse_dest, is_fp32_dest_acc_en>(
+        in_cb_id, in_tile_index, dst_tile_index);
 }
 
 // clang-format off
 /** Dest-reuse element-wise multiply. See add_reuse_dest_tiles; pair with mul_reuse_dest_init<reuse_dest>. */
 // clang-format on
-template <EltwiseBinaryReuseDestType reuse_dest>
+template <EltwiseBinaryReuseDestType reuse_dest, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void mul_reuse_dest_tiles(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
-    detail::binary_reuse_dest_tiles<EltwiseBinaryType::ELWMUL, reuse_dest>(in_cb_id, in_tile_index, dst_tile_index);
+    detail::binary_reuse_dest_tiles<EltwiseBinaryType::ELWMUL, reuse_dest, is_fp32_dest_acc_en>(
+        in_cb_id, in_tile_index, dst_tile_index);
 }
 
 // =====================================================================================================================
@@ -612,12 +616,14 @@ binary_dest_reuse_tiles_init(uint32_t icb0, uint32_t call_line = __builtin_LINE(
 // clang-format on
 template <
     EltwiseBinaryType eltwise_binary_type = EltwiseBinaryType::ELWADD,
-    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
+    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 [[deprecated(
     "Renamed to add_reuse_dest_tiles / sub_reuse_dest_tiles / mul_reuse_dest_tiles<reuse_dest>, e.g. "
     "add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(in_cb, it, idst). This will be removed after September 15th, 2026.")]] ALWI void
 binary_dest_reuse_tiles(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
-    detail::binary_reuse_dest_tiles<eltwise_binary_type, binary_reuse_dest>(in_cb_id, in_tile_index, dst_tile_index);
+    detail::binary_reuse_dest_tiles<eltwise_binary_type, binary_reuse_dest, is_fp32_dest_acc_en>(
+        in_cb_id, in_tile_index, dst_tile_index);
 }
 
 }  // namespace ckernel

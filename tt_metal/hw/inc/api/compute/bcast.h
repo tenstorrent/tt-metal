@@ -420,28 +420,31 @@ ALWI void any_tiles_bcast(
  * | dst_tile_index | The index of the tile in DST REG for the result C        | uint32_t      | Must be less than the acquired size of DST REG | True     |
  */
 // clang-format on
-template <BroadcastType tBcastDim>
+template <BroadcastType tBcastDim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void add_tiles_bcast(
     uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, uint32_t bcast_row_idx = 0) {
-    any_tiles_bcast<EltwiseBinaryType::ELWADD, tBcastDim>(icb0, icb1, itile0, itile1, idst, bcast_row_idx);
+    any_tiles_bcast<EltwiseBinaryType::ELWADD, tBcastDim, is_fp32_dest_acc_en>(
+        icb0, icb1, itile0, itile1, idst, bcast_row_idx);
 }
 
 /**
  * Please refer to documentation for *add_tiles_bcast*.
  */
-template <BroadcastType tBcastDim>
+template <BroadcastType tBcastDim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sub_tiles_bcast(
     uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, uint32_t bcast_row_idx = 0) {
-    any_tiles_bcast<EltwiseBinaryType::ELWSUB, tBcastDim>(icb0, icb1, itile0, itile1, idst, bcast_row_idx);
+    any_tiles_bcast<EltwiseBinaryType::ELWSUB, tBcastDim, is_fp32_dest_acc_en>(
+        icb0, icb1, itile0, itile1, idst, bcast_row_idx);
 }
 
 /**
  * Please refer to documentation for *add_tiles_bcast*.
  */
-template <BroadcastType tBcastDim>
+template <BroadcastType tBcastDim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void mul_tiles_bcast(
     uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, uint32_t bcast_row_idx = 0) {
-    any_tiles_bcast<EltwiseBinaryType::ELWMUL, tBcastDim>(icb0, icb1, itile0, itile1, idst, bcast_row_idx);
+    any_tiles_bcast<EltwiseBinaryType::ELWMUL, tBcastDim, is_fp32_dest_acc_en>(
+        icb0, icb1, itile0, itile1, idst, bcast_row_idx);
 }
 
 /**

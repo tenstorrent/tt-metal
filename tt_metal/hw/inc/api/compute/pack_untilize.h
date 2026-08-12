@@ -74,7 +74,8 @@ ALWI void pack_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line
         false /*narrow_row*/,
         TILE_C_DIM,
         false /*dense*/,
-        configure_remap>(ocb, call_line);
+        configure_remap,
+        is_fp32_dest_acc_en>(ocb, call_line);
 }
 
 }  // namespace pack_untilize_detail
@@ -114,8 +115,9 @@ ALWI void pack_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line
  * | Template   | narrow_row      | Whether the provided input is narrow                | bool      | true/false                | False                 |
  * | Template   | row_num_datums  | Number of datums per row                            | uint32_t  | >= 1                      | False                 |
  * | Template   | dense           | Packs two 2 face tiles in a single 4 face region    | bool      | true/false                | False (default false) |
- * | Template   | configure_remap | Whether to (re)configure BH DEST remap (BH only)    | bool      | true/false                | False (default true)  |
- * | Function   | ocb             | Output circular buffer identifier                   | uint32_t  | 0 to 31                   | True                  |
+ * | Template   | configure_remap      | Whether to (re)configure BH DEST remap (BH only)    | bool      | true/false                | False (default true)  |
+ * | Template   | is_fp32_dest_acc_en  | DEST accumulation mode                              | bool      | true/false                | False                 |
+ * | Function   | ocb                  | Output circular buffer identifier                   | uint32_t  | 0 to 31                   | True                  |
  */
 // clang-format on
 template <
@@ -124,12 +126,18 @@ template <
     bool narrow_row = false,
     std::uint32_t row_num_datums = TILE_C_DIM,
     bool dense = false,
-    bool configure_remap = true>
+    bool configure_remap = true,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void pack_untilize_dest_init(uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     LLK_SAN_FUNCTION();
-    pack_untilize_detail::
-        pack_untilize_dest_init_impl<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense, configure_remap>(
-            ocb, call_line);
+    pack_untilize_detail::pack_untilize_dest_init_impl<
+        block_ct_dim,
+        full_ct_dim,
+        narrow_row,
+        row_num_datums,
+        dense,
+        configure_remap,
+        is_fp32_dest_acc_en>(ocb, call_line);
 }
 
 // clang-format off
@@ -157,16 +165,18 @@ ALWI void pack_untilize_dest_init(uint32_t ocb, uint32_t call_line = __builtin_L
  *
  * | Param Type | Name         | Description                                | Type      | Valid Range               | Required                |
  * |------------|--------------|--------------------------------------------|-----------|---------------------------|-------------------------|
- * | Template   | block_ct_dim | Width of a single block in tiles           | uint32_t  | 1 to max (see note)       | False (default = 8)     |
- * | Template   | full_ct_dim  | Width of a full input in tiles             | uint32_t  | Divisible by block_ct_dim | False                   |
- * | Function   | icb          | Input circular buffer identifier           | uint32_t  | 0 to 31                   | True                    |
- * | Function   | ocb          | Output circular buffer identifier          | uint32_t  | 0 to 31                   | True                    |
+ * | Template   | block_ct_dim        | Width of a single block in tiles           | uint32_t  | 1 to max (see note)       | False (default = 8)     |
+ * | Template   | full_ct_dim         | Width of a full input in tiles             | uint32_t  | Divisible by block_ct_dim | False                   |
+ * | Template   | is_fp32_dest_acc_en | DEST accumulation mode                     | bool      | true/false                | False                   |
+ * | Function   | icb                 | Input circular buffer identifier           | uint32_t  | 0 to 31                   | True                    |
+ * | Function   | ocb                 | Output circular buffer identifier          | uint32_t  | 0 to 31                   | True                    |
  */
 // clang-format on
-template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim>
+template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void pack_untilize_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     LLK_SAN_FUNCTION();
-    pack_untilize_detail::pack_untilize_init_impl<block_ct_dim, full_ct_dim, true>(icb, ocb, call_line);
+    pack_untilize_detail::pack_untilize_init_impl<block_ct_dim, full_ct_dim, true, is_fp32_dest_acc_en>(
+        icb, ocb, call_line);
 }
 
 // clang-format off
@@ -180,16 +190,18 @@ ALWI void pack_untilize_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __
  *
  * | Param Type | Name         | Description                       | Type     | Valid Range               | Required            |
  * |------------|--------------|-----------------------------------|----------|---------------------------|---------------------|
- * | Template   | block_ct_dim | Width of a single block in tiles  | uint32_t | 1 to max (see note)       | False (default = 8) |
- * | Template   | full_ct_dim  | Width of a full input in tiles    | uint32_t | Divisible by block_ct_dim | False               |
- * | Function   | icb          | Input circular buffer identifier  | uint32_t | 0 to 31                   | True                |
- * | Function   | ocb          | Output circular buffer identifier | uint32_t | 0 to 31                   | True                |
+ * | Template   | block_ct_dim        | Width of a single block in tiles  | uint32_t | 1 to max (see note)       | False (default = 8) |
+ * | Template   | full_ct_dim         | Width of a full input in tiles    | uint32_t | Divisible by block_ct_dim | False               |
+ * | Template   | is_fp32_dest_acc_en | DEST accumulation mode            | bool     | true/false                | False               |
+ * | Function   | icb                 | Input circular buffer identifier  | uint32_t | 0 to 31                   | True                |
+ * | Function   | ocb                 | Output circular buffer identifier | uint32_t | 0 to 31                   | True                |
  */
 // clang-format on
-template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim>
+template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void pack_untilize_init_skip_remap(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     LLK_SAN_FUNCTION();
-    pack_untilize_detail::pack_untilize_init_impl<block_ct_dim, full_ct_dim, false>(icb, ocb, call_line);
+    pack_untilize_detail::pack_untilize_init_impl<block_ct_dim, full_ct_dim, false, is_fp32_dest_acc_en>(
+        icb, ocb, call_line);
 }
 
 // clang-format off

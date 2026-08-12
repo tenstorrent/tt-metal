@@ -46,9 +46,9 @@ ALWI void fast_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line
 #ifdef ARCH_BLACKHOLE
     if constexpr (full_ct_dim == 1) {
         if constexpr (configure_remap) {
-            pack_untilize_init<1, 1>(icb, ocb, call_line);
+            pack_untilize_init<1, 1, is_fp32_dest_acc_en>(icb, ocb, call_line);
         } else {
-            pack_untilize_init_skip_remap<1, 1>(icb, ocb, call_line);
+            pack_untilize_init_skip_remap<1, 1, is_fp32_dest_acc_en>(icb, ocb, call_line);
         }
         return;
     }
@@ -74,9 +74,9 @@ ALWI void fast_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line
     PACK((_llk_init_packer_dest_offset_registers_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE>()));
 #else
     if constexpr (configure_remap) {
-        pack_untilize_init<full_ct_dim, full_ct_dim>(icb, ocb, call_line);
+        pack_untilize_init<full_ct_dim, full_ct_dim, is_fp32_dest_acc_en>(icb, ocb, call_line);
     } else {
-        pack_untilize_init_skip_remap<full_ct_dim, full_ct_dim>(icb, ocb, call_line);
+        pack_untilize_init_skip_remap<full_ct_dim, full_ct_dim, is_fp32_dest_acc_en>(icb, ocb, call_line);
     }
 #endif
 }
@@ -100,7 +100,7 @@ ALWI void fast_untilize_block(
 
 #ifdef ARCH_BLACKHOLE
     if constexpr (full_ct_dim == 1) {
-        pack_untilize_block<1, 1>(icb, 1, ocb, 0);
+        pack_untilize_block<1, 1, is_fp32_dest_acc_en>(icb, 1, ocb, 0);
         return;
     }
 
@@ -147,7 +147,7 @@ ALWI void fast_untilize_block(
             icb, first_unpack_unit_dim, prev_unpack_unit_dim)));
     }
 #else
-    pack_untilize_block<full_ct_dim, full_ct_dim>(icb, 1, ocb, 0);
+    pack_untilize_block<full_ct_dim, full_ct_dim, is_fp32_dest_acc_en>(icb, 1, ocb, 0);
 #endif
 }
 
@@ -157,7 +157,7 @@ ALWI void fast_untilize_uninit(uint32_t ocb) {
 
 #ifdef ARCH_BLACKHOLE
     if constexpr (full_ct_dim == 1) {
-        pack_untilize_uninit(ocb);
+        pack_untilize_uninit<is_fp32_dest_acc_en>(ocb);
         return;
     }
 
@@ -173,7 +173,7 @@ ALWI void fast_untilize_uninit(uint32_t ocb) {
     PACK((llk_pack_init(ocb)));
     PACK((llk_pack_fast_untilize_uninit<FAST_UNTILIZE_MAX_UNIT_DIM, full_ct_dim>(ocb)));
 #else
-    pack_untilize_uninit(ocb);
+    pack_untilize_uninit<is_fp32_dest_acc_en>(ocb);
 #endif
 }
 

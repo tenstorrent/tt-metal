@@ -118,9 +118,9 @@ template <
 ALWI void generalized_moe_gate(uint32_t icb0, uint32_t icb1, uint32_t eps, uint32_t scale) {
     if constexpr (enable_sigmoid) {
         // Transpose wh (FPU)
-        transpose_wh_tile(icb0, 0, 0);
+        transpose_tile<is_fp32_dest_acc_en>(icb0, 0, 0);
         // Sigmoid (SFPU)
-        sigmoid_tile<VectorMode::RC_custom, false>(0);
+        sigmoid_tile<VectorMode::RC_custom, false, is_fp32_dest_acc_en>(0);
         // Init add binary reuse (FPU)
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
             false, false, icb1)));

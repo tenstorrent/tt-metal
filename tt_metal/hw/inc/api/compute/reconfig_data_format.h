@@ -103,11 +103,14 @@ ALWI void reconfig_df_srcb(const uint32_t srcb_old_operand, const uint32_t srcb_
  * SrcA/SrcB (SrcOrder::Reverse maps icb0 -> SrcB and icb1 -> SrcA, so matmul can pass its operands unswapped, matching
  * compute_kernel_hw_startup). Set is_tile_dim_reconfig_en when the new tile/face geometry differs from the current one.
  */
-template <SrcOrder src_order = SrcOrder::Regular, bool is_tile_dim_reconfig_en = false>
+template <
+    SrcOrder src_order = SrcOrder::Regular,
+    bool is_tile_dim_reconfig_en = false,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reconfig_data_format(const uint32_t icb0_new_operand, const uint32_t icb1_new_operand) {
     LLK_SAN_FUNCTION();
     constexpr bool reverse = (src_order == SrcOrder::Reverse);
-    detail::reconfig_df_both<is_tile_dim_reconfig_en, false>(
+    detail::reconfig_df_both<is_tile_dim_reconfig_en, false, is_fp32_dest_acc_en>(
         reverse ? icb1_new_operand : icb0_new_operand, reverse ? icb0_new_operand : icb1_new_operand);
 }
 
@@ -115,7 +118,10 @@ ALWI void reconfig_data_format(const uint32_t icb0_new_operand, const uint32_t i
  * Conditional variant of reconfig_data_format: reconfigures only the sources whose format differs between the old
  * and new operand. Operands are in natural (icb0, icb1) order and honor src_order as above.
  */
-template <SrcOrder src_order = SrcOrder::Regular, bool is_tile_dim_reconfig_en = false>
+template <
+    SrcOrder src_order = SrcOrder::Regular,
+    bool is_tile_dim_reconfig_en = false,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reconfig_data_format(
     const uint32_t icb0_old_operand,
     const uint32_t icb0_new_operand,
@@ -123,7 +129,7 @@ ALWI void reconfig_data_format(
     const uint32_t icb1_new_operand) {
     LLK_SAN_FUNCTION();
     constexpr bool reverse = (src_order == SrcOrder::Reverse);
-    detail::reconfig_df_both<is_tile_dim_reconfig_en, false>(
+    detail::reconfig_df_both<is_tile_dim_reconfig_en, false, is_fp32_dest_acc_en>(
         reverse ? icb1_old_operand : icb0_old_operand,
         reverse ? icb1_new_operand : icb0_new_operand,
         reverse ? icb0_old_operand : icb1_old_operand,
@@ -133,37 +139,37 @@ ALWI void reconfig_data_format(
 /**
  * Reconfigures the srcA data format for a new operand, always re-deriving the int8/unsigned state from the new format.
  */
-template <bool is_tile_dim_reconfig_en = false>
+template <bool is_tile_dim_reconfig_en = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reconfig_data_format_srca(const uint32_t srca_new_operand) {
     LLK_SAN_FUNCTION();
-    detail::reconfig_df_srca<is_tile_dim_reconfig_en, false>(srca_new_operand);
+    detail::reconfig_df_srca<is_tile_dim_reconfig_en, false, is_fp32_dest_acc_en>(srca_new_operand);
 }
 
 /**
  * Reconfigures the srcA data format only if the new operand's format differs from the old one.
  */
-template <bool is_tile_dim_reconfig_en = false>
+template <bool is_tile_dim_reconfig_en = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reconfig_data_format_srca(const uint32_t srca_old_operand, const uint32_t srca_new_operand) {
     LLK_SAN_FUNCTION();
-    detail::reconfig_df_srca<is_tile_dim_reconfig_en, false>(srca_old_operand, srca_new_operand);
+    detail::reconfig_df_srca<is_tile_dim_reconfig_en, false, is_fp32_dest_acc_en>(srca_old_operand, srca_new_operand);
 }
 
 /**
  * Reconfigures the srcB data format for a new operand, always re-deriving the int8/unsigned state from the new format.
  */
-template <bool is_tile_dim_reconfig_en = false>
+template <bool is_tile_dim_reconfig_en = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reconfig_data_format_srcb(const uint32_t srcb_new_operand) {
     LLK_SAN_FUNCTION();
-    detail::reconfig_df_srcb<is_tile_dim_reconfig_en, false>(srcb_new_operand);
+    detail::reconfig_df_srcb<is_tile_dim_reconfig_en, false, is_fp32_dest_acc_en>(srcb_new_operand);
 }
 
 /**
  * Reconfigures the srcB data format only if the new operand's format differs from the old one.
  */
-template <bool is_tile_dim_reconfig_en = false>
+template <bool is_tile_dim_reconfig_en = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reconfig_data_format_srcb(const uint32_t srcb_old_operand, const uint32_t srcb_new_operand) {
     LLK_SAN_FUNCTION();
-    detail::reconfig_df_srcb<is_tile_dim_reconfig_en, false>(srcb_old_operand, srcb_new_operand);
+    detail::reconfig_df_srcb<is_tile_dim_reconfig_en, false, is_fp32_dest_acc_en>(srcb_old_operand, srcb_new_operand);
 }
 
 // Perf variant: skips re-deriving the int8/unsigned state (the old to_from_int8 == false behavior). Use it only when
@@ -175,11 +181,14 @@ ALWI void reconfig_data_format_srcb(const uint32_t srcb_old_operand, const uint3
  * behavior). Use only when the caller knows the reconfig never crosses an Int8/UInt8/Int32 boundary and wants to
  * avoid the extra register write.
  */
-template <SrcOrder src_order = SrcOrder::Regular, bool is_tile_dim_reconfig_en = false>
+template <
+    SrcOrder src_order = SrcOrder::Regular,
+    bool is_tile_dim_reconfig_en = false,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reconfig_data_format_skip_int8(const uint32_t icb0_new_operand, const uint32_t icb1_new_operand) {
     LLK_SAN_FUNCTION();
     constexpr bool reverse = (src_order == SrcOrder::Reverse);
-    detail::reconfig_df_both<is_tile_dim_reconfig_en, true>(
+    detail::reconfig_df_both<is_tile_dim_reconfig_en, true, is_fp32_dest_acc_en>(
         reverse ? icb1_new_operand : icb0_new_operand, reverse ? icb0_new_operand : icb1_new_operand);
 }
 
@@ -187,7 +196,10 @@ ALWI void reconfig_data_format_skip_int8(const uint32_t icb0_new_operand, const 
  * Conditional variant of reconfig_data_format_skip_int8: reconfigures only sources whose format differs, without
  * re-deriving the int8/unsigned state.
  */
-template <SrcOrder src_order = SrcOrder::Regular, bool is_tile_dim_reconfig_en = false>
+template <
+    SrcOrder src_order = SrcOrder::Regular,
+    bool is_tile_dim_reconfig_en = false,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reconfig_data_format_skip_int8(
     const uint32_t icb0_old_operand,
     const uint32_t icb0_new_operand,
@@ -195,7 +207,7 @@ ALWI void reconfig_data_format_skip_int8(
     const uint32_t icb1_new_operand) {
     LLK_SAN_FUNCTION();
     constexpr bool reverse = (src_order == SrcOrder::Reverse);
-    detail::reconfig_df_both<is_tile_dim_reconfig_en, true>(
+    detail::reconfig_df_both<is_tile_dim_reconfig_en, true, is_fp32_dest_acc_en>(
         reverse ? icb1_old_operand : icb0_old_operand,
         reverse ? icb1_new_operand : icb0_new_operand,
         reverse ? icb0_old_operand : icb1_old_operand,
@@ -205,37 +217,37 @@ ALWI void reconfig_data_format_skip_int8(
 /**
  * reconfig_data_format_srca without re-deriving the int8/unsigned state. See reconfig_data_format_skip_int8.
  */
-template <bool is_tile_dim_reconfig_en = false>
+template <bool is_tile_dim_reconfig_en = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reconfig_data_format_srca_skip_int8(const uint32_t srca_new_operand) {
     LLK_SAN_FUNCTION();
-    detail::reconfig_df_srca<is_tile_dim_reconfig_en, true>(srca_new_operand);
+    detail::reconfig_df_srca<is_tile_dim_reconfig_en, true, is_fp32_dest_acc_en>(srca_new_operand);
 }
 
 /**
  * Conditional srcA reconfig without re-deriving the int8/unsigned state. See reconfig_data_format_skip_int8.
  */
-template <bool is_tile_dim_reconfig_en = false>
+template <bool is_tile_dim_reconfig_en = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reconfig_data_format_srca_skip_int8(const uint32_t srca_old_operand, const uint32_t srca_new_operand) {
     LLK_SAN_FUNCTION();
-    detail::reconfig_df_srca<is_tile_dim_reconfig_en, true>(srca_old_operand, srca_new_operand);
+    detail::reconfig_df_srca<is_tile_dim_reconfig_en, true, is_fp32_dest_acc_en>(srca_old_operand, srca_new_operand);
 }
 
 /**
  * reconfig_data_format_srcb without re-deriving the int8/unsigned state. See reconfig_data_format_skip_int8.
  */
-template <bool is_tile_dim_reconfig_en = false>
+template <bool is_tile_dim_reconfig_en = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reconfig_data_format_srcb_skip_int8(const uint32_t srcb_new_operand) {
     LLK_SAN_FUNCTION();
-    detail::reconfig_df_srcb<is_tile_dim_reconfig_en, true>(srcb_new_operand);
+    detail::reconfig_df_srcb<is_tile_dim_reconfig_en, true, is_fp32_dest_acc_en>(srcb_new_operand);
 }
 
 /**
  * Conditional srcB reconfig without re-deriving the int8/unsigned state. See reconfig_data_format_skip_int8.
  */
-template <bool is_tile_dim_reconfig_en = false>
+template <bool is_tile_dim_reconfig_en = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reconfig_data_format_srcb_skip_int8(const uint32_t srcb_old_operand, const uint32_t srcb_new_operand) {
     LLK_SAN_FUNCTION();
-    detail::reconfig_df_srcb<is_tile_dim_reconfig_en, true>(srcb_old_operand, srcb_new_operand);
+    detail::reconfig_df_srcb<is_tile_dim_reconfig_en, true, is_fp32_dest_acc_en>(srcb_old_operand, srcb_new_operand);
 }
 
 // -------------------------------------------------------------------------------------------------------------------

@@ -25,7 +25,10 @@ namespace ckernel {
  * Return value: None
  */
 // clang-format on
-ALWI void sum_reduce_scalar_init(uint32_t icb) { copy_tile_to_dst_init_short(icb); }
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void sum_reduce_scalar_init(uint32_t icb) {
+    copy_tile_to_dst_init_short<is_fp32_dest_acc_en>(icb);
+}
 
 // clang-format off
 /**
@@ -70,7 +73,7 @@ template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sum_reduce_scalar_tile(uint32_t icb, uint32_t ocb, uint32_t num_tiles, float scaler = 1.0f) {
     // Step 1: Copy each input tile into its own DEST slot
     for (uint32_t i = 0; i < num_tiles; i++) {
-        copy_tile(icb, i, i);
+        copy_tile<is_fp32_dest_acc_en>(icb, i, i);
     }
 
     // Step 2: Switch UNPACK state for reduce phase (reset counters, set DVALID)

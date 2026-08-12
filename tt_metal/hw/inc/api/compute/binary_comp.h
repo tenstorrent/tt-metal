@@ -99,25 +99,25 @@ ALWI void eq_int_tile_dispatch(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 #endif
 
 #ifndef ARCH_QUASAR
-template <DataFormat data_format>
+template <DataFormat data_format, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void eq_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((detail::eq_int_tile_dispatch<SfpuType::eq, data_format>(idst0, idst1, odst)));
+    MATH((detail::eq_int_tile_dispatch<SfpuType::eq, data_format, is_fp32_dest_acc_en>(idst0, idst1, odst)));
 }
 
-template <DataFormat data_format>
+template <DataFormat data_format, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void ne_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((detail::eq_int_tile_dispatch<SfpuType::ne, data_format>(idst0, idst1, odst)));
+    MATH((detail::eq_int_tile_dispatch<SfpuType::ne, data_format, is_fp32_dest_acc_en>(idst0, idst1, odst)));
 }
 #endif
 
 #ifndef ARCH_QUASAR
-template <DataFormat data_format>
+template <DataFormat data_format, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void lt_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((detail::rel_int_tile_dispatch<SfpuType::lt, data_format>(idst0, idst1, odst)));
+    MATH((detail::rel_int_tile_dispatch<SfpuType::lt, data_format, is_fp32_dest_acc_en>(idst0, idst1, odst)));
 }
 #endif
 
-template <DataFormat data_format>
+template <DataFormat data_format, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void gt_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 #if defined(ARCH_QUASAR)
     // Int8 copy_tile + fp32_dest_acc FPU writes sign-magnitude Int32 into dest.
@@ -125,19 +125,19 @@ ALWI void gt_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     MATH((llk_math_eltwise_binary_sfpu_gt_int<APPROX, data_format, 8 /*ITERATIONS*/, true /*SIGN_MAGNITUDE_FORMAT*/>(
         idst0, idst1, odst)));
 #else
-    MATH((detail::rel_int_tile_dispatch<SfpuType::gt, data_format>(idst0, idst1, odst)));
+    MATH((detail::rel_int_tile_dispatch<SfpuType::gt, data_format, is_fp32_dest_acc_en>(idst0, idst1, odst)));
 #endif
 }
 
 #ifndef ARCH_QUASAR
-template <DataFormat data_format>
+template <DataFormat data_format, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void le_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((detail::rel_int_tile_dispatch<SfpuType::le, data_format>(idst0, idst1, odst)));
+    MATH((detail::rel_int_tile_dispatch<SfpuType::le, data_format, is_fp32_dest_acc_en>(idst0, idst1, odst)));
 }
 
-template <DataFormat data_format>
+template <DataFormat data_format, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void ge_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((detail::rel_int_tile_dispatch<SfpuType::ge, data_format>(idst0, idst1, odst)));
+    MATH((detail::rel_int_tile_dispatch<SfpuType::ge, data_format, is_fp32_dest_acc_en>(idst0, idst1, odst)));
 }
 #endif
 
