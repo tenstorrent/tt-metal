@@ -1,0 +1,78 @@
+# LLK ttnop (timing-perturbation) sweep — Wormhole only (manual dry-run).
+#
+# Runs python_tests with -p ttnop_plugin via ttnop/ci.sh: one clean baseline
+# per case, then unpack+math sync-site delays 1-100 (ttnop defaults).
+#
+# Driven by the TEMPORARY bit-exact override on this branch
+# (llk-bit-exact.yaml / llk-bit-exact-impl.yaml). PYTEST_MARKERS comes from
+# that impl's workflow_call inputs.
+# For max allowed timeout refer to .github/time_budget.yaml (llk -> ttnop).
+#
+# Deliberately no -x: a found race turns that case red, but the suite must
+# finish so report.md lists every failing variant.
+#
+# UNKNOWN (ask infra / manager):
+#   - Per-job timeout below is copied from e2e (1800 min). Raise if the run
+#     hits the job timeout.
+#   - owner_id below is the LLK CI default (Nemanja). Change if ttnop should
+#     page someone else.
+
+- name: llk_ttnop_wormhole group 1/4
+  split_group: 1
+  team: llk
+  coverage: false
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests/ttnop
+    ./ci.sh --test . \
+      --splits 4 --group 1 \
+      --report-dir reports/wormhole-1
+  skus:
+    wh_n150_civ2:
+      timeout: 1800
+  owner_id: U09UC143684 # Nemanja Divnic
+
+- name: llk_ttnop_wormhole group 2/4
+  split_group: 2
+  team: llk
+  coverage: false
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests/ttnop
+    ./ci.sh --test . \
+      --splits 4 --group 2 \
+      --report-dir reports/wormhole-2
+  skus:
+    wh_n150_civ2:
+      timeout: 1800
+  owner_id: U09UC143684 # Nemanja Divnic
+
+- name: llk_ttnop_wormhole group 3/4
+  split_group: 3
+  team: llk
+  coverage: false
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests/ttnop
+    ./ci.sh --test . \
+      --splits 4 --group 3 \
+      --report-dir reports/wormhole-3
+  skus:
+    wh_n150_civ2:
+      timeout: 1800
+  owner_id: U09UC143684 # Nemanja Divnic
+
+- name: llk_ttnop_wormhole group 4/4
+  split_group: 4
+  team: llk
+  coverage: false
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests/ttnop
+    ./ci.sh --test . \
+      --splits 4 --group 4 \
+      --report-dir reports/wormhole-4
+  skus:
+    wh_n150_civ2:
+      timeout: 1800
+  owner_id: U09UC143684 # Nemanja Divnic
