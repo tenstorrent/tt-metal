@@ -137,14 +137,6 @@ Requirements from `ai_ip_tests.json`. *Wired rows* are yaml rows the relevance m
 | **AIIPSW-7** — TTNN/Kernel Ops: Quasar Llama related Kernel Ops | Sept-15 | Borys Bradel | 0 | no | 45 op tests in models/experimental/llama32_1b_quasar/tests/ops/ plus 7 module suites; none wired |
 | **AIIPSW-16** — TTNN/Kernel Ops: Quasar ResNet with conv2D, pool | Sept-15 | Borys Bradel | 0 | no | the conv2d/pool/linear subset of the 51 ResNet op tests -- present but not passing on Quasar yet, so unwired |
 
-## Relevance-map entries that never win a match
-
-No yaml row matches, or an earlier entry claims every row they would.
-
-| Config | Group | Filter | Requirement |
-|---|---|---|---|
-| 1x3 | `unit_tests_api` | `RtlSimCheckOutput.DoesNotExist_ForcedFailure` | — |
-
 ## tt-metal gtests: defined vs selected
 
 The yamls select by gtest filter from binaries that hold far more than they run. Approximate — `TEST_P` instantiation names are normalised.

@@ -274,12 +274,6 @@
       "_source": "local yaml @2x3 (whole file)"
     },
     {
-      "config": "1x3",
-      "group": "unit_tests_api",
-      "filter": "RtlSimCheckOutput.DoesNotExist_ForcedFailure",
-      "_note": "forced-failure fixture for end-to-end testing; inert now (test reverted)"
-    },
-    {
       "config": "2x3_DISPATCH",
       "requirement": "AIIPSW-6",
       "team": "Trinity",
