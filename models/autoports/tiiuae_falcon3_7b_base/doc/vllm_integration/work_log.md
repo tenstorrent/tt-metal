@@ -68,6 +68,6 @@
 
 ## Commits
 
-- tt-metal stage commit: `PENDING`
-- vLLM TT-plugin stage commit: `PENDING`
+- tt-metal stage commit: `753e3f5acb0`
+- vLLM TT-plugin stage commit: `bc1dbf107`
 - Pushes: none.
