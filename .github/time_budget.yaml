@@ -110,7 +110,7 @@ ttnn:
     bh_quietbox_2: 85
   integration:
     wh_llmbox: 30
-    wh_galaxy: 340
+    wh_galaxy: 250
     wh_n150_civ2: 60
     bh_p100: 30
     bh_p150b_civ2_viommu: 30
@@ -225,8 +225,6 @@ scaleout:
     bh_galaxy: 60
     bh_sc1: 20 # single galaxy
     bh_sc4: 90
-    bh_sc4-blitz: 90 #blitz specific mgd sku
-    bh_sc4-mgd: 90 #general mgd sku
     bh_sc16: 150
     bh_loudbox: 80
     bh_p300: 80
@@ -314,8 +312,8 @@ models:
     bh_p150b_civ2_viommu: 110
     bh_p300: 10
   frequent:
-    wh_n150: 765
-    wh_n300: 765
+    wh_n150: 408
+    wh_n300: 390
     wh_n150_civ2: 30
     wh_n300_civ2: 30
     bh_p150b_civ2: 120
@@ -334,25 +332,26 @@ models:
     wh_n150: 28
     wh_galaxy_perf: 120
     bh_p150: 27
-    bh_quietbox_2: 195
+    bh_quietbox_2: 245
     bh_galaxy: 78
     bh_sc1: 140
-    bh_sc4-mgd: 120
+    bh_sc4: 120
   e2e_tier2:
     wh_llmbox_perf: 266
-    wh_n150: 30
+    wh_n150: 41
+    wh_n300: 6
     bh_p150: 26
     bh_p300: 42
     bh_quietbox_2: 186
   e2e_tier3:
-    wh_llmbox_perf: 64
+    wh_llmbox_perf: 75
     wh_n150: 62
     wh_n300: 60
     bh_p150: 7
     bh_p300: 8
-    bh_quietbox_2: 30
+    bh_quietbox_2: 42
   unit:
-    wh_llmbox: 100
+    wh_llmbox: 80
     wh_galaxy_perf: 10
   # Per-tier unit budgets. Consumed by the tiered model pipelines; the plain `unit`
   # key is used for the non-tiered pipelines (galaxy-unit, t3000-unit).
@@ -362,17 +361,19 @@ models:
     wh_galaxy: 235
     wh_galaxy_perf: 45
     bh_p150: 20
-    bh_quietbox_2: 260
+    bh_quietbox_2: 380
     bh_galaxy: 75
     bh_sc1: 75
-    bh_sc4-mgd: 50
+    bh_sc4: 50
   unit_tier2:
     wh_llmbox: 114
     wh_llmbox_perf: 172
-    wh_n150: 55
+    wh_n150: 67
+    wh_n300: 30
     bh_p150: 20
     bh_quietbox_2: 50
   unit_tier3:
+    wh_llmbox: 30
     wh_llmbox_perf: 58
     wh_n150: 41
     wh_n300: 33
@@ -380,20 +381,20 @@ models:
     bh_p300: 30
     bh_quietbox_2: 21
   integration:
-    wh_llmbox: 422
+    wh_llmbox: 125
   perf:
-    wh_llmbox_perf: 685
+    wh_llmbox_perf: 200
     wh_galaxy: 280
-    wh_galaxy_perf: 150
+    wh_galaxy_perf: 90
   device_perf:
     wh_n150: 20
     bh_p150: 20
     bh_p300: 20
     bh_quietbox_2: 80
   demo:
-    wh_llmbox_perf: 1290
+    wh_llmbox_perf: 90
     wh_galaxy: 345
-    wh_galaxy_perf: 150
+    wh_galaxy_perf: 90
     bh_galaxy: 470
     # blaze_models_prefill_tests.yaml sum of bh_sc1 job timeouts (tightened from 840)
     bh_sc1: 437
@@ -409,7 +410,7 @@ models:
     bh_p150b_civ2_viommu: 50
     bh_loudbox: 1200
     bh_p300: 800
-    bh_quietbox_2: 280
+    bh_quietbox_2: 110
   sweep_tier1:
     wh_n150: 30
     wh_galaxy: 30

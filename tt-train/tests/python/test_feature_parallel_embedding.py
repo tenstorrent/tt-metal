@@ -16,7 +16,6 @@ Mesh: ``[1, 2]`` with axes ``("dp", "tp")``.
 from __future__ import annotations
 
 import os
-from typing import Optional
 
 import numpy as np
 import pytest
@@ -25,79 +24,11 @@ import ttnn
 import ttml
 from ttml.modules import Embedding, FeatureParallelEmbedding
 
-
 pytestmark = pytest.mark.requires_device
 
 TP_AXIS_SIZE = 2
-MESH_SHAPE = (1, TP_AXIS_SIZE)
 
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-_MGD_FOR_ARCH_AND_SHAPE = {
-    ("blackhole", MESH_SHAPE): os.path.join(_REPO_ROOT, "configs", "mgd", "bh_galaxy_1_2_line_line.textproto"),
-    ("wormhole_b0", MESH_SHAPE): os.path.join(_REPO_ROOT, "configs", "mgd", "n300_1_2_line_line.textproto"),
-}
-
-
-# ---------------------------------------------------------------------------
-# Multi-device mesh fixture (same shape/skip conventions as test_fsdp.py)
-# ---------------------------------------------------------------------------
-def _detect_arch() -> Optional[str]:
-    try:
-        name = ttnn.get_arch_name().lower()
-    except Exception:  # noqa: BLE001
-        return None
-    if "blackhole" in name:
-        return "blackhole"
-    if "wormhole_b0" in name:
-        return "wormhole_b0"
-    return None
-
-
-def _close_device_mesh_quietly() -> None:
-    """Reverse ``open_device_mesh`` (close device, disable fabric, clear the global mesh),
-    swallowing errors so it is safe on the pre-open and teardown paths."""
-    try:
-        ttml.close_device_mesh()
-    except Exception:  # noqa: BLE001
-        pass
-
-
-def _ensure_mgd_path(shape: tuple[int, ...]) -> Optional[str]:
-    """Point ``TT_MESH_GRAPH_DESC_PATH`` at a bundled MGD if unset; return the old value."""
-    previous = os.environ.get("TT_MESH_GRAPH_DESC_PATH")
-    if previous:
-        return previous
-    arch = _detect_arch()
-    if arch is None:
-        return previous
-    candidate = _MGD_FOR_ARCH_AND_SHAPE.get((arch, shape))
-    if candidate and os.path.isfile(candidate):
-        os.environ["TT_MESH_GRAPH_DESC_PATH"] = candidate
-    return previous
-
-
-def _restore_mgd_path(previous: Optional[str]) -> None:
-    if previous is None:
-        os.environ.pop("TT_MESH_GRAPH_DESC_PATH", None)
-    else:
-        os.environ["TT_MESH_GRAPH_DESC_PATH"] = previous
-
-
-@pytest.fixture(scope="module")
-def tp_mesh():
-    """Open a ``[1, TP_AXIS_SIZE]`` mesh with axes ``("dp", "tp")``; skip if unavailable."""
-    previous_mgd = _ensure_mgd_path(MESH_SHAPE)
-    _close_device_mesh_quietly()
-    try:
-        ttml.open_device_mesh(ttml.Mesh(MESH_SHAPE, ("dp", "tp")))
-    except Exception as e:  # noqa: BLE001
-        _restore_mgd_path(previous_mgd)
-        pytest.skip(f"FeatureParallelEmbedding tests need {TP_AXIS_SIZE} devices on the 'tp' axis: {e}")
-
-    yield ttml.mesh()
-
-    _close_device_mesh_quietly()
-    _restore_mgd_path(previous_mgd)
 
 
 # ---------------------------------------------------------------------------

@@ -1,5 +1,6 @@
 # This file defines the test matrix for multihost pipeline tests.
-# These tests run on exabox multihost infrastructure with allocation/reset lifecycle.
+# These tests run on exabox-multihost-ci-* runners; workers are provisioned by the
+# runner hook from container.image (not a ttop allocation lifecycle).
 
 # Each entry represents a test with the following keys:
 #   name: The display name for the test in GitHub Actions.
@@ -63,6 +64,7 @@
       --mesh-graph-descriptor "${MGD}" \
       --hosts "${RESOLVED_HOSTS}" \
       --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+      -- \
       python3 -m models.demos.deepseek_v3_b1.demo.cli \
         --max-new-tokens 4096 \
         --no-stop-at-eos \
@@ -72,11 +74,11 @@
         --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized \
       > "${PIPELINE_DIR}/launch.log" 2>&1
   skus:
-    bh_sc4-blitz:
+    bh_sc4:
       timeout: 30
   owner_id: U08E1JCMAJF
   team: scaleout
-  sp_config: sc4-blitz
+  sp_config: sc4
 
 #TODO: re-enable after SC4 Stress Test when it is fixed
 # - name: "Stress Test (DeepSeek V3 B1 Supercluster 4 aka Superpod 1)"
@@ -94,6 +96,7 @@
 #       --mesh-graph-descriptor "${MGD}" \
 #       --hosts "${RESOLVED_HOSTS}" \
 #       --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+#       -- \
 #       python3 -m models.demos.deepseek_v3_b1.demo.cli \
 #         --max-new-tokens 128000 \
 #         --repeat-generations 2 \
@@ -104,11 +107,11 @@
 #         --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized \
 #       > "${PIPELINE_DIR}/launch.log" 2>&1
 #   skus:
-#     bh_sc4-blitz:
+#     bh_sc4:
 #       timeout: 60
 #   owner_id: U08E1JCMAJF
 #   team: scaleout
-#   sp_config: sc4-blitz
+#   sp_config: sc4
 
 # =============================================================================
 # BH SC16 Multihost Pipeline Tests (4 connected SC4 = 16 galaxies)
@@ -139,6 +142,7 @@
 #       --mesh-graph-descriptor "${MGD}" \
 #       --hosts "${RESOLVED_HOSTS}" \
 #       --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+#       -- \
 #       python3 -m models.demos.deepseek_v3_b1.demo.teacher_forced \
 #         --weights real \
 #         --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
@@ -170,6 +174,7 @@
       --mesh-graph-descriptor "${MGD}" \
       --hosts "${RESOLVED_HOSTS}" \
       --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+      -- \
       python3 -m models.demos.deepseek_v3_b1.demo.cli \
         --max-new-tokens 4096 \
         --no-stop-at-eos \
@@ -200,6 +205,7 @@
 #       --mesh-graph-descriptor "${MGD}" \
 #       --hosts "${RESOLVED_HOSTS}" \
 #       --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+#       -- \
 #       python3 -m models.demos.deepseek_v3_b1.demo.cli \
 #         --max-new-tokens 128000 \
 #         --repeat-generations 2 \

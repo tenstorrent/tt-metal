@@ -50,10 +50,7 @@ on:
           - llama3_evals
           - llama3_8b_dp
           - llama3_70b_dp
-          - sentence_bert
           - whisper
-          - sd35
-          - flux1
           - gpt-oss
           - motif
           - wan22
@@ -73,10 +70,8 @@ on:
           - llama3
           - resnet50
           - unit
-          - sd35
           - wan22
           - mochi
-          - flux1
           - motif
           - qwenimage
         default: "disabled"
@@ -91,8 +86,6 @@ on:
           #          - llama70b
           #          - llama_unit_tests
           #          - llama70b_prefill
-          - sd35
-          - flux1-dev
           - motif
           #          - sentence_bert
           - wan2-2

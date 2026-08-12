@@ -10,7 +10,7 @@ from loguru import logger
 
 import ttnn
 
-from models.common.utility_functions import run_for_blackhole
+from models.common.utility_functions import run_for_blackhole, is_wormhole_b0
 from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
@@ -138,11 +138,17 @@ OPTIONAL_WEIGHT_BIAS_AFFINE_PARAMS = [
 ]
 OPTIONAL_WEIGHT_BIAS_AFFINE_IDS = ["no_affine", "weight_only", "bias_only"]
 
+# ttnn.empty produces a ROW_MAJOR interleaved input. On Blackhole the non-sharded path
+# rejects that up front; on Wormhole ROW_MAJOR is allowed, so the same shape reaches
+# the device-op tile-height check instead.
+_NEGATIVE_TEST_MSG = (
+    "must be a multiple of the tile height"
+    if is_wormhole_b0()
+    else "interleaved \\(non-sharded\\) input must be in TILE layout"
+)
+
 NEGATIVE_TESTS_PARAMS = [
-    # ttnn.empty produces a ROW_MAJOR interleaved input, which the non-sharded path
-    # rejects up front (it is unsupported there); this fires before the tile-height
-    # check that this shape would otherwise trip.
-    ((2, 1, 16, 32), 8, "interleaved \\(non-sharded\\) input must be in TILE layout"),
+    ((2, 1, 16, 32), 8, _NEGATIVE_TEST_MSG),
 ]
 
 

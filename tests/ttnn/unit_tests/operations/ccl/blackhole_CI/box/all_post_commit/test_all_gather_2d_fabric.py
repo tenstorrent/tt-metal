@@ -65,7 +65,13 @@ def test_all_gather_2d_fabric(
 @pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D, "trace_region_size": 90112}],
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "trace_region_size": 90112,
+            "require_exact_physical_num_devices": True,
+        }
+    ],
     indirect=True,
 )
 def test_all_gather_async_fabric_2d_folded_line(mesh_device):
