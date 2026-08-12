@@ -19,14 +19,16 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-INPUT_DIM = 64  # n_mels
-PROJ_DIM = 512  # speaker embedding dim (== d_vector_dim)
-LAYERS = [3, 4, 6, 3]
-NUM_FILTERS = [32, 64, 128, 256]
-REDUCTION = 8
-LOG_INPUT = True
-OUTMAP_SIZE = INPUT_DIM // 8  # freq dim after 3 stride-2 downsamples = 8
-ASP_DIM = OUTMAP_SIZE * NUM_FILTERS[3]  # 2048
+from models.experimental.xtts.config import (  # noqa: F401 — re-exported for callers
+    SPK_ASP_DIM as ASP_DIM,
+    SPK_INPUT_DIM as INPUT_DIM,
+    SPK_LAYERS as LAYERS,
+    SPK_LOG_INPUT as LOG_INPUT,
+    SPK_NUM_FILTERS as NUM_FILTERS,
+    SPK_OUTMAP_SIZE as OUTMAP_SIZE,
+    SPK_PROJ_DIM as PROJ_DIM,
+    SPK_REDUCTION as REDUCTION,
+)
 
 
 class SELayer(nn.Module):

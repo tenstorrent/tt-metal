@@ -36,12 +36,13 @@ codes, positions starting at 0) is a faithfulness variant revisited at audio tim
 
 import torch
 
-
-START_TEXT_TOKEN = 261  # [START] in vocab.json
-STOP_TEXT_TOKEN = 0  # [STOP]
-START_AUDIO_TOKEN = 1024  # gpt_start_audio_token
-STOP_AUDIO_TOKEN = 1025  # gpt_stop_audio_token
-MAX_AUDIO_TOKENS = 605  # gpt_max_audio_tokens
+from models.experimental.xtts.config import (  # noqa: F401 — re-exported for callers
+    MAX_AUDIO_TOKENS,
+    START_AUDIO_TOKEN,
+    START_TEXT_TOKEN,
+    STOP_AUDIO_TOKEN,
+    STOP_TEXT_TOKEN,
+)
 
 
 def wrap_text_ids(text_ids):

@@ -43,10 +43,10 @@ from models.experimental.xtts.reference.xtts_gpt_block import (
 )
 from models.experimental.xtts.reference.xtts_gpt_stack import XttsReferenceGptStack, reference_gpt_stack
 
-# Vocab sizes, read off the checkpoint embedding/head tensors
-# (gpt.text_embedding=6681, gpt.mel_embedding=1026).
-NUM_TEXT_TOKENS = 6681
-NUM_AUDIO_TOKENS = 1026
+from models.experimental.xtts.config import (  # noqa: F401 — re-exported for callers
+    NUM_AUDIO_TOKENS,
+    NUM_TEXT_TOKENS,
+)
 
 
 class XttsReferenceGptModel(nn.Module):

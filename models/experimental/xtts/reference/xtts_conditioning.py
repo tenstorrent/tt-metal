@@ -32,40 +32,34 @@ import torch
 from torch import einsum, nn
 from torch.nn import functional as F
 
-from models.experimental.xtts.reference.xtts_gpt_block import HF_REPO_ID, HF_REVISION, HIDDEN_SIZE
-
-N_MELS = 80
-NUM_ATTN_HEADS = 16  # GPT.__init__ passes heads (=16) to ConditioningEncoder
-NUM_LATENTS = 32
-
-# PerceiverResampler geometry (coqui's own defaults, named so the TTNN port imports them
-# rather than re-declaring the same numbers).
-PERCEIVER_DEPTH = 2
-PERCEIVER_HEADS = 8
-PERCEIVER_HEAD_DIM = 64
-PERCEIVER_FF_MULT = 4
-
-# Mel-spectrogram config for the perceiver-resampler path (coqui get_gpt_cond_latents).
-MEL_N_FFT = 2048
-MEL_HOP = 256
-MEL_WIN = 1024
-MEL_SR = 22050
-MEL_FMIN = 0
-MEL_FMAX = 8000
-COND_CHUNK_SEC = 6  # legacy single-window length (kept for load_reference_audio default)
-
-# coqui get_gpt_cond_latents: condition on up to gpt_cond_len=30 s of reference audio,
-# split into gpt_cond_chunk_len=4 s windows, run get_style_emb per chunk and AVERAGE the
-# 32-latent style embeddings. We chunk the precomputed log-mel along time (equivalent to
-# chunking the audio, up to a few STFT-overlap frames at boundaries) and average.
-GPT_COND_LEN_SEC = 30  # gpt_cond_len / max_ref_len
-GPT_COND_CHUNK_SEC = 4  # gpt_cond_chunk_len
-COND_CHUNK_FRAMES = int(round(GPT_COND_CHUNK_SEC * MEL_SR / MEL_HOP))  # ~344 mel frames / chunk
-COND_MIN_CHUNK_FRAMES = 32  # drop a tiny trailing chunk (also keeps lengths tile-sane)
-COND_MAX_FRAMES = int(round(GPT_COND_LEN_SEC * MEL_SR / MEL_HOP))  # gpt_cond_len as mel frames
-
-# Single-speaker LJSpeech clips shipped as test data in the upstream coqui repo, already at MEL_SR.
-COQUI_TESTS_WAV_URL = "https://raw.githubusercontent.com/coqui-ai/TTS/dev/tests/data/ljspeech/wavs"
+from models.experimental.xtts.config import (  # noqa: F401 — re-exported for callers
+    COND_CHUNK_FRAMES,
+    COND_CHUNK_SAMPLES,
+    COND_CHUNK_SEC,
+    COND_MAX_FRAMES,
+    COND_MAX_SAMPLES,
+    COND_MIN_CHUNK_FRAMES,
+    COND_MIN_CHUNK_SAMPLES,
+    COND_N_MELS as N_MELS,
+    COQUI_TESTS_WAV_URL,
+    GPT_COND_CHUNK_SEC,
+    GPT_COND_LEN_SEC,
+    HF_REPO_ID,
+    HF_REVISION,
+    HIDDEN_SIZE,
+    MEL_FMAX,
+    MEL_FMIN,
+    MEL_HOP,
+    MEL_N_FFT,
+    MEL_SR,
+    MEL_WIN,
+    NUM_ATTN_HEADS,
+    NUM_LATENTS,
+    PERCEIVER_DEPTH,
+    PERCEIVER_FF_MULT,
+    PERCEIVER_HEAD_DIM,
+    PERCEIVER_HEADS,
+)
 
 
 def chunk_cond_mel(mel, chunk_frames=COND_CHUNK_FRAMES, min_frames=COND_MIN_CHUNK_FRAMES, max_frames=COND_MAX_FRAMES):
@@ -81,11 +75,6 @@ def chunk_cond_mel(mel, chunk_frames=COND_CHUNK_FRAMES, min_frames=COND_MIN_CHUN
     chunks = [mel[..., i : i + chunk_frames] for i in range(0, s, chunk_frames)]
     kept = [c for c in chunks if c.shape[-1] >= min_frames]
     return kept or [mel]
-
-
-COND_CHUNK_SAMPLES = int(round(GPT_COND_CHUNK_SEC * MEL_SR))  # 88200 samples / 4 s window
-COND_MIN_CHUNK_SAMPLES = COND_MIN_CHUNK_FRAMES * MEL_HOP  # drop a tiny trailing chunk
-COND_MAX_SAMPLES = int(round(GPT_COND_LEN_SEC * MEL_SR))  # gpt_cond_len: 30 s of reference audio
 
 
 def chunk_wav(wav, chunk_samples=COND_CHUNK_SAMPLES, min_samples=COND_MIN_CHUNK_SAMPLES, max_samples=COND_MAX_SAMPLES):

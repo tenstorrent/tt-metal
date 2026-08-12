@@ -70,10 +70,12 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.xtts.tt.xtts_conv import TtConv2d
 
-TILE = 32
-BN_EPS = 1e-5
-INSTANCENORM_EPS = 1e-5
-ASP_EPS = 1e-5
+from models.experimental.xtts.config import (  # noqa: F401 — re-exported for callers
+    SPK_ASP_EPS as ASP_EPS,
+    SPK_BN_EPS as BN_EPS,
+    SPK_INSTANCENORM_EPS as INSTANCENORM_EPS,
+    TILE,
+)
 
 BODY_DTYPE = ttnn.bfloat16
 # The attention/ASP working dtype: the [2048, T'] tensors the attention and the statistics

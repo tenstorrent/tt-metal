@@ -36,7 +36,7 @@ from models.experimental.xtts.tt.xtts_conv import (
     sharded_chain_fits_l1,
 )
 
-FINAL_LRELU_SLOPE = 0.01  # coqui's pre-conv_post activation uses F.leaky_relu default
+from models.experimental.xtts.config import FINAL_LRELU_SLOPE, TILE  # noqa: F401 — re-exported
 
 # Keep each resblock's residual chain L1-sharded (collapse the per-conv Interleaved<->Sharded
 # round-trips). Global off-switch for A/B and trace bring-up.
@@ -94,8 +94,6 @@ def _ups_conv_overrides(i):
         ov["shard_layout"] = _UPS_SHARD_OVERRIDE[i]
     return ov
 
-
-TILE = 32
 
 # Best (grid_x, grid_y, per_core_N, out_subblock_w, fp32_dest_acc, fidelity) per speaker-conditioning
 # output width N, from test_hifi_decoder_matmul_sweep.py (Blackhole, grid 11x10; all M=32, K=512),

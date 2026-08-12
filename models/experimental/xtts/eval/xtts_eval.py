@@ -34,20 +34,16 @@ _WHISPER = {}
 _UTMOS = None
 _ECAPA2 = None
 
-WHISPER_MODEL_ID = "openai/whisper-large-v3"
-# Pinned for the same reason as reference.xtts_gpt_block.HF_REVISION: an unpinned download follows
-# the default branch, so an upstream re-upload would move the recorded metrics with no warning.
-WHISPER_REVISION = "06f233fe06e710322aca913c1bc4249a0d71fce1"
-ECAPA2_REPO_ID = "Jenthe/ECAPA2"
-ECAPA2_REVISION = "207cb6d137c671a12ba820ebec3b719549b06c0f"
-# ``torch.hub`` takes a tag or branch, not a commit, so this pins the TAG that upstream's default
-# branch currently points at (v1.2.0 == ed25eac, the commit the unpinned call was already resolving
-# to). Unlike the three HF pins this one is not exercised here — UTMOS needs ``torchaudio``, which
-# is absent from python_env, so the metric skips before the download runs.
-UTMOS_HUB_REPO = "tarepan/SpeechMOS:v1.2.0"
-UTMOS_SR = 16000
-ECAPA2_SR = 16000
-WHISPER_SR = 16000
+from models.experimental.xtts.config import (  # noqa: F401 — re-exported for callers
+    EVAL_ECAPA2_REPO_ID as ECAPA2_REPO_ID,
+    EVAL_ECAPA2_REVISION as ECAPA2_REVISION,
+    EVAL_ECAPA2_SR as ECAPA2_SR,
+    EVAL_UTMOS_HUB_REPO as UTMOS_HUB_REPO,
+    EVAL_UTMOS_SR as UTMOS_SR,
+    EVAL_WHISPER_MODEL_ID as WHISPER_MODEL_ID,
+    EVAL_WHISPER_REVISION as WHISPER_REVISION,
+    EVAL_WHISPER_SR as WHISPER_SR,
+)
 
 
 def _as_mono_f32(wav) -> np.ndarray:

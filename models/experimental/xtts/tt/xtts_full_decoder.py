@@ -15,7 +15,7 @@ Composes the four phase modules into the complete GAN decoder, entirely on devic
 import ttnn
 
 from models.common.lightweightmodule import LightweightModule
-from models.experimental.xtts.reference.xtts_hifigan import COND_CHANNELS
+from models.experimental.xtts.config import COND_CHANNELS  # noqa: F401 — re-exported for callers
 from models.experimental.xtts.tt.xtts_hifi_decoder import TtHifiDecoder
 from models.experimental.xtts.tt.xtts_mel import TtMelFrontend
 from models.experimental.xtts.tt.xtts_speaker_encoder import TtResNetSpeakerEncoder
