@@ -890,7 +890,7 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_binop_with_scalar,
-            (APPROX, ADD_UNARY, 8 /* ITERATIONS */),
+            (APPROX, ADD_UNARY, 8 /* ITERATIONS */, DST_ACCUM_MODE),
             0 /*dst_index*/,
             VectorMode::C,
             0x3F800000 /*scalar*/));

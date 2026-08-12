@@ -34,7 +34,7 @@ ALWI void xlogy_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         calculate_sfpu_binary,
-        (APPROX, BinaryOp::XLOGY, 8 /* ITERATIONS */),
+        (APPROX, BinaryOp::XLOGY, 8 /* ITERATIONS */, is_fp32_dest_acc_en),
         idst0,
         idst1,
         odst,
