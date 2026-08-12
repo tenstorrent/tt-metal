@@ -8,14 +8,16 @@
 #include <memory>
 #include <ostream>
 
+#include <tt-metalium/mesh_coord.hpp>
+
 namespace tt::tt_metal::distributed {
 
 class MeshDevice;
 class MeshEventImpl;
-class MeshCoordinateRange;
 
 class MeshEvent {
 public:
+    MeshEvent(uint32_t id, MeshDevice* device, uint32_t mesh_cq_id, const MeshCoordinateRange& device_range);
     explicit MeshEvent(MeshEventImpl impl);
 
     MeshEvent(const MeshEvent& other);
