@@ -4020,6 +4020,40 @@ because the two roles share zone NAMES but not meanings -- one colour across bot
 scale onto the other, and a filler's CREDIT-WAIT is 54 ns of DRAM ring room where a mover's is us-scale host
 FIFO credit.
 
+### The pacing controller's whole range, and what actually sets bytes-per-marker
+
+Three traces of the SAME 3,000,000-word payload (5,000 zones x 30 cores x 5 RISCs x 2 words), 0 producer
+stalls and 0 ts regressions in all three:
+
+| config | SWEEP mean | PACE mean | sweep share of wall time | egress per filler | busy sweeps |
+|---|---|---|---|---|---|
+| **FD delay 15** | 12.1-13.3 us | **67-208 ns** | **98-99%** | **15.3-15.9 MB** | 55-59 |
+| SD delay 15 | 12.1-13.6 us | 2.7-4.2 us | ~75% | 17.4-17.6 MB | 113 |
+| **FD delay 60** | 14.2-16.5 us | **20.9-22.2 us** | **~42%** | **20.1-20.7 MB** | 74 |
+
+The controller sweeps its entire range across these three points -- from effectively off (back-to-back sweeps
+at FD/15, where spans already arrive at or above the 70% fill target so it correctly gets out of the way) to
+holding the filler off more than half its wall time at FD/60. It is now readable as a blue/grey ratio in the
+GUI instead of a `pace-gap N cyc` integer in a log line.
+
+**Note the direction of the egress column: the config that paces MOST ships the MOST bytes.** That is not the
+controller failing, it is §N+36's mechanism made visible. Bytes-per-marker is set by the PRODUCER RATE, because
+a span ships whole (10,560 B) regardless of how much of it is live; slower producers hand over emptier spans.
+The controller widening its gap NARROWS that penalty but cannot close it -- delay 60 still costs 31% more bytes
+than delay 15 for identical payload. So pacing is a mitigation for slow producers, not a fix, and the fix would
+have to be a short frame (see the 592-word analysis) rather than more waiting.
+
+Also from the FD/15 trace: **mover `SWEEP` is bimodal at the sweep level** -- p50 731-844 ns, p90 16.7-18.2 us,
+max 43.5-48.4 us. A 20x median-to-p90 and ~55x median-to-max spread: most peer visits are near-empty polls, a
+minority are long, and the long ones are where the credit wait lives. Same shape as the FD/60 credit-wait
+distribution (p50 95 ns, p90 ~9-10 us) but visible without descending to detail 1.
+
+Two things not to misread in that capture: the FD/15 worker window is **0.988 ms** against 1.93 ms for SD/15
+at the same 500 iterations -- fast dispatch does the same work in half the wall time, so the drainer rows are
+denser, not busier. And the mover's largest coverage gap is **7.39 us** under FD against 0.94-1.14 us under SD;
+that hole is inside the traced window and is the mover's inter-sweep bookkeeping after a sweep that found
+nothing, not missing instrument.
+
 ### The tail flush could never fire, and every counter read clean
 
 The post-loop flush was gated on `self_on`, which is cleared at the END of every sweep -- so the condition was
