@@ -1,25 +1,48 @@
-#include <algorithm>
-#include <tuple>
+// SPDX-License-Identifier: Apache-2.0
+//
+// A unified/single-threaded programming model built on top of the existing metal
+// programming model. Metal typically has 2 DM threads and 1 compute thread
+// (which is then split into 3, but this header does not concern itself with
+// compute thread splitting and treats compute as the abstraction metal provides
+// -- this is just an extension).
+//
+// One kernel source describes the whole pipeline. It is compiled once per baby
+// RISC-V thread, and each statement lowers to that thread's half of the
+// circular-buffer protocol:
+//
+//   INPUT                    OUTPUT                   INTERMED
+//        DM    Compute            DM    Compute            DM    Compute
+//   reserve <- *               * -> reserve                   reserve
+//     write                          write                      write
+//      push ->    wait         wait <-  push                     push
+//                read          read                              wait
+//         * <-     pop          pop -> *                         read
+//                                                                 pop
+//
+// Layering:
+//   unified_expr.hpp  -- domain-free expression tree + DST register allocator
+//   fusion.hpp        -- leaves, ops, fusion kinds, driver strategies
+//   unified.hpp       -- this file: the core API
+//
+// Core API:
+//   Storage       a circular buffer. `store()` evaluates a compute fusion into it.
+//   Block         move-only evidence that something was produced into a Storage.
+//   ComputeBlock  compute-side consumption of a Block; a leaf in an expression.
+//   noc_*         the data-movement operations, each pinned to a DM thread.
+
+#pragma once
+
+#include <type_traits>
 #include <utility>
 
-// This header proposes a unified/single-threaded programming model
-// built on top of the existing metal programming model.  Metal
-// typically has 2 DM threads and 1 compute thread (which then is
-// split into 3, but this header does not concern itself with compute
-// thread splitting and treats compute as the abstraction that metal
-// provides, this is just an extension).
+#include "fusion.hpp"
 
 namespace tt {
 namespace unified {
 
 class Tensor;
 struct Block;
-
-template <template <typename...> class Derived, typename... Fusions>
-class FusionBase;
-
-template <typename... Fusions>
-struct NaryFusion;
+class ComputeBlock;
 
 struct Coord {
     int y;
@@ -36,6 +59,10 @@ struct Mcast {
     Shape shape;
 };
 
+// ---------------------------------------------------------------------------
+// Storage -- a circular buffer
+// ---------------------------------------------------------------------------
+
 struct Storage {
     Storage(int cb_id, int num_tiles) : cb_id(cb_id), num_tiles(num_tiles) {}
 
@@ -44,100 +71,23 @@ struct Storage {
     Storage& operator=(Storage&&) = delete;
     Storage& operator=(const Storage&) = delete;
 
-    // Defined out-of-line below: needs Block and Fusion complete.
-    template <template <typename...> class D, typename... Fusions>
-    Block store(const FusionBase<D, Fusions...>& fusion);
+    // Evaluate a compute fusion into this buffer. The loop shape is chosen by
+    // the fusion's kind; see Strategy in fusion.hpp. Defined out-of-line below,
+    // once Block is complete.
+    template <typename Node>
+    Block store(const Node& node);
 
     int cb_id;
     int num_tiles;  // This could eventually be N dimensional (maybe via template params?)
 };
 
-// CRTP-style base: `Derived` is a template-template parameter so that
-// append()/concat() rebuild the *derived* fusion type rather than decaying to
-// the base. That is what keeps `x + y + z` chainable.
-template <template <typename...> class Derived, typename... Fusions>
-class FusionBase {
-public:
-    explicit FusionBase(int dst_index, Fusions... fusions) : fusions_(std::move(fusions)...), dst_index_(dst_index) {}
-
-    // Runs every compute fusion, in order.
-    void run() { invoke(std::index_sequence_for<Fusions...>{}); }
-
-    // DST slot holding this fusion's result.
-    int dst() const { return dst_index_; }
-
-    // Append one op, with `new_dst` becoming the result slot.
-    template <typename Lambda>
-    Derived<Fusions..., Lambda> append(Lambda lambda, int new_dst) const {
-        return appendLambda(std::index_sequence_for<Fusions...>{}, std::move(lambda), new_dst);
-    }
-
-    // Concatenate another fusion's ops after this one's.
-    template <template <typename...> class D2, typename... Others>
-    Derived<Fusions..., Others...> concat(const FusionBase<D2, Others...>& other, int new_dst) const {
-        return concatImpl(std::index_sequence_for<Fusions...>{}, std::index_sequence_for<Others...>{}, other, new_dst);
-    }
-
-    template <template <typename...> class D2, typename... Others>
-    int next_dst_idx(const FusionBase<D2, Others...>& other) const {
-        return std::max(dst_index_, other.dst()) + 1;
-    }
-
-protected:
-    template <template <typename...> class, typename...>
-    friend class FusionBase;
-
-    std::tuple<Fusions...> fusions_;
-    int dst_index_;
-
-    template <std::size_t... Is>
-    void invoke(std::index_sequence<Is...>) {
-        // Comma-operator fold guarantees left-to-right evaluation order.
-        // std::get<Is> is a compile-time index, so each call below binds
-        // directly to that fusion's concrete type -- static dispatch.
-        (std::get<Is>(fusions_)(), ...);
-    }
-
-    template <std::size_t... Is, typename Lambda>
-    Derived<Fusions..., Lambda> appendLambda(std::index_sequence<Is...>, Lambda lambda, int d) const {
-        return Derived<Fusions..., Lambda>(d, std::get<Is>(fusions_)..., std::move(lambda));
-    }
-
-    template <std::size_t... Is, std::size_t... Js, template <typename...> class D2, typename... Others>
-    Derived<Fusions..., Others...> concatImpl(
-        std::index_sequence<Is...>, std::index_sequence<Js...>, const FusionBase<D2, Others...>& o, int d) const {
-        return Derived<Fusions..., Others...>(d, std::get<Is>(fusions_)..., std::get<Js>(o.fusions_)...);
-    }
-};
-
-template <typename... Fusions>
-struct NaryFusion : FusionBase<NaryFusion, Fusions...> {
-    using FusionBase<NaryFusion, Fusions...>::FusionBase;
-
-    template <template <typename...> class D2, typename... Fs2>
-    auto add(const FusionBase<D2, Fs2...>& other, int dst_out) const {
-        const int a = this->dst(), b = other.dst();
-        return this->concat(other, dst_out).append([a, b, dst_out]() { sfpu_add(a, b, dst_out); }, dst_out);
-    }
-
-    template <template <typename...> class D2, typename... Fs2>
-    auto operator+(const FusionBase<D2, Fs2...>& other) const {
-        return add(other, this->next_dst_idx(other));
-    }
-};
-
-// C++17 does not consider inherited constructors for CTAD, so the guides are
-// spelled out rather than relying on `using FusionBase::FusionBase`.
-template <typename... Fusions>
-NaryFusion(int, Fusions...) -> NaryFusion<Fusions...>;
-
-template <typename... Fusions>
-struct MatmulFusion : FusionBase<MatmulFusion, Fusions...> {
-    using FusionBase<MatmulFusion, Fusions...>::FusionBase;
-};
-
-template <typename... Fusions>
-MatmulFusion(int, Fusions...) -> MatmulFusion<Fusions...>;
+// ---------------------------------------------------------------------------
+// Block -- move-only evidence that a Storage was produced into
+//
+// Every Block comes from an operation that has already pushed, which is what
+// makes it safe to hand one to a DM thread to drain. Move-only so it reaches
+// exactly one consumer; consumers take it by value.
+// ---------------------------------------------------------------------------
 
 struct Block {
     explicit Block(const Storage& storage) : cb_id(storage.cb_id), num_tiles(storage.num_tiles) {}
@@ -146,6 +96,9 @@ struct Block {
     Block(const Block&) = delete;
     Block& operator=(const Block&) = delete;
 
+    // TODO: does not disengage the source, so a moved-from Block is
+    // indistinguishable from a live one and a second consumer silently issues a
+    // duplicate cb_pop. See the debug-guard note in the design discussion.
     Block(Block&& o) {
         cb_id = o.cb_id;
         num_tiles = o.num_tiles;
@@ -161,22 +114,15 @@ struct Block {
     int num_tiles;  // This could eventually be N dimensional (maybe via template params?)
 };
 
-template <template <typename...> class D, typename... Fusions>
-Block Storage::store(const FusionBase<D, Fusions...>& fusion) {
-#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
-    cb_reserve(cb_id);
-    for (int i = 0; i < num_tiles; ++i) {
-        tile_regs_acquire();
-        fusion.invoke(i);  // TODO: invoke is private and takes no tile index
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile();
-        tile_regs_release();
-    }
-    cb_push(cb_id);
-#endif
+template <typename Node>
+Block Storage::store(const Node& node) {
+    Strategy<expr::kind_of_t<Node>>::run(node, cb_id, num_tiles);
     return Block(cb_id, num_tiles);
 }
+
+// ---------------------------------------------------------------------------
+// ComputeBlock -- compute-side consumption of a Block
+// ---------------------------------------------------------------------------
 
 class ComputeBlock {
 public:
@@ -186,7 +132,7 @@ public:
 #endif
     }
 
-    ~ComputeBlock(){
+    ~ComputeBlock() {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
         cb_pop(cb_id);
 #endif
@@ -197,30 +143,45 @@ public:
     ComputeBlock(ComputeBlock&&) = delete;
     ComputeBlock& operator=(ComputeBlock&&) = delete;
 
-    template <typename... Fusions>
-    NaryFusion<Fusions...> ld(int dst_idx) {
-#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
-        return NaryFusion(dst_idx, [=]() { copy_tile(this->cb_id, i, dst_idx); });
-#endif
-    }
+    int get_cb_id() const { return cb_id; }
 
-    NaryFusion add(const ComputeBlock& other) { return ld(0) + other; }
+    int get_num_tiles() const { return num_tiles; }
 
-    NaryFusion operator+(const ComputeBlock& other) { return add(other); }
-
-    MatmulFusion matmul(const ComputeBlock& other) { return ...; }
+    // TODO: reduces within a tile, not across them. A cross-tile reduction wants
+    // its own Strategy that accumulates over the tile loop and packs once.
+    expr::Un<SumOp, TileSource> sum() const { return {ld()}; }
 
 private:
     int cb_id;
     int num_tiles;  // This could eventually be N dimensional (maybe via template params?)
 };
 
+// ---------------------------------------------------------------------------
+// Adaptors that let a ComputeBlock stand in for an expression leaf.
+// These are the hooks fusion.hpp declares; they live here because they are the
+// only place the fusion layer needs to know about a core type.
+// ---------------------------------------------------------------------------
+
+inline TileSource as_node(const ComputeBlock& b) { return TileSource{b.get_num_tiles()}; }
+
+inline auto relu(const ComputeBlock& b) { return expr::Un<ReluOp, TileSource>{as_node(b)}; }
+
+template <typename Geometry>
+auto matmul(const ComputeBlock& a, const ComputeBlock& b) {
+    return matmul<Geometry>(as_node(a), as_node(b));
+}
+
+// ---------------------------------------------------------------------------
+// Data movement. Each is pinned to a DM thread by its `thread` argument, and
+// compiles away entirely on every other thread.
+// ---------------------------------------------------------------------------
+
 template <int thread>
 Block noc_load(const Storage& storage, const Tensor& t, int idx) {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
         cb_reserve(storage.cb_id);
-        noc_read();
+        noc_async_read();
         cb_push(storage.cb_id);
     }
 #endif
@@ -235,19 +196,25 @@ void noc_store(Block block, const Tensor& t, int idx) {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
         cb_wait(block.cb_id);
-        noc_write();
+        noc_async_write();
         cb_pop(block.cb_id);
     }
 #endif
 }
 
+// TODO: core-to-core movement. `cb_wait(block.cb_id)` is correct (the source is
+// local) but cb_reserve/cb_push on the *destination* id are not -- CB ids are
+// per-core, so the peer's pointers have to be updated over the NOC. See
+// api/remote_circular_buffer.h (remote_cb_reserve_back /
+// remote_cb_push_back_and_write_pages), which is asymmetric between sender and
+// receiver, or the explicit semaphore handshake the matmul mcast kernels use.
 template <int thread>
 Block noc_read(const Storage& storage, Block block, Coord coord, int offset) {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
         cb_wait(block.cb_id);
         cb_reserve(storage.cb_id);
-        noc_read();
+        noc_async_read();
         cb_push(storage.cb_id);
         cb_pop(block.cb_id);
     }
@@ -261,7 +228,7 @@ Block noc_write(const Storage& storage, Block block, Coord coord, int offset) {
     if constexpr (thread == TT_DM_THREAD_ID) {
         cb_wait(block.cb_id);
         cb_reserve(storage.cb_id);
-        noc_write();
+        noc_async_write();
         cb_push(storage.cb_id);
         cb_pop(block.cb_id);
     }
@@ -269,39 +236,17 @@ Block noc_write(const Storage& storage, Block block, Coord coord, int offset) {
     return Block(storage);
 }
 
-//
-// INPUT
-//        DM    Compute
-//   reserve <- *
-//     write
-//      push ->    wait
-//                 read
-//         * <-     pop
-//
-// OUTPUT
-//        DM    Compute
-//         * -> reserve
-//                write
-//      wait <-    push
-//      read
-//       pop -> *
-//
-// INTERMED
-//        DM    Compute
-//              reserve
-//                write
-//                 push
-//                 wait
-//                 read
-//                  pop
-//
-void test() {
-    Storage lhs_storage(0, 8);
-    Storage rhs_storage(1, 8);
-    Storage tmp_storage(2, 8);
-    Storage out_storage(3, 8);
+// ===========================================================================
+// Examples
+// ===========================================================================
 
-    for (int i = 0; i < 10; ++i) {
+void test() {
+    Storage lhs_storage(0, 2);
+    Storage rhs_storage(1, 2);
+    Storage tmp_storage(2, 2);
+    Storage out_storage(3, 2);
+
+    for (int i = 0; i < 1; ++i) {
         ComputeBlock lhs = noc_load<0>(lhs_storage, t0, i);
         ComputeBlock rhs = noc_load<1>(rhs_storage, t1, i);
 
@@ -315,10 +260,10 @@ void test() {
 void reduce() {
     Storage stage0_storage(0, 8);
     Storage stage1_storage(1, 8);
-    Storage tmp_storage(2, 8);
+    Storage tmp_storage(2, 2);
     Storage out1_storage(3, 8);
 
-    for (int i = 0; i < 10; ++i) {
+    for (int i = 0; i < 1; ++i) {
         ComputeBlock s0 = noc_load<0>(stage0_storage, t0, i);
 
         Block tmp = tmp_storage.store(s0.sum());
@@ -327,6 +272,27 @@ void reduce() {
 
         noc_store<0>(out1_storage.store(s1.sum()), t2, i);
     }
+}
+
+// The FPU path: matmul with a fused relu epilogue, then the SFPU path consuming
+// its result out of an intermediate Storage.
+void matmul_relu() {
+    Storage a_storage(0, 1);
+    Storage b_storage(1, 1);
+    Storage mm_storage(2, 1);
+    Storage out_storage(3, 1);
+
+    // out_subblock 2x2 = 4 DST tiles, k-dim 2, 2 inner blocks
+    using Geom = MatmulGeometry</*h=*/2, /*w=*/2, /*in0_block_w=*/2, /*num_blocks=*/2>;
+
+    ComputeBlock a = noc_load<0>(a_storage, t0, 0);
+    ComputeBlock b = noc_load<1>(b_storage, t1, 0);
+
+    // relu folds into the matmul's pack-side epilogue rather than wrapping it
+    ComputeBlock mm = mm_storage.store(relu(matmul<Geom>(a, b)));
+
+    // ... and the SFPU path picks it up from there
+    noc_store<0>(out_storage.store(mm + a), t2, 0);
 }
 
 }  // namespace unified
