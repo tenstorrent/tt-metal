@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <tt-metalium/host_api.hpp>
+#include "tt_metal/distributed/mesh_event_impl.hpp"
 #include <memory>
 #include <vector>
 
@@ -116,8 +117,8 @@ TEST_F(UnitMeshCQEventFixture, TestEventsEnqueueRecordEventIssueQueueWrap) {
 
     for (size_t i = 0; i < num_events; i++) {
         auto event = cq.enqueue_record_event_to_host();
-        EXPECT_EQ(event.id(), cmds_issued_per_cq + 1);  // Event ids start at 1
-        EXPECT_EQ(event.mesh_cq_id(), cq.id());
+        EXPECT_EQ(event.impl().id(), cmds_issued_per_cq + 1);  // Event ids start at 1
+        EXPECT_EQ(event.impl().mesh_cq_id(), cq.id());
         cmds_issued_per_cq++;
     }
     distributed::Finish(cq);
@@ -223,11 +224,11 @@ TEST_F(UnitMeshCQEventFixture, TestEventsEventsQueryBasic) {
     EXPECT_EQ(event_status, true);
 
     // Query a future event that hasn't completed and ensure it's not finished.
-    auto future_event = std::make_shared<distributed::MeshEvent>(
+    auto future_event = std::make_shared<distributed::MeshEvent>(distributed::make_mesh_event(
         0xffff,
         mesh_device.get(),
         cq.id(),
-        distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 0)));
+        distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 0))));
     cq.enqueue_record_event();
     event_status = distributed::EventQuery(*future_event);
     EXPECT_EQ(event_status, false);
@@ -259,8 +260,8 @@ TEST_F(UnitMeshCQEventFixture, TestEventsMixedWriteBufferRecordWaitSynchronize) 
     for (size_t i = 0; i < num_buffers; i++) {
         log_debug(tt::LogTest, "i: {} - Going to record event, write, wait, synchronize.", i);
         auto event = std::make_shared<distributed::MeshEvent>(cq.enqueue_record_event_to_host());
-        EXPECT_EQ(event->mesh_cq_id(), cq.id());
-        EXPECT_EQ(event->id(), events_issued_per_cq + 1);  // Event ids start at 1
+        EXPECT_EQ(event->impl().mesh_cq_id(), cq.id());
+        EXPECT_EQ(event->impl().id(), events_issued_per_cq + 1);  // Event ids start at 1
 
         distributed::DeviceLocalBufferConfig local_config{.page_size = page_size, .buffer_type = BufferType::DRAM};
         distributed::ReplicatedBufferConfig buffer_config{.size = page_size};
