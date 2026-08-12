@@ -18,6 +18,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
 #include "context/metal_context.hpp"
@@ -616,8 +617,9 @@ StandaloneMuxV2BenchmarkRunResult run_standalone_mux_v2_benchmark_once(
     const uint64_t expected_sender_bytes = static_cast<uint64_t>(resolved_payload_size_bytes) * num_packets;
     const uint64_t expected_aggregate_bytes = expected_sender_bytes * benchmark_case.num_senders;
 
-    const auto l1_unreserved_base_address =
-        static_cast<uint32_t>(device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1)) + 1024;
+    constexpr uint32_t kL1PageSizeBytes = 1024;
+    const auto l1_unreserved_base_address = static_cast<uint32_t>(
+        tt::align(device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1), kL1PageSizeBytes));
     const auto packet_header_size_bytes =
         static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes());
     const auto channel_buffer_size_bytes = packet_header_size_bytes + resolved_payload_size_bytes;

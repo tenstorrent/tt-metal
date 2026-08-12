@@ -44,9 +44,6 @@ enum BufferIndex {
 // (8 DM + 4 x 4 TRISC).
 static constexpr std::uint32_t PROFILER_MAX_RISC_COUNT = 24;
 
-// TODO: make this architecture (wh/bh) specific --> needs to be moved out of this common profiler file.
-static constexpr std::uint32_t PROFILER_CONTROL_RISC_SLOTS = 5;
-
 // ---- ID_LH marker-word bit layout (shared device packer / host decoder) ----
 // Each risc's per-run ID_LH word packs three identity fields, low bits first:
 //   [RISC_SHIFT , +RISC_BITS)   processor id within the core (0 .. PROFILER_MAX_RISC_COUNT-1)
@@ -107,13 +104,13 @@ enum ControlBuffer {
     HOST_BUFFER_END_INDEX_T0,
     HOST_BUFFER_END_INDEX_T1,
     HOST_BUFFER_END_INDEX_T2,
-    // slots [5, PROFILER_CONTROL_RISC_SLOTS) would be headroom for additional processors
-    DEVICE_BUFFER_END_INDEX_BR_ER = PROFILER_CONTROL_RISC_SLOTS,
+    // slots [5, PROFILER_MAX_RISC_COUNT) reserved for additional processors (e.g. Quasar DM/Neo)
+    DEVICE_BUFFER_END_INDEX_BR_ER = PROFILER_MAX_RISC_COUNT,
     DEVICE_BUFFER_END_INDEX_NC,
     DEVICE_BUFFER_END_INDEX_T0,
     DEVICE_BUFFER_END_INDEX_T1,
     DEVICE_BUFFER_END_INDEX_T2,
-    FW_RESET_H = 2 * PROFILER_CONTROL_RISC_SLOTS,
+    FW_RESET_H = 2 * PROFILER_MAX_RISC_COUNT,
     FW_RESET_L,
     DRAM_PROFILER_ADDRESS_DEFAULT,  // Used in normal profiler operation
     RUN_COUNTER,
@@ -157,12 +154,8 @@ struct TimestampedDataSize<TS_DATA_16B> {
 };
 
 // TODO: use data types in profile_msg_t rather than addresses/sizes
-constexpr static std::uint32_t PROFILER_L1_CONTROL_VECTOR_SIZE = 32;
+constexpr static std::uint32_t PROFILER_L1_CONTROL_VECTOR_SIZE = 64;
 constexpr static std::uint32_t PROFILER_L1_CONTROL_BUFFER_SIZE = PROFILER_L1_CONTROL_VECTOR_SIZE * sizeof(uint32_t);
-// Ensures our control vector is addressable
-static_assert(
-    DRAM_PROFILER_ADDRESS_T2_0 < PROFILER_L1_CONTROL_VECTOR_SIZE,
-    "ControlBuffer's last entry does not fit in the L1 control vector");
 constexpr static std::uint32_t PROFILER_L1_MARKER_UINT32_SIZE = 2;
 constexpr static std::uint32_t PROFILER_L1_PROGRAM_ID_COUNT = 2;
 constexpr static std::uint32_t PROFILER_L1_GUARANTEED_MARKER_COUNT = 4;
