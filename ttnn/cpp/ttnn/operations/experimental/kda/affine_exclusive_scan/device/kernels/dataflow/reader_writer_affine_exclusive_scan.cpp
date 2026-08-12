@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "api/core_local_mem.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
 
@@ -62,6 +64,9 @@ void kernel_main() {
     const auto output_a_accessor = TensorAccessor(output_a_args, output_a_addr, output_tile_bytes);
     const auto output_b_accessor = TensorAccessor(output_b_args, output_b_addr, output_tile_bytes);
     Noc noc;
+    Semaphore<> ready(ready_sem);
+    Semaphore<> arrival(arrival_sem);
+    Semaphore<> release(release_sem);
 
     auto worker_x = [&](uint32_t worker) { return get_arg_val<uint32_t>(13 + 2 * worker); };
     auto worker_y = [&](uint32_t worker) { return get_arg_val<uint32_t>(14 + 2 * worker); };
@@ -83,30 +88,37 @@ void kernel_main() {
     uint32_t completed_stages = 0;
     auto stage_barrier = [&] {
         completed_stages++;
-        noc_semaphore_inc(get_noc_addr(coordinator_x, coordinator_y, get_semaphore(arrival_sem)), 1);
+        arrival.up(noc, coordinator_x, coordinator_y, 1);
         if (worker_index == 0) {
-            noc_semaphore_wait_min(
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(arrival_sem)),
-                completed_stages * worker_count);
+            arrival.wait_min(completed_stages * worker_count);
             for (uint32_t worker = 0; worker < worker_count; worker++) {
-                noc_semaphore_inc(get_noc_addr(worker_x(worker), worker_y(worker), get_semaphore(release_sem)), 1);
+                release.up(noc, worker_x(worker), worker_y(worker), 1);
             }
-            noc_async_atomic_barrier();
+            noc.async_atomic_barrier();
         }
-        noc_semaphore_wait_min(
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(release_sem)), completed_stages);
+        release.wait_min(completed_stages);
     };
     auto send_pair = [&](uint32_t target, uint32_t current_a, uint32_t current_b) {
-        noc_async_write(
-            get_read_ptr(current_a),
-            get_noc_addr(worker_x(target), worker_y(target), get_write_ptr(cb_remote_a)),
-            kk * stage_a_tile_bytes);
-        noc_async_write(
-            get_read_ptr(current_b),
-            get_noc_addr(worker_x(target), worker_y(target), get_write_ptr(cb_remote_b)),
-            kv * stage_b_tile_bytes);
-        noc_async_write_barrier();
-        noc_semaphore_inc(get_noc_addr(worker_x(target), worker_y(target), get_semaphore(ready_sem)), 1);
+        const CircularBuffer current_a_buffer(current_a);
+        const CircularBuffer current_b_buffer(current_b);
+        const CircularBuffer remote_a_buffer(cb_remote_a);
+        const CircularBuffer remote_b_buffer(cb_remote_b);
+        const uint32_t target_x = worker_x(target);
+        const uint32_t target_y = worker_y(target);
+        noc.async_write(
+            CoreLocalMem<uint32_t>(current_a_buffer.get_read_ptr()),
+            UnicastEndpoint{},
+            kk * stage_a_tile_bytes,
+            {},
+            {.noc_x = target_x, .noc_y = target_y, .addr = remote_a_buffer.get_write_ptr()});
+        noc.async_write(
+            CoreLocalMem<uint32_t>(current_b_buffer.get_read_ptr()),
+            UnicastEndpoint{},
+            kv * stage_b_tile_bytes,
+            {},
+            {.noc_x = target_x, .noc_y = target_y, .addr = remote_b_buffer.get_write_ptr()});
+        noc.async_write_barrier();
+        ready.up(noc, target_x, target_y, 1);
     };
     auto receive_pair = [&] {
         CircularBuffer(cb_remote_a).reserve_back(kk);
@@ -129,8 +141,7 @@ void kernel_main() {
         }
         if (group >= distance) {
             ready_target++;
-            noc_semaphore_wait_min(
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ready_sem)), ready_target);
+            ready.wait_min(ready_target);
             receive_pair();
             CircularBuffer(cb_stage_token).reserve_back(1);
             CircularBuffer(cb_stage_token).push_back(1);
@@ -180,7 +191,7 @@ void kernel_main() {
     }
     if (group > 0) {
         ready_target++;
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ready_sem)), ready_target);
+        ready.wait_min(ready_target);
         receive_pair();
     }
     CircularBuffer(cb_stage_token).reserve_back(1);
