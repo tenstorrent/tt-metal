@@ -99,12 +99,30 @@ The routing result is the one to keep. `supported_by_codegen()` had to reject no
 port and the thing the emitted test exists to catch -- and the agent got it exactly right across all
 96 cases.
 
-Every in-scope failure is one cause, and it is one missing file: `writer_untilize_interleaved.cpp`
+Every in-scope failure was one cause, and it was one missing file: `writer_untilize_interleaved.cpp`
 includes `rm_shard_split.h`, which lives in the generator at `common/templates/` and was never
 vendored into the port. The agent did this correctly for `sequencers.h` -- it sits beside the kernels
-and resolves -- and missed the second one. So the fix is to copy that header in beside the others,
-and the perf figures above should be re-read afterwards, since nothing in-scope has actually
-executed yet.
+and resolves -- and missed the second one. `untilize/codegen/kernels/*.h` was already in the CMake
+glob, so vendoring the header was the whole fix: copied verbatim from the generator at the pinned
+`codegen_agentic_port` ref, with the four-line SPDX header the sibling carries.
+
+**Re-verified on that tree -- run 31635005308 -- and the harness is now reporting a real defect in the
+port rather than one of its own.** Still `back-to-translate`, still 112 of 112 in-scope, but the
+missing-file error is gone and what replaced it is genuine translation work:
+
+- `writer_untilize_interleaved.cpp` reads `get_compile_time_arg_val` at indices 5 and 6 while the
+  program factory passes five, so the static assertion fails with `(5 < 5)` and `(6 < 5)`. The
+  kernel's compile-time argument contract and the factory that fills it disagree.
+- `ttdm::noc_write_row_split<DST_PAGES_PER_ROW, DST_LOGICAL_PAGE_SIZE>(...)` matches no overload in
+  the header just vendored, so the call site and the shared helper's signature disagree too.
+
+That is the pipeline working as designed: a true negative about the port, not a false positive from
+the harness. Both remaining defects are the agent's to fix and are the natural content of a fourth
+run. Two things are settled by getting here, though: the wall band came back **clean** on this tree
+-- median ratio 1.009 over 24 cases, no regressions, aggregate OK, against 0.787 and one regression
+before -- and `device_vs_native` sits at 2.12. Neither number should be read as the port's
+performance while nothing in scope executes; they are evidence that the bands themselves grade
+sanely, which is what was untested.
 
 **The lesson worth carrying to the third op: a green build says nothing about kernel includes.**
 Kernels are JIT-compiled on the device at first use, so a missing kernel header cannot fail the CI
@@ -524,10 +542,12 @@ Cheapest first, so each failure costs the least it can. Steps 1 to 4 are done.
    reached a compiling tree. `verify` ran on it and blocked on the write-path guard.
 6. ~~A `verify` that reaches the bands.~~ Done 2026-08-12, run 31630655137: `back-to-translate` in
    about 20 minutes, routing clean, all 112 in-scope cases failing on one missing kernel header.
-7. Next: vendor `rm_shard_split.h` beside the port's kernels and re-verify. That is the cheapest run
-   in the whole sequence -- one file, one dispatch -- and it is the only thing between here and the
-   first verdict where an in-scope case has actually run. The perf numbers from run 31630655137 are
-   not yet meaningful, because nothing in scope executed to produce them.
+7. ~~Vendor `rm_shard_split.h` and re-verify.~~ Done 2026-08-12, run 31635005308: the header
+   resolves, the wall band came back clean, and the remaining failures are the port's own.
+8. Next: the two translation defects above -- the compile-time argument count and the
+   `noc_write_row_split` signature. This is the first time the harness has handed back a defect that
+   is purely the agent's to fix, so it is also the cleanest test of the loop the whole pipeline
+   exists to close. Nothing in the harness is known to be in the way.
 
 The agent's compiling tree is preserved locally at tag `port-run3-compiling-tree` (commit
 `42487b776557`), independent of the run and its swept scratch refs. Every port file in it was
