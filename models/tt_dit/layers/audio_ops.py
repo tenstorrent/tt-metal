@@ -335,9 +335,7 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache, pref
         # its error text is not a stable API, so any RuntimeError from the conv takes the
         # fallback: the shift-multiply-add form, which has no sharding constraint at all --
         # slower, but this is a correctness path (and MAC is the *more* accurate form).
-        logger.warning(
-            f"depthwise conv1d failed at T_pad={T_pad}, C={C}, K={K}, stride={stride}; MAC fallback ({exc})"
-        )
+        logger.warning(f"depthwise conv1d failed at T_pad={T_pad}, C={C}, K={K}, stride={stride}; MAC fallback ({exc})")
         return _depthwise_tap_mac(x_BTC, taps, stride, T_out=T_out, dtype=dtype)
 
 
@@ -1007,9 +1005,18 @@ class Conv1dViaConv3d(Module):
         accumulator = None
         for tap in range(self.kernel_size[0]):
             offset = tap * self.dilation
-            x_tap = ttnn.slice(x_padded, [0, offset, 0], [batch, offset + t_out, channels])
+            # Skip a slice that selects everything: it hands back a tensor sharing the input's
+            # storage, so the deallocate below would free the CALLER's tensor. A 1x1 stride-1
+            # conv pads nothing (`x_padded` IS `x_BTC`) and its single tap spans the full extent,
+            # which is exactly the audio encoder's two posterior heads -- mean_proj was freeing
+            # the input that logs_proj still needed. Identity on the Python object is the only
+            # test that works here; `ttnn.slice` returns a fresh wrapper even when it aliases,
+            # so comparing its result would not detect the sharing.
+            full_extent = offset == 0 and t_out == x_padded.shape[1]
+            x_tap = x_padded if full_extent else ttnn.slice(x_padded, [0, offset, 0], [batch, offset + t_out, channels])
             x_tile = ttnn.to_layout(x_tap, ttnn.TILE_LAYOUT)
-            ttnn.deallocate(x_tap)
+            if x_tap is not x_padded:
+                ttnn.deallocate(x_tap)
 
             weight = getattr(self, f"tap_w{tap}").data
             if self.split_mode == "off":
