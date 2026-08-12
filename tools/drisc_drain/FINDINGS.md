@@ -3631,3 +3631,194 @@ what the new one makes possible.
 - **`grep -o 'L1 STALL COUNTERS -- [0-9]* producer stalls' | grep -o '[0-9]*' | head -1` returns 1** -- the
   "1" in "L1". Every stall figure in the first pass of this session read `stalls=1`. Parse with `sed -n
   's/...\([0-9]*\) producer stalls.../\1/p'` instead.
+
+## §N+41 — DRISC SELF-PROFILING: the drainer frames its own zones as a worker span, and the sampler has to trigger on WORK, not on sweep number (bh-26, 2026-08-12)
+
+The drainers were the only cores in the system with no row in Tracy. They are now producers of the same wire
+format everything else uses: **a DRISC emits its own zones into its own SPSC ring and frames that ring into the
+DRAM/socket path it already owns**, so the host decoder, the frame layout and the Tracy handler are all
+untouched. Gated behind `TT_METAL_PERF_DEBUG_DRISC_ZONES=N` (default OFF).
+
+Two things dominated the work, and neither was the framing:
+
+1. **A sweep-number sampler captures nothing.** Both roles are >99% idle, and the phases only mean anything on
+   a busy sweep. The trigger has to be *discovered work*.
+2. **The instrumentation's presence costs more than its output.** Getting the emitter calls off the hot path
+   mattered 6x more than anything about the frames.
+
+### What it looks like
+
+Six new Tracy contexts (one per drainer core, at its own NoC coords), each carrying a two-level tree:
+`DRISC-SWEEP` at depth 0 with `DRISC-READ` / `DRISC-READ-WAIT` / `DRISC-PROC` / `DRISC-WR-BARRIER` as children
+and `DRISC-CREDIT-WAIT` / `DRISC-WRITE` nested inside `DRISC-PROC` on a filler (directly under `DRISC-SWEEP` on
+a mover, which has no proc phase).
+
+Measured from `tracy_captures/drisc_selfzones.tracy` (`tracy_zone_csv`: **126 contexts** = 120 workers + 6
+drainers, 3,002,343 zone rows). Per-zone means, one row per drainer:
+
+| DRISC | role | ctx | SWEEP zones | DRISC zones | depths | SWEEP mean | READ | READ-WAIT | PROC | CREDIT-WAIT | WRITE | WR-BARRIER |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 0 | filler | 0 | 8  | 367 | 0:8, 1:309, 2:50  | 15.02 us | 128 ns | 69 ns | 667 ns | 53 ns | 141 ns | 86 ns |
+| 1 | filler | 1 | 4  | 160 | 0:4, 1:156        | 12.16 us | 128 ns | 73 ns | 405 ns | -     | -      | 58 ns |
+| 2 | filler | 2 | 8  | 367 | 0:8, 1:309, 2:50  | 14.81 us | 128 ns | 69 ns | 669 ns | 54 ns | 141 ns | 62 ns |
+| 3 | filler | 3 | 8  | 361 | 0:8, 1:301, 2:52  | 14.89 us | 128 ns | 70 ns | 682 ns | 54 ns | 140 ns | 72 ns |
+| 4 | mover  | 4 | 30 | 186 | 0:30, 1:156       |  6.51 us | 1,059 ns | - | -    | **1,839 ns** | 769 ns | 610 ns |
+| 5 | mover  | 5 | 35 | 224 | 0:35, 1:189       |  6.37 us |   990 ns | - | -    | **1,611 ns** | 909 ns | 487 ns |
+
+The mover rows are the point of the exercise. §N+38 established that the knee is the WORST sweep's credit wait;
+these are the first per-occurrence numbers for it, and **credit-wait is the largest single phase on a mover**
+(1.6-1.8 us mean, against a 990-1,059 ns read and a 769-909 ns write). A filler's zones say the opposite thing
+about itself: its 667-682 ns PROC per batch dwarfs everything, and its credit-wait (DRAM ring room) is 53 ns.
+DRISC 1 captured only idle sweeps in this run and correctly reports itself as such (see "no silent truncation").
+
+**Zone counts match the device's own capture accounting exactly on all six drainers** (8/4/8/8/30/35 SWEEP zones
+against 8/4/8/8/30/35 sweeps reported captured), which is what ties the Tracy rows to the counters.
+
+### Mechanism: the frame is a worker span, and nothing else changed
+
+- The self frame is **the ordinary `PP_BULK_SPAN` layout**: 16-word prefix, a 64-word control vector with the
+  drainer's own `SPSC_CORE_XY`, five 512-word rings. `myRiscID == PROCESSOR_INDEX == 0` on a DRISC, so **only
+  ring 0 is ever live** and the host's per-RISC walk yields nothing from rings 1-4 (`tail == head == 0`).
+- It lives in **staging slot `kNStage`**, one past every slot the drain pipeline can touch. There was no room to
+  add one: a DRAM core's UNRESERVED L1 is 86,448 B and 7 slots x 10,560 B plus the scratch/misc/socket-config
+  reserve leave 1,792 B. So the kernel is handed `nstage - 1` slots instead. **L1 does not grow**; the only
+  behavioural cost is a mover's largest batch dropping 7 -> 6 (a filler's is bounded by `kGenSlots = 3` either
+  way, so it is unaffected).
+- **A filler self-frames into its own DRAM ring; a mover pushes into its socket.** Both are literally
+  `emit_run(kSelfSlot, 1)`, i.e. the same call the payload takes, so single-producer-per-ring is preserved and
+  no mover ever writes into a peer's ring.
+- **Markers are stamped from timestamps the drain loop had already read** (`t_batch0`/`t_issue`, `stage_run`'s
+  `t0`/`t1`/`t2`, the barrier's `t_b0`). This adds no clock reads, and it makes a zone's duration *the same
+  quantity the `out[]` phase counter accumulates* -- so zones and counters agree by construction and a
+  disagreement can only be framing or decode. It is also what allows retroactive arming (below).
+- **The clock needed nothing.** `get_timestamp()` reads `RISCV_DEBUG_REG_WALL_CLOCK_L/H`, the same register the
+  workers use, so DRISC zones land on the worker timeline with no anchor, no high-bit graft, no calibration.
+  Nothing X280-shaped was needed or added.
+- Zone ids are FIXED (`0x7FF0..0x7FF6`, the band `PROFILER_STALL_ZONE_ID = 0x7FFF` already uses) and named
+  host-side next to PRODUCER-STALL, because these zones are not scoped by the `DeviceZoneScopedN` macros and so
+  have no `#pragma message` source location for `generateZoneSourceLocationsHashes()` to harvest.
+
+### The sampler: work-triggered, retroactively armed, rewindable
+
+A "sample every Nth sweep" rule was written first and is **refuted by the sweep distribution**: a filler moves
+frames in ~114 of ~25,000 sweeps (0.5%) and a mover in ~350 of ~230,000 (0.15%). Measured with that rule:
+
+| rule | filler captures | of which DID WORK | mover captures | of which DID WORK |
+|---|---|---|---|---|
+| every Nth sweep + follows-busy, shared budget | 55 | **1** | 64 | **11** |
+| work-armed, split budget, tight work spacing | 8 | 5 | 30 | 21 |
+
+Three separate defects produced that first row, each of which looked healthy in the summary counts:
+
+1. **Uniform samples ate the budget.** A mover runs ~550,000 sweeps, so even 1-in-6,400 is ~85 captures; they
+   took 53 of a 64-frame budget and left 11 for the bursts. Idle samples now have their own eighth of the budget.
+2. **An idle filler sweep could not be rewound.** It still walks 40 batches and emits ~320 markers = ~640 words,
+   overflowing the 512-word ring, so it published a frame mid-sweep and became unrewindable. The ring-full path
+   on a no-work sweep now **abandons** it (one assignment, nothing shipped).
+3. **One shared rate limiter starved work captures.** A drainer is resident for the whole process but the
+   workload occupies a short window of it, so a filler's ~114 busy sweeps are packed into a few hundred
+   consecutive ones -- a 200-sweep limiter allowed exactly one. Work spacing is now `N/8`, idle spacing `N*32`.
+
+The arm is **retroactive**, which only works because markers carry explicit timestamps: `self_arm` emits
+`DRISC-SWEEP`'s START with the sweep's own `t_sweep0` long after that instant passed. A mover arms *before*
+issuing its DRAM read (`n != 0` is known first), so a busy mover visit is captured whole. A filler arms at the
+end of the first batch that found live cores, so **the batches of that sweep before the first live core are not
+recovered** -- their timestamps are gone. Every later batch of the sweep is complete. Stated, not hidden.
+
+### The cost is the CALL SITES, not the frames — and it was worth 6x
+
+The emitters are too large for `-Os` to inline, so putting the `self_on` check *inside* them still costs a real
+call at every site, and one of those sites is in the scan loop. Measured, feature ON, nothing being captured:
+
+| | idle sweep | busy sweep | worst sweep | worst-sweep proc | stalls @ delay 15 |
+|---|---|---|---|---|---|
+| OFF | 8.38 us | 13.28 us | 18.57 us | 7.53 us | **0** (4/4 reps) |
+| ON, checks inside the emitters | 10.2 us | 16.0 us | 22.6 us | 10.5 us | 292-362 |
+| ON, checks at the call sites | 8.72 us | 13.94 us | 21.03 us | 10.26 us | 49-140 |
+
+Two further changes were needed on top of the guards:
+
+- **Nothing may go inside the scan.** The scan is register-pressure bound (see its comment: hoisting the head
+  mirror into scalars is what made it fast), so a call in there spills `m0..m4`. The filler's work-arm moved out
+  to the end of `process_batch`, keyed on `frames != frames_at_p0` -- `frames` already advances once per live
+  core, so asking "did this batch find work" costs nothing in the loop.
+- **One ring per captured sweep, hard.** A captured busy filler sweep wants ~480 markers (~960 words) and so
+  needed a mid-sweep publish; the marker writes plus that publish put the worst sweep at 23.2 us. Past one ring
+  the sweep is now **truncated** (counted, excluded from the counter cross-check, `DRISC-SWEEP` still closed so
+  no lane's Tracy stack is left open). This alone took 292-362 stalls down to 49-140.
+
+### Perturbation, 4 warm reps each (run 1 of every config discarded)
+
+| | filler idle | filler busy | filler worst | filler worst proc | mover idle | mover busy | mover worst | mover worst credit-wait |
+|---|---|---|---|---|---|---|---|---|
+| OFF | 8.38 [8.1-8.5] | 13.28 [12.7-13.6] | 18.57 [17.0-19.6] | 7.53 [7.5-7.9] | 0.75 | 13.79 | 51.0 [41.6-62.9] | 32.5 [22.5-40.7] |
+| ON  | 8.72 [8.5-8.8] | 13.94 [13.4-14.2] | 21.03 [19.9-22.1] | 10.26 [8.3-10.5] | 0.75 | 12.84 | 40.9 [35.3-48.5] | 18.9 [16.8-21.1] |
+
+- **+4% on a filler's idle and busy sweep, +13% on its worst sweep.** The worst-sweep proc figure (7.53 ->
+  10.26 us) is the captured sweeps themselves: a captured sweep IS the worst sweep, so this is a measurement
+  bias, not a background cost. The mover columns are inside run-to-run noise (its worst sweep is credit-wait
+  dominated and spans 41.6-62.9 us with the feature off).
+- **`out[]` phases keep their exact meaning with the feature on.** `self_publish` saves and restores
+  `c_reserve`/`c_write`/`c_wr_*`/`pages`/`pushes`/`max_reserve`, and `c_self` joins the nested term
+  `process_batch` subtracts, so the self frame's egress is billed to `c_self` alone. It shows up as
+  *unaccounted* (89% -> 71% of the worst sweep is accounted), which is the honest place for it.
+- **Cost in bytes: 0.23-1.00% of a drainer's egress** (4-35 frames x 10,560 B against 17-36 MB). The 4/5 waste
+  from shipping five rings to carry one is therefore not worth removing. A 592-word frame (16 prefix + 64 ctrl +
+  512 ring = 2,368 B, exactly 37 socket pages) **would** decode correctly -- the decoder derives the frame
+  length from `payload_words` and only touches ring `r` when `run > 0` -- but the DRAM ring is indexed in whole
+  slots, so a filler cannot use it without leaving the slot's tail on the wire as garbage. Not shipped.
+- **At delay 60, off the knee, ON costs 0 stalls (4/4 reps), same as OFF.** The stalls at delay 15 are a
+  knee-crossing, not a general cost: that config sits at 472-488 of 512 ring words, where one late sweep blocks
+  dozens of lossless producers at once.
+
+### Cross-check: the zones agree with the counters
+
+The device accumulates the same five phase totals over **exactly the sweeps the zones cover** (`out[74..84]`,
+restricted to sweeps instrumented from the top -- a retroactively-armed or truncated sweep has zones for only
+part of itself and is excluded). DRISC 1 is the clean case, where all 4 captured sweeps are fully instrumented,
+so the CSV totals and the counters cover the same set:
+
+| phase | from the Tracy CSV | device counter | delta |
+|---|---|---|---|
+| read (`sum(READ) + sum(READ-WAIT)`) | 8.014 us | 8.0 us | +0.2% |
+| proc (`sum(PROC) - sum(CREDIT-WAIT) - sum(WRITE)`) | 16.180 us | 16.2 us | -0.1% |
+| credit-wait | 0 | 0.0 us | exact |
+| write | 0 | 0.0 us | exact |
+| wr-barrier | 2.080 us | 2.1 us | -1.0% |
+
+Agreement is within the log's print rounding (one decimal) plus the difference between the hardcoded
+`kCycPerUs = 1.35e3` in the log line and the measured aiclk Tracy uses (~0.6%). On the other five drainers the
+CSV covers 1-14 more sweeps than the counters and is larger by the right amount in every phase (e.g. DRISC 4:
+CSV credit-wait 60.7 us vs counter 60.2 us over 22 of 30 sweeps -- the 8 extra are idle samples, which have no
+credit wait).
+
+### No silent truncation
+
+Every way the instrument can under-report is counted and printed: `self_frames`, sweeps captured, **of which
+DID WORK**, frames spent on idle samples, sweeps rewound, sweeps abandoned, sweeps skipped after the budget,
+markers dropped to truncation and the sweeps they came from, and `c_self`. There is an explicit **warning when
+every captured sweep was idle** -- the failure mode the coordinator flagged, because on a mover that means the
+credit wait that sets the knee is absent while every count still looks healthy. It fired for real on DRISC 1.
+
+### Two host bugs the extra cores exposed
+
+- **`L1 STALL COUNTERS` read the DRAM cores.** `core_virt` now also holds the drainers, and reading the TENSIX
+  profiler address on a DRAM core returns whatever is at that offset in DRISC L1: reported **"80,475,310,058
+  producer stalls across 73 of 126 cores"**, which reads as a catastrophically perturbed run and is pure
+  garbage. Bounded to `n_worker_cores`.
+- The proc-split line reported "126 NoC issues/sweep" on a 120-core grid, same cause.
+
+### Caveats
+
+- **A DRISC's zones are labelled `BRISC`** in Tracy's per-hart lane column: it emits on ring 0 and the handler
+  maps risc index 0 through `kRisc[5]`. The zone NAMES are all `DRISC-*`, so nothing is ambiguous in practice.
+- **The publish/consume record counts can differ by ~1,200 with the feature on** (e.g. 6,005,320 published vs
+  6,004,120 consumed) where they are exactly equal with it off. The drainers keep publishing self frames during
+  teardown, after the consumer thread has been told to stop, so the tail of the *self* stream is lost. Producer
+  records are unaffected -- ts regressions stay 0 at publish and at consume, and BroadcastRing drops stay 0.
+- The self frame's ctrl vector is rewritten on every publish, so consecutive publishes must be separated by a
+  write barrier; `self_publish` puts a bounded one at the END (after the write, before any further marker),
+  because after a publish the live window is empty and the next marker overwrites a word the in-flight frame is
+  still shipping. Reversing that order is silent frame corruption.
+- **Self-profiling and the egress ablation are mutually exclusive** (`static_assert`): the ablation re-ships
+  pre-staged slots forever and never runs the sweep body.
