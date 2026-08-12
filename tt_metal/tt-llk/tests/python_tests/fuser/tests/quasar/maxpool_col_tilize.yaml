@@ -1,0 +1,30 @@
+
+operands:
+  - name: "input_A"
+    dims: [1024, 256]
+    format: "Float16_b"
+
+  - name: "input_B"
+    dims: [32, 32]
+    format: "Float16_b"
+    const_value: 1.0
+
+  - name: "maxpool_out"
+    dims: [256, 256]
+    format: "Float16_b"
+
+operations:
+  - math:
+      - type: "Fpu"
+        src_a: "input_A"
+        src_b: "input_B"
+        operation: "Reduce"
+        reduce_dim: "REDUCE_COL"
+        reduce_pool: "MAX"
+        unpacker: "UnpackReduceTilize"
+        math_fidelity: "HiFi4"
+        reduce_to_tile: true
+    block_size: [256, 32]
+    pack:
+      - output: "maxpool_out"
+        packer: "PackUntilize"
