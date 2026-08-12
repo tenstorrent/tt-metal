@@ -19,8 +19,8 @@
 //   PACK((llk_math_eltwise_binary_sfpu_situ_glu<false>(gate, up, out)));           // Kimi betas
 //   PACK((llk_math_eltwise_binary_sfpu_situ_glu<false, MyConfig>(gate, up, out))); // custom
 //
-// Init: tanh_init claims all three vConstFloatPrgm registers, so the sigmoid half
-// cannot use the stock reciprocal -- see _situ_glu_reciprocal_ below.
+// Init: one tanh_init serves the whole op -- every half, sigmoid included, is a
+// tanh polynomial.
 //=============================================================================
 
 #if defined(TRISC_PACK) || defined(TRISC_MATH)
@@ -30,7 +30,6 @@
 #error "situ_glu_sfpu.h is implemented for Blackhole only"
 #endif
 
-#include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_softcap.h"
 #include "ckernel_sfpu_tanh.h"
 #include "llk_math_eltwise_binary_sfpu_macros.h"
@@ -42,41 +41,14 @@ struct SituGluConfigKimi {
     static constexpr float beta_up = 25.0f;
 };
 
-// Newton reciprocal with 2.0 as a literal. The stock sfpu_reciprocal_iter reads that
-// constant from vConstFloatPrgm0, which tanh_init has loaded with a tanh coefficient.
-// Otherwise identical to sfpu_reciprocal_iter; keep in sync with recip.h.
-template <int MAX_ITER>
-sfpi_inline sfpi::vFloat _situ_glu_reciprocal_(const sfpi::vFloat x) {
-    sfpi::vFloat y = sfpi::approx_recip(x);
-    // t is negated so NaN detection is a sign check (comparisons against NaN are all
-    // false, keeping the correct seed for x=0/inf). `- 0.0f` is SFPMAD shape and
-    // preserves signed zero.
-    sfpi::vFloat t = x * y - 2.0f;
-    if constexpr (MAX_ITER > 1) {
-        sfpi::vFloat y1 = y * -t - 0.0f;
-        v_if(t < 0) {
-            t = x * y1 - 2.0f;
-            y = y1 * -t - 0.0f;
-        }
-        v_endif;
-    } else {
-        v_if(t < 0) { y = y * -t - 0.0f; }
-        v_endif;
-    }
-    return y;
-}
-
-// sigmoid(x) = 1 / (1 + exp(-x)); both exp variants are free of vConstFloatPrgm.
-template <bool is_fp32_dest_acc_en>
-sfpi_inline sfpi::vFloat _situ_glu_sigmoid_(sfpi::vFloat x) {
-    sfpi::vFloat exp_neg_x;
-    if constexpr (is_fp32_dest_acc_en) {
-        exp_neg_x = _sfpu_exp_accurate_<true>(-x);
-    } else {
-        exp_neg_x = _sfpu_exp_21f_bf16_<true>(-x);
-    }
-    return _situ_glu_reciprocal_<is_fp32_dest_acc_en ? 2 : 1>(1.0f + exp_neg_x);
-}
+// sigmoid(x) = (1 + tanh(x/2)) / 2, i.e. 0.5 * softcap(x, beta=0.5). Preferred over
+// 1 / (1 + exp(-x)): it is branch-free where the reciprocal is predicated, and it reuses
+// the tanh polynomial the two softcap halves already pay for.
+//
+// The polynomial clamps at |x/2| >= 3.375, so |x| >= 6.75 saturates to exactly 0 or 1
+// instead of decaying. The 1.17e-3 that costs is below the 5.8e-2 the beta_up softcap
+// already contributes, so it does not move the op's error.
+sfpi_inline sfpi::vFloat _situ_glu_sigmoid_(sfpi::vFloat x) { return _sfpu_tanh_polynomial_(x * 0.5f) * 0.5f + 0.5f; }
 
 template <bool is_fp32_dest_acc_en, int ITERATIONS = 8, class Config = SituGluConfigKimi>
 inline void calculate_situ_glu(const uint gate_tile_idx, const uint up_tile_idx, const uint out_tile_idx) {
@@ -91,8 +63,7 @@ inline void calculate_situ_glu(const uint gate_tile_idx, const uint up_tile_idx,
         sfpi::vFloat up = sfpi::dst_reg[up_tile_idx * dst_tile_size];
 
         // sigmoid takes the raw gate, not the capped value.
-        sfpi::vFloat situ_a =
-            _sfpu_softcap_(gate, beta_gate, inv_beta_gate) * _situ_glu_sigmoid_<is_fp32_dest_acc_en>(gate);
+        sfpi::vFloat situ_a = _sfpu_softcap_(gate, beta_gate, inv_beta_gate) * _situ_glu_sigmoid_(gate);
 
         sfpi::vFloat result = situ_a * _sfpu_softcap_(up, beta_up, inv_beta_up);
         if constexpr (!is_fp32_dest_acc_en) {
@@ -104,10 +75,10 @@ inline void calculate_situ_glu(const uint gate_tile_idx, const uint up_tile_idx,
     }
 }
 
-inline void situ_glu_init() {
-    // One tanh init serves the whole op; the sigmoid half claims no vConstFloatPrgm.
-    tanh_init</*APPROXIMATION_MODE=*/false, /*is_fp32_dest_acc_en=*/false>();
-}
+// Always the polynomial coefficients, never the fp32-accurate tanh constants: _sfpu_softcap_
+// and _situ_glu_sigmoid_ both read vConstFloatPrgm0-2 as polynomial coefficients regardless
+// of dst mode.
+inline void situ_glu_init() { tanh_init</*APPROXIMATION_MODE=*/false, /*is_fp32_dest_acc_en=*/false>(); }
 
 }  // namespace ckernel::sfpu
 
