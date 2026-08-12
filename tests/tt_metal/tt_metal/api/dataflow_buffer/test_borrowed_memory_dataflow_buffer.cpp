@@ -260,7 +260,7 @@ void run_borrowed_memory_dfb_program(
     std::iota(input.begin(), input.end(), 0u);
     slow_dispatch::WriteToBuffer(src_tensor.mesh_buffer(), input);
 
-    slow_dispatch::LaunchProgram(mesh_device, program);
+    slow_dispatch::LaunchProgram(mesh_device, program, /*wait_until_cores_done=*/true);
 
     // Assert the borrowed tensor's L1 address was used for the DFB ring. For a borrowed DFB this
     // stays PINNED across a size override (no reallocation).
@@ -401,7 +401,7 @@ void run_update_address_test(
         {experimental::TensorParamName{"dfb_ring_tensor"}, TensorArgument{ring_tensor_a}},
     };
     SetProgramRunArgs(program, params1);
-    slow_dispatch::LaunchProgram(mesh_device, program);
+    slow_dispatch::LaunchProgram(mesh_device, program, /*wait_until_cores_done=*/true);
 
     EXPECT_EQ(
         program.impl().dataflow_buffers()[0]->uniform_alloc_addr(),
@@ -448,7 +448,7 @@ void run_update_address_test(
                 {experimental::TensorParamName{"dfb_ring_tensor"}, TensorArgument{ring_tensor_b}},
             });
     }
-    slow_dispatch::LaunchProgram(mesh_device, program);
+    slow_dispatch::LaunchProgram(mesh_device, program, /*wait_until_cores_done=*/true);
 
     EXPECT_EQ(
         program.impl().dataflow_buffers()[0]->uniform_alloc_addr(),

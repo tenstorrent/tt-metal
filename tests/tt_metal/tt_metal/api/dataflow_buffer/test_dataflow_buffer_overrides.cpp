@@ -168,7 +168,7 @@ static void run_dfb_size_override_test(
             tt_driver_atomics::mfence();
             ASSERT_EQ(rdback, input);
         }
-        slow_dispatch::LaunchProgram(mesh_device, program);
+        slow_dispatch::LaunchProgram(mesh_device, program, /*wait_until_cores_done=*/true);
 
         std::vector<uint32_t> output;
         slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), output);

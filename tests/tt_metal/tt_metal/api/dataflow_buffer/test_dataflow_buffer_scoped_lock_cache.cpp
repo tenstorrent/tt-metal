@@ -186,7 +186,7 @@ std::vector<uint32_t> run_dfb_scoped_lock_cache_test(distributed::MeshDevice& me
         slow_dispatch::WriteToL1(mesh_device, core, ring_base, prefill);
     }
 
-    slow_dispatch::LaunchProgram(mesh_device, program);
+    slow_dispatch::LaunchProgram(mesh_device, program, /*wait_until_cores_done=*/true);
 
     // Kernels write their in-kernel verification read-back (via the non-cacheable alias so the result lands
     // in TL1) to the scratch region; the host reads it directly. Layout: handshake -> num_rounds words (one
