@@ -196,6 +196,17 @@ sharding bug for accurate mode regardless**.
    first/last rows, which are not the global ones on a T-shard. Lifting it means moving that padding
    onto `_t_neighbor_pad`.
 
+## Gate
+
+    1 failed, 24 passed, 15 warnings in 971.11s (0:16:11)
+    FAILED test_audio_decode_t_parallel[blackhole-mesh4x8]
+
+Run with both shard-0 fixes on `PYTHONPATH`. Matches goal.md's recorded 24 passed / 1 failed exactly,
+and the one failure is the T-parallel test -- which this document now explains rather than inherits:
+it is not a hang and not fabric, it is that T-sharding returns the wrong audio. Both fixes are no-ops
+on a single device by construction (`ttnn.get_device_tensors` returns one element, so the `len > 1`
+branch never fires), and the gate confirms it.
+
 ## Fixed here: fusion could not run on a mesh at all
 
 `_snake_conv_params` read alpha/beta with a bare `ttnn.to_torch`. Those parameters are replicated
