@@ -59,9 +59,9 @@ Two environments, deliberately separate. They do not share packages and should n
 | tt-metal `python_env` | running the model on device, PCC/perf tests |
 | `cosyvoice_env` | the PyTorch reference: goldens, baseline audio, WER/SIM scoring |
 
-The reference pins `torch==2.3.1` and a specific `transformers`; forcing those into the
-tt-metal environment would risk the tt-metal build for no benefit, since the reference
-never runs on device.
+The reference pins its own `torch` and `transformers` — see `requirements-cosyvoice.txt`,
+which records why each pin is where it is. Forcing those into the tt-metal environment
+would risk the tt-metal build for no benefit, since the reference never runs on device.
 
 ### 1. Reference environment (host only, no device)
 

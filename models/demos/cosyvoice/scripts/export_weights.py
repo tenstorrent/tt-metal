@@ -21,8 +21,8 @@ axis yields a scaled-but-plausible weight) and the failure would be a uniform
 distortion across the whole vocoder rather than an obvious break. The fold is
 verified by comparing a forward pass before and after.
 
-NOTE the reference's own `HiFTGenerator.remove_weight_norm()` does NOT work on
-torch 2.3.1. `generator.py:25` imports the LEGACY `torch.nn.utils.remove_weight_norm`
+NOTE the reference's own `HiFTGenerator.remove_weight_norm()` does NOT work on any
+torch >= 2.1. `generator.py:25` imports the LEGACY `torch.nn.utils.remove_weight_norm`
 unconditionally, while `:27-29` prefer the NEW
 `torch.nn.utils.parametrizations.weight_norm` for applying. On torch >= 2.1 those
 are different mechanisms, so removal raises
