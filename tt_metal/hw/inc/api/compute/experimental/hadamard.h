@@ -78,6 +78,8 @@ template <bool normalize = true, bool fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void hadamard_h128_init(const uint32_t in_cb_id, const uint32_t h16_cb_id, const uint32_t out_cb_id) {
     static_assert(!(normalize && fp32_dest_acc_en), "hadamard_h128 normalize=true is not supported with fp32 dest");
 
+    // Outside UNPACK/MATH/PACK so every TRISC thread updates its own copy.
+    LLK_ASSERT_SET_DEST_ACC_MODE(fp32_dest_acc_en);
     // Configure both unpackers from h16's [16,16] single-face geometry so the
     // unpacker config is INDEPENDENT of the input CB's tile shape: srcA reads
     // the input data with h16's [16,16] config (a 4x[1,32] feed is read as 8

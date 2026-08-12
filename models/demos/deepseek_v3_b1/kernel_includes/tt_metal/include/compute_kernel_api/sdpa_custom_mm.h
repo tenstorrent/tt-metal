@@ -25,6 +25,8 @@ ALWI void sdpa_custom_mm_block_init(
     const std::uint32_t in1_cb_id,
     const std::uint32_t out_cb_id,
     const std::uint32_t ct_dim = 1) {
+    // Outside UNPACK/MATH/PACK so every TRISC thread updates its own copy.
+    LLK_ASSERT_SET_DEST_ACC_MODE(DST_ACCUM_MODE);
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(in1_cb_id, in0_cb_id)));
     UNPACK((llk_unpack_AB_custom_mm_init<transpose>(in0_cb_id, in1_cb_id, ct_dim)));
 
