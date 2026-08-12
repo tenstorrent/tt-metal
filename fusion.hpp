@@ -240,7 +240,7 @@ struct Strategy<SFPUFusion> {
             "SFPU expression needs more DST slots than the hardware has; "
             "split it across an intermediate Storage");
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
-        cb_reserve(cb_id, num_tiles);
+        cb_reserve_back(cb_id, num_tiles);
         for (int i = 0; i < num_tiles; ++i) {
             tile_regs_acquire();
             expr::emit(node, i);
@@ -249,7 +249,7 @@ struct Strategy<SFPUFusion> {
             pack_dst_tile(expr::result_slot_v<Node>, cb_id);
             tile_regs_release();
         }
-        cb_push(cb_id, num_tiles);
+        cb_push_back(cb_id, num_tiles);
 #else
         (void)node;
         (void)cb_id;
@@ -278,7 +278,7 @@ struct Strategy<FPUFusion> {
             matmul_block(node.in0_cb, node.in1_cb, G::out_subblock_h, G::out_subblock_w, G::in0_block_w);
             tile_regs_commit();
             if (last_out) {
-                cb_reserve(cb_id, G::out_subblock_num_tiles);
+                cb_reserve_back(cb_id, G::out_subblock_num_tiles);
                 if constexpr (Chain::empty) {
                     tile_regs_wait();
                 } else {
@@ -286,7 +286,7 @@ struct Strategy<FPUFusion> {
                     Chain::apply_from_pack(0, G::out_subblock_num_tiles);
                 }
                 pack_block(0, cb_id, G::out_subblock_num_tiles);
-                cb_push(cb_id, G::out_subblock_num_tiles);
+                cb_push_back(cb_id, G::out_subblock_num_tiles);
             } else {
                 tile_regs_wait();
                 // TODO: real kernels spill/reload partials through an

@@ -17,9 +17,10 @@
 //        COMPILE_FOR_NCRISC  -> DM thread 1   (reader)
 //        UCK_CHLKC_{UNPACK,MATH,PACK} -> compute
 //
-//   2. Map the model's intrinsics onto real metal APIs. CB ops go through
-//      CircularBuffer, which is already thread-polymorphic: one call lowers to
-//      cb_* on a DM core and PACK(llk_*)/UNPACK(llk_*) on a TRISC.
+//   2. Map the model's intrinsics onto real metal APIs, where metal does not
+//      already provide a thread-polymorphic name. The CB protocol needs no
+//      binding at all -- metal's cb_reserve_back / cb_push_back / cb_wait_front
+//      / cb_pop_front already resolve per projection.
 //
 // Note on what is NOT here: there are almost no cross-projection no-ops. Every
 // compute intrinsic is only ever called from inside a `#if IS_COMPUTE_THREAD`
@@ -74,19 +75,18 @@
 #include "api/tensor/tensor_accessor_args.h"
 #endif
 
-#include "api/dataflow/circular_buffer.h"
-
 namespace tt {
 namespace unified {
 
 // ---------------------------------------------------------------------------
-// Circular-buffer protocol -- available on every projection
+// Circular-buffer protocol
+//
+// Nothing to bind: metal already exposes cb_reserve_back / cb_push_back /
+// cb_wait_front / cb_pop_front under the same names on every projection --
+// dataflow_api.h on a DM core, api/compute/cb_api.h on a TRISC (where they
+// resolve to PACK(llk_push_tiles) / UNPACK(llk_wait_tiles) and friends). The
+// model calls them directly.
 // ---------------------------------------------------------------------------
-
-inline void cb_reserve(int cb, int pages) { CircularBuffer(cb).reserve_back(pages); }
-inline void cb_push(int cb, int pages) { CircularBuffer(cb).push_back(pages); }
-inline void cb_wait(int cb, int pages) { CircularBuffer(cb).wait_front(pages); }
-inline void cb_pop(int cb, int pages) { CircularBuffer(cb).pop_front(pages); }
 
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
 
@@ -165,7 +165,16 @@ inline void compute_init(int, int) {}
 
 inline uint32_t cb_write_addr(int cb) { return get_write_ptr(static_cast<uint32_t>(cb)); }
 inline uint32_t cb_read_addr(int cb) { return get_read_ptr(static_cast<uint32_t>(cb)); }
-inline uint32_t cb_page_bytes(int cb) { return get_tile_size(static_cast<uint32_t>(cb)); }
+// The CB's *configured* page size, not the data format's tile size --
+// get_tile_size() is derived from unpack_tile_size[] and only coincides with the
+// page size when a page happens to hold exactly one tile.
+//
+// fifo_page_size is stored pre-shifted by cb_addr_shift, which is 0 on a
+// data-movement build (bytes) and CIRCULAR_BUFFER_COMPUTE_ADDR_SHIFT on a TRISC
+// (16B words). The shift is written out so this stays right if it ever moves.
+inline uint32_t cb_page_bytes(int cb) {
+    return get_local_cb_interface(static_cast<uint32_t>(cb)).fifo_page_size << cb_addr_shift;
+}
 
 // Accessors are constructed here, inside a data-movement region, from the
 // TensorAccessorArgs the shared source names on every projection.
