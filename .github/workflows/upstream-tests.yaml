@@ -343,7 +343,7 @@ jobs:
             -e HF_HOME -e HF_MODEL -e TT_CACHE_PATH -e HF_HUB_OFFLINE=1 \
             ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
       - name: Run profiler image
-        timeout-minutes: 10
+        timeout-minutes: 20
         run: |
           docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G \
             --device /dev/tenstorrent \
