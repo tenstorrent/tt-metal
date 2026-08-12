@@ -792,7 +792,7 @@ Local only, on `agentic-research/hous/muse-glimmer-30b`; nothing pushed.
 | tt-metal | `263ab2641b5` | the RoPE-gather peer merge measured and rejected; docstrings made capture-independent |
 | tt-metal | `e45e9ce1068` | three quoted figures corrected; the last probe summary made regenerable |
 | tt-metal | `3c0d549e7db` | three transcription corrections from round 15 |
-| tt-metal | *(this commit)* | the round-16 `clean-pass` record and these SHAs |
+| tt-metal | `a838e18f0ae` | the round-16 `clean-pass` record and these SHAs |
 
 No unrelated dirty state was included: every commit touches only
 `models/autoports/meta_models_muse_glimmer_30b/{tt/fused_decoder.py,
