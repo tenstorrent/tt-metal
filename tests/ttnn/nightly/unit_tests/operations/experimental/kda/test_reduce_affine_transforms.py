@@ -135,7 +135,7 @@ def _composed_ttnn_baseline(
 @pytest.mark.parametrize("sharded_inputs", [False, True], ids=("interleaved", "height-sharded-l1"))
 @pytest.mark.parametrize(
     ("batch_heads", "groups_per_head", "key_dim", "value_dim"),
-    [(2, 4, 32, 32), (3, 2, 32, 64)],
+    [(2, 1, 32, 32), (2, 3, 32, 32), (2, 4, 32, 32), (3, 2, 32, 64)],
 )
 def test_reduce_affine_transforms_contract_cache_trace_and_determinism(
     device: ttnn.Device,
