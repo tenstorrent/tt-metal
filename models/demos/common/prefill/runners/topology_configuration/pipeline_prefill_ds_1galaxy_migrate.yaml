@@ -1,0 +1,21 @@
+# MIGRATION mode, 1 rank, 1 galaxy. Hardware only: rank binding + mesh graph descriptor.
+#
+# Consumed by tt-llm-engine's launch harness
+# (disaggregation/launch_harness/disagg_harness_prefill_loopback.yaml -> prefill_topology_config),
+# which COPIES this file to <run_dir>/prefill_topology.yaml and merges its own values into
+# global_env before handing it to run_pipeline_prefill.sh. The harness injects
+# PREFILL_ENABLE_MIGRATION, PREFILL_NUM_LAYERS, PREFILL_CHUNK_SIZE, PREFILL_SP/TP,
+# PREFILL_MAX_SEQ_LEN, PREFILL_NUM_USERS (2N for a loopback), PREFILL_H2D_SERVICE_ID, the three
+# PREFILL_MIGRATION_*_QUEUE names, PREFILL_MIGRATION_CLIENT_DIR, PREFILL_MIGRATION_TABLE_PATH and
+# MIGRATION_DONE_FILE -- so do NOT set those here (they are reserved; the harness overrides them and
+# logs that it did). Per-model runner flags belong in the harness config's `prefill_env:` block.
+#
+# global_env is deliberately near-empty: tt-run only propagates global_env to every rank, and every
+# value this run depends on arrives via the harness merge.
+rank_bindings:
+  - {rank: 0, mesh_id: 0, mesh_host_rank: 0, env_overrides: {}}
+# Plain (non-torus) single-galaxy mesh: the migration runs set PREFILL_FABRIC_MODE=2d, and a torus
+# descriptor would contradict that (a Ring collective on an axis the fabric does not wrap hangs).
+mesh_graph_desc_path: tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
+global_env:
+  LOGURU_LEVEL: "INFO"
