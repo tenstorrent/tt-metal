@@ -14,7 +14,7 @@ import pyarrow.parquet as pq
 import pytest
 from helpers.perf_compare import compare_run_to_history
 from helpers.perf_dashboard import dashboard_from_warehouse
-from helpers.perf_warehouse import DuckDBWarehouse
+from helpers.perf_warehouse_duckdb import DuckDBWarehouse
 
 
 def _run(path, run_id, math):
