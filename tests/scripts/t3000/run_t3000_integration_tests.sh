@@ -179,16 +179,10 @@ run_t3000_sd35large_tests() {
     "models/tt_dit/tests/models/sd35/test_transformer_sd35.py::test_sd35_transformer_block"
 }
 
-run_t3000_flux1_tests() {
-  run_t3000_dit_tests \
-    "models/tt_dit/tests/blocks/test_attention.py::test_attention_flux" \
-    "models/tt_dit/tests/blocks/test_transformer_block.py::test_transformer_block_flux -k 2x4"
-}
-
 run_t3000_motif_tests() {
   run_t3000_dit_tests \
-    "models/tt_dit/tests/blocks/test_attention.py::test_attention_motif" \
-    "models/tt_dit/tests/blocks/test_transformer_block.py::test_transformer_block_motif"
+    "models/tt_dit/tests/models/motif/test_attention_motif.py::test_attention_motif" \
+    "models/tt_dit/tests/models/motif/test_transformer_block_motif.py::test_transformer_block_motif"
 }
 
 run_t3000_qwenimage_tests() {
@@ -241,9 +235,6 @@ run_t3000_tests() {
 
   # Run sd35_large tests
   run_t3000_sd35large_tests
-
-  # Run flux1 tests
-  run_t3000_flux1_tests
 
   # Run motif tests
   run_t3000_motif_tests

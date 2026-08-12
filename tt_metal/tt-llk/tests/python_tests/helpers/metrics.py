@@ -54,7 +54,7 @@ All metrics are bounded 0-100% unless noted otherwise.
 import pandas as pd
 from loguru import logger
 
-from .perf_schema import (
+from .perf.schema import (
     MARKER,
     MEAN,
     STD,

@@ -46,6 +46,7 @@ void bind_normalization_layernorm_pre_all_gather_operation(nb::module_& mod) {
                 program_config (ttnn.ProgramConfig, optional): the program configuration. Defaults to None.
                 memory_config (ttnn.MemoryConfig, optional): the memory configuration. Defaults to None.
                 recip_tensor (ttnn.Tensor, optional): the reciprocals tensor for Welford algorithm. Required when using Welford (use_welford=True in program_config). Create using :func:`ttnn.create_layer_norm_reciprocals`. Defaults to None.
+                fast_and_approximate_mode (bool, optional): FLOAT32 only. ``False`` (default) uses the accurate SFPU path (full float32 accumulation); ``True`` uses the faster FPU path (inputs truncated to TF32). The accurate path is unavailable on Quasar and falls back to the FPU there. Ignored by the Welford path. No effect for non-FLOAT32 inputs. Defaults to False.
 
               Returns:
                 ttnn.Tensor: the output tensor.
@@ -86,7 +87,8 @@ void bind_normalization_layernorm_pre_all_gather_operation(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("program_config") = nb::none(),
         nb::arg("memory_config") = nb::none(),
-        nb::arg("recip_tensor") = nb::none());
+        nb::arg("recip_tensor") = nb::none(),
+        nb::arg("fast_and_approximate_mode") = false);
 }
 
 void bind_normalization_layernorm_post_all_gather_operation(nb::module_& mod) {

@@ -12,7 +12,7 @@ shared wide schema (DB_SCHEMA), that columns a test did not emit become NULL
 import pandas as pd
 import pyarrow.parquet as pq
 import pytest
-from helpers.perf_parquet import (
+from helpers.perf.parquet import (
     align_to_schema,
     arrow_schema,
     build_run_batch,
@@ -23,7 +23,7 @@ from helpers.perf_parquet import (
     write_parquet,
     write_run_batch,
 )
-from helpers.perf_wide_schema import DB_SCHEMA
+from helpers.perf.wide_schema import DB_SCHEMA
 
 _RUN_PROV = dict(
     commit_sha="abc123",
