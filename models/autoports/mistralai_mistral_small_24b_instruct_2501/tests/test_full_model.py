@@ -31,6 +31,7 @@ from models.common.readiness_check.contract import Generator
 from models.common.sampling import SamplingGenerator, SamplingParams, format_sampling_params
 
 REDUCED_REAL_ENV = "MISTRAL_SMALL_24B_FULL_MODEL_REDUCED_REAL"
+FULL_BENCHMARK_ENV = "MISTRAL_SMALL_24B_OPTIMIZED_FULL_MODEL_BENCHMARK"
 MESH_PARAMS = [(1, 4)]
 DEVICE_PARAMS = [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200000000}]
 MODEL_DIR = Path(__file__).resolve().parents[1]
@@ -199,6 +200,12 @@ def test_optimized_generate_has_no_host_argmax_or_full_logit_feedback():
     reset_source = inspect.getsource(MistralSmall24BGenerator.reset)
     assert "reset_kv_cache" in reset_source
     assert "_release_decode_traces" not in reset_source
+
+    window_source = inspect.getsource(MistralSmall24BGenerator.replay_token_out_window)
+    assert "_replay_split_sampling" in window_source
+    assert "_sampled_tokens_to_torch" not in window_source
+    assert "_copy_trace_state" not in window_source
+    assert window_source.count("_synchronize()") == 1
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
@@ -544,11 +551,121 @@ def test_reduced_real_full_terminal_trace_profile(mesh_device):
     outputs = generator.generate(prompt, 2, enable_trace=True, sampling_mode="device")
     assert len(outputs) == 2
     tracy.signpost("FULL_MODEL_REDUCED_TRACE")
-    for _ in range(10):
-        generator._replay_split_sampling()
-    ttnn.synchronize_device(mesh_device)
+    _, window = generator.replay_token_out_window(10)
     tracy.signpost("FULL_MODEL_REDUCED_TRACE_END")
     assert generator.trace_stats["model_replays"] == 11
     assert generator.trace_stats["sampling_replays"] == 11
     assert generator.trace_stats["full_logit_readbacks"] == 0
+    assert window["trace_stat_delta"]["caller_token_readbacks"] == 0
+    assert window["trace_stat_delta"]["explicit_synchronizations"] == 1
+    generator.teardown()
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+@pytest.mark.parametrize("mesh_device", MESH_PARAMS, indirect=True)
+def test_optimized_full_model_token_out_benchmark(mesh_device):
+    """Compare caller-observed generation with the no-readback token-out loop."""
+
+    snapshot_text = os.environ.get(FULL_BENCHMARK_ENV)
+    if not snapshot_text:
+        pytest.skip(f"Set {FULL_BENCHMARK_ENV} to the complete local HF snapshot")
+    ttnn.CONFIG.throw_exception_on_fallback = True
+    snapshot = os.fspath(snapshot_text)
+    config = AutoConfig.from_pretrained(snapshot, local_files_only=True)
+    num_layers = int(os.environ.get("MISTRAL_SMALL_24B_OPT_FULL_LAYERS", "40"))
+    steps = int(os.environ.get("MISTRAL_SMALL_24B_OPT_FULL_STEPS", "128"))
+    full_config = FullModelConfig(
+        max_batch_size=1,
+        max_context_len=512,
+        num_blocks=16,
+        prefill_chunk_size=128,
+        override_num_layers=num_layers,
+        lm_head_columns_per_device=int(os.environ.get("MISTRAL_SMALL_24B_LM_HEAD_COLUMNS", "8192")),
+        lm_head_input_cores=int(os.environ.get("MISTRAL_SMALL_24B_LM_HEAD_INPUT_CORES", "10")),
+        lm_head_output_cores=int(os.environ.get("MISTRAL_SMALL_24B_LM_HEAD_OUTPUT_CORES", "64")),
+        lm_head_max_in0_block_w=int(os.environ.get("MISTRAL_SMALL_24B_LM_HEAD_BLOCK_W", "4")),
+    )
+    model = MistralSmall24BFullModel.from_state_dict(
+        SafetensorStateDict(snapshot),
+        hf_config=config,
+        mesh_device=mesh_device,
+        full_model_config=full_config,
+    )
+    generator = MistralSmall24BGenerator(model, SimpleNamespace(eos_token_id=2))
+    prompt = [1] + [1000 + (index % 100) for index in range(127)]
+
+    # Compile prefill once, then take two adjacent warmed TTFT samples. The
+    # optimization is decode-only, so the completed and final paths share this
+    # exact prefill implementation and must remain statistically equivalent.
+    assert len(generator.generate(prompt, 1, enable_trace=True, sampling_mode="device")) == 1
+    generator.reset()
+    assert len(generator.generate(prompt, 1, enable_trace=True, sampling_mode="device")) == 1
+    warmed_ttft_before = float(generator.last_generate_stats["ttft_ms"])
+    generator.reset()
+    assert len(generator.generate(prompt, 1, enable_trace=True, sampling_mode="device")) == 1
+    warmed_ttft_after = float(generator.last_generate_stats["ttft_ms"])
+
+    def cache_control_snapshot():
+        layer_indices = sorted({0, len(generator._ensure_kv_cache()) - 1})
+        return [
+            tuple(_first_device_to_torch(tensor).clone() for tensor in generator._ensure_kv_cache()[layer_index])
+            for layer_index in layer_indices
+        ]
+
+    # The observed control emits the same first two tokens and then exactly
+    # `steps` further trace tokens as the host-free window below.
+    generator.reset()
+    control_outputs = generator.generate(prompt, steps + 2, enable_trace=True, sampling_mode="device")
+    assert len(control_outputs) == steps + 2
+    observed = dict(generator.last_generate_stats)
+    control_cache = cache_control_snapshot()
+    control_position = _first_device_to_torch(generator._trace_current_pos).clone()
+    control_rotary = _first_device_to_torch(generator._trace_rotary_pos).clone()
+    control_page_table = generator._trace_page_table_snapshot.clone()
+
+    generator.reset()
+    outputs = generator.generate(prompt, 2, enable_trace=True, sampling_mode="device")
+    assert len(outputs) == 2
+    position_before = int(_first_device_to_torch(generator._trace_current_pos).reshape(-1)[0])
+    device_token, window = generator.replay_token_out_window(steps)
+    position_after = int(_first_device_to_torch(generator._trace_current_pos).reshape(-1)[0])
+    delta = window["trace_stat_delta"]
+    assert position_after == position_before + steps
+    assert delta["model_replays"] == steps
+    assert delta["sampling_replays"] == steps
+    assert delta["token_host_copies"] == 0
+    assert delta["position_host_copies"] == 0
+    assert delta["page_table_host_copies"] == 0
+    assert delta["sampling_param_host_copies"] == 0
+    assert delta["caller_token_readbacks"] == 0
+    assert delta["full_logit_readbacks"] == 0
+    assert delta["explicit_synchronizations"] == 1
+    # Read only after the measured window. Token, persistent positions, page
+    # state, and the first/last layer caches must match the observed control.
+    final_token = int(_first_device_to_torch(device_token).reshape(-1)[0])
+    assert final_token == control_outputs[-1]
+    assert torch.equal(_first_device_to_torch(generator._trace_current_pos), control_position)
+    assert torch.equal(_first_device_to_torch(generator._trace_rotary_pos), control_rotary)
+    assert torch.equal(generator._trace_page_table_snapshot, control_page_table)
+    replay_cache = cache_control_snapshot()
+    assert all(
+        torch.equal(control_tensor, replay_tensor)
+        for control_pair, replay_pair in zip(control_cache, replay_cache)
+        for control_tensor, replay_tensor in zip(control_pair, replay_pair)
+    )
+    print(
+        "OPTIMIZED_FULL_MODEL_TOKEN_OUT "
+        f"layers={num_layers} prompt_len=128 steps={steps} "
+        f"lm_head_columns={full_config.lm_head_columns_per_device} "
+        f"lm_head_input_cores={full_config.lm_head_input_cores} "
+        f"lm_head_output_cores={full_config.lm_head_output_cores} "
+        f"lm_head_block_w={full_config.lm_head_max_in0_block_w} "
+        f"no_readback_ms_per_token={window['ms_per_token']:.6f} "
+        f"no_readback_t/s/u={window['t/s/u']:.6f} "
+        f"observed_t/s/u={observed['traced_decode_t/s/u']:.6f} "
+        f"warmed_ttft_before_ms={warmed_ttft_before:.6f} "
+        f"warmed_ttft_after_ms={warmed_ttft_after:.6f} "
+        f"correctness=token_position_rope_page_cache_exact "
+        f"host_delta={delta}"
+    )
     generator.teardown()

@@ -1,0 +1,63 @@
+{
+  "workload": {
+    "model": "mistralai/Mistral-Small-24B-Instruct-2501",
+    "mesh": "1x4 Blackhole p300c TP4",
+    "batch": 1,
+    "prompt_tokens": 128,
+    "generated_tokens": 128,
+    "firmware": "19.9.0"
+  },
+  "end_to_end": {
+    "warmed_ttft_before_ms": 57.31377,
+    "warmed_ttft_after_ms": 57.938621,
+    "warmed_ttft_delta_percent": 1.09,
+    "caller_observed_traced_decode_t_s_u": 54.352821,
+    "host_free_token_out_t_s_u": 54.451842,
+    "host_free_token_out_ms": 18.364851,
+    "out_of_window_correctness": "exact final token, signed position, RoPE position, page table, and first/last layer K/V caches versus observed control"
+  },
+  "warmed_wall_lower_bound": {
+    "layer_ms": 0.414822,
+    "forty_layer_stack_ms": 16.59288,
+    "terminal_ms": 1.332327,
+    "composed_ms": 17.925207,
+    "measured_minus_composed_ms": 0.439644,
+    "gap_percent": 2.394
+  },
+  "device_kernel_and_roofline": {
+    "decoder_layer_device_us": 348.538,
+    "decoder_layer_byte_roofline_us": 153.954,
+    "decoder_stack_device_ms": 13.94152,
+    "decoder_stack_byte_roofline_ms": 6.15816,
+    "one_layer_full_terminal_device_us": 1856.835,
+    "incremental_terminal_above_one_layer_device_us": 1508.297,
+    "composed_full_path_device_ms": 15.449817,
+    "reduced_profile_modeled_dram_roofline_percent": 42.6,
+    "reduced_profile_implied_byte_floor_us": 791.012,
+    "composed_full_path_byte_floor_ms": 6.795218,
+    "reduced_profile_replays": 10,
+    "reduced_profile_category_percent": {
+      "matmul": 68.526,
+      "all_gather": 10.378,
+      "topk": 6.732,
+      "sampling": 1.467,
+      "manual_seed": 0.928,
+      "async_all_reduce": 2.037
+    }
+  },
+  "host_boundary_delta_for_host_free_window": {
+    "token_host_copies": 0,
+    "position_host_copies": 0,
+    "page_table_host_copies": 0,
+    "sampling_param_host_copies": 0,
+    "caller_token_readbacks": 0,
+    "full_logit_readbacks": 0,
+    "explicit_synchronizations": 1
+  },
+  "provenance": {
+    "full_model_log": "logs/full_40layer_128x128_correctness_warmed.log",
+    "terminal_sweep": "lm_head_candidates.csv",
+    "decoder_accounting": "../optimized_multichip_decoder/evidence/profile_accounting.csv",
+    "terminal_profiler": "profiler/reduced_terminal_trace"
+  }
+}

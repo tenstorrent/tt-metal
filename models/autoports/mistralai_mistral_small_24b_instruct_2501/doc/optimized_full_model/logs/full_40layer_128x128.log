@@ -1,0 +1,304 @@
+2026-08-12 15:22:27.692 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/mvasiljevic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: benchmark-5.2.3, timeout-2.4.0, anyio-4.14.2, cov-7.0.0, dash-2.15.0, split-0.11.0, github-actions-annotate-failures-0.3.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_full_model.py::test_optimized_full_model_token_out_benchmark[blackhole-mesh_device0-device_params0] 2026-08-12 15:22:29.466 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-12 15:22:29.466 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-08-12 15:22:29.466 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-08-12 15:22:29.466 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-08-12 15:22:29.467 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-08-12 15:22:29.467 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-08-12 15:22:29.471 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-08-12 15:22:29.551 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-08-12 15:22:29.551 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-08-12 15:22:29.551 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:145)
+2026-08-12 15:22:29.551 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-08-12 15:22:29.552 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-08-12 15:22:29.749 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-08-12 15:22:29.862 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-08-12 15:22:29.863 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-08-12 15:22:29.863 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-08-12 15:22:29.863 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-08-12 15:22:29.863 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-12 15:22:29.863 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-12 15:22:29.863 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-12 15:22:29.863 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-12 15:22:29.863 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-12 15:22:29.863 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-12 15:22:29.863 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-12 15:22:29.863 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-12 15:22:29.863 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-08-12 15:22:29.863 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-08-12 15:22:29.868 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-12 15:22:29.868 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-12 15:22:29.868 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-12 15:22:29.868 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-12 15:22:29.903 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-08-12 15:22:29.918 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-08-12 15:22:29.921 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-08-12 15:22:29.922 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-08-12 15:22:29.923 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-08-12 15:22:29.923 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-08-12 15:22:29.923 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:305)
+2026-08-12 15:22:29.981 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095680356416_memory' (shm_resource_tracker.cpp:282)
+2026-08-12 15:22:29.981 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095680356417_memory' (shm_resource_tracker.cpp:282)
+2026-08-12 15:22:29.981 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095680357760_memory' (shm_resource_tracker.cpp:282)
+2026-08-12 15:22:29.981 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095680357761_memory' (shm_resource_tracker.cpp:282)
+2026-08-12 15:22:30.559 | info     |           Metal | [Real-time profiler] Device 2 sync complete: 100 samples, frequency=1.349986 GHz, device_time_at_sync=121984714894 cycles (realtime_profiler_manager.cpp:1127)
+2026-08-12 15:22:30.560 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349990 GHz, device_time_at_sync=122281511429 cycles (realtime_profiler_manager.cpp:1127)
+2026-08-12 15:22:30.560 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349986 GHz, device_time_at_sync=121628801244 cycles (realtime_profiler_manager.cpp:1127)
+2026-08-12 15:22:30.560 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349972 GHz, device_time_at_sync=146854481049 cycles (realtime_profiler_manager.cpp:1127)
+2026-08-12 15:22:30.589 | DEBUG    | conftest:mesh_device:599 - multidevice with 4 devices is created
+FAILED2026-08-12 15:27:29.550 | INFO     | conftest:pytest_runtest_teardown:1140 - In custom teardown, open device ids: {0, 1, 2, 3}
+
+
+=================================== FAILURES ===================================
+_ test_optimized_full_model_token_out_benchmark[blackhole-mesh_device0-device_params0] _
+
+mesh_device = MeshDevice(1x4 grid, 4 devices)
+
+    @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+    @pytest.mark.parametrize("mesh_device", MESH_PARAMS, indirect=True)
+    def test_optimized_full_model_token_out_benchmark(mesh_device):
+        """Compare caller-observed generation with the no-readback token-out loop."""
+
+        snapshot_text = os.environ.get(FULL_BENCHMARK_ENV)
+        if not snapshot_text:
+            pytest.skip(f"Set {FULL_BENCHMARK_ENV} to the complete local HF snapshot")
+        ttnn.CONFIG.throw_exception_on_fallback = True
+        snapshot = os.fspath(snapshot_text)
+        config = AutoConfig.from_pretrained(snapshot, local_files_only=True)
+        num_layers = int(os.environ.get("MISTRAL_SMALL_24B_OPT_FULL_LAYERS", "40"))
+        steps = int(os.environ.get("MISTRAL_SMALL_24B_OPT_FULL_STEPS", "128"))
+        observed_tokens = int(os.environ.get("MISTRAL_SMALL_24B_OPT_FULL_OBSERVED_TOKENS", "128"))
+        full_config = FullModelConfig(
+            max_batch_size=1,
+            max_context_len=512,
+            num_blocks=16,
+            prefill_chunk_size=128,
+            override_num_layers=num_layers,
+            lm_head_columns_per_device=int(os.environ.get("MISTRAL_SMALL_24B_LM_HEAD_COLUMNS", "8192")),
+            lm_head_input_cores=int(os.environ.get("MISTRAL_SMALL_24B_LM_HEAD_INPUT_CORES", "10")),
+            lm_head_output_cores=int(os.environ.get("MISTRAL_SMALL_24B_LM_HEAD_OUTPUT_CORES", "64")),
+            lm_head_max_in0_block_w=int(os.environ.get("MISTRAL_SMALL_24B_LM_HEAD_BLOCK_W", "4")),
+        )
+>       model = MistralSmall24BFullModel.from_state_dict(
+            SafetensorStateDict(snapshot),
+            hf_config=config,
+            mesh_device=mesh_device,
+            full_model_config=full_config,
+        )
+
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_full_model.py:589:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/model.py:275: in from_state_dict
+    layer = MultichipDecoder.from_state_dict(
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/multichip_decoder.py:463: in from_state_dict
+    up_weight=_shard_to_mesh(
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/multichip_decoder.py:162: in _shard_to_mesh
+    return ttnn.from_torch(
+ttnn/ttnn/decorators.py:473: in __call__
+    result = self.function(*function_args, **function_kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+tensor = tensor([[-0.0004,  0.0004, -0.0011,  ...,  0.0038, -0.0083,  0.0018],
+        [ 0.0003, -0.0059, -0.0022,  ...,  0.003... -0.0031,  0.0029],
+        [-0.0030,  0.0015, -0.0049,  ...,  0.0058, -0.0001, -0.0019]],
+       dtype=torch.bfloat16)
+dtype = DataType.BFLOAT4_B
+
+    @ttnn.register_python_operation(name="ttnn.from_torch", golden_function=_golden_function)
+    def from_torch(
+        tensor: Optional["torch.Tensor"],
+        dtype: Optional[ttnn.DataType] = None,
+        *,
+        spec: Optional[ttnn.TensorSpec] = None,
+        tile: Optional[ttnn.Tile] = None,
+        pad_value: Optional[float] = None,
+        layout: Optional[ttnn.Layout] = None,
+        device: Optional[ttnn.MeshDevice] = None,
+        memory_config: Optional[ttnn.MemoryConfig] = None,
+        mesh_mapper: Optional[ttnn.CppTensorToMesh | ttnn.ReplicateTensorToMeshWrapper] = None,
+        cq_id: Optional[int] = None,
+        preserve_nan_values: bool = False,
+        col_tilize: bool = False,
+        enable_bfloat_opt: bool = False,
+    ) -> Optional[ttnn.Tensor]:
+        """
+        Converts the `torch.Tensor` tensor into a `ttnn.Tensor`. If `tensor` is `None`, the function returns `None`.
+
+        For bfloat8_b or bfloat4_b format, the function itself is called twice,
+        first call runs in bfloat16 format, and calls to_layout to convert from row_major layout to tile layout (for padding purpose in case input
+        is not tile padded). Second call runs in desired format and does not call to_layout for bfloat8_b or bfloat4_b as we now convert
+        to tile layout during tensor creation (ttnn.Tensor).
+
+        Args:
+            tensor (torch.Tensor | None): the input tensor. If `tensor` is `None`, the function returns `None`.
+            dtype (ttnn.DataType, optional): the desired `ttnn` data type. Defaults to `None`.
+
+        Keyword Args:
+            spec (ttnn.TensorSpec, optional): the desired `ttnn` tensor spec. Defaults to `None`.
+            tile (ttnn.Tile, optional): the desired tiling configuration for the tensor. Defaults to `None`.
+            pad_value (float, optional): the desired padding value for tiling. Only used if `layout` is `TILE_LAYOUT`. Defaults to `None`.
+            layout (ttnn.Layout, optional): the desired `ttnn` layout. Defaults to `ttnn.ROW_MAJOR_LAYOUT`.
+            device (ttnn.MeshDevice, optional): the desired `ttnn` device. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): The desired `ttnn` memory configuration. Defaults to `None`.
+            mesh_mapper (ttnn.TensorToMesh, optional): The desired `ttnn` mesh mapper. Defaults to `None`.
+            cq_id (int, optional): The command queue ID to use. Defaults to `0`.
+            col_tilize (bool, optional): If True, transpose the last two dimensions of the tensor in host
+                memory (float32) before BFP tile encoding.  In BFP format one exponent byte is shared
+                across 16 consecutive datums within a tile face row; transposing before packing redirects
+                that sharing onto the column dimension of the original tensor.  The returned tensor has
+                shape (..., N, K) instead of (..., K, N).  This transpose is applied to the raw float32
+                host data and is unrelated to Tile-level transpose flags (transpose_within_face /
+                transpose_of_faces).  Requires dtype bfloat8_b or bfloat4_b, tensor.ndim >= 2, spec=None.
+                Defaults to `False`.
+            enable_bfloat_opt (bool, optional): If True, use a fast bf4/8 dtype conversion on the device, but with precision loss due to hw rounding rules. Defaults to `False`.
+
+        Returns:
+            ttnn.Tensor | None: A `ttnn.Tensor` created from the input `torch.Tensor`, or `None` if `tensor` is `None`.
+        """
+
+        if tensor is None:
+            return None
+
+        if col_tilize:
+            if spec is not None:
+                raise RuntimeError("ttnn.from_torch: col_tilize=True is not supported with spec")
+            if dtype not in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+                raise RuntimeError("ttnn.from_torch: col_tilize=True requires BFP dtype (bfloat8_b or bfloat4_b)")
+            if tensor.ndim < 2:
+                raise RuntimeError("ttnn.from_torch: col_tilize=True requires tensor.ndim >= 2")
+            if layout is not None and layout is not ttnn.TILE_LAYOUT:
+                raise RuntimeError("ttnn.from_torch: col_tilize=True requires layout to be None or ttnn.TILE_LAYOUT")
+
+        if spec is not None:
+            if spec.shape != tensor.shape:
+                raise RuntimeError(
+                    f"ttnn.from_torch: spec shape {spec.shape} must be the same as tensor shape {tensor.shape}"
+                )
+            if dtype is not None:
+                raise RuntimeError("ttnn.from_torch: dtype must be None when spec is specified")
+            if layout is not None:
+                raise RuntimeError("ttnn.from_torch: layout must be None when spec is specified")
+            if memory_config is not None:
+                raise RuntimeError("ttnn.from_torch: memory_config must be None when spec is specified")
+            if tile is not None:
+                raise RuntimeError("ttnn.from_torch: tile must be None when spec is specified")
+
+            dtype = spec.dtype
+            layout = spec.layout
+            memory_config = spec.memory_config
+            tile = spec.tile
+
+        if memory_config is not None and memory_config.is_sharded():
+            if memory_config.shard_spec is None and memory_config.nd_shard_spec is None:
+                raise RuntimeError("ttnn.from_torch: Shard spec must not be None for sharded tensors")
+
+        import torch
+        import numpy as np
+
+        if isinstance(tensor, np.ndarray):
+            # We use bf16 as an intermediate type between types unsupported by ttnn (e.g., int64)
+            # and types unsupported by Torch/NumPy (e.g., bfloat8).
+            # This allows type conversion: int64 -> bf16 -> bf8/4.
+            # NumPy does not support bfloat16, so we use a Torch tensor instead.
+            # float32 as an intermediate type is not used due to limited amount of L1 memory.
+            tensor = torch.from_numpy(tensor)
+
+        # FP8_E4M3 host-side construction is narrowed to float32 input only. The FLOAT32 -> FP8_E4M3
+        # path is wired up in transform_buffers via static_cast<float8_e4m3>; other source dtypes
+        # either fail at the dlpack importer (torch.float8_e4m3fn, code 10 not yet handled) or hit
+        # "FP8_E4M3 cross-type conversion is only supported to/from FLOAT32" deeper in to_dtype.
+        # The float32 path is supported for unit tests.
+        fp8_target = dtype == ttnn.DataType.FP8_E4M3 or (spec is not None and spec.dtype == ttnn.DataType.FP8_E4M3)
+        if fp8_target and tensor.dtype != torch.float32:
+            raise RuntimeError(
+                f"ttnn.from_torch: source dtype {tensor.dtype} is not supported when target is "
+                "ttnn.fp8_e4m3; only float32 input is supported. Cast to torch.float32 first."
+            )
+
+>       return ttnn.Tensor(
+            tensor=tensor,
+            data_type=dtype,
+            device=device,
+            layout=layout,
+            mem_config=memory_config,
+            tile=tile,
+            cq_id=cq_id,
+            pad_value=pad_value,
+            mesh_mapper=mesh_mapper.unwrap() if isinstance(mesh_mapper, ttnn.ReplicateTensorToMeshWrapper) else mesh_mapper,
+            preserve_nan_values=preserve_nan_values,
+            col_tilize=col_tilize,
+            enable_bfloat_opt=enable_bfloat_opt,
+        )
+E       Failed: Timeout (>300.0s) from pytest-timeout.
+
+ttnn/ttnn/operations/core.py:352: Failed
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+models/tt_transformers/tt/common.py:28
+  /home/mvasiljevic/tt-metal/models/tt_transformers/tt/common.py:28: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/
+    class ImageMedia(BaseModel):
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /home/mvasiljevic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+298.79s call     models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_full_model.py::test_optimized_full_model_token_out_benchmark[blackhole-mesh_device0-device_params0]
+1.33s setup    models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_full_model.py::test_optimized_full_model_token_out_benchmark[blackhole-mesh_device0-device_params0]
+0.13s teardown models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_full_model.py::test_optimized_full_model_token_out_benchmark[blackhole-mesh_device0-device_params0]
+=========================== short test summary info ============================
+FAILED models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_full_model.py::test_optimized_full_model_token_out_benchmark[blackhole-mesh_device0-device_params0]
+================== 1 failed, 3 warnings in 301.19s (0:05:01) ===================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+nanobind: leaked 2 instances!
+ - leaked instance 0x75bb519f0048 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x75bb51fd0d98 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 26 types!
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "FabricConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.multi_device.MeshMapperConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - ... skipped remainder
+nanobind: leaked 263 functions!
+ - leaked function "devices"
+ - leaked function ""
+ - leaked function "update_tensor_topology"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "get_system_mesh_id"
+ - leaked function "get_tile"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-12 15:27:31.423 | info     |    BuildKernels | JIT cache stats: 66/66 hits (100.0%) [66 cached, 18 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-12 15:27:31.423 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-12 15:27:31.435 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-08-12 15:27:31.435 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-08-12 15:27:32.010 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-08-12 15:27:32.011 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-08-12 15:27:32.011 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

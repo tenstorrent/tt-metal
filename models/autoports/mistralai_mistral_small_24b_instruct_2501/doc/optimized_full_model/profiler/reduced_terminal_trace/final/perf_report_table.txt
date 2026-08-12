@@ -1,0 +1,18 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'FULL_MODEL_REDUCED_TRACE'.
+Using operations until 'FULL_MODEL_REDUCED_TRACE_END'.
+Detected data from 4 devices. Merging device data...
+Writing CSV output to models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/optimized_full_model/profiler/reduced_terminal_trace/final/perf_report.csv
+Overall DRAM roofline (modeled ops): 42.6% (218 GB/s)
+Warning: Unclassified operation 'PlusOneDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'RotaryEmbeddingHfDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'AllReduceAsyncDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'TopKDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'ManualSeedDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'NLPCreateQKVHeadsDecodeDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'SamplingDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Writing CSV stacked report to models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/optimized_full_model/profiler/reduced_terminal_trace/final/perf_summary.csv.csv
+Plotting PNG stacked report to models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/optimized_full_model/profiler/reduced_terminal_trace/final/perf_summary.csv.png

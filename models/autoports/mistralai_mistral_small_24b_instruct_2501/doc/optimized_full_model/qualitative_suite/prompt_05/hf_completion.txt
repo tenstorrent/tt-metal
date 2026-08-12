@@ -1,0 +1,8 @@
+The translation of "Hello, how are you today?" to French is:
+
+"Bonjour, comment ça va aujourd'hui?"
+
+Here's a breakdown:
+- "Hello" = "Bonjour"
+- "how are you" = "comment ça va"
+- "today" = "aujourd'hui"</s>

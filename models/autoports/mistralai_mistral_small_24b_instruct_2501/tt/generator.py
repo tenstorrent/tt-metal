@@ -19,6 +19,9 @@ from transformers import AutoConfig, AutoTokenizer
 
 import ttnn
 from models.autoports.mistralai_mistral_small_24b_instruct_2501.tt.model import (
+    LM_HEAD_COLUMNS_PER_DEVICE,
+    LM_HEAD_INPUT_CORES,
+    LM_HEAD_OUTPUT_CORES,
     PAGED_BLOCK_SIZE,
     FullModelConfig,
     MistralSmall24BFullModel,
@@ -584,6 +587,34 @@ class MistralSmall24BGenerator(Generator):
         self.trace_stats["sampling_replays"] += 1
         return self._trace_sampled
 
+    def replay_token_out_window(self, num_steps: int):
+        """Run a steady-state token-out window without per-token host work.
+
+        The model trace advances cache/RoPE positions and the sampling trace
+        writes the next token into the persistent decode input.  The only
+        synchronization is the end-of-window fence needed to measure elapsed
+        end-to-end time; the returned token remains device resident.
+        """
+
+        if num_steps < 1:
+            raise ValueError("num_steps must be positive")
+        if self._trace_model_id is None or self._trace_sampling_id is None:
+            raise RuntimeError("decode traces are not initialized")
+        before = dict(self.trace_stats)
+        start_s = time.perf_counter()
+        for _ in range(num_steps):
+            self._replay_split_sampling()
+        self._synchronize()
+        elapsed_s = time.perf_counter() - start_s
+        stats = {
+            "steps": num_steps,
+            "elapsed_s": elapsed_s,
+            "ms_per_token": 1000.0 * elapsed_s / num_steps,
+            "t/s/u": num_steps / elapsed_s,
+            "trace_stat_delta": {key: self.trace_stats[key] - before[key] for key in self.trace_stats},
+        }
+        return self._trace_sampled, stats
+
     def _release_decode_traces(self) -> None:
         released = False
         for trace_id in (self._trace_model_id, self._trace_sampling_id):
@@ -924,6 +955,10 @@ def build_generator(model_dir: str | Path, mesh_device, **kwargs: Any) -> Genera
         kv_cache_dtype=kwargs.pop("kv_cache_dtype", ttnn.bfloat8_b),
         lm_head_weight_dtype=kwargs.pop("lm_head_weight_dtype", ttnn.bfloat16),
         lm_head_math_fidelity=kwargs.pop("lm_head_math_fidelity", ttnn.MathFidelity.HiFi2),
+        lm_head_columns_per_device=int(kwargs.pop("lm_head_columns_per_device", LM_HEAD_COLUMNS_PER_DEVICE)),
+        lm_head_input_cores=int(kwargs.pop("lm_head_input_cores", LM_HEAD_INPUT_CORES)),
+        lm_head_output_cores=int(kwargs.pop("lm_head_output_cores", LM_HEAD_OUTPUT_CORES)),
+        lm_head_max_in0_block_w=int(kwargs.pop("lm_head_max_in0_block_w", 4)),
         override_num_layers=kwargs.pop("override_num_layers", None),
     )
     if kwargs:

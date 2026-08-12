@@ -86,6 +86,10 @@ class FullModelConfig:
     kv_cache_dtype: object = ttnn.bfloat8_b
     lm_head_weight_dtype: object = ttnn.bfloat16
     lm_head_math_fidelity: object = ttnn.MathFidelity.HiFi2
+    lm_head_columns_per_device: int = LM_HEAD_COLUMNS_PER_DEVICE
+    lm_head_input_cores: int = LM_HEAD_INPUT_CORES
+    lm_head_output_cores: int = LM_HEAD_OUTPUT_CORES
+    lm_head_max_in0_block_w: int = 4
     override_num_layers: int | None = None
 
     def validate(self, hf_config) -> None:
@@ -106,6 +110,11 @@ class FullModelConfig:
             raise ValueError("the paged-cache split permits only BFP8 or BF16")
         if self.lm_head_weight_dtype not in (ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b):
             raise ValueError("LM-head weights must be BF16, BFP8, or BFP4")
+        local_vocab_size = int(_config_value(hf_config, "vocab_size")) // TP_DEGREE
+        if self.lm_head_columns_per_device < ttnn.TILE_SIZE or (local_vocab_size % self.lm_head_columns_per_device):
+            raise ValueError("lm_head_columns_per_device must divide the rank-local vocabulary")
+        if self.lm_head_max_in0_block_w < 1:
+            raise ValueError("lm_head_max_in0_block_w must be positive")
 
 
 class MistralSmall24BFullModel:
@@ -142,24 +151,25 @@ class MistralSmall24BFullModel:
         self.vocab_size = int(_config_value(hf_config, "vocab_size"))
         self.local_vocab_size = self.vocab_size // TP_DEGREE
         self.num_layers = len(layers)
+        self.lm_head_columns_per_device = config.lm_head_columns_per_device
 
         self.lm_head_input_mem_config = _l1_width_sharded_memory_config(
             mesh_device,
             ttnn.TILE_SIZE,
             self.hidden_size,
-            LM_HEAD_INPUT_CORES,
+            config.lm_head_input_cores,
         )
         self.lm_head_program_configs = [
             _dram_matmul_program_config(
                 ttnn.TILE_SIZE,
                 self.hidden_size,
-                LM_HEAD_COLUMNS_PER_DEVICE,
-                LM_HEAD_INPUT_CORES,
-                LM_HEAD_OUTPUT_CORES,
+                config.lm_head_columns_per_device,
+                config.lm_head_input_cores,
+                config.lm_head_output_cores,
                 # Eight K tiles grows terminal circular buffers to 1,782,528
                 # bytes on Blackhole. Four stays below the 1,572,864-byte L1
                 # limit while retaining the DRAM-sharded LM-head strategy.
-                max_in0_block_w=4,
+                max_in0_block_w=config.lm_head_max_in0_block_w,
             )
             for _ in self.lm_head_weights
         ]
@@ -225,28 +235,44 @@ class MistralSmall24BFullModel:
             raise ValueError(f"unexpected LM-head shape {tuple(lm_head.shape)}")
         local_vocab = vocab_size // TP_DEGREE
         lm_head_weights = []
-        for split_start in range(0, local_vocab, LM_HEAD_COLUMNS_PER_DEVICE):
+        for split_start in range(0, local_vocab, config.lm_head_columns_per_device):
             rank_splits = [
                 lm_head[
                     :,
-                    rank * local_vocab + split_start : rank * local_vocab + split_start + LM_HEAD_COLUMNS_PER_DEVICE,
+                    rank * local_vocab
+                    + split_start : rank * local_vocab
+                    + split_start
+                    + config.lm_head_columns_per_device,
                 ]
                 for rank in range(TP_DEGREE)
             ]
             combined = torch.cat(rank_splits, dim=1)
-            lm_head_weights.append(
-                _mesh_tensor(
+            weight_memory_config = _dram_sharded_weight_memory_config(
+                mesh_device,
+                hidden_size,
+                config.lm_head_columns_per_device,
+            )
+            if config.lm_head_columns_per_device > LM_HEAD_COLUMNS_PER_DEVICE:
+                # Direct host tilize into a 16K-column DRAM shard requires a
+                # 2,208,512-byte static CB on one worker. Stage through tiled
+                # interleaved DRAM so this load-time limitation does not reject
+                # an otherwise legal runtime matmul candidate.
+                weight = _mesh_tensor(
                     combined,
                     mesh_device,
                     mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
                     dtype=config.lm_head_weight_dtype,
-                    memory_config=_dram_sharded_weight_memory_config(
-                        mesh_device,
-                        hidden_size,
-                        LM_HEAD_COLUMNS_PER_DEVICE,
-                    ),
                 )
-            )
+                weight = ttnn.to_memory_config(weight, weight_memory_config)
+            else:
+                weight = _mesh_tensor(
+                    combined,
+                    mesh_device,
+                    mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
+                    dtype=config.lm_head_weight_dtype,
+                    memory_config=weight_memory_config,
+                )
+            lm_head_weights.append(weight)
         del lm_head
 
         num_layers = config.override_num_layers if config.override_num_layers is not None else num_layers_total

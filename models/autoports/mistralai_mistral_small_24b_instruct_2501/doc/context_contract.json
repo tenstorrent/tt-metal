@@ -220,6 +220,63 @@
     },
     "claim": "The recalculated full-model decode and retained prefill weights, all 40 BFP8 paged-cache pairs, BF16 TP endpoints, Sampling1D state, split-trace terminal buffers, 200,000,000 bytes of trace reservation per DRAM bank (1,600,000,000 bytes/device), and 1.5 GiB runtime reserve fit at the HF 32768-token limit with 1,189,509,248 bytes/rank remaining. The physical gate executes both a batch-32 prefill chunk and decode at position 32,767 without the irreversible prefill-weight release. No physical limit requires reducing the advertised context."
   },
+  "optimized_full_model": {
+    "status": "optimized_and_trace_verified",
+    "target_mesh": [
+      1,
+      4
+    ],
+    "advertised_context": 32768,
+    "calculated_physical_ceiling_with_reserve": 34464,
+    "capability_reduction": false,
+    "full_path_policy": "TP4 embeddings and BF16 endpoints; 40-layer BFP4 LoFi decoder with BF16 activations, BFP8 KV cache, BFP8 persistent decode collectives, BF16 prefill collectives, and 11-core L1 block-sharded inter-layer residuals; BF16 HiFi2 LM head; device split-trace Sampling1D",
+    "terminal_geometry": {
+      "rank_local_vocab_columns_per_split": 8192,
+      "input_cores": 10,
+      "output_cores": 64,
+      "max_in0_block_w": 4,
+      "selection": "retained control; output_cores=32 was 0.065% faster, an adapted block_w=8/input_cores=80 family was 0.198% faster, and a staged 16384-column/input_cores=80/block_w=1 family was 0.785% faster over 256 warmed replays; all are below the 1% materiality threshold"
+    },
+    "token_out_contract": {
+      "sampler_ready_logits": true,
+      "tt_out_tok_feedback": "device resident",
+      "position_and_rope_advance": "device resident",
+      "page_table_updates": "changed only",
+      "greedy_decode": "fully traced split Sampling1D, no force-argmax",
+      "top_k_top_p_capable": true,
+      "steady_state_host_boundaries": 0,
+      "steady_state_explicit_synchronizations_per_128_token_window": 1,
+      "fixed_slots_mixed_prompts_and_inactive_rows": true,
+      "non_aligned_prompt_lengths": [
+        7,
+        11,
+        18,
+        238
+      ]
+    },
+    "primary_128_128_batch1": {
+      "warmed_ttft_before_ms": 57.31377,
+      "warmed_ttft_after_ms": 57.938621,
+      "caller_observed_traced_decode_t_s_u": 54.352821,
+      "host_free_token_out_t_s_u": 54.451842,
+      "host_free_ms_per_token": 18.364851,
+      "out_of_window_correctness": "exact final token, signed position, RoPE position, page table, and first/last layer K/V caches versus observed control",
+      "token_position_page_sampling_param_host_copies": 0,
+      "caller_token_readbacks": 0,
+      "full_logit_readbacks": 0
+    },
+    "lower_bound_accounting": {
+      "inherited_warmed_layer_ms": 0.414822,
+      "forty_layer_stack_ms": 16.59288,
+      "current_one_layer_full_terminal_ms": 1.747149,
+      "terminal_above_one_layer_ms": 1.332327,
+      "composed_stack_plus_terminal_ms": 17.925207,
+      "measured_token_out_ms": 18.364851,
+      "residual_gap_ms": 0.439644,
+      "residual_gap_percent_of_measured": 2.394
+    },
+    "evidence_root": "models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/optimized_full_model"
+  },
   "paths": {
     "prefill": {
       "status": "translated_and_tested",

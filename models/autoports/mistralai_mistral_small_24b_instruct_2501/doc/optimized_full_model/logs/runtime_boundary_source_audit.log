@@ -1,0 +1,158 @@
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/generator.py:60:def _first_device_to_torch(tensor) -> torch.Tensor:
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/generator.py:62:    return ttnn.to_torch(shards[0] if shards else tensor)
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/generator.py:108:        ttnn.synchronize_device(self.mesh_device)
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/generator.py:112:        return ttnn.from_torch(
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/generator.py:121:        return ttnn.from_torch(
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/generator.py:158:    def _page_table_to_torch(self, page_table) -> torch.Tensor:
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/generator.py:162:            result = _first_device_to_torch(page_table).to(torch.int32)
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/generator.py:170:        source = self._page_table_to_torch(page_table)
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/generator.py:220:    def _local_logits_to_torch(self, logits) -> torch.Tensor:
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/generator.py:222:        host = ttnn.to_torch(
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/generator.py:229:    def _sampled_tokens_to_torch(self, tokens) -> torch.Tensor:
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/generator.py:231:        return _first_device_to_torch(tokens).reshape(-1)[: self.batch].to(torch.long)
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/generator.py:356:                host_logits = self._local_logits_to_torch(last_device_logits)[0, 0, :active_batch]
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/generator.py:388:        initial_host = self._local_logits_to_torch(initial_logits)[0, :active_batch, :initial_logical]
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/generator.py:431:            ttnn.copy_host_to_device_tensor(host_token, self._trace_token)
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/generator.py:449:            ttnn.copy_host_to_device_tensor(host_page, self._trace_page_table)
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/generator.py:651:        sampling_mode: str = "host",
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/generator.py:670:        if sampling_mode == "device":
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/generator.py:688:        if sampling_mode != "host":
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/generator.py:689:            raise ValueError("sampling_mode must be 'host' or 'device'")
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/generator.py:702:        return self._local_logits_to_torch(logits)[0, 0, :active_batch]
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/generator.py:757:        predicted = int(logits[0, 0].argmax().item())
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/generator.py:769:                sampling_mode="host",
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/generator.py:772:            predicted = int(decoded[0].argmax().item())
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/generator.py:782:        sampling_mode: str = "device",
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/generator.py:796:        if sampling_mode == "host":
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/generator.py:805:                "sampling_mode": "host_compatibility",
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/generator.py:813:        if sampling_mode != "device":
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/generator.py:814:            raise ValueError("sampling_mode must be 'host' or 'device'")
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/generator.py:840:        predicted = int(self._sampled_tokens_to_torch(sampled)[0].item())
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/generator.py:847:                "sampling_mode": "device_split_trace",
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/generator.py:874:            predicted = int(self._sampled_tokens_to_torch(sampled)[0].item())
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/generator.py:888:            _first_device_to_torch(self._trace_current_pos).reshape(-1)[: self.batch].to(torch.int32).tolist()
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/generator.py:893:            "sampling_mode": "device_split_trace",
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/model.py:68:    return ttnn.from_torch(
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/model.py:300:                allow_force_argmax=True,
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/model.py:301:                num_argmax_gather_links=2,
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/model.py:360:    def _all_gather_hidden(self, local_hidden):
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/model.py:361:        return ttnn.all_gather(
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/model.py:376:        return self._all_gather_hidden(ttnn.unsqueeze_to_4D(local))
+models/autoports/mistralai_mistral_small_24b_instruct_2501/tt/model.py:385:        hidden = self._all_gather_hidden(ttnn.unsqueeze_to_4D(local))
+35:class SafetensorStateDict(Mapping[str, torch.Tensor]):
+44:    def __getitem__(self, key: str) -> torch.Tensor:
+60:def _first_device_to_torch(tensor) -> torch.Tensor:
+61:    shards = ttnn.get_device_tensors(tensor)
+62:    return ttnn.to_torch(shards[0] if shards else tensor)
+76:        self._page_table_host: torch.Tensor | None = None
+82:        self._trace_page_table_snapshot: torch.Tensor | None = None
+108:        ttnn.synchronize_device(self.mesh_device)
+111:    def _host_tt(self, tensor: torch.Tensor, *, dtype, layout=ttnn.ROW_MAJOR_LAYOUT):
+112:        return ttnn.from_torch(
+117:            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+120:    def _device_tt(self, tensor: torch.Tensor, *, dtype, layout=ttnn.ROW_MAJOR_LAYOUT):
+121:        return ttnn.from_torch(
+126:            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+131:            torch.zeros((1, 1, 1, 32), dtype=torch.int32),
+132:            dtype=ttnn.uint32,
+135:            torch.full((self.batch,), -1, dtype=torch.int32),
+136:            dtype=ttnn.int32,
+139:            torch.zeros((1, self.batch), dtype=torch.int32),
+140:            dtype=ttnn.uint32,
+144:            dtype=ttnn.int32,
+146:        self._sampling_k = self._device_tt(torch.ones(32, dtype=torch.int32), dtype=ttnn.uint32)
+147:        self._sampling_p = self._device_tt(torch.zeros(32, dtype=torch.bfloat16), dtype=ttnn.bfloat16)
+148:        self._sampling_temp = self._device_tt(torch.ones(32, dtype=torch.bfloat16), dtype=ttnn.bfloat16)
+151:    def _default_page_table(self) -> torch.Tensor:
+152:        table = torch.empty((self.batch, self.blocks_per_slot), dtype=torch.int32)
+155:            table[slot] = torch.arange(start, start + self.blocks_per_slot, dtype=torch.int32)
+158:    def _page_table_to_torch(self, page_table) -> torch.Tensor:
+159:        if isinstance(page_table, torch.Tensor):
+160:            result = page_table.detach().cpu().to(torch.int32)
+161:        elif isinstance(page_table, ttnn.Tensor):
+162:            result = _first_device_to_torch(page_table).to(torch.int32)
+169:    def _normalise_page_table(self, page_table, active_batch: int) -> torch.Tensor:
+175:        result = torch.full((self.batch, self.blocks_per_slot), -1, dtype=torch.int32)
+177:        supplied = result[result >= 0].to(torch.int64)
+178:        if torch.any(supplied >= self.model.config.num_blocks):
+191:    def _make_page_table(self) -> torch.Tensor:
+194:    def _page_table_device(self, host: torch.Tensor):
+195:        return self._device_tt(host, dtype=ttnn.int32)
+197:    def _tokens_device(self, host: torch.Tensor):
+198:        return self._device_tt(host.to(torch.int32), dtype=ttnn.uint32)
+200:    def _positions_device(self, positions: torch.Tensor):
+201:        positions = positions.reshape(-1).to(torch.int32)
+204:        padded = torch.full((self.batch,), -1, dtype=torch.int32)
+206:        rotary = torch.clamp(padded, min=0).reshape(1, self.batch)
+208:            self._device_tt(padded, dtype=ttnn.int32),
+209:            self._device_tt(rotary, dtype=ttnn.uint32),
+212:    def _decode_token_host(self, tokens: torch.Tensor) -> torch.Tensor:
+213:        flat = tokens.reshape(-1).to(torch.int32)
+216:        padded = torch.zeros(32, dtype=torch.int32)
+220:    def _local_logits_to_torch(self, logits) -> torch.Tensor:
+221:        logits = ttnn.untilize(logits, use_multicore=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+222:        host = ttnn.to_torch(
+224:            mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=3),
+229:    def _sampled_tokens_to_torch(self, tokens) -> torch.Tensor:
+231:        return _first_device_to_torch(tokens).reshape(-1)[: self.batch].to(torch.long)
+276:            self._host_tt(torch.tensor(k_values, dtype=torch.int32), dtype=ttnn.uint32),
+277:            self._host_tt(torch.tensor(p_values, dtype=torch.bfloat16), dtype=ttnn.bfloat16),
+278:            self._host_tt(torch.tensor(inverse_temperatures, dtype=torch.bfloat16), dtype=ttnn.bfloat16),
+284:    def _validate_prompt_inputs(self, tokens: torch.Tensor, prompt_lens: list[int]):
+302:        tokens: torch.Tensor,
+311:        host = torch.zeros((self.batch, initial_padded), dtype=torch.long)
+324:        tokens: torch.Tensor,
+337:            step_tokens = torch.zeros((self.batch,), dtype=torch.long)
+338:            positions = torch.full((self.batch,), -1, dtype=torch.long)
+366:        tokens: torch.Tensor,
+373:    ) -> torch.Tensor:
+410:            output = torch.zeros(
+420:        return torch.stack(final_logits, dim=0).unsqueeze(1)
+425:        tokens: torch.Tensor | None,
+426:        positions: torch.Tensor | None,
+427:        page_host: torch.Tensor | None,
+430:            host_token = self._host_tt(self._decode_token_host(tokens), dtype=ttnn.uint32)
+431:            ttnn.copy_host_to_device_tensor(host_token, self._trace_token)
+434:            positions = positions.reshape(-1).to(torch.int32)
+435:            padded = torch.full((self.batch,), -1, dtype=torch.int32)
+437:            rotary = torch.clamp(padded, min=0).reshape(1, self.batch)
+438:            host_pos = self._host_tt(padded, dtype=ttnn.int32)
+439:            host_rotary = self._host_tt(rotary, dtype=ttnn.uint32)
+446:            self._trace_page_table_snapshot is None or not torch.equal(page_host, self._trace_page_table_snapshot)
+448:            host_page = self._host_tt(page_host, dtype=ttnn.int32)
+449:            ttnn.copy_host_to_device_tensor(host_page, self._trace_page_table)
+456:        page_host: torch.Tensor,
+459:        tokens: torch.Tensor,
+460:        positions: torch.Tensor,
+497:            model_trace = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+506:            ttnn.end_trace_capture(self.mesh_device, model_trace, cq_id=0)
+510:            sampling_trace = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+519:            ttnn.end_trace_capture(self.mesh_device, sampling_trace, cq_id=0)
+525:                    ttnn.end_trace_capture(self.mesh_device, sampling_trace, cq_id=0)
+530:                    ttnn.end_trace_capture(self.mesh_device, model_trace, cq_id=0)
+536:                        ttnn.release_trace(self.mesh_device, trace_id)
+560:        page_host: torch.Tensor,
+563:        tokens: torch.Tensor,
+564:        positions: torch.Tensor,
+584:        ttnn.execute_trace(self.mesh_device, self._trace_model_id, cq_id=0, blocking=False)
+586:        ttnn.execute_trace(self.mesh_device, self._trace_sampling_id, cq_id=0, blocking=False)
+622:                ttnn.release_trace(self.mesh_device, trace_id)
+633:    def _copy_forced_tokens(self, tokens: torch.Tensor) -> None:
+636:    def _validate_page_coverage(self, page_host: torch.Tensor, positions: torch.Tensor) -> None:
+646:        tokens: torch.Tensor,
+647:        start_pos: torch.Tensor,
+706:        prompt_tokens: torch.Tensor,
+708:        page_host: torch.Tensor,
+752:            torch.tensor([prompt_token_ids], dtype=torch.long),
+765:                torch.tensor([[next_token]], dtype=torch.long),
+766:                torch.tensor([len(prompt_token_ids) + step], dtype=torch.long),
+836:            torch.tensor([prompt_token_ids], dtype=torch.long),
+860:        first_decode_token = torch.tensor([next_token], dtype=torch.long)
+861:        first_decode_position = torch.tensor([len(prompt_token_ids)], dtype=torch.long)
+882:                self._copy_forced_tokens(torch.tensor([next_token], dtype=torch.long))
+888:            _first_device_to_torch(self._trace_current_pos).reshape(-1)[: self.batch].to(torch.int32).tolist()
+890:        sampled_address = ttnn.get_device_tensors(self._trace_sampled)[0].buffer_address()
+891:        token_address = ttnn.get_device_tensors(self._trace_token)[0].buffer_address()
+955:        kv_cache_dtype=kwargs.pop("kv_cache_dtype", ttnn.bfloat8_b),
+956:        lm_head_weight_dtype=kwargs.pop("lm_head_weight_dtype", ttnn.bfloat16),
+957:        lm_head_math_fidelity=kwargs.pop("lm_head_math_fidelity", ttnn.MathFidelity.HiFi2),
