@@ -325,11 +325,21 @@ class Gemma4DecoderLayer:
             if parked is not hidden_states:
                 residual = parked
                 hidden_states = parked
-        prefill_matmul_mc = prefill_matmul_in0_memcfg(padded_h, self.hidden_size) if not is_decode else None
+        # Decode: land the input-LN S2I straight in L1 interleaved, which is where
+        # the QKV matmul reads in0 from anyway. The default (DRAM) sent the norm
+        # output on a full DRAM round-trip, because apply_qkv_projection always
+        # passes a program config, so hoist_prefill_matmul_in0_if_needed copied it
+        # back to L1 — one CopyDeviceOperation per layer (61/step, 0.24 ms). The
+        # matmul now sees the same bits in the same buffer type under the same
+        # program config, so the change is bit-exact by construction.
+        if is_decode:
+            ln_out_memcfg = ttnn.L1_MEMORY_CONFIG
+        else:
+            ln_out_memcfg = prefill_matmul_in0_memcfg(padded_h, self.hidden_size)
         normed = self.input_layernorm.forward(
             hidden_states,
             keep_sharded=False,
-            interleaved_memory_config=prefill_matmul_mc,
+            interleaved_memory_config=ln_out_memcfg,
         )
         if not is_decode and batch_size > 1:
             attn_in = ttnn.reshape(normed, [batch_size, 1, normed.shape[-2] // batch_size, -1])
