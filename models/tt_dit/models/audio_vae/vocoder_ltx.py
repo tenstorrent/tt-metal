@@ -263,7 +263,10 @@ class Vocoder(Module):
         # of 1.391, i.e. -204 dB), which is what made every T-sharded decode return wrong audio. Every
         # other conv shape in the decode is bit-exact under sharding; only this one is not, and it is the
         # one whose size trips conv3d's DRAM auto-slice fallback while its blocking config is derived at
-        # __init__ from the unsharded shape. See audio_perf/conv_sharded_probe.py for the shape sweep.
+        # __init__ from the unsharded shape. A sharded-vs-unsharded sweep over conv shapes found this to
+        # be the only one affected: 1024->512 k=7, 256->256 k=7 and 64->64 at kernels 1/3/7 and
+        # dilation 5 are all bit-exact under T-sharding, and both `_partition_t` and `_t_neighbor_pad`
+        # were verified exact at this shape.
         #
         # Replicating it is close to free: conv_pre runs on the *input* sequence, T=207 (256 padded),
         # which is 1/800th of the final waveform length, so this is the cheapest row-work in the graph.

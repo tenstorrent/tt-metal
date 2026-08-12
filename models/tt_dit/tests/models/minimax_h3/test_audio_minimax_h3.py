@@ -733,7 +733,8 @@ MESH = [
 # the wrong suspect: *every* factor was wrong, and the cause was `conv_pre` (2048 -> 1024, k=7)
 # returning uninitialized memory under T-sharding while every other conv shape was bit-exact. It now
 # runs unsharded on the full sequence -- see the comment on `Vocoder.conv_pre` -- and both factors
-# measure 78.7 dB. See audio_perf/ITEM2_RESULT.md.
+# measure 78.7 dB against the unsharded path, and `audio_perf/cpu_vs_device.py` scores the sharded
+# configuration at the same 49.45 dB vs the CPU reference as single device.
 FACTORS = [(1, 1), (4, 0), (8, 1)]
 KNOWN_BROKEN: set[tuple[int, int]] = set()
 NUM_LATENT_FRAMES = 207
