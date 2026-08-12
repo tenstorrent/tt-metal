@@ -58,6 +58,7 @@
 
 import os
 import re
+import time
 
 import numpy as np
 import pytest
@@ -164,6 +165,40 @@ def _test_image(size):
     return prepare_keyframe_image(frame, height, width, True)
 
 
+# (height, width) of the two reference images: 2048x2048 -> grid [1, 128, 128] (4096 merged tokens) and
+# 2048x2720 -> grid [1, 128, 170] (5440), i.e. the vision tower's `two_refs` case (38,144 patches ->
+# 9,536 image tokens). Forced directly rather than via `resolve_reference_image_size` so the two grids
+# are exactly the ones the block/tower tests validated at tp8_sp4.
+_TWO_REFS_TARGETS = ((2048, 2048), (2048, 2720))
+
+
+def _reference_images() -> list[Image.Image]:
+    """Two reference images at the ref2va geometry, producing the `two_refs` grids. Same t2va-frame
+    content as `_test_image` (its content-sensitivity note applies), resized to each reference
+    resolution via the pipeline's own `prepare_reference_image`."""
+    from pathlib import Path
+
+    import imageio.v3 as iio
+
+    from ....pipelines.minimax_h3.packing_ref2va import prepare_reference_image
+
+    # Diagnostic escape hatch, matching `_test_image`: `MINIMAX_H3_TEST_CONTENT=noise` runs on synthetic
+    # noise so a timing pass needs no artifact. Degenerate for the PCC metric (see `_test_image`), so it
+    # is for timing / "does it run", not fidelity -- the shapes and the pipeline are still exercised.
+    if os.environ.get("MINIMAX_H3_TEST_CONTENT") == "noise":
+        generator = torch.Generator().manual_seed(0)
+        return [
+            Image.fromarray((torch.rand(height, width, 3, generator=generator) * 255).to(torch.uint8).numpy())
+            for (height, width) in _TWO_REFS_TARGETS
+        ]
+
+    source = Path(os.environ.get(T2VA_ARTIFACT_ENV) or Path.home() / "h3_t2va_artifacts") / "t2va.mp4"
+    if not source.is_file():
+        pytest.skip(f"no calibrated t2va artifact at {source}; run test_pipeline_minimax_h3.py first")
+    frame = Image.fromarray(np.asarray(iio.imread(source, index=0, plugin="pyav"))).convert("RGB")
+    return [prepare_reference_image(frame, height, width) for (height, width) in _TWO_REFS_TARGETS]
+
+
 def _conditioner_dir() -> str:
     """`MINIMAX_H3_REPO`, then the local mirror, then a scoped Hub snapshot. Missing is a skip."""
     try:
@@ -193,7 +228,15 @@ def conditioner():
     return path, hf.model.eval()
 
 
-def _tower(reference_visual, submesh):
+# Warmup+measure iterations: iter 1 compiles/caches kernels, iter 2 is the measured steady-state pass
+# (read iter 2's numbers). The full-pipeline loop in the two_refs test runs this many times.
+_PERF_ITERS = 2
+
+
+def _tower(reference_visual, submesh, parallel_config=None, ccl_manager=None):
+    """The tt vision tower on `submesh`. `parallel_config`/`ccl_manager` default to None (replicated,
+    as the fl2va cases run it); passing a tp+sp `EncoderParallelConfig` + ccl runs it sharded -- TP
+    head fracturing + windowed/ring SP attention -- which the two_refs case uses."""
     vc = reference_visual.config
     tower = Qwen3VlVisionModel(
         hidden_size=vc.hidden_size,
@@ -210,6 +253,8 @@ def _tower(reference_visual, submesh):
         norm_eps=1e-6,
         deepstack_visual_indexes=vc.deepstack_visual_indexes,
         mesh_device=submesh,
+        parallel_config=parallel_config,
+        ccl_manager=ccl_manager,
     )
     tower.load_torch_state_dict(reference_visual.state_dict())
     return tower
@@ -493,4 +538,252 @@ def test_fused_conditioner_real_weights(conditioner, mesh_device, submesh_shape,
         f"(golden {int(golden_massive.sum())} such rows, ours {int(ours_massive.sum())}). These rows carry "
         f"norms up to {float(norms.max()) / median_norm:.0f}x the median, so missing one dominates every "
         "whole-tensor metric."
+    )
+
+
+@pytest.mark.timeout(10800)  # `check` computes the slow fp32 reference; `perf` skips it
+@pytest.mark.parametrize(
+    ("mesh_device", "submesh_shape", "tp_axis", "num_links"),
+    [pytest.param((4, 8), (4, 8), 1, 2, id="tp8_axis1")],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768}], indirect=True
+)
+# `check` computes the HF golden and asserts the per-row gate; `perf` skips the golden entirely (it is
+# the slow part -- a fp32 CPU forward of the 32B reference over ~9.5k tokens) and asserts only shape +
+# finiteness, so the device pipeline timing runs without waiting on it. `check` carries the xfail (see
+# the fl2va sibling's massive-activation-row gap); `perf` has no gate to fail.
+@pytest.mark.parametrize(
+    "check_pcc",
+    [
+        pytest.param(
+            True,
+            id="check",
+            marks=pytest.mark.xfail(
+                strict=False,
+                reason=(
+                    "Inherits the fused conditioner's massive-activation-row precision gap "
+                    "(test_fused_conditioner_real_weights, STATE.md amendment 101). strict=False because "
+                    "two_refs has not been separately measured; tighten to strict once its floor is."
+                ),
+            ),
+        ),
+        pytest.param(False, id="perf"),
+    ],
+)
+def test_fused_conditioner_two_refs_real_weights(
+    conditioner, mesh_device, submesh_shape, tp_axis, num_links, check_pcc
+):
+    """The `ref2va` conditioner with TWO reference images, on released weights, with the vision tower
+    run under **tp8_sp4 + windowed SDPA** -- the pipeline's configuration -- feeding the TP=8 causal
+    decoder.
+
+    Where the fl2va sibling is a single image (one block, tower replicated), this exercises the parts
+    only a multi-reference request reaches: the tower's **windowed multi-block SP attention** (two grid
+    rows -> `cu_seqlens` of length 3) and the decoder's **two-run** vision scatter. The two images'
+    128x128 and 128x170 grids are the exact `two_refs` case validated in the block and tower tests
+    (38,144 patches -> 4,096 + 5,440 = 9,536 merged image tokens).
+
+    On the (4, 8) mesh the tower assigns TP to the size-8 axis and SP to the size-4 axis (tp8_sp4),
+    matching `pipeline_minimax_h3`; the decoder takes TP=8 on the same size-8 axis. Golden route and
+    per-row gate are identical to the fl2va sibling -- see it for why the gate is per-row and why the
+    massive-activation-row check is the part that currently fails.
+    """
+    path, reference = conditioner
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
+    shape = tuple(submesh.shape)
+    tp_factor = shape[tp_axis]  # 8 (axis 1)
+    tower_sp_axis = 1 - tp_axis  # 0
+    tower_sp_factor = shape[tower_sp_axis]  # 4
+
+    tokenizer = transformers.AutoTokenizer.from_pretrained(path)
+    processor = transformers.AutoImageProcessor.from_pretrained(path)
+    vision = processor(images=_reference_images(), return_tensors="pt")
+    pixel_values, grid = vision["pixel_values"], vision["image_grid_thw"]
+    assert grid.tolist() == [[1, 128, 128], [1, 128, 170]], f"unexpected two_refs grid: {grid.tolist()}"
+    merge = reference.visual.config.spatial_merge_size**2
+    per_image_tokens = [int(grid[i].prod()) // merge for i in range(grid.shape[0])]
+
+    # Presentation in encode_prompt order: one "<Picture i>: " label + vision block per reference, then
+    # the prompt verbatim -- no chat template, no special tokens.
+    image_pad = tokenizer.convert_tokens_to_ids("<|image_pad|>")
+    vstart = tokenizer.convert_tokens_to_ids("<|vision_start|>")
+    vend = tokenizer.convert_tokens_to_ids("<|vision_end|>")
+    ids_list: list[int] = []
+    for i, n_tokens in enumerate(per_image_tokens):
+        ids_list += tokenizer(f"<Picture {i + 1}>: ", add_special_tokens=False)["input_ids"]
+        ids_list += [vstart] + [image_pad] * n_tokens + [vend]
+    ids_list += tokenizer("a robot dancing", add_special_tokens=False)["input_ids"]
+    ids = torch.tensor([ids_list], dtype=torch.long)
+    type_ids = (ids == image_pad).long()
+    seq_len = ids.shape[1]
+    cfg = reference.language_model.config
+    logger.info(f"[two_refs] presentation built: seq={seq_len}, image tokens={per_image_tokens}.")
+
+    # --- golden (check only): the tensor production reads, via the API it reads it with (fl2va sibling).
+    # In `perf` this whole forward is skipped -- it is the long pole (a fp32 CPU forward of the 32B
+    # reference), and perf gates on shape + finiteness, not PCC. ---
+    golden = None
+    if check_pcc:
+        logger.info(
+            f"[two_refs] computing the HF golden -- a slow fp32 CPU forward (vision tower over "
+            f"{int(grid.prod(dim=1).sum())} patches, then {TAP} decoder layers over {seq_len} tokens). "
+            "This is the long pole; not a hang."
+        )
+        with torch.no_grad():
+            outputs = reference(
+                input_ids=ids,
+                attention_mask=torch.ones_like(ids),
+                mm_token_type_ids=type_ids,
+                pixel_values=pixel_values,
+                image_grid_thw=grid,
+                use_cache=False,
+                output_hidden_states=True,
+            )
+        golden = outputs.hidden_states[TAP].float()
+        assert golden.shape == (1, seq_len, cfg.hidden_size)
+        logger.info(f"[two_refs] HF golden done: hidden_states[{TAP}] {tuple(golden.shape)}.")
+    else:
+        logger.info("[two_refs] perf mode: skipping the HF golden; timing the device pipeline only.")
+
+    # --- port: build both stages once (module weights + the mrope index are one-time setup) ---
+    tower = _tower(
+        reference.visual,
+        submesh,
+        parallel_config=EncoderParallelConfig(
+            tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=tp_factor),  # TP=8 on the size-8 axis
+            sequence_parallel=ParallelFactor(mesh_axis=tower_sp_axis, factor=tower_sp_factor),  # SP=4 on size-4
+        ),
+        ccl_manager=CCLManager(submesh, num_links=num_links, topology=ttnn.Topology.Linear),
+    )
+    rope_params = getattr(cfg, "rope_parameters", None) or cfg.rope_scaling
+    head_dim = getattr(cfg, "head_dim", None) or cfg.hidden_size // cfg.num_attention_heads
+    encoder, _ = build_minimax_h3_text_encoder(
+        path,
+        mesh_device=submesh,
+        parallel_config=EncoderParallelConfig(tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis)),
+        ccl_manager=CCLManager(submesh, num_links=num_links, topology=ttnn.Topology.Linear),
+        is_fsdp=False,
+        num_layers=TAP,
+        load_weights=False,
+    )
+    layer_re = re.compile(r"^layers\.(\d+)\.")
+    truncated = {
+        key: value
+        for key, value in reference.language_model.state_dict().items()
+        if not (m := layer_re.match(key)) or int(m.group(1)) < TAP
+    }
+    encoder.load_torch_state_dict(truncated)
+
+    assert rope_params.get("mrope_interleaved") is True, "this checkpoint is expected to be interleaved"
+    position_ids = mrope_position_ids(
+        type_ids, image_grid_thw=grid, spatial_merge_size=reference.visual.config.spatial_merge_size
+    )
+    expected_position_ids, _ = reference.get_rope_index(ids, mm_token_type_ids=type_ids, image_grid_thw=grid.clone())
+    assert torch.equal(position_ids, expected_position_ids), "mrope_position_ids no longer matches get_rope_index"
+    runs = vision_token_runs(ids, image_pad)
+    assert len(runs) == 2 and [n for _, n in runs] == per_image_tokens, f"unexpected two_refs layout: {runs}"
+    logger.info("[two_refs] tt tower + decoder built, weights loaded. Starting the device pipeline loop.")
+
+    # --- the full pipeline, tower -> decoder, timed end to end EACH iteration. iter 1 compiles/caches
+    # kernels, iter 2 is the measured steady-state pass (read iter 2). Every per-request step is inside
+    # the loop: (re)build + upload both stages' inputs and run both forwards, so nothing is amortized. ---
+    sp = dict(device=submesh, mesh_axis=tower_sp_axis, shard_dim=0)  # SP-shard tower inputs on the rows
+    merged = deepstack = out = None
+    for i in range(_PERF_ITERS):
+        ttnn.synchronize_device(submesh)
+        t0 = time.time()
+        # vision tower: host build + H2D
+        vc, vs = tower.prepare_rope(grid)
+        tt_patches = bf16_tensor(pixel_values.float(), **sp)
+        tt_pos = bf16_tensor(tower.prepare_pos_embeds(grid), **sp)
+        tt_vcos, tt_vsin = bf16_tensor(vc, **sp), bf16_tensor(vs, **sp)
+        ttnn.synchronize_device(submesh)
+        t1 = time.time()
+        # vision tower: forward (windowed multi-block SP attention)
+        merged, deepstack = tower.forward(
+            tt_patches, pos_embeds=tt_pos, rope=(tt_vcos, tt_vsin), cu_seqlens=vision_cu_seqlens(grid)
+        )
+        ttnn.synchronize_device(submesh)
+        t2 = time.time()
+        # decoder: host build + H2D
+        dcos, dsin = create_rope_tensors(
+            1,
+            seq_len,
+            None,
+            head_dim,
+            rope_params["rope_theta"],
+            rope_params["mrope_section"],
+            position_ids=position_ids,
+            interleaved=True,
+        )
+        tt_ids = ttnn.from_torch(ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=submesh)
+        tt_dcos, tt_dsin = bf16_tensor(dcos, device=submesh), bf16_tensor(dsin, device=submesh)
+        ttnn.synchronize_device(submesh)
+        t3 = time.time()
+        # decoder: forward (causal, TAP layers), fed this iter's tower output
+        out = encoder.forward(
+            tt_ids,
+            attention_mask=None,
+            pos_embeds=(tt_dcos, tt_dsin),
+            vision_embeds=merged,
+            vision_runs=runs,
+            deepstack_embeds=deepstack,
+        )[0]
+        ttnn.synchronize_device(submesh)
+        t4 = time.time()
+        logger.info(
+            f"full conditioner [two_refs] tp{tp_factor}_sp{tower_sp_factor} iter {i + 1}/{_PERF_ITERS}: "
+            f"tower prep {(t1 - t0) * 1000:8.1f} | tower op {(t2 - t1) * 1000:8.1f} | "
+            f"dec prep {(t3 - t2) * 1000:8.1f} | dec op {(t4 - t3) * 1000:8.1f} | "
+            f"e2e {(t4 - t0) * 1000:8.1f} ms"
+        )
+    actual = tensor.to_torch(out, mesh_axes=[None, None, None])
+
+    logger.info(
+        f"minimax-h3 fused conditioner [real, two_refs] TP={tp_factor} SP={tower_sp_factor} "
+        f"hidden_states[{TAP}], grids={grid.tolist()}, seq={seq_len} "
+        f"({sum(per_image_tokens)} image tokens = {per_image_tokens}):"
+    )
+    assert actual.shape[-2:] == (seq_len, cfg.hidden_size)
+    assert torch.isfinite(actual).all(), "conditioner output contains NaN or Inf"
+    if not check_pcc:
+        return  # perf: shape + finiteness only, no golden to compare against
+
+    # Per-row gate, identical in shape to the fl2va sibling: text rows, ordinary vision, massive rows.
+    g = golden[0].double()
+    p = actual.reshape(golden.shape)[0].double()
+    row_error = (p - g).norm(dim=1) / g.norm(dim=1)
+    is_text = ~type_ids[0].bool()
+    norms = g.norm(dim=1)
+    median_norm = float(norms.median())
+    golden_massive = norms > MASSIVE_ROW_MULTIPLE * median_norm
+    ours_massive = p.norm(dim=1) > MASSIVE_ROW_MULTIPLE * median_norm
+
+    assert_quality(golden, actual)  # logged, not gated
+    logger.info(f"  row norms: median {median_norm:.1f}, max {float(norms.max()):.1f}")
+    for name, mask in (
+        ("text", is_text),
+        ("ordinary vision", ~golden_massive & ~ours_massive & ~is_text),
+        ("massive (either side)", golden_massive | ours_massive),
+    ):
+        if mask.any():
+            e = row_error[mask]
+            logger.info(
+                f"  {name:22s} n={int(mask.sum()):4d}  median {float(e.median()) * 100:7.2f} %  "
+                f"max {float(e.max()) * 100:8.2f} %"
+            )
+
+    assert (
+        float(row_error[is_text].max()) < FUSED_MAX_TEXT_ROW_ERROR
+    ), f"text rows are {float(row_error[is_text].max()) * 100:.2f} % off; the decoder path itself is wrong"
+    assert (
+        float(row_error.median()) < FUSED_MAX_MEDIAN_ROW_ERROR
+    ), f"median per-row error {float(row_error.median()) * 100:.2f} % exceeds {FUSED_MAX_MEDIAN_ROW_ERROR * 100:.0f} %"
+    missing = int((golden_massive & ~ours_massive).sum())
+    spurious = int((ours_massive & ~golden_massive).sum())
+    assert missing == 0 and spurious == 0, (
+        f"massive-activation rows disagree: {missing} missing from ours, {spurious} spurious "
+        f"(golden {int(golden_massive.sum())} such rows, ours {int(ours_massive.sum())})"
     )

@@ -34,6 +34,8 @@
 #     down_proj  (128, 3200, 5120)   row-parallel: K sharded, N full
 # =============================================================================
 
+import time
+
 import pytest
 import torch
 import transformers
@@ -68,6 +70,13 @@ HIDDEN_ACT = "silu"
 VOCAB_SIZE = 256
 SEQ_LEN = 128  # == SEQ_BUCKET_SIZE, so the encoder's prompt bucketing does not pad
 
+# The decoder sequence length a two_refs vision request produces: 38,144 patches (a 128x128 plus a
+# 128x170 reference image) merged 2x2 -> 9,536 image tokens (4,096 + 5,440), which become the
+# <|image_pad|> rows the decoder runs over. We emulate that scale here -- as if the tower produced
+# these rows under tp8_sp4 + windowed SDPA -- and let the block run its normal causal TP=8 path (the
+# block is length-agnostic to which rows are image). Tile-aligned: 9536 == 298 * 32.
+TWO_REFS_SEQ_LEN = 9536
+
 # `single` is the profiling target and runs anywhere. The TP=8 configs mirror
 # `test_text_encoder_minimax_h3.py` and need a 32-chip mesh; they are what
 # reproduce the sharded matmul shapes listed in the header.
@@ -91,6 +100,41 @@ _PARAMS = pytest.mark.parametrize(
     indirect=["mesh_device", "device_params"],
 )
 
+# The two_refs case (9,536 tokens) is far heavier than the 128 profiling case -- the fp32 reference's
+# quadratic attention and a 27x-longer device run -- so it needs headroom over the global budget. The
+# 128 cases finish in seconds regardless.
+pytestmark = pytest.mark.timeout(1800)
+
+
+# Warmup+measure iterations: iter 1 compiles/caches kernels, iter 2 is the measured steady-state pass
+# (read iter 2's numbers). Matches the vision-tower test's perf loop.
+_PERF_ITERS = 2
+
+
+def _timed(submesh, tag, prep, op):
+    """Run `op(prep())` under device-synced prep/op/e2e wall-clock timing, `_PERF_ITERS` times.
+
+    `prep()` builds and uploads the inputs (host build + H2D transfer); `op(inputs)` runs the device
+    op. A sync brackets each half so the numbers are honest wall clock. Returns the last op result (the
+    steady-state one), so the PCC assertion after still runs on a real output.
+    """
+    result = None
+    n = _PERF_ITERS
+    for i in range(n):
+        ttnn.synchronize_device(submesh)
+        t0 = time.time()
+        inputs = prep()
+        ttnn.synchronize_device(submesh)
+        t1 = time.time()
+        result = op(inputs)
+        ttnn.synchronize_device(submesh)
+        t2 = time.time()
+        logger.info(
+            f"{tag} iter {i + 1}/{n}: prep {(t1 - t0) * 1000:8.1f} ms (host build + H2D) | "
+            f"op {(t2 - t1) * 1000:8.1f} ms | e2e {(t2 - t0) * 1000:8.1f} ms"
+        )
+    return result
+
 
 def _config():
     return transformers.Qwen3VLTextConfig(
@@ -108,8 +152,20 @@ def _config():
     )
 
 
+@pytest.fixture(
+    scope="module",
+    params=[
+        pytest.param(SEQ_LEN, id="short_128"),
+        pytest.param(TWO_REFS_SEQ_LEN, id="two_refs_9536"),
+    ],
+)
+def seq_len(request):
+    """Sequence length under test: the short profiling length, and the two_refs decoder scale."""
+    return request.param
+
+
 @pytest.fixture(scope="module")
-def golden():
+def golden(seq_len):
     """One reference forward, capturing the inputs and outputs of the layer and of its two halves.
 
     Hooks rather than direct calls: `Qwen3VLTextDecoderLayer.forward` takes `position_embeddings` and
@@ -148,7 +204,7 @@ def golden():
         layer.self_attn.register_forward_hook(grab("attn"), with_kwargs=True),
         layer.mlp.register_forward_hook(grab("mlp"), with_kwargs=True),
     ]
-    ids = torch.randint(0, VOCAB_SIZE, (1, SEQ_LEN))
+    ids = torch.randint(0, VOCAB_SIZE, (1, seq_len))
     with torch.no_grad():
         lm(input_ids=ids, attention_mask=torch.ones_like(ids), use_cache=False)
     for h in handles:
@@ -175,12 +231,12 @@ def _ctx(mesh_device, submesh_shape, tp_axis, num_links):
     return submesh, Qwen3VlContext(device=submesh, tp_axis=tp_axis, ccl_manager=ccl, fsdp_mesh_axis=None)
 
 
-def _rope(submesh):
+def _rope(submesh, seq_len):
     # Production (`test_text_encoder_minimax_h3.py`) leaves `interleaved` at False even though this
     # checkpoint declares `mrope_interleaved`: the two layouts coincide exactly while all three MRoPE
     # axes carry the same position, which is the text-only case. Verified equal here to 7.6e-6, i.e.
     # the documented `theta ** -x` vs `1 / theta ** x` ulp difference and nothing else.
-    cos, sin = create_rope_tensors(1, SEQ_LEN, None, HEAD_DIM, ROPE_THETA, MROPE_SECTION)
+    cos, sin = create_rope_tensors(1, seq_len, None, HEAD_DIM, ROPE_THETA, MROPE_SECTION)
 
     # Omitting `position_ids` must stay equivalent to passing the token index on all three axes. This is
     # the call Ideogram 4.0 makes through the shared encoder, and `test_qwen3vl.py` -- the test that
@@ -188,12 +244,12 @@ def _rope(submesh):
     # currently runs.
     explicit = create_rope_tensors(
         1,
-        SEQ_LEN,
+        seq_len,
         None,
         HEAD_DIM,
         ROPE_THETA,
         MROPE_SECTION,
-        position_ids=torch.arange(SEQ_LEN).view(1, 1, -1).expand(3, 1, -1),
+        position_ids=torch.arange(seq_len).view(1, 1, -1).expand(3, 1, -1),
     )
     for a, b, which in zip((cos, sin), explicit, ("cos", "sin")):
         assert torch.equal(a, b), f"{which}: omitting position_ids no longer matches the shared token index"
@@ -202,7 +258,7 @@ def _rope(submesh):
 
 
 @_PARAMS
-def test_decoder_block_on_device(golden, mesh_device, submesh_shape, tp_axis, num_links):
+def test_decoder_block_on_device(golden, seq_len, mesh_device, submesh_shape, tp_axis, num_links):
     """The whole pre-norm layer: RMSNorm + attention + RMSNorm + MLP, both residuals.
 
     This is the profiling entry point -- one iteration of the layer that the 64-layer conditioner
@@ -222,10 +278,12 @@ def test_decoder_block_on_device(golden, mesh_device, submesh_shape, tp_axis, nu
     )
     block.load_torch_state_dict(golden["state"])
 
-    out = block.forward(
-        bf16_tensor(golden["layer_in"], device=submesh),
-        attention_bias=None,  # internal causal path; see the assertion in the `golden` fixture
-        pos_embeds=_rope(submesh),
+    out = _timed(
+        submesh,
+        f"decoder layer axis={tp_axis} seq={seq_len}",
+        lambda: (bf16_tensor(golden["layer_in"], device=submesh), _rope(submesh, seq_len)),
+        # internal causal path; see the assertion in the `golden` fixture
+        lambda inp: block.forward(inp[0], attention_bias=None, pos_embeds=inp[1]),
     )
 
     tp_factor = tuple(submesh.shape)[tp_axis] if tp_axis is not None else 1
@@ -234,7 +292,7 @@ def test_decoder_block_on_device(golden, mesh_device, submesh_shape, tp_axis, nu
 
 
 @_PARAMS
-def test_decoder_attention_on_device(golden, mesh_device, submesh_shape, tp_axis, num_links):
+def test_decoder_attention_on_device(golden, seq_len, mesh_device, submesh_shape, tp_axis, num_links):
     """Attention alone: fused qkv, per-head QK-RMSNorm, RoPE, SDPA, o_proj. Excludes the residual and
     the input norm, so it attributes the `qkv_proj` / `o_proj` half of the layer's time."""
     submesh, ctx = _ctx(mesh_device, submesh_shape, tp_axis, num_links)
@@ -251,16 +309,17 @@ def test_decoder_attention_on_device(golden, mesh_device, submesh_shape, tp_axis
     prefix = "self_attn."
     attn.load_torch_state_dict({k[len(prefix) :]: v for k, v in golden["state"].items() if k.startswith(prefix)})
 
-    out = attn.forward(
-        bf16_tensor(golden["attn_in"], device=submesh),
-        attention_bias=None,
-        pos_embeds=_rope(submesh),
+    out = _timed(
+        submesh,
+        f"decoder attn axis={tp_axis} seq={seq_len}",
+        lambda: (bf16_tensor(golden["attn_in"], device=submesh), _rope(submesh, seq_len)),
+        lambda inp: attn.forward(inp[0], attention_bias=None, pos_embeds=inp[1]),
     )
     assert_quality(golden["attn_out"].float(), tensor.to_torch(out, mesh_axes=[None, None, None]), pcc=0.99)
 
 
 @_PARAMS
-def test_decoder_mlp_on_device(golden, mesh_device, submesh_shape, tp_axis, num_links):
+def test_decoder_mlp_on_device(golden, seq_len, mesh_device, submesh_shape, tp_axis, num_links):
     """MLP alone: SwiGLU over `intermediate_size` 25600. Three of the layer's four matmuls by FLOPs,
     so this is where the layer's time is expected to sit."""
     submesh, ctx = _ctx(mesh_device, submesh_shape, tp_axis, num_links)
@@ -268,5 +327,10 @@ def test_decoder_mlp_on_device(golden, mesh_device, submesh_shape, tp_axis, num_
     mlp = Qwen3VlMlp(hidden_size=HIDDEN_SIZE, intermediate_size=INTERMEDIATE_SIZE, hidden_act=HIDDEN_ACT, ctx=ctx)
     mlp.load_torch_state_dict({k[len("mlp.") :]: v for k, v in golden["state"].items() if k.startswith("mlp.")})
 
-    out = mlp.forward(bf16_tensor(golden["mlp_in"], device=submesh))
+    out = _timed(
+        submesh,
+        f"decoder mlp axis={tp_axis} seq={seq_len}",
+        lambda: bf16_tensor(golden["mlp_in"], device=submesh),
+        lambda inp: mlp.forward(inp),
+    )
     assert_quality(golden["mlp_out"].float(), tensor.to_torch(out, mesh_axes=[None, None, None]), pcc=0.99)
