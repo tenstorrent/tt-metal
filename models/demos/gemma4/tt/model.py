@@ -976,8 +976,15 @@ class Gemma4Model:
             # Intermediate generator chunk: do not flush (last chunk owns the ring).
             return None
 
-        # Final norm
-        hidden_states = self.norm.forward(hidden_states)
+        # Final norm. In decode the only consumer is the lm_head matmul, which
+        # reads in0 from L1 — land the norm's sharded_to_interleaved there
+        # directly instead of in DRAM, so _apply_lm_head's hoist does not have to
+        # copy it back (one CopyDeviceOperation per step; same bits, same buffer
+        # type, same program config at the matmul).
+        hidden_states = self.norm.forward(
+            hidden_states,
+            interleaved_memory_config=ttnn.L1_MEMORY_CONFIG if is_decode else None,
+        )
 
         # Speculative decoding seed: the it-assistant drafter's recurrent hidden
         # is HF's ``model_outputs.hidden_states[-1]``. For the gemma4_unified text
