@@ -7,15 +7,15 @@
 ONE combined perf + quality e2e, on the ``mixed`` case -- the largest shape (padded_len 89856
 against 46080 for one image and 81664 for a sounded video) and the only one carrying all three
 modalities at once, in an order that exercises the per-modality row cursors of
-``split_condition_blocks``. The dropped ``one_image`` and ``video_with_sound`` e2e cases are
-covered where their failure modes actually live: per-modality encode parity is the device PCC
+``split_condition_blocks``. ``one_image`` and ``video_with_sound`` need no e2e of their own --
+their failure modes are gated where they live: per-modality encode parity is the device PCC
 gate in ``test_references_minimax_h3.py`` (``test_encode_references_matches_reference``), the
 packed layout is bit-exact host-gated there per case, and "the conditioning reaches the output"
-is ``test_ref2va_conditioning_is_not_a_no_op`` below. The former order-sensitivity e2e is gone
-for the same reason: reference order is bit-exact host-gated (``nine_mixed_reversed``), and the
-no-op discriminator already proves layout differences reach the output.
+is ``test_ref2va_conditioning_is_not_a_no_op`` below. Reference order likewise: it is bit-exact
+host-gated there (``nine_mixed_reversed``), and the no-op discriminator proves layout differences
+reach the output.
 
-The e2e folds the fully-warm latency measurement and the quality gates into one weight load:
+The e2e carries both the fully-warm latency measurement and the quality gates on one weight load:
 warmup at the real shape with the real references, then time the measured generation and gate its
 output. The timed Encoder row is a real device encode, vision tower included -- there is no
 prompt-embedding cache. The timing method is ``pipelines/ltx``'s -- prepares and export
@@ -280,11 +280,10 @@ def _pipeline(mesh_device) -> MiniMaxH3Pipeline:
 
 # The gated e2e case and the padded packed length it runs at, MEASURED end to end and asserted
 # below so the case cannot silently drift onto a shape the full-depth probe did not cover.
-# `mixed` is 89856 rather than the 90112 the host-only prediction gave, because that estimate used
-# a guessed presentation length and the real one tokenizes shorter. For the record, the two
-# formerly-gated smaller shapes measured 46080 (`one_image`) and 81664 (`video_with_sound`);
-# `padded_len` is what every program in the 50-block stack is keyed on, so it is the identity of
-# the measurement too.
+# `mixed` is 89856, not the 90112 a host-only estimate predicts from a guessed presentation length --
+# the real presentation tokenizes shorter. The other ref2va shapes measure 46080 (`one_image`) and
+# 81664 (`video_with_sound`); `padded_len` is what every program in the 50-block stack is keyed on,
+# so it is the identity of the measurement too.
 CASE = "mixed"
 EXPECTED_PADDED_LEN = 89856
 
@@ -342,8 +341,8 @@ def test_ref2va_end_to_end(mesh_device, reset_seeds):
     assert output.video.shape == (1, 3, NUM_FRAMES, HEIGHT, WIDTH), tuple(output.video.shape)
     assert output.video.min() >= 0.0 and output.video.max() <= 1.0, "decoded video must be in [0, 1]"
     assert torch.isfinite(output.video).all() and torch.isfinite(output.audio).all()
-    # A drift here means the case is no longer the request that was probed, so the memory
-    # verdict of the shape probe no longer covers it.
+    # A drift here means the case differs from the request that was probed, so the shape probe's
+    # memory verdict does not cover it.
     assert (
         pipeline.last_padded_len == EXPECTED_PADDED_LEN
     ), f"{case} ran at padded_len {pipeline.last_padded_len}, not the probed {EXPECTED_PADDED_LEN}"

@@ -56,7 +56,7 @@ _PATTERNS = [
 
 # `MINIMAX_H3_RUN_REF=0` skips the golden: no reference forward, no comparison, just our
 # implementation, asserting only shapes and finiteness. Default is on, so a plain `pytest` run is a
-# parity test exactly as before.
+# parity test.
 #
 # It is NOT a speed-up worth reaching for. The reference forward is memory-bandwidth bound at roughly
 # 2s; what dominates these tests is `load_torch_state_dict` pushing ~32B of weights onto the mesh, which
@@ -95,8 +95,8 @@ def _conditioner_dir() -> str:
 def _rope_params(text_config):
     """`(rope_theta, mrope_section, mrope_interleaved)`.
 
-    transformers >=5 moved `rope_theta` *into* `rope_parameters` and dropped the top-level attribute,
-    so it must not be referenced as a `dict.get` default -- Python evaluates defaults eagerly and
+    transformers >=5 keeps `rope_theta` inside `rope_parameters` with no top-level attribute, so it
+    must not be referenced as a `dict.get` default -- Python evaluates defaults eagerly and
     `text_config.rope_theta` raises `AttributeError` on this config.
     """
     params = getattr(text_config, "rope_parameters", None) or text_config.rope_scaling
@@ -131,14 +131,14 @@ def _reference_lm(path: str):
 
 
 # Galaxy (32 chips). TP on the size-8 axis -- axis 1, the config the pipeline runs -- shards the
-# ~32B conditioner to ~7.5 GiB/device. A tp8_axis0 variant used to run here too; the axis choice
-# only changes which CCL path the collectives take, and that path is covered by
+# ~32B conditioner to ~7.5 GiB/device. Only axis 1 runs here: the axis choice changes only which CCL
+# path the collectives take, and that path is covered by
 # `tests/encoders/qwen3vl/test_qwen3vl_decoder_block.py`'s tp8_axis0 case without a second ~32B
 # weight load.
 #
 # No FSDP: `is_fsdp` stays at its False default, so weights are replicated on the non-TP axis rather
-# than sharded across it. FSDP was required on a Wormhole 2x4, where TP=4 puts 14.9 GiB of weights on
-# a 12 GiB chip; a Blackhole chip is 31.9 GiB, so even TP=4 fits and FSDP buys nothing here. The cost
+# than sharded across it. FSDP is needed on a Wormhole 2x4, where TP=4 puts 14.9 GiB of weights on
+# a 12 GiB chip; a Blackhole chip has 31.9 GiB, so even TP=4 fits and FSDP buys nothing here. The cost
 # of skipping it is a 4x weight replication across the non-TP axis -- load-time bandwidth, not
 # capacity.
 #
@@ -192,8 +192,8 @@ def test_minimax_h3_text_conditioner(
     # This checkpoint sets `mrope_interleaved=True`, and `create_rope_tensors` implements the
     # *chunked* ([TTT..HHH..WWW]) layout, not the interleaved ([THWTHW..]) one. The two coincide
     # exactly while all three MRoPE axes carry the same position, which is the case for `t2va` (no
-    # vision tokens). When the vision tower lands the axes diverge and this assertion will fail --
-    # which is the intended signal that the chunked path is no longer valid.
+    # vision tokens). A vision-bearing request makes the axes diverge and this assertion fail --
+    # the intended signal that the chunked path stops reproducing the reference.
     if mrope_interleaved:
         from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLTextRotaryEmbedding
 

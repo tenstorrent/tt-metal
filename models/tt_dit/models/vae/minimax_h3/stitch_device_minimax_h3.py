@@ -12,8 +12,8 @@ Why it is not simply a weighted accumulation: the reference `stitch_tiles` is **
 asymmetric**. For an interior tile the corner region is `b*L + (1-b)*(a*A + (1-a)*T)` where `L` is the
 *unblended* left tile and the diagonal tile never appears. Measured against a separable ramp
 formulation at the production geometry, 11.1 % of pixels differ by up to 4.66 --- an O(1) error over a
-ninth of every frame, which the artifact rubric says surfaces as seams. So this mirrors the reference
-order exactly, tile by tile, rather than reformulating it.
+ninth of every frame, which surfaces as visible seams. So this mirrors the reference order exactly,
+tile by tile, rather than reformulating it.
 
 The blend runs in **float32** on device even though the decoder emits bfloat16, because the host path
 it replaces blends in float32 (`.float()` before `stitch_tiles`). Keeping the same precision is what

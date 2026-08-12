@@ -8,8 +8,8 @@
 `minimal_matmul_strided_reduce_scatter_async`. That fusion is only a win with a *swept* blocking:
 `get_fused_mmrs_config` falls back to `default_fused_mmrs_config`, which puts the matmul on an 8x7 =
 56-core grid with `M_block=2` and subblock 1x1 -- half the machine at the least efficient subblock,
-where the unfused path runs on 110 cores at subblock (2, 2). Measured, that fallback made the fusion a
-**45% regression** on the stage (1.75 -> 2.55 ms) before these entries existed.
+where the unfused path runs on 110 cores at subblock (2, 2). Measured, that fallback makes the fusion a
+**45% regression** on the stage (1.75 -> 2.55 ms).
 
 Unlike `agmm_config` these must be keyed on the full `(M, K, N)`, because that is what
 `get_fused_mmrs_config` looks up -- there is no `default_block_size` hook to key more loosely. M is the
@@ -74,7 +74,7 @@ def has_mmrs_config(m: int, k: int, n: int) -> bool:
     swept blocking, so an arbitrary duration gets the fused path. `M_block` does *not* have to divide
     the M tile count -- a partial trailing block along M is fine, unlike along K, where the ring
     delivers the gathered input in fixed chunks. M=4768 was swept successfully at `M_block=4` despite
-    being 149 tiles; requiring divisibility here silently disabled the fused path at both 5s and 15s.
+    being 149 tiles; requiring divisibility here would silently disable the fused path at both 5s and 15s.
     """
     return k == _K and n == _N and m % _TILE == 0
 

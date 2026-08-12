@@ -9,7 +9,7 @@ The module tree **mirrors the diffusers key names one-for-one**
 ``...resnets.0.conv_shortcut``), so almost nothing needs a ``_prepare_torch_state``
 override. That is deliberate: the available checkpoint at
 ``/data/cglagovich/MiniMax-H3-diffusers/vae`` is diffusers-converted, not the raw
-MiniMax layout an earlier draft assumed.
+MiniMax layout.
 
 Two facts drive the plumbing:
 
@@ -18,12 +18,11 @@ Two facts drive the plumbing:
   the batch axis so no statistic ever mixes across frames.
 
 The norm is :class:`MiniMaxH3DistributedFrameGroupNorm`, which computes the per-(frame,
-group) statistics itself. Three in-tree alternatives were measured and all lost --
-``ttnn.group_norm`` with T as batch (2.7x slower, and bf16-only, which made every norm a
-bf16 island in an otherwise fp32 encoder), a fused distributed GroupNorm device op written
-for this branch and since dropped (1.6x slower per frame, ~30 GB/s against the stats norm's
-~112), and carrying the resnet chain in TILE to avoid the round trip (a wash). All three
-were measured before being rejected; do not re-derive them.
+group) statistics itself. Measured alternatives all lose: ``ttnn.group_norm`` with T as
+batch is 2.7x slower and bf16-only, which makes every norm a bf16 island in an otherwise
+fp32 encoder; a fused distributed GroupNorm device op is 1.6x slower per frame (~30 GB/s
+against the stats norm's ~112); carrying the resnet chain in TILE to avoid the round trip
+is a wash. Do not re-derive them.
 
 Each norm is still specialised to its ``(T, H, W)`` at construction, because the divisor is
 the *global* element count per (frame, group) and only the constructor knows the mesh factor.
@@ -48,7 +47,7 @@ _SILU_ACTIVATION = ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)
 
 # Compute the group variance as E[x^2] - E[x]^2 rather than centring first. Saves one full
 # pass over the activation per norm site (four -> three). The class docstring explains why
-# the two-pass form was chosen: the group means are not near zero, so this is exactly the
+# the two-pass form is kept: the group means are not near zero, so this is exactly the
 # cancellation Welford exists to avoid. Contained here by doing the subtraction on the
 # per-(frame, group) stats in fp32 -- 32 scalars per frame -- so only the *sums* are bf16.
 MINIMAX_H3_ONE_PASS_VARIANCE = True
@@ -59,14 +58,14 @@ class MiniMaxH3DistributedFrameGroupNorm(Module):
 
     Takes and returns ``(1, T, H, W, C)`` ROW_MAJOR, with ``H`` the **local** height.
 
-    Neither existing primitive can do this job:
+    No existing primitive does this job:
 
     * ``ttnn.group_norm`` has no notion of the mesh, so a sharded ``H`` gives each device a
       statistic over its own strip only.
-    * A fused distributed GroupNorm device op was written for this branch and dropped: it
-      hard-rejects ``N > 1``, and here ``N`` is ``T`` (17/9/5) because the statistic is per
-      frame. It also took a single ``cluster_axis``, so it could not reduce over both mesh
-      axes -- and it measured 1.6x slower than this anyway.
+    * A fused distributed GroupNorm device op does not fit: it hard-rejects ``N > 1``, and
+      here ``N`` is ``T`` (17/9/5) because the statistic is per frame. It also takes a
+      single ``cluster_axis``, so it cannot reduce over both mesh axes -- and it measures
+      1.6x slower than this anyway.
 
     So the statistics are computed directly: per ``(frame, group)`` local sums, an
     all-reduce of **only those** -- ``T x 32`` scalars, against a full-activation gather --
@@ -80,8 +79,8 @@ class MiniMaxH3DistributedFrameGroupNorm(Module):
     on the ``(T,1,1,G)`` stats tensor in fp32, never on the activation; PCC gates the
     difference at 0.02 pp.
 
-    Runs in the activation dtype, so unlike ``ttnn.group_norm`` -- which is bf16-only, and
-    was the encoder's precision floor while it was in use -- fp32 activations stay fp32.
+    Runs in the activation dtype, so fp32 activations stay fp32 -- unlike
+    ``ttnn.group_norm``, which is bf16-only and would floor the encoder's precision.
     """
 
     def __init__(
@@ -183,8 +182,8 @@ class MiniMaxH3DistributedFrameGroupNorm(Module):
             centred = ttnn.subtract(x, mean)
             variance = self._spread(ttnn.multiply(self._group_sums(ttnn.multiply(centred, centred)), scale))
             # Fold ``weight`` into the inverse standard deviation on the (T,1,1,C) stats
-            # tensor. ``normed * weight + bias`` was three full passes over the activation;
-            # ``centred * gamma + bias`` is two, and the extra work lands on a tensor
+            # tensor. ``normed * weight + bias`` costs three full passes over the activation;
+            # ``centred * gamma + bias`` costs two, and the extra work lands on a tensor
             # 65536x smaller.
             gamma = ttnn.multiply(ttnn.rsqrt(ttnn.add(variance, self.eps)), self.weight.data)
             beta = self.bias.data
@@ -326,8 +325,8 @@ class MiniMaxH3ResnetBlock3d(Module):
     def forward(self, x_BTHWC: ttnn.Tensor) -> ttnn.Tensor:
         """``(1,T,H,W,C)`` ROW_MAJOR in and out -- what ``conv3d`` requires on both sides.
 
-        Carrying the chain in TILE instead, to make the residual add cheaper, was measured
-        and is a wash: it moves the cost into Tilize rather than removing it.
+        Carrying the chain in TILE instead, to make the residual add cheaper, measures as a
+        wash: it moves the cost into Tilize rather than removing it.
         """
         norm_kwargs = dict(parallel_config=self.parallel_config, ccl_manager=self.ccl_manager)
         h = self.conv1(_norm_silu(self.norm1, x_BTHWC, self.dtype, **norm_kwargs))

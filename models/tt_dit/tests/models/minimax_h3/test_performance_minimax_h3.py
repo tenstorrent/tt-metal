@@ -4,12 +4,11 @@
 
 """Device performance of one MiniMax-H3 transformer block at realistic 768P sequence lengths.
 
-This file used to also hold the fully-warm pipeline-latency tests (`t2va`, `fl2va`, `ref2va`).
-Those measurements now live inside the e2e gates -- `test_pipeline_minimax_h3.py`,
-`test_pipeline_fl2va_minimax_h3.py` and `test_pipeline_ref2va_minimax_h3.py` -- which fold the
-warmup-then-measure method into the same weight load as the quality checks, so one pipeline
-construction serves both. What stays here is the cheap block-level test, which is where the
-duration-scaling data (5 s / 10 s / 15 s) comes from: the packed sequence length is the only thing
+Fully-warm pipeline-latency measurements (`t2va`, `fl2va`, `ref2va`) live in the e2e gates --
+`test_pipeline_minimax_h3.py`, `test_pipeline_fl2va_minimax_h3.py`,
+`test_pipeline_ref2va_minimax_h3.py` -- where one pipeline construction serves both the
+warmup-then-measure timing and the quality checks. This file holds the cheap block-level test that
+produces the duration-scaling data (5 s / 10 s / 15 s): the packed sequence length is the only thing
 that changes with duration, and one block under Tracy shows how every one of the 50 blocks scales.
 
 Run under the Tracy device profiler, which emits the per-op CSV this test exists to produce:
@@ -27,7 +26,7 @@ Both signposts matter. Without the closing one the analysed region runs to the e
 folds the output readback into the measurement.
 
 IMPORTANT: one profiled run yields one parameter's worth of ops. Running all three durations under a
-single `--profile` invocation produced a CSV containing only the first (verified against the recorded
+single `--profile` invocation yields a CSV containing only the first (verified against the recorded
 tensor shapes), so profile one duration at a time with `-k`:
 
     for d in 5s_768p 10s_768p 15s_768p; do

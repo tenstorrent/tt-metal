@@ -28,9 +28,9 @@ an entry at all rather than falling back.
 Measured with `models/tt_dit/utils/sweep_mm_block_sizes.py` on 4x8 Blackhole Galaxy at the 12x9 grid
 the model uses (one core column reserved for CCL), 811 combos over the three shapes, at M=4768:
 
-    (5376, 5376)  to_qkv   (8, 7, 12)  1416 us   was (8, 7, 8) 1634 us, -13.4%
-    (7168, 1344)  to_out   (8,  8, 6)   890 us   already optimal among usable combos
-    (5376, 7168)  ff1      (8, 3, 14)  2089 us   was (8, 7, 8) 2365 us, -11.7%
+    (5376, 5376)  to_qkv   (8, 7, 12)  1416 us   vs (8, 7, 8): 1634 us, -13.4%
+    (7168, 1344)  to_out   (8,  8, 6)   890 us   best among usable combos
+    (5376, 7168)  ff1      (8, 3, 14)  2089 us   vs (8, 7, 8): 2365 us, -11.7%
 
 The sweep's own best for to_out was (8, 8, 5) at 875 us -- 1.7% faster -- but it needs subblock
 (4, 1), and `get_matmul_config` hardcodes subblock (2, 2) for anything supplied via

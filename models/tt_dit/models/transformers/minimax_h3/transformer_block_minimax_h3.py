@@ -174,7 +174,7 @@ class MiniMaxH3TransformerBlock(Module):
         bias = state.pop("adaln_proj.linear.bias", None)
         if self.precomputed_adaln:
             # Dropped: these are the 26 GB the precomputed table exists to keep off the
-            # device. Popping them above already removed them from the state the loader will check.
+            # device. The pops above already strip them from the state the loader checks.
             return
         if weight is not None:
             state["adaln_proj.weight"] = _reorder_for_tp(weight)
@@ -255,7 +255,7 @@ class MiniMaxH3TransformerBlock(Module):
         Returns the block output, fractured N on SP and hidden_size on TP.
         """
         # Precomputed: the six tables come from the host-built cache, addressed by the same absolute
-        # `adaln_indices`, so nothing downstream changes. Otherwise project `temb` as before.
+        # `adaln_indices`, so nothing downstream changes. Otherwise project `temb` on device.
         if modulation_tables is not None:
             if len(modulation_tables) != NUM_MODULATION_PARAMS:
                 raise ValueError(f"expected {NUM_MODULATION_PARAMS} modulation tables, got {len(modulation_tables)}")
@@ -308,10 +308,10 @@ class MiniMaxH3TransformerBlock(Module):
         # ff2's reduce-scatter and the gated residual after it fuse into a single
         # minimal_matmul_strided_reduce_scatter_async, computing residual + ff2(...) * gate in one op.
         #
-        # Only take it for a shape with a swept blocking. The fallback config runs the matmul on 56 of
-        # the device's 120 cores at subblock 1x1, which made this fusion a 45% regression on the stage
-        # before mmrs_config existed -- and silently, since an unknown shape did not warn. See
-        # mmrs_config for the sweep and the grid/bandwidth tradeoff behind it.
+        # Only take it for a shape with a swept blocking. The generic fallback config runs the matmul
+        # on 56 of the device's 120 cores at subblock 1x1, making the fused op a measured 45%
+        # regression on this stage (1.75 -> 2.55 ms) -- and silently, since an unknown shape does not
+        # warn. See mmrs_config for the sweep and the grid/bandwidth tradeoff behind it.
         ff2_shape = (normed.shape[2], self.ffn_dim // self.tp_factor, self.hidden_size)
         if self.tp_factor > 1 and has_mmrs_config(*ff2_shape):
             # M is only known here (it tracks the packed sequence length), so the blocking is

@@ -20,11 +20,10 @@ and the design depends on both:
   over all 98 distinct levels shifts it ~5e-6 and the bf16 projection amplifies
   that to about one ULP on ~0.7% of values.
 
-The full 26 GB build against the real checkpoint was verified once with a
-one-off builder script (``tools/build_adaln_table.py``, since removed; see git
-history for the script and its run); it reported 0 mismatches over 196
-(step, layer) projections and all 49 final-layer rows. These tests use a small
-synthetic checkpoint so they run without it.
+The full 26 GB build against the real checkpoint was verified once by a one-off
+builder script (recoverable from git history: ``tools/build_adaln_table.py``):
+0 mismatches over 196 (step, layer) projections and all 49 final-layer rows.
+These tests use a small synthetic checkpoint so they run without it.
 """
 
 import pytest

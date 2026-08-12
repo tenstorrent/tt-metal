@@ -647,9 +647,9 @@ def _apply_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tens
     # the fused ttnn.experimental.rotary_embedding_llama (rope_halfsplit_to_interleaved*); that
     # conversion is numerically neutral there. Not adopted here: it needs a head_dim channel
     # permutation baked into the qkv weights, and the encoder RoPE is a negligible slice of latency
-    # (the encoder is ~1.5% of end-to-end), so the fused op buys ~nothing. (An earlier interleaved
-    # attempt regressed PCC only because cos/sin were left half-split while the rotate switched to
-    # adjacent-pair -- a bug in that attempt, not the layout.)
+    # (the encoder is ~1.5% of end-to-end), so the fused op buys ~nothing. If it is ever adopted,
+    # cos/sin must be converted to adjacent-pair along with the rotate -- mixing the two layouts
+    # regresses PCC silently.
     return x * cos + _rotate_half(x) * sin
 
 
@@ -852,8 +852,9 @@ def create_rope_tensors(
 
     # `theta ** -x` rather than the reference's `1 / theta ** x`: mathematically identical, one fp32
     # ulp apart (~1.2e-7 relative), and *not* invisible after the bf16 cast the caller applies -- a few
-    # entries land on the other side of a rounding boundary. Kept as-is so this stays bit-for-bit for
-    # existing callers; the 1-ulp divergence from the reference is already absorbed in the measured PCC.
+    # entries land on the other side of a rounding boundary. Do not switch forms: existing callers
+    # depend on this one bit-for-bit, and its 1-ulp divergence from the reference is absorbed in the
+    # measured PCC.
     inv_freq = rope_theta ** (-torch.arange(0, head_dim, 2, dtype=torch.int64).to(dtype=torch.float) / head_dim)
     inv_freq_expanded = inv_freq[None, None, :, None].float().expand(3, batch_size, -1, 1)
     position_ids_expanded = position_ids[:, :, None, :].float()

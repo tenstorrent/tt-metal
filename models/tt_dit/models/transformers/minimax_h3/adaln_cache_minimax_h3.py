@@ -8,8 +8,8 @@ The AdaLN projections never reach the device. `adaln_proj` across 50 blocks
 is 26 GB of the checkpoint (6.50 GB per device at TP=4); the table that replaces it is 1.416 GB
 (0.354 GB per device). It is built on host by
 `pipelines/minimax_h3/adaln_precompute.precompute_adaln_table`, which reads the safetensors directly
-and never uploads the weights, so both the read and the residency disappear. It also removes one
-matmul per block per step (measured 0.58 ms, 3.4% of the 5s block).
+and never uploads the weights, so both the read and the residency disappear. Relative to on-device
+projection it also saves one matmul per block per step (measured 0.58 ms, 3.4% of the 5s block).
 
 **A table is valid for exactly one schedule.** Its rows are `(step, timestep level, modality)`
 triples derived from both schedulers' sigmas, the per-modality shifts and the keyframe noise-aug

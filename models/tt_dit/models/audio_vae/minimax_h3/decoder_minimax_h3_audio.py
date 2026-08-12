@@ -141,8 +141,7 @@ class MiniMaxH3AudioDecoder(Module):
         projected_device = self.dec_in_proj(x_device)
         # The upload replicates, and dec_in_proj is a k1 conv, so every device holds the same
         # result: read back one. A bare ``ttnn.to_torch`` asserts ``buffers.size() == 1`` and
-        # so only ever worked on a single-device mesh -- which is what kept this decoder off
-        # the mesh entirely, ``parallel_config`` or not. Same shape as the vocoder's own
+        # so only works on a single-device mesh. Same shape as the vocoder's own
         # ``_device_to_host``.
         if self.mesh_device.get_num_devices() > 1:
             projected_device = ttnn.get_device_tensors(projected_device)[0]
@@ -158,8 +157,9 @@ class MiniMaxH3AudioDecoder(Module):
 
         ``traced`` replays a captured device graph for the vocoder instead of dispatching it
         op by op. The vocoder is ~70 % host-bound, so this is its dominant lever -- unlike the
-        *visual* halves, which measured 1.00x traced because they are device-bound. Needs a ``trace_region_size`` on the mesh device; the first call at a
-        shape captures, later calls replay.
+        *visual* halves, which measure 1.00x traced because they are device-bound. Needs a
+        ``trace_region_size`` on the mesh device; the first call at a shape captures, later
+        calls replay.
         """
         _, channels, _ = latents_BCT.shape
         assert channels == self.latent_channels, f"expected {self.latent_channels} latent channels, got {channels}"

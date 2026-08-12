@@ -362,8 +362,7 @@ class DistributedLayerNorm(Module):
         """Lazy-allocate the row-major fp32 reciprocal LUT the fused op consumes.
 
         The fused op's reader NoC-reads a ROW_MAJOR [1,1,1,width_per_device] DRAM tensor
-        holding [1/1..1/width] (replicated per device) — unlike the composite Welford op,
-        which used a HEIGHT_SHARDED L1 layout. Cached per (device, width).
+        holding [1/1..1/width] (replicated per device). Cached per (device, width).
         """
         width = self.embedding_dim // self.mesh_width
         key = (self.mesh_device.id(), width)
@@ -434,7 +433,7 @@ Set mesh_axis to None to disable data parallelism.
 class GroupNorm(Module):
     default_num_out_blocks = {
         # (Batch, Height, Width, Channels): num_out_blocks
-    }  # used to override the num_out_blocks computed based on the input shape.
+    }  # overrides the num_out_blocks computed from the input shape.
 
     def __init__(
         self,

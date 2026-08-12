@@ -22,7 +22,7 @@ from __future__ import annotations
 from ....layers.audio_ops import audio_max_c_in_block
 from ....utils.conv3d import _FP32_BLOCKINGS, aligned_channels
 
-# 16 overshot L1 by 1.26x (1979264 B against 1572864 B) at the widest audio convs.
+# 16 overshoots L1 by 1.26x (1979264 B against 1572864 B) at the widest audio convs.
 T_OUT_BLOCK = 8
 C_OUT_BLOCK = 32
 

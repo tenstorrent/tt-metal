@@ -4,8 +4,8 @@
 
 """Reference-free sanity checks for a joint video + audio generation.
 
-`tests/models/wan2_2/common.py::check_output_sanity` covers the video side; nothing in tree covered
-the soundtrack or the relationship between the two, which is what this adds. Every threshold here
+`tests/models/wan2_2/common.py::check_output_sanity` covers the video side; this module adds the
+soundtrack and the relationship between the two streams. Every threshold here
 sits far below any real output, so these fire on genuine corruption and not on run-to-run noise --
 they answer "is this a real video with a real soundtrack, aligned to it", not "is it good".
 
@@ -363,9 +363,8 @@ def _ffmpeg():
 def write_artifacts(frames, audio, sampling_rate, directory: Path, stem: str = "t2va"):
     """Write the video, the soundtrack, and a muxed mp4. Returns the paths that were produced.
 
-    `stem` names the files. It defaults to `t2va` so every existing caller and every recorded artifact
-    path is unchanged; the fl2va gate passes its own so the two tasks' artifacts coexist in one
-    directory rather than overwriting each other.
+    `stem` names the files; each gate passes its own (the default is the t2va gate's) so the tasks'
+    artifacts coexist in one directory rather than overwriting each other.
     """
     import wave
 

@@ -23,10 +23,10 @@ def linear_compute_config(mesh_device, dtype):
     """The default compute kernel config every linear in tt_dit uses.
 
     HiFi2 for bf16 (HiFi4 for fp32), fp32 DEST accumulate, packer L1 accumulate, non-approx.
-    Note `fp32_dest_acc_en` is on: the "bf16 acc" that older comments refer to is the packer's L1
-    accumulation at the output dtype, not the DEST register. Callers that need more precision pass
-    an explicit `compute_kernel_config` to the layer constructor instead of moving this default --
-    the file is shared by every model here, so the default must not move without evidence.
+    `fp32_dest_acc_en` is on; the packer's L1 accumulation runs at the output dtype, not the DEST
+    register. Callers that need more precision pass an explicit `compute_kernel_config` to the
+    layer constructor instead of moving this default -- the file is shared by every model here,
+    so the default must not move without evidence.
     """
     return ttnn.init_device_compute_kernel_config(
         mesh_device.arch(),

@@ -118,8 +118,8 @@ MINIMAX_H3_PIXEL_MEAN = _MINIMAX_H3_PIXEL_MEAN
 MINIMAX_H3_PIXEL_STD = _MINIMAX_H3_PIXEL_STD
 
 # AdaLN precompute, **on by default in the pipeline**. `MINIMAX_H3_PRECOMPUTE_ADALN=0` opts out and
-# restores the reference path, which builds and loads every projection. The model itself still defaults
-# to the reference path -- only the pipeline opts in -- so a caller constructing the transformer
+# takes the reference path, which builds and loads every projection. The model itself defaults to
+# the reference path -- only the pipeline opts in -- so a caller constructing the transformer
 # directly is unaffected.
 PRECOMPUTE_ADALN_ENV = "MINIMAX_H3_PRECOMPUTE_ADALN"
 
@@ -373,16 +373,15 @@ class MiniMaxH3Pipeline:
 
         **The text encoder is kept co-resident too.** Measured on a 4x8 Blackhole mesh with the
         precomputed AdaLN path: encoder, DiT and VAE fit together, and a prompt's Encoder row
-        drops from **23.9 s to 2.8 s** because the 50 GB reload disappears. Every request pays the
-        encode itself -- there is no embedding cache -- so this is on the critical path of
-        essentially every served request. `MINIMAX_H3_CORESIDENT=0` restores eviction for a mesh
-        where they do not fit.
+        drops from **23.9 s to 2.8 s** because the 50 GB reload disappears. Every request runs the
+        conditioner encode, so this is on the critical path of essentially every served request.
+        `MINIMAX_H3_CORESIDENT=0` evicts each stage for a mesh where they do not fit.
 
         **The DiT and the video VAE are kept co-resident**, which is measured, not assumed: on a 4x8
         Blackhole mesh they fit together with no allocation failure. Eviction costs a per-shape decoder
         rebuild per generation plus a ~50 s DiT reload on the next one; co-resident measures the VAE
         decode row at **6.0 s against 17.6 s** and the fully-warm total at **69.1 s against 81.1 s**.
-        `MINIMAX_H3_CORESIDENT=0` restores the eviction for a mesh where they do not fit.
+        `MINIMAX_H3_CORESIDENT=0` evicts each stage for a mesh where they do not fit.
         """
         if self._resident == stage:
             return
@@ -997,7 +996,7 @@ class MiniMaxH3Pipeline:
             logger.info(f"per-shape decoder {decode_shape} built in {time.time() - t0:.1f}s")
         if encode_shape is not None:
             # taps=1 for a single frame: the causal front-pad is zeros, so a 3-tap temporal conv
-            # collapses to `weight[:, :, -1]` exactly. Not an approximation -- see M8a. A ref2va
+            # collapses to `weight[:, :, -1]` exactly, not approximately. A ref2va
             # video reference goes through `vae.encode` at taps=3 and needs its own per-shape
             # encoder, built here so the weight upload stays outside the timed encode row.
             key = (*encode_shape, encode_taps)
@@ -1167,12 +1166,12 @@ class MiniMaxH3Pipeline:
 
         Note that `fl2va` at a given seed does **not** reproduce `t2va` at that seed, even with a
         keyframe that contributes nothing: the conditioning noise is the first draw off the request
-        generator and shifts the video and audio streams behind it. That is the reference's order and
-        it is correct, not a regression.
+        generator and shifts the video and audio streams behind it. That is the reference's draw
+        order.
         """
         # (label, seconds) rows counted toward the total; **prepares and export excluded**, matching
         # `pipelines/ltx/pipeline_ltx_distilled.py`. Weight upload is one-time construction cost and
-        # the measurement contract never counts it (`.claude/skills/README.md`), so every
+        # the measurement contract never counts it, so every
         # `_prepare_*` happens outside a timed window. The one exception: the first Encoder row of a
         # fresh pipeline loads the text encoder inside the timed window; after that the encoder stays
         # resident and the row measures the ~2.8 s encode alone.
@@ -1276,9 +1275,9 @@ class MiniMaxH3Pipeline:
             vae = self._prepare_vae(encode_shape=(1, vae.tile_size, vae.tile_size))
             t0 = time.time()
             condition_rows = self._encode_keyframes(vae, keyframes)
-            # `scheduler.scale_noise`, never a local copy: `conditioning.py` records that a local one
-            # drifted 2.4e-7 by computing `1 - t` in Python double instead of the sample dtype, and
-            # there is a test asserting no second implementation exists.
+            # `scheduler.scale_noise`, never a local copy: a reimplementation computing `1 - t` in
+            # Python double instead of the sample dtype drifts 2.4e-7 (see `conditioning.py`), and a
+            # test asserts no second implementation exists.
             condition_rows = scheduler.scale_noise(condition_rows, MINIMAX_H3_KEYFRAME_NOISE_AUG, condition_noise)
             t_keyframe = time.time() - t0
             timings.append(("Keyframe encode", t_keyframe))

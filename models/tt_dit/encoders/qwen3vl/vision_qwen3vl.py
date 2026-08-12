@@ -51,7 +51,7 @@ class VisionParallel(NamedTuple):
 
     Separate from `EncoderParallelConfig` because that carries mesh axes while every module here needs
     the *factors* too, and because the replicated case (both factors 1) must stay a plain `Linear`
-    path: gating on the factor keeps an unparallelized run bit-identical to before this existed.
+    path: gating on the factor keeps an unparallelized run bit-identical to the single-device module.
     """
 
     tp_axis: int | None = None
@@ -76,9 +76,9 @@ def resolve_vision_parallel(
 ) -> VisionParallel:
     """`VisionParallel` from the pipeline's `EncoderParallelConfig`.
 
-    `sequence_parallel` is optional on that config and has historically gone unread by every encoder;
-    the tower is the first consumer. A factor above 1 on either axis requires a `ccl_manager`, since
-    both paths reduce or gather across devices.
+    `sequence_parallel` is optional on that config; the tower is its only encoder-side consumer. A
+    factor above 1 on either axis requires a `ccl_manager`, since both paths reduce or gather across
+    devices.
     """
     if parallel_config is None:
         return VisionParallel(ccl_manager=ccl_manager)
@@ -494,8 +494,8 @@ class Qwen3VlVisionAttention(Module):
         qkv = self.qkv.forward(hidden_states)
 
         # Sliced rather than `ttnn.split`: split reports a *tile-padded* row count on its outputs, so
-        # a patch count that is not a multiple of 32 (784 for a 28x28 grid) made the reshape below
-        # disagree with `seq_len` and fail. Slicing the last dimension keeps the logical row count.
+        # a patch count that is not a multiple of 32 (784 for a 28x28 grid) would make the reshape
+        # below disagree with `seq_len`. Slicing the last dimension keeps the logical row count.
         # Under TP the local slice is `[q_d | k_d | v_d]` of width `3 * local_inner` (see
         # `_interleave_for_col_parallel`), so the stride and the head count are both the local ones.
         q, k, v = (
@@ -859,9 +859,10 @@ class Qwen3VlVisionModel(Module):
         The `ttnn.clone` is load-bearing. Every CCL gather here writes into a persistent buffer that
         `CCLManager` caches by `(shape, dim, mesh_axis)`, and all four mergers emit the SAME
         `(tokens, out_hidden_size)` shape -- so they share one buffer. Deepstack features are retained
-        across the remaining blocks while later mergers gather into that buffer, which silently
-        overwrote them (a feature read PCC 0.009% while the output tokens read 99.99%). Cloning moves
-        the result out of the buffer, as `Qwen3VlTextEncoder.forward` does for its embedding gather.
+        across the remaining blocks while later mergers gather into that buffer, so without the clone
+        they are silently overwritten (a feature reads PCC 0.009% while the output tokens read
+        99.99%). Cloning moves the result out of the buffer, as `Qwen3VlTextEncoder.forward` does for
+        its embedding gather.
         """
         if not (self._p.sp or self._p.tp):
             return x

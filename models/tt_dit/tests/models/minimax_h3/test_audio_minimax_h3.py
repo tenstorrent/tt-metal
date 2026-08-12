@@ -20,10 +20,9 @@ before ``conv_post``, where LTX's narrowest is 24. ``_AlignedOutConv1d`` pads 8 
 while ``SnakeBeta`` keeps 8, so that boundary gets its own case.
 
 T-parallel decode is deliberately not gated here: it is not wired into the pipeline (which
-passes ``parallel_config=None``), and its 8-way shard layout was known-broken when its gate
-was removed. Resurrect ``test_audio_decode_t_parallel`` (and its ``_localize_divergence``
-helper) and the halo isolation gate ``test_neighbor_pad_t_minimax_h3.py`` from git history
-if T-parallel ever ships.
+passes ``parallel_config=None``), and its 8-way shard layout is known-broken. If T-parallel
+ever ships, resurrect ``test_audio_decode_t_parallel`` (and its ``_localize_divergence``
+helper) and the halo isolation gate ``test_neighbor_pad_t_minimax_h3.py`` from git history.
 """
 
 from __future__ import annotations
@@ -62,7 +61,7 @@ SINGLE_DEVICE = [pytest.param((1, 1), {"l1_small_size": 65536}, id="single_devic
 # RMSE/sigma bar, set from measurement rather than convention. Candidate error sources were each
 # measured: the MAC fallback in depthwise_tap_filter is **bit-exact** (rel_max 0.0), `Activation1d` is
 # pcc 0.9999998 / RMSE 0.17%, and the decoder path contains no SDPA so the bf16 attention island cannot
-# explain it. What remains is accumulation across the chain -- and the per-op term is now identified
+# explain it. What remains is accumulation across the chain, with the per-op term identified
 # rather than inferred: an fp32 conv3d on this hardware is fp32 storage and fp32 accumulate with a
 # multiply that keeps only ~11 significand bits, which measures 1.86e-03 on `conv_pre` at production
 # blocking and is **flat in the reduction depth**. Over ~130 convolutions plus 126 anti-aliased
@@ -89,8 +88,7 @@ HOP_LENGTH = 800
 SAMPLING_RATE = 32000
 
 # 40 Hz latent: 5 s at the video working points' true durations. The 10 s case (405 frames)
-# was measured too and exercises no path 207 doesn't -- same convs, same blockings, longer T --
-# so only 5 s is gated.
+# exercises no path 207 doesn't -- same convs, same blockings, longer T -- so only 5 s is gated.
 PRODUCTION_LATENT_FRAMES = [pytest.param(207, id="5s")]
 
 
@@ -224,7 +222,7 @@ def test_decode_accurate_mode(mesh_device, monkeypatch):
       1.54e-03 through a single ``Activation1d`` downsampler -- the single largest error source
       in the whole decode (7e-08 for ``snake_beta`` and the upsampler);
     - ``tap_matmul=True``: shifted-matmul convs avoid conv3d's partial-sum rounding across
-      ``C_in_block``. The case that broke first on this route was ``causal_narrow_out``
+      ``C_in_block``. The trap case on this route is ``causal_narrow_out``
       (64 -> 16, causal): ``_AlignedOutConv1d`` rounds a non-32-multiple ``C_out`` up and
       allocates the bias at the rounded width, which the conv3d route handles inside
       ``prepare_conv3d_weight_state`` and the tap route must do for itself -- ``conv_post``'s
@@ -288,7 +286,7 @@ def test_conv_operand_split_improves_precision(mesh_device):
     x_device = None
     errors = {}
     for mode in ("off", "weight", "full"):
-        # The env var no longer reaches the layer; MiniMax-H3 modules resolve it once at
+        # The env var does not reach the layer: MiniMax-H3 modules resolve it once at
         # construction and pass the explicit ``split_mode`` argument, so drive that directly.
         layer = Conv1dViaConv3d(
             in_channels,
@@ -485,8 +483,8 @@ def test_real_checkpoint_fusion_matches_reference_module():
     """The real 1087-tensor checkpoint: axes hold, every pair fuses, and the fused weights
     equal what the reference's own ``remove_weight_norm`` produces.
 
-    One checkpoint load carries both the key-accounting asserts (folded from the former
-    axes-and-conversion gate) and the value comparison against torch's own arithmetic.
+    One checkpoint load carries both the key-accounting asserts and the value comparison
+    against torch's own arithmetic.
     """
     weights_dir = _weights_dir()
     if weights_dir is None:
@@ -512,7 +510,7 @@ def test_real_checkpoint_fusion_matches_reference_module():
     assert not [k for k in converted if k.endswith((".weight_g", ".weight_v"))], "a weight-norm pair survived"
     assert not [k for k in converted if k.endswith(("q_bias", "v_bias", "zero_k_bias"))], "an attn bias survived"
     assert not [k for k in converted if "activations." in k], "an activations key survived"
-    # Every fused conv should have produced exactly one weight, and nothing else was lost.
+    # Every fused conv produces exactly one weight, and nothing else is lost.
     assert (
         len(converted) == len(state) - num_pairs - 2
     ), f"key count {len(converted)} does not match {len(state)} minus {num_pairs} g/v pairs and 2 folded biases"
@@ -545,8 +543,8 @@ def test_real_checkpoint_fusion_matches_reference_module():
 # not 224 independent work units -- but it is the opposite kind of workload from the visual
 # halves: ~1 MB tensors over many ops, so **host dispatch**, not device time, is expected to
 # dominate. ``vocoder_ltx.Vocoder`` says so itself ("the vocoder is ~70% host-bound") and
-# already carries a `@traced_function` device region plus a ``forward_traced`` entry point --
-# H3's decoder simply called the untraced ``forward_BCT``.
+# carries a `@traced_function` device region plus a ``forward_traced`` entry point; H3's
+# decoder exposes the same device region through ``traced=True``.
 #
 # Traced output must match untraced exactly-ish, so this asserts before it reports timing.
 

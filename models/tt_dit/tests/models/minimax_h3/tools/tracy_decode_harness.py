@@ -6,11 +6,12 @@
 
 Nothing here asserts: these exist to put exactly one warmed forward of each decoder inside a
 signposted Tracy window for manual profiling. The filename does not start with ``test_``, so pytest's
-discovery leaves this file alone; run it by passing the path explicitly (commands below). Moved out of
-``test_performance_vae_minimax_h3.py`` so the perf gates stay assert-bearing while these stay runnable.
+discovery leaves this file alone; run it by passing the path explicitly (commands below). Separate
+from ``test_performance_vae_minimax_h3.py`` so the perf gates stay assert-bearing while these stay
+runnable.
 
-Kept separate from the ``_wave``/``_baseline`` timing tests rather than folded into them, because a
-profile wants the opposite of what a timing measurement wants. ``_time_it`` runs a warmup plus timed
+A profile also wants the opposite of what the ``_wave``/``_baseline`` timing measurements want.
+``_time_it`` runs a warmup plus timed
 iterations; three invocations of the 36-layer decoder emit well past Tracy's ~1000-op-per-device
 buffer, and the symptom is ``AssertionError: Device data missing: Op <id>``, which reads as a tool bug
 rather than as overflow. So these run **one** forward inside the signposted window. Device kernel
@@ -122,7 +123,8 @@ def test_tracy_audio_decode(mesh_device):
           -s --timeout 900 &> tracy_audio.log
 
     The reading caveat that matters here: Tracy **undercounts** this stage's device time by ~6x
-    against wall clock -- 224 ms device against 1284 ms wall is the recorded example. Treat the per-op ranking as the product, not the absolute total.
+    against wall clock -- 224 ms device against 1284 ms wall is the recorded example. Treat the
+    per-op ranking as the product, not the absolute total.
     """
     from loguru import logger
     from tracy import signpost

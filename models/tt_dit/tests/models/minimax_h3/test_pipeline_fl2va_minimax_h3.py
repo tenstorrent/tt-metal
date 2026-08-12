@@ -7,18 +7,17 @@
 ONE combined perf + quality e2e, on the `first_and_last` case: it strictly supersets the lone
 `first` and lone `last` cases on packing and scatter coverage -- two conditioning blocks (2016
 rows), a two-run vision scatter in the conditioner, and both preparation paths (stretch for the
-geometry anchor, cover-crop for the follower). The one behaviour the dropped `last` case gated
-that `first_and_last` cannot -- a lone `last_image` being the geometry anchor and therefore
-*stretched*, not cover-cropped -- is pinned host-side by
-`test_lone_last_keyframe_is_stretched_not_cover_cropped`, for free.
+geometry anchor, cover-crop for the follower). The one behaviour `first_and_last` cannot gate --
+a lone `last_image` being the geometry anchor and therefore *stretched*, not cover-cropped -- is
+pinned host-side by `test_lone_last_keyframe_is_stretched_not_cover_cropped`.
 
-The test folds the fully-warm latency measurement and the quality gates into one weight load:
+The test carries both the fully-warm latency measurement and the quality gates on one weight load:
 warmup at the real shape (keyframes included), then time the measured generation and gate its
 output. The timing method is `pipelines/ltx`'s -- prepares and export excluded,
 `Total (compute)` = the sum of `pipeline.last_timings` rows -- so the number is comparable to the
 t2va row in `test_pipeline_minimax_h3.py`. The timed Encoder row is a real device encode, vision
 tower included. Two warmth conditions are asserted rather than assumed (see the comments in the
-test); each has bitten a measurement in this model's bringup or its sibling's.
+test); each can silently invalidate the measurement.
 
 A separate file from `test_pipeline_minimax_h3.py` rather than more cases in it, so the
 two e2e gates default to separate processes. One process holding the 50-block DiT's programs *and*
@@ -50,8 +49,8 @@ the same prompt still applies, and the anchor check is maximally meaningful beca
 in-distribution for the model. It also means this file needs the t2va gate to have run; it skips
 rather than inventing content when the artifact is absent.
 
-Tier 6 was recorded before it was gated. CLIP measures 36.63 / 37.30 / 37.00 across the three cases
-against t2va's 37.37, so the t2va bar of 33.0 transfers by measurement rather than by assumption.
+Tier 6 is calibrated by measurement: CLIP measures 36.63 / 37.30 / 37.00 across the three anchor
+cases against t2va's 37.37, so the t2va bar of 33.0 transfers by measurement rather than assumption.
 """
 
 from __future__ import annotations
@@ -139,7 +138,7 @@ CLIP_THRESHOLD = 33.0
 
 # Generous: a regression bar, not a target -- same convention as the t2va gate's. There is no tuned
 # perf target yet; the point is to notice a collapse (a lost cache, a fallback kernel). Comfortable
-# even though the timed window now includes the real conditioner encode (vision tower included).
+# even with the real conditioner encode (vision tower included) inside the timed window.
 EXPECTED_TOTAL_S = 400.0
 
 
@@ -207,9 +206,9 @@ def test_fl2va_end_to_end(mesh_device, reset_seeds):
     # number means nothing:
     # 1. The warmup must be fl2va-shaped, keyframes included: every program in the 50-block stack
     #    is keyed on the padded packed length, so a t2va warmup warms nothing for fl2va.
-    # 2. The warmup must run at the same prompt length -- asserted below rather than assumed. t2va
-    #    got away with a one-token "warmup" prompt purely by luck (1 and 39 tokens both round up to
-    #    37888); with two ~1008-row vision blocks that luck is gone.
+    # 2. The warmup must run at the same prompt length -- asserted below rather than assumed. For
+    #    t2va a one-token "warmup" prompt works purely by coincidence (1 and 39 tokens both round up
+    #    to 37888); with two ~1008-row vision blocks it does not.
     # The measured run pays the full device conditioner encode -- vision tower included -- inside the
     # timed Encoder row: there is no prompt-embedding cache, so that row is a genuine measurement.
     # No reference number is recorded for the fl2va encode (t2va's text-only encode measures ~2.8 s;
@@ -279,8 +278,8 @@ def test_fl2va_end_to_end(mesh_device, reset_seeds):
     check_av_sync(frames, output.audio, sampling_rate=output.sampling_rate, fps=output.fps)
     log_spectral_flatness(output.audio, sampling_rate=output.sampling_rate)
 
-    # Boundaries from the VAE's own tile grid rather than re-derived: an earlier re-derivation used an
-    # overlap of 32 against the real 64 and checked positions that were not boundaries at all. Note the
+    # Boundaries from the VAE's own tile grid rather than re-derived: a re-derivation with overlap 32
+    # against the real 64 checks positions that are not boundaries at all. Note the
     # return shape -- `((y_starts, lengths, overlaps), (x_starts, ...))`, rows first -- and that
     # vertical seams come from the *x* starts.
     ratio = pipeline.vae_config.spatial_compression_ratio
@@ -364,9 +363,8 @@ def test_fl2va_end_to_end(mesh_device, reset_seeds):
 
 # ------------------------------------------------------------------ host: keyframe preparation
 #
-# The one behaviour the dropped lone-`last` e2e case gated that `first_and_last` cannot: which
-# preparation path a lone `last_image` takes. Pinned here on host, for free, instead of with a
-# third 90-second generation.
+# Which preparation path a lone `last_image` takes -- the one behaviour the `first_and_last` e2e
+# case cannot gate. Pinned on host instead of with a third 90-second generation.
 
 
 def test_lone_last_keyframe_is_stretched_not_cover_cropped():
@@ -376,8 +374,7 @@ def test_lone_last_keyframe_is_stretched_not_cover_cropped():
     `sources = [k for k in (image, last_image) if k is not None]` followed by
     `prepare_keyframe_image(k, height, width, stretch=(i == 0))`. With `image=None` a lone
     `last_image` sits at index 0 and is stretched, despite being the "last" anchor. That looks
-    like a bug in `prepare_keyframe_image` until this rule is read; the e2e `last` case used to
-    prove it end to end, and this pins it host-side.
+    like a bug in `prepare_keyframe_image` until this rule is read, so this pins it host-side.
 
     The source is 1:1 against the 16:9 canvas with a marker band on its top edge, so the two
     preparation paths are genuinely distinguishable: a stretch distorts aspect but keeps every

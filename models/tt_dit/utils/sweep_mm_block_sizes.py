@@ -159,12 +159,11 @@ SHAPES = [
     (4768, 3584, 5376, 12, 7, False, "mmrs"),
     (4768, 3584, 5376, 12, 8, False, "mmrs"),
     (4768, 3584, 5376, 12, 9, False, "mmrs"),
-    # 12x8 won that grid sweep (1.313 ms vs 1.373 at 12x7 and 1.487 at 12x9) and the longer durations
+    # 12x8 won that grid sweep (1.313 ms vs 1.373 at 12x7 and 1.487 at 12x9); the longer durations
     # (M = 9216 / 13632) reuse its blocking rather than being swept -- warmup compiles one program per
     # combo and compile time grows with M, so M=9216 alone is ~75 min against ~9 min here, for a block
-    # shape that has little reason to change with M. Add them back as
+    # shape that has little reason to change with M. To check that assumption, add
     #   (9216, 3584, 5376, 12, 8, False, "mmrs"),
-    # if that assumption ever needs checking.
 ]
 
 SHAPE_IDS = [f"{M}_{K}_{N}_{cgx}x{cgy}_{'agmm' if agmm else 'mm'}_{uc}" for M, K, N, cgx, cgy, agmm, uc in SHAPES]
@@ -211,7 +210,7 @@ USE_CASE_CONFIGS = {
         "use_addcmul": True,  # for the L1 estimate; the runner always passes addcmul tensors
     },
     # ff1 (proj_mlp) with fused SwiGLU — gate+up packed into N=4608 weight.
-    # fp32_dest_acc_en=True (always on), N_block MUST be even (pitfall 1).
+    # fp32_dest_acc_en=True (always on); N_block MUST be even (gate/up tile-pairs interleave along N).
     # No fused_activation (incompatible with fuse_swiglu per TT_FATAL).
     "ff1_swiglu": {
         "fuse_swiglu": True,
@@ -222,7 +221,7 @@ USE_CASE_CONFIGS = {
 # capacity is halved (4 tiles instead of 8), so only subblocks with h*w == 4
 # match peak compute throughput — and among those, 2x2 is strictly preferred
 # over 4x1 / 1x4 (better tile reuse in the math LLK). So when fp32 dest is on
-# we skip the subblock sweep entirely and always pick 2x2 (when divisible).
+# the subblock sweep is skipped entirely and 2x2 is picked (when divisible).
 FP32_DEST_ACC_EN = True
 
 # Block-size candidate methodology:
@@ -292,7 +291,7 @@ def get_k_block_candidates(K_per_device):
     K_block-sized chunks — any K_block that doesn't divide K_per_device leaves
     a partial chunk on the last iteration, which the algorithm doesn't support.
 
-    So we restrict to divisors only. K_BLOCK_MIN excludes tiny sizes that are
+    So candidates are restricted to divisors only. K_BLOCK_MIN excludes tiny sizes that are
     dispatch-overhead-bound; there's no upper cap because dividing K cleanly
     never adds padding even at larger block sizes.
     """
@@ -370,10 +369,9 @@ def pick_subblock(m_block, n_block, max_dest_volume=4):
 def generate_kn_combos(K_per_device, N_per_core, m_block=1, use_case="plain"):
     """Generate (K_block, N_block) combos filtered by L1 budget.
 
-    For fuse_swiglu use_cases, N_block MUST be even (TT_FATAL pitfall 1 from
-    sweep_fused_gelu.md: gate/up tile-pairs are interleaved along N, so a block
-    must never split a pair).  Odd N candidates are skipped pre-sweep to avoid
-    hard asserts that would abort the program.
+    For fuse_swiglu use_cases, N_block MUST be even (TT_FATAL: gate/up tile-pairs
+    are interleaved along N, so a block must never split a pair). Odd N candidates
+    are skipped pre-sweep to avoid hard asserts that would abort the program.
     """
     k_candidates = get_k_block_candidates(K_per_device)
     n_candidates = get_mn_block_candidates(N_per_core)
@@ -832,7 +830,7 @@ def _quiet_loguru():
     logger.add(sys.stderr, level="ERROR")
 
 
-@pytest.mark.timeout(7200)  # 2h — one worker now covers the full (M, K, N) grid
+@pytest.mark.timeout(7200)  # 2h — one worker covers the full (M, K, N) grid
 @pytest.mark.parametrize("device_config", list(DEVICE_CONFIGS.keys()))
 @pytest.mark.parametrize("shape", SHAPES, ids=SHAPE_IDS)
 def test_mm_sweep_worker(device_config, shape):
@@ -915,7 +913,7 @@ def test_mm_sweep_worker(device_config, shape):
 # ============================================================================
 
 
-@pytest.mark.timeout(7200)  # 2 hours — one subprocess per shape now
+@pytest.mark.timeout(7200)  # 2 hours — one subprocess per shape
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance sweep - skip on CI")
 @pytest.mark.parametrize("device_config", list(DEVICE_CONFIGS.keys()))
 @pytest.mark.parametrize("shape", SHAPES, ids=SHAPE_IDS)

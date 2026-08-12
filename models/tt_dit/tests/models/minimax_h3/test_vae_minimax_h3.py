@@ -164,9 +164,8 @@ def test_encode_clip_tiled(mesh_device, num_frames, temporal_taps, expected_late
     tiles, so the tile shape, the tile loop and the overlap cross-fade are all the
     production ones -- and each tile runs the full 128..1024 encoder stack at both
     ``temporal_taps=1`` (keyframe) and ``temporal_taps=3`` (17-frame clip), so this is
-    also the whole-encoder gate. (The weights-free encoder coverage that used to live in
-    ``test_encoder_moments`` was folded in here; whole-encoder coverage therefore skips
-    without ``MINIMAX_H3_DIFFUSERS_DIR``.)
+    also the whole-encoder gate. (Whole-encoder coverage therefore skips without
+    ``MINIMAX_H3_DIFFUSERS_DIR``.)
 
     The 0.99 bar is the encoder's precision floor: ``ttnn.group_norm`` has no fp32 path,
     so all thirteen norms in the stack are bf16 islands. Per-conv parity at 0.999 is
@@ -259,8 +258,7 @@ def test_visual_roundtrip_quality(mesh_device):
     adds is that encode and decode compose -- that the latent one produces is the latent the
     other consumes, including the chunk geometry between them.
 
-    It is also the video-chunking gate (the old ``test_encode_video_chunking`` and
-    ``test_decode_video_chunking`` were folded in): 39 frames is not a multiple of 17, so
+    It is also the video-chunking gate: 39 frames is not a multiple of 17, so
     ``encode`` runs the last-frame repeat padding and must emit
     ``ceil(39/17) * 5 - token_drop = 12`` latent frames, and decoding those 12 frames runs
     two overlapping 7-frame chunks (the ``token_overlap`` stride), the pixel-space
@@ -323,10 +321,10 @@ def test_visual_roundtrip_quality(mesh_device):
 # * ``conv_out`` at **1024 -> 48**, a non-32-multiple output channel count that reaches
 #   ``conv3d`` through the ``max(32, out)`` rule.
 #
-# Everything runs the clip schedule (``temporal_taps=3``). The old keyframe (T=1,
-# ``temporal_taps=1``) axis was dropped as a duplicate: taps=1 is the same code with a
-# shorter causal pad, and the keyframe path is still gated whole-encoder by
-# ``test_encode_clip_tiled``'s keyframe case.
+# Everything runs the clip schedule (``temporal_taps=3``); a keyframe (T=1,
+# ``temporal_taps=1``) axis would be a duplicate: taps=1 is the same code with a shorter
+# causal pad, and the keyframe path is gated whole-encoder by ``test_encode_clip_tiled``'s
+# keyframe case.
 #
 # Every shape here is taken from the encoder's **real** schedule for the shipping tile, not
 # invented. Spatial tiling fixes the tile at 256x256 and the clip at 17 frames, so 768P and
@@ -371,10 +369,10 @@ def _assert_same(expected: torch.Tensor, actual: torch.Tensor, *, pcc: float) ->
     assert_quality(expected, actual, pcc=pcc)
 
 
-# One case per distinct conv the encoder contains, plus the two real downsample sites
-# (folded from the old ``test_downsample``): level 2 is space+time at 64x64 (T=9), level 3
-# is space-only at 32x32 (T=5). Spatial extents are the real ones for that level; convs
-# carry no norms, so these are cheap to run at true size.
+# One case per distinct conv the encoder contains, plus the two real downsample sites:
+# level 2 is space+time at 64x64 (T=9), level 3 is space-only at 32x32 (T=5). Spatial
+# extents are the real ones for that level; convs carry no norms, so these are cheap to
+# run at true size.
 @pytest.mark.parametrize(
     (
         "in_channels",
@@ -456,10 +454,9 @@ def test_causal_conv3d(
 
 # (in_channels, out_channels, T, H, W) drawn from the real encoder schedule for a
 # 17x256x256 tile: level 2 sits at 64x64 with T=9, levels 3-5 at 32x32 and 16x16 with
-# T=5. Clip axis only -- the keyframe (T=1) variant was dropped along with the conv
-# tests' keyframe axis; see the section comment above. Do not "widen" coverage with
-# synthetic shapes: (C=128, T=5, 32x32) deadlocks ttnn.group_norm, and that combination
-# exists only in a synthetic stack.
+# T=5. Clip axis only -- see the section comment above for why there is no keyframe (T=1)
+# variant. Do not "widen" coverage with synthetic shapes: (C=128, T=5, 32x32) deadlocks
+# ttnn.group_norm, and that combination exists only in a synthetic stack.
 REAL_RESNET_SHAPES = [
     pytest.param(256, 256, 9, 64, 64, id="L2_256_64x64"),
     pytest.param(256, 512, 5, 32, 32, id="L3_shortcut_256to512_32x32"),
@@ -559,8 +556,7 @@ def test_rope_tables_are_bit_exact():
     """Host-only rope gate, both halves of the claim in one place.
 
     First the tables: our cos/sin must equal the reference module's exactly. Then the
-    rotation (folded from the old ``test_permuted_rope_matches_reference_rotation``):
-    lane permute + rot90 must equal the reference's half-split rotation, and the two
+    rotation: lane permute + rot90 must equal the reference's half-split rotation, and the two
     properties that make the no-slice trick valid must hold -- the pass-through lanes are
     untouched, and the suffix rows are the identity.
     """

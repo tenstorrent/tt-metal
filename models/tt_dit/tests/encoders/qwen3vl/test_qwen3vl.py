@@ -43,7 +43,7 @@ _NEEDS_WEIGHTS = pytest.mark.skipif(not FP8, reason="IDEOGRAM4_WEIGHTS not set (
 def _reference_lm(weights: str):
     """HF Qwen3-VL language model built from config (no base-checkpoint pull). weights="real"
     overlays the shipped Ideogram text_encoder weights (dequantized fp8); weights="random" keeps
-    the fresh init, giving the encoder (incl. the new per-head QK-norm path) weight-free CI
+    the fresh init, giving the encoder (incl. the per-head QK-norm path) weight-free CI
     coverage. Both sides load the SAME state_dict, so the port is checked structurally."""
     cfg = transformers.AutoConfig.from_pretrained(REPO)
     hf = transformers.AutoModel.from_config(cfg).to(torch.bfloat16)
@@ -98,8 +98,8 @@ def test_qwen3vl_text_encoder(
     lm = _reference_lm(weights)
     cfg = lm.config
     head_dim = cfg.hidden_size // cfg.num_attention_heads
-    # transformers >=5 moved `rope_theta` *into* `rope_parameters` and dropped the top-level attribute,
-    # so it must not be used as a `dict.get` default: Python evaluates defaults eagerly, and
+    # In transformers >=5, `rope_theta` lives inside `rope_parameters` and there is no top-level
+    # attribute, so it must not be used as a `dict.get` default: Python evaluates defaults eagerly, and
     # `cfg.rope_theta` raises AttributeError on a Qwen3-VL config before `.get` ever runs.
     rope_params = getattr(cfg, "rope_parameters", None) or cfg.rope_scaling
     mrope_section = rope_params["mrope_section"]

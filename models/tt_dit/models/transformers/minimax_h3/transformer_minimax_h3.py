@@ -188,10 +188,9 @@ class MiniMaxH3Transformer3DModel(Module):
     through `audio_proj_in` (32 wide) and video rows through `proj_in` (96 wide), so they cannot be
     concatenated before projection at all. Projecting each block separately is bit-identical to
     projecting a concatenation of same-modality blocks, because a per-row GEMM against a shared weight
-    is row-independent -- which is what lets the blocks be placed apart here, and what makes the
-    `fl2va` numbers unchanged by this generalization.
+    is row-independent -- which is what lets the blocks be placed apart here.
 
-    The property this preserves is the one that made `fl2va` safe: **one frame of reference for row
+    The load-bearing invariant is **one frame of reference for row
     indices**. The block list is assembled by walking the reference list in packed order, which is the
     same walk that produced `layout.position_ids`, `token_tags`, `video_indices`, `audio_indices` and
     `adaln_index_ranges`. There is no second ordering to keep in step.
@@ -443,9 +442,8 @@ class MiniMaxH3Transformer3DModel(Module):
         # 124 frames the video rows are 37 * 1008 = 37296 (= 16 mod 32) and the audio rows
         # 207 * 2 = 414 (= 30 mod 32), and the text rows are whatever the prompt tokenizes to.
         # Assembling in ROW_MAJOR instead costs two layout passes over the packed sequence and
-        # accepts any lengths. The tile path is kept for the aligned case rather than deleted:
-        # it is strictly cheaper, and keeping it means this change cannot move a shape that
-        # already worked.
+        # accepts any lengths. The tile path is kept for the aligned case because it is strictly
+        # cheaper.
         # Every *block* is tested, not their sum: the concat cuts at each block boundary, so one
         # unaligned block forces the ROW_MAJOR path even when the totals are aligned.
         tile_aligned = not (
@@ -463,9 +461,7 @@ class MiniMaxH3Transformer3DModel(Module):
             # row of its own modality that happens to be pinned, and the reference
             # projects it with the very same `proj_in` / `audio_proj_in`. A per-row GEMM
             # against a shared weight is row-independent, so projecting the blocks
-            # separately is bit-identical to projecting them concatenated -- which is
-            # what lets them be placed apart here, and what keeps fl2va's numbers
-            # unchanged now that its one block goes through this loop.
+            # separately is bit-identical to projecting them concatenated.
             streams.append(self.audio_proj_in(block) if modality == "audio" else self.proj_in(block))
         streams += [audio_embeds, video_embeds]
 

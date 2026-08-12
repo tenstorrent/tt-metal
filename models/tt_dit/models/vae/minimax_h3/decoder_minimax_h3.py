@@ -11,7 +11,7 @@ decode call is always a ``(1, 24, 7, 16, 16)`` latent, i.e. ``7*16*16 = 1792`` p
 plus a 5-token suffix, and ``proj_out`` expands each token into a
 ``4 x 16 x 16`` block of 3-channel pixels.
 
-Four details the plan did not record, all verified against the pinned reference:
+Four easily-missed details, all verified against the pinned reference:
 
 * **``scale1`` / ``scale2`` are per-channel LayerScale multipliers**, not norms:
   ``h = h + attn(norm1(h)) * scale1`` then ``h = h + ff(norm2(h)) * scale2``.
@@ -81,19 +81,15 @@ class MiniMaxH3ViTAttention(Module):
         self.to_qkv = Linear(dim, 3 * inner, bias=True, mesh_device=mesh_device, dtype=dtype)
         self.to_out = Linear(inner, dim, bias=True, mesh_device=mesh_device, dtype=dtype)
 
-        # SDPA was being called bare, on defaults. ``Linear`` already carries HiFi2 +
-        # packer_l1_acc (linear.py:71), so attention was the only untuned op in the block.
-        # Both `attention_wan.py:120` and `attention_ltx.py:158` configure theirs; this
+        # Both `attention_wan.py:120` and `attention_ltx.py:158` configure their SDPA; this
         # follows them -- HiFi2 with fp32 accumulation off is the standard SDPA setting
         # there, and it roughly doubles matmul throughput against the HiFi4 default.
-        # Swept at the decoder's exact SDPA shape ([1, 32, 1824, 64] bf16) with a
-        # single-op min-of-20 benchmark, which is measurable where whole-model wall clock is
-        # not: default 1.448 ms (602 TF/s) -> q=k=192 + HiFi2 0.491 ms (1777 TF/s), **2.95x**. 128 gave 0.502 ms; 256 and above hang
-        # the sweep and remain unmeasured.
-        #
-        # An earlier attempt at q=k=256 was judged a regression on whole-decoder wall clock;
-        # that reading was noise (the same code measures 0.34-0.99 s/wave). SDPA is 40 % of
-        # layer device time, so this is the largest single decoder win available.
+        # Swept at the decoder's exact SDPA shape ([1, 32, 1824, 64] bf16) with a single-op
+        # min-of-20 benchmark, which is measurable where whole-decoder wall clock is not
+        # (wall clock jitters 0.34-0.99 s/wave on identical code): default 1.448 ms
+        # (602 TF/s) -> q=k=192 + HiFi2 0.491 ms (1777 TF/s), **2.95x**. 128 gives 0.502 ms;
+        # 256 and above hang the sweep and remain unmeasured. SDPA is 40 % of layer device
+        # time, so this is the largest single decoder win available.
         self.sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=mesh_device.compute_with_storage_grid_size(),
             q_chunk_size=192,
@@ -166,10 +162,10 @@ class MiniMaxH3ViTAttention(Module):
         batch, seq_len, _ = x.shape
         qkv = self.to_qkv(x)
 
-        # One fused op rather than chunk + 3 reshapes + 3 permutes. Profiling one layer put
-        # ReshapeView at 25.8 % of device time (800 us mean) and Transpose at 10.1 % -- 36 %
-        # on data movement, more than every matmul combined -- and this hand-rolled head
-        # plumbing was all of it. wan (attention_wan.py:401) and ltx (attention_ltx.py:463)
+        # One fused op rather than chunk + 3 reshapes + 3 permutes: profiled per layer, that
+        # hand-rolled head plumbing costs 25.8 % of device time in ReshapeView (800 us mean)
+        # and 10.1 % in Transpose -- 36 % on data movement, more than every matmul combined.
+        # wan (attention_wan.py:401) and ltx (attention_ltx.py:463)
         # both use this op. transpose_k_heads=False because SDPA wants K as [B,H,S,D], and
         # the layout it expects, [Q all heads | K all heads | V all heads], is exactly what
         # _prepare_torch_state's cat([q, k, v], dim=0) already produces.
@@ -247,8 +243,8 @@ class MiniMaxH3TransformerBlock(Module):
         # Fold LayerScale into the preceding projection. `to_out(x) * scale1` is
         # `x @ (W_out * scale1) + b_out * scale1` because scale is per *output* channel, so
         # this is exact, not an approximation. Same for scale2 into ff2. Removes two
-        # elementwise multiplies per layer -- BinaryNg is 22 calls and 13.2 % of layer device
-        # time, and these were two of them.
+        # elementwise multiplies per layer from BinaryNg, which is 22 calls and 13.2 % of
+        # layer device time.
         #
         # Torch layout here is [out, in], so scale multiplies rows; the Linear's own
         # _prepare_torch_state transposes afterwards.

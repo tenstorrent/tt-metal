@@ -250,8 +250,8 @@ def precompute_adaln_table(
     checkpoint_dir = Path(checkpoint_dir)
     # Both layouts in circulation: the original MiniMax release names its shards `model-*` while the
     # diffusers conversion names them `diffusion_pytorch_model-*`. Single-file variants of each are
-    # accepted too. Only globbing `model-*` silently missed the diffusers snapshot this pipeline
-    # actually loads, which surfaced as "no model-*.safetensors" against a directory full of weights.
+    # accepted too. Globbing `model-*` alone would silently miss the diffusers snapshot this
+    # pipeline loads.
     shards = sorted(
         {
             shard

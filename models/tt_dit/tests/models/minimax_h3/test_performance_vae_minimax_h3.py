@@ -12,7 +12,7 @@ regression or a pathology, not to pin a tuned number -- nothing here has been th
 
 The visual shipping unit is a data-parallel **wave** -- one work unit per device -- which
 is what the encode/decode paths issue, so the visual budgets gate the wave time directly.
-H/W sharding of a single unit was measured and rejected for throughput: data parallelism
+H/W sharding of a single unit measures worse for throughput: data parallelism
 runs at 95-97 % scaling efficiency with no communication, while sharding adds a
 full-activation all-gather and re-partition at every GroupNorm site plus a halo per conv,
 and its tiles shrink to 2 rows at the deepest, widest-channel blocks -- it only pays when
@@ -77,14 +77,13 @@ WORK_UNITS = {
 # n = 7 / 14 / 21, which reproduces the 5 s and 10 s rows above.
 
 # The audio VAE runs at sampling_rate / hop_length = 32000 / 800 = 40 latent frames per second. The 5 s
-# baseline below predates this and uses 207 frames rather than the exact 200 -- keeping the number
-# comparable to the recorded baseline matters more than the rounding.
+# baseline uses 207 frames rather than the exact 200; the recorded budget was calibrated at 207, so
+# comparability with that recording matters more than the rounding.
 AUDIO_LATENT_FRAMES_5S = 207
 
 # Seconds per measurement. Generous: a regression bar, not a tuned target. The visual
 # entries gate a whole 32-unit data-parallel wave; at the measured 95-97 % scaling a wave
-# costs about one unit's single-device time, so these carry over the per-invocation
-# budgets from the old single-device `test_visual_*_baseline` tests unchanged.
+# costs about one unit's single-device time, so a per-invocation budget serves as a wave budget.
 EXPECTED_METRICS = {
     "visual_encoder_clip_wave": 20.0,  # 32 x (1,3,17,256,256) -> (1,48,5,16,16)
     "visual_encoder_keyframe_wave": 5.0,  # 32 x (1,3,1,256,256)
@@ -136,11 +135,10 @@ MESH_4X8 = [
 def test_visual_data_parallel_throughput(mesh_device):
     """Per-wave time with one work unit per device, gated, plus full-video projections.
 
-    The wave is the shipping unit, so the old single-device ``test_visual_encoder_baseline``
-    and ``test_visual_decoder_baseline`` were folded in here and their ``EXPECTED_METRICS``
-    budgets moved onto the waves -- this test fails when a wave blows its budget, not just
-    logs. Correctness of the data-parallel decomposition is gated in
-    ``test_vae_parallel_minimax_h3.py``; this only times it.
+    The wave is the shipping unit, so the ``EXPECTED_METRICS`` budgets gate the wave time
+    directly -- this test fails when a wave blows its budget, not just logs. Correctness of
+    the data-parallel decomposition is gated in ``test_vae_parallel_minimax_h3.py``; this
+    only times it.
     """
     from loguru import logger
 
@@ -233,10 +231,9 @@ def test_visual_data_parallel_throughput(mesh_device):
 def test_audio_baselines(mesh_device):
     """Audio encode/decode timing baselines at 5 s, against their budgets.
 
-    Timing only. The roundtrip-quality half this test used to carry was dropped as a
-    strictly weaker duplicate of ``test_audio_minimax_h3.py::test_roundtrip``, which gates
-    the same encode -> decode against the reference with PSNR *and* a log-spectrogram
-    distance. Real weights are still loaded -- the run doubles as a check that the
+    Timing only. Roundtrip quality is gated by ``test_audio_minimax_h3.py::test_roundtrip``,
+    which checks the same encode -> decode against the reference with PSNR *and* a
+    log-spectrogram distance. Real weights are loaded -- the run doubles as a check that the
     state-dict conversion wires up -- but the timing inputs are synthesised, since timing
     does not depend on the values.
     """

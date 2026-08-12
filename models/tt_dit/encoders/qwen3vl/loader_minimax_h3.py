@@ -9,8 +9,8 @@ decoder layer 49 -- not the post-norm final state. So only 50 layers are built a
 taken with ``activation_layers``, which returns hidden states without the final norm. Truncating
 the stack to 50 layers and reading its normalized output instead would be a different tensor;
 the diffusers reference raises rather than allow that, and
-``test_text_encoder_minimax_h3.py::test_tap_is_not_the_post_norm_state`` pins the distinction
-here (they differ by O(10^4), not by rounding).
+``test_text_encoder_minimax_h3.py::test_minimax_h3_text_conditioner`` asserts the tap differs
+from the post-norm state (by O(10^4), not by rounding).
 
 T2VA is text-only, so none of the vision tower (``model.visual.*``, 27 blocks) is built or read,
 and mRoPE degenerates: all three position axes carry the same ``arange``, which makes the

@@ -364,7 +364,7 @@ class MiniMaxH3Attention(Module):
 
         if use_ring:
             # Sequence is fractured across SP, so attention must gather K/V around the ring.
-            # The packed sequence is one attention document (the test keeps it padless), so no mask.
+            # The packed sequence is one attention document and logical_n masks the pad tail, so no mask.
             spatial_BHNE, _prompt, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                 q_BHNE,
                 k_BHNE,

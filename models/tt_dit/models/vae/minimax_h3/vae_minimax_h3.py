@@ -23,12 +23,11 @@ never need a cross-device reduction.
 The tiling and blending stay on host. They are cheap, exactly specified, and porting
 them to device buys nothing until a measurement says otherwise.
 
-The earlier version of this file was a T=1-only keyframe encoder built on
-``Conv2dViaConv3d``. That class cannot load ``conv_in``: it sizes the weight from the
-*aligned* input-channel count but prepares an unpadded weight, so a 3-channel conv
-fails its ``Parameter`` shape check. The encoder now lives in
-``encoder_minimax_h3.py`` on a ``LTXCausalConv3d``-shaped conv, parameterised by
-``temporal_taps`` so the keyframe path and the clip path are one implementation.
+The encoder lives in ``encoder_minimax_h3.py`` on a ``LTXCausalConv3d``-shaped conv,
+parameterised by ``temporal_taps`` so the keyframe path and the clip path are one
+implementation. ``Conv2dViaConv3d`` cannot serve as ``conv_in``: it sizes the weight
+from the *aligned* input-channel count but prepares an unpadded weight, so a 3-channel
+conv fails its ``Parameter`` shape check.
 """
 
 from __future__ import annotations
@@ -557,18 +556,18 @@ class MiniMaxH3Vae(Module):
             # `ConcatMeshToTensor`, **not** `fast_device_to_host`.
             #
             # `fast_device_to_host(concat_dims=[0, 0])` looks like the right call -- it is what
-            # `vae_ltx.py` and `vae_wan2_1.py` use, and it measured 39 % faster -- but it is a misuse
+            # `vae_ltx.py` and `vae_wan2_1.py` use, and it measures 39 % faster -- but it is a misuse
             # of that API and returns garbage here. `concat_dims` names, per mesh axis, the tensor
             # dimension to concatenate along, and it is meant for a tensor fractured on *different*
             # dims per axis (LTX shards H on one axis and W on the other). This tensor is fractured
             # 32 ways along dim 0 by `ShardTensorToMesh(dim=0)`, so passing dim 0 for both axes is not
             # a valid spec: measured, it returns `[24..31, 0, 0, ... 0]` where the correct order is
-            # `[0..31]` -- one mesh row of real data and the rest left unwritten.
+            # `[0..31]` -- one mesh row of real data and the rest left unwritten. The speed comes from
+            # not moving the data.
             #
-            # It was *faster* precisely because it was not moving the data. Nothing in the per-shard
-            # numerics suite catches this (every shard is individually correct, and the roundtrip
-            # tests run on a 1x1 mesh where the spec is trivially right); the e2e CLIP
-            # prompt-alignment gate did, dropping 37.37 -> 19.58.
+            # Nothing in the per-shard numerics suite catches the misuse (every shard is individually
+            # correct, and the roundtrip tests run on a 1x1 mesh where the spec is trivially right);
+            # only the e2e CLIP prompt-alignment gate does (37.37 -> 19.58).
             out = ttnn.to_torch(decoded, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))
             elapsed = time.perf_counter() - mark
             profile["readback"] += elapsed
@@ -579,7 +578,7 @@ class MiniMaxH3Vae(Module):
 
             mark = time.perf_counter()
             # `.float()` per tile rather than once over the whole batch: the batch is 32 x 22 MB and
-            # upcasting it whole allocated a 5 GB fp32 intermediate to then slice 32 ways. The blend
+            # upcasting it whole allocates a 5 GB fp32 intermediate only to slice it 32 ways. The blend
             # still runs in fp32, so this is numerically identical -- the device output is bf16 either
             # way, and upcasting earlier adds no information.
             tiles = [
@@ -651,7 +650,7 @@ class MiniMaxH3Vae(Module):
         the collective is nearly free.
 
         The tile -> gathered-position map comes from `gathered_tile_order`'s inverse and is **not**
-        row-major: the two-axis gather was measured to transpose dim 0, so position
+        row-major: the two-axis gather transposes dim 0 (measured), so position
         `c * rows + r` holds shard `r * cols + c`. Assuming row-major here puts tiles in the wrong
         place, which the seam gate catches loudly -- but only because something finally reads them.
         """
@@ -800,7 +799,7 @@ class MiniMaxH3Vae(Module):
     def decode(self, z_BCTHW: torch.Tensor) -> torch.Tensor:
         """Decode a latent video, mirroring the chunking ``encode`` applied.
 
-        ``token_drop`` removed the tail of every encoded chunk, so consecutive decoded
+        ``token_drop`` removes the tail of every encoded chunk, so consecutive decoded
         chunks overlap by ``frame_overlap`` pixel frames and are cross-faded. Ported from
         the reference ``_decode``; the trailing repeated latent frames produce pixel frames
         that were never asked for and are cut at the end.

@@ -76,28 +76,33 @@ the checkpoint's 64 layers are never read, and neither is `lm_head`. `loader_min
 this as `activation_layers=(num_layers - 1,)` with `num_layers = 50`, and
 `load_minimax_h3_text_state_dict` reads 552 tensors from 12 of 14 shards, 50.3 GB bf16. Note that
 `activation_layers=None` returns the *normalized* final state, which diffusers is explicit is **not**
-the conditioning H3 expects; `test_tap_is_not_the_post_norm_state` pins that with a measurement.
+the conditioning H3 expects; `test_minimax_h3_text_conditioner` asserts the tap is distinguishable
+from that post-norm state.
 
-Verified against the released weights on a 4x8 Blackhole Galaxy, TP=4 axis 0 with FSDP on axis 1:
-**PCC 99.9892%, RMSE/sigma 1.5%, at the production 512-token prompt** —
-`tests/models/minimax_h3/test_text_encoder_minimax_h3.py::test_text_encoder_tap_matches_reference`.
-Short prompts read far better (99.9999% at 13-22 tokens); a 50-layer causal stack accumulates over
-its context, so the bar is set from the 512-token row.
+Verified against the released weights on a 4x8 Blackhole Galaxy, TP=8 on axis 1 (no FSDP):
+**PCC 99.9993%, RMSE/sigma 0.4%, at 128 tokens** —
+`tests/models/minimax_h3/test_text_encoder_minimax_h3.py::test_minimax_h3_text_conditioner`.
+A 50-layer causal stack accumulates over its context, so long prompts read lower: 99.9892% measured
+at a 512-token prompt (TP=4 axis 0 with FSDP on axis 1), against 99.9999% at 13-22 tokens. The 0.99
+bar leaves room for the production 512-token behaviour.
 
 Two conditioner facts that break naive assumptions:
 
 - **`head_dim` is 128, not `hidden_size // num_heads`.** 5120 / 64 = 80, and the derivation fails
   *silently* because 5120 % 64 == 0. The q/k/v inner dimension is 8192, wider than the 5120 residual
   stream. Always pass `head_dim` from config. (Qwen3-VL-8B, which Ideogram4 uses, happens to satisfy
-  the derivation, which is why this went unnoticed.)
+  the derivation, so the hazard shows no signal there.)
 - **`rope_scaling.mrope_interleaved` is true.** The chunked and interleaved rotary layouts coincide
   exactly while all three M-RoPE axes share a position — i.e. for `t2va`, where the flag is a no-op.
   A vision run makes them diverge. `create_rope_tensors(..., interleaved=True)` and
   `mrope_position_ids()` cover that; see `tests/encoders/qwen3vl/test_qwen3vl_mrope.py`.
 
-FSDP is not used: it was required on a Wormhole 2x4, where TP=4 puts 14.9 GiB of weights on a 12 GiB
-chip, but a Blackhole chip is 31.9 GiB so even TP=4 fits. Without it the weights are replicated
-across the non-TP axis — load bandwidth, not capacity.
+FSDP is a placement choice, and the two consumers make it differently. The pipeline builds the
+encoder with `is_fsdp=True` (`pipeline_minimax_h3.py`), sharding the weights across the non-TP axis
+as well — ~1.6 GB/device for the 50.3 GB stack on 32 chips. `test_text_encoder_minimax_h3.py` leaves
+`is_fsdp` at its False default: a 31.9 GiB Blackhole chip holds a TP=8 shard without it, so the
+weights are simply replicated across the non-TP axis — load bandwidth, not capacity. (On a Wormhole
+2x4, where TP=4 puts 14.9 GiB on a 12 GiB chip, FSDP is a capacity requirement.)
 
 ## Vision tower
 
@@ -106,16 +111,20 @@ never injects deepstack features, so the conditioner reduces to a plain text dec
 `ref2va` do feed vision, at **four** depths — the embedding scatter at `<|image_pad|>` positions, plus
 additive deepstack injection at decoder layers 0/1/2 from vision layers `[8, 16, 24]`.
 
-The tower is ported: `encoders/qwen3vl/vision_qwen3vl.py` (`Qwen3VlVisionModel`, replicated, no TP),
+The tower is ported: `encoders/qwen3vl/vision_qwen3vl.py` (`Qwen3VlVisionModel`; the pipeline runs it
+replicated, no TP),
 wired into the decoder by `model_qwen3vl.py`'s `vision_embeds` / `vision_runs` / `deepstack_embeds`
 forward arguments — merged tokens **replace** the `<|image_pad|>` row embeddings, deepstack features
 are **added** to those same rows. Gated by `tests/encoders/qwen3vl/test_qwen3vl_vision_*.py` and, on
 released weights, `tests/models/minimax_h3/test_vision_conditioner_minimax_h3.py`.
 
-**The tower is green on released weights; the fused conditioner is not.** Merged tokens read 99.6532%
-at 448x448 and 99.5953% at 1344x768 (~9.4% RMSE/sigma), but `test_fused_conditioner_real_weights` is
-`xfail` at PCC 98.6224% against a 0.99 bar, cause not established. Do not read a green run of that
-file as `fl2va` being verified end to end.
+**The tower is green on released weights; the fused conditioner is not.** Merged tokens read 99.5953%
+at the production 1344x768 canvas (~9.4% RMSE/sigma; 99.6532% measured at 448x448, which is not a
+canvas `resolve_canvas_size` yields, so the gate runs the production canvas only).
+`test_fused_conditioner_real_weights` is a strict `xfail` on its massive-activation row check: with
+the HiFi4 decoder linears (see Precision) whole-tensor PCC is 85.82% at the production canvas, and
+the port reproduces 6 of the reference's 7 massive-activation rows — row 63 missing, one spurious row
+at 156. Do not read a green run of that file as `fl2va` being verified end to end.
 
 Note the demos port at `models/demos/qwen3_vl/` is built on `LightweightModule` /
 `tt_transformers`, not `tt_dit`. It is an algorithm reference, not reusable code.
@@ -285,7 +294,7 @@ scripts/run_safe_pytest.sh models/tt_dit/tests/models/minimax_h3/test_performanc
 
 | stage | t2va | `fl2va` | what it is |
 |---|---|---|---|
-| Encoder | 0.0 s* | 0.0 s* | *measured with the since-removed embedding cache. A current run pays the full conditioner encode here — ~2.8 s text-only with the encoder co-resident, plus the vision tower for `fl2va` — on top of the totals below |
+| Encoder | 0.0 s* | 0.0 s* | *measurement condition: these runs had the prompt embeddings pre-cached, a mechanism this branch does not have. A run of this branch pays the full conditioner encode here — ~2.8 s text-only with the encoder co-resident, plus the vision tower for `fl2va` — on top of the totals below |
 | Keyframe encode | — | **0.1 s** | keyframe -> VAE moments -> posterior sample -> fp16 round trip -> normalize -> patchify -> `scale_noise` at t = 0.999 |
 | Denoise | 67.0 s | 58.0 s | 49 forwards of the 50-layer DiT over the packed sequence |
 | VAE decode | 4.0 s | 4.1 s | 196 work units in 7 waves of 28 across 32 devices |
@@ -315,8 +324,8 @@ on either.
 against 61.7 s in an earlier measurement), and the mp4 write and every weight load are excluded from the
 rows by design. `warmup()` must be given the **real prompt and the real keyframes** — every program in
 the 50-block stack is keyed on the padded packed length, so warming a different one warms nothing.
-`test_performance_minimax_h3.py` asserts the warm and measured lengths agree; t2va only ever
-got away without that by luck, since 1 and 39 tokens both round up to 37888.
+`test_performance_minimax_h3.py` asserts the warm and measured lengths agree; for t2va the hazard is
+masked only by luck, since 1 and 39 tokens both round up to 37888.
 
 ## Precision
 
@@ -363,8 +372,8 @@ fidelity can help. Elementwise fp32 ops, by contrast, are exact.
   residual, so a second conv carries the mantissa bits the first dropped. A **3-way** split is
   bit-identical to a 2-way one, so 2-way already recovers the whole operand mantissa.
 - **`DEPTHWISE_MAC`** runs the anti-aliased resample filters as shift-multiply-add instead of
-  `ttnn.conv1d`. This was the single largest source: one `Activation1d` injected 1.54e-03, *all* of it
-  from its downsampler, against ~7e-08 for `snake_beta` and the upsampler. MAC is elementwise, hence
+  `ttnn.conv1d`. This targets the single largest source: one `Activation1d` injects 1.54e-03, *all* of
+  it from its downsampler, against ~7e-08 for `snake_beta` and the upsampler. MAC is elementwise, hence
   exact — 1.5e-03 → 5.3e-08.
 - **`TAP_MATMUL`** runs stride-1 convs as `sum_j W_j @ x[t + dilation*j]`. conv3d's residual *after*
   splitting is partial-sum rounding across `C_in_block`, which matmul does not have; worth 1.8–3.5x per

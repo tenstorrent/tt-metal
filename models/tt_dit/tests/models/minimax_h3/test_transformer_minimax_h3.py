@@ -180,17 +180,16 @@ def _modality_metadata(
     ("num_text", "num_audio", "num_video", "grid", "cond_spec", "weights"),
     [
         # The two tile-aligned cases: every modality is a multiple of TILE (32), so the packed
-        # sequence is assembled directly in TILE_LAYOUT. This is the cheap path and stays covered.
+        # sequence is assembled directly in TILE_LAYOUT. This is the cheap path.
         pytest.param(512, 256, 1280, (8, 8), (), "random", id="small_s2048"),  # 2048: aligned, no padding
         # 2112 is a multiple of TILE but not of SP * TILE, so this one exercises the tail padding.
         pytest.param(512, 256, 1344, (8, 8), (), "random", id="unaligned_s2112"),  # 2112 -> padded to 2304
         # The shape that ships: 1344x768 / 124 frames, 512-token prompt. 37 latent frames over a
         # 24x42 patch grid = 37296 video rows (== 16 mod 32) and 207 audio latents x 2 channels =
-        # 414 audio rows (== 30 mod 32), so this is the ROW_MAJOR assembly path -- and before that
-        # path existed, this case asserted rather than ran.
+        # 414 audio rows (== 30 mod 32), so this is the ROW_MAJOR assembly path.
         #
-        # The two cases above are tile-aligned by construction and cannot reach it. They are kept
-        # as the cheap regression net for the TILE path, but this is the one that gates what ships.
+        # The two cases above are tile-aligned by construction and cannot reach it; they are the
+        # cheap regression net for the TILE path, while this is the case that gates what ships.
         pytest.param(512, 414, 37296, (24, 42), (), "random", id="prod_768p_5s"),  # 38222 -> padded to 38400
         # Real checkpoint values at reduced depth, on the production shape only -- the key-map and
         # trained-distribution check does not vary by shape, so one case carries it for the whole
@@ -405,7 +404,7 @@ def test_minimax_h3_transformer(
         )
     # The port returns the TARGET rows only, for BOTH modalities -- see the note on `forward`'s return
     # value -- so drop the reference's leading conditioning rows of each before comparing. For ref2va
-    # the audio stream has conditioning rows too, which t2va and fl2va never did.
+    # the audio stream has conditioning rows too, which t2va and fl2va do not.
     torch_video_out = torch_out.sample[:, num_cond_video:]
     torch_audio_out = torch_out.audio_sample[:, num_cond_audio:]
     logger.info(f"torch video {tuple(torch_video_out.shape)} audio {tuple(torch_audio_out.shape)}")
@@ -621,9 +620,9 @@ def _truncated_depth_state_dict(directory: Path, num_layers: int) -> dict[str, t
     [
         # The shape that ships: 1344x768 / 124 frames / 512-token prompt. 37 latent frames over a
         # 24x42 patch grid = 37296 video rows, 207 audio latents x 2 channels = 414 audio rows,
-        # total 38222 padded to 38400 -- 4800 rows per device at SP=8. The tile-aligned shapes the
-        # 2-layer test also runs (2048, 21504 packed) are strictly smaller and are implied by this
-        # one fitting: fit is monotone in padded length, and only this case asks the ROW_MAJOR
+        # total 38222 padded to 38400 -- 4800 rows per device at SP=8. The shapes the 2-layer test
+        # also runs (2048 and 2112 packed) are strictly smaller and are implied by this one
+        # fitting: fit is monotone in padded length, and only this case asks the ROW_MAJOR
         # assembly question at full depth.
         pytest.param(512, 414, 37296, (24, 42), (), id="prod_768p_5s"),
         # ---- ref2va: does it fit? ----
@@ -861,8 +860,6 @@ def test_minimax_h3_transformer_real_weights(
 # ---------------------------------------------------------------------- the attention module, alone
 
 
-# MiniMax-H3 transformer config, shared by the `transformer/` (t2va) and `transformer_ref/` partitions.
-
 # NOTE: MiniMax-H3's attention inner dim (56 * 128 = 7168) is *larger* than the residual stream
 # (5376), unlike Wan. to_q/k/v are 5376 -> 7168 and to_out is 7168 -> 5376, all bias-free.
 
@@ -910,7 +907,7 @@ def test_minimax_h3_attention(
     topology: ttnn.Topology,
     reset_seeds,
 ) -> None:
-    # Measured 0.9997 at bringup on both this shape and the since-dropped s21504 (T21 H64 W64);
+    # Measured 0.9997 at bringup on this shape and on s21504 (T21 H64 W64);
     # 0.995 leaves margin without being a rubber stamp.
     MIN_PCC = 0.995
 
@@ -1027,8 +1024,6 @@ def test_minimax_h3_attention(
 # ---------------------------------------------------------------------- one transformer block
 
 
-# MiniMax-H3 transformer config, shared by the `transformer/` (t2va) and `transformer_ref/` partitions.
-
 # Token tags, per the reference: 0 video, 1 text, 2 audio (-1 padding, unused here).
 TAG_VIDEO, TAG_TEXT, TAG_AUDIO = 0, 1, 2
 
@@ -1122,8 +1117,8 @@ def test_minimax_h3_transformer_block(
     #   off-by-one modality        0.9962      timestep ignored           0.9973
     #   tags/timesteps swapped     0.9967      modality ignored           0.9984
     # A loose threshold (0.99, say) would therefore pass a completely broken AdaLN gather. The real
-    # implementation measures 0.999995 on both this shape and the since-dropped s21504, so 0.9995
-    # sits clear of both bounds.
+    # implementation measured 0.999995 on this shape and on s21504, so 0.9995 sits clear of both
+    # bounds.
     MIN_PCC = 0.9995
 
     skip_if_unsupported_num_links(mesh_device, num_links)
@@ -1264,9 +1259,6 @@ def test_minimax_h3_transformer_block(
 
 
 # ---------------------------------------------------------------------- the token refiner
-
-
-# MiniMax-H3 transformer config, shared by the `transformer/` (t2va) and `transformer_ref/` partitions.
 
 
 @pytest.mark.parametrize(

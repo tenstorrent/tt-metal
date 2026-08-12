@@ -4,13 +4,13 @@
 
 """End-to-end `t2va`: a prompt in, an mp4 with a soundtrack out, at the production working point.
 
-One test carries both the fully-warm latency measurement and the quality gates, folded into a
-single weight load: build the pipeline once, run one full warmup generation at the target shape
+One test carries both the fully-warm latency measurement and the quality gates on a single weight
+load: build the pipeline once, run one full warmup generation at the target shape
 (`MiniMaxH3Pipeline.warmup`, the analogue of `LTXPipeline.warmup_buffers`), then run the timed
 generation and gate *its* output. The timing method is `pipelines/ltx`'s, so the numbers stay
 comparable: prepares and export excluded, `Total (compute)` = the sum of `pipeline.last_timings`
 rows, and only the fully-warm second call is quoted. There is no tuned perf target yet -- the
-bringup directive was "current perf, no tuning" -- so `EXPECTED_TOTAL_S` is a loose
+bringup scope is "current perf, no tuning" -- so `EXPECTED_TOTAL_S` is a loose
 did-something-collapse bar, not a performance target. Duration scaling (10 s / 15 s) is covered by
 the block-level test in `test_performance_minimax_h3.py`, not here.
 
@@ -96,7 +96,7 @@ DEFAULT_WEIGHTS = "/data/cglagovich/MiniMax-H3-diffusers"
 ARTIFACT_ENV = "MINIMAX_H3_ARTIFACT_DIR"
 
 # Generous: a regression bar, not a target. Measured fully-warm total is well inside this even with
-# the ~2.8 s encoder forward now inside the timed window (there is no prompt-embedding cache), and
+# the ~2.8 s encoder forward inside the timed window (there is no prompt-embedding cache), and
 # the point is to notice a collapse (a lost cache, a fallback kernel) rather than to police seconds.
 EXPECTED_TOTAL_S = 400.0
 
@@ -264,11 +264,10 @@ def test_t2va_end_to_end(mesh_device, reset_seeds):
     log_spectral_flatness(output.audio, sampling_rate=output.sampling_rate)
 
     # Spatial seams, at the tile geometry the VAE **actually used**. Asked of the VAE object rather
-    # than re-derived: an earlier version of this recomputed `split_tiles(HEIGHT, 256, 32, ratio)`
-    # with a hardcoded overlap of 32 against the real `DEFAULT_TILE_OVERLAP = 64`, which produced a
-    # 4x6 grid instead of 4x7 and checked columns that are not tile boundaries at all. The gate
-    # passed while measuring nothing. Duplicating a derivation is how that happens; asking the
-    # object that owns it is how it does not.
+    # than re-derived: recomputing `split_tiles(HEIGHT, 256, 32, ratio)` with a hardcoded overlap of
+    # 32 against the real `DEFAULT_TILE_OVERLAP = 64` yields a 4x6 grid instead of 4x7 and checks
+    # columns that are not tile boundaries at all -- a gate that passes while measuring nothing.
+    # Asking the object that owns the derivation rules that out.
     ratio = pipeline.vae_config.spatial_compression_ratio
     (y_starts, _, _), (x_starts, _, _) = pipeline.vae.decode_tile_grid(HEIGHT // ratio, WIDTH // ratio)
     check_spatial_seams(frames, vertical_boundaries=x_starts[1:], horizontal_boundaries=y_starts[1:])

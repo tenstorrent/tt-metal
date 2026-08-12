@@ -231,16 +231,16 @@ def _draw(num_keyframes: int, seed: int = 0):
 
 
 def test_t2va_draws_are_unchanged_by_the_keyframe_argument():
-    """With no keyframes, `draw_request_latents` reproduces the pre-fl2va t2va stream bit-for-bit.
+    """With no keyframes, `draw_request_latents` reproduces the plain t2va stream bit-for-bit.
 
     The t2va no-regression proof, and it costs no device time. Video and audio are drawn inline off
     one generator, so a conditioning draw ahead of them would shift both streams; the empty case must
-    consume the generator exactly as the pre-fl2va order did.
+    draw nothing before video.
     """
     condition_noise, video_rows, audio_rows = _draw(0)
     assert condition_noise is None, "t2va must draw no conditioning noise at all"
 
-    # Exactly what the pipeline did before `draw_request_latents` existed.
+    # The t2va draw order, spelled out: video at full 5D shape, then audio, off one generator.
     generator = torch.Generator().manual_seed(0)
     expected_video = patchify_video_latents(
         torch.randn(
@@ -308,11 +308,8 @@ def test_keyframe_rows_per_anchor_match_the_layout():
 
 
 # --- fl2va presentation ---------------------------------------------------------------------------
-# Relocated here from `test_text_encoder_minimax_h3.py`, whose other five tests were redundant once
-# jonathansu's consolidated conditioner test landed (it covers both the tap comparison and the
-# post-norm assertion) and the dedicated mrope tests live in `test_qwen3vl_mrope.py`. This one
-# had no equivalent anywhere, and it is host-only, so it belongs in the fast suite rather than behind
-# a device fixture.
+# Pins the tokenized keyframe presentation (token ids, H3 row tags, mm_token_type_ids) against the
+# diffusers reference. Host-only: it exercises only the tokenizer and image processor, no mesh.
 
 PROMPT = (
     "A red fox trots across a snowy field at dawn, its breath visible in the cold air. "

@@ -141,5 +141,5 @@ def keyframe_condition_noise(
 #
 #     scheduler.scale_noise(condition_rows, MINIMAX_H3_KEYFRAME_NOISE_AUG, noise)
 #
-# A second copy of `t*x0 + (1-t)*noise` here drifted by 2.4e-7 because it computed
-# `1 - t` in Python double while the scheduler computes it in float32.
+# A second copy of `t*x0 + (1-t)*noise` computing `1 - t` in Python double instead
+# of the scheduler's float32 drifts by 2.4e-7.

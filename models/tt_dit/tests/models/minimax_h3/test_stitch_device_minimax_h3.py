@@ -9,9 +9,8 @@ while that file runs ``FABRIC_1D``, and ``fabric_config`` is a process-global on
 distinct value in one process raises ``TT_FATAL: Tried to override previous value of fabric config``.
 
 This is the piece that has to be right before any of it is worth doing. The reference blend is
-sequential and asymmetric; a separable reformulation was measured to move 11.1 % of pixels by up to
-4.66, so the device version mirrors the order rather than the algebra. These tests are what say it
-did.
+sequential and asymmetric; a separable reformulation moves 11.1 % of pixels by up to 4.66 (measured),
+so the device version mirrors the order rather than the algebra. These tests are what say it does.
 
 `single_device` throughout: the question here is the arithmetic, not the distribution. The
 all-gather that co-locates neighbouring tiles is a separate concern and gated separately.
@@ -31,8 +30,8 @@ from ....utils.check import assert_quality
 SINGLE_DEVICE = [pytest.param((1, 1), {"l1_small_size": 65536}, id="single_device")]
 
 # 1344x768 with the real tile size and overlap: a 4x7 grid, overlaps [96, 80, 80] by height and
-# [80, 80, 80, 80, 64, 64] by width. Derived rather than hardcoded -- hardcoding an overlap of 32
-# here is exactly the mistake that made an earlier seam gate check non-boundary columns.
+# [80, 80, 80, 80, 64, 64] by width. Derived rather than hardcoded -- a hardcoded overlap of 32
+# puts the seam bands on non-boundary columns and misses the actual seams.
 HEIGHT, WIDTH = 768, 1344
 # One decoder work unit covers 7 latent frames -> 28 pixel frames. Trimmed to 4 for these tests: the
 # blend is per-pixel along H and W and does nothing along T, so T is a multiplier on cost only.
@@ -57,9 +56,9 @@ def test_stitch_matches_host_at_production_geometry(mesh_device, reset_seeds):
     pixel value, and a seam is a *local* defect that a whole-canvas PCC can dilute -- so the seam
     columns are also checked on their own below.
 
-    This also subsumes the former standalone single-blend gate: the stitch runs every cross-fade the
-    stitcher has, on both axes at every real overlap extent (96/80 by height, 80/64 by width), and
-    the per-seam bands below hold each one to the same `pcc=0.9999` bar against the host original.
+    Single-blend coverage is included: the stitch runs every cross-fade the stitcher has, on both
+    axes at every real overlap extent (96/80 by height, 80/64 by width), and the per-seam bands
+    below hold each one to the same `pcc=0.9999` bar against the host original.
     """
     height_overlaps, width_overlaps = _geometry()
     rows, columns = len(height_overlaps) + 1, len(width_overlaps) + 1
@@ -149,9 +148,9 @@ def gathered_tile_order(mesh_rows: int, mesh_cols: int) -> list[int]:
     Returns `order`, where `order[i]` is the index of the **original** shard sitting at position `i` of
     dim 0 in the gathered tensor. So `gathered[i] == original[order[i]]`.
 
-    This exists because the gather is **not** order-preserving, which was measured
-    the hard way (`gathered replica matches host: False, maxdiff 7.93`) and initially left unpinned. `ShardTensorToMesh(dim=0)` lays shard `k` on device `k` in row-major order, so
-    shard `k` is at mesh position `(k // cols, k % cols)`. Gathering `cluster_axis=0` concatenates each
+    This exists because the gather is **not** order-preserving (measured: `gathered replica matches
+    host: False, maxdiff 7.93`). `ShardTensorToMesh(dim=0)` lays shard `k` on device `k` in row-major
+    order, so shard `k` is at mesh position `(k // cols, k % cols)`. Gathering `cluster_axis=0` concatenates each
     mesh *column*'s four shards along dim 0; gathering `cluster_axis=1` then concatenates those
     per-column groups. The result is dim 0 **transposed**: position `c * rows + r` holds shard
     `r * cols + c`.
@@ -174,8 +173,8 @@ def test_two_axis_all_gather_permutes_dim0_by_transpose(mesh_device):
     2. the order is exactly `gathered_tile_order`, i.e. a transpose, not row-major;
     3. every device agrees on that order, so a caller may read any single replica.
 
-    Claim 1 matters because an earlier readback bug looked like a 39 % speedup precisely because it
-    moved no data. A test that only compared *sets* of values would pass on a no-op too.
+    Claim 1 matters because a no-op gather reads as a ~39 % timing speedup precisely because it
+    moves no data. A test that only compared *sets* of values would pass on a no-op too.
     """
     rows, cols = tuple(mesh_device.shape)
     num_devices = rows * cols

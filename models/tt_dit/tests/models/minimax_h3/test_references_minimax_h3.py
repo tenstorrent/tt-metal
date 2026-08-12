@@ -35,7 +35,7 @@ image and video posteriors are *sampled* under a generator seeded 42 and rounded
 float16, while a soundtrack takes the posterior *mean* untouched.
 
 This module ``importorskip``s the minimax-h3 diffusers branch at import time.
-``test_packing_minimax_h3.py`` (t2va/fl2va) stays a separate file on purpose: its golden digests
+``test_packing_minimax_h3.py`` (t2va/fl2va) is a separate file on purpose: its golden digests
 are designed to stand in when that branch is absent, which the skip here would defeat.
 """
 
@@ -430,9 +430,9 @@ AUDIO_ONLY = dict(kind="audio", audio_seconds=DURATION)
 # `nine_mixed_reversed` is the same nine in the opposite order. Reference order is
 # semantic -- it moves both the rotary clock and the row modalities -- so a layout
 # assembled order-blind matches the reference on neither ordering. This pair is also the
-# host gate that lets the e2e suite drop its order-sensitivity generation: the layout
-# change is pinned bit-exact here, and `test_ref2va_conditioning_is_not_a_no_op` proves
-# layout differences reach the output.
+# host order-sensitivity gate, standing in for an e2e generation pair: the layout change
+# is pinned bit-exact here, and `test_ref2va_conditioning_is_not_a_no_op` proves layout
+# differences reach the output.
 _NINE_MIXED = [
     VIDEO_SOUND,
     AUDIO_ONLY,
@@ -489,9 +489,9 @@ def test_layout_matches_reference(case):
 
 # ---------------------------------------------------------------- media preparation
 #
-# The unique edge cases the layout depends on. Happy-path composition is already covered
+# The unique edge cases the layout depends on. Happy-path composition is covered
 # bit-exact by `test_prepare_references_matches_reference`'s 7-spec composition above;
-# what stays here is what those specs do not reach -- the fps grid, the 22-frame trim
+# this section covers what those specs do not reach -- the fps grid, the 22-frame trim
 # floor, the round-half-to-even timestamps, the aspect extremes, and the input-form
 # handling of `reference_media_to_uint8`.
 

@@ -21,10 +21,10 @@ Reused rather than rewritten, all from ``layers/audio_ops.py``:
 * ``_AlignedOutConv1d`` everywhere else, per its own docstring: a non-32-multiple channel
   count reaching ``conv3d`` produces a buffer whose page size does not divide its length.
 
-The one gap that needed a shared-code change: the five strided channel-doubling convs pair
-``kernel = 2 * stride`` with ``padding = ceil(stride / 2)``, and ``Conv1dViaConv3d``
-derived ``eff_k // 2``, which gives ``L/stride + 1`` instead of ``L/stride``. That is now
-an optional ``padding`` argument, defaulting to the old behaviour so no LTX call site moves.
+The five strided channel-doubling convs pair ``kernel = 2 * stride`` with
+``padding = ceil(stride / 2)``, passed through ``Conv1dViaConv3d``'s optional ``padding``
+argument: the derived default ``eff_k // 2`` gives ``L/stride + 1`` instead of ``L/stride``.
+The default stands, so LTX call sites are unaffected.
 
 The reference's residual-unit shortcut crop is a no-op here -- the dilated conv's padding is
 exact-same, so the crop width is zero -- but the lengths are asserted rather than assumed.

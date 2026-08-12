@@ -45,9 +45,9 @@ from ....utils.conv3d import _FP32_BLOCKINGS, _ntuple, aligned_channels, get_con
 #
 # **Swept**, not stubs: measured per shape with `wan2_2/bruteforce_conv3d_sweep.py`, which
 # brute-forces every legal blocking and times it on hardware under a trace. Against the
-# conv3d.py table baseline the winners are 2.5x-25.6x per layer and 9.5x summed, which is
-# what the encoder needed -- it was running at ~2.3 TFLOP/s against the ViT decoder's 14.0
-# purely because every one of its shapes missed the table.
+# conv3d.py table baseline the winners are 2.5x-25.6x per layer and 9.5x summed; on the
+# fallback the encoder runs at ~2.3 TFLOP/s against the ViT decoder's 14.0 purely because
+# every one of its shapes misses the table.
 #
 # Keyed by (C_in, C_out), which a level's res and downsample convs share. Where they share a
 # key the blocking must be legal for **both**: a strided downsample has a different input
@@ -81,7 +81,7 @@ register_conv3d_configs(_H3_BLOCKING_ENTRIES)
 # register_conv3d_configs only updates the bf16 fallback table, but get_conv3d_config
 # short-circuits to _FP32_BLOCKINGS when the weights are fp32 -- so for an fp32 encoder the
 # registration above is silently ignored. Seed the fp32 table as well. `setdefault`, so a
-# swept value that lands in conv3d.py later wins over these stubs.
+# swept value that lands in conv3d.py itself wins over these entries.
 for _key, _blocking in _H3_BLOCKING_ENTRIES.items():
     _FP32_BLOCKINGS.setdefault(_key, _blocking)
 
@@ -406,10 +406,9 @@ def edge_mask_pair(
     axis a shard belongs to, so on a 4x8 mesh it lands correctly only for the
     fastest-varying axis: with width on axis 1 the device at ``(i, j)`` happens to receive
     mask row ``j``, which is right, while with height on axis 0 it receives row ``j`` when it
-    needs row ``i``. That put the edge corrections on the wrong devices -- measured as a
-    worst-element error of 7.117 for ``h4`` against 2.4e-07 for ``w8``, which is what made
-    the asymmetry legible. ``ShardTensor2dMesh`` with the other axis ``None`` replicates
-    along it and is correct for either.
+    needs row ``i``, putting the edge corrections on the wrong devices (measured worst-element
+    error 7.117 for ``h4`` against 2.4e-07 for ``w8``). ``ShardTensor2dMesh`` with the other
+    axis ``None`` replicates along it and is correct for either.
     """
     leading = torch.zeros(factor, 1, 1, 1, 1)
     trailing = torch.zeros(factor, 1, 1, 1, 1)

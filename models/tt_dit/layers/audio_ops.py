@@ -64,7 +64,7 @@ def conv_split_mode() -> str:
     first one dropped. ``hi`` has 8 significand bits so the multiplier represents it exactly, and
     ``hi + lo`` reconstructs the input bit-for-bit.
 
-    * ``off`` (default) -- one conv, today's behaviour.
+    * ``off`` (default) -- one conv.
     * ``weight`` -- 2 convs, splitting the weight only. Needs no activation ops at all, just a second
       prepared weight. Measured 1.5x on ``conv_pre`` at production blocking.
     * ``full`` -- 3 convs, splitting both. ``lo*lo`` is genuinely negligible (a 4-term form measures
@@ -133,7 +133,7 @@ def audio_weights_variant() -> str:
     unchanged file set (`prepare_conv3d_weight_state` blocks by ``C_in_block``), so it gets a term
     too. Appending this to the cache subfolder keys the cache by the *effective* configuration
     (``MINIMAX_H3_AUDIO_ACCURATE`` only moves the two defaults, so it needs no term of its own).
-    The default configuration maps to ``""``, leaving pre-existing cache paths untouched.
+    The default configuration maps to ``""``, so default-config cache paths carry no suffix.
 
     The H3 modules resolve the same helpers once at construction and pass them down as explicit
     conv arguments, so the modules this key describes and the key itself derive from one source.
@@ -375,7 +375,7 @@ def depthwise_mac_preferred() -> bool:
         ttnn.conv1d   1.5437e-03
         MAC form      5.3334e-08     <- ~29000x better
 
-    That 1.5437e-03 was the *entire* error injected by an `Activation1d` -- `snake_beta` and the
+    That 1.5437e-03 is the *entire* error an `Activation1d` injects -- `snake_beta` and the
     upsampler both measure at ~7e-08 -- so for the audio decode this matters more than the conv3d
     operand split does. It is not free: the MAC form does K passes over the tensor.
 
@@ -493,7 +493,7 @@ def _depthwise_tap_conv1d(
     wkey,
     prepared,
 ):
-    """The HEIGHT_SHARDED ``ttnn.conv1d`` fast path (unchanged behaviour for LTX)."""
+    """The HEIGHT_SHARDED ``ttnn.conv1d`` fast path."""
     out, _, (weight, _bias) = ttnn.conv1d(
         input_tensor=ttnn.reshape(x_BTC, (B, T_pad, 1, C)),
         weight_tensor=weight,
@@ -900,11 +900,10 @@ class Conv1dViaConv3d(Module):
         self.ccl_manager = ccl_manager
 
         eff_k = (kernel_size - 1) * dilation + 1
-        # ``eff_k // 2`` is torch's "same" padding and is right for every LTX call site.
-        # A strided conv need not use it: MiniMax-H3's DAC encoder pairs ``kernel = 2 *
-        # stride`` with ``padding = ceil(stride / 2)``, which yields exactly ``L / stride``
-        # where ``eff_k // 2`` would yield ``L / stride + 1``. ``padding=None`` keeps the
-        # existing behaviour, so no LTX call site changes.
+        # ``eff_k // 2`` (the ``padding=None`` default) is torch's "same" padding and is right
+        # for every LTX call site. A strided conv need not use it: MiniMax-H3's DAC encoder pairs
+        # ``kernel = 2 * stride`` with ``padding = ceil(stride / 2)``, which yields exactly
+        # ``L / stride`` where ``eff_k // 2`` would yield ``L / stride + 1``.
         same_pad = eff_k // 2 if padding is None else padding
 
         if sharded:
@@ -1297,7 +1296,7 @@ class ConvTranspose1dViaConv3d(Module):
             split_mode=split_mode,
             tap_matmul=tap_matmul,
         )
-        # We supply our own symmetric padding instead.
+        # forward() supplies its own symmetric padding, so the inner conv's causal front pad is disabled.
         self.conv.external_pad_front = 0
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:

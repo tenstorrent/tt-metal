@@ -113,9 +113,10 @@ PROMPTS = {
     # MiniMax-H3 `fl2va` at the production working point. A keyframe is put onto the target canvas
     # before the processor sees it, so 1344x768 is grid [1, 48, 84] = 4032 patches = 1008 token slots,
     # and the presentation is `"<Picture 1>: "` (5 tokens) + the vision block + the prompt verbatim.
-    # Every grid above is a toy by comparison -- the largest is 6 slots. The reason this is here: the rope-table comparison below passed at 13-22 tokens with atol 1e-4
-    # and *failed* at 512, because longer prompts put more entries on a rounding boundary. Index
-    # arithmetic has no such accumulation, but the tables do, and both are checked by these cases.
+    # Every grid above is a toy by comparison -- the largest is 6 slots. Production length matters:
+    # the rope-table comparison below passes at 13-22 tokens with atol 1e-4 and *fails* at 512, because
+    # longer prompts put more entries on a rounding boundary. Index arithmetic has no such
+    # accumulation, but the tables do, and both are checked by these cases.
     "keyframe_768x1344": (("text", 5), ("image", (1, 48, 84)), ("text", 41)),
     "two_keyframes_768x1344": (
         ("text", 5),

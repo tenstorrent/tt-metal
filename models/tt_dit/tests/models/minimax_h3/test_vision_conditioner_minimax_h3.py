@@ -10,11 +10,11 @@
 # run of this file as fl2va being verified end to end.
 #
 # What is known about the remaining gap:
-#   - the pipeline decoder now runs HiFi4 linears (build_minimax_h3_text_encoder
+#   - the pipeline decoder runs HiFi4 linears (build_minimax_h3_text_encoder
 #     opts in unconditionally; the tt_dit-wide default in layers/linear.py is
-#     HiFi2 and unchanged). Measured at production shape and content, that took
-#     the fused conditioner from whole-tensor PCC 70.8949% to 85.8171% and
-#     recovered massive-activation rows 102 and 128. Row 63 is still missing
+#     HiFi2). Measured at production shape and content, HiFi4 moves the fused
+#     conditioner from whole-tensor PCC 70.8949% (HiFi2) to 85.8171% and
+#     recovers massive-activation rows 102 and 128. Row 63 is still missing
 #     and one spurious massive row appears at 156, hence the xfail.
 #   - the linear lever is exhausted: HiFi4 with packer_l1_acc off measured
 #     bit-identical to HiFi4, and HiFi4 itself cost nothing (1184.2 vs
@@ -22,19 +22,19 @@
 #   - reproducible, in-suite and in isolation (-k fused), before and after a
 #     device reboot. Not flaky, not cross-test interference, not hardware.
 #   - the gap is mostly NOT the vision tower (which keeps the HiFi2 default
-#     linears -- HiFi4 left it unchanged, 99.6116% -> 99.6055%). Giving the
-#     tower fp32 accumulation roughly halved its hidden-state error (block 26:
-#     99.6893% -> 99.8272% on a 784-patch image) and moved the fused number
+#     linears -- HiFi4 measures no change there, 99.6116% -> 99.6055%). Giving
+#     the tower fp32 accumulation roughly halves its hidden-state error (block
+#     26: 99.6893% -> 99.8272% on a 784-patch image) and moves the fused number
 #     only slightly, so the residual error lives in the decoder with vision
 #     injected.
-#   - a reduced-geometry fused-conditioner parity test (4 layers, tap at 3) --
-#     a bring-up test since removed from tests/encoders/qwen3vl/, whose
-#     remaining per-module tests cover the same structure -- passed at
-#     99.9917%, so whatever this is needs the real depth, width or tap index to
-#     show up: 64 layers and a tap at 50, versus 4 layers and a tap at 3.
+#   - a reduced-geometry fused-conditioner parity run (4 layers, tap at 3;
+#     harness recoverable from the git history of tests/encoders/qwen3vl/)
+#     measured 99.9917%, so whatever this is needs the real depth, width or tap
+#     index to show up: 64 layers and a tap at 50, versus 4 layers and a tap
+#     at 3.
 #
 # The companion to test_text_encoder_minimax_h3.py, which covers t2va at PCC
-# 99.9993%. Everything above that point was verified with reduced geometry and
+# 99.9993%. The per-module tests verify the stack with reduced geometry and
 # random weights -- structure, not fidelity. This closes that gap for the tower:
 #
 #   - the vision tower at its real geometry (depth 27, hidden 1152, head_dim 72
@@ -94,7 +94,7 @@ _PATTERNS = [f"{_SUBFOLDER}/*"]
 # would be evidence about 448x448 alone. The full 1008-token presentation runs in a few minutes, so
 # the smaller shape buys nothing. The tower gate runs the production keyframe canvas only: the 1:1
 # 768x768 canvas differs from it only in grid extent -- same patching, same position-table
-# interpolation path, same head padding -- so a second full-tower run bought no new coverage.
+# interpolation path, same head padding -- so a second full-tower run buys no new coverage.
 KEYFRAME_IMAGE = (1344, 768)
 
 # Where the calibrated t2va generation lives; frame 0 of it is the keyframe these tests condition on.
@@ -102,20 +102,20 @@ T2VA_ARTIFACT_ENV = "MINIMAX_H3_T2VA_ARTIFACT_DIR"
 
 # Bars for the fused conditioner, all set from the production measurement below.
 #
-# Whole-tensor PCC is NOT one of them, which is the main thing this gate learned. The
+# Whole-tensor PCC is NOT one of them. The
 # tap's row norms span 177 to 20612 -- a 79x spread, because a handful of rows carry massive activations
 # -- so a single flattened correlation over all 5.2 M elements is dominated by those few rows and says
-# almost nothing about the other 1011. Measured at production shape and content with the pre-HiFi4
-# decoder: whole-tensor PCC 70.8949 % (85.8171 % with the HiFi4 linears the pipeline now always runs)
+# almost nothing about the other 1011. Measured at production shape and content with the HiFi2
+# decoder: whole-tensor PCC 70.8949 % (85.8171 % with the HiFi4 linears the pipeline always runs)
 # while the *median* per-row relative error is 9.0 % and the text rows are within 2.5 %.
 # Excluding the largest rows makes whole-tensor PCC *worse* (57 %, 50 %, 39 % as the top 1, 3, 5 are
 # dropped), which is the tell that the statistic is unstable here rather than informative.
 #
 # So the gate is per-row, split by row class, which is both robust and diagnostic. The bars below were
-# calibrated on the pre-HiFi4 measurement; HiFi4 only lowers per-row error, so they remain valid (loose)
+# calibrated on the HiFi2 measurement; HiFi4 only lowers per-row error, so they remain valid (loose)
 # upper bounds and are deliberately not retightened until a fresh calibration run.
-FUSED_MAX_TEXT_ROW_ERROR = 0.05  # measured median 0.0197, max 0.0247 (pre-HiFi4; HiFi4 is lower)
-FUSED_MAX_MEDIAN_ROW_ERROR = 0.15  # measured median 0.0901 over all rows (pre-HiFi4; HiFi4 is lower)
+FUSED_MAX_TEXT_ROW_ERROR = 0.05  # measured median 0.0197, max 0.0247 (HiFi2 calibration; HiFi4 is lower)
+FUSED_MAX_MEDIAN_ROW_ERROR = 0.15  # measured median 0.0901 over all rows (HiFi2 calibration; HiFi4 is lower)
 # Rows whose norm exceeds this multiple of the median are "massive activations". Emergent and
 # threshold-like: a small numerical difference decides whether a row blows up at all.
 MASSIVE_ROW_MULTIPLE = 10.0
@@ -288,14 +288,15 @@ def test_fused_conditioner_real_weights(conditioner, mesh_device, submesh_shape,
 
     Three properties this gate depends on:
 
-    - **the shape.** 448x448 is not a canvas `resolve_canvas_size` produces, so a run there was
+    - **the shape.** 448x448 is not a canvas `resolve_canvas_size` produces, so a run there would be
       evidence about 448x448 alone. Production is 1344x768 -> 1008 image tokens, seq 1028.
     - **the content.** `torch.rand` uniform noise is invented *and* degenerate for this metric; see
       `_test_image`.
-    - **the tap.** It read `hidden_states[51]` -- `activation_layers=(50,)` over 64 layers, with a hook
-      on `layers[50]`. Production reads `hidden_states[50]`, the output of layer **49**, which is what
-      `build_minimax_h3_text_encoder` builds at 50 layers. Self-consistent before, so not the PCC gap,
-      but it gated a tensor production never reads and paid for 14 layers it never needed.
+    - **the tap.** Production reads `hidden_states[50]`, the output of layer **49**, which is what
+      `build_minimax_h3_text_encoder` builds at 50 layers. A hook on `layers[50]`
+      (`activation_layers=(50,)` over 64 layers) captures `hidden_states[51]` instead --
+      self-consistent, so no PCC gap, but it gates a tensor production never reads and pays for 14
+      layers it never needs.
 
     The bar is set from the production measurement rather than inherited, and the reason a *loose* bar
     is a gate here rather than an admission is that the floor behind it has been measured:
@@ -340,9 +341,9 @@ def test_fused_conditioner_real_weights(conditioner, mesh_device, submesh_shape,
 
     # --- golden: exactly what production reads, through the API production reads it with ---
     # `MiniMaxH3TextEncoderStep.encode_prompt` does `output_hidden_states=True` then
-    # `hidden_states[MINIMAX_H3_TEXT_ENCODER_LAYER]`. No forward hook: the hook the old version used
-    # captured layer TAP's *output*, which is `hidden_states[TAP + 1]`, and that off-by-one is how this
-    # gate came to measure a tensor production never reads. Asking for the tensor by the index
+    # `hidden_states[MINIMAX_H3_TEXT_ENCODER_LAYER]`. No forward hook: a hook on layer TAP captures
+    # its *output*, which is `hidden_states[TAP + 1]` -- an off-by-one that measures a tensor
+    # production never reads. Asking for the tensor by the index
     # production uses cannot drift that way. The reference builds its own tower output and its own
     # position ids here, so a disagreement in either surfaces as PCC.
     with torch.no_grad():

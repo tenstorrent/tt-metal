@@ -124,10 +124,10 @@ def _encoder(submesh, *, layers, activation_layers):
 
 @pytest.mark.parametrize(("mesh_device", "submesh_shape"), _MESH, indirect=["mesh_device"])
 def test_text_only_path_is_unchanged(mesh_device, submesh_shape):
-    """Passing no vision arguments must give bit-identical output to before.
+    """Omitting the vision arguments and passing them explicitly as None are bit-identical.
 
-    This is the guarantee the Ideogram4 callers depend on: they never pass the new arguments, so the
-    text path has to be untouched.
+    This is the guarantee the Ideogram4 callers depend on: they never pass vision arguments, so the
+    text-only path must not depend on their presence.
     """
     submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     torch.manual_seed(0)
@@ -212,25 +212,21 @@ HIDDEN_REAL = 5120
 # `<|image_pad|>` slots, and the presentation is `"<Picture i>: "` (5 tokens) + the vision block + the
 # prompt. One anchor is seq 1054 with one run; `first`+`last` is seq 2067 with two.
 #
-# Both cross tile boundaries -- 31 and 63 of them -- and the whole prior green record for
-# `_scatter_rows` was collected without that hazard ever being exercised (every earlier case fit its
-# runs inside one 32-row tile block, and the reduced fused-conditioner test is a single block at
-# seq_len 19).
+# Both cross tile boundaries -- 31 and 63 of them. That is the hazard these cases exist for: a run
+# that fits inside one 32-row tile block never exercises it, so only production-length runs gate it.
 #
-# Why this is worth its own gate rather than an assumption: TILE row
-# granularity is 32, an unaligned cut there *asserted* in the DiT's packed-sequence path, and the fix
-# was to assemble in ROW_MAJOR and convert once. `_scatter_rows` slices a TILE_LAYOUT tensor at
-# arbitrary row offsets, so it is the same hazard in a different module.
+# Why this is worth its own gate rather than an assumption: TILE row granularity is 32, an unaligned
+# cut there *asserted* in the DiT's packed-sequence path (fixed by assembling in ROW_MAJOR and
+# converting once), and `_scatter_rows` slices a TILE_LAYOUT tensor at arbitrary row offsets -- the
+# same hazard in a different module.
 #
-# The width is the real 5120 too. An earlier draft of this gate also carried a `seq=19` control and the
-# 448x448 released-weights geometry; both are invented shapes (448x448 is not a canvas
-# `resolve_canvas_size` produces) and were removed per the production-shapes-only rule. What the
-# control established during bringup is recorded in the `add` docstring below rather than re-run
-# forever.
+# The width is the real 5120 too, and the shapes are production-only: 448x448 is excluded because it
+# is not a canvas `resolve_canvas_size` produces, and a single-tile `seq=19` control is excluded
+# because it cannot exercise the boundary hazard -- what such a control does establish is recorded in
+# the `add` docstring below rather than re-run forever.
 #
-# The two `edge_*` geometries are folded in from a former PCC-gated sweep of `_scatter_rows`: a run
-# starting at row 0 and a run ending at the last row are the slicing edge cases (no prefix / no
-# suffix to concatenate), and they are kept here at bit-exact strength rather than behind a PCC bar.
+# The two `edge_*` geometries -- a run starting at row 0 and a run ending at the last row -- are the
+# slicing edge cases (no prefix / no suffix to concatenate), gated at bit-exact strength like the rest.
 _TILE_RUNS = [
     pytest.param(1054, [(5, 1008)], HIDDEN_REAL, id="production_keyframe_crosses_31"),
     pytest.param(2067, [(5, 1008), (1018, 1008)], HIDDEN_REAL, id="production_two_keyframes"),
@@ -248,8 +244,8 @@ def test_scatter_rows_is_exact_across_tile_boundaries(mesh_device, submesh_shape
     Gated on `torch.equal`, not PCC. A replace is pure data movement: it selects rows and concatenates
     them, so there is no arithmetic to lose precision in and no numerical excuse for a mismatch. A PCC
     bar on a data movement would pass a scatter that placed a few rows one tile off, which is exactly
-    the failure mode tile boundaries invite -- the former PCC-gated sibling sat at pcc=0.999, which at
-    these row counts would tolerate ~1 row in 1000 being wrong, and was retired in favor of this gate.
+    the failure mode tile boundaries invite -- at these row counts even pcc=0.999 tolerates ~1 row in
+    1000 being wrong.
 
     Inputs are pre-rounded to bf16 so the comparison is against what the device was actually given;
     otherwise this would be measuring the host's fp32 -> bf16 cast, not the scatter.
@@ -295,12 +291,12 @@ def test_scatter_rows_add_is_exact_across_tile_boundaries(mesh_device, submesh_s
     perturbing them.
 
     The written rows are compared at the bf16 floor instead, because they are not a data movement:
-    `ttnn.add` and torch do not round a bf16 sum identically. Two earlier bars were both wrong for the
-    same reason and are recorded so nobody re-derives them: a 2**-8 relative tolerance (that is *half* a
-    bf16 ulp -- 7 stored mantissa bits put the spacing at 2**-7 relative), and bit-exactness against a
-    bf16-rounded golden (which assumes both sides round the same way). What established it as a rounding-mode difference rather than a tile-boundary effect
-    was a single-tile `seq=19` control failing exactly as hard as the 2067-row case -- a tile-boundary
-    defect cannot do that. That control was a bringup diagnostic at an invented shape and is not kept.
+    `ttnn.add` and torch do not round a bf16 sum identically. Two tempting stricter bars are both wrong
+    for the same reason; do not re-derive them: a 2**-8 relative tolerance is *half* a bf16 ulp (7
+    stored mantissa bits put the spacing at 2**-7 relative), and bit-exactness against a bf16-rounded
+    golden assumes both sides round the same way. Measured during bringup: a single-tile `seq=19`
+    control (an invented shape, so not in the suite) failed exactly as hard as the 2067-row case, which
+    a tile-boundary defect cannot do -- pinning the mismatch on rounding mode, not tiling.
 
     A ~50 % differing fraction is expected for a rounding-mode difference, so unlike the rope-table
     gate there is no bound on *how many* entries differ. The systematic-bias check below is what

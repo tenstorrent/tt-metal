@@ -14,16 +14,15 @@ Three things are being established, separated so a failure names itself:
 
 1. **The reflect edges**, on their own. ``neighbor_pad_async`` has no ``reflect`` mode, so
    the halo pads ``replicate`` and :func:`reflect_edge_correction` repairs the two global
-   edges per axis with a per-device 0/1 mask. That correction was verified as host algebra
-   but had never executed on device. It has to be gated alone because the error it makes is
-   **one pixel of border**: PCC stays high and it reads as a faint vignette, so a
-   whole-encoder number would not catch it. Compared elementwise against ``F.pad(mode=
-   "reflect")``, exactly, not by PCC.
+   edges per axis with a per-device 0/1 mask. The correction is gated alone because the
+   error it makes is **one pixel of border**: PCC stays high and it reads as a faint
+   vignette, so a whole-encoder number would not catch it. Compared elementwise against
+   ``F.pad(mode="reflect")``, exactly, not by PCC.
 
 2. **The asymmetric trailing pad.** H3's downsamplers pre-pad ``(0,1,0,1)`` reflect. Under
    sharding that cannot live in the model -- only the device holding the global bottom/right
    edge may reflect, while interior devices need a real halo row from the neighbour -- so it
-   moved into the conv as ``trailing_spatial_padding``, with the halo asymmetric ``(0,1)``.
+   lives in the conv as ``trailing_spatial_padding``, with the halo asymmetric ``(0,1)``.
 
 3. **The whole encoder, sharded vs unsharded.** Sharding is a pure decomposition: the answer
    must not depend on the factor. Comparing sharded against the (already diffusers-gated)
@@ -63,9 +62,8 @@ FABRIC = {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_
 
 # (mesh, h_factor, w_factor). Height on mesh axis 0 (width 4), width on axis 1 (width 8).
 # H3's extents are dyadic so every factor here divides all six levels exactly. Only the
-# full h4w8 sharding is kept: it runs the halo exchange and the global-edge correction on
-# both axes at once, which subsumes the single-axis h4 / w8 cases that used to sit
-# alongside it.
+# full h4w8 sharding runs: it exercises the halo exchange and the global-edge correction on
+# both axes at once, subsuming the single-axis h4 / w8 cases.
 SHARDINGS = [
     pytest.param((4, 8), 4, 8, FABRIC, id="h4w8"),
 ]
@@ -183,8 +181,7 @@ def test_reflect_halo_edges_exact(mesh_device, h_factor, w_factor, pad_kind):
     """The replicate halo + global-edge correction must equal ``F.pad(mode="reflect")`` exactly.
 
     Runs the pad path alone (no conv) so a border error cannot hide behind a convolution.
-    ``trailing`` is the downsamplers' asymmetric ``(0,1,0,1)`` pre-pad, sharded (the old
-    ``test_trailing_reflect_halo_exact``, folded in as a pad kind).
+    ``trailing`` is the downsamplers' asymmetric ``(0,1,0,1)`` pre-pad, sharded.
     """
 
     torch.manual_seed(0)
