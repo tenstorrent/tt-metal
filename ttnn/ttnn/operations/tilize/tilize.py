@@ -447,12 +447,16 @@ def _dispatch(
     use_multicore=True,
     use_double_buffer=True,
     tile=None,
+    levers=None,
 ):
     """Allocate the output and launch the generic op.
 
-    Separated from `tilize()` so the multi-core / double-buffer values of the
+    Separated from `tilize()` so (a) the multi-core / double-buffer values of the
     distribution parameters can be exercised (bench + refinement tests) while
-    Phase 0's SUPPORTED rectangle still only *accepts* their trivial values.
+    Phase 0's SUPPORTED rectangle still only *accepts* their trivial values, and
+    (b) the perf bench can force a lever off (`levers=dict(<knob>=0)`) without
+    the public entry point ever exposing an ablation switch. `levers=None` is the
+    production path.
     """
     device = input_tensor.device()
     out_memory_config = memory_config if memory_config is not None else input_tensor.memory_config()
@@ -473,5 +477,6 @@ def _dispatch(
         use_multicore=use_multicore,
         use_double_buffer=use_double_buffer,
         tile_height=tile_height,
+        levers=levers,
     )
     return ttnn.generic_op([input_tensor, output_tensor], program_descriptor)

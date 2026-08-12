@@ -1,0 +1,258 @@
+{
+  "op": "tilize",
+  "levers": {
+    "A0": {
+      "status": "applied",
+      "phase": "A0",
+      "knob": "multicore",
+      "reason": "Active-core count checked PER REGIME against A0's criterion (interleaved: active == min(grid, total_blocks)) on this 11x10=110 grid: square 256 blocks -> 110 cores; wide_short 32 blocks -> 32 cores; tall_narrow 64 -> 64; smallest 1 -> 1. All four match. No bandwidth-knee cap: tilize's reader is transaction-rate bound and master.md A0 records the cap measuring ~2.4x SLOWER on this very op, so the full grid is used. NOTE: Phase 0's SUPPORTED rectangle only ACCEPTS use_multicore=False, so the SHIPPED default path is the 1-core value of this parameter; the multi-core value is wired, correctness-tested (test_tilize_debug.py::test_multicore_identity, ::test_multicore_fills_the_grid_on_wide_short) and measured here. Refinement A1 flips the SUPPORTED entry and changes no kernel code.",
+      "measured": {
+        "on_ns": 44590.0,
+        "off_ns": 333972.7,
+        "shape": [
+          1,
+          1,
+          2048,
+          2048
+        ],
+        "note": "per-regime off/on: square 7.49x, wide_short 6.008x, tall_narrow 16.87x, smallest[1,1,32,32] 0.986x, smallest[1,1,32,64] 1.026x"
+      },
+      "delta_pct": 649.0
+    },
+    "A1": {
+      "status": "applied",
+      "phase": "A0",
+      "knob": "row_wise",
+      "reason": "split_work_to_cores(..., row_wise=True) AND grid_to_cores(..., row_wise=True) \u2014 the same flag on both calls, or the runtime-arg assignment order silently mismatches the split's group order (op_design risk 18). Pays on the many-core regimes; inside the ~2-3% noise band on the DRAM-saturated square and on the 1-core smallest shapes, which is expected \u2014 with one core there is no core line to orient.",
+      "measured": {
+        "on_ns": 7321.3,
+        "off_ns": 8121.0,
+        "shape": [
+          1,
+          1,
+          32,
+          16384
+        ],
+        "note": "per-regime off/on: square 0.996x, wide_short 1.109x, tall_narrow 1.022x, smallest[1,1,32,32] 0.978x, smallest[1,1,32,64] 1.024x"
+      },
+      "delta_pct": 10.9
+    },
+    "A2": {
+      "status": "deferred",
+      "phase": "A0",
+      "followup": "A3: on the sharded paths pin the grid to the shard's own cores (get_optimal_worker_cores_for_sharded_tensor) instead of re-spreading with split_work_to_cores. Phase 0 is interleaved-only, so there is no shard whose cores could be honoured yet.",
+      "predicted_delta_pct": 100,
+      "reason": "Predicted delta is the whole DRAM traffic on the sharded cells (C14 zero-copy is the same refinement): a shard re-spread across the grid re-fetches over the NoC data that is already resident in the owning core's L1."
+    },
+    "A3": {
+      "status": "deferred",
+      "phase": "A0",
+      "followup": "Map the linear block index -> a bank-adjacent core (reader next to the DRAM bank it reads) instead of the plain row-wise line, and re-measure the square. The block->core mapping is already a host-side function, so this is a placement change only.",
+      "predicted_delta_pct": 9,
+      "reason": "The square measures 376 GB/s of DRAM traffic against a ~448 GB/s theoretical peak (84%), and the tech report's placed/adjacent recipe reaches ~92% \u2014 so ~9% is the size of what bank-adjacency (with B10's per-reader VCs) could still buy. Deferred rather than refuted because interleaved round-robin pages touch every bank, which weakens the adjacency argument for THIS memory layout: it needs measuring, not asserting."
+    },
+    "A4": {
+      "status": "deferred",
+      "phase": "A0",
+      "followup": "Revisit only if a profile ever shows the tail-column-block cores idling: specialize them into their own kernel instead of carrying (n_full, n_tail) as runtime args.",
+      "predicted_delta_pct": 0,
+      "reason": "The two-group split already carries the remainder in a runtime arg, and the tail column-block is a second COMPILE-TIME instantiation of the same compute kernel (WT_TAIL), so there is no cliff kernel to skip and no idle core to reclaim. Predicted 0 rather than structurally-impossible because a cliff kernel IS buildable \u2014 it just has nothing to win here."
+    },
+    "B0": {
+      "status": "applied",
+      "phase": "A0",
+      "knob": "barrier_per_block",
+      "reason": "The discipline itself: every per-core-overhead lever in this ledger (B5, B7, and B9) is counterfactualed on the smallest regime the op runs in as well as on the square, so a lever that pays at several blocks/core cannot silently regress the 1-block case. All three DID pay on the smallest shape (B7 6.03x, B5 1.027x, B9 1.045x), so none needed a work-per-core gate. The measurement below is B7's smallest-regime arm, the strongest instance. Measured on [1,1,32,32] \u2014 the smallest shape the Phase-0 op can RUN (1 core, 1 block, 1 tile). feature_spec.INPUTS' global smallest is [1,1,30,32], but that is a pad_mode=\"auto\" cell which Phase 0 refuses (padding is refinement P1), and [1,1,32,32] is its tile-aligned counterpart with the identical per-core geometry (nt_h=1, Wt=1, one block). FOLLOW-UP for P1: re-run these arms on [1,1,30,32] once the padded reader exists, since the pad fill adds per-block L1 stores that this shape does not carry.",
+      "measured": {
+        "on_ns": 1867.3,
+        "off_ns": 11251.3,
+        "shape": [
+          1,
+          1,
+          32,
+          32
+        ],
+        "note": "Measured on [1,1,32,32] \u2014 the smallest shape the Phase-0 op can RUN (1 core, 1 block, 1 tile). feature_spec.INPUTS' global smallest is [1,1,30,32], but that is a pad_mode=\"auto\" cell which Phase 0 refuses (padding is refinement P1), and [1,1,32,32] is its tile-aligned counterpart with the identical per-core geometry (nt_h=1, Wt=1, one block). FOLLOW-UP for P1: re-run these arms on [1,1,30,32] once the padded reader exists, since the pad fill adds per-block L1 stores that this shape does not carry."
+      },
+      "delta_pct": 502.5
+    },
+    "B5": {
+      "status": "applied",
+      "phase": "A0",
+      "knob": "coalesce_writes",
+      "reason": "The writer writes each output tile as ONE whole-page noc_async_write instead of four face-sized writes. Small but consistent, and it pays on the smallest regime too, which is B0's requirement for a per-core-overhead lever. per-regime off/on: square 1.026x, wide_short 1.061x, tall_narrow 1.031x, smallest[1,1,32,32] 1.027x, smallest[1,1,32,64] 1.098x",
+      "measured": {
+        "on_ns": 1867.3,
+        "off_ns": 1918.0,
+        "shape": [
+          1,
+          1,
+          32,
+          32
+        ],
+        "note": "Measured on [1,1,32,32] \u2014 the smallest shape the Phase-0 op can RUN (1 core, 1 block, 1 tile). feature_spec.INPUTS' global smallest is [1,1,30,32], but that is a pad_mode=\"auto\" cell which Phase 0 refuses (padding is refinement P1), and [1,1,32,32] is its tile-aligned counterpart with the identical per-core geometry (nt_h=1, Wt=1, one block). FOLLOW-UP for P1: re-run these arms on [1,1,30,32] once the padded reader exists, since the pad fill adds per-block L1 stores that this shape does not carry."
+      },
+      "delta_pct": 2.7
+    },
+    "B6": {
+      "status": "applied",
+      "phase": "A0",
+      "knob": "target_read_bytes",
+      "reason": "TARGET_READ_BYTES is a BYTE target (so every dtype lands on the same sweet spot) and the sweep MOVED it: 512 B \u2014 the Wormhole one-packet value op_design.md specified \u2014 is wrong on this Blackhole part, where NOC_MAX_BURST_SIZE is 256 words x 64 B = 16 KB so the one-packet argument does not bind at 512 B. Square sweep: 128 B 151.3us | 256 B 86.5us | 512 B 55.3us | 1024 B 44.6us | 2048 B 44.7us | 4096 B 47.2us. wide_short: 512 B 1.060x, 2048 B 1.090x, 4096 B 1.280x vs 1024 B. tall_narrow and both smallest shapes are unaffected (WT_BLOCK = min(Wt, ...) clamps). Default moved 512 -> 1024: 1.24x on the square, 1.06x on wide_short, no regression in any regime.",
+      "measured": {
+        "on_ns": 44590.0,
+        "off_ns": 55277.7,
+        "shape": [
+          1,
+          1,
+          2048,
+          2048
+        ],
+        "note": "off_ns is the 512 B arm (op_design's specified value); full sweep in the reason"
+      },
+      "delta_pct": 24.0
+    },
+    "B7": {
+      "status": "applied",
+      "phase": "A0",
+      "knob": "barrier_per_block",
+      "reason": "One noc_async_read_barrier per BLOCK (tile_h reads in flight), which is exactly what dataflow_kernel_lib::read_sticks_for_tilize<TILE> does; the off-arm barriers every transaction. The largest transaction-shape lever in the op, and it pays in EVERY regime \u2014 most of all on the smallest one \u2014 so no work-per-core gate is needed. per-regime off/on: square 1.242x, wide_short 2.242x, tall_narrow 2.465x, smallest[1,1,32,32] 6.025x, smallest[1,1,32,64] 6.132x",
+      "measured": {
+        "on_ns": 1867.3,
+        "off_ns": 11251.3,
+        "shape": [
+          1,
+          1,
+          32,
+          32
+        ],
+        "note": "Measured on [1,1,32,32] \u2014 the smallest shape the Phase-0 op can RUN (1 core, 1 block, 1 tile). feature_spec.INPUTS' global smallest is [1,1,30,32], but that is a pad_mode=\"auto\" cell which Phase 0 refuses (padding is refinement P1), and [1,1,32,32] is its tile-aligned counterpart with the identical per-core geometry (nt_h=1, Wt=1, one block). FOLLOW-UP for P1: re-run these arms on [1,1,30,32] once the padded reader exists, since the pad fill adds per-block L1 stores that this shape does not carry."
+      },
+      "delta_pct": 502.5
+    },
+    "B8": {
+      "status": "deferred",
+      "phase": "A0",
+      "followup": "Add a `trid` knob to the reader (tag each block's reads with a transaction id, barrier on the PREVIOUS id) and measure on the square \u2014 the only benched shape with several blocks per core (256 blocks / 110 cores). Compare against split_reader, the other way to keep reads in flight.",
+      "predicted_delta_pct": 10,
+      "reason": "Structurally invisible on the 1-block-per-core shapes (wide_short at the current WT_BLOCK, tall_narrow, both smallest), which per master.md B8 is a BENCH property and not evidence the lever fails. The square is where it could show: its ablation says read and write are co-binding with compute fully hidden, so more outstanding reads is the plausible next lever. Deferred on scope, not refuted."
+    },
+    "B9": {
+      "status": "applied",
+      "phase": "A0",
+      "knob": "noc_split",
+      "reason": "Reader on NCRISC/NoC0 (ReaderConfigDescriptor) and writer on BRISC/NoC1 (WriterConfigDescriptor); the off-arm swaps the two configs so the read stream runs on the writer's NoC. Pays in every regime, including the smallest, and is the second-largest lever on the square. per-regime off/on: square 1.273x, wide_short 1.864x, tall_narrow 1.118x, smallest[1,1,32,32] 1.045x, smallest[1,1,32,64] 1.062x",
+      "measured": {
+        "on_ns": 7321.3,
+        "off_ns": 13649.3,
+        "shape": [
+          1,
+          1,
+          32,
+          16384
+        ],
+        "note": "per-regime off/on: square 1.273x, wide_short 1.864x, tall_narrow 1.118x, smallest[1,1,32,32] 1.045x, smallest[1,1,32,64] 1.062x"
+      },
+      "delta_pct": 86.4
+    },
+    "B10": {
+      "status": "deferred",
+      "phase": "A0",
+      "followup": "Assign per-reader VCs (the vc/use_vc params on the dataflow read/write API) so readers sharing a route stop serializing FCFS; measure on the square and wide_short. Pair it with A3 (bank-adjacent placement) \u2014 the tech report applies them together.",
+      "predicted_delta_pct": 9,
+      "reason": "Same headroom as A3 (the square sits at 84% of DRAM peak vs the ~92% placed+VC recipe); the two levers are not additive, so 9% is the JOINT estimate, not 9% each. Per B0 it can regress the smallest regime, so it would ship gated on work-per-core."
+    },
+    "B11": {
+      "status": "structurally-impossible",
+      "phase": "A0",
+      "assert_test": "tests/ttnn/unit_tests/operations/tilize/test_tilize_debug.py::test_b11_transfers_are_alignment_clean",
+      "reason": "There is no misalignment for the lever to fix at any element width the current or next refinement reaches: every read is WT_BLOCK*32*elem bytes and every write is a whole tile page, both multiples of this part's DRAM alignment unit for 2 B and 4 B dtypes at every Wt (pinned by the named test). ONE exception is recorded rather than hidden: a 1-byte dtype with Wt == 1 yields a 32 B read, below the 64 B unit \u2014 out of SUPPORTED at Phase 0, explicitly owned by refinement A5b's alignment-aware narrow-stick reader, and pinned by test_b11_uint8_narrow_stick_is_the_known_alignment_gap so it cannot ship silently."
+    },
+    "B12": {
+      "status": "structurally-impossible",
+      "phase": "A0",
+      "assert_test": "tests/ttnn/unit_tests/operations/tilize/test_tilize_debug.py::test_b12_multicast_is_structurally_absent",
+      "reason": "tilize's map is a BIJECTION on byte positions and its single input operand varies along BOTH split axes, so no core reads a byte another core reads and there is no fan-out to multicast. Pinned by asserting the program declares no semaphores (a multicast handshake needs them) and that the per-core block ranges tile the block space exactly once."
+    },
+    "B13": {
+      "status": "deferred",
+      "phase": "A0",
+      "followup": "Add a `set_state` knob to the reader (configure the command buffer once, then issue same-shape reads with with_state) and SWEEP it across target_read_bytes \u2014 a prior run found this lever inverts with transaction size (+19.9% at 512 B, 0.950-0.978 at <=128 B), so one measurement would decide it wrongly. Per B0, measure the smallest regime too.",
+      "predicted_delta_pct": 5,
+      "reason": "Buildable here: every read in a block has the same size and the same L1 stride; only the source page changes. Deliberately NOT closed by the argument that interleaved DRAM puts consecutive sticks on different banks \u2014 that exact (correct) premise is what a prior run used to reject the lever, and measurement then found it wins below 128 B. It owes a number; deferred on scope."
+    },
+    "C14": {
+      "status": "deferred",
+      "phase": "A0",
+      "followup": "A3: back both CBs on the resident L1 shards with ttnn.cb_descriptor_from_sharded_tensor so the reader issues NO NoC read and tilize packs straight into the output shard. Keep reader/compute/writer as three kernels (folding measured 0.74x in examples/zero_copy_fold).",
+      "predicted_delta_pct": 100,
+      "reason": "Removes 100% of the DRAM traffic on the same-spec sharded cells. Inapplicable to the interleaved Phase-0 rectangle \u2014 a shard has to exist before its CB can be aliased onto it \u2014 so this is A3's deliverable. op_design.md already records that consuming a resident shard through a TensorAccessor would not be an implementation of sharding at all."
+    },
+    "C15": {
+      "status": "deferred",
+      "phase": "A0",
+      "followup": "A3 makes the sharded path exist; after that this lever is the CALLER's choice of memory_config, not the op's. Nothing for the op to apply beyond supporting the layout natively.",
+      "predicted_delta_pct": 0,
+      "reason": "The op does not choose its own tensor placement \u2014 memory_config is an argument. Predicted 0 for the interleaved cells this phase ships; the value of sharding shows up as C14 on cells that pass a sharded memory_config."
+    },
+    "C16": {
+      "status": "measured-no-payoff",
+      "phase": "A0",
+      "knob": "double_buffer",
+      "reason": "Depth-2 CBs measured INSIDE the noise band against depth-1 in every regime. That matches op_design.md's own prediction that depth-2 stops paying once DRAM is saturated, and the ablation agrees about the mechanism: compute is fully overlap-hidden (ablate_compute is 0.994x on the square), so a deeper CB has nothing left to overlap. The code KEEPS depth-2 as the default because use_double_buffer is a user-facing contract (refinement A6) \u2014 but as a PERF lever it is refuted here, and depth-1 halves per-core CB L1 (128 KiB -> 64 KiB at bf16) for free, which is the finding A6 should record. per-regime off/on: square 0.995x, wide_short 0.993x, tall_narrow 1.01x, smallest[1,1,32,32] 1.002x, smallest[1,1,32,64] 1.018x",
+      "measured": {
+        "on_ns": 44590.0,
+        "off_ns": 44355.7,
+        "shape": [
+          1,
+          1,
+          2048,
+          2048
+        ],
+        "note": "per-regime off/on: square 0.995x, wide_short 0.993x, tall_narrow 1.01x, smallest[1,1,32,32] 1.002x, smallest[1,1,32,64] 1.018x"
+      },
+      "delta_pct": -0.5
+    },
+    "C17": {
+      "status": "structurally-impossible",
+      "phase": "A0",
+      "assert_test": "tests/ttnn/unit_tests/operations/tilize/test_tilize_debug.py::test_c17_in_place_is_structurally_impossible",
+      "reason": "A layout conversion cannot be in-place: RM->TILE moves every byte, and the tilize LLK helper itself static_asserts input_dfb != output_dfb (tilize_helpers.inl:116). Pinned by asserting the two CB slots differ and that the output tensor is a different buffer from the input."
+    },
+    "D18": {
+      "status": "deferred",
+      "phase": "A0",
+      "followup": "APPLIED IN CODE (TensorAccessorArgs appended LAST as compile-time args in both dataflow kernels) but UNMEASURED, because a device-kernel-duration bench structurally CANNOT see it \u2014 the lever moves address-gen code and program-cache behaviour, not kernel ns. To close it: add a runtime-accessor-args arm (TensorAccessorArgs(..., ArgConfig::Runtime) plus the <cta, crta> kernel form) and compare dispatch time, or diff ttnn.compute_program_descriptor_hash. Named as a BENCH gap, not as a win.",
+      "predicted_delta_pct": 0,
+      "reason": "Predicted ~0 on device kernel time; the payoff is dispatch/program-cache, which tests/ttnn/unit_tests/operations/tilize/test_tilize.py::test_tilize_program_cache_hit exercises together with D19."
+    },
+    "D19": {
+      "status": "deferred",
+      "phase": "A0",
+      "followup": "Same bench gap as D18. Runtime args are already only (buffer address, b0, nb) \u2014 every shape-derived quantity is compile-time \u2014 so a second call with the same spec reuses the program. Close it by asserting the cache hit in the bench rather than in kernel ns.",
+      "predicted_delta_pct": 0,
+      "reason": "Applied in code, unmeasurable in device kernel duration by construction. Recorded as open rather than claimed as a measured win."
+    },
+    "D20": {
+      "status": "deferred",
+      "phase": "A0",
+      "followup": "A3/A3b/A3c and T2 introduce genuinely different data paths (zero-copy shard alias, crossover, cross-spec reshard, face-walking retile reader); op_design.md 5.3 already pins the regime-selection function. Implement it as the factory selector then.",
+      "predicted_delta_pct": 0,
+      "reason": "There is exactly ONE data path at Phase 0 (interleaved RM -> TILE), so there is nothing to select between. Predicted 0 now; the lever's value arrives with the sharded/retile regimes."
+    },
+    "D21": {
+      "status": "deferred",
+      "phase": "A0",
+      "followup": "Check whether TensorAccessor already specializes pow2 page sizes (shifts, not multiplies) on this path; if not, measure an InterleavedAddrGenFast-style specialization on the square, where address-gen runs 128 reads/core.",
+      "predicted_delta_pct": 2,
+      "reason": "Small by nature (address arithmetic, not bytes), and the square is DRAM-bandwidth-bound at 84% of peak, so saving reader instructions is unlikely to move the wall. Worth a number only if a reader-issue-bound regime appears."
+    },
+    "E22": {
+      "status": "deferred",
+      "phase": "A0",
+      "followup": "Out of single-op scope by construction: Metal Trace + multi-CQ removes HOST dispatch, which device kernel duration does not measure. Revisit at model level.",
+      "predicted_delta_pct": 0,
+      "reason": "The smallest regime shows the shape of the cost it targets (ablate_all is 0.32us of a 1.87us launch, 17%), so the lever is real at model level \u2014 but it is not this op's to apply."
+    }
+  }
+}

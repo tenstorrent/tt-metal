@@ -30,6 +30,7 @@ void kernel_main() {
     constexpr uint32_t wt_block = get_compile_time_arg_val(2);
     constexpr uint32_t wt_tail = get_compile_time_arg_val(3);
     constexpr bool needs_cast = get_compile_time_arg_val(4) == 1;
+    constexpr uint32_t stub_compute = get_compile_time_arg_val(5);  // ablation (0 = off)
 
     const uint32_t n_full = get_arg_val<uint32_t>(0);
     const uint32_t n_tail = get_arg_val<uint32_t>(1);
@@ -40,6 +41,24 @@ void kernel_main() {
                    : ReconfigureRegisterDatatypeMode::NoReconfigure;
 
     compute_kernel_hw_startup(cb_input_sticks, cb_output_tiles);
+
+    // /perf-measure ablation arm: keep the CB reserve/push/wait/pop scaffolding
+    // and the block trip counts, drop ONLY the tilize math, so the duration diff
+    // classifies the op as DM-bound vs compute-bound. Not a production path;
+    // `stub_compute == 0` emits the helper calls below and nothing else.
+    if constexpr (stub_compute == 1) {
+        for (uint32_t pass = 0; pass < 2; ++pass) {
+            const uint32_t blocks = (pass == 0) ? n_full : n_tail;
+            const uint32_t w = (pass == 0) ? wt_block : wt_tail;
+            for (uint32_t block = 0; block < blocks; ++block) {
+                cb_wait_front(cb_input_sticks, w);
+                cb_reserve_back(cb_output_tiles, w);
+                cb_push_back(cb_output_tiles, w);
+                cb_pop_front(cb_input_sticks, w);
+            }
+        }
+        return;
+    }
 
     // `tilize` ASSERTs num_blocks > 0, so both calls are guarded.
     if (n_full > 0) {
