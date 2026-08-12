@@ -236,16 +236,26 @@ INPUT_TAGGERS = {
 # parameter in the program descriptor (grid_cores, CB_DEPTH, WT_BLOCK,
 # NEEDS_CAST, tile_h) — the refinements flip SUPPORTED entries, they do not add
 # kernel code paths for these axes.
+#
+# Refinement 1 (A1 + A5 + A6) — the interleaved path at full generality. Four
+# axes flip, none of which needs a kernel-source change:
+#   use_multicore  += True   the 2-D `b = wchunk*nt_h + r` split IS the only code
+#                            path; use_multicore=False is its grid_cores=1 value.
+#   rank           += 2,3,5  `nimg = prod(shape[:-2])` is rank-agnostic.
+#   buffer         += the three L1 directions — a TensorAccessor buffer-type
+#                            difference, already baked as a CT arg.
+#   double_buffer  += False  CB_DEPTH is already `2 if use_double_buffer and
+#                            depth2_fits_l1 else 1`.
 
 SUPPORTED = {
     "dtype": [ttnn.bfloat16],
     "output_dtype": [ttnn.bfloat16],
-    "use_multicore": [False],
-    "double_buffer": [True],
+    "use_multicore": [False, True],
+    "double_buffer": [False, True],
     "shard_api": ["none"],
     "out_scheme": ["interleaved"],
-    "buffer": ["dram_to_dram"],
-    "rank": [4],
+    "buffer": ["dram_to_dram", "dram_to_l1", "l1_to_l1", "l1_to_dram"],
+    "rank": [2, 3, 4, 5],
     "pad_mode": ["none"],
     "pad_value": ["none"],
     "alignment": ["tile_aligned"],
@@ -275,10 +285,11 @@ EXCLUSIONS = [
 
 PROPERTIES = {
     # The 2-D (tile-row x tile-column) split is wired and parameterized by
-    # `grid_cores`; Phase 0's SUPPORTED rectangle only *accepts*
-    # use_multicore=False, so the multi-core value of that parameter is not yet
-    # claimed. "declared", not "verified", until A1 flips the axis.
-    "multi_core": {"value": False, "source": "declared"},
+    # `grid_cores`, and Refinement 1 (A1) flipped use_multicore=True into
+    # SUPPORTED. The core count is ASSERTED, not inferred:
+    # test_tilize_debug.py::test_multicore_fills_the_grid_on_wide_short pins
+    # len(cores) == min(total_blocks, grid_cores) in every regime.
+    "multi_core": {"value": True, "source": "verified"},
     # per-core CB L1 = CB_DEPTH * WT_BLOCK * (in_tile + out_tile), and
     # WT_BLOCK = min(Wt, WT_BLOCK_MAX) -> independent of H, W, Wt, rank, batch.
     "bounded_cb": {"value": True, "source": "declared"},
