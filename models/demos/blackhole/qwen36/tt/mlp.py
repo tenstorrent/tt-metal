@@ -325,6 +325,22 @@ class Qwen36MLP:
             # measurements and why halve_out_block was needed before.
             _kpass1 = not tpc.is_blackhole()
             _half = not _kpass1
+            # WORMHOLE ONLY: with _CKC_MLP_KPASS1's fp32_dest_acc_en=False the output-subblock ceiling
+            # is DST_TILES (8), not DST_TILES_FP32_ACC (4) -- but the shared factory defaults to the
+            # conservative 4 (correct for its fp32-acc callers: attention wo on BH, GDN out-proj).
+            # Raising it here was left undone when the MLP moved to one K pass: per_core_N is 24
+            # (gate/up) and 16 (down), both divisible by 8, so out_block_w == per_core_N (one K pass)
+            # stays legal at sub_w=8. Same lever create_prefill_kpass1_matmul_program_config already
+            # pulls explicitly for the GDN in-projection.
+            #
+            # MEASURED (device kernel duration, N300, M=2048; tests/perf/test_mlp_subblock_actdtype_sweep.py),
+            # in0=bf16, one K pass, sub_w 4 -> 8:
+            #     gate  2048x4096x6144   989.9us -> 864.6us   -12.7%
+            #     up    2048x4096x6144   900.4us -> 815.0us    -9.5%
+            #     down  2048x6144x4096  1015.0us -> 924.8us    -8.9%
+            # PCC is UNCHANGED to 5 decimals on all three (gate 0.99013, up 0.99313, down 0.99983) --
+            # this is pure blocking, not an accuracy trade.
+            _sub_cap = tpc.DST_TILES if _kpass1 else None
             pc_gate = tpc.create_prefill_mlp_matmul_program_config(
                 seq,
                 args.dim,
@@ -333,9 +349,16 @@ class Qwen36MLP:
                 max_cols=_gw,
                 tuning=_pt,
                 halve_out_block=_half,
+                max_subblock_hw=_sub_cap,
             )
             pc_up = tpc.create_prefill_mlp_matmul_program_config(
-                seq, args.dim, w.w3.shape[-1], max_cols=_gw, tuning=_pt, halve_out_block=_half
+                seq,
+                args.dim,
+                w.w3.shape[-1],
+                max_cols=_gw,
+                tuning=_pt,
+                halve_out_block=_half,
+                max_subblock_hw=_sub_cap,
             )
             if _kpass1:
                 ckc = _CKC_MLP_KPASS1
@@ -366,14 +389,30 @@ class Qwen36MLP:
             # allocated at 1080192 and static circular buffer region ends at 1162432",
             # test_mlp_tp_prefill at T=2048). No smaller budget helps: 2048 IS the production
             # chunk-outer length, so anything that excludes it wins nothing. Keep DRAM.
+            #
+            # WORMHOLE PREFILL: emit `hidden` as bf8 while KEEPING IT IN DRAM. This is deliberately
+            # the dtype axis and NOT the placement axis -- L1 is the known-dead end above, and staying
+            # in DRAM means none of that CB-clash risk applies. Two wins for one change:
+            #   * the multiply writes half as many bytes (it is pure bandwidth, no FLOPs)
+            #   * the down-proj's in0 becomes bf8, turning it into a BFP8 x BFP8 matmul
+            # MEASURED (device kernel duration, N300, T=2048):
+            #   SwiGLU mul  [1,1,2048,6144]  out DRAM/bf16 424.0us -> out DRAM/bf8 348.6us  -17.8%
+            #                                (tests/perf/test_layer_elementwise_l1_sweep.py, pcc 0.99996)
+            #   down-proj   2048x6144x4096   in0 bf16 924.8us -> in0 bf8 758.5us  -18.0%
+            #                                (tests/perf/test_mlp_subblock_actdtype_sweep.py, pcc 0.99978)
+            # It also halves `hidden`'s DRAM footprint (25.2MB -> 12.6MB), easing pressure for
+            # everything downstream. Only on the one-K-pass (_kpass1 / Wormhole) prefill arm, whose
+            # numerics are already the loosest in the layer (LoFi + bfp4 gate/up weights) -- Blackhole's
+            # fused-AGMM path produces `hidden` inside all_gather_swiglu_prefill and never reaches here.
+            _hidden_dt = {"dtype": ttnn.bfloat8_b} if (_prefill_tuned and not tpc.is_blackhole()) else {}
             # Standalone silu only on DRAM-sharded decode path (SILU not fused there).
             if _silu_fused:
-                hidden = ttnn.mul(w1_out, w3_out, memory_config=mc_out)
+                hidden = ttnn.mul(w1_out, w3_out, memory_config=mc_out, **_hidden_dt)
                 ttnn.deallocate(w1_out)
             else:
                 w1_act = ttnn.silu(w1_out, memory_config=mc_out)
                 ttnn.deallocate(w1_out)
-                hidden = ttnn.mul(w1_act, w3_out, memory_config=mc_out)
+                hidden = ttnn.mul(w1_act, w3_out, memory_config=mc_out, **_hidden_dt)
                 ttnn.deallocate(w1_act)
             ttnn.deallocate(w3_out)
         # Prefill w2: 2D progcfg on (8,10); decode (M<=32) keeps ttnn-auto.
@@ -384,12 +423,19 @@ class Qwen36MLP:
         elif hidden.shape[-2] > ttnn.TILE_SIZE:
             # Prefill down-proj: subblock-tuned 2D config with the wide grid (max_cols=device width),
             # off the generic 8-wide prefill_progcfg. Output L1 via mc_w2_out below.
+            # max_subblock_hw keyed off the ACTUAL compute config rather than an arch check: the
+            # raised DST_TILES ceiling is only legal with fp32_dest_acc_en=False, and `ckc` here is
+            # _CKC_MLP_KPASS1 only on the Wormhole non-fused arm above (Blackhole's fused-AGMM path
+            # leaves ckc at self.compute_kernel_config, which has fp32 dest acc ON -> cap stays 4).
+            # Testing the object directly means this cannot silently desync if that branch changes.
+            # MEASURED down 2048x6144x4096: 1015.0us -> 924.8us (-8.9%), PCC 0.99983 unchanged.
             w2_pc = tpc.create_prefill_mlp_matmul_program_config(
                 hidden.shape[-2],
                 hidden.shape[-1],
                 w.w2.shape[-1],
                 max_cols=getattr(args, "decode_grid_w", 8),
                 tuning=getattr(args, "prefill_tuning", None),
+                max_subblock_hw=tpc.DST_TILES if ckc is _CKC_MLP_KPASS1 else None,
             )
         # down-proj OUTPUT in L1 for the tuned prefill path (DRAM input `hidden` + L1 output = the
         # validated sweep outL1 config; tt_all_reduce already consumes an L1 partial) — but only while
