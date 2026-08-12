@@ -592,7 +592,11 @@ def depthwise_tap_filter_snake(x_BTC, taps, *, alpha, inv_beta, mesh_device, dty
         throwaway, prepared = _conv(base, fused=False)
         ttnn.deallocate(throwaway)
 
-        pw = ttnn.to_torch(prepared).float()
+        # `base` is replicated across the mesh, so `prepared` is too, and a bare `ttnn.to_torch` here
+        # hits `buffers.size() == 1` (pytensor.cpp:299) on any multi-device mesh. Every shard holds the
+        # same prepared weight, so read one -- the same shape as `prepare_conv3d_weight_state` above.
+        pw_shards = ttnn.get_device_tensors(prepared)
+        pw = ttnn.to_torch(pw_shards[0] if len(pw_shards) > 1 else prepared).float()
         width = pw.shape[-1]
         rows = torch.cat([pw.reshape(-1, width), _snake_param_rows(alpha, inv_beta, width)], dim=0)
         rows = rows.reshape(1, 1, rows.shape[0], width)
