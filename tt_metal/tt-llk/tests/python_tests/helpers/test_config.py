@@ -482,6 +482,7 @@ class TestConfig:
             hw_specific_includes = [
                 "-I../../hw/inc/internal/tt-2xx/quasar",
                 "-I../../hw/ckernels/quasar/metal/llk_api",
+                "-I../../hw/ckernels/quasar/metal/llk_api/llk_sfpu",
             ]
 
         if detailed_artefacts:
@@ -519,17 +520,24 @@ class TestConfig:
             f"-DTENSIX_FIRMWARE -DENV_LLK_INFRA -DKERNEL_BUILD {llk_assert_define}{TestConfig.ARCH_DEFINE} "
             f"{'-DSPEED_OF_LIGHT' if TestConfig.SPEED_OF_LIGHT else ''}"
         )
-        TestConfig.INCLUDES = [
-            "-Isfpi/include",
-            f"-I../{TestConfig.ARCH_LLK_ROOT}/llk_lib",
-            f"-I../{TestConfig.ARCH_LLK_ROOT}/common/inc",
-            f"-I../{TestConfig.ARCH_LLK_ROOT}/common/inc/sfpu",
-            "-I../common",
-            "-I../../hw/inc",
-            "-Ifirmware/riscv/common",
-            "-Ihelpers/include",
-            "-I../../hostdevcommon/api",
-        ] + hw_specific_includes
+        TestConfig.INCLUDES = (
+            [
+                "-Isfpi/include",
+                f"-I../{TestConfig.ARCH_LLK_ROOT}/llk_lib",
+                f"-I../{TestConfig.ARCH_LLK_ROOT}/common/inc",
+                f"-I../{TestConfig.ARCH_LLK_ROOT}/common/inc/sfpu",
+                "-I../common",
+                "-I../../hw/inc",
+                "-Ifirmware/riscv/common",
+                "-Ihelpers/include",
+                "-I../../hostdevcommon/api",
+            ]
+            + hw_specific_includes
+            + [
+                # TODO: remove this after kernels get moved into Metal experimental (#52837)
+                "-I../../../ttnn/cpp/ttnn/operations/experimental",
+            ]
+        )
 
     @staticmethod
     def setup_build(
