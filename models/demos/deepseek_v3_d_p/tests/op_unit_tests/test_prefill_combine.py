@@ -368,18 +368,8 @@ SINGLE_GLX_AND_PROXY_MESHES = _Test_Mesh(
 # conservative integer N such that dgs*seq*N >= worst-case dispatch buffer.
 COMBINE_MODELS = [
     ("dsv3", DeepSeekV3Config, False, SINGLE_GLX_AND_PROXY_MESHES),
-    (
-        "glm_51",
-        GLM51Config,
-        True,
-        SINGLE_GLX_AND_PROXY_MESHES,
-    ),  # TODO [dlukic]: Instead of extended_flag+same mesh list,
-    (
-        "kimi_k26",
-        KimiK26Config,
-        True,
-        SINGLE_GLX_AND_PROXY_MESHES,
-    ),  # can we just drop the flag and use different mesh lists?
+    ("glm_51", GLM51Config, True, SINGLE_GLX_AND_PROXY_MESHES),
+    ("kimi_k26", KimiK26Config, True, SINGLE_GLX_AND_PROXY_MESHES),
     ("minimax_m27", MiniMaxM27Config, True, SINGLE_GLX_AND_PROXY_MESHES),
     ("dsv4_pro", DeepSeekV4ProConfig, True, SINGLE_GLX_AND_PROXY_MESHES),
     ("dsv4_flash", DeepSeekV4FlashConfig, True, SINGLE_GLX_AND_PROXY_MESHES),
@@ -489,11 +479,8 @@ def _cross_product_conflated_cmb_test_dimensions():
 # 1. Chip count and layout
 #   1.1. mesh column size, which is consequently the size of a dispatch group
 #   1.2. mesh row size, which is consequently the number of dispatch groups
-# 2. Fabric-related
-#   2.1. Fabric dimensionality (1d / 2d / maybe more in the future)
-#   2.2. Ring/Linear across column
-#   2.3. Ring/Linear across row
-#   2.4. number of links in a single chip-to-chip connection
+# 2. Number of fabric links in a single chip-to-chip connection. (Other fabric props are either cherry-picked
+#    for the test case, such as fabric config or packet size, or are derivable from them, like fabric topology)
 # 3. Model-related (embed-dim, topK, num-experts, ...)
 # 4. Input related (ISL, tile/RM, datum format, ...)
 # 5. Scenario/type of test
