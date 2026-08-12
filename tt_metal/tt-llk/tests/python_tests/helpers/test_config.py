@@ -456,6 +456,7 @@ class TestConfig:
             f"{debug_flag}-{opt_level} "
             "-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit "
             "-ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit "
+            f"{os.environ.get('TT_LLK_EXTRA_CFLAGS', '')} "
         )
         TestConfig.WITH_COVERAGE = with_coverage
         StimuliConfig.WITH_COVERAGE = with_coverage
