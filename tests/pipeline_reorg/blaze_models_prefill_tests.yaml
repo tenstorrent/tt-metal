@@ -27,7 +27,7 @@
       set -e
       export OMP_NUM_THREADS=$(nproc)
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-      EXPECT_NUM_TESTS=18 python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_moe_gate_prefill2d.py -k "torus-xy-8x4"
+      EXPECT_NUM_TESTS=18 python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_moe_gate_prefill2d.py -k "torus-xy-8x4" --timeout=600
     '
   test_type: moe_gate
   test_group: module
@@ -36,9 +36,9 @@
       # Raised 8 -> 14 when the kimi_k3 cases joined this selector. K3's host_all path builds its
       # reference gate over 896 experts x 25600 tokens on CPU and measures 158s warm (device_fp32 is
       # 9s) -- ~2.8 min added to a stage that previously fit 16 tests in 8; this row now owns 18.
-      # Cold-JIT runs are
-      # substantially slower: a config change made the same pair take 475s and tripped pytest.ini's
-      # 300s per-test timeout on host_all. The headroom is for that case, not the warm one.
+      # Cold-JIT runs are substantially slower: a config change made the same pair take 475s and
+      # tripped pytest.ini's 300s per-test timeout on host_all. This row therefore raises that
+      # per-test cap to 600s; the 14-minute job timeout bounds the complete 18-case invocation.
       timeout: 14
   owner_id: U08RL15T4N8
   team: models
