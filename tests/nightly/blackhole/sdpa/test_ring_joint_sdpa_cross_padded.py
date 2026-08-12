@@ -39,6 +39,7 @@ PADDED_CONFIGS = [
 ]
 
 
+@pytest.mark.timeout(600)
 @pytest.mark.parametrize("nhq_total, head_dim, q_global, kv_global, logical_n", PADDED_CONFIGS)
 def test_cross_padded_ring8(nhq_total, head_dim, q_global, kv_global, logical_n):
     """is_cross ring SDPA at padded V2A shapes on the ring8 mesh (split-forward active)."""
