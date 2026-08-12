@@ -31,6 +31,12 @@ A DRISC only exists on a DRAM core, and metal exposes exactly ONE per core
 | 4 | MOVER | 0 | `0-0` | **y==0** | rings of fillers **0 and 2** -> socket FIFO 0 -> host |
 | 5 | MOVER | 3 | `9-0` | **y==0** | rings of fillers **1 and 3** -> socket FIFO 1 -> host |
 
+With `TT_METAL_PERF_DEBUG_DRISC_ZONES=N` **every one of the six also becomes a PRODUCER of its own zones**,
+framed as a worker span and pushed down the path it already owns -- a filler into its own DRAM frame ring, a
+mover into its socket FIFO. Each therefore gets its own Tracy row at its own NoC coords, and the lane space
+grows by `n_drisc * 5` (lanes `[600,630)` at 120 cores). Default OFF; see "Self-profiling" below and
+FINDINGS §N+41.
+
 **Why 4 + 2 and not 4 + 4.** The knee is the FILLER's scan over its slice (FINDINGS §N+28), so fillers are
 the thing to multiply: 4 of them at 30 cores each moved the knee from delay 40-60 to delay 15 (§N+40).
 Movers cannot follow, for two independent reasons: only NoC row y==0 is measured safe for HOST-FACING duty
@@ -68,6 +74,7 @@ one L1 would overlap staging, socket config, results and handshake with no count
 | control vector | worker L1 | heads + stall counters | 64 words = **256 B** | 1 per core |
 | **span** (unit of transfer) | worker L1 | 64 ctrl + 5 x 512 ring words | 2,624 words = **10,496 B** | 1 per core |
 | **staging slot** (frame) | DRISC L1 | 16-word prefix + span | 2,640 words = **10,560 B** = **165 pages** | **7** per DRISC (73,920 B) |
+| **self-frame slot** | DRISC L1 | one staging slot, reused as a frame the DRISC authors | **10,560 B** (of which 2,368 B carry data) | 1 per DRISC, only with self-profiling on |
 | **DRAM frame ring** | device DRAM | one frame | **64 MiB = 6,355 frames** | 1 per FILLER (**4**) |
 | **socket FIFO** | host RAM | 64 B page | 196,608 pages = **12 MiB** | 1 per MOVER (2) |
 | host read chunk | host RAM | pooled buffer | <= 1,024 pages = **64 KB** per read | pool <= 4,096 |
@@ -82,6 +89,11 @@ Geometry notes that are load-bearing, not incidental:
 - Only **3** of the 7 staging slots are ever live (`kGenSlots = nstage/2`), so just 3 cores' reads are
   in flight and the 7th slot is unused. That is why the sweep is read-latency bound and cannot be
   widened without more DRISC L1.
+- **DRISC L1 has no room for an eighth slot**, which is why self-profiling takes the seventh rather than
+  adding one: UNRESERVED is 86,448 B, and 7 slots plus the 8 KB socket-config reserve, 4 KB head scratch and
+  the misc block leave **1,792 B**. With the feature on the kernel is handed `nstage - 1` slots and uses index
+  `kNStage` for its self frame, so L1 is unchanged and a MOVER's largest batch drops 7 -> 6 (a filler's is
+  bounded by `kGenSlots = 3` either way).
 - A full span carries at most 1,280 markers (2,560 ring words / 2) across 165 pages = **7.80
   markers/page** against a host batch bound of 8.00 -- a 2.5% margin, which is why that batch
   occasionally fills (handled by flush-and-continue, never by dropping).
@@ -109,6 +121,39 @@ chunks, then one write barrier -- which covers the PCIe push, the tail write, an
 word the next peer's tail write sources from. Per-peer state is strictly separate (`mv_tail`, `mv_moved`,
 `mv_max_n`, `ring_hi`, the probe words and the live head/tail telemetry): one shared `mv_tail` across two
 rings would ack frames on one ring that were only read from the other. Observed `max batch 7` per peer.
+
+**EITHER ROLE, with self-profiling on**: emits its own 2-word markers into a 512-word ring inside its
+self-frame slot, stamped with timestamps the drain loop has ALREADY read (`t_batch0`/`t_issue`, `stage_run`'s
+`t0`/`t1`/`t2`, the barrier's `t_b0`) rather than fresh clock reads -- so a zone's duration is the same
+quantity the matching `out[]` phase counter accumulates. At the end of a captured sweep it sets its own
+`SPSC_CORE_XY` / head / tail in the frame's control vector and ships the slot through the same
+`emit_run(kSelfSlot, 1)` the payload uses, then a bounded write barrier. Nothing about the wire format, the
+ring protocol or the host decoder changes: the frame IS a worker span, and only ring 0 of its five is live
+(`myRiscID == PROCESSOR_INDEX == 0` on a DRISC), so the host's per-RISC walk yields nothing from the rest.
+
+## Self-profiling: what the drainers say about themselves
+
+Zone tree per drainer row: `DRISC-SWEEP` (depth 0) with `DRISC-READ`, `DRISC-READ-WAIT`, `DRISC-PROC` and
+`DRISC-WR-BARRIER` as children, and `DRISC-CREDIT-WAIT` / `DRISC-WRITE` inside `DRISC-PROC` on a filler
+(directly under `DRISC-SWEEP` on a mover, which has no proc phase). Per-occurrence means, bh-26:
+
+| role | SWEEP | READ | READ-WAIT | PROC | CREDIT-WAIT | WRITE | WR-BARRIER |
+|---|---|---|---|---|---|---|---|
+| FILLER | 14.8-15.0 us | 128 ns | 69 ns | **667-682 ns** | 53 ns | 141 ns | 62-86 ns |
+| MOVER  |  6.4-6.5 us | 990-1,059 ns | - | - | **1,611-1,839 ns** | 769-909 ns | 487-610 ns |
+
+The two roles are bottlenecked on different things and their own zones say so: a filler's per-batch PROC
+dwarfs everything else it does, while a mover's largest phase is the socket **credit wait** -- the quantity
+§N+38 identified as setting the knee, now visible per occurrence.
+
+**The sampler triggers on discovered WORK, not on sweep number**, because both roles are >99% idle (a filler
+moves frames in ~114 of ~25,000 sweeps, a mover in ~350 of ~230,000). A sweep-number rule captured 1 working
+sweep out of 55 on a filler and 11 of 64 on a mover. A mover arms before issuing its DRAM read, so its busy
+visit is captured whole; a filler arms at the end of the first batch with live cores, so that sweep's earlier
+batches are not recovered. Idle samples get their own eighth of the frame budget, an instrumented sweep that
+turns out idle is rewound or abandoned for free, and a captured sweep is bounded to one ring (past that it is
+truncated, counted, and excluded from the counter cross-check). Cost: **0.23-1.00% of a drainer's egress**,
++4% on a filler's sweep time, 0 producer stalls at delay 60 and 49-140 at delay 15 (a knee crossing).
 
 ## Measured costs and occupancy
 
