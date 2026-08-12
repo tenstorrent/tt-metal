@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common.h"
 // Blackhole-only: the custom_mm LLKs live only in the Blackhole llk_api / llk_lib trees.
 #if defined(TRISC_MATH) && defined(ARCH_BLACKHOLE)
@@ -248,9 +249,9 @@ ALWI void custom_mm_block_math(
  *
  * Return value: None
  *
- * | Argument       | Description                                                                            | Type     | Valid Range                  | Required              |
- * |----------------|----------------------------------------------------------------------------------------|----------|------------------------------|-----------------------|
- * | dense_packing  | Whether to pack consecutive tiles 32 rows apart (instead of 64, doubles dest capacity) | bool     | true/false                   | False (default false) |
+ * | Argument              | Description                                                                            | Type     | Valid Range                  | Required              |
+ * |-----------------------|----------------------------------------------------------------------------------------|----------|------------------------------|-----------------------|
+ * | dense_packing         | Whether to pack consecutive tiles 32 rows apart (instead of 64, doubles dest capacity) | bool     | true/false                   | False (default false) |
  */
 // clang-format on
 template <bool dense_packing = false>
@@ -259,11 +260,12 @@ ALWI void custom_mm_block_uninit() {
         // Restore default packing stride of 64 rows between tiles
         PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * 2)));
     }
-    // Deliberately no packer-MOP write here: the MOP is owned by whichever init programmed
-    // it (llk_pack_init derives tile geometry from the output CB, and some fused callers
-    // intentionally inherit the block-contiguous MOP across ops). A no-arg
-    // _llk_pack_mop_config_<Default>() would install fixed 32x32 geometry and clobber the
-    // 1x32 configuration this family targets.
+    // Deliberately no packer-MOP write. Under the poison-pack-ambient contract
+    // (tt-blaze#3014) an op may not leave the packer at ambient Default on exit:
+    // hw cleanup poisons the pack MOP/strides/PAC X, and a follow-on op must run
+    // its own pack_init / pack_reconfig_data_format<true>. A no-arg
+    // _llk_pack_mop_config_<Default>() would also install fixed 32x32 geometry and
+    // clobber the 1x32 configuration this family targets.
 }
 
 #endif  // ARCH_BLACKHOLE
