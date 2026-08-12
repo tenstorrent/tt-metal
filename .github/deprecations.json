@@ -53,7 +53,7 @@
       "id": "create-devices-close-devices",
       "description": "detail::CreateDevices / CloseDevices in tt_metal.hpp deprecated in favor of MeshDevice::create_unit_meshes / create_unit_mesh (and RAII / device->close()). See tech_reports/TT-Distributed/TTMeshMigrationGuide.md. Remove the declarations and definitions after the grace period once external callers have migrated. In-tree FabricSwitchManager may keep suppressed calls until switch meshes have a supported Mesh path.",
       "files": ["tt_metal/api/tt-metalium/tt_metal.hpp", "tt_metal/impl/host_api/tt_metal.cpp"],
-      "introduced_by_pr": 0,
+      "introduced_by_pr": 52982,
       "grace": "5w",
       "owners": ["riverwuTT"]
     }
