@@ -77,18 +77,20 @@ RECALL_WEIGHT_RTOL = 0.002
 
 
 class _RealGateSource(NamedTuple):
-    """Where a model's real router weights live, and under which HF key layout."""
+    """Where a model's real router weights live, and under which HF key layout.
+
+    The correction bias is loaded at the weight dtype (bf16) for every source, and there is no knob to
+    widen it: the device gate op requires a bf16 bias, TtMoEGatePrefill caches it as bf16 and rebuilds
+    its host-fallback torch_bias from that cache, and this test's golden downcasts the whole reference
+    router to bf16. A wider host bias would therefore not reach the device at all, and under HOST_ALL
+    it would only desynchronize the two sides at exactly the top-k tie-break the recall thresholds
+    were calibrated against.
+    """
 
     env_var: str
     fallbacks: tuple[str, ...]
     hf_repo: str
     key_prefix_template: str
-    # dtype for e_score_correction_bias; None means "same as the weight dtype". Per-source rather than
-    # global because it is NOT inert: under HOST_ALL the gate feeds torch_bias straight into the
-    # reference router without a downcast, while this test's own baseline does .to(bfloat16) -- so
-    # widening the bias for one model would put the two sides on different precisions at exactly the
-    # top-k tie-break the recall thresholds were calibrated against.
-    bias_dtype: object | None = None
 
 
 # Models for which real router weights can be loaded. Anything absent from this map falls back to
@@ -103,10 +105,6 @@ _REAL_GATE_SOURCES = {
         ),
         hf_repo="deepseek-ai/DeepSeek-V3",
         key_prefix_template=GATE_KEY_PREFIX_DEEPSEEK,
-        # Deliberately left at the weight dtype: this path was passing before K3 existed and its
-        # thresholds are calibrated for a bf16 bias on both sides. Do not widen it here as a
-        # side-effect of a K3 change.
-        bias_dtype=None,
     ),
     # K3's router is the one MoE tensor group the checkpoint leaves unquantized, so it can be read
     # directly. ~12.8 MB out of 1.5 TB via a prefix-filtered safe_open.
@@ -115,11 +113,6 @@ _REAL_GATE_SOURCES = {
         fallbacks=(str(KIMI_K3_CHECKPOINT),),
         hf_repo="moonshotai/Kimi-K3",
         key_prefix_template=GATE_KEY_PREFIX_KIMI_K3,
-        # Keep the routing correction in fp32. Only decides which of 896 experts win top-16, so
-        # precision there matters more the more experts there are. Scoped to K3: under HOST_ALL this
-        # widens one side of the comparison, so it needs K3's own threshold calibration, not
-        # DeepSeek-V3's.
-        bias_dtype=torch.float32,
     ),
 }
 
@@ -151,7 +144,6 @@ def _try_load_real_gate_weights(gate_model: str, n_routed_experts: int, dim: int
             layer_idx=_MOE_LAYER_IDX,
             dtype=torch.bfloat16,
             key_prefix_template=source.key_prefix_template,
-            bias_dtype=source.bias_dtype,
         )
         gate_w["weight"] = gate_w["weight"][:n_routed_experts, :dim]
         gate_w["e_score_correction_bias"] = gate_w["e_score_correction_bias"][:n_routed_experts]

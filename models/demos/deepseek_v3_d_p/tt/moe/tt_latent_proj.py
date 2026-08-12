@@ -102,11 +102,19 @@ class TtLatentMoeProjections(LightweightModule):
             # TtDistributedRmsNorm, whose no-weight/no-cache branch silently calls
             # _create_random_sharded_weight() -- torch.rand * 2 - 1. That is the same silent-garbage
             # outcome this guard exists to prevent, one missing key away, so check the keys here.
+            #
+            # Checked with .get(k) is None rather than `k not in`: a present-but-None entry is what a
+            # partial extraction actually produces (a state_dict.get(...) -> None threaded into the
+            # dict), and downstream it is indistinguishable from an absent key -- every consumer here
+            # either fetches with .get() or passes the value straight to torch_weight=, so None
+            # re-enters the same random / torch.empty branches. `is None` specifically, never
+            # truthiness: bool() on a multi-element tensor raises, and an all-zero weight is a
+            # legitimate value to cache.
             expected_keys = (*_PROJ_NAMES, "norm") if use_norm else tuple(_PROJ_NAMES)
-            missing = [k for k in expected_keys if k not in torch_weights]
+            missing = [k for k in expected_keys if torch_weights.get(k) is None]
             if missing:
                 raise ValueError(
-                    f"TtLatentMoeProjections: torch_weights is missing {missing}; "
+                    f"TtLatentMoeProjections: torch_weights entries {missing} are missing or None; "
                     f"expected {list(expected_keys)} (use_norm={use_norm})."
                 )
             return
@@ -206,7 +214,20 @@ class TtLatentMoeProjections(LightweightModule):
         cache_name_prefix: str,
         use_norm: bool = True,
     ):
-        """Write the projection (and latent-norm) caches without copying to device."""
+        """Write the projection (and latent-norm) caches without copying to device.
+
+        ``torch_weights`` must be a complete dict (down_proj / up_proj [/ norm]); None is accepted only
+        when the cache is already complete, in which case ``ttnn.as_tensor`` loads each file and writes
+        nothing. Anything else raises rather than persisting placeholders -- see _require_weight_source.
+        """
+        # Same precondition as __init__, and for the same reason: the placeholder branch below writes
+        # torch.empty (and the norm leg writes an uninitialised gamma for a dict missing only "norm"),
+        # and ttnn.as_tensor persists that to a tensorbin that check_cache_complete then reports as a
+        # good cache. Enforced HERE rather than left to callers because this is a public staticmethod:
+        # TtMoe.build_ttnn_cache already gates on `latent_weights` being truthy, but that convention
+        # lives in a comment at the call site, so a direct or future caller would silently bypass it and
+        # turn a failed weight extraction into a persistent, legitimate-looking cache of garbage.
+        TtLatentMoeProjections._require_weight_source(torch_weights, cache_path, cache_name_prefix, use_norm)
         TtLatentMoeProjections._convert_and_cache_weights(
             torch_weights,
             emb_dim,

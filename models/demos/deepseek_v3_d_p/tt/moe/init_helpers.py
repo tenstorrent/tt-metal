@@ -997,7 +997,6 @@ def load_gate_weights_from_hf(
     layer_idx: int,
     dtype: torch.dtype = torch.bfloat16,
     key_prefix_template: str = GATE_KEY_PREFIX_DEEPSEEK,
-    bias_dtype: torch.dtype | None = None,
 ) -> dict:
     """
     Load MoE gate (router) weights from a HuggingFace checkpoint.
@@ -1009,13 +1008,13 @@ def load_gate_weights_from_hf(
     Args:
         model_id: HuggingFace model ID or local checkpoint path
         layer_idx: Transformer layer index (must be an MoE layer, i.e. >= 3 for DeepSeek-V3)
-        dtype: Target dtype for the returned weight
+        dtype: Target dtype for the returned weight AND for ``e_score_correction_bias``. The
+            checkpoints store the bias as fp32, but it is downcast here on purpose: the device gate
+            (``ttnn.experimental.deepseek_grouped_gate``) requires a bf16 bias, so keeping it wider
+            on the host would only put the reference and the device on different precisions at the
+            top-k tie-break.
         key_prefix_template: HF key prefix with a ``{layer_idx}`` placeholder. Defaults to the
             DeepSeek/Kimi-K2.x layout; pass ``GATE_KEY_PREFIX_KIMI_K3`` for Kimi-K3.
-        bias_dtype: Target dtype for ``e_score_correction_bias``; defaults to ``dtype``. The
-            checkpoints store it as fp32 and the device gate accepts an fp32 bias, so pass
-            ``torch.float32`` to keep the routing correction at full precision -- it matters more as
-            the expert count grows, since the bias only affects which experts win top-k.
 
     Returns dict matching MoEGate / ``create_gate_weights`` format:
         "weight": (n_routed_experts, dim) — HF convention
@@ -1039,7 +1038,7 @@ def load_gate_weights_from_hf(
         raise KeyError(f"Gate bias not found at {bias_key}. Layer {layer_idx} may not be an MoE layer.")
 
     gate_weight = state_dict[weight_key].to(dtype)
-    gate_bias = state_dict[bias_key].to(dtype if bias_dtype is None else bias_dtype)
+    gate_bias = state_dict[bias_key].to(dtype)
 
     logger.info(
         f"Loaded gate weights from {model_id} layer {layer_idx}: weight={gate_weight.shape}, bias={gate_bias.shape}"
