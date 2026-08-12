@@ -26,6 +26,7 @@ from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import TorchMoe
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.reference_runners import run_reference_moe
@@ -88,6 +89,11 @@ def run_model(
     request,
     is_balanced=False,
     padded_percent=0,
+    routed_emb_dim=None,
+    shared_hidden_dim=None,
+    latent_use_norm=True,
+    rms_norm_eps=1e-5,
+    final_output_pcc=0.982,
 ):
     """TtMoe PCC body — shared between `test_ds_moe` / `test_kimi_moe`.
 
@@ -167,18 +173,36 @@ def run_model(
     # weights-type suffix a perf run would persist placeholder (≈zero) expert
     # weights that a later PCC run loads as "complete" — producing all-zero
     # expert outputs (PCC=0). Keep the two cohorts in separate directories.
+    # LatentMoE resolution (Kimi-K3). Mirrors TtMoe's own defaulting so this test and the module can
+    # never disagree about what "no latent space" means.
+    routed_emb = emb_dim if routed_emb_dim is None else routed_emb_dim
+    shared_hidden = hidden_dim if shared_hidden_dim is None else shared_hidden_dim
+    use_latent = routed_emb != emb_dim
+    if use_latent:
+        logger.info(f"LatentMoE: routed side at {routed_emb} (emb_dim={emb_dim}), shared inter={shared_hidden}")
+
     weights_type = "realistic" if run_pcc_check else "dummy"
     # Base dir is env-overridable so concurrent users don't collide on a single shared /tmp path
     # (the default /tmp/{variant}_moe_cache is world-visible but owner-writable → cross-user EACCES).
     _moe_cache_base = os.environ.get("DS_MOE_CACHE_DIR", f"/tmp/{variant.name}_moe_cache")
+    # Every dim that shapes a cached tensor goes in the key, UNCONDITIONALLY -- not gated on
+    # use_latent. routed_emb and shared_hidden are independent knobs, so gating them on the latent
+    # flag would give a (shared_hidden != hidden_dim, no latent) case the same directory as the plain
+    # case and let it load a differently-shaped shared-expert cache as its own. Cache filenames carry
+    # dtype and layout but NOT shape, so that mismatch is a silent wrong-weights load.
     moe_cache_dir = Path(
-        f"{_moe_cache_base}/{num_routed_experts}experts_{n_sp_devices}x{n_tp_devices}mesh_{emb_dim}emb_{hidden_dim}hid_{weights_type}"
+        f"{_moe_cache_base}/{num_routed_experts}experts_{n_sp_devices}x{n_tp_devices}mesh_"
+        f"{emb_dim}emb_{hidden_dim}hid_{routed_emb}rout_{shared_hidden}sh_{weights_type}"
     )
     moe_cache_dir.mkdir(parents=True, exist_ok=True)
 
     init_checker(moe_cache_dir)
     ttnn_cache_complete = TtMoe.check_cache_complete(
-        moe_cache_dir, layer_idx=layer_idx, experts_per_chip=experts_per_chip
+        moe_cache_dir,
+        layer_idx=layer_idx,
+        experts_per_chip=experts_per_chip,
+        use_latent_moe=use_latent,
+        latent_use_norm=latent_use_norm,
     )
     need_torch_weights = not ttnn_cache_complete or run_pcc_check
     logger.info(f"Cache status: TTNN={ttnn_cache_complete}, need_torch_weights={need_torch_weights}")
@@ -194,12 +218,24 @@ def run_model(
         # so a perf-built cache (gate drawn first) silently mismatches the PCC
         # reference (gate drawn third) and collapses gate recall to ~random.
         if run_pcc_check:
-            all_routed_weights = create_torch_expert_weights(num_routed_experts, emb_dim, hidden_dim, seed=1234)
-            shared_expert_weights = create_shared_expert_weights(emb_dim, hidden_dim, seed=5678)
+            # Routed experts at the latent width, shared expert at emb_dim with its own intermediate.
+            all_routed_weights = create_torch_expert_weights(num_routed_experts, routed_emb, hidden_dim, seed=1234)
+            shared_expert_weights = create_shared_expert_weights(emb_dim, shared_hidden, seed=5678)
         else:
             all_routed_weights = None
             shared_expert_weights = None
         gate_weights = create_gate_weights(num_routed_experts, emb_dim, seed=9012)
+        # LatentMoE projections. Distinct fixed seeds for the same reason as above: each tensor must
+        # be a pure function of (shape, seed) so a perf-built cache matches the PCC reference.
+        latent_weights = None
+        if use_latent:
+            g = torch.Generator().manual_seed(3456)
+            latent_weights = {
+                "down_proj": torch.randn(routed_emb, emb_dim, generator=g, dtype=torch.float32) * 0.02,
+                "up_proj": torch.randn(emb_dim, routed_emb, generator=g, dtype=torch.float32) * 0.02,
+                # Non-trivial gamma, so a dropped or mis-sharded norm weight cannot pass as identity.
+                "norm": 1.0 + torch.randn(routed_emb, generator=g, dtype=torch.float32) * 0.02,
+            }
         profiler.end("weights_creation")
 
         # Build TTNN cache if not already complete
@@ -218,6 +254,10 @@ def run_model(
                 shared_expert_weights_dtype=ttnn.bfloat8_b,
                 cache_path=moe_cache_dir,
                 layer_idx=layer_idx,
+                shared_hidden_dim=shared_hidden,
+                routed_emb_dim=routed_emb,
+                latent_weights=latent_weights,
+                latent_use_norm=latent_use_norm,
             )
             profiler.end("ttnn_cache_build")
 
@@ -230,6 +270,7 @@ def run_model(
         all_routed_weights = None
         shared_expert_weights = None
         gate_weights = None
+        latent_weights = None
 
     expert_dispatch_table = ExpertMapping.create_dispatch_table(
         num_routed_experts=num_routed_experts,
@@ -306,6 +347,15 @@ def run_model(
             n_expert_groups=config.n_group,
             n_limited_groups=config.topk_group,
             route_scale=config.routed_scaling_factor,
+            routed_emb_dim=routed_emb_dim,
+            shared_hidden_dim=shared_hidden_dim,
+            latent_weights=latent_weights,
+            latent_use_norm=latent_use_norm,
+            rms_norm_eps=rms_norm_eps,
+            # SiLU on both sides. The device has no SiTU kernel yet (#51335), so comparing against a
+            # SiTU reference would measure the missing activation rather than this dataflow. SiTU
+            # parity is covered host-side in test_moe_reference_comparison.py.
+            activation="silu",
         )
         profiler.end("torch_moe_creation")
 
@@ -347,6 +397,11 @@ def run_model(
         n_limited_groups=config.topk_group,
         route_scale=config.routed_scaling_factor,
         is_balanced=is_balanced,
+        routed_emb_dim=routed_emb_dim,
+        shared_hidden_dim=shared_hidden_dim,
+        latent_weights=latent_weights,
+        latent_use_norm=latent_use_norm,
+        rms_norm_eps=rms_norm_eps,
     )
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_moe_creation")
@@ -423,8 +478,35 @@ def run_model(
     dense_checks = [
         ("shared_output", tt_intermediates.shared_output, torch_intermediates.shared_output, get_tp_mesh_composer(mesh_device), 0.997),
         ("routed_output", tt_intermediates.routed_output, torch_intermediates.routed_output, get_tp_mesh_composer(mesh_device), 0.96),
-        ("final_output", tt_output, torch_output, get_tp_mesh_composer(mesh_device), 0.982),
+        # final_output = routed_output + shared_output, so its PCC is a magnitude-weighted blend of the
+        # two. That makes the bar model-specific rather than universal: see final_output_pcc.
+        ("final_output", tt_output, torch_output, get_tp_mesh_composer(mesh_device), final_output_pcc),
     ]
+    if use_latent:
+        # Checked BEFORE routed_output so a LatentMoE failure is attributed to the right stage:
+        # routed_output bundles the reduce, the latent norm and the up-projection, whereas this
+        # isolates everything up to and including the reduce.
+        #
+        # 0.965 rather than routed_output's shared 0.96: this bar is K3-only, so it can be tied to
+        # K3's own measured value (0.969778) instead of the cross-model floor. ~0.005 of margin,
+        # against two consecutive runs that agreed to all six digits -- loose enough for run-to-run
+        # noise, tight enough that a real accumulation regression cannot hide under it.
+        dense_checks.insert(1, (
+            "latent_routed_output", tt_intermediates.latent_routed_output,
+            torch_intermediates.latent_routed_output, get_tp_mesh_composer(mesh_device), 0.965,
+        ))
+        # The other side of the latent boundary: post down-projection, pre-dispatch. Composed with the
+        # SP composer, not the TP one -- to_latent() all-gathers on the TP axis so this tensor is
+        # replicated across columns, not sharded.
+        #
+        # 0.998 against a measured 0.999882: a single matmul on bf8 weights, so it is near-exact and
+        # a tight bar costs nothing. Its real value is attribution -- it says the ~0.03 the block
+        # loses is all downstream of the down-projection, and a to_latent()-side defect can no longer
+        # hide inside a latent_routed_output miss.
+        dense_checks.insert(1, (
+            "latent_input", tt_intermediates.latent_input,
+            torch_intermediates.latent_input, get_sp_mesh_composer(mesh_device), 0.998,
+        ))
     # fmt: on
 
     for name, tt_tensor, torch_tensor, composer, threshold in dense_checks:
@@ -781,4 +863,142 @@ def test_kimi_moe(
         topology,
         gate_fallback_mode,
         request,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Kimi-K3 LatentMoE
+# ---------------------------------------------------------------------------
+#
+# Capacity factor 5 carries over from Kimi-K2.6, and that is a deliberate choice rather than a
+# copy-paste: the two K3 shape changes push the dispatch buffer in opposite directions and very nearly
+# cancel. Row width halves (7168 -> 3584 latent) while token slots double (top-8 -> top-16), so
+# per-chip dispatch BYTES are roughly unchanged. Note compute_constants sizes the buffer in TOKENS and
+# ignores num_experts_per_tok entirely (init_helpers.py:491-493, TODO #41293), so the doubled top-k
+# does NOT flow into sizing automatically -- the token count per chip really does double, from
+# dgs*seq*8*12/384 to dgs*seq*16*28/896. Slots double, bytes per slot halve. Verified on device
+# via the per-chip overflow check that TtMoe.forward logs on the PCC path.
+@pytest.mark.parametrize(
+    (
+        "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, "
+        "dispatch_buffer_capacity_factor, gate_fallback_mode, run_pcc_check"
+    ),
+    [
+        # fmt: off
+        pytest.param( 640, KimiK3Config.EMB_SIZE, KimiK3Config.MOE_INTERMEDIATE_SIZE, KimiK3Config.NUM_ROUTED_EXPERTS, KimiK3Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi_k3-5k-perf"),
+        pytest.param( 640, KimiK3Config.EMB_SIZE, KimiK3Config.MOE_INTERMEDIATE_SIZE, KimiK3Config.NUM_ROUTED_EXPERTS, KimiK3Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi_k3-5k-pcc"),
+        pytest.param(3200, KimiK3Config.EMB_SIZE, KimiK3Config.MOE_INTERMEDIATE_SIZE, KimiK3Config.NUM_ROUTED_EXPERTS, KimiK3Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi_k3-25k-perf"),
+        pytest.param(3200, KimiK3Config.EMB_SIZE, KimiK3Config.MOE_INTERMEDIATE_SIZE, KimiK3Config.NUM_ROUTED_EXPERTS, KimiK3Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi_k3-25k-pcc"),
+        # fmt: on
+    ],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    [
+        pytest.param(
+            (4, 2),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE),
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            },
+            2 if is_blackhole() else 1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
+            id="fabric2d-mesh-4x2",
+        ),
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(
+                fabric_router_config=create_fabric_router_config(max_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE)
+            ),
+            2 if is_blackhole() else 1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["kimi_k3"], indirect=True, ids=["kimi_k3"])
+def test_kimi_k3_moe(
+    variant,
+    config_only,
+    mesh_device,
+    device_params,
+    seq_len_per_chip,
+    emb_dim,
+    hidden_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    dispatch_buffer_capacity_factor,
+    run_pcc_check,
+    num_links,
+    gate_fallback_mode,
+    request,
+):
+    """Kimi-K3 MoE: 896 experts / top-16 with the LatentMoE projections around the routed side.
+
+    Two deliberate limits on what this proves, both from the bring-up scope:
+
+      * **SiLU, not SiTU.** No TT kernel implements SiTU-GLU yet (issue #51335), so both the device and
+        the torch reference run SiLU. That keeps this an honest test of the dataflow -- dispatch and
+        combine at 896/top-16, the latent down/up projections, the latent RMSNorm, and the
+        routed/shared dimension split -- rather than a measurement of the missing activation. SiTU
+        itself is validated host-side against upstream ``KimiSparseMoeBlock`` in
+        ``tests/torch/test_moe_reference_comparison.py::test_kimi_k3_latent_moe_reference_pcc``.
+
+      * **Seeded random weights, not the checkpoint.** Everything routed is MXFP4 and no dequantizer
+        exists yet, so device-vs-torch parity is checked on identical seeded weights. That is the same
+        thing ``test_kimi_moe`` and ``test_ds_moe`` do -- the ``"realistic"`` cache cohort means
+        *seeded* rather than *placeholder*, not *from a checkpoint*. The router is the one MoE tensor
+        group K3 leaves unquantized, and real-weight gate coverage lives in
+        ``tests/pcc/test_moe_gate_prefill2d.py``.
+
+    Expect to relax ``moe_pcc_threshold`` below K2.6's 0.971: top-16 doubles the combine accumulation
+    depth and it accumulates in the 3584 latent space at bf8, with the latent RMSNorm immediately
+    after the sum. The failure mode to avoid is hunting a kernel defect that is really accumulation
+    error.
+    """
+    run_model(
+        variant,
+        config_only,
+        mesh_device,
+        device_params,
+        seq_len_per_chip,
+        emb_dim,
+        hidden_dim,
+        num_routed_experts,
+        num_experts_per_tok,
+        dispatch_buffer_capacity_factor,
+        run_pcc_check,
+        num_links,
+        per_axis_topology(device_params["fabric_config"]),
+        gate_fallback_mode,
+        request,
+        routed_emb_dim=KimiK3Config.ROUTED_EXPERT_HIDDEN_SIZE,
+        shared_hidden_dim=KimiK3Config.SHARED_EXPERT_INTERMEDIATE_SIZE,
+        latent_use_norm=KimiK3Config.LATENT_MOE_USE_NORM,
+        rms_norm_eps=KimiK3Config.RMS_NORM_EPS,
+        # 0.96, not the 0.982 the other variants use, and NOT because K3's routed path is worse --
+        # measured on 8x4 with the same golden-trace input, K3 is marginally BETTER there:
+        #
+        #                     shared_output   routed_output   final_output
+        #   Kimi-K2.6           0.999779        0.967471        0.983272
+        #   Kimi-K3             0.999759        0.969424        0.969454
+        #
+        # final = routed + shared, so its PCC is a magnitude-weighted blend of the two. K2.6's
+        # near-exact shared expert pulls final up to 0.983; K3 sums 16 experts (not 8) and pushes the
+        # result through a 7168-wide up-projection, so the routed term dominates and final collapses
+        # onto routed (0.96945 vs 0.96942). Holding K3 to 0.982 would therefore be demanding a
+        # routed-path accuracy that K2.6 does not itself achieve. 0.96 matches the routed_output bar
+        # this suite already accepts.
+        #
+        # That the residual is accumulation and not the new code is pinned by latent_routed_output:
+        # 0.969778 before the latent norm + up-projection vs 0.969424 after, i.e. those two stages
+        # cost 0.0004. Expect this to move once #51335 lands SiTU and the comparison runs in fp32
+        # dest accumulate.
+        # 0.965, not 0.96: tied to K3's measured 0.969454 with ~0.0045 of margin now that a baseline
+        # exists. A bar at 0.96 would let a real ~0.009 regression through all three of
+        # latent_routed_output / routed_output / final_output, which are three views of one
+        # accumulation chain rather than independent checks.
+        final_output_pcc=0.965,
     )

@@ -166,6 +166,10 @@ class TtPrefillRuntime:
                 is_first_rank=self.config.is_first_rank,
                 is_last_rank=self.config.is_last_rank,
                 kv_only_last_layer=self.config.kv_only_last_layer,
+                # Required for a LatentMoE model (Kimi-K3): without it the per-block check cannot know
+                # to look for the latent-projection cache files and would call an incomplete cache
+                # complete. model_cfg is already in hand two lines up.
+                model_cfg=model_cfg,
             ):
                 logger.info(f"TTNN weight cache complete at {self.config.weight_cache_path}; loading from disk")
             else:

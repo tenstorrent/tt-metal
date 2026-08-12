@@ -15,6 +15,7 @@ from copy import deepcopy
 from typing import Optional
 
 import torch
+from loguru import logger
 
 from models.demos.common.prefill.adapter import PrefillModelAdapter as TestVariant
 
@@ -30,6 +31,18 @@ def run_reference_moe(
 ) -> Optional[torch.Tensor]:
     """Forward the variant's upstream MoE reference on CPU."""
     if variant.reference_moe_cls is None:
+        return None
+    # Opt-out for references this helper structurally cannot drive: _pack_reference_moe_state_dict
+    # builds a DeepSeek-shaped parameter set (gate + gate_proj/up_proj/down_proj experts + shared
+    # expert) and loads it strict=True, so a reference with renamed expert projections or extra
+    # tensors will not load. Skipped rather than half-loaded: a strict=False load would leave some
+    # tensors randomly initialised and yield a meaningless PCC.
+    #
+    # Read with getattr, and set on the variant adapter (kimi_k3 today) rather than declared on
+    # PrefillModelAdapter: this is a test-only property of this one helper, and the shared adapter
+    # base class is the serving contract. Absent means supported.
+    if not getattr(variant, "supports_reference_moe_crosscheck", True):
+        logger.info(f"{variant.name}: upstream MoE reference cross-check not supported for this variant, skipping")
         return None
     # Test params can override the variant's default MoE dims (expert count, hidden/intermediate size —
     # e.g. GLM-5.1's 256 experts / 6144 hidden vs the deepseek_v3 variant's 7168), so patch the reference
