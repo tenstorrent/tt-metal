@@ -603,21 +603,77 @@ jobs:
       - name: 🧹 Cleanup server process
         if: always()
         run: |
-          if [ -f "${FILE_SERVER_PID}" ]; then
-            pid=$(cat "${FILE_SERVER_PID}")
-            if kill -0 "$pid" 2>/dev/null; then
-              kill "$pid"
-              echo "✅ Server process with PID $pid terminated."
-              rm -f "${FILE_SERVER_PID}"
-            else
-              echo "❌ Server process already down!"
-              echo "Check out the server log in a step below."
-              exit 1
-            fi
-          else
+          if [ ! -f "${FILE_SERVER_PID}" ]; then
             echo "❌ PID file not found. Server may not have started correctly."
             exit 1
           fi
+
+          pid=$(cat "${FILE_SERVER_PID}")
+
+          # PIDs of every process still holding a /dev/tenstorrent fd. These, not
+          # the launcher, are what must be gone before the next job opens the
+          # device: with VLLM_ENABLE_V1_MULTIPROCESSING the engine cores are
+          # forked children and they own the handles. Scanning is safe because
+          # the job's container has its own PID namespace.
+          device_holders() {
+            local fd_dir holder found=""
+            for fd_dir in /proc/[0-9]*/fd; do
+              holder=${fd_dir#/proc/}
+              holder=${holder%/fd}
+              if readlink "${fd_dir}"/* 2>/dev/null | grep -q tenstorrent; then
+                found="${found} ${holder}"
+              fi
+            done
+            echo "${found}"
+          }
+
+          # Signal the launcher's whole process group, so the engine cores go with
+          # it. Fields shift when comm contains spaces, so parse /proc stat after
+          # the closing paren; pgrp is then the third field.
+          if [ -r "/proc/${pid}/stat" ]; then
+            pgid=$(sed 's/.*) //' "/proc/${pid}/stat" | awk '{print $3}')
+            kill -TERM "-${pgid}" 2>/dev/null || true
+            echo "✅ Sent SIGTERM to server process group ${pgid}."
+          else
+            # Not an error on its own: whichever step observed the server dying
+            # has already failed and reported it. The sweep below still runs,
+            # because a dead launcher is exactly when engine cores are orphaned.
+            echo "⚠️ Server launcher (pid=${pid}) was already down before cleanup."
+            echo "Check out the server log in a step below."
+          fi
+
+          rm -f "${FILE_SERVER_PID}"
+
+          # Graceful first: the engine cores need to unwind their device handles.
+          for _ in $(seq 1 30); do
+            [ -n "$(device_holders)" ] || break
+            sleep 1
+          done
+
+          holders=$(device_holders)
+          if [ -n "${holders}" ]; then
+            echo "⚠️ Still holding /dev/tenstorrent after SIGTERM, escalating to SIGKILL:${holders}"
+            for holder in ${holders}; do
+              kill -KILL "${holder}" 2>/dev/null || true
+            done
+            sleep 5
+          fi
+
+          # A surviving holder hands a dirty device to the next job on this
+          # runner, where it surfaces as an unrelated "Failed to allocate TLB
+          # window". Fail here instead, while it is still attributable. A process
+          # wedged in an uninterruptible driver call outlives SIGKILL, and no
+          # amount of retrying in this container will free it.
+          holders=$(device_holders)
+          if [ -n "${holders}" ]; then
+            echo "❌ Processes still holding /dev/tenstorrent after SIGKILL:${holders}"
+            for holder in ${holders}; do
+              echo "  ${holder}: $(tr '\0' ' ' < "/proc/${holder}/cmdline" 2>/dev/null || true)"
+            done
+            exit 1
+          fi
+
+          echo "✅ No process is holding /dev/tenstorrent."
 
       - name: Show server log
         if: always()
