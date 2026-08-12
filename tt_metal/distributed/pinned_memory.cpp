@@ -30,8 +30,8 @@ namespace tt::tt_metal::experimental {
 namespace {
 
 tt::umd::DeviceBufferAccess to_umd_access(PinnedMemoryDeviceAccess access) {
-    return access == PinnedMemoryDeviceAccess::ReadOnly ? tt::umd::DeviceBufferAccess::ReadOnly
-                                                        : tt::umd::DeviceBufferAccess::ReadWrite;
+    return access == PinnedMemoryDeviceAccess::ReadOnly ? tt::umd::DeviceBufferAccess::READ_ONLY
+                                                        : tt::umd::DeviceBufferAccess::READ_WRITE;
 }
 
 }  // namespace
