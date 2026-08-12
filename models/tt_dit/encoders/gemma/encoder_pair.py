@@ -154,10 +154,11 @@ class GemmaTokenizerEncoderPair:
         # than untraced — and the trace never amortizes. Resident (e.g. 4x8) captures once and
         # replays warm.
         self._encoder_trace = not dynamic_load
-        # A later capture reuses the memory freed from this trace's capture-time activations, and a
-        # replay then writes over whatever now owns it. The consumer opens this gate once its own
-        # captures are done, so the encode trace is the last one taken and nothing reclaims it.
-        self._trace_gate_open = False
+        # A capture taken after this one reuses the memory freed from its capture-time activations,
+        # and replaying the encode then writes over whatever now owns that region. Consumers that
+        # capture traces of their own after construction call ``defer_trace_capture`` and reopen the
+        # gate once they are done, which makes the encode the last capture taken.
+        self._trace_gate_open = True
 
     # Dims the pipeline warmup needs before the encoder is built.
     @property
@@ -171,6 +172,10 @@ class GemmaTokenizerEncoderPair:
     @property
     def audio_dim(self) -> int:
         return self._audio_dim
+
+    def defer_trace_capture(self) -> None:
+        """Hold the encode trace back until ``open_trace_gate`` (see ``_trace_gate_open``)."""
+        self._trace_gate_open = False
 
     def open_trace_gate(self) -> None:
         """Allow the next encode to capture/replay its trace (see ``_trace_gate_open``)."""
