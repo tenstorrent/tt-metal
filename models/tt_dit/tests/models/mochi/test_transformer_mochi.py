@@ -15,7 +15,6 @@ from models.tt_transformers.tt.common import get_rot_transformation_mat
 from ....models.transformers.transformer_mochi import MochiTransformer3DModel, MochiTransformerBlock
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
-from ....utils import cache
 from ....utils.check import assert_quality
 from ....utils.padding import pad_vision_seq_parallel
 from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard
@@ -262,13 +261,6 @@ def test_mochi_transformer_block(
         pytest.param(False, id="no_test_attention_mask"),
     ],
 )
-@pytest.mark.parametrize(
-    "load_cache",
-    [
-        pytest.param(True, id="yes_load_cache"),
-        pytest.param(False, id="no_load_cache"),
-    ],
-)
 @pytest.mark.parametrize("device_params", [line_params_req_exact_devices], ids=["line"], indirect=True)
 def test_mochi_transformer_model(
     mesh_device: ttnn.MeshDevice,
@@ -280,7 +272,6 @@ def test_mochi_transformer_model(
     H: int,
     W: int,
     prompt_seq: int,
-    load_cache: bool,
     test_attention_mask: bool,
 ) -> None:
     skip_if_unsupported_num_links(mesh_device, num_links)
@@ -349,29 +340,10 @@ def test_mochi_transformer_model(
         parallel_config=parallel_config,
         is_fsdp=True,
     )
-    if load_cache:
-        start = time.time()
-
-        try:
-            cache.load_model(
-                tt_model,
-                model_name="mochi-1-preview",
-                subfolder="transformer",
-                parallel_config=parallel_config,
-                mesh_shape=tuple(mesh_device.shape),
-                mesh_device=mesh_device,
-            )
-        except cache.MissingCacheError as err:
-            msg = "Cache path does not exist. Run test_mochi_transformer_model_caching first with the desired parallel config."
-            raise RuntimeError(msg) from err
-
-        end = time.time()
-        logger.info(f"Time taken to load cached state dict: {end - start} seconds")
-    else:
-        start = time.time()
-        tt_model.load_torch_state_dict(torch_model.state_dict())
-        end = time.time()
-        logger.info(f"Time taken to load state dict: {end - start} seconds")
+    start = time.time()
+    tt_model.load_torch_state_dict(torch_model.state_dict())
+    end = time.time()
+    logger.info(f"Time taken to load state dict: {end - start} seconds")
 
     # Run TT model
     logger.info(
@@ -397,130 +369,3 @@ def test_mochi_transformer_model(
 
     logger.info(f"Checking spatial outputs")
     assert_quality(torch_spatial_out, tt_spatial_out, pcc=MIN_PCC, relative_rmse=MIN_RMSE)
-
-
-@pytest.mark.parametrize(
-    ("mesh_device", "sp_axis", "tp_axis", "num_links"),
-    [
-        pytest.param((1, 8), 1, 0, 1, id="1x8sp1tp0nl1"),
-        pytest.param((2, 4), 1, 0, 1, id="2x4sp1tp0nl1"),
-        pytest.param((2, 4), 0, 1, 1, id="2x4sp0tp1nl1"),
-        pytest.param((4, 8), 1, 0, 4, id="4x8sp1tp0nl4"),
-    ],
-    indirect=["mesh_device"],
-)
-@pytest.mark.parametrize(
-    ("B", "T", "H", "W", "prompt_seq"),
-    [
-        pytest.param(1, 8, 40, 50, 118, id="short_seq"),
-    ],
-)
-@pytest.mark.parametrize("device_params", [line_params_req_exact_devices], ids=["line"], indirect=True)
-def test_mochi_transformer_model_caching(
-    mesh_device: ttnn.MeshDevice,
-    sp_axis: int,
-    tp_axis: int,
-    num_links: int,
-    B: int,
-    T: int,
-    H: int,
-    W: int,
-    prompt_seq: int,
-) -> None:
-    skip_if_unsupported_num_links(mesh_device, num_links)
-
-    torch_dtype = torch.float32
-
-    sp_factor = tuple(mesh_device.shape)[sp_axis]
-    tp_factor = tuple(mesh_device.shape)[tp_axis]
-
-    # Model configuration
-    patch_size = 2
-    num_attention_heads = 24
-    attention_head_dim = 128
-    num_layers = 48
-    pooled_projection_dim = 1536
-    in_channels = 12
-    text_embed_dim = 4096
-    time_embed_dim = 256
-    activation_fn = "swiglu"
-
-    # Tight error bounds based on test config
-    MIN_PCC = 0.992_500
-    MIN_RMSE = 0.14
-
-    torch_model = TorchMochiTransformer3DModel.from_pretrained(
-        f"genmo/mochi-1-preview", subfolder="transformer", torch_dtype=torch_dtype
-    )
-    torch_model.eval()
-
-    # Create CCL manager
-    ccl_manager = CCLManager(
-        mesh_device=mesh_device,
-        num_links=num_links,
-        topology=ttnn.Topology.Linear,
-    )
-
-    parallel_config = DiTParallelConfig(
-        tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=tp_factor),
-        sequence_parallel=ParallelFactor(mesh_axis=sp_axis, factor=sp_factor),
-        cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
-    )
-
-    cache_dir = cache.model_cache_dir(
-        model_name="mochi-1-preview",
-        subfolder="transformer",
-        parallel_config=parallel_config,
-        mesh_shape=tuple(mesh_device.shape),
-        mesh_device=mesh_device,
-    )
-
-    logger.info(f"Cache path {cache_dir}")
-
-    # Create TT model
-    tt_model = MochiTransformer3DModel(
-        patch_size=patch_size,
-        num_attention_heads=num_attention_heads,
-        attention_head_dim=attention_head_dim,
-        num_layers=num_layers,
-        pooled_projection_dim=pooled_projection_dim,
-        in_channels=in_channels,
-        text_embed_dim=text_embed_dim,
-        time_embed_dim=time_embed_dim,
-        activation_fn=activation_fn,
-        mesh_device=mesh_device,
-        ccl_manager=ccl_manager,
-        parallel_config=parallel_config,
-        is_fsdp=True,
-    )
-    start = time.time()
-    tt_model.load_torch_state_dict(torch_model.state_dict())
-    end = time.time()
-    logger.info(f"Time taken to load state dict: {end - start} seconds")
-
-    start = time.time()
-    tt_model.save(cache_dir)
-    end = time.time()
-    logger.info(f"Time taken to cache state dict: {end - start} seconds")
-
-    start = time.time()
-    del tt_model
-
-    cache_model = MochiTransformer3DModel(
-        patch_size=patch_size,
-        num_attention_heads=num_attention_heads,
-        attention_head_dim=attention_head_dim,
-        num_layers=num_layers,
-        pooled_projection_dim=pooled_projection_dim,
-        in_channels=in_channels,
-        text_embed_dim=text_embed_dim,
-        time_embed_dim=time_embed_dim,
-        activation_fn=activation_fn,
-        mesh_device=mesh_device,
-        ccl_manager=ccl_manager,
-        parallel_config=parallel_config,
-        is_fsdp=True,
-    )
-    cache_model.load(cache_dir)
-    end = time.time()
-    logger.info(f"Time taken to load cached state dict: {end - start} seconds")
