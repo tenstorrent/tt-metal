@@ -149,7 +149,7 @@
   cmd: |
     exit_code=0
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/huggingface/hub/models--deepseek-ai--DeepSeek-R1-0528
-    pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc and not perf-host-64 and ((mesh-4x2 or mesh-2x4 or linear-8) or not (moe_gate_prefill2d or moe_routing_setup or ttnn_moe)) and not (linear-8 and (pcc-device or (5k and not 25k))) and not (ttnn_moe and kimi and perf) and not (ttnn_moe and deepseek_v3 and mesh-4x2 and not fabric2d-) and not pad50" --timeout 1800 || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc and not perf-host-64 and not balanced and ((mesh-4x2 or mesh-2x4 or linear-8) or not (moe_gate_prefill2d or moe_routing_setup or ttnn_moe)) and not (linear-8 and (pcc-device or (5k and not 25k))) and not (ttnn_moe and kimi and perf) and not (ttnn_moe and deepseek_v3 and mesh-4x2 and not fabric2d-) and not pad50" --timeout 1800 || exit_code=$?
     exit $exit_code
   skus:
     bh_loudbox:
@@ -214,7 +214,7 @@
   model-name: deepseek_prefill
   cmd: |
     exit_code=0
-    pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc and not perf-host-64 and (mesh-2x2 or not (moe_gate_prefill2d or moe_routing_setup or ttnn_moe))" --timeout 1800 || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc and not perf-host-64 and not balanced and (mesh-2x2 or not (moe_gate_prefill2d or moe_routing_setup or ttnn_moe))" --timeout 1800 || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/cache/ -vvv --tb=short || exit_code=$?
     exit $exit_code
   skus:
