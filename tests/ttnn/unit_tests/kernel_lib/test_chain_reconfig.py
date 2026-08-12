@@ -18,7 +18,7 @@ from loguru import logger
 from tests.ttnn.utils_for_testing import comp_pcc
 import tests.ttnn.unit_tests.kernel_lib.chain_test_lib as lib
 
-KERNEL_DIR = "ttnn/cpp/ttnn/kernel_lib/tests/chain_reconfig"
+KERNEL_DIR = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/reconfig"
 KERNEL = f"{KERNEL_DIR}/scenarios.cpp"
 
 
