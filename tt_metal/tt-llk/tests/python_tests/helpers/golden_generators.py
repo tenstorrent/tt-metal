@@ -19,6 +19,7 @@ from helpers.llk_params import (
     PackerReluType,
     ReduceDimension,
     ReducePool,
+    SdpaOp,
     TopKSortDirection,
     format_dict,
     pack_relu_config,
@@ -30,6 +31,23 @@ from helpers.pack import (
     pack_mxint2,
     pack_mxint4,
     pack_mxint8,
+)
+from helpers.sfpu_dispatch_constants import (
+    CLAMP_MAX,
+    CLAMP_MIN,
+    HARDSHRINK_LAMBDA,
+    INT_MAXMIN_SCALAR,
+    LRELU_NEGATIVE_SLOPE,
+    PRELU_SLOPE,
+    RELU_MAX_THRESHOLD,
+    RELU_MIN_THRESHOLD,
+    SOFTPLUS_BETA,
+    SOFTPLUS_THRESHOLD,
+    SOFTSHRINK_LAMBDA,
+    THRESHOLD_T,
+    THRESHOLD_V,
+    UNARY_COMP_THRESHOLD,
+    UNARY_MAX_MIN_VALUE,
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.unpack import (
@@ -2270,8 +2288,13 @@ class UnarySFPUGolden:
         # Fixed dispatch constants shared with sfpu_operations.h: unary shift by 3
         # bits, integer unary max/min against the scalar 1000.
         self._int_shift_amount = 3
-        self._int_maxmin_scalar = 1000
+        self._int_maxmin_scalar = INT_MAXMIN_SCALAR
         self.data_format = None
+        # Precision the SFPU actually evaluates at, which is Dest's and not the output
+        # format's. The per-element ops below read this rather than data_format: no
+        # output format can restore precision the value has already lost, and none can
+        # take away precision Dest still holds.
+        self.dst_format = None
         self.dest_acc = DestAccumulation.No
 
     def __call__(
@@ -2289,6 +2312,7 @@ class UnarySFPUGolden:
         skip_tilize: bool = False,
     ):
         self.data_format = data_format
+        self.dst_format = data_format
         self.dest_acc = dest_acc
 
         if operation not in self.ops:
@@ -2305,13 +2329,12 @@ class UnarySFPUGolden:
         ):
             return self._call_integer(operation, operand1, input_format, dimensions)
 
-        # Quantize input to match what hardware actually unpacks from bfp4_b L1 memory
-        if input_format == DataFormat.Bfp2_b:
-            operand1 = _bfp2b_to_float16b(operand1)
-        if input_format == DataFormat.Bfp4_b:
-            operand1 = _bfp4b_to_float16b(operand1)
-        if input_format.is_mx_format():
-            operand1 = quantize_mx_tensor_chunked(operand1, input_format)
+        # Quantize input to match what hardware actually sees after unpack from L1.
+        # Matters most for discontinuous ops (floor/ceil/trunc/frac), where a sub-ULP
+        # quantization step across an integer becomes a full 1.0 error.
+        operand1 = quantize_input_to_unpack_format(
+            operand1, input_format, all_mx_formats=True
+        )
 
         # Special handling for Column and Row reduction which needs to process the entire tensor
         if operation in [MathOperation.ReduceColumn, MathOperation.ReduceRow]:
@@ -2327,6 +2350,8 @@ class UnarySFPUGolden:
             dst_format = DataFormat.Float16
         else:
             dst_format = DataFormat.Float16_b
+
+        self.dst_format = dst_format
 
         if self.dest_acc == DestAccumulation.No and input_format == DataFormat.Float32:
             # dst in 16-bit mode and 32-bit input: truncation may occur when unpacked to dst
@@ -2666,7 +2691,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.nn.functional.celu(input_tensor, alpha=1.0).item()
 
@@ -2674,7 +2699,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.nn.functional.silu(input_tensor).item()
 
@@ -2691,12 +2716,12 @@ class UnarySFPUGolden:
             return 1.0
         return 0.5
 
-    def _softshrink(self, x, lambd=0.5):
-        # Matches calculate_softshrink with lambda = 0.5 (the dispatch constant).
+    def _softshrink(self, x, lambd=SOFTSHRINK_LAMBDA):
+        # Matches calculate_softshrink with lambda fixed to the dispatch constant.
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.nn.functional.softshrink(input_tensor, lambd=lambd).item()
 
@@ -2705,7 +2730,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.nn.functional.softsign(input_tensor).item()
 
@@ -2725,11 +2750,11 @@ class UnarySFPUGolden:
         # rdiv(x) = value / x; value fixed to the dispatch constant (2.0).
         return self._torch_unary(x, lambda t: value / t)
 
-    def _clamp(self, x, min_val=-1.0, max_val=1.0):
+    def _clamp(self, x, min_val=CLAMP_MIN, max_val=CLAMP_MAX):
         # tt-llk clamp with min/max fixed to the dispatch constants and offset 0.
         return self._torch_unary(x, lambda t: torch.clamp(t, min_val, max_val))
 
-    def _hardtanh(self, x, min_val=-1.0, max_val=1.0):
+    def _hardtanh(self, x, min_val=CLAMP_MIN, max_val=CLAMP_MAX):
         # hardtanh(x) = clamp(x, min, max); min/max fixed to the dispatch constants.
         return self._torch_unary(x, lambda t: torch.clamp(t, min_val, max_val))
 
@@ -2737,7 +2762,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.nn.functional.elu(input_tensor, alpha=1.0).item()
 
@@ -2745,7 +2770,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.exp(input_tensor).item()
 
@@ -2753,7 +2778,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.exp2(input_tensor).item()
 
@@ -2764,7 +2789,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.exp(0.5 * input_tensor).item()
 
@@ -2814,7 +2839,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.nn.functional.gelu(input_tensor).item()
 
@@ -2824,7 +2849,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.nn.functional.gelu(input_tensor, approximate="tanh").item()
 
@@ -2840,7 +2865,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return input_tensor.fill_(const_value).item()
 
@@ -2848,7 +2873,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.nn.functional.hardsigmoid(input_tensor).item()
 
@@ -2856,39 +2881,39 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.nn.functional.sigmoid(input_tensor).item()
 
-    def _threshold(self, x, t=5, v=10):
+    def _threshold(self, x, t=THRESHOLD_T, v=THRESHOLD_V):
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.nn.functional.threshold(input_tensor, t, v).item()
 
-    def _relu_max(self, x, threshold=5):
+    def _relu_max(self, x, threshold=RELU_MAX_THRESHOLD):
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.relu(torch.min(input_tensor, torch.tensor(threshold))).item()
 
-    def _relu_min(self, x, threshold=5):
+    def _relu_min(self, x, threshold=RELU_MIN_THRESHOLD):
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.max(input_tensor, torch.tensor(threshold)).item()
 
-    def _lrelu(self, x, negative_slope=0.1):
+    def _lrelu(self, x, negative_slope=LRELU_NEGATIVE_SLOPE):
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.nn.functional.leaky_relu(
             input_tensor, negative_slope=negative_slope
@@ -2957,21 +2982,24 @@ class UnarySFPUGolden:
     def _identity(self, x):
         return x
 
-    # Fixed scalar dispatch constants mirrored from sfpu_operations.h.
-    _PRELU_SLOPE = 0.25
+    # Fixed scalar dispatch constants mirrored from sfpu_operations.h. The ones an edge
+    # probe has to land on exactly come from sfpu_dispatch_constants, which both this
+    # golden and sfpu_domains._OP_EDGE_POINTS read — see that module for why they are not
+    # written twice. The rest are local because nothing probes at them.
+    _PRELU_SLOPE = PRELU_SLOPE
     _RPOW_BASE = 2.0
     _UNARY_POWER_EXP = 2.0
     _FMOD_DIVISOR = 2.0
     _REMAINDER_DIVISOR = 2.0
-    _UNARY_COMP_THRESHOLD = 0.5
-    _UNARY_MAX_MIN_VALUE = 0.0
+    _UNARY_COMP_THRESHOLD = UNARY_COMP_THRESHOLD
+    _UNARY_MAX_MIN_VALUE = UNARY_MAX_MIN_VALUE
     _POLYGAMMA_ORDER = 1
     _XIELU_ALPHA_P = 1.0
     _XIELU_ALPHA_N = 1.0
     _XIELU_BETA = 0.5
-    _HARDSHRINK_LAMBDA = 0.5
-    _SOFTPLUS_BETA = 1.0
-    _SOFTPLUS_THRESHOLD = 20.0
+    _HARDSHRINK_LAMBDA = HARDSHRINK_LAMBDA
+    _SOFTPLUS_BETA = SOFTPLUS_BETA
+    _SOFTPLUS_THRESHOLD = SOFTPLUS_THRESHOLD
 
     def _prelu(self, x):
         return x if x >= 0.0 else self._PRELU_SLOPE * x
@@ -4554,6 +4582,108 @@ class TopKGolden:
             data_format=data_format,
         )
 
+        return result
+
+
+@register_golden
+class SdpaSfpuGolden:
+    # Columns the kernel writes to.
+    TRANSFORMED_COLS = (0, 2, 4, 6, 8, 10, 12, 14)
+
+    def __call__(
+        self,
+        input_2d,
+        op,
+        exp_scale: float = 1.0,
+        softplus_beta: float = 1.0,
+        softplus_threshold: float = 20.0,
+    ):
+        x = input_2d.to(torch.float32).clone()
+        out = x.clone()
+
+        if op == SdpaOp.RecipLegacy:
+            transformed = torch.reciprocal(x.abs())
+        elif op == SdpaOp.RecipIter:
+            transformed = torch.reciprocal(x)
+        elif op in (SdpaOp.ExpAccurate, SdpaOp.ExpPoly):
+            # Both fold the scale, so the reference is exp(scale * x).
+            transformed = torch.exp(exp_scale * x)
+        elif op == SdpaOp.Softplus:
+            transformed = torch.nn.functional.softplus(
+                x, beta=softplus_beta, threshold=softplus_threshold
+            )
+        else:
+            raise ValueError(f"SdpaSfpuGolden: unhandled op {op}")
+
+        cols = torch.tensor(self.TRANSFORMED_COLS, dtype=torch.long)
+        out[:, cols] = transformed[:, cols]
+        return out
+
+
+@register_golden
+class SdpaCorrectionGolden:
+    """Golden for calculate_fused_max_sub_exp_add_tile in ckernel_sfpu_sdpa.h."""
+
+    def __call__(self, tiles, scale: float):
+        prev_max, worker_max, cur_max_seed, prev_sum, worker_sum = (
+            t.to(torch.float32) for t in tiles
+        )
+
+        cur_max = torch.maximum(prev_max, worker_max)
+        exp_prev = torch.exp(scale * (prev_max - cur_max))
+        exp_worker = torch.exp(scale * (worker_max - cur_max))
+        corrected_worker_sum = exp_worker * worker_sum
+        corrected_prev_sum = exp_prev * prev_sum
+
+        computed = [
+            exp_prev,
+            exp_worker,
+            cur_max,
+            corrected_worker_sum + corrected_prev_sum,
+            corrected_worker_sum,
+        ]
+
+        cols = torch.tensor(SdpaSfpuGolden.TRANSFORMED_COLS, dtype=torch.long)
+        seeds = [prev_max, worker_max, cur_max_seed, prev_sum, worker_sum]
+        out = []
+        for seed, value in zip(seeds, computed):
+            tile = seed.clone()
+            tile[:, cols] = value[:, cols]
+            out.append(tile)
+        return out
+
+
+@register_golden
+class HadamardH128Golden:
+    """
+    Hadamard computes Y = H_128 @ x (* 1/sqrt(128) when normalizing), where
+    H_128 is the Sylvester matrix H_128 = kron(H_8, H_16) and, for row a < 8,
+    H_16[a, r < 8] == H_8[a, r], so the first 8 rows of H_16 @ X_pad are H_8 @ X.
+    """
+
+    @staticmethod
+    def sylvester(order: int) -> torch.Tensor:
+        """The Sylvester Hadamard matrix of the given pow2 order."""
+        if order <= 0 or order & (order - 1):
+            raise ValueError(f"Hadamard order must be a power of two, got {order}")
+        matrix = torch.ones(1, 1, dtype=torch.float32)
+        while matrix.shape[0] < order:
+            matrix = torch.cat(
+                [
+                    torch.cat([matrix, matrix], dim=1),
+                    torch.cat([matrix, -matrix], dim=1),
+                ],
+                dim=0,
+            )
+        return matrix
+
+    def __call__(self, x, normalize: bool = True):
+        x = x.reshape(-1).to(torch.float32)
+        if x.numel() != 128:
+            raise ValueError(f"H128 takes a 128-element input, got {x.numel()}")
+        result = HadamardH128Golden.sylvester(128) @ x
+        if normalize:
+            result = result * (1.0 / math.sqrt(128.0))
         return result
 
 

@@ -412,6 +412,7 @@ def run_sparse_mla_chunked_case(
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         is_chunked=True,
+        active_seq_len=chunk,
         slot_num=num_users,
         layer_num=1,
         sparse_kv_cache_format=cache_format,
@@ -524,6 +525,7 @@ def run_sparse_mla_kv_only_case(variant, config, mesh_device, seq_len, chunk, ds
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         is_chunked=True,
+        active_seq_len=chunk,
         layer_num=1,
         sparse_kv_cache_format=cache_format,
         kv_only=True,
@@ -622,6 +624,7 @@ def run_sparse_mla_rotated_case(
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         is_chunked=True,
+        active_seq_len=chunk_size_global,
         slot_num=1,
         layer_num=1,
     )

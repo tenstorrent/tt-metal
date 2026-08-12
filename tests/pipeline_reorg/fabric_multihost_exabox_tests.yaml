@@ -1,0 +1,125 @@
+# Test matrix for SC4 fabric multihost CI (fabric-multihost-exabox.yaml).
+# Runs on exabox-multihost-ci-sc4; worker image comes from container.image.
+#
+# Each entry:
+#   name: GitHub Actions job display name
+#   cmd: Command to run after shared unpack/reset (cwd: /home/user/tt-metal)
+#   skus: SKU → timeout (minutes)
+#   owner_id / team / sp_config: routing + slack + matrix filter
+#
+# Time budget: .github/time_budget.yaml → scaleout → e2e → bh_sc4
+
+# ============================================================================
+# SC4 fabric health + stability
+# ============================================================================
+
+- name: "Physical discovery (SC4)"
+  cmd: |
+    mpirun --tag-output -x LD_LIBRARY_PATH -x TT_METAL_RUNTIME_ROOT --pernode \
+      /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_physical_discovery
+  skus:
+    bh_sc4:
+      timeout: 10
+  owner_id: U0845EV7A5U # Umair Cheema
+  team: scaleout
+  sp_config: sc4
+
+- name: "System Health Check (SC4)"
+  cmd: |
+    mpirun --tag-output -x LD_LIBRARY_PATH -x TT_METAL_RUNTIME_ROOT --pernode \
+      /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_system_health --min-connections 2
+  skus:
+    bh_sc4:
+      timeout: 10
+  owner_id: U0845EV7A5U # Umair Cheema
+  team: scaleout
+  sp_config: sc4
+
+- name: "Fabric stability short (SC4)"
+  cmd: |
+    MGD="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
+    FABRIC_BIN="${TT_METAL_HOME}/build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric"
+    FABRIC_CFG="${TT_METAL_HOME}/tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_2d_torus_stability.yaml"
+    mkdir -p "${PIPELINE_DIR}/ranklogs" "${TTRUN_CWD}"
+    RESOLVED_HOSTS=$(awk 'NF {printf "%s,", $1}' /etc/ttop/hostfile | sed 's/,$//')
+    test -f "${TTRUN_PY}" || { echo "ERROR: missing ${TTRUN_PY}"; exit 1; }
+    test -f "${MGD}" || { echo "ERROR: missing ${MGD}"; exit 1; }
+    test -x "${FABRIC_BIN}" || { echo "ERROR: missing ${FABRIC_BIN}"; exit 1; }
+    test -f "${FABRIC_CFG}" || { echo "ERROR: missing ${FABRIC_CFG}"; exit 1; }
+
+    cd "${TTRUN_CWD}"
+    python3 "${TTRUN_PY}" \
+      --skip-executable-check \
+      --tcp-interface ens5f0np0 \
+      --mesh-graph-descriptor "${MGD}" \
+      --hosts "${RESOLVED_HOSTS}" \
+      --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+      "${FABRIC_BIN}" \
+      --test_config "${FABRIC_CFG}" \
+      --filter 'name.*_short'
+  skus:
+    bh_sc4:
+      timeout: 20
+  owner_id: U0845EV7A5U # Umair Cheema
+  team: scaleout
+  sp_config: sc4
+
+- name: "DC validation (quad) neighbor exchange"
+  cmd: |
+    TTRUN_DIR=/etc/ttop
+    WORKER_HOME=/home/user/tt-metal
+    mkdir -p "${PIPELINE_DIR}"
+
+    sudo apt-get update && sudo apt-get install -y --no-install-recommends iproute2
+    echo "--- available interfaces ---"; ip -br link || true
+
+    echo "--- ${TTRUN_DIR} ---"
+    ls -la "$TTRUN_DIR" 2>&1 || true
+    for f in hostfile rankfile; do
+      echo "--- ${f} ---"
+      cat "${TTRUN_DIR}/${f}" 2>&1 || true
+    done
+
+    count_hosts() { tr ',' '\n' <<< "$1" | grep -c . || true; }
+
+    PIPELINE_HOSTS=$(sed -n 's/^rank[[:space:]]*[0-9]*=\([^[:space:]]*\).*/\1/p' "${TTRUN_DIR}/rankfile" 2>/dev/null \
+      | awk '!seen[$0]++' | paste -sd, -)
+    NHOSTS=$(count_hosts "$PIPELINE_HOSTS")
+    if [ "${NHOSTS:-0}" -ne 4 ]; then
+      echo "rankfile yielded ${NHOSTS} host(s); falling back to hostfile order"
+      PIPELINE_HOSTS=$(awk 'NF {print $1}' "${TTRUN_DIR}/hostfile" 2>/dev/null \
+        | awk '!seen[$0]++' | paste -sd, -)
+      NHOSTS=$(count_hosts "$PIPELINE_HOSTS")
+    fi
+    echo "Ring order (${NHOSTS} hosts): $PIPELINE_HOSTS"
+    if [ "${NHOSTS:-0}" -ne 4 ]; then
+      echo "::error::Could not determine the 4 quad hosts from ${TTRUN_DIR} (see the dump above)"
+      exit 1
+    fi
+
+    set -o pipefail
+    ./tools/scaleout/exabox/run_fabric_tests.sh \
+      --hosts "$PIPELINE_HOSTS" \
+      --image none \
+      --config 4x32 \
+      --test-binary "$WORKER_HOME/build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric" \
+      --test-config "$WORKER_HOME/tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_neighbor_exchange.yaml" \
+      --mesh-graph-desc-path "$WORKER_HOME/tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto" \
+      --filter name.2DTorusXYNeighborExchange \
+      --mpi-if none \
+      --mpi-args "--wdir $WORKER_HOME" 2>&1 | tee "${PIPELINE_DIR}/dc_quad_result.log"
+
+    if ! grep -qE "Tests: [1-9][0-9]* executed" "${PIPELINE_DIR}/dc_quad_result.log"; then
+      echo "::error::DC validation ran no tests (check the --test-config path and --filter)"
+      exit 1
+    fi
+
+    if [ -d fabric_test_logs ]; then
+      cp -a fabric_test_logs "${PIPELINE_DIR}/" || true
+    fi
+  skus:
+    bh_sc4:
+      timeout: 20
+  owner_id: U0845EV7A5U # Umair Cheema
+  team: scaleout
+  sp_config: sc4
