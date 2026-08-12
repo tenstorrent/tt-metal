@@ -331,6 +331,13 @@ inline uint32_t DataflowBuffer::get_read_ptr_impl() const {
 #endif
 }
 
+#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
+// Entries this side moves per NoC transaction: a whole block when BLOCKED with adjacent entries, else 1.
+inline uint32_t DataflowBuffer::get_entries_per_txn_impl() const {
+    return local_dfb_interface_.block_size;
+}
+#endif
+
 #ifndef COMPILE_FOR_TRISC
 template <bool is_producer>
 inline void DataflowBuffer::handle_final_credits(uint16_t transactions_issued, uint8_t txn_id_index) {
@@ -522,29 +529,31 @@ inline uint32_t DataflowBuffer::prepare_implicit_read() {
     while (static_cast<int16_t>(
         static_cast<uint16_t>(overlay::fast_llk_intf_read_posted(tensix_id, tc_id)) -
         static_cast<uint16_t>(ptxn_id_loop_cnt_ * local_dfb_interface_.num_entries_per_txn_id_per_tc)) < 0);
-    while (overlay::fast_llk_intf_get_free_space(tensix_id, tc_id) < 1);
+    // A transaction fills `block_size` entries, so wait for room for all of them.
+    // This is 1 by default in the non-blocked case.
+    while (overlay::fast_llk_intf_get_free_space(tensix_id, tc_id) < local_dfb_interface_.block_size);
     WAYPOINT("PIRD");
     return txn_id;
 }
 
 // Postamble for implicit-sync read: advance wr_ptr, tile/txn counters, and tc_idx.
 inline void DataflowBuffer::commit_implicit_read() {
-    local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].wr_ptr += local_dfb_interface_.stride_size;
+    // Runs once per transaction, which carries `block` entries, so advance by that much.
+    // This is 1 by default in the non-blocked case.
+    const uint32_t block = local_dfb_interface_.block_size;
+    local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].wr_ptr +=
+        local_dfb_interface_.stride_size * block;
     if (local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].wr_ptr >=
         local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].limit) {
         local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].wr_ptr =
             local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].base_addr;
     }
-    ptiles_read_++;
+    ptiles_read_ += block;
     if (ptiles_read_ % local_dfb_interface_.num_entries_per_txn_id == 0) {
         ptxn_id_index_ = (ptxn_id_index_ + 1) % local_dfb_interface_.num_txn_ids;
         ptxn_id_loop_cnt_++;
     }
-    // BLOCKED: keep a whole block (block_size entries) in one sub-ring; only round-robin to the next
-    // sub-ring at a block boundary. block_size==1 (non-BLOCKED) advances every entry, as before.
-    if (ptiles_read_ % local_dfb_interface_.block_size == 0) {
-        local_dfb_interface_.tc_idx = (local_dfb_interface_.tc_idx + 1) % local_dfb_interface_.num_tcs_to_rr;
-    }
+    local_dfb_interface_.tc_idx = (local_dfb_interface_.tc_idx + 1) % local_dfb_interface_.num_tcs_to_rr;
 }
 
 // Preamble for implicit-sync write: spin until previous writes are acked and data is available in the tile counters.
@@ -560,29 +569,31 @@ inline uint32_t DataflowBuffer::prepare_implicit_write() {
     while (static_cast<int16_t>(
         static_cast<uint16_t>(overlay::fast_llk_intf_read_acked(tensix_id, tc_id)) -
         static_cast<uint16_t>(ctxn_id_loop_cnt_ * local_dfb_interface_.num_entries_per_txn_id_per_tc)) < 0);
-    while (overlay::fast_llk_intf_get_occupancy(tensix_id, tc_id) < 1);
+    // A transaction drains `block_size` entries, so wait until that many are available.
+    // This is 1 by default in the non-blocked case.
+    while (overlay::fast_llk_intf_get_occupancy(tensix_id, tc_id) < local_dfb_interface_.block_size);
     WAYPOINT("PIWD");
     return txn_id;
 }
 
 // Postamble for implicit-sync write: advance rd_ptr, tile/txn counters, and tc_idx.
 inline void DataflowBuffer::commit_implicit_write() {
-    local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].rd_ptr += local_dfb_interface_.stride_size;
+    // Runs once per transaction, which drains `block` entries, so advance by that much.
+    // This is 1 by default in the non-blocked case.
+    const uint32_t block = local_dfb_interface_.block_size;
+    local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].rd_ptr +=
+        local_dfb_interface_.stride_size * block;
     if (local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].rd_ptr >=
         local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].limit) {
         local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].rd_ptr =
             local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].base_addr;
     }
-    ctiles_written_++;
+    ctiles_written_ += block;
     if (ctiles_written_ % local_dfb_interface_.num_entries_per_txn_id == 0) {
         ctxn_id_index_ = (ctxn_id_index_ + 1) % local_dfb_interface_.num_txn_ids;
         ctxn_id_loop_cnt_++;
     }
-    // BLOCKED: drain a whole block (block_size entries) from one sub-ring before round-robining to the
-    // next; only advance tc_idx at a block boundary. block_size==1 (non-BLOCKED) advances every entry.
-    if (ctiles_written_ % local_dfb_interface_.block_size == 0) {
-        local_dfb_interface_.tc_idx = (local_dfb_interface_.tc_idx + 1) % local_dfb_interface_.num_tcs_to_rr;
-    }
+    local_dfb_interface_.tc_idx = (local_dfb_interface_.tc_idx + 1) % local_dfb_interface_.num_tcs_to_rr;
 }
 
 // Out-of-line definitions of Noc DFB-specific implicit-sync overloads.
@@ -603,12 +614,13 @@ Noc::async_read(
     uint32_t txn_id = dst.prepare_implicit_read();
     noc_async_read_set_trid(txn_id, noc_id_);
     while (noc_available_transactions(noc_id_, txn_id) < ((NOC_MAX_TRANSACTION_ID_COUNT + 1) / 2));
-    // DPRINT("Issue the read\n");
+    // Move a whole block in one NOC transaction.
+    // A block is size 1 in the non-blocked case.
     noc_async_read<NOC_MAX_BURST_SIZE + 1, true>(
         get_src_ptr<AddressType::NOC>(src, src_args),
         // Use cached addresses for NOC APIs
         dst.get_noc_write_addr(),
-        dst.get_entry_size(),
+        dst.get_entry_size() * dst.get_entries_per_txn(),
         noc_id_,
         NOC_UNICAST_WRITE_VC);
     dst.commit_implicit_read();
@@ -628,15 +640,18 @@ Noc::async_write(
     // Use cached addresses for NOC APIs
     auto src_addr = src.get_noc_read_addr();
     auto dst_noc_addr = get_dst_ptr<AddressType::NOC>(dst, dst_args);
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID, src_addr, dst_noc_addr, size_bytes, -1, posted, noc_id_);
-    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_id_, dst_noc_addr, src_addr, src.get_entry_size());
+    // Drain a whole block in one transaction.
+    // A block is size 1 in the non-blocked case.
+    const uint32_t txn_bytes = src.get_entry_size() * src.get_entries_per_txn();
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID, src_addr, dst_noc_addr, txn_bytes, -1, false, noc_id_);
+    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_id_, dst_noc_addr, src_addr, txn_bytes);
     // DPRINT("Issue the write\n");
     ncrisc_noc_fast_write_any_len<noc_mode, true, /*one_packet*/false>(
         noc_id_,
         write_cmd_buf,
         src_addr,
         dst_noc_addr,
-        src.get_entry_size(),
+        txn_bytes,
         NOC_UNICAST_WRITE_VC,
         false,   // mcast
         false,   // linked

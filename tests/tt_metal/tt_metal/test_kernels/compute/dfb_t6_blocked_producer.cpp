@@ -2,20 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Metal 2.0 (declarative API) Tensix-side BLOCKED producer (TRISC → DFB → DM case).
-//
-// Parallel to dfb_t6_producer_2_0.cpp, but posts credits at BLOCKED granularity:
-// reserve_back(block_size) / push_back(block_size) once per block instead of per
-// tile. As with the STRIDED Tensix producer, TRISC compute kernels can't NoC-read
-// from DRAM in this test setup, so the host pre-fills the DFB's L1 ring before the
-// program launches; this kernel only posts the credits the downstream DM consumer
-// waits on. The block-ness here is purely the credit cadence (block_size at a time);
-// the per-thread contiguous sub-ring layout is set up host-side (stride_in_entries=1).
-//
-// Bindings/CTAs (set by host KernelSpec):
-//   dfb::out                  — PRODUCER
-//   num_entries_per_producer  — total entries this thread produces
-//   block_size                — tiles per block
+// Metal 2.0 (declarative API) Tensix-side BLOCKED producer (TRISC -> DFB -> DM).
+// Parallel to dfb_t6_producer_2_0.cpp, but posts credits a block at a time. TRISC kernels
+// can't NoC-read DRAM in this setup, so the host pre-fills the ring and this kernel only
+// posts the credits the DM consumer waits on.
 
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/compute/common.h"

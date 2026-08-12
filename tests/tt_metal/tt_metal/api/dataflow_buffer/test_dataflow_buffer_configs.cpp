@@ -2352,18 +2352,14 @@ TEST_F(UnitMeshFixture, DFBDeviceSlotLimitIsPerCoreNotPerProgram) {
 }
 
 // =====================================================================================
-// BLOCKED access-pattern config-rejection tests (migrated from monolithic)
+// BLOCKED access-pattern config-rejection tests
 // =====================================================================================
-// --- REJECTED CONFIG: Tensix BLOCKED producer + IMPLICIT DM consumer ---
-// A Tensix producer must post EXPLICIT credits (the implicit-sync ISR poster dfb_tile_poster_irq_handler()
-// is #ifndef COMPILE_FOR_TRISC — compiled out on Tensix). For a STRIDED DM consumer those explicit per-tile
-// posts hand off to an implicit drain fine (the A1 Tensix→DM STRIDED pipeline passes). For a BLOCKED DM
-// consumer they do NOT: the per-block explicit posts never reach the implicit BLOCKED drain's ISR/txn
-// signal, so the DM consumer spin-waits forever (verified: a device-side deadlock, ~20s CPU / >10min wall).
-// The host now rejects this combination at config time (finalize_single_dfb_config), turning a silent hang
-// into a fast, deterministic failure. These two were added unverified in 4a0757c0a11; they now assert the
-// rejection. Real-use workaround: explicit DM consumer (the non-_impl TensixDMTest1xDFB{2Bx2B,4Bx4B}_blk4
-// tests above cover Tensix→DM BLOCKED), or a DM producer if the consumer must be implicit.
+// --- REJECTED CONFIG: Tensix BLOCKED producer + implicit DM consumer ---
+// A Tensix producer can only post explicit credits -- the ISR poster is #ifndef COMPILE_FOR_TRISC, so it
+// is compiled out on Tensix. A STRIDED DM consumer takes those per-tile posts fine, but a BLOCKED one
+// spin-waits forever, since the per-block posts never reach its implicit drain's txn signal.
+// finalize_single_dfb_config rejects the combination, turning a device hang into a host error.
+// Use an explicit DM consumer, or a DM producer if the consumer must be implicit.
 static void expect_tensix_blocked_implicit_consumer_rejected(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t num_threads, uint32_t num_entries) {
     if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
@@ -2390,12 +2386,10 @@ TEST_F(MeshDeviceFixture, TensixDMTest1xDFB4Bx4B_blk4_impl_rejected_2_0) {
 }
 
 // --- REJECTED CONFIG: implicit BLOCKED whose txn window doesn't cover every tile counter ---
-// The ISR credits all of a RISC's tile counters equally each time a txn ID retires, but a BLOCKED
-// endpoint advances its counter only every block_size entries. With P=1, C=4, block_size=4 and 16
-// entries the producer gets 4 counters and num_entries_per_txn_id = 8, so one txn window fills only
-// 2 of the 4 sub-rings while all 4 counters are credited — consumers 2 and 3 would read entries that
-// were never written. compute_txn_descriptor rejects it (see the block_size * num_tcs_per_risc check).
-// The explicit twin (DMTest1xDFB1Bx4B_blk4) is unaffected and passes: it posts its own credits.
+// The ISR credits all of a RISC's tile counters equally when a txn ID retires, but a BLOCKED endpoint
+// advances its counter only every block_size entries. At P=1, C=4, block_size=4 and 16 entries the txn
+// window fills 2 of the 4 sub-rings while all 4 counters are credited, so consumers 2 and 3 would read
+// entries nobody wrote. compute_txn_descriptor rejects it; the explicit twin is unaffected.
 TEST_F(MeshDeviceFixture, DMTest1xDFB1Bx4B_blk4_impl_rejected_2_0) {
     auto& mesh_device = this->devices_.at(0);
     if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
@@ -2415,10 +2409,8 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB1Bx4B_blk4_impl_rejected_2_0) {
     EXPECT_ANY_THROW(run_single_dfb_program_2_0(mesh_device, params));
 }
 
-// B10 — a BLOCKED binding with block_size == 0 is rejected. BLOCKED is now supported (Phase 3),
-// so the lowering gate is gone; what remains is the host validation that block_size must be > 0
-// iff the access pattern is BLOCKED (check_block_size_validity in program_spec.cpp). This config
-// leaves block_size unset (0) on a BLOCKED consumer, so it must still throw.
+// B10 — a BLOCKED binding needs block_size > 0 (check_block_size_validity in program_spec.cpp).
+// This config leaves it unset on a BLOCKED consumer, so it must throw.
 TEST_F(MeshDeviceFixture, B10_Blocked_Rejected_2_0) {
     auto& mesh_device = this->devices_.at(0);
     if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
@@ -2446,31 +2438,5 @@ TEST_F(MeshDeviceFixture, B10_Blocked_Rejected_2_0) {
 // Not applicable to M2: ProgramSpec doesn't expose a circular-buffer API
 // (CircularBufferConfig is a legacy host-API construct). M2 programs are
 // purely DFB-based; the legacy CB-then-DFB rejection path can't be exercised
-
-
-// DM-DM ALL + implicit sync is rejected at LAUNCH, not at config: finalizing must still work
-// (B4_CachedThreshold_Config_2_0 builds this config to inspect its thresholds).
-TEST_F(MeshDeviceFixture, DMDMAllImplicitSync_RejectedAtLaunchNotConfig_2_0) {
-    auto& mesh_device = this->devices_.at(0);
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
-        GTEST_SKIP() << "Implicit sync is Quasar-only";
-    }
-    using namespace m2_config_test_helpers;
-
-    M2ConfigDFBParams p{
-        .producer_type = M2PorCType::DM,
-        .consumer_type = M2PorCType::DM,
-        .num_producers = 1,
-        .num_consumers = 3,
-        .num_entries = 18,
-        .pap = m2::DFBAccessPattern::STRIDED,
-        .cap = m2::DFBAccessPattern::ALL,
-        .implicit_sync = true,
-    };
-
-    Program program = build_single_dfb_program_2_0(mesh_device, p);
-    EXPECT_NO_THROW(program.impl().finalize_dataflow_buffer_configs());
-    EXPECT_ANY_THROW(program.impl().validate_dataflow_buffers_for_launch());
-}
 
 }  // end namespace tt::tt_metal

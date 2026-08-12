@@ -426,6 +426,59 @@ void verify_dfb_global_header_participation(
     }
 }
 
+// Entries one side moves per NoC transaction: block_size when that side is BLOCKED and its entries are
+// adjacent in L1 (stride_in_entries == 1), else 1. A transaction covers one contiguous byte range, so an
+// interleaved STRIDED ring can only move one entry at a time.
+static uint32_t dfb_side_block_entries(
+    uint32_t stride_in_entries, ::dfb::AccessPattern side_pattern, uint32_t side_block_size) {
+    if (stride_in_entries != 1) {
+        return 1u;
+    }
+    if (side_pattern != ::dfb::AccessPattern::BLOCKED) {
+        return 1u;
+    }
+    return std::max<uint32_t>(side_block_size, 1u);
+}
+
+// Reject a block too big for one NoC packet: it would split into several, each acking separately, and
+// the ISR would fire early. Only applies to a side that batches.
+static void validate_implicit_burst_fits_one_packet(const DataflowBufferImpl& dfb) {
+    if (!MetalContext::instance().hal().has_tile_counter_registers()) {
+        return;
+    }
+    const DataflowBufferConfig& config = dfb.config;
+    if (!config.enable_producer_implicit_sync && !config.enable_consumer_implicit_sync) {
+        return;
+    }
+    constexpr uint32_t kNocMaxBurstBytes = 65536;  // Quasar: NOC_MAX_BURST_WORDS 256 * NOC_WORD_BYTES 256
+    const uint32_t prod_burst =
+        dfb_side_block_entries(dfb.stride_in_entries, config.pap, config.producer_block_size);
+    const uint32_t cons_burst =
+        dfb_side_block_entries(dfb.stride_in_entries, config.cap, config.consumer_block_size);
+    if (config.enable_producer_implicit_sync && prod_burst > 1) {
+        TT_FATAL(
+            prod_burst * config.entry_size <= kNocMaxBurstBytes,
+            "DFB {}: implicit-sync BLOCKED producer requires block_size * entry_size <= {} bytes (one NoC "
+            "packet); got {} B ({} x {}). Use explicit sync for larger blocks.",
+            dfb.id,
+            kNocMaxBurstBytes,
+            prod_burst * config.entry_size,
+            prod_burst,
+            config.entry_size);
+    }
+    if (config.enable_consumer_implicit_sync && cons_burst > 1) {
+        TT_FATAL(
+            cons_burst * config.entry_size <= kNocMaxBurstBytes,
+            "DFB {}: implicit-sync BLOCKED consumer requires block_size * entry_size <= {} bytes (one NoC "
+            "packet); got {} B ({} x {}). Use explicit sync for larger blocks.",
+            dfb.id,
+            kNocMaxBurstBytes,
+            cons_burst * config.entry_size,
+            cons_burst,
+            config.entry_size);
+    }
+}
+
 size_t serialize_dfb_config_for_core(
     const CoreCoord& core,
     const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core,
@@ -657,17 +710,13 @@ size_t serialize_dfb_config_for_core(
             entry.logical_dfb_id = dfb_narrow_field<uint8_t>(dfb->device_slot, dfb->id, "logical_dfb_id");
             entry.num_tcs        = num_tcs;
             entry._reserved0 = 0;
-            // BLOCKED block size for this hart's side; 1 when the ring is not BLOCKED so the device
-            // assigns iface.block_size unconditionally. Byte 28 of the 32B header.
-            entry.dm_block_size =
-                (dfb->config.cap == ::dfb::AccessPattern::BLOCKED)
-                    ? dfb_narrow_field<uint16_t>(
-                          std::max<uint32_t>(
-                              rc.is_producer ? dfb->config.producer_block_size : dfb->config.consumer_block_size,
-                              1u),
-                          dfb->id,
-                          "block_size")
-                    : uint16_t{1};
+            entry.dm_block_size = dfb_narrow_field<uint16_t>(
+                dfb_side_block_entries(
+                    dfb->stride_in_entries,
+                    rc.is_producer ? dfb->config.pap : dfb->config.cap,
+                    rc.is_producer ? dfb->config.producer_block_size : dfb->config.consumer_block_size),
+                dfb->id,
+                "block_size");
             entry.capacity = rc.is_producer ? dfb_narrow_field<uint16_t>(dfb->capacity, dfb->id, "capacity")
                                             : static_cast<uint16_t>(0);
             entry.entry_size = dfb->config.entry_size;
@@ -722,6 +771,7 @@ size_t serialize_dfb_config_for_core(
             entry.intra_shadow_tc_id = (dfb->remapper_programmer == RemapperProgrammer::TENSIX_PACKER && rc.is_producer)
                                            ? rc.config.intra_shadow_tc_id
                                            : 0xFFu;
+
             // Zero the full entry region first (covers padding between packed_tc and next 4B boundary).
             std::memset(out.data() + offset, 0, entry_sz);
 
@@ -1094,12 +1144,20 @@ static dfb_txn_id_descriptor_t compute_txn_descriptor(
         num_entries,
         required_divisor);
 
-    // threshold is the number of transactions that each txn ID needs to process before posting/acking
+    // Threshold counts transactions, credits count entries, so only the threshold scales by block_size.
     // for reads the transaction needs to be committed to dst, for writes the transaction needs to be sent out
-    // threshold / per_txn are uint8_t in the device blob. Compute wide first and reject an overflow
-    // rather than truncating: a truncated-to-zero threshold makes the ISR never fire.
+    // threshold / per_txn are uint8_t on the device, so compute them in 32 bits and reject values that do
+    // not fit rather than letting the cast truncate: a threshold truncated to zero never fires the ISR.
     const uint32_t wide_per_txn = num_entries / num_txn_ids;
-    const uint32_t wide_threshold = consumes_all ? (num_prods_or_cons * wide_per_txn) : wide_per_txn;
+    const uint32_t wide_entry_threshold = consumes_all ? (num_prods_or_cons * wide_per_txn) : wide_per_txn;
+    TT_FATAL(
+        wide_entry_threshold % block_size == 0,
+        "Implicit-sync BLOCKED DFB: entries per txn ID {} must be divisible by block_size {}. Each NoC "
+        "transaction retires a whole block, so the transaction threshold is (entries per txn ID) / "
+        "block_size; an inexact division would make the ISR fire early or never.",
+        wide_entry_threshold,
+        block_size);
+    const uint32_t wide_threshold = wide_entry_threshold / block_size;
     TT_FATAL(
         wide_threshold <= 0xFFu && wide_per_txn <= 0xFFu,
         "Implicit-sync DFB descriptor overflow: threshold {} / per_txn {} exceed uint8_t (num_entries {}, "
@@ -1110,23 +1168,21 @@ static dfb_txn_id_descriptor_t compute_txn_descriptor(
         num_txn_ids,
         num_prods_or_cons);
 
-    uint8_t threshold;
+    uint8_t threshold = static_cast<uint8_t>(wide_threshold);
     uint8_t per_txn;
     if (consumes_all) {
         // wr_sent is a global counter shared across all DMs. Each of the num_consumers DMs writes
         // per_txn entries per txn_id, so the ISR must not fire until all consumers have finished
-        // their batch: threshold = num_consumers × per_txn.
-        per_txn = static_cast<uint8_t>(num_entries / num_txn_ids);
-        threshold = static_cast<uint8_t>(num_prods_or_cons * per_txn);
+        // their batch: the entry-domain threshold is num_consumers × per_txn (scaled by block_size above).
+        per_txn = static_cast<uint8_t>(wide_per_txn);
     } else {
-        threshold = static_cast<uint8_t>(num_entries / num_txn_ids);
         // Defensive assertion — guaranteed by the upfront check above.
         TT_FATAL(
-            threshold % num_prods_or_cons == 0,
+            wide_entry_threshold % num_prods_or_cons == 0,
             "num_entries_to_process_threshold {} must be divisible by num_prods_or_cons {}",
-            threshold,
+            wide_entry_threshold,
             num_prods_or_cons);
-        per_txn = threshold / num_prods_or_cons;
+        per_txn = static_cast<uint8_t>(wide_entry_threshold / num_prods_or_cons);
     }
 
     TT_FATAL(
@@ -1136,12 +1192,9 @@ static dfb_txn_id_descriptor_t compute_txn_descriptor(
         num_tcs_per_risc);
     uint8_t per_txn_per_tc = per_txn / num_tcs_per_risc;
 
-    // When a transaction ID retires, the ISR posts per_txn_per_tc credits to EVERY tile counter this
-    // RISC round-robins over, so a txn's entries must spread evenly across them. A BLOCKED side
-    // advances its counter only every block_size entries, so its entries cycle with period
-    // block_size * num_tcs_per_risc; the spread is even only when that period divides per_txn.
-    // Otherwise trailing counters are credited for entries never written and consumers read stale L1.
-    if (block_size > 1 && num_tcs_per_risc > 1) {
+    // A batching side moves entries block_size at a time, so per_txn has to be a whole number of blocks
+    // across its TCs. Otherwise the trid rotates late and some TCs get credits for unwritten entries.
+    if (block_size > 1) {
         TT_FATAL(
             per_txn % (block_size * num_tcs_per_risc) == 0,
             "BLOCKED DFB with implicit sync: num_entries_per_txn_id {} must be divisible by block_size * "
@@ -1218,8 +1271,7 @@ static std::pair<uint16_t, uint32_t> compute_capacity_and_stride(const DataflowB
                 dfb.id,
                 config.num_entries,
                 std::max(config.num_producers, config.num_consumers));
-            // A BLOCKED producer feeding a STRIDED consumer must still tile its sub-ring, or the
-            // kernel's num_blocks = entries_per_producer / block_size truncates the last partial block.
+            // A BLOCKED producer needs whole blocks, or its last partial block is dropped.
             if (config.producer_block_size > 0) {
                 TT_FATAL(
                     config.num_entries % (config.producer_block_size * config.num_producers) == 0,
@@ -1256,12 +1308,8 @@ static std::pair<uint16_t, uint32_t> compute_capacity_and_stride(const DataflowB
             stride_in_entries = 1;
             break;
         case ::dfb::AccessPattern::BLOCKED: {
-            // BLOCKED uses stride_in_entries = 1: the ring is partitioned into max(P,C) CONTIGUOUS
-            // sub-rings of `capacity` entries. The block-ness lives in the kernel, which moves
-            // block_size contiguous entries and posts/waits block_size credits at a time -- valid
-            // precisely because each block is contiguous within a sub-ring. Asymmetric P != C is
-            // supported; the per-thread tile-counter round-robin fans blocks across the unequal side
-            // exactly as STRIDED does.
+            // Stride 1: the ring splits into max(P,C) contiguous sub-rings, so each thread's block is
+            // contiguous and can move in one transaction. Asymmetric P != C works as it does for STRIDED.
             const uint32_t threads = std::max(config.num_producers, config.num_consumers);
             const uint32_t block = std::max<uint32_t>(config.consumer_block_size, 1u);
             const uint32_t pblock = std::max<uint32_t>(config.producer_block_size, 1u);
@@ -1367,12 +1415,10 @@ static void validate_ring_extent(const DataflowBufferImpl& dfb) {
 static dfb_txn_id_descriptor_t make_txn_descriptor(
     const DataflowBufferImpl& dfb, bool is_producer, const std::vector<uint8_t>& txn_ids, uint8_t num_tcs) {
     const DataflowBufferConfig& config = dfb.config;
-    // Per-block counter cadence only when the ring itself is BLOCKED; a BLOCKED endpoint on a
-    // STRIDED/ALL ring keeps per-entry cadence (effective block size 1).
-    const uint32_t effective_block_size =
-        config.cap == ::dfb::AccessPattern::BLOCKED
-            ? std::max<uint32_t>(is_producer ? config.producer_block_size : config.consumer_block_size, 1u)
-            : 1u;
+    const uint32_t effective_block_size = dfb_side_block_entries(
+        dfb.stride_in_entries,
+        is_producer ? config.pap : config.cap,
+        is_producer ? config.producer_block_size : config.consumer_block_size);
     return compute_txn_descriptor(
         config.num_entries,
         config.num_producers,
@@ -1540,6 +1586,9 @@ void DataflowBufferImpl::update_size(std::optional<uint32_t> new_entry_size, std
 
     std::tie(capacity, stride_in_entries) = compute_capacity_and_stride(*this);
     validate_ring_extent(*this);
+    // The override may have raised block_size * entry_size past one NoC packet; the txn descriptors
+    // recomputed below scale their ack threshold assuming exactly one ack per block.
+    validate_implicit_burst_fits_one_packet(*this);
 
     if (configs_finalized && MetalContext::instance(context_id_).hal().has_tile_counter_registers()) {
         const bool producer_is_tensix_only =
@@ -1954,8 +2003,7 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
             dfb->stride_in_entries = 1;
             break;
         case dfb::AccessPattern::BLOCKED: {
-            // Mirrors compute_capacity_and_stride: contiguous sub-rings (stride 1), each holding a
-            // whole number of blocks for both sides' block_size.
+            // Each thread gets its own contiguous sub-ring, and it must hold whole blocks.
             const uint32_t threads = std::max(config.num_producers, config.num_consumers);
             const uint32_t block = std::max<uint32_t>(config.consumer_block_size, 1u);
             const uint32_t pblock = std::max<uint32_t>(config.producer_block_size, 1u);
@@ -2206,8 +2254,8 @@ void ProgramImpl::finalize_single_dfb_config(
             "(different Neos). Un-scoped Tensix-to-Tensix DFBs are not allowed.");
     }
 
-    // A Tensix producer must post EXPLICIT credits (the implicit-sync ISR poster is DM-only,
-    // #ifndef COMPILE_FOR_TRISC). For a BLOCKED DM consumer those per-block posts never reach the
+    // A Tensix producer must post EXPLICIT credits (the implicit-sync ISR poster is DM-only. 
+    //For a BLOCKED DM consumer those per-block posts never reach the
     // implicit drain, so the consumer deadlocks. Reject at config time.
     if (producer_is_tensix_only && config.cap == ::dfb::AccessPattern::BLOCKED) {
         TT_FATAL(
@@ -2218,8 +2266,7 @@ void ProgramImpl::finalize_single_dfb_config(
             dfb->id);
     }
 
-    // The device blob stores each side's block_size in a uint8_t; >= 256 would truncate silently and
-    // corrupt the credit cadence (a truncation to 0 makes the device's `% block_size` degenerate).
+    // The device blob stores each side's block_size in a uint16_t; >= 65536 would truncate silently.
     TT_FATAL(
         config.producer_block_size <= 0xFFFFu && config.consumer_block_size <= 0xFFFFu,
         "DFB {}: block_size must be <= 65535 to fit the device config blob (uint16_t); got producer_block_size={}, "
@@ -2227,6 +2274,8 @@ void ProgramImpl::finalize_single_dfb_config(
         dfb->id,
         config.producer_block_size,
         config.consumer_block_size);
+
+    validate_implicit_burst_fits_one_packet(*dfb);
 
     // TRISC pack/unpack store ring extent in uint32_t L1-aligned units; host rejects rings > L1 / uint32.
     validate_ring_extent(*dfb);
@@ -2634,10 +2683,8 @@ void ProgramImpl::finalize_single_dfb_config(
                 config.num_entries, config.num_producers, num_producer_tcs,
                 /*consumes_all=*/false);
             auto producer_txn_ids = txn_id_allocator_.allocate(num_prod_txn_ids);
-            // Per-block counter cadence only when the ring itself is BLOCKED.
-            const uint32_t producer_block_size = config.cap == ::dfb::AccessPattern::BLOCKED
-                                                     ? std::max<uint32_t>(config.producer_block_size, 1u)
-                                                     : 1u;
+            const uint32_t producer_block_size =
+                dfb_side_block_entries(dfb->stride_in_entries, config.pap, config.producer_block_size);
             dfb->producer_txn_descriptor = compute_txn_descriptor(
                 config.num_entries,
                 config.num_producers,
@@ -2663,9 +2710,8 @@ void ProgramImpl::finalize_single_dfb_config(
                 config.num_entries, config.num_consumers, num_consumer_tcs,
                 /*consumes_all=*/consumes_all);
             auto consumer_txn_ids = txn_id_allocator_.allocate(num_cons_txn_ids);
-            const uint32_t consumer_block_size = config.cap == ::dfb::AccessPattern::BLOCKED
-                                                     ? std::max<uint32_t>(config.consumer_block_size, 1u)
-                                                     : 1u;
+            const uint32_t consumer_block_size =
+                dfb_side_block_entries(dfb->stride_in_entries, config.cap, config.consumer_block_size);
             dfb->consumer_txn_descriptor = compute_txn_descriptor(
                 config.num_entries,
                 config.num_producers,
@@ -2706,35 +2752,6 @@ void ProgramImpl::invalidate_dataflow_buffer_allocation() {
         dfb_allocator.reset_available_addresses();
     }
     this->local_dataflow_buffer_allocation_needed_ = true;
-}
-
-void ProgramImpl::validate_dataflow_buffers_for_launch() const {
-    // Gen2-only: on Gen1 a DFB lowers to a circular buffer with no broadcast_tc path and no
-    // implicit-sync ISR, so these combinations are legitimate there. This gate is load-bearing --
-    // finalize_dataflow_buffer_configs() used to provide it implicitly by returning early for Gen1
-    // before reaching finalize_single_dfb_config, where this check used to live. LaunchProgram runs
-    // on every arch, so the gate has to be explicit here.
-    if (!MetalContext::instance().hal().has_tile_counter_registers()) {
-        return;
-    }
-    for (const auto& dfb : this->dataflow_buffers_) {
-        const auto& config = dfb->config;
-        // DM-DM ALL posts one broadcast count to every consumer TC, but the implicit-sync ISR
-        // round-robins one TC per entry, so credits are mis-accounted and the consumer hangs.
-        // Checked at launch, not at finalize: a config that is built but never launched cannot
-        // hang, and many tests finalize to inspect descriptors without ever running.
-        const bool producer_is_tensix_only =
-            !has_dm_risc(config.producer_risc_mask) && has_tensix_risc(config.producer_risc_mask);
-        const bool consumer_is_tensix_only =
-            !has_dm_risc(config.consumer_risc_mask) && has_tensix_risc(config.consumer_risc_mask);
-        const bool dm_dm_all =
-            (config.cap == dfb::AccessPattern::ALL) && !producer_is_tensix_only && !consumer_is_tensix_only;
-        TT_FATAL(
-            !(dm_dm_all && (config.enable_producer_implicit_sync || config.enable_consumer_implicit_sync)),
-            "DFB {}: DM-DM ALL does not support implicit sync (the broadcast credit path is "
-            "broadcast-unaware); use explicit sync.",
-            dfb->id);
-    }
 }
 
 // Same as allocate_circular_buffers

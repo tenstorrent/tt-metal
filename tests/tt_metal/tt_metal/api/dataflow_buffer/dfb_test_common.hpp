@@ -272,10 +272,8 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
     const bool is_all = (p.cap == m2::DFBAccessPattern::ALL);
     const bool producer_blocked = (p.pap == m2::DFBAccessPattern::BLOCKED);
     const bool consumer_blocked = (p.cap == m2::DFBAccessPattern::BLOCKED);
-    // BLOCKED-producer -> STRIDED-consumer: reads block-contiguous DRAM but pushes per-tile so the
-    // STRIDED round-robin scatters each tile into the consumer's interleaved slot. DM uses
-    // dfb_blocked_strided_producer; Tensix reuses the plain per-tile producer (its block-ness was
-    // only credit cadence over a host-flat-prefilled ring).
+    // BLOCKED→STRIDED reads block-contiguous DRAM but pushes per tile, so the round-robin can scatter
+    // each tile into the right consumer's interleaved slot.
     const bool blocked_to_strided = producer_blocked && (p.cap == m2::DFBAccessPattern::STRIDED);
 
     const m2::DFBSpecName DFB{"dfb"};
@@ -325,8 +323,7 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
         // BLOCKED posts credits block_size-at-a-time (host pre-fills the L1 ring either way).
         producer = make_compute_kernel(
             PRODUCER,
-            // BLOCKED->STRIDED: a Tensix producer only posts credits over the host-flat-prefilled ring,
-            // and a STRIDED consumer needs per-tile credits, so reuse the plain per-tile Tensix producer.
+            // A STRIDED consumer needs per-tile credits, so reuse the plain per-tile Tensix producer.
             (producer_blocked && !blocked_to_strided)
                 ? "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_blocked_producer.cpp"
                 : "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_producer_2_0.cpp",
@@ -338,8 +335,7 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
          .endpoint_type = m2::DFBEndpointType::PRODUCER,
          .access_pattern = p.pap,
          .block_size = producer_blocked ? p.block_size : 0u}};
-    // BLOCKED uses dedicated kernels with a block_size CTA. They support both sync modes:
-    // explicit = one NoC burst per block; implicit = one TXN_ID transfer per tile (single-entry).
+    // BLOCKED uses dedicated kernels with a block_size CTA, in both sync modes.
     if (producer_blocked) {
         producer.compile_time_args = {
             {"num_entries_per_producer", num_entries_per_producer},
@@ -359,8 +355,7 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
                              : "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer_2_0.cpp",
             p.num_consumers);
         consumer.tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}};
-        // BLOCKED uses the dedicated kernel (explicit burst or implicit per-tile) with a block_size CTA.
-        // The legacy "blocked_consumer" CTA is the ALL-pattern contiguous flag, unrelated to BLOCKED.
+        // The legacy "blocked_consumer" CTA below is the ALL-pattern contiguous flag, not BLOCKED.
         if (consumer_blocked) {
             consumer.compile_time_args = {
                 {"num_entries_per_consumer", num_entries_per_consumer},
@@ -486,9 +481,8 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
     //            slot p*E + e for the drained order to reconstruct the identity output. A
     //            linear copy only works for a single producer; with P>1 it drains a P-way
     //            transpose of the input.
-    //   BLOCKED: a Tensix BLOCKED producer only posts credits over a FLAT ring (ring[s]=input[s]);
-    //            its BLOCKED goldens (incl. BLOCKED->ALL) assume the flat layout, so the ALL transpose
-    //            is gated off for a BLOCKED producer below.
+    //   BLOCKED: the ring is prefilled flat (ring[s]=input[s]), which every BLOCKED golden assumes, so
+    //            the ALL transpose is gated off for a BLOCKED producer below.
     if (p.producer_type == M2PorCType::TENSIX) {
         const uint32_t dfb_l1_addr =
             static_cast<uint32_t>(mesh_device.allocator()->get_base_allocator_addr(HalMemType::L1));
@@ -582,19 +576,12 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
         } else if (
             p.producer_type == M2PorCType::TENSIX && p.cap == m2::DFBAccessPattern::BLOCKED &&
             (p.num_consumers > 1 || p.num_producers > p.num_consumers)) {
-            // Tensix→DM BLOCKED (any integer-ratio thread counts): a permutation, NOT identity. A Tensix
-            // producer only posts credits over a host-prefilled FLAT ring (L1[k] = input[k]) — unlike a DM
-            // producer there is no block-strided DRAM read to cancel the consumer's de-interleave.
-            // cap=BLOCKED splits the ring into max(P,C) contiguous sub-rings of capacity=num_entries/max(P,C)
-            // (stride 1). Consumer c, tile-counter slot t reads sub-ring (t*C + c); for fan-in P>C each
-            // consumer round-robins ntc = P/C sub-rings per pop_front, else ntc = 1. Consumer c writes block
-            // b to out page (b*C + c)*block_size. General device map (symmetric, fan-out C>=P, fan-in P>C):
+            // Tensix→DM BLOCKED is a permutation, not identity: the producer only posts credits over a flat
+            // prefilled ring, so no block-strided DRAM read cancels the consumer's de-interleave. Consumer c
+            // writes its block b to out page (b*C + c)*bs, reading sub-ring (t*C + c):
             //   output[(b*C + c)*bs + j] = input[((b % ntc)*C + c)*capacity + (b / ntc)*bs + j]
-            //   capacity = num_entries/max(P,C),  ntc = (P>=C) ? P/C : 1.
-            // (N==1 symmetric degenerates to identity — handled by the else branch. For C>=P, ntc=1 and
-            // capacity=num_entries/C, recovering the simple c*capacity + b*bs + j form.) The guard includes
-            // num_producers>num_consumers so fan-in cases with C==1 reach this branch (not else-identity),
-            // and using max(P,C) is what makes 4Bx2B correct.
+            //   capacity = num_entries/max(P,C),  ntc = (P>=C) ? P/C : 1
+            // Degenerates to identity at P==C==1, which the else branch handles.
             const uint32_t wpe = p.entry_size / sizeof(uint32_t);
             const uint32_t P = p.num_producers;
             const uint32_t C = p.num_consumers;
@@ -612,9 +599,7 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
                     }
                 }
             }
-            // Diagnostic (mirrors the STRIDED branch): if it mismatches, map each output tile back to
-            // the input page that actually landed there, so a device-side credit/sub-ring surprise is
-            // debuggable (a deadlock would show up as a launch hang instead, pointing at credits/TCs).
+            // On mismatch, map each output tile back to the input page that actually landed there.
             if (expected != output) {
                 for (uint32_t t = 0; t < std::min<uint32_t>(entries_per_core, 16); ++t) {
                     int match = -1;
@@ -636,12 +621,10 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
         } else if (
             p.producer_type == M2PorCType::TENSIX && p.pap == m2::DFBAccessPattern::BLOCKED &&
             p.cap == m2::DFBAccessPattern::ALL) {
-            // Trisc→DM BLOCKED→ALL. A Tensix BLOCKED producer feeding a DM ALL consumer routes the credit
-            // fan-out through the REMAPPER (not broadcast_tc — that path needs a DM producer). The host
-            // pre-fills the ring FLAT (ring[s]=input[s]); the ALL consumer reads round-robin across the P
-            // producer sub-rings (out tile r ← ring slot (r%P)*capacity + (r/P), capacity=num_entries/P). So
-            // output[r] = input[(r%P)*capacity + (r/P)] — identity at P==1, block-size-independent (the
-            // consumer reads per-tile, the flat prefill carries no block order).
+            // Trisc→DM BLOCKED→ALL routes the fan-out through the remapper (broadcast_tc needs a DM
+            // producer). Over a flat prefilled ring the ALL consumer reads round-robin across the P producer
+            // sub-rings, so output[r] = input[(r%P)*capacity + (r/P)], capacity = num_entries/P.
+            // Identity at P==1, and block-size-independent since a flat prefill carries no block order.
             const uint32_t wpe = p.entry_size / sizeof(uint32_t);
             const uint32_t P = p.num_producers;
             const uint32_t capacity = p.num_entries / P;
@@ -671,15 +654,10 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
         } else if (
             p.producer_type == M2PorCType::DM && p.consumer_type == M2PorCType::DM &&
             p.pap == m2::DFBAccessPattern::BLOCKED && p.cap == m2::DFBAccessPattern::ALL) {
-            // BLOCKED-producer -> ALL-consumer (DM->DM). The producer block-bursts into its contiguous
-            // per-producer sub-ring (capacity = num_entries/P, stride_in_entries=1); the ALL consumer
-            // reads round-robin across the P producer sub-rings — the SAME de-interleave that makes
-            // STRIDED->ALL identity (out tile r reads ring slot (r%P)*capacity + (r/P)). For P==1 the
-            // round-trip is identity, but for P>1 the producer's per-BLOCK interleave does NOT cancel
-            // the consumer's per-TILE round-robin, so it is a permutation:
-            //   producer p, block b, offset j: input tile (b*P + p)*bs + j is written to ring slot
-            //     p*capacity + b*bs + j, which the consumer reads out to tile (b*bs + j)*P + p.
-            //   => output[(b*bs + j)*P + p] = input[(b*P + p)*bs + j]    (reduces to identity at P==1).
+            // DM→DM BLOCKED→ALL. The producer block-bursts into its own sub-ring; the ALL consumer reads
+            // round-robin across the P sub-rings. At P>1 the producer's per-block interleave doesn't cancel
+            // that per-tile round-robin, so it's a permutation:
+            //   output[(b*bs + j)*P + p] = input[(b*P + p)*bs + j]      (identity at P==1)
             const uint32_t wpe = p.entry_size / sizeof(uint32_t);
             const uint32_t P = p.num_producers;
             const uint32_t bs = p.block_size;
@@ -700,22 +678,18 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
         } else if (
             p.producer_type == M2PorCType::DM && p.consumer_type == M2PorCType::DM &&
             p.pap == m2::DFBAccessPattern::BLOCKED && p.cap == m2::DFBAccessPattern::STRIDED) {
-            // BLOCKED-producer -> STRIDED-consumer (DM->DM). The producer reads block_size contiguous DRAM
-            // pages per block (block order) but PUSHES PER-TILE, so the STRIDED round-robin hands tile i to
-            // the producer's TC slot t = i % ntc, whose paired consumer is c = (p + t*P) % C; that consumer
-            // reads its interleaved slots in order, writing its k-th received tile to out page k*C + c. The
-            // k-th tile producer p sends to slot t is local push i = t + k*ntc, reading DRAM page
-            // (i/bs * P + p)*bs + i%bs:
+            // DM→DM BLOCKED→STRIDED. The producer reads block-contiguous DRAM but pushes per tile, so the
+            // round-robin hands tile i to TC slot t = i % ntc, whose consumer c = (p + t*P) % C writes its
+            // k-th received tile to out page k*C + c. That k-th tile is local push i = t + k*ntc:
             //   output[k*C + c] = input[((t + k*ntc)/bs * P + p)*bs + (t + k*ntc)%bs]
-            // For P==1 (ntc=C, t=c) this collapses to identity; for P>1 it is a deterministic permutation.
+            // Identity at P==1, a permutation at P>1.
             const uint32_t wpe = p.entry_size / sizeof(uint32_t);
             const uint32_t P = p.num_producers;
             const uint32_t C = p.num_consumers;
             const uint32_t bs = p.block_size;
             std::vector<uint32_t> expected(input.size(), 0u);
             if (C >= P) {
-                // Fan-out: producer pp round-robins ntc = C/P consumer TCs (its push i -> slot t = i%ntc,
-                // consumer c = (pp + t*P)%C). Producer pp's k-th push to slot t is local push i = t + k*ntc.
+                // Fan-out: producer pp round-robins ntc = C/P TCs; its k-th push to slot t is push t + k*ntc.
                 const uint32_t epp = p.num_entries / P;  // entries per producer
                 const uint32_t ntc = C / P;
                 for (uint32_t pp = 0; pp < P; ++pp) {
@@ -734,9 +708,8 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
                     }
                 }
             } else {
-                // Fan-in (P>C): each producer has 1 TC -> feeds consumer (pp%C); consumer c is fed by the
-                // ntc_c = P/C producers {c, c+C, ...} via ntc_c TCs, read round-robin. Consumer c's read m
-                // takes TC t = m%ntc_c -> producer pp = c + t*C, that producer's (m/ntc_c)-th push.
+                // Fan-in: consumer c is fed round-robin by the P/C producers {c, c+C, ...}, so its read m
+                // comes from producer c + (m%ntc_c)*C, that producer's (m/ntc_c)-th push.
                 const uint32_t ntc_c = P / C;
                 for (uint32_t c = 0; c < C; ++c) {
                     for (uint32_t m = 0; m < p.num_entries / C; ++m) {
@@ -771,16 +744,9 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
         } else if (
             p.producer_type == M2PorCType::TENSIX && p.consumer_type == M2PorCType::DM &&
             p.pap == m2::DFBAccessPattern::BLOCKED && p.cap == m2::DFBAccessPattern::STRIDED) {
-            // Trisc→DM BLOCKED→STRIDED is IDENTITY for ALL P/C. The Tensix producer flat-prefills the ring
-            // (ring[s]=input[s]) — it never scatters. The DM STRIDED consumer (dfb_consumer_2_0.cpp) reads its
-            // tiles with stride = num_consumers (C) and writes them back with that SAME stride
-            // (page = tile_id*C + consumer_idx), so over a flat ring the read-stride and write-stride cancel
-            // and the round-trip is identity regardless of the P:C ratio.
-            // (Confirmed: DM→DM 4Bx2S — same C=2 consumer routing — passes with its scatter-composed
-            // permutation golden, proving the consumer de-interleave is correct on this build; Trisc→DM differs
-            // only by the flat prefill, which yields identity.)
-            // NOTE: an earlier C<P "stride=P round-robin" permutation golden here was WRONG — the consumer
-            // strides by C (num_consumers), not P. It only ever affected P>C,C>1 (the lone 4Bx2S case).
+            // Trisc→DM BLOCKED→STRIDED is identity for every P/C: the Tensix producer flat-prefills the ring
+            // and never scatters, and the DM STRIDED consumer reads with stride C and writes back with that
+            // same stride (page = tile_id*C + consumer_idx), so the two cancel.
             const uint32_t wpe = p.entry_size / sizeof(uint32_t);
             const uint32_t P = p.num_producers;
             const uint32_t C = p.num_consumers;
@@ -871,7 +837,7 @@ inline void run_a1_blocked_pipeline(
     producer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
 
     // Middle: single Tensix thread consumes DFB_IN (cap_in) and copies through to DFB_OUT (STRIDED).
-    // dfb_eltwise_copy is pattern-agnostic (per-tile wait_front/copy_tile/pack_tile/pop_front) — no edit.
+    // dfb_eltwise_copy is pattern-agnostic (per-tile wait_front/copy_tile/pack_tile/pop_front).
     auto compute =
         make_compute_kernel(COMPUTE, "tests/tt_metal/tt_metal/test_kernels/compute/dfb_eltwise_copy_2_0.cpp");
     compute.dfb_bindings = {
@@ -944,9 +910,9 @@ inline void run_a1_blocked_pipeline(
     std::vector<uint32_t> output;
     detail::ReadFromBuffer(*out_tensor.mesh_buffer().get_reference_buffer(), output);
 
-    // DRAM_out[k] = the Tensix's k-th consumed tile from DFB_IN (the back-half is a FIFO identity
-    // pass-through). NOTE this is the raw CONSUME ORDER — for BLOCKED it is NOT the DM→DM identity,
-    // because the A1 back-half does not do the DM block-consumer's reordering write.
+    // DRAM_out[k] is the Tensix's k-th consumed tile from DFB_IN, since the back half is a FIFO
+    // pass-through. That is raw CONSUME order -- not the DM→DM identity, because this back half has no
+    // block-consumer reordering write.
     const uint32_t wpe = entry_size / sizeof(uint32_t);
     const uint32_t bs = block_size;
     const char* cap_name = "STRIDED";
@@ -957,8 +923,8 @@ inline void run_a1_blocked_pipeline(
     }
     std::vector<uint32_t> expected(input.size(), 0u);
     if (cap_in == m2::DFBAccessPattern::ALL) {
-        // BLOCKED→ALL: the ALL consumer writes in consume order, so this matches the DM→DM golden:
-        // output[(b*bs+j)*P+p] = input[(b*P+p)*bs+j], capacity=num_entries/P. Identity at P==1.
+        // BLOCKED→ALL: the consumer writes in consume order, so this matches the DM→DM golden
+        // output[(b*bs+j)*P+p] = input[(b*P+p)*bs+j], capacity = num_entries/P. Identity at P==1.
         const uint32_t capacity = num_entries / P;
         const uint32_t blocks_per_producer = capacity / bs;
         for (uint32_t pp = 0; pp < P; ++pp) {
@@ -971,9 +937,8 @@ inline void run_a1_blocked_pipeline(
             }
         }
     } else if (cap_in == m2::DFBAccessPattern::BLOCKED) {
-        // BLOCKED→BLOCKED, C=1: the single consumer round-robins the P producer sub-rings — its k-th
-        // pop is TC (k%P), sub-ring position (k/P). Producer p filled sub-ring position s with input
-        // page (s/bs * P + p)*bs + s%bs. Identity at P==1, a permutation for P>1.
+        // BLOCKED→BLOCKED at C=1: the one consumer round-robins the P sub-rings, so its k-th pop is
+        // TC k%P at position k/P, and producer p filled position s from page (s/bs * P + p)*bs + s%bs.
         for (uint32_t k = 0; k < num_entries; ++k) {
             const uint32_t p = k % P;
             const uint32_t s = k / P;
@@ -981,7 +946,7 @@ inline void run_a1_blocked_pipeline(
             std::copy(input.begin() + src * wpe, input.begin() + (src + 1) * wpe, expected.begin() + k * wpe);
         }
     } else {
-        // BLOCKED→STRIDED: C≥P forces P==1 here → identity.
+        // BLOCKED→STRIDED: C>=P forces P==1 here, so identity.
         expected = input;
     }
 
@@ -1081,10 +1046,9 @@ inline void run_a1_fanout_blocked_pipeline(
         {"num_entries_per_consumer", num_entries}, {"blocked_consumer", 0u}, {"implicit_sync", implicit ? 1u : 0u}};
     consumer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
 
-    // DFB_IN is BLOCKED with C>1 Tensix consumers (C>P=1, so the DM producer is the wider-fan-out side with
-    // num_producer_tcs=C>1). An IMPLICIT DM producer here is the suspected hole: commit_implicit_read
-    // advances tc_idx per-entry, scattering a block across sub-rings. (DFB_OUT is STRIDED, where per-entry
-    // round-robin is correct, so its DM consumer may be implicit safely.)
+    // DFB_IN is BLOCKED with C>1 Tensix consumers, so the DM producer is the wider-fan-out side and its
+    // implicit commit has to stay block-aware. DFB_OUT is STRIDED, where per-entry round-robin is right,
+    // so its DM consumer can be implicit either way.
     if (!implicit) {
         disable_implicit_sync_for(producer, DFB_IN);
         disable_implicit_sync_for(consumer, DFB_OUT);
