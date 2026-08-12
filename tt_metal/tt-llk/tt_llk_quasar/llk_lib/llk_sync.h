@@ -114,26 +114,36 @@ inline void _llk_stall_cfg_on_()
 }
 
 /**
- * @brief If both MOP config banks are already claimed, block until the oldest one
- *        drains on this thread's own engine, then release its claim.
+ * @brief Reset this TRISC's local MOP bank selection and claim count.
+ */
+inline void _llk_mop_bank_tracker_init_()
+{
+    mop_bank_tracker.next_program_bank_id = 0;
+    mop_bank_tracker.num_claimed_banks    = 0;
+}
+
+/**
+ * @brief Claim one of this TRISC's two MOP config banks, draining the engine before reuse.
  *
- * Call this immediately before acquiring semaphore::MOP_BANK in a _llk_*_mop_config_
- * function. When at least one of the 2 banks has never been claimed yet, this is a
- * no-op (the semaphore read is non-blocking) -- the stall only fires once a third
- * distinct op needs to reclaim a bank that a still-outstanding op is using.
+ * The first two claims use the two physical banks without a stall. A third claim queues
+ * STALL_CFG on this thread's engine, which orders the following bank-program CFG writes
+ * after all prior engine work has drained. Both earlier local claims are therefore retired
+ * before the new claim is recorded.
  *
  * @tparam DrainRes0  Primary resource to drain (e.g. p_stall::UNPACK0, p_stall::PACK0, p_stall::MATH).
  * @tparam DrainRes1  Optional second drain resource (e.g. p_stall::WAIT_SFPU for the math thread).
  * @tparam DrainRes2  Optional third drain resource.
  */
 template <std::uint32_t DrainRes0, std::uint32_t DrainRes1 = p_stall::NOTHING, std::uint32_t DrainRes2 = p_stall::NOTHING>
-inline void _llk_mop_bank_reclaim_if_full_()
+inline void _llk_mop_bank_acquire_()
 {
-    if (semaphore_read(semaphore::MOP_BANK) == 0)
+    if (mop_bank_tracker.num_claimed_banks == 2)
     {
         _llk_stall_cfg_on_<DrainRes0, DrainRes1, DrainRes2>();
-        _llk_sync_post_(semaphore::MOP_BANK);
+        mop_bank_tracker.num_claimed_banks = 0;
     }
+
+    ++mop_bank_tracker.num_claimed_banks;
 }
 
 /**

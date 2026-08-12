@@ -77,11 +77,9 @@ inline void _llk_pack_hw_configure_(const tdma_descriptor_t& tdma_desc, const ck
 {
     static_assert((PACK_SEL == p_pacr::PACK0) || (PACK_SEL == p_pacr::PACK1), "PACK_SEL can only be set to p_pacr::PACK0/PACK1");
 
-    // Both MOP config banks start free; _llk_mop_bank_reclaim_if_full_ blocks once both are claimed.
-    // Lives here (once per kernel) rather than in each op's own _init_, so it isn't re-initialized
-    // mid-kernel if a kernel uses multiple different ops on this thread.
-    _llk_sync_init_(semaphore::MOP_BANK, 2, 2);
-    current_program_mop_bank_id = 0;
+    // Both local MOP config bank claims start free. Initialize once per kernel rather than
+    // in each op's own _init_, so multiple ops on this TRISC share the same local tracker.
+    _llk_mop_bank_tracker_init_();
 
     // RT: make defines to aggregate the packer input format address, to make the below a single function
     // Program math destination register format

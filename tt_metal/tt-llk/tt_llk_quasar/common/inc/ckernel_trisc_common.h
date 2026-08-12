@@ -108,22 +108,133 @@ static std::uint32_t dest_register_offset = 0;
 extern thread_local std::uint32_t dest_register_offset;
 #endif
 
-// Tracks which MOP config bank (0 or 1) the next _llk_*_mop_config_ call on this thread should
-// program into. Toggles after each program so the paired execute function can infer which bank
-// just got a fresh program (the opposite of the now-current value) vs which one is still running.
+// Per-TRISC software state for the two MOP config banks. Semaphores cannot track these claims
+// because semaphore IDs are shared across TRISCs.
+struct mop_bank_tracker_t
+{
+    std::uint32_t next_program_bank_id;
+    std::uint32_t num_claimed_banks;
+};
+
 #ifdef ENV_LLK_INFRA
-static std::uint32_t current_program_mop_bank_id = 0;
+static mop_bank_tracker_t mop_bank_tracker = {0, 0};
 #else
-extern thread_local std::uint32_t current_program_mop_bank_id;
+extern thread_local mop_bank_tracker_t mop_bank_tracker;
 #endif
 
+// Per-TRISC software tracking for the two instruction replay banks. Claims
+// count outstanding replay-bank uses; hardware mutex ownership is established
+// later by an execute REPLAY with set_mutex=1. The replay load and execute
+// cursors are distinct hardware state and need not match the MOP bank selected
+// by _mop_bank_program_.
+struct replay_bank_tracker_t
+{
+    std::uint32_t next_load_bank_id;
+    std::uint32_t next_execute_bank_id;
+    std::uint32_t num_claimed_banks;
+};
+
+#ifdef ENV_LLK_INFRA
+static replay_bank_tracker_t replay_bank_tracker = {0, 0, 0};
+#else
+extern thread_local replay_bank_tracker_t replay_bank_tracker;
+#endif
+
+inline void _replay_bank_tracker_reset_from_hw_()
+{
+    replay_bank_tracker.next_load_bank_id    = replay_mmap[replay_write_id];
+    replay_bank_tracker.next_execute_bank_id = replay_mmap[replay_read_id];
+    replay_bank_tracker.num_claimed_banks    = 0;
+}
+
+inline void _replay_bank_clear_mutexes_()
+{
+    replay_mmap[mutex_0_unbanked] = 0;
+    replay_mmap[mutex_1_unbanked] = 0;
+}
+
+inline void _replay_bank_align_load_execute_cursors_()
+{
+    if (replay_mmap[replay_write_id] != replay_mmap[replay_read_id])
+    {
+        // Preserve finish_using_replay_mmio_load()'s established alignment
+        // sequence: done=1 flips the instruction-load cursor after the NOP.
+        TTI_REPLAY(0, 1, 1, 0, 0, 1);
+        TTI_NOP;
+        wait_replay_idle();
+    }
+}
+
 /**
- * @brief Program `temp` into whichever MOP bank current_program_mop_bank_id designates, then toggle it.
- * @note Caller must have already acquired semaphore::MOP_BANK (see _llk_mop_bank_reclaim_if_full_ in llk_sync.h).
+ * @brief Normalize replay ownership when configuring a kernel on this TRISC.
+ *
+ * Drains replay before immediate RISC MMIO mutex writes, releases both banks,
+ * aligns the instruction load cursor with the execute cursor, and snapshots
+ * both hardware cursors into an empty local tracker.
+ */
+inline void _replay_bank_tracker_configure_()
+{
+    wait_replay_idle();
+    _replay_bank_clear_mutexes_();
+    _replay_bank_align_load_execute_cursors_();
+    _replay_bank_tracker_reset_from_hw_();
+}
+
+/**
+ * @brief Record a claim against the hardware instruction-load cursor.
+ *
+ * The first two claims use the two replay banks without draining. Before a
+ * third claim, replay is actively drained, mutexes returned by completed
+ * execute REPLAY instructions are released through MMIO, and local credits
+ * are reset. Hardware load/read IDs are re-read for every claim and remain the
+ * source of truth. This helper intentionally does not lock the load bank:
+ * mutex=1 denotes software ownership and would block the instruction REPLAY
+ * load that follows this claim.
+ *
+ * @return The replay bank id to which the next instruction replay load writes.
+ */
+inline std::uint32_t _replay_bank_acquire_()
+{
+    if (replay_bank_tracker.num_claimed_banks == 2)
+    {
+        wait_replay_idle();
+        _replay_bank_clear_mutexes_();
+        replay_bank_tracker.num_claimed_banks = 0;
+    }
+
+    replay_bank_tracker.next_load_bank_id    = replay_mmap[replay_write_id];
+    replay_bank_tracker.next_execute_bank_id = replay_mmap[replay_read_id];
+    ++replay_bank_tracker.num_claimed_banks;
+    return replay_bank_tracker.next_load_bank_id;
+}
+
+/**
+ * @brief Return replay to the normalized single-bank legacy boundary.
+ *
+ * If this TRISC has no outstanding double-bank claims, this is a no-op.
+ * Otherwise, actively drains replay before releasing mutexes, aligns the
+ * instruction load and execute cursors, and clears all local claims.
+ */
+inline void _replay_bank_legacy_boundary_()
+{
+    if (replay_bank_tracker.num_claimed_banks == 0)
+    {
+        return;
+    }
+
+    wait_replay_idle();
+    _replay_bank_clear_mutexes_();
+    _replay_bank_align_load_execute_cursors_();
+    _replay_bank_tracker_reset_from_hw_();
+}
+
+/**
+ * @brief Program `temp` into the next MOP bank, then toggle the local bank selection.
+ * @note Caller must have already claimed a bank with _llk_mop_bank_acquire_ in llk_sync.h.
  */
 inline void _mop_bank_program_(ckernel_template& temp, volatile std::uint32_t* instrn_buffer)
 {
-    if (current_program_mop_bank_id == 0)
+    if (mop_bank_tracker.next_program_bank_id == 0)
     {
         temp.program_bank0_sw_cntl(instrn_buffer);
     }
@@ -131,7 +242,7 @@ inline void _mop_bank_program_(ckernel_template& temp, volatile std::uint32_t* i
     {
         temp.program_bank1_sw_cntl(instrn_buffer);
     }
-    current_program_mop_bank_id ^= 1;
+    mop_bank_tracker.next_program_bank_id ^= 1;
 }
 
 /**
@@ -140,7 +251,7 @@ inline void _mop_bank_program_(ckernel_template& temp, volatile std::uint32_t* i
  */
 inline void _mop_bank_run_(volatile std::uint32_t* instrn_buffer)
 {
-    if (current_program_mop_bank_id == 0)
+    if (mop_bank_tracker.next_program_bank_id == 0)
     {
         ckernel_template::run_bank1_sw_cntl(instrn_buffer);
     }
@@ -343,7 +454,6 @@ struct semaphore
     // - UNPACK_MATH = unpack->math
     constexpr static std::uint32_t MATH_PACK   = 1; // math <-> pack sync on dest register
     constexpr static std::uint32_t UNPACK_MATH = 4; // unpack <-> math sync on dest register
-    constexpr static std::uint32_t MOP_BANK    = 2; // caps concurrent in-flight MOP bank programming at 2 (one per physical bank)
 
     constexpr static std::uint16_t t6_sem(const std::uint8_t sem_index)
     {

@@ -35,11 +35,9 @@ inline void _llk_math_srcAB_hw_configure_(DataFormat srcA_format, DataFormat src
     // RT: This is turned on by default by HW, this should be removed
     set_ttsync_enables<TRACK_ALL>(TRISC_ID);
 
-    // Both MOP config banks start free; _llk_mop_bank_reclaim_if_full_ blocks once both are claimed.
-    // Lives here (once per kernel) rather than in each op's own _init_, so it isn't re-initialized
-    // mid-kernel if a kernel uses multiple different ops on this thread.
-    _llk_sync_init_(semaphore::MOP_BANK, 2, 2);
-    current_program_mop_bank_id = 0;
+    // Both local MOP config bank claims start free. Initialize once per kernel rather than
+    // in each op's own _init_, so multiple ops on this TRISC share the same local tracker.
+    _llk_mop_bank_tracker_init_();
 
     static_assert(!(EN_FP32_MATH_FORMAT && EN_INT32_MATH_FORMAT), "Cannot have Int32 dest & Float32 dest at the same time");
 

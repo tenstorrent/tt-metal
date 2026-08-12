@@ -393,7 +393,7 @@ void ckernel_template::program_bank0_sw_cntl([[maybe_unused]] volatile std::uint
 {
     volatile mop_config_regs_t *mop_cfg = reinterpret_cast<volatile mop_config_regs_t *>(MOP_CFG_BASE);
 
-    // Caller is responsible for ensuring bank0 is safe to overwrite (see _llk_mop_bank_reclaim_if_full_)
+    // Caller is responsible for ensuring bank0 is safe to overwrite (see _llk_mop_bank_acquire_)
     // before calling this -- no blanket mop_sync() drain here.
 
     mop_cfg->MOP_CONFIG              = 2;
@@ -413,7 +413,7 @@ void ckernel_template::program_bank1_sw_cntl([[maybe_unused]] volatile std::uint
 {
     volatile mop_config_regs_t *mop_cfg = reinterpret_cast<volatile mop_config_regs_t *>(MOP_CFG_BASE);
 
-    // Caller is responsible for ensuring bank1 is safe to overwrite (see _llk_mop_bank_reclaim_if_full_)
+    // Caller is responsible for ensuring bank1 is safe to overwrite (see _llk_mop_bank_acquire_)
     // before calling this -- no blanket mop_sync() drain here.
 
     mop_cfg->MOP_CONFIG              = 2;

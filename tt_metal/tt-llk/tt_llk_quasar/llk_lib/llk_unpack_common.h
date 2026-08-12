@@ -61,11 +61,10 @@ inline void _llk_unpack_configure_unary_(const tdma_descriptor_t& tdma_desc_src)
 {
     _llk_unpack_hw_configure_<UNP_SEL>(tdma_desc_src);
 
-    // Both MOP config banks start free; _llk_mop_bank_reclaim_if_full_ blocks once both are claimed.
-    // Lives here (once per kernel) rather than in each op's own _init_, so it isn't re-initialized
-    // mid-kernel if a kernel uses multiple different ops on this thread.
-    _llk_sync_init_(semaphore::MOP_BANK, 2, 2);
-    current_program_mop_bank_id = 0;
+    // Local MOP and replay bank claims start free. Initialize once per unary kernel rather
+    // than in each op's own _init_, so multiple ops on this TRISC share the same trackers.
+    _llk_mop_bank_tracker_init_();
+    _replay_bank_tracker_configure_();
 }
 
 /**
@@ -80,11 +79,9 @@ inline void _llk_unpack_configure_binary_(const tdma_descriptor_t& tdma_desc_src
     _llk_unpack_hw_configure_<UNP_SEL_0>(tdma_desc_src0);
     _llk_unpack_hw_configure_<UNP_SEL_1>(tdma_desc_src1);
 
-    // Both MOP config banks start free; _llk_mop_bank_reclaim_if_full_ blocks once both are claimed.
-    // Lives here (once per kernel) rather than in each op's own _init_, so it isn't re-initialized
-    // mid-kernel if a kernel uses multiple different ops on this thread.
-    _llk_sync_init_(semaphore::MOP_BANK, 2, 2);
-    current_program_mop_bank_id = 0;
+    // Both local MOP config bank claims start free. Initialize once per kernel rather than
+    // in each op's own _init_, so multiple ops on this TRISC share the same local tracker.
+    _llk_mop_bank_tracker_init_();
 }
 
 /**

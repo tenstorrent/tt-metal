@@ -30,8 +30,7 @@ inline void _llk_math_eltwise_unary_datacopy_mop_config_(
 {
     // Divide number of rows by how many rows are output per fpu instruction
     // Each FPU instruction moves 8 rows at a time
-    _llk_mop_bank_reclaim_if_full_<p_stall::MATH, p_stall::WAIT_SFPU>();
-    _llk_sync_get_(semaphore::MOP_BANK);
+    _llk_mop_bank_acquire_<p_stall::MATH, p_stall::WAIT_SFPU>();
 
     const std::uint32_t MOP_INNER_LOOP = num_rows_inner_loop >> rows_log2(num_rows_per_move_instrn);
     const std::uint32_t mov_rows_instn = p_mov_src_to_dest::MOV_8_ROWS;

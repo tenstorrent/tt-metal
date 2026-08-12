@@ -47,8 +47,7 @@ inline void _llk_unpack_unary_operand_variable_tile_size_mop_config_(
     // TODO: Implement Unpack to dest for tiny tiles
     static_assert((UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B), "UNP_SEL can only be set to p_unpacr::UNP_A/UNP_B");
 
-    _llk_mop_bank_reclaim_if_full_<p_stall::UNPACK0>();
-    _llk_sync_get_(semaphore::MOP_BANK);
+    _llk_mop_bank_acquire_<p_stall::UNPACK0>();
 
     const std::uint32_t MOP_OUTER_LOOP = num_tiles;
     const std::uint32_t MOP_INNER_LOOP = tensor_shape.total_num_faces();
@@ -110,8 +109,7 @@ inline void _llk_unpack_unary_operand_mop_config_(const std::uint32_t buf_desc_i
         (UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B) || (UNP_SEL == p_unpacr::UNP_DEST),
         "UNP_SEL can only be set to p_unpacr::UNP_A/UNP_B/UNP_DEST");
 
-    _llk_mop_bank_reclaim_if_full_<p_stall::UNPACK0>();
-    _llk_sync_get_(semaphore::MOP_BANK);
+    _llk_mop_bank_acquire_<p_stall::UNPACK0>();
 
     const std::uint32_t MOP_OUTER_LOOP     = num_tiles;
     constexpr std::uint32_t MOP_INNER_LOOP = 1;
@@ -162,15 +160,17 @@ inline void _llk_unpack_unary_operand_transpose_mop_config_(const std::uint32_t 
 
     LLK_ASSERT(tensor_shape.total_num_faces() == NUM_FACES, "Transpose is only supported for regular tile dimensions with 4 faces");
 
-    _llk_mop_bank_reclaim_if_full_<p_stall::UNPACK0>();
-    _llk_sync_get_(semaphore::MOP_BANK);
+    _llk_mop_bank_acquire_<p_stall::UNPACK0>();
 
     const std::uint32_t MOP_OUTER_LOOP = num_tiles;
     const std::uint32_t MOP_INNER_LOOP = 1;
 
     constexpr std::uint32_t replay_buf_len = NUM_FACES;
 
-    load_replay_buf<0, replay_buf_len>(
+    // Claim the bank selected by the hardware load cursor without taking its
+    // mutex; last=1 advances that cursor after this instruction load.
+    (void)_replay_bank_acquire_();
+    load_replay_buf<0, replay_buf_len, false, 0, 1>(
         [buf_desc_id]
         {
             if constexpr (UNP_SEL == p_unpacr::UNP_A)
@@ -219,7 +219,7 @@ inline void _llk_unpack_unary_operand_transpose_mop_config_(const std::uint32_t 
     ckernel_template temp(
         MOP_OUTER_LOOP,
         MOP_INNER_LOOP,
-        TT_OP_REPLAY(0 /*start_idx*/, replay_buf_len, 0 /*last*/, 0 /*set_mutex*/, 0 /*execute_while_loading*/, 0 /*load_mode*/),
+        TT_OP_REPLAY(0 /*start_idx*/, replay_buf_len, 1 /*last*/, 1 /*set_mutex*/, 0 /*execute_while_loading*/, 0 /*load_mode*/),
         TT_OP_INC_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, UNP_SEL, 1 /*Value*/)); // Inc Src by 1 tile, because above UNPACR0/1_FACE do not inc counters
 
     // 32-bit datacopy uses ELWADD, which requires datavalid from both SrcA and SrcB
@@ -249,8 +249,7 @@ inline void _llk_unpack_unary_operand_reuse_dest_mop_config_(const std::uint32_t
 {
     static_assert(reuse_dest != EltwiseBinaryReuseDestType::NONE, "reuse_dest must be DEST_TO_SRCA or DEST_TO_SRCB");
 
-    _llk_mop_bank_reclaim_if_full_<p_stall::UNPACK0>();
-    _llk_sync_get_(semaphore::MOP_BANK);
+    _llk_mop_bank_acquire_<p_stall::UNPACK0>();
 
     // CB_UNP: the unpacker that reads real data from the Circular Buffer
     // DUMMY_UNP: the unpacker that gets a dummy dvalid (its source register is filled by MOVD2A/B on the math side)
@@ -327,6 +326,13 @@ template <
 inline void _llk_unpack_unary_operand_init_(const std::uint32_t buf_desc_id, const TensorShape& tensor_shape, const std::uint32_t num_tiles)
 {
     static_assert(!(TRANSPOSE_EN && reuse_dest != EltwiseBinaryReuseDestType::NONE), "Transpose is not supported with reuse_dest");
+
+    if constexpr (!TRANSPOSE_EN)
+    {
+        // Normalize only when this kernel previously claimed replay banks for
+        // transpose; the helper is a no-op for ordinary legacy configurations.
+        _replay_bank_legacy_boundary_();
+    }
 
     if constexpr (unpack_to_dest)
     {

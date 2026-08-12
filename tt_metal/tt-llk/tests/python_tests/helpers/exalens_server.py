@@ -120,9 +120,11 @@ class ExalensServer:
                     )
                     pytest.exit(returncode=1)
 
-                if self._log_contains_ready_pattern():
+                readiness_mode = self._get_readiness_mode()
+                if readiness_mode:
                     logger.info(
-                        "tt-exalens ready (PID {}, took ~{}s)",
+                        "tt-exalens ready via {} readiness (PID {}, took ~{}s)",
+                        readiness_mode,
                         self._process.pid,
                         elapsed,
                     )
@@ -201,17 +203,24 @@ class ExalensServer:
             return f"(from {latest})\n" + "\n".join(error_lines)
         return None
 
-    def _log_contains_ready_pattern(self) -> bool:
+    def _get_readiness_mode(self) -> Optional[str]:
         if not self._log_path or not os.path.exists(self._log_path):
-            return False
+            return None
         try:
             with open(self._log_path, "r") as f:
                 f.seek(self._log_read_offset)
                 new_data = f.read()
                 self._log_read_offset = f.tell()
-                return self.READY_PATTERN in new_data
+                if self.READY_PATTERN in new_data:
+                    return "4B"
+                legacy_ready_pattern = (
+                    f"ttexalens-server listening on port {self._port}"
+                )
+                if legacy_ready_pattern in new_data:
+                    return "legacy server-listening"
+                return None
         except OSError:
-            return False
+            return None
 
     def _read_log_tail(self, lines: int = 30) -> str:
         if not self._log_path or not os.path.exists(self._log_path):

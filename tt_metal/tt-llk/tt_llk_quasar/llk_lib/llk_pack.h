@@ -27,8 +27,7 @@ using namespace ckernel;
  */
 inline void _llk_pack_mop_config_(const std::uint8_t buf_desc_id, const std::uint32_t num_tiles, const TensorShape& tensor_shape)
 {
-    _llk_mop_bank_reclaim_if_full_<p_stall::PACK0>();
-    _llk_sync_get_(semaphore::MOP_BANK);
+    _llk_mop_bank_acquire_<p_stall::PACK0>();
 
     const std::uint32_t MOP_OUTER_LOOP = num_tiles;
     const std::uint32_t MOP_INNER_LOOP =
