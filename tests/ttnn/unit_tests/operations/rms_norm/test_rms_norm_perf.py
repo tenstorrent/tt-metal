@@ -107,6 +107,81 @@ def test_rms_norm_perf_pipeline_blocks(device, rows, hidden, min_blocks, monkeyp
     test_rms_norm_perf(device, rows, hidden, 0)
 
 
+# --- Refinement 4: collateral shapes of the critical-path admissibility band ------
+#
+# `_admissible_by_balance` (BALANCE_SLACK_PCT + MIN_CORE_W_TILES) changes the chosen
+# (G, C, R) for exactly four of the 31 shapes surveyed in probes/probe_030.py: the
+# two prefill perf cases it targets, plus these two. They are measured here so the
+# band's blast radius is covered by numbers rather than by argument.
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [(3, 1, 736, 5119), (1, 1, 4096, 4096)],
+    ids=lambda s: "x".join(str(d) for d in s),
+)
+@pytest.mark.parametrize("banded", [False, True], ids=["phase0", "banded"])
+def test_rms_norm_perf_balance_collateral(device, shape, banded, monkeypatch):
+    from ttnn.operations.rms_norm import rms_norm_program_descriptor as pd
+
+    if not banded:
+        monkeypatch.setattr(pd, "BALANCE_SLACK_PCT", None)
+
+    torch.manual_seed(0)
+    torch_input = torch.randn(shape, dtype=torch.float32).to(torch.bfloat16)
+    torch_gamma = torch.randn((shape[-1],), dtype=torch.float32).to(torch.bfloat16)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_gamma = ttnn.from_torch(torch_gamma, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    cfg = ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=False)
+    tt_out = rms_norm(tt_input, gamma=tt_gamma, epsilon=1e-6, compute_kernel_config=cfg)
+
+    x = torch_input.float()
+    expected = x * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + 1e-6) * torch_gamma.float()
+    from tests.ttnn.utils_for_testing import assert_with_pcc
+
+    assert_with_pcc(expected, ttnn.to_torch(tt_out).float(), 0.995)
+
+
+# --- Refinement 4: reduction-group FLOOR (op_design.md lamp P3) ------------------
+#
+# A prefill shape fills the grid on the `row` axis alone, so the selection prefers
+# G = 1 (fewest combine partners). But `row` splits in whole tile-rows, and 256
+# tile-rows over 110 groups is 3-vs-2: the critical core carries 1.29x the mean.
+# Splitting `hidden` as well multiplies the number of tile-rows per group and so
+# QUANTISES the row split more finely (G=2 -> 55 groups -> 5-vs-4 -> 1.07x), at the
+# cost of one combine round per block and a narrower per-core DRAM run.
+#
+# Sweep the floor to find where that trade turns. MIN_W_GROUP_SIZE is a preference,
+# so the selection still takes the SMALLEST G >= the floor that fills the grid.
+
+
+@pytest.mark.parametrize("min_g", [1, 2, 5, 10, 11], ids=lambda g: f"ming{g}")
+@pytest.mark.parametrize("rows,hidden", [(8192, 1024), (8192, 2304), (8192, 5120), (8192, 7168)], ids=lambda v: str(v))
+def test_rms_norm_perf_wgroup_min(device, rows, hidden, min_g, monkeypatch):
+    from ttnn.operations.rms_norm import rms_norm_program_descriptor as pd
+
+    monkeypatch.setattr(pd, "MIN_W_GROUP_SIZE", min_g)
+    test_rms_norm_perf(device, rows, hidden, 0)
+
+
+# --- Refinement 4: buffer-depth co-tune (op_design.md lamp P1, `double_buffer`) --
+#
+# input_cb_depth and output_cb_depth trade the SAME L1 as block_row_tiles (the
+# residency solve spends what is left on R), so they have to be swept together
+# rather than stacked blind. Depth buys bytes-in-flight-per-barrier and
+# read/compute/write overlap; R buys combine rounds amortised.
+
+
+@pytest.mark.parametrize("in_depth,out_depth", [(2, 2), (2, 3), (2, 4), (3, 2), (3, 3), (4, 4)])
+@pytest.mark.parametrize("rows,hidden", [(8192, 1024), (8192, 2304), (8192, 5120), (8192, 7168)], ids=lambda v: str(v))
+def test_rms_norm_perf_cb_depths(device, rows, hidden, in_depth, out_depth, monkeypatch):
+    from ttnn.operations.rms_norm import rms_norm_program_descriptor as pd
+
+    monkeypatch.setattr(pd, "INPUT_CB_DEPTH", in_depth)
+    monkeypatch.setattr(pd, "OUTPUT_CB_DEPTH", out_depth)
+    test_rms_norm_perf(device, rows, hidden, 0)
+
+
 # --- Refinement 4: is the prefill wall DRAM bandwidth, or the row imbalance? ---
 #
 # The prefill profile is aggregate-DRAM-bandwidth bound, so the interesting

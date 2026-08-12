@@ -121,6 +121,14 @@ MAX_GATHER_TILES = 64  # cap on block_row_tiles * w_group_size (cb_stat_gather)
 # neighbours: at tensor_row_tiles = 2 the cap left 44 of 110 cores active (66 at 3,
 # 88 at 4), because `active = min(row_tiles, num_groups) * G`. The knob stays live.
 MAX_W_GROUP_SIZE = 0
+# Perf lamp P3 — a LOWER bound on the cores per reduction group. The mirror of
+# MAX_W_GROUP_SIZE: forcing the hidden axis to split even when the row axis
+# already fills the grid trades one combine round per block for a shorter
+# critical path (see `_select_candidates`'s balance key) and a smaller `C`.
+# 1 = no floor. Kept at 1 because BALANCE_GRANULARITY expresses the same
+# preference derived from the geometry instead of pinned per shape; this knob is
+# the sweep handle that measured it.
+MIN_W_GROUP_SIZE = 1
 # Perf lamp P1 — the smallest number of blocks a core's row assignment is cut
 # into. `input_cb_depth = 2` only buys read/compute overlap when there is a
 # block b+1 for the reader to prefetch while compute runs block b; at
@@ -143,6 +151,56 @@ MAX_W_GROUP_SIZE = 0
 # floor, and pair it with input_cb_depth 3-4 as op_design.md's lamp P1 suggests.
 MIN_PIPELINE_BLOCKS = 1
 
+# Perf knob (Refinement 4) — CRITICAL-PATH SLACK, in percent.
+#
+# `max_tiles_per_core = core_row_tiles * C` is the BUSIEST core's tile count, i.e.
+# the critical path. Among the splits that fill the grid equally, this knob admits
+# only those within `BALANCE_SLACK_PCT`% of the shortest critical path; the Phase 0
+# preferences (fewest combine partners `-G`, then coarsest block `R`) then choose
+# among the survivors. `None` disables the filter, which is Phase 0 verbatim.
+#
+# WHY IT EXISTS. `row` splits in whole TILE-ROWS, so a prefill shape that fills the
+# grid on that axis alone is quantised coarsely: 256 tile-rows over 110 row-groups
+# is 3-vs-2, and the critical core carries 3/(256/110) = 1.29x the mean. Splitting
+# `hidden` too multiplies the tile-rows per group and re-quantises the row split
+# finely (G=2 => 55 groups => 5-vs-4 => 1.07x), at the price of one combine round
+# per block and a narrower per-core DRAM run. The ABLATION behind this (see the
+# changelog) shows why the trade is worth taking: on the prefill profile the DRAM
+# stream already runs at ~500 GB/s (peak) and the per-core COMPUTE is 23-30% of the
+# wall and essentially ADDITIVE with it, so shortening the busiest core's tile count
+# shortens the wall directly.
+#
+# WHY A SLACK BAND AND NOT A MINIMUM. Minimising `max_tiles_per_core` outright picks
+# the widest group (G=11 at (1,1,8192,1024): 24 tile-rows x C=3 = 72 tiles against
+# G=2's 80) and MEASURES WORSE — 123542 ns vs 91316 — because it buys those 8 tiles
+# with 5 combine rounds on an 11-core group and a 6 KB per-tile-row DRAM run. The
+# band keeps the near-optimal candidates and lets `-G` break the tie.
+#
+# MEASURED on blackhole_p150b at the pinned perf config (bf16 / TILE / INTERLEAVED /
+# gamma bf16 TILE / fp32_dest_acc_en=False / HiFi2), device kernel ns, by forcing the
+# group size with MIN_W_GROUP_SIZE (test_rms_norm_perf_wgroup_min):
+#   shape            G=1      G=2      G=5      G=10     G=11
+#   (1,1,8192,1024)  99123    91316    99687    103695   123542
+#   (1,1,8192,2304)  214959   196059   208107   205636   214383
+#   (1,1,8192,5120)  (n/a)    423343   437224   426409   415553
+#   (1,1,8192,7168)  (n/a)    591909   588487   600031   584071
+# G=2 is the winner or within noise on all four. The admissible window for this knob
+# is [11.2%, 20%): below 11.2% only G=11's 72 tiles survive at W=1024, and at 20%
+# G=1's 216 tiles re-enter at W=2304 and win on `-G` again. 15% is its midpoint.
+BALANCE_SLACK_PCT = 15
+# The floor, in tiles, on a core's hidden slice `C` for the balance band above to
+# consider a candidate at all. `C` IS the per-tile-row DRAM run of the reader and
+# the writer's per-barrier batch, so this is `double_buffer`'s bytes-in-flight knob
+# read off the geometry: its measured plateau is 4-8 tiles per barrier and 16 keeps
+# a comfortable margin. It is what stops the band from buying a shorter critical
+# path with a slice too narrow to stream — the same table above shows C=7 costing
+# +9% at W=1024 and C=15 costing +6% at W=2304 against their C=16/36 winners.
+# When no candidate at the best occupancy clears it (every narrow-hidden shape:
+# (99991,64) has C<=2, (1,1,3232,96) has C=2) the band is skipped and Phase 0's
+# choice stands, which is why the blast radius of this refinement is small.
+MIN_CORE_W_TILES = 16
+
+
 # Buffer-depth ladder, tried in order by the residency solve. Depth buys overlap,
 # so it is spent FIRST and given up LAST: step 0 is the knobs above (the only step
 # any interleaved geometry ever needs, so the default path is byte-identical), and
@@ -150,11 +208,20 @@ MIN_PIPELINE_BLOCKS = 1
 # a HEIGHT-sharded core holds the tensor's WHOLE hidden slice (`C =
 # tensor_w_tiles`, not a chosen split), and on the ROW_MAJOR legs that slice is
 # staged twice more through cb_input_rm / cb_output_rm.
-_DEPTH_LADDER = (
-    (INPUT_CB_DEPTH, RM_CB_DEPTH),
-    (INPUT_CB_DEPTH, 1),
-    (1, 1),
-)
+def _depth_ladder():
+    """`((input_cb_depth, rm_cb_depth), ...)` — built from the knobs on every call.
+
+    A function rather than a module constant so INPUT_CB_DEPTH / RM_CB_DEPTH stay
+    LIVE knobs: a constant tuple would freeze their import-time values into the
+    residency solve's default argument, and a re-tuned depth would then be
+    allocated without being solved for (silently overrunning L1).
+    """
+    return (
+        (INPUT_CB_DEPTH, RM_CB_DEPTH),
+        (INPUT_CB_DEPTH, 1),
+        (1, 1),
+    )
+
 
 # Hidden-axis chunking (op_design.md regime R3), the residency knob of LAST resort
 # for a resident shard. `w_chunk_tiles` (WC) is the block extent along `hidden` of
@@ -488,7 +555,7 @@ def _cb_bytes(
     G,
     is_rm_out,
     has_tail,
-    depths=_DEPTH_LADDER[0],
+    depths=None,
     pin_in=False,
     pin_out=False,
     w_chunk_tiles=None,
@@ -499,7 +566,12 @@ def _cb_bytes(
     DERIVED from `_cb_specs` — never restated — by differencing the inventory at
     R = 1 and R = 2. Every page count there is affine in R, so
     `footprint(R) = fixed_bytes + R · per_row_bytes` holds exactly.
+
+    `depths = None` means the ladder's first (deepest) step, resolved HERE rather
+    than as a default argument so the depth knobs stay live (see `_depth_ladder`).
     """
+    if depths is None:
+        depths = _depth_ladder()[0]
 
     def total(R):
         return sum(
@@ -533,7 +605,7 @@ def _max_block_row_tiles(
     is_rm_out,
     has_tail,
     budget,
-    depths=_DEPTH_LADDER[0],
+    depths=None,
     pin_in=False,
     pin_out=False,
     w_chunk_tiles=None,
@@ -568,21 +640,20 @@ def _max_block_row_tiles(
     return max(1, min((budget - fixed_bytes) // per_row_bytes, cap))
 
 
-def _select_candidates(geo, grid_x, grid_y, is_rm_out, budget, w_group_cap):
+def _select_candidates(geo, grid_x, grid_y, is_rm_out, budget, w_group_cap, w_group_min=1):
     """Every (gc, gr) split that clears the mechanism caps and fits L1.
 
-    Score, in priority order:
+    Returns `[(score, (gc, gr, C, R), max_tiles_per_core)]`.
+
+    Score, in priority order (the Phase 0 tuple, unchanged):
       1. active cores        — fill the grid;
       2. -G                  — fewest combine partners (each round is a gather
          barrier + a root reduce + a multicast);
       3. R                   — coarsest block, i.e. fewest combine rounds.
 
-    A `-max_tiles_per_core` term was measured as a second key (prefer the split
-    whose BUSIEST core carries the least work, e.g. G=2 x 80 tiles over G=1 x 96
-    tiles at (8192, 1024) — both fill all 110 cores). It is NOT used: measured on
-    blackhole_p150b it won (1,1,8192,2304) 220420 -> 198307 ns but lost
-    (1,1,8192,1024) 102445 -> 123259 ns, i.e. the extra combine round and the
-    halved DRAM run length outweigh the balance gain more often than not.
+    `max_tiles_per_core` rides alongside rather than inside the score because it is
+    applied as an ADMISSIBILITY BAND, not as a key — see `BALANCE_SLACK_PCT` and
+    `_select_regime`.
     """
     has_tail = 1 if geo.partial_w != 0 else 0
     out = []
@@ -594,6 +665,8 @@ def _select_candidates(geo, grid_x, grid_y, is_rm_out, budget, w_group_cap):
                 continue  # mechanism cap: a core owning zero hidden tiles hangs the gather
             if w_group_cap and G > w_group_cap:
                 continue  # perf lamp P2
+            if G < w_group_min:
+                continue  # perf lamp P3 (a floor on the reduction-group size)
             C = _div_up(geo.tensor_w_tiles, G)
             active_groups = min(geo.tensor_row_tiles, num_groups)
             core_row_tiles = _div_up(geo.tensor_row_tiles, active_groups)
@@ -604,8 +677,34 @@ def _select_candidates(geo, grid_x, grid_y, is_rm_out, budget, w_group_cap):
             if R == 0:
                 continue
             score = (active_groups * G, -G, R)
-            out.append((score, (gc, gr, C, R)))
+            out.append((score, (gc, gr, C, R), core_row_tiles * C))
     return out
+
+
+def _admissible_by_balance(candidates):
+    """Drop candidates whose CRITICAL PATH is more than `BALANCE_SLACK_PCT`% off the best.
+
+    Applied only among candidates that already tie on occupancy (the first score
+    key), so it never trades cores away for balance, and only among those whose
+    per-core hidden slice is at least `MIN_CORE_W_TILES` wide — the DRAM-run /
+    writer-barrier floor. If NO tied candidate clears that floor the band is
+    skipped entirely, so a narrow-hidden shape keeps Phase 0's choice untouched.
+
+    `BALANCE_SLACK_PCT = None` returns the input unchanged, which is Phase 0's
+    selection verbatim.
+    """
+    if BALANCE_SLACK_PCT is None or not candidates:
+        return candidates
+    best_occupancy = max(c[0][0] for c in candidates)
+    tied = [c for c in candidates if c[0][0] == best_occupancy]
+    wide = [c for c in tied if c[1][2] >= MIN_CORE_W_TILES]
+    if not wide:
+        return candidates
+    limit = min(c[2] for c in wide) * (100 + BALANCE_SLACK_PCT) // 100
+    kept = [c for c in wide if c[2] <= limit]
+    # The lower-occupancy candidates ride along: they always lose on the first
+    # score key, and keeping them means this filter can never empty the pool.
+    return [c for c in candidates if c[0][0] < best_occupancy] + kept
 
 
 def _select_regime(geo, grid_x, grid_y, is_rm_out, budget):
@@ -615,11 +714,13 @@ def _select_regime(geo, grid_x, grid_y, is_rm_out, budget):
 
     MAX_W_GROUP_SIZE is a PREFERENCE, not a mechanism cap: if no capped candidate
     fits L1 (a hidden dim so wide that residency needs a large group), the search
-    is retried uncapped rather than failing.
+    is retried uncapped rather than failing. MIN_W_GROUP_SIZE is a preference the
+    same way.
     """
-    candidates = _select_candidates(geo, grid_x, grid_y, is_rm_out, budget, MAX_W_GROUP_SIZE)
-    if not candidates and MAX_W_GROUP_SIZE:
-        candidates = _select_candidates(geo, grid_x, grid_y, is_rm_out, budget, 0)
+    candidates = _select_candidates(geo, grid_x, grid_y, is_rm_out, budget, MAX_W_GROUP_SIZE, MIN_W_GROUP_SIZE)
+    if not candidates and (MAX_W_GROUP_SIZE or MIN_W_GROUP_SIZE > 1):
+        candidates = _select_candidates(geo, grid_x, grid_y, is_rm_out, budget, 0, 1)
+    candidates = _admissible_by_balance(candidates)
     if not candidates:
         raise RuntimeError(
             "rms_norm: no work split fits L1 for shape "
@@ -952,7 +1053,7 @@ def create_program_descriptor(
 
         has_tail_global = 1 if geo.partial_w != 0 else 0
         max_row_count = rows_per_group + (1 if rows_extra else 0)
-        depths = _DEPTH_LADDER[0]
+        depths = _depth_ladder()[0]
         # An interleaved geometry never chunks: `_select_regime` still has the
         # w_group_size knob, which shrinks C itself (and chunking a DRAM-fed input
         # would not be free — see the R3 note above).
@@ -1027,8 +1128,8 @@ def create_program_descriptor(
         # it too (flat whenever a group's box carries filler cores — see
         # `_tree_for_box`).
         sh_s1, sh_s2 = _combine_tree(groups, G)
-        R, depths, W_CHUNK = 0, _DEPTH_LADDER[-1], C
-        for candidate_depths in _DEPTH_LADDER:
+        R, depths, W_CHUNK = 0, _depth_ladder()[-1], C
+        for candidate_depths in _depth_ladder():
             R = _max_block_row_tiles(
                 geo,
                 C,
@@ -1049,7 +1150,7 @@ def create_program_descriptor(
             # HIDDEN-AXIS CHUNKING (op_design.md R3). Take the COARSEST chunk that
             # fits, at full buffer depth; only if no chunk fits at that depth does
             # the depth ladder come back into play.
-            for candidate_depths in _DEPTH_LADDER:
+            for candidate_depths in _depth_ladder():
                 for wc in range(C - 1, 0, -1):
                     R = _max_block_row_tiles(
                         geo,
