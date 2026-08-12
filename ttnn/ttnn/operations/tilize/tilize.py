@@ -307,6 +307,10 @@ PROPERTIES = {
     "multi_core": {"value": True, "source": "verified"},
     # per-core CB L1 = CB_DEPTH * WT_BLOCK * (in_tile + out_tile), and
     # WT_BLOCK = min(Wt, WT_BLOCK_MAX) -> independent of H, W, Wt, rank, batch.
+    # On a RESIDENT (zero-copy) side the CB *is* the caller's shard, so it costs
+    # no L1 beyond the tensor the caller already allocated; A3d's clamp keeps the
+    # streamed side of a crossover bounded too (a wide shard downgrades to the
+    # byte-target block width rather than growing the CB with W).
     "bounded_cb": {"value": True, "source": "declared"},
 }
 

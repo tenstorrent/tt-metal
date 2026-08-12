@@ -367,3 +367,154 @@ geometry), `test_a6_depth2_fallback_is_pure_and_monotone`,
 `test_a6_l1_bytes_per_core_counts_only_interleaved_l1`. No new test file — the directory's
 existing debug/structure file is the right home, and the acceptance spec (`test_tilize.py`) was
 not touched (it is immutable and already covered these axes).
+
+---
+
+## Refinement 2 — Sharded I/O: same-spec zero-copy, crossover, both orientations (prompt A3 + A3b + A3d + A5c)
+
+- Date: 2026-08-12
+- Accuracy achieved: **exact** (`torch.equal`) on every sharded shape — tilize is a bijection on
+  byte positions, so there is no tolerance to report. HEIGHT `[1,1,512,64]` (128,64)x4,
+  WIDTH `[1,1,64,512]` (64,128)x4, BLOCK `[1,1,128,128]` (64,64) COL_MAJOR on 2x2, nd rank-4
+  `(1,1,64,64)` on 2x2, nd rank-3 `[4,32,64]` (2,32,64)x2, both crossovers, cross-spec, COL_MAJOR
+  HEIGHT `[1,1,256,64]` on a 1x4 column, plus 39 reference-shaped sharded cases in
+  `test_translated.py` (uneven shard shapes, DRAM-backed height shards, 11 block-sharded grids).
+- Golden test progress: registry golden **11 -> 22 supported_pass**, `supported_fail` /
+  `xpass_drift` / `xfail_wrong_mode` all **0**. Whole `eval/golden_tests/tilize/` directory: **165
+  passed / 179 failed in 32 s**, and every one of the 179 is a typed refusal (171
+  `UnsupportedAxisValue` for later refinements' axes + 8 `ExcludedCell` for the now-live
+  `use_multicore=False x sharded` exclusion). Zero hangs, zero non-refusal failures.
+
+### What was done
+
+**The distinction this refinement is actually about.** A HEIGHT-sharded tensor whose shard is the
+full row *passes every value test* when the interleaved reader re-reads it through a
+`TensorAccessor` — the layout is merely tolerated, and nothing but the dataflow itself catches it.
+So the deliverable is the placement, and it is asserted structurally, not inferred from output
+colour: `test_r2_same_spec_is_zero_copy_not_merely_tolerated` asserts `cb.has_buffer()` on BOTH
+CBs and `resident == 1` in BOTH dataflow kernels. The measured size of the difference is
+**10.1x** (below).
+
+**`plan_placement()` — one pure host function, three modes.** Per side it picks RESIDENT (the CB
+is aliased onto the shard buffer with `ttnn.cb_descriptor_from_sharded_tensor`) or STREAMED (the
+existing `TensorAccessor` path):
+
+| mode | when | reader | writer | bytes moved |
+|---|---|---|---|---|
+| `resident` (A3) | both sides L1-sharded with the SAME placement | arms the CB | drains the CB | **zero, both sides** |
+| `crossover_in/out` (A3b) | exactly one side L1-sharded | alias / accessor | accessor / alias | one side only |
+| `streamed` | interleaved, cross-spec, or a DRAM shard | accessor | accessor | both sides |
+
+- **The shard hands you the block width.** `WT_BLOCK = Wt_shard` on any resident side (a narrower
+  block would need a strided CB page, which an alias cannot express — `op_design.md` §6.2). This
+  is the ONE new argument to `blocking()` (`wt_block_override`), so the blocking arithmetic is
+  still stated once. On `sharded_big` that is `WT_BLOCK = 64` vs the interleaved clamp's 16.
+- **A2 core pinning**: sharded calls launch on `get_optimal_worker_cores_for_sharded_tensor(...)`
+  — core k holds shard k — never a re-spread `split_work_to_cores` line.
+- **Orientation is a non-issue on the resident path** and that is a *result*, not an omission:
+  every core tilizes the block sitting in its own L1, so it never needs to know which shard that
+  is. ROW/COL_MAJOR therefore land in SUPPORTED with no orientation-dependent code. Only the
+  crossover needs shard->position arithmetic (`b0 = wchunk*nt_h + r0`, contiguous because the
+  linearization is column-block-major), and it is gated to the cases where the mapping is
+  unambiguous (1-D shard grid, or ROW_MAJOR).
+- **A3d**: on a crossover the resident side costs no extra L1, but the streamed side's CB is
+  `Wt_shard` pages, so a wide-W HEIGHT shard would grow it with W. Past the budget the plan falls
+  back to the fully-streamed path, whose `WT_BLOCK` is the byte-target clamp and therefore
+  constant in W (`test_r2_a3d_wide_shard_crossover_keeps_the_cb_constant_in_w`).
+- **Multi-box cores**: when there are more shards than cores, a core holds several shard boxes —
+  still a dense run of blocks, so `nb = boxes_per_core * nt_h_shard`. A cliff/padded shard is not
+  dense and downgrades to streaming (or, when its pages are partial rows, a typed refusal).
+- **Cross-spec is NOT swallowed by the zero-copy path** (`test_r2_cross_spec_streams_and_does_not_alias`).
+  It falls back to the accessor path, which for L1 shards is an L1->L1 NoC read with no DRAM
+  staging — enough to make the cell correct, but *not* Refinement 4's designed topology (host-computed
+  pull map, shard-pinned cores). R4 remains the entry that builds that, and this refinement leaves
+  its same-spec guard test in place for it.
+
+**Kernel delta: two `if constexpr` arms, no new file.** The reader gains `resident == 1` ->
+`cb_reserve_back(pages); cb_push_back(pages); return;`, the writer `cb_wait_front(pages);
+cb_pop_front(pages); return;`. Compute is untouched — the resident path is the same `tilize`
+helper call at a different block width.
+
+### Perf
+
+Zero-copy is the whole point of the placement, so it is measured as a lever with its off-arm
+(`levers=dict(force_streamed=1)` — consume the resident shard through a TensorAccessor instead,
+i.e. the interleaved path tolerating the layout). Two new bench shapes, both carried forward:
+
+| shape | placement | zero-copy (ns) | `force_streamed=1` (ns) | **off/on** |
+|---|---|---|---|---|
+| `sharded_big (1,1,2048,2048)` | HEIGHT (32,2048), 8x8 = 64 cores | **2 093** | 21 235 | **10.144x** |
+| `sharded_small (1,1,512,64)` | HEIGHT (128,64), 4 cores | **852** | 2 345 | **2.754x** |
+
+It pays on the smallest sharded regime too, which is master.md **B0**'s requirement for a
+per-core lever. (The bench's GB/s column is DRAM-relative and is meaningless on these rows — the
+sharded path moves no DRAM bytes at all.)
+
+**Bound classification after the lever: the resident path is COMPUTE-bound.** Stubbing the tilize
+math alone takes `sharded_big` 2 096 -> **403 ns (0.19x)**, which equals the all-payloads-stubbed
+floor (421 ns) — because on this path there is no data-movement payload left to stub. So the
+honest statement is not "there is DM headroom" but "the 1.7 us above the launch floor is compute",
+and no DM lever can move it. `sharded_small` is 50 % launch floor (436 of 875 ns), exactly the
+fixed-cost regime Refinement 6 is scoped to. **No `/perf-ceiling-dm` target is reported for the
+resident path on purpose**: its NoC transfer count is zero, so a DM ceiling is not defined for it.
+C16 (CB depth) was re-measured here and is a structural no-op on the resident path (0.980x /
+1.006x) — both CBs *are* the shards, so depth has nothing to double.
+
+**Cumulative bench set — no regression** (all prior shapes re-measured, `base` arm):
+
+| shape | Refinement 1 | Refinement 2 | delta |
+|---|---|---|---|
+| `(1,1,2048,2048)` square | 44 317 | 44 146 | −0.4 % |
+| `(1,1,32,16384)` wide_short | 7 220 | 7 143 | −1.1 % |
+| `(1,1,2048,64)` tall_narrow | 4 893 | 4 846 | −1.0 % |
+| `(1,1,32,64)` smallest | 1 930 | 1 930 | 0.0 % |
+| `(1,1,32,32)` smallest_aligned | 1 846 | 1 835 | −0.6 % |
+| `(1,1,512,2048)` l1_to_l1 | 6 414 | 6 511 | +1.5 % (noise band) |
+| `(1,1,2048,2048)` **sharded_big** (new) | — | **2 122** | added to the set |
+| `(1,1,512,64)` **sharded_small** (new) | — | **863** | added to the set |
+
+Every prior shape is inside the 2-3 % noise band; the interleaved kernels are byte-identical at
+`resident == 0`, so this is the expected result rather than a lucky one. The square's ceiling is
+unchanged (achieved 0.92) and wide_short's 0.70 gap is still Refinement 3's declared region.
+
+Lever ledger: `verify_levers --phase "Refinement 2"` -> **clean, 0 blocking, 0 signal**. **A2** and
+**C14** move `deferred -> applied` (one edit, one shared off-arm, both arms measured on two
+regimes); **C15** stays `deferred` but now carries the measured size of the caller-side choice it
+describes (44.1 us interleaved vs 2.09 us sharded for the same conversion) — the op still cannot
+make that choice, `memory_config` is an argument. C14's **second degree** (folding the dataflow
+kernels away) is deliberately not taken: `examples/zero_copy_fold` measured 0.74x at 2 tiles/core,
+and it is Refinement 6's measurable step.
+
+### Issues encountered
+
+Two, both found by measurement rather than by argument, and both about the *host* view of a shard
+rather than the kernel:
+
+1. **A spec was unequal to itself.** The same-spec test initially took the streamed path because
+   `shard_identity` keyed on `memory_layout` and on the nd projection: a caller-constructed
+   MemoryConfig reports `ND_SHARDED` / `nd_shard_spec = None`, and the tensor built from it reports
+   `BLOCK_SHARDED` / a filled-in nd spec. The cells still PASSED (the streamed path is correct for
+   a full-row shard) — which is exactly why the zero-copy assertion tests exist. Fixed by keying the
+   identity on what actually places data (buffer, grid, folded shard shape, orientation) and
+   comparing the nd form only when both sides expose one.
+2. **A core can hold several shard boxes.** `cb_descriptor_from_sharded_tensor` returns the whole
+   per-bank size, which is `boxes_per_core` blocks, not one. The first version demanded exactly one
+   and fell back to streaming — which then refused nd cases whose pages are partial rows. Fixed by
+   deriving `boxes_per_core` from the per-bank size and requiring both sides to agree; four more
+   `test_tilize_nd_sharded` cases pass as a result.
+
+### Tests added
+
+`tests/ttnn/unit_tests/operations/tilize/test_tilize_debug.py` group 6 (**+10 cases**), all
+asserting the DATAFLOW rather than the values:
+`test_r2_same_spec_is_zero_copy_not_merely_tolerated` (5 cases: HEIGHT / WIDTH / BLOCK-COL / nd
+rank-4 / nd rank-3 — both CBs aliased, both kernels `resident == 1`, cores == shard cores, CB page
+size and page count == the shard),
+`test_r2_crossover_aliases_only_the_sharded_side` (2 cases),
+`test_r2_cross_spec_streams_and_does_not_alias` (the guard Refinement 4 inherits),
+`test_r2_plan_is_pure_and_covers_the_four_placements` (host-only: all four modes + the
+`force_streamed` off-arm + the typed refusal),
+`test_r2_a3d_wide_shard_crossover_keeps_the_cb_constant_in_w` (host-only).
+`_bench_tilize.py` gained the two sharded shapes and the `lever_c14_force_streamed` arm. The
+acceptance spec (`test_tilize.py`) was not touched — its section 8 already specifies this work and
+all 7 of its sharded cases now pass, in both correctness modes.

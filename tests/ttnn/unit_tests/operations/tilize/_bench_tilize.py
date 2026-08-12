@@ -85,13 +85,39 @@ SHAPES = {
     # them). Carried forward as a bench shape so a later phase cannot regress the
     # L1 directions while tuning the DRAM ones.
     "l1_to_l1": (1, 1, 512, 2048),
+    # Refinement 2 (A3/C14) adds the SHARDED placements. Two regimes, because the
+    # zero-copy lever's whole cost model is per-core:
+    #   sharded_big   grid-filling same-spec HEIGHT shard on 64 cores -> the
+    #                 regime where removing the NoC traffic is the whole call.
+    #   sharded_small the op_requirements Refinement-6 shape: 4 cores, 8 tiles
+    #                 each, where per-core fixed cost dominates (master.md B0).
+    "sharded_big": (1, 1, 2048, 2048),
+    "sharded_small": (1, 1, 512, 64),
 }
+
+
+def _height_shard(grid_end, shard_shape):
+    """Same-spec L1 HEIGHT shard (both sides) — the zero-copy placement."""
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(*grid_end))})
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+
+# 2048 rows over an 8x8 grid -> 32 rows/core (one tile-row, 64 tiles wide), and
+# 512 rows over 4 cores -> 128 rows/core (4 tile-rows, 2 tiles wide).
+_SHARD_BIG = _height_shard((7, 7), (32, 2048))
+_SHARD_SMALL = _height_shard((3, 0), (128, 64))
 
 # Per-shape memory placement; DRAM interleaved on both sides unless named here.
 # ONE source of truth for a shape's placement — `_bench_input` and the `_dispatch`
 # call both read it.
 _MEM_BY_SHAPE = {
     "l1_to_l1": (ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
+    "sharded_big": (_SHARD_BIG, _SHARD_BIG),
+    "sharded_small": (_SHARD_SMALL, _SHARD_SMALL),
 }
 
 
@@ -122,6 +148,11 @@ ARMS = {
     "lever_b9_noc_swap": dict(levers=dict(noc_split=0)),
     # ---- buffering lever (C16) ------------------------------------------
     "lever_c16_depth1": dict(levers=dict(double_buffer=0)),
+    # ---- placement lever (A2 / C14): zero-copy OFF ----------------------
+    # The sharded shapes' counterfactual — consume the resident shard through a
+    # TensorAccessor instead of aliasing the CB onto it (i.e. the interleaved
+    # path merely TOLERATING the layout). A no-op on the interleaved shapes.
+    "lever_c14_force_streamed": dict(levers=dict(force_streamed=1)),
     # ---- ablation arms (classification; output wrong by design) ---------
     "ablate_compute": dict(levers=dict(stub_compute=1)),
     "ablate_read": dict(levers=dict(stub_read=1)),
@@ -210,7 +241,14 @@ def test_bench(device):
     for shape_name in shape_names:
         shape = SHAPES[shape_name]
         blk = blocking(list(shape), 32, 2)
-        cores, _all_cores, _per_core = plan_cores(device, blk["total_blocks"], use_multicore=True)
+        in_mem, _out_mem = _mem_for(shape_name)
+        if in_mem.is_sharded():
+            # A shard's cores are fixed by its spec (master.md A2), and the shard
+            # hands you the block width — so neither comes from `plan_cores`.
+            cores = list(range(in_mem.shard_spec.grid.num_cores()))
+            blk = dict(blk, wt_block=in_mem.shard_spec.shape[1] // 32, total_blocks=len(cores))
+        else:
+            cores, _all_cores, _per_core = plan_cores(device, blk["total_blocks"], use_multicore=True)
         elem_bytes = 2
         total_bytes = 2 * torch.tensor(shape).prod().item() * elem_bytes  # read + write
         base = results.get((shape_name, "base"))

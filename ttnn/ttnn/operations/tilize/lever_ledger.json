@@ -38,11 +38,22 @@
       "delta_pct": 10.9
     },
     "A2": {
-      "status": "deferred",
-      "phase": "A0",
-      "followup": "A3: on the sharded paths pin the grid to the shard's own cores (get_optimal_worker_cores_for_sharded_tensor) instead of re-spreading with split_work_to_cores. Phase 0 is interleaved-only, so there is no shard whose cores could be honoured yet.",
-      "predicted_delta_pct": 100,
-      "reason": "Predicted delta is the whole DRAM traffic on the sharded cells (C14 zero-copy is the same refinement): a shard re-spread across the grid re-fetches over the NoC data that is already resident in the owning core's L1."
+      "status": "applied",
+      "phase": "Refinement 2",
+      "knob": "force_streamed",
+      "reason": "Sharded calls launch on the shard's OWN cores via get_optimal_worker_cores_for_sharded_tensor (shard_grid_cores in the program descriptor) \u2014 core k holds shard k \u2014 instead of re-spreading the linear block space with split_work_to_cores. A2 and C14 are one edit on this op (the pinned cores are what makes the CB alias legal), so they share the force_streamed off-arm: with it on, the same call re-spreads across the grid AND re-fetches the shard over the NoC. per-regime off/on: sharded_big (64 cores, 1 block each) 10.144x, sharded_small (4 cores, 4 blocks each) 2.754x \u2014 it pays on the smallest sharded regime too, which is B0's requirement.",
+      "measured": {
+        "on_ns": 2093.3,
+        "off_ns": 21235.0,
+        "shape": [
+          1,
+          1,
+          2048,
+          2048
+        ],
+        "note": "same-spec HEIGHT-sharded L1->L1, shard (32,2048) on an 8x8 grid; off-arm = levers=dict(force_streamed=1). Second regime measured on sharded_small [1,1,512,64] shard (128,64) on 4 cores: 851.7 vs 2345.3 ns."
+      },
+      "delta_pct": 90.1
     },
     "A3": {
       "status": "deferred",
@@ -182,18 +193,29 @@
       "reason": "Buildable here: every read in a block has the same size and the same L1 stride; only the source page changes. Deliberately NOT closed by the argument that interleaved DRAM puts consecutive sticks on different banks \u2014 that exact (correct) premise is what a prior run used to reject the lever, and measurement then found it wins below 128 B. It owes a number; deferred on scope."
     },
     "C14": {
-      "status": "deferred",
-      "phase": "A0",
-      "followup": "A3: back both CBs on the resident L1 shards with ttnn.cb_descriptor_from_sharded_tensor so the reader issues NO NoC read and tilize packs straight into the output shard. Keep reader/compute/writer as three kernels (folding measured 0.74x in examples/zero_copy_fold).",
-      "predicted_delta_pct": 100,
-      "reason": "Removes 100% of the DRAM traffic on the same-spec sharded cells. Inapplicable to the interleaved Phase-0 rectangle \u2014 a shard has to exist before its CB can be aliased onto it \u2014 so this is A3's deliverable. op_design.md already records that consuming a resident shard through a TensorAccessor would not be an implementation of sharding at all."
+      "status": "applied",
+      "phase": "Refinement 2",
+      "knob": "force_streamed",
+      "reason": "FIRST degree taken: both CBs are aliased onto the resident L1 shards with ttnn.cb_descriptor_from_sharded_tensor, so the reader issues no NoC read (it only arms the CB), tilize packs straight into the output shard, and the writer only drains it \u2014 zero bytes moved on either side. Structurally verified, not inferred: test_tilize_debug.py::test_r2_same_spec_is_zero_copy_not_merely_tolerated asserts cb.has_buffer() on BOTH CBs and resident==1 in both dataflow kernels. SECOND degree (fold the dataflow kernels away) deliberately NOT taken \u2014 examples/zero_copy_fold measured 0.74x at 2 tiles/core; it is Refinement 6's measurable step.",
+      "measured": {
+        "on_ns": 2093.3,
+        "off_ns": 21235.0,
+        "shape": [
+          1,
+          1,
+          2048,
+          2048
+        ],
+        "note": "Same arm as A2 (one edit, one off-arm). After the lever the resident path is COMPUTE-bound: ablate_compute alone drops sharded_big 2096 -> 403 ns (0.19x), which equals the ablate_all floor (421 ns) because there is no data-movement payload left to stub."
+      },
+      "delta_pct": 90.1
     },
     "C15": {
       "status": "deferred",
-      "phase": "A0",
+      "phase": "Refinement 2",
       "followup": "A3 makes the sharded path exist; after that this lever is the CALLER's choice of memory_config, not the op's. Nothing for the op to apply beyond supporting the layout natively.",
       "predicted_delta_pct": 0,
-      "reason": "The op does not choose its own tensor placement \u2014 memory_config is an argument. Predicted 0 for the interleaved cells this phase ships; the value of sharding shows up as C14 on cells that pass a sharded memory_config."
+      "reason": "The op does not choose its own tensor placement \u2014 memory_config is an argument. Predicted 0 for the interleaved cells this phase ships; the value of sharding shows up as C14 on cells that pass a sharded memory_config. Refinement 2 MEASURED the size of the caller-side choice this lever describes: the same [1,1,2048,2048] bf16 conversion is 44.1 us DRAM-interleaved and 2.09 us same-spec L1-sharded (21x) \u2014 the sharded call moves zero bytes. Still `deferred` and not `applied`, because the op cannot make that choice: memory_config is an argument."
     },
     "C16": {
       "status": "measured-no-payoff",

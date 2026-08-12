@@ -33,6 +33,7 @@ from pathlib import Path
 import math
 
 import ttnn
+from ttnn.operations._op_contract import UnsupportedAxisValue
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
 
@@ -304,13 +305,12 @@ def shard_identity(memory_config):
     if view is None:
         return None
     grid, shape, orientation = view
-    return (
-        str(memory_config.buffer_type),
-        str(memory_config.memory_layout),
-        str(grid),
-        shape,
-        str(orientation),
-    )
+    # NOT keyed on `memory_layout`: the same nd spec reports ND_SHARDED as a
+    # caller-constructed MemoryConfig and BLOCK_SHARDED once a tensor is built
+    # from it, so keying on it would make a spec unequal to itself (measured).
+    # Grid + folded shard shape + orientation is what places the data; the nd
+    # form (compared separately) is what separates the two APIs.
+    return (str(memory_config.buffer_type), str(grid), shape, str(orientation))
 
 
 def _nd_identity(memory_config):
@@ -563,7 +563,10 @@ def create_program_descriptor(
         force_streamed=bool(lv["force_streamed"]),
     )
     if plan["error"] is not None:
-        raise ValueError(plan["error"])  # validate() refuses this before dispatch
+        # A support gap, not a contract violation: validate() raises the same
+        # typed refusal ahead of dispatch for every geometry it can see without
+        # the allocated buffers (it cannot see a cliff shard's per-bank size).
+        raise UnsupportedAxisValue(plan["error"])
 
     tile_descriptor = ttnn.TileDescriptor(tile_height, TILE_WIDTH)
     resident_in = plan["mode"] in (MODE_RESIDENT, MODE_CROSSOVER_IN)
@@ -584,12 +587,17 @@ def create_program_descriptor(
     # ---------- 3. circular buffers ----------
     # A resident CB is ALIASED onto the shard buffer: the shard IS the CB, so
     # the reader/writer move zero bytes on that side. `total_size=0` asks for the
-    # tensor's own per-bank size, which must be exactly the dense tile block —
-    # a padded shard is not densely addressable and falls back to streaming.
-    def _aliased_cb(index, tensor, page_size, core_ranges, expected_bytes):
-        cb = ttnn.cb_descriptor_from_sharded_tensor(index, tensor, 0, 0, core_ranges)
-        if cb.total_size != expected_bytes:
-            return None
+    # tensor's own per-bank size, which must be a whole number of dense shard
+    # blocks (a core can hold SEVERAL boxes when there are more shards than
+    # cores). Anything else — a padded or cliff shard — is not densely
+    # addressable and falls back to streaming.
+    def _aliased_cb(index, tensor, page_size, core_ranges, block_bytes):
+        try:
+            cb = ttnn.cb_descriptor_from_sharded_tensor(index, tensor, 0, 0, core_ranges)
+        except Exception:  # some nd geometries cannot express a CB at all
+            return None, 0
+        if block_bytes == 0 or cb.total_size % block_bytes:
+            return None, 0
         cb.format_descriptors = [
             ttnn.CBFormatDescriptor(
                 buffer_index=index,
@@ -598,7 +606,7 @@ def create_program_descriptor(
                 tile=tile_descriptor,
             )
         ]
-        return cb
+        return cb, cb.total_size // block_bytes
 
     def _streamed_cb(index, dtype, page_size, core_ranges, num_pages):
         return ttnn.CBDescriptor(
@@ -638,34 +646,37 @@ def create_program_descriptor(
     else:
         sharded_tensor = input_tensor if plan["sharded_side"] == "in" else output_tensor
         cores, all_cores = shard_grid_cores(device, sharded_tensor)
-        nt_h_shard = plan["shard"]["nt_h_shard"]
-        if plan["mode"] == MODE_RESIDENT:
-            # Every core tilizes the block sitting in its own L1 — it never needs
-            # to know WHICH shard that is, which is why orientation is a non-issue.
-            assignments = [(core, 0, nt_h_shard) for core in cores]
-        else:
-            n_sh_cols = plan["shard"]["n_sh_cols"]
-            assignments = [
-                (core, (k % n_sh_cols) * nt_h + (k // n_sh_cols) * nt_h_shard, nt_h_shard)
-                for k, core in enumerate(cores)
-            ]
 
-    # ---------- 5. CB depth knob (a distinct knob from block factor) ----------
+    # ---------- 5. commit the plan against the real buffers ----------
+    # The analytic plan says the shard COULD be the block; the buffers decide
+    # whether it IS one. A core can hold several shard boxes (more shards than
+    # cores), which is still a dense run of blocks; a cliff/padded shard is not,
+    # and downgrades to streaming.
     alias_bytes = 0
+    boxes_per_core = 1
     cb_input_sticks = cb_output_tiles = None
     if resident_in or resident_out:
         nt_h_shard = plan["shard"]["nt_h_shard"]
+        boxes_in = boxes_out = None
         if resident_in:
-            cb_input_sticks = _aliased_cb(
+            cb_input_sticks, boxes_in = _aliased_cb(
                 CB_INPUT_STICKS, input_tensor, in_tile_bytes, all_cores, nt_h_shard * wt_block * in_tile_bytes
             )
         if resident_out:
-            cb_output_tiles = _aliased_cb(
+            cb_output_tiles, boxes_out = _aliased_cb(
                 CB_OUTPUT_TILES, output_tensor, out_tile_bytes, all_cores, nt_h_shard * wt_block * out_tile_bytes
             )
-        if (resident_in and cb_input_sticks is None) or (resident_out and cb_output_tiles is None):
-            # The shard is not a dense whole-tile block (padded per-bank size):
-            # fall back to the streamed path rather than alias a wrong layout.
+        boxes = boxes_in if resident_in else boxes_out
+        aliased_ok = (not resident_in or cb_input_sticks is not None) and (
+            not resident_out or cb_output_tiles is not None
+        )
+        if resident_in and resident_out and boxes_in != boxes_out:
+            aliased_ok = False  # the two sides disagree about the block run
+        if plan["mode"] != MODE_RESIDENT and boxes != 1:
+            # A crossover core's blocks must be ONE contiguous range of the
+            # linearization; several boxes per core is Refinement 4's territory.
+            aliased_ok = False
+        if not aliased_ok:
             return create_program_descriptor(
                 input_tensor,
                 output_tensor,
@@ -674,9 +685,24 @@ def create_program_descriptor(
                 tile_height=tile_height,
                 levers=dict(lv, force_streamed=1),
             )
+        boxes_per_core = boxes
         alias_bytes = (cb_input_sticks.total_size if resident_in else 0) + (
             cb_output_tiles.total_size if resident_out else 0
         )
+
+    if plan["mode"] != MODE_STREAMED:
+        nt_h_shard = plan["shard"]["nt_h_shard"]
+        if plan["mode"] == MODE_RESIDENT:
+            # Every core tilizes the blocks sitting in its own L1 — it never needs
+            # to know WHICH shards those are, which is why orientation is a
+            # non-issue on this path.
+            assignments = [(core, 0, boxes_per_core * nt_h_shard) for core in cores]
+        else:
+            n_sh_cols = plan["shard"]["n_sh_cols"]
+            assignments = [
+                (core, (k % n_sh_cols) * nt_h + (k // n_sh_cols) * nt_h_shard, nt_h_shard)
+                for k, core in enumerate(cores)
+            ]
 
     streamed_page_bytes = (0 if resident_in else in_tile_bytes) + (0 if resident_out else out_tile_bytes)
     cb_depth = cb_depth_for(

@@ -128,7 +128,7 @@ the roofline work belongs to the perf slots, which begin from a fresh whole-op b
 
 ---
 
-### [ ] Refinement 2 — Sharded I/O: same-spec zero-copy, crossover, both orientations (prompt A3 + A3b + A3d + A5c)
+### [x] Refinement 2 — Sharded I/O: same-spec zero-copy, crossover, both orientations (prompt A3 + A3b + A3d + A5c)
 
 **Goal**: add the sharded placement axes for the schemes whose work stays **local to the core that
 owns the shard**:
@@ -166,6 +166,31 @@ Refinement 5's pad reader).
 **Done when**: the same-spec (HEIGHT/WIDTH/BLOCK/nd, ROW and COL) and crossover golden cells pass;
 tt-npe shows zero DRAM traffic on every sharded side; a wide HEIGHT-shard crossover keeps per-core CB
 L1 constant in `W`; the interleaved bench set shows no regression.
+
+**Outcome** (`[x]`, 2026-08-12): `shard_api`, `out_scheme` and `orientation` are fully in SUPPORTED.
+Golden registry **11 -> 22 supported_pass** with `supported_fail` / `xpass_drift` /
+`xfail_wrong_mode` all **0**; the whole golden directory runs in 32 s with **165 passed / 179
+failed**, every failure a typed refusal for a later refinement's axis, zero hangs. **Zero-copy is
+asserted structurally, not inferred from test colour** (`test_r2_same_spec_is_zero_copy_not_merely_tolerated`
+pins `cb.has_buffer()` on both CBs + `resident == 1` in both dataflow kernels + cores == shard
+cores), because a full-row shard passes every value test on the streamed path too. Measured with
+its off-arm (`levers=dict(force_streamed=1)`): **10.144x** on `sharded_big [1,1,2048,2048]` HEIGHT
+(32,2048) on 64 cores (2 093 vs 21 235 ns) and **2.754x** on `sharded_small [1,1,512,64]` on 4
+cores (852 vs 2 345 ns) — so it pays in the low-work-per-core regime too (master.md B0). Ledger
+rows **A2** and **C14** move `deferred -> applied` with both arms recorded; C15 stays deferred but
+now carries the measured caller-side contrast (44.1 us interleaved vs 2.09 us sharded for the same
+conversion). Cumulative bench re-measured: every prior shape within ±1.5 % (noise band).
+**Remaining headroom, as a FINDING (not a queue item)**: after the lever the resident path is
+**compute-bound, with no data movement left at all** — stubbing the tilize math alone takes
+`sharded_big` 2 096 -> 403 ns, which *equals* the all-payloads-stubbed floor (421 ns), so no DM
+lever can move it and **no DM ceiling is defined for this path**. What is left is (a) the ~1.7 us
+of tilize math on `sharded_big` and (b) the launch floor, which is **50 %** of `sharded_small`
+(436 of 875 ns) — exactly Refinement 6's declared region, where C14's *second* degree (folding the
+dataflow kernels away, measured 0.74x at 2 tiles/core in `examples/zero_copy_fold`) is the
+candidate. Not chased here: this is a generality slot, and the fold is a measurement Refinement 6
+owns. Cross-spec is reachable but takes the generic accessor path (L1->L1, no DRAM staging), NOT
+Refinement 4's host-computed pull map — R4 is unchanged, and this refinement leaves it a guard test
+so a general gather cannot silently swallow the same-spec zero-copy case.
 
 ---
 
