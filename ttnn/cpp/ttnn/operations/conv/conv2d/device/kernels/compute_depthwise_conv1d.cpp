@@ -157,8 +157,8 @@ inline void mul_and_accumulate_block(
 // so the kernel needs no reciprocal.
 //
 // The scalar SFPU_OP_*_ACTIVATION seam cannot express this: it is parameterised by compile-time
-// scalars, and snake's parameters are per channel. See AUDIO_FUSION_PLAN.md Step 2a for the three
-// cheaper routes that were ruled out by inspection.
+// scalars, and snake's parameters are per channel. Three cheaper routes were ruled out by inspection
+// for the same reason.
 //
 // DST budget: this runs only on the last tap, by which point DST_A and DST_B have been consumed, so
 // it reuses them and the total stays at the 3 tiles the fp32 half-sync budget already allows.
@@ -169,7 +169,7 @@ inline void mul_and_accumulate_block(
 //     DST_ACC += DST_A
 //
 // The parameters ride in the **weights** CB rather than a CB of their own, which is why this takes
-// `in1_dfb`. AUDIO_FUSION_PLAN.md picked the optional-input-tensor route instead, but that is the more
+// `in1_dfb`. The design notes first picked the optional-input-tensor route instead, but that is the more
 // expensive of the two once counted properly: adding an optional tensor to the op touches the
 // operation struct, validate, compute_output_specs, create_program, the conv2d/conv1d invoke chains
 // and pybind, and an op-signature change is all-or-nothing -- no subset of those files compiles, so it
@@ -186,7 +186,7 @@ inline void mul_and_accumulate_block(
 // tiles; popping them would destroy them for the tiles that follow. They live in a small dedicated CB
 // filled once, not in the streaming weights CB -- which is also why this cannot ride in1: the
 // non-coalesced path pops in1 once per tile per tap, so two pops at the last tap would consume
-// `2 * block_num_tiles` per block against one push. See FUSED_BAND_DESIGN.md.
+// `2 * block_num_tiles` per block against one push.
 template <uint32_t dst_acc, uint32_t dst_a, uint32_t dst_b>
 inline void apply_snake_beta(DataflowBuffer params_dfb, uint32_t param_col) {
     const uint32_t params_cb_id = params_dfb.get_id();

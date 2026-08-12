@@ -60,5 +60,19 @@ The shipping result: **281.6 ms at 49.45 dB PSNR vs the CPU reference**, on a 4x
 * **18 `DRAM Auto slice` criticals per decode are pre-existing** and identical sharded or not.
 * **A wedged card looks exactly like a kernel hang.** A bare `ttnn.add` tells them apart in seconds.
 
-Roughly 47 one-shot probes were removed once their conclusions were captured in the result documents;
-`git log -- models/tt_dit/tests/models/minimax_h3/audio_perf` recovers any of them.
+## What was removed
+
+46 one-shot probe scripts and 6 exploration documents (`START_HERE_FUSION.md`, `AUDIO_FUSION_PLAN.md`,
+`FUSED_BAND_DESIGN.md`, `AUDIO_KERNELS_BENCH.md`, `AUDIO_RESULTS.md`, `UPSTREAM_TRANSPOSE_TF32.md`) once
+their conclusions were captured in `ITEM1_RESULT.md`, `ITEM2_RESULT.md` and `goal.md`'s dead-ends list.
+Recover any of them with:
+
+    git log --diff-filter=D --name-only -- models/tt_dit/tests/models/minimax_h3/audio_perf
+    git show <commit>^:<path>
+
+Those documents carried the design rationale for the fused-band / snake C++ work, and the source
+comments that pointed at them were reworded to state the reason inline rather than cite a deleted file.
+If you are working on that C++ and want the fuller derivation, it is in git history.
+
+`PROFILE_2026_08_06.txt` is kept deliberately: it is the raw artifact behind "the profiler's 1401 ms is
+not device time", and a retraction whose evidence has been deleted is just an assertion.

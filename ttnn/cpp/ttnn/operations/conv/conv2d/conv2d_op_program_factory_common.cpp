@@ -215,7 +215,7 @@ std::vector<CBInfo> get_cb_info(
         // Per-channel snake parameters (alpha, then inv_beta) for the fused activation on the 1D
         // depthwise path. Two tiles, filled once and never popped -- they are the same for every tile
         // in a block, so a streaming CB is the wrong home: the compute path pops in1 once per tile per
-        // tap, which would consume them `block_num_tiles` times over. See FUSED_BAND_DESIGN.md.
+        // tap, which would consume them `block_num_tiles` times over.
         //
         // Env-gated rather than a Conv2dConfig field because this is a measurement vehicle; if it
         // earns its place it should become a proper field. Zero pages otherwise, so the default path
