@@ -874,21 +874,6 @@ class TT_CCL:
                     else persistent_buffer.memory_config()
                 )
                 input_tensor_mesh = ttnn.to_memory_config(input_tensor_mesh, target_mem_cfg)
-            if os.environ.get("QWEN_BH_PROBE", "0") == "1":
-                try:
-                    _pb_grid = persistent_buffer.memory_config().shard_spec.grid
-                    _out_grid = (
-                        memory_config.shard_spec.grid
-                        if (memory_config is not None and memory_config.is_sharded())
-                        else None
-                    )
-                    logger.info(
-                        f"QWEN_BH_AR_PROBE lm_head={lm_head} cluster_axis={cluster_axis} "
-                        f"in_grid={input_tensor_mesh.memory_config().shard_spec.grid if input_tensor_mesh.memory_config().is_sharded() else None} "
-                        f"buffer_grid={_pb_grid} out_grid={_out_grid}"
-                    )
-                except Exception as _e:
-                    logger.info(f"QWEN_BH_AR_PROBE failed: {_e}")
             output_tensor_mesh = ttnn.experimental.all_reduce_async(
                 input_tensor_mesh,
                 persistent_buffer,
@@ -1763,19 +1748,6 @@ class TT_CCL:
         self.mesh_device.reset_sub_device_stall_group()
 
 
-def _norm_probe(mesh_device, tag):
-    # Env-gated device sync used to bracket the distributed-norm sub-ops so a hang can be attributed
-    # to the exact step (pre / all_gather / post). No-op unless QWEN_BH_PROBE=1.
-    if os.environ.get("QWEN_BH_PROBE", "0") == "1":
-        logger.info(f"[norm-probe] before sync: {tag}")
-        try:
-            ttnn.synchronize_device(mesh_device)
-        except Exception as e:
-            logger.info(f"[norm-probe] sync skipped ({tag}): {str(e)[:80]}")
-            return
-        logger.info(f"[norm-probe] after  sync: {tag}")
-
-
 def tt_distributed_rmsnorm(
     inp,
     epsilon,
@@ -1799,7 +1771,6 @@ def tt_distributed_rmsnorm(
     # Reshard onto the worker-safe grid before computing stats (only on the confined path).
     if input_memcfg is not None:
         inp = ttnn.to_memory_config(inp, memory_config=input_memcfg)
-        _norm_probe(mesh_device, "reshard inp -> worker grid")
 
     # Run distributed rmsnorm part 1
     tt_stats = ttnn.rms_norm_pre_all_gather(
@@ -1809,7 +1780,6 @@ def tt_distributed_rmsnorm(
         use_2d_core_grid=use_2d_grid,
         program_config=program_config,
     )
-    _norm_probe(mesh_device, "rms_norm_pre_all_gather")
 
     # On the confined path the gathered stats must be sharded (rms_norm_post_all_gather with a sharded
     # program config asserts stats.is_sharded()); everywhere else keep the DRAM interleaved gather.
@@ -1823,7 +1793,6 @@ def tt_distributed_rmsnorm(
         buffer_key="LAYERNORM",
         force_stable=force_stable_ag,
     )
-    _norm_probe(mesh_device, "line_all_gather (LAYERNORM stats)")
     tt_stats.deallocate(True)
 
     # Run distributed rmsnorm part 2. output_dtype lets the caller keep the norm output bf8 even when
@@ -1838,7 +1807,6 @@ def tt_distributed_rmsnorm(
         program_config=program_config,
         dtype=output_dtype,
     )
-    _norm_probe(mesh_device, "rms_norm_post_all_gather")
     # tt_stats_gathered.deallocate(True)
     # inp.deallocate(True)
 

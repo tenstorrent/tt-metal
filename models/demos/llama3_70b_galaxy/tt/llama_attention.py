@@ -2,11 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-
 import torch
 import ttnn
-from loguru import logger
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 
@@ -619,18 +616,6 @@ class TtLlamaAttention(LightweightModule):
         # worker-pinned no-prefetcher collective/head/rotary path instead, gluing layouts as needed.
         fused_ccl = self.use_prefetcher and not self.use_unfused_ccl
 
-        _ap_on = os.environ.get("QWEN_BH_PROBE", "0") == "1"
-
-        def _aprobe(tag):
-            if _ap_on:
-                logger.info(f"[attn-probe] before sync: {tag}")
-                try:
-                    ttnn.synchronize_device(self.mesh_device)
-                except Exception as e:
-                    logger.info(f"[attn-probe] sync skipped ({tag}): {str(e)[:80]}")
-                    return
-                logger.info(f"[attn-probe] after  sync: {tag}")
-
         ###
         # QKV matmuls
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
@@ -673,7 +658,6 @@ class TtLlamaAttention(LightweightModule):
             if x_in is not x:
                 ttnn.deallocate(x_in)
         ttnn.deallocate(x)
-        _aprobe("qkv_matmul")
         # xqkv_fused_sharded -> [1, 1, 32, 12288 // 8]
 
         ###
@@ -739,7 +723,6 @@ class TtLlamaAttention(LightweightModule):
                 dtype=ttnn.bfloat16,
                 use_optimal_ccl_for_llama=True,
             )
-            _aprobe("qkv_line_all_reduce")
             if self.use_unfused_ccl:
                 # The ring QKV output + column all-reduce leave the fused tensor width-sharded on the
                 # ring cores == the prefetcher's global-CB receiver cores (cols 1-3, rows 0-7). Running
@@ -763,7 +746,6 @@ class TtLlamaAttention(LightweightModule):
                     ),
                 )
                 xqkv_fused_create_head_in = ttnn.to_memory_config(xqkv_fused_create_head_in, _ch_in_memcfg)
-                _aprobe("create_head_input_reshard_off_receiver")
             (
                 q_heads_pre_rot_1BQD,
                 k_heads_pre_rot_1BKD,
@@ -777,7 +759,6 @@ class TtLlamaAttention(LightweightModule):
                 slice_size=self.slice_size,
             )
             ttnn.deallocate(xqkv_fused_create_head_in)
-            _aprobe("create_qkv_heads")
         else:
             (
                 q_heads_pre_rot_1BQD,
@@ -796,7 +777,6 @@ class TtLlamaAttention(LightweightModule):
             q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD = self._apply_decode_qk_norm(
                 q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD
             )
-            _aprobe("qk_norm")
 
         ttnn.deallocate(xqkv_fused_sharded)
 
@@ -883,7 +863,6 @@ class TtLlamaAttention(LightweightModule):
             )
         ttnn.deallocate(q_heads_pre_rot_1BQD)
         ttnn.deallocate(k_heads_pre_rot_1BKD)
-        _aprobe("rotary")
 
         ###
         # KV update
@@ -921,7 +900,6 @@ class TtLlamaAttention(LightweightModule):
         )
         ttnn.deallocate(k_heads_1BKD)
         ttnn.deallocate(v_heads_1BKD)
-        _aprobe("kv_update")
 
         # NOTE: Varying the batch size will result in slightly different outputs.
         # For example, a prompt w/ 1 user vs, the same prompt repeated N times for N users, will produce different outputs
@@ -952,7 +930,6 @@ class TtLlamaAttention(LightweightModule):
                 memory_config=sdpa_out_mem_cfg,  # FIXME: why not L1 height sharded e.g. SCORES_BATCHED_MM_OUTPUT_MEMCFG?
             )
         ttnn.deallocate(q_heads_1BQD)
-        _aprobe("sdpa")
 
         if not fused_ccl:
             # Device SDPA output is batch-first [1, B_local, H_local, D] (8 users/col). Order matters:
@@ -981,7 +958,6 @@ class TtLlamaAttention(LightweightModule):
                 subdevice_id=_ccl.worker_sub_device_id,
             )
             _ccl.gather_idx[_ca] = (_gidx + 1) % _ccl.num_cbs
-            _aprobe("sdpa_all_gather_users")
             try:
                 concat_sub_core_grids = gathered_users.memory_config().shard_spec.grid
             except Exception:
@@ -992,7 +968,6 @@ class TtLlamaAttention(LightweightModule):
                 sub_core_grids=concat_sub_core_grids,
             )
             ttnn.deallocate(gathered_users)
-            _aprobe("concat_heads")
         else:
             attn_output_cat = self.tt_ccl.all_gather_concat(  # [1, 1, 32, 1024]
                 attn_output_1G4D_sharded,
@@ -1014,7 +989,6 @@ class TtLlamaAttention(LightweightModule):
             attn_output_cat = ttnn.to_memory_config(
                 attn_output_cat, self.model_config["SHARDED_ATTN_WO_INPUT_RING_MEMCFG"]
             )
-            _aprobe("wo_input_reshard")
         if not self.use_prefetcher:
             # BH no-prefetch cannot use the ring WO program here: its static CB
             # allocation exceeds L1 once concat produces the correct decode shape.
@@ -1041,7 +1015,6 @@ class TtLlamaAttention(LightweightModule):
                 dtype=ttnn.bfloat8_b,
                 sub_device_id=self.prefetcher_setup.worker_sub_device_id,
             )
-        _aprobe("wo_matmul")
         # [1, 1, 32, 2304]
         if use_replicated_full_wo:
             dense_out_reduced = dense_out_ttnn
@@ -1059,7 +1032,6 @@ class TtLlamaAttention(LightweightModule):
                 use_optimal_ccl_for_llama=True,
             )
             ttnn.deallocate(dense_out_ttnn)
-        _aprobe("wo_line_all_reduce")
 
         return dense_out_reduced
 
