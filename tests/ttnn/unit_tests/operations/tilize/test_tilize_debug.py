@@ -36,6 +36,11 @@ Eight groups:
 
 8. **Refinement 4 (A3c)** — the cross-spec RESHARD: the pull topology, the band
    gather, zero DRAM staging, and the same-spec zero-copy path it must not eat.
+
+9. **Refinement 6 (perf)** — the five per-core-overhead knobs: that each is
+   correct at BOTH its values (four ship OFF as measured nulls and must stay
+   re-runnable), that the one that ships ON is gated on the residency that makes
+   it legal, and that the fold really removes the kernels it claims to.
 """
 
 import pytest
@@ -47,8 +52,14 @@ from ttnn.operations.tilize.tilize import _dispatch
 from ttnn.operations.tilize.tilize_program_descriptor import (
     MIN_BLOCKS_PER_CORE,
     SPREAD_CORES,
+    FAST_ADDRGEN,
+    FOLD_RESIDENT,
     STAGGER_READS,
+    STATEFUL_READS,
     TARGET_READ_BYTES,
+    TILIZE_UNINIT,
+    WAIT_UPFRONT_RESIDENT,
+    read_bank_period,
     blocking,
     cb_budget_bytes,
     cb_depth_for,
@@ -238,6 +249,18 @@ def test_multicore_identity(device, shape):
         dict(stagger_reads=0),
         dict(stagger_reads=1),
         dict(spread_cores=1, min_blocks_per_core=3, stagger_reads=1),
+        # R6 per-core-overhead knobs. Four of these ship OFF (measured nulls kept
+        # as live knobs), so their ON value is not production code anywhere —
+        # which is exactly why it has to stay correct: a knob nobody can re-run
+        # is not a counterfactual.
+        dict(stateful_reads=0),
+        dict(stateful_reads=1),
+        dict(fast_addrgen=0),
+        dict(fast_addrgen=1),
+        dict(stateful_reads=1, fast_addrgen=1),
+        dict(tilize_uninit=0),
+        dict(wait_upfront=0),
+        dict(fold_resident=1),
     ],
     ids=lambda d: "-".join(f"{k}{v}" for k, v in d.items()),
 )
@@ -1307,3 +1330,101 @@ def test_r5_pad_plan_is_pure_and_states_the_geometry_once():
     assert pad_plan([1, 1, 64, 64], 32, None, None, ttnn.bfloat16, 2) is None
     # ... and an ALIGNED input with a pad argument resolves to a disarmed plan.
     assert pad_plan([1, 1, 64, 64], 32, None, 0.0, ttnn.bfloat16, 2)["enabled"] is False
+
+
+# ---------------------------------------------------------------------------
+# 9. Refinement 6 (perf) — the per-core-overhead knobs
+# ---------------------------------------------------------------------------
+#
+# Four of R6's five knobs measured as nulls and ship at a byte-identical default;
+# the fifth (`wait_upfront`) ships ON but only where residency makes it legal.
+# These tests pin the two things a perf knob can silently get wrong: the GATE
+# (armed where it is legal, never where it would deadlock) and the STRUCTURE (the
+# fold really drops the kernels).
+
+_COMPUTE_FOLD_CT = 6
+_COMPUTE_WAIT_UPFRONT_CT = 8
+_READER_STATEFUL_CT = 19
+_READER_BANK_PERIOD_CT = 20
+_READER_FAST_ADDRGEN_CT = 21
+
+
+def test_r6_read_bank_period_is_a_hint_that_gates_itself():
+    """Host-only. `read_bank_period` decides whether bank grouping is even
+    DEFINED for a source; it never decides correctness (the kernel derives its
+    stride from real accessor addresses and checks the source node)."""
+    # The armed case: fewer banks than a block has sticks.
+    assert read_bank_period(7, 32, is_dram_interleaved=True) == 7
+    # Not DRAM-interleaved -> the R4 band gather or the resident path owns it.
+    assert read_bank_period(7, 32, is_dram_interleaved=False) == 0
+    # Degenerate groupings: one stick per group buys nothing and costs a probe.
+    assert read_bank_period(32, 32, is_dram_interleaved=True) == 0
+    assert read_bank_period(64, 32, is_dram_interleaved=True) == 0
+    assert read_bank_period(1, 32, is_dram_interleaved=True) == 0
+    # A tiny tile height (Refinement 8's axis) disarms it on its own.
+    assert read_bank_period(7, 4, is_dram_interleaved=True) == 0
+
+
+def test_r6_shipped_defaults_are_the_measured_ones(device):
+    """The four measured-null knobs must ship OFF, and the reader's CT vector
+    must say so — a default that drifted back ON would silently reintroduce a
+    lever measured at 1.04-1.24x WORSE, and no value test would notice."""
+    assert (STATEFUL_READS, FAST_ADDRGEN, FOLD_RESIDENT) == (0, 0, 0)
+    assert TILIZE_UNINIT == 1 and WAIT_UPFRONT_RESIDENT == 1
+
+    descriptor, _, _ = _descriptor_for(device, (1, 1, 32, 64), ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG)
+    reader, _writer, compute = descriptor.kernels
+    assert reader.compile_time_args[_READER_STATEFUL_CT] == 0
+    assert reader.compile_time_args[_READER_FAST_ADDRGEN_CT] == 0
+    # With both arms off the bank period is meaningless and must not be carried.
+    assert reader.compile_time_args[_READER_BANK_PERIOD_CT] == 0
+    assert compute.compile_time_args[_COMPUTE_FOLD_CT] == 0
+
+
+def test_r6_upfront_wait_is_armed_only_where_the_input_is_resident(device):
+    """`WaitUpfront` waits for the WHOLE assignment in one call. That is legal
+    exactly when the input CB *is* the shard (the reader pushes every page in one
+    `cb_push_back`); on a streamed input the CB holds `cb_depth * wt_block` pages
+    and the same wait would deadlock. So the gate is residency, not the caller."""
+    shard = _legacy_mem(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _crs(((0, 0), (3, 0))), (128, 64))
+    _skip_if_grid_too_small(device, shard)
+
+    resident, _, _ = _descriptor_for(device, (1, 1, 512, 64), shard, shard)
+    assert resident.kernels[2].compile_time_args[_COMPUTE_WAIT_UPFRONT_CT] == 1
+    # crossover_in: the input is still resident, so it is still legal.
+    crossover_in, _, _ = _descriptor_for(device, (1, 1, 512, 64), shard, ttnn.DRAM_MEMORY_CONFIG)
+    assert crossover_in.kernels[2].compile_time_args[_COMPUTE_WAIT_UPFRONT_CT] == 1
+    # crossover_out and fully-streamed: the input STREAMS -> must be WaitBlock.
+    crossover_out, _, _ = _descriptor_for(device, (1, 1, 512, 64), ttnn.DRAM_MEMORY_CONFIG, shard)
+    assert crossover_out.kernels[2].compile_time_args[_COMPUTE_WAIT_UPFRONT_CT] == 0
+    streamed, _, _ = _descriptor_for(device, (1, 1, 512, 64), ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG)
+    assert streamed.kernels[2].compile_time_args[_COMPUTE_WAIT_UPFRONT_CT] == 0
+
+
+def test_r6_fold_removes_the_kernels_and_only_on_the_resident_path(device):
+    """C14's SECOND degree is about the PROGRAM, not the data path, so it is
+    asserted on the kernel list. It is also gated: a crossover still has one real
+    dataflow kernel, and folding that would serialize genuine NoC work onto the
+    compute thread instead of deleting an empty kernel."""
+    shard = _legacy_mem(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _crs(((0, 0), (3, 0))), (128, 64))
+    _skip_if_grid_too_small(device, shard)
+
+    def kernels_for(in_mem, out_mem, levers):
+        torch.manual_seed(0)
+        tt_in = ttnn.from_torch(
+            torch.randn(1, 1, 512, 64).bfloat16(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=in_mem,
+        )
+        tt_out = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, 512, 64]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, out_mem
+        )
+        return create_program_descriptor(tt_in, tt_out, levers=levers).kernels
+
+    assert len(kernels_for(shard, shard, dict(fold_resident=1))) == 1
+    assert len(kernels_for(shard, shard, dict(fold_resident=0))) == 3
+    # not the same spec -> not foldable, whichever side is resident.
+    assert len(kernels_for(shard, ttnn.DRAM_MEMORY_CONFIG, dict(fold_resident=1))) == 3
+    assert len(kernels_for(ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, dict(fold_resident=1))) == 3

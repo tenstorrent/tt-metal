@@ -82,9 +82,9 @@
     },
     "B0": {
       "status": "applied",
-      "phase": "A0",
+      "phase": "Refinement 6",
       "knob": "barrier_per_block",
-      "reason": "The discipline itself: every per-core-overhead lever in this ledger (B5, B7, and B9) is counterfactualed on the smallest regime the op runs in as well as on the square, so a lever that pays at several blocks/core cannot silently regress the 1-block case. All three DID pay on the smallest shape (B7 6.03x, B5 1.027x, B9 1.045x), so none needed a work-per-core gate. The measurement below is B7's smallest-regime arm, the strongest instance. Measured on [1,1,32,32] \u2014 the smallest shape the Phase-0 op can RUN (1 core, 1 block, 1 tile). feature_spec.INPUTS' global smallest is [1,1,30,32], but that is a pad_mode=\"auto\" cell which Phase 0 refuses (padding is refinement P1), and [1,1,32,32] is its tile-aligned counterpart with the identical per-core geometry (nt_h=1, Wt=1, one block). FOLLOW-UP for P1: re-run these arms on [1,1,30,32] once the padded reader exists, since the pad fill adds per-block L1 stores that this shape does not carry.",
+      "reason": "The discipline itself: every per-core-overhead lever in this ledger (B5, B7, and B9) is counterfactualed on the smallest regime the op runs in as well as on the square, so a lever that pays at several blocks/core cannot silently regress the 1-block case. All three DID pay on the smallest shape (B7 6.03x, B5 1.027x, B9 1.045x), so none needed a work-per-core gate. The measurement below is B7's smallest-regime arm, the strongest instance. Measured on [1,1,32,32] \u2014 the smallest shape the Phase-0 op can RUN (1 core, 1 block, 1 tile). feature_spec.INPUTS' global smallest is [1,1,30,32], but that is a pad_mode=\"auto\" cell which Phase 0 refuses (padding is refinement P1), and [1,1,32,32] is its tile-aligned counterpart with the identical per-core geometry (nt_h=1, Wt=1, one block). FOLLOW-UP for P1: re-run these arms on [1,1,30,32] once the padded reader exists, since the pad fill adds per-block L1 stores that this shape does not carry. Refinement 6 is the discipline's stress test and it PAID: all five knobs were counterfactualed on [1,1,32,64] / [1,1,32,32] / [1,1,512,64] FIRST, and four of the five turned out to be net-negative exactly there \u2014 the regime they were predicted to help. R6 also corrects B0's own framing for this op: the smallest regime is not fixed-per-core-setup-bound (ablate_all is 316 of 1898 ns = 17%), it is bound by ONE core issuing 32 unavoidable stick reads and then running read -> compute -> write strictly serially because a single block has nothing to overlap with.",
       "measured": {
         "on_ns": 1867.3,
         "off_ns": 11251.3,
@@ -197,17 +197,28 @@
       "reason": "tilize's map is a BIJECTION on byte positions and its single input operand varies along BOTH split axes, so no core reads a byte another core reads and there is no fan-out to multicast. Pinned by asserting the program declares no semaphores (a multicast handshake needs them) and that the per-core block ranges tile the block space exactly once."
     },
     "B13": {
-      "status": "deferred",
-      "phase": "A0",
-      "followup": "Add a `set_state` knob to the reader (configure the command buffer once, then issue same-shape reads with with_state) and SWEEP it across target_read_bytes \u2014 a prior run found this lever inverts with transaction size (+19.9% at 512 B, 0.950-0.978 at <=128 B), so one measurement would decide it wrongly. Per B0, measure the smallest regime too.",
-      "predicted_delta_pct": 5,
-      "reason": "Buildable here: every read in a block has the same size and the same L1 stride; only the source page changes. Deliberately NOT closed by the argument that interleaved DRAM puts consecutive sticks on different banks \u2014 that exact (correct) premise is what a prior run used to reject the lever, and measurement then found it wins below 128 B. It owes a number; deferred on scope."
+      "status": "measured-no-payoff",
+      "phase": "Refinement 6",
+      "knob": "stateful_reads",
+      "reason": "BUILT and measured in both orderings, and it LOSES in both. `set_state` programs the source NODE, so it only amortizes if consecutive issues share a bank \u2014 which means issuing the block's sticks in bank-phase order. (a) Bank-phase order: DEVICE_PRINT confirms the grouping is perfect (7 nodes x ~5 sticks, address stride exactly one aligned page), and the arm is still 1.18x SLOWER on [1,1,32,64] and 1.27x on [1,1,32,16384) \u2014 five consecutive requests to ONE bank queue behind each other, while the natural page order round-robins the seven banks. Bank grouping is an anti-lever on this part. (b) Natural order (what ships as the knob): the node changes every stick, so the state is re-programmed every stick and the arm pays set_state + with_state (two command-buffer-ready polls) where a plain read pays one \u2014 1.236x/1.238x worse on the two smallest shapes, 1.030x on tall_narrow, 1.000x on the square. The premise the row was deferred on (that the six register writes are what a read costs) is refuted: the per-issue cost is command-buffer turnaround plus DRAM latency, not instructions, so replacing three register writes cannot move it. Kept as a live knob at the byte-identical default STATEFUL_READS = 0; both arms are in `_bench_tilize.py` (lever_r6_stateful_off / lever_r6_stateful_force) and both values are pinned exact by test_tilize_debug.py::test_lever_off_arms_are_still_correct.",
+      "measured": {
+        "on_ns": 2377.7,
+        "off_ns": 1923.7,
+        "shape": [
+          1,
+          1,
+          32,
+          64
+        ],
+        "note": "on = stateful forced, off = shipped default. B0's smallest regime, where the lever was predicted to pay most."
+      },
+      "delta_pct": -23.6
     },
     "C14": {
       "status": "applied",
-      "phase": "Refinement 4",
+      "phase": "Refinement 6",
       "knob": "force_streamed",
-      "reason": "FIRST degree taken: both CBs are aliased onto the resident L1 shards with ttnn.cb_descriptor_from_sharded_tensor, so the reader issues no NoC read (it only arms the CB), tilize packs straight into the output shard, and the writer only drains it \u2014 zero bytes moved on either side. Structurally verified, not inferred: test_tilize_debug.py::test_r2_same_spec_is_zero_copy_not_merely_tolerated asserts cb.has_buffer() on BOTH CBs and resident==1 in both dataflow kernels. SECOND degree (fold the dataflow kernels away) deliberately NOT taken \u2014 examples/zero_copy_fold measured 0.74x at 2 tiles/core; it is Refinement 6's measurable step. Refinement 4 carries the first degree onto the cross-spec reshard: a cross-spec pair cannot alias BOTH sides (a core would tilize its own rows into another core's tiles), but it can and does alias ONE \u2014 so half the NoC traffic disappears there too. Measured against the R2 fully-streamed fallback (levers=dict(force_streamed=1)) on the two reshard bench shapes: 22,851 vs 61,580 ns (2.695x) banded, 15,717 vs 30,078 ns (1.914x) whole-row.",
+      "reason": "FIRST degree taken: both CBs are aliased onto the resident L1 shards with ttnn.cb_descriptor_from_sharded_tensor, so the reader issues no NoC read (it only arms the CB), tilize packs straight into the output shard, and the writer only drains it \u2014 zero bytes moved on either side. Structurally verified, not inferred: test_tilize_debug.py::test_r2_same_spec_is_zero_copy_not_merely_tolerated asserts cb.has_buffer() on BOTH CBs and resident==1 in both dataflow kernels. SECOND degree (fold the dataflow kernels away) NOW MEASURED and NOT taken on evidence: the compute kernel can self-arm the input CB (PACK thread) and self-drain the output CB (UNPACK thread), so the program launches ONE kernel per core instead of three \u2014 and it is 1.045x SLOWER on sharded_small (4 cores, 8 tiles) and 1.024x on sharded_big. Mechanism: DEVICE KERNEL DURATION is the max over RISCs, and the two resident dataflow kernels (one cb_reserve/push, one cb_wait/pop) were never on the critical path, so folding deletes nothing from the wall and adds the handshake to the compute thread. Same sign as examples/zero_copy_fold's 0.74x on Wormhole, much smaller here. Kept as a live knob at FOLD_RESIDENT = 0 with both bench arms (lever_r6_fold_off / lever_r6_fold_force) and its kernel-count structure pinned by test_r6_fold_removes_the_kernels_and_only_on_the_resident_path. Refinement 4 carries the first degree onto the cross-spec reshard: a cross-spec pair cannot alias BOTH sides (a core would tilize its own rows into another core's tiles), but it can and does alias ONE \u2014 so half the NoC traffic disappears there too. Measured against the R2 fully-streamed fallback (levers=dict(force_streamed=1)) on the two reshard bench shapes: 22,851 vs 61,580 ns (2.695x) banded, 15,717 vs 30,078 ns (1.914x) whole-row. R6 also lands a THIRD consequence of residency, and it is the one that actually paid: because the resident reader arms the CB with the whole assignment in ONE cb_push_back, compute's per-block cb_wait_front can only ever re-observe a semaphore that is already set \u2014 so the resident path ships WaitMode::WaitUpfront (one wait per call) instead of WaitBlock. Measured 1.040x on sharded_small (870 -> 837 ns, repeated at 5 trials) and 1.018x on sharded_big; armed ONLY where the input is resident (on a streamed input the CB holds cb_depth*wt_block pages and the same wait would deadlock), gated by residency rather than by the caller and pinned by test_r6_upfront_wait_is_armed_only_where_the_input_is_resident. Off-arm: lever_r6_wait_upfront_off.",
       "measured": {
         "on_ns": 2093.3,
         "off_ns": 21235.0,
@@ -217,7 +228,7 @@
           2048,
           2048
         ],
-        "note": "Same arm as A2 (one edit, one off-arm). After the lever the resident path is COMPUTE-bound: ablate_compute alone drops sharded_big 2096 -> 403 ns (0.19x), which equals the ablate_all floor (421 ns) because there is no data-movement payload left to stub."
+        "note": "Same arm as A2 (one edit, one off-arm). After the lever the resident path is COMPUTE-bound: ablate_compute alone drops sharded_big 2096 -> 403 ns (0.19x), which equals the ablate_all floor (421 ns) because there is no data-movement payload left to stub. R6: the second degree measured 869/882 ns folded vs 836/844 ns unfolded on sharded_small \u2014 a 1.04x LOSS, so the three-kernel structure ships."
       },
       "delta_pct": 90.1
     },
@@ -285,11 +296,22 @@
       "delta_pct": 35.8
     },
     "D21": {
-      "status": "deferred",
-      "phase": "A0",
-      "followup": "Check whether TensorAccessor already specializes pow2 page sizes (shifts, not multiplies) on this path; if not, measure an InterleavedAddrGenFast-style specialization on the square, where address-gen runs 128 reads/core.",
-      "predicted_delta_pct": 2,
-      "reason": "Small by nature (address arithmetic, not bytes), and the square is DRAM-bandwidth-bound at 84% of peak, so saving reader instructions is unlikely to move the wall. Worth a number only if a reader-issue-bound regime appears."
+      "status": "measured-no-payoff",
+      "phase": "Refinement 6",
+      "knob": "fast_addrgen",
+      "reason": "The row's own follow-up asked: does TensorAccessor already specialize the address arithmetic? MEASURED: yes. A hand-rolled replacement \u2014 one running address per bank phase, advanced by a stride derived from two real accessor calls, so a block costs bank_period+1 accessor calls instead of tile_h \u2014 is 1.078x/1.103x SLOWER on the two smallest shapes, 1.055x on tall_narrow, 1.005x on the square, in the natural issue order (an earlier bank-phase-ordered version was worse still, see B13). The accessor's divisions are by a COMPILE-TIME bank count baked through TensorAccessorArgs, so the compiler already turns them into a multiply-shift; the address table's own array, branch and probe call cost more than they save. Kept as a live knob at the byte-identical default FAST_ADDRGEN = 0, with both bench arms (lever_r6_addrgen_off / lever_r6_addrgen_force) and both values pinned exact.",
+      "measured": {
+        "on_ns": 2073.7,
+        "off_ns": 1923.7,
+        "shape": [
+          1,
+          1,
+          32,
+          64
+        ],
+        "note": "on = fast_addrgen forced, off = shipped default (the accessor per stick)."
+      },
+      "delta_pct": -7.8
     },
     "E22": {
       "status": "deferred",

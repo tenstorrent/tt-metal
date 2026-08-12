@@ -457,7 +457,7 @@ a tail rather than the bulk, the numbers above say there is nothing to win.
 
 ---
 
-### [ ] Refinement 6 — Speed up the low-work-per-core regimes
+### [x] Refinement 6 — Speed up the low-work-per-core regimes
 
 **Type**: perf
 
@@ -479,6 +479,42 @@ regime itself and gated on a work-per-core threshold if it only pays above one.
 **Done when**: measured device-ns improves on `smallest` and on the small sharded shape, each landed
 lever has an off-arm ratio recorded in the ledger, the golden suite is green, and there is no
 regression on `square` / `wide_short` / `tall_narrow` or on any sharded shape a prior phase measured.
+
+**Outcome** (`[x]`, 2026-08-12): five knobs built, each with both bench arms and both values pinned
+exact; **one pays and ships on, four measured net-negative *on the regime they were predicted to
+help* and ship parked at byte-identical defaults.** The win is **`sharded_small` 870 -> 837 ns
+(1.040x, reproduced at 5 trials)**, from C14's *third* degree: a resident reader arms the CB with the
+whole assignment in one `cb_push_back`, so compute's per-block `cb_wait_front` can only re-observe a
+semaphore already set — `WaitMode::WaitUpfront` collapses them, armed only where the input is
+resident (a streamed input would deadlock). `sharded_big` 1.018x. Golden registry 42/42 unchanged,
+unit dir 154 passed / 0 failed, all 14 cumulative bench shapes within ±3 %, ledger clean (17 of 24
+rows now closed with evidence, up from 15).
+
+The four nulls are the other half of the deliverable, each retiring a lever the ledger had carried
+with a predicted delta since Phase 0, with a mechanism rather than an argument. **B13** (`predicted
+5%`) was measured in BOTH orderings: bank-phase order — which is the only order that lets one
+`set_state` amortize — is 1.18x/1.27x SLOWER because five consecutive requests to one bank queue
+behind each other (DEVICE_PRINT proved the grouping itself was perfect: 7 nodes x 5 sticks, stride
+exactly one aligned page), and natural order re-programs the state every stick for 1.24x worse.
+**D21** (`predicted 2%`) answered its own deferral question — `TensorAccessor` already specializes
+(its divisor is a CT-baked bank count), so a hand-rolled running-address table is 1.08x/1.10x worse.
+**C14's second degree** (fold the resident dataflow kernels into compute; one kernel per core, built
+and correct) is 1.045x slower, because `DEVICE KERNEL DURATION` is the max over RISCs and those two
+handshake kernels were never on the critical path. **The LLK teardown** (`tilize_uninit`) is noise
+everywhere, so the cross-op state coupling that skipping it would create is not worth taking.
+
+**What is left, as a FINDING (not a queue item).** `smallest` did NOT improve (1 898 ns) and the
+ablation says why the queue's premise for it was wrong: `ablate_all` is 17 % (316 ns) — real, but the
+other 83 % is not per-core setup. It is one core issuing 32 stick reads it cannot avoid (splitting
+along W hands every core all 32 sticks again, only narrower) and then running read -> compute ->
+write **strictly serially**, because one block per core has nothing to overlap with. Against B7's own
+off-arm (a fully serialized read is ~350 ns) the 963 ns read stage decomposes as ~625 ns of issue
+plus one DRAM round trip, i.e. **~20 ns/issue of command-buffer turnaround** — which is exactly why
+both instruction-side levers moved nothing. The lever that would move it is master.md
+**B8**/`split_reader` in its true form: give the idle writer RISC half the block's sticks so two NIUs
+issue in parallel. Not taken here because it needs a semaphore handshake to re-join the two halves
+into one CB block — a scheme change, not a knob — and because the trailing perf rounds start from a
+fresh whole-op breakdown rather than from a lever guessed at now.
 
 ---
 

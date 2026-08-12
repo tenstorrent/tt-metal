@@ -1209,3 +1209,190 @@ residency kept),
 `_bench_tilize.py` gained the four padded shapes and the `_PAD_BY_SHAPE` request map.
 `probes/probe_014.py` (the allocation/view mechanism measured before it was used),
 `probe_015.py` (interleaved padded), `probe_016.py` (padded sharded).
+
+---
+
+## Refinement 6 — Speed up the low-work-per-core regimes
+
+- **Date**: 2026-08-12
+- **Box/arch**: same stamp as A0 (Blackhole, 11x10 = 110 cores, AICLK 1349.98 MHz, bf16,
+  `DEVICE KERNEL DURATION [ns]`, 3 launches averaged after 2 cache-warming launches; the two
+  confirmation rows below are 5 launches).
+- **Type**: perf. No SUPPORTED change; `SUPPORTED` / `EXCLUSIONS` / `validate()` are byte-identical
+  to Refinement 5.
+
+### What was done
+
+Five knobs were built, each with both bench arms and both values pinned exact. **Four measured
+net-negative on the very regime they were predicted to help and ship parked at a byte-identical
+default; one pays and ships on.** The four nulls are the deliverable as much as the win — each
+retires a lever the ledger had been carrying with a predicted delta since Phase 0, and each retires
+it with a *mechanism*, not an argument.
+
+| knob | master.md | ships | measured (off/on, >1 = the shipped value pays) |
+|---|---|---|---|
+| `wait_upfront` | C14 (3rd degree) | **ON, resident path only** | **1.040x** sharded_small, 1.018x sharded_big |
+| `stateful_reads` | B13 | off (`STATEFUL_READS = 0`) | 0.809x smallest, 0.808x smallest_aligned, 0.970x tall_narrow |
+| `fast_addrgen` | D21 | off (`FAST_ADDRGEN = 0`) | 0.928x smallest, 0.907x smallest_aligned, 0.948x tall_narrow |
+| `fold_resident` | C14 (2nd degree) | off (`FOLD_RESIDENT = 0`) | 0.957x sharded_small, 0.977x sharded_big |
+| `tilize_uninit` | — (LLK teardown) | on (unchanged) | 0.991x-1.009x everywhere = noise |
+
+**The one that pays — `wait_upfront` (C14's third degree).** A resident reader arms the input CB
+with the WHOLE assignment in a single `cb_push_back` (the CB *is* the shard), so compute's per-block
+`cb_wait_front` can only re-observe a semaphore that is already set. `WaitMode::WaitUpfront`
+collapses the four waits of `sharded_small` into one: **870 -> 837 ns, 1.040x**, reproduced at 5
+trials (1.039x at 3 trials in the earlier sweep), and 1.018x on `sharded_big`. It is armed **only
+where the input is resident** — on a streamed input the CB holds `cb_depth * wt_block` pages, not
+the whole assignment, so the same wait would deadlock — and the gate is residency, not a caller
+argument (`test_r6_upfront_wait_is_armed_only_where_the_input_is_resident` asserts the CT flag on
+resident / crossover_in / crossover_out / streamed).
+
+**B13, measured in BOTH orderings, and it loses in both.** `set_state` programs the source NODE, so
+it amortizes only across issues that share a bank — which means issuing a block's sticks in
+bank-phase order. (a) *Bank-phase order*: DEVICE_PRINT confirms the grouping is exactly right (7
+nodes x ~5 sticks each, low address advancing by exactly one aligned page), and the arm is still
+**1.18x slower on `smallest` and 1.27x on `wide_short`** — five consecutive requests to ONE bank
+queue behind each other while the natural page order round-robins the seven banks. *Bank grouping is
+an anti-lever on this part*, which is worth recording on its own: it is the mirror image of R3's
+`stagger_reads` finding. (b) *Natural order* (what ships as the knob): the node changes every stick,
+so the state is re-programmed every stick and the arm pays `set_state` + `with_state` — two
+command-buffer-ready polls where a plain read pays one — **1.236x/1.238x worse** on the two smallest
+shapes. The ledger's premise ("every read in a block has the same size and stride; only the page
+changes") was true and still insufficient: what a read costs here is command-buffer turnaround plus
+DRAM latency, not the three register writes B13 removes.
+
+**D21 answered its own deferral question: `TensorAccessor` already specializes.** The row asked
+"check whether TensorAccessor already does shifts rather than divides; if not, measure an
+InterleavedAddrGenFast-style specialization". Measured: a hand-rolled replacement — one running
+address per bank phase, advanced by a stride *derived from two real accessor calls* (so `bank_period
++ 1` accessor calls per block instead of `tile_h`), in the unchanged natural issue order — is
+**1.078x/1.103x slower** on the two smallest shapes. The accessor's divisions are by a compile-time
+bank count baked through `TensorAccessorArgs`, so the compiler already emits a multiply-shift; the
+address table's array, branch and probe cost more than they save.
+
+**C14's second degree (the fold), measured, and it loses — for a structural reason worth keeping.**
+The compute kernel can self-arm the input CB (a PACK-thread `cb_reserve_back`/`cb_push_back`) and
+self-drain the output CB (an UNPACK-thread `cb_wait_front`/`cb_pop_front`), so the program launches
+**one kernel per core instead of three** — correct on device, and **1.045x slower** on
+`sharded_small`. Mechanism: `DEVICE KERNEL DURATION` is the max over RISCs, and the two resident
+dataflow kernels (one reserve/push, one wait/pop) were never on the critical path — so folding
+deletes nothing from the wall and adds the handshake to the compute thread. Same sign as
+`examples/zero_copy_fold`'s 0.74x on Wormhole, much smaller here (1.04x vs 1.35x), which is itself
+the useful number: the fold's cost is the serialized handshake, and this op's handshake is two CB
+operations for a whole core's work rather than per block.
+
+### Accuracy achieved
+
+**Exact** (`torch.equal`, not PCC — tilize is a byte bijection). Both values of all five knobs are
+production code *or* a live counterfactual, so both are pinned:
+`test_lever_off_arms_are_still_correct` grew from 18 to 26 arms (`stateful_reads` {0,1},
+`fast_addrgen` {0,1}, the two together, `tilize_uninit=0`, `wait_upfront=0`, `fold_resident=1`) on a
+tail-block geometry, and `probe_018/020/021` check nine geometries x four knob combinations
+(rank 2/3/4, tail block, all four buffer directions, resident and crossover_in) bit-exact.
+Precision baseline unchanged (PCC = 1.000000, max_abs_err = 0.0).
+
+### Golden test progress
+
+| suite | Refinement 5 | Refinement 6 |
+|---|---|---|
+| `test_golden.py` (registry) | 42 passed / 0 failed | **42 passed, 338 xfailed, 580 skipped, 0 failed** |
+| golden `-k shard` slice | — | **186 passed / 38 failed**, all 38 typed `UnsupportedAxisValue` refusals (R5's padded-narrow-shard gap), **0** non-refusal failures |
+| unit dir `tests/.../tilize/` | 142 passed / 17 xfailed | **154 passed / 17 xfailed / 0 failed** |
+
+Unchanged registry count is the expected result for a perf refinement (no axis value added).
+
+### Perf gate
+
+**Bound classification, re-ablated at the shipped config** (payload stubbed, all CB scaffolding and
+trip counts kept; 5 launches):
+
+| shape | base | read | write | compute | floor | reading |
+|---|---|---|---|---|---|---|
+| `smallest (1,1,32,64)` | **1 898** | 963 | 325 | 476 | 316 (17 %) | serial: 1 core, 1 block |
+| `smallest_aligned (1,1,32,32)` | **1 862** | 1 115 | 311 | 418 | 313 (17 %) | serial: 1 core, 1 block |
+| `sharded_small (1,1,512,64)` | **837** | 0 | 22 | 405 | 410 (**49 %**) | compute + launch floor |
+| `sharded_big (1,1,2048,2048)` | **2 081** | 0 | 0 | 1 677 | 396 (19 %) | compute, no DM at all |
+
+**No `/perf-ceiling-dm` target is reported for the two sharded rows** (their NoC transfer count is
+zero, as R2 recorded), and the two `smallest` rows move 4-8 KB — three orders of magnitude below any
+bandwidth bound, so a DRAM ceiling does not describe them either. The right comparison for them is
+the *structural* floor, below.
+
+**What `smallest` is actually made of — the finding that retires the queue's premise.** The entry
+scoped this slot at "the per-core setup cost", citing `ablate_all` = 17 %. That 17 % is real and
+confirmed (316 of 1 898 ns) — but the other 83 % is **not** setup. It is one core issuing 32 stick
+reads it cannot avoid (one per row of the single tile-row; splitting along W gives every core all 32
+sticks again, only narrower), and then running read -> compute -> write **strictly serially**,
+because a core holding exactly ONE block has nothing to overlap it with. Per-issue cost decomposes
+against B7's own off-arm: a fully serialized read is ~350 ns (the B7 arm is 11 251 ns for 32), so
+with all 32 in flight behind one barrier the 963 ns read stage is ~625 ns of issue plus one ~340 ns
+DRAM round trip, i.e. **~20 ns per issue that is command-buffer turnaround, not instructions**. That
+is exactly why both instruction-side levers (B13's register writes, D21's address arithmetic) moved
+nothing and cost their own overhead. The lever that *would* move it is the one this slot does not
+own: give the idle writer RISC half the block's sticks so two NIUs issue in parallel (master.md
+**B8**/`split_reader` in its true form), which needs a semaphore handshake and is a scheme change.
+
+**Cumulative bench set — no regression, all 14 shapes re-measured in one run:**
+
+| shape | R5 | R6 | delta | verdict |
+|---|---:|---:|---:|---|
+| `(1,1,2048,2048)` square | 44 170 | 44 410 | +0.5 % | noise |
+| `(1,1,32,16384)` wide_short | 6 844 | 6 775 | −1.0 % | noise |
+| `(1,1,2048,64)` tall_narrow | 4 973 | 4 817 | −3.1 % | noise/faster |
+| `(1,1,32,64)` smallest | 1 903 | 1 924 | +1.1 % | noise |
+| `(1,1,32,32)` smallest_aligned | 1 844 | 1 835 | −0.5 % | noise |
+| `(1,1,512,2048)` l1_to_l1 | 5 055 | 5 029 | −0.5 % | noise |
+| `(1,1,2048,2048)` sharded_big | 2 117 | 2 106 | −0.5 % | noise (1.018x vs its own off-arm) |
+| `(1,1,512,64)` **sharded_small** | 863 | **837** | **−3.0 %** | this slot's target (1.040x vs off-arm) |
+| `(1,1,1024,1024)` reshard | 22 668 | 22 877 | +0.9 % | noise |
+| `(1,1,1024,1024)` reshard_rowwise | 15 550 | 15 724 | +1.1 % | noise |
+| `(1,1,2046,2048)` padded_h_tail | 44 013 | 44 117 | +0.2 % | noise |
+| `(1,1,2048,2046)` padded_w_tail | 44 453 | 44 269 | −0.4 % | noise |
+| `(1,1,2048,2048)` padded_noop | 44 181 | 44 291 | +0.2 % | noise |
+| `(1,1,1,16384)` padded_row_vector | 28 888 | 28 936 | +0.2 % | noise |
+
+No bench shape was added: the set already spans every regime this refinement's knobs key on (the
+four interleaved shapes for B13/D21, both sharded shapes for the fold and the upfront wait, and both
+reshard geometries where the input side is resident). Every knob was measured on **all 14**, which is
+how the four nulls are known to be nulls everywhere rather than only on their target.
+
+Lever ledger: `verify_levers --phase "Refinement 6"` -> **clean, 0 blocking, 0 signal**; 24/24 rows,
+now **17 closed with evidence** (was 15). **B13** and **D21** move `deferred -> measured-no-payoff`
+with both arms and a mechanism; **C14** records its second degree as measured-and-rejected and its
+third degree as applied; **B0** records that its own discipline is what caught four negative levers
+before they shipped, and that its framing of this op's smallest regime (fixed per-core setup) is
+corrected by the ablation to "one core, one block, unavoidably serial".
+
+### Issues encountered
+
+One, and it changed the design of the lever rather than the code under it. The first B13/D21 arm
+issued the block's sticks in **bank-phase order**, which is what lets one `set_state` cover a group —
+and it measured 1.18-1.27x SLOWER. Rather than revert on the wall alone, the grouping was verified
+with DEVICE_PRINT (`TT_METAL_DPRINT_RISCVS=NC`, 32 sticks: seven distinct source nodes, five sticks
+each, low address stepping by exactly 128 B) which proved the *implementation* was right and the
+*ordering* was the cost — consecutive same-bank requests queue at the bank. The arm was then rebuilt
+in natural issue order, where D21 is still expressible and B13 is not, and both were measured again.
+No hang, no race, no numerical divergence, no debug escalation.
+
+### Reused vs added
+
+| Reused unchanged | Added |
+|---|---|
+| the reader's block decode and `read_sticks_for_tilize` (still the emitted code on every shipped path — all four new reader/compute knobs default off or are `if constexpr`-discarded), `blocking()` / `plan_placement()` / `plan_cores()` / the CB builders / the **writer kernel, not one line** | `read_bank_period()` (host, pure), one `if constexpr` arm in the reader carrying both B13 and D21, three CT-selected lines in the compute kernel (`init_mode`, `wait_mode`, the fold's self-arm/self-drain), and the one-kernel program list for the fold |
+
+### Tests added
+
+`test_tilize_debug.py` group 9 (**+4 tests**, and +8 arms on the existing lever-correctness test):
+`test_r6_read_bank_period_is_a_hint_that_gates_itself` (host-only: armed only when the bank count is
+between 2 and `tile_height`, and never off a DRAM-interleaved source — including the tiny-tile case
+Refinement 8 will add),
+`test_r6_shipped_defaults_are_the_measured_ones` (the four nulls must ship OFF **and the reader's CT
+vector must say so** — a default drifting back on would silently reintroduce a 1.04-1.24x regression
+that no value test can see),
+`test_r6_upfront_wait_is_armed_only_where_the_input_is_resident` (all four placements; the streamed
+cases are the ones where the wait would deadlock),
+`test_r6_fold_removes_the_kernels_and_only_on_the_resident_path` (kernel-count structure, and that a
+crossover — which still has one real dataflow kernel — is never folded).
+`_bench_tilize.py` gained 8 R6 arms. `probes/probe_017.py` (the device's bank geometry),
+`probe_018/020/021.py` (per-knob bit-exactness), `probe_019.py` (the DEVICE_PRINT bank-grouping
+verification).
