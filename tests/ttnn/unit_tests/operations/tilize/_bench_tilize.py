@@ -131,6 +131,14 @@ SHAPES = {
     "padded_w_tail": (1, 1, 2048, 2046),
     "padded_noop": (1, 1, 2048, 2048),
     "padded_row_vector": (1, 1, 1, 16384),
+    # R6 ledger close-out: the GLOBAL smallest regime, i.e. the smallest shape in
+    # `feature_spec.INPUTS` — [1,1,30,32], a pad_mode="auto" cell. Phase 0 refused
+    # it (padding did not exist yet), which is why the per-core-overhead levers
+    # were counterfactualed on its tile-aligned counterpart `smallest_aligned`
+    # instead. Refinement 5 landed the padded reader, so the real smallest regime
+    # is now runnable and master.md B0's rule is measurable on the shape it names:
+    # 1 core, 1 block, 1 tile, and 30 of 32 rows read while 2 are filled.
+    "smallest_padded": (1, 1, 30, 32),
 }
 
 
@@ -193,6 +201,7 @@ _PAD_BY_SHAPE = {
     "padded_w_tail": dict(pad_value=-18.5),
     "padded_noop": dict(pad_value=-18.5),
     "padded_row_vector": dict(pad_value=-18.5),
+    "smallest_padded": dict(pad_value=-18.5),
 }
 
 

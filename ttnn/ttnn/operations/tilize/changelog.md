@@ -1396,3 +1396,33 @@ crossover — which still has one real dataflow kernel — is never folded).
 `_bench_tilize.py` gained 8 R6 arms. `probes/probe_017.py` (the device's bank geometry),
 `probe_018/020/021.py` (per-knob bit-exactness), `probe_019.py` (the DEVICE_PRINT bank-grouping
 verification).
+
+### Ledger close-out addendum (R6, ledger-only)
+
+`verify_levers` flagged **B13**: it is a per-core-overhead lever (master.md B0), so its
+counterfactual must be measured on the smallest regime in `feature_spec.INPUTS` — `[1,1,30,32]` —
+and R6 had measured it on `[1,1,32,64]`. A bench shape `smallest_padded` `[1,1,30,32]`
+(`pad_mode="auto"`, 1 core / 1 block / 1 tile) was added and the arms run there. The result is a
+**structural finding, not a number**: that shape's single block is a **pad-boundary** block, so R5's
+padded reader body (`tilize_reader.cpp`, `pad_enabled == 1`) runs — and that body is a separate loop
+that routes through neither the stateful-read path nor `read_sticks_for_tilize`, so it honours none
+of the reader-side issue knobs. The arms are therefore **inert** there: base 1899.0 /
+`lever_r6_stateful_off` 1895.0 / `lever_r6_stateful_force` 1868.7 ns, a 1.6% spread that the
+byte-identical `base_singlecore` arm (1929.7 ns) reproduces on its own, i.e. the run's noise floor.
+
+Rather than close B13 on a number that does not measure the lever, its row is **restated as
+`deferred`** (an honest open status) with the concrete next step: make the padded boundary body issue
+its real sub-rectangle through the same branch the aligned path uses, so `stateful_reads`,
+`fast_addrgen` and `barrier_per_block` become live on padded blocks, then re-run
+`TB_SHAPES=smallest_padded`. That is a kernel change and out of scope for a ledger close-out. The
+shipped default is untouched: `STATEFUL_READS = 0`, byte-identical to the helper path. The same
+inertness is recorded on **B7**, whose off-arm measured 1871.3 vs 1899.0 ns (inert) there for exactly
+the same reason — its `[1,1,32,32]` measurement stands as the smallest regime its reader reaches.
+
+**B5** went the other way and is now closed on the true smallest regime: it lives in the *writer*,
+which the pad body does not touch, so its arm is live on a padded block and still pays —
+1899.0 shipped vs 2005.7 ns with face writes (**1.056x**), above the noise floor. Its `measured`
+block now records `[1,1,30,32]`, retiring A0's own "re-run once the padded reader exists" follow-up.
+
+`verify_levers ... --phase "Refinement 6"` is now clean: 24/24 rows, 0 blocking, 0 signal.
+No kernel, program-factory or op-entry-point file was touched.
