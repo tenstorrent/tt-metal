@@ -3,9 +3,9 @@
   "levers": {
     "A0": {
       "status": "applied",
-      "phase": "Refinement 1",
+      "phase": "Refinement 3",
       "knob": "multicore",
-      "reason": "Active-core count checked PER REGIME against A0's criterion (interleaved: active == min(grid, total_blocks)) on this 11x10=110 grid: square 256 blocks -> 110 cores; wide_short 32 blocks -> 32 cores; tall_narrow 64 -> 64; l1_to_l1 64 -> 64; smallest 1 -> 1. All match. No bandwidth-knee cap: tilize's reader is transaction-rate bound and master.md A0 records the cap measuring ~2.4x SLOWER on this very op, so the full grid is used. REFINEMENT 1 (A1): use_multicore=True is now IN SUPPORTED, so this lever is the SHIPPED default path rather than a wired-but-unclaimed parameter value (Phase 0 shipped the 1-core value). Re-measured this phase; the off-arm is the same `levers=dict(multicore=0)` bench arm. Core count asserted, never inferred: test_tilize_debug.py::test_multicore_fills_the_grid_on_wide_short and ::test_a1_wide_short_golden_cell_fills_the_grid.",
+      "reason": "Active-core count checked PER REGIME against A0's criterion (interleaved: active == min(grid, total_blocks)) on this 11x10=110 grid: square 256 blocks -> 110 cores; wide_short 32 blocks -> 32 cores; tall_narrow 64 -> 64; l1_to_l1 64 -> 64; smallest 1 -> 1. All match. No bandwidth-knee cap: tilize's reader is transaction-rate bound and master.md A0 records the cap measuring ~2.4x SLOWER on this very op, so the full grid is used. REFINEMENT 1 (A1): use_multicore=True is now IN SUPPORTED, so this lever is the SHIPPED default path rather than a wired-but-unclaimed parameter value (Phase 0 shipped the 1-core value). Re-measured this phase; the off-arm is the same `levers=dict(multicore=0)` bench arm. Core count asserted, never inferred: test_tilize_debug.py::test_multicore_fills_the_grid_on_wide_short and ::test_a1_wide_short_golden_cell_fills_the_grid. REFINEMENT 3: the per-regime criterion now has ONE measured, gated exception, and A0's own text is why \u2014 'active_cores == min(grid, total_blocks)' assumes more cores is never worse, which holds on the DRAM path and NOT on the all-L1 path. Blocks-per-core is the PIPELINE DEPTH (a core's read/compute/write overlap only across different blocks), so the new `min_blocks_per_core` knob caps cores at total_blocks//min_blocks_per_core. On l1_to_l1 [1,1,512,2048] that is 64 cores x 1 block -> 32 x 2 and measures 6630 -> 5121 ns (off/on 1.295x), because with both operands in L1 the DM is ~1.7x faster and compute is CO-BINDING (R1: ablate_compute 0.596x) \u2014 so hiding compute is worth half the cores. On the DRAM path the same cap is a wash-to-worse (wide_short 1.007x off/on, i.e. forcing it costs 1.03x) because compute is already overlap-hidden (square ablate_compute 0.996x), so it is GATED OFF there and the criterion holds unchanged: square 110, wide_short 32, tall_narrow 64, smallest 1 \u2014 asserted by test_r3_wide_short_still_fills_the_grid_on_the_shipped_path, which exists precisely because 'cap the cores' is the one kind of perf change that could silently strand the mandatory wide-short shape. The cap never binds where the split already reaches the depth (test_r3_pipeline_cap_binds_only_on_the_fill_deficit).",
       "measured": {
         "on_ns": 44316.7,
         "off_ns": 334309.3,
@@ -15,7 +15,7 @@
           2048,
           2048
         ],
-        "note": "Refinement 1 re-measure, per-regime off/on: square 7.544x, wide_short 6.092x, tall_narrow 16.809x, l1_to_l1[1,1,512,2048] 11.520x, smallest[1,1,32,64] 1.000x, smallest[1,1,32,32] 1.004x. The two 1-block shapes are 1.00x BY CONSTRUCTION (one block cannot be spread), which is master.md B0's requirement satisfied rather than a miss."
+        "note": "Refinement 1 re-measure, per-regime off/on: square 7.544x, wide_short 6.092x, tall_narrow 16.809x, l1_to_l1[1,1,512,2048] 11.520x, smallest[1,1,32,64] 1.000x, smallest[1,1,32,32] 1.004x. The two 1-block shapes are 1.00x BY CONSTRUCTION (one block cannot be spread), which is master.md B0's requirement satisfied rather than a miss. R3: l1_to_l1 deliberately ships 32 cores (not 64) on measured grounds \u2014 off-arm `levers=dict(min_blocks_per_core=1)` = 6630.3 ns vs 5120.7 ns shipped (1.295x); every other regime's core count is unchanged."
       },
       "delta_pct": 654.0
     },
@@ -56,11 +56,22 @@
       "delta_pct": 90.1
     },
     "A3": {
-      "status": "deferred",
-      "phase": "A0",
-      "followup": "Map the linear block index -> a bank-adjacent core (reader next to the DRAM bank it reads) instead of the plain row-wise line, and re-measure the square. The block->core mapping is already a host-side function, so this is a placement change only.",
-      "predicted_delta_pct": 9,
-      "reason": "The square measures 376 GB/s of DRAM traffic against a ~448 GB/s theoretical peak (84%), and the tech report's placed/adjacent recipe reaches ~92% \u2014 so ~9% is the size of what bank-adjacency (with B10's per-reader VCs) could still buy. Deferred rather than refuted because interleaved round-robin pages touch every bank, which weakens the adjacency argument for THIS memory layout: it needs measuring, not asserting."
+      "status": "applied",
+      "phase": "Refinement 3",
+      "knob": "spread_cores",
+      "reason": "A3 is about WHERE the readers sit relative to the DRAM banks. It only has a degree of freedom when active_cores < grid_cores, which is exactly the wide-short regime Refinement 3 targets (32 blocks -> 32 of 110 cores). `grid_to_cores(n)` hands back the FIRST n cores of the row-major enumeration, i.e. a solid slab of the first 3 rows, so every DRAM reader reaches the banks over the same handful of links; `spread_core_list` takes every (grid/n)-th core instead \u2014 same core COUNT, same per-core block assignment (pinned by test_r3_spread_preserves_the_count_and_covers_the_grid), only different cores. GATED on the data path (`placement_defaults`): forcing it on the all-L1 path measured 1.102x WORSE, because an L1-interleaved operand's banks ARE the worker cores, so spreading the consumers lengthens their L1 routes instead of shortening them. Structurally inert once the grid is full, which is why the square is unmoved (1.003x). The mechanism is confirmed by the ablation re-classification, not just the wall: on wide_short the three stage costs summed to 1.04x of the removable wall when packed (fully SERIAL) and 0.79x when spread \u2014 the read and write streams stop contending for the same routes and start overlapping. A3's SECOND degree (per-core transaction stagger \u2014 rotate each core's read ISSUE ORDER by its block index so a fleet sharing source pages does not queue on one bank) was also built, as the `stagger_reads` knob, and is a MEASURED NULL: wide_short 0.983x / 1.028x on two runs (inside the 2-3% band, so the bank-queue hypothesis is refuted) and 1.040-1.051x WORSE on `smallest`, where it costs the read_sticks_for_tilize helper. It is parked at STAGGER_READS=0, which emits the helper path byte-for-byte, and stays a live knob with both bench arms (`lever_r3_stagger_off` / `lever_r3_stagger_force`).",
+      "measured": {
+        "on_ns": 6865.7,
+        "off_ns": 7338.0,
+        "shape": [
+          1,
+          1,
+          32,
+          16384
+        ],
+        "note": "off-arm `levers=dict(spread_cores=0)`, per-regime off/on: wide_short 1.069x (and 1.061x on a second run), tall_narrow 0.988x, smallest[1,1,32,64] 1.017x, smallest[1,1,32,32] 1.018x, square 1.003x (inert: 110 of 110 cores). master.md B0 satisfied: counterfactualed on the smallest regime, where it is inside noise rather than negative. The l1_to_l1 row is the GATE's evidence: `lever_r3_spread_force` 1.102x worse, so the knob is off on that path by measurement."
+      },
+      "delta_pct": 6.9
     },
     "A4": {
       "status": "deferred",
@@ -143,10 +154,10 @@
     },
     "B8": {
       "status": "deferred",
-      "phase": "A0",
+      "phase": "Refinement 3",
       "followup": "Add a `trid` knob to the reader (tag each block's reads with a transaction id, barrier on the PREVIOUS id) and measure on the square \u2014 the only benched shape with several blocks per core (256 blocks / 110 cores). Compare against split_reader, the other way to keep reads in flight.",
       "predicted_delta_pct": 10,
-      "reason": "Structurally invisible on the 1-block-per-core shapes (wide_short at the current WT_BLOCK, tall_narrow, both smallest), which per master.md B8 is a BENCH property and not evidence the lever fails. The square is where it could show: its ablation says read and write are co-binding with compute fully hidden, so more outstanding reads is the plausible next lever. Deferred on scope, not refuted."
+      "reason": "Structurally invisible on the 1-block-per-core shapes (wide_short at the current WT_BLOCK, tall_narrow, both smallest), which per master.md B8 is a BENCH property and not evidence the lever fails. The square is where it could show: its ablation says read and write are co-binding with compute fully hidden, so more outstanding reads is the plausible next lever. Deferred on scope, not refuted. REFINEMENT 3 re-check (the queue asked for it AFTER the block count per core moved): B8 and split_reader need a NEXT block to overlap against, and the shipped DRAM path has exactly one block per core \u2014 the precondition can only be created by forcing `min_blocks_per_core=2`, which was measured to COST 1.03x on wide_short, i.e. more than B8 could plausibly return. So on the DRAM path B8 stays closed as unreachable rather than unapplied. The regime where it WOULD pay is now concrete: the all-L1 path ships 2 blocks/core (above), so a trid double-issue across that block boundary is measurable there \u2014 that is the recorded next lever, and the reader's per-stick raw arm already exists to host it. Not chased here because wide_short, this slot's declared region, is the one shape where it structurally cannot help."
     },
     "B9": {
       "status": "applied",
@@ -219,9 +230,9 @@
     },
     "C16": {
       "status": "measured-no-payoff",
-      "phase": "Refinement 1",
+      "phase": "Refinement 3",
       "knob": "double_buffer",
-      "reason": "Depth-2 CBs measure INSIDE the noise band against depth-1 in every regime, in BOTH phases that measured them. The ablation gives the mechanism on the DRAM shapes: compute is fully overlap-hidden (ablate_compute 0.994x on the square), so a deeper CB has nothing left to overlap. REFINEMENT 1 (A6): double_buffer=False is now IN SUPPORTED, so this is a user-facing L1-vs-perf knob, not just an internal lever - and the measurement says the L1 half is free: depth-1 HALVES per-core CB L1 (128 KiB -> 64 KiB at bf16 WT_BLOCK=16; 16 -> 8 KiB at WT_BLOCK=2) at a cost inside noise. Depth-2 stays the DEFAULT because use_double_buffer=True is the documented default of the public API. Re-measured this phase on all 6 bench shapes including the new l1_to_l1 direction, where the ablation profile is DIFFERENT (compute is co-binding at 0.596x, not hidden) and depth-1 still costs only 1.023x.",
+      "reason": "Depth-2 CBs measure INSIDE the noise band against depth-1 in every regime, in BOTH phases that measured them. The ablation gives the mechanism on the DRAM shapes: compute is fully overlap-hidden (ablate_compute 0.994x on the square), so a deeper CB has nothing left to overlap. REFINEMENT 1 (A6): double_buffer=False is now IN SUPPORTED, so this is a user-facing L1-vs-perf knob, not just an internal lever - and the measurement says the L1 half is free: depth-1 HALVES per-core CB L1 (128 KiB -> 64 KiB at bf16 WT_BLOCK=16; 16 -> 8 KiB at WT_BLOCK=2) at a cost inside noise. Depth-2 stays the DEFAULT because use_double_buffer=True is the documented default of the public API. Re-measured this phase on all 6 bench shapes including the new l1_to_l1 direction, where the ablation profile is DIFFERENT (compute is co-binding at 0.596x, not hidden) and depth-1 still costs only 1.023x. REFINEMENT 3: C16 was refuted as a perf lever because compute was already hidden and a deeper CB had nothing left to overlap. That premise changed on ONE path: with the pipeline cap the all-L1 path now runs 2 blocks per core, and depth-1 there measures 1.056x worse (5322 vs 5041 ns) \u2014 just outside the noise band, the first regime in three phases where the depth actually buys overlap. Still `measured-no-payoff` as a GLOBAL claim (square 0.989x, wide_short 0.980x, sharded 0.979x \u2014 all noise or better at depth 1), and depth-2 remains the shipped default because use_double_buffer=True is the documented API default.",
       "measured": {
         "on_ns": 44316.7,
         "off_ns": 44244.7,

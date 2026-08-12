@@ -247,7 +247,7 @@ starts from that table instead of from zero. Full golden suite re-run to complet
 
 ---
 
-### [ ] Refinement 3 — Speed up the mandatory wide-short regime
+### [x] Refinement 3 — Speed up the mandatory wide-short regime
 
 **Type**: perf
 
@@ -277,6 +277,43 @@ golden suite still green, the used-optimization ledger records each landed lever
 there is no regression across the config-spanning guard set (`square`, `tall_narrow`, `smallest`, plus
 one sharded shape once Refinement 2 has landed — one representative per distinct kernel path × layout ×
 placement).
+
+**Outcome** (`[x]`, 2026-08-12): **wide_short 7 220 -> 6 866 ns, `achieved` 0.70 -> 0.74**, and the
+same pass took **`l1_to_l1` 6 511 -> 5 121 ns (1.27x)** — the larger win, on a prior phase's bench
+shape. Golden registry **22/22, 0 failed** (unchanged, as a perf slot should be); cumulative bench set
+re-measured with every other shape inside the 2-3 % noise band; ledger clean, **A3 `deferred ->
+applied`**.
+
+*What actually binds wide_short, measured.* Two of the queue's premises were corrected by
+measurement. (a) The shape was not merely under-parallel, it was **fully serialized**: Phase 0's own
+ablation stage costs SUM to **1.04x** of the removable wall (vs 0.71x on the square), because 32
+blocks on 32 cores is **one block per core** and a core's read/compute/write overlap only across
+*different* blocks. (b) **Grid fill is not the cost**: 8 cores at 2048 B and 32 cores at 1024 B move
+the same 2 MB in the same ~7.2 µs, so between 8 and 32 cores the memory path binds, not the number of
+cores asking — which is why the proposed "lower `WT_BLOCK` while `total_blocks < grid_cores`" clamp is
+a wash in both directions (512 B/64 cores 7 746 ns, 2048 B/8 cores 7 275 ns, 1024 B/16 cores x2
+7 156 ns, all ≥ the 6 866 ns shipped). What moved was **which** cores: spreading the 32 active cores
+over the grid instead of packing them into the first three rows is **1.069x** (master.md A3), and the
+ablation re-classification confirms the mechanism rather than just the wall — Σstages/removable goes
+**1.04 -> 0.79**, i.e. the read and write streams stop contending for the same routes and start
+overlapping. Pipeline depth (`min_blocks_per_core`) is the same lever's mirror image: a wash on DRAM
+(compute is already hidden, `ablate_compute` 0.996x) and **1.295x on all-L1** (where R1 measured
+compute co-binding at 0.596x). Both knobs therefore ship **regime-gated** (`placement_defaults`), each
+with its off-arm AND its force-arm measured, because forcing either onto the other path costs
+1.03-1.10x.
+
+*What is left, as a FINDING (not a queue item).* wide_short's remaining 1.35x to its 5.1 µs target is
+(i) **DM at ~305 GB/s**, and reads and writes share the DRAM bus, so overlapping them cannot shorten
+the ~4.1 µs of bus time — only the per-direction efficiency can, and reads are already at ~400 GB/s;
+(ii) **897 ns of exposed compute (13 %)**, which needs ≥2 blocks per core, and *creating* the second
+block on this shape costs 1.03x — more than hiding compute returns. That same fact closes **B8 /
+`split_reader`** on this shape by measurement rather than by argument (no next block to overlap, and
+buying one is net-negative); the regime where B8 becomes measurable is the **all-L1 path**, which now
+ships 2 blocks/core. Also measured and recorded: the read-issue **stagger** (A3's second degree) is a
+**null** — 0.983x / 1.028x on two runs, which refutes the DRAM-bank-queueing hypothesis for this
+shape — and is kept parked at a byte-identical default as a live knob rather than reverted; and CB
+depth (C16), refuted as a perf lever for three phases, finally buys 1.056x on the all-L1 path now that
+it has two blocks to double-buffer across.
 
 ---
 

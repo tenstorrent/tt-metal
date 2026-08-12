@@ -619,3 +619,178 @@ Refinement 7's verification budget. The table above is handed to it so it starts
   from `SUPPORTED` at runtime, so the test needs no edit when Refinement 5/7/8 widens an axis — the
   same case flips from "expected refusal" to "expected to run" on its own.
 - `probes/probe_011.py` — the dtype characterization above (saved by `tt-probe.sh`).
+
+---
+
+## Refinement 3 — Speed up the mandatory wide-short regime
+
+- **Date**: 2026-08-12
+- **Box/arch**: same stamp as A0 (Blackhole, 11x10 = 110 cores, AICLK 1349.98 MHz, bf16,
+  `DEVICE KERNEL DURATION [ns]`, 3 launches averaged after 2 cache-warming launches).
+- **Type**: perf. No SUPPORTED change; `SUPPORTED` / `EXCLUSIONS` / `validate()` are byte-identical
+  to Refinement 2.
+
+### What was done
+
+The refinement asked to co-tune **block size against grid fill** on `[1,1,32,16384]`. The
+measurement said the premise needed one correction first, so the diagnosis is recorded before the
+levers.
+
+**Diagnosis 1 — the shape was fully SERIALIZED, not merely under-parallel.** Phase 0's ablation
+table already contained the signal, unread: the three stage costs SUM to **104 %** of the removable
+wall on wide_short (vs 72 % on the square), which is the signature of zero read/compute/write
+overlap. Cause: at `WT_BLOCK=16` the shape has 32 blocks on 32 cores, i.e. **one block per core**,
+and a core's stages overlap only across *different* blocks (all `tile_h` sticks must land before the
+block can be tilized; all its tiles must be packed before they can be written). `op_design.md` §10.2
+says this in advance about B8/`split_reader`/`CB_DEPTH`; it applies to the whole pipeline.
+
+**Diagnosis 2 — grid fill is NOT what binds this shape.** Measured, because the naive clamp the
+queue proposed (lower `WT_BLOCK` while `total_blocks < grid_cores`) had already measured *slower*:
+
+| wide_short config | cores | blk/core | read B | ns |
+|---|---|---|---|---|
+| shipped R1 | 32 | 1 | 1024 | 7 215 |
+| `target_read_bytes=512` | 64 | 1 | 512 | 7 746 |
+| `min_blocks_per_core=2` | 16 | 2 | 1024 | 7 156 |
+| `min_blocks_per_core=2, read=512` | 32 | 2 | 512 | 7 485 |
+| `min_blocks_per_core=2, read=2048` | **8** | 2 | 2048 | 7 275 |
+| `min_blocks_per_core=3` | 10 | 3-4 | 1024 | 15 005 |
+
+**8 cores and 32 cores move the same 2 MB in the same ~7.2 µs.** So between 8 and 32 cores this
+shape is bounded by the memory path, not by how many cores ask — which retires "two thirds of the
+grid is idle" as the diagnosis (it is true, and it is not the cost) and makes the block-size/grid-fill
+trade a wash in *both* directions. What did move was **which cores**, and **how deep** the pipeline
+is on the other data path.
+
+**Lever 1 — `spread_cores` (master.md A3), the wide-short win.** `grid_to_cores(n)` returns the first
+`n` cores of the row-major enumeration — for 32 of 110 that is a solid slab of the first three rows,
+every DRAM reader reaching the banks over the same few links. `spread_core_list` takes every
+`grid/n`-th core instead: **same core count, same per-core block assignment, different cores**
+(pinned). Mechanism confirmed by re-ablation rather than by the wall alone — the stage-cost sum over
+the removable wall goes **1.04x (serial) -> 0.79x (overlapping)**: the read and write streams stop
+contending for the same routes.
+
+**Lever 2 — `min_blocks_per_core` (master.md A0), the L1 win.** Blocks-per-core *is* the pipeline
+depth, so the knob caps cores at `total_blocks // min_blocks_per_core` (`pipeline_capped_cores`
+returns `None` whenever the split already reaches that depth, so a grid-filling shape can never be
+perturbed). It pays **1.295x on `l1_to_l1`** and is a wash-to-worse on DRAM.
+
+**The gate is the deliverable as much as the levers**: the two knobs measure with **opposite signs**
+on the two interleaved data paths, so neither is applied globally. `placement_defaults` (one pure
+function) selects per path — all-DRAM -> spread, no cap; all-L1 -> cap, packed; mixed -> the Phase-0
+placement verbatim, because a mixed direction is half of each regime and was *not* measured here.
+Each knob keeps both a `None` (regime) default and a forceable value, so **every arm stays measurable
+on every shape** — which is how the gate itself is evidenced (`lever_r3_spread_force` costs 1.102x on
+L1; `lever_r3_pipeline_force2` costs 1.030x on wide_short).
+
+**Lever 3 — `stagger_reads` (A3's second degree): built, measured, NULL, kept parked.** On a
+wide-short tensor (`nt_h == 1`) every core reads the *same* `tile_h` source pages in the same order,
+so the whole fleet requests one page — one DRAM bank — at a time. The knob rotates each core's read
+**issue order** by its own block index (identical transfers, identical L1 destinations, one barrier
+still covering all of them). Measured **0.983x / 1.028x on wide_short across two runs** (inside the
+2-3 % band, so the bank-queueing hypothesis is *refuted by measurement*) and **1.04-1.05x worse on
+`smallest`**, where the raw per-stick loop costs the `read_sticks_for_tilize` helper. Per the
+keep-a-correct-lever rule it was **not reverted**: it is parked at `STAGGER_READS = 0`, which emits
+the helper call byte-for-byte, and remains a live knob with both bench arms. It carries the only
+declared helper substitution in the op (documented at the reader's head: the helper walks
+`start_page..start_page+rows` sequentially into consecutive L1 and *cannot* express a rotated issue
+order — splitting it into two calls would write the sticks rotated and produce a row-permuted tile).
+
+No other kernel change: the reader gained one CT arg, the writer and compute kernels are untouched.
+
+### Accuracy achieved
+
+**Exact** (`torch.equal`, not PCC — tilize is a byte bijection), on every knob value of every new
+lever: `test_lever_off_arms_are_still_correct` grew from 10 to 18 arms, covering
+`min_blocks_per_core ∈ {1,2,4}`, `spread_cores ∈ {0,1}`, `stagger_reads ∈ {0,1}` and one
+all-three-at-once combination, on a tail-block geometry (`96x288` = 3 tile-rows x 9 tile-columns).
+Both values of each knob are production code *somewhere* (each ships as the default on one data path
+and is gated off on the other), which is why both are pinned. Precision baseline unchanged
+(PCC = 1.000000, max_abs_err = 0.0).
+
+### Golden test progress
+
+| suite | Refinement 2b | Refinement 3 |
+|---|---|---|
+| `test_golden.py` (registry) | 22 passed / 0 failed | **22 passed, 358 xfailed, 580 skipped, 0 failed** |
+| unit dir `tests/.../tilize/` | 96 passed / 27 xfailed | **101 passed / 27 xfailed / 0 failed** |
+
+22/22 responsible cells, `supported_fail = 0`, zero hangs, zero XPASS — identical to Refinement 2,
+which is the expected result for a perf refinement (no axis value added).
+
+### Perf gate
+
+**Bound classification, re-ablated at the shipped config** (payload stubbed, all CB scaffolding and
+trip counts kept; `stage` = base − ablate_stage):
+
+| shape | base | read | write | compute | floor | Σstages / removable | reading |
+|---|---|---|---|---|---|---|---|
+| square `(1,1,2048,2048)` | 44 399 | 12 124 | 18 771 | 177 | 520 | 0.71 | DM-bound, both halves, compute free |
+| **wide_short `(1,1,32,16384)`** | **6 866** | 1 618 | 2 528 | 897 | 476 | **0.79** (was **1.04**) | DM-bound, now OVERLAPPING |
+| tall_narrow `(1,1,2048,64)` | 4 868 | 3 055 | 484 | 238 | 486 | 0.86 | read-dominated |
+| l1_to_l1 `(1,1,512,2048)` | 5 121 | 1 152 | 1 701 | 1 593 | 521 | 0.97 | all three co-binding |
+
+**Ceiling reconciliation** (targets from A0's `/perf-ceiling-dm` audit; the transfer algorithm and
+every transaction knob are unchanged, so the targets carry over):
+
+| shape | practical target | R1/R2 measured | R3 measured | achieved |
+|---|---|---|---|---|
+| `(1,1,32,16384)` wide_short | **5.1 µs** | 7.22 / 7.14 µs | **6.87 µs** | **0.70 -> 0.74** |
+| `(1,1,2048,2048)` square | 40.7 µs | 44.15 µs | 44.40 µs | 0.92 (unchanged, inert) |
+
+**Landed levers, off-arm measured** (ratio = off/on; >1 means the lever pays):
+
+| off-arm (knob) | wide_short | l1_to_l1 | square | tall_narrow | smallest 32x64 | smallest 32x32 |
+|---|---|---|---|---|---|---|
+| `spread_cores=0` (A3) | **1.069x** | 0.976x (gated off) | 1.003x | 0.988x | 1.017x | 1.018x |
+| `min_blocks_per_core=1` (A0) | 1.007x (gated off) | **1.295x** | 0.997x | 0.988x | 1.000x | 0.982x |
+| `stagger_reads=1` (A3-2, forced) | 1.028x | 1.010x | 0.994x | 0.994x | 1.040x | 1.006x |
+| gate evidence: `spread_cores=1` forced | — | **1.102x worse** | — | — | — | — |
+| gate evidence: `min_blocks_per_core=2` forced | **1.030x worse** | — | — | 0.995x | — | — |
+
+**Cumulative bench set — no regression, two shapes faster** (all prior shapes re-measured, `base` arm):
+
+| shape | Refinement 2 | Refinement 3 | delta | verdict |
+|---|---|---|---|---|
+| `(1,1,2048,2048)` square | 44 146 | 44 399 | +0.6 % | noise |
+| `(1,1,32,16384)` **wide_short** | 7 143 | **6 866** | **−3.9 %** | this slot's target (−4.9 % vs R1's 7 220) |
+| `(1,1,2048,64)` tall_narrow | 4 846 | 4 868 | +0.5 % | noise |
+| `(1,1,32,64)` smallest | 1 930 | 1 915 | −0.8 % | noise |
+| `(1,1,32,32)` smallest_aligned | 1 835 | 1 871 | +2.0 % | noise (2-3 % band) |
+| `(1,1,512,2048)` **l1_to_l1** | 6 511 | **5 121** | **−21.4 %** | **1.27x** — the largest R3 win |
+| `(1,1,2048,2048)` sharded_big | 2 122 | 2 137 | +0.7 % | noise (path untouched) |
+| `(1,1,512,64)` sharded_small | 863 | 844 | −2.2 % | noise (path untouched) |
+
+The four shape-dependent code paths this refinement keys on are each benched: DRAM-interleaved
+(3 shapes spanning both aspect ratios and the 1-block corner), L1-interleaved, and both sharded
+placements (where `plan_cores` is not called at all). No bench shape was added — the set already
+spanned every regime the gate distinguishes.
+
+Lever ledger: `verify_levers --phase "Refinement 3"` -> **clean, 0 blocking, 0 signal**; 24/24 rows,
+now **10 applied**. **A3** moves `deferred -> applied` (both arms measured, plus its second degree
+measured and parked); **A0** records its one measured, gated exception (l1_to_l1 ships 32 cores, not
+64); **B8** stays `deferred` but its blocker is now measured rather than argued (the DRAM path has one
+block per core, and *creating* the second block costs 1.03x — more than B8 could return) with the
+all-L1 path named as the regime where it becomes measurable; **C16** records the first regime in three
+phases where CB depth actually buys overlap (l1_to_l1 depth-1 = 1.056x worse).
+
+### Issues encountered
+
+One free failure (the bench's header passed the whole gate dict into `plan_cores`, which does not take
+`stagger_reads`) — fixed and re-run. No hang, no race, no numerical divergence, no debug escalation.
+
+### Tests added
+
+`tests/ttnn/unit_tests/operations/tilize/test_tilize_debug.py` group 7 (**+4 tests**, and +8 arms on
+the existing lever-correctness test):
+`test_r3_placement_gate_picks_the_measured_regime_per_data_path` (the gate, host-only, all four
+regimes incl. mixed and sharded),
+`test_r3_pipeline_cap_binds_only_on_the_fill_deficit` (the cap is a no-op on a filled grid, monotone
+in the depth, never collapses to zero cores),
+`test_r3_wide_short_still_fills_the_grid_on_the_shipped_path` (the R1 grid-fill guarantee, re-asserted
+against the *gated* config — "cap the cores" is exactly the kind of perf change that could silently
+strand the mandatory shape),
+`test_r3_spread_preserves_the_count_and_covers_the_grid` (spread changes which cores, never how many
+or how much each gets; and is byte-identical once the grid is full).
+`_bench_tilize.py` gained 11 R3 arms (both off-arms, both gate-evidence force-arms, and the
+pipeline-depth x block-size co-tuning corners) and now reports `blocks/core` in every shape header.
