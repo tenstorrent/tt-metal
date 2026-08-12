@@ -42,7 +42,16 @@ PER_CHIP_TOKENS = 640
 TP_AXIS = 1
 SP_AXIS = 0
 
-FABRIC = {"fabric_config": ttnn.FabricConfig.FABRIC_1D}
+FABRIC = {"fabric_config": ttnn.FabricConfig.FABRIC_2D}
+
+PLACEMENTS = [
+    pytest.param(
+        (2, 4),
+        FABRIC,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+        id="fabric2d-2x4",
+    )
+]
 
 
 def _oracle(partial, prefix_sum, shift, mass, query):
@@ -60,7 +69,7 @@ def _oracle(partial, prefix_sum, shift, mass, query):
     return (partial * rescale + prefix_sum * live_weight) / (mass * rescale + live_weight)
 
 
-@pytest.mark.parametrize("mesh_device, device_params", [pytest.param((2, 4), FABRIC, id="mesh-2x4")], indirect=True)
+@pytest.mark.parametrize("mesh_device, device_params", PLACEMENTS, indirect=True)
 @pytest.mark.parametrize("fuse_add", [False, True], ids=["plain", "settle"])
 def test_matches_torch(mesh_device, device_params, fuse_add):
     torch.manual_seed(2026)
@@ -164,7 +173,7 @@ def test_matches_torch(mesh_device, device_params, fuse_add):
         logger.info(f"settled stream vs torch: {vs_torch_stream}, bit-identical to ttnn.add")
 
 
-@pytest.mark.parametrize("mesh_device, device_params", [pytest.param((2, 4), FABRIC, id="mesh-2x4")], indirect=True)
+@pytest.mark.parametrize("mesh_device, device_params", PLACEMENTS, indirect=True)
 def test_rejects_a_site_past_the_batch_on_a_cache_hit(mesh_device, device_params, expect_error):
     """`site` shapes no kernel and is kept out of the program hash, so the second call
     below is a cache hit and never reaches the validation the first one passed. Without

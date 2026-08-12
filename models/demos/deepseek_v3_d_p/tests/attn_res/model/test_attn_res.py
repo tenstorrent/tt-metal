@@ -56,9 +56,16 @@ MODULE_SCALE = 0.02
 
 # `ttnn.all_reduce` needs an initialized fabric context on a real mesh; without it the
 # op dies in the control plane rather than returning wrong numbers.
-FABRIC = {"fabric_config": ttnn.FabricConfig.FABRIC_1D}
+FABRIC = {"fabric_config": ttnn.FabricConfig.FABRIC_2D}
 
-PLACEMENTS = [pytest.param((2, 4), FABRIC, id="mesh-2x4")]
+PLACEMENTS = [
+    pytest.param(
+        (2, 4),
+        FABRIC,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+        id="fabric2d-2x4",
+    )
+]
 
 on_placements = pytest.mark.parametrize(
     "mesh_device, device_params", PLACEMENTS, indirect=["mesh_device", "device_params"]

@@ -278,7 +278,7 @@
   # runs at one shape: 1280 tokens over SP 2 and `d` over TP 4, so every chip holds the
   # 640 rows prefill shards to. The reference test needs no device and costs a second.
   cmd: |
-    pytest \
+    EXPECT_NUM_TESTS=17 pytest \
       models/demos/deepseek_v3_d_p/tests/attn_res/model/ \
       tests/ttnn/unit_tests/operations/attn_residual/test_attn_res_gather_softmax.py \
       -vvv --tb=short

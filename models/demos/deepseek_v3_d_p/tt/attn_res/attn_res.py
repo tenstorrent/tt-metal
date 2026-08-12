@@ -31,6 +31,7 @@ a rank boundary.
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.common.prefill.topology import per_axis_topology
 
 HIDDEN_SIZE = 7168
 BLOCK_SIZE = 12
@@ -93,9 +94,6 @@ class TtAttnRes(LightweightModule):
             one chip: the read's exchange is what its one dispatch is built around,
             and there is no exchange to absorb at `tp_factor == 1`.
         num_links: fabric links for the statistics all-reduce.
-        topology: one `ttnn.Topology` **per mesh axis**, not a scalar. Galaxy
-            prefill is `[LINE, RING]`; applying a scalar `Ring` to a linear axis
-            points a collective at a wrap link with no physical fabric edge.
         stats_dtype: dtype the statistics all-reduce runs in. `ttnn.all_reduce`
             reduces in bf16 unless the input is fp32 (`all_reduce_nanobind.cpp:48`).
             The difference is small and it is free: measured over 186 chained reads
@@ -136,7 +134,6 @@ class TtAttnRes(LightweightModule):
         sp_axis=0,
         tp_axis=1,
         num_links=1,
-        topology=None,
         stats_dtype=ttnn.float32,
         fold_stats=True,
         one_pass_stats=True,
@@ -159,11 +156,7 @@ class TtAttnRes(LightweightModule):
         mesh_shape = tuple(mesh_device.shape)
         self.tp_factor = mesh_shape[tp_axis]
         self.sp_factor = mesh_shape[sp_axis]
-        self.topology = topology if topology is not None else [ttnn.Topology.Linear] * len(mesh_shape)
-        assert len(self.topology) == len(mesh_shape), (
-            f"topology has {len(self.topology)} entries for a {len(mesh_shape)}-axis mesh; "
-            "pass one Topology per axis (Galaxy prefill is [LINE, RING])"
-        )
+        self.topology = per_axis_topology()
 
         # The read is one program because the exchange runs inside it. Without a
         # tensor-parallel axis there is no exchange, and no read either.

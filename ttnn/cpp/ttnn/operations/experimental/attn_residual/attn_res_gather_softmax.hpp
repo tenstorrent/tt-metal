@@ -61,7 +61,6 @@ std::vector<ttnn::Tensor> attn_res_gather_softmax(
     float eps,
     const std::optional<ttnn::Tensor>& pending,
     std::optional<uint32_t> num_links,
-    std::optional<ttnn::ccl::Topology> topology,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config);

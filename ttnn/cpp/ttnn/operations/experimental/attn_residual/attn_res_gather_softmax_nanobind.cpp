@@ -79,7 +79,6 @@ void bind_attn_res_gather_softmax(nb::module_& mod) {
         nb::arg("eps") = 0.0f,
         nb::arg("pending").noconvert() = nb::none(),
         nb::arg("num_links") = nb::none(),
-        nb::arg("topology") = nb::none(),
         nb::arg("subdevice_id") = nb::none(),
         nb::arg("memory_config").noconvert() = nb::none(),
         nb::arg("compute_kernel_config").noconvert() = nb::none());

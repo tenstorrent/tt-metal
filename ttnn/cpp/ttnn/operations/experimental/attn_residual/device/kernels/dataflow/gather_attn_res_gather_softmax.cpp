@@ -28,6 +28,7 @@
 #include "api/tensor/noc_traits.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
+#include "ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 #include "ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 
 void kernel_main() {
@@ -49,6 +50,7 @@ void kernel_main() {
     const auto num_release_ranges = get_arg_val<uint32_t>(3);
     constexpr uint32_t kReleaseRangeArgIdx = 4;
     constexpr uint32_t kWordsPerReleaseRange = 5;
+    constexpr uint32_t kWordsPerPeerRoute = 4;
 
     constexpr uint32_t cb_id_headers = 8;
     constexpr uint32_t cb_id_stage = 9;
@@ -65,7 +67,8 @@ void kernel_main() {
     // on a program-cache hit — and it doubles as the fabric payload size.
     auto stats_accessor = TensorAccessor(stats_args, stats_addr, stat_tile_bytes);
 
-    size_t fabric_arg_idx = kReleaseRangeArgIdx + kWordsPerReleaseRange * num_release_ranges;
+    const size_t peer_route_base = kReleaseRangeArgIdx + kWordsPerReleaseRange * num_release_ranges;
+    size_t fabric_arg_idx = peer_route_base + kWordsPerPeerRoute * kPeers;
     auto fabric_connection =
         FabricConnectionManager::build_from_args<FabricConnectionManager::BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION>(
             fabric_arg_idx);
@@ -85,16 +88,23 @@ void kernel_main() {
         if (p == my_rank) {
             continue;
         }
-        const bool forward = p > my_rank;
-        const uint32_t hops = forward ? (p - my_rank) : (my_rank - p);
+        const size_t route_idx = peer_route_base + slot * kWordsPerPeerRoute;
+        const bool forward = get_arg_val<uint32_t>(route_idx) == 0;
+        ccl_routing_utils::line_unicast_route_info_t route = {
+            .dst_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(route_idx + 2)),
+            .dst_chip_id = static_cast<uint16_t>(get_arg_val<uint32_t>(route_idx + 3))};
 
         payload_headers[slot] =
             reinterpret_cast<volatile PACKET_HEADER_TYPE*>(header_base + (2 * slot) * packet_header_size_bytes);
         inc_headers[slot] =
             reinterpret_cast<volatile PACKET_HEADER_TYPE*>(header_base + (2 * slot + 1) * packet_header_size_bytes);
 
-        fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)payload_headers[slot], hops);
-        fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)inc_headers[slot], hops);
+        if constexpr (std::is_same_v<PACKET_HEADER_TYPE, tt::tt_fabric::LowLatencyPacketHeader>) {
+            route.dst_mesh_id = 0;
+            route.distance_in_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(route_idx + 1));
+        }
+        ccl_routing_utils::fabric_set_line_unicast_route(payload_headers[slot], route);
+        ccl_routing_utils::fabric_set_line_unicast_route(inc_headers[slot], route);
 
         peer_connections[slot] =
             forward ? &fabric_connection.get_forward_connection() : &fabric_connection.get_backward_connection();

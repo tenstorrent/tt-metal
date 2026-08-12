@@ -15,6 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 PYTHON_ROOTS = (
     Path("models/demos/common/prefill"),
     Path("models/demos/deepseek_v3_d_p"),
+    Path("tests/ttnn/unit_tests/operations/attn_residual"),
 )
 PIPELINE_FILES = (
     Path(".github/workflows/blaze-models-prefill-tests-impl.yaml"),

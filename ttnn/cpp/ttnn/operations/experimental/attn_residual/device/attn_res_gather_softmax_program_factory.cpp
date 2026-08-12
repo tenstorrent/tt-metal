@@ -14,6 +14,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/experimental/fabric/pipeline_builder.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -116,6 +117,58 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
             forward_fabric_node_id = fabric_node_ids.at(i + 1);
         } else if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
             forward_fabric_node_id = fabric_node_ids.at(0);
+        }
+    }
+
+    struct PeerRoute {
+        uint32_t connection;  // 0 = forward, 1 = backward
+        uint32_t hops;        // used by Fabric1D; Fabric2D routes by destination node
+        tt::tt_fabric::FabricNodeId destination;
+    };
+    std::vector<PeerRoute> peer_routes;
+    peer_routes.reserve(ring_size - 1);
+    for (uint32_t peer_rank = 0; peer_rank < ring_size; ++peer_rank) {
+        if (peer_rank == my_rank) {
+            continue;
+        }
+
+        uint32_t forward_hops = peer_rank > my_rank ? peer_rank - my_rank : 0;
+        uint32_t backward_hops = peer_rank < my_rank ? my_rank - peer_rank : 0;
+        bool use_forward = peer_rank > my_rank;
+        if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
+            forward_hops = (peer_rank + ring_size - my_rank) % ring_size;
+            backward_hops = (my_rank + ring_size - peer_rank) % ring_size;
+            use_forward = forward_hops <= backward_hops;
+        }
+        peer_routes.push_back(
+            {use_forward ? 0u : 1u, use_forward ? forward_hops : backward_hops, fabric_node_ids.at(peer_rank)});
+    }
+
+    // Fabric2D packet headers route by destination node, and the connection must be
+    // opened in the first-hop direction selected by the control plane. Mesh rank order
+    // alone cannot decide that direction reliably, especially across a torus wrap.
+    if (tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig())) {
+        const auto self_node = mesh_device->get_fabric_node_id(mesh_coord);
+        const auto forward_direction =
+            forward_fabric_node_id.has_value()
+                ? tt::tt_fabric::pipeline_get_forwarding_direction(self_node, forward_fabric_node_id.value())
+                : std::nullopt;
+        const auto backward_direction =
+            backward_fabric_node_id.has_value()
+                ? tt::tt_fabric::pipeline_get_forwarding_direction(self_node, backward_fabric_node_id.value())
+                : std::nullopt;
+        for (auto& route : peer_routes) {
+            const auto direction = tt::tt_fabric::pipeline_get_forwarding_direction(self_node, route.destination);
+            TT_FATAL(direction.has_value(), "attn_res_gather_softmax has no Fabric2D route to a tensor-axis peer");
+            if (forward_direction.has_value() && direction == forward_direction) {
+                route.connection = 0;
+            } else if (backward_direction.has_value() && direction == backward_direction) {
+                route.connection = 1;
+            } else {
+                TT_THROW(
+                    "attn_res_gather_softmax peer route is not on either tensor-axis connection; "
+                    "the mesh view does not describe a straight fabric axis");
+            }
         }
     }
 
@@ -456,6 +509,15 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
         static_cast<uint32_t>(operation_attributes.semaphore.address()),
         static_cast<uint32_t>(fold_ranges.size())};
     gather_rt_args.insert(gather_rt_args.end(), release_args.begin(), release_args.end());
+
+    // Per-peer route data precedes the variable-length connection-manager arguments.
+    // Hybrid Fabric2D headers use destination mesh/chip IDs; Fabric1D headers use hops.
+    for (const auto& route : peer_routes) {
+        gather_rt_args.push_back(route.connection);
+        gather_rt_args.push_back(route.hops);
+        gather_rt_args.push_back(*route.destination.mesh_id);
+        gather_rt_args.push_back(route.destination.chip_id);
+    }
 
     // Forward then backward, each preceded by its presence flag: the order
     // FabricConnectionManager::build_from_args reads them in.
