@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 from typing import NamedTuple
 
 from loguru import logger
@@ -264,6 +265,9 @@ class FusedMMRSConfig(NamedTuple):
     subblock_w: int
     num_buffers_per_channel: int | None
     chunk_width_in_mm_blocks: int
+    # Optional explicit reduce-scatter worker count. Positional entries below rely
+    # on this slot's position — new fields go after it.
+    num_workers_per_link: int | None = None
     # The op keeps the matmul output L1-resident per core; at large M the full
     # shard exceeds the bank and every blocking fails the CB-vs-L1 clash check.
     # A window bounds the shard to this many M blocks, recycled via the RS->MM
@@ -271,12 +275,17 @@ class FusedMMRSConfig(NamedTuple):
     mm_window_blocks: int | None = None
 
     def get_params(self, core_grid, num_links):
-        rs_zone_capacity = (core_grid.y - self.compute_with_storage_grid_size.y) * core_grid.x
-        num_workers_per_link = rs_zone_capacity // (2 * num_links) - 1
         config_dict = self._asdict()
         num_buffers_per_channel = config_dict.pop("num_buffers_per_channel")
         chunk_width_in_mm_blocks = config_dict.pop("chunk_width_in_mm_blocks")
         mm_window_blocks = config_dict.pop("mm_window_blocks")
+        num_workers_override = config_dict.pop("num_workers_per_link")
+
+        if num_workers_override is not None:
+            num_workers_per_link = num_workers_override
+        else:
+            rs_zone_capacity = (core_grid.y - self.compute_with_storage_grid_size.y) * core_grid.x
+            num_workers_per_link = rs_zone_capacity // (2 * num_links) - 1
 
         # Order is important. Guaranteed for python 3.7+
         return {
@@ -299,6 +308,8 @@ fused_mmrs_configs = {
     ttnn.CoreCoord(12, 10): {
         (9472, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 8, 4, 8, 2, 1, None, 1),
         (9472 // 4, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 4, 8, 2, 2, None, 1),
+        # LTX video FFN ff2 (RowParallel): per-device [4864,4096]@[4096,4096]
+        (4864, 4096, 4096): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 7, 5, 6, 1, 3, None, 1, 3),
     },
     # Cosmos3 trunk on BH Galaxy (grid power-clamped to 10x10): mm on rows 0-7,
     # RS zone rows 8-9 (20 cores). down_proj (M=22144, K=3200) only. Blocking
@@ -394,3 +405,66 @@ def register_fused_mmrs_configs(configs: dict) -> None:
     """
     for core_grid, entries in configs.items():
         fused_mmrs_configs.setdefault(core_grid, {}).update(entries)
+
+
+# ===================================================================== Fabric-bound all-gather-matmul
+class FabricAGMMConfig(NamedTuple):
+    mm_core_grid: ttnn.CoreCoord
+    ag_core_grid_offset: tuple
+    M_block_size: int
+    K_block_size: int
+    N_block_size: int
+    subblock_h: int
+    subblock_w: int
+    num_workers_per_link: int
+    num_buffers_per_channel: int
+
+
+# Keyed by device core-grid (``ttnn.CoreCoord``) then ``(K, N, chunks)``
+fabric_agmm_configs: dict[ttnn.CoreCoord, dict[tuple, FabricAGMMConfig]] = {
+    ttnn.CoreCoord(12, 10): {
+        # (K, N, chunks) -> FabricAGMMConfig
+        (4096, 1024, 1): FabricAGMMConfig(ttnn.CoreCoord(12, 8), (0, 8), 16, 8, 4, 2, 2, 3, 8),
+        # --------------------------------------------------------------------------------------- Remaining
+        (4096, 32, 1): FabricAGMMConfig(ttnn.CoreCoord(12, 8), (0, 8), 16, 8, 1, 2, 1, 3, 8),
+        # audio to_gate_logits: per-device N = num_heads/tp = 8, tile-padded to 32 (1 tile)
+        (4096, 512, 1): FabricAGMMConfig(ttnn.CoreCoord(12, 8), (0, 8), 16, 8, 2, 2, 2, 3, 8),
+        # audio a_kv (chunks=1 in the op test): K = audio_dim = 2048, N = 1024
+    },
+}
+
+
+def get_fabric_agmm_config(K, N, chunks, device_core_grid) -> FabricAGMMConfig | None:
+    """Return the tuned fabric-bound strided-AGMM config for this shape, or ``None``.
+
+    ``None`` means the shape is not (known to be) fabric-bound; the caller keeps the current
+    ``all_gather_minimal_matmul_async`` path. Keyed on ``(K, N, chunks)`` only (M-independent).
+
+    A/B switch: set ``DISABLE_FABRIC_AGMM=1`` to force a miss for every shape, routing the whole
+    model back onto the old ``all_gather_minimal_matmul_async`` op. Used to get an apples-to-apples
+    old-agmm-vs-strided-sagmm baseline under the same trace/fabric config.
+    """
+    if os.environ.get("DISABLE_FABRIC_AGMM") in ("1", "true", "True"):
+        return None
+    return fabric_agmm_configs.get(device_core_grid, {}).get((K, N, chunks))
+
+
+def register_fabric_agmm_configs(configs: dict) -> None:
+    """Register additional fabric-bound strided-AGMM configs from external models.
+
+    Args:
+        configs: Mapping from ``ttnn.CoreCoord`` (device core-grid) to dict of
+            ``(K, N, chunks)`` -> :class:`FabricAGMMConfig`.
+
+    Example::
+
+        register_fabric_agmm_configs({
+            ttnn.CoreCoord(12, 10): {
+                (4096, 1024, 1): FabricAGMMConfig(
+                    ttnn.CoreCoord(12, 8), (0, 8), 16, 8, 4, 2, 2, 3, 8
+                ),
+            },
+        })
+    """
+    for core_grid, entries in configs.items():
+        fabric_agmm_configs.setdefault(core_grid, {}).update(entries)

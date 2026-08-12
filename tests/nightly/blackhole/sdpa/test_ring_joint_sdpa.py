@@ -328,6 +328,43 @@ def generate_model_configs(mesh_config: MeshConfig) -> Dict[str, ModelConfig]:
         )
     )
 
+    # LTX-2.3 distilled video self-attention (spatial, non-causal)
+    if mesh_config.is_galaxy:
+        configs.append(
+            ModelConfig(
+                name="ltx_s1",
+                nhq=8,
+                nhk=8,
+                nhv=8,
+                d_q=128,
+                d_k=128,
+                d_v=128,
+                is_causal=False,
+                q_dtype=ttnn.bfloat16,
+                kv_dtype=ttnn.bfloat16,
+                q_chunk_sizes=[96],
+                k_chunk_sizes=[256],
+                seq_len=1216,
+            )
+        )
+        configs.append(
+            ModelConfig(
+                name="ltx_s2",
+                nhq=8,
+                nhk=8,
+                nhv=8,
+                d_q=128,
+                d_k=128,
+                d_v=128,
+                is_causal=False,
+                q_dtype=ttnn.bfloat16,
+                kv_dtype=ttnn.bfloat16,
+                q_chunk_sizes=[192],
+                k_chunk_sizes=[512],
+                seq_len=4864,
+            )
+        )
+
     return {config.name: config for config in configs}
 
 
