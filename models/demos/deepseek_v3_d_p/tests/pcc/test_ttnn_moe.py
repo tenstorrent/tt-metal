@@ -978,7 +978,7 @@ def test_kimi_k3_moe(
         shared_hidden_dim=KimiK3Config.SHARED_EXPERT_INTERMEDIATE_SIZE,
         latent_use_norm=KimiK3Config.LATENT_MOE_USE_NORM,
         rms_norm_eps=KimiK3Config.RMS_NORM_EPS,
-        # 0.96, not the 0.982 the other variants use, and NOT because K3's routed path is worse --
+        # 0.965, not the 0.982 the other variants use, and NOT because K3's routed path is worse --
         # measured on 8x4 with the same golden-trace input, K3 is marginally BETTER there:
         #
         #                     shared_output   routed_output   final_output
@@ -989,8 +989,8 @@ def test_kimi_k3_moe(
         # near-exact shared expert pulls final up to 0.983; K3 sums 16 experts (not 8) and pushes the
         # result through a 7168-wide up-projection, so the routed term dominates and final collapses
         # onto routed (0.96945 vs 0.96942). Holding K3 to 0.982 would therefore be demanding a
-        # routed-path accuracy that K2.6 does not itself achieve. 0.96 matches the routed_output bar
-        # this suite already accepts.
+        # routed-path accuracy that K2.6 does not itself achieve. K3 therefore stays near the 0.96
+        # routed_output bar this suite already accepts.
         #
         # That the residual is accumulation and not the new code is pinned by latent_routed_output:
         # 0.969778 before the latent norm + up-projection vs 0.969424 after, i.e. those two stages
