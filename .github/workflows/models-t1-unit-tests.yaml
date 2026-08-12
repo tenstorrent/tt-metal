@@ -51,8 +51,6 @@ on:
           # scarce exabox hardware.
           - "bh_sc1 (BH Single Galaxy)"
           - "bh_sc4 (BH Supercluster 4)"
-          - "bh_sc4-blitz (BH Supercluster 4 / Blitz)"
-          - "bh_sc4-mgd (BH Supercluster 4 / MGD)"
           - "bh_sc16 (BH Supercluster 16)"
       platform:
         required: false
@@ -102,7 +100,7 @@ jobs:
       - name: Resolve SKU and model selection
         id: resolve
         run: |
-          ALL_SKUS="wh_n150,wh_n300,wh_llmbox,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf,bh_p150,bh_p300,bh_quietbox_2,bh_galaxy,bh_sc4-mgd"
+          ALL_SKUS="wh_n150,wh_n300,wh_llmbox,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf,bh_p150,bh_p300,bh_quietbox_2,bh_galaxy,bh_sc4"
           EVENT="${{ github.event_name }}"
           if [[ "$EVENT" == "workflow_dispatch" ]]; then
             SKU_INPUT="${{ inputs.sku || 'all' }}"
@@ -134,8 +132,8 @@ jobs:
   models-unit-tests:
     needs: [check-harbor, build-artifact, resolve-skus]
     secrets: inherit
-    # OIDC only on this caller (the reusable workflow's multihost job needs ttop auth), not
-    # workflow-wide. Job-level permissions replace inherited defaults, so restate what tests need.
+    # OIDC only on this caller (multihost-ci runner chart may need it), not workflow-wide.
+    # Job-level permissions replace inherited defaults, so restate what tests need.
     permissions:
       contents: read
       packages: read
