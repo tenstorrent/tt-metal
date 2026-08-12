@@ -30,7 +30,7 @@ constexpr bool sdpa_can_preload_ln2_constants() {
     return false;
 }
 
-template <bool legacy_compat = true, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <bool legacy_compat, bool is_fp32_dest_acc_en>
 inline void calculate_recip_first_column() {
     constexpr int ITERATIONS_HALF_FACE = 4;
     if constexpr (legacy_compat) {
@@ -202,7 +202,7 @@ inline void calculate_exponential_polynomial() {
     }
 }
 
-template <bool SDPA_EXP_APPROX_MODE, uint16_t scale_bf16, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <bool SDPA_EXP_APPROX_MODE, uint16_t scale_bf16, bool is_fp32_dest_acc_en>
 inline void calculate_exponential_first_column() {
     constexpr int ITERATIONS_HALF_FACE = 4;
     if constexpr (SDPA_EXP_APPROX_MODE) {
@@ -226,7 +226,7 @@ inline void calculate_exponential_first_column() {
     }
 }
 
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <bool is_fp32_dest_acc_en>
 inline void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
     constexpr int ITERATIONS_HALF_FACE = 4;
     constexpr uint32_t prev_max_base_idx = 0;
@@ -267,7 +267,7 @@ inline void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
     }
 }
 
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <bool is_fp32_dest_acc_en>
 inline void calculate_softplus_first_column(uint param0, uint param1, uint param2) {
     constexpr int ITERATIONS_HALF_FACE = 4;
     float beta = ckernel::sfpu::Converter::as_float(param0);

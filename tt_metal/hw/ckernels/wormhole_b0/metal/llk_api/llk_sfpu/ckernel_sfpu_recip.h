@@ -119,7 +119,7 @@ inline void calculate_reciprocal() {
     }
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool legacy_compat = false>
+template <bool APPROXIMATION_MODE, [[maybe_unused]] bool is_fp32_dest_acc_en, bool legacy_compat = false>
 void recip_init() {
     // Common SFPU init inlined (SFPU config register + ADDR_MOD_7 + counter reset), then the op-specific
     // reciprocal setup below -- one self-contained init, matching exp_init. SDPA runs reciprocal in its

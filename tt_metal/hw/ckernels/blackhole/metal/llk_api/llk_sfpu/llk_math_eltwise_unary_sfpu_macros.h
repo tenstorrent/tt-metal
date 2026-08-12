@@ -51,9 +51,11 @@ inline __attribute__((always_inline)) void _sfpu_check_(
 /*
  * SFPU init macros (3 total)
  *
- * No dst index involved, so no bound check and no DST_SYNC / DST_ACCUM
- * arguments. Argument order mirrors the call macros: OP first (which selects
- * the SfpuType), then the init callback (the FN-like argument), then the
+ * No dst index involved, so no bound check and no DST_SYNC argument.
+ * The bare init LLK requires is_fp32_dest_acc_en; this macro supplies the
+ * kernel compile-time DST_ACCUM_MODE (the same value compute APIs default to).
+ * Argument order mirrors the call macros: OP first (which selects the
+ * SfpuType), then the init callback (the FN-like argument), then the
  * templates that parameterise it.
  */
 
@@ -61,7 +63,7 @@ inline __attribute__((always_inline)) void _sfpu_check_(
  * Bare init: no callback.
  *   SFPU_UNARY_INIT(abs);
  */
-#define SFPU_UNARY_INIT(OP) ::ckernel::llk_math_eltwise_unary_sfpu_init<::SfpuType::OP>()
+#define SFPU_UNARY_INIT(OP) ::ckernel::llk_math_eltwise_unary_sfpu_init<::SfpuType::OP, DST_ACCUM_MODE>()
 
 /*
  * Init with a templated callback.

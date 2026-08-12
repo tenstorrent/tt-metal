@@ -115,7 +115,7 @@ sfpi_inline void _xielu_mad_(sfpi::vFloat mul_a, sfpi::vFloat mul_b, sfpi::vFloa
  * if x < 0 : alpha_n * expm1(minimum(x, eps)) - alpha_n * x + beta * x
  *        --> alpha_n * (expm1(minimum(x, eps)) - x) + beta * x
  */
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_xielu(const uint32_t param0, const uint32_t param1) {
     sfpi::vFloat alpha_p = Converter::as_float(param0);
     sfpi::vFloat alpha_n = Converter::as_float(param1);

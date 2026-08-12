@@ -125,9 +125,8 @@ ALWI void remainder_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 /**
  * Please refer to documentation for remainder_binary_tile.
  */
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void remainder_binary_tile_init() {
-    MATH((SFPU_BINARY_INIT_FN(unused, sfpu::remainder_binary_init, (APPROX, is_fp32_dest_acc_en))));
+    MATH((SFPU_BINARY_INIT_FN(unused, sfpu::remainder_binary_init, (APPROX))));
 }
 
 }  // namespace ckernel

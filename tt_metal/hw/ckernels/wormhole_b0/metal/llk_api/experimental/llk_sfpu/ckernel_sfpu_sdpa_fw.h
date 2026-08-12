@@ -14,7 +14,7 @@
 
 namespace ckernel::sfpu {
 
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <bool is_fp32_dest_acc_en>
 inline void calculate_recip_first_column() {
     constexpr int ITERATIONS_HALF_FACE = 4;
     for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
@@ -31,7 +31,7 @@ inline void calculate_recip_first_column() {
     }
 }
 
-template <uint16_t scale_bf16, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <uint16_t scale_bf16, bool is_fp32_dest_acc_en>
 inline void calculate_exponential_first_column() {
     constexpr int ITERATIONS_HALF_FACE = 4;
     for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {

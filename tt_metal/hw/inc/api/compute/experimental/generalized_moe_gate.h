@@ -43,13 +43,13 @@ ALWI void generalized_moe_gate_init(uint32_t icb0, uint32_t icb1) {
 // (just unpacked from the L1 run stash via copy_tile) into its home region (bias/indices/scores)
 // at rows {dst_lo,dst_hi}. Row-selective, so it drops a block's run at the {4,6} merge slot without
 // disturbing the run already placed at {0,2}.
-template <uint32_t field, uint32_t dst_lo, uint32_t dst_hi, uint32_t src_lo = 0, uint32_t src_hi = 2, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <uint32_t field, uint32_t dst_lo, uint32_t dst_hi, uint32_t src_lo = 0, uint32_t src_hi = 2>
 ALWI void generalized_moe_gate_place_field_from_interm() {
     MATH((SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
+        DST_ACCUM_MODE,
         generalized_moe_gate_place_field_from_interm,
-        (APPROX, is_fp32_dest_acc_en, field, src_lo, src_hi, dst_lo, dst_hi),
+        (APPROX, field, src_lo, src_hi, dst_lo, dst_hi),
         0,
         VectorMode::RC_custom)));
 }
@@ -92,13 +92,13 @@ ALWI void generalized_moe_gate_step2_only() {
 }
 
 // Relocate a run between column-pairs within the scores/idx/bias regions (proven copy_topk_run).
-template <uint32_t from_lo, uint32_t from_hi, uint32_t to_lo, uint32_t to_hi, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <uint32_t from_lo, uint32_t from_hi, uint32_t to_lo, uint32_t to_hi>
 ALWI void generalized_moe_gate_relocate_run() {
     MATH((SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
+        DST_ACCUM_MODE,
         generalized_moe_gate_copy_topk_run,
-        (APPROX, is_fp32_dest_acc_en, from_lo, from_hi, to_lo, to_hi),
+        (APPROX, from_lo, from_hi, to_lo, to_hi),
         0,
         VectorMode::RC_custom)));
 }

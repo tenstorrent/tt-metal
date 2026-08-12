@@ -46,7 +46,7 @@ enum class SamplingBinaryOp { add, sub, mul };
  * @note Call @ref sampling_recip_init with the matching legacy_compat before this function; the
  *       legacy_compat = false path reads vConstFloatPrgm0 as its Newton-Raphson constant.
  */
-template <bool legacy_compat, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <bool legacy_compat, bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat sampling_recip_value(sfpi::vFloat in) {
     if constexpr (legacy_compat) {
         return ckernel::sfpu::_reciprocal_compat_<APPROX ? 2 : 3>(in);
@@ -91,7 +91,7 @@ inline void sampling_recip_init() {
  * @note Call @ref sampling_recip_init with the same legacy_compat before this function; the
  *       legacy_compat = false path reads vConstFloatPrgm0 as its Newton-Raphson constant.
  */
-template <bool legacy_compat = true, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <bool legacy_compat, bool is_fp32_dest_acc_en>
 inline void calculate_sampling_recip_scalar() {
     sfpi::vFloat in = sfpi::dst_reg[0];
     sfpi::vFloat out = sampling_recip_value<legacy_compat, is_fp32_dest_acc_en>(in);

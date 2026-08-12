@@ -23,7 +23,7 @@ enum {
     RSUB = 4,
 };  // BINOP_MODE
 
-template <bool APPROXIMATION_MODE, int BINOP_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <bool APPROXIMATION_MODE, int BINOP_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
 void calculate_binop_with_scalar(std::uint32_t param) {
     const sfpi::vFloat parameter = Converter::as_float(param);
 
@@ -57,23 +57,23 @@ void calculate_binop_with_scalar(std::uint32_t param) {
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
 void calculate_add(std::uint32_t param) {
     calculate_binop_with_scalar<APPROXIMATION_MODE, ADD, ITERATIONS, is_fp32_dest_acc_en>(param);
 }
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
 void calculate_sub(std::uint32_t param) {
     calculate_binop_with_scalar<APPROXIMATION_MODE, SUB, ITERATIONS, is_fp32_dest_acc_en>(param);
 }
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
 void calculate_mul(std::uint32_t param) {
     calculate_binop_with_scalar<APPROXIMATION_MODE, MUL, ITERATIONS, is_fp32_dest_acc_en>(param);
 }
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
 void calculate_div(std::uint32_t param) {
     calculate_binop_with_scalar<APPROXIMATION_MODE, DIV, ITERATIONS, is_fp32_dest_acc_en>(param);
 }
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
 void calculate_rsub(std::uint32_t param) {
     calculate_binop_with_scalar<APPROXIMATION_MODE, RSUB, ITERATIONS, is_fp32_dest_acc_en>(param);
 }

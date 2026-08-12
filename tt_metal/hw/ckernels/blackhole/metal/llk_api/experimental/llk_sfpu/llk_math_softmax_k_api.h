@@ -12,12 +12,12 @@
 namespace ckernel {
 namespace sfpu {
 
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <bool is_fp32_dest_acc_en>
 inline void llk_math_sfpu_softmax_k_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(_init_softmax_k_<is_fp32_dest_acc_en>);
 }
 
-template <int k, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <int k, bool is_fp32_dest_acc_en>
 inline void llk_math_sfpu_softmax_k() {
     _llk_math_eltwise_unary_sfpu_params_(_softmax_k_<k, is_fp32_dest_acc_en>, 0, VectorMode::RC_custom);
 }

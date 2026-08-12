@@ -498,7 +498,7 @@ void call_unary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::lgamma)
     {
-        llk_math_eltwise_unary_sfpu_init<OPERATION>(lgamma_stirling_init<APPROX_MODE, is_fp32_dest_acc_en>);
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(lgamma_stirling_init<APPROX_MODE>);
     }
     else if constexpr (OPERATION == SfpuType::digamma)
     {
@@ -547,7 +547,7 @@ void call_unary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::polygamma)
     {
-        llk_math_eltwise_unary_sfpu_init<OPERATION>(polygamma_init<APPROX_MODE, is_fp32_dest_acc_en>);
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(polygamma_init<APPROX_MODE>);
     }
     else if constexpr (OPERATION == SfpuType::xielu)
     {
@@ -563,7 +563,7 @@ void call_unary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::mish)
     {
-        llk_math_eltwise_unary_sfpu_init<OPERATION>(mish_init<APPROX_MODE, is_fp32_dest_acc_en>);
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(mish_init<APPROX_MODE>);
     }
     else if constexpr (OPERATION == SfpuType::rdiv)
     {
@@ -590,7 +590,7 @@ void call_unary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::gelu_tanh)
     {
-        llk_math_eltwise_unary_sfpu_init<OPERATION>(gelu_tanh_init<is_fp32_dest_acc_en>);
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(gelu_tanh_init);
     }
     else if constexpr (OPERATION == SfpuType::hardsigmoid)
     {
@@ -663,7 +663,7 @@ void call_unary_sfpu_operation_init()
         //   - silu: production silu_tile_init is NOT trivial (it wires sfpu::silu_init -> sigmoid_init<false>()),
         //     but this harness uses the self-contained legacy _calculate_silu_ (piecewise-linear, no LUT/
         //     reciprocal), which needs no op-specific init.
-        llk_math_eltwise_unary_sfpu_init<SfpuType::unused>();
+        llk_math_eltwise_unary_sfpu_init<SfpuType::unused, is_fp32_dest_acc_en>();
     }
     else if constexpr (
         OPERATION == SfpuType::equal_zero || OPERATION == SfpuType::not_equal_zero || OPERATION == SfpuType::less_than_zero ||
@@ -678,7 +678,7 @@ void call_unary_sfpu_operation_init()
     }
     else
     {
-        llk_math_eltwise_unary_sfpu_init<OPERATION>();
+        llk_math_eltwise_unary_sfpu_init<OPERATION, is_fp32_dest_acc_en>();
     }
 }
 
@@ -1620,9 +1620,9 @@ void call_binary_sfpu_operation_init()
     }
     else if constexpr (BINOP == BinaryOp::REMAINDER)
     {
-        // is_fp32_dest_acc_en only selects the (inert) legacy_compat=false branch of
-        // recip_init, so pass false here; both paths just load the reciprocal polynomial.
-        SFPU_BINARY_INIT_FN(add1, remainder_binary_init, (APPROXIMATION_MODE, false));
+        // remainder_binary_init loads the reciprocal polynomial (Wormhole) or
+        // vConstFloatPrgm0 (Blackhole); dest-acc mode is not a parameter.
+        SFPU_BINARY_INIT_FN(add1, remainder_binary_init, (APPROXIMATION_MODE));
     }
     else if constexpr (BINOP == BinaryOp::DIV_INT32)
     {

@@ -11,7 +11,7 @@
  * LLK PACK FAST TILIZE (BH)
  *************************************************************************/
 
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <bool is_fp32_dest_acc_en>
 inline void llk_pack_fast_tilize_init(
     const std::uint32_t input_operand, const std::uint32_t pack_output, const std::uint32_t unit_dim) {
     const std::uint8_t output_id = get_output_id(pack_output);

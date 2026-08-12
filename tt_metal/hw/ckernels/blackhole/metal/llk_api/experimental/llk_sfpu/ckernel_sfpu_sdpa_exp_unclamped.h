@@ -34,7 +34,7 @@ namespace ckernel::sfpu {
  *       SFPLOADI immediate, so the invariant SFPU config + ADDR_MOD_7 is all it needs. Calling
  *       exp_init would only program the TTI exp path's state, which nothing here reads.
  */
-template <bool SCALE_EN, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <bool SCALE_EN, bool is_fp32_dest_acc_en>
 inline void calculate_sdpa_exp_unclamped(const std::uint32_t exp_base_scale_factor) {
     // One SFPU slot is 4 DEST rows x 8 columns, so a full 16x16 face is 8 slots.
     constexpr int ITERATIONS_FULL_FACE = 8;
