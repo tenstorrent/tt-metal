@@ -890,3 +890,32 @@ PCC-only. It is in the evidence chain in the README.
 206 synthetic (worst 0.990467). Ten Tracy windows, zero dropped markers. Watcher
 clean over 30 node ids: zero detections across 23,720 lines, 44 dumps.
 `refresh_context_contract.py --check` and `summarize_pcc.py --check` clean.
+
+
+## 19. Stage review and checkpoint
+
+Six independent $stage-review rounds. Rounds 1-3 found engineering work -- an
+unearned `ttnn.linear` rejection, a host upload in the measured prefill path, an
+unearned sharded-prefill-norm rejection, and an unguarded silent-miscompute shape.
+All four became shipped changes. Rounds 4-6 confirmed every engineering,
+correctness and performance claim re-derives from the committed artifacts and
+found only documentation drift, which is why `bench/check_reported_figures.py`
+exists. **Round 6: `clean-pass`, no required work.**
+
+| repo | branch | commit |
+| --- | --- | --- |
+| tt-metal | `agentic-research/hous/muse-glimmer-30b` | `68231464980` |
+
+Full SHA `68231464980fbd83faf9f31fcc51e1582188cfbc`. Local checkpoint only, not pushed. The commit contains
+stage-owned files only: `tt/optimized_decoder.py`,
+`tests/test_optimized_decoder.py`, `doc/optimized_decoder/`, and the
+`doc/context_contract.json` update this stage owns.
+
+Re-verify the committed state without a device:
+
+```bash
+D=models/autoports/meta_models_muse_glimmer_30b/doc/optimized_decoder
+python $D/bench/refresh_context_contract.py --check
+python $D/bench/summarize_pcc.py --check
+python $D/bench/check_reported_figures.py --check
+```
