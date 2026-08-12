@@ -8,23 +8,23 @@
 
 #include <tt-metalium/core_coord.hpp>
 
-#include "attn_res_gather_merge_device_operation_types.hpp"
+#include "attn_res_gather_softmax_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operation.hpp"
 
 namespace ttnn::experimental::prim {
 
-struct AttnResGatherMergeSiteOffsets {
+struct AttnResGatherSoftmaxSiteOffsets {
     uint32_t shift;
     uint32_t mass;
     uint32_t partial;
 };
 
-AttnResGatherMergeSiteOffsets attn_res_gather_merge_site_offsets(
-    const AttnResGatherMergeParams& operation_attributes, const AttnResGatherMergeInputs& tensor_args);
+AttnResGatherSoftmaxSiteOffsets attn_res_gather_softmax_site_offsets(
+    const AttnResGatherSoftmaxParams& operation_attributes, const AttnResGatherSoftmaxInputs& tensor_args);
 
-struct AttnResGatherMergeSharedVariables {
+struct AttnResGatherSoftmaxSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id{};
     tt::tt_metal::KernelHandle writer_kernel_id{};
     tt::tt_metal::KernelHandle gather_kernel_id{};
@@ -32,20 +32,20 @@ struct AttnResGatherMergeSharedVariables {
     tt::tt_metal::CoreCoord gather_core;
 };
 
-struct AttnResGatherMergeMeshWorkloadFactory {
-    using shared_variables_t = AttnResGatherMergeSharedVariables;
+struct AttnResGatherSoftmaxMeshWorkloadFactory {
+    using shared_variables_t = AttnResGatherSoftmaxSharedVariables;
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
     static cached_mesh_workload_t create_mesh_workload(
-        const AttnResGatherMergeParams& operation_attributes,
+        const AttnResGatherSoftmaxParams& operation_attributes,
         const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const AttnResGatherMergeInputs& tensor_args,
+        const AttnResGatherSoftmaxInputs& tensor_args,
         std::vector<Tensor>& tensor_return_value);
 
     static void override_runtime_arguments(
         cached_mesh_workload_t& cached_workload,
-        const AttnResGatherMergeParams& operation_attributes,
-        const AttnResGatherMergeInputs& tensor_args,
+        const AttnResGatherSoftmaxParams& operation_attributes,
+        const AttnResGatherSoftmaxInputs& tensor_args,
         std::vector<Tensor>& tensor_return_value);
 
 private:
@@ -55,9 +55,9 @@ private:
     // tensor-parallel axis decides which slot of the statistics tensor it fills and
     // which way each peer lies on the fabric.
     static cached_program_t create_at(
-        const AttnResGatherMergeParams& operation_attributes,
+        const AttnResGatherSoftmaxParams& operation_attributes,
         const ttnn::MeshCoordinate& mesh_coordinate,
-        const AttnResGatherMergeInputs& tensor_args,
+        const AttnResGatherSoftmaxInputs& tensor_args,
         std::vector<Tensor>& tensor_return_value);
 };
 

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "attn_res_gather_merge_program_factory.hpp"
+#include "attn_res_gather_softmax_program_factory.hpp"
 
 #include <algorithm>
 #include <array>
@@ -29,7 +29,7 @@ using namespace tt::tt_metal;
 
 namespace {
 
-constexpr auto kKernelDir = "ttnn/cpp/ttnn/operations/experimental/ccl/attn_res_gather_merge/device/kernels/";
+constexpr auto kKernelDir = "ttnn/cpp/ttnn/operations/experimental/attn_residual/device/kernels/";
 
 // The row weights `a` and `b`, and the shift and mass they are derived from.
 constexpr uint32_t kRowWeights = 2;
@@ -52,8 +52,8 @@ constexpr uint32_t kGatherSemAddrIdx = 2;
 
 }  // namespace
 
-AttnResGatherMergeSiteOffsets attn_res_gather_merge_site_offsets(
-    const AttnResGatherMergeParams& operation_attributes, const AttnResGatherMergeInputs& tensor_args) {
+AttnResGatherSoftmaxSiteOffsets attn_res_gather_softmax_site_offsets(
+    const AttnResGatherSoftmaxParams& operation_attributes, const AttnResGatherSoftmaxInputs& tensor_args) {
     const auto& input_shape = tensor_args.partial.padded_shape();
     const uint32_t Wt = input_shape[-1] / TILE_WIDTH;
     const uint32_t Ht = input_shape[-2] / TILE_HEIGHT;
@@ -73,15 +73,15 @@ AttnResGatherMergeSiteOffsets attn_res_gather_merge_site_offsets(
     };
 }
 
-AttnResGatherMergeMeshWorkloadFactory::cached_program_t AttnResGatherMergeMeshWorkloadFactory::create_at(
-    const AttnResGatherMergeParams& operation_attributes,
+AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMeshWorkloadFactory::create_at(
+    const AttnResGatherSoftmaxParams& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coord,
-    const AttnResGatherMergeInputs& tensor_args,
+    const AttnResGatherSoftmaxInputs& tensor_args,
     std::vector<Tensor>& tensor_return_value) {
     ttnn::MeshDevice* mesh_device = tensor_args.partial.device();
     auto* const target_device = mesh_device->get_device(mesh_coord);
     const auto mesh_view = mesh_device->get_view();
-    TT_FATAL(mesh_view.is_mesh_2d(), "attn_res_gather_merge requires a 2D mesh to resolve the cluster axis");
+    TT_FATAL(mesh_view.is_mesh_2d(), "attn_res_gather_softmax requires a 2D mesh to resolve the cluster axis");
 
     const uint32_t ring_size = operation_attributes.ring_size;
     const uint32_t cluster_axis = operation_attributes.cluster_axis;
@@ -152,7 +152,7 @@ AttnResGatherMergeMeshWorkloadFactory::cached_program_t AttnResGatherMergeMeshWo
     const uint32_t Ht = input_shape[-2] / TILE_HEIGHT;
     const uint32_t kScalars = kFixedScalars + kStatsPerPartial * ring_size;
 
-    const auto site_offsets = attn_res_gather_merge_site_offsets(operation_attributes, tensor_args);
+    const auto site_offsets = attn_res_gather_softmax_site_offsets(operation_attributes, tensor_args);
 
     // A fabric packet carries one statistics tile whole, so the tile has to fit one.
     const auto max_payload = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
@@ -181,7 +181,7 @@ AttnResGatherMergeMeshWorkloadFactory::cached_program_t AttnResGatherMergeMeshWo
     const uint32_t num_output_tiles = Ht * Wt;
     const auto grid_cores =
         corerange_to_cores(CoreRangeSet(CoreRange({0, 0}, {grid.x - 1, grid.y - 1})), std::nullopt, /*row_wise=*/true);
-    TT_FATAL(grid_cores.size() > 1, "attn_res_gather_merge needs a grid with more than one core");
+    TT_FATAL(grid_cores.size() > 1, "attn_res_gather_softmax needs a grid with more than one core");
 
     // One core is held back for the fabric connection. It cannot double as a worker:
     // a link admits a single sender, and that core's two dataflow RISCs are already
@@ -263,7 +263,7 @@ AttnResGatherMergeMeshWorkloadFactory::cached_program_t AttnResGatherMergeMeshWo
                                  2 * output_tile_size;
     TT_FATAL(
         l1_per_core <= target_device->l1_size_per_core(),
-        "attn_res_gather_merge needs {} B of L1 per core at Wt {} but the core has {} B",
+        "attn_res_gather_softmax needs {} B of L1 per core at Wt {} but the core has {} B",
         l1_per_core,
         Wt,
         target_device->l1_size_per_core());
@@ -337,7 +337,7 @@ AttnResGatherMergeMeshWorkloadFactory::cached_program_t AttnResGatherMergeMeshWo
 
     const auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        std::string(kKernelDir) + "dataflow/reader_attn_res_gather_merge.cpp",
+        std::string(kKernelDir) + "dataflow/reader_attn_res_gather_softmax.cpp",
         all_fold_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
 
@@ -351,7 +351,7 @@ AttnResGatherMergeMeshWorkloadFactory::cached_program_t AttnResGatherMergeMeshWo
 
     const auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        std::string(kKernelDir) + "dataflow/writer_attn_res_gather_merge.cpp",
+        std::string(kKernelDir) + "dataflow/writer_attn_res_gather_softmax.cpp",
         all_fold_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
 
@@ -364,7 +364,7 @@ AttnResGatherMergeMeshWorkloadFactory::cached_program_t AttnResGatherMergeMeshWo
 
     const auto compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        std::string(kKernelDir) + "compute/attn_res_gather_merge.cpp",
+        std::string(kKernelDir) + "compute/attn_res_gather_softmax.cpp",
         all_fold_cores,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
@@ -379,7 +379,7 @@ AttnResGatherMergeMeshWorkloadFactory::cached_program_t AttnResGatherMergeMeshWo
 
     const auto gather_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        std::string(kKernelDir) + "dataflow/gather_attn_res_gather_merge.cpp",
+        std::string(kKernelDir) + "dataflow/gather_attn_res_gather_softmax.cpp",
         gather_core_set,
         tt::tt_metal::ReaderDataMovementConfig(gather_ct_args));
 
@@ -481,11 +481,11 @@ AttnResGatherMergeMeshWorkloadFactory::cached_program_t AttnResGatherMergeMeshWo
          .gather_core = gather_core}};
 }
 
-AttnResGatherMergeMeshWorkloadFactory::cached_mesh_workload_t
-AttnResGatherMergeMeshWorkloadFactory::create_mesh_workload(
-    const AttnResGatherMergeParams& operation_attributes,
+AttnResGatherSoftmaxMeshWorkloadFactory::cached_mesh_workload_t
+AttnResGatherSoftmaxMeshWorkloadFactory::create_mesh_workload(
+    const AttnResGatherSoftmaxParams& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const AttnResGatherMergeInputs& tensor_args,
+    const AttnResGatherSoftmaxInputs& tensor_args,
     std::vector<Tensor>& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
@@ -502,12 +502,12 @@ AttnResGatherMergeMeshWorkloadFactory::create_mesh_workload(
     return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
 }
 
-void AttnResGatherMergeMeshWorkloadFactory::override_runtime_arguments(
+void AttnResGatherSoftmaxMeshWorkloadFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const AttnResGatherMergeParams& operation_attributes,
-    const AttnResGatherMergeInputs& tensor_args,
+    const AttnResGatherSoftmaxParams& operation_attributes,
+    const AttnResGatherSoftmaxInputs& tensor_args,
     std::vector<Tensor>& tensor_return_value) {
-    const auto site_offsets = attn_res_gather_merge_site_offsets(operation_attributes, tensor_args);
+    const auto site_offsets = attn_res_gather_softmax_site_offsets(operation_attributes, tensor_args);
     const bool fuse_add = tensor_args.pending.has_value();
     const auto pending_addr =
         fuse_add ? tensor_args.pending->buffer()->address() : tensor_args.prefix_sum.buffer()->address();

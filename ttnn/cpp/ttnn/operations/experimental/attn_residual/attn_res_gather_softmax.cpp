@@ -2,16 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "attn_res_gather_merge.hpp"
+#include "attn_res_gather_softmax.hpp"
 
-#include "device/attn_res_gather_merge_device_operation.hpp"
+#include "device/attn_res_gather_softmax_device_operation.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::experimental::ccl {
+namespace ttnn::experimental::attn_residual {
 
-std::vector<ttnn::Tensor> attn_res_gather_merge(
+std::vector<ttnn::Tensor> attn_res_gather_softmax(
     const ttnn::Tensor& partial,
     const ttnn::Tensor& prefix_sum,
     const ttnn::Tensor& shift,
@@ -34,9 +34,9 @@ std::vector<ttnn::Tensor> attn_res_gather_merge(
         "Input tensor storage type must be DEVICE but got {}",
         partial.storage_type());
 
-    // HiFi4 with fp32 dest accumulation, matching attn_res_merge. The statistics reduce
-    // and the whole weight derivation run in dst, and `exp` then `recip` on a bf16 dest
-    // would round the denominator twice before it ever divides a value.
+    // HiFi4 with fp32 dest accumulation. The statistics reduce and the whole weight
+    // derivation run in dst, and `exp` then `recip` on a bf16 dest would round the
+    // denominator twice before it ever divides a value.
     auto kernel_config_val = init_device_compute_kernel_config(
         partial.device()->arch(),
         compute_kernel_config,
@@ -48,7 +48,7 @@ std::vector<ttnn::Tensor> attn_res_gather_merge(
     // is what decides whether a rank has a backward neighbour at index 0.
     const auto usable_topology = ttnn::ccl::get_usable_topology(partial, topology, cluster_axis);
 
-    return ttnn::prim::attn_res_gather_merge(
+    return ttnn::prim::attn_res_gather_softmax(
         partial,
         prefix_sum,
         shift,
@@ -69,4 +69,4 @@ std::vector<ttnn::Tensor> attn_res_gather_merge(
         kernel_config_val);
 }
 
-}  // namespace ttnn::experimental::ccl
+}  // namespace ttnn::experimental::attn_residual

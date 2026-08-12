@@ -66,6 +66,7 @@
 #include "ttnn/operations/experimental/test/prefetcher_consumer/dram_prefetcher_consumer_nanobind.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/minimal_matmul_nanobind.hpp"
 #include "ttnn/operations/experimental/isin/isin_nanobind.hpp"
+#include "ttnn/operations/experimental/attn_residual/attn_res_gather_softmax_nanobind.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/minimal_matmul_split_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek/moe/moe_gate_mm/moe_gate_mm_nanobind.hpp"
 #include "ttnn/operations/experimental/topk_router_gpt/topk_router_gpt_nanobind.hpp"
@@ -203,6 +204,7 @@ void py_module(nb::module_& mod) {
     deepseek::mla::detail::bind_matmul_wo(mod);
     indexer_score::detail::bind_indexer_score(mod);
     moe_gpt::detail::bind_moe_gpt(mod);
+    attn_residual::bind_attn_res_gather_softmax(mod);
 
     // DeepSeek prefill MoE operations
     deepseek_prefill::detail::bind_dispatch(mod);

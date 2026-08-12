@@ -4,18 +4,16 @@
 
 // One site's whole read path: this rank's share of the scoring statistics, the
 // cross-rank gather that completes them, and the online-softmax fold that turns
-// them into `h`. Standalone that is three dispatches — statistics, collective,
-// merge — and the walk pays roughly 380 us of host dispatch per site for about
-// 26 ms of device work over the whole schedule. Folding them into one program
-// is a host-side change that happens to also save the statistics a round trip
-// through DRAM.
+// them into `h`. As three separate dispatches — statistics, collective, fold —
+// the walk pays roughly 380 us of host dispatch per site for about 26 ms of
+// device work over the whole schedule. One program is a host-side change that
+// happens to also save the statistics a round trip through DRAM.
 //
 // The seam is exact and is why this fuses at all. The statistics reduce emits
-// per token row a sum of squares then a dot; the merge wants, per token row,
+// per token row a sum of squares then a dot; the fold wants, per token row,
 // `shift`, `mass`, then a (sum of squares, dot) pair per rank in rank order.
 // So the gather is not a general collective over a tensor — it is a fixed
-// 2-tile exchange between the cores that hold the same token rows on each rank,
-// and `derive_row_weights` below is unmodified from the standalone merge.
+// 2-tile exchange between the cores that hold the same token rows on each rank.
 //
 // Two passes, and the grid is divided differently for each. Pass one reduces a token
 // row along the whole of its width, so a row belongs entirely to one core and the
@@ -48,10 +46,10 @@ using namespace ckernel;
 
 namespace {
 
-constexpr auto cb_partial = tt::CBIndex::c_0;      // merge operand, one row at a time
+constexpr auto cb_partial = tt::CBIndex::c_0;      // fold operand, one row at a time
 constexpr auto cb_scaler = tt::CBIndex::c_1;       // reduce scaler, resident
 constexpr auto cb_q = tt::CBIndex::c_2;            // query row, resident
-constexpr auto cb_prefix = tt::CBIndex::c_3;       // the live stream: reduce input, then merge operand
+constexpr auto cb_prefix = tt::CBIndex::c_3;       // the live stream: reduce input, then fold operand
 constexpr auto cb_row = tt::CBIndex::c_4;          // [a, b], produced here rather than read
 constexpr auto cb_scalars = tt::CBIndex::c_5;      // [shift, mass, gathered statistics] per token row
 constexpr auto cb_tmp = tt::CBIndex::c_6;          // transformed row, drained by the reduce
@@ -152,8 +150,8 @@ ALWI void settle_row(
 // reads — so the rest of the tile is padding and its exp/reciprocal results are
 // never packed into a full-width operand.
 //
-// Unchanged from the standalone merge: the gather leaves `cb_scalars` in exactly
-// the rank-major layout this already expected of a gathering collective.
+// The gather leaves `cb_scalars` rank-major, which is the layout this reads it in;
+// nothing is reordered on arrival.
 void derive_row_weights(CircularBuffer& cb_row_obj) {
     unary_op_init_common(cb_scalars, cb_row);
 

@@ -6,9 +6,9 @@
 
 #include "ttnn-nanobind/nanobind_fwd.hpp"
 
-namespace ttnn::operations::experimental::ccl {
+namespace ttnn::operations::experimental::attn_residual {
 
 namespace nb = nanobind;
-void bind_attn_res_gather_merge(nb::module_& mod);
+void bind_attn_res_gather_softmax(nb::module_& mod);
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::operations::experimental::attn_residual
