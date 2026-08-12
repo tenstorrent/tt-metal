@@ -17,12 +17,22 @@
 // the CB. That is what implementing sharding means — re-reading a local shard
 // through the TensorAccessor above would re-fetch bytes the core already holds.
 //
-// The two `if constexpr` arms below are LEVER COUNTERFACTUALS, not alternative
+// The `if constexpr` arms below are LEVER COUNTERFACTUALS, not alternative
 // production paths: `barrier_per_block == 0` is the master.md B7 off-arm (one
 // barrier per transaction instead of per block) and `stub_read == 1` is the
 // /perf-measure read ablation (keep the CB sync scaffolding, drop the NoC
 // payload). At their defaults (1, 0) the compiler emits only the helper call, so
 // they cannot perturb the measured path.
+//
+// HELPER SUBSTITUTION, declared (Refinement 3): `stagger_reads == 1` issues the
+// same `tile_h` reads to the same L1 destinations in a ROTATED order, and
+// `read_sticks_for_tilize` cannot express that — it walks `start_page ..
+// start_page + total_num_rows` sequentially into consecutive L1, so the only way
+// to reorder the issue is to split it into two calls, which would write the
+// sticks into the CB in rotated order and produce a row-permuted tile. The
+// substitution is therefore the rotation itself, not a preference; it reuses the
+// arm that already existed for B7, and the helper remains the emitted code
+// whenever the lever is off (the `stagger_reads == 0` condition above).
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.hpp"
@@ -38,7 +48,8 @@ void kernel_main() {
     constexpr uint32_t barrier_per_block = get_compile_time_arg_val(7);  // lever B7 (1 = on)
     constexpr uint32_t stub_read = get_compile_time_arg_val(8);          // ablation (0 = off)
     constexpr uint32_t resident = get_compile_time_arg_val(9);           // A3/C14 zero-copy (1 = on)
-    constexpr auto src_args = TensorAccessorArgs<10>();
+    constexpr uint32_t stagger_reads = get_compile_time_arg_val(10);     // lever R3/A3 (1 = on)
+    constexpr auto src_args = TensorAccessorArgs<11>();
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t b0 = get_arg_val<uint32_t>(1);
@@ -70,7 +81,7 @@ void kernel_main() {
         const uint32_t row_bytes = w * tile_row_bytes;
         const uint32_t byte_offset = wchunk * wt_block * tile_row_bytes;
 
-        if constexpr (barrier_per_block == 1 && stub_read == 0) {
+        if constexpr (barrier_per_block == 1 && stub_read == 0 && stagger_reads == 0) {
             dataflow_kernel_lib::read_sticks_for_tilize<cb_input_sticks>(
                 src,
                 /*total_num_rows*/ tile_h,
@@ -78,18 +89,33 @@ void kernel_main() {
                 /*start_page*/ r * tile_h,
                 /*byte_offset_within_page*/ byte_offset);
         } else {
-            // Counterfactual / ablation arm: identical CB accounting (reserve w,
-            // read tile_h sticks at L1 stride row_bytes, push w).
+            // Counterfactual / ablation arm, and the `stagger_reads` production arm:
+            // identical CB accounting (reserve w, read tile_h sticks at L1 stride
+            // row_bytes, push w) — only the ISSUE ORDER of the reads can differ.
             cb_reserve_back(cb_input_sticks, w);
-            uint32_t l1_addr = get_write_ptr(cb_input_sticks);
-            for (uint32_t s = 0; s < tile_h; ++s) {
+            const uint32_t l1_base = get_write_ptr(cb_input_sticks);
+            // R3 read stagger. On a wide-short tensor (`nt_h == 1`) EVERY core reads
+            // the same `tile_h` source pages, differing only in byte offset, and the
+            // helper issues them in page order — so at any instant the whole fleet
+            // is requesting one page, i.e. ONE DRAM bank, and the banks are used
+            // one at a time. Rotating the issue order by this core's own block index
+            // spreads the in-flight requests across the banks. Byte-for-byte the
+            // same transfers to the same L1 destinations: `s` indexes both the
+            // source page and its L1 slot, so the block lands stick-ordered no
+            // matter which stick is issued first, and the single barrier below still
+            // covers all of them.
+            const uint32_t s0 = (stagger_reads == 1) ? (b % tile_h) : 0;
+            for (uint32_t i = 0; i < tile_h; ++i) {
+                uint32_t s = s0 + i;
+                if (s >= tile_h) {
+                    s -= tile_h;
+                }
                 if constexpr (stub_read == 0) {
-                    noc_async_read(src.get_noc_addr(r * tile_h + s, byte_offset), l1_addr, row_bytes);
+                    noc_async_read(src.get_noc_addr(r * tile_h + s, byte_offset), l1_base + s * row_bytes, row_bytes);
                     if constexpr (barrier_per_block == 0) {
                         noc_async_read_barrier();  // B7 off: one barrier per transaction
                     }
                 }
-                l1_addr += row_bytes;
             }
             if constexpr (barrier_per_block == 1) {
                 noc_async_read_barrier();

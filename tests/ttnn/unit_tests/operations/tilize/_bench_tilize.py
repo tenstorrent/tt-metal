@@ -144,27 +144,35 @@ ARMS = {
     "lever_b6_read_2048": dict(levers=dict(target_read_bytes=2048)),
     "lever_b6_read_4096": dict(levers=dict(target_read_bytes=4096)),
     "lever_b7_barrier_per_read": dict(levers=dict(barrier_per_block=0)),
-    # ---- pipeline-depth lever (R3): blocks per core == overlap depth --------
-    # `min_blocks_per_core=1` is the OFF-ARM (the Phase-0 split: as many cores as
-    # blocks, so a low-block shape gets one block per core and no overlap). The
-    # rest of the arms are the co-tuning sweep the refinement asks for — pipeline
-    # depth against block size (`target_read_bytes` -> WT_BLOCK -> block count).
+    # ---- R3 placement levers: pipeline depth + core spread ------------------
+    # Both knobs ship at a REGIME-selected default (`placement_defaults`: the
+    # pipeline cap on the all-L1 path, the spread on the all-DRAM path), because
+    # they measure with OPPOSITE signs on those two paths. So each lever needs BOTH
+    # an off-arm (on the path where it ships on) and a force-arm (on the path where
+    # it is gated off) — the force-arms are the evidence FOR the gate, and an
+    # explicit value here always overrides the regime default.
+    #
+    # pipeline depth: blocks per core == the number of read/compute/write stages a
+    # core can overlap. Ships on l1_to_l1 (1.35x); forced on wide_short it trades
+    # 32 cores for 16 and is a wash.
     "lever_r3_pipeline_off": dict(levers=dict(min_blocks_per_core=1)),
-    "lever_r3_pipeline3": dict(levers=dict(min_blocks_per_core=3)),
-    "lever_r3_pipeline4": dict(levers=dict(min_blocks_per_core=4)),
-    "lever_r3_pipeline2_read512": dict(levers=dict(min_blocks_per_core=2, target_read_bytes=512)),
-    "lever_r3_pipeline4_read512": dict(levers=dict(min_blocks_per_core=4, target_read_bytes=512)),
-    "lever_r3_pipeline2_read2048": dict(levers=dict(min_blocks_per_core=2, target_read_bytes=2048)),
+    "lever_r3_pipeline_force2": dict(levers=dict(min_blocks_per_core=2)),
+    "lever_r3_pipeline_force3": dict(levers=dict(min_blocks_per_core=3)),
+    "lever_r3_pipeline_force4": dict(levers=dict(min_blocks_per_core=4)),
+    # core spread: which cores, when active_cores < grid_cores. Ships on the DRAM
+    # path (wide_short 1.05x); forced on l1_to_l1 it costs 1.08x, which is the gate.
+    "lever_r3_spread_off": dict(levers=dict(spread_cores=0)),
+    "lever_r3_spread_force": dict(levers=dict(spread_cores=1)),
+    "lever_r3_spread_off_pipeline_force2": dict(levers=dict(spread_cores=0, min_blocks_per_core=2)),
+    # the co-tuning corners the refinement asks for: pipeline depth x block size
+    # (`target_read_bytes` -> WT_BLOCK -> block count -> cores).
+    "lever_r3_pipeline_force2_read512": dict(levers=dict(min_blocks_per_core=2, target_read_bytes=512)),
+    "lever_r3_pipeline_force2_read2048": dict(levers=dict(min_blocks_per_core=2, target_read_bytes=2048)),
     "lever_r3_gridfill_read512_off": dict(levers=dict(min_blocks_per_core=1, target_read_bytes=512)),
-    # ---- placement lever (R3 / master.md A1+A3): spread vs packed cores -----
-    # Only observable when active_cores < grid_cores (the fill-deficit regime).
-    "lever_r3_spread_on": dict(levers=dict(spread_cores=1)),
-    "lever_r3_spread_on_pipeline_off": dict(levers=dict(spread_cores=1, min_blocks_per_core=1)),
-    "lever_r3_spread_on_colmajor": dict(levers=dict(spread_cores=1, row_wise=0)),
-    # The co-tuning corners: placement x pipeline depth x block size.
-    "lever_r3_spread_read512": dict(levers=dict(spread_cores=1, target_read_bytes=512)),
-    "lever_r3_spread_read512_pipe1": dict(levers=dict(spread_cores=1, target_read_bytes=512, min_blocks_per_core=1)),
-    "lever_r3_spread_pipeline3": dict(levers=dict(spread_cores=1, min_blocks_per_core=3)),
+    # read-issue stagger (master.md A3): rotate each core's read order by its own
+    # block index, so a fleet that shares source pages does not queue on one bank.
+    "lever_r3_stagger_off": dict(levers=dict(stagger_reads=0)),
+    "lever_r3_stagger_force": dict(levers=dict(stagger_reads=1)),
     "lever_b5_face_writes": dict(levers=dict(coalesce_writes=0)),
     "lever_b9_noc_swap": dict(levers=dict(noc_split=0)),
     # ---- buffering lever (C16) ------------------------------------------
@@ -272,8 +280,13 @@ def test_bench(device):
         else:
             # Report the SHIPPED geometry, so the header's core count and pipeline
             # depth are the ones `base` actually ran with (R3's cap included).
+            gate = placement_defaults(in_mem, out_mem)
             cores, _all_cores, per_core = plan_cores(
-                device, blk["total_blocks"], use_multicore=True, **placement_defaults(in_mem, out_mem)
+                device,
+                blk["total_blocks"],
+                use_multicore=True,
+                min_blocks_per_core=gate["min_blocks_per_core"],
+                spread_cores=bool(gate["spread_cores"]),
             )
         elem_bytes = 2
         total_bytes = 2 * torch.tensor(shape).prod().item() * elem_bytes  # read + write

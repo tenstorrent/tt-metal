@@ -99,6 +99,12 @@ MIN_BLOCKS_PER_CORE = 2
 # operands' buffer type in `placement_defaults`, never applied globally.
 SPREAD_CORES = 1
 
+# --- Knob: per-core read-issue stagger (master.md A3) ----------------------
+# Rotate each core's read ISSUE ORDER by its own block index. Same transfers,
+# same destinations. Measured below; DRAM-path only (an L1 read does not queue
+# behind a DRAM bank).
+STAGGER_READS = 0
+
 TILE_WIDTH = 32  # a tile is ALWAYS 32 wide; only its height varies
 # The tile HEIGHT the op uses when the caller passes no `tile=`. Defined ONCE
 # here and imported by the op file so the taggers, validate(), the entry point
@@ -139,6 +145,12 @@ DEFAULT_LEVERS = {
     "coalesce_writes": 1,  # B5: whole-tile-page writes vs per-face writes
     "barrier_per_block": 1,  # B7: one barrier per block vs one per transaction
     "noc_split": 1,  # B9: reader NoC0 / writer NoC1 vs swapped
+    # R3 (master.md A3): rotate each core's READ ISSUE ORDER by its own block
+    # index. Same transfers, same L1 destinations, different order — it exists
+    # because on a wide-short tensor (`nt_h == 1`) every core reads the SAME
+    # `tile_h` source pages, so an unstaggered fleet requests one page (one DRAM
+    # bank) at a time. `None` = the regime default (`placement_defaults`).
+    "stagger_reads": None,
     "double_buffer": 1,  # C16: CB depth 2 vs 1  (also the user-facing kwarg)
     # A2/C14 off-arm: consume a resident shard through a TensorAccessor instead
     # of aliasing the CB onto it. 1 = the NON-zero-copy counterfactual (the
@@ -565,6 +577,7 @@ def placement_defaults(in_memory_config, out_memory_config):
     return {
         "min_blocks_per_core": MIN_BLOCKS_PER_CORE if all_l1 else 1,
         "spread_cores": SPREAD_CORES if all_dram else 0,
+        "stagger_reads": STAGGER_READS if all_dram else 0,
     }
 
 
@@ -737,6 +750,14 @@ def create_program_descriptor(
         # the allocated buffers (it cannot see a cliff shard's per-bank size).
         raise UnsupportedAxisValue(plan["error"])
 
+    # R3: the placement knobs default to their REGIME value (measured, and of
+    # opposite sign on the DRAM and L1 paths); an explicit lever value forces the
+    # knob on any shape, so both arms stay measurable everywhere. Resolved ONCE.
+    placement = placement_defaults(input_tensor.memory_config(), output_tensor.memory_config())
+
+    def _knob(name):
+        return placement[name] if lv[name] is None else lv[name]
+
     tile_descriptor = ttnn.TileDescriptor(tile_height, TILE_WIDTH)
     resident_in = plan["mode"] in (MODE_RESIDENT, MODE_CROSSOVER_IN)
     resident_out = plan["mode"] in (MODE_RESIDENT, MODE_CROSSOVER_OUT)
@@ -800,20 +821,14 @@ def create_program_descriptor(
     # collapses a wide-short tensor onto min(nt_h, grid) cores — the exact
     # regression the 2-D linearization exists to prevent.
     if plan["mode"] == MODE_STREAMED:
-        # R3: the two placement knobs default to their REGIME value (measured, and
-        # of opposite sign on the DRAM and L1 paths); an explicit lever value
-        # forces the knob on any shape so both arms stay measurable everywhere.
-        placement = placement_defaults(input_tensor.memory_config(), output_tensor.memory_config())
         cores, all_cores, per_core_blocks = plan_cores(
             device,
             total_blocks,
             use_multicore=use_multicore and bool(lv["multicore"]),
             row_wise=bool(lv["row_wise"]),
             max_cores=None if lv["width_split"] else nt_h,
-            min_blocks_per_core=int(
-                placement["min_blocks_per_core"] if lv["min_blocks_per_core"] is None else lv["min_blocks_per_core"]
-            ),
-            spread_cores=bool(placement["spread_cores"] if lv["spread_cores"] is None else lv["spread_cores"]),
+            min_blocks_per_core=int(_knob("min_blocks_per_core")),
+            spread_cores=bool(_knob("spread_cores")),
         )
         assignments = []
         block_start = 0
@@ -908,6 +923,7 @@ def create_program_descriptor(
         lv["barrier_per_block"],
         lv["stub_read"],
         int(resident_in),
+        int(_knob("stagger_reads")),
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 

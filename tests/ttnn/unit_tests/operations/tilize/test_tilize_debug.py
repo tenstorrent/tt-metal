@@ -3,7 +3,7 @@
 
 """Deterministic debugging / structure tests for tilize. DO NOT DELETE.
 
-Three groups:
+Seven groups:
 
 1. **Deterministic value tests** — all-ones and position-encoded inputs, so a
    DEVICE_PRINT session has hand-calculable expectations and a data-reordering
@@ -27,6 +27,12 @@ Three groups:
 5. **Refinement 1 (A1 + A5 + A6)** — the same generality axes exercised through
    the PUBLIC entry point, plus the depth-2 L1 fallback the `*_l1` buffer
    directions made load-bearing.
+
+6. **Refinement 2 (A3 + A3b + A3d)** — the sharded placements, asserted on the
+   DATAFLOW (both CBs aliased, both kernels resident) rather than on values.
+
+7. **Refinement 3 (perf)** — the placement knobs' regime gate, and the grid-fill
+   / block-assignment invariants a placement lever could silently break.
 """
 
 import pytest
@@ -36,12 +42,17 @@ import ttnn
 from ttnn.operations.tilize import tilize
 from ttnn.operations.tilize.tilize import _dispatch
 from ttnn.operations.tilize.tilize_program_descriptor import (
+    MIN_BLOCKS_PER_CORE,
+    SPREAD_CORES,
+    STAGGER_READS,
     TARGET_READ_BYTES,
     blocking,
     cb_budget_bytes,
     cb_depth_for,
     create_program_descriptor,
     l1_bytes_per_core,
+    pipeline_capped_cores,
+    placement_defaults,
     plan_cores,
     plan_placement,
     shard_residency,
@@ -209,6 +220,17 @@ def test_multicore_identity(device, shape):
         dict(coalesce_writes=0),
         dict(noc_split=0),
         dict(double_buffer=0),
+        # R3 placement knobs: both values of each, since each ships as the DEFAULT
+        # on one data path and is gated off on the other — so "off" and "forced"
+        # are both production code somewhere and both must be exact.
+        dict(min_blocks_per_core=1),
+        dict(min_blocks_per_core=2),
+        dict(min_blocks_per_core=4),
+        dict(spread_cores=0),
+        dict(spread_cores=1),
+        dict(stagger_reads=0),
+        dict(stagger_reads=1),
+        dict(spread_cores=1, min_blocks_per_core=3, stagger_reads=1),
     ],
     ids=lambda d: "-".join(f"{k}{v}" for k, v in d.items()),
 )
@@ -724,3 +746,119 @@ def test_r2b_refusal_type_tracks_the_declared_rectangle(device, case, expect_err
         # Inside the rectangle: never a support refusal, so the hook can never
         # convert this case's failures into a silent xfail.
         validate(tt_input, **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# 7. Refinement 3 (perf) — the placement knobs and their REGIME GATE
+#
+#    R3 landed no new axis value; it added three placement knobs whose measured
+#    sign DEPENDS ON THE DATA PATH (numbers in tilize_program_descriptor.py next
+#    to each constant). The knobs themselves are covered by
+#    `test_lever_off_arms_are_still_correct`; what needs its own pins is (a) the
+#    gate that picks a knob's default per regime, (b) that the pipeline cap can
+#    never strand a wide-short tensor (it is measured NEUTRAL on the DRAM path,
+#    so shipping it there would trade cores for nothing), and (c) that spreading
+#    preserves the core count and the block assignment exactly.
+# ---------------------------------------------------------------------------
+
+
+def test_r3_placement_gate_picks_the_measured_regime_per_data_path():
+    """Host-only. The gate is the ONE place a regime chooses a knob value, and it
+    must key on the data path, because the two interleaved paths measured with
+    OPPOSITE signs: the pipeline cap pays 1.30x on L1<->L1 and costs 1.03x on
+    DRAM wide-short, the spread pays 1.06x on DRAM wide-short and costs 1.10x on
+    L1<->L1."""
+    dram, l1 = ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG
+    shard = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
+            (32, 64),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+    all_dram = placement_defaults(dram, dram)
+    assert all_dram["spread_cores"] == SPREAD_CORES and all_dram["stagger_reads"] == STAGGER_READS
+    assert all_dram["min_blocks_per_core"] == 1, "the pipeline cap is measured neutral on the DRAM path"
+
+    all_l1 = placement_defaults(l1, l1)
+    assert all_l1["min_blocks_per_core"] == MIN_BLOCKS_PER_CORE
+    assert all_l1["spread_cores"] == 0 and all_l1["stagger_reads"] == 0, "spreading L1 consumers measured 1.10x WORSE"
+
+    # A mixed direction is half of each regime and was not measured, so it keeps
+    # the Phase-0 placement rather than inheriting a guess from either side.
+    for mixed in (placement_defaults(dram, l1), placement_defaults(l1, dram)):
+        assert mixed == {"min_blocks_per_core": 1, "spread_cores": 0, "stagger_reads": 0}
+
+    # A sharded side never reaches plan_cores at all (its cores are the shard's).
+    assert placement_defaults(shard, shard)["spread_cores"] == 0
+    assert placement_defaults(shard, dram)["min_blocks_per_core"] == 1
+
+
+def test_r3_pipeline_cap_binds_only_on_the_fill_deficit():
+    """Host-only. The cap must be a no-op wherever the default split already
+    reaches `min_blocks_per_core` per core — otherwise a grid-filling shape would
+    silently shed cores."""
+    # 256 blocks on 110 cores is already >= 2 deep -> no cap.
+    assert pipeline_capped_cores(256, 110, 2) is None
+    # 32 blocks on 110 cores is 1 deep -> capped to 16 (2 blocks each).
+    assert pipeline_capped_cores(32, 110, 2) == 16
+    assert pipeline_capped_cores(32, 110, 4) == 8
+    # The trivial value never binds, and a shape with less work than the depth
+    # collapses to one core rather than to zero.
+    assert pipeline_capped_cores(32, 110, 1) is None
+    assert pipeline_capped_cores(1, 110, 2) is None  # already 1 core by the split
+    assert pipeline_capped_cores(3, 110, 4) == 1
+    # Monotone in the depth, and never more cores than the plain split.
+    caps = [pipeline_capped_cores(64, 110, m) or min(110, 64) for m in (1, 2, 3, 4, 8)]
+    assert caps == sorted(caps, reverse=True)
+
+
+def test_r3_wide_short_still_fills_the_grid_on_the_shipped_path(device):
+    """The R1 grid-fill guarantee is a PERF invariant a placement refinement could
+    silently break: capping cores for pipeline depth is exactly "use fewer cores".
+    Assert the shipped (gated) config for the mandatory bench shape keeps
+    min(total_blocks, grid) cores — measured, not assumed: forcing the cap here
+    was 1.03x SLOWER."""
+    grid = device.compute_with_storage_grid_size()
+    grid_cores = grid.x * grid.y
+    blk = blocking([1, 1, 32, 16384], tile_height=32, elem_size=2)
+    gate = placement_defaults(ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG)
+
+    cores, _all_cores, per_core = plan_cores(
+        device,
+        blk["total_blocks"],
+        use_multicore=True,
+        min_blocks_per_core=gate["min_blocks_per_core"],
+        spread_cores=bool(gate["spread_cores"]),
+    )
+    assert len(cores) == min(blk["total_blocks"], grid_cores)
+    assert sum(per_core) == blk["total_blocks"]
+
+
+def test_r3_spread_preserves_the_count_and_covers_the_grid(device):
+    """Spreading changes WHICH cores, never how many or how much each gets — that
+    is what makes it a placement lever rather than a distribution change."""
+    grid = device.compute_with_storage_grid_size()
+    grid_cores = grid.x * grid.y
+    blk = blocking([1, 1, 32, 16384], tile_height=32, elem_size=2)
+
+    packed = plan_cores(device, blk["total_blocks"], use_multicore=True, spread_cores=False)
+    spread = plan_cores(device, blk["total_blocks"], use_multicore=True, spread_cores=True)
+
+    assert len(spread[0]) == len(packed[0])
+    assert spread[2] == packed[2], "the block assignment is identical; only the cores move"
+    assert len({(c.x, c.y) for c in spread[0]}) == len(spread[0]), "no core may be used twice"
+    # The point of the lever: the packed list is a slab of the first rows, the
+    # spread list touches (nearly) every row of the grid.
+    assert len({c.y for c in spread[0]}) > len({c.y for c in packed[0]})
+
+    # And it is structurally inert once the grid is full: a shape with more blocks
+    # than cores gets the same core set either way.
+    big = blocking([1, 1, 2048, 2048], tile_height=32, elem_size=2)
+    assert big["total_blocks"] > grid_cores
+    assert [(c.x, c.y) for c in plan_cores(device, big["total_blocks"], use_multicore=True, spread_cores=True)[0]] == [
+        (c.x, c.y) for c in plan_cores(device, big["total_blocks"], use_multicore=True, spread_cores=False)[0]
+    ]
