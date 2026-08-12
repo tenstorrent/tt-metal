@@ -43,7 +43,7 @@
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/data_movement_hardware_config.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 
 #include "gtest/gtest.h"
 
@@ -101,8 +101,7 @@ TEST_F(MeshDeviceSingleCardFixture, ZeroMemoryApi) {
     tt_metal::detail::WriteToDeviceL1(dev, node, flag_addr, flag_init);
 
     // DRAM tensor: 0xFF everywhere, so a no-op kernel can't pass the post-zero check.
-    auto tensor = MeshTensor::allocate_on_device(
-        mesh_device, make_flat_dram_tensor_spec(page_size_bytes, num_pages), TensorTopology{});
+    auto tensor = MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(page_size_bytes, num_pages));
     std::vector<uint32_t> stamped(total_words, 0xFFFFFFFFu);
     detail::WriteToBuffer(*tensor.mesh_buffer().get_reference_buffer(), stamped);
 
@@ -166,12 +165,13 @@ TEST_F(MeshDeviceSingleCardFixture, ZeroMemoryApi) {
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = L1_PRODUCER,
-            .runtime_arg_values = {{.node = node, .args = {{"total_bytes", scratch_bytes}, {"flag_addr", flag_addr}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node, {{"total_bytes", scratch_bytes}, {"flag_addr", flag_addr}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = DRAM_CONSUMER,
-            .runtime_arg_values =
-                {{.node = node, .args = {{"page_start", 0u}, {"page_end", num_pages}, {"page_size", page_size_bytes}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node, {{"page_start", 0u}, {"page_end", num_pages}, {"page_size", page_size_bytes}}),
         },
     };
     params.tensor_args = {{OUT_TENSOR, experimental::ProgramRunArgs::TensorArgument{tensor}}};
@@ -221,8 +221,7 @@ TEST_F(MeshDeviceSingleCardFixture, ZeroMemoryApiBatchedL1) {
     std::vector<uint32_t> flag_init{0xBAADF00Du};
     tt_metal::detail::WriteToDeviceL1(dev, node, flag_addr, flag_init);
 
-    auto tensor = MeshTensor::allocate_on_device(
-        mesh_device, make_flat_dram_tensor_spec(page_size_bytes, num_pages), TensorTopology{});
+    auto tensor = MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(page_size_bytes, num_pages));
     std::vector<uint32_t> stamped(total_words, 0xFFFFFFFFu);
     detail::WriteToBuffer(*tensor.mesh_buffer().get_reference_buffer(), stamped);
 
@@ -276,12 +275,13 @@ TEST_F(MeshDeviceSingleCardFixture, ZeroMemoryApiBatchedL1) {
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = L1_BATCHED_PRODUCER,
-            .runtime_arg_values = {{.node = node, .args = {{"total_bytes", scratch_bytes}, {"flag_addr", flag_addr}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node, {{"total_bytes", scratch_bytes}, {"flag_addr", flag_addr}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = DRAM_CONSUMER,
-            .runtime_arg_values =
-                {{.node = node, .args = {{"page_start", 0u}, {"page_end", num_pages}, {"page_size", page_size_bytes}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node, {{"page_start", 0u}, {"page_end", num_pages}, {"page_size", page_size_bytes}}),
         },
     };
     params.tensor_args = {{OUT_TENSOR, experimental::ProgramRunArgs::TensorArgument{tensor}}};

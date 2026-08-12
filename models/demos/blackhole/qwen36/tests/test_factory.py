@@ -11,7 +11,7 @@ Centralizes what used to be copy-pasted across the per-test files:
                                        FP8 (or bf16) safetensors checkpoint
 * ``compute_pcc`` / ``compare_tensors`` — single PCC implementation
 * ``get_pcc_threshold(request)``   — per-test threshold from ``pcc_thresholds.json``
-* ``parametrize_mesh_tp()``        — the env-driven (1,4)/(1,1) mesh + FABRIC_1D idiom
+* ``parametrize_mesh_tp()``        — the env-driven (1,8)/(1,4)/(1,1) mesh + FABRIC_1D idiom
 * ``tp_composer`` / ``replicate_to_device`` — shared TP tensor helpers
 
 Heavy imports (ttnn weight loaders, ``Qwen36ModelArgs``) are kept lazy / local so
@@ -164,26 +164,37 @@ def get_pcc_threshold(request, default=0.99):
 # --------------------------------------------------------------------------- #
 # Mesh / device helpers
 # --------------------------------------------------------------------------- #
-def _resolve_mesh_shape(max_tp=4):
-    return {"P150": (1, 1), "P150x4": (1, 4)}.get(
-        os.environ.get("MESH_DEVICE"), (1, min(len(ttnn.get_device_ids()), max_tp))
-    )
+def _resolve_mesh_shape(max_tp=8):
+    # MESH_DEVICE wins outright. The device-count fallback is computed lazily (not as a
+    # ``dict.get`` default, which Python evaluates eagerly) so an explicit MESH_DEVICE never
+    # touches ttnn.get_device_ids() -- that call raises on clusters whose ClusterType lookup
+    # fails, which would otherwise break collection even for a fully-specified mesh.
+    shape = {"P150": (1, 1), "P150x4": (1, 4), "P150x8": (1, 8)}.get(os.environ.get("MESH_DEVICE"))
+    if shape is not None:
+        return shape
+    return (1, min(len(ttnn.get_device_ids()), max_tp))
 
 
-def parametrize_mesh_tp(max_tp=4):
+def parametrize_mesh_tp(max_tp=8):
     """Parametrize a TP test over the env-selected mesh shape + FABRIC_1D.
 
     Mirrors the idiom the qwen TP tests used inline: ``MESH_DEVICE=P150`` -> (1,1),
-    ``P150x4`` -> (1,4); otherwise (1, min(num_devices, max_tp)). The mesh shape
+    ``P150x4`` -> (1,4), ``P150x8`` -> (1,8); otherwise (1, min(num_devices, max_tp)).
+    The mesh shape
     gets an explicit ``RxC`` id so node names (and ``pcc_thresholds.json`` mesh
     keys) are readable.
     """
     shape = _resolve_mesh_shape(max_tp)
+    # Local import to keep this test helper's module load light (see module docstring).
+    from models.demos.blackhole.qwen36.tt.model_config import GDN_CONV1D_L1_SMALL_SIZE
 
     def decorator(fn):
-        fn = pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)(
-            fn
-        )
+        fn = pytest.mark.parametrize(
+            "device_params",
+            # l1_small_size required by ttnn.conv1d in the GDN prefill path
+            [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": GDN_CONV1D_L1_SMALL_SIZE}],
+            indirect=True,
+        )(fn)
         fn = pytest.mark.parametrize("mesh_device", [pytest.param(shape, id=f"{shape[0]}x{shape[1]}")], indirect=True)(
             fn
         )
@@ -192,7 +203,18 @@ def parametrize_mesh_tp(max_tp=4):
     return decorator
 
 
-def parametrize_mesh_only(max_tp=4):
+def parametrize_batch(batches=(1, 8, 32)):
+    """Parametrize a decode test over batch sizes (the ``B`` fixture argument).
+
+    B must be a power of two <= 32 so the ``kv_update_shard_cfg`` core grid in
+    ``Qwen35ModelArgs._init_tp_config`` factors cleanly (one user per core, grid
+    sized to ``max_batch_size``). Ids are ``B1``/``B8``/``B32`` so node names and
+    ``pcc_thresholds.json`` stay readable.
+    """
+    return pytest.mark.parametrize("B", [pytest.param(b, id=f"B{b}") for b in batches])
+
+
+def parametrize_mesh_only(max_tp=8):
     """Parametrize over just the env-selected mesh shape (no device_params / fabric).
 
     For mesh tests that don't run fabric CCL ops (e.g. pure weight-loading checks),
@@ -222,5 +244,24 @@ def replicate_to_device(mesh_device, t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LA
         layout=layout,
         device=mesh_device,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+def shard_to_device(mesh_device, t, dim=-1, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
+    """Shard a torch tensor across the mesh on ``dim`` (last dim by default).
+
+    Use this for the PREFILL activation fed to ``forward_prefill``: the fused in-proj
+    all-gather-matmul (all_gather_minimal_matmul_async) expects a K-sharded input, since
+    the model's prefill RMSNorm skips its post-norm all-gather (layer.py ``_fuse_norm_agmm``)
+    and hands attention/GDN a ``[.,S,dim/tp]`` activation. The fused op gathers it back to
+    full ``dim`` before the matmul, so a host reference over the full tensor still matches.
+    """
+    return ttnn.from_torch(
+        t,
+        dtype=dtype,
+        layout=layout,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=dim),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )

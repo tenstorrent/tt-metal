@@ -10,13 +10,50 @@ import torch.nn.functional as F
 import ttnn
 from models.common.sampling import (
     LogProbsCalculator,
+    SamplingGenerator,
     SamplingParams,
     SeedManager,
     broadcast_sampling_params,
     format_sampling_params,
 )
+from models.common.sampling.generator import _mark_trace_buffers_corruptible
 from models.common.sampling.tt_log_probs import MAX_TOP_LOGPROBS, LogProbsResult
 from models.common.utility_functions import comp_pcc
+
+
+def test_sampling_trace_buffer_reuse_is_bucket_only(monkeypatch):
+    marked = []
+    monkeypatch.setattr(ttnn, "mark_corruptible", marked.append, raising=False)
+
+    _mark_trace_buffers_corruptible(None, ["default"])
+    _mark_trace_buffers_corruptible(1, ["input", None, ("output",)])
+
+    assert marked == ["input", "output"]
+
+
+def test_sampling_trace_bucket_isolation():
+    """Default users keep one flat namespace; Qwen bucket widths get distinct slots."""
+    sampling = SamplingGenerator.__new__(SamplingGenerator)
+    sampling._trace_states = {}
+    sampling._active_trace_bucket = None
+
+    default_key, default_slot = sampling._trace_slot(False, False, True)
+    assert default_key.bucket is None
+    assert sampling._trace_slot(False, False, True)[1] is default_slot
+
+    sampling.set_trace_bucket(1)
+    width1_key, width1_slot = sampling._trace_slot(False, False, True)
+    sampling.set_trace_bucket(8)
+    width8_key, width8_slot = sampling._trace_slot(False, False, True)
+
+    assert width1_key.bucket == 1 and width8_key.bucket == 8
+    assert width1_slot is not default_slot
+    assert width8_slot is not default_slot
+    assert width8_slot is not width1_slot
+
+    sampling.set_trace_bucket(None)
+    assert sampling._trace_slot(False, False, True)[1] is default_slot
+    assert len(sampling._trace_states) == 3
 
 
 # ---------------------------------------------------------------------------
@@ -88,6 +125,44 @@ def test_seed_counter_position_alignment_skips_out_of_bounds_slots():
     seed_manager.align_seed_counters_to_positions([101, None, 303], [0, 2], [5], offset=1)
 
     assert seed_manager.seed_counters == [6, 0, 0, 0]
+
+
+def test_slot_remap_condense_relabels_destination_and_vacates_source():
+    """A condense map moves the source slot's RNG state to its new slot and leaves
+    the vacated source unseeded.
+
+    vLLM's condense moves the highest live request down into the lowest empty slot
+    (``InputBatch.condense``: ``_slot_remap[empty_index] = _slot_remap[last_req_index]``),
+    so a source that is not itself a destination has genuinely been vacated.
+    """
+    seed_manager = _make_host_only_seed_manager(max_batch_size=4)
+    seed_manager.reset_seed([42, 99], [0, 3])  # slot0=42, slot3=99
+    assert seed_manager.seeds == [42, None, None, 99]
+
+    # Condense: the request in slot3 moves into empty slot1. remap[1]=3; indices
+    # 0/2/3 keep their identity values (the map does not mark slot3 as empty).
+    seed_manager.apply_slot_remap(torch.tensor([0, 3, 2, 3], dtype=torch.int32))
+
+    assert seed_manager.seeds[1] == 99  # relabelled into its new slot
+    assert seed_manager.seeds[3] is None  # source vacated
+    assert seed_manager.seed_counters[3] == 0
+    assert seed_manager.seeds[0] == 42  # untouched slot keeps its seed
+    assert seed_manager._seed_active is True
+
+
+def test_slot_remap_identity_is_a_noop():
+    """The steady state is an identity map (vLLM pops the remap and resets it to
+    identity every step, and lane-DP never condenses at all), which must not touch
+    any slot's RNG state."""
+    seed_manager = _make_host_only_seed_manager(max_batch_size=4)
+    seed_manager.reset_seed([42, 43], [0, 1])
+
+    identity = torch.tensor([0, 1, 2, 3], dtype=torch.int32)
+    for _ in range(50):
+        seed_manager.apply_slot_remap(identity)
+
+    assert seed_manager.seeds == [42, 43, None, None]
+    assert seed_manager._seed_active is True
 
 
 def test_broadcast_sampling_params_preserves_none_list_fields():

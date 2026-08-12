@@ -12,12 +12,8 @@
 #include "ckernel.h"
 #include "llk_defs.h"
 #include "params.h"
-#include "profiler.h"
-
-#ifndef PERF_RUN_TYPE
-#define PERF_RUN_TYPE PerfRunType::L1_TO_L1
-#endif
 #include "perf.h"
+#include "profiler.h"
 
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
@@ -66,32 +62,6 @@ inline std::uint32_t decompose_row(const std::uint32_t ct_dim, std::uint32_t uni
 #include "llk_unpack_common.h"
 #include "llk_unpack_tilize.h"
 
-inline void _llk_unpack_tilize_dispatch_(
-    void (*unpack_tilize)(std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, bool),
-    const std::uint32_t base_address,
-    const std::uint32_t tile_index,
-    const std::uint32_t unpack_src_format,
-    const std::uint32_t unpack_dst_format,
-    const std::uint32_t face_r_dim,
-    const std::uint32_t num_faces,
-    const bool narrow_tile)
-{
-    unpack_tilize(base_address, tile_index, unpack_src_format, unpack_dst_format, face_r_dim, num_faces, narrow_tile);
-}
-
-inline void _llk_unpack_tilize_dispatch_(
-    void (*unpack_tilize)(std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, bool),
-    const std::uint32_t base_address,
-    const std::uint32_t tile_index,
-    const std::uint32_t unpack_src_format,
-    const std::uint32_t unpack_dst_format,
-    const std::uint32_t face_r_dim,
-    const std::uint32_t num_faces,
-    const bool narrow_tile)
-{
-    unpack_tilize(base_address, tile_index, unpack_src_format, unpack_dst_format, 0, face_r_dim, num_faces, narrow_tile);
-}
-
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #ifndef SPEED_OF_LIGHT
@@ -103,6 +73,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // in the caller. See fast_tilize_metal_api_test.cpp for the reference pattern.
 #ifdef SPEED_OF_LIGHT
     static_assert(BLOCK_RT_DIM == 1, "fast_tilize_bh_test: row-only — set BLOCK_RT_DIM=1");
+    static_assert(BLOCK_CT_DIM > 1 || PERF_RUN_TYPE == PerfRunType::L1_TO_L1, "fast_tilize width-1 fallback implements L1_TO_L1 only");
 #endif
 
     std::uint32_t unit_dims[MAX_UNITS_PER_ROW];
@@ -126,25 +97,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         {
             ZONE_SCOPED("TILE_LOOP")
-            if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
-                {
-                    _llk_unpack_tilize_dispatch_(
-                        _llk_unpack_tilize_,
-                        L1_ADDRESS(buffer_A[0]),
-                        0,
-                        formats.unpack_A_src,
-                        formats.unpack_A_dst,
-                        FACE_R_DIM,
-                        4 /* num_faces */,
-                        false /* narrow_tile */);
-                }
+                _llk_unpack_tilize_(
+                    L1_ADDRESS(buffer_A[0]), 0, formats.unpack_A_src, formats.unpack_A_dst, FACE_R_DIM, 4 /* num_faces */, false /* narrow_tile */);
             }
         }
         {
             ZONE_SCOPED("UNINIT")
-            _llk_unpack_tilize_uninit_(formats.unpack_A_dst, ckernel::tensor_shape_from_num_faces(4 /* num_faces */));
+            _llk_unpack_tilize_uninit_(formats.unpack_A_dst, ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, 4 /* num_faces */));
         }
         return;
     }
@@ -188,12 +149,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ZONE_SCOPED("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
-            return;
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             // Each unit produces 4 dvalids regardless of unit_dim
-            return _perf_unpack_loop_set_valid<true, false>(units_per_row * 4 * LOOP_FACTOR);
+            _perf_unpack_loop_set_valid<true, false>(units_per_row * 4 * LOOP_FACTOR);
         }
         else
         {
@@ -239,6 +199,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 #ifdef SPEED_OF_LIGHT
     static_assert(BLOCK_RT_DIM == 1, "fast_tilize_bh_test: row-only — set BLOCK_RT_DIM=1");
+    static_assert(BLOCK_CT_DIM > 1 || PERF_RUN_TYPE == PerfRunType::L1_TO_L1, "fast_tilize width-1 fallback implements L1_TO_L1 only");
 #endif
     constexpr std::uint32_t unit_dim = 4;
 
@@ -281,16 +242,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ZONE_SCOPED("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
-            // Release one section_done per unit so pack can run all units
-            for (std::uint32_t i = 0; i < units_per_row * LOOP_FACTOR; i++)
-            {
-                _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-            }
-            return;
+            // Intentionally empty: MATH_PACK SEMINITs to max 2, so posting one credit per unit hangs pack
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            return _perf_math_loop_clear_valid<true, false>(units_per_row * 4 * LOOP_FACTOR);
+            _perf_math_loop_clear_valid<true, false>(units_per_row * 4 * LOOP_FACTOR);
         }
         else
         {
@@ -329,10 +285,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 #ifdef SPEED_OF_LIGHT
     static_assert(BLOCK_RT_DIM == 1, "fast_tilize_bh_test: row-only — set BLOCK_RT_DIM=1");
+    static_assert(BLOCK_CT_DIM > 1 || PERF_RUN_TYPE == PerfRunType::L1_TO_L1, "fast_tilize width-1 fallback implements L1_TO_L1 only");
 #endif
 
     std::uint32_t unit_dims[MAX_UNITS_PER_ROW];
     std::uint32_t units_per_row = decompose_row(BLOCK_CT_DIM, unit_dims);
+
+    constexpr bool pack_free_runs = (PERF_RUN_TYPE == PerfRunType::L1_CONGESTION || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE);
 
     const std::uint32_t total_tiles = BLOCK_CT_DIM;
     const std::uint32_t tile_bytes  = GET_L1_HEADERLESS_TILE_SIZE(formats.pack_dst) << 4;
@@ -395,7 +354,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             ZONE_SCOPED("TILE_LOOP")
             if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
             {
-                return;
             }
             else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
             {
@@ -404,7 +362,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     _llk_packer_wait_for_math_done_();
                     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
                 }
-                return;
             }
             else
             {
@@ -425,9 +382,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             prev_udim = udim;
                         }
 
-                        _llk_packer_wait_for_math_done_();
+                        if constexpr (!pack_free_runs)
+                        {
+                            _llk_packer_wait_for_math_done_();
+                        }
                         _llk_pack_fast_tilize_row_chunk_(0 /* tile_index */, udim, 4 /* num_faces */);
-                        _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                        if constexpr (!pack_free_runs)
+                        {
+                            _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                        }
                     }
 
                     _llk_pack_fast_tilize_row_end_();
@@ -436,6 +399,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         {
             ZONE_SCOPED("UNINIT")
+            if constexpr (pack_free_runs)
+            {
+                TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
+            }
             _llk_pack_fast_tilize_uninit_<DstSync::SyncHalf, is_fp32_dest_acc_en>(formats.pack_dst, FACE_R_DIM, 4 /* num_faces */, formats.pack_src);
         }
 

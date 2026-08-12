@@ -5,7 +5,7 @@
 
 #include <gtest/gtest.h>
 
-#include <tt-metalium/experimental/tensor/tensor_types.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 
 namespace tt::tt_metal {
@@ -24,6 +24,7 @@ TEST(TensorTypesTileSizeTest, MatchesDataFormatTileSize) {
         DataType::UINT8,
         DataType::UINT16,
         DataType::INT32,
+        DataType::INT8,
     };
 
     for (DataType dtype : kDataTypes) {

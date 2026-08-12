@@ -24,7 +24,7 @@ namespace ttnn::prim {
 struct ConcatDeviceOperation {
     using operation_attributes_t = ConcatParams;
     using tensor_args_t = ConcatInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<
         ConcatProgramFactory,
@@ -42,8 +42,6 @@ struct ConcatDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
-
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
     static tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> create_op_performance_model(
         const std::vector<Tensor>& input_tensors,

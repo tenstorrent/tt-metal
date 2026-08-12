@@ -354,7 +354,7 @@ void trisc_fused_softmax_top_p_sampling_block() {
         pack_tile(0, probs_cb);
         cb_push_back(probs_cb, 1);
         tile_regs_release();
-        reconfig_data_format_srca<false, true>(exp_cb, probs_cb);
+        reconfig_data_format_srca</*is_tile_dim_reconfig_en=*/true>(exp_cb, probs_cb);
         cb_wait_front(probs_cb, 1);
         cb_wait_front(p_cb, 1);
         tile_regs_acquire();
@@ -511,10 +511,10 @@ void trisc_fused_softmax_top_p_sampling_block() {
 }
 
 void generate_rand_tile(const uint32_t cb_id) {
-    uint32_t rand_scale = 0;
-    const float one_f = 1.0f;
-    std::memcpy(&rand_scale, &one_f, sizeof(uint32_t));
-    uint32_t rand_from = 0;
+    // The random tile is packed to BF16. Keep the FP32 endpoint below the BF16
+    // midpoint to 1.0 so the packed threshold remains strictly less than 1.0.
+    constexpr uint32_t rand_scale = 0x3F7F7FFFU;
+    constexpr uint32_t rand_from = 0;
     cb_reserve_back(cb_id, 1);
     tile_regs_acquire();
     rand_tile(0, rand_from, rand_scale);

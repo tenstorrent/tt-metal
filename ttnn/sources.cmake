@@ -43,6 +43,7 @@ set(TTNN_CORE_SRCS
     core/tensor/tensor_ops.cpp
     core/services/h2d_socket_service.cpp
     core/services/d2h_socket_service.cpp
+    core/services/layer_ack_service.cpp
     core/tensor/d2d_stream_service.cpp
     cpp/ttnn/operations/experimental/core_subset_write/copy_to_device_filtered.cpp
     core/tensor/tensor_utils.cpp
@@ -60,6 +61,7 @@ set(TTNNCPP_SRCS
     # FIXME: Move these out to appropriate sub targets
     cpp/ttnn/operations/compute_throttle_utils.cpp
     cpp/ttnn/operations/trace.cpp
+    cpp/ttnn/graph/capture_program_config_registry.cpp
     cpp/ttnn/operations/ccl/sharding_addrgen_helper.cpp
     cpp/ttnn/operations/generic/generic_op.cpp
     cpp/ttnn/operations/generic/device/generic_op_program_factory.cpp
@@ -69,6 +71,9 @@ set(TTNNCPP_SRCS
     cpp/ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_device_operation.cpp
     cpp/ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_program_factory.cpp
     cpp/ttnn/operations/experimental/ccl/rms_allgather/rms_allgather.cpp
+    cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/dit_fused_distributed_rmsnorm.cpp
+    cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation.cpp
+    cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/dispatch/dispatch.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/combine/combine.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_common.cpp
@@ -116,6 +121,8 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn-nanobind/h2d_stream_service.cpp
     cpp/ttnn-nanobind/d2h_stream_service.cpp
     cpp/ttnn-nanobind/counter_channel.cpp
+    cpp/ttnn-nanobind/layer_ack_service.cpp
+    cpp/ttnn-nanobind/layer_completion.cpp
     cpp/ttnn-nanobind/mesh_socket.cpp
     cpp/ttnn-nanobind/profiler.cpp
     cpp/ttnn-nanobind/program_descriptors.cpp
@@ -130,6 +137,13 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn-nanobind/tensor_accessor_args.cpp
     cpp/ttnn-nanobind/pipeline_module_nanobind.cpp
 )
+
+# tt::tests::prefill_test::LayerCompletionConsumer is a test-only scheduler stand-in; keep it out of
+# the shipped module. The matching nanobind registration is gated on the same flag via
+# TTNN_WITH_LAYER_COMPLETION_CONSUMER.
+if(TTNN_BUILD_TESTS)
+    list(APPEND TTNN_SRC_PYBIND cpp/ttnn-nanobind/layer_completion_consumer.cpp)
+endif()
 
 # experimental/ccl/'s, point_to_point's, and debug/'s own nanobind sources
 # are registered directly on the `ttnn` target from those ops' own
@@ -147,6 +161,7 @@ set(TTNN_CORE_JIT_API_HEADERS
     cpp/ttnn/kernel/compute/tilize.cpp
     cpp/ttnn/kernel/compute/transpose_wh.cpp
     cpp/ttnn/kernel/dataflow/generate_bcast_scalar.hpp
+    cpp/ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp
     cpp/ttnn/kernel/dataflow/generate_mm_scaler.hpp
     cpp/ttnn/kernel/dataflow/generate_reduce_scaler.hpp
     cpp/ttnn/kernel/dataflow/moreh_common.hpp
@@ -189,6 +204,7 @@ set(TTNNCPP_API_HEADERS
     api/ttnn/events.hpp
     api/ttnn/global_circular_buffer.hpp
     api/ttnn/global_semaphore.hpp
+    api/ttnn/graph/capture_program_config.hpp
     api/ttnn/graph/graph_consts.hpp
     api/ttnn/graph/graph_serialization.hpp
     api/ttnn/graph/graph_operation_queries.hpp

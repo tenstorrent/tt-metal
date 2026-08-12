@@ -15,8 +15,8 @@ set_target_properties(
 
 file(
     GLOB_RECURSE kernels
-    convert_to_chw/device/kernels/*
-    convert_to_hwc/device/kernels/*
+    convert_to_chw/device/kernels/*.cpp
+    convert_to_hwc/device/kernels/*.cpp
 )
 
 target_sources(

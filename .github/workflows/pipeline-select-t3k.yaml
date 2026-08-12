@@ -31,7 +31,6 @@ on:
           - n300 mesh llama3.2-11b-vision
           - llama3.2-90b-vision
           - llama3.2-90b
-          - mistral
           - mixtral
           - grok
           - unet shallow
@@ -49,18 +48,14 @@ on:
           - llama3_90b_vision
           - llama3_70b
           - resnet50
-          - sentence_bert
           - sd35_large
-          - flux1-dev
           - motif
-          - mistral
           - mixtral
           - whisper
           - qwen3
           - qwen25
           - qwen25_vl
           - gemma3
-          - wan22
           - mochi
       t3000-perf:
         description: "Perf tests: Select 'all', specific model or 'disabled'"
@@ -70,11 +65,8 @@ on:
           - disabled
           - all
           - resnet50
-          - sentence_bert
           - stable_diffusion_35_large
           - mochi
-          - wan22
-          - flux1-dev
           - motif
       t3000-integration:
         description: "Integration tests: Select 'all', specific model or 'disabled'"
@@ -88,9 +80,7 @@ on:
           - trace stress
           - resnet
           - sd35_large
-          - flux1
           - motif
-          - wan2.2
           - mochi
           - deepseek-modules
       t3000-e2e:
@@ -132,7 +122,7 @@ jobs:
     uses: ./.github/workflows/check-harbor.yaml
   # Centralized logic to determine what should run
   determine-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       run-unit: ${{ steps.logic.outputs.run-unit }}
       run-demo: ${{ steps.logic.outputs.run-demo }}
@@ -182,7 +172,7 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-type: ${{ inputs.build-type || 'Release' }}
       enable-lto: ${{ inputs.enable-lto || false }}
-      build-wheel: true
+      build-inplace-wheel: true
       tracy: ${{ needs.determine-tests.outputs.run-perf == 'true' }}
   t3000-unit-tests:
     if: ${{ needs.determine-tests.outputs.run-unit == 'true' }}

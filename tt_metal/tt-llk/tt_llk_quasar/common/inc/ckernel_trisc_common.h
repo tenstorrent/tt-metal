@@ -13,13 +13,36 @@
 #include "ckernel_template.h"
 #include "llk_assert.h"
 #include "llk_defs.h"
+#include "llk_tdma_guard.h"
 #include "tensix_types.h"
 #include "tensor_shape.h"
 
 namespace ckernel::trisc
 {
+// Fixed hardware thread ids, matching the DEST section register layout (SEC0..SEC3) and the
+// -DCOMPILE_FOR_TRISC=<n> the build assigns per thread. Use these when a call must address a specific
+// thread's slot rather than the compile-time thread it runs on -- e.g. the unpack-to-dest path, where
+// the unpack thread programs the UNP_DEST producer slot (Unpack) regardless of what it is compiled as.
+enum class TriscID : std::uint8_t
+{
+    Unpack = 0,
+    Math   = 1,
+    Pack   = 2,
+    Sfpu   = 3, // isolate-SFPU
+};
+
 // Num of words in buffer descriptor struct
 constexpr static std::uint32_t BD_NUM_WORDS = 3;
+
+// Selects how L1 is addressed for an op when building its buffer descriptor.
+// Continuous: normal tile layout (y_dim = face_r_dim).
+// Strided: PACR/UNPACR_STRIDE tiny-tile quirk. HW/programming constraints require the buffer
+//          descriptor to be programmed as y_dim = 1 so that L1 rows are indexed as tiles.
+enum class L1AccessMode : std::uint8_t
+{
+    Continuous = 0,
+    Strided    = 1,
+};
 
 using ckernel::FACE_C_DIM;
 using ckernel::FACE_R_DIM;
@@ -107,7 +130,10 @@ inline bool _divisible_by_pow_two_(const std::uint32_t value, const std::uint32_
     16x16: x=16, y=16, z=1
     32x32: x=16, y=16, z=4
  * @param buf_desc: Contains L1 buffer descriptor information
+ * @tparam MODE: L1 access mode the descriptor was built for. Strided ops (PACR/UNPACR_STRIDE
+ *        tiny-tiles) must be programmed with y_dim = 1 to index L1 rows as tiles.
  */
+template <L1AccessMode MODE = L1AccessMode::Continuous>
 inline void validate_buffer_desc(const buffer_descriptor_u& buf_desc)
 {
     LLK_ASSERT(buf_desc.f.x_dim == 16, "x_dim must be 16");
@@ -119,6 +145,10 @@ inline void validate_buffer_desc(const buffer_descriptor_u& buf_desc)
     {
         LLK_ASSERT(buf_desc.f.y_dim == 16, "y_dim must be 16 when z_dim is 4");
     }
+    if constexpr (MODE == L1AccessMode::Strided)
+    {
+        LLK_ASSERT(buf_desc.f.y_dim == 1, "Strided L1 access requires buffer descriptor y_dim == 1");
+    }
 }
 
 /**
@@ -128,7 +158,6 @@ inline void validate_buffer_desc(const buffer_descriptor_u& buf_desc)
  */
 inline void _configure_buf_desc_table_(const std::uint32_t buf_desc_id, const buffer_descriptor_u& buf_desc)
 {
-    validate_buffer_desc(buf_desc);
     for (std::uint32_t i = 0; i < BD_NUM_WORDS; i++)
     {
         bd_table[buf_desc_id].words[i] = buf_desc.words[i];
@@ -144,6 +173,33 @@ enum class DstTileShape : std::uint8_t
     Tile32x16 = 5,
     Tile32x32 = 6
 };
+
+constexpr std::uint32_t get_dest_tile_size_log2(const DstTileShape tile_shape)
+{
+    return ckernel::to_underlying(tile_shape) < ckernel::to_underlying(DstTileShape::Tile32x8) ? ckernel::to_underlying(DstTileShape::Tile32x8)
+                                                                                               : ckernel::to_underlying(tile_shape);
+}
+
+/**
+ * @brief Calculates the maximum number of tiles that fit in the math destination region.
+ *
+ * Destination addressing uses a minimum 16-row footprint for tile shapes smaller
+ * than 32x16.
+ *
+ * @tparam SYNC_MODE: Destination synchronization mode, values = <SyncHalf/SyncFull>
+ * @tparam ACCUM_MODE: Accumulation mode, true for 32-bit and false for 16-bit
+ * @tparam TILE_SHAPE: Destination tile shape
+ * @return Maximum number of destination tiles.
+ */
+template <ckernel::DstSync SYNC_MODE, bool ACCUM_MODE, DstTileShape TILE_SHAPE>
+constexpr std::uint32_t get_dest_max_tiles()
+{
+    constexpr std::uint32_t DEST_REGISTER_SIZE = SYNC_MODE == ckernel::DstSync::SyncHalf
+                                                     ? (ACCUM_MODE ? DEST_REGISTER_HALF_SIZE >> 1 : DEST_REGISTER_HALF_SIZE)
+                                                     : (ACCUM_MODE ? DEST_REGISTER_FULL_SIZE >> 1 : DEST_REGISTER_FULL_SIZE);
+
+    return DEST_REGISTER_SIZE >> get_dest_tile_size_log2(TILE_SHAPE);
+}
 
 /**
  * @brief Sets the destination register base address, each Trisc0/1/2/3 has separate
@@ -262,7 +318,7 @@ inline void _update_dest_register_offset_()
 // Semaphores mapping and trisc space -> tensix space conversion
 struct semaphore
 {
-    // The math thread is always the middleman, for regular unpack and for unpack_to_dest.
+    // The math thread is the middleman, for regular unpack and for unpack_to_dest.
     // When unpacking to dest, math thread doesn't produce data, it just bridges UNPACK_MATH -> MATH_PACK.
     // Packer only listens on MATH_PACK, so something has to translate the unpack completion into a
     // pack-visible event. Math being the forwarder is also what makes future fused ops cheap:
@@ -271,8 +327,10 @@ struct semaphore
     // Keep pairwise naming with producer_consumer direction:
     // - MATH_PACK = math->pack
     // - UNPACK_MATH = unpack->math
+    // - PACK_UNPACK = pack->unpack
     constexpr static std::uint32_t MATH_PACK   = 1; // math <-> pack sync on dest register
     constexpr static std::uint32_t UNPACK_MATH = 4; // unpack <-> math sync on dest register
+    constexpr static std::uint32_t PACK_UNPACK = 7; // pack <-> unpack sync on L1 memory
 
     constexpr static std::uint16_t t6_sem(const std::uint8_t sem_index)
     {
@@ -387,12 +445,15 @@ inline std::uint16_t compute_square_of_min(std::uint8_t input1, std::uint8_t inp
  * Currently supported buffer descriptor dimensions are:
  * x=16; y=[1, 2, 4, 8, 16]; z=1; or x=16; y=16; z=4; these are hardware constraints.
  *
+ * @tparam MODE: L1 access mode. Strided (PACR/UNPACR_STRIDE tiny-tiles) forces y_dim = 1 and z_dim = 1
+ *        so L1 rows are indexed as tiles; Continuous keeps the tensor-shape derived y_dim, z_dim.
  * @param tensor_shape: Tile/face dimensions and shape of input tensor
  * @param base_l1_16B: base address of the buffer in L1
  * @param data_format: L1 data encoding format
  * @param buf_desc_id: buffer descriptor table ID
  * @param reg_data_format: Register data encoding format
  */
+template <L1AccessMode MODE = L1AccessMode::Continuous>
 inline tdma_descriptor_t construct_tdma_desc(
     const TensorShape& tensor_shape, unsigned base_l1_16B, unsigned data_format, std::uint32_t buf_desc_id, unsigned reg_data_format)
 {
@@ -409,6 +470,15 @@ inline tdma_descriptor_t construct_tdma_desc(
     }
     buf_desc.f.l1_addr_16B = base_l1_16B;
     buf_desc.f.format      = static_cast<std::uint8_t>(data_format);
+
+    if constexpr (MODE == L1AccessMode::Strided)
+    {
+        // PACR_STRIDE quirk: program BD as 1x1x16 so L1 addressing indexes rows as tiles.
+        buf_desc.f.y_dim = 1;
+        buf_desc.f.z_dim = 1;
+    }
+
+    validate_buffer_desc<MODE>(buf_desc);
 
     tdma_descriptor_t tdma_desc = {buf_desc, buf_desc_id, static_cast<std::uint8_t>(reg_data_format)};
 

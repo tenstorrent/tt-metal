@@ -45,7 +45,7 @@
 #include <umd/device/types/arch.hpp>
 #include "tt_metal/test_utils/bfloat_utils.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/buffer.hpp>
 
@@ -293,10 +293,9 @@ void run_single_core_unary_broadcast_quasar(
     const uint32_t out_tile_size = tile_size(out_t);
     const uint32_t dfb_num_entries = block_size * 2;
 
-    auto in_tensor = MeshTensor::allocate_on_device(
-        *mesh_device, make_flat_dram_tensor_spec(in_tile_size, num_tiles), TensorTopology{});
-    auto out_tensor = MeshTensor::allocate_on_device(
-        *mesh_device, make_flat_dram_tensor_spec(out_tile_size, num_tiles), TensorTopology{});
+    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, make_flat_dram_tensor_spec(in_tile_size, num_tiles));
+    auto out_tensor =
+        MeshTensor::allocate_on_device(*mesh_device, make_flat_dram_tensor_spec(out_tile_size, num_tiles));
 
     const experimental::DFBSpecName SRC_DFB{"src_dfb"};
     const experimental::DFBSpecName DST_DFB{"dst_dfb"};
@@ -399,17 +398,17 @@ void run_single_core_unary_broadcast_quasar(
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values =
-                {{node,
-                  {{"src_addr", src_dram_addr},
-                   {"src_dram_bank_id", 0u},
-                   {"num_tiles", num_tiles},
-                   {"ublock_size_tiles", 1u},
-                   {"reader_only", 0u}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"src_addr", src_dram_addr},
+                 {"src_dram_bank_id", 0u},
+                 {"num_tiles", num_tiles},
+                 {"ublock_size_tiles", 1u},
+                 {"reader_only", 0u}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = {{node, {{"num_tiles", num_tiles}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"num_tiles", num_tiles}}),
         },
     };
     params.tensor_args = {{OUT_TENSOR, experimental::ProgramRunArgs::TensorArgument{out_tensor}}};
@@ -563,8 +562,7 @@ void run_single_core_unary_broadcast(
 
 using namespace unit_tests::compute::unary_broadcast;
 
-// FIXME: https://github.com/tenstorrent/tt-metal/issues/36142
-TEST_F(LLKMeshDeviceFixture, DISABLED_TensixComputeSingleTileUnaryBroadcast) {
+TEST_F(LLKMeshDeviceFixture, TensixComputeSingleTileUnaryBroadcast) {
     if (this->arch_ == tt::ARCH::QUASAR) {
         GTEST_SKIP() << "Quasar uses TensixComputeUnaryBroadcastQuasarDfb";
     }

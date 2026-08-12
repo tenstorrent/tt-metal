@@ -36,11 +36,17 @@ DSV3 = get_adapter("deepseek_v3_d_p")
 # glm_5_2 is a TEST-ONLY variant here: its adapter is intentionally kept out of the shared common
 # ADAPTER_PATHS (prefill serving is not wired), so register it locally for the `variant` fixture
 # without modifying the common prefill registry.
-from models.demos.deepseek_v3_d_p.tt.runners.adapters.sparse_mla import GLM52Adapter
+from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_2 import GLM52Adapter
 
 TEST_VARIANTS["glm_5_2"] = GLM52Adapter()
+
+# kimi_k3 is TEST-ONLY for the same reason, more strongly: 69 of its 93 layers are KDA
+# linear-attention layers with no TT implementation, so only its MLA layer is testable.
+from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3 import KimiK3Adapter
+
+TEST_VARIANTS["kimi_k3"] = KimiK3Adapter()
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
-from models.demos.deepseek_v3_d_p.utils.test_utils import dequantize_state_dict, detect_language_model_prefix
+from models.demos.deepseek_v3_d_p.utils.test_utils import convert_state_dict, detect_language_model_prefix
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import download_infinitebench_subset
 
 # Shared FABRIC_2D parametrize entries for the prefill block + transformer tests.
@@ -103,6 +109,37 @@ FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS = [
         # (EXPECT_NUM_TESTS=1) CI selectors that target the fabric2d-mesh siblings; select via `-k torus-y`.
         id="torus-y-8x4",
     ),
+    # FABRIC_2D_TORUS_X: single-galaxy 8x4 with the TP axis (mesh dim 1, 4-wide) closed into a ring;
+    # the SP axis (dim 0, 8-long) stays a line. Per-axis topology (SP, TP) = (Linear, Ring): Ring
+    # drives the TP-axis collectives (RMS-norm, MLA, dense-FFN, shared-expert, gate), Linear the
+    # SP-axis MoE dispatch/combine. This is the production full-galaxy X-ring case — it matches the
+    # [LINE,RING] pipeline-prefill descriptors and needs no sub-torus carve (uses all 32 chips).
+    pytest.param(
+        (8, 4),
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
+            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+        },
+        2,
+        (ttnn.Topology.Linear, ttnn.Topology.Ring),
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+        id="torus-x-8x4",
+    ),
+    # FABRIC_2D_TORUS_XY on the full 8x4 galaxy: Ring on BOTH axes (SP dim 0 = Ring-8, TP dim 1 =
+    # Ring-4). SP-axis MoE dispatch/combine ride #48225's ring-aware kernels; TP-axis collectives ring.
+    pytest.param(
+        (8, 4),
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+        },
+        2,
+        (ttnn.Topology.Ring, ttnn.Topology.Ring),
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+        id="torus-xy-8x4",
+    ),
     # FABRIC_2D_TORUS_Y on a 4x4 sub-torus (16 of the galaxy's 32 chips). Same [RING, LINE]
     # shape as the 8x4 torus but with a Ring-4 on the SP axis (dim 0). Requires carving the
     # sub-torus at runtime via TT_VISIBLE_DEVICES (16 chips) + TT_MESH_GRAPH_DESC_PATH pointing at
@@ -120,6 +157,38 @@ FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS = [
         (ttnn.Topology.Ring, ttnn.Topology.Linear),
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
         id="torus-y-4x4",
+    ),
+    # FABRIC_2D_TORUS_X on a 4x4 sub-torus: Ring-4 on the TP/X axis (dim 1), Linear on the SP/Y axis
+    # (dim 0). The mirror of torus-y — wraps the columns instead of the rows, so the TP-axis
+    # collectives (RMS-norm, MLA, dense-FFN, shared-expert, gate) ring while the SP-axis MoE
+    # dispatch/combine stay a line. Carve via TT_VISIBLE_DEVICES (16 chips) + TT_MESH_GRAPH_DESC_PATH
+    # pointing at single_bh_galaxy_subtorus_x4_graph_descriptor.textproto.
+    pytest.param(
+        (4, 4),
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
+            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+        },
+        2,
+        (ttnn.Topology.Linear, ttnn.Topology.Ring),
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+        id="torus-x-4x4",
+    ),
+    # FABRIC_2D_TORUS_XY on a 4x4 sub-torus: Ring-4 on BOTH axes (full 2D torus). The SP-axis MoE
+    # dispatch/combine ride the ring-aware kernels and the TP-axis collectives ring too. Carve via
+    # TT_VISIBLE_DEVICES (16 chips) + TT_MESH_GRAPH_DESC_PATH=...subtorus_xy4...
+    pytest.param(
+        (4, 4),
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+        },
+        2,
+        (ttnn.Topology.Ring, ttnn.Topology.Ring),
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+        id="torus-xy-4x4",
     ),
 ]
 
@@ -790,6 +859,17 @@ def random_weights(config_only):
         ).to(torch.bfloat16),
     }
 
+    # Kimi-K3 output gate. Appended AFTER the block above so the manual_seed(42) draw order for every
+    # non-gated variant is unchanged (the cached reference results depend on it — see above).
+    if getattr(config, "mla_use_output_gate", False):
+        weights["g_proj.weight"] = (
+            torch.randn(
+                config.num_attention_heads * config.v_head_dim,
+                config.hidden_size,
+            )
+            * std
+        ).to(torch.bfloat16)
+
     logger.info(f"Generated {len(weights)} random weight tensors using config dimensions")
     return config, weights
 
@@ -800,7 +880,7 @@ def pretrained_transformer_weights(variant, model_path, hf_config, state_dict, r
     Dequantized pretrained weights for N-layer transformer in TT state_dict format.
 
     Extracts embed, norm, and per-layer weights (attention, FFN/MoE) using
-    sub_state_dict() + dequantize_state_dict(), matching the format produced
+    sub_state_dict() + convert_state_dict(), matching the format produced
     by extract_tt_state_dict() in transformer_helpers.py.
 
     Parametrize with num_layers (default 6) via indirect fixture or marker:
@@ -831,14 +911,14 @@ def pretrained_transformer_weights(variant, model_path, hf_config, state_dict, r
 
     # Embed tokens
     embed_sd = sub_state_dict(state_dict, f"{prefix}model.embed_tokens.")
-    embed_dequant = dequantize_state_dict(embed_sd, hf_config)
+    embed_dequant = convert_state_dict(embed_sd, hf_config)
     result = {
         "embed_weight": embed_dequant["weight"].float(),
     }
 
     # Final norm
     norm_sd = sub_state_dict(state_dict, f"{prefix}model.norm.")
-    norm_dequant = dequantize_state_dict(norm_sd, hf_config)
+    norm_dequant = convert_state_dict(norm_sd, hf_config)
     result["norm_weight"] = norm_dequant["weight"]
 
     # Per-layer weights
@@ -846,7 +926,7 @@ def pretrained_transformer_weights(variant, model_path, hf_config, state_dict, r
     for i in range(num_layers):
         logger.info(f"Loading layer {i} weights...")
         layer_sd = sub_state_dict(state_dict, f"{prefix}model.layers.{i}.")
-        layer_dequant = dequantize_state_dict(layer_sd, hf_config)
+        layer_dequant = convert_state_dict(layer_sd, hf_config)
 
         layer_dict = {
             "attn_norm_weight": layer_dequant["input_layernorm.weight"],

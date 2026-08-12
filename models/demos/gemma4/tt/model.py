@@ -517,6 +517,55 @@ class Gemma4Model:
         # Generator/vLLM entry points gate on this flag (and sampling != None).
         self._supports_on_device_sampling = self.sampling is not None
 
+        # Trace-safe bounded-fill cap: one persistent 1-element int32 device
+        # tensor shared by every sliding layer. Traced prefill runs with
+        # get_last_token=-1 (lm_head deferred), so the host-side valid_seq_len
+        # slice is skipped; the generator refreshes this tensor out-of-trace
+        # and paged_fill_cache's writer reads it at runtime to skip padding
+        # tiles that would otherwise wrap the circular KV window.
+        self.prefill_valid_len_dev = None
+        if bounded_sliding_kv_cache:
+            self._init_prefill_valid_len_dev()
+
+    def _init_prefill_valid_len_dev(self):
+        """Allocate the persistent valid_seq_len tensor and stash it on every
+        bounded sliding layer's attention config (``prefill_valid_len_dev``).
+        """
+        is_mesh = hasattr(self.mesh_device, "shape")
+        self.prefill_valid_len_dev = ttnn.from_torch(
+            torch.tensor([0], dtype=torch.int32),
+            device=self.mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.int32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh else None,
+        )
+        for layer in self.layers:
+            cfg = getattr(getattr(layer, "self_attn", None), "config", None)
+            if cfg is not None and getattr(cfg, "cache_position_modulo", None) is not None:
+                cfg.prefill_valid_len_dev = self.prefill_valid_len_dev
+
+    def update_prefill_valid_seq_len(self, valid_seq_len: int):
+        """Refresh the persistent valid_seq_len device tensor (out of trace).
+
+        ``valid_seq_len`` is the real (unpadded) token count for the current
+        prefill chunk. The writer kernel block-aligns it; callers pass the raw
+        length (``last_token_idx - num_cached_tokens + 1``).
+        """
+        if self.prefill_valid_len_dev is None:
+            return
+        if valid_seq_len is None or int(valid_seq_len) <= 0:
+            return
+        is_mesh = hasattr(self.mesh_device, "shape")
+        host = ttnn.from_torch(
+            torch.tensor([int(valid_seq_len)], dtype=torch.int32),
+            device=None,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.int32,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh else None,
+        )
+        ttnn.copy_host_to_device_tensor(host, self.prefill_valid_len_dev)
+
     @staticmethod
     def _make_sampling_args(hf_config, mesh_device, tp):
         """Create minimal args object for SamplingGenerator/TTSampling."""
@@ -848,9 +897,22 @@ class Gemma4Model:
                 kv_pair[1].deallocate(True)
 
         # Batched prefill (batch_size > 1) returns hidden states; Generator applies
-        # norm + lm_head per user. Single-user prefill runs norm + lm_head here.
+        # norm + lm_head per user. Single-user intermediate generator-level chunks
+        # (get_last_token=-1 with a chunk_page_table, not in prefill-trace mode)
+        # only need the KV fill from the layer loop above — their logits are
+        # discarded by the chunk loop, so skip the expensive full-sequence lm_head.
+        # Gate on chunk_page_table: get_last_token defaults to -1 for all direct
+        # ttnn_prefill_forward callers (unit tests, demos), which still need logits.
         if not is_decode and get_last_token == -1 and batch_size > 1:
             return hidden_states
+        if (
+            not is_decode
+            and get_last_token == -1
+            and batch_size == 1
+            and chunk_page_table is not None
+            and not getattr(self, "_prefill_trace_mode", False)
+        ):
+            return None
 
         # Final norm
         hidden_states = self.norm.forward(hidden_states)

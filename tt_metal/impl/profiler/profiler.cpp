@@ -69,7 +69,9 @@ namespace tt::tt_metal {
 
 namespace {
 kernel_profiler::PacketTypes get_packet_type(uint32_t timer_id) {
-    return static_cast<kernel_profiler::PacketTypes>((timer_id >> 16) & 0x7);
+    return static_cast<kernel_profiler::PacketTypes>(
+        (timer_id >> kernel_profiler::PROFILER_TIMER_PACKET_TYPE_SHIFT) &
+        kernel_profiler::PROFILER_TIMER_PACKET_TYPE_MASK);
 }
 
 void add_program_sub_device_meta_data(nlohmann::json& meta_data, tt::ChipId device_id, uint32_t runtime_id) {
@@ -492,10 +494,13 @@ bool doAllDispatchCoresComeAfterNonDispatchCores(
     const std::vector<CoreCoord> logical_dispatch_cores =
         get_logical_dispatch_cores(env, device->id(), device->num_hw_cqs(), dispatch_core_config);
 
+    const CoreType dispatch_core_type =
+        resolve_dispatch_core_type(env, device->id(), dispatch_core_config);
     std::vector<CoreCoord> virtual_dispatch_cores;
+    virtual_dispatch_cores.reserve(logical_dispatch_cores.size());
     for (const CoreCoord& core : logical_dispatch_cores) {
         const CoreCoord virtual_dispatch_core =
-            device->virtual_core_from_logical_core(core, get_core_type_from_config(dispatch_core_config));
+            device->virtual_core_from_logical_core(core, dispatch_core_type);
         virtual_dispatch_cores.push_back(virtual_dispatch_core);
     }
 
@@ -583,6 +588,7 @@ void removeFabricMuxEvents(
     std::vector<std::variant<FabricEventMarkers, tracy::TTDeviceMarker>>& coalesced_events,
     const CoreCoord& fabric_mux_core) {
     std::vector<std::variant<FabricEventMarkers, tracy::TTDeviceMarker>> filtered_events;
+    filtered_events.reserve(coalesced_events.size());
     for (const auto& coalesced_event : coalesced_events) {
         if (std::holds_alternative<tracy::TTDeviceMarker>(coalesced_event)) {
             auto event = std::get<tracy::TTDeviceMarker>(coalesced_event);
@@ -1212,7 +1218,8 @@ bool isGalaxyMMIODevice(distributed::MeshDevice* mesh_device, IDevice* device) {
 }
 
 bool useFastDispatch(distributed::MeshDevice* mesh_device, IDevice* device, ContextId context_id) {
-    return MetalContext::instance(context_id).device_manager()->is_dispatch_firmware_active() &&
+    return MetalContext::instance(context_id).rtoptions().get_fast_dispatch() &&
+           MetalContext::instance(context_id).device_manager()->is_dispatch_firmware_active() &&
            !isGalaxyMMIODevice(mesh_device, device);
 }
 
@@ -1498,9 +1505,10 @@ void DeviceProfiler::readRiscProfilerResults(
 
     const auto& rtoptions = MetalContext::instance(context_id).rtoptions();
 
-    // Skip the HOST_BUFFER_END_INDEX (DRAM flush count) early-out in trace-only/accumulate modes, where data stays in
-    // L1 and the index may never advance.
-    if (!rtoptions.get_profiler_trace_only() && !rtoptions.get_profiler_accumulate()) {
+    // Skip the HOST_BUFFER_END_INDEX (DRAM flush count) early-out where it doesn't apply: trace-only /
+    // accumulate modes (data stays in L1 and the index may never advance), and the Quasar L1-only path.
+    if (!rtoptions.get_profiler_trace_only() && !rtoptions.get_profiler_accumulate() &&
+        data_source != ProfilerDataBufferSource::L1) {
         if ((control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_BR_ER] == 0) &&
             (control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_NC] == 0)) {
             return;
@@ -1532,7 +1540,7 @@ void DeviceProfiler::readRiscProfilerResults(
     int riscCount = 1;
 
     if (!rtoptions.get_profiler_trace_only() && CoreType == HalProgrammableCoreType::TENSIX) {
-        riscCount = 5;
+        riscCount = MetalContext::instance(context_id).hal().get_num_risc_processors(HalProgrammableCoreType::TENSIX);
     }
 
     std::map<tracy::RiscType, std::set<tracy::TTDeviceMarker>>& device_markers_for_core =
@@ -1550,7 +1558,14 @@ void DeviceProfiler::readRiscProfilerResults(
         if (rtoptions.get_profiler_trace_only() && CoreType == HalProgrammableCoreType::TENSIX) {
             riscType = tracy::RiscType::TENSIX_RISC_AGG;
         } else if (CoreType == HalProgrammableCoreType::TENSIX) {
-            riscType = static_cast<tracy::RiscType>(riscEndIndex);
+            if (device_arch == tt::ARCH::QUASAR) {
+                // Map riscEndIndex to the corresponding QUASAR_* RiscType (contiguous from QUASAR_DM0), matching
+                // the device get_hw_thread_idx() ordering.
+                riscType =
+                    static_cast<tracy::RiscType>(static_cast<uint8_t>(tracy::RiscType::QUASAR_DM0) + riscEndIndex);
+            } else {
+                riscType = static_cast<tracy::RiscType>(riscEndIndex);
+            }
         } else {
             riscType = tracy::RiscType::ERISC;
         }
@@ -1615,8 +1630,9 @@ void DeviceProfiler::readRiscProfilerResults(
                     opTime_L = 0;
                 } else if (!oneStartFound) {
                     // Pre-sentinel data: capture TS_DATA and advance past its 4-slot layout.
-                    uint32_t timer_id = (data_buffer.at(index) >> 12) & 0x7FFFF;
-                    uint32_t time_H = data_buffer.at(index) & 0xFFF;
+                    uint32_t timer_id = (data_buffer.at(index) >> kernel_profiler::PROFILER_MARKER_TIMER_ID_SHIFT) &
+                                        kernel_profiler::PROFILER_MARKER_TIMER_ID_MASK;
+                    uint32_t time_H = data_buffer.at(index) & kernel_profiler::PROFILER_MARKER_TS_HIGH_MASK;
                     if (timer_id || time_H) {
                         kernel_profiler::PacketTypes pre_packet_type = get_packet_type(timer_id);
                         if (pre_packet_type == kernel_profiler::TS_DATA) {
@@ -1638,11 +1654,12 @@ void DeviceProfiler::readRiscProfilerResults(
                 } else if (newRunStart) {
                     newRunStart = false;
 
-                    // TODO(MO): Cleanup magic numbers
-                    riscNumRead = data_buffer.at(index) & 0x7;
-                    coreFlatIDRead = (data_buffer.at(index) >> 3) & 0xFF;
+                    riscNumRead = data_buffer.at(index) & kernel_profiler::PROFILER_ID_RISC_MASK;
+                    coreFlatIDRead = (data_buffer.at(index) >> kernel_profiler::PROFILER_ID_FLAT_SHIFT) &
+                                     kernel_profiler::PROFILER_ID_FLAT_MASK;
                     if (!skipReadingDeviceTraceCounter()) {
-                        deviceTraceCounterRead = (data_buffer.at(index) >> 11) & 0xFFFF;
+                        deviceTraceCounterRead = (data_buffer.at(index) >> kernel_profiler::PROFILER_ID_TRACE_SHIFT) &
+                                                 kernel_profiler::PROFILER_ID_TRACE_MASK;
                     }
                     runHostCounterRead = data_buffer.at(index + 1);
                     if (runHostCounterRead != 0) {
@@ -1670,13 +1687,14 @@ void DeviceProfiler::readRiscProfilerResults(
                     pre_sentinel_markers.clear();
 
                 } else if (oneStartFound) {
-                    uint32_t timer_id = (data_buffer.at(index) >> 12) & 0x7FFFF;
+                    uint32_t timer_id = (data_buffer.at(index) >> kernel_profiler::PROFILER_MARKER_TIMER_ID_SHIFT) &
+                                        kernel_profiler::PROFILER_MARKER_TIMER_ID_MASK;
                     kernel_profiler::PacketTypes packet_type = get_packet_type(timer_id);
 
                     switch (packet_type) {
                         case kernel_profiler::ZONE_START:
                         case kernel_profiler::ZONE_END: {
-                            uint32_t time_H = data_buffer.at(index) & 0xFFF;
+                            uint32_t time_H = data_buffer.at(index) & kernel_profiler::PROFILER_MARKER_TS_HIGH_MASK;
                             if (timer_id || time_H) {
                                 uint32_t time_L = data_buffer.at(index + 1);
 
@@ -1740,7 +1758,7 @@ void DeviceProfiler::readRiscProfilerResults(
                             break;
                         }
                         case kernel_profiler::TS_DATA: {
-                            uint32_t time_H = data_buffer.at(index) & 0xFFF;
+                            uint32_t time_H = data_buffer.at(index) & kernel_profiler::PROFILER_MARKER_TS_HIGH_MASK;
                             uint32_t time_L = data_buffer.at(index + 1);
                             index += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
                             uint32_t data_H = data_buffer.at(index);
@@ -1762,7 +1780,7 @@ void DeviceProfiler::readRiscProfilerResults(
                             continue;
                         }
                         case kernel_profiler::TS_EVENT: {
-                            uint32_t time_H = data_buffer.at(index) & 0xFFF;
+                            uint32_t time_H = data_buffer.at(index) & kernel_profiler::PROFILER_MARKER_TS_HIGH_MASK;
                             uint32_t time_L = data_buffer.at(index + 1);
                             readDeviceMarkerData(
                                 device_markers_for_core_risc,
@@ -1779,7 +1797,7 @@ void DeviceProfiler::readRiscProfilerResults(
                         }
                         case kernel_profiler::TS_DATA_16B: {
                             // Header
-                            uint32_t time_H = data_buffer.at(index) & 0xFFF;
+                            uint32_t time_H = data_buffer.at(index) & kernel_profiler::PROFILER_MARKER_TS_HIGH_MASK;
                             uint32_t time_L = data_buffer.at(index + 1);
                             index += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
 
@@ -1917,7 +1935,7 @@ void DeviceProfiler::readDeviceMarkerData(
     updateFirstTimestamp(timestamp);
 
 #if defined(TRACY_ENABLE)
-    if ((timer_id & 0xFFFF) == kernel_profiler::NOC_DEBUGGING_STATIC_ID) {
+    if ((timer_id & kernel_profiler::PROFILER_TIMER_STATIC_ID_MASK) == kernel_profiler::NOC_DEBUGGING_STATIC_ID) {
         NOCDebugState* noc_debug_state = MetalContext::instance(context_id).noc_debug_state().get();
         if (noc_debug_state) {
             const metal_SocDescriptor& soc_desc =
@@ -1957,7 +1975,8 @@ void DeviceProfiler::readTsData16BMarkerData(
 
     nlohmann::json meta_data;
 #if defined(TRACY_ENABLE)
-    if ((timer_id & 0xFFFF) == kernel_profiler::NOC_TRACING_STATIC_ID) {
+    std::optional<NOCDebugEvent> noc_debug_event;
+    if ((timer_id & kernel_profiler::PROFILER_TIMER_STATIC_ID_MASK) == kernel_profiler::NOC_TRACING_STATIC_ID) {
         using EMD = KernelProfilerNocEventMetadata;
 
         EMD event_metadata(data);
@@ -1992,11 +2011,8 @@ void DeviceProfiler::readTsData16BMarkerData(
             const CoreCoord virtual_core =
                 soc_desc.translate_coord_to(physical_core, CoordSystem::NOC0, CoordSystem::TRANSLATED);
             // NOLINTEND
-            noc_debug_state->push_event(
-                device_id,
-                timestamp,
-                get_processor_id(risc_type),
-                make_noc_debug_event(virtual_core, local_noc_event, trailer_metadata.getLocalNocEventDstTrailer()));
+            noc_debug_event =
+                make_noc_debug_event(virtual_core, local_noc_event, trailer_metadata.getLocalNocEventDstTrailer());
         }
     }
 #endif
@@ -2028,6 +2044,15 @@ void DeviceProfiler::readTsData16BMarkerData(
     if (!new_marker_inserted) {
         return;
     }
+
+#if defined(TRACY_ENABLE)
+    // Only push NOC debug events if this is a new marker.
+    if (noc_debug_event.has_value()) {
+        MetalContext::instance(context_id)
+            .noc_debug_state()
+            ->push_event(device_id, timestamp, get_processor_id(risc_type), *noc_debug_event);
+    }
+#endif
 
     device_tracy_contexts.try_emplace({device_id, physical_core}, nullptr);
 
@@ -2575,7 +2600,9 @@ void DeviceProfiler::pushTracyDeviceResults(
 #if defined(TRACY_ENABLE)
     ZoneScoped;
     if (!getDeviceProfilerState(context_id) ||
-        MetalContext::instance(context_id).rtoptions().get_profiler_disable_push_to_tracy()) {
+        MetalContext::instance(context_id).rtoptions().get_profiler_disable_push_to_tracy() ||
+        // TODO: Quasar is CSV-only for now
+        device_arch == tt::ARCH::QUASAR) {
         return;
     }
 
@@ -2841,7 +2868,11 @@ void DeviceProfiler::pollDebugDumpResults(
             for (tracy::RiscType risc_type : enchantum::values_generator<tracy::RiscType>) {
                 if (risc_type == tracy::RiscType::TENSIX_RISC_AGG || risc_type == tracy::RiscType::NONE ||
                     (is_eth && risc_type != tracy::RiscType::ERISC) ||
-                    (!is_eth && risc_type == tracy::RiscType::ERISC)) {
+                    (!is_eth && risc_type == tracy::RiscType::ERISC) ||
+                    // WH/BH and Quasar RiscTypes occupy disjoint enum ranges, and the Quasar DRAM profiler
+                    // buffer is unsupported for now.
+                    (static_cast<uint8_t>(risc_type) >= static_cast<uint8_t>(tracy::RiscType::QUASAR_DM0) &&
+                     static_cast<uint8_t>(risc_type) <= static_cast<uint8_t>(tracy::RiscType::QUASAR_NEO3_TRISC3))) {
                     continue;
                 }
 
@@ -2918,6 +2949,7 @@ void DeviceProfiler::pollDebugDumpResults(
     // Figure out which DRAM profiler addresses need to be read
     std::set<uint8_t> stalled_dram_buffer_indices;
     std::vector<CoreCoord> virtual_cores_with_data;
+    virtual_cores_with_data.reserve(stalled_cores_with_data.size());
     for (const auto& [virtual_core, risc_types] : stalled_cores_with_data) {
         virtual_cores_with_data.push_back(virtual_core);
         for (const auto& risc_type : risc_types) {
@@ -2954,6 +2986,7 @@ void DeviceProfiler::pollDebugDumpResults(
     // Remaining L1 data not flushed to DRAM yet
     if (is_final_poll) {
         std::vector<CoreCoord> cores_with_l1_data;
+        cores_with_l1_data.reserve(virtual_cores.size());
         std::map<CoreCoord, std::set<tracy::RiscType>> riscs_with_l1_data;
 
         for (const auto& virtual_core : virtual_cores) {
@@ -2963,7 +2996,11 @@ void DeviceProfiler::pollDebugDumpResults(
             for (tracy::RiscType risc_type : enchantum::values_generator<tracy::RiscType>) {
                 if (risc_type == tracy::RiscType::TENSIX_RISC_AGG || risc_type == tracy::RiscType::NONE ||
                     (is_eth && risc_type != tracy::RiscType::ERISC) ||
-                    (!is_eth && risc_type == tracy::RiscType::ERISC)) {
+                    (!is_eth && risc_type == tracy::RiscType::ERISC) ||
+                    // WH/BH and Quasar RiscTypes occupy disjoint enum ranges, and the Quasar DRAM profiler
+                    // buffer is unsupported for now.
+                    (static_cast<uint8_t>(risc_type) >= static_cast<uint8_t>(tracy::RiscType::QUASAR_DM0) &&
+                     static_cast<uint8_t>(risc_type) <= static_cast<uint8_t>(tracy::RiscType::QUASAR_NEO3_TRISC3))) {
                     continue;
                 }
 
@@ -3010,7 +3047,14 @@ void DeviceProfiler::pollDebugDumpResults(
 }
 
 bool getDeviceProfilerState(ContextId context_id) {
-    return MetalContext::instance(context_id).rtoptions().get_profiler_enabled();
+    auto& ctx = MetalContext::instance(context_id);
+
+    // Device profiler cannot be enabled on mock device.
+    if (ctx.get_cluster().is_mock_or_emulated()) {
+        return false;
+    }
+
+    return ctx.rtoptions().get_profiler_enabled();
 }
 
 bool getDeviceDebugDumpEnabled(ContextId context_id) {

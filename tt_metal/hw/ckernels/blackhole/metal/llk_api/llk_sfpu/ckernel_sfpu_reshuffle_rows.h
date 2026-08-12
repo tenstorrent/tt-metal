@@ -9,6 +9,7 @@
 #include "ckernel.h"
 #include "ckernel_addrmod.h"
 #include "ckernel_instr_params.h"
+#include "cmath_common.h"
 #include "sfpi.h"
 
 namespace ckernel {
@@ -36,6 +37,8 @@ namespace sfpu {
  *
  * @param idx_addr: L1 address of the mask tile containing destination row mappings (uint8_t[32])
  */
+inline void reshuffle_rows_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
+
 template <bool APPROXIMATION_MODE>
 inline void calculate_reshuffle_rows(uint idx_addr) {
     constexpr std::uint32_t output_tile_offset = 64;

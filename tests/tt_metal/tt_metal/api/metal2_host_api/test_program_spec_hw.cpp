@@ -23,8 +23,8 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
-#include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 
 #include "device_fixture.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
@@ -38,7 +38,6 @@ using test_helpers::BindTensorParameterToKernel;
 using test_helpers::MakeMinimalDFB;
 using test_helpers::MakeMinimalGen1ComputeKernel;
 using test_helpers::MakeMinimalGen1DMKernel;
-using test_helpers::MakeMinimalReaderDMKernel;
 using test_helpers::MakeMinimalWorkUnit;
 using test_helpers::MakeShardedTensorParameter;
 
@@ -66,7 +65,7 @@ protected:
 //
 // Proves that DFB local accessor names work end-to-end on real WH/BH hardware:
 //   1. kernel_bindings_generated.h is emitted correctly (dfb::buf resolves at compile time)
-//   2. The DFBAccessor mechanism works (DFB ID maps to the correct underlying CB)
+//   2. The DFBBindingToken mechanism works (DFB ID maps to the correct underlying CB)
 //   3. Data flows correctly through the DFB from producer to consumer
 //
 // Pipeline:
@@ -108,7 +107,7 @@ TEST_F(ProgramSpecHWTest, DFBAccessorNameLoopback) {
     producer.advanced_options.num_runtime_varargs = 3;
 
     // Consumer: NCRISC reads DFB → DRAM
-    auto consumer = MakeMinimalReaderDMKernel("consumer");
+    auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
     consumer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_accessor_loopback_consumer.cpp";
     consumer.advanced_options.num_runtime_varargs = 3;
 
@@ -248,7 +247,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
     // Consumer: NCRISC reads DFB → DRAM. Uses default `args` namespace, 1 named RTA,
     // 1 named CRTA, 2 named CTAs, 2 RTA varargs (note: different count from producer —
     // this verifies the named_rta_words offset is baked per-kernel), 1 CRTA vararg.
-    auto consumer = MakeMinimalReaderDMKernel("consumer");
+    auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
     consumer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/named_args_loopback_consumer.cpp";
     consumer.runtime_arg_schema.runtime_arg_names = {"dst_addr"};
     consumer.runtime_arg_schema.common_runtime_arg_names = {"num_entries"};
@@ -284,7 +283,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
     params.kernel_run_args = {
         ProgramRunArgs::KernelRunArgs{
             .kernel = KernelSpecName{"producer"},
-            .runtime_arg_values = {{node, {{"src_addr", input_buffer->address()}}}},
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"src_addr", input_buffer->address()}}),
             .common_runtime_arg_values = {{"num_entries", num_transfers}},
             .advanced_options =
                 AdvancedKernelRunArgs{
@@ -294,7 +293,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
         },
         ProgramRunArgs::KernelRunArgs{
             .kernel = KernelSpecName{"consumer"},
-            .runtime_arg_values = {{node, {{"dst_addr", output_buffer->address()}}}},
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"dst_addr", output_buffer->address()}}),
             .common_runtime_arg_values = {{"num_entries", num_transfers}},
             .advanced_options =
                 AdvancedKernelRunArgs{
@@ -329,63 +328,36 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
 // The named-args helpers reach a compute kernel via a completely different
 // include chain than a DM kernel.
 //
-// Pipeline:
-//   Compute kernel (TRISC) — produces out_dfb. Reads named RTAs/CRTAs/CTAs +
-//       RTA/CRTA varargs; writes the XOR sum of all of them into the first
-//       uint32_t of every entry, zeros the rest.
-//   DM Consumer (NCRISC) — out_dfb → DRAM output. Positional varargs only.
+// Pipeline (compute-only; no DFB / DM consumer):
+//   Compute kernel (TRISC) — reads named RTAs/CRTAs/CTAs + RTA/CRTA varargs; PACK writes the
+//       XOR sum into L1 at the allocator base address on the compute core. Host reads that
+//       word via ReadFromDeviceL1 after LaunchProgram.
 //
-// The kernel does NOT use the unpack/math/pack tile pipeline — just raw L1 writes
-// from PACK after reserve_back. This is a plumbing test only; didn't want to
-// tangle with type conversions....
-//
-// Verification: the host arranges every named arg + every vararg so their XOR
-// equals a known target. Output DRAM should contain {target, 0, 0, …} per
-// entry, exactly. A wrong offset on any accessor → wrong sum → test fails on
-// the byte-for-byte compare.
+// Verification: the host arranges every named arg + every vararg so their XOR equals a known
+// target. A wrong offset on any accessor → wrong sum → test fails.
 
 TEST_F(ProgramSpecHWTest, NamedArgsLoopbackCompute) {
     auto mesh_device = devices_.at(0);
     IDevice* device = mesh_device->get_devices()[0];
 
-    constexpr uint32_t entry_size = 1024;
-    constexpr uint32_t num_entries_in_dfb = 4;
-    constexpr uint32_t num_transfers = 8;
-    constexpr uint32_t total_bytes = entry_size * num_transfers;
+    constexpr uint32_t entry_size = 1024;  // CTA value folded into the XOR (not a DFB size)
+    constexpr uint32_t num_tiles = 8;      // CRTA value folded into the XOR
+    const uint32_t report_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
 
     const NodeCoord node{0, 0};
-
-    InterleavedBufferConfig dram_config{
-        .device = device, .size = total_bytes, .page_size = total_bytes, .buffer_type = BufferType::DRAM};
-    auto output_buffer = CreateBuffer(dram_config);
 
     ProgramSpec spec;
     spec.name = "named_args_loopback_compute";
 
-    // Compute kernel: produces out_dfb. The kernel under test — exercises every
-    // named-arg accessor (RTA / CRTA / two CTAs) plus RTA + CRTA varargs.
     auto compute = MakeMinimalGen1ComputeKernel("compute");
     compute.source = "tests/tt_metal/tt_metal/test_kernels/compute/named_args_loopback_compute.cpp";
-    compute.runtime_arg_schema.runtime_arg_names = {"input_offset"};
+    compute.runtime_arg_schema.runtime_arg_names = {"input_offset", "report_addr"};
     compute.runtime_arg_schema.common_runtime_arg_names = {"num_tiles"};
     compute.advanced_options = KernelAdvancedOptions{.num_runtime_varargs = 2, .num_common_runtime_varargs = 1};
     compute.compile_time_args = {{"magic", 0xCAFE0001u}, {"entry_size", entry_size}};
 
-    // Consumer: NCRISC reads out_dfb → DRAM. Reuses dfb_accessor_loopback_consumer.cpp
-    // verbatim (positional varargs only).
-    auto consumer = MakeMinimalReaderDMKernel("consumer");
-    consumer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_accessor_loopback_consumer.cpp";
-    consumer.advanced_options.num_runtime_varargs = 3;
-
-    auto out_dfb = MakeMinimalDFB("out_dfb", entry_size, num_entries_in_dfb);
-    out_dfb.data_format_metadata = tt::DataFormat::Float16_b;
-
-    compute.dfb_bindings.push_back(ProducerOf(DFBSpecName{"out_dfb"}, "out_dfb"));
-    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"out_dfb"}, "a_dfb_named_bob"));
-
-    spec.kernels = {compute, consumer};
-    spec.dataflow_buffers = {out_dfb};
-    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"compute", "consumer"})};
+    spec.kernels = {compute};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"compute"})};
 
     Program program = MakeProgramFromSpec(*mesh_device, spec);
 
@@ -399,43 +371,31 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopbackCompute) {
     constexpr uint32_t kVararg0 = 0xAAAA1111u;
     constexpr uint32_t kVararg1 = 0xBBBB2222u;
     constexpr uint32_t kCommonVararg0 =
-        kTargetXorSum ^ kMagic ^ entry_size ^ num_transfers ^ kInputOffset ^ kVararg0 ^ kVararg1;
+        kTargetXorSum ^ kMagic ^ entry_size ^ num_tiles ^ kInputOffset ^ kVararg0 ^ kVararg1;
 
     ProgramRunArgs params;
-    params.kernel_run_args = {
-        ProgramRunArgs::KernelRunArgs{
-            .kernel = KernelSpecName{"compute"},
-            .runtime_arg_values = {{node, {{"input_offset", kInputOffset}}}},
-            .common_runtime_arg_values = {{"num_tiles", num_transfers}},
-            .advanced_options =
-                AdvancedKernelRunArgs{
-                    .runtime_varargs = {{node, {kVararg0, kVararg1}}},
-                    .common_runtime_varargs = {kCommonVararg0},
-                },
-        },
-        ProgramRunArgs::KernelRunArgs{
-            .kernel = KernelSpecName{"consumer"},
-            .advanced_options =
-                AdvancedKernelRunArgs{
-                    .runtime_varargs = {{node, {output_buffer->address(), 0u, num_transfers}}},
-                },
-        },
-    };
+    params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"compute"},
+        .runtime_arg_values =
+            MakeRuntimeArgsForSingleNode(node, {{"input_offset", kInputOffset}, {"report_addr", report_addr}}),
+        .common_runtime_arg_values = {{"num_tiles", num_tiles}},
+        .advanced_options =
+            AdvancedKernelRunArgs{
+                .runtime_varargs = {{node, {kVararg0, kVararg1}}},
+                .common_runtime_varargs = {kCommonVararg0},
+            },
+    }};
     SetProgramRunArgs(program, params);
+
+    std::vector<uint32_t> zero_report(1, 0u);
+    detail::WriteToDeviceL1(device, node, report_addr, zero_report);
 
     detail::LaunchProgram(device, program);
 
-    std::vector<uint32_t> output_data;
-    detail::ReadFromBuffer(output_buffer, output_data);
-
-    constexpr uint32_t words_per_entry = entry_size / sizeof(uint32_t);
-    std::vector<uint32_t> expected(total_bytes / sizeof(uint32_t), 0u);
-    for (uint32_t e = 0; e < num_transfers; ++e) {
-        expected[e * words_per_entry] = kTargetXorSum;
-    }
-
-    ASSERT_EQ(output_data.size(), expected.size());
-    EXPECT_EQ(output_data, expected);
+    std::vector<uint32_t> reported;
+    detail::ReadFromDeviceL1(device, node, report_addr, sizeof(uint32_t), reported);
+    ASSERT_EQ(reported.size(), 1u);
+    EXPECT_EQ(reported[0], kTargetXorSum);
 }
 
 // ============================================================================
@@ -478,7 +438,7 @@ TEST_F(ProgramSpecHWTest, TtKernelNamedArgsLoopback) {
     producer.compile_time_args = {{"bank_id", 0}, {"entry_size", entry_size}};
 
     // Consumer (NCRISC) reads DFB → DRAM. Same TT_KERNEL form with dst_addr.
-    auto consumer = MakeMinimalReaderDMKernel("consumer");
+    auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
     consumer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/tt_kernel_named_args_consumer.cpp";
     consumer.runtime_arg_schema.runtime_arg_names = {"dst_addr"};
     consumer.runtime_arg_schema.common_runtime_arg_names = {"num_entries"};
@@ -499,12 +459,12 @@ TEST_F(ProgramSpecHWTest, TtKernelNamedArgsLoopback) {
     params.kernel_run_args = {
         ProgramRunArgs::KernelRunArgs{
             .kernel = KernelSpecName{"producer"},
-            .runtime_arg_values = {{node, {{"src_addr", input_buffer->address()}}}},
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"src_addr", input_buffer->address()}}),
             .common_runtime_arg_values = {{"num_entries", num_transfers}},
         },
         ProgramRunArgs::KernelRunArgs{
             .kernel = KernelSpecName{"consumer"},
-            .runtime_arg_values = {{node, {{"dst_addr", output_buffer->address()}}}},
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"dst_addr", output_buffer->address()}}),
             .common_runtime_arg_values = {{"num_entries", num_transfers}},
         },
     };
@@ -532,91 +492,60 @@ TEST_F(ProgramSpecHWTest, TtKernelNamedArgsLoopback) {
 // The TT_KERNEL counterpart to NamedArgsLoopbackCompute, and the test that proves the generated
 // kernel_main() shim is emitted on the COMPUTE (TRISC) compile path — the gap fixed by routing
 // both genfiles paths through the shared shim helper. The compute kernel is authored in TT_KERNEL
-// form (magic/entry_size as template CTAs; input_offset (RTA) and num_tiles (CRTA) as function
-// params); the DM consumer reuses the existing positional-vararg DFB consumer verbatim.
+// form (magic/entry_size as template CTAs; input_offset + report_addr (RTAs) and num_tiles (CRTA)
+// as function params). No DFB — PACK writes the XOR into L1 at the allocator base address on the
+// compute core (same ReadFromDeviceL1 idiom as NamedArgsLoopbackCompute).
 //
-// Verification: the kernel writes magic ^ entry_size ^ input_offset ^ num_tiles into word 0 of
-// every entry; the host solves input_offset so the XOR equals a known target. A wrong binding on
-// the compute path → wrong sum → wrong DRAM word → test fails.
+// Verification: the host solves input_offset so magic ^ entry_size ^ input_offset ^ num_tiles
+// equals a known target. A wrong binding on the compute path → wrong sum → test fails.
 
 TEST_F(ProgramSpecHWTest, TtKernelNamedArgsLoopbackCompute) {
     auto mesh_device = devices_.at(0);
     IDevice* device = mesh_device->get_devices()[0];
 
-    constexpr uint32_t entry_size = 1024;
-    constexpr uint32_t num_entries_in_dfb = 4;
-    constexpr uint32_t num_transfers = 8;
-    constexpr uint32_t total_bytes = entry_size * num_transfers;
+    constexpr uint32_t entry_size = 1024;  // CTA value folded into the XOR (not a DFB size)
+    constexpr uint32_t num_tiles = 8;      // CRTA value folded into the XOR
+    const uint32_t report_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
 
     const NodeCoord node{0, 0};
-
-    InterleavedBufferConfig dram_config{
-        .device = device, .size = total_bytes, .page_size = total_bytes, .buffer_type = BufferType::DRAM};
-    auto output_buffer = CreateBuffer(dram_config);
 
     ProgramSpec spec;
     spec.name = "tt_kernel_named_args_loopback_compute";
 
-    // Compute kernel authored in TT_KERNEL form. magic/entry_size are template params (CTAs);
-    // input_offset (RTA) and num_tiles (CRTA) are function params. No varargs.
     auto compute = MakeMinimalGen1ComputeKernel("compute");
     compute.source = "tests/tt_metal/tt_metal/test_kernels/compute/tt_kernel_named_args_compute.cpp";
-    compute.runtime_arg_schema.runtime_arg_names = {"input_offset"};
+    compute.runtime_arg_schema.runtime_arg_names = {"input_offset", "report_addr"};
     compute.runtime_arg_schema.common_runtime_arg_names = {"num_tiles"};
     compute.compile_time_args = {{"magic", 0xCAFE0001u}, {"entry_size", entry_size}};
 
-    // Consumer: NCRISC reads out_dfb → DRAM. Reuses the existing positional-vararg consumer.
-    auto consumer = MakeMinimalReaderDMKernel("consumer");
-    consumer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_accessor_loopback_consumer.cpp";
-    consumer.advanced_options.num_runtime_varargs = 3;
-
-    auto out_dfb = MakeMinimalDFB("out_dfb", entry_size, num_entries_in_dfb);
-    out_dfb.data_format_metadata = tt::DataFormat::Float16_b;
-
-    compute.dfb_bindings.push_back(ProducerOf(DFBSpecName{"out_dfb"}, "out_dfb"));
-    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"out_dfb"}, "a_dfb_named_bob"));
-
-    spec.kernels = {compute, consumer};
-    spec.dataflow_buffers = {out_dfb};
-    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"compute", "consumer"})};
+    spec.kernels = {compute};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"compute"})};
 
     Program program = MakeProgramFromSpec(*mesh_device, spec);
 
     // sum = magic ^ entry_size ^ input_offset ^ num_tiles. Solve input_offset for a known target.
     constexpr uint32_t kTargetXorSum = 0xDEADBEEFu;
     constexpr uint32_t kMagic = 0xCAFE0001u;
-    constexpr uint32_t kInputOffset = kTargetXorSum ^ kMagic ^ entry_size ^ num_transfers;
+    constexpr uint32_t kInputOffset = kTargetXorSum ^ kMagic ^ entry_size ^ num_tiles;
 
     ProgramRunArgs params;
-    params.kernel_run_args = {
-        ProgramRunArgs::KernelRunArgs{
-            .kernel = KernelSpecName{"compute"},
-            .runtime_arg_values = {{node, {{"input_offset", kInputOffset}}}},
-            .common_runtime_arg_values = {{"num_tiles", num_transfers}},
-        },
-        ProgramRunArgs::KernelRunArgs{
-            .kernel = KernelSpecName{"consumer"},
-            .advanced_options =
-                AdvancedKernelRunArgs{
-                    .runtime_varargs = {{node, {output_buffer->address(), 0u, num_transfers}}},
-                },
-        },
-    };
+    params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"compute"},
+        .runtime_arg_values =
+            MakeRuntimeArgsForSingleNode(node, {{"input_offset", kInputOffset}, {"report_addr", report_addr}}),
+        .common_runtime_arg_values = {{"num_tiles", num_tiles}},
+    }};
     SetProgramRunArgs(program, params);
+
+    std::vector<uint32_t> zero_report(1, 0u);
+    detail::WriteToDeviceL1(device, node, report_addr, zero_report);
 
     detail::LaunchProgram(device, program);
 
-    std::vector<uint32_t> output_data;
-    detail::ReadFromBuffer(output_buffer, output_data);
-
-    constexpr uint32_t words_per_entry = entry_size / sizeof(uint32_t);
-    std::vector<uint32_t> expected(total_bytes / sizeof(uint32_t), 0u);
-    for (uint32_t e = 0; e < num_transfers; ++e) {
-        expected[e * words_per_entry] = kTargetXorSum;
-    }
-
-    ASSERT_EQ(output_data.size(), expected.size());
-    EXPECT_EQ(output_data, expected);
+    std::vector<uint32_t> reported;
+    detail::ReadFromDeviceL1(device, node, report_addr, sizeof(uint32_t), reported);
+    ASSERT_EQ(reported.size(), 1u);
+    EXPECT_EQ(reported[0], kTargetXorSum);
 }
 
 // ============================================================================
@@ -663,7 +592,7 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
             "tests/tt_metal/tt_metal/test_kernels/dataflow/semaphore_accessor_loopback_producer.cpp",
         .num_threads = 1,
         .semaphore_bindings = {{.semaphore_spec_name = SemaphoreSpecName{"only_sem"}, .accessor_name = "signal"}},
-        .hw_config = CreateWriter1xxDataMovementConfig(),
+        .hw_config = CreateWriterGen1DataMovementConfig(),
     };
     KernelSpec consumer{
         .unique_id = KernelSpecName{"consumer"},
@@ -672,7 +601,7 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
             "tests/tt_metal/tt_metal/test_kernels/dataflow/semaphore_accessor_loopback_consumer.cpp",
         .num_threads = 1,
         .semaphore_bindings = {{.semaphore_spec_name = SemaphoreSpecName{"only_sem"}, .accessor_name = "waiter"}},
-        .hw_config = CreateReader1xxDataMovementConfig(),
+        .hw_config = CreateReaderGen1DataMovementConfig(),
     };
 
     // A WorkUnitSpec describes the kernels that run on a shared set of nodes.
@@ -738,8 +667,8 @@ TEST_F(ProgramSpecHWTest, TensorAccessorBindingLoopback) {
     auto tensor_layout = TensorLayout(DataType::BFLOAT16, page_config, memory_config);
     auto tensor_spec = TensorSpec(Shape{num_pages, 512}, tensor_layout);
 
-    MeshTensor input_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
-    MeshTensor output_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
+    MeshTensor input_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
+    MeshTensor output_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
 
     // -------------------------------------------------------
     // Build ProgramSpec: 2 DM kernels + 1 DFB + 2 TensorParameters
@@ -753,7 +682,7 @@ TEST_F(ProgramSpecHWTest, TensorAccessorBindingLoopback) {
     producer.advanced_options.num_runtime_varargs = 1;
 
     // Consumer (NCRISC): pops from DFB, writes output tensor via TA binding
-    auto consumer = MakeMinimalReaderDMKernel("consumer");
+    auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
     consumer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/tensor_accessor_loopback_consumer.cpp";
     consumer.advanced_options.num_runtime_varargs = 1;
 
@@ -842,11 +771,11 @@ TEST_F(ProgramSpecHWTest, TensorAccessorBindingLoopback) {
 //   3. The binding's base-address CRTA is broadcast to the compute kernel and resolves to the local
 //      L1 shard address — verified by comparing the reported address to the bound tensor's address.
 //
-// Pipeline (compute-only producer, no DM producer needed):
+// Pipeline (compute-only; no DFB / DM consumer):
 //   Compute kernel (TRISC) — constructs LocalTensorAccessor (token ctor) and a second via the legacy
-//       base-address ctor, deposits {base_address, get_unsafe_ptr, &operator[], legacy-ctor base} into
-//       each out_dfb entry (raw L1 writes from PACK); all four should equal the bound tensor's address.
-//   DM consumer (NCRISC)   — out_dfb → DRAM output.
+//       base-address ctor; PACK writes {base_address, get_unsafe_ptr, &operator[], legacy-ctor base}
+//       into a host-known L1 report buffer (named RTA). All four should equal the bound tensor's
+//       address. Host reads the report via ReadFromDeviceL1 after LaunchProgram.
 //
 // The tensor is a single-shard L1 tensor on core (0,0) (the compute kernel's core), so its shard base
 // address equals MeshTensor::address(). No dereference of the shard occurs (address-of only), so the
@@ -856,79 +785,53 @@ TEST_F(ProgramSpecHWTest, LocalTensorAccessorBindingCompileComputeKernel) {
     auto mesh_device = devices_.at(0);
     IDevice* device = mesh_device->get_devices()[0];
 
-    constexpr uint32_t entry_size = 1024;
-    constexpr uint32_t num_entries_in_dfb = 4;
-    constexpr uint32_t num_tiles = 2;  // entries the compute kernel pushes
-    constexpr uint32_t total_bytes = entry_size * num_tiles;
+    constexpr uint32_t kReportAddr = 100 * 1024;  // host-known fixed L1 addr (same idiom as ScratchpadWriteReadback)
+    constexpr uint32_t kNumReportWords = 4;
 
     const NodeCoord node{0, 0};
 
-    InterleavedBufferConfig dram_config{
-        .device = device, .size = total_bytes, .page_size = total_bytes, .buffer_type = BufferType::DRAM};
-    auto output_buffer = CreateBuffer(dram_config);
-
     // Single-shard L1 tensor on core (0,0): one 32x32 BFLOAT16 tile.
     auto tensor_param = MakeShardedTensorParameter("local_t", Shape{32, 32}, {32, 32}, /*num_cores=*/1);
-    MeshTensor local_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_param.spec, TensorTopology{});
+    MeshTensor local_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_param.spec);
 
     ProgramSpec spec;
     spec.name = "local_tensor_accessor_compute";
 
-    // Compute kernel (the kernel under test) — binds the tensor, produces into out_dfb.
     auto compute = MakeMinimalGen1ComputeKernel("compute");
     compute.source = "tests/tt_metal/tt_metal/test_kernels/compute/local_tensor_accessor_compute.cpp";
-    compute.compile_time_args = {{"entry_size", entry_size}, {"num_tiles", num_tiles}};
+    compute.runtime_arg_schema.runtime_arg_names = {"report_addr"};
     BindTensorParameterToKernel(compute, "local_t", "local_t");
 
-    // Consumer (NCRISC): drains out_dfb → DRAM. Reuses dfb_accessor_loopback_consumer.cpp verbatim.
-    auto consumer = MakeMinimalReaderDMKernel("consumer");
-    consumer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_accessor_loopback_consumer.cpp";
-    consumer.advanced_options.num_runtime_varargs = 3;
-
-    auto out_dfb = MakeMinimalDFB("out_dfb", entry_size, num_entries_in_dfb);
-    out_dfb.data_format_metadata = tt::DataFormat::Float16_b;
-
-    compute.dfb_bindings.push_back(ProducerOf(DFBSpecName{"out_dfb"}, "out_dfb"));
-    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"out_dfb"}, "a_dfb_named_bob"));
-
-    spec.kernels = {compute, consumer};
-    spec.dataflow_buffers = {out_dfb};
+    spec.kernels = {compute};
     spec.tensor_parameters = {tensor_param};
-    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"compute", "consumer"})};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"compute"})};
 
     Program program = MakeProgramFromSpec(*mesh_device, spec);
 
     ProgramRunArgs params;
-    params.kernel_run_args = {
-        ProgramRunArgs::KernelRunArgs{.kernel = KernelSpecName{"compute"}},
-        ProgramRunArgs::KernelRunArgs{
-            .kernel = KernelSpecName{"consumer"},
-            .advanced_options =
-                AdvancedKernelRunArgs{
-                    .runtime_varargs = {{node, {output_buffer->address(), 0u, num_tiles}}},
-                },
-        },
-    };
+    params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"compute"},
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"report_addr", kReportAddr}}),
+    }};
     params.tensor_args = {
         {TensorParamName{"local_t"}, TensorArgument{local_tensor}},
     };
     SetProgramRunArgs(program, params);
 
+    std::vector<uint32_t> zero_report(kNumReportWords, 0u);
+    detail::WriteToDeviceL1(device, node, kReportAddr, zero_report);
+
     detail::LaunchProgram(device, program);
 
-    std::vector<uint32_t> output_data;
-    detail::ReadFromBuffer(output_buffer, output_data);
+    std::vector<uint32_t> reported;
+    detail::ReadFromDeviceL1(device, node, kReportAddr, kNumReportWords * sizeof(uint32_t), reported);
+    ASSERT_EQ(reported.size(), kNumReportWords);
 
     const uint32_t expected_address = static_cast<uint32_t>(local_tensor.address());
-    constexpr uint32_t words_per_entry = entry_size / sizeof(uint32_t);
-    ASSERT_EQ(output_data.size(), total_bytes / sizeof(uint32_t));
-    for (uint32_t e = 0; e < num_tiles; ++e) {
-        const uint32_t* entry = output_data.data() + e * words_per_entry;
-        EXPECT_EQ(entry[0], expected_address) << "entry " << e << ": get_bank_base_address mismatch";
-        EXPECT_EQ(entry[1], expected_address) << "entry " << e << ": get_unsafe_ptr mismatch";
-        EXPECT_EQ(entry[2], expected_address) << "entry " << e << ": &operator[] mismatch";
-        EXPECT_EQ(entry[3], expected_address) << "entry " << e << ": legacy base-address ctor mismatch";
-    }
+    EXPECT_EQ(reported[0], expected_address) << "get_bank_base_address mismatch";
+    EXPECT_EQ(reported[1], expected_address) << "get_unsafe_ptr mismatch";
+    EXPECT_EQ(reported[2], expected_address) << "&operator[] mismatch";
+    EXPECT_EQ(reported[3], expected_address) << "legacy base-address ctor mismatch";
 }
 
 // ============================================================================
@@ -1028,7 +931,7 @@ TEST_F(ProgramSpecHWTest, ScratchpadWriteReadback) {
     ProgramRunArgs params;
     params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
         .kernel = KernelSpecName{"scratch_kernel"},
-        .runtime_arg_values = {{node, {{"report_addr", kReportAddr}}}},
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"report_addr", kReportAddr}}),
     }};
     SetProgramRunArgs(program, params);
 
@@ -1124,7 +1027,7 @@ TEST_F(ProgramSpecHWTest, CrtaAllFourSectionsSetAndPartialUpdate) {
         PageConfig(Layout::ROW_MAJOR),
         MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM});
     auto tensor_spec = TensorSpec(Shape{1, 512}, tensor_layout);
-    MeshTensor io_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
+    MeshTensor io_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
 
     ProgramSpec spec;
     spec.name = "crta_all_four_sections";
@@ -1136,6 +1039,7 @@ TEST_F(ProgramSpecHWTest, CrtaAllFourSectionsSetAndPartialUpdate) {
     auto producer = MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
     producer.source = KernelSpec::SourceCode{R"(
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 void kernel_main() {
     const uint32_t named0 = get_arg(args::named0);
@@ -1162,18 +1066,22 @@ void kernel_main() {
     BindTensorParameterToKernel(producer, "io", "io");
 
     // Consumer (NCRISC): drain the staged entry to DRAM.
-    auto consumer = MakeMinimalReaderDMKernel("consumer");
+    auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
     consumer.source = KernelSpec::SourceCode{R"(
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc.h"
 #include "experimental/kernel_args.h"
 void kernel_main() {
     auto dst_addr = get_arg(args::dst_addr);
     auto bank_id = get_arg(args::bank_id);
+    Noc noc;
+    AllocatorBank<AllocatorBankType::DRAM> dram_dst;
     DataflowBuffer buf(dfb::stage);
     buf.wait_front(1);
-    uint64_t dst_noc_addr = get_noc_addr_from_bank_id<true>(bank_id, dst_addr);
-    noc_async_write(buf.get_read_ptr(), dst_noc_addr, buf.get_entry_size());
-    noc_async_write_barrier();
+    noc.async_write(buf, dram_dst, buf.get_entry_size(), {}, {.bank_id = bank_id, .addr = dst_addr});
+    noc.async_write_barrier();
     buf.pop_front(1);
 }
 )"};
@@ -1187,22 +1095,23 @@ void kernel_main() {
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
     spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = kScratchpadBytes}};
-    // enqueue_invariant so the UPDATE phase may omit it (retaining its bound tensor) — exercises the
-    // "invariant tensor retained across partial update" path. dynamic_tensor_shape widens the binding to
+    // The UPDATE phase omits this tensor (retaining its bound tensor) — exercises the
+    // "omitted tensor retained across partial update" path. dynamic_tensor_shape widens the binding to
     // two CRTA words (base + aligned_page_size) — the multi-word binding this test exists to stress.
     spec.tensor_parameters = {TensorParameter{
         .unique_id = TensorParamName{"io"},
         .spec = tensor_spec,
-        .advanced_options = TensorParameterAdvancedOptions{.enqueue_invariant = true, .dynamic_tensor_shape = true}}};
+        .relaxations = TensorSpecRelaxations{.dynamic_tensor_shape = true}}};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"producer", "consumer"})};
 
     Program program = MakeProgramFromSpec(*mesh_device, spec);
 
-    // Consumer's per-node RTAs (re-supplied on every set/update — they are not enqueue-invariant).
+    // Consumer's per-node RTAs (re-supplied on every set/update in this test).
     auto consumer_args = [&]() {
         return ProgramRunArgs::KernelRunArgs{
             .kernel = KernelSpecName{"consumer"},
-            .runtime_arg_values = {{node, {{"dst_addr", output_buffer->address()}, {"bank_id", 0u}}}},
+            .runtime_arg_values =
+                MakeRuntimeArgsForSingleNode(node, {{"dst_addr", output_buffer->address()}, {"bank_id", 0u}}),
         };
     };
 
@@ -1268,7 +1177,7 @@ void kernel_main() {
         << "partial update: vararg 0 landed at the wrong offset — the vararg base must be "
            "named + tensor-binding(2 words) + scratchpad section words (the A1 sum with a multi-word binding).";
     EXPECT_EQ(u[5], kVararg1Upd) << "partial update: vararg 1 landed at the wrong offset";
-    // Not touched by this update — the invariant tensor's binding (both words) and the scratchpad must survive.
+    // Not touched by this update — the omitted tensor's binding (both words) and the scratchpad must survive.
     EXPECT_EQ(u[2], tensor_base) << "tensor-binding base slot was clobbered by the named/vararg partial update";
     EXPECT_EQ(u[6], kExpectedPageSize) << "tensor-binding page-size slot was clobbered by the partial update";
     EXPECT_EQ(u[3], scratch_base) << "scratchpad slot was clobbered by the named/vararg partial update";
@@ -1328,6 +1237,7 @@ TEST_F(ProgramSpecHWTest, ScratchpadBaseReDeliveredAfterDfbResize) {
     auto producer = MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
     producer.source = KernelSpec::SourceCode{R"(
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 void kernel_main() {
     Scratchpad<uint32_t> pad(scratch::pad);
@@ -1346,18 +1256,22 @@ void kernel_main() {
         KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
 
     // Consumer (NCRISC): drain the staged entry to DRAM.
-    auto consumer = MakeMinimalReaderDMKernel("consumer");
+    auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
     consumer.source = KernelSpec::SourceCode{R"(
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc.h"
 #include "experimental/kernel_args.h"
 void kernel_main() {
     auto dst_addr = get_arg(args::dst_addr);
     auto bank_id = get_arg(args::bank_id);
+    Noc noc;
+    AllocatorBank<AllocatorBankType::DRAM> dram_dst;
     DataflowBuffer buf(dfb::stage);
     buf.wait_front(1);
-    uint64_t dst_noc_addr = get_noc_addr_from_bank_id<true>(bank_id, dst_addr);
-    noc_async_write(buf.get_read_ptr(), dst_noc_addr, buf.get_entry_size());
-    noc_async_write_barrier();
+    noc.async_write(buf, dram_dst, buf.get_entry_size(), {}, {.bank_id = bank_id, .addr = dst_addr});
+    noc.async_write_barrier();
     buf.pop_front(1);
 }
 )"};
@@ -1386,7 +1300,8 @@ void kernel_main() {
         ProgramRunArgs params;
         params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
             .kernel = KernelSpecName{"consumer"},
-            .runtime_arg_values = {{node, {{"dst_addr", output_buffer->address()}, {"bank_id", 0u}}}},
+            .runtime_arg_values =
+                MakeRuntimeArgsForSingleNode(node, {{"dst_addr", output_buffer->address()}, {"bank_id", 0u}}),
         }};
         params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"stage"}, .num_entries = dfb_num_entries});
         SetProgramRunArgs(program, params);

@@ -26,6 +26,8 @@
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
@@ -225,13 +227,13 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
 
     // Device compatibility checks
     TT_FATAL(
-        a.storage_type() == tt::tt_metal::StorageType::DEVICE && b.storage_type() == tt::tt_metal::StorageType::DEVICE,
+        a.storage_type() == ttnn::StorageType::DEVICE && b.storage_type() == ttnn::StorageType::DEVICE,
         "Operands to large matmul need to be on device!");
     TT_FATAL(a.device() == b.device(), "Operands to conv need to be on the same device!");
     TT_FATAL(
         a.buffer() != nullptr && b.buffer() != nullptr, "Operands to conv need to be allocated in buffers on device!");
     if (has_bias) {
-        TT_FATAL(bias.value().storage_type() == tt::tt_metal::StorageType::DEVICE, "Bias should be on device");
+        TT_FATAL(bias.value().storage_type() == ttnn::StorageType::DEVICE, "Bias should be on device");
         TT_FATAL(bias.value().device() == a.device(), "Bias should be on the same device as act tensor");
     }
 
@@ -420,8 +422,8 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
     }();
 
     auto& cq = a.device()->mesh_command_queue();
-    tt::tt_metal::MeshTensor reader_indices_mesh_tensor = tt::tt_metal::enqueue_write_tensor(
-        cq, host_config_tensor.host_tensor(), *a.device(), reader_indices_mem_config);
+    tt::tt_metal::MeshTensor reader_indices_mesh_tensor =
+        cq.enqueue_write_tensor(host_config_tensor.host_tensor(), reader_indices_mem_config);
     tt::tt_metal::Buffer* conv_reader_indices_buffer = reader_indices_mesh_tensor.mesh_buffer().get_reference_buffer();
     const uint32_t reader_indices_actual_page_size = conv_reader_indices_buffer->page_size();
 
@@ -621,7 +623,10 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
     // self-loops the borrowed ACT_SHARDED (input address source) and READER_INDICES.
     m2::DataMovementHardwareConfig act_hw;
     if (device->arch() == tt::ARCH::QUASAR) {
-        act_hw = m2::DataMovementGen2Config{};
+        // QSR: this width-sharded activation reader fills the ACT_ROW_MAJOR/ACT DFB via per-window "stick"
+        // sub-tile NOC reads; that pattern stalls the DFB implicit-sync credit accounting (reader pinned at
+        // NRBW). Opt out so explicit reserve/push credits stay authoritative (mirrors tilize/transpose HC-sharded).
+        act_hw = m2::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
     } else {
         act_hw = m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = act_noc};
     }
@@ -723,7 +728,12 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
 
     m2::DataMovementHardwareConfig weights_hw;
     if (device->arch() == tt::ARCH::QUASAR) {
-        weights_hw = m2::DataMovementGen2Config{};
+        // This weights reader does explicit reserve_back/push_back on WEIGHTS/BIAS. Full-tile page reads avoid
+        // the sub-tile *stall* the act reader hits, but they do NOT avoid the Quasar *counter double-count*: the
+        // implicit-sync ISR bumps the same 16-bit tile counter as the explicit push -> overflow ->
+        // TILE_COUNTERS fault on the compute unpack consuming WEIGHTS. Opt out so explicit credits are
+        // authoritative.
+        weights_hw = m2::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
     } else {
         weights_hw =
             m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = weights_noc};
@@ -805,15 +815,15 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
         uint32_t core_y = core_index / full_core_grid.x;
         CoreCoord core(core_x, core_y);
 
-        act_run_args.runtime_arg_values.push_back(m2::KernelRunArgs::NodeRuntimeArgs{
-            .node = core,
-            .args =
-                {
-                    {"this_core_x", core_x},
-                    {"this_core_y", core_y},
-                    {"num_cores_x", full_core_grid.x},
-                },
-        });
+        m2::KernelRunArgs::RuntimeArgValues& act_rtas = act_run_args.runtime_arg_values;
+        m2::AddRuntimeArgsForNode(
+            act_rtas,
+            core,
+            {
+                {"this_core_x", core_x},
+                {"this_core_y", core_y},
+                {"num_cores_x", full_core_grid.x},
+            });
         // X/Y mcast lookup tables as per-node varargs.
         m2::AdvancedKernelRunArgs::Varargs varargs;
         varargs.reserve(act_mcast_noc_x.size() + act_mcast_noc_y.size());
@@ -822,14 +832,14 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
         act_run_args.advanced_options.runtime_varargs.insert({core, std::move(varargs)});
 
         if (core_index < total_num_active_cores) {
-            weights_run_args.runtime_arg_values.push_back(m2::KernelRunArgs::NodeRuntimeArgs{
-                .node = core,
-                .args =
-                    {
-                        {"init_weight_start_tile_id", core_index * weight_block_w_ntiles},
-                        {"is_active", (uint32_t)(core_index < output_num_cores)},
-                    },
-            });
+            m2::KernelRunArgs::RuntimeArgValues& weights_rtas = weights_run_args.runtime_arg_values;
+            m2::AddRuntimeArgsForNode(
+                weights_rtas,
+                core,
+                {
+                    {"init_weight_start_tile_id", core_index * weight_block_w_ntiles},
+                    {"is_active", (uint32_t)(core_index < output_num_cores)},
+                });
         }
     }
 

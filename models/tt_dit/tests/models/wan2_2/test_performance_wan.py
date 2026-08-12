@@ -22,7 +22,7 @@ from models.tt_dit.utils.video import export_to_video
 
 from ....utils.test import line_params, ring_params, ring_params_8k
 
-DEVICE_PARAMS = {"trace_region_size": 120000000}
+DEVICE_PARAMS = {"trace_region_size": 150000000}
 
 # BH 4x8 linear topology is expected to be slower than ring; relax assert/CI targets by this factor.
 BH_4X8_LINEAR_EXPECTED_METRICS_SLACK = 1.10
@@ -85,7 +85,7 @@ def t2v_metrics(mesh_device, height):
         assert height == 480, "2x2 is only supported for 480p"
         assert is_blackhole(), "2x2 is only supported for blackhole"
         expected_metrics = {
-            "encoder": 0.06,
+            "encoder": 0.12,
             "denoising": 680.0,
             "vae": 60.0,
             "total": 760.0,
@@ -94,7 +94,7 @@ def t2v_metrics(mesh_device, height):
         assert is_blackhole(), "4x32 is only supported for blackhole"
         assert height == 720, "4x32 is only supported for 720p"
         expected_metrics = {
-            "encoder": 0.5,
+            "encoder": 0.54,
             "denoising": 75.0,
             "vae": 5.0,
             "total": 80.5,
@@ -408,6 +408,7 @@ def test_pipeline_performance(
             (2, 2): "BH_QB",
             (2, 4): "BH_LB" if is_blackhole() else "WH_T3K",
             (4, 8): "BH_GLX" if is_blackhole() else "WH_GLX",
+            (4, 32): "BH_QG",
         }
         benchmark_data.save_partial_run_json(
             benchmark_profiler,

@@ -136,20 +136,20 @@ inline volatile void *memcpy_blocking(volatile void *dst, const volatile void *s
 
 /**
  * @brief Issues a load transaction that will block the core until the transaction is completed.
- * @tparam T 32-bit type to load
+ * @tparam T 16-bit or 32-bit type to load
  * @param ptr address to read from
  * @return value read from the address
  */
 template <typename T, typename = std::enable_if_t<std::is_trivially_copyable_v<T>>>
 inline T load_blocking(volatile T *ptr)
 {
-    static_assert(sizeof(T) == sizeof(std::uint32_t), "load_blocking: operand must be 32-bit");
+    static_assert(sizeof(T) == sizeof(std::uint16_t) || sizeof(T) == sizeof(std::uint32_t), "load_blocking: operand must be 16-bit or 32-bit");
 
     // https://github.com/tenstorrent/tt-isa-documentation/tree/main/BlackholeA0/TensixTile/BabyRISCV/MemoryOrdering.md
 
     // this code provides a blocking load by doing the following:
     // - issue a LOAD transaction to the address
-    //     - actual load that was requested
+    //     - actual load that was requested (lw for 32-bit, lhu for 16-bit)
     // - issue an instruction that requires the data from the LOAD transaction
     //     - block the pipeline until the LOAD transaction completes
     // - memory clobber
@@ -157,12 +157,24 @@ inline T load_blocking(volatile T *ptr)
 
     std::uint32_t raw;
 
-    asm volatile(
-        "lw %[raw], (%[ptr])\n\t"
-        "and x0, x0, %[raw]"
-        : [raw] "=r"(raw)
-        : [ptr] "r"(ptr)
-        : "memory");
+    if constexpr (sizeof(T) == sizeof(std::uint16_t))
+    {
+        asm volatile(
+            "lhu %[raw], (%[ptr])\n\t"
+            "and x0, x0, %[raw]"
+            : [raw] "=r"(raw)
+            : [ptr] "r"(ptr)
+            : "memory");
+    }
+    else
+    {
+        asm volatile(
+            "lw %[raw], (%[ptr])\n\t"
+            "and x0, x0, %[raw]"
+            : [raw] "=r"(raw)
+            : [ptr] "r"(ptr)
+            : "memory");
+    }
 
     T val;
     std::memcpy(&val, &raw, sizeof(T));

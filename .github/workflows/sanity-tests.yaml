@@ -18,6 +18,11 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      build-inplace-wheel:
+        required: false
+        type: boolean
+        default: true
+        description: "Use Ubuntu instead of manylinux for the wheel build."
       with-retries:
         required: false
         type: boolean
@@ -113,6 +118,11 @@ on:
         default: false
         type: boolean
         description: "Enable Link Time Optimization (LTO)"
+      build-inplace-wheel:
+        required: false
+        default: true
+        type: boolean
+        description: "Use Ubuntu instead of manylinux for the wheel build."
       run-ttnn-sanity-tests:
         required: false
         default: true
@@ -182,15 +192,19 @@ jobs:
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
-      build-wheel: true
+      # In-place wheel by default; nightly canary passes build-inplace-wheel:false for the real manylinux wheel.
+      # Direct push has no inputs, so treat it as in-place too.
+      build-inplace-wheel: ${{ inputs.build-inplace-wheel || github.event_name == 'push' }}
+      build-wheel: ${{ !inputs.build-inplace-wheel && github.event_name != 'push' }}
       tracy: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       skip-tt-train: false
       enable-lto: ${{ inputs.enable-lto || false }}
       ref: ${{ inputs.ref || github.sha }}
+      checkout-filter: tree:0
 
   resolve-artifacts:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     needs: [build-artifact]
     if: ${{ !cancelled() && (inputs.dev-docker-image != '' || needs.build-artifact.result == 'success') }}
     outputs:
@@ -246,7 +260,7 @@ jobs:
   tests-to-run:
     needs: [resolve-artifacts]
     if: ${{ always() && !cancelled() && needs.resolve-artifacts.result == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       ttnn-sanity-tests: ${{ steps.set-ttnn-sanity-tests.outputs.should-run }}
       t3000-apc-fast-tests: ${{ steps.set-t3000-apc-fast-tests.outputs.should-run }}
@@ -291,7 +305,7 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/t3000-sanity-tests-impl.yaml
     with:
-      enabled-skus: "wh_llmbox"
+      enabled-skus: "wh_llmbox_civ2"
       docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}

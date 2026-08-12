@@ -184,27 +184,26 @@ std::vector<uint32_t> expected_host_after_filtered_write(
 }  // end namespace local_test_functions
 
 TEST_F(MeshDeviceFixture, TestInterleavedReadWrite) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& device : this->devices_) {
         L1Config test_config(*this);
         test_config.buffer_layout = TensorMemoryLayout::INTERLEAVED;
         test_config.sharded = false;
-        EXPECT_TRUE(local_test_functions::l1_buffer_read_write(this->devices_.at(id), test_config));
+        EXPECT_TRUE(local_test_functions::l1_buffer_read_write(device, test_config));
     }
 }
 
 TEST_F(MeshDeviceFixture, TestHeightShardReadWrite) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& device : this->devices_) {
         L1Config test_config(*this);
-        EXPECT_TRUE(local_test_functions::l1_buffer_read_write(this->devices_.at(id), test_config));
+        EXPECT_TRUE(local_test_functions::l1_buffer_read_write(device, test_config));
     }
 }
 
 TEST_F(MeshDeviceFixture, TestHeightShardFilteredWrite_WritesOnlyFilteredCores) {
     constexpr uint32_t k_sentinel = 0x11111111u;
     constexpr uint32_t k_new = 0x22222222u;
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& mesh_device : this->devices_) {
         L1Config test_config(*this);
-        auto mesh_device = this->devices_.at(id);
         auto buffer = local_test_functions::make_height_sharded_l1_buffer(mesh_device, test_config);
         const uint32_t num_u32 = test_config.size_bytes / sizeof(uint32_t);
         std::vector<uint32_t> sentinel(num_u32, k_sentinel);
@@ -227,9 +226,8 @@ TEST_F(MeshDeviceFixture, TestHeightShardFilteredWrite_WritesOnlyFilteredCores) 
 
 TEST_F(MeshDeviceFixture, TestHeightShardFilteredWrite_EmptyFilterIsNoop) {
     constexpr uint32_t k_sentinel = 0xABCDEF01u;
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& mesh_device : this->devices_) {
         L1Config test_config(*this);
-        auto mesh_device = this->devices_.at(id);
         auto buffer = local_test_functions::make_height_sharded_l1_buffer(mesh_device, test_config);
         const uint32_t num_u32 = test_config.size_bytes / sizeof(uint32_t);
         std::vector<uint32_t> sentinel(num_u32, k_sentinel);
@@ -250,9 +248,8 @@ TEST_F(MeshDeviceFixture, TestHeightShardFilteredWrite_EmptyFilterIsNoop) {
 
 TEST_F(MeshDeviceFixture, TestHeightShardFilteredWrite_FullFilterMatchesUnfiltered) {
     constexpr uint32_t k_pattern = 0x50505050u;
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& mesh_device : this->devices_) {
         L1Config test_config(*this);
-        auto mesh_device = this->devices_.at(id);
         auto buffer_a = local_test_functions::make_height_sharded_l1_buffer(mesh_device, test_config);
         auto buffer_b = local_test_functions::make_height_sharded_l1_buffer(mesh_device, test_config);
         const uint32_t num_u32 = test_config.size_bytes / sizeof(uint32_t);
@@ -278,37 +275,37 @@ TEST_F(MeshDeviceFixture, TestHeightShardFilteredWrite_FullFilterMatchesUnfilter
 }
 
 TEST_F(MeshDeviceFixtureWithL1Small, TestHeightShardReadWrite) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& device : this->devices_) {
         L1Config test_config(*this);
         test_config.buffer_type = BufferType::L1;
-        auto l1_write_info = local_test_functions::l1_buffer_write_wait(this->devices_.at(id), test_config);
+        auto l1_write_info = local_test_functions::l1_buffer_write_wait(device, test_config);
         test_config.buffer_type = BufferType::L1_SMALL;
-        auto l1small_write_info = local_test_functions::l1_buffer_write_wait(this->devices_.at(id), test_config);
+        auto l1small_write_info = local_test_functions::l1_buffer_write_wait(device, test_config);
 
-        EXPECT_TRUE(local_test_functions::l1_buffer_read(this->devices_.at(id), test_config, l1_write_info));
-        EXPECT_TRUE(local_test_functions::l1_buffer_read(this->devices_.at(id), test_config, l1small_write_info));
+        EXPECT_TRUE(local_test_functions::l1_buffer_read(device, test_config, l1_write_info));
+        EXPECT_TRUE(local_test_functions::l1_buffer_read(device, test_config, l1small_write_info));
     }
 }
 
 TEST_F(MeshDeviceFixture, TestWidthShardReadWrite) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& device : this->devices_) {
         L1Config test_config(*this);
         test_config.buffer_layout = TensorMemoryLayout::WIDTH_SHARDED;
-        EXPECT_TRUE(local_test_functions::l1_buffer_read_write(this->devices_.at(id), test_config));
+        EXPECT_TRUE(local_test_functions::l1_buffer_read_write(device, test_config));
     }
 }
 
 TEST_F(MeshDeviceFixtureWithL1Small, TestWidthShardReadWrite) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& device : this->devices_) {
         L1Config test_config(*this);
         test_config.buffer_layout = TensorMemoryLayout::WIDTH_SHARDED;
         test_config.buffer_type = BufferType::L1;
-        auto l1_write_info = local_test_functions::l1_buffer_write_wait(this->devices_.at(id), test_config);
+        auto l1_write_info = local_test_functions::l1_buffer_write_wait(device, test_config);
         test_config.buffer_type = BufferType::L1_SMALL;
-        auto l1small_write_info = local_test_functions::l1_buffer_write_wait(this->devices_.at(id), test_config);
+        auto l1small_write_info = local_test_functions::l1_buffer_write_wait(device, test_config);
 
-        EXPECT_TRUE(local_test_functions::l1_buffer_read(this->devices_.at(id), test_config, l1_write_info));
-        EXPECT_TRUE(local_test_functions::l1_buffer_read(this->devices_.at(id), test_config, l1small_write_info));
+        EXPECT_TRUE(local_test_functions::l1_buffer_read(device, test_config, l1_write_info));
+        EXPECT_TRUE(local_test_functions::l1_buffer_read(device, test_config, l1small_write_info));
     }
 }
 
@@ -333,8 +330,7 @@ TEST_F(MeshDeviceFixture, TestUnorderedHeightShardReadWrite) {
         ShardOrientation::ROW_MAJOR,
         {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
         {(uint32_t)cores.size(), 1});
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        auto mesh_device = this->devices_.at(id);
+    for (auto& mesh_device : this->devices_) {
         std::vector<CoreCoord> physical_cores;
         physical_cores.reserve(cores.size());
         for (const auto& core : cores) {

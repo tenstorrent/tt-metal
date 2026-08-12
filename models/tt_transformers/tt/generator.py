@@ -49,6 +49,19 @@ SUPPORTED_PREFILL_BATCH_SIZES = (1, 2, 4, 8, 16, 32)
 DECODE_PAGE_TABLE_INPUT_IDX = 3
 
 
+def _mark_trace_buffers_corruptible(owner, value):
+    """Acknowledge opt-in trace I/O that another live trace may overwrite."""
+    if not getattr(owner, "_tt_allow_decode_trace_buffer_reuse", False) or value is None:
+        return
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            _mark_trace_buffers_corruptible(owner, item)
+        return
+    mark_corruptible = getattr(ttnn, "mark_corruptible", None)
+    if mark_corruptible is not None:
+        mark_corruptible(value)
+
+
 def max_prefill_chunk_size_cutoff(sequence_length, max_prefill_chunk_size):
     return sequence_length > max_prefill_chunk_size
 
@@ -1068,6 +1081,45 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         else:
             return output_tensor
 
+    def _paged_prefill_block_size(self, kv_cache):
+        """Block size for chunked-prefill page-table padding/slicing.
+
+        Defaults to the cache's declared block_size. Models whose paged ops address
+        an HMA-shared K/V buffer through a smaller per-layer effective block_size
+        (e.g. gemma4 hybrid kv-cache groups: full-attention head_dim=512 viewing a
+        buffer declared for a head_dim=256 sliding layer) override this so the page
+        table math matches ``paged_fill_cache`` / the chunked SDPA. Non-overriding
+        models are unaffected.
+        """
+        return get_block_size(kv_cache)
+
+    def _chunk_prefill_get_last_token(self, *, is_last_chunk, last_token_idx_in_chunk, chunk_size):
+        """``get_last_token`` for one generator-level prefill chunk.
+
+        Default (legacy): always the last-chunk's relative index. Correct for
+        lm_head on the final chunk, but intermediate chunks then inherit a short
+        index and under-fill their KV — fatal for models that treat
+        ``get_last_token+1`` as the real fill length (Gemma4 bounded sliding).
+        Those models override this.
+        """
+        del is_last_chunk, chunk_size
+        return (last_token_idx_in_chunk // 32) * 32
+
+    def _chunk_prefill_page_table(self, page_table, *, user_id, model_id=-1, kv_cache=None):
+        """Page table + block_size for multi-chunk ``chunk_page_table`` slices.
+
+        Full-attention ``paged_fill_cache`` writes via ``chunk_page_table`` (absolute
+        block offsets for the current chunk). Returns ``(page_table, block_size)``.
+
+        Default: the legacy ``page_table`` and ``_paged_prefill_block_size``. Hybrid
+        kv-cache-group models override this to return a full-attention layer's
+        per-layer table and that group's block_size — the legacy table is often
+        group 0 (sliding), whose block IDs / column stride must not be used for
+        full-layer fill.
+        """
+        del user_id, model_id
+        return page_table, self._paged_prefill_block_size(kv_cache)
+
     def prefill_forward_single_user_text(
         self,
         tokens,  # New tokens to prefill (without the cached tokens), padded by get_padded_prefill_len()
@@ -1108,13 +1160,23 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 chunk_size = seq_len
 
             last_token_idx_in_seq = last_token_idx - num_cached_tokens  # Excluding the cached tokens
-            block_size = get_block_size(kv_cache)
             last_token_idx_in_chunk = last_token_idx_in_seq % chunk_size
             # Calculate which chunk contains the last_token_idx
             last_chunk_start = (last_token_idx_in_seq // chunk_size) * chunk_size
-            page_table_user = page_table[user_id : user_id + 1, :]
-            # Pad page table to match number of blocks in seq_len
-            num_padding_blocks = num_blocks_in_seq(seq_len + num_cached_tokens, block_size) - page_table_user.shape[1]
+            # Hybrid models may substitute a full-attention per-layer table here
+            # so ``chunk_page_table`` carries the block IDs (and column stride) that
+            # full-layer fill actually writes (legacy ``page_table`` is often
+            # sliding group 0 with a different unified block_size).
+            chunk_source_page_table, block_size = self._chunk_prefill_page_table(
+                page_table, user_id=user_id, model_id=model_id, kv_cache=kv_cache
+            )
+            page_table_user = chunk_source_page_table[user_id : user_id + 1, :]
+            # Trim over-wide tables (vLLM hybrid pads per-layer tables to
+            # max_num_blocks_per_req) so the pad width below stays non-negative.
+            needed_blocks = num_blocks_in_seq(seq_len + num_cached_tokens, block_size)
+            if page_table_user.shape[1] > needed_blocks:
+                page_table_user = page_table_user[:, :needed_blocks]
+            num_padding_blocks = needed_blocks - page_table_user.shape[1]
             page_table_user_padded = torch.cat(
                 [page_table_user, torch.zeros(1, num_padding_blocks, dtype=torch.int32)], dim=-1
             )
@@ -1142,6 +1204,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 # Cached pages must be skipped as well,
                 # so using absolute indexes.
                 chunk_page_table = page_table_user_padded[:, chunk_start // block_size : chunk_end // block_size]
+                is_last_chunk = chunk_start_relative == last_chunk_start
 
                 chunk_inputs = self.model[model_id].prepare_inputs_prefill(
                     chunk_tokens,
@@ -1160,7 +1223,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     chunk_page_table_tt,
                     _chunk_start_idx_tt,
                 ) = chunk_inputs
-
                 tt_logits = self.model[model_id].ttnn_prefill_forward(
                     chunk_prefill_input,
                     rot_mats_global=chunk_rot_mats_global_prefill,
@@ -1169,13 +1231,17 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     page_table=page_table_tt,
                     chunk_page_table=chunk_page_table_tt,
                     chunk_start_idx=chunk_start,
-                    get_last_token=(last_token_idx_in_chunk // 32) * 32,
+                    get_last_token=self._chunk_prefill_get_last_token(
+                        is_last_chunk=is_last_chunk,
+                        last_token_idx_in_chunk=last_token_idx_in_chunk,
+                        chunk_size=chunk_size,
+                    ),
                     kv_cache=kv_cache,
                     batch_size=batch_size,
                     **kwargs,
                 )
 
-                if chunk_start_relative == last_chunk_start:
+                if is_last_chunk:
                     return tt_logits
                 else:
                     del tt_logits
@@ -1216,6 +1282,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         output_tokens: torch.Tensor | None = None,
         slot_remap=None,
         defer_device_sampling: bool = False,
+        skip_trace_precompile: bool = False,
         **kwargs,
     ):
         mode_switched = False
@@ -1329,6 +1396,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             tt_decode_output = self._decode_forward_trace_text(
                 **decode_kwargs,
                 reset_batch=reset_batch or mode_switched,
+                skip_precompile=skip_trace_precompile,
             )
         else:
             tt_decode_output = self._decode_forward_no_trace_text(
@@ -1349,6 +1417,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 output_tokens=output_tokens,
                 slot_remap=slot_remap,
                 enable_trace=enable_trace,
+                skip_precompile=skip_trace_precompile,
             )
         # Host sampling
         if read_from_device:
@@ -1417,20 +1486,21 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         page_table=None,
         kv_cache=None,
         on_device_sampling=False,
+        skip_precompile=False,
     ):
         """
         Captures a trace for the decode_forward method.
         """
 
-        # Compile run
-        self._decode_forward_no_trace_text(
-            tokens,
-            current_pos,
-            page_table=page_table,
-            kv_cache=kv_cache,
-            on_device_sampling=on_device_sampling,
-        )
-        logger.info("Done Compiling Model")
+        if not skip_precompile:
+            self._decode_forward_no_trace_text(
+                tokens,
+                current_pos,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                on_device_sampling=on_device_sampling,
+            )
+            logger.info("Done Compiling Model")
 
         # Get inputs ready for trace run
         device_inputs = []
@@ -1442,8 +1512,8 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             host_inputs = self.model[i].prepare_decode_inputs_host(
                 tokens[i], current_pos[i], page_table=user_page_table
             )
-
             device_inputs_i = copy_host_to_device(host_inputs, mesh_device=self.model_args[i].mesh_device)
+            _mark_trace_buffers_corruptible(self, device_inputs_i)
             device_inputs.append(device_inputs_i)
 
         for i in range(self.data_parallel):
@@ -1474,6 +1544,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 )
             )
             ttnn.end_trace_capture(self.model_args[i].mesh_device, trace_id, cq_id=0)
+            _mark_trace_buffers_corruptible(self, tt_out_trace[-1])
 
             if sampling_trace_enabled:
                 # NOTE: sampling trace can be keyed depending on sampling params,
@@ -1487,7 +1558,11 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 # rank-2; ttnn.sampling requires a rank-4 preallocated output) —
                 # pass None so sampling allocates its own output.
                 tt_out_tok = self._decode_token_feedback_buffer(self.model[i], device_inputs[i])
-                sampling_module.capture_trace(logits=tt_out_trace[i], tt_out_tok=tt_out_tok)
+                sampling_module.capture_trace(
+                    logits=tt_out_trace[i],
+                    tt_out_tok=tt_out_tok,
+                    skip_precompile=skip_precompile,
+                )
         logger.info("Done Capturing Decode Trace")
 
         return trace_ids, tt_out_trace, *device_inputs
@@ -1500,6 +1575,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         kv_cache=None,
         on_device_sampling=False,
         reset_batch=False,
+        skip_precompile=False,
     ):
         """
         Run decode forward text with tracing
@@ -1507,7 +1583,12 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         # The trace is different depending on whether we are doing device sampling or not
         if not self.trace_ids_decode[on_device_sampling]:
             trace_ids, tt_out_trace, *device_inputs = self._capture_decode_trace_text(
-                tokens, current_pos, page_table=page_table, kv_cache=kv_cache, on_device_sampling=on_device_sampling
+                tokens,
+                current_pos,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                on_device_sampling=on_device_sampling,
+                skip_precompile=skip_precompile,
             )
             self.trace_ids_decode[on_device_sampling] = trace_ids
             self.trace_inputs_decode[on_device_sampling] = device_inputs
@@ -1567,6 +1648,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         output_tokens: torch.Tensor | None = None,
         slot_remap=None,
         enable_trace=False,
+        skip_precompile=False,
     ):
         # sampling_dp may differ from data_parallel for models that internally
         # shard users across mesh rows (users_row_sharded) — each row samples
@@ -1642,7 +1724,13 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     for chunk in model_chunks:
                         s = format_sampling_params(chunk, seed_bs).seed
                         seed_values += s if isinstance(s, list) else [s] * seed_bs
-                sampling_module.seed_manager.reset_seed_from_slots_if_needed(seed_values, active_seed_slots)
+                # reset_batch = first decode after prefill or a layout change: seed unconditionally,
+                # even for seed=None. ``decode_only`` mode never seeded the device, so the if_needed
+                # path matches the manager's initial None, early-returns, and replays one draw.
+                if reset_batch:
+                    sampling_module.seed_manager.reset_seed_from_slots(seed_values, active_seed_slots)
+                else:
+                    sampling_module.seed_manager.reset_seed_from_slots_if_needed(seed_values, active_seed_slots)
                 sampling_module.seed_manager.align_seed_counters_to_positions(
                     seed_values, active_seed_slots, start_values
                 )
@@ -1677,6 +1765,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     logits=logits_i,
                     tt_out_tok=tt_out_tok,
                     enable_trace=sampling_enable_trace,
+                    skip_precompile=skip_precompile,
                 )
             )
         return sampled_outputs
@@ -2842,12 +2931,31 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                         except Exception:
                             pass
 
+            # Release all sampling traces, including every decode-bucket namespace.
+            for model in getattr(self, "model", []):
+                sampling_module = getattr(model, "sampling", None)
+                if sampling_module is not None and hasattr(sampling_module, "reset_trace"):
+                    try:
+                        sampling_module.reset_trace()
+                    except Exception:
+                        pass
+
             # Release decode traces
+            decode_trace_stores = []
+            for bucket_store in getattr(self, "_bucket_trace_store", {}).values():
+                if bucket_store is not None:
+                    decode_trace_stores.append(bucket_store[0])
             if hasattr(self, "trace_ids_decode"):
-                for sampling_key, trace_ids_dict in self.trace_ids_decode.items():
+                decode_trace_stores.append(self.trace_ids_decode)
+
+            released_decode_traces = set()
+            for trace_store in decode_trace_stores:
+                for sampling_key, trace_ids_dict in trace_store.items():
                     if trace_ids_dict is not None:
                         for model_id, trace_id in trace_ids_dict.items():
-                            if trace_id is not None:
+                            trace_key = (model_id, trace_id)
+                            if trace_id is not None and trace_key not in released_decode_traces:
+                                released_decode_traces.add(trace_key)
                                 try:
                                     ttnn.release_trace(self.model_args[model_id].mesh_device, trace_id)
                                 except Exception:

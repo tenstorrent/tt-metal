@@ -10,15 +10,49 @@ import weakref
 from types import NoneType
 from typing import TYPE_CHECKING, Any, overload
 
+import torch
 from loguru import logger
 
 import ttnn
+
+from .tensor import from_torch
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
     from typing import ClassVar
 
 _OMITTED = object()
+
+
+class StateTensor:
+    """A persistent device buffer refreshed in place under tracing.
+
+    A ttnn trace bakes its inputs' absolute addresses, so a traced input must keep the same buffer
+    and only update its contents; untraced, ``update`` rebinds to the new value.
+    """
+
+    def __init__(self) -> None:
+        self._value: ttnn.Tensor | None = None
+
+    @property
+    def value(self) -> ttnn.Tensor | None:
+        return self._value
+
+    def update(
+        self,
+        value: torch.Tensor | ttnn.Tensor,
+        traced: bool,
+        dtype: ttnn.DataType = ttnn.bfloat16,
+        mesh_axes: list[int | None] | None = None,
+        device: ttnn.MeshDevice | None = None,
+    ) -> None:
+        if torch.is_tensor(value):
+            assert device is not None, "device must be provided if using torch tensor"
+            value = from_torch(value, device=device, mesh_axes=mesh_axes, dtype=dtype)
+        if self._value is None or not traced:
+            self._value = value
+        else:
+            ttnn.copy(value, self._value)
 
 
 class Tracer:
@@ -524,6 +558,10 @@ def traced_function(
     ``tracer_execute_on_capture``) are forwarded to the ``Tracer`` when tracing
     and stripped before calling the original function in the untraced path.
 
+    A wrapper-only ``tracer_trace_key`` kwarg selects which trace to capture/replay for a
+    given context, so one instance can hold several traces (e.g. the same step method captured
+    at two input shapes). It defaults to ``None`` and is never forwarded to the function.
+
     Args:
         _fn: The function to wrap when used without parentheses (``@traced_function``).
         device: Device for tracing. For methods, pass a callable
@@ -577,6 +615,10 @@ def traced_function(
             raise ValueError(msg)
 
         _tracers: weakref.WeakKeyDictionary[Any, Tracer] = weakref.WeakKeyDictionary()
+        # Set only when ``tracer_trace_key`` is used: one context holding several traces keyed by it
+        # — e.g. one method captured at multiple input shapes. Keeps ``_tracers`` (the default,
+        # one-per-context store) unchanged for callers that don't key.
+        _tracers_keyed: weakref.WeakKeyDictionary[Any, dict[Any, Tracer]] = weakref.WeakKeyDictionary()
         _tracers_auto: dict[tuple[int, ...], Tracer] = {}
         _auto_bind_names: tuple[str, ...] | None = None  # frozen on the first traced call
 
@@ -586,6 +628,9 @@ def traced_function(
         @functools.wraps(fn)
         def wrapper(*args: Any, traced: bool = False, **kwargs: Any) -> Any:
             nonlocal _auto_bind_names
+
+            # Wrapper-only: selects the trace for this context; never forwarded to fn or the Tracer.
+            trace_key = kwargs.pop("tracer_trace_key", None)
 
             # When injecting, accept either name but only one at a time. The kwarg is consumed
             # by the wrapper in every path — it is never forwarded to the wrapped function.
@@ -654,18 +699,23 @@ def traced_function(
                     )
                 return _tracers_auto[key](*bound.args, **bound.kwargs, **tracer_call_kwargs)
 
-            # Context-bound path: first arg is a non-tracer-valid context (e.g. self);
-            # bind it away and track one Tracer per instance.
+            # Context-bound path: first arg is a non-tracer-valid context (e.g. self); bind it away.
+            # Default (no trace_key) is one Tracer per instance in _tracers; a trace_key selects
+            # among several per instance in _tracers_keyed.
             if args and not isinstance(args[0], _TRACER_VALID_INPUT_TYPES):
                 context, rest = args[0], args[1:]
-                if _needs_new_tracer(_tracers.get(context)):
-                    _tracers[context] = Tracer(
+                if trace_key is None:
+                    store, store_key = _tracers, context
+                else:
+                    store, store_key = _tracers_keyed.setdefault(context, {}), trace_key
+                if _needs_new_tracer(store.get(store_key)):
+                    store[store_key] = Tracer(
                         functools.partial(fn, context),
                         device=_resolve_device(context),
                         prep_run=prep_run,
                         clone_prep_inputs=clone_prep_inputs,
                     )
-                return _tracers[context](*rest, **kwargs)
+                return store[store_key](*rest, **kwargs)
 
             # device= was supplied but the first positional argument is a valid Tracer input
             # (or absent), so there's no context to bind. Standalone functions should omit
@@ -680,6 +730,7 @@ def traced_function(
             raise TypeError(msg)
 
         wrapper._tracers = _tracers  # type: ignore[attr-defined]
+        wrapper._tracers_keyed = _tracers_keyed  # type: ignore[attr-defined]
         wrapper._tracers_auto = _tracers_auto  # type: ignore[attr-defined]
         return wrapper
 

@@ -18,8 +18,8 @@
 #include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
-#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "experimental/metal2_host_api/data_movement_hardware_config.hpp"
 #include "kernel_types.hpp"
@@ -106,24 +106,24 @@ inline KernelSpec MakeMinimalGen1DMKernel(
 }
 
 // Helper to create a minimal valid KernelSpec for data movement whose Gen1 config is built
-// from the READER role via CreateReader1xxDataMovementConfig (Gen1/WH/BH).
+// from the READER role via CreateReaderGen1DataMovementConfig (Gen1/WH/BH).
 inline KernelSpec MakeMinimalReaderDMKernel(std::string name) {
     return KernelSpec{
         .unique_id = KernelSpecName{std::move(name)},
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
         .num_threads = 1,
-        .hw_config = CreateReader1xxDataMovementConfig(),
+        .hw_config = CreateReaderGen1DataMovementConfig(),
     };
 }
 
 // Helper to create a minimal valid KernelSpec for data movement whose Gen1 config is built
-// from the WRITER role via CreateWriter1xxDataMovementConfig (Gen1/WH/BH).
+// from the WRITER role via CreateWriterGen1DataMovementConfig (Gen1/WH/BH).
 inline KernelSpec MakeMinimalWriterDMKernel(std::string name) {
     return KernelSpec{
         .unique_id = KernelSpecName{std::move(name)},
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
         .num_threads = 1,
-        .hw_config = CreateWriter1xxDataMovementConfig(),
+        .hw_config = CreateWriterGen1DataMovementConfig(),
     };
 }
 

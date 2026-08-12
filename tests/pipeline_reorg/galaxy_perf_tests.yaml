@@ -18,7 +18,7 @@
   skus:
     wh_galaxy_perf:
       timeout: 15
-  owner_id: U03FJB5TM5Y # Colman Glagovich
+  owner_id: U06UEFWB4P9 # Colman Glagovich
   team: models
   arch: wormhole_b0
   save-perf-data: true
@@ -39,12 +39,13 @@
 - name: Galaxy DiT Wan2.2 model perf tests
   cmd: |
     export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
+    export HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
     pytest models/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "wh_4x8_sp1tp0 and resolution_720p and t2v" --timeout=1200
   model: wan2-2
   skus:
     wh_galaxy_perf:
       timeout: 25
-  owner_id: U03FJB5TM5Y # Colman Glagovich
+  owner_id: U06UEFWB4P9 # Colman Glagovich
   team: models
   arch: wormhole_b0
   save-perf-data: true
@@ -141,15 +142,16 @@
   arch: blackhole
   save-perf-data: false
 
-- name: Galaxy Llama 8B TP=4 DDP=8 train perf tests
-  cmd: |
-    ./tt-train/scripts/setup_pth.sh
-    python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames "llama_8b_tp4_ddp8_shakespeare"
-  model: llama_8b_tp4_ddp8_shakespeare
-  skus:
-    bh_galaxy_perf:
-      timeout: 55
-  owner_id: U07K00A281X # Kevin Wu
-  team: train
-  arch: blackhole
-  save-perf-data: false
+#  Hanging on g13blx01, disable until issue is resolved: https://github.com/tenstorrent/tt-metal/issues/49557
+# - name: Galaxy Llama 8B TP=4 DDP=8 train perf tests
+#   cmd: |
+#     ./tt-train/scripts/setup_pth.sh
+#     python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames "llama_8b_tp4_ddp8_shakespeare"
+#   model: llama_8b_tp4_ddp8_shakespeare
+#   skus:
+#     bh_galaxy_perf:
+#       timeout: 55
+#   owner_id: U07K00A281X # Kevin Wu
+#   team: train
+#   arch: blackhole
+#   save-perf-data: false

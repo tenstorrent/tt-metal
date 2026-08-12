@@ -13,7 +13,7 @@ The bar (bf4 vs bf16): first-token argmax match + top-5 overlap; later tokens ma
 This is COHERENCE+GROUND-TRUTH; no PCC (would need our logit vectors dumped from a separate run).
 
 Standalone (no `test_` prefix → pytest skips it). CPU only, no ttnn. Run in the throwaway uv env:
-  export HF_MODEL=/data/vmelnykov/MiniMax-M3-ref
+  export HF_MODEL=/mnt/models/MiniMaxAI/MiniMax-M3-ref
   uv run --no-project --with "transformers>=5.12" --with "torch" --python 3.10 \
       python models/demos/minimax_m3/tests/golden_hf_first_token.py
 """

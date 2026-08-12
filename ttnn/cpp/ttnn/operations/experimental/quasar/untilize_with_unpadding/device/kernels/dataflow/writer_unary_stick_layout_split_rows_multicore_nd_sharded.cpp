@@ -7,7 +7,6 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
-#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "api/tensor/tensor_accessor.h"
 #include "experimental/kernel_args.h"
@@ -49,10 +48,8 @@ void kernel_main() {
                                             uint32_t num_rows_to_write) {
         cb_out.wait_front(num_tiles_per_input_block);
 
-        uint32_t base_l1_read_addr = cb_out.get_read_ptr();
-
         for (uint32_t j = 0; j < num_rows_to_write; ++j) {
-            uint32_t current_l1_read_addr = base_l1_read_addr + j * num_cols_per_input_block * output_element_size;
+            const uint32_t row_src_offset = j * num_cols_per_input_block * output_element_size;
 
             uint32_t num_rows_already_processed = start_row + j;
             uint32_t num_pages_already_processed_in_previous_rows =
@@ -66,22 +63,22 @@ void kernel_main() {
                 num_cols_already_processed_in_first_output_block * output_element_size;
 
             uint32_t num_input_cols_processed = 0;
+            uint32_t col_src_offset = 0;
             while (num_input_cols_processed < num_unpadded_cols_per_input_block) {
                 uint32_t num_cols_to_write = std::min(
                     num_unpadded_cols_per_input_block - num_input_cols_processed,
                     num_cols_remaining_in_current_output_block);
                 uint32_t num_bytes_to_write = num_cols_to_write * output_element_size;
 
-                CoreLocalMem<uint32_t> src(current_l1_read_addr);
                 noc.async_write(
-                    src,
+                    cb_out,
                     accessor_dst,
                     num_bytes_to_write,
-                    {.offset_bytes = 0},
+                    {.offset_bytes = row_src_offset + col_src_offset},
                     {.page_id = output_page_id, .offset_bytes = output_offset_within_page_in_bytes});
 
                 num_input_cols_processed += num_cols_to_write;
-                current_l1_read_addr += num_bytes_to_write;
+                col_src_offset += num_bytes_to_write;
                 output_page_id++;
                 num_cols_remaining_in_current_output_block = num_cols_per_output_block;
                 output_offset_within_page_in_bytes = 0;

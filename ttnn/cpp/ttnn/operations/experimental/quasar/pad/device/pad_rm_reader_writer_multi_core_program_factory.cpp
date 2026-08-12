@@ -9,7 +9,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/tensor/tensor_apis.hpp>
+#include <tt-metalium/tensor/tensor_apis.hpp>
 
 #include <cmath>
 #include <filesystem>
@@ -184,7 +184,7 @@ MeshTensor build_pad_value_const_mesh_tensor(const PadInputs& tensor_args, float
     auto& cq = device->mesh_command_queue();
     // NOTE: The const buffer is always in L1 (mirrors the legacy factory).
     const MemoryConfig mem_cfg{TensorMemoryLayout::INTERLEAVED, BufferType::L1};
-    return tt::tt_metal::enqueue_write_tensor(cq, host_pad.host_tensor(), *device, mem_cfg);
+    return cq.enqueue_write_tensor(host_pad.host_tensor(), mem_cfg);
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
@@ -329,7 +329,8 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreProgramFactor
                   "num_local_unpadded_Y",
                   "full_unpadded_X_nbytes",
                   "num_local_W"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config =
+            ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // ------------------------------------------------------------------------
@@ -355,7 +356,8 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreProgramFactor
                   "full_padded_X_nbytes",
                   "dst_stick_offset",
                   "num_local_W"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config =
+            ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     log_debug(tt::LogOp, "ncores: {}", ncores);
@@ -416,40 +418,48 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreProgramFactor
                 }
 
                 const NodeCoord node = core;
-                reader_run.runtime_arg_values.push_back(
-                    {node,
-                     {{"num_unpadded_W", static_cast<uint32_t>(a.padded_shape()[0])},
-                      {"num_total_W", static_cast<uint32_t>(output_shape[0])},
-                      {"num_unpadded_Z", static_cast<uint32_t>(a.padded_shape()[1])},
-                      {"num_total_Z", static_cast<uint32_t>(output_shape[1])},
-                      {"num_unpadded_Y", static_cast<uint32_t>(a.padded_shape()[2])},
-                      {"num_total_Y", static_cast<uint32_t>(output_shape[2])},
-                      {"unpadded_X_nbytes", curr_stick_size_nbytes},
-                      {"padded_X_nbytes", static_cast<uint32_t>(dst_nbytes_per_core_w)},
-                      {"padded_X_diff_nbytes", static_cast<uint32_t>(curr_stick_diff_nbytes)},
-                      {"pad_value_packed", packed_pad_value},
-                      {"start_src_stick_id", start_src_stick_id},
-                      {"start_src_stick_wi", start_src_stick_wi},
-                      {"start_src_stick_offset", start_src_stick_wi * a.element_size()},
-                      {"num_local_Y", static_cast<uint32_t>(local_nsticks)},
-                      {"num_local_unpadded_Y", num_local_unpadded_nsticks},
-                      {"full_unpadded_X_nbytes", unpadded_row_size_nbytes},
-                      {"num_local_W", nbatch_per_core_h}}});
+                KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run.runtime_arg_values;
+                AddRuntimeArgsForNode(
+                    reader_rtas,
+                    node,
+                    {
+                        {"num_unpadded_W", static_cast<uint32_t>(a.padded_shape()[0])},
+                        {"num_total_W", static_cast<uint32_t>(output_shape[0])},
+                        {"num_unpadded_Z", static_cast<uint32_t>(a.padded_shape()[1])},
+                        {"num_total_Z", static_cast<uint32_t>(output_shape[1])},
+                        {"num_unpadded_Y", static_cast<uint32_t>(a.padded_shape()[2])},
+                        {"num_total_Y", static_cast<uint32_t>(output_shape[2])},
+                        {"unpadded_X_nbytes", curr_stick_size_nbytes},
+                        {"padded_X_nbytes", static_cast<uint32_t>(dst_nbytes_per_core_w)},
+                        {"padded_X_diff_nbytes", static_cast<uint32_t>(curr_stick_diff_nbytes)},
+                        {"pad_value_packed", packed_pad_value},
+                        {"start_src_stick_id", start_src_stick_id},
+                        {"start_src_stick_wi", start_src_stick_wi},
+                        {"start_src_stick_offset", start_src_stick_wi * a.element_size()},
+                        {"num_local_Y", static_cast<uint32_t>(local_nsticks)},
+                        {"num_local_unpadded_Y", num_local_unpadded_nsticks},
+                        {"full_unpadded_X_nbytes", unpadded_row_size_nbytes},
+                        {"num_local_W", nbatch_per_core_h},
+                    });
 
-                writer_run.runtime_arg_values.push_back(
-                    {node,
-                     {{"num_total_W", static_cast<uint32_t>(output_shape[0])},
-                      {"num_total_Z", static_cast<uint32_t>(output_shape[1])},
-                      {"num_total_Y", static_cast<uint32_t>(output_shape[2])},
-                      {"num_total_X", static_cast<uint32_t>(output_shape[3])},
-                      {"padded_X_nbytes", static_cast<uint32_t>(dst_nbytes_per_core_w)},
-                      {"start_dst_stick_id", start_dst_stick_id},
-                      {"start_dst_stick_wi", start_dst_stick_wi},
-                      {"num_local_Y", static_cast<uint32_t>(local_nsticks)},
-                      {"num_local_unpadded_Y", num_local_unpadded_nsticks},
-                      {"full_padded_X_nbytes", padded_row_size_nbytes},
-                      {"dst_stick_offset", start_dst_stick_wi * output.element_size()},
-                      {"num_local_W", nbatch_per_core_h}}});
+                KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
+                AddRuntimeArgsForNode(
+                    writer_rtas,
+                    node,
+                    {
+                        {"num_total_W", static_cast<uint32_t>(output_shape[0])},
+                        {"num_total_Z", static_cast<uint32_t>(output_shape[1])},
+                        {"num_total_Y", static_cast<uint32_t>(output_shape[2])},
+                        {"num_total_X", static_cast<uint32_t>(output_shape[3])},
+                        {"padded_X_nbytes", static_cast<uint32_t>(dst_nbytes_per_core_w)},
+                        {"start_dst_stick_id", start_dst_stick_id},
+                        {"start_dst_stick_wi", start_dst_stick_wi},
+                        {"num_local_Y", static_cast<uint32_t>(local_nsticks)},
+                        {"num_local_unpadded_Y", num_local_unpadded_nsticks},
+                        {"full_padded_X_nbytes", padded_row_size_nbytes},
+                        {"dst_stick_offset", start_dst_stick_wi * output.element_size()},
+                        {"num_local_W", nbatch_per_core_h},
+                    });
 
                 start_src_stick_wi += ntiles_per_core_w * TILE_WIDTH;
                 start_dst_stick_wi += ntiles_per_core_w * TILE_WIDTH;

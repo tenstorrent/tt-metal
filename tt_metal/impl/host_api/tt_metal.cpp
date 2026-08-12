@@ -26,6 +26,7 @@
 #include <functional>
 #include <iostream>
 #include <optional>
+#include <string_view>
 #include <unordered_set>
 #include <utility>
 #include <type_traits>
@@ -65,7 +66,8 @@
 #include "common/tt_backend_api_types.hpp"
 #include <experimental/fabric/control_plane.hpp>
 #include "impl/buffers/circular_buffer.hpp"
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <internal/service/service_core_manager.hpp>
 
 #ifdef TT_METAL_USE_EMULE
@@ -173,6 +175,14 @@ void ConfigureKernelGroup(
         program.impl().get_kernel(kernel_id)->configure(
             device, logical_core, kernel_config_base, kernel_group->kernel_text_offsets.data());
     }
+}
+
+void ValidateLegacyRuntimeArgsAPI(const Program& program, std::string_view api_name) {
+    TT_FATAL(
+        !program.impl().has_metal2_registry(),
+        "{} cannot be used with a Program created from a Metal 2.0 ProgramSpec. "
+        "Use experimental::SetProgramRunArgs or experimental::UpdateProgramRunArgs instead.",
+        api_name);
 }
 
 inline void SetRuntimeArgsImpl(
@@ -544,6 +554,8 @@ void print_page(
     std::cout << std::dec << std::endl;
 }
 
+using experimental::per_core_allocation::get_shard_base_address;
+
 void WriteToDeviceSharded(
     Buffer& buffer, ttsl::Span<const uint8_t> host_buffer, const CoreRangeSet* logical_core_filter) {
     TT_FATAL(
@@ -583,8 +595,8 @@ void WriteToDeviceSharded(
             }
             std::span<const std::uint8_t> page(host_buffer.data() + data_index + offset, size_in_bytes);
             if (buffer.is_l1()) {
-                auto absolute_address =
-                    buffer.address() + bank_offset + (write_device_page * buffer.aligned_page_size()) + offset;
+                auto absolute_address = get_shard_base_address(buffer, core) + bank_offset +
+                                        (write_device_page * buffer.aligned_page_size()) + offset;
                 auto core_coordinates =
                     device->worker_core_from_logical_core(buffer.allocator()->get_logical_core_from_bank_id(bank_id));
                 MetalContext::instance().get_cluster().write_core(
@@ -772,10 +784,11 @@ void read_pages_to_host_helper(
     size_t aligned_page_size = tt::align(page_size, cluster.get_alignment_requirements(device->id(), page_size));
 
     if (dev_buffer.is_l1()) {
-        auto core_coordinates =
-            device->worker_core_from_logical_core(dev_buffer.allocator()->get_logical_core_from_bank_id(bank_id));
+        auto logical_core = dev_buffer.allocator()->get_logical_core_from_bank_id(bank_id);
+        auto core_coordinates = device->worker_core_from_logical_core(logical_core);
         auto bank_offset = device->allocator()->get_bank_offset(dev_buffer.buffer_type(), bank_id);
-        auto absolute_address = dev_buffer.address() + bank_offset + (core_page_id * dev_buffer.aligned_page_size());
+        auto absolute_address = get_shard_base_address(dev_buffer, logical_core) + bank_offset +
+                                (core_page_id * dev_buffer.aligned_page_size());
         if (aligned_page_size > page_size) {
             std::vector<uint8_t> page(aligned_page_size);
             MetalContext::instance().get_cluster().read_core(
@@ -884,6 +897,27 @@ void LaunchProgram(
     LaunchProgram(device, *program, wait_until_cores_done, force_slow_dispatch);
 }
 
+// Returns true iff the program has kernels and every core it targets is a DRAM programmable core.
+// Such programs (e.g. the persistent tensor-prefetcher DRISC senders) are disjoint from the FD
+// worker grid and dispatch column, so launching them via slow dispatch does not perturb an active
+// FD session. Used to scope the force-slow-dispatch guard in LaunchProgram.
+bool program_targets_only_dram_cores(const Program& program) {
+    const auto& logical_cores_used_in_program = program.impl().logical_cores();
+    const auto& hal = MetalContext::instance().hal();
+    bool has_any_core = false;
+    for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < logical_cores_used_in_program.size();
+         programmable_core_type_index++) {
+        if (logical_cores_used_in_program[programmable_core_type_index].empty()) {
+            continue;
+        }
+        has_any_core = true;
+        if (hal.get_programmable_core_type(programmable_core_type_index) != HalProgrammableCoreType::DRAM) {
+            return false;
+        }
+    }
+    return has_any_core;
+}
+
 void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done, bool force_slow_dispatch) {
     {  // Profiler scope start
         ZoneScoped;
@@ -900,8 +934,13 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
             // Scope the service bypass to this device
             const bool service_active =
                 !tt::tt_metal::MetalContext::instance().get_service_core_manager().claimed_cores(device->id()).empty();
+            // DRAM-only programs (e.g. the persistent tensor-prefetcher DRISC senders) run on the DRAM
+            // programmable cores, which are disjoint from the FD worker grid and dispatch column. Launching
+            // them via slow dispatch does not touch FD-owned cores or the FD pipeline, so it is safe to mix
+            // with an active FD session regardless of profiler init state.
+            const bool dram_only = detail::program_targets_only_dram_cores(program);
             TT_ASSERT(
-                !(fd_active && rt_done) || service_active,
+                !(fd_active && rt_done) || service_active || dram_only,
                 "Cannot force slow dispatch while fast dispatch firmware is active and real-time profiler init has "
                 "completed on this device.");
         }
@@ -1016,6 +1055,9 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
         program.impl().validate_circular_buffer_core_ranges(validation_device);
         program.impl().validate_circular_buffer_region(validation_device);
         program.impl().allocate_dataflow_buffers(validation_device);
+        // Pre-size Metal 2.0 RTA/CRTA buffers from schema when not already reserved
+        // (e.g. MakeProgramFromSpec). Idempotent if SetProgramRunArgs already sized them.
+        program.impl().reserve_runtime_arg_buffers();
         // Metal 2.0 scratchpads stack on the DFB allocations, so allocate them AFTER the DFBs are placed.
         // Scratchpads are passed as implicit CRTAs, so they must be allocated before the CRTAs are committed.
         program.impl().allocate_scratchpads(validation_device);
@@ -1055,7 +1097,9 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                     hal.get_dev_addr(hal.get_programmable_core_type(index), HalL1MemAddrType::KERNEL_CONFIG);
                 const auto& cbs_on_core = program.impl().circular_buffers_on_core(logical_core);
                 const auto& dfbs_on_core = program.impl().dataflow_buffers_on_core(logical_core);
-                if (!cbs_on_core.empty()) {
+                const bool scans_remote_cb_configs =
+                    kernel_group->launch_msg.view().kernel_config().min_remote_cb_start_index() < max_cbs;
+                if (!cbs_on_core.empty() || scans_remote_cb_configs) {
                     // CircularBufferConfigVec -- common across all kernels, so written once to the core
                     std::vector<uint32_t> circular_buffer_config_vec(
                         program.impl().get_program_config(index).cb_size / sizeof(uint32_t));
@@ -1092,12 +1136,21 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                     log_info(tt::LogMetal, "DFB size: {}", program.impl().get_program_config(index).dfb_size);
                     std::vector<uint8_t> dfb_config_vec(
                         program.impl().get_program_config(index).dfb_size / sizeof(uint8_t));
-                    uint32_t offset = 0;
-                    for (const auto& dfb : dfbs_on_core) {
-                        auto serialized = dfb->serialize_for_core(logical_core);
-                        std::memcpy(dfb_config_vec.data() + offset, serialized.data(), serialized.size());
-                        offset += serialized.size();
+
+                    size_t bytes_written = 0;
+                    if (MetalContext::instance().hal().has_tile_counter_registers()) {
+                        bytes_written = tt::tt_metal::experimental::dfb::detail::serialize_dfb_config_for_core(
+                            logical_core, dfbs_on_core, dfb_config_vec);
+                    } else {
+                        uint32_t offset = 0;
+                        for (const auto& dfb : dfbs_on_core) {
+                            auto serialized = dfb->serialize_for_core(logical_core);
+                            std::memcpy(dfb_config_vec.data() + offset, serialized.data(), serialized.size());
+                            offset += serialized.size();
+                        }
+                        bytes_written = offset;
                     }
+
                     uint64_t addr = kernel_config_base + program.impl().get_program_config(index).dfb_offset;
                     log_info(
                         tt::LogMetal,
@@ -1107,8 +1160,9 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                         addr,
                         kernel_config_base,
                         program.impl().get_program_config(index).dfb_offset,
-                        dfb_config_vec.size());
-                    MetalContext::instance().get_cluster().write_core(device_id, physical_core, dfb_config_vec, addr);
+                        bytes_written);
+                    MetalContext::instance().get_cluster().write_core(
+                        device_id, physical_core, std::span<const uint8_t>(dfb_config_vec.data(), bytes_written), addr);
                 }
             }
             program.impl().init_semaphores(*device, logical_core, index);
@@ -1689,17 +1743,6 @@ GlobalSemaphore CreateGlobalSemaphore(
     return GlobalSemaphore(device, std::move(cores), initial_value, buffer_type);
 }
 
-namespace experimental {
-GlobalSemaphore CreateGlobalSemaphore(
-    IDevice* device,
-    const CoreRangeSet& cores,
-    std::optional<uint32_t> initial_value,
-    BufferType buffer_type,
-    uint64_t address) {
-    return GlobalSemaphore(device, cores, initial_value, buffer_type, address);
-}
-}  // namespace experimental
-
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config) {
     return Buffer::create(config.device, config.size, config.page_size, config.buffer_type);
 }
@@ -1752,6 +1795,7 @@ void SetRuntimeArgs(
     ttsl::Span<const uint32_t> runtime_args) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureSetRuntimeArgsUint32, program, kernel_id, core_spec, runtime_args);
+    ValidateLegacyRuntimeArgsAPI(program, "SetRuntimeArgs");
     std::visit([&](auto&& core_spec) { SetRuntimeArgsImpl(program, kernel_id, core_spec, runtime_args); }, core_spec);
 }
 
@@ -1763,6 +1807,7 @@ void SetRuntimeArgs(
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureSetRuntimeArgsUint32, program, kernel_id, core_spec, runtime_args);
     ZoneScoped;
+    ValidateLegacyRuntimeArgsAPI(program, "SetRuntimeArgs");
     std::visit([&](auto&& core_spec) { SetRuntimeArgsImpl(program, kernel_id, core_spec, runtime_args); }, core_spec);
 }
 
@@ -1774,6 +1819,7 @@ void SetRuntimeArgs(
     ZoneScoped;
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureSetRuntimeArgsUint32VecPerCore, program, kernel, core_spec, runtime_args);
+    ValidateLegacyRuntimeArgsAPI(program, "SetRuntimeArgs");
     TT_FATAL(
         core_spec.size() == runtime_args.size(),
         "Mismatch between number of cores {} and number of runtime args {} getting updated",
@@ -1787,6 +1833,7 @@ void SetRuntimeArgs(
 
 void SetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id, ttsl::Span<const uint32_t> runtime_args) {
     ZoneScoped;
+    ValidateLegacyRuntimeArgsAPI(program, "SetCommonRuntimeArgs");
     if (!runtime_args.empty()) {
         program.impl().get_kernel(kernel_id)->set_common_runtime_args(runtime_args);
     }
@@ -1795,20 +1842,24 @@ void SetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id, ttsl::
 void SetCommonRuntimeArgs(
     const Program& program, KernelHandle kernel_id, std::initializer_list<uint32_t> runtime_args) {
     ZoneScoped;
+    ValidateLegacyRuntimeArgsAPI(program, "SetCommonRuntimeArgs");
     if (runtime_args.size() != 0) {
         program.impl().get_kernel(kernel_id)->set_common_runtime_args(runtime_args);
     }
 }
 
 RuntimeArgsData& GetRuntimeArgs(const Program& program, KernelHandle kernel_id, const CoreCoord& logical_core) {
+    ValidateLegacyRuntimeArgsAPI(program, "GetRuntimeArgs");
     return program.impl().get_kernel(kernel_id)->runtime_args_data(logical_core);
 }
 
 std::vector<std::vector<RuntimeArgsData>>& GetRuntimeArgs(const Program& program, KernelHandle kernel_id) {
+    ValidateLegacyRuntimeArgsAPI(program, "GetRuntimeArgs");
     return program.impl().get_kernel(kernel_id)->runtime_args_data();
 }
 
 RuntimeArgsData& GetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id) {
+    ValidateLegacyRuntimeArgsAPI(program, "GetCommonRuntimeArgs");
     return program.impl().get_kernel(kernel_id)->common_runtime_args_data();
 }
 

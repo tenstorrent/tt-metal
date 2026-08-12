@@ -100,7 +100,7 @@ void PostCombineReduceDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-ttnn::TensorSpec PostCombineReduceDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec PostCombineReduceDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const ttnn::Tensor& combine_output = tensor_args.combine_output;
     const auto& input_shape = combine_output.padded_shape();
@@ -109,6 +109,7 @@ ttnn::TensorSpec PostCombineReduceDeviceOperation::compute_output_specs(
     // Input: [B, C, seq_len, num_experts, emb_dim]
     // Output: [B, C, seq_len, emb_dim]
     std::vector<uint32_t> output_shape_vec;
+    output_shape_vec.reserve(input_shape.rank());
     for (uint32_t i = 0; i < input_shape.rank(); ++i) {
         if (i != operation_attributes.expert_dim) {
             output_shape_vec.push_back(input_shape[i]);
@@ -119,7 +120,7 @@ ttnn::TensorSpec PostCombineReduceDeviceOperation::compute_output_specs(
     const tt::tt_metal::MemoryConfig& output_memory_config = operation_attributes.output_memory_config;
 
     // Use TILE layout for hardware tilization output
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
             combine_output.dtype(), tt::tt_metal::PageConfig(Layout::TILE), output_memory_config));

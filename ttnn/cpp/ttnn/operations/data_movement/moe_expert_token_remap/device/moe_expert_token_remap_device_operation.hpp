@@ -35,7 +35,7 @@ struct MoeExpertTokenRemapDeviceOperation {
         const std::optional<ttnn::Tensor> optional_output_reduced_tensor;
     };
 
-    using spec_return_value_t = std::vector<ttnn::TensorSpec>;
+    using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
 
     using tensor_return_value_t = std::vector<ttnn::Tensor>;
 

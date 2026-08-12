@@ -16,10 +16,8 @@
 #include "api/tensor/tensor_accessor.h"
 #include "experimental/kernel_args.h"
 #include "conv_reader_common.hpp"
-#include "api/debug/dprint.h"  // DEBUG: conv2d layer3 hang localization (remove after)
 
 void kernel_main() {
-    DPRINT("RDR start\n");  // DEBUG: conv2d layer3 hang
     constexpr uint32_t dilation_h = get_arg(args::dilation_h);
     constexpr uint32_t dilation_w = get_arg(args::dilation_w);
     constexpr uint32_t stride_w = get_arg(args::stride_w);
@@ -107,13 +105,33 @@ void kernel_main() {
     experimental::set_read_state<coalesced_read_bytes>(noc, act_l1_read_addr);
 
     constexpr uint32_t stride_w_bytes = dilation_w * conv_act_c_read_bytes;
+    // Vertical (kernel-row) stride in the halo'd L1 shard: one padded input row. Same value as
+    // window_outer_offset; used by the full-window gather (read_channels<weight_size_h>) to step between
+    // kernel rows within a single K-block.
+    // Vertical (kernel-row) stride in the halo'd L1 shard: one padded input row. Same value as
+    // window_outer_offset; used by the full-window gather (read_channels<weight_size_h>) to step between
+    // kernel rows within a single K-block. (ISOLATION with stride_h_bytes=0 showed the pack fault PERSISTS,
+    // so it's the dest/compute path (ACT_TILIZED self-loop / pack), NOT a source over-read — restored.)
+    constexpr uint32_t stride_h_bytes = window_outer_offset;
+    // window_outer == 1  <=> the whole reduction window is kept in ONE K-block (full_inner_dim / Quasar
+    //                        "no-spill" path): the full window (all weight_size_h kernel rows) must be
+    //                        gathered per stick here.
+    // window_outer > 1   <=> sliced per kernel row (normal spilling path): read one kernel row per outer
+    //                        block, unchanged from before.
+    // Mirrors reader_conv_activations_2d_mcast_..._metal2.cpp (block-sharded), which derives the same flag.
+    constexpr bool sliced_inner_dim = window_outer > 1;
     uint32_t start_reader_idx = 0;
     uint32_t l1_write_addr_act = 0;
     const uint32_t cb_start_addr = cb_act.get_write_ptr();
     for (uint32_t bh = 0; bh < act_num_blocks_h; bh++) {
         if constexpr (activation_reuse_enabled) {
             l1_write_addr_act = cb_start_addr;
-            get_local_cb_interface(cb_id_act).fifo_wr_ptr = l1_write_addr_act;
+#ifndef ARCH_QUASAR
+            // evil_set_write_ptr is WH/BH-only FIFO-cursor surgery (dataflow_buffer.h: "Not declared on
+            // Quasar"). cb_act is a concrete DataflowBuffer here, so two-phase lookup name-checks this even
+            // though the branch is dead on Quasar (activation_reuse is force-off in the factory). Guard it.
+            cb_act.evil_set_write_ptr(l1_write_addr_act);
+#endif
         }
         uint32_t reader_offset = act_l1_read_addr;
         for (uint32_t outer = 0; outer < window_outer; outer++) {
@@ -123,18 +141,38 @@ void kernel_main() {
                 cb_act.reserve_back(act_block_num_tiles);
                 l1_write_addr_act = cb_act.get_write_ptr();
 
-                read_sticks<
+                // read_activation_data branches on sliced_inner_dim:
+                //   sliced_inner_dim == true  -> per-kernel-row read_sticks (unchanged spilling path;
+                //                                the outer loop supplies filter_h blocks).
+                //   sliced_inner_dim == false -> full-window read_channels<weight_size_h> gather: for each
+                //                                stick it reads all weight_size_h kernel rows (each a
+                //                                coalesced weight_size_w * Cin burst, stepping by
+                //                                stride_h_bytes), laying the K columns out as [r][s][c] to
+                //                                match the reuse=true full-window weight layout
+                //                                (to_weight_special_padding_tile_layout). This is the Quasar
+                //                                no-spill path (window_outer == 1, num_blocks_act_w == 1).
+                // In both cases read_activation_data issues the async_read_barrier and advances reader_offset
+                // by window_outer_offset internally.
+                read_activation_data<
+                    sliced_inner_dim,
                     dilation_w,
                     coalesced_read_bytes,
                     conv_act_c_read_bytes,
                     act_block_w_extra_align_bytes,
                     stride_w_bytes,
                     weight_size_w,
-                    stride_w>(noc, packed_reader_indices_ptr, reader_offset, l1_write_addr_act, reader_idx);
+                    stride_w,
+                    weight_size_h,
+                    window_outer_offset>(
+                    noc,
+                    packed_reader_indices_ptr,
+                    reader_offset,
+                    l1_write_addr_act,
+                    reader_idx,
+                    act_l1_read_addr,
+                    stride_h_bytes);
 
-                noc.async_read_barrier();
                 cb_act.push_back(act_block_num_tiles);
-                reader_offset += window_outer_offset;
             } else {
                 read_sticks_activation_reuse<
                     coalesced_read_bytes,
@@ -180,5 +218,4 @@ void kernel_main() {
 
     // Drain outstanding NOC reads/writes/atomics before returning (Metal 2.0 FW epilogue does not).
     noc.async_full_barrier();
-    DPRINT("RDR end\n");  // DEBUG: conv2d layer3 hang
 }

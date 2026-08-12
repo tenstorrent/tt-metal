@@ -249,8 +249,8 @@ class MochiPipeline(PipelineAPIMixin):
             )
 
         checkpoint_name = config.checkpoint_name
-        self._scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(checkpoint_name, subfolder="scheduler")
-        self._solver = EulerSolver()
+        scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(checkpoint_name, subfolder="scheduler")
+        self._solver = EulerSolver(scheduler=scheduler)
 
         # Load pretrained T5 text encoder and tokenizer (Torch)
         self._text_encoder = TextEncoder(
@@ -365,9 +365,8 @@ class MochiPipeline(PipelineAPIMixin):
         # 5. Prepare timestep
         # from https://github.com/genmoai/models/blob/075b6e36db58f1242921deff83a1066887b9c9e1/src/mochi_preview/infer.py#L77
         sigmas = np.array(linear_quadratic_schedule(num_inference_steps, threshold_noise=0.025))
-        self._scheduler.set_timesteps(sigmas=sigmas)
-        self._solver.set_schedule(self._scheduler.sigmas.tolist())
-        timesteps = self._scheduler.timesteps
+        self._solver.set_schedule(sigmas=sigmas)
+        timesteps = self._solver.timesteps
 
         # Upload spatial latents and pre-compute rope features once before the loop.
         _, _, f, h, w = latents.shape

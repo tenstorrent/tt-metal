@@ -8,6 +8,8 @@
 #include "rotary_embedding_llama_multi_core_prefill_sharded_program_factory.hpp"
 #include "rotary_embedding_llama_sharded_program_factory.hpp"
 #include "ttnn/device.hpp"
+#include "ttnn/device_operation.hpp"  // ttnn::device_operation::launch
+#include "ttnn/operation.hpp"         // tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG
 #include <tt-metalium/constants.hpp>
 
 namespace ttnn::experimental::prim {
@@ -211,7 +213,7 @@ RotaryEmbeddingLlamaDeviceOperation::spec_return_value_t RotaryEmbeddingLlamaDev
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& shape = input_tensor.logical_shape();
-    return {TensorSpec(
+    return {tt::tt_metal::TensorSpec(
         shape,
         tt::tt_metal::TensorLayout(
             input_tensor.dtype(),
@@ -229,13 +231,13 @@ RotaryEmbeddingLlamaDeviceOperation::tensor_return_value_t RotaryEmbeddingLlamaD
 
 namespace ttnn::prim {
 
-tt::tt_metal::Tensor rotary_embedding_llama(
-    const tt::tt_metal::Tensor& input_tensor,
-    const tt::tt_metal::Tensor& cos_cache,
-    const tt::tt_metal::Tensor& sin_cache,
-    const tt::tt_metal::Tensor& trans_mat,
+ttnn::Tensor rotary_embedding_llama(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& cos_cache,
+    const ttnn::Tensor& sin_cache,
+    const ttnn::Tensor& trans_mat,
     bool is_decode_mode,
-    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
     using OperationType = ttnn::experimental::prim::RotaryEmbeddingLlamaDeviceOperation;
 

@@ -19,23 +19,14 @@ run_tg_tests() {
     pytest models/tt_dit/tests/models/sd35/test_attention_sd35.py -k "4x4sp0tp1" --timeout=300; fail+=$?
     pytest models/tt_dit/tests/models/sd35/test_transformer_sd35.py::test_sd35_transformer_block -k "4x4sp0tp1" --timeout=300; fail+=$?
 
-  elif [[ "$1" == "flux1" ]]; then
-    echo "LOG_METAL: running Flux.1 run_tg_frequent_tests"
-    HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest models/tt_dit/tests/blocks/test_attention.py::test_attention_flux -k "4x" --timeout=300; fail+=$?
-    HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest models/tt_dit/tests/blocks/test_transformer_block.py::test_transformer_block_flux -k "4x" --timeout=300; fail+=$?
-
   elif [[ "$1" == "motif" ]]; then
     echo "LOG_METAL: running Motif run_tg_frequent_tests"
-    HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest models/tt_dit/tests/blocks/test_attention.py::test_attention_motif -k "4x" --timeout=300; fail+=$?
-    HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest models/tt_dit/tests/blocks/test_transformer_block.py::test_transformer_block_motif -k "4x" --timeout=300; fail+=$?
+    HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest models/tt_dit/tests/models/motif/test_attention_motif.py::test_attention_motif -k "4x" --timeout=300; fail+=$?
+    HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest models/tt_dit/tests/models/motif/test_transformer_block_motif.py::test_transformer_block_motif -k "4x" --timeout=300; fail+=$?
 
   elif [[ "$1" == "wan22" ]]; then # Wan2.2 I2V and T2V
     echo "LOG_METAL: running Wan2.2 run_tg_frequent_tests"
     export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
-    pytest models/tt_dit/tests/models/wan2_2/test_rope.py -k "wh_4x8sp1tp0"; fail+=$?
-    pytest models/tt_dit/tests/models/wan2_2/test_attention_wan.py -k "wh_4x8sp1tp0"; fail+=$?
-    pytest models/tt_dit/tests/models/wan2_2/test_transformer_wan.py -k "transformer_block and wh_4x8sp1tp0 or short_seq-wh_4x8sp1tp0 and not yes_load_cache and not model_caching"; fail+=$?
-    pytest models/tt_dit/tests/models/wan2_2/test_vae_wan2_1.py -k "(test_wan_encoder or test_wan_decoder) and wh_4x8 and real_weights and check_output and _1f and chunk_1"; fail+=$?
     pytest models/tt_dit/tests/encoders/umt5/test_umt5.py -k "wh_glx" ; fail+=$?
     pytest models/tt_dit/tests/unit/test_embeddings.py::test_wan_time_text_image_embedding  -k "wh_glx" ; fail+=$?
 

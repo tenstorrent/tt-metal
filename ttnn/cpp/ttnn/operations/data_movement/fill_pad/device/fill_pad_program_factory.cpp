@@ -28,7 +28,7 @@ tt::tt_metal::ProgramDescriptor FillPadProgramFactory::create_descriptor(
         "FillPadProgramFactory: unsupported dtype {}",
         input_tensor.dtype());
 
-    const tt::tt_metal::PadValue& fill_value = operation_attributes.fill_value;
+    const ttnn::PadValue& fill_value = operation_attributes.fill_value;
     tt::tt_metal::IDevice* device = input_tensor.device();
     ProgramDescriptor desc;
 
@@ -318,7 +318,7 @@ tt::tt_metal::ProgramDescriptor FillPadL1ShardedProgramFactory::create_descripto
         "FillPadL1ShardedProgramFactory: unsupported dtype {}",
         input_tensor.dtype());
 
-    const tt::tt_metal::PadValue& fill_value = operation_attributes.fill_value;
+    const ttnn::PadValue& fill_value = operation_attributes.fill_value;
 
     ProgramDescriptor desc;
 
@@ -376,6 +376,7 @@ tt::tt_metal::ProgramDescriptor FillPadL1ShardedProgramFactory::create_descripto
     };
 
     std::vector<ShardCoreInfo> active;
+    active.reserve(all_shard_cores.size());
 
     for (uint32_t i = 0; i < static_cast<uint32_t>(all_shard_cores.size()); ++i) {
         uint32_t row, col;

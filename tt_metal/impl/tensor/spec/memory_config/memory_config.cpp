@@ -3,22 +3,49 @@
 
 #include <cstdint>
 
+#include <tt_stl/assert.hpp>
 #include <tt_stl/reflection.hpp>
 
-#include <tt-metalium/experimental/tensor/tensor_types.hpp>
-#include <tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
+#include <tt-metalium/tensor/spec/memory_config/memory_config.hpp>
+#include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
+
+#include "memory_config_impl.hpp"
 
 namespace tt::tt_metal {
 
+MemoryConfig::MemoryConfig() : impl_(std::make_unique<MemoryConfigImpl>()) {}
+
 MemoryConfig::MemoryConfig(
     TensorMemoryLayout memory_layout, BufferType buffer_type, std::optional<ShardSpec> shard_spec) :
-    memory_layout_(memory_layout), buffer_type_(buffer_type), shard_spec_(std::move(shard_spec)) {}
+    impl_(std::make_unique<MemoryConfigImpl>(
+        memory_layout, buffer_type, std::move(shard_spec), std::nullopt, /*created_with_nd_shard_spec=*/false)) {}
 
-MemoryConfig::MemoryConfig(BufferType buffer_type, std::optional<NdShardSpec> nd_shard_spec) :
-    memory_layout_(nd_shard_spec.has_value() ? TensorMemoryLayout::ND_SHARDED : TensorMemoryLayout::INTERLEAVED),
-    buffer_type_(buffer_type),
-    nd_shard_spec_(std::move(nd_shard_spec)),
-    created_with_nd_shard_spec_(nd_shard_spec_.has_value()) {}
+MemoryConfig::MemoryConfig(BufferType buffer_type, std::optional<NdShardSpec> nd_shard_spec) {
+    const bool created_with_nd_shard_spec = nd_shard_spec.has_value();
+    impl_ = std::make_unique<MemoryConfigImpl>(
+        created_with_nd_shard_spec ? TensorMemoryLayout::ND_SHARDED : TensorMemoryLayout::INTERLEAVED,
+        buffer_type,
+        std::nullopt,
+        std::move(nd_shard_spec),
+        created_with_nd_shard_spec);
+}
+
+MemoryConfig::~MemoryConfig() = default;
+
+MemoryConfig::MemoryConfig(const MemoryConfig& other) :
+    impl_(other.impl_ ? std::make_unique<MemoryConfigImpl>(*other.impl_) : nullptr) {}
+
+MemoryConfig& MemoryConfig::operator=(const MemoryConfig& other) {
+    if (this == &other) {
+        return *this;
+    }
+    impl_ = other.impl_ ? std::make_unique<MemoryConfigImpl>(*other.impl_) : nullptr;
+    return *this;
+}
+
+MemoryConfig::MemoryConfig(MemoryConfig&& other) noexcept = default;
+MemoryConfig& MemoryConfig::operator=(MemoryConfig&& other) noexcept = default;
 
 MemoryConfig::MemoryConfig(
     TensorMemoryLayout memory_layout,
@@ -26,24 +53,48 @@ MemoryConfig::MemoryConfig(
     std::optional<ShardSpec> shard_spec,
     std::optional<NdShardSpec> nd_shard_spec,
     bool created_with_nd_shard_spec) :
-    memory_layout_(memory_layout),
-    buffer_type_(buffer_type),
-    shard_spec_(std::move(shard_spec)),
-    nd_shard_spec_(std::move(nd_shard_spec)),
-    created_with_nd_shard_spec_(created_with_nd_shard_spec) {}
+    impl_(std::make_unique<MemoryConfigImpl>(
+        memory_layout, buffer_type, std::move(shard_spec), std::move(nd_shard_spec), created_with_nd_shard_spec)) {}
 
-MemoryConfig MemoryConfig::create_with_prepopulated_shard_specs(
-    TensorMemoryLayout memory_layout,
-    BufferType buffer_type,
-    std::optional<ShardSpec> shard_spec,
-    std::optional<NdShardSpec> nd_shard_spec,
-    bool created_with_nd_shard_spec) {
-    return MemoryConfig(
-        memory_layout, buffer_type, std::move(shard_spec), std::move(nd_shard_spec), created_with_nd_shard_spec);
+MemoryConfigImpl& MemoryConfig::impl() {
+    TT_FATAL(impl_ != nullptr, "MemoryConfig is in a moved-from state.");
+    return *impl_;
+}
+
+const MemoryConfigImpl& MemoryConfig::impl() const {
+    TT_FATAL(impl_ != nullptr, "MemoryConfig is in a moved-from state.");
+    return *impl_;
+}
+
+TensorMemoryLayout MemoryConfig::memory_layout() const { return impl().memory_layout_; }
+
+BufferType MemoryConfig::buffer_type() const { return impl().buffer_type_; }
+
+const std::optional<ShardSpec>& MemoryConfig::shard_spec() const { return impl().shard_spec_; }
+
+const std::optional<NdShardSpec>& MemoryConfig::nd_shard_spec() const { return impl().nd_shard_spec_; }
+
+bool MemoryConfig::created_with_nd_shard_spec() const { return impl().created_with_nd_shard_spec_; }
+
+std::tuple<
+    const TensorMemoryLayout&,
+    const BufferType&,
+    const std::optional<ShardSpec>&,
+    const std::optional<NdShardSpec>&,
+    const bool&,
+    const bool&>
+MemoryConfig::attribute_values() const {
+    return std::forward_as_tuple(
+        impl().memory_layout_,
+        impl().buffer_type_,
+        impl().shard_spec_,
+        impl().nd_shard_spec_,
+        impl().created_with_nd_shard_spec_,
+        impl().per_core_allocation_);
 }
 
 bool MemoryConfig::is_sharded() const {
-    switch (this->memory_layout_) {
+    switch (impl().memory_layout_) {
         case TensorMemoryLayout::HEIGHT_SHARDED:
         case TensorMemoryLayout::WIDTH_SHARDED:
         case TensorMemoryLayout::BLOCK_SHARDED:
@@ -52,12 +103,21 @@ bool MemoryConfig::is_sharded() const {
     }
 }
 
-bool MemoryConfig::is_l1() const { return buffer_type_ == BufferType::L1 or buffer_type_ == BufferType::L1_SMALL; }
+bool MemoryConfig::is_l1() const {
+    return impl().buffer_type_ == BufferType::L1 or impl().buffer_type_ == BufferType::L1_SMALL;
+}
 
-bool MemoryConfig::is_dram() const { return buffer_type_ == BufferType::DRAM; }
+bool MemoryConfig::is_dram() const { return impl().buffer_type_ == BufferType::DRAM; }
 
 bool operator==(const MemoryConfig& config_a, const MemoryConfig& config_b) {
     if (config_a.buffer_type() != config_b.buffer_type() || config_a.memory_layout() != config_b.memory_layout()) {
+        return false;
+    }
+    // per_core_allocation changes allocator semantics -- each core gets an independent L1 address
+    // instead of one lockstep address -- so two configs differing only in this flag are not
+    // interchangeable and must not compare equal.
+    if (experimental::per_core_allocation::is_per_core_allocation(config_a) !=
+        experimental::per_core_allocation::is_per_core_allocation(config_b)) {
         return false;
     }
     // Compare only the authoritative shard spec based on creation path.
@@ -98,6 +158,8 @@ nlohmann::json ttsl::json::to_json_t<tt::tt_metal::MemoryConfig>::operator()(
     json_object["memory_layout"] = config.memory_layout();
     json_object["buffer_type"] = config.buffer_type();
     json_object["created_with_nd_shard_spec"] = config.created_with_nd_shard_spec();
+    json_object["per_core_allocation"] =
+        tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(config);
     if (config.created_with_nd_shard_spec()) {
         if (config.nd_shard_spec().has_value()) {
             json_object["nd_shard_spec"] = ttsl::json::to_json(config.nd_shard_spec().value());
@@ -115,7 +177,11 @@ tt::tt_metal::MemoryConfig ttsl::json::from_json_t<tt::tt_metal::MemoryConfig>::
     auto memory_layout = json_object["memory_layout"].get<tt::tt_metal::TensorMemoryLayout>();
     auto buffer_type = json_object["buffer_type"].get<tt::tt_metal::BufferType>();
     auto created_with_nd_shard_spec = json_object["created_with_nd_shard_spec"].get<bool>();
+    // Absent in JSON written before per_core_allocation was serialized; those configs are lockstep.
+    const bool per_core_allocation = json_object.value("per_core_allocation", false);
     if (created_with_nd_shard_spec) {
+        TT_FATAL(
+            !per_core_allocation, "per_core_allocation is not supported with NdShardSpec, but JSON requested both");
         auto nd_shard_spec = ttsl::json::from_json<tt::tt_metal::NdShardSpec>(json_object["nd_shard_spec"]);
         return tt::tt_metal::MemoryConfig(buffer_type, std::move(nd_shard_spec));
     }
@@ -123,5 +189,9 @@ tt::tt_metal::MemoryConfig ttsl::json::from_json_t<tt::tt_metal::MemoryConfig>::
     if (json_object.contains("shard_spec")) {
         shard_spec = ttsl::json::from_json<tt::tt_metal::ShardSpec>(json_object["shard_spec"]);
     }
-    return tt::tt_metal::MemoryConfig(memory_layout, buffer_type, std::move(shard_spec));
+    auto memory_config = tt::tt_metal::MemoryConfig(memory_layout, buffer_type, std::move(shard_spec));
+    if (per_core_allocation) {
+        tt::tt_metal::experimental::per_core_allocation::set_per_core_allocation(memory_config, true);
+    }
+    return memory_config;
 }

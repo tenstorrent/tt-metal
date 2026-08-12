@@ -15,6 +15,11 @@ on:
       enabled-skus:
         required: true
         type: string
+      sp-config:
+        required: false
+        type: string
+        default: "sc1"
+        description: "Supercluster configuration (sc1)"
       test-type:
         required: false
         type: string
@@ -23,24 +28,44 @@ on:
         required: false
         type: string
         default: ""
-  workflow_dispatch:
+      resource-prefix:
+        required: true
+        type: string
+        description: "Unique prefix when multiple impl jobs share a run (e.g. module, sdpa-perf)"
+      hang-detection-timeout:
+        required: false
+        type: number
+        default: 10
+        description: "Seconds without dispatch progress before tt-triage fires on the hung rank(s). 0 or less disables hang detection (the runtime treats any non-positive duration as no timeout)."
+
+permissions:
+  id-token: write
+  contents: read
 
 jobs:
   load-test-matrix:
-    runs-on: ubuntu-latest
+    name: Load Test Matrix for ${{ inputs.sp-config }}
+    runs-on: ubuntu-slim
     outputs:
-      matrix: ${{ steps.apply-test-type-filter.outputs.matrix }}
+      matrix: ${{ steps.filter-tests.outputs.matrix }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/blaze_models_prefill_tests.yaml
     steps:
-      - name: Checkout the repository
+      - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
-        with:
-          submodules: recursive
+
       - name: Install dependencies
+        run: pip3 install PyYAML
+
+      - name: Validate SKU exists
         run: |
-          pip3 install PyYAML
+          if ! grep -q "bh_${{ inputs.sp-config }}:" .github/sku_config.yaml; then
+            echo "::error::SKU 'bh_${{ inputs.sp-config }}' not found in .github/sku_config.yaml"
+            exit 1
+          fi
+          echo "✓ SKU 'bh_${{ inputs.sp-config }}' exists in sku_config.yaml"
+
       - name: Verify test timeouts against budget
         run: |
           set -e
@@ -49,106 +74,348 @@ jobs:
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
             "demo"
-      - name: Build unified test matrix based on enabled SKUs
+
+      - name: Build test matrix
         id: build-matrix
         run: |
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
             "${{ inputs.enabled-skus }}" \
             ./.github/sku_config.yaml
+
       - name: Apply test-type filter
         id: apply-test-type-filter
+        env:
+          MATRIX: ${{ steps.build-matrix.outputs.matrix }}
         run: |
-          MATRIX='${{ steps.build-matrix.outputs.matrix }}'
-          # test-type is a comma-separated selection (validated upstream). An empty
-          # value or any "all" token means run the full matrix; otherwise keep entries
-          # whose test_type OR test_group matches any selected token.
+          MATRIX="$MATRIX"
           TEST_TYPE="${{ inputs.test-type }}"
           EXCLUDE_GROUP="${{ inputs.exclude-test-group }}"
           if [ -z "$TEST_TYPE" ] || \
             echo "$TEST_TYPE" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -Fxq "all"; then
-            # Optionally drop a test_group from the "all" run (e.g. perf checks that
-            # need their own profiler build are run via a separate impl invocation).
             if [ -n "$EXCLUDE_GROUP" ]; then
               MATRIX=$(echo "$MATRIX" | jq -c --arg g "$EXCLUDE_GROUP" '[.[] | select(.test_group != $g)]')
             fi
-            echo "matrix<<EOF" >> $GITHUB_OUTPUT
-            echo "$MATRIX" >> $GITHUB_OUTPUT
-            echo "EOF" >> $GITHUB_OUTPUT
           else
-            FILTERED=$(echo "$MATRIX" | jq -c --arg sel "$TEST_TYPE" '
+            MATRIX=$(echo "$MATRIX" | jq -c --arg sel "$TEST_TYPE" '
               ($sel | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))) as $tokens
               | [ .[] | . as $e | select(($tokens | index($e.test_type)) or ($tokens | index($e.test_group))) ]
             ')
-            if [ "$FILTERED" = "[]" ]; then
-              echo "::error::No tests found for test-type '$TEST_TYPE'. Ensure each selected test-type or test-group is defined in the test matrix (TESTS_YAML_PATH=${TESTS_YAML_PATH})."
+            if [ "$MATRIX" = "[]" ]; then
+              echo "::error::No tests found for test-type '$TEST_TYPE'. Ensure each selected test-type or test-group is defined in the test matrix (TESTS_YAML_PATH=${{ env.TESTS_YAML_PATH }})."
               exit 1
             fi
-            echo "matrix<<EOF" >> $GITHUB_OUTPUT
-            echo "$FILTERED" >> $GITHUB_OUTPUT
-            echo "EOF" >> $GITHUB_OUTPUT
           fi
+          echo "filtered_matrix<<EOF" >> $GITHUB_OUTPUT
+          echo "$MATRIX" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
-  galaxy-deepseek-tests:
+      - name: Filter tests by sp_config
+        id: filter-tests
+        env:
+          MATRIX: ${{ steps.apply-test-type-filter.outputs.filtered_matrix }}
+        run: |
+          FILTERED=$(echo "$MATRIX" | jq -c --arg sp "${{ inputs.sp-config }}" '[.[] | select(.sp_config == $sp)]')
+          if [ "$FILTERED" = "[]" ]; then
+            echo "::error::No tests found for sp_config '${{ inputs.sp-config }}' in ${TESTS_YAML_PATH}"
+            exit 1
+          fi
+          echo "matrix<<EOF" >> $GITHUB_OUTPUT
+          echo "$FILTERED" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          echo "Filtered tests for ${{ inputs.sp-config }}:"
+          echo "$FILTERED" | jq .
+      - name: Write test matrix to file
+        env:
+          MATRIX: ${{ steps.filter-tests.outputs.matrix }}
+        run: |
+          echo "$MATRIX" > test_matrix_${{ inputs.resource-prefix }}.json
+      # Named per resource-prefix so the two impl invocations (module, sdpa-perf)
+      # don't collide on one artifact name; the parent merges them for expected-jobs.
+      - name: Upload test matrix
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: test_matrix_${{ inputs.resource-prefix }}
+          path: test_matrix_${{ inputs.resource-prefix }}.json
+          retention-days: 1
+
+  multihost-tests:
+    name: ${{ matrix.test-group.name }}
     needs: load-test-matrix
+    container:
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+
+    env:
+      PATH: "/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      VIRTUAL_ENV: /opt/venv
+      HOME: /home/user
+      # /ci is the NFS volume shared with the runner; worker /home/user is per-node, invisible to it.
+      # Rank 0 writes; the run/attempt/job subpath keeps reused-PVC runs from colliding.
+      PREFILL_SUMMARIES: /ci/prefill_summaries/${{ github.run_id }}-${{ github.run_attempt }}/${{ inputs.resource-prefix }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
+      # On /ci for the same reason as PREFILL_SUMMARIES: triage runs on a worker node.
+      TRIAGE_OUTPUT_DIR: /ci/triage_output/${{ github.run_id }}-${{ github.run_attempt }}/${{ inputs.resource-prefix }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
     strategy:
       fail-fast: false
       matrix:
         test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
-    name: ${{ matrix.test-group.name }}
     runs-on: ${{ matrix.test-group.runs_on }}
-    container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
-      env:
-        TT_METAL_HOME: /work
-        PYTHONPATH: /work
-        LD_LIBRARY_PATH: /work/build/lib
-        LOGURU_LEVEL: INFO
-      volumes:
-        - ${{ github.workspace }}/docker-job:/work
-        - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf:ro
-      options: "--device /dev/tenstorrent"
-    defaults:
-      run:
-        shell: bash
-        working-directory: /work
+    outputs:
+      test-result: ${{ steps.run-test.outcome }}
     steps:
-      - name: 🧬 Checkout Repository
+      - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
+
+      - name: 📦 Download Build Artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          submodules: recursive
-          path: docker-job
-      - name: Mark repository as safe directory
+          name: ${{ inputs.build-artifact-name }}
+          path: /ci/artifacts
+
+      - name: 🧪 Download Python Wheel
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ inputs.wheel-artifact-name }}
+          path: /ci/artifacts
+
+      - name: Unpack artifacts & install
         run: |
-          git config --global --add safe.directory $GITHUB_WORKSPACE
-      - name: ⬇️  Setup Job
-        uses: ./docker-job/.github/actions/setup-job
-        timeout-minutes: 10
-        with:
-          build-artifact-name: ${{ inputs.build-artifact-name }}
-          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-      - name: ${{ matrix.test-group.name }}
-        timeout-minutes: ${{ matrix.test-group.timeout }}
-        uses: ./docker-job/.github/actions/run-with-log
-        with:
-          log-file: generated/test_logs/${{ matrix.test-group.name }}.log
-          run: ${{ matrix.test-group.cmd }}
-      - name: Publish PCC summary
-        if: ${{ !cancelled() }}
-        run: |
-          PCC_DIR="/tmp/pcc_summaries"
-          if [ -d "$PCC_DIR" ]; then
-            for f in "$PCC_DIR"/pcc_summary_*.md; do
-              [ -f "$f" ] && cat "$f" >> "$GITHUB_STEP_SUMMARY"
-            done
+          rm -rf /ci/tt-metal
+          cp -r "$GITHUB_WORKSPACE" /ci/tt-metal
+          if ! command -v zstd >/dev/null 2>&1; then
+            echo "zstd not found in runner context, installing fallback..."
+            sudo apt-get update
+            sudo apt-get install -y zstd
           fi
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
+          shopt -s globstar nullglob
+          build_archives=(/ci/artifacts/**/*.tar.zst)
+          echo "Found ${#build_archives[@]} .tar.zst candidate(s) under /ci/artifacts"
+          printf ' - %s\n' "${build_archives[@]}"
+          if [ ${#build_archives[@]} -eq 0 ]; then
+            echo "ERROR: Could not find any .tar.zst under /ci/artifacts"
+            echo "Artifact directory layout:"
+            ls -R /ci/artifacts
+            exit 1
+          fi
+          BUILD_ARCHIVE="${build_archives[0]}"
+          echo "Using build archive: ${BUILD_ARCHIVE}"
+
+          sudo rm -rf /home/user/tt-metal
+          sudo mkdir -p /home/user/tt-metal
+          sudo chown "$(id -u):$(id -g)" /home/user/tt-metal
+          tar --zstd -xf "${BUILD_ARCHIVE}" -C /home/user/tt-metal
+
+          mpirun --pernode bash -lc 'rm -rf /home/user/tt-metal && cp -r /ci/tt-metal /home/user/'
+          mpirun --pernode git -C /home/user/tt-metal submodule update --init --recursive
+
+          mpirun --pernode tar --zstd -xf "${BUILD_ARCHIVE}" -C /home/user/tt-metal
+          ttnn_wheels=(/ci/artifacts/**/ttnn-*.whl)
+          echo "Found ${#ttnn_wheels[@]} ttnn wheel candidate(s) under /ci/artifacts"
+          printf ' - %s\n' "${ttnn_wheels[@]}"
+          if [ ${#ttnn_wheels[@]} -eq 0 ]; then
+            echo "ERROR: Could not find ttnn-*.whl under /ci/artifacts"
+            echo "Artifact directory layout:"
+            ls -R /ci/artifacts
+            exit 1
+          fi
+          mpirun --pernode uv pip install "${ttnn_wheels[@]}"
+
+      - name: Reset cards and validate cluster for ${{ matrix.test-group.name }}
+        working-directory: /tmp
+        timeout-minutes: 45
+        run: |
+          MAX_RECOVERY_ATTEMPTS=10
+
+          echo "--- Pre-check: tt-smi visibility on all hosts ---"
+          mpirun --pernode --tag-output \
+            bash -lc '
+              snapshot=$(tt-smi --snapshot_no_tty --snapshot)
+              driver=$(jq -r ".host_info.Driver // \"unknown\"" <<< "$snapshot")
+              tt_smi=$(jq -r ".host_sw_vers.tt_smi // \"unknown\"" <<< "$snapshot")
+              echo "$(hostname): Driver=${driver} tt_smi=${tt_smi}"
+            ' || true
+
+          run_cluster_validation() {
+            mpirun --pernode --tag-output \
+              /home/user/tt-metal/build/tools/scaleout/run_cluster_validation \
+              --send-traffic \
+              --hard-fail \
+              --cabling-descriptor-path /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto \
+              --deployment-descriptor-path /data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto \
+              --num-iterations 5
+          }
+
+          for attempt in $(seq 1 "$MAX_RECOVERY_ATTEMPTS"); do
+            echo "=== Recovery attempt $attempt of $MAX_RECOVERY_ATTEMPTS ==="
+            reset_success=false
+            validation_success=false
+
+            echo "--- Resetting cards with tt-smi ---"
+            if mpirun --pernode tt-smi -glx_reset; then
+              reset_success=true
+            else
+              echo "WARNING: Reset failed on attempt $attempt"
+            fi
+
+            if [ "$reset_success" = true ]; then
+              echo "--- Sleeping 5s after reset to allow links/services to settle ---"
+              sleep 5
+
+              echo "--- Running cluster validation ---"
+              if run_cluster_validation; then
+                validation_success=true
+              else
+                echo "WARNING: Validation failed on attempt $attempt"
+              fi
+            else
+              echo "WARNING: Skipping validation because reset failed on attempt $attempt"
+            fi
+
+            if [ "$reset_success" = true ] && [ "$validation_success" = true ]; then
+              echo "SUCCESS: Reset and cluster validation passed on attempt $attempt"
+              exit 0
+            fi
+
+            if [ "$attempt" -lt "$MAX_RECOVERY_ATTEMPTS" ]; then
+              echo "Sleeping 30s before retry..."
+              sleep 30
+            fi
+          done
+
+          echo "ERROR: Recovery failed after $MAX_RECOVERY_ATTEMPTS attempts"
+          exit 1
+
+      - name: Verify ttnn imports on workers
+        working-directory: /tmp
+        run: |
+          mpirun --pernode --tag-output bash -lc '
+            python3 -c "import ttnn; print(\"ttnn import: OK\")"
+            python3 -c "import ttnn.device; print(\"ttnn.device import: OK\")"
+          '
+
+      - name: Check /mnt/models access on workers
+        working-directory: /tmp
+        run: |
+          mpirun --pernode --tag-output bash -lc '
+            test -r /mnt/models
+          '
+
+      # Same mechanism as .github/actions/setup-job, which this job can't use (not a container
+      # job, tests run under mpirun): on dispatch stall the runtime runs
+      # TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE inside the hung rank, then throws. Armed here
+      # rather than job-wide so the cluster-validation loop above is unaffected.
+      - name: 🧯 Enable tt-triage on hang
+        if: ${{ inputs.hang-detection-timeout > 0 }}
+        timeout-minutes: 5
+        env:
+          TEST_NAME: ${{ matrix.test-group.name }}
+        run: |
+          mkdir -p "$TRIAGE_OUTPUT_DIR"
+
+          # Identity of the leg, written into the report dir when triage fires. A downloaded
+          # artifact otherwise says nothing about which job produced it, and the triage output does
+          # not always reach the step log — a hang inside a process the test spawned itself (e.g.
+          # the prefill producer) writes the files but its stderr never gets to the log.
+          echo "TT_TRIAGE_JOB_INFO=leg: $TEST_NAME | sku: ${{ matrix.test-group.sku }} | runner: ${RUNNER_NAME:-unknown} | run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}" >> $GITHUB_ENV
+
+          # Single-quoted: expanded by /bin/sh on the rank's node, not here. Sentinel keeps it to
+          # the first hang — cards aren't reset between tests, so later triage is misleading.
+          TRIAGE_CMD='D="${TRIAGE_OUTPUT_DIR:-/tmp/tt_triage}/$(hostname)"; mkdir -p "$D" || D=/tmp; if [ -e "$D/.tt_triage_already_ran" ]; then echo "[auto-triage] triage already ran on $(hostname); skipping (cards are not reset between tests, so a second triage is unreliable)" >&2; else touch "$D/.tt_triage_already_ran"; printf "%s\n" "${TT_TRIAGE_JOB_INFO:-unknown leg}" > "$D/job_info.txt"; /opt/venv/bin/python3 "${TT_METAL_HOME:-/home/user/tt-metal}/tools/tt-triage.py" --disable-progress --path="$D/debug_bus_signal_groups.json" --triage-summary-path="$D/triage_summary.txt" --llm-output-path="$D/triage_llm_output.txt" 2>&1 | tee "$D/triage_output.txt" 1>&2; fi'
+
+          {
+            echo "TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE=$TRIAGE_CMD"
+            echo "TT_METAL_OPERATION_TIMEOUT_SECONDS=${{ inputs.hang-detection-timeout }}"
+            echo "TT_TRIAGE_ENABLE_AGGREGATED_CALLSTACKS=1"
+            echo "TT_RUN_DISABLED_TRIAGE_SCRIPTS_IN_CI=1"
+          } >> $GITHUB_ENV
+
+          # Confirm per host that the hook actually reaches the ranks (env forwarding is done by
+          # ttop via PRTE_MCA_prte_fwd_environment, not by this workflow) and that triage can run
+          # there. Diagnostics only — never fails the leg.
+          export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="$TRIAGE_CMD"
+          mpirun --bind-to none --pernode --tag-output bash -lc '
+            ok=1
+            [ -n "$TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE" ] || { echo "triage hook not forwarded to this rank"; ok=0; }
+            [ -w "${TRIAGE_OUTPUT_DIR:-/nonexistent}" ] || { echo "TRIAGE_OUTPUT_DIR not writable here: ${TRIAGE_OUTPUT_DIR:-<unset>}"; ok=0; }
+            /opt/venv/bin/python3 -c "import ttexalens" 2>/dev/null || { echo "ttexalens missing from /opt/venv"; ok=0; }
+            [ "$ok" = 1 ] && echo "triage armed"
+          ' || echo "::warning::Could not verify triage arming on all hosts; a hang here may not produce triage output"
+
+          echo "Triage fires after ${{ inputs.hang-detection-timeout }}s without dispatch progress"
+
+      - name: ${{ matrix.test-group.name }}
+        id: run-test
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        uses: ./.github/actions/run-with-log
         with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: ${{ matrix.test-group.owner_id }}
+          working-directory: /home/user/tt-metal
+          log-file: generated/test_logs/${{ matrix.test-group.name }}.log
+          run: |
+            CMD=$(cat << 'EOF'
+            ${{ matrix.test-group.cmd }}
+            EOF
+            )
+
+            echo "Running: ${{ matrix.test-group.name }}"
+            echo "$CMD"
+            eval "$CMD"
+
+      # Only uploaded on a hang; the triage report itself is already in the test step's log.
+      - name: ⬆️ Upload triage output
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          # Named after the leg, not the matrix index: the job is displayed as
+          # "<caller job> / <this name>", so the artifact maps to it by eye. The index-based name it
+          # replaced could only be resolved by cross-referencing the test_matrix_* artifact.
+          name: triage_output_${{ matrix.test-group.name }} (attempt ${{ github.run_attempt }})
+          path: ${{ env.TRIAGE_OUTPUT_DIR }}/**
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: 📊 Publish prefill summaries
+        if: always() && !cancelled()
+        continue-on-error: true
+        run: |
+          shopt -s nullglob
+          files=("$PREFILL_SUMMARIES"/perf/*.md "$PREFILL_SUMMARIES"/pcc/*.md)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No prefill summary files under $PREFILL_SUMMARIES"
+            exit 0
+          fi
+          for f in "${files[@]}"; do
+            # tee so the table shows in this step's log too, not only on the job-summary page.
+            cat "$f" | tee -a "$GITHUB_STEP_SUMMARY"
+            printf '\n' >> "$GITHUB_STEP_SUMMARY"
+          done
+          echo "Published ${#files[@]} prefill summary file(s) to the job summary"
+
+      # Keep the raw .md files for cross-run perf-trend analysis. Uploaded before cleanup; unique name per
+      # matrix job so v7 (no auto-merge) doesn't collide when the whole suite runs.
+      - name: ⬆️ Upload prefill summaries
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: prefill-summaries-${{ inputs.resource-prefix }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
+          path: ${{ env.PREFILL_SUMMARIES }}/**/*.md
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: 🧹 Clean shared dirs
+        if: always()
+        env:
+          TEST_NAME: ${{ matrix.test-group.name }}
+        run: |
+          # Annotate the job when a hang was triaged, so the failed job points at its artifact
+          # instead of leaving you to guess which one belongs to it.
+          if [ -n "$TRIAGE_OUTPUT_DIR" ] && [ -n "$(ls -A "$TRIAGE_OUTPUT_DIR" 2>/dev/null)" ]; then
+            echo "::notice title=tt-triage::Hang triaged on $(ls "$TRIAGE_OUTPUT_DIR" | tr '\n' ' ')— see artifact \"triage_output_$TEST_NAME (attempt ${{ github.run_attempt }})\""
+          fi
+          if [ -n "$PREFILL_SUMMARIES" ]; then rm -rf "$PREFILL_SUMMARIES"; fi
+          if [ -n "$TRIAGE_OUTPUT_DIR" ]; then rm -rf "$TRIAGE_OUTPUT_DIR"; fi
+
       - name: 🤖 AI job summary
         if: always() && !cancelled()
         continue-on-error: true
@@ -157,54 +424,16 @@ jobs:
           config: |
             {
               "model": "${{ vars.AI_SUMMARY_MODEL }}",
-              "workspace": "$GITHUB_WORKSPACE/docker-job",
+              "workspace": "/home/user/tt-metal",
               "input_dirs": ["generated/test_logs"],
               "output_dir": "generated/ai_summaries"
             }
           api-key: ${{ secrets.TT_CHAT_API_KEY }}
           api-url: ${{ secrets.TT_CHAT_URL }}
           job-name: ${{ matrix.test-group.name }}
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
-        timeout-minutes: 10
-        if: ${{ !cancelled() }}
-        with:
-          prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
-        if: always()
 
-  ai-run-summary:
-    name: "AI Run Summary"
-    needs: [load-test-matrix, galaxy-deepseek-tests]
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        timeout-minutes: 20
-      - id: ai-run-summary
-        continue-on-error: true
-        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/run@main
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() }}
         with:
-          config: |
-            {
-              "model": "${{ vars.AI_SUMMARY_MODEL }}",
-              "workspace": "$GITHUB_WORKSPACE",
-              "input_dir": "ai_job_summaries",
-              "output_dir": "ai_run_summaries"
-            }
-          api-key: ${{ secrets.TT_CHAT_API_KEY }}
-          api-url: ${{ secrets.TT_CHAT_URL }}
-          expected-jobs: ${{ needs.load-test-matrix.outputs.matrix }}
-          run-result: ${{ needs.galaxy-deepseek-tests.result }}
-      - name: Show report
-        if: always() && steps.ai-run-summary.outputs.report-file != ''
-        continue-on-error: true
-        shell: bash
-        env:
-          REPORT_FILE: ${{ steps.ai-run-summary.outputs.report-file }}
-        run: |
-          if [ -f "$REPORT_FILE" ]; then
-            cat "$REPORT_FILE"
-            cat "$REPORT_FILE" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "::warning::Report file not found: $REPORT_FILE"
-          fi
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: ${{ matrix.test-group.owner_id }}

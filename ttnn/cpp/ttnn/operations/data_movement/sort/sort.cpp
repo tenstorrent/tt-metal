@@ -64,12 +64,27 @@ Tensor pre_sort_transform_tensor(
     Tensor padded_tensor = transformed_tensor;
     const bool is_row_major = (transformed_tensor.layout() == Layout::ROW_MAJOR);
 
+    // UINT16 cannot represent ±inf.  Use UINT16_MAX (65535) as the sentinel for ascending
+    // (sorts past all real values) and 0 for descending (sorts after all real values).
+    // For all other dtypes use ±inf as before.
+    //
+    // Known limitation: 0 and 65535 are valid UINT16 values, so these sentinels
+    // can collide with real input data.  If the input contains 65535 (ascending)
+    // or 0 (descending) and the last dimension needs W-padding to the next power
+    // of two, a padded element with the same sentinel value could sort into the
+    // sliced result, producing an index that points outside the original
+    // sort dimension.  In practice the primary use case (position indices
+    // bounded well below 65535) is not affected, but full-range UINT16 inputs
+    // may see incorrect indices for tied values at the boundary.
+    const bool is_uint16_input = (input_tensor.dtype() == DataType::UINT16);
+    const float pad_ascending = is_uint16_input ? 65535.0f : std::numeric_limits<float>::infinity();
+    const float pad_descending = is_uint16_input ? 0.0f : -std::numeric_limits<float>::infinity();
+    const float pad_fill = descending ? pad_descending : pad_ascending;
+
     if (!is_row_major) {
         // TILE layout: fill the implicit tile-row padding so the bitonic sort
-        // ignores it (pads with ±inf).
-        padded_tensor = ttnn::fill_implicit_tile_padding(
-            transformed_tensor,
-            descending ? -std::numeric_limits<float>::infinity() : std::numeric_limits<float>::infinity());
+        // ignores it (pads with ±inf or UINT16 sentinel).
+        padded_tensor = ttnn::fill_implicit_tile_padding(transformed_tensor, pad_fill);
     } else {
         // ROW_MAJOR: the kernel processes rows in groups of TILE_HEIGHT (32).
         // If combined_h (= shape[0]*shape[1]*shape[2]) is not a multiple of
@@ -85,9 +100,9 @@ Tensor pre_sort_transform_tensor(
             const uint32_t new_h = (lshape_4d[2] + h_alignment - 1) / h_alignment * h_alignment;
             padded_tensor = ttnn::pad(
                 padded_tensor,
-                tt::tt_metal::Array4D({lshape_4d[0], lshape_4d[1], new_h, lshape_4d[3]}),
-                tt::tt_metal::Array4D({0, 0, 0, 0}),
-                descending ? -std::numeric_limits<float>::infinity() : std::numeric_limits<float>::infinity(),
+                ttnn::Array4D({lshape_4d[0], lshape_4d[1], new_h, lshape_4d[3]}),
+                ttnn::Array4D({0, 0, 0, 0}),
+                pad_fill,
                 /*use_multicore=*/true);
         }
     }
@@ -108,10 +123,9 @@ Tensor pre_sort_transform_tensor(
     const auto& padded_logical_shape = padded_tensor.logical_shape();
     return ttnn::pad(
         padded_tensor,
-        tt::tt_metal::Array4D(
-            {padded_logical_shape[0], padded_logical_shape[1], padded_logical_shape[2], padded_last_dim}),
-        tt::tt_metal::Array4D({0, 0, 0, 0}),
-        descending ? -std::numeric_limits<float>::infinity() : std::numeric_limits<float>::infinity(),
+        ttnn::Array4D({padded_logical_shape[0], padded_logical_shape[1], padded_logical_shape[2], padded_last_dim}),
+        ttnn::Array4D({0, 0, 0, 0}),
+        pad_fill,
         /*use_multicore=*/true);
 }
 
@@ -235,9 +249,11 @@ std::vector<Tensor> sort(
     const ttnn::Shape& original_lshape = input_tensor.logical_shape();
     const auto rank = input_tensor.logical_shape().rank();
 
-    // FLOAT32 inputs require UINT32 indices (device-side validation enforces this for the
-    // non-early-exit path; keep early exits consistent).
-    const DataType index_dtype = (input_tensor.dtype() == DataType::FLOAT32) ? DataType::UINT32 : DataType::UINT16;
+    // FLOAT32 and UINT16 inputs require UINT32 indices: both run with
+    // fp32_dest_acc_en=true in the sort kernel (device-side validation enforces
+    // this for the non-early-exit path; keep early exits consistent).
+    const bool idx_is_uint32 = (input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::UINT16);
+    const DataType index_dtype = idx_is_uint32 ? DataType::UINT32 : DataType::UINT16;
 
     // Check for early exit for scalar or empty tensors tensors
     if ((original_lshape == ttnn::Shape{}) || (original_lshape == ttnn::Shape{1})) {

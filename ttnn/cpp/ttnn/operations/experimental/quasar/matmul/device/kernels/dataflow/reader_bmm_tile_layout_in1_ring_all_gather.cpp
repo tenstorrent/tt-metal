@@ -7,7 +7,6 @@
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "api/remote_circular_buffer.h"
-#include "api/debug/dprint.h"
 #include "api/debug/dprint_tile.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"

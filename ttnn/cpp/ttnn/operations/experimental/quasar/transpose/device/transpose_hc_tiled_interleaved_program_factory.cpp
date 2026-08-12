@@ -126,12 +126,12 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledInterleavedProgramFacto
     spec.tensor_parameters.push_back(TensorParameter{
         .unique_id = INPUT,
         .spec = input_tensor.tensor_spec(),
-        .advanced_options = {.dynamic_tensor_shape = true},
+        .relaxations = {.dynamic_tensor_shape = true},
     });
     spec.tensor_parameters.push_back(TensorParameter{
         .unique_id = OUTPUT,
         .spec = output_tensor.tensor_spec(),
-        .advanced_options = {.dynamic_tensor_shape = true},
+        .relaxations = {.dynamic_tensor_shape = true},
     });
 
     // NEEDS_PADDING define gates the conditional PAD_CB binding on both kernels.
@@ -209,7 +209,10 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledInterleavedProgramFacto
             },
         .runtime_arg_schema =
             {.runtime_arg_names = {"start_tile_idx", "end_tile_idx", "start_padding_tile_idx", "end_padding_tile_idx"}},
-        .hw_config = ttnn::create_writer_datamovement_config(input_tensor.device()->arch()),
+        // Quasar: writer drains SRC/PAD CBs with ~32B face-line (sub-tile) writes; implicit sync
+        // mis-credits per NOC op and stalls. Revert to explicit credits. See ~/implicit_sync.md.
+        .hw_config = ttnn::create_writer_datamovement_config(
+            input_tensor.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     spec.kernels.push_back(std::move(reader));
@@ -272,24 +275,24 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledInterleavedProgramFacto
         uint32_t end_idx = start_idx + num_tiles_per_core;
         uint32_t padded_end_idx = padded_start_idx + padded_tiles_per_core;
 
-        reader_run.runtime_arg_values.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = core,
-            .args =
-                {
-                    {"num_tiles", num_tiles_per_core},
-                    {"start_id", start_idx},
-                },
-        });
-        writer_run.runtime_arg_values.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = core,
-            .args =
-                {
-                    {"start_tile_idx", start_idx},
-                    {"end_tile_idx", end_idx},
-                    {"start_padding_tile_idx", padded_start_idx},
-                    {"end_padding_tile_idx", padded_end_idx},
-                },
-        });
+        KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run.runtime_arg_values;
+        KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
+        AddRuntimeArgsForNode(
+            reader_rtas,
+            core,
+            {
+                {"num_tiles", num_tiles_per_core},
+                {"start_id", start_idx},
+            });
+        AddRuntimeArgsForNode(
+            writer_rtas,
+            core,
+            {
+                {"start_tile_idx", start_idx},
+                {"end_tile_idx", end_idx},
+                {"start_padding_tile_idx", padded_start_idx},
+                {"end_padding_tile_idx", padded_end_idx},
+            });
 
         start_idx = end_idx;
         padded_start_idx = padded_end_idx;

@@ -5,7 +5,8 @@
 #include "tensor_prefetcher.hpp"
 
 #include <tt-metalium/experimental/tensor_prefetcher.hpp>
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
 namespace ttnn::operations::experimental {
 
@@ -13,8 +14,8 @@ bool is_tensor_prefetcher_supported(tt::tt_metal::distributed::MeshDevice* mesh_
     return tt::tt_metal::experimental::IsTensorPrefetcherSupported(*mesh_device);
 }
 
-void start_tensor_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device, bool dual_senders_per_bank) {
-    tt::tt_metal::experimental::StartTensorPrefetcher(*mesh_device, {.dual_senders_per_bank = dual_senders_per_bank});
+void start_tensor_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device) {
+    tt::tt_metal::experimental::StartTensorPrefetcher(*mesh_device, {});
 }
 
 void queue_tensor_prefetcher_request(
@@ -22,7 +23,7 @@ void queue_tensor_prefetcher_request(
     const std::vector<TensorPrefetcherQueueTensor>& tensors,
     const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb,
     const std::optional<tt::tt_metal::distributed::MeshCoordinateRangeSet>& device_subset,
-    std::optional<uint8_t> cq_id) {
+    bool capture_into_trace) {
     std::vector<tt::tt_metal::experimental::TensorPrefetcherInput> inputs;
     inputs.reserve(tensors.size());
     for (const auto& item : tensors) {
@@ -36,14 +37,28 @@ void queue_tensor_prefetcher_request(
             inputs.push_back({tensor.mesh_tensor(), block_count, rotation});
         }
     }
-    tt::tt_metal::experimental::QueueTensorPrefetcherRequest(*mesh_device, global_cb, device_subset, inputs, cq_id);
+    // There is no cq_id parameter to consult: a `cq_id`/`queue_id` keyword is consumed by
+    // ttnn's operation wrapper before this function runs, and applied by making that queue
+    // the thread's current one. So the knob left here is whether to consider a queue at all
+    // — with capture_into_trace false we hand metal no queue, and the request is sent
+    // immediately even mid trace-capture.
+    tt::tt_metal::experimental::QueueTensorPrefetcherRequest(
+        *mesh_device,
+        global_cb,
+        device_subset,
+        inputs,
+        capture_into_trace ? &mesh_device->mesh_command_queue() : nullptr);
 }
 
 void wait_for_cq_on_tensor_prefetcher(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
-    uint8_t cq_id,
+    std::optional<uint8_t> cq_id,
     const std::optional<tt::tt_metal::distributed::MeshCoordinateRangeSet>& device_subset) {
-    tt::tt_metal::experimental::WaitForCqOnTensorPrefetcher(*mesh_device, cq_id, device_subset);
+    // cq_id must stay optional, not `uint8_t = 0`: only the positional form reaches here as a
+    // value, since a keyword cq_id= is consumed by the wrapper and applied by making that
+    // queue current. Resolving nullopt to the thread's current queue is what makes the two
+    // forms agree; defaulting to 0 would silently fence queue 0 for the keyword form.
+    tt::tt_metal::experimental::WaitForCqOnTensorPrefetcher(mesh_device->mesh_command_queue(cq_id), device_subset);
 }
 
 void stop_tensor_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device) {

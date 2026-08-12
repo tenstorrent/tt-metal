@@ -13,7 +13,11 @@ set_target_properties(
             api
 )
 
-file(GLOB_RECURSE kernels device/kernels/*)
+file(
+    GLOB_RECURSE kernels
+    device/kernels/*.cpp
+    device/kernels/*.hpp
+)
 
 target_sources(
     ttnn_op_experimental_minimal_matmul
@@ -33,6 +37,7 @@ target_sources(
 # Disable unity build for program factory files to avoid symbol collisions
 set_source_files_properties(
     device/minimal_matmul_program_factory.cpp
+    device/minimal_matmul_fabric_bound_program_factory.cpp
     PROPERTIES
         SKIP_UNITY_BUILD_INCLUSION
             ON
