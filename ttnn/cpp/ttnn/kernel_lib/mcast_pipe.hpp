@@ -193,7 +193,7 @@ public:
     //   [if PRE_HANDSHAKE] wait(consumer_ready)  — gate the mcast on receivers having drained
     //   mcast data                                — object API auto-chunks a ready block > burst
     //   signal ready                              — data-before-signal, same VC; reset owned by receiver
-    //   fence                                     — flush; atomic-barrier on the Counter path
+    //   fence                                     — loopback ACKED, otherwise SENT; atomic-barrier on Counter
     void send(uint32_t src_l1, uint32_t dst_l1, uint32_t size);
 
     // ===== CONTROL channel (a pure ready signal, no data block) =====
@@ -211,7 +211,7 @@ private:
     void signal_ready_(bool loopback, uint32_t mcast_dests);
 
     // ---- post-send fence ----
-    void fence_();
+    void fence_(bool loopback);
 
     // ---- local L1 self-copy (degenerate self-only guard) via the Noc object ----
     void local_copy_(uint32_t src_l1, uint32_t dst_l1, uint32_t size);
