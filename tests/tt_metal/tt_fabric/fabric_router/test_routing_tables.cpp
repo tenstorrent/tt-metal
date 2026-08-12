@@ -6,7 +6,9 @@
 #include <gmock/gmock.h>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
+#include <unistd.h>
 #include <filesystem>
+#include <fstream>
 #include <algorithm>
 #include <optional>
 #include <unordered_set>
@@ -2439,9 +2441,12 @@ void assert_spine_deadlock_free(
                     // The table must be the ring policy, not merely compatible with it.
                     EXPECT_EQ(nxt_row, rings->next_row(cur_row, rd))
                         << "table hop at chip " << cur << " toward " << dst << " disagrees with the ring policy";
-                    // A leaf may only be passed through toward a destination inside its own run.
+                    // A leaf may be passed through only while egressing the source's own run or
+                    // ingressing the destination's; a leaf in neither run is a real detour.
                     if (cur != src && rings->is_leaf(cur_row)) {
-                        EXPECT_EQ(rings->leaf_run_of[cur_row], rings->leaf_run_of[rd])
+                        const bool own_run = rings->leaf_run_of[cur_row] == rings->leaf_run_of[rs] ||
+                                             rings->leaf_run_of[cur_row] == rings->leaf_run_of[rd];
+                        EXPECT_TRUE(own_run)
                             << "leaf row " << cur_row << " used as transit on spine route " << src << "->" << dst;
                     }
                     if (!rings->is_leaf(cur_row) && !rings->is_leaf(nxt_row) &&
@@ -2571,6 +2576,41 @@ TEST(ExpressLinkRouting, IntraMesh32x4DeadlockFree) {
     EXPECT_EQ(t[0][8], D::S);   // row0(ex8)->row2(ex4): single crossover, base S first
     EXPECT_EQ(t[0][0], D::C);   // self
 
+    assert_spine_deadlock_free(*mg, intra, /*L0=*/32, /*row_size=*/4);
+}
+
+// 32x4 four-quad galaxy with ONLY the wide (ex8) pattern: one ring over the block endpoints with
+// runs of six leaves between them. Drives the full setup phase (mapper, table generation, route
+// validation) for a long-run topology. Rides the same 4-rank binding and cluster mapping as
+// IntraMesh32x4DeadlockFree; the ex8-only descriptor is written per-rank to a temp file (its absolute
+// path flows through build_express_intra_table unchanged) so it needs no committed fixture. Run
+// multi-rank under tt-run with 4 ranks.
+TEST(ExpressLinkRouting, IntraMesh32x4Ex8OnlyDeadlockFree) {
+    if (!express_link_cluster_available()) {
+        GTEST_SKIP() << kNoClusterSkipMsg;
+    }
+    if (world_size() != 4) {
+        GTEST_SKIP() << "32x4 declares 4 host ranks; run under tt-run with 4 ranks";
+    }
+    // Per-process filename: under tt-run the ranks share /tmp, and a shared path would let one rank
+    // truncate the file while another reads it mid-write.
+    const auto desc_path = std::filesystem::temp_directory_path() /
+                           ("express_links_32x4_ex8_only_" + std::to_string(::getpid()) + ".textproto");
+    std::ofstream(desc_path) << R"(
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [32, 4] dim_types: [RING, RING] }
+  host_topology   { dims: [4, 1] }
+  channels { count: 2 policy: RELAXED }
+  express_links { dim_idx: 0  pattern { start: 0  step: 8 } }
+}
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+)";
+    std::unique_ptr<tt::tt_fabric::MeshGraph> mg;
+    const auto intra = build_express_intra_table(desc_path.string(), mg);
+    ASSERT_EQ(intra.size(), 1u);
+    ASSERT_EQ(intra[0].size(), 128u);
     assert_spine_deadlock_free(*mg, intra, /*L0=*/32, /*row_size=*/4);
 }
 

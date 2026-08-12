@@ -263,9 +263,13 @@ void RoutingTableGenerator::validate_express_ring_routes(
                     const int from_row = row_of(cur);
                     const int to_row = row_of(next);
                     if (cur != src) {
+                        // A leaf may be passed through only while egressing the source's own run or
+                        // ingressing the destination's -- each toward the nearer anchor, so the run is
+                        // never crossed end to end. A leaf belonging to neither run is a real detour.
+                        const bool in_src_run = rings->leaf_run_of[from_row] == rings->leaf_run_of[row_of(src)];
+                        const bool in_dst_run = rings->leaf_run_of[from_row] == rings->leaf_run_of[row_of(dst)];
                         TT_FATAL(
-                            !rings->is_leaf(from_row) ||
-                                rings->leaf_run_of[from_row] == rings->leaf_run_of[row_of(dst)],
+                            !rings->is_leaf(from_row) || in_src_run || in_dst_run,
                             "Mesh M{} route {}->{} transits leaf row {}",
                             mesh_id_val,
                             src,
@@ -319,6 +323,16 @@ void RoutingTableGenerator::validate_express_ring_routes(
             }
         }
     }
+
+    // No dependency cycle may form outside the selected protected rings.
+    const auto cyclic = rings->cyclic_non_ring_hops();
+    TT_FATAL(
+        cyclic.empty(),
+        "Mesh M{} has a dependency cycle through non-ring hop {}->{} (and {} more); routing would deadlock",
+        mesh_id_val,
+        cyclic.empty() ? -1 : cyclic.front().first,
+        cyclic.empty() ? -1 : cyclic.front().second,
+        cyclic.empty() ? 0 : static_cast<int>(cyclic.size() - 1));
 }
 
 // Returns first hop to reach each destination mesh from source mesh.
