@@ -1,30 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""On-device token sampler for the XTTS-v2 GPT decode loop.
-
-Greedy argmax is deterministic but collapses on long generations (repeats a code
-to silence). XTTS's real inference samples with repetition penalty + temperature +
-top-k, which is what gives natural, self-terminating audio. This does that entirely
-on device (no host fallback in the tensor path):
-
-    repetition penalty  (seen-token mask, `ttnn.scatter`)
-    -> temperature       (`ttnn.mul`)
-    -> top-k truncation  (`ttnn.topk`, mask below the k-th value to -inf)
-    -> top-p / nucleus    (softmax over the sorted top-k window -> exclusive cumsum
-                          `ttnn.cumsum` < p -> smallest kept logit = nucleus threshold,
-                          combined with the top-k threshold via `ttnn.maximum`)
-    -> categorical draw   via the Gumbel-max trick: argmax(logits + Gumbel noise),
-                          since ttnn has no multinomial. Gumbel = -log(-log(U)),
-                          U ~ uniform(0,1). ``pick`` draws U with `ttnn.rand` (fp32 — bf16 is
-                          too coarse near 0/1 and biases toward greedy); ``pick_dev`` (the traced
-                          loop) instead ADDS pre-drawn Gumbel noise streamed in from host, so the
-                          draw is trace-safe AND a true uniform (matches torch.multinomial).
-
-Only the final sampled id crosses to host (loop control + next embedding index) —
-the same one-int-per-step read greedy already needs (``pick_dev`` keeps even that on device).
-"""
-
 import torch
 import ttnn
 
@@ -32,9 +8,6 @@ from models.experimental.xtts.config import NEG_INF  # noqa: F401 — re-exporte
 
 
 class TtSampler:
-    """Repetition-penalty / temperature / top-k / Gumbel-max sampler. Holds the
-    per-generation repetition ``seen`` mask; call :meth:`reset` between generations."""
-
     def __init__(self, device, vocab_size, temperature, top_k=0, repetition_penalty=1.0, top_p=1.0):
         self.device = device
         self.v = vocab_size
@@ -42,15 +15,11 @@ class TtSampler:
         self.top_k = int(top_k) if top_k and top_k < vocab_size else 0
         self.rep = float(repetition_penalty)
         self.top_p = float(top_p)
-        # nucleus needs a top-k window to sort/cumsum over; without one it is a no-op.
         self._nucleus = 0.0 < self.top_p < 1.0 and self.top_k > 0
-        # bf16 throughout — ttnn.topk requires bf16, and the GPT logits are bf16 anyway.
         self._neg = ttnn.from_torch(
             torch.full((1, vocab_size), NEG_INF), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
         )
         self._one = ttnn.from_torch(torch.ones((1, 1)), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-        # arange over the vocab (fp32 — exact for ids > 256, unlike bf16) for building an on-device
-        # one-hot of the sampled token when marking the ``seen`` mask in place (pick_dev).
         self._arange_v = ttnn.from_torch(
             torch.arange(vocab_size, dtype=torch.float32).reshape(1, vocab_size),
             device=device,
@@ -60,19 +29,11 @@ class TtSampler:
         self.reset()
 
     def reset(self):
-        """Clear the repetition mask, IN PLACE once it exists.
-
-        ``pick_dev`` marks into ``self.seen`` in place, so a captured decode step binds THIS
-        buffer's address for the life of the trace. Allocating a fresh tensor here would leave the
-        trace marking (and penalising against) the old one, which both fails to clear the mask
-        between captures and — for a trace replayed across several generations — carries the
-        previous utterance's whole vocabulary into the next one's penalty."""
+        # Clear seen in place so traced pick_dev keeps binding this buffer.
         if getattr(self, "seen", None) is not None:
             ttnn.multiply(self.seen, 0.0, output_tensor=self.seen)
             return
-        # bf16 persistent repetition mask (1.0 at seen ids — 0/1 flags are bf16-exact). MUST be bf16:
-        # an fp32 seen makes ttnn.gt(seen, 0.5) yield a condition whose dtype mismatches the bf16
-        # logit branches in ttnn.where, silently corrupting the rep-penalty (garbage output).
+        # bf16 required: fp32 seen breaks ttnn.where dtype with bf16 logits.
         self.seen = ttnn.from_torch(
             torch.zeros((1, self.v)), device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
         )
@@ -84,7 +45,6 @@ class TtSampler:
         self.seen = ttnn.scatter(self.seen, 1, idx, self._one)
 
     def pick(self, logits):
-        """``logits`` is ``[1, 1, V]`` (or ``[1, V]``); returns the sampled id (int)."""
         L = ttnn.typecast(ttnn.reshape(logits, [1, self.v]), ttnn.bfloat16)
 
         if self.rep != 1.0:
@@ -96,27 +56,23 @@ class TtSampler:
             L = ttnn.multiply(L, 1.0 / self.temperature)
 
         if self.top_k:
-            vals = ttnn.topk(L, self.top_k, dim=-1, largest=True, sorted=True)[0]  # [1, k] desc
-            kth = ttnn.slice(vals, [0, self.top_k - 1], [1, self.top_k])  # [1, 1] top-k threshold
+            vals = ttnn.topk(L, self.top_k, dim=-1, largest=True, sorted=True)[0]
+            kth = ttnn.slice(vals, [0, self.top_k - 1], [1, self.top_k])
             thr = kth
             if self._nucleus:
-                # Nucleus over the sorted top-k window: keep the shortest prefix whose
-                # cumulative prob first exceeds top_p (the token that crosses is kept).
-                probs = ttnn.softmax(vals, dim=-1)  # [1, k] descending probabilities
-                excl = ttnn.subtract(ttnn.cumsum(probs, dim=-1), probs)  # exclusive prefix sum
-                keep = ttnn.lt(excl, self.top_p)  # [1, k] bool: positions inside the nucleus
-                # smallest logit still kept = nucleus threshold (mask dropped to +inf, row-min).
+                probs = ttnn.softmax(vals, dim=-1)
+                excl = ttnn.subtract(ttnn.cumsum(probs, dim=-1), probs)
+                keep = ttnn.lt(excl, self.top_p)
                 pos_inf = ttnn.add(ttnn.multiply(vals, 0.0), -NEG_INF)
-                nuc = ttnn.min(ttnn.where(keep, vals, pos_inf), dim=-1, keepdim=True)  # [1, 1]
+                nuc = ttnn.min(ttnn.where(keep, vals, pos_inf), dim=-1, keepdim=True)
                 thr = ttnn.maximum(nuc, kth)
             L = ttnn.where(ttnn.ge(L, thr), L, self._neg)
 
-        # Gumbel-max: argmax(L + g), g = -log(-log(U)), U ~ uniform(0,1). Draw/compute the
-        # noise in fp32 (bf16 U is too coarse near 0/1 and biases the draw toward greedy).
+        # Gumbel in fp32 — bf16 U is too coarse near 0/1.
         u = ttnn.clamp(ttnn.rand([1, self.v], device=self.device, dtype=ttnn.float32), 1e-4, 1.0 - 1e-3)
         g = ttnn.multiply(ttnn.log(ttnn.multiply(ttnn.log(u), -1.0)), -1.0)
         noisy = ttnn.add(ttnn.typecast(L, ttnn.float32), g)
-        tok = ttnn.argmax(noisy, dim=-1)  # argmax over TILE directly (respects logical V; no untilize)
+        tok = ttnn.argmax(noisy, dim=-1)
         token = int(ttnn.to_torch(tok).flatten()[0].item())
 
         if self.rep != 1.0:
@@ -124,13 +80,12 @@ class TtSampler:
         return token
 
     def _apply_penalty_temp_topk(self, logits):
-        """Shared rep-penalty -> temperature -> top-k/top-p logit shaping (returns ``[1, V]``)."""
         L = ttnn.typecast(ttnn.reshape(logits, [1, self.v]), ttnn.bfloat16)
         if self.rep != 1.0:
             pos = ttnn.gt(L, 0.0)
             penalized = ttnn.where(pos, ttnn.multiply(L, 1.0 / self.rep), ttnn.multiply(L, self.rep))
             L = ttnn.where(ttnn.gt(self.seen, 0.5), penalized, L)
-        if self.temperature > 0.0 and self.temperature != 1.0:  # >0 guard: temp<=0 is greedy (no scaling)
+        if self.temperature > 0.0 and self.temperature != 1.0:
             L = ttnn.multiply(L, 1.0 / self.temperature)
         if self.top_k:
             vals = ttnn.topk(L, self.top_k, dim=-1, largest=True, sorted=True)[0]
@@ -147,37 +102,16 @@ class TtSampler:
         return L
 
     def pick_dev(self, logits, gumbel=None, bias=None):
-        """Fully-on-device sample for the TRACED decode loop: same rep/temp/top-k/top-p shaping as
-        the host path, then a Gumbel-max draw ``argmax(shaped_logits + gumbel)``. ``gumbel`` is a
-        ``[1, V]`` fp32 tensor of PRE-DRAWN Gumbel noise ``-log(-log(U))``, ``U ~ uniform(0,1)`` —
-        drawn on HOST with a proper RNG (``torch``) once before the loop and streamed into this
-        persistent buffer per step. Because the noise is independent of the logits it is genuine
-        preprocessing, not a host fallback, and unlike an in-trace ``frac(sin)`` PRNG it is a true
-        uniform draw, so this matches ``torch.multinomial`` in distribution (exact Gumbel-max
-        equivalence). Returns the sampled id as a DEVICE ``[1, 1]`` uint32 tensor (no host readback)
-        and updates the ``seen`` mask on device. Greedy when ``temperature <= 0`` / ``gumbel`` None.
-
-        ``bias`` is an optional persistent ``[1, V]`` fp32 tensor added to the shaped logits — a
-        per-token additive mask the caller refreshes BETWEEN traced replays, exactly as it does
-        ``gumbel``. Used for STOP suppression (see ``generate_ondevice_traced``). It is applied
-        after the penalty/temperature/top-k shaping so a large negative entry cannot be rescaled
-        back into contention by the temperature divide, and it applies to greedy as well as
-        sampled draws."""
         L = self._apply_penalty_temp_topk(logits)
         Lf = ttnn.typecast(L, ttnn.float32)
         if bias is not None:
             Lf = ttnn.add(Lf, bias)
         if self.temperature > 0.0 and gumbel is not None:
-            Lf = ttnn.add(Lf, gumbel)  # + pre-drawn Gumbel noise -> exact categorical sample
-        tok = ttnn.argmax(Lf, dim=-1)  # argmax over TILE directly (respects logical V; no untilize)
+            Lf = ttnn.add(Lf, gumbel)
+        tok = ttnn.argmax(Lf, dim=-1)
         tok = ttnn.reshape(ttnn.typecast(tok, ttnn.uint32), [1, 1])
         if self.rep != 1.0:
-            # Mark the sampled id in the persistent seen mask IN PLACE (output_tensor=self.seen) so
-            # it ACCUMULATES across traced replays. A reassignment (self.seen = scatter(...)) binds
-            # buffers once at capture and does NOT feed back on replay, silently killing the
-            # repetition penalty -> the model repeats and never emits STOP.
-            oh = ttnn.typecast(
-                ttnn.eq(self._arange_v, ttnn.typecast(tok, ttnn.float32)), ttnn.bfloat16
-            )  # [1,V] one-hot
+            # Mark seen in place so penalty accumulates across traced replays.
+            oh = ttnn.typecast(ttnn.eq(self._arange_v, ttnn.typecast(tok, ttnn.float32)), ttnn.bfloat16)
             ttnn.maximum(self.seen, oh, output_tensor=self.seen)
         return tok
