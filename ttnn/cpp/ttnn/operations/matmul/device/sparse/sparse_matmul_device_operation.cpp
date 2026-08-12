@@ -341,11 +341,8 @@ SparseMatmulDeviceOperation::tensor_return_value_t SparseMatmulDeviceOperation::
     SparseMatmulDeviceOperation::tensor_return_value_t output_tensors;
     const auto& optional_output_tensors = tensor_args.optional_output_tensors;
     const auto& input_tensors = tensor_args.input_tensors;
-    // A caller that hands in an output tensor sized for exactly `nnz` blocks is asking for the
-    // compact layout, in which the writer front-packs one block per non-zero sparsity entry and
-    // therefore writes every element of that output. Pre-zeroing it would be redundant work, so
-    // skip it -- but only in that case: every other caller still relies on the zero-fill to leave
-    // the skipped blocks at zero.
+    // A compact output is fully written by the in1 writer (one block per non-zero sparsity entry),
+    // so it skips the zero-fill below; expanded outputs rely on it to zero the skipped blocks.
     const bool compact_output = !optional_output_tensors.empty() && optional_output_tensors[0].has_value() &&
                                 operation_attributes.nnz.has_value() &&
                                 optional_output_tensors[0]->logical_shape() ==

@@ -973,10 +973,7 @@ def test_sparse_matmul_compact_optional_output(device):
         optional_output_tensor=compact_output_cached,
     )
     cache_entries_after_second = device.num_program_cache_entries()
-    assert cache_entries_after_second == cache_entries_after_first, (
-        f"expected compact output to reuse the cached program, but cache entries changed from "
-        f"{cache_entries_after_first} to {cache_entries_after_second}"
-    )
+    assert cache_entries_after_second == cache_entries_after_first, "compact output should reuse the cached program"
 
     output_torch = ttnn.to_torch(output).float()
     cached_output_torch = ttnn.to_torch(cached_output).float()
@@ -999,28 +996,11 @@ def test_sparse_matmul_compact_optional_output(device):
     for block, expert in enumerate(expert_for_block):
         expanded_reference[0, block, 0, expert] = reference[0, block]
 
-    expected_compact_shape = (1, num_blocks, m, n)
-    expected_expanded_shape = (1, num_blocks, 1, num_experts, m, n)
-    actual_compact_shape = tuple(output.shape)
-    actual_expanded_shape = tuple(expanded.shape)
-    assert (
-        actual_compact_shape == expected_compact_shape
-    ), f"compact output shape mismatch: expected {expected_compact_shape}, got {actual_compact_shape}"
-    compact_sentinel_count = int((output_torch == compact_sentinel).sum().item())
-    assert (
-        compact_sentinel_count == 0
-    ), f"compact output left {compact_sentinel_count} values at sentinel {compact_sentinel}"
-    cached_sentinel_count = int((cached_output_torch == cached_sentinel).sum().item())
-    assert (
-        cached_sentinel_count == 0
-    ), f"cached compact output left {cached_sentinel_count} values at sentinel {cached_sentinel}"
-    assert (
-        actual_expanded_shape == expected_expanded_shape
-    ), f"expanded output shape mismatch: expected {expected_expanded_shape}, got {actual_expanded_shape}"
-    expanded_sentinel_count = int((expanded_torch == expanded_sentinel).sum().item())
-    assert (
-        expanded_sentinel_count == 0
-    ), f"expanded output left {expanded_sentinel_count} values at sentinel {expanded_sentinel}"
+    # Compact output skips the pre-zero fill, so the writer must have covered every element;
+    # the expanded output's sentinel must instead be cleared by the zero-fill.
+    assert not (output_torch == compact_sentinel).any()
+    assert not (cached_output_torch == cached_sentinel).any()
+    assert not (expanded_torch == expanded_sentinel).any()
     torch.testing.assert_close(output_torch, reference, rtol=0.1, atol=1.5)
     torch.testing.assert_close(cached_output_torch, reference, rtol=0.1, atol=1.5)
     torch.testing.assert_close(expanded_torch, expanded_reference, rtol=0.1, atol=1.5)
