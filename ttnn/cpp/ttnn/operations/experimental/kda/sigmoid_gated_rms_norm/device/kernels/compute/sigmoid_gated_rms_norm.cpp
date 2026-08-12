@@ -60,7 +60,7 @@ void normalize(uint32_t Vt) {
     cb_reserve_back(cb_norm, Vt);
     pack_reconfig_data_format(cb_norm);
     reconfig_data_format(cb_x, cb_inv);
-    mul_bcast_cols_init_short(cb_x, cb_inv);
+    mul_bcast_cols_init(cb_x, cb_inv);
     for (uint32_t i = 0; i < Vt; i++) {
         tile_regs_acquire();
         mul_tiles_bcast_cols(cb_x, cb_inv, i, 0, 0);
@@ -76,7 +76,7 @@ void apply_weight(uint32_t Vt) {
     cb_reserve_back(cb_tmp, Vt);
     pack_reconfig_data_format(cb_tmp);
     reconfig_data_format(cb_norm, cb_weight);
-    mul_bcast_rows_init_short(cb_norm, cb_weight);
+    mul_bcast_rows_init(cb_norm, cb_weight);
     for (uint32_t i = 0; i < Vt; i++) {
         tile_regs_acquire();
         mul_tiles_bcast_rows(cb_norm, cb_weight, i, i, 0);
@@ -110,7 +110,7 @@ void multiply_output(uint32_t Vt) {
     cb_reserve_back(cb_out, Vt);
     pack_reconfig_data_format(cb_out);
     reconfig_data_format(cb_tmp, cb_norm);
-    mul_tiles_init(cb_tmp, cb_norm);
+    mul_init(cb_tmp, cb_norm);
     for (uint32_t i = 0; i < Vt; i++) {
         tile_regs_acquire();
         mul_tiles(cb_tmp, cb_norm, i, i, 0);
