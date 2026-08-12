@@ -69,7 +69,12 @@ def ccl_sync_split_enabled() -> bool:
     return os.environ.get("GEMMA4_CCL_SPLIT", "1").lower() not in ("0", "false", "no")
 
 
-def ccl_sync_rs_workers() -> int:
+# Prefill RS worker/chunk switch: decode and short prefill stay latency-bound
+# (w=1,c=1). T3K chunk height 2048 (~22 MB) is bandwidth-bound and wants w=2,c=2.
+_PREFILL_RS_TALL_HEIGHT = 2048
+
+
+def ccl_sync_rs_workers(padded_height: int | None = None) -> int:
     """``num_workers_per_link`` for the split all-reduce's reduce-scatter.
 
     Trace-replay sweep of the Gemma4-31B decode all-reduce ([1,1,32,5376] bf16,
@@ -89,22 +94,42 @@ def ccl_sync_rs_workers() -> int:
     granularity is. ``num_buffers_per_channel`` is noise here (b=2/4/8 all
     88.8-89.4 us); 4 is taken as the middle.
 
-    Note ``w=4`` is a 1.5x cliff, not a plateau: with a single link, extra
-    workers contend. Do not raise this without re-sweeping, and do not confuse
-    it with the async path's ``GEMMA4_CCL_NUM_WORKERS`` default of 2.
+    Prefill (same mesh, distinct per-device input, metal-trace min-of-3):
+    M=96 (~1 MB) still wants ``w=1,c=1``. M=2048 (~22 MB, T3K chunk) wants
+    ``w=2,c=2`` (~9% vs ``w=1,c=1``, still bit-exact). Height-aware default
+    below; ``GEMMA4_CCL_SYNC_RS_WORKERS`` overrides.
+
+    Note ``w=4`` is a 1.5x cliff at decode / short prefill, not a plateau: with
+    a single link, extra workers contend. Do not raise this without re-sweeping,
+    and do not confuse it with the async path's ``GEMMA4_CCL_NUM_WORKERS``
+    default of 2.
 
     The GATHER half was swept over the same knobs (w x c x b, 12 arms) and is
     completely insensitive -- 95.5-95.9 us throughout. It runs on ONE worker core
     (vs the reduce-scatter's 6) and 44.7 us for a 688 KB gather is the num_links=1
     fabric floor, not core starvation. Leave it on defaults.
     """
-    return max(1, int(os.environ.get("GEMMA4_CCL_SYNC_RS_WORKERS", "1")))
+    env = os.environ.get("GEMMA4_CCL_SYNC_RS_WORKERS")
+    if env is not None and str(env).strip() != "":
+        return max(1, int(env))
+    if padded_height is not None and int(padded_height) >= _PREFILL_RS_TALL_HEIGHT:
+        return 2
+    return 1
 
 
-def ccl_sync_rs_chunks() -> int:
-    """``chunks_per_sync`` for the split all-reduce's reduce-scatter. See
-    ``ccl_sync_rs_workers`` -- 1 measured 88.9 us, 2 measured 96.1, 4 measured 99.0."""
-    return max(1, int(os.environ.get("GEMMA4_CCL_SYNC_RS_CHUNKS", "1")))
+def ccl_sync_rs_chunks(padded_height: int | None = None) -> int:
+    """``chunks_per_sync`` for the split all-reduce's reduce-scatter.
+
+    Decode / short prefill: 1 measured 88.9 us, 2 measured 96.1, 4 measured 99.0.
+    Prefill M=2048: ``c=2`` with ``w=2`` is the isolated winner. See
+    ``ccl_sync_rs_workers``.
+    """
+    env = os.environ.get("GEMMA4_CCL_SYNC_RS_CHUNKS")
+    if env is not None and str(env).strip() != "":
+        return max(1, int(env))
+    if padded_height is not None and int(padded_height) >= _PREFILL_RS_TALL_HEIGHT:
+        return 2
+    return 1
 
 
 def ccl_sync_rs_buffers() -> int:
@@ -333,10 +358,10 @@ def _short_seq_l1_gather_memcfg(tensor, ccl_manager):
     (-0.45 ms/decode step on 31B), bit-exact (ops_list/tools/sweeps/l1_stream.py).
 
     Decode: tile-aligned height <= ``TILE_SIZE``. Short prefill (height <=
-    ``_SHARDED_NORM_MAX_HEIGHT``): same win for post-attn / post-MLP LN when the
-    following norm S2I's to DRAM (prefill ``keep_sharded=False``). Do *not* pair
-    with a prefill keep-sharded island through gate_up — that clashes with tuned
-    matmul CBs on Wormhole.
+    ``_SHARDED_NORM_MAX_HEIGHT``): same win for post-attn / post-MLP LN. Prefill
+    may keep the LN/residual island (``prefill_mlp_island_enabled``); do *not*
+    feed that shard into gate_up — Wormhole 1D prefill CBs clash (SharedMLP
+    S2I's to interleaved for M > TILE).
     """
     if not ccl_l1_gather_enabled():
         return None
@@ -447,6 +472,8 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
         return gathered
 
     if ccl_sync_split_enabled():
+        h = int(tensor.shape[-2])
+        padded_h = ((h + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
         scattered = ttnn.reduce_scatter(
             tensor,
             dim=3,
@@ -454,8 +481,8 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
             num_links=ccl_manager.num_links,
             topology=topology,
             memory_config=memory_config,
-            num_workers_per_link=ccl_sync_rs_workers(),
-            chunks_per_sync=ccl_sync_rs_chunks(),
+            num_workers_per_link=ccl_sync_rs_workers(padded_h),
+            chunks_per_sync=ccl_sync_rs_chunks(padded_h),
             num_buffers_per_channel=ccl_sync_rs_buffers(),
         )
         tensor.deallocate(True)
