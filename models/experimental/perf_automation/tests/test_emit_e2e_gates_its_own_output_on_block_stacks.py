@@ -78,3 +78,31 @@ def test_single_section_models_are_left_alone():
     i = src.index("def _block_stack_gate(")
     body = src[i : i + 4000]
     assert "len(sections) < 2" in body, "single-section models are gated on a comparison that cannot fail"
+
+
+def test_multi_stack_models_must_expose_a_knob_per_stack():
+    """ONE NUMBER CANNOT DESCRIBE A MULTI-SECTION MODEL.
+
+    optimize sizes a coverage window PER stack -- the smallest depth in which every distinct op type
+    of that stack appears -- and those numbers differ: an audio encoder of one repeated conformer
+    block saturates at 2, a decoder interleaving attention and MLP variants may need 8. With a single
+    `layers` argument the tool has nowhere to put the second number, so it collapses them with max()
+    and every section is profiled at the deepest one.
+
+    Voxtral-Mini-3B is the worked example: a 32-layer text decoder and TWO 32-layer audio encoder
+    stacks behind one argument. Capping at 2 built 2 text layers behind 64 encoder layers; once the
+    encoders were capped too, all three sections were forced to the same depth whether it suited them
+    or not.
+
+    The override names come from the model's own PIPELINE_STAGES, so no new convention is invented,
+    and it is read from the SIGNATURE -- **kwargs is exactly what swallowed `layers` silently.
+    """
+    src = _src()
+    assert "def _missing_stack_knobs(" in src, "nothing checks for per-stack depth knobs"
+    i = src.index("def _missing_stack_knobs(")
+    body = src[i : i + 2600]
+    assert "PIPELINE_STAGES" in body, "the override names are invented rather than taken from the model"
+    assert "kwonlyargs" in body, "the check does not read the factory signature"
+    assert "n_stacks < 2" in body, "single-stack models are asked for overrides they do not need"
+    gate = src[src.index("def _block_stack_gate(") :]
+    assert "_missing_stack_knobs(" in gate, "the check is defined but never run by the gate"

@@ -855,6 +855,46 @@ finally:
 """
 
 
+def _missing_stack_knobs(demo_dir: Path, n_stacks: int) -> list:
+    """Per-stack depth overrides the factory should accept but does not.
+
+    Only meaningful once the model HAS more than one stack -- a single-stack model is fully described
+    by `layers`, and demanding overrides from it would be noise. The expected names come from the
+    model's own PIPELINE_STAGES, so nothing new is invented and a stage owning no repeated block
+    simply has no override to miss.
+
+    Read from the signature, not from prose: `**kwargs` is what silently swallowed `layers` on
+    Voxtral, and a promise in a docstring cannot be checked.
+    """
+    if n_stacks < 2:
+        return []
+    pipeline_py = demo_dir / "tt" / "pipeline.py"
+    if not pipeline_py.is_file():
+        return []
+    try:
+        tree = ast.parse(pipeline_py.read_text(errors="ignore"))
+    except SyntaxError:
+        return []
+    stages, params = [], set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "PIPELINE_STAGES" for t in node.targets):
+            try:
+                stages = [str(v.value) for v in node.value.elts]
+            except Exception:  # noqa: BLE001
+                stages = []
+        if isinstance(node, ast.FunctionDef) and node.name == "build_pipeline":
+            params = {a.arg for a in list(node.args.args) + list(node.args.kwonlyargs)}
+    if not stages or not params:
+        return []
+    want = ["%s_layers" % st for st in stages]
+    have = [w for w in want if w in params]
+    # A model whose stacks are fewer than its stages needs only as many overrides as it has stacks;
+    # accepting any of them is taken as the pattern being followed.
+    if have:
+        return []
+    return want[:n_stacks]
+
+
 def _block_stack_gate(demo_dir: Path, model_id: str, timeout_s: int):
     """Every section the config declares must be visible to the profiler's walk.
 
@@ -905,6 +945,19 @@ def _block_stack_gate(demo_dir: Path, model_id: str, timeout_s: int):
             "G6 block stacks: the model could not be BUILT at layers=2 (a shallow build is what "
             "every profile uses), so its stacks cannot be checked. Capping must leave a runnable "
             "model, not a fragment. tail: %s" % " | ".join(t[:120] for t in tail)
+        )
+    # ONE KNOB PER STACK. A multi-stack model that accepts only `layers` forces every section to the
+    # same depth: optimize sizes a coverage window PER stack and has nowhere to put the second
+    # number, so it collapses them with max() and the shallow sections are profiled deeper than they
+    # need. Checked on the factory's SIGNATURE, the same way the depth argument itself is checked --
+    # a parameter is structure, a docstring promise is not.
+    _missing = _missing_stack_knobs(demo_dir, found)
+    if _missing:
+        return (
+            "G6 per-stack depth: %d block stacks but build_pipeline accepts only a single depth "
+            "argument (missing %s). Accept a per-stack override named for its PIPELINE_STAGES entry "
+            "(None falls back to `layers`), or the tool must force every section to one depth."
+            % (found, ", ".join(_missing))
         )
     if found < len(sections):
         return (
@@ -1869,6 +1922,29 @@ config, not a prompt.
 zero-layer model. Build exactly `layers` repeats of the model's repeated block (the decoder /
 transformer stack) and leave everything else -- embeddings, norms, heads -- intact, so a capped build
 still exercises every DISTINCT op the full model runs, just fewer times.
+
+ONE KNOB PER STACK WHEN THERE IS MORE THAN ONE STACK. `layers` is the DEFAULT depth for every
+repeated block; a model with several independent stacks must ALSO accept a per-stack override named
+after the stage it belongs to -- `<stage>_layers` for each entry in PIPELINE_STAGES that owns a
+stack (encode_layers, prefill_layers, decode_layers, ...). An override that is None falls back to
+`layers`, and `layers=None` still means every layer.
+
+A SINGLE NUMBER CANNOT DESCRIBE A MULTI-SECTION MODEL, and pretending otherwise is not neutral.
+optimize sizes a coverage depth PER STACK -- the smallest window in which every distinct op type of
+that stack appears -- and those numbers differ: an audio encoder built from one repeated conformer
+block saturates in 2, a text decoder interleaving attention and MLP variants may need 8. With one
+parameter the tool has nowhere to put the second number, so it collapses them (max) and every
+section gets the deepest one, or the model applies one value everywhere and the shallow sections are
+profiled deeper than they need while nothing is measured about them separately.
+
+Voxtral-Mini-3B is the worked example: a 32-layer text decoder and TWO 32-layer audio encoder
+stacks, one `layers` argument between them. Capping at 2 built 2 text layers behind 64 encoder
+layers before the encoders were capped too, and after they were, all three sections were forced to
+the same depth whether that suited them or not.
+
+The override names come from PIPELINE_STAGES, which the model already declares, so no new naming
+convention is introduced and nothing has to be guessed: a stage that owns no repeated stack simply
+takes no override.
 
 This exists because profiling is per-op, not per-layer: two layers surface the same op set as
 forty-eight at a fraction of the cost, and optimize profiles many times per run. Without it every
