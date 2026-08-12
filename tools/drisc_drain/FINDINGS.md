@@ -3801,6 +3801,59 @@ Two further changes were needed on top of the guards:
   knee-crossing, not a general cost: that config sits at 472-488 of 512 ring words, where one late sweep blocks
   dozens of lossless producers at once.
 
+### FAST DISPATCH, delay 60: clean, and the mover is MORE credit-bound than under slow dispatch
+
+Self-profiling was built and tuned against the slow-dispatch reference, so it was re-run under fast dispatch.
+The role split works there unchanged -- the drain kernels are launched with `force_slow_dispatch=true` onto DRAM
+cores, which touch none of the fast-dispatch worker grid or dispatch column, so a resident drainer is
+independent of dispatch mode.
+
+**RUN RECIPE: fast dispatch needs `--gx 11 --gy 10`, not 12.** `compute_with_storage_grid_size()` returns 11x10
+under FD because dispatch reserves the last column itself, so the poll list is **110 cores** (fillers get
+27/28/27/28) against 120 under slow dispatch. A producer outside the poll list is undrained, and the producers
+are lossless, so `--gx 12` there wedges the workload -- the same failure class as §N+33's `--gx 0`.
+
+4 warm reps each, run 1 discarded at both configs, 110 cores, delay 60, `--iters 500`:
+
+| | producer stalls | records (publish) | consume | dropped | ts regressions |
+|---|---|---|---|---|---|
+| OFF | **0** (4/4) | 5,501,100 exactly, all 4 reps | == publish | 0 | 0 / 0 |
+| ON  | **0** (4/4) | 5,502,618 - 5,502,774 | **== publish, all 4 reps** | 0 | 0 / 0 |
+
+- **0 producer stalls with the feature ON**, which the slow-dispatch reference at delay 15 could not manage
+  (49-140 there). Consistent with the delay-60 slow-dispatch result: the stalls are a knee crossing, not a
+  general cost of the instrument.
+- **`publish == consume` exactly in every ON rep.** The ~1,200-record tail truncation recorded under slow
+  dispatch (drainers still publishing self frames after the consumer is told to stop) **does not reproduce
+  here**, so that caveat is slow-dispatch-specific rather than inherent.
+- Every captured sweep DID WORK on all six drainers (3/3 per filler, 13/13 and 14/14 per mover), 0 frames to
+  idle samples. Cost **0.15-0.34% of a drainer's egress** -- lower than slow dispatch, because FD moves ~20%
+  more bytes per drainer (20.0-20.5 MB per filler, 40.2-41.1 MB per mover).
+
+Perturbation, and the interesting part is which role moves:
+
+| | filler idle | filler busy | filler worst | mover idle | mover busy | mover worst | mover worst credit-wait |
+|---|---|---|---|---|---|---|---|
+| OFF | 7.80 [7.6-8.2] | 16.46 [15.0-17.6] | 17.64 [16.0-19.7] | 0.75 | 20.35 [17.1-23.2] | 83.88 [50.5-106.0] | 53.00 [26.9-74.9] |
+| ON  | 8.12 [7.9-8.5] | 17.38 [15.9-18.6] | 20.35 [19.2-21.7] | 0.75 | 16.34 [13.7-20.2] | 57.14 [37.1-118.6] | 31.51 [16.4-65.9] |
+
+Filler cost is the same +4% idle / +5.6% busy / +15% worst-sweep shape as slow dispatch. The mover columns are
+NOISE, not improvement: its worst sweep spans 50.5-106.0 us with the feature off and 37.1-118.6 with it on.
+
+**What the zones say that the counters did not: fast dispatch makes the mover far more credit-bound.**
+Per busy sweep, from the self zones' own cross-check totals:
+
+| | mover credit-wait per busy sweep | mover read | mover write |
+|---|---|---|---|
+| slow dispatch, delay 15 | 4.7 us | 3.5 us | 1.8 us |
+| **fast dispatch, delay 60** | **7.7 us (mover 4) / 12.7 us (mover 5)** | 4.0 / 3.3 us | 3.8 / 2.7 us |
+
+and the OFF-path worst-sweep credit wait agrees independently (53.0 us mean under FD against 32.5 us under SD
+at the tighter delay). Fast dispatch removes the host round trip between ops, so producers fill their rings in
+harder bursts; the drainer's egress is unchanged, so the extra burstiness lands entirely on the socket credit
+wait -- the one phase §N+38 identified as setting the knee. **The two movers also differ by 1.6x from each
+other** (7.7 vs 12.7 us), which a single aggregate figure would have hidden entirely.
+
 ### Cross-check: the zones agree with the counters
 
 The device accumulates the same five phase totals over **exactly the sweeps the zones cover** (`out[74..84]`,
