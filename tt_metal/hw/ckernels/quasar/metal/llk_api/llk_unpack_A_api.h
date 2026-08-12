@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "llk_unpack_common_api.h"
 #include "llk_unpack_unary_broadcast_operands.h"
 #include "llk_unpack_unary_operand.h"
@@ -26,7 +27,8 @@
  * @tparam BType: Broadcast type; BroadcastType::NONE selects the plain unary path
  * @tparam acc_to_dest: Unused on Quasar in dest-reuse path; kept for API parity
  * @tparam binary_reuse_dest: Dest reuse mode; when not NONE, selects the dest-reuse sub-path
- * @tparam unpack_to_dest: When true, the (non-broadcast) primitive routes the operand through UNP_DEST regardless of format
+ * @tparam unpack_to_dest: When true, the (non-broadcast) primitive routes the operand through UNP_DEST regardless of
+ * format
  * @param transpose_of_faces: Non-zero enables transpose of 16x16 faces (unary/broadcast NONE path only)
  * @param within_face_16x16_transpose: Unused on Quasar; kept for API parity with Blackhole / other arches
  * @param operand: The input operand logical dataflow buffer / CB id
@@ -78,6 +80,10 @@ inline void llk_unpack_A_init(
                     operand_id, tensor_shape, 1);
             }
         } else {
+            // Unlike the unary path above, the broadcast LLK takes no TensorShape, so it does not scale
+            // its L1 tile index by the face count.
+            assert_full_tile_operand(operand_id);
+
             constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_A : p_unpacr::UNP_B;
             constexpr bool is_fp32_dest_acc_en = unpack_to_dest ? false : DST_ACCUM_MODE;
             _llk_unpack_unary_broadcast_operands_init_<unp_sel, BType, unpack_to_dest, is_fp32_dest_acc_en>(
@@ -96,7 +102,8 @@ inline void llk_unpack_A_init(
  * @tparam BType: Broadcast type; BroadcastType::NONE selects the plain unary path
  * @tparam acc_to_dest: Unused on Quasar; kept for API parity with Blackhole / other arches
  * @tparam binary_reuse_dest: Dest reuse mode (unary path only)
- * @tparam unpack_to_dest: when true, the (non-broadcast) primitive routes the operand through UNP_DEST regardless of format
+ * @tparam unpack_to_dest: when true, the (non-broadcast) primitive routes the operand through UNP_DEST regardless of
+ * format
  * @param operand: The logical dataflow buffer id
  * @param tile_index: The index in the input CB to read from
  */
@@ -133,7 +140,8 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
  * @tparam BType: Broadcast type; BroadcastType::NONE selects the plain unary path
  * @tparam acc_to_dest: Unused on Quasar; kept for API parity with Blackhole / other arches
  * @tparam binary_reuse_dest: Dest reuse mode (unary path only)
- * @tparam unpack_to_dest: when true, the (non-broadcast) primitive routes the operand through UNP_DEST regardless of format
+ * @tparam unpack_to_dest: when true, the (non-broadcast) primitive routes the operand
+ * through UNP_DEST regardless of format
  * @param operand: The logical dataflow buffer id
  * @param start_tile_index: The starting tile index within the input buffer
  * @param ntiles: The number of consecutive tiles to unpack
@@ -150,7 +158,7 @@ inline void llk_unpack_A_block(
     const LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(operand_id);
     const std::uint32_t rd_entry_idx = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].rd_entry_idx;
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
-    for (uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
+    for (std::uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
         WAYPOINT("UPAW");
         if constexpr (BType == BroadcastType::NONE) {
             if constexpr (unpack_to_dest) {

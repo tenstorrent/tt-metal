@@ -49,10 +49,7 @@ inline void _llk_math_eltwise_binary_init_custom_([[maybe_unused]] const ckernel
     static_assert(broadcast_type == BroadcastType::COL, "custom sub bcast-col path supports COL broadcast only");
     static_assert(eltwise_binary_type == EltwiseBinaryType::ELWSUB, "custom sub bcast-col path supports ELWSUB only");
 
-    LLK_ASSERT(
-        tensor_shape.face_r_dim == MAX_FACE_R_DIM && tensor_shape.face_c_dim == MAX_FACE_C_DIM && tensor_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM &&
-            (tensor_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM || tensor_shape.num_faces_r_dim == 1),
-        "custom sub bcast-col path supports 32x32 and 16x32 tiles only");
+    LLK_ASSERT(validate_tensor_shape_sub_bcast_col_custom_(tensor_shape), "custom sub bcast-col path supports 32x32 and 16x32 tiles only");
 
     _reset_counters_<p_setrwc::SET_ABD_F>();
 }
@@ -77,7 +74,7 @@ inline void _llk_math_eltwise_binary_init_custom_([[maybe_unused]] const ckernel
 inline void _llk_math_sub_bcast_cols_reuse_custom_(
     const std::uint32_t ct_dim = 1, const ckernel::TensorShape& tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE, const std::uint32_t dst_index = 0)
 {
-    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
+    LLK_ASSERT(validate_tensor_shape_sub_bcast_col_custom_(tensor_shape), "custom sub bcast-col path supports 32x32 and 16x32 tiles only");
 
     // Two faces make up one face-row; a full 32x32 tile has two of them, a 16x32 tile one.
     const std::uint32_t num_face_rows = tensor_shape.num_faces_r_dim;
@@ -103,22 +100,18 @@ inline void _llk_math_sub_bcast_cols_reuse_custom_(
     // End of an odd dest face: jump SrcB to the next face-row (face 0 -> face 2).
     addr_mod_t {.srca = {.incr = ELTWISE_MATH_ROWS}, .srcb = {.incr = SRCB_NEXT_FROW}, .dest = {.incr = ELTWISE_MATH_ROWS}}.set(ADDR_MOD_6);
 
-    // Dest slots are packed as densely as the tile is tall, matching what the packer reads back:
-    // 64 rows for a 4-face tile, 32 for a 2-face one (@ref _llk_pack_ scales its dest tile index by
-    // the face count for tiny tiles). DstTileShape selects that stride; Tile32x16 is the 2-face,
-    // 32-dest-row case that a 16x32 tile also lands in.
-    const bool full_tile = tensor_shape.total_num_faces() == ckernel::MAX_NUM_FACES;
+    // Dest slots are as tall as the tile, which is how the packer reads them back: @ref _llk_pack_
+    // scales its dest tile index by the face count and its unit is one face (16 dest rows), so a 4-face
+    // tile owns 64 rows and a 2-face tile 32. Deriving the stride from the shape (rather than switching
+    // on a full-tile bool) single-sources that rule with the packer instead of restating it here.
+    // find_max mirrors @ref _llk_math_reduce_init_: dest never packs tighter than one face.
+    // Programmed here rather than in the init for the same reason as the addr-mods above: the GPR is
+    // shared with the datacopy and reduce paths, whose inits may have run in between.
+    _set_tile_shape_idx_gpr_(find_max(FACE_R_DIM, tensor_shape.face_r_dim * tensor_shape.total_num_faces()));
 
     for (std::uint32_t i = 0; i < ct_dim; i++)
     {
-        if (full_tile)
-        {
-            _set_dst_write_addr_<DstTileShape::Tile32x32>(dst_index + i);
-        }
-        else
-        {
-            _set_dst_write_addr_<DstTileShape::Tile32x16>(dst_index + i);
-        }
+        _set_dst_write_addr_by_rows_(dst_index + i);
         _reset_counters_<p_setrwc::SET_D>();
 
         for (std::uint32_t face_row = 0; face_row < num_face_rows; face_row++)

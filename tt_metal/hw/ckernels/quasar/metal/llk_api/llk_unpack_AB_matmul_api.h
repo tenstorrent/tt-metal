@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "llk_unpack_matmul.h"
 #include "llk_unpack_common_api.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -35,6 +36,11 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     // In1 -> srcA
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
+
+    // _llk_unpack_matmul_ takes no TensorShape, so it does not scale its L1 tile indices by the face
+    // count; Quasar matmul is full-tile only (tt-metal #45208).
+    assert_full_tile_operand(operandA_id);
+    assert_full_tile_operand(operandB_id);
 
     _llk_unpack_matmul_init_<TRANSPOSE_EN>(operandA_id, operandB_id, ct_dim, rt_dim, kt_dim);
 }

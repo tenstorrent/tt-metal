@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "llk_unpack_binary_broadcast_operands.h"
 #include "llk_unpack_binary_operands.h"
 #include "llk_unpack_common_api.h"
@@ -28,6 +29,10 @@ inline void llk_unpack_AB_init(
     // TODO (tt-metal #42916): Once runtime asserts are added for Quasar, assert that transpose is unused
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
+
+    // Neither LLK below takes a TensorShape, so neither scales its L1 tile index by the face count.
+    assert_full_tile_operand(operandA_id);
+    assert_full_tile_operand(operandB_id);
 
     if constexpr (BType == BroadcastType::NONE) {
         _llk_unpack_binary_operands_init_(operandA_id, operandB_id, 1);

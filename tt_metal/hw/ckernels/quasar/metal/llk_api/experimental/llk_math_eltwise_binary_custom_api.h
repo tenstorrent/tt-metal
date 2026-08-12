@@ -54,14 +54,18 @@ inline void llk_math_eltwise_binary_sub_bcast_cols_init_custom(
 template <bool is_fp32_dest_acc_en = false>
 inline void llk_math_eltwise_binary_sub_bcast_cols_custom(
     const std::uint32_t operandA, const std::uint32_t dst_index, const std::uint32_t ct_dim = 1) {
-    // Derive the Tile32x32 dest capacity: one section is half the dest register under SyncHalf
-    constexpr std::uint32_t max_dest_tiles =
-        (DST_SYNC_MODE == DstSync::SyncHalf ? ckernel::DEST_NUM_TILES_FP16_HALF : ckernel::DEST_NUM_TILES_FP16) >>
-        (DST_ACCUM_MODE ? 1 : 0);  // and a 32-bit dest halves the tile count again.
-    LLK_ASSERT(dst_index + ct_dim <= max_dest_tiles, "dst range out of bounds");
-
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operandA_id);
+
+    // Dest capacity in tiles of this shape: one section is half the dest register under SyncHalf, a
+    // 32-bit dest halves the tile count again, and a tile shorter than the full 2x2 face grid fits
+    // proportionally more slots because the LLK strides dest by total_num_faces() faces (as _llk_pack_
+    // does).
+    const std::uint32_t max_dest_tiles =
+        ((DST_SYNC_MODE == DstSync::SyncHalf ? ckernel::DEST_NUM_TILES_FP16_HALF : ckernel::DEST_NUM_TILES_FP16) >>
+         (DST_ACCUM_MODE ? 1 : 0)) *
+        (ckernel::MAX_NUM_FACES / tensor_shape.total_num_faces());
+    LLK_ASSERT(dst_index + ct_dim <= max_dest_tiles, "dst range out of bounds");
 
     _llk_math_sub_bcast_cols_reuse_custom_(ct_dim, tensor_shape, dst_index);
 }

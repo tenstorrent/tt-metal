@@ -942,15 +942,22 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, ComputeSubBcastColCustom) {
         {.ct_dim = 4, .rt_dim = 2, .num_blocks = 1},
         {.ct_dim = 2, .rt_dim = 2, .num_blocks = 2},
         // Tiny 16x32 tiles: one face-row, so the srcB walk runs its four-op face-row block once and
-        // dest slots are 32 rows apart instead of 64. ct_dim/rt_dim/num_blocks are re-swept because
-        // the tile shape changes the per-tile unpack (one UNPACR per face on Quasar), the dest slot
-        // stride and the pack granularity all at once.
+        // dest slots are 32 rows apart instead of 64. The full-tile sweep above is repeated shape for
+        // shape, because the tile shape changes the per-tile unpack (one UNPACR per face on Quasar),
+        // the dest slot stride and the pack granularity all at once. A 32-row slot also means twice as
+        // many tiles fit in a dest section, so every shape that fits at 32x32 fits here.
         {.ct_dim = 1, .num_blocks = 1, .tile_shape = TileShape::TINY_TILE_16x32},
         {.ct_dim = 2, .num_blocks = 1, .tile_shape = TileShape::TINY_TILE_16x32},
         {.ct_dim = 3, .num_blocks = 1, .tile_shape = TileShape::TINY_TILE_16x32},
+        {.ct_dim = 4, .num_blocks = 1, .tile_shape = TileShape::TINY_TILE_16x32},
+        {.ct_dim = 7, .num_blocks = 1, .tile_shape = TileShape::TINY_TILE_16x32},
         {.ct_dim = 8, .num_blocks = 1, .tile_shape = TileShape::TINY_TILE_16x32},
         {.ct_dim = 2, .num_blocks = 2, .tile_shape = TileShape::TINY_TILE_16x32},
+        {.ct_dim = 8, .num_blocks = 2, .tile_shape = TileShape::TINY_TILE_16x32},
+        {.ct_dim = 1, .rt_dim = 2, .num_blocks = 1, .tile_shape = TileShape::TINY_TILE_16x32},
         {.ct_dim = 2, .rt_dim = 2, .num_blocks = 1, .tile_shape = TileShape::TINY_TILE_16x32},
+        {.ct_dim = 2, .rt_dim = 4, .num_blocks = 1, .tile_shape = TileShape::TINY_TILE_16x32},
+        {.ct_dim = 4, .rt_dim = 2, .num_blocks = 1, .tile_shape = TileShape::TINY_TILE_16x32},
         {.ct_dim = 2, .rt_dim = 2, .num_blocks = 2, .tile_shape = TileShape::TINY_TILE_16x32},
     };
 
