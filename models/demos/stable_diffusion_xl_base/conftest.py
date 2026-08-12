@@ -464,13 +464,15 @@ def _fetch_lora_from_ci_v2_cache(cache_dir, filename):
 
 
 def _resolve_lora_weights_path(
-    request, is_ci_env, is_ci_v2_env, default_repo_id, default_filename, ci_v2_cache_dir=None
+    request, is_ci_env, is_ci_v2_env, default_repo_id, default_filename, default_revision=None, ci_v2_cache_dir=None
 ):
     """Resolve a LoRA weights path.
 
     1) --lora-weights: full path to a local .safetensors file.
     2) --lora-hf-repo and --lora-hf-filename: download from Hugging Face.
-    3) If nothing provided: use the supplied default weights. In CI (v1 or v2),
+    3) If nothing provided: use the supplied default weights, pinned to
+       `default_revision` so an upstream re-upload cannot silently change what
+       the PCC references are compared against. In CI (v1 or v2),
        adapters with a `ci_v2_cache_dir` are fetched from the large-file cache
        first: CIv2 runners have no HF egress, and CIv1 runners call
        hf_hub_download with local_files_only=True, so an adapter absent from
@@ -498,12 +500,16 @@ def _resolve_lora_weights_path(
         return
 
     tried_ci_cache = False
+    hf_revision = None
     if not (hf_repo_id and hf_filename):
         logger.warning(
             f"No LoRA weights provided. Using default weights. Repo: {default_repo_id}, File: {default_filename}"
         )
         hf_repo_id = default_repo_id
         hf_filename = default_filename
+        # Only the built-in defaults are pinned. A caller-supplied repo/filename
+        # keeps HF's default branch, since this revision does not describe it.
+        hf_revision = default_revision
 
         if (is_ci_env or is_ci_v2_env) and ci_v2_cache_dir:
             tried_ci_cache = True
@@ -515,7 +521,10 @@ def _resolve_lora_weights_path(
         from huggingface_hub import hf_hub_download
 
         return hf_hub_download(
-            repo_id=hf_repo_id, filename=hf_filename, local_files_only=is_ci_env and not is_ci_v2_env
+            repo_id=hf_repo_id,
+            filename=hf_filename,
+            revision=hf_revision,
+            local_files_only=is_ci_env and not is_ci_v2_env,
         )
     except Exception as _:
         ci_cache_note = (
@@ -523,8 +532,9 @@ def _resolve_lora_weights_path(
             if tried_ci_cache
             else ""
         )
+        revision_note = f" at pinned revision {hf_revision}" if hf_revision else ""
         pytest.skip(
-            f"LoRA weights not available from HF ({hf_repo_id}, {hf_filename}).{ci_cache_note} "
+            f"LoRA weights not available from HF ({hf_repo_id}, {hf_filename}){revision_note}.{ci_cache_note} "
             f"Use --lora-weights for a local file path, or ensure network/cache for HF."
         )
         return
@@ -533,7 +543,16 @@ def _resolve_lora_weights_path(
 @pytest.fixture(scope="function")
 def lora_path(request, is_ci_env, is_ci_v2_env):
     """LoRA weights path, defaulting to the UNet-only test adapter."""
-    return _resolve_lora_weights_path(request, is_ci_env, is_ci_v2_env, TEST_LORA_REPO_ID, TEST_LORA_FILENAME)
+    from models.demos.stable_diffusion_xl_base.lora.config import TEST_LORA_REVISION
+
+    return _resolve_lora_weights_path(
+        request,
+        is_ci_env,
+        is_ci_v2_env,
+        TEST_LORA_REPO_ID,
+        TEST_LORA_FILENAME,
+        default_revision=TEST_LORA_REVISION,
+    )
 
 
 @pytest.fixture(scope="function")
@@ -550,6 +569,7 @@ def te_lora_path(request, is_ci_env, is_ci_v2_env):
         TE_TEST_LORA_CI_CACHE_DIR,
         TE_TEST_LORA_FILENAME,
         TE_TEST_LORA_REPO_ID,
+        TE_TEST_LORA_REVISION,
     )
 
     return _resolve_lora_weights_path(
@@ -558,5 +578,6 @@ def te_lora_path(request, is_ci_env, is_ci_v2_env):
         is_ci_v2_env,
         TE_TEST_LORA_REPO_ID,
         TE_TEST_LORA_FILENAME,
+        default_revision=TE_TEST_LORA_REVISION,
         ci_v2_cache_dir=TE_TEST_LORA_CI_CACHE_DIR,
     )
