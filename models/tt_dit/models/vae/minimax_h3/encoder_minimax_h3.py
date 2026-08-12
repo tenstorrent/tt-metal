@@ -331,7 +331,15 @@ class MiniMaxH3ResnetBlock3d(Module):
         norm_kwargs = dict(parallel_config=self.parallel_config, ccl_manager=self.ccl_manager)
         h = self.conv1(_norm_silu(self.norm1, x_BTHWC, self.dtype, **norm_kwargs))
         h = self.conv2(_norm_silu(self.norm2, h, self.dtype, **norm_kwargs))
-        residual = self.conv_shortcut(x_BTHWC) if self.in_channels != self.out_channels else x_BTHWC
+        # The residual carries the caller's dtype, which need not be ours: `_norm_silu` casts the
+        # main path but nothing casts this one. An fp32 input then either reaches conv_shortcut,
+        # which rejects a dtype mismatch against its weights, or reaches the add as an fp32 term
+        # against a bf16 one, which does not fail -- it returns garbage that varies run to run.
+        residual = x_BTHWC
+        if residual.get_dtype() != self.dtype:
+            residual = ttnn.typecast(residual, self.dtype)
+        if self.in_channels != self.out_channels:
+            residual = self.conv_shortcut(residual)
         return ttnn.add(residual, h)
 
 
