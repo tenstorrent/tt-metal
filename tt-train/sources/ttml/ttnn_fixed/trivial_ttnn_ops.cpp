@@ -246,8 +246,8 @@ ttnn::Tensor sample(
             EltwiseUnary{ttnn::operations::unary::UnaryOpType::LOG, 0.0F},
             EltwiseUnary{ttnn::operations::unary::UnaryOpType::NEG},
         };
-        rand = ttnn::operations::unary::detail::unary_impl(
-            rand, gumbel_chain, /* memory_config */ std::nullopt, /* optional_output_tensor */ rand);
+rand = ttnn::unary_chain(
+    rand, gumbel_chain, /* memory_config */ std::nullopt, /* optional_output_tensor */ rand);
 
         if (rand.dtype() != out.dtype()) {
             rand = ttnn::typecast(rand, out.dtype());
