@@ -18,8 +18,9 @@
 //   reconfig_mode    = NoReconfigure when there is nothing to cast (the
 //       reconfigure exists only to drive a dtype= cast and is otherwise a fixed
 //       ~150 ns waste), UnpackAndPackReconfigure on a real cast.
-//   fp32_mode        = Fast — tilize's consumers are FPU ops, which re-truncate
-//       to tf32 anyway; Lossless would only cost a slower path.
+//   fp32_mode        = Fast everywhere EXCEPT the fp32 -> fp32 identity, where
+//       tilize's own bijection contract demands bit-exactness and Fast measurably
+//       truncates (R7/A4; the host arms Lossless's two prerequisites).
 
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
@@ -34,6 +35,7 @@ void kernel_main() {
     constexpr uint32_t fold_resident = get_compile_time_arg_val(6);  // lever R6/C14-2 (1 = on)
     constexpr uint32_t tilize_uninit_on = get_compile_time_arg_val(7);  // lever R6 (1 = uninit, the default)
     constexpr uint32_t wait_upfront = get_compile_time_arg_val(8);      // lever R6 (1 = one wait per CALL)
+    constexpr uint32_t fp32_lossless = get_compile_time_arg_val(9);     // lever R7/A4 (1 = bit-exact fp32)
 
     const uint32_t n_full = get_arg_val<uint32_t>(0);
     const uint32_t n_tail = get_arg_val<uint32_t>(1);
@@ -58,6 +60,16 @@ void kernel_main() {
     // holds (`resident_in`); on the streamed path it would deadlock, because the
     // CB holds `cb_depth * wt_block` pages and not the whole assignment.
     constexpr WaitMode wait_mode = wait_upfront == 1 ? WaitMode::WaitUpfront : WaitMode::WaitBlock;
+    // R7 (A4): tilize's contract is a BIJECTION ON BYTE POSITIONS, so an
+    // fp32 -> fp32 call has to come back bit-exact — and `Fast` measurably does
+    // not (PCC 0.999998, max diff 1.6e-2: it truncates fp32 -> tf32 into DEST).
+    // `Lossless` is the helper's documented configuration for that, and the host
+    // arms the two prerequisites it static_asserts (`fp32_dest_acc_en` and
+    // `UnpackToDestFp32` on the input CB) from the SAME `numeric_policy` dict.
+    // The helper's own comment ("you almost never want Lossless") is about
+    // kernels whose FPU consumers re-truncate anyway; tilize has no consumer —
+    // its output IS the user's tensor.
+    constexpr Fp32Mode fp32_mode = fp32_lossless == 1 ? Fp32Mode::Lossless : Fp32Mode::Fast;
 
     compute_kernel_hw_startup(cb_input_sticks, cb_output_tiles);
 
@@ -104,13 +116,11 @@ void kernel_main() {
     // `tilize` ASSERTs num_blocks > 0, so both calls are guarded.
     if (n_full > 0) {
         compute_kernel_lib::
-            tilize<wt_block, cb_input_sticks, cb_output_tiles, init_mode, wait_mode, reconfig_mode, Fp32Mode::Fast>(
-                n_full);
+            tilize<wt_block, cb_input_sticks, cb_output_tiles, init_mode, wait_mode, reconfig_mode, fp32_mode>(n_full);
     }
     if (n_tail > 0) {
         compute_kernel_lib::
-            tilize<wt_tail, cb_input_sticks, cb_output_tiles, init_mode, wait_mode, reconfig_mode, Fp32Mode::Fast>(
-                n_tail);
+            tilize<wt_tail, cb_input_sticks, cb_output_tiles, init_mode, wait_mode, reconfig_mode, fp32_mode>(n_tail);
     }
 
     if constexpr (fold_resident == 1) {

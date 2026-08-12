@@ -41,6 +41,12 @@ KERNEL_DIR = Path(__file__).parent / "kernels"
 # --- CB slots (semantic names are the primary identifier) -------------------
 CB_INPUT_STICKS = 0  # reader -> compute : row-major sticks, tile-sized pages
 CB_OUTPUT_TILES = 16  # compute -> writer : tiled output pages
+# CB slots the per-CB `unpack_to_dest_mode` vector (R7) must cover. 64, not 32:
+# `data_format.cpp` requires `size() >= buf_formats.size()`, and that is the
+# ARCH's CB count (32 on Wormhole, 64 on Blackhole) — `circular_buffer_constants.h`
+# documents 64 as "the max for array sizing" precisely so a host-side vector can
+# be arch-portable. This op occupies two of the slots; the rest stay Default.
+NUM_CB_SLOTS = 64
 
 # --- Knob: read transaction byte target ------------------------------------
 # Expressed in BYTES so every dtype lands on the same measured sweet spot
@@ -171,6 +177,30 @@ WAIT_UPFRONT_RESIDENT = 1
 # default. 1/0 force one direction on any geometry (both bench arms).
 RESHARD_PULL = None
 
+# --- Knob: fp32 identity precision (R7 / A4) -------------------------------
+# `Fp32Mode::Fast` truncates fp32 -> tf32 on the way into DEST, which is the
+# right default for a tilize whose consumers are FPU ops (they re-truncate
+# anyway — `tilize_helpers.hpp:52-71`). But tilize's own contract is a BIJECTION
+# ON BYTE POSITIONS, so an fp32 -> fp32 call must come back bit-exact, and Fast
+# measured PCC 0.999998 / max diff 1.6e-2 on it (R2b's probe_011). `Lossless` is
+# the one configuration the helper documents for that: it needs BOTH
+# `fp32_dest_acc_en` and `UnpackToDestFp32` on the input CB (the helper
+# static_asserts both), which is why this is a policy triple rather than a flag.
+# Armed ONLY on the fp32 -> fp32 identity: a narrowing fp32 -> bf16/bf8b cast
+# lands in a 7-bit mantissa either way, so Fast costs it nothing.
+FP32_LOSSLESS_IDENTITY = 1
+
+# --- Knob: 8-bit DEST width (R7 / A5b) -------------------------------------
+# An 8-bit datum has no DEST representation of its own: the regular tilize path
+# is unpack -> SrcA -> (A2D datacopy) -> DEST -> pack, and with a 16-bit DEST the
+# packer reads the int8 payload as a float16 denormal and writes ZERO. Measured:
+# the whole uint8 tile comes back 0 (probe_023), with the reader's L1 verified
+# correct (probe_026) — so it is a DEST-width problem, not a dataflow one.
+# `fp32_dest_acc_en` widens DEST to 32 bits, which is also the branch
+# `get_single_pack_src_format` needs to select an integer pack source for UInt8
+# (`data_format.cpp:271-283` — UInt16 has its own early branch, UInt8 does not).
+FP32_DEST_ACC_8BIT = 1
+
 TILE_WIDTH = 32  # a tile is ALWAYS 32 wide; only its height varies
 # The tile HEIGHT the op uses when the caller passes no `tile=`. Defined ONCE
 # here and imported by the op file so the taggers, validate(), the entry point
@@ -265,6 +295,19 @@ DEFAULT_LEVERS = {
     # measured regime default (`reshard_default_pull`), which is what the
     # shipped path does; an explicit value forces one side on any shape.
     "reshard_pull": None,
+    # R7 (A4): the fp32 -> fp32 bit-exact triple (`Fp32Mode::Lossless` +
+    # `fp32_dest_acc_en` + `UnpackToDestFp32` on the input CB). `None` = the
+    # shipped default (`FP32_LOSSLESS_IDENTITY`, armed on the fp32 identity
+    # only), 0 = `Fp32Mode::Fast` everywhere — which is the pre-R7 kernel
+    # byte-for-byte and the off-arm for the "what does bit-exactness cost?"
+    # measurement. Never armed off the fp32 identity, where it is a no-op.
+    "fp32_lossless": None,
+    # R7 (A5b): widen DEST to 32 bits for an 8-bit datum. `None` = the shipped
+    # default (`FP32_DEST_ACC_8BIT`), 0 = the 16-bit DEST, i.e. the arm that
+    # produces an all-zero uint8 tile. Kept as a knob because it is the
+    # correctness lever for 8-bit AND a throughput cost everywhere else, so both
+    # arms have to stay measurable.
+    "fp32_dest_acc_8bit": None,
     "stub_read": 0,  # ablation: drop the NoC read payload
     "stub_compute": 0,  # ablation: drop the tilize math
     "stub_write": 0,  # ablation: drop the NoC write payload
@@ -399,6 +442,57 @@ def tile_geometry(shape, tile_height: int):
 # disagree about which cell a padded call lands in.
 
 _FLOAT_DTYPES = (ttnn.bfloat16, ttnn.float32)
+
+
+def numeric_policy(in_dtype, out_dtype, in_elem_size, levers=None) -> dict:
+    """The op's whole dtype surface, decided in ONE place (R7 / A4 + A5b).
+
+    tilize has no arithmetic and therefore no `ComputeKernelConfig` surface to
+    expose — but it does have three numeric-format decisions, and each of them
+    is a *pair* of host config + kernel template argument that must agree or the
+    helper's own static_asserts fire:
+
+      needs_cast        out != in  -> `UnpackAndPackReconfigure`, else
+                        `NoReconfigure` (a ~150 ns fixed cost with nothing to
+                        cast — op_design §7.1).
+      fp32_lossless     fp32 -> fp32 must be BIT-EXACT (identity is the op's
+                        contract), which the tilize helper only guarantees under
+                        `Fp32Mode::Lossless` + `fp32_dest_acc_en` +
+                        `UnpackToDestFp32` on the input CB. All three, or none:
+                        the helper static_asserts the other two whenever the
+                        first is set, and conversely asserts that FAST fp32
+                        tilize does NOT see `UnpackToDestFp32`.
+      fp32_dest_acc     also forced by an 8-bit input, where it is a CORRECTNESS
+                        lever rather than a precision one (see FP32_DEST_ACC_8BIT).
+      bfp8_pack_precise only for fp32 -> bfp8_b. The fast packer clears the
+                        golden PCC gate for bf16 -> bfp8_b and costs ~1.4x less;
+                        gating on the INPUT dtype is the /numeric-formats-metal
+                        rule, not a blanket "precise for all block-float".
+
+    Returns the four host-side values plus the one CT flag the compute kernel
+    needs, so the descriptor never re-derives any of them.
+    """
+    lv = levers if levers is not None else {}
+    lossless_knob = lv.get("fp32_lossless")
+    if lossless_knob is None:
+        lossless_knob = FP32_LOSSLESS_IDENTITY
+    dest_acc_8bit_knob = lv.get("fp32_dest_acc_8bit")
+    if dest_acc_8bit_knob is None:
+        dest_acc_8bit_knob = FP32_DEST_ACC_8BIT
+
+    fp32_lossless = bool(lossless_knob) and in_dtype == ttnn.float32 and out_dtype == ttnn.float32
+    # Keyed off the ELEMENT SIZE, not a dtype list: the constraint is the DEST
+    # width a 1-byte datum needs, so int8 / fp8 inherit it without an edit.
+    dest_acc_8bit = bool(dest_acc_8bit_knob) and in_elem_size == 1
+    return {
+        "needs_cast": int(out_dtype != in_dtype),
+        "fp32_lossless": int(fp32_lossless),
+        # `UnpackToDestFp32` is EXCLUSIVE with the fast tilize path, so it is
+        # tied to `fp32_lossless` and never set on its own.
+        "unpack_to_dest_fp32": int(fp32_lossless),
+        "fp32_dest_acc_en": bool(fp32_lossless or dest_acc_8bit),
+        "bfp8_pack_precise": bool(out_dtype == ttnn.bfloat8_b and in_dtype == ttnn.float32),
+    }
 
 
 def auto_padded_shape(shape, tile_height: int = DEFAULT_TILE_HEIGHT):
@@ -1168,7 +1262,11 @@ def create_program_descriptor(
     in_tile_bytes = tile_height * TILE_WIDTH * elem_size  # RM input is never block-float
     out_tile_bytes = output_tensor.buffer_page_size()
 
-    needs_cast = int(output_tensor.dtype != input_tensor.dtype)
+    # R7 (A4/A5b): the whole dtype surface in one call — the cast flag, the fp32
+    # bit-exact triple and the 8-bit DEST width. Host config and kernel template
+    # argument come from the SAME dict, so they cannot drift apart.
+    numeric = numeric_policy(input_tensor.dtype, output_tensor.dtype, elem_size, lv)
+    needs_cast = numeric["needs_cast"]
 
     grid = device.compute_with_storage_grid_size()
     num_l1_banks = grid.x * grid.y
@@ -1477,7 +1575,21 @@ def create_program_descriptor(
         fold_resident,
         int(TILIZE_UNINIT if lv["tilize_uninit"] is None else lv["tilize_uninit"]),
         wait_upfront,
+        numeric["fp32_lossless"],  # R7 (A4): Fp32Mode::Lossless on the fp32 identity
     ]
+
+    # R7: the op's ONLY ComputeConfigDescriptor. Every field is derived from the
+    # dtype pair (`numeric_policy`); at the pre-R7 dtypes all three are their
+    # defaults, so the bf16 program is byte-identical to Refinement 6's.
+    # `unpack_to_dest_mode` is a per-CB vector — sized to the arch's CB count and
+    # indexed by CB slot, never by allocation order.
+    compute_config = ttnn.ComputeConfigDescriptor()
+    compute_config.fp32_dest_acc_en = numeric["fp32_dest_acc_en"]
+    compute_config.bfp8_pack_precise = numeric["bfp8_pack_precise"]
+    if numeric["unpack_to_dest_fp32"]:
+        unpack_modes = [ttnn.UnpackToDestMode.Default] * NUM_CB_SLOTS
+        unpack_modes[CB_INPUT_STICKS] = ttnn.UnpackToDestMode.UnpackToDestFp32
+        compute_config.unpack_to_dest_mode = unpack_modes
 
     reader_rt = ttnn.RuntimeArgs()
     writer_rt = ttnn.RuntimeArgs()
@@ -1529,7 +1641,7 @@ def create_program_descriptor(
         core_ranges=all_cores,
         compile_time_args=compute_ct_args,
         runtime_args=compute_rt,
-        config=ttnn.ComputeConfigDescriptor(),
+        config=compute_config,
     )
 
     # R6 / C14 second degree: on the folded resident path the two dataflow

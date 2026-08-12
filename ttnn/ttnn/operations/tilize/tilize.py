@@ -262,6 +262,28 @@ INPUT_TAGGERS = {
 #   rank       += 0          the scalar -> one tile case, reachable only with a
 #                            pad (its tile dims are synthesized by the target).
 #
+# Refinement 7 (A4 + A5b + P3) — the numeric surface. Two axes flip, and the
+# mechanism behind them is `numeric_policy()` in the program descriptor, which
+# turns the (in_dtype, out_dtype) pair into ONE ComputeConfigDescriptor plus ONE
+# kernel template argument:
+#   dtype        += float32, uint32/uint16/int32, uint8. The cast is already the
+#                   CT `needs_cast` flag -> UnpackAndPackReconfigure; what R7 adds
+#                   is the two formats that are not merely "another width":
+#                     fp32 -> fp32 needs Fp32Mode::Lossless + fp32_dest_acc_en +
+#                       UnpackToDestFp32 (Fast truncates fp32 -> tf32: measured
+#                       max diff 1.6e-2 on an op whose contract is a BIJECTION).
+#                     uint8 needs a 32-bit DEST (fp32_dest_acc_en); with the
+#                       16-bit DEST the packer reads the int8 payload as a float
+#                       denormal and the whole tile comes back ZERO (measured).
+#   output_dtype += float32, bfloat8_b, uint32/uint16/int32, uint8. bfloat8_b is
+#                   output-only, and only an fp32 INPUT pays for the precise
+#                   packer (the fast packer clears the golden PCC gate from bf16
+#                   at ~1.4x less cost).
+# P3 (the padded path per dtype) needed no new code: `pad_fill_word` already
+# packs in the INPUT format and replicates across the 32-bit store word (4x for
+# uint8, 2x for bf16/uint16, 1x for fp32/uint32/int32), with the signed->unsigned
+# bit_cast for a negative integer fill.
+#
 # Refinement 2 (A3 + A3b + A3d + A5c) — sharded placement. Three axes flip, and
 # the mechanism behind them is `plan_placement()` in the program descriptor:
 #   shard_api   += legacy_2d, nd  both APIs project onto one ShardSpec view.
@@ -272,8 +294,22 @@ INPUT_TAGGERS = {
 #                            never needs to know which shard that is).
 
 SUPPORTED = {
-    "dtype": [ttnn.bfloat16],
-    "output_dtype": [ttnn.bfloat16],
+    # Refinement 7 (A4 + A5b + P3). `bfloat8_b` is OUTPUT-ONLY — block-float has
+    # no row-major form, and the tilize helper ASSERTs a non-block-float input.
+    # uint16 / int32 are beyond the golden TARGET (which collapses the wider
+    # integers onto uint32) but are the op's declared dtype family
+    # (op_design.md §3) and are exercised by `test_regression.py`, so they are
+    # declared rather than silently refused.
+    "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.uint32, ttnn.uint16, ttnn.int32, ttnn.uint8],
+    "output_dtype": [
+        ttnn.bfloat16,
+        ttnn.float32,
+        ttnn.bfloat8_b,
+        ttnn.uint32,
+        ttnn.uint16,
+        ttnn.int32,
+        ttnn.uint8,
+    ],
     "use_multicore": [False, True],
     "double_buffer": [False, True],
     "shard_api": ["none", "legacy_2d", "nd"],
