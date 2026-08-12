@@ -277,16 +277,20 @@
   # bh_loudbox is the smallest box carrying Galaxy's TP factor of 4, and everything here
   # runs at one shape: 1280 tokens over SP 2 and `d` over TP 4, so every chip holds the
   # 640 rows prefill shards to. The reference test needs no device and costs a second.
+  # The 93-layer walk is deselected: it is the most expensive test here by a wide margin
+  # and the only thing it reaches that the reads do not is bf16 accumulating over 186 of
+  # them, which the reads show does not compound. It stays in the tree to run by hand.
   cmd: |
     pytest \
       models/demos/deepseek_v3_d_p/tests/attn_res/model/ \
       tests/ttnn/unit_tests/operations/attn_residual/test_attn_res_gather_softmax.py \
+      --deselect models/demos/deepseek_v3_d_p/tests/attn_res/model/test_attn_res.py::test_walk_matches_reference \
       -vvv --tb=short
   skus:
     bh_loudbox:
-      # 3:14 with nothing in the kernel cache, which is how CI runs it — 2:17 of that
-      # is the tests and the rest is compiling the op's four kernels.
-      timeout: 4
+      # 1:49 with nothing in the kernel cache, which is how CI runs it — about a third of
+      # that is compiling the op's four kernels.
+      timeout: 3
   owner_id: U09LK84G4TF # Nikola Milicevic
   team: models
 

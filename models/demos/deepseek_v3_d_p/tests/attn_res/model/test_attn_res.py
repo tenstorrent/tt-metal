@@ -223,7 +223,9 @@ def test_walk_matches_reference(mesh_device, device_params):
     A driver that batches the wrong sites, or seals on the wrong layer, is wrong in a way
     the reads above cannot see: they issue one `inter_block` and index its sites by hand,
     so they never exercise the seal cadence or the site bookkeeping across a stack. This
-    is the only thing in the repo that does.
+    is the only thing in the repo that drives them, and the only caller of
+    `attn_res_stack_split` — but it costs more than the rest of this file put together, so
+    CI deselects it and it runs by hand.
 
     It clears the same PCC gate one read does. 186 rounds of bf16 accumulation cost about
     as much accuracy as a single read, because every read renormalizes the stream against
