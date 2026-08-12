@@ -1,5 +1,5 @@
 {
-  "last_scan_date": "2026-08-10",
+  "last_scan_date": "2026-08-12",
   "scanned_run_ids": [
     "30387358745",
     "30493606319",
@@ -19,7 +19,8 @@
     "31197332405",
     "31285846176",
     "31362719766",
-    "31229899895"
+    "31229899895",
+    31566814739
   ],
   "workflows_sampled": [
     "merge-gate.yaml",
@@ -37,7 +38,8 @@
     "models-t1-unit-tests.yaml",
     "galaxy-demo-tests.yaml",
     "t3000-e2e-tests.yaml",
-    "galaxy-e2e-tests.yaml"
+    "galaxy-e2e-tests.yaml",
+    "runtime-integration-tests.yaml"
   ],
   "in_flight_prs": [
     {
@@ -50,13 +52,6 @@
       "note": "Closed/superseded per maintainer action observed this session. No further Silencer action needed."
     },
     {
-      "number": 51849,
-      "branch": "silencer/demote-fabric-initialized-per-device-log",
-      "pattern": "Fabric initialized on Device {} - redundant per-device info log (384-952x per job)",
-      "status": "ci-passed",
-      "note": "PR Gate Status check on run 30732237919 conclusion=success as of 2026-08-02. Awaiting maintainer review/merge."
-    },
-    {
       "number": 51794,
       "branch": "silencer/demote-precompiled-firmware-log",
       "pattern": "Using pre-compiled firmware from: {} - info log firing once per device (384-768x per job)",
@@ -64,32 +59,11 @@
       "note": "Awaiting maintainer review/merge."
     },
     {
-      "number": 51643,
-      "branch": "silencer/dedupe-unknown-motherboard-warning",
-      "pattern": "Unknown motherboard warning fires once per chip instead of once per host",
-      "status": "open-pr",
-      "note": "Awaiting maintainer review/merge."
-    },
-    {
-      "branch": "silencer/demote-finalize-dfb-log",
-      "pattern": "Finalize dfb: dfb_offset == base_offset: {}, dfb size: {}, return value: {} - info log in finalize_dfbs() firing once per programmable-core-type per program (165x in one job sample)",
-      "status": "ci-passed",
-      "note": "PR Gate Status check on run 30770179479 conclusion=success as of 2026-08-03. Awaiting maintainer review/merge.",
-      "number": 51870
-    },
-    {
       "branch": "silencer/dedupe-matmul-memconfig-mismatch-warning-77496cdc6bbbe3a9",
       "pattern": "Mismatch between computed/provided mem config warning - 102x repeats, only 2 distinct pairs",
       "status": "open-pr-no-validation-run-found",
       "note": "PR #51894 draft, no comments yet. No dedicated single-card-demo-tests run found on branch (prior dispatch apparently did not fire). Not re-dispatched this run (1/1 dispatch_workflow budget used elsewhere). Only generic PR Gate Status checks visible. Awaiting maintainer review; re-attempt dispatch next run if still unvalidated.",
       "number": 51894
-    },
-    {
-      "branch": "silencer/demote-realtime-profiler-sync-log-e588c4c1564539dd",
-      "pattern": "[Real-time profiler] Device {} sync complete - info log firing once per device per periodic resync (352x in one job sample)",
-      "status": "open-pr-no-validation-run-found",
-      "note": "PR #52013 open (title has [skip ci]), mergeable_state clean, codeowners ping posted. No galaxy-sanity run found on branch (prior dispatch apparently did not fire). Not re-dispatched this run (budget used elsewhere). Trivial log-level demotion, no behavior change. Awaiting codeowner approval/merge.",
-      "number": 52013
     },
     {
       "branch": "silencer/unused-var-groupnorm-out-block-hw-actual-f45a844be7c0d8c8",
@@ -104,13 +78,6 @@
       "status": "resolved",
       "note": "PR #52111 fully resolved: validation run 30946210745 (t3000-demo-tests) succeeded, build logs grepped for reset_index/output_tile_index (0 occurrences confirmed). Outcome commented and marked ready for review in prior run (2026-08-05). No further action needed.",
       "number": 52111
-    },
-    {
-      "branch": "silencer/demote-watcher-attach-detach-log-546609e8b3fb5e60",
-      "pattern": "Watcher attached device {} / Watcher detached device {} - top LLRuntime info-severity lines (130x each in one job sample), fired unconditionally once per device per attach/detach cycle",
-      "status": "open-pr-no-validation-run-found",
-      "note": "PR #52122 open, mergeable_state behind, 2 codeowner groups pending. No models-t3-unit-tests run found on branch (prior dispatch apparently did not fire). Not re-dispatched this run (budget used elsewhere). Awaiting codeowner approval/merge.",
-      "number": 52122
     },
     {
       "number": 52249,
@@ -162,6 +129,12 @@
       "source_job_id": "93040818652",
       "status": "pr-opened-pending-ci",
       "note": "PR just created this run (draft, safeoutputs create_pull_request); dispatched galaxy-e2e-tests on the branch for validation. Number to be filled in once known from GitHub."
+    },
+    {
+      "branch": "silencer/eth-buffer-movement-log-noise",
+      "number": null,
+      "status": "pr_opened",
+      "note": "Demoted 7 log_info->log_debug in tests/tt_metal/tt_metal/eth/{test_buffer_movement_kernels.cpp,test_erisc_app_direct_send.cpp}; 99.6% of spdlog info lines in job 94034078128 (run 31566814739, runtime-integration-tests) were these per-iteration messages. Awaiting PR number assignment / CI validation."
     }
   ],
   "backlog_cursor": {
