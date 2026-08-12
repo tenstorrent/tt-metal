@@ -70,9 +70,15 @@ COPY --from=openmpi-layer /install/ /opt/
 # Copy ccache from pre-built tool image
 COPY --from=ccache-layer /install/ /usr/local/
 
+# Copy SFPI from pre-built tool image
+RUN --mount=from=sfpi-layer,source=/install,target=/sfpi-staging \
+    mkdir -p /opt/tenstorrent && \
+    cp -a /sfpi-staging/opt/tenstorrent/sfpi /opt/tenstorrent/
+
 RUN test -x /usr/local/bin/cmake || { echo "ERROR: cmake not found in cmake-layer" >&2; exit 1; } && \
     test -d "${OMPI_PREFIX}/bin" || { echo "ERROR: OpenMPI not found in openmpi-layer" >&2; exit 1; } && \
-    test -x /usr/local/bin/ccache || { echo "ERROR: ccache not found in ccache-layer" >&2; exit 1; }
+    test -x /usr/local/bin/ccache || { echo "ERROR: ccache not found in ccache-layer" >&2; exit 1; } && \
+    test -d /opt/tenstorrent/sfpi || { echo "ERROR: sfpi not found in sfpi-layer" >&2; exit 1; }
 
 # Install basic tools to build
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -131,11 +137,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Copy SFPI from pre-built tool image
-RUN --mount=from=sfpi-layer,source=/install,target=/sfpi-staging \
-    mkdir -p /opt/tenstorrent && \
-    cp -a /sfpi-staging/opt/tenstorrent/sfpi /opt/tenstorrent/
-RUN test -d /opt/tenstorrent/sfpi || { echo "ERROR: sfpi not found in sfpi-layer" >&2; exit 1; }
+# SFPI is already staged in the base image (inherited from the base stage).
 
 # Set up virtual environment using uv
 ENV PYTHON_ENV_DIR=/opt/venv
