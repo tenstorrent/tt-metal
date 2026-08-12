@@ -31,16 +31,16 @@ OP = "GenericOpDeviceOperation"
 ITERS = 20
 PERF = "tests/ttnn/unit_tests/kernel_lib/test_chain_perf.py"
 
-BLOCK_CHUNKED = "ttnn/cpp/ttnn/kernel_lib/tests/axes/block_exp_chunked.cpp"
-HOIST = "ttnn/cpp/ttnn/kernel_lib/tests/axes/hoist.cpp"
-FUSED = "ttnn/cpp/ttnn/kernel_lib/tests/axes/fused_chain.cpp"  # FPU add + Exp + DestReuse mul
+BLOCK_CHUNKED = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/axes/block_exp_chunked.cpp"
+HOIST = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/axes/hoist.cpp"
+FUSED = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/axes/fused_chain.cpp"  # FPU add + Exp + DestReuse mul
 
-# Chunked-vs-Bulk comparison on a REALISTIC fused chain (out = exp(A+B)*C: FPU add + Exp + DestReuse
+# PerBlockSize-vs-Bulk comparison on a REALISTIC fused chain (out = exp(A+B)*C: FPU add + Exp + DestReuse
 # mul). Neither lifecycle stages the whole window — both keep a BOUNDED CB and process N over many
 # iterations, so N scales to thousands (1024 tiles). Three configs isolate the two effects:
 #   bulk1  -> Bulk, batched (window=BULK_BATCH), block_size=1   : no blocking, batched-upfront baseline
 #   bulk8  -> Bulk, batched (window=BULK_BATCH), block_size=max : blocking WITHIN Bulk (bulk1 -> bulk8)
-#   chunk8 -> Chunked, single call, block_size=max             : lifecycle gain (bulk8 -> chunk8)
+#   chunk8 -> PerBlockSize, single call, block_size=max        : lifecycle gain (bulk8 -> chunk8)
 LIFECYCLE_NS = [64, 128, 1024]
 MAX_CHUNK = 8
 BULK_BATCH = 64  # Bulk window per chain call (bounded; CB = 2*BULK_BATCH pages, independent of N)
@@ -60,7 +60,7 @@ def _run_block_chunked(device, n, block_size):
     cg = lib.single_core_grid()
     torch_in, tt_in = lib.make_input(shape, dt, device, seed=2001)
     tt_out = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), dt, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG)
-    pages = max(4, 2 * block_size)  # Chunked: CB holds ~block_size tiles, double-buffered
+    pages = max(4, 2 * block_size)  # PerBlockSize: CB holds ~block_size tiles, double-buffered
     cbs = [lib.cb_descriptor(0, dt, pages, cg), lib.cb_descriptor(16, dt, pages, cg)]
     reader = lib.build_reader_kernel([tt_in], n, cg)
     writer = lib.build_writer_1out_kernel(tt_out, n, cg)
@@ -129,7 +129,7 @@ def _run_lifecycle(device, mode, n):
         cta, pages = [n, 1, 0, BULK_BATCH], 2 * BULK_BATCH
     elif mode == "bulk8":  # Bulk, batched window, block_size max (blocking within Bulk)
         cta, pages = [n, MAX_CHUNK, 0, BULK_BATCH], 2 * BULK_BATCH
-    else:  # chunk8: Chunked, single call, block_size max
+    else:  # chunk8: PerBlockSize, single call, block_size max
         cta, pages = [n, MAX_CHUNK, 1, 0], 2 * MAX_CHUNK
     cbs = [lib.cb_descriptor(i, dt, pages, cg) for i in (0, 1, 2)] + [lib.cb_descriptor(16, dt, pages, cg)]
     reader = lib.build_reader_kernel([tt_a, tt_b, tt_c], n, cg)
@@ -210,7 +210,7 @@ def test_perf_hoisting_device(n):
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize("n", BLOCK_N)
 def test_perf_blocking_device(n):
-    """block_size 1 vs 8 device-kernel ns at tile count n (Chunked block-capable chain). Logs the
+    """block_size 1 vs 8 device-kernel ns at tile count n (PerBlockSize block-capable chain). Logs the
     ratio — blocking is neutral-to-slightly-negative for this Exp chain and the penalty amortizes as n
     grows (x0.90 @ n=64 -> x0.99 @ n=2048), which is why the n sweep matters. Regression-guards each config."""
     ns_b1 = _device_kernel_ns(f"test_func_block[block_size=1-n={n}]", f"eltwise_block1_n{n}")
@@ -222,16 +222,16 @@ def test_perf_blocking_device(n):
     _check_baseline(ns_b8, BLOCK_BASELINE_NS[(n, 8)], f"block=8 n={n}")
 
 
-# Chunked-vs-Bulk baselines (ns), measured 2026-06-09. Findings:
+# PerBlockSize-vs-Bulk baselines (ns), measured 2026-06-09. Findings:
 #   - blocking within Bulk does NOTHING: bulk1 ≈ bulk8 (x0.99-1.00) — upfront serialization is the
 #     bottleneck, not loop overhead.
-#   - the REAL gain is Chunked vs Bulk at the same block size because Chunked overlaps per-chunk
+#   - the REAL gain is PerBlockSize vs Bulk at the same block size because PerBlockSize overlaps per-block-size
 #     reads with compute while Bulk waits for each bounded window first.
-# Bounded-CB fused chain out=exp(A+B)*C, batched Bulk (window=64) vs single-call Chunked, 2026-06-09.
+# Bounded-CB fused chain out=exp(A+B)*C, batched Bulk (window=64) vs single-call PerBlockSize, 2026-06-09.
 # KEY FINDING: when Bulk is used REALISTICALLY (batched with a bounded window, not whole-window
-# staging), the Chunked advantage shrinks sharply with N: x1.77 @ n=64 (1 batch = whole window) ->
+# staging), the PerBlockSize advantage shrinks sharply with N: x1.77 @ n=64 (1 batch = whole window) ->
 # x1.41 @ n=128 -> only x1.05 @ n=1024 (16 batches). Double-buffered batches recover cross-batch
-# pipelining, so at scale batched-Bulk ≈ Chunked (~5% behind). Blocking within Bulk stays ~1-2%.
+# pipelining, so at scale batched-Bulk ≈ PerBlockSize (~5% behind). Blocking within Bulk stays ~1-2%.
 LIFECYCLE_BASELINE_NS = {
     (64, "bulk1"): 115359,
     (64, "bulk8"): 114173,
@@ -248,7 +248,7 @@ LIFECYCLE_BASELINE_NS = {
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize("n", LIFECYCLE_NS)
 def test_perf_lifecycle_compare(n):
-    """Same exp(A+B)*C chain under Bulk(blk=1), Bulk(blk=max), and Chunked(blk=max).
+    """Same exp(A+B)*C chain under Bulk(blk=1), Bulk(blk=max), and PerBlockSize(blk=max).
 
     bulk1->bulk8 isolates blocking within Bulk; bulk8->chunk8 isolates lifecycle at the same block size.
     """
@@ -261,7 +261,7 @@ def test_perf_lifecycle_compare(n):
         logger.info(f"[chunk-vs-bulk n={n}] {mode:7s} {ns[mode]:.0f} ns | x{ns[mode]/fastest:.3f} vs fastest")
     logger.info(
         f"[chunk-vs-bulk n={n}] blocking gain (bulk1/bulk8) x{ns['bulk1']/ns['bulk8']:.3f} | "
-        f"Chunked-vs-Bulk gain (bulk8/chunk8) x{ns['bulk8']/ns['chunk8']:.3f}"
+        f"PerBlockSize-vs-Bulk gain (bulk8/chunk8) x{ns['bulk8']/ns['chunk8']:.3f}"
     )
     for mode in modes:
         if (n, mode) in LIFECYCLE_BASELINE_NS:

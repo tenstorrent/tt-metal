@@ -19,7 +19,7 @@ from loguru import logger
 from tests.ttnn.utils_for_testing import comp_pcc
 import tests.ttnn.unit_tests.kernel_lib.chain_test_lib as lib
 
-KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/axes/optional.cpp"
+KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/axes/optional.cpp"
 
 
 def _run_optional_unary(device, enabled):
@@ -46,7 +46,7 @@ def test_optional_unary_gate(device):
         a, out = _run_optional_unary(device, enabled)
         golden = -a if enabled else a
         pcc_ok, msg = comp_pcc(golden, out, lib.pcc_threshold([ttnn.bfloat16]))
-        logger.info(f"OptionalChainElement unary gate enabled={enabled} | {msg}")
+        logger.info(f"Optional unary gate enabled={enabled} | {msg}")
         assert pcc_ok, f"gate enabled={enabled}: {msg}"
         outputs[enabled] = out
     assert torch.equal(outputs[True], -outputs[False])

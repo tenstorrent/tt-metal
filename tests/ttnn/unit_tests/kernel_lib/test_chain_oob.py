@@ -22,7 +22,7 @@ import ttnn
 from loguru import logger
 import tests.ttnn.unit_tests.kernel_lib.chain_test_lib as lib
 
-KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/oob/dst_slot.cpp"
+KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/oob/dst_slot.cpp"
 DST_OVERFLOW_MSG = "DEST slot exceeds"
 
 
@@ -89,7 +89,7 @@ def test_dst_slot5_overflow_fp32(device, expect_error):
 
 
 # =============================================================================
-# Runtime block_size clamp. block_size is a runtime EltwiseShape field, so it
+# Runtime block_size clamp. block_size is a runtime IterationShape field, so it
 # can't be static_asserted; the chain clamps it down to chain_max_block_v at runtime
 # so it can NEVER overflow DEST. An over-large block_size
 # must therefore still produce the exact identity copy (clamp only changes loop structure).
@@ -97,7 +97,7 @@ def test_dst_slot5_overflow_fp32(device, expect_error):
 # The chain here is a Bulk + Block reader (block-capable), so block_size is honored. Bulk
 # stages the whole window upfront -> the input CB must hold all n pages.
 # =============================================================================
-BLOCK_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/oob/block_clamp.cpp"
+BLOCK_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/oob/block_clamp.cpp"
 
 
 def test_block_size_clamp_identity(device):

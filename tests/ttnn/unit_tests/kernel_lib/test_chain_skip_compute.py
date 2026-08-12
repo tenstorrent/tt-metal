@@ -19,8 +19,8 @@ from loguru import logger
 import tests.ttnn.unit_tests.kernel_lib.chain_test_lib as lib
 from tests.ttnn.utils_for_testing import comp_pcc
 
-HOIST_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/axes/hoist.cpp"
-ACCUMULATION_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/accumulation.cpp"
+HOIST_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/axes/hoist.cpp"
+ACCUMULATION_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/accumulation.cpp"
 SKIP_DEFINE = [("CKL_ELTWISE_CHAIN_SKIP_COMPUTE", "1")]
 
 

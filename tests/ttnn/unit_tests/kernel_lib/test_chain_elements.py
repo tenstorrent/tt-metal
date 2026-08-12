@@ -21,9 +21,9 @@ from loguru import logger
 from tests.ttnn.utils_for_testing import comp_pcc
 import tests.ttnn.unit_tests.kernel_lib.chain_test_lib as lib
 
-DEST_REUSE_PARAM = "ttnn/cpp/ttnn/kernel_lib/tests/axes/dest_reuse_param.cpp"
-MISC_ELEMENTS = "ttnn/cpp/ttnn/kernel_lib/tests/axes/misc_elements.cpp"
-UNARY_BCAST = "ttnn/cpp/ttnn/kernel_lib/tests/axes/unary_bcast.cpp"
+DEST_REUSE_PARAM = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/axes/dest_reuse_param.cpp"
+MISC_ELEMENTS = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/axes/misc_elements.cpp"
+UNARY_BCAST = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/axes/unary_bcast.cpp"
 
 # reuse selector -> name; op selector -> (name, torch fn applied as `lhs op rhs`)
 _REUSE = {0: "DEST_TO_SRCA", 1: "DEST_TO_SRCB"}
@@ -134,9 +134,9 @@ def test_pack_relu(device):
         assert pcc_ok, message
 
 
-@pytest.mark.parametrize("dim", [1, 2, 3], ids=["col", "row", "scalar"])
+@pytest.mark.parametrize("dim", [0, 1, 2, 3], ids=["none", "col", "row", "scalar"])
 def test_unary_bcast(device, dim):
-    """UnaryBcast replicates one column, row, or scalar within each tile."""
+    """UnaryBcast passes through or replicates one column, row, or scalar within each tile."""
     n = 4
     dt = ttnn.bfloat16
     shape = [1, 1, 32, 32 * n]
@@ -161,7 +161,9 @@ def test_unary_bcast(device, dim):
     output = ttnn.generic_op([tt_in, tt_out], program)
 
     tiles = host.to(torch.float32).reshape(1, 1, 32, n, 32).permute(0, 1, 3, 2, 4)
-    if dim == 1:
+    if dim == 0:
+        golden_tiles = tiles
+    elif dim == 1:
         golden_tiles = tiles[..., :1].expand_as(tiles)
     elif dim == 2:
         golden_tiles = tiles[..., :1, :].expand_as(tiles)
