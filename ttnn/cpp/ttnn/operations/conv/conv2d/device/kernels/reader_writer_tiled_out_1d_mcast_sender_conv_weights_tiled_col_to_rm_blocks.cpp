@@ -139,6 +139,70 @@ void kernel_main() {
     constexpr uint32_t weight_inner_block_stride_h =
         weight_next_block_stride_h / weight_block_height_num_outer;  // TODO: Pass as args
 
+#ifdef SNAKE_PARAMS
+    // Per-channel snake parameters: the last two tile-rows of the weight matrix, alpha then inv_beta.
+    // Pushed **once for the whole op**, not per block: the compute kernel reads them on every output
+    // tile and never pops (they are identical across a block, so popping would destroy them for the
+    // tiles that follow). Pushing per block would overflow a 2-page CB on the second block.
+    //
+    // Every tile-column of the channel axis, alpha's row first and then inv_beta's, so the CB reads
+    // [alpha_col0 .. alpha_colN-1, invbeta_col0 .. invbeta_colN-1] and the compute kernel can index
+    // its own output column. Fetching only column 0 (what this did first) silently reapplied channels
+    // 0-31's parameters to every wider column: rel_rmse 2.6e-01 at C=64, exact at C<=32.
+    //
+    // Only this core has a weight TensorAccessor, so the receivers cannot fetch the two tiles
+    // themselves -- they are mcast here, reusing the weights semaphore pair. This handshake is the
+    // first one either side performs, so it stays paired with the receiver's matching block, which
+    // likewise sits ahead of its block loop.
+    {
+        DataflowBuffer dfb_snake(SNAKE_PARAMS_CB_ID);
+        constexpr uint32_t snake_tile_nbytes = get_tile_size(SNAKE_PARAMS_CB_ID);
+        constexpr uint32_t snake_num_tiles = 2 * SNAKE_PARAM_NUM_COLS;
+        dfb_snake.reserve_back(snake_num_tiles);
+        uint32_t snake_write_offset = 0;
+        for (uint32_t row = 0; row < 2; ++row) {
+            for (uint32_t col = 0; col < SNAKE_PARAM_NUM_COLS; ++col) {
+                noc.async_read(
+                    s_weight,
+                    dfb_snake,
+                    snake_tile_nbytes,
+                    {.page_id = SNAKE_ALPHA_ROW_TILE_ID + row * SNAKE_PARAM_ROW_STRIDE + col},
+                    {.offset_bytes = snake_write_offset});
+                snake_write_offset += snake_tile_nbytes;
+            }
+        }
+        noc.async_read_barrier();
+
+#ifndef SKIP_MCAST
+        // Wait for every receiver to have reserved its two pages, then push the pair out. The CB is
+        // at the same L1 address on every core, so the sender's own write pointer is the destination.
+        weights_mcast_sender_sem.wait(weights_mcast_num_dests);
+        weights_mcast_sender_sem.set(0);
+
+        mcast_dst.addr = dfb_snake.get_write_ptr();
+        noc.async_write_multicast(
+            CoreLocalMem<uint32_t>(dfb_snake.get_write_ptr()),
+            mcast_ep,
+            snake_num_tiles * snake_tile_nbytes,
+            weights_mcast_num_cores,
+            {},
+            mcast_dst,
+            true);
+
+        weights_mcast_receiver_sem.set_multicast(
+            noc,
+            mcast_rect.noc_x_start,
+            mcast_rect.noc_y_start,
+            mcast_rect.noc_x_end,
+            mcast_rect.noc_y_end,
+            weights_mcast_num_cores,
+            false);
+#endif
+
+        dfb_snake.push_back(snake_num_tiles);
+    }
+#endif
+
     uint32_t l1_write_addr_act = 0;
     for (uint32_t bh = 0; bh < out_num_blocks_h; bh++) {
         // READ WEIGHTS + MCAST SEND WEIGHTS

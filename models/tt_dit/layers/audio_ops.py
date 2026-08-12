@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import math
 import os
 from typing import Sequence
@@ -341,6 +342,143 @@ def depthwise_mac_preferred() -> bool:
     am. 113 for the measured cost.
     """
     return os.environ.get("MINIMAX_H3_AUDIO_DEPTHWISE_MAC", "1" if audio_accurate_mode() else "0") == "1"
+
+
+SNAKE_TILE_HEIGHT = 32
+
+
+def fuse_snake_into_conv_enabled() -> bool:
+    """Whether the per-channel snake rides the depthwise conv's output instead of its own op.
+
+    Off by default: it needs the `TT_CONV1D_SNAKE_PARAMS` path in `compute_depthwise_conv1d.cpp`,
+    which is itself env-gated on the C++ side, so the two must be turned on together or not at all.
+    """
+    return os.environ.get("MINIMAX_H3_AUDIO_FUSE_SNAKE_CONV", "0") == "1"
+
+
+class _snake_params_env:
+    """Turn on the program factory's snake path for the duration of one conv1d call.
+
+    The C++ side reads this at program-creation time. Scoping it to the single call keeps every other
+    conv in the decode on the untouched default path, and restoring the previous value rather than
+    deleting it keeps the block re-entrant.
+    """
+
+    def __enter__(self):
+        self._prev = os.environ.get("TT_CONV1D_SNAKE_PARAMS")
+        os.environ["TT_CONV1D_SNAKE_PARAMS"] = "1"
+        return self
+
+    def __exit__(self, *exc):
+        if self._prev is None:
+            os.environ.pop("TT_CONV1D_SNAKE_PARAMS", None)
+        else:
+            os.environ["TT_CONV1D_SNAKE_PARAMS"] = self._prev
+        return False
+
+
+def _snake_param_rows(alpha_1d: torch.Tensor, inv_beta_1d: torch.Tensor, width: int) -> torch.Tensor:
+    """Two tile-rows, ``(64, width)``: alpha then inv_beta, each replicated down all 32 rows.
+
+    The compute kernel multiplies these against a finished output tile whose columns are the channel
+    axis, so the parameter tile has to be constant down rows and per-channel across columns -- exactly
+    the layout a weight tile for one tap already has.
+    """
+    rows = []
+    for vec in (alpha_1d, inv_beta_1d):
+        padded = torch.zeros(width, dtype=torch.float32)
+        padded[: vec.numel()] = vec.to(torch.float32)
+        rows.append(padded.unsqueeze(0).expand(SNAKE_TILE_HEIGHT, width).contiguous())
+    return torch.cat(rows, dim=0)
+
+
+def depthwise_tap_filter_snake(x_BTC, taps, *, alpha, inv_beta, mesh_device, dtype, cache, cache_tag):
+    """Depthwise FIR with ``y = v + inv_beta * sin(alpha * v)^2`` applied to the conv's own output.
+
+    One op where the unfused form is two (conv, then `ttnn.snake_beta`) plus the tilize/untilize the
+    activation needs around it. The parameters ride as two extra tile-rows appended to the *prepared*
+    weight, which the reader fetches into a dedicated CB and mcasts to the receiver cores; the device
+    side is `compute_depthwise_conv1d.cpp`'s `apply_snake_beta`, gated on `TT_CONV1D_SNAKE_PARAMS`.
+
+    Deliberately not routed through `depthwise_tap_filter`: that function carries the L1-probe,
+    operand-split and C-chunk machinery, none of which composes with an appended weight (the probe
+    compares against a differently shaped weight, the split would apply the snake once per term). The
+    band is the only caller that wants this, and it wants the plain HEIGHT_SHARDED path.
+
+    `cache_tag` distinguishes the two polyphase sub-tap vectors, which share one cache dict.
+    """
+    B, T_pad, C = int(x_BTC.shape[0]), int(x_BTC.shape[1]), int(x_BTC.shape[2])
+    K = len(taps)
+    T_out = T_pad - K + 1
+
+    if "cc_snake" not in cache:
+        # Same compute config as the unfused phase conv, `packer_l1_acc` included: the point is to
+        # remove an op, not to change the arithmetic underneath it, and any difference here would show
+        # up as drift over the ~126 bands the decode chains together.
+        cache["cc_snake"] = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
+        )
+    conv_config = ttnn.Conv1dConfig(weights_dtype=dtype, shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED)
+
+    def _conv(weight, fused):
+        ctx = _snake_params_env() if fused else contextlib.nullcontext()
+        with ctx:
+            out, _, wb = ttnn.conv1d(
+                input_tensor=ttnn.reshape(x_BTC, (B, T_pad, 1, C)),
+                weight_tensor=weight,
+                device=mesh_device,
+                in_channels=C,
+                out_channels=C,
+                batch_size=B,
+                input_length=T_pad,
+                kernel_size=K,
+                stride=1,
+                padding=0,
+                dilation=1,
+                groups=C,
+                dtype=dtype,
+                conv_config=conv_config,
+                compute_config=cache["cc_snake"],
+                return_output_dim=True,
+                return_weights_and_bias=True,
+            )
+        return out, (wb[0] if isinstance(wb, (tuple, list)) else wb)
+
+    wkey = ("w_snake", cache_tag, C, K)
+    widened = cache.get(wkey)
+    if widened is None:
+        # The appended rows have to match the *prepared* layout, so let conv1d prepare the plain
+        # weight once and append to what it hands back. This costs one throwaway conv per band, on the
+        # first call only; a decode runs the same bands thousands of times.
+        wt = torch.tensor(taps, dtype=torch.float32).reshape(1, 1, K).expand(C, 1, K).contiguous()
+        base = ttnn.from_torch(
+            wt, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device)
+        )
+        throwaway, prepared = _conv(base, fused=False)
+        ttnn.deallocate(throwaway)
+
+        # `base` is replicated across the mesh, so `prepared` is too, and a bare `ttnn.to_torch` here
+        # hits `buffers.size() == 1` (pytensor.cpp:299) on any multi-device mesh. Every shard holds the
+        # same prepared weight, so read one -- the same shape as `prepare_conv3d_weight_state` above.
+        pw_shards = ttnn.get_device_tensors(prepared)
+        pw = ttnn.to_torch(pw_shards[0] if len(pw_shards) > 1 else prepared).float()
+        width = pw.shape[-1]
+        rows = torch.cat([pw.reshape(-1, width), _snake_param_rows(alpha, inv_beta, width)], dim=0)
+        rows = rows.reshape(1, 1, rows.shape[0], width)
+        # Must land on device: conv1d treats a host weight as unprepared and would re-prepare it,
+        # dropping the appended rows.
+        widened = ttnn.from_torch(
+            rows,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=dtype,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        cache[wkey] = widened
+
+    out, _ = _conv(widened, fused=True)
+    out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    return ttnn.reshape(out, (B, T_out, C))
 
 
 def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
