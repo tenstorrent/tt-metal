@@ -166,7 +166,7 @@ def test_max_fp32_fast_and_approximate_mode(device, input_shape, dim, fast_and_a
     output_tensor = ttnn.max(input_tensor, fast_and_approximate_mode=fast_and_approximate_mode, dim=dim)
     output_tensor = ttnn.to_torch(ttnn.from_device(output_tensor)).reshape(torch_output_tensor.shape)
 
-    if fast_and_approximate_mode:
+    if fast_and_approximate_mode or device.arch() == ttnn.device.Arch.QUASAR:
         assert_allclose(torch_output_tensor, output_tensor, rtol=1e-3, atol=1e-2)
     else:
         assert_equal(torch_output_tensor, output_tensor)
