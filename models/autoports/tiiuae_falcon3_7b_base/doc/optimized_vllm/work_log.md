@@ -98,4 +98,12 @@ Independent fresh-subagent stage review: `clean-pass`; report in
 single-request resolution, intentional lack of serving profiler data, and the
 documented dependence on the scheduler's steady-page-table guarantee.
 
-Local checkpoint commits: pending.  Nothing will be pushed.
+Local checkpoint:
+
+- `tt-metal`, branch `mvasiljevic/fmf/tiiuae-falcon3-7b-base`:
+  `4e22b862073` (`Optimize Falcon3 vLLM async serving boundary`).
+- `/home/mvasiljevic/vllm`: clean after candidate removal; no retained change,
+  so no checkpoint commit was created.
+
+Nothing was pushed.  The unrelated pre-existing untracked
+`third_party/tt-metal/` directory was excluded.
