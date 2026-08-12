@@ -59,9 +59,6 @@ def _ltx_checkpoint_cached(filename: str) -> bool:
     return False
 
 
-from models.tt_dit.utils.vbench import assert_vbench_quality
-
-
 # Default-off: full AV gen needs the real LTX checkpoint + Gemma, so it skips without one.
 @pytest.mark.skipif(
     not _ltx_checkpoint_cached("ltx-2.3-22b-distilled-1.1.safetensors"),
