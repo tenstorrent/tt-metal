@@ -31,10 +31,13 @@ temperature/top-k/top-p) runs on host between traced steps with coqui's default 
 
 ## Dependencies
 
-Install model-specific dependencies:
+Install model-specific dependencies into tt-metal's venv (which is uv-managed and ships
+without pip — a bare `pip install` falls through to the system Python and fails with
+`externally-managed-environment`):
 
 ```bash
-pip install -r models/experimental/xtts_v2/requirements.txt
+# with python_env activated
+uv pip install -r models/experimental/xtts_v2/requirements.txt
 ```
 
 (`num2words` is used by the text normalizer to expand digits; without it, texts containing
@@ -46,7 +49,7 @@ The checkpoint is fetched automatically from the HF hub on first use, or point `
 at a local `model.pth` (with `config.json` and `vocab.json` alongside):
 
 ```bash
-huggingface-cli download coqui/XTTS-v2 --local-dir xtts_ref
+hf download coqui/XTTS-v2 --local-dir xtts_ref   # (`huggingface-cli download` on older huggingface_hub)
 export XTTS_CKPT=$(pwd)/xtts_ref/model.pth
 ```
 
