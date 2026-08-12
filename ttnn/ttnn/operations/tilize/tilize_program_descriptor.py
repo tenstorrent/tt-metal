@@ -336,6 +336,16 @@ MODE_STREAMED = "streamed"  # both sides through TensorAccessor (Phase 0 path)
 MODE_RESIDENT = "resident"  # same-spec L1 shards: both CBs aliased, zero NoC
 MODE_CROSSOVER_IN = "crossover_in"  # input shard resident, output streamed
 MODE_CROSSOVER_OUT = "crossover_out"  # output shard resident, input streamed
+# Refinement 4 (A3c) — CROSS-SPEC reshard: both sides sharded, different specs.
+# The shard is still the per-core block, but it is a DIFFERENT block on each
+# side, so one side is resident and the other is gathered across cores.
+MODE_RESHARD_OUT = "reshard_out"  # output shard resident: each output core PULLS
+MODE_RESHARD_IN = "reshard_in"  # input shard resident: the pull's mirror image
+
+# Which modes leave each side's CB aliased onto its shard. Stated once so a new
+# mode cannot half-register itself.
+RESIDENT_IN_MODES = (MODE_RESIDENT, MODE_CROSSOVER_IN, MODE_RESHARD_IN)
+RESIDENT_OUT_MODES = (MODE_RESIDENT, MODE_CROSSOVER_OUT, MODE_RESHARD_OUT)
 
 
 def shard_view(memory_config):
@@ -425,18 +435,64 @@ def shard_residency(memory_config, *, tile_height: int):
     return h // tile_height, w // TILE_WIDTH
 
 
-def _input_is_streamable(memory_config, Wt: int) -> bool:
-    """Can the STREAMED reader address this input?
+def shard_folds_contiguously(memory_config, shape) -> bool:
+    """Does this shard cover a CONTIGUOUS run of folded tile-rows?
 
-    The reader indexes the source by stick (`page = one row`), which is what a
-    ROW_MAJOR interleaved tensor and a HEIGHT-sharded one both give. A
-    width/block-sharded ROW_MAJOR tensor pages at the SHARD width instead, so
-    its pages are partial rows and the stick indexing would be wrong.
+    `shard_view` folds an nd shard onto 2-D as `(prod(dims[:-1]), dims[-1])`,
+    which is only the truth when the shard's leading dims either select a single
+    image (`prod == 1`) or span each image's whole height. Otherwise the shard
+    holds rows `{i*H + h}` for several `i` and a strict subset of `h` — several
+    DISJOINT runs of the folded index, so it cannot be one core's contiguous
+    `[b0, b0+nb)` block range.
+
+    Only the crossover / reshard modes need this: they place a shard at a
+    position in the global linearization. Same-spec RESIDENT does not — there
+    each core tilizes whatever sits in its own L1 and never names a global block
+    — and the streamed path does not either (the accessor addresses by page id).
+    A legacy 2-D shard is already stated in the folded view, so it is always
+    contiguous.
     """
+    nd = _nd_identity(memory_config)
+    if nd is None:
+        return True
+    shard_shape = list(nd[0])
+    if len(shard_shape) < 3:
+        return True
+    H = shape[-2] if len(shape) >= 2 else 1
+    return math.prod(shard_shape[:-2]) == 1 or shard_shape[-2] == H
+
+
+def source_bands(memory_config, W: int, elem_size: int):
+    """The READ side's page geometry: `(n_bands, band_bytes)`, or None.
+
+    A tensor's page is ONE ROW OF ITS SHARD — `shard_w * elem` bytes for a
+    sharded tensor, the whole row (`W * elem`) for an interleaved one. So the
+    source page grid is `[folded_row][band]` with `n_bands = ceil(W / shard_w)`,
+    and the page id of `(folded_row, band)` is `folded_row * n_bands + band`.
+    Measured, not assumed (`probes/probe_012.py`): a `(64,128)` width shard of
+    `[1,1,64,512]` reports page_size 256 B and 256 pages = 64 rows x 4 bands;
+    an nd `(2,64,96)` shard of `[7,128,128]` reports 192 B and 1792 = 896 x 2.
+
+    Refinement 4 (A3c): this is what lets an output core PULL from a source
+    whose shard is NARROWER than a row — the read is split at band boundaries
+    and each segment is one NoC read from whichever core holds that band. Before
+    R4 the reader could only index whole-row pages, so such an input was refused.
+
+    Returns None when a band is not a whole number of tile-columns: the segment
+    boundaries are then not tile-column boundaries, so a segment length would
+    not be a multiple of `TILE_WIDTH * elem` and the L1 destination cursor would
+    walk off the NoC alignment grid.
+    """
+    row_bytes = W * elem_size
     geometry = shard_2d(memory_config)
     if geometry is None:
-        return True
-    return geometry[1] == Wt * TILE_WIDTH
+        return 1, row_bytes
+    shard_w = geometry[1]
+    if shard_w % TILE_WIDTH:
+        return None
+    if shard_w >= W:
+        return 1, row_bytes
+    return _div_up(W, shard_w), shard_w * elem_size
 
 
 def plan_placement(
@@ -463,8 +519,21 @@ def plan_placement(
     in_res = None if force_streamed else shard_residency(in_memory_config, tile_height=tile_height)
     out_res = None if force_streamed else shard_residency(out_memory_config, tile_height=tile_height)
 
+    # The read side's page geometry (R4). `in_tile_bytes` is by construction
+    # `tile_height * TILE_WIDTH * elem_size`, so it carries the element size
+    # without a second parameter that could disagree with it.
+    elem_size = max(1, in_tile_bytes // (tile_height * TILE_WIDTH))
+    bands = source_bands(in_memory_config, shape[-1] if len(shape) else 1, elem_size)
+
     def _plan(mode, wt_block=None, shard=None, sharded_side=None):
-        return {"mode": mode, "wt_block": wt_block, "shard": shard, "sharded_side": sharded_side, "error": None}
+        return {
+            "mode": mode,
+            "wt_block": wt_block,
+            "shard": shard,
+            "sharded_side": sharded_side,
+            "bands": bands,
+            "error": None,
+        }
 
     # (a) Same-spec L1 -> L1: BOTH CBs alias their shard, zero DRAM traffic on
     #     both sides. No core needs to know which shard it holds — it tilizes
@@ -478,58 +547,95 @@ def plan_placement(
             sharded_side="in",
         )
 
-    # (b) Crossover: exactly one side sharded. That side is a CB alias pinned to
-    #     its own cores; the other keeps its TensorAccessor. The core's block
-    #     range is its shard's position in the linearization `b = wchunk*nt_h + r`
-    #     — contiguous, because the linearization is column-block-major.
-    crossover_ok = in_sharded != out_sharded
-    res = in_res if in_sharded else out_res
-    if crossover_ok and res is not None:
+    # (b) ONE side resident, the other streamed. Two schemes share this shape:
+    #
+    #     CROSSOVER (A3b, Refinement 2) — exactly one side sharded. That side is
+    #       a CB alias pinned to its own cores; the other keeps its accessor.
+    #     RESHARD (A3c, Refinement 4) — BOTH sides sharded with different specs.
+    #       The shard is still the per-core block, but it is a different block on
+    #       each side, so a core must touch bytes another core owns. `op_design`
+    #       §4.3 pins the topology: **pull, not push** — the OUTPUT shard is the
+    #       resident side, each output core owns its output block and reads the
+    #       input pages it needs from whichever core holds them, over L1->L1. No
+    #       semaphore, no multicast (§1.1: the map is a bijection, nothing to fan
+    #       out), no DRAM staging. `MODE_RESHARD_IN` is the mirror image, taken
+    #       only for the geometries the output side cannot express.
+    #
+    # Either way the resident core's block range is its shard's position in the
+    # linearization `b = wchunk*nt_h + r` — contiguous, because the
+    # linearization is column-block-major.
+    if in_sharded and out_sharded:
+        candidates = [("out", out_res, out_memory_config), ("in", in_res, in_memory_config)]
+    elif in_sharded:
+        candidates = [("in", in_res, in_memory_config)]
+    elif out_sharded:
+        candidates = [("out", out_res, out_memory_config)]
+    else:
+        candidates = []
+
+    for side, res, mc in candidates:
+        if res is None:
+            continue
         nt_h_shard, wt_shard = res
-        mc = in_memory_config if in_sharded else out_memory_config
-        if nt_h % nt_h_shard == 0 and Wt % wt_shard == 0:
-            n_sh_rows = nt_h // nt_h_shard
-            n_sh_cols = Wt // wt_shard
-            # Shard k -> (row-block, column-block) is row-major over the shard
-            # grid. That is unambiguous for a 1-D shard grid (HEIGHT / WIDTH) and
-            # for ROW_MAJOR; a COL_MAJOR 2-D grid is left to the streamed path
-            # rather than guessed at.
-            mapping_known = n_sh_rows == 1 or n_sh_cols == 1 or shard_view(mc)[2] == ttnn.ShardOrientation.ROW_MAJOR
-            # A3d: the resident side costs no extra L1 (it IS the shard), but the
-            # STREAMED side's CB is `wt_shard` pages — so a wide shard would grow
-            # the CB with W. When it no longer fits the budget, fall back to the
-            # fully-streamed path, whose WT_BLOCK is clamped by the byte target
-            # and therefore constant in W.
-            streamed_tile_bytes = out_tile_bytes if in_sharded else in_tile_bytes
-            fits = cb_budget_bytes is None or wt_shard * streamed_tile_bytes <= cb_budget_bytes
-            streamable = _input_is_streamable(in_memory_config, Wt)
-            if mapping_known and (fits or not streamable):
-                return _plan(
-                    MODE_CROSSOVER_IN if in_sharded else MODE_CROSSOVER_OUT,
-                    wt_block=wt_shard,
-                    shard={
-                        "nt_h_shard": nt_h_shard,
-                        "wt_shard": wt_shard,
-                        "n_sh_rows": n_sh_rows,
-                        "n_sh_cols": n_sh_cols,
-                    },
-                    sharded_side="in" if in_sharded else "out",
-                )
+        if nt_h % nt_h_shard or Wt % wt_shard:
+            continue
+        # This mode places the shard at a POSITION in the global linearization,
+        # so the shard must be one contiguous run of folded tile-rows.
+        if not shard_folds_contiguously(mc, shape):
+            continue
+        n_sh_rows = nt_h // nt_h_shard
+        n_sh_cols = Wt // wt_shard
+        # Shard k -> (row-block, column-block) is row-major over the shard grid.
+        # That is unambiguous for a 1-D shard grid (HEIGHT / WIDTH) and for
+        # ROW_MAJOR; a COL_MAJOR 2-D grid is left to the streamed path rather
+        # than guessed at.
+        if not (n_sh_rows == 1 or n_sh_cols == 1 or shard_view(mc)[2] == ttnn.ShardOrientation.ROW_MAJOR):
+            continue
+        # The STREAMED side is the other one. When the input streams it must be
+        # band-addressable (R4); a streamed output is always tile-paged.
+        if side == "out" and bands is None:
+            continue
+        # A3d: the resident side costs no extra L1 (it IS the shard), but the
+        # STREAMED side's CB is `wt_shard` pages — so a wide shard would grow the
+        # CB with W. When it no longer fits the budget, fall back to the
+        # fully-streamed path, whose WT_BLOCK is clamped by the byte target and
+        # therefore constant in W — but only when that fallback can address the
+        # input at all.
+        streamed_tile_bytes = out_tile_bytes if side == "in" else in_tile_bytes
+        fits = cb_budget_bytes is None or wt_shard * streamed_tile_bytes <= cb_budget_bytes
+        if not fits and bands is not None:
+            continue
+        if in_sharded and out_sharded:
+            mode = MODE_RESHARD_OUT if side == "out" else MODE_RESHARD_IN
+        else:
+            mode = MODE_CROSSOVER_OUT if side == "out" else MODE_CROSSOVER_IN
+        return _plan(
+            mode,
+            wt_block=wt_shard,
+            shard={
+                "nt_h_shard": nt_h_shard,
+                "wt_shard": wt_shard,
+                "n_sh_rows": n_sh_rows,
+                "n_sh_cols": n_sh_cols,
+            },
+            sharded_side=side,
+        )
 
     # (c) Everything else streams through TensorAccessor: interleaved on both
     #     sides (Phase 0), and the cross-spec / DRAM-shard cases where the bytes
     #     genuinely live on another core or in DRAM.
-    if not _input_is_streamable(in_memory_config, Wt):
+    if bands is None:
         h, w = shard_2d(in_memory_config)
         return {
             "mode": None,
             "wt_block": None,
             "shard": None,
             "sharded_side": None,
+            "bands": None,
             "error": (
                 f"tilize: a ROW_MAJOR input sharded {h}x{w} cannot be addressed — its pages are "
-                f"partial rows ({w} of {Wt * TILE_WIDTH} elements) and the shard is not L1-resident "
-                "on the cores that would consume it"
+                f"partial rows of {w} elements, which is not a whole number of {TILE_WIDTH}-wide "
+                "tile columns, so a gathered read would not land on the NoC alignment grid"
             ),
         }
     return _plan(MODE_STREAMED)
@@ -759,8 +865,16 @@ def create_program_descriptor(
         return placement[name] if lv[name] is None else lv[name]
 
     tile_descriptor = ttnn.TileDescriptor(tile_height, TILE_WIDTH)
-    resident_in = plan["mode"] in (MODE_RESIDENT, MODE_CROSSOVER_IN)
-    resident_out = plan["mode"] in (MODE_RESIDENT, MODE_CROSSOVER_OUT)
+    resident_in = plan["mode"] in RESIDENT_IN_MODES
+    resident_out = plan["mode"] in RESIDENT_OUT_MODES
+
+    # R4: the source page grid the reader indexes. `(1, row_bytes)` — the whole
+    # row is one page — is the interleaved / HEIGHT-shard case and emits exactly
+    # the Phase-0 reader; anything narrower makes the reader gather band by band.
+    # Never 0: the gather arm's discarded branch still has to compile.
+    n_bands, band_bytes = plan["bands"]
+    if resident_in:  # the input is never read at all — keep the trivial value
+        n_bands, band_bytes = 1, band_bytes
 
     # The shard hands you the block width on any resident side (op_design §6.2).
     blk = blocking(shape, tile_height, elem_size, lv["target_read_bytes"], wt_block_override=plan["wt_block"])
@@ -924,6 +1038,8 @@ def create_program_descriptor(
         lv["stub_read"],
         int(resident_in),
         int(_knob("stagger_reads")),
+        n_bands,  # R4: source pages per row (1 = whole-row pages, the Phase-0 path)
+        band_bytes,  # R4: bytes per source page
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 

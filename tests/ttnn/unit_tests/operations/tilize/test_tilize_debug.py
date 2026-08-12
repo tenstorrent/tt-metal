@@ -3,7 +3,7 @@
 
 """Deterministic debugging / structure tests for tilize. DO NOT DELETE.
 
-Seven groups:
+Eight groups:
 
 1. **Deterministic value tests** — all-ones and position-encoded inputs, so a
    DEVICE_PRINT session has hand-calculable expectations and a data-reordering
@@ -33,6 +33,9 @@ Seven groups:
 
 7. **Refinement 3 (perf)** — the placement knobs' regime gate, and the grid-fill
    / block-assignment invariants a placement lever could silently break.
+
+8. **Refinement 4 (A3c)** — the cross-spec RESHARD: the pull topology, the band
+   gather, zero DRAM staging, and the same-spec zero-copy path it must not eat.
 """
 
 import pytest
@@ -471,6 +474,9 @@ _COL = ttnn.ShardOrientation.COL_MAJOR
 # CT-arg positions of the `resident` flag (kept next to the kernels' arg lists).
 _READER_RESIDENT_CT = 9
 _WRITER_RESIDENT_CT = 9
+# ... and of Refinement 4's source-page-grid args on the reader.
+_READER_N_BANDS_CT = 11
+_READER_BAND_BYTES_CT = 12
 
 
 def _crs(*ranges):
@@ -575,22 +581,27 @@ def test_r2_crossover_aliases_only_the_sharded_side(device, direction):
     assert reader.core_ranges.num_cores() == len(ttnn.get_optimal_worker_cores_for_sharded_tensor(sharded))
 
 
-def test_r2_cross_spec_streams_and_does_not_alias(device):
-    """Cross-spec (in spec != out spec) is Refinement 4's designed topology; it
-    must NOT silently take the zero-copy path — a core would tilize its own rows
-    into another core's tiles. Here it falls back to the accessor path (L1->L1
-    over the NoC, still no DRAM staging)."""
+def test_r2_cross_spec_never_aliases_the_input_block(device):
+    """Cross-spec (in spec != out spec) must never treat the INPUT shard as this
+    core's block — a core would then tilize its own rows into another core's
+    tiles. The bytes it needs are elsewhere, so the read side is always a gather.
+
+    (Refinement 2 additionally asserted that the OUTPUT side did not alias
+    either, because R2's fallback streamed both sides. Refinement 4 replaces
+    that fallback with the design's pull topology, where the output shard IS
+    resident — pinned by `test_r4_cross_spec_pulls_into_a_resident_output`. The
+    invariant that survives, and the one this test was really protecting, is the
+    input side: a general gather must not swallow the zero-copy case.)"""
     shape = (1, 1, 128, 64)
     in_mem = _legacy_mem(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _crs(((0, 0), (3, 0))), (32, 64))
     out_mem = _legacy_mem(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _crs(((0, 0), (1, 0))), (64, 64))
     _skip_if_grid_too_small(device, in_mem)
 
     descriptor, _in, _out = _descriptor_for(device, shape, in_mem, out_mem)
-    cb_in, cb_out = descriptor.cbs
-    reader, writer, _compute = descriptor.kernels
-    assert not cb_in.has_buffer() and not cb_out.has_buffer()
+    cb_in, _cb_out = descriptor.cbs
+    reader, _writer, _compute = descriptor.kernels
+    assert not cb_in.has_buffer()
     assert reader.compile_time_args[_READER_RESIDENT_CT] == 0
-    assert writer.compile_time_args[_WRITER_RESIDENT_CT] == 0
 
 
 def test_r2_plan_is_pure_and_covers_the_four_placements():
@@ -605,26 +616,42 @@ def test_r2_plan_is_pure_and_covers_the_four_placements():
     assert plan_placement(in_memory_config=height, out_memory_config=height, **kwargs)["mode"] == "resident"
     assert plan_placement(in_memory_config=height, out_memory_config=dram, **kwargs)["mode"] == "crossover_in"
     assert plan_placement(in_memory_config=dram, out_memory_config=height, **kwargs)["mode"] == "crossover_out"
-    assert plan_placement(in_memory_config=height, out_memory_config=other, **kwargs)["mode"] == "streamed"
     assert plan_placement(in_memory_config=dram, out_memory_config=dram, **kwargs)["mode"] == "streamed"
+    # Cross-spec was Refinement 2's fully-streamed fallback and is Refinement 4's
+    # pull reshard: the OUTPUT shard is the resident block, the input is gathered.
+    assert plan_placement(in_memory_config=height, out_memory_config=other, **kwargs)["mode"] == "reshard_out"
 
     # force_streamed is C14's off-arm: the same call, deliberately NOT zero-copy.
     forced = plan_placement(in_memory_config=height, out_memory_config=height, force_streamed=True, **kwargs)
     assert forced["mode"] == "streamed" and forced["error"] is None
 
-    # A ROW_MAJOR shard narrower than a row cannot be addressed by the streamed
-    # reader (its pages are partial rows) and is not resident here (DRAM shard).
+    # A ROW_MAJOR shard narrower than a row was refused outright before R4. It is
+    # now band-addressable: its pages are shard-rows, so the reader gathers the
+    # bands its block spans (here 4 bands of 128 elements each).
     dram_width_shard = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.DRAM,
         ttnn.ShardSpec(_crs(((0, 0), (3, 0))), (64, 128), _ROW),
     )
+    narrow_kwargs = dict(
+        out_memory_config=dram, shape=[1, 1, 64, 512], tile_height=32, Wt=16, nt_h=2, in_tile_bytes=2048
+    )
+    gathered = plan_placement(in_memory_config=dram_width_shard, out_tile_bytes=2048, **narrow_kwargs)
+    assert gathered["error"] is None and gathered["bands"] == (4, 128 * 2)
+
+    # What IS still unaddressable: a band that is not a whole number of tile
+    # columns, so a gathered segment would leave the NoC alignment grid.
+    ragged = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(_crs(((0, 0), (1, 0))), (64, 48), _ROW),
+    )
     refused = plan_placement(
-        in_memory_config=dram_width_shard,
+        in_memory_config=ragged,
         out_memory_config=dram,
-        shape=[1, 1, 64, 512],
+        shape=[1, 1, 64, 96],
         tile_height=32,
-        Wt=16,
+        Wt=3,
         nt_h=2,
         in_tile_bytes=2048,
         out_tile_bytes=2048,
@@ -862,3 +889,174 @@ def test_r3_spread_preserves_the_count_and_covers_the_grid(device):
     assert [(c.x, c.y) for c in plan_cores(device, big["total_blocks"], use_multicore=True, spread_cores=True)[0]] == [
         (c.x, c.y) for c in plan_cores(device, big["total_blocks"], use_multicore=True, spread_cores=False)[0]
     ]
+
+
+# ---------------------------------------------------------------------------
+# 8. Refinement 4 (A3c) — the cross-spec RESHARD, a scheme-change
+# ---------------------------------------------------------------------------
+#
+# Cross-spec is the ONE place in this op where a core touches bytes another core
+# owns, so the communication TOPOLOGY is the deliverable and the tests assert it
+# directly (op_design.md §4.3):
+#
+#   * PULL, not push — the OUTPUT shard is the resident block, each output core
+#     reads the input pages it needs from whichever core holds them.
+#   * The read is a BAND gather: a source sharded narrower than a row pages at
+#     the shard width, so a stick is assembled from several pages.
+#   * No semaphore, no multicast (§1.1: the map is a bijection), and zero DRAM
+#     staging — no intermediate is ever materialized.
+#
+# Values are exact (`torch.equal`): tilize is a bijection on byte positions, and
+# a reshard that mis-addresses ONE band produces a visibly wrong tile rather than
+# a numerically close one.
+
+_RESHARD_CASES = [
+    # The golden registry cross-spec cell: same scheme, different grid + shard.
+    pytest.param(
+        (1, 1, 128, 64),
+        lambda: _legacy_mem(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _crs(((0, 0), (3, 0))), (32, 64)),
+        lambda: _legacy_mem(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _crs(((0, 0), (1, 0))), (64, 64)),
+        id="height4_to_height2",
+    ),
+    # nd -> legacy: the two sharding APIs meeting across the reshard.
+    pytest.param(
+        (1, 1, 128, 128),
+        lambda: _nd_mem((1, 1, 64, 64), _crs(((0, 0), (1, 1)))),
+        lambda: _legacy_mem(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _crs(((0, 0), (3, 0))), (32, 128)),
+        id="nd_block_to_height",
+    ),
+    # legacy -> nd, the same pair in the other direction.
+    pytest.param(
+        (1, 1, 128, 128),
+        lambda: _legacy_mem(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _crs(((0, 0), (3, 0))), (32, 128)),
+        lambda: _nd_mem((1, 1, 64, 64), _crs(((0, 0), (1, 1)))),
+        id="height_to_nd_block",
+    ),
+    # WIDTH -> HEIGHT: the input pages are BANDS (4 of them), so every stick of
+    # every block is assembled from a different core than its neighbours.
+    pytest.param(
+        (1, 1, 128, 512),
+        lambda: _legacy_mem(ttnn.TensorMemoryLayout.WIDTH_SHARDED, _crs(((0, 0), (3, 0))), (128, 128)),
+        lambda: _legacy_mem(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _crs(((0, 0), (3, 0))), (32, 512)),
+        id="width_to_height",
+    ),
+    # BLOCK -> WIDTH: both axes of the placement change at once.
+    pytest.param(
+        (1, 1, 128, 128),
+        lambda: _legacy_mem(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _crs(((0, 0), (1, 1))), (64, 64)),
+        lambda: _legacy_mem(ttnn.TensorMemoryLayout.WIDTH_SHARDED, _crs(((0, 0), (3, 0))), (128, 32)),
+        id="block_to_width",
+    ),
+    # UNEVEN / CLIFF bands: a 96-wide shard of a 128-wide tensor, so the last
+    # band is a 32-element cliff and a 3-tile block straddles the boundary.
+    pytest.param(
+        (7, 128, 128),
+        lambda: _nd_mem((2, 64, 96), _crs(((0, 0), (1, 1)))),
+        lambda: _legacy_mem(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _crs(((0, 0), (1, 1))), (448, 64)),
+        id="cliff_band_nd_to_block",
+    ),
+]
+
+
+@pytest.mark.parametrize("shape, in_fn, out_fn", _RESHARD_CASES)
+def test_r4_cross_spec_reshard_is_exact(device, shape, in_fn, out_fn):
+    """Every cross-spec pair, through the PUBLIC entry point, bit-exact."""
+    in_mem, out_mem = in_fn(), out_fn()
+    _skip_if_grid_too_small(device, in_mem)
+    _skip_if_grid_too_small(device, out_mem)
+
+    torch_input = torch.randn(shape).bfloat16()
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_mem
+    )
+    result = ttnn.to_torch(tilize(tt_input, memory_config=out_mem))
+    assert torch.equal(result, torch_input), f"max diff {(result.float() - torch_input.float()).abs().max()}"
+
+
+def test_r4_cross_spec_pulls_into_a_resident_output(device):
+    """§4.3's topology, asserted on the descriptor rather than on the values.
+
+    A cross-spec reshard that merely streamed BOTH sides would pass every value
+    test (Refinement 2's fallback did exactly that), so the pull topology has to
+    be pinned structurally: the output CB is aliased onto the output shard, the
+    core set IS the output shard's cores, and the reader carries a band count
+    (its source is not addressable as whole rows)."""
+    shape = (1, 1, 128, 512)
+    in_mem = _legacy_mem(ttnn.TensorMemoryLayout.WIDTH_SHARDED, _crs(((0, 0), (3, 0))), (128, 128))
+    out_mem = _legacy_mem(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _crs(((0, 0), (3, 0))), (32, 512))
+    _skip_if_grid_too_small(device, in_mem)
+
+    descriptor, _tt_in, tt_out = _descriptor_for(device, shape, in_mem, out_mem)
+    cb_in, cb_out = descriptor.cbs
+    reader, writer, _compute = descriptor.kernels
+
+    # PULL: the output block is resident, the input is gathered.
+    assert cb_out.has_buffer(), "the output shard must BE the block — this is not a pull"
+    assert not cb_in.has_buffer()
+    assert writer.compile_time_args[_WRITER_RESIDENT_CT] == 1
+    assert reader.compile_time_args[_READER_RESIDENT_CT] == 0
+
+    # The gather: 512 elements of row over a 128-element shard = 4 source bands
+    # of 128*2 bytes each, so a stick is assembled from four pages.
+    assert reader.compile_time_args[_READER_N_BANDS_CT] == 4
+    assert reader.compile_time_args[_READER_BAND_BYTES_CT] == 128 * 2
+
+    # A2: the cores are the OUTPUT shard's own cores (core k owns output shard k),
+    # never a re-spread split — that is what makes each core's pull local-output.
+    assert reader.core_ranges.num_cores() == len(ttnn.get_optimal_worker_cores_for_sharded_tensor(tt_out))
+
+    # No semaphore and no multicast: the map is a bijection (op_design §1.1), so
+    # every source page is read by exactly one core and there is nothing to
+    # coordinate between them.
+    assert list(descriptor.semaphores) == []
+
+
+def test_r4_reshard_stages_nothing_through_dram(device):
+    """Zero DRAM staging is the gate on this scheme, so assert it on the program:
+    an L1->L1 reshard's kernels may touch NO buffer other than the caller's two
+    L1 tensors — there is no intermediate to allocate and none is allocated."""
+    shape = (1, 1, 128, 128)
+    in_mem = _nd_mem((1, 1, 64, 64), _crs(((0, 0), (1, 1))))
+    out_mem = _legacy_mem(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _crs(((0, 0), (3, 0))), (32, 128))
+    _skip_if_grid_too_small(device, in_mem)
+
+    descriptor, tt_input, tt_out = _descriptor_for(device, shape, in_mem, out_mem)
+    assert tt_input.memory_config().buffer_type == ttnn.BufferType.L1
+    assert tt_out.memory_config().buffer_type == ttnn.BufferType.L1
+
+    # Every NoC access these kernels can make is derived from a base address in
+    # their runtime args, and there are exactly two of them — the caller's input
+    # and its output. No third buffer exists, so there is nothing to stage
+    # through: a DRAM intermediate is not merely unused, it is unaddressable.
+    reader, writer, _compute = descriptor.kernels
+    cores = ttnn.get_optimal_worker_cores_for_sharded_tensor(tt_out)
+    addresses = {kernel.runtime_args[c.x][c.y][0] for kernel in (reader, writer) for c in cores}
+    assert addresses == {tt_input.buffer_address(), tt_out.buffer_address()}, addresses
+    assert len(descriptor.cbs) == 2 and descriptor.cbs[1].has_buffer()
+
+    # ... and the values still come out exact over that topology.
+    torch_input = torch.randn(shape).bfloat16()
+    tt_in2 = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_mem
+    )
+    assert torch.equal(ttnn.to_torch(tilize(tt_in2, memory_config=out_mem)), torch_input)
+
+
+def test_r4_same_spec_still_takes_the_zero_copy_path(device):
+    """The regression this refinement is most likely to cause: a general gather
+    that silently swallows Refinement 2's same-spec case. Same-spec must still
+    alias BOTH CBs and read zero bytes; only a spec MISMATCH may gather."""
+    shape = (1, 1, 512, 64)
+    mem = _legacy_mem(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _crs(((0, 0), (3, 0))), (128, 64))
+    _skip_if_grid_too_small(device, mem)
+
+    descriptor, _in, _out = _descriptor_for(device, shape, mem, mem)
+    cb_in, cb_out = descriptor.cbs
+    reader, writer, _compute = descriptor.kernels
+    assert cb_in.has_buffer() and cb_out.has_buffer()
+    assert reader.compile_time_args[_READER_RESIDENT_CT] == 1
+    assert writer.compile_time_args[_WRITER_RESIDENT_CT] == 1
+    # And the whole-row source path stays byte-identical for every pre-R4 shape:
+    # the band count is the trivial 1, which emits the helper call and nothing else.
+    interleaved, _, _ = _descriptor_for(device, (1, 1, 64, 128), ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG)
+    assert interleaved.kernels[0].compile_time_args[_READER_N_BANDS_CT] == 1

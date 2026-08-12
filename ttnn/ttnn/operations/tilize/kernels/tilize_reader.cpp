@@ -24,6 +24,21 @@
 // payload). At their defaults (1, 0) the compiler emits only the helper call, so
 // they cannot perturb the measured path.
 //
+// `n_bands > 1` (Refinement 4, A3c) is the THIRD production path: the source is
+// sharded narrower than a row, so its pages are BANDS of a row scattered across
+// cores, and this core (which owns the OUTPUT block) pulls the bands it needs
+// over L1->L1. See the arm's own comment for the topology.
+//
+// HELPER SUBSTITUTION, declared (Refinement 4): the gather arm cannot be
+// `read_sticks_for_tilize` either. That helper reads ONE page per stick at a
+// fixed `byte_offset_within_page` (`tilize_helpers_dataflow.inl`), which is the
+// whole-row-page contract; a banded source needs the stick's bytes assembled
+// from SEVERAL pages at different offsets, into one contiguous L1 row. There is
+// no kernel_lib entry point for a segmented stick read, so `noc_async_read` +
+// `TensorAccessor::get_noc_addr(page, offset)` is the only mechanism — and the
+// helper remains the emitted code on the whole-row path (`n_bands == 1`), which
+// is every pre-R4 shape, byte for byte.
+//
 // HELPER SUBSTITUTION, declared (Refinement 3): `stagger_reads == 1` issues the
 // same `tile_h` reads to the same L1 destinations in a ROTATED order, and
 // `read_sticks_for_tilize` cannot express that — it walks `start_page ..
@@ -49,7 +64,9 @@ void kernel_main() {
     constexpr uint32_t stub_read = get_compile_time_arg_val(8);          // ablation (0 = off)
     constexpr uint32_t resident = get_compile_time_arg_val(9);           // A3/C14 zero-copy (1 = on)
     constexpr uint32_t stagger_reads = get_compile_time_arg_val(10);     // lever R3/A3 (1 = on)
-    constexpr auto src_args = TensorAccessorArgs<11>();
+    constexpr uint32_t n_bands = get_compile_time_arg_val(11);           // R4: source pages per row
+    constexpr uint32_t band_bytes = get_compile_time_arg_val(12);        // R4: bytes per source page
+    constexpr auto src_args = TensorAccessorArgs<13>();
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t b0 = get_arg_val<uint32_t>(1);
@@ -81,7 +98,51 @@ void kernel_main() {
         const uint32_t row_bytes = w * tile_row_bytes;
         const uint32_t byte_offset = wchunk * wt_block * tile_row_bytes;
 
-        if constexpr (barrier_per_block == 1 && stub_read == 0 && stagger_reads == 0) {
+        if constexpr (n_bands > 1) {
+            // R4 (A3c) CROSS-SPEC RESHARD — the PULL gather.
+            //
+            // The source is sharded NARROWER than a row, so its pages are bands:
+            // page `(row, band)` holds bytes [band*band_bytes, +band_bytes) of
+            // that row and lives in whatever core's L1 owns that shard. This
+            // core owns the OUTPUT block, so it pulls the bands its block needs
+            // — the read is split at band boundaries and each segment is one
+            // NoC read from whichever core holds it. Still ONE barrier per block
+            // (B7), still no semaphore and no multicast: §1.1 makes the map a
+            // bijection, so every source byte is read by exactly one core and
+            // there is nothing to coordinate.
+            //
+            // `band_bytes` is a whole number of tile-columns (the host refuses
+            // anything else), so every segment length is a multiple of
+            // `tile_row_bytes` and the L1 cursor stays on the alignment grid.
+            cb_reserve_back(cb_input_sticks, w);
+            const uint32_t l1_base = get_write_ptr(cb_input_sticks);
+            const uint32_t end = byte_offset + row_bytes;
+            for (uint32_t s = 0; s < tile_h; ++s) {
+                const uint32_t row_page0 = (r * tile_h + s) * n_bands;
+                uint32_t l1 = l1_base + s * row_bytes;
+                uint32_t off = byte_offset;
+                while (off < end) {
+                    const uint32_t band = off / band_bytes;
+                    const uint32_t in_band = off - band * band_bytes;
+                    uint32_t len = band_bytes - in_band;
+                    if (len > end - off) {
+                        len = end - off;
+                    }
+                    if constexpr (stub_read == 0) {
+                        noc_async_read(src.get_noc_addr(row_page0 + band, in_band), l1, len);
+                        if constexpr (barrier_per_block == 0) {
+                            noc_async_read_barrier();  // B7 off: one barrier per transaction
+                        }
+                    }
+                    l1 += len;
+                    off += len;
+                }
+            }
+            if constexpr (barrier_per_block == 1) {
+                noc_async_read_barrier();
+            }
+            cb_push_back(cb_input_sticks, w);
+        } else if constexpr (barrier_per_block == 1 && stub_read == 0 && stagger_reads == 0) {
             dataflow_kernel_lib::read_sticks_for_tilize<cb_input_sticks>(
                 src,
                 /*total_num_rows*/ tile_h,
