@@ -83,12 +83,17 @@ class MATH_NUM_FACES(TemplateParameter):
     host/pack face count. sdpa_bcast_col_srca_srcb_reuse, for instance, drives a single 16x16 face on the
     unpack/pack side (num_faces == 1) while its mop still requires 2 -- there, 2 is the inner-loop count
     for the two 8-row ELWMUL chunks that cover the tile's 16 dest rows.
+
+    The field is `math_num_faces`, not `num_faces`: NUM_FACES already owns the `num_faces` field, and
+    test_perf_header_gate.test_parameter_field_names_are_globally_unique rejects a field name declared by
+    two parameter classes (they would collide as perf-CSV headers). The emitted C++ symbol stays
+    MATH_NUM_FACES.
     """
 
-    num_faces: int = 2
+    math_num_faces: int = 2
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr std::uint32_t MATH_NUM_FACES = {self.num_faces};"
+        return f"constexpr std::uint32_t MATH_NUM_FACES = {self.math_num_faces};"
 
 
 @dataclass
@@ -1224,19 +1229,6 @@ class CRK_TILE_DIMM(RuntimeParameter):
             "std::uint32_t KT_DIM;",
         ]
         return "\n".join(lines), "III"
-
-
-@dataclass
-class IN0_FACE_R_DIM(RuntimeParameter):
-    # in0 partial-tile row dimension for the experimental custom_mm LLK (see test_custom_mm.py).
-    # in0 tile shape is [{1, 2, 4, 8}, 32]; this is the leading dimension (rows in a single active face).
-    in0_face_r_dim: int = 8
-
-    def convert_to_cpp(self) -> str:
-        return f"constexpr std::uint32_t IN0_FACE_R_DIM = {self.in0_face_r_dim};"
-
-    def convert_to_struct_fields(self) -> tuple[str, str]:
-        return "std::uint32_t IN0_FACE_R_DIM;", "I"
 
 
 @dataclass
