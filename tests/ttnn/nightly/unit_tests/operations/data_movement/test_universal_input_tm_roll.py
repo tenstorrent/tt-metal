@@ -414,3 +414,27 @@ def test_roll_col_major_height_sharded(device, shape, sh, sw, shifts, dims, layo
     )
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
     run_roll(device, torch.randn(shape, dtype=torch.bfloat16), layout, mem_config, shifts, dims)
+
+
+# rd=(2,6) shard_h=4 shift=1 dim=2: 3-source case (past reader's 2-slot `src_base`) routed via interleaved round-trip.
+def test_roll_dram_sharded_row_major_ge3_source_shards_routes_via_interleaved(device):
+    torch.manual_seed(51213)
+    shape = [1, 2, 6, 16]
+    sh, sw = 4, 16
+    total_h = shape[0] * shape[1] * shape[2]
+    ncores = total_h // sh
+    compute_grid = device.compute_with_storage_grid_size()
+    if ncores > compute_grid.x * compute_grid.y:
+        pytest.skip(f"Device has insufficient cores ({ncores} needed)")
+    shard_spec = ttnn.ShardSpec(
+        ttnn.num_cores_to_corerangeset(ncores, compute_grid, True),
+        [sh, sw],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, shard_spec)
+    x = torch.randn(shape, dtype=torch.bfloat16)
+    tt_in = ttnn.from_torch(
+        x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_config
+    )
+    out = ttnn.roll(tt_in, [1], [2])
+    assert_with_pcc(torch.roll(x, [1], [2]).float(), ttnn.to_torch(out.cpu()).float(), _PCC)
