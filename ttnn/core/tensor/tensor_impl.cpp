@@ -9,13 +9,14 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-#include "tt-metalium/experimental/tensor/host_tensor.hpp"
-#include "tt-metalium/experimental/tensor/tensor_apis.hpp"
+#include "tt-metalium/tensor/host_tensor.hpp"
+#include "tt-metalium/tensor/tensor_apis.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/core/core.hpp"
 
@@ -37,6 +38,7 @@
 #include <tt_stl/assert.hpp>
 
 #include <tracy/Tracy.hpp>
+#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 
 namespace ttnn::tensor_impl {
 
@@ -52,6 +54,7 @@ std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& dtype) 
         case tt::tt_metal::DataType::UINT16: os << "uint16"; break;
         case tt::tt_metal::DataType::UINT32: os << "uint32"; break;
         case tt::tt_metal::DataType::INT32: os << "int32"; break;
+        case tt::tt_metal::DataType::INT8: os << "int8"; break;
         case tt::tt_metal::DataType::FP8_E4M3: os << "fp8_e4m3"; break;
         default: throw std::invalid_argument("Unknown data type");
     }
@@ -116,6 +119,11 @@ inline void print_datum(std::ostream& ss, bfloat16 datum, bool use_scientific) {
 template <>
 inline void print_datum(std::ostream& ss, uint8_t datum, bool use_scientific) {
     print_datum<uint32_t>(ss, datum, use_scientific);
+}
+
+template <>
+inline void print_datum(std::ostream& ss, int8_t datum, bool use_scientific) {
+    print_datum<int32_t>(ss, datum, use_scientific);
 }
 
 // Helper function to determine if scientific notation should be used
@@ -311,30 +319,33 @@ std::string to_string_impl(const ttnn::Tensor& tensor) {
 
     const ttnn::Tensor row_major_tensor = get_row_major_tensor(cpu_tensor);
     const auto strides = row_major_tensor.tensor_spec().compute_strides();
-    const auto coords = storage.get_coords();
-    auto coords_it = coords.begin();
-    const std::vector<tt::tt_metal::HostBuffer> buffers = get_host_buffers(row_major_tensor.host_storage());
+    const auto& dist_buffer = row_major_tensor.host_storage().buffer();
     std::stringstream ss;
-    for (size_t i = 0; i < buffers.size(); i++) {
-        const distributed::MeshCoordinate coord = *coords_it++;
-        if (mesh_device.is_local(coord)) {
-            ss << "device_id: " << mesh_device.get_device(coord)->id() << ", " << coord << std::endl;
-            detail::to_string(ss, buffers[i].view_as<T>(), shape, strides, tensor.dtype(), tensor.layout());
+    bool first = true;
+    // `shard_coords()` records the requested coordinates, but only shards local to this host are materialized, so
+    // each buffer must be retrieved by its coordinate rather than inferred from position.
+    for (const auto& coord : dist_buffer.shard_coords()) {
+        const std::optional<tt::tt_metal::HostBuffer> shard = dist_buffer.get_shard(coord);
+        if (!shard.has_value() || !mesh_device.is_local(coord)) {
+            continue;
         }
-        if (i + 1 != buffers.size()) {
+        if (!first) {
             ss << std::endl;
         }
+        first = false;
+        ss << "device_id: " << mesh_device.get_device(coord)->id() << ", " << coord << std::endl;
+        detail::to_string(ss, shard->view_as<T>(), shape, strides, tensor.dtype(), tensor.layout());
     }
     return ss.str();
 }
 
 template <>
-std::string to_string_impl<tt::tt_metal::tensor_impl::bfloat8_b>(const ttnn::Tensor& tensor) {
+std::string to_string_impl<bfloat8_b>(const ttnn::Tensor& tensor) {
     return to_string_impl<float>(tensor);
 }
 
 template <>
-std::string to_string_impl<tt::tt_metal::tensor_impl::bfloat4_b>(const ttnn::Tensor& tensor) {
+std::string to_string_impl<bfloat4_b>(const ttnn::Tensor& tensor) {
     return to_string_impl<float>(tensor);
 }
 
@@ -344,7 +355,7 @@ std::string to_string_impl<float8_e4m3>(const ttnn::Tensor& tensor) {
 }
 
 std::string to_string(const ttnn::Tensor& tensor) {
-    return tt::tt_metal::tensor_impl::dispatch(tensor.dtype(), [&]<typename T>() { return to_string_impl<T>(tensor); });
+    return dispatch(tensor.dtype(), [&]<typename T>() { return to_string_impl<T>(tensor); });
 }
 
 // ======================================================================================
@@ -431,7 +442,7 @@ tt::tt_metal::HostTensor view(
 
     // TODO (#25340): Review tensor topology logic for reshape
     const auto& buffer = tensor.buffer();
-    return tt::tt_metal::HostTensor::from_buffer(buffer, new_spec, tensor.tensor_topology());
+    return host_tensor_from_buffer_with_topology(buffer, new_spec, tt::tt_metal::get_tensor_topology(tensor));
 }
 
 // ======================================================================================
@@ -456,14 +467,12 @@ ttnn::Tensor extract_shard_impl(const ttnn::Tensor& tensor, const uint32_t& core
 }
 
 template <>
-ttnn::Tensor extract_shard_impl<tt::tt_metal::tensor_impl::bfloat8_b>(
-    const ttnn::Tensor& tensor, const uint32_t& core_id) {
+ttnn::Tensor extract_shard_impl<bfloat8_b>(const ttnn::Tensor& tensor, const uint32_t& core_id) {
     return extract_shard_impl<uint32_t>(tensor, core_id);
 }
 
 template <>
-ttnn::Tensor extract_shard_impl<tt::tt_metal::tensor_impl::bfloat4_b>(
-    const ttnn::Tensor& tensor, const uint32_t& core_id) {
+ttnn::Tensor extract_shard_impl<bfloat4_b>(const ttnn::Tensor& tensor, const uint32_t& core_id) {
     return extract_shard_impl<uint32_t>(tensor, core_id);
 }
 
@@ -475,8 +484,7 @@ ttnn::Tensor extract_shard_impl<float8_e4m3>(const ttnn::Tensor&, const uint32_t
 }
 
 ttnn::Tensor extract_shard(const ttnn::Tensor& tensor, const uint32_t& core_id) {
-    return tt::tt_metal::tensor_impl::dispatch(
-        tensor.dtype(), [&]<typename T>() { return extract_shard_impl<T>(tensor, core_id); });
+    return dispatch(tensor.dtype(), [&]<typename T>() { return extract_shard_impl<T>(tensor, core_id); });
 }
 
 }  // namespace ttnn::tensor_impl

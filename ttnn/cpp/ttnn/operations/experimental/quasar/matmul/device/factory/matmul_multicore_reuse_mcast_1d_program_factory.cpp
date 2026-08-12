@@ -938,7 +938,17 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
 
     CoreCoord start_core_noc = top_left_core_physical;
     CoreCoord end_core_noc = bottom_right_core_physical;
-    if (in0_noc == tt::tt_metal::NOC::NOC_1) {
+    // A multicast rectangle must be specified with start <= end. Two arch paths:
+    //  * WH/BH (2 NOCs, torus): a NOC_1 multicast runs high->low, so swap start/end (unchanged).
+    //  * Quasar (single NOC, non-torus): ascending regardless of NOC. in0_noc defaults to NOC_1 on Quasar
+    //    too, so the WH/BH swap would degenerate the rectangle to [max..min] and hang the sender on mcast
+    //    acks. Force ascending via component-wise min/max. (#48552)
+    if (device->arch() == tt::ARCH::QUASAR) {
+        CoreCoord lo = {std::min(start_core_noc.x, end_core_noc.x), std::min(start_core_noc.y, end_core_noc.y)};
+        CoreCoord hi = {std::max(start_core_noc.x, end_core_noc.x), std::max(start_core_noc.y, end_core_noc.y)};
+        start_core_noc = lo;
+        end_core_noc = hi;
+    } else if (in0_noc == tt::tt_metal::NOC::NOC_1) {
         std::swap(start_core_noc, end_core_noc);
     }
 
@@ -1816,7 +1826,16 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
 
     CoreCoord start_core_noc = bottom_right_core_physical;
     CoreCoord end_core_noc = top_left_core_physical;
-    if (in1_noc == tt::tt_metal::NOC::NOC_0) {
+    // A multicast rectangle must be specified with start <= end. Two arch paths (see the in0 note above):
+    //  * WH/BH: an in1 NOC_0 multicast runs high->low, so swap start/end (unchanged).
+    //  * Quasar (single NOC, non-torus): force ascending via component-wise min/max regardless of NOC,
+    //    else the reversed [max..min] rectangle hangs the sender on mcast acks. (#48552)
+    if (device->arch() == tt::ARCH::QUASAR) {
+        CoreCoord lo = {std::min(start_core_noc.x, end_core_noc.x), std::min(start_core_noc.y, end_core_noc.y)};
+        CoreCoord hi = {std::max(start_core_noc.x, end_core_noc.x), std::max(start_core_noc.y, end_core_noc.y)};
+        start_core_noc = lo;
+        end_core_noc = hi;
+    } else if (in1_noc == tt::tt_metal::NOC::NOC_0) {
         std::swap(start_core_noc, end_core_noc);
     }
 
@@ -3775,7 +3794,17 @@ void override_program_parameters(
 
     CoreCoord start_core_noc = top_left_core_physical;
     CoreCoord end_core_noc = bottom_right_core_physical;
-    if (in0_noc == tt::tt_metal::NOC::NOC_1) {
+    // A multicast rectangle must be specified with start <= end. Two arch paths:
+    //  * WH/BH (2 NOCs, torus): a NOC_1 multicast runs high->low, so swap start/end (unchanged).
+    //  * Quasar (single NOC, non-torus): ascending regardless of NOC. in0_noc defaults to NOC_1 on Quasar
+    //    too, so the WH/BH swap would degenerate the rectangle to [max..min] and hang the sender on mcast
+    //    acks. Force ascending via component-wise min/max. (#48552)
+    if (device->arch() == tt::ARCH::QUASAR) {
+        CoreCoord lo = {std::min(start_core_noc.x, end_core_noc.x), std::min(start_core_noc.y, end_core_noc.y)};
+        CoreCoord hi = {std::max(start_core_noc.x, end_core_noc.x), std::max(start_core_noc.y, end_core_noc.y)};
+        start_core_noc = lo;
+        end_core_noc = hi;
+    } else if (in0_noc == tt::tt_metal::NOC::NOC_1) {
         std::swap(start_core_noc, end_core_noc);
     }
 
@@ -4646,7 +4675,16 @@ void override_program_parameters(
 
     CoreCoord start_core_noc = bottom_right_core_physical;
     CoreCoord end_core_noc = top_left_core_physical;
-    if (in1_noc == tt::tt_metal::NOC::NOC_0) {
+    // A multicast rectangle must be specified with start <= end. Two arch paths (see the in0 note above):
+    //  * WH/BH: an in1 NOC_0 multicast runs high->low, so swap start/end (unchanged).
+    //  * Quasar (single NOC, non-torus): force ascending via component-wise min/max regardless of NOC,
+    //    else the reversed [max..min] rectangle hangs the sender on mcast acks. (#48552)
+    if (device->arch() == tt::ARCH::QUASAR) {
+        CoreCoord lo = {std::min(start_core_noc.x, end_core_noc.x), std::min(start_core_noc.y, end_core_noc.y)};
+        CoreCoord hi = {std::max(start_core_noc.x, end_core_noc.x), std::max(start_core_noc.y, end_core_noc.y)};
+        start_core_noc = lo;
+        end_core_noc = hi;
+    } else if (in1_noc == tt::tt_metal::NOC::NOC_0) {
         std::swap(start_core_noc, end_core_noc);
     }
 
@@ -5160,11 +5198,16 @@ namespace m2 = tt::tt_metal::experimental;
 
 namespace CMAKE_UNIQUE_NAMESPACE {
 // Create a generation-agnostic data movement hardware config: Gen1 (WH/BH) takes the given
-// processor & NOC; Gen2 (Quasar) uses the default config.
+// processor & NOC; Gen2 (Quasar) uses the default config, optionally opting the kernel's DFBs
+// out of implicit-sync credit accounting (disable_dfb_implicit_sync_for_all) — a Gen2-only concept
+// ignored on Gen1.
 m2::DataMovementHardwareConfig make_datamovement_hardware_config(
-    tt::ARCH arch, tt::tt_metal::DataMovementProcessor processor, tt::tt_metal::NOC noc) {
+    tt::ARCH arch,
+    tt::tt_metal::DataMovementProcessor processor,
+    tt::tt_metal::NOC noc,
+    bool disable_dfb_implicit_sync_for_all = false) {
     if (arch == tt::ARCH::QUASAR) {
-        return m2::DataMovementGen2Config{};
+        return m2::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = disable_dfb_implicit_sync_for_all};
     }
     return m2::DataMovementGen1Config{.processor = processor, .noc = noc};
 }
@@ -5226,6 +5269,12 @@ constexpr const char* IN1_RECEIVER_WRITER_KERNEL_PATH =
 constexpr const char* COMPUTE_KERNEL_PATH =
     "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/compute/"
     "bmm_large_block_zm_fused_bias_activation_metal2.cpp";
+// No-op kernels for the matmul's idle ("noop") cores, co-located with this op (the old
+// tt_metal/kernels/{dataflow,compute}/blank.cpp were moved to tests/ by #44980 and are not shipped).
+constexpr const char* NOOP_DM_KERNEL_PATH =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/blank.cpp";
+constexpr const char* NOOP_COMPUTE_KERNEL_PATH =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/compute/blank.cpp";
 
 // std::map<string,string> defines -> Metal 2.0 Defines (Table<string,string>).
 m2::KernelSpec::CompilerOptions::Defines to_m2_defines(const std::map<std::string, std::string>& m) {
@@ -5922,7 +5971,10 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
         // multicast that never delivers VALID, and the whole grid hangs at receiver_sem.wait(VALID).
         // Matches the working mcast_2d factory.
         .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
-            device->arch(), tt::tt_metal::DataMovementProcessor::RISCV_1, in0_noc),
+            device->arch(),
+            tt::tt_metal::DataMovementProcessor::RISCV_1,
+            in0_noc,
+            /*disable_dfb_implicit_sync_for_all=*/true),
     });
 
     const bool has_no_work_in_recv =
@@ -5949,7 +6001,10 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
             .runtime_arg_schema = {.runtime_arg_names = in0_no_work_rta_names},
             // [#47797] Pin RISCV_1 + in0_noc (see in0 sender above); block-sharded mcast geometry.
             .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
-                device->arch(), tt::tt_metal::DataMovementProcessor::RISCV_1, in0_noc),
+                device->arch(),
+                tt::tt_metal::DataMovementProcessor::RISCV_1,
+                in0_noc,
+                /*disable_dfb_implicit_sync_for_all=*/true),
         });
     }
     if (has_no_work_not_in_recv) {
@@ -5972,7 +6027,10 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
             .runtime_arg_schema = {.runtime_arg_names = in0_no_work_rta_names},
             // [#47797] Pin RISCV_1 + in0_noc (see in0 sender above); block-sharded mcast geometry.
             .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
-                device->arch(), tt::tt_metal::DataMovementProcessor::RISCV_1, in0_noc),
+                device->arch(),
+                tt::tt_metal::DataMovementProcessor::RISCV_1,
+                in0_noc,
+                /*disable_dfb_implicit_sync_for_all=*/true),
         });
     }
 
@@ -6007,7 +6065,10 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
             // [#47797] Pin RISCV_1 + in0_noc for NOC parity with the in0 sender (the receiver's
             // sender_sem.up to the sender must use the same NOC as the mcast geometry).
             .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
-                device->arch(), tt::tt_metal::DataMovementProcessor::RISCV_1, in0_noc),
+                device->arch(),
+                tt::tt_metal::DataMovementProcessor::RISCV_1,
+                in0_noc,
+                /*disable_dfb_implicit_sync_for_all=*/true),
         });
     }
 
@@ -6120,7 +6181,10 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
             // The bare WRITER hint resolves to NOC1 here and the writes never leave the NIU
             // (npw_sent=0), hanging the final barrier.
             .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
-                device->arch(), tt::tt_metal::DataMovementProcessor::RISCV_0, in1_noc),
+                device->arch(),
+                tt::tt_metal::DataMovementProcessor::RISCV_0,
+                in1_noc,
+                /*disable_dfb_implicit_sync_for_all=*/true),
         });
     }
 
@@ -6220,7 +6284,17 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
 
     CoreCoord start_core_noc = top_left_core_physical;
     CoreCoord end_core_noc = bottom_right_core_physical;
-    if (in0_noc == tt::tt_metal::NOC::NOC_1) {
+    // A multicast rectangle must be specified with start <= end. Two arch paths:
+    //  * WH/BH (2 NOCs, torus): a NOC_1 multicast runs high->low, so swap start/end (unchanged).
+    //  * Quasar (single NOC, non-torus): ascending regardless of NOC. in0_noc defaults to NOC_1 on Quasar
+    //    too, so the WH/BH swap would degenerate the rectangle to [max..min] and hang the sender on mcast
+    //    acks. Force ascending via component-wise min/max. (#48552)
+    if (device->arch() == tt::ARCH::QUASAR) {
+        CoreCoord lo = {std::min(start_core_noc.x, end_core_noc.x), std::min(start_core_noc.y, end_core_noc.y)};
+        CoreCoord hi = {std::max(start_core_noc.x, end_core_noc.x), std::max(start_core_noc.y, end_core_noc.y)};
+        start_core_noc = lo;
+        end_core_noc = hi;
+    } else if (in0_noc == tt::tt_metal::NOC::NOC_1) {
         std::swap(start_core_noc, end_core_noc);
     }
 
@@ -6868,7 +6942,10 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
             // Pin RISCV_1 + in0_noc (not a plain READER hint -> NOC_0) so this does not collide with the
             // in1 sender writer on NOC_0. See the in0_noc comment above.
             .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
-                device->arch(), tt::tt_metal::DataMovementProcessor::RISCV_1, in0_noc),
+                device->arch(),
+                tt::tt_metal::DataMovementProcessor::RISCV_1,
+                in0_noc,
+                /*disable_dfb_implicit_sync_for_all=*/true),
         });
     }
 
@@ -6976,7 +7053,10 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
             // Pin RISCV_0 + in1_noc (legacy parity): the multicast dest rectangle was swapped for
             // in1_noc, so the mcast must issue on in1_noc or it inverts and degenerates.
             .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
-                device->arch(), tt::tt_metal::DataMovementProcessor::RISCV_0, in1_noc),
+                device->arch(),
+                tt::tt_metal::DataMovementProcessor::RISCV_0,
+                in1_noc,
+                /*disable_dfb_implicit_sync_for_all=*/true),
         });
     }
 
@@ -7055,7 +7135,10 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
             // Pin RISCV_0 + in1_noc (legacy parity) so the receiver's NoC ops use the same NOC as
             // the sender's multicast geometry.
             .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
-                device->arch(), tt::tt_metal::DataMovementProcessor::RISCV_0, in1_noc),
+                device->arch(),
+                tt::tt_metal::DataMovementProcessor::RISCV_0,
+                in1_noc,
+                /*disable_dfb_implicit_sync_for_all=*/true),
         });
     }
 
@@ -7130,24 +7213,30 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
         }
         kernels.push_back(m2::KernelSpec{
             .unique_id = RO_NOOP_BRISC_KERNEL,
-            .source = std::filesystem::path("tt_metal/kernels/dataflow/blank.cpp"),
+            .source = std::filesystem::path(NOOP_DM_KERNEL_PATH),
             .dfb_bindings = std::move(noop_dm_dfb),
             .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
-                device->arch(), tt::tt_metal::DataMovementProcessor::RISCV_0, in1_noc),
+                device->arch(),
+                tt::tt_metal::DataMovementProcessor::RISCV_0,
+                in1_noc,
+                /*disable_dfb_implicit_sync_for_all=*/true),
         });
         kernels.push_back(m2::KernelSpec{
             .unique_id = RO_NOOP_NCRISC_KERNEL,
-            .source = std::filesystem::path("tt_metal/kernels/dataflow/blank.cpp"),
+            .source = std::filesystem::path(NOOP_DM_KERNEL_PATH),
             // RISCV_1 + in0_noc (not in1_noc): the BRISC noop above is RISCV_0 + in1_noc (== NOC_0 on WH), so
             // pinning both to in1_noc puts two dedicated-NOC DM kernels on NOC_0 on the same noop core, which
             // the program-spec validator rejects (noc_inserted). in0_noc is the opposite NOC -> distinct.
             // Mirrors the worker-core split (in0 reader on in0_noc, in1 writer on in1_noc).
             .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
-                device->arch(), tt::tt_metal::DataMovementProcessor::RISCV_1, in0_noc),
+                device->arch(),
+                tt::tt_metal::DataMovementProcessor::RISCV_1,
+                in0_noc,
+                /*disable_dfb_implicit_sync_for_all=*/true),
         });
         kernels.push_back(m2::KernelSpec{
             .unique_id = RO_NOOP_COMPUTE_KERNEL,
-            .source = std::filesystem::path("tt_metal/kernels/compute/blank.cpp"),
+            .source = std::filesystem::path(NOOP_COMPUTE_KERNEL_PATH),
             .dfb_bindings = std::move(noop_compute_dfb),
             .hw_config = compute_hw_config,
         });
@@ -7184,7 +7273,16 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
     CoreCoord start_core_noc = bottom_right_core_physical;
     CoreCoord end_core_noc = top_left_core_physical;
     // in1_noc is defined above (hoisted before kernel creation so the in1 writers pin the same NOC).
-    if (in1_noc == tt::tt_metal::NOC::NOC_0) {
+    // A multicast rectangle must be specified with start <= end. Two arch paths (see the in0 note above):
+    //  * WH/BH: an in1 NOC_0 multicast runs high->low, so swap start/end (unchanged).
+    //  * Quasar (single NOC, non-torus): force ascending via component-wise min/max regardless of NOC,
+    //    else the reversed [max..min] rectangle hangs the sender on mcast acks. (#48552)
+    if (device->arch() == tt::ARCH::QUASAR) {
+        CoreCoord lo = {std::min(start_core_noc.x, end_core_noc.x), std::min(start_core_noc.y, end_core_noc.y)};
+        CoreCoord hi = {std::max(start_core_noc.x, end_core_noc.x), std::max(start_core_noc.y, end_core_noc.y)};
+        start_core_noc = lo;
+        end_core_noc = hi;
+    } else if (in1_noc == tt::tt_metal::NOC::NOC_0) {
         std::swap(start_core_noc, end_core_noc);
     }
 

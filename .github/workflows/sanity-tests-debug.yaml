@@ -79,7 +79,7 @@ jobs:
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: RelWithDebInfo
-      build-wheel: true
+      build-inplace-wheel: true
       tracy: true
       platform: "Ubuntu 22.04"
       skip-tt-train: false
@@ -98,6 +98,7 @@ jobs:
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: RelWithDebInfo
+      # Manylinux wheel: in-place is cp310, but this leg tests on 24.04 (cp312 venv).
       build-wheel: true
       tracy: true
       platform: "Ubuntu 24.04"

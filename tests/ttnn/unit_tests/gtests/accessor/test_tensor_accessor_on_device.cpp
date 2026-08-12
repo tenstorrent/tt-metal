@@ -16,7 +16,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/api/ttnn/distributed/api.hpp"
@@ -1232,7 +1232,7 @@ TEST_F(TensorAccessorArgsConstructorTests, MeshTensorConstructorEquivalentToMesh
         tt::tt_metal::Shape{64, 64},
         tt::tt_metal::TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_config));
 
-    auto mesh_tensor = MeshTensor::allocate_on_device(*mesh_device_, tensor_spec, tt::tt_metal::TensorTopology());
+    auto mesh_tensor = MeshTensor::allocate_on_device(*mesh_device_, tensor_spec);
 
     const auto args_from_mesh_tensor = TensorAccessorArgs(mesh_tensor);
     const auto args_from_mesh_buffer = TensorAccessorArgs(mesh_tensor.mesh_buffer());
@@ -1248,7 +1248,7 @@ TEST_F(TensorAccessorArgsConstructorTests, MeshTensorConstructorEquivalentToMesh
         tt::tt_metal::Shape{64, 128},
         tt::tt_metal::TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_config));
 
-    auto mesh_tensor = MeshTensor::allocate_on_device(*mesh_device_, tensor_spec, tt::tt_metal::TensorTopology());
+    auto mesh_tensor = MeshTensor::allocate_on_device(*mesh_device_, tensor_spec);
 
     const auto args_from_mesh_tensor = TensorAccessorArgs(mesh_tensor);
     const auto args_from_mesh_buffer = TensorAccessorArgs(mesh_tensor.mesh_buffer());
@@ -1270,7 +1270,7 @@ TEST_F(TensorAccessorArgsConstructorTests, MeshTensorConstructorEquivalentToMesh
         tt::tt_metal::Shape{4, 6, 64, 64},
         tt::tt_metal::TensorLayout(DataType::UINT16, PageConfig(Layout::TILE), mem_config));
 
-    auto mesh_tensor = MeshTensor::allocate_on_device(*mesh_device_, tensor_spec, tt::tt_metal::TensorTopology());
+    auto mesh_tensor = MeshTensor::allocate_on_device(*mesh_device_, tensor_spec);
 
     const auto args_from_mesh_tensor = TensorAccessorArgs(mesh_tensor);
     const auto args_from_mesh_buffer = TensorAccessorArgs(mesh_tensor.mesh_buffer());

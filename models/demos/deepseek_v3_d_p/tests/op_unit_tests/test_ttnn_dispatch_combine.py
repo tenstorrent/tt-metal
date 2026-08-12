@@ -203,7 +203,6 @@ def run_dispatch_combine(
     tt_dispatch_offsets, tt_expert_token_counts, tt_expert_region_offsets, _ = tt_moe_routing_setup(
         ttnn_top_k_experts_indices=indices,
         num_routed_experts=num_routed_experts,
-        seq_len_per_chip=seq_len_per_chip,
         num_experts_per_tok=num_experts_per_tok,
     )
 
@@ -423,7 +422,6 @@ def dispatch_combine_shape_params():
 )
 def test_ttnn_dispatch_combine(
     mesh_device,
-    device_params,
     seq_len_per_chip,
     emb_dim,
     num_routed_experts,
@@ -436,11 +434,6 @@ def test_ttnn_dispatch_combine(
     is_ci_env,
     is_ci_v2_env,
 ):
-    if device_params.get("fabric_config") == ttnn.FabricConfig.FABRIC_2D and tuple(mesh_device.shape) == (4, 2):
-        pytest.skip(
-            "fabric2d mesh-4x2 all-gather hang. Revert this skip when "
-            "https://github.com/tenstorrent/tt-metal/issues/50559 is closed."
-        )
     run_dispatch_combine(
         mesh_device,
         seq_len_per_chip,
@@ -621,7 +614,6 @@ def test_ttnn_dispatch_combine_overflow(mesh_device, num_links, topology, overfl
     tt_dispatch_offsets, tt_expert_token_counts, tt_expert_region_offsets, _ = tt_moe_routing_setup(
         ttnn_top_k_experts_indices=indices,
         num_routed_experts=num_routed_experts,
-        seq_len_per_chip=seq_len_per_chip,
         num_experts_per_tok=num_experts_per_tok,
     )
 

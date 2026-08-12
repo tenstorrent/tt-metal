@@ -12,8 +12,8 @@
 #include "tt_stl/overloaded.hpp"
 #include <tt_stl/reflection.hpp>
 
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
-#include <tt-metalium/experimental/tensor/tensor_types.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
 
 namespace tt::tt_metal {
 
@@ -47,6 +47,12 @@ namespace {
 // (different kernels like reader/writer/compute can legitimately run on the same cores)
 std::vector<CoreRange> collect_all_kernel_core_ranges(const ProgramDescriptor& desc) {
     std::vector<CoreRange> all_ranges;
+    size_t total_ranges = 0;
+    for (const auto& kernel : desc.kernels) {
+        total_ranges += kernel.core_ranges.ranges().size();
+    }
+    all_ranges.reserve(total_ranges);
+
     for (const auto& kernel : desc.kernels) {
         for (const auto& range : kernel.core_ranges.ranges()) {
             all_ranges.push_back(range);
@@ -136,6 +142,9 @@ static inline ttsl::hash::hash_t hash_kernel_descriptor(const KernelDescriptor& 
         kernel.compiler_include_paths,
         kernel.common_runtime_args.size(),
         kernel.runtime_args.size(),
+        // Blaze-only experimental named args (issue #50953): hash the named-RT-arg schema
+        // (names/lengths/dispatch), NOT values — values don't affect the JIT build.
+        experimental::blaze::hash_named_args_schema(kernel.blaze_named_args),
         kernel.config.index(),
         kernel.config);
 }
@@ -193,6 +202,20 @@ void apply_descriptor_runtime_args(Program& program, const ProgramDescriptor& de
                 common_args[i] = kernel.common_runtime_args[i];
             }
         }
+
+        ////////////////////////////////////////////////////////////
+        // Blaze-only experimental named args
+        // Removal is tracked by issue #50953
+        // process_named_args merged the named VALUES into the program's runtime
+        // args at construction, but they live outside the descriptor-visible
+        // runtime_args/common_runtime_args copied above, and the descriptor
+        // hashers intentionally exclude them from the cache key.  Re-apply the
+        // current descriptor's named values or a same-schema/different-values
+        // cache hit silently executes with the first invocation's values.
+        if (!kernel.blaze_named_args.empty()) {
+            experimental::blaze::apply_named_runtime_args(program, kernel, k);
+        }
+        ////////////////////////////////////////////////////////////
     }
 
     auto program_cbs = program.circular_buffers();

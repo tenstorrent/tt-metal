@@ -834,17 +834,24 @@ std::map<LogicalChipId, tt::tt_metal::ASICPosition> compose_mesh_node_to_asic_po
     return node_to_position;
 }
 
-std::optional<std::vector<std::pair<tt::tt_metal::ASICPosition, FabricNodeId>>> filter_pinnings_for_mesh_ids(
-    const std::optional<std::vector<std::pair<tt::tt_metal::ASICPosition, FabricNodeId>>>& pinnings,
+std::optional<std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>> filter_pinnings_for_mesh_ids(
+    const std::optional<std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>>& pinnings,
     const std::set<uint32_t>& applicable_mesh_ids) {
     if (!pinnings.has_value()) {
         return std::nullopt;
     }
-    std::vector<std::pair<tt::tt_metal::ASICPosition, FabricNodeId>> filtered;
+    std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint> filtered;
     filtered.reserve(pinnings->size());
-    for (const auto& pinning : *pinnings) {
-        if (applicable_mesh_ids.contains(pinning.second.mesh_id.get())) {
-            filtered.push_back(pinning);
+    for (const auto& group : *pinnings) {
+        tt::tt_metal::experimental::tt_fabric::PinningConstraint filtered_group;
+        filtered_group.asic_positions = group.asic_positions;
+        for (const auto& fabric_node : group.fabric_nodes) {
+            if (applicable_mesh_ids.contains(fabric_node.mesh_id.get())) {
+                filtered_group.fabric_nodes.push_back(fabric_node);
+            }
+        }
+        if (!filtered_group.fabric_nodes.empty()) {
+            filtered.push_back(std::move(filtered_group));
         }
     }
     if (filtered.empty()) {
@@ -853,25 +860,26 @@ std::optional<std::vector<std::pair<tt::tt_metal::ASICPosition, FabricNodeId>>> 
     return filtered;
 }
 
-// Returns the number of required constraints added (one per MGD node that resolved to >=1 PGD node). May be
-// 0 even when `pinnings` is non-empty (e.g. no pinned ASIC position maps to a PGD node in this grouping); the
-// caller skips that PGD variant when pinnings were required.
+// Returns the number of required constraints added (one per many-to-many pinning group that resolved to >=1 PGD
+// node per side). May be 0 even when `pinnings` is non-empty (e.g. no pinned ASIC position maps to a PGD node in
+// this grouping); the caller skips that PGD variant when pinnings were required.
 std::size_t add_mgd_to_pgd_asic_position_pinning_constraints(
     MappingConstraints<uint32_t, uint32_t>& constraints,
     const GroupingInfo& pgd_grouping,
-    const std::vector<std::pair<tt::tt_metal::ASICPosition, FabricNodeId>>& pinnings) {
-    std::map<uint32_t, std::set<uint32_t>> mgd_node_to_pgd_nodes;
-    for (const auto& [position, fabric_node] : pinnings) {
-        const auto pgd_nodes = find_pgd_nodes_at_asic_position(pgd_grouping, position);
-        if (pgd_nodes.empty()) {
-            continue;
-        }
-        mgd_node_to_pgd_nodes[fabric_node.chip_id].insert(pgd_nodes.begin(), pgd_nodes.end());
-    }
+    const std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>& pinnings) {
     std::size_t constraints_added = 0;
-    for (const auto& [mgd_node, pgd_nodes] : mgd_node_to_pgd_nodes) {
-        if (!pgd_nodes.empty()) {
-            constraints.add_required_constraint(mgd_node, pgd_nodes);
+    for (const auto& group : pinnings) {
+        std::set<uint32_t> mgd_nodes;
+        std::set<uint32_t> pgd_nodes;
+        for (const auto& fabric_node : group.fabric_nodes) {
+            mgd_nodes.insert(fabric_node.chip_id);
+        }
+        for (const auto& position : group.asic_positions) {
+            const auto found_pgd_nodes = find_pgd_nodes_at_asic_position(pgd_grouping, position);
+            pgd_nodes.insert(found_pgd_nodes.begin(), found_pgd_nodes.end());
+        }
+        if (!mgd_nodes.empty() && !pgd_nodes.empty()) {
+            constraints.add_required_constraint(mgd_nodes, pgd_nodes);
             ++constraints_added;
         }
     }
@@ -885,14 +893,14 @@ namespace tt::tt_fabric {
 ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
     const MeshGraphDescriptor& mesh_graph_descriptor,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    const std::optional<std::vector<std::pair<tt::tt_metal::ASICPosition, FabricNodeId>>>& pinnings) const {
+    const std::optional<std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>>& pinnings) const {
     return get_valid_groupings_for_mgd(mesh_graph_descriptor, &physical_system_descriptor, pinnings);
 }
 
 ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
     const MeshGraphDescriptor& mesh_graph_descriptor,
     const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor,
-    const std::optional<std::vector<std::pair<tt::tt_metal::ASICPosition, FabricNodeId>>>& pinnings) const {
+    const std::optional<std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>>& pinnings) const {
     ValidGroupingsMap result;
 
     // ===== PHASE 0: Convert MGD instances to GroupingInfo map (includes adjacency graphs and ASIC counts) =====
@@ -923,7 +931,17 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
 
     // ===== PHASE 2: Match MESH mgd groupings to MESH groupings =====
     // For each MGD mesh instance, find all valid PGD mesh groupings that can contain it
-    for (const auto& [mgd_instance_key, mgd_mesh_grouping] : mgd_grouping_infos["MESH"]) {
+    log_info(tt::LogFabric, "Matching MESH mgd groupings to MESH groupings");
+    // Deterministic processing order across MGD mesh instances (unordered_map iteration is unspecified)
+    std::vector<std::string> mesh_mgd_instance_order;
+    mesh_mgd_instance_order.reserve(mgd_grouping_infos.at("MESH").size());
+    for (const auto& [k, _] : mgd_grouping_infos.at("MESH")) {
+        mesh_mgd_instance_order.push_back(k);
+    }
+    std::sort(mesh_mgd_instance_order.begin(), mesh_mgd_instance_order.end());
+
+    for (const std::string& mgd_instance_key : mesh_mgd_instance_order) {
+        const GroupingInfo& mgd_mesh_grouping = mgd_grouping_infos.at("MESH").at(mgd_instance_key);
         const std::string& instance_name = mgd_instance_key;  // Use unique instance key (includes mesh_id)
         const GroupingInfo& mgd_grouping_info = mgd_mesh_grouping;
         const std::string& instance_type = mgd_grouping_info.type;  // Should be "MESH"
@@ -961,9 +979,18 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
             device_topo.has_value() ? normalized_dims(device_topo->dims) : std::vector<int32_t>{};
 
         // Group valid candidates by node difference (map is ordered by key ascending)
-        // Store (name, index) pairs to handle multiple groupings with same name
+        // Store (name, index) pairs to handle multiple groupings with same name.
+        // Iterate PGD names in sorted order so candidate order within each diff bucket is stable.
+        log_info(tt::LogFabric, "Grouping valid candidates by node difference");
         std::map<size_t, std::vector<std::pair<std::string, size_t>>> candidates_by_diff;
-        for (const auto& [name, grouping_infos] : mesh_flat_groupings) {
+        std::vector<std::string> pgd_mesh_grouping_names;
+        pgd_mesh_grouping_names.reserve(mesh_flat_groupings.size());
+        for (const auto& [name, _] : mesh_flat_groupings) {
+            pgd_mesh_grouping_names.push_back(name);
+        }
+        std::sort(pgd_mesh_grouping_names.begin(), pgd_mesh_grouping_names.end());
+        for (const std::string& name : pgd_mesh_grouping_names) {
+            const auto& grouping_infos = mesh_flat_groupings.at(name);
             for (size_t idx = 0; idx < grouping_infos.size(); ++idx) {
                 const auto& grouping_info = grouping_infos[idx];
                 size_t n = grouping_info.adjacency_graph.get_nodes().size();
@@ -982,6 +1009,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
         for (const auto& [node_diff, name_idx_pairs] : candidates_by_diff) {
             best_matches_topology.clear();
             best_matches_psd_placed.clear();
+            best_matches_topology.reserve(name_idx_pairs.size());
 
             for (const auto& [name, idx] : name_idx_pairs) {
                 const auto& grouping_info = mesh_flat_groupings.at(name)[idx];
@@ -1236,6 +1264,37 @@ std::vector<GroupingInfo> PhysicalGroupingDescriptor::get_mgd_mesh_groupings_for
         }
     }
     return meshes;
+}
+
+ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgds(
+    const std::vector<MeshGraphDescriptor>& mesh_graph_descriptors,
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const std::vector<std::optional<std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>>>&
+        per_mgd_pinnings) const {
+    ValidGroupingsMap out;
+    // With multiple MGDs (split sub-contexts), different descriptors can reuse the same instance name (e.g. "M0").
+    // Prefix each MGD's instance names with "mgd{i}_" so they stay distinct in the merged map; otherwise their
+    // groupings (and the downstream physical mesh nodes) collapse together. Single-MGD keeps names unprefixed so the
+    // common path is unchanged. The "mgd{i}_" key encodes the originating descriptor index for downstream lookup
+    // (see build_physical_multi_mesh_adjacency_graph).
+    const bool multi_mgd = mesh_graph_descriptors.size() > 1;
+    for (size_t i = 0; i < mesh_graph_descriptors.size(); ++i) {
+        // Pins for MGD i are in this descriptor's own local mesh-id space; forward them so the PGD<->MGD match
+        // honours the pinned ASIC positions (same as the single-MGD get_valid_groupings_for_mgd(mgd, psd, pins)).
+        std::optional<std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>> pins;
+        if (i < per_mgd_pinnings.size()) {
+            pins = per_mgd_pinnings[i];
+        }
+        auto one = get_valid_groupings_for_mgd(mesh_graph_descriptors[i], physical_system_descriptor, pins);
+        for (const auto& [type, by_name] : one) {
+            for (const auto& [name, gvec] : by_name) {
+                const std::string key = multi_mgd ? fmt::format("mgd{}_{}", i, name) : name;
+                auto& dest = out[type][key];
+                dest.insert(dest.end(), gvec.begin(), gvec.end());
+            }
+        }
+    }
+    return out;
 }
 
 }  // namespace tt::tt_fabric
@@ -1618,7 +1677,7 @@ std::vector<MappingResult<uint32_t, AsicID>> solve_for_many_groupings_to_psd(
             used_asic_ids.insert(asic_id);
         }
 
-        results.push_back(result);
+        results.push_back(std::move(result));
 
         std::set<uint32_t> all_target_nodes(flat_mesh.get_nodes().begin(), flat_mesh.get_nodes().end());
         TT_FATAL(

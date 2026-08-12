@@ -2,10 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <array>
 #include <bit>
 #include <vector>
 
 #include "moreh_adam_device_operation.hpp"
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
@@ -318,11 +320,65 @@ void MorehAdamOperation::override_runtime_arguments(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // Re-derive the descriptor from the single source of truth (create_descriptor) and re-apply its per-core
-    // args (incl. hash-excluded lr/step) + tensor-backed CB/buffer addresses to the cached program. No rebuild;
-    // supersedes get_dynamic/resolve_bindings and fixes in-place aliasing (#48928).
-    auto desc = create_descriptor(operation_attributes, tensor_args, output_tensor);
-    tt::tt_metal::apply_descriptor_runtime_args(program, desc);
+    // Only the buffer addresses and the hash-excluded lr/step vary per dispatch: everything else
+    // (work split, tile_offset, beta/eps/weight_decay, amsgrad) is pinned by compute_program_hash.
+    constexpr uint32_t kReaderKernelIdx = 0, kWriterKernelIdx = 1, kComputeKernelIdx = 2;
+    constexpr uint32_t kReaderLrIdx = 5, kReaderStepIdx = 10, kComputeStepIdx = 0;
+
+    const auto addr_or_zero = [](const std::optional<Tensor>& t) -> uint32_t {
+        return t.has_value() ? t->buffer()->address() : 0u;
+    };
+    // Mirrors create_descriptor's push order; a null optional was emitted as 0u there too.
+    const std::array<uint32_t, 5> reader_addrs{
+        tensor_args.param_in.buffer()->address(),
+        tensor_args.grad.buffer()->address(),
+        tensor_args.exp_avg_in.buffer()->address(),
+        tensor_args.exp_avg_sq_in.buffer()->address(),
+        addr_or_zero(tensor_args.max_exp_avg_sq_in)};
+    const std::array<uint32_t, 4> writer_addrs{
+        output_tensor.at(0)->buffer()->address(),
+        output_tensor.at(1)->buffer()->address(),
+        output_tensor.at(2)->buffer()->address(),
+        addr_or_zero(output_tensor.at(3))};
+
+    const uint32_t f2u_lr = std::bit_cast<uint32_t>(operation_attributes.lr);
+    const uint32_t step = operation_attributes.step;
+
+    for (auto& col : tt::tt_metal::GetRuntimeArgs(program, kReaderKernelIdx)) {
+        for (auto& a : col) {
+            if (a.size() <= kReaderStepIdx) {
+                continue;
+            }
+            for (uint32_t i = 0; i < reader_addrs.size(); ++i) {
+                a[i] = reader_addrs[i];
+            }
+            a[kReaderLrIdx] = f2u_lr;
+            a[kReaderStepIdx] = step;
+        }
+    }
+    for (auto& col : tt::tt_metal::GetRuntimeArgs(program, kWriterKernelIdx)) {
+        for (auto& a : col) {
+            for (uint32_t i = 0; i < writer_addrs.size() && i < a.size(); ++i) {
+                a[i] = writer_addrs[i];
+            }
+        }
+    }
+
+    // step also feeds the compute kernel(s). A second one exists only when the split leaves a
+    // remainder group, so re-run just the split (not the descriptor) to learn whether it is there.
+    const uint32_t num_tiles = tensor_args.param_in.physical_volume() / tt::constants::TILE_HW;
+    const auto grid = tensor_args.param_in.device()->compute_with_storage_grid_size();
+    const auto core_group_2 = std::get<3>(split_work_to_cores(grid, num_tiles));
+    const uint32_t num_compute_kernels = core_group_2.ranges().empty() ? 1u : 2u;
+    for (uint32_t k = 0; k < num_compute_kernels; ++k) {
+        for (auto& col : tt::tt_metal::GetRuntimeArgs(program, kComputeKernelIdx + k)) {
+            for (auto& a : col) {
+                if (a.size() > kComputeStepIdx) {
+                    a[kComputeStepIdx] = step;
+                }
+            }
+        }
+    }
 }
 
 }  // namespace ttnn::operations::moreh::moreh_adam

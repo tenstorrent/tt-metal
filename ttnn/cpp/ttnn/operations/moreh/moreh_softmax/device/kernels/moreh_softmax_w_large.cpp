@@ -2,61 +2,68 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// NOTE: with fp32_dest_acc_en this kernel must be built at -O3 (the program factory sets the compute
+// KernelSpec opt_level to O3, matching legacy). At -O2 GCC fails to constant-fold the LLK addrmod SETC16
+// inline-asm "n" immediate in this larger fp32 TU and JIT aborts with "impossible constraint in 'asm'".
+// At O3 it folds and no source workaround is needed.
+
 #include <cstdint>
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    constexpr auto cb_in0 = tt::CBIndex::c_0;
-    DataflowBuffer dfb_in0_obj(cb_in0);
-    constexpr auto cb_mask = tt::CBIndex::c_1;
-    DataflowBuffer dfb_mask_obj(cb_mask);
-    constexpr auto cb_max_scaler = tt::CBIndex::c_2;
-    constexpr auto cb_sum_scaler = tt::CBIndex::c_3;
-    constexpr auto cb_out0 = tt::CBIndex::c_16;
-    DataflowBuffer dfb_out0_obj(cb_out0);
-    constexpr auto cb_exps = tt::CBIndex::c_24;
-    DataflowBuffer dfb_exps_obj(cb_exps);
-    constexpr auto cb_recipsumexps = tt::CBIndex::c_25;
-    DataflowBuffer dfb_recipsumexps_obj(cb_recipsumexps);
-    constexpr auto cb_add = tt::CBIndex::c_26;
-    DataflowBuffer dfb_add_obj(cb_add);
-    constexpr auto cb_max = tt::CBIndex::c_27;
-    DataflowBuffer dfb_max_obj(cb_max);
-    constexpr auto cb_tmp = tt::CBIndex::c_28;
-    DataflowBuffer dfb_tmp_obj(cb_tmp);
+    constexpr auto dfb_in0 = dfb::in0;
+    DataflowBuffer dfb_in0_obj(dfb_in0);
+    constexpr auto dfb_mask = dfb::mask;
+    DataflowBuffer dfb_mask_obj(dfb_mask);
+    constexpr auto dfb_max_scaler = dfb::max_scaler;
+    constexpr auto dfb_sum_scaler = dfb::sum_scaler;
+    constexpr auto dfb_out0 = dfb::out0;
+    DataflowBuffer dfb_out0_obj(dfb_out0);
+    constexpr auto dfb_exps = dfb::exps;
+    DataflowBuffer dfb_exps_obj(dfb_exps);
+    constexpr auto dfb_recipsumexps = dfb::recip_sum_exps;
+    DataflowBuffer dfb_recipsumexps_obj(dfb_recipsumexps);
+    constexpr auto dfb_add = dfb::add;
+    DataflowBuffer dfb_add_obj(dfb_add);
+    constexpr auto dfb_max = dfb::max;
+    DataflowBuffer dfb_max_obj(dfb_max);
+    constexpr auto dfb_tmp = dfb::tmp;
+    DataflowBuffer dfb_tmp_obj(dfb_tmp);
 
-    binary_op_init_common(cb_in0, cb_max_scaler, cb_out0);
+    compute_kernel_hw_startup(dfb_in0, dfb_max_scaler, dfb_out0);
 
-    constexpr uint32_t onetile = 1;
+    constexpr std::uint32_t onetile = 1;
 
-    uint32_t N = get_compile_time_arg_val(0);
-    uint32_t Wt = get_compile_time_arg_val(1);
+    // Plain uint32_t (not constexpr) to match legacy get_compile_time_arg_val typing.
+    std::uint32_t N = get_arg(args::N);
+    std::uint32_t Wt = get_arg(args::Wt);
 
-    for (uint32_t n = 0; n < N; ++n) {
+    for (std::uint32_t n = 0; n < N; ++n) {
         // find max
         if (Wt == 1) {
             mask_tile_to_cb(dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop0=*/1, /*popm=*/0);
 
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_tmp, cb_max_scaler, cb_max>(
+            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb_tmp, dfb_max_scaler, dfb_max>(
                 compute_kernel_lib::ReduceInputBlockShape::single());
         } else {
-            // Phase 1: reduce Wt-1 full tiles into cb_max (no accumulation, first call).
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_in0, cb_max_scaler, cb_max>(
+            // Phase 1: reduce Wt-1 full tiles into dfb_max (no accumulation, first call).
+            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb_in0, dfb_max_scaler, dfb_max>(
                 compute_kernel_lib::ReduceInputBlockShape::row(Wt - 1));
 
-            // Phase 2: mask the last tile and continue reducing into cb_max via Accumulate.
+            // Phase 2: mask the last tile and continue reducing into dfb_max via Accumulate.
             mask_tile_to_cb(dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop0=*/1, /*popm=*/0);
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_tmp, cb_max_scaler, cb_max>(
+            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb_tmp, dfb_max_scaler, dfb_max>(
                 compute_kernel_lib::ReduceInputBlockShape::row(1),
                 compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                compute_kernel_lib::Accumulate::at(cb_max, /*iter=*/1));
+                compute_kernel_lib::Accumulate::at(dfb_max, /*iter=*/1));
         }
 
         // step 1
-        for (uint32_t w = 0; w < Wt; ++w) {
+        for (std::uint32_t w = 0; w < Wt; ++w) {
             // compute exp(x)
             if (w == Wt - 1) {
 #ifdef SOFTMAX
@@ -104,14 +111,14 @@ void kernel_main() {
         compute_kernel_lib::reduce<
             PoolType::SUM,
             ReduceDim::REDUCE_ROW,
-            cb_add,
-            cb_sum_scaler,
-            cb_recipsumexps,
+            dfb_add,
+            dfb_sum_scaler,
+            dfb_recipsumexps,
             compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
             compute_kernel_lib::ReduceInputBlockShape::single(),
             compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
             compute_kernel_lib::NoAccumulation{},
-            [](uint32_t dst_idx) {
+            [](std::uint32_t dst_idx) {
                 log_tile_init();
                 log_tile(dst_idx);
             });
@@ -120,21 +127,21 @@ void kernel_main() {
         compute_kernel_lib::reduce<
             PoolType::SUM,
             ReduceDim::REDUCE_ROW,
-            cb_add,
-            cb_sum_scaler,
-            cb_recipsumexps,
+            dfb_add,
+            dfb_sum_scaler,
+            dfb_recipsumexps,
             compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
             compute_kernel_lib::ReduceInputBlockShape::single(),
             compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
             compute_kernel_lib::NoAccumulation{},
-            [](uint32_t dst_idx) {
+            [](std::uint32_t dst_idx) {
                 recip_tile_init();
                 recip_tile(dst_idx);
             });
 #endif
 
         // step 3, compute final result
-        for (uint32_t w = 0; w < Wt; w += onetile) {
+        for (std::uint32_t w = 0; w < Wt; w += onetile) {
 #ifdef LOG
 #ifdef SOFTMAX
             // x - max - log(sum)
