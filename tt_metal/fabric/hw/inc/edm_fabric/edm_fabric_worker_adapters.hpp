@@ -88,8 +88,7 @@ struct WorkerToFabricEdmSenderBase {
     WorkerToFabricEdmSenderBase() = default;
 
     template <ProgrammableCoreType my_core_type>
-    static WorkerToFabricEdmSenderBase build_from_args(
-        std::size_t& arg_idx, uint8_t noc = get_fabric_worker_noc()) {
+    static WorkerToFabricEdmSenderBase build_from_args(std::size_t& arg_idx) {
         constexpr bool is_persistent_fabric = true;
         uint8_t direction;
         uint8_t edm_worker_x;
@@ -172,8 +171,7 @@ struct WorkerToFabricEdmSenderBase {
             worker_free_slots_stream_id,
             my_fc_stream_channel_id,
             write_reg_cmd_buf,
-            write_at_cmd_buf,
-            noc);
+            write_at_cmd_buf);
     }
 
     template <ProgrammableCoreType my_core_type = ProgrammableCoreType::ACTIVE_ETH>
@@ -198,8 +196,7 @@ struct WorkerToFabricEdmSenderBase {
             worker_credits_stream_id,  // To locally track downstream EDM's free slots. Only used by EDM. Sending EDM
                                        // decrements locally. Downstream EDM increments over noc when a slot is freed.
         uint8_t data_noc_cmd_buf = write_reg_cmd_buf,
-        uint8_t sync_noc_cmd_buf = write_at_cmd_buf,
-        uint8_t noc = get_fabric_worker_noc()) {
+        uint8_t sync_noc_cmd_buf = write_at_cmd_buf) {
         this->edm_buffer_addr = edm_buffer_base_addr;
         this->worker_credits_stream_id = worker_credits_stream_id.get();
 
@@ -238,7 +235,6 @@ struct WorkerToFabricEdmSenderBase {
         this->edm_noc_y = edm_worker_y;
         this->data_noc_cmd_buf = data_noc_cmd_buf;
         this->sync_noc_cmd_buf = sync_noc_cmd_buf;
-        this->send_noc = noc;
 
         if constexpr (I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
             // The EDM is guaranteed to know the number of free slots of the downstream EDM
@@ -269,8 +265,7 @@ struct WorkerToFabricEdmSenderBase {
         uint32_t sender_channel_credits_stream_id,
         StreamId worker_credits_stream_id,
         uint8_t data_noc_cmd_buf = write_reg_cmd_buf,
-        uint8_t sync_noc_cmd_buf = write_at_cmd_buf,
-        uint8_t noc = get_fabric_worker_noc()) {
+        uint8_t sync_noc_cmd_buf = write_at_cmd_buf) {
         this->init<my_core_type>(
             connected_to_persistent_fabric,
             edm_worker_x,
@@ -287,8 +282,7 @@ struct WorkerToFabricEdmSenderBase {
             sender_channel_credits_stream_id,
             worker_credits_stream_id,
             data_noc_cmd_buf,
-            sync_noc_cmd_buf,
-            noc);
+            sync_noc_cmd_buf);
     }
 
     FORCE_INLINE uint32_t get_num_free_write_slots() const {
@@ -446,9 +440,10 @@ struct WorkerToFabricEdmSenderBase {
     // Must be called alongside (before) open_finish().
     template <
         bool SEND_CREDIT_ADDR = false,
-        bool posted = false>
+        bool posted = false,
+        uint8_t WORKER_HANDSHAKE_NOC = get_fabric_worker_noc()>
     void open_start() {
-        const auto dest_noc_addr_coord_only = get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0, this->send_noc);
+        const auto dest_noc_addr_coord_only = get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0, WORKER_HANDSHAKE_NOC);
 
         tt::tt_fabric::EDMChannelWorkerLocationInfo* worker_location_info_ptr =
             reinterpret_cast<tt::tt_fabric::EDMChannelWorkerLocationInfo*>(edm_worker_location_info_addr);
@@ -463,7 +458,7 @@ struct WorkerToFabricEdmSenderBase {
                 remote_producer_cursor_addr,
                 local_producer_cursor_addr,
                 sizeof(tt::tt_fabric::SenderChannelProducerCursor),
-                this->send_noc);
+                WORKER_HANDSHAKE_NOC);
 
             const uint64_t edm_read_free_slots_or_read_counter_addr =
                 dest_noc_addr_coord_only | reinterpret_cast<size_t>(
@@ -474,7 +469,7 @@ struct WorkerToFabricEdmSenderBase {
                 edm_read_free_slots_or_read_counter_addr,
                 reinterpret_cast<size_t>(this->edm_buffer_local_free_slots_read_ptr),
                 sizeof(uint32_t),  // also want to read the local write counter
-                this->send_noc);
+                WORKER_HANDSHAKE_NOC);
         }
         const uint64_t dest_edm_location_info_addr =
             dest_noc_addr_coord_only |
@@ -487,13 +482,13 @@ struct WorkerToFabricEdmSenderBase {
                 dest_edm_location_info_addr,
                 reinterpret_cast<size_t>(edm_buffer_local_free_slots_update_ptr),
                 0xf,
-                this->send_noc);
+                WORKER_HANDSHAKE_NOC);
         } else {
             noc_inline_dw_write<InlineWriteDst::L1, posted>(
                 dest_edm_location_info_addr,
                 reinterpret_cast<size_t>(edm_buffer_local_free_slots_update_ptr),
                 0xf,
-                this->send_noc);
+                WORKER_HANDSHAKE_NOC);
         }
         const uint64_t edm_teardown_semaphore_address_address =
             dest_noc_addr_coord_only |
@@ -503,23 +498,23 @@ struct WorkerToFabricEdmSenderBase {
             edm_teardown_semaphore_address_address,
             reinterpret_cast<size_t>(worker_teardown_addr),
             0xf,
-            this->send_noc);
+            WORKER_HANDSHAKE_NOC);
         // Write out core noc-xy coord to EDM
         const uint64_t connection_worker_xy_address =
             dest_noc_addr_coord_only | reinterpret_cast<uint64_t>(&(worker_location_info_ptr->worker_xy));
         noc_inline_dw_write<InlineWriteDst::L1, posted>(
-            connection_worker_xy_address, WorkerXY(my_x[0], my_y[0]).to_uint32(), 0xf, this->send_noc);
+            connection_worker_xy_address, WorkerXY(my_x[0], my_y[0]).to_uint32(), 0xf, WORKER_HANDSHAKE_NOC);
     }
 
     // Advanced usage API:
     // Completes the connection opening process. Induces a read barrier
     // !!! IMPORTANT !!!
     // Must be called alongside (after) open_start().
-    template <bool posted = false>
+    template <bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = get_fabric_worker_noc()>
     void open_finish() {
         const uint64_t edm_connection_handshake_noc_addr =
-            get_noc_addr(this->edm_noc_x, this->edm_noc_y, edm_connection_handshake_l1_addr, this->send_noc);
-        noc_async_read_barrier(this->send_noc);
+            get_noc_addr(this->edm_noc_x, this->edm_noc_y, edm_connection_handshake_l1_addr, WORKER_HANDSHAKE_NOC);
+        noc_async_read_barrier(WORKER_HANDSHAKE_NOC);
         // Order here is important
         // We need to write our read counter value to the register before we signal the EDM
         // As EDM will potentially increment the register as well
@@ -546,7 +541,7 @@ struct WorkerToFabricEdmSenderBase {
             edm_connection_handshake_noc_addr,
             tt::tt_fabric::connection_interface::open_connection_value,
             0xf,
-            this->send_noc);
+            WORKER_HANDSHAKE_NOC);
         *this->worker_teardown_addr = 0;
         if constexpr (!USER_DEFINED_NUM_BUFFER_SLOTS) {
             this->edm_buffer_addr =
@@ -558,10 +553,11 @@ struct WorkerToFabricEdmSenderBase {
     //                   or some legacy code which skips connection info copy on Tensix L1 static address
     template <
         bool SEND_CREDIT_ADDR = false,
-        bool posted = false>
+        bool posted = false,
+        uint8_t WORKER_HANDSHAKE_NOC = get_fabric_worker_noc()>
     void open() {
-        open_start<SEND_CREDIT_ADDR, posted>();
-        open_finish<posted>();
+        open_start<SEND_CREDIT_ADDR, posted, WORKER_HANDSHAKE_NOC>();
+        open_finish<posted, WORKER_HANDSHAKE_NOC>();
     }
 
     // Advanced usage API:
@@ -569,10 +565,10 @@ struct WorkerToFabricEdmSenderBase {
     // for the ack from the fabric before returning, saving some cycles for advanced users.
     // !!! IMPORTANT !!!
     // Must be called alongside (before) close_finish().
-    template <bool posted = false>
+    template <bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = get_fabric_worker_noc()>
     void close_start() {
         const auto dest_noc_addr_coord_only =
-            get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0, this->send_noc) & ~(uint64_t)NOC_COORDINATE_MASK;
+            get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0, WORKER_HANDSHAKE_NOC) & ~(uint64_t)NOC_COORDINATE_MASK;
 
         // Persist the producer cursor for the next connection on this channel. Only
         // worker-style producers participate in this protocol: the block is read back
@@ -583,12 +579,12 @@ struct WorkerToFabricEdmSenderBase {
                 remote_producer_cursor_addr + offsetof(tt::tt_fabric::SenderChannelProducerCursor, write_counter),
                 this->buffer_slot_write_counter.counter,
                 0xF,
-                this->send_noc);
+                WORKER_HANDSHAKE_NOC);
             noc_inline_dw_write<InlineWriteDst::L1, posted>(
                 remote_producer_cursor_addr + offsetof(tt::tt_fabric::SenderChannelProducerCursor, write_index),
                 static_cast<uint32_t>(this->get_buffer_slot_index()),
                 0xF,
-                this->send_noc);
+                WORKER_HANDSHAKE_NOC);
         } else {
             // Deliberate no-op: stream-reg (EDM-style) producers never read the cursor
             // block in open_start(), so there is nothing to hand off. This must stay a
@@ -600,20 +596,20 @@ struct WorkerToFabricEdmSenderBase {
             dest_edm_connection_state_addr,
             tt::tt_fabric::connection_interface::close_connection_request_value,
             0xF,
-            this->send_noc);
+            WORKER_HANDSHAKE_NOC);
     }
 
     // Advanced usage API:
     // Completes the connection closing process. Induces a write barrier
     // !!! IMPORTANT !!!
     // Must be called alongside (after) close_start().
-    template <bool posted = false>
+    template <bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = get_fabric_worker_noc()>
     void close_finish() {
         WAYPOINT("FCFW");
         if constexpr (posted) {
-            noc_async_posted_writes_flushed(this->send_noc);
+            noc_async_posted_writes_flushed(WORKER_HANDSHAKE_NOC);
         }
-        noc_async_write_barrier(this->send_noc);
+        noc_async_write_barrier(WORKER_HANDSHAKE_NOC);
 
         // Need to wait for the ack to teardown notice, from edm
         while (*this->worker_teardown_addr != 1) {
@@ -623,10 +619,10 @@ struct WorkerToFabricEdmSenderBase {
         *(this->worker_teardown_addr) = 0;
     }
 
-    template <bool posted = false>
+    template <bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = get_fabric_worker_noc()>
     void close() {
-        close_start<posted>();
-        close_finish<posted>();
+        close_start<posted, WORKER_HANDSHAKE_NOC>();
+        close_finish<posted, WORKER_HANDSHAKE_NOC>();
     }
 
     uint32_t edm_buffer_addr;
@@ -665,15 +661,6 @@ struct WorkerToFabricEdmSenderBase {
     // the cmd buffer is used for edm-edm path
     uint8_t data_noc_cmd_buf;
     uint8_t sync_noc_cmd_buf;
-
-    // NoC used for the entire worker->fabric path (open handshake, packet sends, close). This is runtime
-    // connection state so split-phase operations cannot select different NoCs through independent template
-    // arguments. Callers can steer this path off a NoC lane reserved by e.g. a persistent linked mcast
-    // (#1819). Set by build_from_args()/init() (both default to get_fabric_worker_noc()
-    // for byte-identical legacy behavior); left uninitialized here like the other members so the
-    // class keeps a trivial default constructor (static-storage instances of this type -- e.g.
-    // CQRelayClient's embedded WorkerToFabricMuxSender -- are declared before init() ever runs).
-    uint8_t send_noc;
 
 private:
     template <bool STATEFUL_NOC>
@@ -798,10 +785,10 @@ private:
 
     template <EDM_IO_BLOCKING_MODE blocking_mode>
     FORCE_INLINE void send_payload_impl(uint32_t cb_id, uint32_t num_pages, uint32_t page_size) {
-        uint64_t buffer_address = this->compute_dest_buffer_slot_noc_addr(this->send_noc);
+        uint64_t buffer_address = this->compute_dest_buffer_slot_noc_addr();
         ASSERT(num_pages * page_size <= this->buffer_size_bytes);
-        send_chunk<blocking_mode>(cb_id, num_pages, page_size, buffer_address, this->send_noc);
-        post_send_payload_increment_pointers(this->send_noc);
+        send_chunk<blocking_mode>(cb_id, num_pages, page_size, buffer_address);
+        post_send_payload_increment_pointers();
     }
 };
 
