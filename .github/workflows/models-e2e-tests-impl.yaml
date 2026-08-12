@@ -36,8 +36,8 @@ on:
         description: "Filtered matrix of exabox multihost legs that ran."
         value: ${{ jobs.load-test-matrix.outputs.matrix_multihost }}
 
-# Default to read-only. Only the multihost job needs id-token (ttop OIDC), which it grants on the
-# job itself. Single-host legs pull the dev container image, so packages: read is the default.
+# Default to read-only. Only the multihost job needs id-token (multihost-ci runner chart), which it
+# grants on the job itself. Single-host legs pull the dev container image, so packages: read is the default.
 permissions:
   contents: read
   packages: read
@@ -244,12 +244,12 @@ jobs:
 
   # Multihost (exabox) e2e tests — lifecycle lives in models-e2e-tests-multihost-impl.yaml.
   # Legs are routed here when prepare_test_matrix.py marks them "multihost": true
-  # (exabox-multihost* runs_on and/or allocation block) and load-test-matrix collects
+  # (SKU runs_on contains an exabox-multihost* label) and load-test-matrix collects
   # them into matrix_multihost.
   models-e2e-tests-multihost:
     needs: load-test-matrix
     if: ${{ needs.load-test-matrix.outputs.matrix_multihost != '[]' }}
-    # OIDC (ttop cluster auth) is needed only by this leg; grant it here rather than
+    # OIDC may be required by the multihost-ci runner chart; grant it here rather than
     # workflow-wide. Job-level permissions replace inherited defaults, so restate reads too.
     permissions:
       contents: read

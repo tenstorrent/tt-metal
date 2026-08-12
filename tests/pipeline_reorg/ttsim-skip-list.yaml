@@ -33,7 +33,6 @@ wormhole_b0:
   # Numeric mismatches, not root caused
   # https://github.com/tenstorrent/tt-metal/issues/41530
   - tests/ttnn/unit_tests/operations/reduce/test_reduction.py
-  - tests/ttnn/unit_tests/operations/reduce/test_sum.py
 
 blackhole:
   # Job-level timeouts
@@ -66,4 +65,3 @@ blackhole:
   # Numeric mismatches, not root caused
   # https://github.com/tenstorrent/tt-metal/issues/41530
   - tests/ttnn/unit_tests/operations/reduce/test_reduction.py
-  - tests/ttnn/unit_tests/operations/reduce/test_sum.py
