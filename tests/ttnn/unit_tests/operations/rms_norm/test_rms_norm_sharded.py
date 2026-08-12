@@ -38,6 +38,7 @@ from ttnn.operations.rms_norm import rms_norm
 from ttnn.operations.rms_norm.rms_norm_program_descriptor import (
     CB_INPUT_TILES,
     CB_OUTPUT_TILES,
+    CB_STAT_GATHER,
     READER_ACCESSOR_CT_BASE,
     create_program_descriptor,
 )
@@ -301,3 +302,50 @@ def test_rms_norm_pinned_perf_shard_geometries(device, shape, shard_shape, core_
     """
     _, _, got, expected = _run(device, shape, memory_layout, ttnn.TILE_LAYOUT, pin=(shard_shape, core_grid))
     assert _pcc(got, expected) > 0.9995, f"PCC {_pcc(got, expected)}"
+
+
+# ---------------------------------------------------------------------------
+# 5. Refinement 5 — the statistics pipeline's page format follows fp32_dest_acc_en
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("fp32_dest_acc_en,expect_tile_bytes", [(True, 4096), (False, 2048)], ids=["acc_on", "acc_off"])
+def test_rms_norm_stat_pipeline_format_follows_dest(device, fp32_dest_acc_en, expect_tile_bytes):
+    """`cb_stat_gather` is fp32 with an fp32 DEST and bf16 with a 16-bit one.
+
+    STRUCTURAL, like the zero-copy and chunking assertions next to it: both formats
+    produce numerically indistinguishable output (at a 16-bit DEST every value on
+    this path is packed out of DEST and unpacked straight back into it, so the fp32
+    container carries bf16-precision data either way), and the whole point of the
+    narrower one is the bytes — half the gather + multicast payload and half the
+    per-tile-row L1 that bounds `block_row_tiles`. Only the descriptor can see it.
+    """
+    shape = (1, 1, 32, 2048)
+    memory_config = auto_shard_config(
+        list(shape), ML.WIDTH_SHARDED, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device
+    )
+    ttnn_input = ttnn.from_torch(
+        torch.randn(shape, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=memory_config,
+    )
+    ttnn_gamma = ttnn.from_torch(
+        torch.randn(1, 1, 1, shape[-1], dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    ttnn_output = ttnn.allocate_tensor_on_device(
+        ttnn.Shape(list(shape)), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, memory_config
+    )
+    cfg = ttnn.ComputeConfigDescriptor()
+    cfg.fp32_dest_acc_en = fp32_dest_acc_en
+    descriptor = create_program_descriptor(ttnn_input, ttnn_gamma, ttnn_output, epsilon=1e-6, compute_kernel_config=cfg)
+
+    page_sizes = {int(fmt.buffer_index): int(fmt.page_size) for cb in descriptor.cbs for fmt in cb.format_descriptors}
+    assert page_sizes[CB_STAT_GATHER] == expect_tile_bytes, (
+        f"cb_stat_gather page size {page_sizes[CB_STAT_GATHER]} at "
+        f"fp32_dest_acc_en={fp32_dest_acc_en}, expected {expect_tile_bytes}"
+    )

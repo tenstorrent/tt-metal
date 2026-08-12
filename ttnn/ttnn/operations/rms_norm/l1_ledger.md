@@ -29,6 +29,13 @@ multicast source, and a compute input — three parties).
 Symbols: `R` = `block_row_tiles`, `C` = `core_w_tiles`, `G` = `w_group_size`, `WC` = `w_chunk_tiles`
 (the hidden-axis chunk; `WC == C`, one chunk, on every geometry that fits without chunking, and `NC = ceil(C / WC)`).
 `T_in` = `tile_size(input_dtype)`, `T_γ` = `tile_size(gamma_dtype)`, `T_f32` = 4096, `T_bf16` = 2048.
+`T_stat` = the **statistics-pipeline** page format (Refinement 5): `T_f32` when
+`fp32_dest_acc_en` is True, `T_bf16` when it is False. Every row below that used to read
+`T_f32` — `cb_zero_tile`, `cb_stat_sq`, `cb_tail_masked`, `cb_stat_partial`, `cb_stat_gather`,
+`cb_stat_gather2`, `cb_branch_sum`, `cb_stat_sum`, `cb_rstd_send`, `cb_rstd` — now reads
+`T_stat`, and they move together: the whole path is pack-out-of-DEST →
+unpack-back-into-DEST, so at a 16-bit DEST an fp32 container stores bf16-precision data.
+`cb_scaler` / `cb_wmask` stay `T_bf16` unconditionally.
 Indicators: `rm_in`, `rm_out`, `rm_γ`, `has_gamma`, `has_tail` ∈ {0,1}.
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
@@ -63,7 +70,7 @@ Every non-block parameter in a capacity expression, with its bound and the predi
 | `WC` = `w_chunk_tiles` | block extent along `hidden` of the buffers that only *stream* over it | `1 ≤ WC ≤ C`; `WC = C` (one chunk) unless a resident shard's `C` does not fit | Refinement 2b. A shard spec pins `G` **and** `C`, so when the depth ladder still does not fit, the hidden axis is chunked and the *coarsest* `WC` that fits is taken. Interleaved geometries never reach it — `_select_regime` still has `G`. |
 | `NC` = `ceil(C / WC)` | hidden chunks per block | `1` unchunked | Derived, in the kernels too (`CB_CHUNK_TILES` is the only CT arg). Sets `cb_stat_sq`'s column count: one partial `Σ x²` column per chunk, folded by the reduce that already sums a tile-row's columns. |
 | `input_cb_depth`, `output_cb_depth`, `rm_cb_depth` | buffer depths | `2` in Phase 0 | Explicit pipelining knobs; perf lamp P1 measures alternatives. |
-| `MAX_GATHER_TILES` | cap on `R · G` | `64` (fp32 tiles = 256 KiB) | Declared mechanism cap; bounds `cb_stat_gather`, the only buffer whose capacity is a product of two extents. |
+| `MAX_GATHER_TILES` | cap on `R · G` | `64` **fp32-tile equivalents** = 256 KiB | Declared mechanism cap; bounds `cb_stat_gather`, the only buffer whose capacity is a product of two extents. Refinement 5 re-denominated it in BYTES (`MAX_GATHER_TILES · T_f32 / T_stat` tiles), so the knob means the same L1 at either statistics format and a bf16 pipeline admits twice the tiles. Re-swept at the bf16 format on the BLOCK perf geometry — 16/32/64/128/256 → 55430/51153/49228/48970/48949 ns — flat past 64, so the default stands. |
 | `l1_cb_budget` | bytes available to CBs | `device.l1_size_per_core() − L1_RESERVE_BYTES`, `L1_RESERVE_BYTES = 131072` | Named host constant covering kernel binaries, stack, semaphores and allocator alignment — **not** a safety fraction. |
 | `tensor_row_tiles`, `tensor_w_tiles`, `partial_w` | tensor geometry | derived from the shape, alignment-aware (`ceil`, per-image on the TILE path) | Formulas in `op_design.md` → Blocking Model → Axes. |
 
@@ -74,7 +81,7 @@ Every non-block parameter in a capacity expression, with its bound and the predi
 # NC = ceil(C / WC); pin_in / pin_out = the block CB is the resident shard itself,
 # which costs the CB arena nothing (its bytes come off the budget once, up front).
 per_row_bytes  = T_in · (!pin_in · input_cb_depth · (rm_in ? NC·WC : C) + has_gamma · WC)
-               + T_f32 · (4 + NC + has_tail + G)                    # cb_stat_sq (NC[+1] cols), _partial,
+               + T_stat · (4 + NC + has_tail + G)                   # cb_stat_sq (NC[+1] cols), _partial,
                                                                     #   _sum, cb_rstd_send, cb_rstd, cb_stat_gather
 fixed_bytes    = T_in · (!pin_out · output_cb_depth · WC + rm_in·rm_cb_depth·WC + rm_out·rm_cb_depth·WC)
                + T_γ  · has_gamma · WC · (1 + rm_γ)                 # cb_gamma_tiles [+ cb_gamma_rm]
@@ -219,16 +226,16 @@ form, not as a second source of truth (see the last two implementation deltas ab
 
 ```
 per_row_bytes  = T_in  * C * (input_cb_depth + has_gamma + rm_out)     # cb_input_tiles, cb_normed, [cb_output_tiles]
-               + T_f32 * (4 + (1 + has_tail) + G)                      # cb_stat_partial/_sum/_rstd_send/_rstd,
+               + T_stat * (4 + (1 + has_tail) + G)                     # cb_stat_partial/_sum/_rstd_send/_rstd,
                                                                        #   cb_stat_sq (1+has_tail cols), cb_stat_gather
 fixed_bytes    = T_in  * C * ((1 - rm_out) * output_cb_depth
                               + rm_in * rm_cb_depth + rm_out * rm_cb_depth)
                + T_gamma * has_gamma * C * (1 + rm_gamma)              # cb_gamma_tiles [+ cb_gamma_rm]
                + T_bf16 * (1 + has_tail)                               # cb_scaler [+ cb_wmask]
-               + T_f32                                                 # cb_zero_tile
+               + T_stat                                                # cb_zero_tile
 
 block_row_tiles = clamp( floor((l1_cb_budget - fixed_bytes) / per_row_bytes),
-                         1, min(core_row_tiles, MAX_GATHER_TILES / G) )
+                         1, min(core_row_tiles, MAX_GATHER_TILES * T_f32 / T_stat / G) )
 ```
 
 `l1_cb_budget = l1_size_per_core(arch) - L1_RESERVE_BYTES`, `L1_RESERVE_BYTES = 131072`.
@@ -382,3 +389,41 @@ local copy; at `G = 2` each block really unicasts `R` fp32 tiles to the partner 
 `R` back. That is `2·R·4096` bytes per block per group — 40 KiB per block at `R = 5` — against
 the ~2.6 MiB of activation bytes the same block moves, i.e. 1.5 %. It is the cost the band pays
 and the measurement says it is worth it.
+
+## Refinement 5 — the statistics pipeline narrows, and the cross-core stat traffic halves
+
+Refinement 5 is a perf phase on the five pinned **sharded** `group="perf"` geometries. It changed
+exactly one thing in this ledger: the page format of the ten statistics CBs, from an unconditional
+`T_f32` to `T_stat` (see the legend). No CB was added, removed, resized in *pages*, or re-aliased.
+
+**Why the Refinement 1 note that pinned them to fp32 no longer applies at
+`fp32_dest_acc_en = False`.** That note's argument is `row_reduce_accumulate`'s: a bf16 accumulator
+degrades a monotonically growing all-positive sum, so `Σ x²` must cross L1 in fp32 even when the
+*in-DEST* accumulation narrows. What Refinement 5 observes is that at `fp32_dest_acc_en = False`
+there is no fp32 anywhere on that path to preserve: every value in `cb_stat_*` is **packed out of a
+16-bit DEST and unpacked straight back into one**, so the fp32 container is 2× the bytes around
+bf16-precision data. The argument still binds at `fp32_dest_acc_en = True`, where DEST is genuinely
+fp32 — and that is exactly where `T_stat = T_f32` keeps every row byte-identical to Phase 0.
+Refinement 5 also folded `1/W_true` into the reduce scaler, so the value stored here is a share of
+the **mean** (≈ 1) rather than a raw sum (≈ W), which is the magnitude bf16 represents best.
+
+Three consequences, all measured:
+
+| Effect | Magnitude |
+|--------|-----------|
+| `per_row_bytes` drops by `T_bf16 · (4 + NC + has_tail + G)` at `fp32_dest_acc_en = False` | On the `(1,1,8192,1024)` BLOCK perf geometry (`C = 4`, `G = 8`): `61 440 → 34 816` B per tile-row, i.e. `cb_stat_gather` alone falls from 32 768 to 16 384 B. |
+| The gather + multicast payload halves | The combine moves `R·(G−1)` tiles into the root and `R` back out per block; at 2048 B/tile instead of 4096 that is 112 KiB per block instead of 224 KiB on this geometry. |
+| `R` is no longer pinned by the gather cap on a narrow-`C` shard | `MAX_GATHER_TILES` in fp32 equivalents admits `R = 16` where it admitted 8, halving the block count (4 → 2) and with it the group-wide combine barriers. |
+
+**One capacity cell recovered as a side effect.** `13x777x1023` WIDTH_SHARDED — recorded by
+Refinements 2b/3/4 as one of three remaining `RuntimeError: … does not fit L1` cells (a 650 KiB
+full-height shard on each of 32 cores left 110 KiB for an `R·G = 32`-tile `cb_stat_gather`) — now
+fits, because that buffer halved. The golden loose slice went 381/384 → **382/384**; the two
+`W = 11008` TILE HEIGHT cells are unchanged and still fail for the reason Refinement 2b documented
+(the two resident shards alone take 1 409 024 B of the 1 441 792 B budget, which no CB format can
+address).
+
+**Data-movement budget: unchanged for every tensor.** The activation, output and gamma DRAM
+crossing counts in the table above are untouched — Refinement 5 moved no tensor traffic, only the
+*cross-core statistics* traffic, which is the last column of that table and which halves at
+`fp32_dest_acc_en = False` exactly as the middle row above states.

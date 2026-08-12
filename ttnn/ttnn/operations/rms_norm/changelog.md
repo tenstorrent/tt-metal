@@ -467,3 +467,111 @@
   measured `phase0` vs `banded` in one run: `(3,1,736,5119)` 155493 → 135613, `(1,1,4096,4096)`
   195524 → 184774 — both faster). Kernel-side, the three `RMSN_ABLATE_*` compile-time switches are
   left in place at `0`: they are inert, and they are the harness that produced the table above.
+
+## Refinement 5 — Speed up the sharded perf geometries
+
+- **Date**: 2026-08-12
+- **What was done**: a perf-only phase (no SUPPORTED change) on the five pinned `group="perf"`
+  **sharded** geometries. Three levers landed, all aimed at the term an ablation identified rather
+  than at the one the heading predicted. Diff is two kernels + the program descriptor; no CB was
+  added, removed or resized in pages, and no kernel phase was restructured.
+  - **The ablation came first and redirected the phase.** The verifier note expected the per-block
+    combine round to bind. Two *matched-geometry* measurements said otherwise
+    (`(1,1,8192,1024)` BLOCK_SHARDED `[1024,128]` on `(8,8)`, the pinned geometry):
+
+    | variant | device kernel ns |
+    |---|---|
+    | baseline | 76 927 |
+    | HEIGHT twin: same 64 cores, same 128 tiles/core, `G = 1` (no gather / reduce / mcast) | 25 462 |
+    | BLOCK spec forced to one-member groups: same `C = 4`, `R = 8`, 4 blocks, no combine | 59 517 |
+    | gather payload 4096 → 128 B/tile (transactions + semaphores intact) | 65 981 |
+    | root folds 1 of `G` gathered partials instead of all (CB quantum intact) | 71 531 |
+    | root's finalize = `CopyTile` + `PackTile` only (no `Mul`/`Add`/`Rsqrt`) | 45 823 |
+    | …finalize = `CopyTile` + `Rsqrt` + `PackTile` | 68 964 |
+
+    So the **whole** cross-core combine is 17.3 µs of the wall (11.0 gather NoC bytes + 5.4 root
+    tile-adds), the block count is ~1.1 µs per block (swept via `MAX_GATHER_TILES`: 16/32/64/128/256
+    → 90267/80952/76833/75575/75584), and the dominant term — **31.1 µs, 23.1 of it the `Rsqrt`
+    alone** — is the root's **finalize chain**, run once per *tile-row* while the other seven cores
+    of the group wait. A BLOCK core owns 32 tile-rows where the HEIGHT twin owns 4; the statistics
+    pipeline is per tile-row, not per tile, which is the whole 25.5 → 59.5 µs gap between the twins.
+  - **Lever 1 — `1/W_true` rides in the reduce scaler.** The reduce is a matmul-path multiply that
+    happens anyway, and `reduce_helpers_dataflow.hpp` names exactly this case ("the scaler combines
+    reduction with another factor") as `prepare_reduce_scaler`'s reason to exist. Folding the divisor
+    there **deletes `MulUnary` from the finalize chain** and makes every core's partial a share of
+    the MEAN, so the gathered sum *is* the mean. One reader runtime arg; `INV_W_BITS` stays a compute
+    CT arg so no downstream index moved.
+  - **Lever 2 — the finalize runs on the column-valid faces only.** A `reduce<SUM, REDUCE_ROW>`
+    result is **column-0-valid** and the apply consumes `rstd` as an `OperandKind::Col` broadcast, so
+    31 of 32 columns are structurally garbage. Column 0 lives in faces 0 and 2 — precisely the pair
+    `VectorMode::C` walks (`llk_math_eltwise_sfpu_common.h`), at half the cost of `RC`.
+    `ckl::Rsqrt` / `ckl::AddUnary` cannot express it (`rsqrt_tile` / `add_unary_tile` HARDCODE
+    `VectorMode::RC`), so the op grew the missing block operation: two `ckl::UnaryOp` chain
+    **ELEMENTS** (`RsqrtColValid`, `AddUnaryColValid`) that differ from the kernel_lib ops in that
+    one template argument. They stay *inside* `eltwise_chain`, which keeps owning the DEST window,
+    the CB lifecycle, the init and the format reconfig — a built block operation, not a bypassed
+    helper.
+  - **Lever 3 — the statistics pipeline's page format follows `fp32_dest_acc_en`.**
+    `cb_zero_tile`, `cb_stat_sq`, `_partial`, `_gather`, `_gather2`, `cb_branch_sum`, `_sum`,
+    `cb_rstd_send`, `cb_rstd` were pinned to fp32 unconditionally since Phase 0, on
+    `row_reduce_accumulate`'s argument. That argument binds at `fp32_dest_acc_en=True` and is kept
+    there (byte-identical to Refinement 4). At **False** there is no fp32 anywhere on the path to
+    preserve: every value is packed out of a 16-bit DEST and unpacked straight back into one, so the
+    fp32 container held bf16-precision data at 2× the gather + multicast bytes and 2× the
+    per-tile-row L1 that bounds `R`. `MAX_GATHER_TILES` is now denominated in **fp32-tile
+    equivalents** so the one knob means the same BYTES at either format (and a bf16 pipeline admits
+    twice the tiles, which took the BLOCK geometry's block count 4 → 2). Lever 1 helps here too: the
+    stored magnitude is ≈ 1 (a mean share) instead of ≈ W.
+- **Measured (device kernel ns, blackhole_p150b, the pinned sharded perf config — bf16 / TILE /
+  `fp32_dest_acc_en=False` / HiFi2, shard spec from `extras`)**:
+
+  | geometry | baseline | +levers 1&2 | +lever 3 | vs `achievable_ns` |
+  |---|---|---|---|---|
+  | `(1,1,32,1024)` WIDTH `[32,128]` (8,1) | 5694 | 5121 | **3915** (1.45×) | 4110 — **beaten** |
+  | `(1,1,32,2304)` WIDTH `[32,256]` (9,1) | 6254 | 5692 | **4436** (1.41×) | 4617 — **beaten** |
+  | `(1,1,32,5120)` WIDTH `[32,160]` (8,4) | 6679 | 6160 | **4817** (1.39×) | 5267 — **beaten** |
+  | `(1,1,32,7168)` WIDTH `[32,256]` (7,4) | 6756 | 6196 | **4897** (1.38×) | 5481 — **beaten** |
+  | `(1,1,8192,1024)` BLOCK `[1024,128]` (8,8) | 76927 | 59648 | **49240** (1.56×) | 25640 |
+
+  Collateral on the **interleaved** perf set (not targeted; the finalize is shared): decode
+  6882/7299/8350/8987 → **5070/5403/7101/7904** (1.14–1.36×); prefill 91157/196134/421220/589550 →
+  89784/195453/424117/589561, i.e. unchanged inside the 2–3 % noise band (each re-measured twice).
+- **Accuracy achieved**: unchanged where the format is unchanged, and inside every gate where it is.
+  The unit precision matrix (140 cells, both DEST settings × {HiFi4, HiFi2} × 3 dtypes) is green,
+  including its `|ratio_median − 1|` scale tripwire — a bf16 stat costs ~0.2 % on `rstd`, two orders
+  inside the 2 % band. Golden `-m perf` 13/13 at their soft `pcc_threshold = 0.9995`, `-m pad_poison`
+  green (so the mask-before-square identity and the true-`W` divisor survive both the scaler fold and
+  the narrower stat). The pinned sharded perf geometries hold PCC > 0.9995.
+- **Golden test progress**: `test_op_loose` **382 / 384** — one better than the 381/384 Refinements
+  2b/3/4 all recorded. `13x777x1023` WIDTH_SHARDED, refused since Refinement 2 as an L1-capacity
+  failure (a 650 KiB full-height shard per core left 110 KiB for an `R·G = 32`-tile
+  `cb_stat_gather`), now fits because that buffer halved. The two remaining failures are byte-for-byte
+  the `W = 11008` TILE HEIGHT cells Refinement 2b documented, unchanged and for the unchanged reason.
+  `-m perf` 13/13. Unit directory **575 passed / 36 skipped / 0 failed** (was 573).
+- **Issues encountered**: none of substance. One free failure: an ablation that replaced the reduce
+  with `ckl::copy` did not compile (wrong overload) and was dropped — it was not needed, the finalize
+  ablation had already located the term.
+- **What is left (a finding, not a queued task)**: on the BLOCK geometry the no-combine floor is
+  25.5 µs against today's 49.2, and the gap is the root's **serialized** `gather → G tile-adds →
+  finalize` with seven cores idle. `VectorMode::C` is the structural floor for the SFPU (column 0
+  spans two faces; no mode walks one), and a logical two-level tree over the 1-D group line only
+  redistributes ~4 µs of adds for an extra hop per block. The lever that would actually close it is
+  **software-pipelining the combine** — let a member compute block `b+1`'s `sumsq` while block `b`'s
+  round is in flight — which needs `cb_stat_gather` to hold two blocks of slots and explicit
+  back-pressure that the writer's current design deliberately does not have (its documented race
+  argument is that the multicast *is* the barrier freeing those slots). Not taken: a new topology
+  with its own deadlock surface, on the much-travelled interleaved path as well. See the
+  `**Outcome**` line in `op_requirements.md`.
+- **Tests added**: `test_rms_norm_perf.py` grows the sharded harness this phase measures against —
+  `test_rms_norm_perf_sharded` (the five pinned geometries at their exact config; the previous
+  sharded test only asserted they *run*, at the default HiFi4/fp32-DEST config, which says nothing
+  about these `achievable_ns`), plus the three diagnostics that produced the table above and are kept
+  as the measurement record: `test_rms_norm_perf_sharded_combine_share` (the HEIGHT twin),
+  `test_rms_norm_perf_sharded_nogather` (one-member groups at matched `C`/`R`/blocks) and
+  `test_rms_norm_perf_sharded_gather_cap` (the block-count sweep). `test_rms_norm_sharded.py` grows
+  `test_rms_norm_stat_pipeline_format_follows_dest`, a **structural** assertion on the descriptor —
+  both formats are numerically indistinguishable at a 16-bit DEST, so only the descriptor can tell
+  them apart, the same argument as the zero-copy shard and chunking-knob assertions beside it. The
+  three `RMSN_ABLATE_COMBINE_MATH` / `RMSN_ABLATE_FINALIZE` / `RMSN_ABLATE_GATHER_BYTES` compile-time
+  switches are left in the kernels at `0` alongside Refinement 4's: inert, and the harness that
+  produced the ablation table.

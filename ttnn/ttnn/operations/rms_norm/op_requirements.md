@@ -409,7 +409,7 @@ at bf16, which is exactly `cb_normed`'s format for a bf16 input but a real preci
 dest-reuse at 0.94× / 0.82× *isolated*, so a ~3 % predicted win against a measured-negative
 primitive is not a bet worth making blind. Recorded, not filed as a follow-up.
 
-### [ ] Refinement 5 — Speed up the sharded perf geometries
+### [x] Refinement 5 — Speed up the sharded perf geometries
 
 **Type**: perf
 
@@ -435,3 +435,47 @@ against an interleaved measurement. Expect the binding cost after the DRAM read 
 per-block combine round (~1.3–1.5 µs measured for a 1-tile payload on a 16-core group in
 `tensix_all_reduce`) against a 4–5.5 µs total budget: at these targets the combine *is* the op, which
 is why this is a separate phase from Refinements 3 and 4 rather than a continuation of them.
+
+**Outcome**: **all five flagged geometries improved, and the four WIDTH decode cases now BEAT their
+`achievable_ns`** (blackhole_p150b, bf16 / TILE / `fp32_dest_acc_en=False` / HiFi2, shard spec pinned
+by `extras`): `(1,1,32,1024)` 5694 → **3915** ns vs a 4110 target (1.45×); `(1,1,32,2304)` 6254 →
+**4436** vs 4617 (1.41×); `(1,1,32,5120)` 6679 → **4817** vs 5267 (1.39×); `(1,1,32,7168)` 6756 →
+**4897** vs 5481 (1.38×); `(1,1,8192,1024)` BLOCK 76927 → **49240** vs 25640 (1.56×). Collateral,
+not targeted: the four *interleaved* decode cases also fell 1.14–1.36× (6882/7299/8350/8987 →
+5070/5403/7101/7904) and the golden loose slice went 381/384 → **382/384** (`13x777x1023` WIDTH,
+recorded since Refinement 2b as an L1-capacity refusal, now fits). Prefill is unchanged within noise.
+**The verifier note's prediction was wrong in an instructive way, and the ablation is what found it.**
+The note expected the per-block combine round to bind. It does not. Two matched-geometry ablations
+placed the cost: a HEIGHT twin of the BLOCK geometry (same 64 cores, same 128 tiles/core, `G = 1`, no
+gather/reduce/multicast) runs in 25462 ns against 76859, and forcing the BLOCK spec's groups to one
+member each — same `C = 4`, same `R = 8`, same 4 blocks — gives 59517. So the *whole* cross-core
+combine is 17.3 µs of the 76.9 µs wall (11 µs gather NoC bytes, 5.4 µs root tile-adds, measured
+separately), the block count is ~1.1 µs per block, and the remaining ~34 µs is the **per-tile-row
+statistics pipeline**: a BLOCK core owns 32 tile-rows where the HEIGHT twin owns 4, and the stat
+pipeline is per tile-row, not per tile. Ablating the root's finalize chain alone removed **31.1 µs**
+(23.1 µs of it the `Rsqrt`, at ~720 ns per one-tile-row stat tile) — Refinement 3's recorded
+"~1.3 µs of SFPU work to produce 32 useful numbers", now shown to be the single dominant term of a
+sharded geometry rather than a decode curiosity, because it sits on the ROOT and the entire group
+waits for it. Three levers landed against that: (1) `1/W_true` folded into the **reduce scaler**
+(the reduce helpers' own header names the "scaler combines reduction with another factor" case),
+deleting `MulUnary` from the finalize; (2) two custom `ckl::UnaryOp` chain **elements**
+(`RsqrtColValid` / `AddUnaryColValid`) that pass `VectorMode::C` — a `reduce<SUM, REDUCE_ROW>` result
+is column-0-valid and column 0 lives in faces 0 and 2, which is exactly the pair that mode walks, so
+half the SFPU work was structurally garbage; the kernel_lib ops cannot express it because
+`rsqrt_tile` / `add_unary_tile` hardcode `VectorMode::RC`; (3) the statistics pipeline's page format
+now **follows `fp32_dest_acc_en`** (bf16 at False, byte-identical fp32 at True), which halves the
+gather + multicast payload and the per-tile-row L1 that bounds `R` — justified because at a 16-bit
+DEST every value on that path is packed out of DEST and unpacked back into it, so fp32 was storing
+bf16-precision data.
+**What binds now, and what I did not do.** On the BLOCK geometry the no-combine floor is 25.5 µs and
+we are at 49.2, so ~24 µs is still the root's serialized `gather → G tile-adds → finalize` chain with
+seven cores idle. `VectorMode::C` is already the structural floor for the SFPU (column 0 spans two
+faces; no mode walks one). The next lever is **software-pipelining the combine** — let a member run
+block `b+1`'s `sumsq` while block `b`'s round is in flight — which needs `cb_stat_gather` to hold two
+blocks of slots and explicit back-pressure the writer's current design deliberately does not have
+(its race argument is that the multicast *is* the barrier that frees the slots). I did not take it:
+it is a new topology with its own deadlock surface, on the much-travelled interleaved path too, and
+the phase's named lever set is landed and measured. Two knobs re-measured and kept at their
+byte-identical defaults: `MAX_GATHER_TILES` (now denominated in fp32-tile equivalents, re-swept at
+the bf16 format — 16/32/64/128/256 → 55430/51153/49228/48970/48949 ns, flat past 64) and, from the
+fp32-format sweep that preceded it, the same knob at 64/128/256 → 76833/75575/75584.
