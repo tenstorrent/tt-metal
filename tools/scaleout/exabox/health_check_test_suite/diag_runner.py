@@ -1027,6 +1027,32 @@ def _emit_result(name: str, status: str, suffix: str = "") -> None:
     sys.stdout.flush()
 
 
+def _write_cmd_log(logs_dir: Path | None, dry_run: bool, name: str, cmdline: str, cp) -> str | None:
+    """Write a reset command's full stdout+stderr to logs/<name>.log.
+
+    reset_loop runs with capture_output=True, so otherwise only a 2000-char tail
+    survives in the JSON. Returns the log path, or None (dry-run / no logs_dir /
+    write error).
+    """
+    if logs_dir is None or dry_run:
+        return None
+    try:
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        log_path = logs_dir / f"{name}.log"
+        with log_path.open("w") as f:
+            f.write(f"$ {cmdline}\n")
+            f.write(f"# rc={getattr(cp, 'returncode', '?')}\n")
+            if getattr(cp, "stdout", None):
+                f.write("\n--- stdout ---\n")
+                f.write(cp.stdout)
+            if getattr(cp, "stderr", None):
+                f.write("\n--- stderr ---\n")
+                f.write(cp.stderr)
+        return str(log_path)
+    except OSError:
+        return None
+
+
 def reset_loop(
     tt_smi: str,
     plan: list[str],
@@ -1034,6 +1060,7 @@ def reset_loop(
     dry_run: bool,
     snapshot_out: Path | None = None,
     post_reset_phases: list | None = None,
+    logs_dir: Path | None = None,
 ) -> None:
     """Per SYS-4365: first -r, then stick to -glx_reset for subsequent iterations.
 
@@ -1041,6 +1068,9 @@ def reset_loop(
     taken + validated after each reset iteration (including any CPLD auto-recover),
     and appended to `post_reset_phases` as (name, Phase) pairs for the caller to
     splice into the report.
+
+    When `logs_dir` is set, each reset/recover command and any snapshot-capture
+    failure also writes logs/<name>.log (mirrors run_tests).
     """
 
     def _post_reset_snapshot(label: str) -> None:
@@ -1054,6 +1084,16 @@ def reset_loop(
         except Exception as e:
             sp.error = repr(e)
             sp.add(Check(name="snapshot_capture", status=FAIL, details=repr(e), ip="other"))
+            # Keep the full tt-smi -f error as an attachable log.
+            if logs_dir is not None:
+                try:
+                    logs_dir.mkdir(parents=True, exist_ok=True)
+                    (logs_dir / f"snapshot_after_{label}.log").write_text(
+                        f"$ {tt_smi} -f {snapshot_out}\n"
+                        f"snapshot capture failed after reset '{label}':\n{e}\n"
+                    )
+                except OSError:
+                    pass
         sp.duration_s = time.time() - t0
         sp.rollup()
         post_reset_phases.append((sp.name, sp))
@@ -1078,6 +1118,7 @@ def reset_loop(
                 post_count = -1
         status = PASS if (dry_run or (cp.returncode == 0 and post_count == EXPECTED_CHIP_COUNT)) else FAIL
         _emit_result(check_name, status, suffix=f"({dt:.1f}s, post_pcie={post_count})")
+        reset_log = _write_cmd_log(logs_dir, dry_run, check_name, f"{tt_smi} {flag}", cp)
         phase.add(
             Check(
                 name=check_name,
@@ -1091,6 +1132,7 @@ def reset_loop(
                     "post_pcie_count": post_count,
                     "stdout_tail": cp.stdout[-2000:] if cp.stdout else "",
                     "stderr_tail": cp.stderr[-2000:] if cp.stderr else "",
+                    "log_file": reset_log,
                 },
                 ip="other",
             )
@@ -1124,6 +1166,7 @@ def reset_loop(
             recovered = rcp.returncode == 0 and rpost == EXPECTED_CHIP_COUNT
             rstatus = PASS if recovered else FAIL
             _emit_result("cpld_auto_recover", rstatus, suffix=f"({rdt:.1f}s, post_pcie={rpost})")
+            recover_log = _write_cmd_log(logs_dir, dry_run, "cpld_auto_recover", f"{tt_smi} -glx_reset", rcp)
             phase.add(
                 Check(
                     name="cpld_auto_recover",
@@ -1139,6 +1182,7 @@ def reset_loop(
                         "post_pcie_count": rpost,
                         "stdout_tail": rcp.stdout[-2000:] if rcp.stdout else "",
                         "stderr_tail": rcp.stderr[-2000:] if rcp.stderr else "",
+                        "log_file": recover_log,
                     },
                     ip="other",
                 )
@@ -1386,6 +1430,9 @@ def run_diag(
     if tt_metal_path is None:
         tt_metal_path = default_tt_metal_path()
 
+    # gtest + reset-loop logs live next to the report.
+    logs_dir = output.resolve().parent / "logs"
+
     started = datetime.now(timezone.utc)
     report = {
         "tool_version": "0.3.0-draft",
@@ -1438,6 +1485,7 @@ def run_diag(
                 dry_run,
                 snapshot_out=snap_out_for_resets,
                 post_reset_phases=post_reset_phases,
+                logs_dir=logs_dir,
             )
         except Exception as e:
             reset_phase.error = repr(e)
@@ -1506,7 +1554,6 @@ def run_diag(
         test_phase.add(Check(name="tests", status=SKIP, details="--skip-tests"))
     else:
         try:
-            logs_dir = output.resolve().parent / "logs"
             run_tests(tt_metal_path, tier, test_phase, dry_run, logs_dir)
         except Exception as e:
             test_phase.error = repr(e)
