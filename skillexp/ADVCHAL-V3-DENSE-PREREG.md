@@ -152,3 +152,66 @@ qwenB **3.0×**, nmB **1.5×** — and **gemma-4-12B 0.034×**, i.e. **29× insi
 **So the "shipped ≠ established" worry I pre-registered lands on exactly one cell, and it is not the control.**
 Every other shipped result clears its own band, most of them comfortably. The corpus total should be quoted as
 **−7,837.6 µs established**, with gemma-12b's 11.5 µs recorded as a sub-band non-result rather than a win.
+
+
+---
+
+# RESULTS — the two llama controls. Both hold at exactly 0.0 %.
+
+| | llama-3.1-8B `exp17` | llama-3.2-1B `exp17` |
+|---|---|---|
+| outcome | `no_change_measured` | `no_change` |
+| model estimate | **20,607.6 → 20,607.6 = 0.0 µs** | **5,570.9 → 5,570.9 = 0.0 µs** |
+| per layer | 0.6640912592411041 → identical | 0.37322603166103363 → identical |
+| measurements taken | **19** | 7 |
+| incumbent PCC | 0.9995038931504077 | 0.999546366342165 |
+| gate | PASSED | PASSED **with 2 advisory warnings** |
+
+**Prediction scored: both correct**, including the specific risk (a sub-band ship) which did not materialise. These
+are the first fully-correct pre-registered predictions in this corpus, and the reason is that they were **floor
+predictions grounded in a prior measurement**, not outputs of the capacity formula.
+
+**The zero point is a property of the stage, not a fluke of one cell.** Two independent models, 19 and 7
+measurements, both exactly zero. So **gemma-4-12B's 11.5 µs sub-band ship is one cell, not a tendency** — the
+reassurance the band audit could not give on its own.
+
+## ⚠ But the control ships a zero over a measured −35.7 µs
+
+The gate's two warnings on llama-3.2-1B:
+
+| candidate | ms | vs shipped 0.37322603 | × 16 layers | vs the 10.0 µs band |
+|---|---:|---:|---:|---:|
+| `dense2_confirm` | 0.37099261 | **−0.60 %** | **−35.7 µs** | **3.6×** |
+| `dense2_post_norm_chain` | 0.37114954 | −0.56 % | −33.2 µs | 3.3× |
+
+Verdicts `rejected_overlap` and `rejected_confirmation_overlap`. **So "0.0 %" is a shipped zero over an
+establishable −35.7 µs** — the "did it ship its best?" failure appearing in the cleanest cell in the corpus, where
+nothing else is in dispute.
+
+**And my own measurements-vs-decision check caught it and rated it advisory.** Fourth cell where a `WARN` sits on a
+faster, establishable candidate (after phiA, nmFN and g26onA). The check works; **its severity is wrong**, and that
+is now the best-evidenced single gate change in the corpus — four instances, one of them in the negative control.
+
+The second warning is also that machinery working correctly: *"the first timed repeat is 56 % of the whole spread,
+so 0.622 µs is a settling ramp, not a noise floor (without it: 0.276 µs)"* — a real methodological catch.
+
+## One result that cuts against v3
+
+| cell | v2 band | v3 band | |
+|---|---:|---:|---|
+| llama-3.1-8B | ±22.3 µs | **14.1 µs** | v3 **37 % tighter** |
+| llama-3.2-1B | **±2.3 µs** | 10.0 µs | v3 **4.3× LOOSER** |
+
+**So v3's precision improvement is not uniform, and on the tightest cell in the corpus v3 is the less precise of the
+two.** I had cited the tighter band as a v3 win off the first cell alone; on both cells where it is checkable the
+claim holds once and fails once, so it should not be claimed at all.
+
+# Final corpus position — 15 cells
+
+| | µs |
+|---|---:|
+| shipped | **−7,849.0** |
+| **established (outside its own band)** | **−7,837.6** |
+| sub-band ship | 11.5 — gemma-4-12B, 0.03× its band |
+| **verified zeros** | **2** |
+| left on the table by warned-about `rejected_*` verdicts | ≥ 35.7 (llama32-1b) + 137.5 (nmFN) + ~178 (phiA) + 6,055 (g26onA) |

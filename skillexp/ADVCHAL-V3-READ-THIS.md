@@ -9,6 +9,7 @@ taken until now to write v3's.
 | | |
 |---|---|
 | **v3 vs v2, same 11 cells** | **−6,769 µs/model against −15,177 — 45 %** ([`RESULTS`](ADVCHAL-V3-RESULTS.md)) |
+| **the zero point is verified** | **both llama `exp17` controls report exactly 0.0 %** (19 and 7 measurements) — v3 does not manufacture wins. But llama-3.2-1B ships that zero over a measured **−35.7 µs at 3.6× its band**, flagged `rejected_overlap` and rated **advisory** by my own gate check — the fourth such instance |
 | **with the dense cells added** | **−7,849 µs across 13 cells, of which −7,837.6 is outside its own band.** Only `gemma-4-12B exp11` ships a sub-band non-result — **11.5 µs at 0.03× its band** ([`DENSE-PREREG`](ADVCHAL-V3-DENSE-PREREG.md)) |
 | ⚠ **implementation variance is real and now proven** | **phi `exp17` shipped `advisor_rope_l1` for −3.295 % at a PCC identical to its incumbent, while phi `nofuse-noadvise` wrote the same knob on the same unmodified stage and scored 0.985.** Same model, same guidance, one agent correct and one defective — and the stage cannot distinguish "bad placement" from "wrong code" |
 | **why** | **v3's defect was detected and v2's was not, and v3 could not attribute what it detected — so it discarded the win instead of fixing the bug.** Both versions ship the same cross-phase defect; only v2's fixture hid it ([`WHY-WORSE`](ADVCHAL-V3-WHY-WORSE.md), which supersedes part of [`CORE-ISSUE`](ADVCHAL-V3-CORE-ISSUE.md)) |
