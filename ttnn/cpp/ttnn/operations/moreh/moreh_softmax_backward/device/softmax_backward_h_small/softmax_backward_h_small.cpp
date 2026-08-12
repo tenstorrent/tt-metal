@@ -140,7 +140,7 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardHSmallFactory::create_program
                  },
                  DFBBinding{
                      .dfb_spec_name = SCALER_DFB,
-                     .accessor_name = "bcast_scaler",
+                     .accessor_name = "scaler",
                      .endpoint_type = DFBEndpointType::CONSUMER,
                  },
                  DFBBinding{
@@ -177,12 +177,12 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardHSmallFactory::create_program
                  },
                  DFBBinding{
                      .dfb_spec_name = DY_M_SUM_DFB,
-                     .accessor_name = "inter2",
+                     .accessor_name = "dy_m_sum",
                      .endpoint_type = DFBEndpointType::PRODUCER,
                  },
                  DFBBinding{
                      .dfb_spec_name = DY_M_SUM_DFB,
-                     .accessor_name = "inter2",
+                     .accessor_name = "dy_m_sum",
                      .endpoint_type = DFBEndpointType::CONSUMER,
                  }},
             .compile_time_args = {{"N", num_tiles_per_core}, {"Ht", Ht}},

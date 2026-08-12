@@ -19,13 +19,13 @@ void kernel_main() {
 
     DataflowBuffer dfb_ydy_obj(dfb::ydy);  // y * dy
     DataflowBuffer dfb_sum_obj(dfb::sum);
-    DataflowBuffer dfb_inter2_obj(dfb::inter2);
+    DataflowBuffer dfb_dy_m_sum_obj(dfb::dy_m_sum);
     DataflowBuffer dfb_add_obj(dfb::add);
 
-    compute_kernel_hw_startup(dfb::y, dfb::bcast_scaler, dfb::dx);
+    compute_kernel_hw_startup(dfb::y, dfb::scaler, dfb::dx);
 
-    constexpr auto N = get_arg(args::N);
-    constexpr auto Ht = get_arg(args::Ht);
+    uint32_t N = get_arg(args::N);
+    uint32_t Ht = get_arg(args::Ht);
 
     for (uint32_t n = 0; n < N; ++n) {
 #ifdef LOG
@@ -52,7 +52,7 @@ void kernel_main() {
             }
         }
 
-        compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_COL, dfb::add, dfb::bcast_scaler, dfb::sum>(
+        compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_COL, dfb::add, dfb::scaler, dfb::sum>(
             compute_kernel_lib::ReduceInputBlockShape::single());
 
         for (uint32_t h = 0; h < Ht; ++h) {
@@ -61,10 +61,10 @@ void kernel_main() {
             exp_tile_to_cb(dfb_y_obj, dfb_exp_obj, 0);
 
             // sum * exp(y)
-            mul_tiles_bcast_rows_to_cb(dfb_exp_obj, dfb_sum_obj, dfb_inter2_obj, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            mul_tiles_bcast_rows_to_cb(dfb_exp_obj, dfb_sum_obj, dfb_dy_m_sum_obj, 0, 0, /*pop0=*/1, /*pop1=*/0);
 
             // dy - sum * exp(y)
-            sub_tiles_to_cb(dfb_dy_obj, dfb_inter2_obj, dfb_dx_obj);
+            sub_tiles_to_cb(dfb_dy_obj, dfb_dy_m_sum_obj, dfb_dx_obj);
         }
 
         dfb_sum_obj.pop_front(onetile);
@@ -87,20 +87,20 @@ void kernel_main() {
         }
 
         // step 2, compute sum(y * dy)
-        compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_COL, dfb::add, dfb::bcast_scaler, dfb::sum>(
+        compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_COL, dfb::add, dfb::scaler, dfb::sum>(
             compute_kernel_lib::ReduceInputBlockShape::single());
 
         // step 3, compute final result
         for (uint32_t h = 0; h < Ht; ++h) {
             // dy - sum
-            sub_tiles_bcast_rows_to_cb(dfb_dy_obj, dfb_sum_obj, dfb_inter2_obj, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            sub_tiles_bcast_rows_to_cb(dfb_dy_obj, dfb_sum_obj, dfb_dy_m_sum_obj, 0, 0, /*pop0=*/1, /*pop1=*/0);
 
 #ifdef SOFTMAX
             // (dy - sum) * y
-            mul_tiles_to_cb(dfb_y_obj, dfb_inter2_obj, dfb_dx_obj);
+            mul_tiles_to_cb(dfb_y_obj, dfb_dy_m_sum_obj, dfb_dx_obj);
 #else
             // -(dy - sum) * y
-            mul_tiles_and_negative_to_cb(dfb_y_obj, dfb_inter2_obj, dfb_dx_obj);
+            mul_tiles_and_negative_to_cb(dfb_y_obj, dfb_dy_m_sum_obj, dfb_dx_obj);
 #endif
         }
 

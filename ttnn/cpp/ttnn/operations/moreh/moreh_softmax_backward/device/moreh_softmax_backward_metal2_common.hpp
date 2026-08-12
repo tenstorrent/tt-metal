@@ -75,9 +75,9 @@ inline DataflowBufferSpec MakeDFB(
     };
 }
 
-// SOFTMAX / SOFTMIN / LOG select the math variant inside the compute kernel; FP32_DEST_ACC_EN
-// gates its fp32 paths. The readers of the large W/H/C variants take LOG as well, and build
-// their defines separately.
+// SOFTMAX and LOG select paths inside the compute kernels. SOFTMIN and FP32_DEST_ACC_EN are
+// preserved for descriptor parity even though these kernels do not read them. The readers of the
+// large W/H/C variants consume LOG as well and build their defines separately.
 inline KernelSpec::CompilerOptions::Defines MakeComputeDefines(MorehSoftmaxBackwardOp op, bool fp32_dest_acc_en) {
     KernelSpec::CompilerOptions::Defines defines;
     if (op == MorehSoftmaxBackwardOp::SOFTMAX) {

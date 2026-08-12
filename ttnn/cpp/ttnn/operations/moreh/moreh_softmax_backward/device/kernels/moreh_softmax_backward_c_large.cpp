@@ -19,8 +19,8 @@ void kernel_main() {
     DataflowBuffer dfb_sum_obj(dfb::sum);
     DataflowBuffer dfb_dy_m_sum_obj(dfb::dy_m_sum);  // dy - sum
 
-    constexpr auto N = get_arg(args::N);
-    constexpr auto dim_size = get_arg(args::dim_size);
+    uint32_t N = get_arg(args::N);
+    uint32_t dim_size = get_arg(args::dim_size);
 
     compute_kernel_hw_startup(dfb::dy, dfb::y, dfb::dx);
 
@@ -41,12 +41,10 @@ void kernel_main() {
             exp_tile_to_cb(dfb_y_obj, dfb_exp_obj);
 
             // sum * exp(y)
-            // the dy - sum buffer under a second name; one FIFO, not an extra buffer
-            auto& dfb_inter2_obj = dfb_dy_m_sum_obj;
-            mul_tiles_to_cb(dfb_sum_obj, dfb_exp_obj, dfb_inter2_obj, 0, 0, /*pop0=*/0, /*pop1=*/1);
+            mul_tiles_to_cb(dfb_sum_obj, dfb_exp_obj, dfb_dy_m_sum_obj, 0, 0, /*pop0=*/0, /*pop1=*/1);
 
             // dy - sum * exp(y)
-            sub_tiles_to_cb(dfb_dy_obj, dfb_inter2_obj, dfb_dx_obj);
+            sub_tiles_to_cb(dfb_dy_obj, dfb_dy_m_sum_obj, dfb_dx_obj);
         }
         dfb_sum_obj.pop_front(onetile);
 #else

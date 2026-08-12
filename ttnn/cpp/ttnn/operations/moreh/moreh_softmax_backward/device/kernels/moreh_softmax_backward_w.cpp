@@ -19,21 +19,22 @@ void kernel_main() {
 
     DataflowBuffer dfb_ydy_obj(dfb::ydy);  // y * dy
     DataflowBuffer dfb_sum_obj(dfb::sum);
-    DataflowBuffer dfb_inter2_obj(dfb::inter2);
+    DataflowBuffer dfb_dy_m_sum_obj(dfb::dy_m_sum);
 
-    compute_kernel_hw_startup(dfb::y, dfb::bcast_scaler, dfb::dx);
+    compute_kernel_hw_startup(dfb::y, dfb::scaler, dfb::dx);
 
-    constexpr auto N = get_arg(args::N);
-    constexpr auto Wt = get_arg(args::Wt);
+    uint32_t N = get_arg(args::N);
+    uint32_t Wt = get_arg(args::Wt);
 
     for (uint32_t n = 0; n < N; ++n) {
 #ifdef LOG
         // sum(dy)
         if (Wt == 1) {
             // apply mask
-            mask_tile_to_cb(dfb_dy_obj, dfb_mask_obj, dfb_inter2_obj, /*itile=*/0, /*mtile=*/0, /*pop=*/0, /*popm=*/0);
+            mask_tile_to_cb(
+                dfb_dy_obj, dfb_mask_obj, dfb_dy_m_sum_obj, /*itile=*/0, /*mtile=*/0, /*pop=*/0, /*popm=*/0);
 
-            compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, dfb::inter2, dfb::bcast_scaler, dfb::sum>(
+            compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, dfb::dy_m_sum, dfb::scaler, dfb::sum>(
                 compute_kernel_lib::ReduceInputBlockShape::single());
         } else {
             // On this path the y*dy and sum buffers hold two partial sums instead; the second
@@ -43,7 +44,7 @@ void kernel_main() {
                 PoolType::SUM,
                 ReduceDim::REDUCE_ROW,
                 dfb::dy,
-                dfb::bcast_scaler,
+                dfb::scaler,
                 dfb_inter0,
                 compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
                 compute_kernel_lib::ReduceInputBlockShape::row(Wt - 1));
@@ -53,11 +54,11 @@ void kernel_main() {
             mask_tile_to_cb(
                 dfb_dy_obj, dfb_mask_obj, dfb_inter1_obj, /*itile=*/Wt - 1, /*mtile=*/0, /*pop=*/0, /*popm=*/0);
 
-            compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, dfb_inter1, dfb::bcast_scaler, dfb::inter2>(
+            compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, dfb_inter1, dfb::scaler, dfb::dy_m_sum>(
                 compute_kernel_lib::ReduceInputBlockShape::single());
 
             auto& dfb_inter0_obj = dfb_ydy_obj;
-            add_tiles_to_cb(dfb_inter0_obj, dfb_inter2_obj, dfb_sum_obj);
+            add_tiles_to_cb(dfb_inter0_obj, dfb_dy_m_sum_obj, dfb_sum_obj);
         }
 
         // dy - sum * exp(y)
@@ -68,10 +69,10 @@ void kernel_main() {
             exp_tile_to_cb(dfb_y_obj, dfb_exp_obj, w, /*dst=*/0, /*pop=*/0);
 
             // sum * exp(y)
-            mul_tiles_bcast_cols_to_cb(dfb_exp_obj, dfb_sum_obj, dfb_inter2_obj, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            mul_tiles_bcast_cols_to_cb(dfb_exp_obj, dfb_sum_obj, dfb_dy_m_sum_obj, 0, 0, /*pop0=*/1, /*pop1=*/0);
 
             // dy - sum * exp(y)
-            sub_tiles_to_cb(dfb_dy_obj, dfb_inter2_obj, dfb_dx_obj, w, 0, /*pop0=*/0, /*pop1=*/1);
+            sub_tiles_to_cb(dfb_dy_obj, dfb_dy_m_sum_obj, dfb_dx_obj, w, 0, /*pop0=*/0, /*pop1=*/1);
         }
 
         dfb_sum_obj.pop_front(onetile);
@@ -93,21 +94,21 @@ void kernel_main() {
             PoolType::SUM,
             ReduceDim::REDUCE_ROW,
             dfb::ydy,
-            dfb::bcast_scaler,
+            dfb::scaler,
             dfb::sum,
             compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
 
         // step 3, compute final result
         for (uint32_t w = 0; w < Wt; w += onetile) {
             // dy - sum
-            sub_tiles_bcast_cols_to_cb(dfb_dy_obj, dfb_sum_obj, dfb_inter2_obj, w, 0, /*pop0=*/0, /*pop1=*/0);
+            sub_tiles_bcast_cols_to_cb(dfb_dy_obj, dfb_sum_obj, dfb_dy_m_sum_obj, w, 0, /*pop0=*/0, /*pop1=*/0);
 
 #ifdef SOFTMAX
             // (dy - sum) * y
-            mul_tiles_to_cb(dfb_y_obj, dfb_inter2_obj, dfb_dx_obj, w, 0, /*pop0=*/0, /*pop1=*/1);
+            mul_tiles_to_cb(dfb_y_obj, dfb_dy_m_sum_obj, dfb_dx_obj, w, 0, /*pop0=*/0, /*pop1=*/1);
 #else
             // -(dy - sum) * y
-            mul_tiles_and_negative_to_cb(dfb_y_obj, dfb_inter2_obj, dfb_dx_obj, w, 0, /*pop0=*/0, /*pop1=*/1);
+            mul_tiles_and_negative_to_cb(dfb_y_obj, dfb_dy_m_sum_obj, dfb_dx_obj, w, 0, /*pop0=*/0, /*pop1=*/1);
 #endif
         }
 

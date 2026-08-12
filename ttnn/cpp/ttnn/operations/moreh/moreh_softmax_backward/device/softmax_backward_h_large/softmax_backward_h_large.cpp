@@ -129,8 +129,9 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardHLargeFactory::create_program
     auto make_compute_spec = [&](const KernelSpecName& unique_id, uint32_t num_tiles_per_core) {
         return KernelSpec{
             .unique_id = unique_id,
-            .source = "ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/kernels/"
-                      "moreh_softmax_backward_h_large.cpp",
+            .source =
+                "ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/kernels/"
+                "moreh_softmax_backward_h_large.cpp",
             // Legacy ComputeConfigDescriptor left opt_level unset, which resolves to O3 for a
             // compute kernel; Metal 2.0's type-agnostic default is O2, so state O3 here.
             .compiler_options = {.defines = compute_defines, .opt_level = KernelBuildOptLevel::O3},
@@ -147,7 +148,7 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardHLargeFactory::create_program
                  },
                  DFBBinding{
                      .dfb_spec_name = SCALER_DFB,
-                     .accessor_name = "bcast_scaler",
+                     .accessor_name = "scaler",
                      .endpoint_type = DFBEndpointType::CONSUMER,
                  },
                  DFBBinding{
@@ -184,12 +185,12 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardHLargeFactory::create_program
                  },
                  DFBBinding{
                      .dfb_spec_name = DY_M_SUM_DFB,
-                     .accessor_name = "inter2",
+                     .accessor_name = "dy_m_sum",
                      .endpoint_type = DFBEndpointType::PRODUCER,
                  },
                  DFBBinding{
                      .dfb_spec_name = DY_M_SUM_DFB,
-                     .accessor_name = "inter2",
+                     .accessor_name = "dy_m_sum",
                      .endpoint_type = DFBEndpointType::CONSUMER,
                  },
                  DFBBinding{
