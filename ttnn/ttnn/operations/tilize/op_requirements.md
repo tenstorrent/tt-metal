@@ -317,7 +317,7 @@ it has two blocks to double-buffer across.
 
 ---
 
-### [ ] Refinement 4 — Cross-spec reshard (prompt A3c)
+### [x] Refinement 4 — Cross-spec reshard (prompt A3c)
 
 **Goal**: input shard spec ≠ output shard spec (including nd↔legacy and uneven/cliff shards): each
 **output** core pulls the input pages it needs from whichever core holds them, over L1→L1 NoC, with
@@ -342,6 +342,43 @@ arg vector.
 **Done when**: the cross-spec and nd↔legacy golden cells pass with no hangs; tt-npe shows **zero DRAM
 bytes** for an L1→L1 reshard; Refinement 2's same-spec cells still take the zero-copy path (a general
 gather that silently swallows the same-spec case is a regression).
+
+**Outcome** (`[x]`, 2026-08-12): the named family lands in full — `test_tilize_nd_sharded_to_legacy_sharded`
+goes **0/9 → 9/9** (incl. the uneven `([7,128,128],[2,64,96])` cliff shard), the whole golden directory
+**165 → 185 passed / 179 → 161 failed** with all 161 typed refusals for R5/R7's axes, 0 hangs, 0 XPASS,
+and the registry suite unchanged at 22/22 (cross-spec is a *relation* between two specs, not a
+registry axis value — so this refinement's gate is the external grader plus the structural tests, not
+the registry count). Zero DRAM staging is asserted structurally rather than by tt-npe: the op
+allocates exactly one tensor and the kernels' only base addresses are the caller's two L1 buffers, so
+an intermediate is unaddressable. Same-spec still aliases BOTH CBs; cross-spec never does.
+
+*What the design got right, and the one place measurement overruled it.* §4.3's **pull** is built and
+ships — but so is its mirror (**push**, input shard resident, whole-tile-page writes), because the
+choice measured per-geometry on `[1,1,1024,1024]` L1→L1: at equal core counts push wins **1.558x**
+(2048 B tile writes vs 256 B band reads), and on the same pair *reversed* pull wins **1.605x**. The
+winner tracks the reversal, so the first term is **core count**, not direction: the resident side's
+shard grid IS the core set (A2), so making the smaller grid resident throws away parallelism whichever
+way the bytes travel. §4.3's stated reason for pull (§1.1's bijection ⇒ no fan-out, no semaphore) is
+true of **both** directions and rules out a *combine*, not a direction — so `reshard_direction_is_pull`
+gates on core count then transaction shape, keeping pull wherever pull is not measurably worse.
+Against R2's fully-streamed fallback the scheme is **2.695x / 1.914x**. Cumulative bench: all 8 prior
+shapes within ±2 % (noise); 2 reshard shapes added (one per side of the gate, each with both forcing
+arms). Ledger clean, **D20 `deferred → applied`** — its own deferral note had named A3c as the
+refinement that would land it.
+
+*Remaining headroom, as a FINDING (not a queue item).* Ablation says each reshard geometry is bound by
+its single cross-core transfer — `reshard` is **write-bound** (0.171x), `reshard_rowwise`
+**read-bound** (0.232x), compute overlap-hidden (0.95-0.97x) — which is structural: on a one-sided
+resident reshard **exactly one dataflow kernel moves bytes and the other only runs the CB handshake,
+so lever B9's NoC0/NoC1 split (worth 1.27-1.86x on every interleaved shape) is unavailable and the
+whole transfer runs on one NoC**. That shows up as a per-core rate of **16.7 GB/s** vs `l1_to_l1`'s
+26 GB/s, i.e. ~1.5x of per-core headroom. The candidate is master.md **B8**/`split_reader` in its true
+form — give the idle kernel a second input CB and alternate blocks between the two, so both NoCs
+carry the gather — which is a real scheme change and needs its own measurement (`zero_copy_fold`
+already warns that touching this structure can cost 0.74x). Not chased here: this is a generality
+slot, and the trailing perf rounds start from a fresh whole-op breakdown. The other bound is the
+caller's: a reshard cannot use more cores than the resident side's shard grid, and widening it by
+going fully streamed measured **2.7x worse**.
 
 ---
 

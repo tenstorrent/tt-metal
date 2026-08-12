@@ -58,7 +58,13 @@ import torch
 
 import ttnn
 from ttnn.operations.tilize.tilize import _dispatch
-from ttnn.operations.tilize.tilize_program_descriptor import blocking, placement_defaults, plan_cores
+from ttnn.operations.tilize.tilize_program_descriptor import (
+    blocking,
+    placement_defaults,
+    plan_cores,
+    plan_placement,
+    shard_view,
+)
 
 _DURATION_KEY = "DEVICE KERNEL DURATION [ns]"
 
@@ -93,6 +99,19 @@ SHAPES = {
     #                 each, where per-core fixed cost dominates (master.md B0).
     "sharded_big": (1, 1, 2048, 2048),
     "sharded_small": (1, 1, 512, 64),
+    # Refinement 4 (A3c) adds the CROSS-SPEC reshard — the one topology in this
+    # op where a core touches bytes another core owns. WIDTH shard in -> HEIGHT
+    # shard out is its worst case: the two placements share no axis, so every
+    # output core's every stick is gathered from a DIFFERENT input core, band by
+    # band. Carried forward so a later phase cannot regress the gather while
+    # tuning the resident or interleaved paths.
+    "reshard": (1, 1, 1024, 1024),
+    # The reshard's OTHER regime, and the one that decides its direction gate:
+    # a WHOLE-ROW (HEIGHT-sharded) source, where a pull reads a full block row
+    # (2048 B) rather than a band. `reshard` above is the banded regime, where a
+    # pull reads 256 B. One shape per side of the gate, so both arms of
+    # `reshard_pull` stay measurable on the geometry each one is meant to win.
+    "reshard_rowwise": (1, 1, 1024, 1024),
 }
 
 
@@ -111,6 +130,26 @@ def _height_shard(grid_end, shard_shape):
 _SHARD_BIG = _height_shard((7, 7), (32, 2048))
 _SHARD_SMALL = _height_shard((3, 0), (128, 64))
 
+# R4: the cross-spec pair. 1024 rows over 8 cores -> a (128,1024) HEIGHT shard
+# out; 1024 columns over the same 8 cores -> a (1024,128) WIDTH shard in, i.e.
+# 8 source bands per row. No core's input shard overlaps its output shard in
+# more than one block, so the whole call is gather.
+_RESHARD_IN = ttnn.MemoryConfig(
+    ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+    ttnn.BufferType.L1,
+    ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
+        (1024, 128),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    ),
+)
+_RESHARD_OUT = _height_shard((7, 0), (128, 1024))
+
+# The whole-row regime: 8 HEIGHT shards in -> 4 HEIGHT shards out (a merge), so
+# the source pages are full rows (n_bands == 1) and a pull reads whole block rows.
+_RESHARD_ROW_IN = _height_shard((3, 0), (256, 1024))
+_RESHARD_ROW_OUT = _height_shard((7, 0), (128, 1024))
+
 # Per-shape memory placement; DRAM interleaved on both sides unless named here.
 # ONE source of truth for a shape's placement — `_bench_input` and the `_dispatch`
 # call both read it.
@@ -118,6 +157,8 @@ _MEM_BY_SHAPE = {
     "l1_to_l1": (ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
     "sharded_big": (_SHARD_BIG, _SHARD_BIG),
     "sharded_small": (_SHARD_SMALL, _SHARD_SMALL),
+    "reshard": (_RESHARD_IN, _RESHARD_OUT),
+    "reshard_rowwise": (_RESHARD_ROW_IN, _RESHARD_ROW_OUT),
 }
 
 
@@ -182,6 +223,12 @@ ARMS = {
     # TensorAccessor instead of aliasing the CB onto it (i.e. the interleaved
     # path merely TOLERATING the layout). A no-op on the interleaved shapes.
     "lever_c14_force_streamed": dict(levers=dict(force_streamed=1)),
+    # R4 (A3c): the cross-spec reshard's DIRECTION. `pull` is op_design §4.3's
+    # contract (the output shard is resident and gathers); `push` is its mirror
+    # (the input shard is resident and scatters whole tile pages). Both arms are
+    # forcing arms so the choice is measured on any cross-spec geometry.
+    "lever_r4_reshard_push": dict(levers=dict(reshard_pull=0)),
+    "lever_r4_reshard_pull": dict(levers=dict(reshard_pull=1)),
     # ---- ablation arms (classification; output wrong by design) ---------
     "ablate_compute": dict(levers=dict(stub_compute=1)),
     "ablate_read": dict(levers=dict(stub_read=1)),
@@ -271,12 +318,26 @@ def test_bench(device):
         shape = SHAPES[shape_name]
         blk = blocking(list(shape), 32, 2)
         in_mem, out_mem = _mem_for(shape_name)
-        if in_mem.is_sharded():
+        if in_mem.is_sharded() or out_mem.is_sharded():
             # A shard's cores are fixed by its spec (master.md A2), and the shard
-            # hands you the block width — so neither comes from `plan_cores`.
-            cores = list(range(in_mem.shard_spec.grid.num_cores()))
-            blk = dict(blk, wt_block=in_mem.shard_spec.shape[1] // 32, total_blocks=len(cores))
-            per_core = [blk["total_blocks"] // max(1, len(cores))]
+            # hands you the block width — so neither comes from `plan_cores`, and
+            # on a cross-spec reshard it is the RESIDENT side that hands them
+            # over (the output, under R4's pull topology), not the input.
+            plan = plan_placement(
+                shape=list(shape),
+                tile_height=32,
+                in_memory_config=in_mem,
+                out_memory_config=out_mem,
+                Wt=blk["Wt"],
+                nt_h=blk["nt_h"],
+                in_tile_bytes=2048,
+                out_tile_bytes=2048,
+            )
+            side_mem = in_mem if plan["sharded_side"] == "in" else out_mem
+            nt_h_shard = plan["shard"]["nt_h_shard"]
+            cores = list(range(shard_view(side_mem)[0].num_cores()))
+            blk = dict(blk, wt_block=plan["wt_block"], total_blocks=len(cores) * nt_h_shard)
+            per_core = [nt_h_shard]
         else:
             # Report the SHIPPED geometry, so the header's core count and pipeline
             # depth are the ones `base` actually ran with (R3's cap included).

@@ -105,6 +105,15 @@ SPREAD_CORES = 1
 # behind a DRAM bank).
 STAGGER_READS = 0
 
+# --- Knob: cross-spec reshard direction (R4 / A3c) -------------------------
+# Which SIDE of a cross-spec reshard holds the resident block: 1 = PULL (the
+# output shard, op_design §4.3's contract), 0 = PUSH (the input shard).
+# `None` = decide per geometry with `reshard_direction_is_pull`, which is the
+# SHIPPED path — the two directions measure with opposite signs on geometries
+# that differ only in which side has more cores, so neither can be a global
+# default. 1/0 force one direction on any geometry (both bench arms).
+RESHARD_PULL = None
+
 TILE_WIDTH = 32  # a tile is ALWAYS 32 wide; only its height varies
 # The tile HEIGHT the op uses when the caller passes no `tile=`. Defined ONCE
 # here and imported by the op file so the taggers, validate(), the entry point
@@ -158,6 +167,18 @@ DEFAULT_LEVERS = {
     # zero-copy placement. Only legal where the streamed reader can address the
     # input (interleaved, or a shard whose width is the full row).
     "force_streamed": 0,
+    # R4 (A3c): which SIDE of a cross-spec reshard is the resident block, i.e.
+    # the direction of the one cross-core transfer this op has.
+    #   1 = PULL  (op_design §4.3): the OUTPUT shard is resident; each output
+    #       core reads the input bands it needs from whichever core holds them.
+    #   0 = PUSH: the INPUT shard is resident; each input core tilizes its own
+    #       block and writes whole tile pages to whichever core owns them.
+    # Both are bijections and neither needs a semaphore or a multicast (§1.1),
+    # so the design's stated reason for pull does not discriminate between them
+    # — the transaction SHAPE does, and it is per-geometry. `None` = take the
+    # measured regime default (`reshard_default_pull`), which is what the
+    # shipped path does; an explicit value forces one side on any shape.
+    "reshard_pull": None,
     "stub_read": 0,  # ablation: drop the NoC read payload
     "stub_compute": 0,  # ablation: drop the tilize math
     "stub_write": 0,  # ablation: drop the NoC write payload
@@ -495,6 +516,44 @@ def source_bands(memory_config, W: int, elem_size: int):
     return _div_up(W, shard_w), shard_w * elem_size
 
 
+def reshard_direction_is_pull(*, in_memory_config, out_memory_config, band_bytes: int, out_tile_bytes: int) -> bool:
+    """Which side of a CROSS-SPEC reshard should hold the resident block.
+
+    Measured on `[1,1,1024,1024]` bf16 L1->L1 (R4 bench, `DEVICE KERNEL
+    DURATION`; the ratio is the loser over the winner):
+
+    | input placement     | output placement    | pull cores | push cores | winner      |
+    |---------------------|---------------------|-----------:|-----------:|-------------|
+    | WIDTH  (1024,128)@8 | HEIGHT (128,1024)@8 |          8 |          8 | push 1.566x |
+    | HEIGHT (128,1024)@8 | HEIGHT (256,1024)@4 |          4 |          8 | push 1.359x |
+    | HEIGHT (256,1024)@4 | HEIGHT (128,1024)@8 |          8 |          4 | pull 1.615x |
+
+    Rows 2 and 3 are the SAME pair reversed and they swap the winner, so the
+    first term is not the direction at all — it is the CORE COUNT. The resident
+    side's shard grid *is* the core set the program launches on (master.md A2),
+    so making the smaller grid resident throws away parallelism, whichever way
+    the bytes then travel.
+
+    Row 1 holds the core count equal and isolates the second term, the
+    transaction shape: a pull reads ONE BAND of a row (256 B there), while a
+    push always writes a whole tile page (2048 B), because an output tile is one
+    page no matter how the output is sharded. At equal parallelism the coarser
+    transaction wins.
+
+    `op_design` §4.3 named pull, and its stated reason — §1.1's bijection, so no
+    fan-out and no semaphore — is TRUE OF BOTH DIRECTIONS and therefore does not
+    discriminate between them. This gate keeps pull everywhere pull is not
+    measurably worse, and is the same shape as R3's `placement_defaults`: a knob
+    whose two values have opposite signs on two real geometries cannot have a
+    global default.
+    """
+    in_cores = shard_view(in_memory_config)[0].num_cores()
+    out_cores = shard_view(out_memory_config)[0].num_cores()
+    if in_cores != out_cores:
+        return out_cores > in_cores
+    return band_bytes >= out_tile_bytes
+
+
 def plan_placement(
     *,
     shape,
@@ -507,6 +566,7 @@ def plan_placement(
     out_tile_bytes: int,
     cb_budget_bytes: int | None = None,
     force_streamed: bool = False,
+    reshard_pull: "bool | None" = None,
 ):
     """Choose RESIDENT / STREAMED per side. Pure — no tensors, no device.
 
@@ -565,7 +625,23 @@ def plan_placement(
     # linearization `b = wchunk*nt_h + r` — contiguous, because the
     # linearization is column-block-major.
     if in_sharded and out_sharded:
+        # The `reshard_pull` knob picks which side is TRIED FIRST; the other stays
+        # as the fallback for a geometry the preferred side cannot express (an nd
+        # shard that does not fold contiguously, an indivisible shard grid, ...).
+        # `None` = the measured per-geometry gate.
+        pull = (
+            reshard_direction_is_pull(
+                in_memory_config=in_memory_config,
+                out_memory_config=out_memory_config,
+                band_bytes=bands[1] if bands is not None else 0,
+                out_tile_bytes=out_tile_bytes,
+            )
+            if reshard_pull is None
+            else bool(reshard_pull)
+        )
         candidates = [("out", out_res, out_memory_config), ("in", in_res, in_memory_config)]
+        if not pull:
+            candidates.reverse()
     elif in_sharded:
         candidates = [("in", in_res, in_memory_config)]
     elif out_sharded:
@@ -684,6 +760,7 @@ def placement_defaults(in_memory_config, out_memory_config):
         "min_blocks_per_core": MIN_BLOCKS_PER_CORE if all_l1 else 1,
         "spread_cores": SPREAD_CORES if all_dram else 0,
         "stagger_reads": STAGGER_READS if all_dram else 0,
+        "reshard_pull": RESHARD_PULL,
     }
 
 
@@ -834,6 +911,16 @@ def create_program_descriptor(
     unreserved_bytes = _unreserved_l1_bytes()
 
     # ---------- 2. placement plan (which side is resident, which streams) ----
+    # R3/R4: the placement knobs default to their REGIME value (measured, and of
+    # opposite sign on different data paths); an explicit lever value forces the
+    # knob on any shape, so both arms stay measurable everywhere. Resolved ONCE,
+    # before the plan, because `reshard_pull` decides which side the plan makes
+    # resident.
+    placement = placement_defaults(input_tensor.memory_config(), output_tensor.memory_config())
+
+    def _knob(name):
+        return placement[name] if lv[name] is None else lv[name]
+
     nt_h_geo, Wt_geo, _, _ = tile_geometry(shape, tile_height)
     plan = plan_placement(
         shape=shape,
@@ -849,20 +936,13 @@ def create_program_descriptor(
         # it only ever keeps a big crossover CB out, never lets one in.
         cb_budget_bytes=cb_budget_bytes(unreserved_bytes, interleaved_l1_bytes),
         force_streamed=bool(lv["force_streamed"]),
+        reshard_pull=_knob("reshard_pull"),
     )
     if plan["error"] is not None:
         # A support gap, not a contract violation: validate() raises the same
         # typed refusal ahead of dispatch for every geometry it can see without
         # the allocated buffers (it cannot see a cliff shard's per-bank size).
         raise UnsupportedAxisValue(plan["error"])
-
-    # R3: the placement knobs default to their REGIME value (measured, and of
-    # opposite sign on the DRAM and L1 paths); an explicit lever value forces the
-    # knob on any shape, so both arms stay measurable everywhere. Resolved ONCE.
-    placement = placement_defaults(input_tensor.memory_config(), output_tensor.memory_config())
-
-    def _knob(name):
-        return placement[name] if lv[name] is None else lv[name]
 
     tile_descriptor = ttnn.TileDescriptor(tile_height, TILE_WIDTH)
     resident_in = plan["mode"] in RESIDENT_IN_MODES

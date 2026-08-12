@@ -39,9 +39,9 @@
     },
     "A2": {
       "status": "applied",
-      "phase": "Refinement 2",
+      "phase": "Refinement 4",
       "knob": "force_streamed",
-      "reason": "Sharded calls launch on the shard's OWN cores via get_optimal_worker_cores_for_sharded_tensor (shard_grid_cores in the program descriptor) \u2014 core k holds shard k \u2014 instead of re-spreading the linear block space with split_work_to_cores. A2 and C14 are one edit on this op (the pinned cores are what makes the CB alias legal), so they share the force_streamed off-arm: with it on, the same call re-spreads across the grid AND re-fetches the shard over the NoC. per-regime off/on: sharded_big (64 cores, 1 block each) 10.144x, sharded_small (4 cores, 4 blocks each) 2.754x \u2014 it pays on the smallest sharded regime too, which is B0's requirement.",
+      "reason": "Sharded calls launch on the shard's OWN cores via get_optimal_worker_cores_for_sharded_tensor (shard_grid_cores in the program descriptor) \u2014 core k holds shard k \u2014 instead of re-spreading the linear block space with split_work_to_cores. A2 and C14 are one edit on this op (the pinned cores are what makes the CB alias legal), so they share the force_streamed off-arm: with it on, the same call re-spreads across the grid AND re-fetches the shard over the NoC. per-regime off/on: sharded_big (64 cores, 1 block each) 10.144x, sharded_small (4 cores, 4 blocks each) 2.754x \u2014 it pays on the smallest sharded regime too, which is B0's requirement. Refinement 4 extends the same pinning to the CROSS-SPEC reshard, where the two specs disagree about which cores hold what: the program launches on the RESIDENT side's shard cores, and which side that is is `reshard_direction_is_pull`'s call (D20) precisely because the resident side's shard grid IS the core set \u2014 making the smaller grid resident measured 1.558-1.605x worse on [1,1,1024,1024].",
       "measured": {
         "on_ns": 2093.3,
         "off_ns": 21235.0,
@@ -205,9 +205,9 @@
     },
     "C14": {
       "status": "applied",
-      "phase": "Refinement 2",
+      "phase": "Refinement 4",
       "knob": "force_streamed",
-      "reason": "FIRST degree taken: both CBs are aliased onto the resident L1 shards with ttnn.cb_descriptor_from_sharded_tensor, so the reader issues no NoC read (it only arms the CB), tilize packs straight into the output shard, and the writer only drains it \u2014 zero bytes moved on either side. Structurally verified, not inferred: test_tilize_debug.py::test_r2_same_spec_is_zero_copy_not_merely_tolerated asserts cb.has_buffer() on BOTH CBs and resident==1 in both dataflow kernels. SECOND degree (fold the dataflow kernels away) deliberately NOT taken \u2014 examples/zero_copy_fold measured 0.74x at 2 tiles/core; it is Refinement 6's measurable step.",
+      "reason": "FIRST degree taken: both CBs are aliased onto the resident L1 shards with ttnn.cb_descriptor_from_sharded_tensor, so the reader issues no NoC read (it only arms the CB), tilize packs straight into the output shard, and the writer only drains it \u2014 zero bytes moved on either side. Structurally verified, not inferred: test_tilize_debug.py::test_r2_same_spec_is_zero_copy_not_merely_tolerated asserts cb.has_buffer() on BOTH CBs and resident==1 in both dataflow kernels. SECOND degree (fold the dataflow kernels away) deliberately NOT taken \u2014 examples/zero_copy_fold measured 0.74x at 2 tiles/core; it is Refinement 6's measurable step. Refinement 4 carries the first degree onto the cross-spec reshard: a cross-spec pair cannot alias BOTH sides (a core would tilize its own rows into another core's tiles), but it can and does alias ONE \u2014 so half the NoC traffic disappears there too. Measured against the R2 fully-streamed fallback (levers=dict(force_streamed=1)) on the two reshard bench shapes: 22,851 vs 61,580 ns (2.695x) banded, 15,717 vs 30,078 ns (1.914x) whole-row.",
       "measured": {
         "on_ns": 2093.3,
         "off_ns": 21235.0,
@@ -267,11 +267,22 @@
       "reason": "Applied in code, unmeasurable in device kernel duration by construction. Recorded as open rather than claimed as a measured win. OBSERVED: a probe (tests/ttnn/unit_tests/operations/tilize/probes/probe_002.py) shows num_program_cache_entries 1 -> 1 across two identical-spec calls with identity intact on both, so the CT/RT split does cache as intended \u2014 but that is a dispatch observation, not the ns counterfactual this status would need."
     },
     "D20": {
-      "status": "deferred",
-      "phase": "A0",
-      "followup": "A3/A3b/A3c and T2 introduce genuinely different data paths (zero-copy shard alias, crossover, cross-spec reshard, face-walking retile reader); op_design.md 5.3 already pins the regime-selection function. Implement it as the factory selector then.",
-      "predicted_delta_pct": 0,
-      "reason": "There is exactly ONE data path at Phase 0 (interleaved RM -> TILE), so there is nothing to select between. Predicted 0 now; the lever's value arrives with the sharded/retile regimes."
+      "status": "applied",
+      "phase": "Refinement 4",
+      "knob": "reshard_pull",
+      "reason": "Refinement 4 lands the data path this row was deferred FOR (its own follow-up named A3c). `plan_placement` now selects between four schemes (resident / crossover / reshard / streamed) and, inside the reshard, `reshard_direction_is_pull` selects WHICH SIDE holds the resident block. That second selector is the measured one: the two directions have OPPOSITE signs on geometries that differ only in which side has more cores, so neither can be a global default. Measured on [1,1,1024,1024] bf16 L1->L1, off-arm = the direction the gate did NOT pick: banded WIDTH(1024,128)@8 -> HEIGHT(128,1024)@8 picks push, 22,843 vs 35,594 ns forced pull (1.558x); whole-row HEIGHT(256,1024)@4 -> HEIGHT(128,1024)@8 picks pull, 15,815 vs 25,266 ns forced push (1.598x). Reversing the second pair reverses the winner, which is what proves the gate is selecting a regime rather than expressing a preference.",
+      "measured": {
+        "on_ns": 22850.7,
+        "off_ns": 35603.0,
+        "shape": [
+          1,
+          1,
+          1024,
+          1024
+        ],
+        "note": "bench shape `reshard` (WIDTH (1024,128)@8 -> HEIGHT (128,1024)@8, L1->L1); off-arm = levers=dict(reshard_pull=1), i.e. forcing op_design 4.3's pull on a geometry the gate sends the other way. The forced-push arm reproduces the shipped number (22,382 ns), which is what shows the gate picked it. The mirror shape `reshard_rowwise` (HEIGHT (256,1024)@4 -> HEIGHT (128,1024)@8) carries the OPPOSITE sign: 15,717 ns shipped (pull, forced-pull 15,547) vs 25,225 ns at levers=dict(reshard_pull=0)."
+      },
+      "delta_pct": 35.8
     },
     "D21": {
       "status": "deferred",

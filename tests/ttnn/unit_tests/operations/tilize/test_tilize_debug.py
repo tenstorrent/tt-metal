@@ -58,6 +58,7 @@ from ttnn.operations.tilize.tilize_program_descriptor import (
     placement_defaults,
     plan_cores,
     plan_placement,
+    reshard_direction_is_pull,
     shard_residency,
     shard_view,
     wt_block_max,
@@ -581,27 +582,30 @@ def test_r2_crossover_aliases_only_the_sharded_side(device, direction):
     assert reader.core_ranges.num_cores() == len(ttnn.get_optimal_worker_cores_for_sharded_tensor(sharded))
 
 
-def test_r2_cross_spec_never_aliases_the_input_block(device):
-    """Cross-spec (in spec != out spec) must never treat the INPUT shard as this
-    core's block — a core would then tilize its own rows into another core's
-    tiles. The bytes it needs are elsewhere, so the read side is always a gather.
+def test_r2_cross_spec_never_aliases_both_sides(device):
+    """Cross-spec (in spec != out spec) must never alias BOTH CBs — that is the
+    same-spec zero-copy placement, and taking it here would have each core
+    tilize its own rows into another core's tiles.
 
-    (Refinement 2 additionally asserted that the OUTPUT side did not alias
-    either, because R2's fallback streamed both sides. Refinement 4 replaces
-    that fallback with the design's pull topology, where the output shard IS
-    resident — pinned by `test_r4_cross_spec_pulls_into_a_resident_output`. The
-    invariant that survives, and the one this test was really protecting, is the
-    input side: a general gather must not swallow the zero-copy case.)"""
+    (Refinement 2 asserted the stronger "neither side aliases", because its
+    fallback streamed both. Refinement 4 replaces that fallback with the
+    designed reshard, where exactly ONE side is resident and the other is the
+    cross-core transfer — see `test_r4_reshard_resident_side_follows_the_gate`.
+    The invariant this test was really protecting is the one kept here.)"""
     shape = (1, 1, 128, 64)
     in_mem = _legacy_mem(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _crs(((0, 0), (3, 0))), (32, 64))
     out_mem = _legacy_mem(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _crs(((0, 0), (1, 0))), (64, 64))
     _skip_if_grid_too_small(device, in_mem)
 
     descriptor, _in, _out = _descriptor_for(device, shape, in_mem, out_mem)
-    cb_in, _cb_out = descriptor.cbs
-    reader, _writer, _compute = descriptor.kernels
-    assert not cb_in.has_buffer()
-    assert reader.compile_time_args[_READER_RESIDENT_CT] == 0
+    cb_in, cb_out = descriptor.cbs
+    reader, writer, _compute = descriptor.kernels
+    assert not (cb_in.has_buffer() and cb_out.has_buffer())
+    resident = (
+        reader.compile_time_args[_READER_RESIDENT_CT],
+        writer.compile_time_args[_WRITER_RESIDENT_CT],
+    )
+    assert resident in ((1, 0), (0, 1)), f"exactly one side must be resident, got {resident}"
 
 
 def test_r2_plan_is_pure_and_covers_the_four_placements():
@@ -618,8 +622,17 @@ def test_r2_plan_is_pure_and_covers_the_four_placements():
     assert plan_placement(in_memory_config=dram, out_memory_config=height, **kwargs)["mode"] == "crossover_out"
     assert plan_placement(in_memory_config=dram, out_memory_config=dram, **kwargs)["mode"] == "streamed"
     # Cross-spec was Refinement 2's fully-streamed fallback and is Refinement 4's
-    # pull reshard: the OUTPUT shard is the resident block, the input is gathered.
-    assert plan_placement(in_memory_config=height, out_memory_config=other, **kwargs)["mode"] == "reshard_out"
+    # RESHARD. Which side is resident is the measured gate's call (here `height`
+    # has 4 cores and `other` 2, so the input side wins), but it is always a
+    # reshard and always exactly one side.
+    cross = plan_placement(in_memory_config=height, out_memory_config=other, **kwargs)
+    assert cross["mode"] in ("reshard_in", "reshard_out") and cross["sharded_side"] in ("in", "out")
+    assert plan_placement(in_memory_config=height, out_memory_config=other, reshard_pull=True, **kwargs)["mode"] == (
+        "reshard_out"
+    )
+    assert plan_placement(in_memory_config=height, out_memory_config=other, reshard_pull=False, **kwargs)["mode"] == (
+        "reshard_in"
+    )
 
     # force_streamed is C14's off-arm: the same call, deliberately NOT zero-copy.
     forced = plan_placement(in_memory_config=height, out_memory_config=height, force_streamed=True, **kwargs)
@@ -817,7 +830,9 @@ def test_r3_placement_gate_picks_the_measured_regime_per_data_path():
     # A mixed direction is half of each regime and was not measured, so it keeps
     # the Phase-0 placement rather than inheriting a guess from either side.
     for mixed in (placement_defaults(dram, l1), placement_defaults(l1, dram)):
-        assert mixed == {"min_blocks_per_core": 1, "spread_cores": 0, "stagger_reads": 0}
+        # `reshard_pull` is None on every interleaved path: it is a cross-spec
+        # knob, and None means "decide per geometry" (`reshard_direction_is_pull`).
+        assert mixed == {"min_blocks_per_core": 1, "spread_cores": 0, "stagger_reads": 0, "reshard_pull": None}
 
     # A sharded side never reaches plan_cores at all (its cores are the shard's).
     assert placement_defaults(shard, shard)["spread_cores"] == 0
@@ -973,42 +988,83 @@ def test_r4_cross_spec_reshard_is_exact(device, shape, in_fn, out_fn):
     assert torch.equal(result, torch_input), f"max diff {(result.float() - torch_input.float()).abs().max()}"
 
 
-def test_r4_cross_spec_pulls_into_a_resident_output(device):
+def test_r4_reshard_resident_side_follows_the_gate(device):
     """§4.3's topology, asserted on the descriptor rather than on the values.
 
     A cross-spec reshard that merely streamed BOTH sides would pass every value
-    test (Refinement 2's fallback did exactly that), so the pull topology has to
-    be pinned structurally: the output CB is aliased onto the output shard, the
-    core set IS the output shard's cores, and the reader carries a band count
-    (its source is not addressable as whole rows)."""
+    test (Refinement 2's fallback did exactly that), so the topology has to be
+    pinned structurally. Both directions ship, because `reshard_direction_is_pull`
+    measured them with OPPOSITE signs on the same pair reversed: whichever side
+    has more cores holds the resident block, since the resident side's shard grid
+    IS the core set.
+
+    Forced arms are used so each direction is pinned on ONE geometry rather than
+    the test silently re-deriving the gate it is meant to check; the gate's own
+    choice is pinned by `test_r4_reshard_gate_is_pure_and_regime_selected`."""
     shape = (1, 1, 128, 512)
     in_mem = _legacy_mem(ttnn.TensorMemoryLayout.WIDTH_SHARDED, _crs(((0, 0), (3, 0))), (128, 128))
     out_mem = _legacy_mem(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _crs(((0, 0), (3, 0))), (32, 512))
     _skip_if_grid_too_small(device, in_mem)
 
-    descriptor, _tt_in, tt_out = _descriptor_for(device, shape, in_mem, out_mem)
-    cb_in, cb_out = descriptor.cbs
-    reader, writer, _compute = descriptor.kernels
+    torch.manual_seed(0)
+    tt_input = ttnn.from_torch(
+        torch.randn(shape).bfloat16(),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=in_mem,
+    )
+    tt_out = ttnn.allocate_tensor_on_device(ttnn.Shape(list(shape)), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, out_mem)
 
-    # PULL: the output block is resident, the input is gathered.
-    assert cb_out.has_buffer(), "the output shard must BE the block — this is not a pull"
-    assert not cb_in.has_buffer()
-    assert writer.compile_time_args[_WRITER_RESIDENT_CT] == 1
-    assert reader.compile_time_args[_READER_RESIDENT_CT] == 0
-
+    # --- PULL: the output block is resident, the input is GATHERED. -----------
+    pull = create_program_descriptor(tt_input, tt_out, levers=dict(reshard_pull=1))
+    cb_in, cb_out = pull.cbs
+    reader, writer, _compute = pull.kernels
+    assert cb_out.has_buffer() and not cb_in.has_buffer()
+    assert (reader.compile_time_args[_READER_RESIDENT_CT], writer.compile_time_args[_WRITER_RESIDENT_CT]) == (0, 1)
     # The gather: 512 elements of row over a 128-element shard = 4 source bands
-    # of 128*2 bytes each, so a stick is assembled from four pages.
+    # of 128*2 bytes, so every stick is assembled from four pages on four cores.
     assert reader.compile_time_args[_READER_N_BANDS_CT] == 4
     assert reader.compile_time_args[_READER_BAND_BYTES_CT] == 128 * 2
-
-    # A2: the cores are the OUTPUT shard's own cores (core k owns output shard k),
-    # never a re-spread split — that is what makes each core's pull local-output.
+    # A2: the cores are the RESIDENT side's own cores (core k owns shard k),
+    # never a re-spread split — that is what makes each core's transfer local.
     assert reader.core_ranges.num_cores() == len(ttnn.get_optimal_worker_cores_for_sharded_tensor(tt_out))
-
     # No semaphore and no multicast: the map is a bijection (op_design §1.1), so
-    # every source page is read by exactly one core and there is nothing to
-    # coordinate between them.
-    assert list(descriptor.semaphores) == []
+    # every page moves between exactly one pair of cores — nothing to coordinate.
+    assert list(pull.semaphores) == []
+
+    # --- PUSH: the mirror image, and the shipped choice on this geometry. -----
+    push = create_program_descriptor(tt_input, tt_out, levers=dict(reshard_pull=0))
+    cb_in, cb_out = push.cbs
+    reader, writer, _compute = push.kernels
+    assert cb_in.has_buffer() and not cb_out.has_buffer()
+    assert (reader.compile_time_args[_READER_RESIDENT_CT], writer.compile_time_args[_WRITER_RESIDENT_CT]) == (1, 0)
+    assert reader.core_ranges.num_cores() == len(ttnn.get_optimal_worker_cores_for_sharded_tensor(tt_input))
+    assert list(push.semaphores) == []
+
+
+def test_r4_reshard_gate_is_pure_and_regime_selected():
+    """The direction gate is host-only and keyed on the two things that measured:
+    core count first (the resident side's grid IS the core set), transaction
+    shape as the tie-break. Pinned in both directions so a later phase cannot
+    quietly make one of them global — R3's placement knobs have the same shape
+    and the same reason."""
+    kwargs = dict(band_bytes=2048, out_tile_bytes=2048)
+    many = _legacy_mem(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _crs(((0, 0), (7, 0))), (128, 1024))
+    few = _legacy_mem(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _crs(((0, 0), (3, 0))), (256, 1024))
+
+    # Core count decides first, and reversing the pair reverses the answer.
+    assert reshard_direction_is_pull(in_memory_config=few, out_memory_config=many, **kwargs) is True
+    assert reshard_direction_is_pull(in_memory_config=many, out_memory_config=few, **kwargs) is False
+
+    # At equal core counts the coarser transaction wins: a push always writes a
+    # whole tile page, a pull reads at most one source band.
+    banded = _legacy_mem(ttnn.TensorMemoryLayout.WIDTH_SHARDED, _crs(((0, 0), (7, 0))), (1024, 128))
+    assert (
+        reshard_direction_is_pull(in_memory_config=banded, out_memory_config=many, band_bytes=256, out_tile_bytes=2048)
+        is False
+    )
+    assert reshard_direction_is_pull(in_memory_config=many, out_memory_config=many, **kwargs) is True
 
 
 def test_r4_reshard_stages_nothing_through_dram(device):
@@ -1029,10 +1085,13 @@ def test_r4_reshard_stages_nothing_through_dram(device):
     # and its output. No third buffer exists, so there is nothing to stage
     # through: a DRAM intermediate is not merely unused, it is unaddressable.
     reader, writer, _compute = descriptor.kernels
-    cores = ttnn.get_optimal_worker_cores_for_sharded_tensor(tt_out)
+    cb_in, cb_out = descriptor.cbs
+    assert len(descriptor.cbs) == 2
+    assert cb_in.has_buffer() != cb_out.has_buffer(), "a reshard makes exactly one side resident"
+    resident_tensor = tt_input if cb_in.has_buffer() else tt_out
+    cores = ttnn.get_optimal_worker_cores_for_sharded_tensor(resident_tensor)
     addresses = {kernel.runtime_args[c.x][c.y][0] for kernel in (reader, writer) for c in cores}
     assert addresses == {tt_input.buffer_address(), tt_out.buffer_address()}, addresses
-    assert len(descriptor.cbs) == 2 and descriptor.cbs[1].has_buffer()
 
     # ... and the values still come out exact over that topology.
     torch_input = torch.randn(shape).bfloat16()

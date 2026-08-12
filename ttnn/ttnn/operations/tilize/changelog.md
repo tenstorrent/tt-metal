@@ -794,3 +794,210 @@ strand the mandatory shape),
 or how much each gets; and is byte-identical once the grid is full).
 `_bench_tilize.py` gained 11 R3 arms (both off-arms, both gate-evidence force-arms, and the
 pipeline-depth x block-size co-tuning corners) and now reports `blocks/core` in every shape header.
+
+---
+
+## Refinement 4 — Cross-spec reshard (prompt A3c)
+
+- **Date**: 2026-08-12
+- **Box/arch**: same stamp as A0 (Blackhole, 11x10 = 110 cores, AICLK 1349.98 MHz, bf16,
+  `DEVICE KERNEL DURATION [ns]`, 3 launches averaged after 2 cache-warming launches).
+- **Type**: generality · **scheme-change** (the one place in this op where a core touches bytes
+  another core owns). No SUPPORTED / EXCLUSIONS / `validate()` change — cross-spec is a RELATION
+  between two specs, not a value of any registry axis, so this refinement moves cells that were
+  refused by `plan_placement`'s support gap rather than by the rectangle.
+
+### What was done
+
+**The blocker, found by measuring the buffer rather than by reading the spec.** Before R4 the reader
+could only address a source whose page is a WHOLE ROW, so any input sharded narrower than a row was
+refused outright ("its pages are partial rows"). `probes/probe_012.py` measures what a sharded
+ROW_MAJOR tensor's page actually is: **one row of its shard**. A `(64,128)` width shard of
+`[1,1,64,512]` reports `page_size=256 B` and **256 pages = 64 rows x 4 bands**; an nd `(2,64,96)`
+shard of `[7,128,128]` reports 192 B and **1792 = 896 x 2**. So the source page grid is
+`[folded_row][band]` and the page id of `(row, band)` is `row * n_bands + band` — a *page-index
+remap*, not a new addressing mechanism.
+
+That collapses the reshard's read side into the existing reader: `source_bands()` returns
+`(n_bands, band_bytes)`, and a new `n_bands > 1` arm splits each stick's read at band boundaries and
+issues one `noc_async_read` per segment, **one barrier per block** exactly like the interleaved
+reader. At `n_bands == 1` (every pre-R4 shape: interleaved, HEIGHT-sharded, whole-row) the arm is
+`if constexpr`-discarded and the emitted code is the `read_sticks_for_tilize` helper call, byte for
+byte. Uneven/cliff shards come free: the last band is a partial row of a full-size page, and the
+segment length is clamped by the block's own end, so nothing reads past valid data.
+
+**The topology, and the one place measurement overruled the design.** `op_design.md` §4.3 specifies
+**pull**: the OUTPUT shard is the resident block and each output core reads what it needs. That is
+built and shipped — but so is its mirror (**push**: the INPUT shard is resident and each input core
+writes whole tile pages to whichever core owns them), because the measurement says the choice is
+per-geometry:
+
+| input placement | output placement | pull cores | push cores | pull ns | push ns | winner |
+|---|---|---|---:|---:|---:|---:|---|
+| WIDTH `(1024,128)`@8 | HEIGHT `(128,1024)`@8 | 8 | 8 | 35 603 | **22 382** | **push 1.558x** |
+| HEIGHT `(256,1024)`@4 | HEIGHT `(128,1024)`@8 | 8 | 4 | **15 547** | 25 225 | **pull 1.605x** |
+
+Rows 1 and 2's second and third columns are the *same pair reversed* in row 2, and the winner
+reverses with them — so the first term is **not the direction, it is the core count**: the resident
+side's shard grid IS the core set the program launches on (master.md **A2**), so making the smaller
+grid resident throws away parallelism whichever way the bytes then travel. Row 1 holds the core
+count equal and isolates the second term, **transaction shape**: a pull reads one band of a row
+(256 B there) while a push always writes a whole tile page (2048 B, because an output tile is one
+page however the output is sharded).
+
+§4.3's stated reason for pull — §1.1's bijection, so no fan-out, no semaphore, no multicast — is
+**true of both directions** and therefore does not discriminate between them; it rules out a
+*combine*, which neither direction needs. So `reshard_direction_is_pull()` gates on the two things
+that measured (core count, then transaction shape) and keeps pull everywhere pull is not measurably
+worse — the same shape as R3's `placement_defaults`, and for the same reason: a knob whose two
+values have opposite signs on two real geometries cannot have a global default. Both values ship as
+forcing bench arms (`lever_r4_reshard_pull` / `lever_r4_reshard_push`), so the gate is re-measurable
+on any geometry rather than being an argument.
+
+**No DRAM staging, no semaphore, no new kernel file.** Every run is L1->L1 (or L1<->DRAM when the
+caller placed a shard in DRAM); the op allocates exactly one tensor (the output) and the kernels'
+only base addresses are the caller's two buffers, so an intermediate is not merely unused, it is
+unaddressable (`test_r4_reshard_stages_nothing_through_dram`). `descriptor.semaphores == []`.
+
+**The delta is small and shared** — the reuse bar this refinement was given:
+
+| reused | added |
+|---|---|
+| the streamed reader + `TensorAccessor`, the CB-alias helper `_aliased_cb`, `shard_grid_cores` core pinning, the crossover block-assignment formula, `blocking(wt_block_override=...)`, the `force_streamed` off-arm | `source_bands()`, `shard_folds_contiguously()`, `reshard_direction_is_pull()`, the reader's `n_bands > 1` arm, and `MODE_RESHARD_IN/OUT` in the candidate loop |
+
+The crossover branch became a **candidate loop** rather than a second branch: one-side-sharded
+(R2's crossover) and both-sides-sharded (R4's reshard) are the same mechanism — one side resident,
+the other streamed — so they share every check (divisibility, shard->position mapping, the A3d CB
+clamp) and differ only in which candidates are offered and in the mode name. Two new guards fell
+out of generalizing it: `shard_folds_contiguously()` refuses to place an **nd shard whose leading
+dims select several images at a partial height** (it covers several disjoint runs of the folded
+row index, so it cannot be one core's `[b0, b0+nb)` range — this is why the nd->legacy golden cells
+correctly take pull even where the gate would prefer push), and the input-band check is now the
+`source_bands` model rather than "the shard is the full row".
+
+### Accuracy achieved
+
+**Exact** (`torch.equal`, not PCC — tilize is a bijection on byte positions; a reshard that
+mis-addresses ONE band produces a visibly wrong tile, not a numerically close one). Six cross-spec
+pairs through the PUBLIC entry point: HEIGHT@4->HEIGHT@2, nd-block->legacy-HEIGHT,
+legacy-HEIGHT->nd-block, WIDTH->HEIGHT (4 source bands per row), BLOCK->WIDTH (both placement axes
+change at once), and the cliff case `[7,128,128]` nd `(2,64,96)` -> BLOCK `(448,64)` where the last
+band is a 32-element cliff. Precision baseline unchanged (PCC = 1.000000, max_abs_err = 0.0).
+
+### Golden test progress
+
+| suite | Refinement 3 | Refinement 4 |
+|---|---|---|
+| `test_golden.py` (registry) | 22 passed / 0 failed | **22 passed, 358 xfailed, 580 skipped, 0 failed** |
+| whole `eval/golden_tests/tilize/` dir | 165 passed / 179 failed | **185 passed / 161 failed** in 33 s |
+| unit dir `tests/.../tilize/` | 101 passed / 27 xfailed | **123 passed / 27 xfailed / 0 failed** |
+
+- The registry count is unchanged **by construction**: cross-spec is not a registry axis value, and
+  its one registry cell (`(32,64)@4 -> (64,64)@2`) already passed through R2's fully-streamed
+  fallback. What changed is the topology underneath it, which is why this refinement's gate is the
+  external grader plus the structural tests, not the registry count.
+- **+20 external-grader cells**, and the named family is the whole of it:
+  `test_tilize_nd_sharded_to_legacy_sharded` goes **0/9 -> 9/9** (3 tensor shapes x HEIGHT/WIDTH/
+  BLOCK output, including the uneven `([7,128,128],[2,64,96])` cliff shard). Every one of them was
+  a hard `UnsupportedAxisValue` before this refinement.
+- All **161** remaining directory failures are typed refusals for a LATER refinement's axis: 85
+  `pad_mode` (R5), 65 `dtype` (R7), 3 `rank=0` (R5), 8 `ExcludedCell` (the deliberate
+  `use_multicore=False x sharded`). **Zero** non-refusal failures, **zero** hangs, **zero** XPASS.
+
+### Perf gate
+
+**Bound classification, ablated at the shipped config** (payload stubbed, all CB scaffolding and
+trip counts kept):
+
+| shape | base | read | write | compute | floor | reading |
+|---|---|---|---|---|---|---|
+| `reshard` (banded, ships PUSH) | 22 851 | −163 (0 by construction) | **18 950** | 604 | 1 486 | write-bound: the scatter IS the op |
+| `reshard_rowwise` (ships PULL) | 15 717 | **12 078** | 58 | 737 | 492 | read-bound: the gather IS the op |
+
+That is the structural signature of a one-sided-resident reshard and it is the right one: exactly
+ONE dataflow kernel moves bytes, the other runs the CB handshake, and compute is overlap-hidden
+(0.95-0.97x) as on every other L1 path.
+
+**Landed levers, off-arm measured** (ratio = off/on; >1 means the shipped choice pays):
+
+| off-arm (knob) | `reshard` | `reshard_rowwise` |
+|---|---|---|
+| `force_streamed=1` — R2's fallback, i.e. NO reshard scheme at all (C14/A2) | **2.695x** | **1.914x** |
+| the direction the gate did NOT pick (`reshard_pull`, D20) | **1.558x** (forced pull) | **1.605x** (forced push) |
+| the direction the gate DID pick, forced explicitly | 0.980x (= base, i.e. the gate picked it) | 0.989x (= base) |
+
+**No `/perf-ceiling-dm` target is reported for the reshard path**, for the same reason R2 gave for
+the resident path: its transfers are L1->L1 between worker cores, so the DRAM ceiling the op's
+targets are built on does not bound it (the bench's GB/s column is DRAM-relative and additionally
+double-counts here — a reshard moves each byte ONCE, not twice). The honest comparison is the
+per-core NoC rate against the op's other L1 path: `reshard_rowwise` moves 2 MB in 15.7 us on 8 cores
+= **16.7 GB/s per core**, against `l1_to_l1`'s 4 MB in 5.05 us on 32 cores = **26 GB/s per core**.
+
+**Cumulative bench set — no regression** (every prior shape re-measured, `base` arm):
+
+| shape | Refinement 3 | Refinement 4 | delta | verdict |
+|---|---|---|---|---|
+| `(1,1,2048,2048)` square | 44 399 | 43 962 | −1.0 % | noise |
+| `(1,1,32,16384)` wide_short | 6 866 | 6 747 | −1.7 % | noise |
+| `(1,1,2048,64)` tall_narrow | 4 868 | 4 880 | +0.2 % | noise |
+| `(1,1,32,64)` smallest | 1 915 | 1 941 | +1.4 % | noise |
+| `(1,1,32,32)` smallest_aligned | 1 871 | 1 833 | −2.0 % | noise |
+| `(1,1,512,2048)` l1_to_l1 | 5 121 | 5 049 | −1.4 % | noise |
+| `(1,1,2048,2048)` sharded_big | 2 137 | 2 113 | −1.1 % | noise |
+| `(1,1,512,64)` sharded_small | 844 | 852 | +0.9 % | noise |
+| `(1,1,1024,1024)` **reshard** (new) | — | **22 851** | — | added (banded source, ships push) |
+| `(1,1,1024,1024)` **reshard_rowwise** (new) | — | **15 717** | — | added (whole-row source, ships pull) |
+
+Every prior shape is inside the 2-3 % noise band, which is the expected result rather than a lucky
+one: at `n_bands == 1` the reader is byte-identical and `reshard_*` modes are unreachable unless
+BOTH sides are sharded. **Two** bench shapes were added, not one, because the direction gate is
+shape-dependent and a gate benched on one side of itself has not been benched at all — they are the
+two regimes of `reshard_direction_is_pull`, and each carries both forcing arms.
+
+Lever ledger: `verify_levers --phase "Refinement 4"` -> **clean, 0 blocking, 0 signal**; 24/24 rows,
+now **11 applied**. **D20** (dispatch/regime selection) moves `deferred -> applied` — its own
+deferral note named A3c as the refinement that would land it — with the direction gate as its
+measured evidence; **A2** and **C14** are re-stated with the reshard's numbers (the core pinning now
+also decides WHICH side pins, and the zero-copy alias now covers one side of a cross-spec pair).
+
+### Issues encountered
+
+Three, none of them numerical:
+
+1. **A test that hung the runner, in Python, not on device.** `test_r4_reshard_stages_nothing_through_dram`
+   originally iterated `kernel.runtime_args` to collect every base address; iterating that binding
+   does not terminate in the way a list would, so the whole unit directory ran past 10 minutes with
+   no dispatch timeout (the device was never the problem — `SAFE_PYTEST_DISPATCH_TIMEOUT` is 5 s and
+   never fired). Fixed by indexing `[core.x][core.y]` for the cores the descriptor actually
+   launches on. Worth recording because the symptom (a "hang" with a clean triage) points at the
+   host, not the kernel.
+2. **The gate invalidated three prior-phase assertions, all of which pinned R2's fallback** rather
+   than an invariant: `test_r2_plan_is_pure_...` asserted cross-spec plans as `streamed`,
+   `test_r2_cross_spec_streams_and_does_not_alias` asserted that NEITHER side aliases, and
+   `test_r3_placement_gate_...` compared `placement_defaults` as a whole dict. Each was re-pointed
+   at the invariant it was protecting — cross-spec must never alias BOTH sides (aliasing one is the
+   scheme; aliasing both is the same-spec case and would have a core tilize its own rows into
+   another core's tiles) — and the direction itself is now pinned by forcing arms, so the tests
+   cannot silently re-derive the gate they check.
+3. **An nd shard can be non-contiguous in the folded view**, which the crossover code (R2) had not
+   had to face: `(2,64,96)` on `[7,128,128]` covers folded rows `{i*128 + h : i<2, h<64}` — two
+   disjoint runs, not one. Caught before it could produce wrong output because generalizing the
+   crossover branch made the folding assumption explicit; `shard_folds_contiguously()` now refuses
+   to make such a shard the resident block (the streamed/other-side path addresses it by page id
+   and does not care).
+
+### Tests added
+
+`tests/ttnn/unit_tests/operations/tilize/test_tilize_debug.py` group 8 (**+11 cases**):
+`test_r4_cross_spec_reshard_is_exact` (6 pairs, public entry point, `torch.equal`),
+`test_r4_reshard_resident_side_follows_the_gate` (both directions forced, on one geometry: which CB
+is aliased, which kernel is resident, the band count and band size the gather derives, the core set
+== the resident shard's cores, and `semaphores == []`),
+`test_r4_reshard_gate_is_pure_and_regime_selected` (host-only: core count decides first and reverses
+with the pair; transaction shape is the tie-break),
+`test_r4_reshard_stages_nothing_through_dram` (both tensors L1, exactly one CB aliased, and the
+kernels' only base addresses are the caller's two buffers),
+`test_r4_same_spec_still_takes_the_zero_copy_path` (the regression this scheme is most likely to
+cause, plus `n_bands == 1` on the interleaved path so the pre-R4 reader stays byte-identical).
+`_bench_tilize.py` gained the two reshard shapes and the two direction forcing arms.
+`probes/probe_012.py` — the page-geometry measurement the whole addressing model rests on.
