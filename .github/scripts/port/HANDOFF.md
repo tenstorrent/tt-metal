@@ -51,6 +51,34 @@ down: after the first build failed it dispatched a `verify` on the byte-identica
 before it measures and so failed in the same place having queued for a card. `refuse_pointless_
 dispatch` now knows how the last build of a tree turned out and blocks exactly that.
 
+**`verify` then ran end to end for the first time, and returned `blocked` for a reason that was
+ours.** Run 31626314731 went green through build, wheel and the device job, so every step of the
+mode works; the verdict it produced was `changes outside the port's own files`, naming
+`ttm_any.tar.zst` and `ttnn-...whl`. Neither is the agent's. The measure job downloaded both into
+`docker-job`, which *is* the checkout, so `check_write_paths` counted the job's own inputs as the
+agent writing where it was not allowed to. The extracted build escaped notice only because
+`build/` is gitignored and the two archives are not.
+
+This was unwinnable from the agent's side, and that is the part worth remembering: the files appear
+on the far side, after the snapshot, so no edit to the port could have cleared them. It then proved
+itself -- the agent dispatched a second `verify` on the same tree and got the same verdict naming the
+same two files, the wheel's version string carrying the new scratch commit each time, which is what
+identifies them as the job's own downloads rather than anything in the tree. `verify` is exempt from
+`refuse_pointless_dispatch` because measurement is noisy, so nothing bounded that loop but the run's
+own budget: roughly twenty minutes of a card per turn, reported to the agent as its own fault. What
+the agent did with it was right, for the third time in three runs -- it declined to open a PR on a
+port it could not verify. The
+archives now land in `port-inputs`, beside the checkout, for the same reason the generator does;
+`selftest.py` asserts no `download-artifact` step targets the checkout, and that check was confirmed
+to fail when the old path is restored. **No band has produced a number yet**, because the guard runs
+before the measurement: correctness and perf on this port remain unmeasured.
+
+One thing found on the way and worth fixing properly: the wheel install globs `./*.whl` and runs
+*before* the guard, so a wheel planted in the snapshot would have been installed and only reported
+afterwards. Globbing from `port-inputs` closes it for now, since the agent's snapshot cannot reach
+that directory, but the ordering is the real defect and the guard should run before anything from
+the tree is executed.
+
 The second run, the same afternoon, got further and failed for a sibling reason. The agent wrote the
 port, started exactly one build -- the start/collect split working -- and then re-dispatched a
 byte-identical tree rather than reading the compiler diagnostics, because a non-zero exit reaches it
@@ -367,12 +395,14 @@ files. That grep is the check.
 
 ## What is *not* verified
 
-**The agent now runs too, up to the point where it needs an answer back.** On 2026-08-12 it reached
-a model, read the task, wrote the port and started a build on CIv2 that compiled its code. What has
-never happened is a result being *returned* to it: every collect path the agent would take -- `wait`
-on a build, `wait` on a verify, and everything downstream of a verdict -- is still unexercised from
-inside the sandbox, because the gateway was cancelling the call before it could finish. The
-start-and-collect split that fixes it is proven from a laptop but not yet from an agent.
+**The agent now runs, and results now reach it.** By the end of 2026-08-12 it had collected a failed
+build, a "still going", a passing build and a `blocked` verdict, and acted correctly on the first
+three -- it read the compiler diagnostics, edited, and rebuilt to green. So the collect paths and the
+start-and-collect split are proven from inside the sandbox, not just from a laptop.
+
+What is still unexercised is everything *downstream of a graded verdict*: a pass, a demotion, a PR
+body built from real numbers. No run has got there, because the write-path guard blocked the only
+`verify` that ever reached the card.
 
 What *is* checked, beyond `selftest.py`: both workflow files pass `actionlint`. The token boundary
 was established by compiling and reading the lock file. The whole parameter round trip -- the JSON
@@ -425,8 +455,10 @@ Two things that were guesses are now settled: the `/codegen` volume mounts and i
 
 What that leaves genuinely untested:
 
-- **`verify` mode.** `report_verify` and the `gate.json` it reads have never run. It is the only mode
-  whose exit code drives the agent's next move, so it is the highest-value thing left to probe.
+- **The bands themselves.** `verify` mode now runs -- `report_verify` and `gate.json` both exercised
+  on 2026-08-12 -- but it blocked on the write-path guard, which sits in front of the measurement, so
+  correctness and performance have still never been graded on a real port. The next `verify` is the
+  first one that can produce a number, and it is the highest-value thing left to probe.
 - **The agent acting on a result.** It has now been handed two -- a failed build and a "still
   going" -- and misread both, because both arrived framed as tool errors. Whether it reads them
   correctly now that they arrive as content is the single open question, and the cheapest thing to
@@ -453,11 +485,13 @@ Cheapest first, so each failure costs the least it can. Steps 1 to 4 are done.
 3. ~~`dispatch.py` end to end from a laptop.~~ Done: `build` in 8.5 minutes, `baseline` in 19.
 4. ~~`--start` and `--wait` end to end from a laptop.~~ Done 2026-08-12: handle in 28 seconds, two
    "still going" replies, collected `build OK` at 8.7 minutes, ref and job record both swept.
-5. Next: push to `ebanerjee/port-op-dryrun` to trigger `port-op` itself. The agent half is now the
-   cheap thing to test and the device half the expensive one, which is the reverse of before: watch
-   the *first* `wait` call, because everything the agent does after it depends on reading exit 4 as
-   "call again". If that works, `verify` is the only report path left that has never run, and it
-   will run inside that same session rather than needing a rehearsal of its own.
+5. ~~Push to `ebanerjee/port-op-dryrun` to trigger `port-op` itself, and watch the first `wait`.~~
+   Done 2026-08-12, run 3: the agent read exit 4 as "call again", read a build failure, edited, and
+   reached a compiling tree. `verify` ran on it and blocked on the write-path guard.
+6. Next: a `verify` that reaches the bands. The guard defect is fixed and asserted, so this is the
+   first run that can produce a correctness or performance number. It needs no new rehearsal --
+   dispatch a `verify` on a tree that already compiles, from a laptop, and read `gate.json`. Cheaper
+   than a full agent session and it settles the last unexercised report path.
 
 Measured per-cycle wall times, which the budget argument rests on: a `build` is 8.5 minutes and a
 `baseline` 19, both well inside the 20 and 35-45 the design assumed. A `verify` is still unmeasured,

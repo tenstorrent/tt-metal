@@ -237,30 +237,42 @@ jobs:
           git fetch --depth=1 origin "$PORT_BASE_SHA" 2>/dev/null \
             || echo "::warning::could not fetch $PORT_BASE_SHA; the write-path guard may not run"
 
+      # The two archives land in `port-inputs`, beside the checkout rather than inside it, for the
+      # same reason the generator does: an untracked file under /work is a file gate.py's write-path
+      # guard counts as the agent writing where it was not allowed to. Downloading them into
+      # `docker-job` made every `verify` return `blocked`, naming `ttm_any.tar.zst` and the wheel as
+      # unexpected changes -- a tree the job dirtied on its own behalf, blamed on the agent, and
+      # unfixable from the agent's side because these appear after its snapshot is taken. The
+      # extracted build still has to land in /work, since TT_METAL_HOME points there; it is only the
+      # archives that move.
+      #
+      # Globbing the wheel out of here rather than out of the checkout also closes a real hole: the
+      # install runs before the guard does, so a wheel planted in the snapshot would have been
+      # installed and only reported afterwards.
       - name: Download the build
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         timeout-minutes: 10
         with:
           name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-          path: docker-job
+          path: port-inputs
 
       - name: Extract the build
         timeout-minutes: 10
-        working-directory: docker-job
-        run: tar --zstd -xf ttm_any.tar.zst
+        working-directory: port-inputs
+        run: tar --zstd -xf ttm_any.tar.zst -C "$GITHUB_WORKSPACE/docker-job"
 
       - name: Download the wheel
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         timeout-minutes: 10
         with:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-          path: docker-job
+          path: port-inputs
 
       - name: Install the wheel and the harness dependencies
         timeout-minutes: 15
         working-directory: docker-job
         run: |
-          uv pip install "$(ls -1 ./*.whl)"
+          uv pip install "$(ls -1 "$GITHUB_WORKSPACE"/port-inputs/*.whl)"
           # graphviz is what the tt-dm-codegen prototype leg imports, pyyaml is what reads the
           # manifest. Neither is in the wheel, and a missing one surfaces as a `blocked` verdict
           # halfway through a measurement rather than as an install error.

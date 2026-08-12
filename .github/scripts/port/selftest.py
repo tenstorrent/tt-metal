@@ -665,6 +665,26 @@ with tempfile.TemporaryDirectory() as tmp:
     dispatch.refuse_pointless_dispatch(work, "build", "def456")
     check("an edited tree builds again", True)
 
+# Nothing the measure job fetches may land in the checkout. An untracked file under /work is one
+# `check_write_paths` attributes to the agent, and the agent cannot clear it: the download happens
+# on the far side, after its snapshot was taken. On 2026-08-12 this returned `blocked` from every
+# verify, naming `ttm_any.tar.zst` and the wheel as changes outside the port -- a verdict no edit to
+# the port could have changed. Asserted here because the symptom appears 20 minutes downstream, on a
+# card, and reads as the agent's fault rather than the workflow's.
+_checkout = next(
+    step["with"]["path"]
+    for step in yaml.safe_load(WORKFLOW.read_text())["jobs"]["measure"]["steps"]
+    if step.get("name") == "Checkout the port under test"
+)
+for _step in yaml.safe_load(WORKFLOW.read_text())["jobs"]["measure"]["steps"]:
+    if "download-artifact" in str(_step.get("uses", "")):
+        _into = _step["with"]["path"]
+        check(
+            f"'{_step['name']}' does not download into the checkout",
+            _into != _checkout and not _into.startswith(f"{_checkout}/"),
+            f"lands in {_into}, which is the checkout at {_checkout}",
+        )
+
 print()
 print(f"{len(failures)} failure(s)" + (": " + ", ".join(failures) if failures else ""))
 sys.exit(1 if failures else 0)
