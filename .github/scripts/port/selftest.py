@@ -611,6 +611,45 @@ check(
     "a well-formed handle was rejected",
 )
 
+# --------------------------------------------------------------------------------------------
+# How an answer is *framed* decides what the agent does with it. gh-aw rejects the handler promise
+# on any non-zero exit, so a delivered answer that exits non-zero arrives as "Command failed", and
+# the reasonable response to a broken tool is to call it again. Two agentic runs died that way.
+
+check("a delivered answer exits zero for a tool", dispatch.delivered(1, True) == 0)
+check("and keeps its code for a workflow step", dispatch.delivered(1, False) == 1)
+check("a still-running reply is not an error either", dispatch.delivered(4, True) == 0)
+
+check(
+    "a refusal is a kind of answer, so the agent can act on it",
+    issubclass(dispatch.Refusal, dispatch.DispatchError),
+)
+
+# Every tool the agent can call must pass the flag, or that tool alone regresses to the old
+# behaviour and nothing else in the suite would notice.
+_tools = yaml.safe_load(PORT_OP.read_text().split("---", 2)[1])["mcp-scripts"]
+for name, spec in _tools.items():
+    check(f"the {name} tool delivers answers rather than errors", "--as-tool" in spec["run"], spec["run"])
+    check(f"the {name} tool returns inside the gateway's deadline", spec["timeout"] < 600, str(spec["timeout"]))
+
+# A compile is deterministic, so the same tree cannot compile differently. Re-dispatching one costs
+# nine minutes of a card to relearn the same diagnostics, which is what happened on 2026-08-12.
+with tempfile.TemporaryDirectory() as tmp:
+    work = Path(tmp)
+    dispatch.refuse_unchanged_build(work, work, "build", "abc123")
+    check("the first build of a tree goes through", True)
+    try:
+        dispatch.refuse_unchanged_build(work, work, "build", "abc123")
+        check("rebuilding an unchanged tree is refused", False, "it was dispatched")
+    except dispatch.Refusal as exc:
+        check("rebuilding an unchanged tree is refused", "deterministic" in str(exc), str(exc))
+    dispatch.refuse_unchanged_build(work, work, "build", "def456")
+    check("an edited tree builds again", True)
+    # Measurement is noisy in a way compilation is not, so re-measuring stays allowed.
+    dispatch.refuse_unchanged_build(work, work, "verify", "def456")
+    dispatch.refuse_unchanged_build(work, work, "verify", "def456")
+    check("re-verifying the same tree is still allowed", True)
+
 print()
 print(f"{len(failures)} failure(s)" + (": " + ", ".join(failures) if failures else ""))
 sys.exit(1 if failures else 0)
