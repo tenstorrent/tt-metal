@@ -143,14 +143,17 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     }
     ProgramDescriptor desc;
 
-    constexpr uint32_t in0_cb_index = CBIndex::c_0;
-    constexpr uint32_t in1_cb_index = CBIndex::c_1;
-    constexpr uint32_t out_cb_index = CBIndex::c_2;
-    constexpr uint32_t full_in0_cb_index = CBIndex::c_3;
-    // GCB path only: c_4 carries "compute is done reading in1" back to the reader so it can
-    // release the GCB page; c_31 is the remote (GCB) index aliased onto the local in1 CB.
-    constexpr uint32_t sync_cb_index = CBIndex::c_4;
-    constexpr uint32_t remote_cb_index = CBIndex::c_31;
+    // These are this op's own CB indices; every kernel receives them as named "cb_*" compile-time
+    // args, so op fusion can pool-allocate different hardware slots for two instances sharing a
+    // core without either factory having to know about the other.
+    const uint32_t in0_cb_index = CBIndex::c_0;
+    const uint32_t in1_cb_index = CBIndex::c_1;
+    const uint32_t out_cb_index = CBIndex::c_2;
+    const uint32_t full_in0_cb_index = CBIndex::c_3;
+    // GCB path only: sync_cb carries "compute is done reading in1" back to the reader so it can
+    // release the GCB page; remote_cb is the remote (GCB) index aliased onto the local in1 CB.
+    const uint32_t sync_cb_index = CBIndex::c_4;
+    const uint32_t remote_cb_index = CBIndex::c_31;
     desc.cbs.push_back(CBDescriptor{
         .total_size = M_tiles * inA_K_tiles_per_core * in0_tile_size,
         .core_ranges = all_compute_cores_with_bbox,
@@ -303,8 +306,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         "full_width_sharded matmul_decode two-hub broadcast requires a compute rectangle of at least 2 cores");
 
     const KernelDescriptor::CompileTimeArgs reader_compile_time_args = {
-        in0_cb_index,
-        full_in0_cb_index,
         shard_num_tiles,
         in0_tile_size,
         num_senders,
@@ -320,11 +321,19 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         static_cast<uint32_t>(mcast_end_phys.x),
         static_cast<uint32_t>(mcast_end_phys.y),
         split_H,
-        in1_cb_index,
         in1_page_num_tiles,
-        remote_cb_index,
-        sync_cb_index,
         num_k_blocks,
+    };
+
+    // Every CB index travels as a named "cb_*" arg: op fusion pool-allocates hardware CB slots
+    // across the phases it merges and rewrites exactly these args, so positional or hard-coded
+    // indices would leave the kernels pointing at pre-remap slots.
+    const KernelDescriptor::NamedCompileTimeArgs reader_named_args = {
+        {"cb_in0", in0_cb_index},
+        {"cb_full_in0", full_in0_cb_index},
+        {"cb_in1", in1_cb_index},
+        {"cb_in1_remote", remote_cb_index},
+        {"cb_sync", sync_cb_index},
     };
 
     const std::vector<CoreCoord> sender_cores = corerange_to_cores(inputA_core_range_set, std::nullopt, true);
@@ -359,6 +368,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         reader_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         reader_kernel_desc.core_ranges = CoreRangeSet(ranges);
         reader_kernel_desc.compile_time_args = reader_compile_time_args;
+        reader_kernel_desc.named_compile_time_args = reader_named_args;
         reader_kernel_desc.config = DataMovementConfigDescriptor{
             .processor = DataMovementProcessor::RISCV_1,
             // The GCB path pins every reader to NOC 0. remote_cb_pop_front acks the page with a
@@ -451,8 +461,13 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         K_tiles,
         inB_N_tiles_per_core,
         inA_K_tiles_per_core,
-        sync_cb_index,
         num_k_blocks,
+    };
+    compute_kernel_desc.named_compile_time_args = {
+        {"cb_full_in0", full_in0_cb_index},
+        {"cb_in1", in1_cb_index},
+        {"cb_out", out_cb_index},
+        {"cb_sync", sync_cb_index},
     };
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = MathFidelity::HiFi4,

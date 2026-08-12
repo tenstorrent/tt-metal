@@ -36,17 +36,19 @@ void kernel_main() {
     constexpr uint32_t Nc_tiles = get_compile_time_arg_val(3);
     constexpr uint32_t K_blocks = get_compile_time_arg_val(4);
     constexpr uint32_t inA_K_tiles_per_core = get_compile_time_arg_val(5);
-    constexpr uint32_t sync_cb_id = get_compile_time_arg_val(6);
-    constexpr uint32_t num_k_blocks = get_compile_time_arg_val(7);
+    constexpr uint32_t num_k_blocks = get_compile_time_arg_val(6);
 
     const uint32_t k_idx = get_arg_val<uint32_t>(0);
     const uint32_t is_base = get_arg_val<uint32_t>(1);
 
-    constexpr uint32_t full_in0_cb_id = tt::CBIndex::c_3;
-    constexpr uint32_t in1_cb_id = tt::CBIndex::c_1;
-    constexpr uint32_t out_cb_id = tt::CBIndex::c_2;
-    constexpr uint32_t partial_cb_id = tt::CBIndex::c_4;
-    constexpr uint32_t reduce_cb_id = tt::CBIndex::c_5;
+    // Named so op fusion can remap them; the reader gathers A into cb_full_in0, which is what
+    // compute reads as its in0.
+    constexpr uint32_t full_in0_cb_id = get_named_compile_time_arg_val("cb_full_in0");
+    constexpr uint32_t in1_cb_id = get_named_compile_time_arg_val("cb_in1");
+    constexpr uint32_t out_cb_id = get_named_compile_time_arg_val("cb_out");
+    constexpr uint32_t partial_cb_id = get_named_compile_time_arg_val("cb_partial");
+    constexpr uint32_t reduce_cb_id = get_named_compile_time_arg_val("cb_reduce");
+    constexpr uint32_t sync_cb_id = get_named_compile_time_arg_val("cb_sync");
 
     constexpr uint32_t full_in0_num_tiles = M_tiles * K_tiles;
     // One GCB page: k_block_tiles whole K-rows of this receiver's [Kc, Nc] slab.

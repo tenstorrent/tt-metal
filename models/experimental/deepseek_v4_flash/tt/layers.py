@@ -357,10 +357,23 @@ class LinearDecode(DeepSeekV4Module):
     *not* K-block-folded: the DRAM ND shard already enumerates the ``(K_blocks x N_blocks)``
     grid row-major, which is the receiver order the op consumes slabs in.
 
+    ``keep_weights_in_l1=True`` copies the weight into its width-sharded L1 layout once, in
+    the constructor, and leaves it there: ``forward`` then neither copies it in nor frees it
+    afterwards, so a decode step pays no DRAM->L1 transfer for this weight at all. The
+    DRAM-interleaved copy is released, since nothing reads it again.
+
+    That is a permanent L1 allocation of the whole weight (``K * N`` bytes at the weight's
+    dtype, spread over the B cores), so it only fits a few small projections: L1 also has to
+    hold every activation, every op's circular buffers and any GCB on the device. A weight
+    left resident that does not fit shows up as a later op failing to build, not as an error
+    here. Mutually exclusive with ``use_prefetcher``, whose whole point is that the weight
+    never lands in L1 as a tensor.
+
     ``fetch_weights`` keeps its meaning across both paths -- stage this layer's weights ahead
     of the call that needs them -- but here it queues the prefetch request rather than
     copying into L1, so the transfer overlaps whatever the workers are still doing. Calling
-    it is optional; ``forward`` queues the request itself if nobody did.
+    it is optional; ``forward`` queues the request itself if nobody did. With
+    ``keep_weights_in_l1`` there is nothing left to stage and it is a no-op.
 
     The caller owns the prefetcher session: wrap the forward passes in
     ``ttnn.experimental.start_tensor_prefetcher`` / ``stop_tensor_prefetcher`` (plus a
@@ -386,6 +399,7 @@ class LinearDecode(DeepSeekV4Module):
         num_prefetch_slabs: int = 2,
         global_cb=None,
         global_cb_page_bytes: Optional[int] = None,
+        keep_weights_in_l1: bool = False,
     ):
         self.partial_width_sharded = partial_width_sharded
         self.num_inputA_cores = num_inputA_cores
@@ -393,9 +407,16 @@ class LinearDecode(DeepSeekV4Module):
         self.device = device
         self.l1_weights = None
         self.use_prefetcher = use_prefetcher
+        self.keep_weights_in_l1 = keep_weights_in_l1
         self.global_cb = None
         self.gcb_k_blocks = 1
         self.prefetch_queued = False
+
+        if keep_weights_in_l1 and use_prefetcher:
+            raise ValueError(
+                "keep_weights_in_l1 and use_prefetcher are mutually exclusive: the prefetched weight "
+                "is streamed into the matmul's in1 buffer and never held as an L1 tensor"
+            )
 
         assert K != -1 and N != -1, "K and N must be set"
         self.K = K
@@ -448,6 +469,7 @@ class LinearDecode(DeepSeekV4Module):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 cache_file_name=cache_file_name,
             )
+            self._make_weights_resident()
             return
 
         w = w.t().contiguous()
@@ -464,6 +486,19 @@ class LinearDecode(DeepSeekV4Module):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=cache_file_name,
         )
+        self._make_weights_resident()
+
+    def _make_weights_resident(self):
+        """Move the weight into L1 for good, under ``keep_weights_in_l1``.
+
+        The DRAM-interleaved copy is freed: with the weight resident nothing reads it again,
+        and holding both would pay for the layout twice.
+        """
+        if not self.keep_weights_in_l1:
+            return
+        self.l1_weights = ttnn.to_memory_config(self.weight, self.weights_memory_config)
+        self.weight.deallocate()
+        self.weight = None
 
     def _init_prefetched_weight(
         self,
@@ -610,6 +645,8 @@ class LinearDecode(DeepSeekV4Module):
         if self.use_prefetcher:
             self._queue_prefetch()
             return
+        if self.keep_weights_in_l1:
+            return
         self.l1_weights = ttnn.to_memory_config(self.weight, self.weights_memory_config)
         # self.weight.deallocate()
 
@@ -657,6 +694,9 @@ class LinearDecode(DeepSeekV4Module):
                 ttnn.experimental.stop_tensor_prefetcher(self.device, force=True)
                 raise
         if self.l1_weights is None or not self.l1_weights.is_allocated():
+            # A resident weight has no DRAM copy left to re-shard from, so losing it is a
+            # bug in whoever freed it rather than something to silently rebuild.
+            assert not self.keep_weights_in_l1, "the resident L1 weight was deallocated by someone else"
             self.l1_weights = ttnn.to_memory_config(self.weight, self.weights_memory_config)
         m = x.shape[-2]
         m_padded = ((m + 31) // 32) * 32
@@ -683,8 +723,9 @@ class LinearDecode(DeepSeekV4Module):
         result = ttnn.experimental.matmul_decode(
             x, self.l1_weights, partial_width_sharded=self.partial_width_sharded, output_mem_config=output_memory_config
         )
-        self.l1_weights.deallocate()
-        self.l1_weights = None
+        if not self.keep_weights_in_l1:
+            self.l1_weights.deallocate()
+            self.l1_weights = None
         return result
 
 

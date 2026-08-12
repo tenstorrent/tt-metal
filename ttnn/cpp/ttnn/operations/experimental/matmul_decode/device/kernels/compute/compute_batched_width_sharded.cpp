@@ -32,12 +32,14 @@ void kernel_main() {
     constexpr uint32_t Nc_tiles = get_compile_time_arg_val(2);
     constexpr uint32_t Bc = get_compile_time_arg_val(3);
     constexpr uint32_t inA_K_tiles_per_core = get_compile_time_arg_val(4);
-    constexpr uint32_t sync_cb_id = get_compile_time_arg_val(5);
-    constexpr uint32_t num_k_blocks = get_compile_time_arg_val(6);
+    constexpr uint32_t num_k_blocks = get_compile_time_arg_val(5);
 
-    constexpr uint32_t full_in0_cb_id = tt::CBIndex::c_3;
-    constexpr uint32_t in1_cb_id = tt::CBIndex::c_1;
-    constexpr uint32_t out_cb_id = tt::CBIndex::c_2;
+    // Named so op fusion can remap them; the reader gathers A into cb_full_in0, which is what
+    // compute reads as its in0.
+    constexpr uint32_t full_in0_cb_id = get_named_compile_time_arg_val("cb_full_in0");
+    constexpr uint32_t in1_cb_id = get_named_compile_time_arg_val("cb_in1");
+    constexpr uint32_t out_cb_id = get_named_compile_time_arg_val("cb_out");
+    constexpr uint32_t sync_cb_id = get_named_compile_time_arg_val("cb_sync");
 
     constexpr uint32_t full_in0_num_tiles = Bc * M_tiles * K_tiles;
     // One GCB page: page_k_rows consecutive rows of this receiver's [Bc*K, Nc] slab.

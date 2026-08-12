@@ -55,6 +55,12 @@ DECODE_LAYOUTS = {
     "q_a_proj": {"K": 4096, "N": 1024, "partial_width_sharded": True, "k_blocks": 2, "n_blocks": 32},
     "q_b_proj": {"K": 1024, "N": 32768, "n_blocks": 64},
     "kv_proj": {"K": 4096, "N": 512, "partial_width_sharded": True, "k_blocks": 4, "n_blocks": 16},
+    # q_a and kv projected by one matmul over their concatenated weight (see
+    # ``DeepSeekV4Attention._qkv``). Deliberately absent from ``DECODE_GCB_GROUP``: a
+    # 1536-wide weight cuts into 3-tile rows per B core, and the group's page is 32 tiles,
+    # so it has no page size in common with the shared buffer. The prefetched path
+    # therefore keeps q_a_proj / kv_proj separate and only the L1 path fuses them.
+    "qa_kv_proj": {"K": 4096, "N": 1536, "partial_width_sharded": True, "k_blocks": 4, "n_blocks": 16},
     "o_b_proj": {"K": 8192, "N": 4096},
     "compressed_sparse_attention": {
         "K": 4096,

@@ -832,6 +832,19 @@ def _compressor_projections(
     return projection("kv_proj"), projection("gate_proj")
 
 
+def _concat_weight(*sources):
+    """A lazy ``[sum(out), in]`` weight from ``[out, in]`` sources stacked row-wise.
+
+    Fusing projections that read the same activation means concatenating their torch
+    weights; behind a thunk, so a populated tile cache still never touches the checkpoint.
+    """
+
+    def build():
+        return torch.cat([w() if callable(w) else w for w in sources], dim=0)
+
+    return build
+
+
 class DeepSeekV4Attention(DeepSeekV4Module):
     """ttnn port of ``DeepseekV4Attention`` (decode only, running KV cache).
 
@@ -904,9 +917,31 @@ class DeepSeekV4Attention(DeepSeekV4Module):
                 **prefetch,
             )
 
-        self.q_a_proj = projection("q_a_proj")
+        # q_a and kv both read the block's hidden, so one matmul over their concatenated
+        # weight replaces two and ``_qkv`` splits the halves back out. Only on the L1 path:
+        # the fused weight cannot join the shared decode GCB (see DECODE_LAYOUTS), so under
+        # the prefetcher the two projections stay separate.
+        # The split width is q_a's output, read off the layout registry rather than the
+        # config: the layouts are fixed constants anyway (``check_decode_layout`` below is
+        # what ties them to this config), and not every caller's config object carries
+        # ``q_lora_rank``.
+        self.q_lora_rank = DECODE_LAYOUTS["q_a_proj"]["N"]
+        self.fused_qa_kv = True  # not use_prefetcher
+        if self.fused_qa_kv:
+            print("use fused qa_kv_proj")
+            check_decode_layout("qa_kv_proj", config.hidden_size, self.q_lora_rank + self.head_dim)
+            self.qa_kv_proj = LinearDecode(
+                _concat_weight(weights["q_a_proj.weight"], weights["kv_proj.weight"]),
+                device,
+                cache.file("qa_kv_proj"),
+                dtype=weight_dtype,
+                keep_weights_in_l1=True,
+                **DECODE_LAYOUTS["qa_kv_proj"],
+            )
+        else:
+            self.q_a_proj = projection("q_a_proj")
+            self.kv_proj = projection("kv_proj")
         self.q_b_proj = projection("q_b_proj")
-        self.kv_proj = projection("kv_proj")
         self.o_b_proj = projection("o_b_proj")
         self.q_a_norm = DeepSeekV4RMSNorm(
             weights["q_a_norm.weight"], self.eps, device, cache.file("q_a_norm"), sharded=True
@@ -968,14 +1003,21 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         # that one head. Its per-core reduction-scratch CB grows as
         # ``(out_tiles + 2*PNHt) * (cores_per_head - 1)``; with the default 16 and
         # ``head_dim == 256`` that overflows L1 (~1.8 MB > 1.5 MB), independent of
-        # the grid. Capping it to 4 shrinks that CB ~5x while still parallelising
-        # the KV reduction 4 ways.
+        # the grid.
+        #
+        # 2 rather than 4 because these CBs are *statically* allocated and so have to fit
+        # under whatever L1 buffers are live at the call -- which now includes a resident
+        # projection weight (``keep_weights_in_l1``, ~55 KB/core at bf4). At 4 the CB region
+        # runs ~60 KB past the resident buffer and the program fails to build; the term above
+        # is linear in ``cores_per_head - 1``, so dropping to 2 cuts that scratch CB to a
+        # third of what 4 asks for. The cost is the KV reduction splitting 2 ways instead of
+        # 4, which is the part of the op that scales with the (short) KV axis.
         self._sdpa_pcfg = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
             q_chunk_size=0,
             k_chunk_size=32,
             exp_approx_mode=False,
-            max_cores_per_head_batch=4,
+            max_cores_per_head_batch=2,
         )
 
         # The rotate-half matrix must stay precise (a bf4 rotation would corrupt RoPE).
@@ -1018,9 +1060,13 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         a projection whose matmul runs out of turn pops its own page size off the head of
         another weight's slab, which is wrong results rather than an error.
         """
-        self.q_a_proj.fetch_weights()
-        self.q_b_proj.fetch_weights()
-        self.kv_proj.fetch_weights()
+        if self.fused_qa_kv:
+            self.qa_kv_proj.fetch_weights()
+            self.q_b_proj.fetch_weights()
+        else:
+            self.q_a_proj.fetch_weights()
+            self.q_b_proj.fetch_weights()
+            self.kv_proj.fetch_weights()
         if self.compressor is not None:
             self.compressor.prefetch_weights()
         if self.use_prefetcher:
@@ -1169,14 +1215,28 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         _, _, tokens_n, _ = tokens.shape
         h, dh = self.num_heads, self.head_dim
         _profile(self.device)
-        q_a = self.q_a_norm(self.q_a_proj(tokens))
+        kv_raw = None
+        if self.fused_qa_kv:
+            # One matmul for both projections of ``tokens``. Its output is width-sharded
+            # over the reduction cores and the split point is not a shard boundary, so the
+            # halves are cut in DRAM; both norms reshard their own input anyway.
+            qa_kv = ttnn.to_memory_config(self.qa_kv_proj(tokens), ttnn.DRAM_MEMORY_CONFIG)
+            q_a_raw, kv_raw = ttnn.split(qa_kv, [self.q_lora_rank, dh], dim=3)
+            ttnn.deallocate(qa_kv)
+        else:
+            q_a_raw = self.q_a_proj(tokens)
+
+        q_a = self.q_a_norm(q_a_raw)
         q = self.q_b_proj(q_a)  # [1, 1, B, H*Dh]
         q = ttnn.reshape(q, [1, tokens_n, h, dh], memory_config=width_sharded_l1_config(tokens_n * h, dh, self.device))
 
         q = _rms_norm_unweighted(q, self.eps)
         q = _apply_rope(q, cos, sin, self.rot, self.rope_dim)  # [1, B, H, Dh]
 
-        kv = self.kv_norm(self.kv_proj(tokens))  # [1, 1, B, Dh]
+        # Unfused, kv_proj runs here rather than beside q_a_proj: one GCB is one FIFO, so a
+        # prefetched matmul that runs out of turn pops another weight's page (see
+        # ``prefetch_weights``).
+        kv = self.kv_norm(kv_raw if kv_raw is not None else self.kv_proj(tokens))  # [1, 1, B, Dh]
 
         kv = _apply_rope(kv, cos, sin, self.rot, self.rope_dim)
         return q, kv
