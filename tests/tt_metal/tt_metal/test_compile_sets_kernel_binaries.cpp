@@ -8,11 +8,13 @@
 #include <cstdint>
 #include <filesystem>
 #include <map>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
 
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -108,16 +110,12 @@ protected:
         for (int id = 0; id < num_devices_; id++) {
             ids.push_back(id);
         }
-        devices_ = detail::CreateDevices(ids);
+        devices_ = distributed::MeshDevice::create_unit_meshes(ids);
     }
 
-    void TearDown() override {
-        if (!devices_.empty()) {
-            detail::CloseDevices(devices_);
-        }
-    }
+    void TearDown() override { devices_.clear(); }
 
-    std::map<int, IDevice*> devices_;
+    std::map<int, std::shared_ptr<distributed::MeshDevice>> devices_;
     int num_devices_ = 0;
 };
 
@@ -129,7 +127,7 @@ TEST_F(CompileSetsKernelBinariesFixture, CompileSetsKernelBinaries) {
     std::map<uint64_t, std::vector<const ll_api::memory*>> ncrisc_binaries;
 
     for (int i = 0; i < num_devices_; i++) {
-        auto* device = devices_[i];
+        auto* device = devices_[i].get();
 
         programs.push_back(Program());
         Program& program = programs.back();
@@ -175,10 +173,11 @@ TEST_F(CompileSetsKernelBinariesFixture, CompileSetsKernelBinaries) {
     for (int iter = 0; iter < 3; iter++) {
         std::vector<std::string> kernel_names = {"reader_unary_push_4", "writer_unary", "eltwise_copy_3m"};
         for (int i = 0; i < num_devices_; i++) {
+            auto* device = devices_[i].get();
             for (const auto& kernel_name : kernel_names) {
                 std::filesystem::remove_all(
-                    BuildEnvManager::get_instance(extract_context_id(devices_[i]))
-                        .get_device_build_env(devices_[i]->id())
+                    BuildEnvManager::get_instance(extract_context_id(device))
+                        .get_device_build_env(device->id())
                         .build_env.get_out_kernel_root_path() +
                     kernel_name);
             }
@@ -186,7 +185,7 @@ TEST_F(CompileSetsKernelBinariesFixture, CompileSetsKernelBinaries) {
         jit_build_cache_clear();
         std::vector<Program> new_programs;
         for (int i = 0; i < num_devices_; i++) {
-            auto& device = devices_[i];
+            auto* device = devices_[i].get();
             new_programs.push_back(Program());
             Program& program = new_programs.back();
             construct_program(program, device, core);
@@ -197,7 +196,7 @@ TEST_F(CompileSetsKernelBinariesFixture, CompileSetsKernelBinaries) {
         uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
         uint32_t compute_class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
         for (int i = 0; i < num_devices_; i++) {
-            auto& device = devices_[i];
+            auto* device = devices_[i].get();
             auto& program = new_programs[i];
             ths.emplace_back([&] {
                 for (int j = 0; j < num_compiles; j++) {

@@ -178,7 +178,7 @@ TEST_F(MockDeviceProfilerFixture, DeviceProfilerIsNotStartedOnMockDevice) {
         << "getDeviceProfilerState() must be false for a mock context even when profiling is "
            "requested";
 
-    auto devices = detail::CreateDevices({0});
+    auto devices = distributed::MeshDevice::create_unit_meshes({0});
     ASSERT_FALSE(devices.empty());
     const ChipId mock_device_id = devices.begin()->first;
 
@@ -188,8 +188,6 @@ TEST_F(MockDeviceProfilerFixture, DeviceProfilerIsNotStartedOnMockDevice) {
     EXPECT_FALSE(profiler_state_manager->device_profiler_map.contains(mock_device_id))
         << "Device profiler was started on mock device " << mock_device_id
         << " -- the profiler must be skipped for mock/emulated clusters";
-
-    detail::CloseDevices(devices);
 }
 
 }  // namespace tt::tt_metal
