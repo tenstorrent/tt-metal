@@ -116,25 +116,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const std::uint32_t num_tiles = params.TILE_CNT;
 
-    constexpr std::uint32_t buf_desc_id_unpack = 0;
-    constexpr std::uint32_t buf_desc_id_pack   = 8;
-
     llk_sfpu_srcs_init(
         L1_ADDRESS(params.buffer_S[0]),
         static_cast<DataFormat>(formats.unpack_S_src),
         static_cast<DataFormat>(formats.unpack_S_dst),
-        buf_desc_id_unpack,
         L1_ADDRESS(params.buffer_Res[0]),
         static_cast<DataFormat>(formats.pack_S_src),
         static_cast<DataFormat>(formats.pack_S_dst),
-        buf_desc_id_pack,
         IMPLIED_MATH_FORMAT);
 
     llk_sfpu_srcs(
         num_tiles,
         static_cast<DataFormat>(formats.unpack_S_dst),
-        buf_desc_id_unpack,
-        buf_desc_id_pack,
         [](const int load_base_addr, const int store_base_addr, const int num_sfpu_iterations)
         { _calculate_exp_srcs_(load_base_addr, store_base_addr, num_sfpu_iterations); });
 
