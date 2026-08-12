@@ -1104,6 +1104,35 @@
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
+# ── Mochi (TT-DiT) ─────────────────────────────────────────────────
+#
+# One entry across both SKUs. The remaining -k terms select WHICH CASE runs
+# (op variant, channel/latent size, sequence length) — never which machine;
+# mesh selection is handled by require_exact_physical_num_devices and
+# skip_if_unsupported_num_links in the test files.
+# The legacy legs prefixed the VAE line with FAKE_DEVICE; nothing under
+# models/tt_dit reads it, and tt_transformers asserts it is unset, so it is
+# dropped rather than carried over.
+
+- name: TT-DiT Mochi unit tests
+  cmd: |
+    unset HF_HUB_OFFLINE
+    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
+    pytest --timeout 1500 models/tt_dit/tests/models/mochi/test_vae_mochi.py -k "(decoder and load_dit) or conv3d_1x1x1 or (l768 and bf16)"
+    pytest --timeout 900 models/tt_dit/tests/models/mochi/test_attention_mochi.py -k "short_seq"
+    pytest --timeout 900 models/tt_dit/tests/models/mochi/test_transformer_mochi.py -k "short_seq and not yes_load_cache and not model_caching"
+  model: mochi
+  model_family: Mochi
+  skus:
+    wh_llmbox:
+      timeout: 60
+      tier: 3
+    wh_galaxy:
+      timeout: 80
+      tier: 3
+  owner_id: U09ELB03XRU # Stephen Osborne
+  team: models
+
 # ============================================================================
 # Multihost (exabox) model-unit tests
 # ============================================================================

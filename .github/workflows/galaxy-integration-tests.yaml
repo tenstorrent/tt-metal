@@ -13,7 +13,6 @@ on:
           - resnet50
           - unit
           - wan22
-          - mochi
           - motif
           - qwenimage
       platform:

@@ -15,7 +15,6 @@ on:
           - resnet
           - motif
           - qwenimage
-          - mochi
           - deepseek-modules
       platform:
         required: false

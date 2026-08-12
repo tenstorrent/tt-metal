@@ -20,6 +20,7 @@ from ....utils import cache
 from ....utils.check import assert_quality
 from ....utils.padding import pad_vision_seq_parallel
 from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard
+from ....utils.test import line_params_req_exact_devices, skip_if_unsupported_num_links
 
 
 def stack_cos_sin(cos, sin):
@@ -31,19 +32,19 @@ def stack_cos_sin(cos, sin):
 @pytest.mark.parametrize(
     ("mesh_device", "mesh_shape", "sp_axis", "tp_axis", "num_links"),
     [
-        pytest.param((1, 1), (1, 1), 0, 1, 1, id="1x1sp0tp1"),
-        pytest.param((1, 2), (1, 2), 0, 1, 1, id="1x2sp0tp1"),
-        pytest.param((1, 2), (1, 2), 1, 0, 1, id="1x2sp1tp0"),
-        pytest.param((2, 1), (2, 1), 0, 1, 1, id="2x1sp0tp1"),
-        pytest.param((2, 1), (2, 1), 1, 0, 1, id="2x1sp1tp0"),
-        pytest.param((2, 2), (2, 2), 0, 1, 1, id="2x2sp0tp1"),
-        pytest.param((2, 2), (2, 2), 1, 0, 1, id="2x2sp1tp0"),
-        pytest.param((2, 4), (2, 4), 0, 1, 1, id="2x4sp0tp1"),
-        pytest.param((2, 4), (2, 4), 1, 0, 1, id="2x4sp1tp0"),
-        pytest.param((1, 8), (1, 8), 1, 0, 1, id="1x8sp1tp0"),
-        pytest.param((4, 8), (2, 8), 1, 0, 4, id="2x8sp1tp0"),
-        pytest.param((4, 8), (4, 8), 0, 1, 4, id="4x8sp0tp1"),
-        pytest.param((4, 8), (4, 8), 1, 0, 4, id="4x8sp1tp0"),
+        pytest.param((1, 1), (1, 1), 0, 1, 1, id="1x1sp0tp1nl1"),
+        pytest.param((1, 2), (1, 2), 0, 1, 1, id="1x2sp0tp1nl1"),
+        pytest.param((1, 2), (1, 2), 1, 0, 1, id="1x2sp1tp0nl1"),
+        pytest.param((2, 1), (2, 1), 0, 1, 1, id="2x1sp0tp1nl1"),
+        pytest.param((2, 1), (2, 1), 1, 0, 1, id="2x1sp1tp0nl1"),
+        pytest.param((2, 2), (2, 2), 0, 1, 1, id="2x2sp0tp1nl1"),
+        pytest.param((2, 2), (2, 2), 1, 0, 1, id="2x2sp1tp0nl1"),
+        pytest.param((2, 4), (2, 4), 0, 1, 1, id="2x4sp0tp1nl1"),
+        pytest.param((2, 4), (2, 4), 1, 0, 1, id="2x4sp1tp0nl1"),
+        pytest.param((1, 8), (1, 8), 1, 0, 1, id="1x8sp1tp0nl1"),
+        pytest.param((4, 8), (2, 8), 1, 0, 4, id="2x8sp1tp0nl4"),
+        pytest.param((4, 8), (4, 8), 0, 1, 4, id="4x8sp0tp1nl4"),
+        pytest.param((4, 8), (4, 8), 1, 0, 4, id="4x8sp1tp0nl4"),
     ],
     indirect=["mesh_device"],
 )
@@ -68,7 +69,7 @@ def stack_cos_sin(cos, sin):
         pytest.param(False, id="no_context_pre"),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("device_params", [line_params_req_exact_devices], ids=["line"], indirect=True)
 def test_mochi_transformer_block(
     mesh_device: ttnn.MeshDevice,
     mesh_shape: tuple[int, int],
@@ -81,6 +82,8 @@ def test_mochi_transformer_block(
     context_pre_only: bool,
     is_fsdp: bool,
 ) -> None:
+    skip_if_unsupported_num_links(mesh_device, num_links)
+
     torch_dtype = torch.float32
     parent_mesh_device = mesh_device
     mesh_device = parent_mesh_device.create_submesh(ttnn.MeshShape(*mesh_shape))
@@ -240,12 +243,12 @@ def test_mochi_transformer_block(
 @pytest.mark.parametrize(
     ("mesh_device", "sp_axis", "tp_axis", "num_links"),
     [
-        pytest.param((2, 2), 0, 1, 1, id="2x2sp0tp1"),
-        pytest.param((2, 2), 1, 0, 1, id="2x2sp1tp0"),
-        pytest.param((2, 4), 0, 1, 1, id="2x4sp0tp1"),
-        pytest.param((2, 4), 1, 0, 1, id="2x4sp1tp0"),
-        pytest.param((4, 8), 0, 1, 4, id="4x8sp0tp1"),
-        pytest.param((4, 8), 1, 0, 4, id="4x8sp1tp0"),
+        pytest.param((2, 2), 0, 1, 1, id="2x2sp0tp1nl1"),
+        pytest.param((2, 2), 1, 0, 1, id="2x2sp1tp0nl1"),
+        pytest.param((2, 4), 0, 1, 1, id="2x4sp0tp1nl1"),
+        pytest.param((2, 4), 1, 0, 1, id="2x4sp1tp0nl1"),
+        pytest.param((4, 8), 0, 1, 4, id="4x8sp0tp1nl4"),
+        pytest.param((4, 8), 1, 0, 4, id="4x8sp1tp0nl4"),
     ],
     indirect=["mesh_device"],
 )
@@ -271,7 +274,7 @@ def test_mochi_transformer_block(
         pytest.param(False, id="no_load_cache"),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("device_params", [line_params_req_exact_devices], ids=["line"], indirect=True)
 def test_mochi_transformer_model(
     mesh_device: ttnn.MeshDevice,
     sp_axis: int,
@@ -286,6 +289,8 @@ def test_mochi_transformer_model(
     test_attention_mask: bool,
     dit_unit_test: bool,
 ) -> None:
+    skip_if_unsupported_num_links(mesh_device, num_links)
+
     torch_dtype = torch.float32
 
     sp_factor = tuple(mesh_device.shape)[sp_axis]
@@ -407,10 +412,10 @@ def test_mochi_transformer_model(
 @pytest.mark.parametrize(
     ("mesh_device", "sp_axis", "tp_axis", "num_links"),
     [
-        pytest.param((1, 8), 1, 0, 1, id="1x8sp1tp0"),
-        pytest.param((2, 4), 1, 0, 1, id="2x4sp1tp0"),
-        pytest.param((2, 4), 0, 1, 1, id="2x4sp0tp1"),
-        pytest.param((4, 8), 1, 0, 4, id="4x8sp1tp0"),
+        pytest.param((1, 8), 1, 0, 1, id="1x8sp1tp0nl1"),
+        pytest.param((2, 4), 1, 0, 1, id="2x4sp1tp0nl1"),
+        pytest.param((2, 4), 0, 1, 1, id="2x4sp0tp1nl1"),
+        pytest.param((4, 8), 1, 0, 4, id="4x8sp1tp0nl4"),
     ],
     indirect=["mesh_device"],
 )
@@ -420,7 +425,7 @@ def test_mochi_transformer_model(
         pytest.param(1, 8, 40, 50, 118, id="short_seq"),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("device_params", [line_params_req_exact_devices], ids=["line"], indirect=True)
 def test_mochi_transformer_model_caching(
     mesh_device: ttnn.MeshDevice,
     sp_axis: int,
@@ -432,6 +437,8 @@ def test_mochi_transformer_model_caching(
     W: int,
     prompt_seq: int,
 ) -> None:
+    skip_if_unsupported_num_links(mesh_device, num_links)
+
     torch_dtype = torch.float32
 
     sp_factor = tuple(mesh_device.shape)[sp_axis]

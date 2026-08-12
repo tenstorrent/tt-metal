@@ -18,6 +18,7 @@ from ....parallel.config import MochiVAEParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils import cache
 from ....utils.check import assert_quality
+from ....utils.test import line_params_req_exact_devices, skip_if_unsupported_num_links
 
 
 def get_padded_size(numerator, denominator):
@@ -98,7 +99,10 @@ def create_random_conv3d_models(mesh_device, in_channels, out_channels, bias=Tru
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 20000000}], indirect=True
+    "device_params",
+    [{**line_params_req_exact_devices, "trace_region_size": 20000000}],
+    ids=["line"],
+    indirect=True,
 )
 def test_tt_conv3d_1x1x1(mesh_device, N, C_in, C_out, T, H, W, reset_seeds):
     """Test forward pass of TtConv1x1 against Conv3d with 1x1x1 kernel."""
@@ -211,12 +215,12 @@ def create_random_resblock_models(
         ((8, 4), 2),  # BH Galaxy
     ],
     ids=[
-        "1x1",
-        "1x2",
-        "1x8",
-        "2x4",
-        "wh_8x4",
-        "bh_8x4",
+        "1x1nl1",
+        "1x2nl1",
+        "1x8nl1",
+        "2x4nl1",
+        "8x4nl4",
+        "8x4nl2",
     ],
     indirect=["mesh_device"],
 )
@@ -226,10 +230,15 @@ def create_random_resblock_models(
     ids=["bf16", "f32"],
 )
 @pytest.mark.parametrize(
-    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 20000000}], indirect=True
+    "device_params",
+    [{**line_params_req_exact_devices, "trace_region_size": 20000000}],
+    ids=["line"],
+    indirect=True,
 )
 def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds, num_links, dtype):
     """Test complete forward pass of TtResBlock."""
+    skip_if_unsupported_num_links(mesh_device, num_links)
+
     block_args = resblock_args.copy()
     block_args["channels"] = C
     block_args["nonlinearity"] = "silu"
@@ -329,17 +338,20 @@ def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds, num_links,
         ((8, 4), 2),  # BH Galaxy
     ],
     ids=[
-        "1x1",
-        "1x2",
-        "1x8",
-        "2x4",
-        "wh_8x4",
-        "bh_8x4",
+        "1x1nl1",
+        "1x2nl1",
+        "1x8nl1",
+        "2x4nl1",
+        "8x4nl4",
+        "8x4nl2",
     ],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
-    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 20000000}], indirect=True
+    "device_params",
+    [{**line_params_req_exact_devices, "trace_region_size": 20000000}],
+    ids=["line"],
+    indirect=True,
 )
 def test_tt_resblock_decoder_dims(mesh_device, C, T, H_unpadded, W_unpadded, W_padded, reset_seeds, num_links):
     """Test resblock with decoder-actual dimensions that exercise W unpadding on 2D mesh.
@@ -349,6 +361,8 @@ def test_tt_resblock_decoder_dims(mesh_device, C, T, H_unpadded, W_unpadded, W_p
     logical width). The standalone resblock test doesn't cover this because those
     channels use clean W values that divide evenly by w_factor.
     """
+    skip_if_unsupported_num_links(mesh_device, num_links)
+
     N = 1
     block_args = resblock_args.copy()
     block_args["channels"] = C
@@ -558,20 +572,25 @@ def create_random_causalupsampleblock_models(
         ((8, 4), 2),  # BH Galaxy
     ],
     ids=[
-        "1x1",
-        "1x2",
-        "1x8",
-        "2x4",
-        "wh_8x4",
-        "bh_8x4",
+        "1x1nl1",
+        "1x2nl1",
+        "1x8nl1",
+        "2x4nl1",
+        "8x4nl4",
+        "8x4nl2",
     ],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
-    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 20000000}], indirect=True
+    "device_params",
+    [{**line_params_req_exact_devices, "trace_region_size": 20000000}],
+    ids=["line"],
+    indirect=True,
 )
 def test_tt_upsample_forward(mesh_device, config, reset_seeds, num_links):
     """Test TtCausalUpsampleBlock against reference implementation."""
+    skip_if_unsupported_num_links(mesh_device, num_links)
+
     in_channels = config["in_channels"]
     out_channels = config["out_channels"]
     num_res_blocks = config["num_res_blocks"]
@@ -830,19 +849,24 @@ def load_dit(
         ((8, 4), 2),  # BH Galaxy
     ],
     ids=[
-        "1x1",
-        "1x2",
-        "1x8",
-        "2x4",
-        "wh_8x4",
-        "bh_8x4",
+        "1x1nl1",
+        "1x2nl1",
+        "1x8nl1",
+        "2x4nl1",
+        "8x4nl4",
+        "8x4nl2",
     ],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
-    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 20000000}], indirect=True
+    "device_params",
+    [{**line_params_req_exact_devices, "trace_region_size": 20000000}],
+    ids=["line"],
+    indirect=True,
 )
 def test_tt_decoder_forward(mesh_device, config, reset_seeds, load_dit_weights, num_links):
+    skip_if_unsupported_num_links(mesh_device, num_links)
+
     input_shape = config["input_shape"]
     N, C, T, H, W = input_shape
 

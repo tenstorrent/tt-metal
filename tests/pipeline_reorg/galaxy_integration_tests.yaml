@@ -37,15 +37,6 @@
   owner_id: U06UEFWB4P9 # Colman Glagovich
   team: ttnn
 
-- name: Galaxy mochi integration tests
-  cmd: ./tests/scripts/tg/run_tg_frequent_tests.sh --model mochi
-  model: mochi
-  skus:
-    wh_galaxy:
-      timeout: 80
-  owner_id: U09ELB03XRU # Stephen Osborne
-  team: ttnn
-
 - name: Galaxy Motif integration tests
   cmd: ./tests/scripts/tg/run_tg_frequent_tests.sh --model motif
   model: motif

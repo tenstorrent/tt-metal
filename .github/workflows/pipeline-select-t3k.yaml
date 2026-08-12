@@ -55,7 +55,6 @@ on:
           - qwen25
           - qwen25_vl
           - gemma3
-          - mochi
       t3000-perf:
         description: "Perf tests: Select 'all', specific model or 'disabled'"
         type: choice
@@ -64,7 +63,6 @@ on:
           - disabled
           - all
           - resnet50
-          - mochi
           - motif
       t3000-integration:
         description: "Integration tests: Select 'all', specific model or 'disabled'"
@@ -78,7 +76,6 @@ on:
           - trace stress
           - resnet
           - motif
-          - mochi
           - deepseek-modules
       t3000-e2e:
         required: false

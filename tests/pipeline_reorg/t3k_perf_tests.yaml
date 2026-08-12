@@ -21,17 +21,6 @@
   model-name: resnet50
   model-type: CNN
 
-- name: t3k_DiT_Mochi_model_perf_tests
-  cmd: run_t3000_mochi_tests
-  skus:
-    wh_llmbox_perf:
-      timeout: 75
-  owner_id: U09ELB03XRU # Stephen Osborne
-  team: models
-  model-name: mochi
-  model-type: DiT
-  save-perf-data: true
-
 - name: t3k_DiT_Motif_model_perf_tests
   cmd: run_t3000_motif_tests
   skus:

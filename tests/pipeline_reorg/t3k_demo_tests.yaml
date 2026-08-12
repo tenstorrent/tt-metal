@@ -35,12 +35,3 @@
   owner_id: U08TED0JM9D # Samuel Adesoye
   team: models
   model-name: qwenimage
-
-- name: t3k_mochi_tests
-  cmd: run_t3000_mochi_tests
-  skus:
-    wh_llmbox_perf:
-      timeout: 30
-  owner_id: U09ELB03XRU # Stephen Osborne
-  team: models
-  model-name: mochi
