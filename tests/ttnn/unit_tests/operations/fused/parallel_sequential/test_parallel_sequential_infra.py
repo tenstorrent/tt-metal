@@ -272,13 +272,13 @@ class TestCBPoolAllocator:
         self._alloc(pool, 1, {0: CI(**kwargs1)})
         assert pool.get_remap(0)[0] != pool.get_remap(1)[0]
 
-    def test_overflow_raises_on_projection(self):
+    def test_overflow_raises_on_projection(self, expect_error):
         pool = _cb_alloc.CBPoolAllocator()
         CI = _cb_alloc.CBInfo
         for i in range(33):
             self._alloc(pool, i, {0: CI(0, 1024, f"F{i}", 1024, None, "Default")})
         assert len(pool._slots) == 33
-        with pytest.raises(ValueError, match="CB pool overflow"):
+        with expect_error(ValueError, "CB pool overflow"):
             pool.project_to_group(list(range(33)), set())
 
     def test_phantom_cb_reservation(self):
@@ -330,14 +330,14 @@ class TestCBPoolAllocator:
         proj_b = pool.project_to_group([0, 2], set())
         assert proj_a.phase_remaps[0] == proj_b.phase_remaps[0]
 
-    def test_global_pool_unlimited_slots(self):
+    def test_global_pool_unlimited_slots(self, expect_error):
         pool = _cb_alloc.CBPoolAllocator()
         CI = _cb_alloc.CBInfo
         for i in range(35):
             self._alloc(pool, i, {0: CI(0, 1024, f"F{i}", 1024, None, "Default")})
         assert len(pool._slots) == 35
         pool.project_to_group([0, 1, 2, 3, 4], set())  # Should succeed
-        with pytest.raises(ValueError, match="CB pool overflow"):
+        with expect_error(ValueError, "CB pool overflow"):
             pool.project_to_group(list(range(35)), set())
 
 
@@ -359,16 +359,16 @@ class TestCBStateSaveRestore:
         saved = _cb_alloc._save_cb_state([_ns(cbs=[cb]), _ns(cbs=[cb])])
         assert len(saved) == 1
 
-    def test_verify_fails_on_mismatch(self):
+    def test_verify_fails_on_mismatch(self, expect_error):
         cb = _ns(total_size=8192, core_ranges="mock", format_descriptors=[_ns(buffer_index=5)])
         fmt = cb.format_descriptors[0]
         saved = [{"cb": cb, "total_size": 4096, "core_ranges": "mock", "fmt": [(fmt, 5)]}]
-        with pytest.raises(RuntimeError, match="total_size"):
+        with expect_error(RuntimeError, "total_size"):
             _cb_alloc._verify_cb_restore(saved)
 
         cb.total_size = 4096
         fmt.buffer_index = 10
-        with pytest.raises(RuntimeError, match="buffer_index"):
+        with expect_error(RuntimeError, "buffer_index"):
             _cb_alloc._verify_cb_restore(saved)
 
 
@@ -550,14 +550,14 @@ class TestArgMerging:
         _, args = result[0]
         assert args == [1, 2, 3, 4, 5, 10, 20, 30]
 
-    def test_validate_fp32_consistency(self):
+    def test_validate_fp32_consistency(self, expect_error):
         fn = _codegen._validate_fp32_consistency
 
         def _desc(fp32):
             return _ns(descriptor=_ns(kernels=[_ns(config=_ns(fp32_dest_acc_en=fp32))]))
 
         fn([_desc(True), _desc(True)])  # Should not raise
-        with pytest.raises(ValueError, match="fp32_dest_acc_en mismatch"):
+        with expect_error(ValueError, "fp32_dest_acc_en mismatch"):
             fn([_desc(True), _desc(False)])
 
 
@@ -619,8 +619,8 @@ class TestMustMatchDefines:
         )
         assert {"REDUCE_OP", "REDUCE_DIM"} <= {n for n, _ in must_match}
 
-    def test_mismatched_rejected(self):
-        with pytest.raises(ValueError, match="REDUCE_OP.*inconsistent"):
+    def test_mismatched_rejected(self, expect_error):
+        with expect_error(ValueError, "REDUCE_OP.*inconsistent"):
             _codegen._collect_phase_defines(
                 [
                     {"compute": _ns(defines=[("REDUCE_OP", "0")])},
@@ -666,15 +666,15 @@ class TestOpGraphBuilder:
         result = _graph.OpGraphBuilder(_graph.OpNode(desc)).build(device=None)
         assert type(result).__name__ == "FusedOp"
 
-    def test_build_twice_raises(self, monkeypatch):
+    def test_build_twice_raises(self, monkeypatch, expect_error):
         _patch_get_node_core_range_for_mock_ops(monkeypatch)
         desc = self._make_buildable_op()
         builder = _graph.OpGraphBuilder(_graph.OpNode(desc))
         builder.build(device=None)
-        with pytest.raises(ValueError, match="Already built"):
+        with expect_error(ValueError, "Already built"):
             builder.build(device=None)
 
-    def test_overlapping_siblings_rejected(self, monkeypatch):
+    def test_overlapping_siblings_rejected(self, monkeypatch, expect_error):
         _patch_get_node_core_range_for_mock_ops(monkeypatch)
         root = _graph.OpNode(
             self._op([((0, 0), (3, 0))]),
@@ -683,7 +683,7 @@ class TestOpGraphBuilder:
                 _graph.OpNode(self._op([((1, 0), (3, 0))])),
             ],
         )
-        with pytest.raises(ValueError, match="overlapping cores"):
+        with expect_error(ValueError, "overlapping cores"):
             _graph.OpGraphBuilder(root)._validate_topology()
 
     def test_valid_disjoint_children(self, monkeypatch):
@@ -909,30 +909,30 @@ class TestSequentialParallelAPI:
         s = S(a)
         assert s.add(b).add(c) is s and len(s._items) == 3
 
-    def test_parallel_requires_two_items(self):
-        with pytest.raises(ValueError, match="at least 2"):
+    def test_parallel_requires_two_items(self, expect_error):
+        with expect_error(ValueError, "at least 2"):
             _fusion.Parallel(_make_mock_op("a"))
 
-    def test_parallel_in_middle_errors(self):
+    def test_parallel_in_middle_errors(self, expect_error):
         S, P = _fusion.Sequential, _fusion.Parallel
         a, b, c, d = [_make_mock_op(n) for n in "abcd"]
-        with pytest.raises(ValueError, match="diverge"):
+        with expect_error(ValueError, "diverge"):
             _fusion._resolve(S(a, P(b, c), d))
 
-    def test_empty_sequential_errors(self):
-        with pytest.raises(ValueError, match="at least 1"):
+    def test_empty_sequential_errors(self, expect_error):
+        with expect_error(ValueError, "at least 1"):
             _fusion.Sequential()
 
-    def test_resolve_raw_op_and_unsupported_type(self):
+    def test_resolve_raw_op_and_unsupported_type(self, expect_error):
         op = _make_mock_op("raw")
         nodes = _fusion._resolve(op)
         assert len(nodes) == 1 and nodes[0].op is op
-        with pytest.raises(TypeError, match="Unsupported"):
+        with expect_error(TypeError, "Unsupported"):
             _fusion._resolve(42)
 
-    def test_resolve_rejects_fused_op(self):
+    def test_resolve_rejects_fused_op(self, expect_error):
         fused = _fusion.FusedOp(op=_fusion.OpDescriptor(_PLACEHOLDER, [], [], program_cache_key=0))
-        with pytest.raises(TypeError, match="FusedOp cannot be nested"):
+        with expect_error(TypeError, "FusedOp cannot be nested"):
             _fusion._resolve(fused)
 
     def test_merge_build_results(self, monkeypatch):
@@ -1196,9 +1196,29 @@ class TestGlobalCircularBuffer:
             has_buffer=lambda: False,
         )
 
-    def test_extract_cb_info_skips_remote(self):
+    def test_extract_cb_info_skips_global_cbs(self):
+        # A GlobalCB's L1 is owned by the GlobalCircularBuffer, so neither its local
+        # alias nor its remote index is pool-allocated; both are assigned by
+        # _assign_global_cb_indices and the CBDescriptor is passed through as-is.
         result = _cb_alloc.extract_cb_info(_ns(cbs=[self._regular_cb(0), self._global_cb(1, 31)]))
-        assert 0 in result and 1 in result and 31 not in result
+        assert 0 in result and 1 not in result and 31 not in result
+
+    def test_assign_global_cb_indices_moves_second_global_cb(self):
+        pool = _cb_alloc.CBPoolAllocator()
+        op_a = _ns(descriptor=_ns(cbs=[self._global_cb(1, 31)]))
+        op_b = _ns(descriptor=_ns(cbs=[self._global_cb(1, 31)]))
+        assert _cb_alloc._assign_global_cb_indices(pool, op_a) == {1: 1, 31: 31}
+        # The second op declares the same indices; it must land elsewhere, with its
+        # remote index still above its local one.
+        remap_b = _cb_alloc._assign_global_cb_indices(pool, op_b)
+        assert remap_b[1] != 1 and remap_b[31] != 31
+        assert remap_b[31] > remap_b[1]
+
+    def test_assign_global_cb_indices_is_idempotent(self):
+        pool = _cb_alloc.CBPoolAllocator()
+        op_a = _ns(descriptor=_ns(cbs=[self._global_cb(1, 31)]))
+        first = _cb_alloc._assign_global_cb_indices(pool, op_a)
+        assert _cb_alloc._assign_global_cb_indices(pool, op_a) == first
 
     def test_extract_remote_only_no_cbinfo(self):
         assert len(_cb_alloc.extract_cb_info(_ns(cbs=[self._remote_only_cb()]))) == 0
