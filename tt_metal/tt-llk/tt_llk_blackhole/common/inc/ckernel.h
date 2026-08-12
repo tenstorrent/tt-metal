@@ -63,6 +63,7 @@ void __builtin_rvtt_rmwciB0(unsigned, unsigned, unsigned);
 void __builtin_rvtt_rmwciB1(unsigned, unsigned, unsigned);
 void __builtin_rvtt_rmwciB2(unsigned, unsigned, unsigned);
 void __builtin_rvtt_rmwciB3(unsigned, unsigned, unsigned);
+void __builtin_rvtt_cfg_store(unsigned, unsigned, unsigned);
 #pragma GCC diagnostic pop
 
 namespace ckernel
@@ -359,11 +360,26 @@ inline std::uint32_t cfg_addr(std::uint32_t cfg_addr32)
     return (cfg_state_id == 0) ? cfg_addr32 : (CFG_STATE_SIZE * 4) + cfg_addr32;
 }
 
+// Memory-mapped Config write: cfg[addr32] = data, issued by the RISC-V core.
+// Routed through __builtin_rvtt_cfg_store, which emits exactly the same store
+// -- no extra instruction, no extra register -- but carries the word index so
+// pass_rvtt_config forgets that one word instead of discarding everything it
+// knows.  A naked cfg[...] = ... store is invisible to the pass, which has to
+// treat it as an opaque barrier.
+inline void cfg_store(volatile std::uint32_t tt_reg_ptr *cfg, std::uint32_t addr32, std::uint32_t data)
+{
+    // The builtin's operands are 'unsigned int'; std::uint32_t is 'unsigned
+    // long' on this target, so cast explicitly rather than relying on the
+    // implicit conversion (which the builtin's argument check rejects).
+    __builtin_rvtt_cfg_store(
+        static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(cfg)), static_cast<unsigned>(addr32), static_cast<unsigned>(data));
+}
+
 inline void cfg_write(std::uint32_t cfg_addr32, std::uint32_t data)
 {
     // Declared here instead of globally to prevent direct access, which might ignore current state ID
     volatile std::uint32_t tt_reg_ptr *cfg_regs = reinterpret_cast<volatile std::uint32_t tt_reg_ptr *>(TENSIX_CFG_BASE);
-    cfg_regs[cfg_addr(cfg_addr32)]              = data;
+    cfg_store(cfg_regs, cfg_addr(cfg_addr32), data);
 }
 
 inline std::uint32_t cfg_read(std::uint32_t cfg_addr32)
@@ -505,7 +521,7 @@ inline void cfg_rmw(std::uint32_t cfg_addr32, std::uint32_t cfg_shamt, std::uint
     cfg_data |= wrdata;
 
     // Update cfg regs
-    cfg_regs[addr] = cfg_data;
+    cfg_store(cfg_regs, addr, cfg_data);
 }
 
 inline void cfg_rmw_gpr(std::uint32_t cfg_addr32, std::uint32_t cfg_shamt, std::uint32_t cfg_mask, std::uint32_t gpr_index)
@@ -809,7 +825,7 @@ inline void init_prng_seed(const std::uint32_t seed)
 {
     // The seed for PRNG should at least be initialized during chip boot-up time.
     volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer();
-    cfg[PRNG_SEED_Seed_Val_ADDR32]         = seed;
+    cfg_store(cfg, PRNG_SEED_Seed_Val_ADDR32, seed);
 
     // TODO: ckernel::wait does not work properly. Use ckernel::wait when fixed.
     for (int i = 0; i < 600; i++)

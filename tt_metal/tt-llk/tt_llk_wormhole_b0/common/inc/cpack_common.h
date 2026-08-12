@@ -488,18 +488,18 @@ inline void set_packer_config(
     // for (uint i=0; i<4; i++) cfg[THCON_SEC1_REG1_Row_start_section_size_ADDR32+i]=config.val[i];
     // for (uint i=0; i<4; i++) cfg[THCON_SEC0_REG8_Row_start_section_size_ADDR32+i]=config.val[i];
     // for (uint i=0; i<4; i++) cfg[THCON_SEC1_REG8_Row_start_section_size_ADDR32+i]=config.val[i];
-    cfg[THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 0] = config.val[0];
-    cfg[THCON_SEC1_REG1_Row_start_section_size_ADDR32 + 0] = config.val[0];
-    cfg[THCON_SEC0_REG8_Row_start_section_size_ADDR32 + 0] = config.val[0];
-    cfg[THCON_SEC1_REG8_Row_start_section_size_ADDR32 + 0] = config.val[0];
-    cfg[THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 2] = config.val[2];
-    cfg[THCON_SEC1_REG1_Row_start_section_size_ADDR32 + 2] = config.val[2];
-    cfg[THCON_SEC0_REG8_Row_start_section_size_ADDR32 + 2] = config.val[2];
-    cfg[THCON_SEC1_REG8_Row_start_section_size_ADDR32 + 2] = config.val[2];
-    cfg[THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 3] = config.val[3];
-    cfg[THCON_SEC1_REG1_Row_start_section_size_ADDR32 + 3] = config.val[3];
-    cfg[THCON_SEC0_REG8_Row_start_section_size_ADDR32 + 3] = config.val[3];
-    cfg[THCON_SEC1_REG8_Row_start_section_size_ADDR32 + 3] = config.val[3];
+    cfg_store(cfg, THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 0, config.val[0]);
+    cfg_store(cfg, THCON_SEC1_REG1_Row_start_section_size_ADDR32 + 0, config.val[0]);
+    cfg_store(cfg, THCON_SEC0_REG8_Row_start_section_size_ADDR32 + 0, config.val[0]);
+    cfg_store(cfg, THCON_SEC1_REG8_Row_start_section_size_ADDR32 + 0, config.val[0]);
+    cfg_store(cfg, THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 2, config.val[2]);
+    cfg_store(cfg, THCON_SEC1_REG1_Row_start_section_size_ADDR32 + 2, config.val[2]);
+    cfg_store(cfg, THCON_SEC0_REG8_Row_start_section_size_ADDR32 + 2, config.val[2]);
+    cfg_store(cfg, THCON_SEC1_REG8_Row_start_section_size_ADDR32 + 2, config.val[2]);
+    cfg_store(cfg, THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 3, config.val[3]);
+    cfg_store(cfg, THCON_SEC1_REG1_Row_start_section_size_ADDR32 + 3, config.val[3]);
+    cfg_store(cfg, THCON_SEC0_REG8_Row_start_section_size_ADDR32 + 3, config.val[3]);
+    cfg_store(cfg, THCON_SEC1_REG8_Row_start_section_size_ADDR32 + 3, config.val[3]);
 
     dest_rd_ctrl_u dest_rd_ctrl;
     dest_rd_ctrl.val = 0;
@@ -521,7 +521,7 @@ inline void set_packer_config(
     {
         dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Round_10b_mant = 1;
     }
-    cfg[PCK_DEST_RD_CTRL_Read_32b_data_ADDR32] = dest_rd_ctrl.val;
+    cfg_store(cfg, PCK_DEST_RD_CTRL_Read_32b_data_ADDR32, dest_rd_ctrl.val);
 
     if (IS_BFP_FORMAT(pack_dst_format))
     {
@@ -529,29 +529,29 @@ inline void set_packer_config(
         if ((pack_dst_format & 0x1F) == to_underlying(DataFormat::Bfp8) || (pack_dst_format & 0x1F) == to_underlying(DataFormat::Bfp8_b))
         {
             config.f.exp_section_size                              = bfp_exp_section_size(1 /* index */, bfp8_row_bytes, num_faces);
-            cfg[THCON_SEC0_REG8_Row_start_section_size_ADDR32 + 0] = config.val[0];
+            cfg_store(cfg, THCON_SEC0_REG8_Row_start_section_size_ADDR32 + 0, config.val[0]);
             config.f.exp_section_size                              = bfp_exp_section_size(2 /* index */, bfp8_row_bytes, num_faces);
-            cfg[THCON_SEC1_REG1_Row_start_section_size_ADDR32 + 0] = config.val[0];
+            cfg_store(cfg, THCON_SEC1_REG1_Row_start_section_size_ADDR32 + 0, config.val[0]);
             config.f.exp_section_size                              = bfp_exp_section_size(3 /* index */, bfp8_row_bytes, num_faces);
-            cfg[THCON_SEC1_REG8_Row_start_section_size_ADDR32 + 0] = config.val[0];
+            cfg_store(cfg, THCON_SEC1_REG8_Row_start_section_size_ADDR32 + 0, config.val[0]);
         }
         else if ((pack_dst_format & 0x1F) == to_underlying(DataFormat::Bfp4) || (pack_dst_format & 0x1F) == to_underlying(DataFormat::Bfp4_b))
         {
             config.f.exp_section_size                              = bfp_exp_section_size(1 /* index */, bfp4_row_bytes, num_faces);
-            cfg[THCON_SEC0_REG8_Row_start_section_size_ADDR32 + 0] = config.val[0];
+            cfg_store(cfg, THCON_SEC0_REG8_Row_start_section_size_ADDR32 + 0, config.val[0]);
             config.f.exp_section_size                              = bfp_exp_section_size(2 /* index */, bfp4_row_bytes, num_faces);
-            cfg[THCON_SEC1_REG1_Row_start_section_size_ADDR32 + 0] = config.val[0];
+            cfg_store(cfg, THCON_SEC1_REG1_Row_start_section_size_ADDR32 + 0, config.val[0]);
             config.f.exp_section_size                              = bfp_exp_section_size(3 /* index */, bfp4_row_bytes, num_faces);
-            cfg[THCON_SEC1_REG8_Row_start_section_size_ADDR32 + 0] = config.val[0];
+            cfg_store(cfg, THCON_SEC1_REG8_Row_start_section_size_ADDR32 + 0, config.val[0]);
         }
         else if ((pack_dst_format & 0x1F) == to_underlying(DataFormat::Bfp2) || (pack_dst_format & 0x1F) == to_underlying(DataFormat::Bfp2_b))
         {
             config.f.exp_section_size                              = bfp_exp_section_size(1 /* index */, bfp2_row_bytes, num_faces);
-            cfg[THCON_SEC0_REG8_Row_start_section_size_ADDR32 + 0] = config.val[0];
+            cfg_store(cfg, THCON_SEC0_REG8_Row_start_section_size_ADDR32 + 0, config.val[0]);
             config.f.exp_section_size                              = bfp_exp_section_size(2 /* index */, bfp2_row_bytes, num_faces);
-            cfg[THCON_SEC1_REG1_Row_start_section_size_ADDR32 + 0] = config.val[0];
+            cfg_store(cfg, THCON_SEC1_REG1_Row_start_section_size_ADDR32 + 0, config.val[0]);
             config.f.exp_section_size                              = bfp_exp_section_size(3 /* index */, bfp2_row_bytes, num_faces);
-            cfg[THCON_SEC1_REG8_Row_start_section_size_ADDR32 + 0] = config.val[0];
+            cfg_store(cfg, THCON_SEC1_REG8_Row_start_section_size_ADDR32 + 0, config.val[0]);
         }
     }
 
@@ -823,7 +823,7 @@ inline void configure_pack(
     pck_edge_offset.val    = 0;
     pck_edge_offset.f.mask = 0xffff;
 
-    cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32]                = pck_edge_offset.val;
+    cfg_store(cfg, PCK_EDGE_OFFSET_SEC0_mask_ADDR32, pck_edge_offset.val);
     cfg[TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32] = 0x0; // All packers use row set mapping 0, edge offset 0 mask
 
     regfile[p_gpr_pack::TILE_HEADER]     = tile_size;

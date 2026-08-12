@@ -449,8 +449,11 @@ class TestConfig:
         speed_of_light: bool = False,
     ):
         debug_flag = "" if no_debug_symbols else "-g "
+        # TT_LLK_OPT_LEVEL overrides the optimization level, which is useful
+        # when bisecting a codegen problem against the level.
+        opt_level = os.environ.get("TT_LLK_OPT_LEVEL", "O3")
         TestConfig.OPTIONS_ALL = (
-            f"{debug_flag}-O3 "
+            f"{debug_flag}-{opt_level} "
             "-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit "
             "-ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit "
         )

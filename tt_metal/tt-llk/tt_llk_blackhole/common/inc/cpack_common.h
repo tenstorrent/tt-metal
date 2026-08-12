@@ -452,8 +452,8 @@ TT_ALWAYS_INLINE void set_packer_config(
     // THCON_SEC0_REG1_Unused1 = cfg_reg_array[1][117 +: 3];
     // THCON_SEC0_REG1_Exp_threshold = cfg_reg_array[1][120 +: 8];
     // for (uint i=0; i<4; i++) cfg[THCON_SEC0_REG1_Row_start_section_size_ADDR32+i]=config.val[i];
-    cfg[THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 0] = config.val[0];
-    cfg[THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 2] = config.val[2];
+    cfg_store(cfg, THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 0, config.val[0]);
+    cfg_store(cfg, THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 2, config.val[2]);
     // cfg[THCON_SEC0_REG1_Row_start_section_size_ADDR32+3]=config.val[3];
 
     // Reset L1 accumulation flag
@@ -480,7 +480,7 @@ TT_ALWAYS_INLINE void set_packer_config(
     {
         dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Round_10b_mant = 1;
     }
-    cfg[PCK_DEST_RD_CTRL_Read_32b_data_ADDR32] = dest_rd_ctrl.val;
+    cfg_store(cfg, PCK_DEST_RD_CTRL_Read_32b_data_ADDR32, dest_rd_ctrl.val);
 
     // Save to GPR for quick data format reconfig. Issued as the TTSETDMAREG intrinsic so
     // pass_rvtt_config sees the REGFILE write (it does not coalesce REGFILE with CONFIG space).
@@ -661,7 +661,7 @@ TT_ALWAYS_INLINE void configure_pack(
     pck_edge_offset.val    = 0;
     pck_edge_offset.f.mask = 0xffff;
 
-    cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32]                = pck_edge_offset.val;
+    cfg_store(cfg, PCK_EDGE_OFFSET_SEC0_mask_ADDR32, pck_edge_offset.val);
     cfg[TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32] = 0x0; // All packers use row set mapping 0, edge offset 0 mask
 
     // TILE_HEADER is the per-tile datum count (tile_size), an author-owned GPR

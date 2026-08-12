@@ -87,15 +87,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // _llk_unpack_AB_, but the MOP run is replaced by two inline unpacr
         // intrinsics (one 16x16 face = one SrcA + one SrcB read).  The unpacr
         // words match the LLK MOP's (AddrMode=1, OvrdThreadId=1,
-        // SetDatValid=1, Last=1); the always-const bits are compiler-defaulted.
+        // SetDatValid=1, Last=1); the remaining fields are the TT_OP_UNPACR
+        // defaults.  The operand list is the full 13-field UNPACR word:
+        // (Unpack_block_selection, AddrMode, CfgContextCntInc, CfgContextId,
+        //  AddrCntContextId, OvrdThreadId, SetDatValid, srcb_bcast,
+        //  ZeroWrite2, AutoIncContextID, RowSearch, SearchCacheFlush, Last).
         volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer();
         TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111); // reset addr counters
         wait_for_next_context(2);
         _llk_unpack_configure_addresses_(L1_ADDRESS(params.buffer_A[i]), L1_ADDRESS(params.buffer_B[i]), cfg);
         semaphore_post(semaphore::UNPACK_SYNC);
         TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
-        INTR_UNPACR(0, 1, 0, 0, 1, 1); // SrcA read
-        INTR_UNPACR(1, 1, 0, 0, 1, 1); // SrcB read
+        INTR_UNPACR(0, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1); // SrcA read
+        INTR_UNPACR(1, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1); // SrcB read
         t6_semaphore_get(semaphore::UNPACK_SYNC);
         switch_config_context(unp_cfg_context);
     }

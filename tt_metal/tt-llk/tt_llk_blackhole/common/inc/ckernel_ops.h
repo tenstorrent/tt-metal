@@ -1070,3 +1070,526 @@
     (ckernel::is_valid(zero_val, 20) && ckernel::is_valid(write_mode, 1) && ckernel::is_valid(bank_mask, 1) && ckernel::is_valid(src_mask, 2))
 #define TT_ZEROSRC(zero_val, write_mode, bank_mask, src_mask)  ckernel::instrn_buffer[0] = TT_OP_ZEROSRC(zero_val, write_mode, bank_mask, src_mask)
 #define TTI_ZEROSRC(zero_val, write_mode, bank_mask, src_mask) INSTRUCTION_WORD(TT_OP_ZEROSRC(zero_val, write_mode, bank_mask, src_mask))
+
+// Only the three TRISCs are built with the Tensix extension
+// (-mcpu=tt-bh-tensix); BRISC/NCRISC use plain -mcpu=tt-bh, where these
+// builtins are not registered at all.  Those cores still issue the odd Tensix
+// instruction (boot.h's TTI_ZEROACC/TTI_SFPCONFIG) as a raw .ttinsn word,
+// which needs no codegen support -- so leave the legacy macros in place there.
+// Without this guard the declarations below turn every call into an ordinary
+// extern function and the failure surfaces as an undefined reference at link.
+#if defined(__riscv_xtttensixbh)
+
+// The instruction-issue macros below expand to compiler builtins.  Many of
+// those expansions land inside templates, where a non-dependent name must be
+// declared at the point of definition -- so pull in sfpi's declarations rather
+// than relying on the builtin being known implicitly.  Declaring a __builtin_
+// name is a redundant redeclaration of what the compiler already knows, hence
+// the suppression.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wredundant-decls"
+#include "tensix_builtins.h"
+#pragma GCC diagnostic pop
+
+// --------------------------------------------------------------------------
+// Route instruction issue through the compiler's intrinsics.
+//
+// TT_<OP> (runtime issue, formerly a store to instrn_buffer) and TTI_<OP>
+// (compile-time issue, formerly .ttinsn) both become the same intrinsic call.
+// The compiler emits the immediate instruction when every operand is a
+// constant and materialises the word otherwise, so the choice those two
+// spellings used to make by hand is now the compiler's to make.  Kernels are
+// unchanged: they keep writing TTI_FOO(...) / TT_FOO(...).
+//
+// This is what lets pass_rvtt_config see the instruction stream at all: an
+// asm-issued instruction is opaque to it, so every .ttinsn was a barrier that
+// stopped config folding dead.
+//
+// TT_OP_<OP> is deliberately NOT redirected -- it yields the instruction
+// *word* as a value, which MOP templates and the replay buffer store rather
+// than issue.  The operands are cast because the builtins are typed and the
+// callers pass scoped enums the old arithmetic macros accepted implicitly.
+//
+// Redirected: 119 of 127.  These have no matching intrinsic or a
+// different operand shape, and keep their original definitions:
+//   INCRWC, MOP_CFG, PACR, PACR_SETREG, REPLAY, SFPLUTFP32, SFPSETMAN, SFP_STOCH_RND
+// --------------------------------------------------------------------------
+
+#undef TT_ADDDMAREG
+#define TT_ADDDMAREG(a0, a1, a2, a3) __builtin_rvtt_adddmareg((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_ADDDMAREG
+#define TTI_ADDDMAREG(a0, a1, a2, a3) TT_ADDDMAREG(a0, a1, a2, a3)
+#undef TT_ADDRCRXY
+#define TT_ADDRCRXY(a0, a1, a2, a3, a4, a5) __builtin_rvtt_addrcrxy((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4), (unsigned)(a5))
+#undef TTI_ADDRCRXY
+#define TTI_ADDRCRXY(a0, a1, a2, a3, a4, a5) TT_ADDRCRXY(a0, a1, a2, a3, a4, a5)
+#undef TT_ADDRCRZW
+#define TT_ADDRCRZW(a0, a1, a2, a3, a4, a5) __builtin_rvtt_addrcrzw((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4), (unsigned)(a5))
+#undef TTI_ADDRCRZW
+#define TTI_ADDRCRZW(a0, a1, a2, a3, a4, a5) TT_ADDRCRZW(a0, a1, a2, a3, a4, a5)
+#undef TT_APOOL3S1
+#define TT_APOOL3S1(a0, a1, a2, a3) __builtin_rvtt_apool3s1((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_APOOL3S1
+#define TTI_APOOL3S1(a0, a1, a2, a3) TT_APOOL3S1(a0, a1, a2, a3)
+#undef TT_APOOL3S2
+#define TT_APOOL3S2(a0, a1, a2, a3) __builtin_rvtt_apool3s2((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_APOOL3S2
+#define TTI_APOOL3S2(a0, a1, a2, a3) TT_APOOL3S2(a0, a1, a2, a3)
+#undef TT_ATCAS
+#define TT_ATCAS(a0, a1, a2, a3, a4, a5) __builtin_rvtt_atcas((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4), (unsigned)(a5))
+#undef TTI_ATCAS
+#define TTI_ATCAS(a0, a1, a2, a3, a4, a5) TT_ATCAS(a0, a1, a2, a3, a4, a5)
+#undef TT_ATGETM
+#define TT_ATGETM(a0) __builtin_rvtt_atgetm((unsigned)(a0))
+#undef TTI_ATGETM
+#define TTI_ATGETM(a0) TT_ATGETM(a0)
+#undef TT_ATINCGET
+#define TT_ATINCGET(a0, a1, a2, a3, a4) __builtin_rvtt_atincget((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4))
+#undef TTI_ATINCGET
+#define TTI_ATINCGET(a0, a1, a2, a3, a4) TT_ATINCGET(a0, a1, a2, a3, a4)
+#undef TT_ATINCGETPTR
+#define TT_ATINCGETPTR(a0, a1, a2, a3, a4, a5, a6) __builtin_rvtt_atincgetptr((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4), (unsigned)(a5), (unsigned)(a6))
+#undef TTI_ATINCGETPTR
+#define TTI_ATINCGETPTR(a0, a1, a2, a3, a4, a5, a6) TT_ATINCGETPTR(a0, a1, a2, a3, a4, a5, a6)
+#undef TT_ATRELM
+#define TT_ATRELM(a0) __builtin_rvtt_atrelm((unsigned)(a0))
+#undef TTI_ATRELM
+#define TTI_ATRELM(a0) TT_ATRELM(a0)
+#undef TT_ATSWAP
+#define TT_ATSWAP(a0, a1, a2, a3) __builtin_rvtt_bh_atswap((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_ATSWAP
+#define TTI_ATSWAP(a0, a1, a2, a3) TT_ATSWAP(a0, a1, a2, a3)
+#undef TT_BITWOPDMAREG
+#define TT_BITWOPDMAREG(a0, a1, a2, a3, a4) __builtin_rvtt_bitwopdmareg((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4))
+#undef TTI_BITWOPDMAREG
+#define TTI_BITWOPDMAREG(a0, a1, a2, a3, a4) TT_BITWOPDMAREG(a0, a1, a2, a3, a4)
+#undef TT_CFGSHIFTMASK
+#define TT_CFGSHIFTMASK(a0, a1, a2, a3, a4, a5) __builtin_rvtt_bh_cfgshiftmask((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4), (unsigned)(a5))
+#undef TTI_CFGSHIFTMASK
+#define TTI_CFGSHIFTMASK(a0, a1, a2, a3, a4, a5) TT_CFGSHIFTMASK(a0, a1, a2, a3, a4, a5)
+#undef TT_CLEARDVALID
+#define TT_CLEARDVALID(a0, a1) __builtin_rvtt_cleardvalid((unsigned)(a0), (unsigned)(a1))
+#undef TTI_CLEARDVALID
+#define TTI_CLEARDVALID(a0, a1) TT_CLEARDVALID(a0, a1)
+#undef TT_CMPDMAREG
+#define TT_CMPDMAREG(a0, a1, a2, a3, a4) __builtin_rvtt_cmpdmareg((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4))
+#undef TTI_CMPDMAREG
+#define TTI_CMPDMAREG(a0, a1, a2, a3, a4) TT_CMPDMAREG(a0, a1, a2, a3, a4)
+#undef TT_CONV3S1
+#define TT_CONV3S1(a0, a1, a2, a3) __builtin_rvtt_bh_conv3s1((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_CONV3S1
+#define TTI_CONV3S1(a0, a1, a2, a3) TT_CONV3S1(a0, a1, a2, a3)
+#undef TT_CONV3S2
+#define TT_CONV3S2(a0, a1, a2, a3) __builtin_rvtt_bh_conv3s2((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_CONV3S2
+#define TTI_CONV3S2(a0, a1, a2, a3) TT_CONV3S2(a0, a1, a2, a3)
+#undef TT_DOTPV
+#define TT_DOTPV(a0, a1, a2, a3, a4) __builtin_rvtt_bh_dotpv((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4))
+#undef TTI_DOTPV
+#define TTI_DOTPV(a0, a1, a2, a3, a4) TT_DOTPV(a0, a1, a2, a3, a4)
+#undef TT_ELWADD
+#define TT_ELWADD(a0, a1, a2, a3, a4) __builtin_rvtt_bh_elwadd((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4))
+#undef TTI_ELWADD
+#define TTI_ELWADD(a0, a1, a2, a3, a4) TT_ELWADD(a0, a1, a2, a3, a4)
+#undef TT_ELWMUL
+#define TT_ELWMUL(a0, a1, a2, a3, a4) __builtin_rvtt_bh_elwmul((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4))
+#undef TTI_ELWMUL
+#define TTI_ELWMUL(a0, a1, a2, a3, a4) TT_ELWMUL(a0, a1, a2, a3, a4)
+#undef TT_ELWSUB
+#define TT_ELWSUB(a0, a1, a2, a3, a4) __builtin_rvtt_bh_elwsub((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4))
+#undef TTI_ELWSUB
+#define TTI_ELWSUB(a0, a1, a2, a3, a4) TT_ELWSUB(a0, a1, a2, a3, a4)
+#undef TT_FLUSHDMA
+#define TT_FLUSHDMA(a0) __builtin_rvtt_flushdma((unsigned)(a0))
+#undef TTI_FLUSHDMA
+#define TTI_FLUSHDMA(a0) TT_FLUSHDMA(a0)
+#undef TT_GAPOOL
+#define TT_GAPOOL(a0, a1, a2, a3, a4) __builtin_rvtt_gapool((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4))
+#undef TTI_GAPOOL
+#define TTI_GAPOOL(a0, a1, a2, a3, a4) TT_GAPOOL(a0, a1, a2, a3, a4)
+#undef TT_GATESRCRST
+#define TT_GATESRCRST(a0, a1) __builtin_rvtt_gatesrcrst((unsigned)(a0), (unsigned)(a1))
+#undef TTI_GATESRCRST
+#define TTI_GATESRCRST(a0, a1) TT_GATESRCRST(a0, a1)
+#undef TT_GMPOOL
+#define TT_GMPOOL(a0, a1, a2, a3, a4) __builtin_rvtt_gmpool((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4))
+#undef TTI_GMPOOL
+#define TTI_GMPOOL(a0, a1, a2, a3, a4) TT_GMPOOL(a0, a1, a2, a3, a4)
+#undef TT_INCADCXY
+#define TT_INCADCXY(a0, a1, a2, a3, a4) __builtin_rvtt_incadcxy((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4))
+#undef TTI_INCADCXY
+#define TTI_INCADCXY(a0, a1, a2, a3, a4) TT_INCADCXY(a0, a1, a2, a3, a4)
+#undef TT_INCADCZW
+#define TT_INCADCZW(a0, a1, a2, a3, a4) __builtin_rvtt_incadczw((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4))
+#undef TTI_INCADCZW
+#define TTI_INCADCZW(a0, a1, a2, a3, a4) TT_INCADCZW(a0, a1, a2, a3, a4)
+#undef TT_LOADIND
+#define TT_LOADIND(a0, a1, a2, a3, a4) __builtin_rvtt_loadind((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4))
+#undef TTI_LOADIND
+#define TTI_LOADIND(a0, a1, a2, a3, a4) TT_LOADIND(a0, a1, a2, a3, a4)
+#undef TT_LOADREG
+#define TT_LOADREG(a0, a1) __builtin_rvtt_loadreg((unsigned)(a0), (unsigned)(a1))
+#undef TTI_LOADREG
+#define TTI_LOADREG(a0, a1) TT_LOADREG(a0, a1)
+#undef TT_MFCONV3S1
+#define TT_MFCONV3S1(a0, a1, a2, a3) __builtin_rvtt_bh_mfconv3s1((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_MFCONV3S1
+#define TTI_MFCONV3S1(a0, a1, a2, a3) TT_MFCONV3S1(a0, a1, a2, a3)
+#undef TT_MOP
+#define TT_MOP(a0, a1, a2) __builtin_rvtt_bh_mop((unsigned)(a0), (unsigned)(a1), (unsigned)(a2))
+#undef TTI_MOP
+#define TTI_MOP(a0, a1, a2) TT_MOP(a0, a1, a2)
+#undef TT_MOVA2D
+#define TT_MOVA2D(a0, a1, a2, a3, a4) __builtin_rvtt_bh_mova2d((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4))
+#undef TTI_MOVA2D
+#define TTI_MOVA2D(a0, a1, a2, a3, a4) TT_MOVA2D(a0, a1, a2, a3, a4)
+#undef TT_MOVB2A
+#define TT_MOVB2A(a0, a1, a2, a3) __builtin_rvtt_bh_movb2a((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_MOVB2A
+#define TTI_MOVB2A(a0, a1, a2, a3) TT_MOVB2A(a0, a1, a2, a3)
+#undef TT_MOVB2D
+#define TT_MOVB2D(a0, a1, a2, a3, a4) __builtin_rvtt_bh_movb2d((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4))
+#undef TTI_MOVB2D
+#define TTI_MOVB2D(a0, a1, a2, a3, a4) TT_MOVB2D(a0, a1, a2, a3, a4)
+#undef TT_MOVD2A
+#define TT_MOVD2A(a0, a1, a2, a3, a4) __builtin_rvtt_bh_movd2a((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4))
+#undef TTI_MOVD2A
+#define TTI_MOVD2A(a0, a1, a2, a3, a4) TT_MOVD2A(a0, a1, a2, a3, a4)
+#undef TT_MOVD2B
+#define TT_MOVD2B(a0, a1, a2, a3, a4) __builtin_rvtt_bh_movd2b((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4))
+#undef TTI_MOVD2B
+#define TTI_MOVD2B(a0, a1, a2, a3, a4) TT_MOVD2B(a0, a1, a2, a3, a4)
+#undef TT_MOVDBGA2D
+#define TT_MOVDBGA2D(a0, a1, a2, a3, a4) __builtin_rvtt_bh_movdbga2d((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4))
+#undef TTI_MOVDBGA2D
+#define TTI_MOVDBGA2D(a0, a1, a2, a3, a4) TT_MOVDBGA2D(a0, a1, a2, a3, a4)
+#undef TT_MOVDBGB2D
+#define TT_MOVDBGB2D(a0, a1, a2, a3, a4) __builtin_rvtt_bh_movdbgb2d((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4))
+#undef TTI_MOVDBGB2D
+#define TTI_MOVDBGB2D(a0, a1, a2, a3, a4) TT_MOVDBGB2D(a0, a1, a2, a3, a4)
+#undef TT_MPOOL3S1
+#define TT_MPOOL3S1(a0, a1, a2, a3) __builtin_rvtt_mpool3s1((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_MPOOL3S1
+#define TTI_MPOOL3S1(a0, a1, a2, a3) TT_MPOOL3S1(a0, a1, a2, a3)
+#undef TT_MPOOL3S2
+#define TT_MPOOL3S2(a0, a1, a2, a3) __builtin_rvtt_mpool3s2((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_MPOOL3S2
+#define TTI_MPOOL3S2(a0, a1, a2, a3) TT_MPOOL3S2(a0, a1, a2, a3)
+#undef TT_MULDMAREG
+#define TT_MULDMAREG(a0, a1, a2, a3) __builtin_rvtt_muldmareg((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_MULDMAREG
+#define TTI_MULDMAREG(a0, a1, a2, a3) TT_MULDMAREG(a0, a1, a2, a3)
+#undef TT_MVMUL
+#define TT_MVMUL(a0, a1, a2, a3) __builtin_rvtt_bh_mvmul((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_MVMUL
+#define TTI_MVMUL(a0, a1, a2, a3) TT_MVMUL(a0, a1, a2, a3)
+#undef TT_RDCFG
+#define TT_RDCFG(a0, a1) __builtin_rvtt_rdcfg((unsigned)(a0), (unsigned)(a1))
+#undef TTI_RDCFG
+#define TTI_RDCFG(a0, a1) TT_RDCFG(a0, a1)
+#undef TT_REG2FLOP
+#define TT_REG2FLOP(a0, a1, a2, a3, a4, a5) __builtin_rvtt_reg2flop((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4), (unsigned)(a5))
+#undef TTI_REG2FLOP
+#define TTI_REG2FLOP(a0, a1, a2, a3, a4, a5) TT_REG2FLOP(a0, a1, a2, a3, a4, a5)
+#undef TT_RESOURCEDECL
+#define TT_RESOURCEDECL(a0, a1, a2) __builtin_rvtt_bh_resourcedecl((unsigned)(a0), (unsigned)(a1), (unsigned)(a2))
+#undef TTI_RESOURCEDECL
+#define TTI_RESOURCEDECL(a0, a1, a2) TT_RESOURCEDECL(a0, a1, a2)
+#undef TT_RMWCIB0
+#define TT_RMWCIB0(a0, a1, a2) __builtin_rvtt_rmwciB0((unsigned)(a0), (unsigned)(a1), (unsigned)(a2))
+#undef TTI_RMWCIB0
+#define TTI_RMWCIB0(a0, a1, a2) TT_RMWCIB0(a0, a1, a2)
+#undef TT_RMWCIB1
+#define TT_RMWCIB1(a0, a1, a2) __builtin_rvtt_rmwciB1((unsigned)(a0), (unsigned)(a1), (unsigned)(a2))
+#undef TTI_RMWCIB1
+#define TTI_RMWCIB1(a0, a1, a2) TT_RMWCIB1(a0, a1, a2)
+#undef TT_RMWCIB2
+#define TT_RMWCIB2(a0, a1, a2) __builtin_rvtt_rmwciB2((unsigned)(a0), (unsigned)(a1), (unsigned)(a2))
+#undef TTI_RMWCIB2
+#define TTI_RMWCIB2(a0, a1, a2) TT_RMWCIB2(a0, a1, a2)
+#undef TT_RMWCIB3
+#define TT_RMWCIB3(a0, a1, a2) __builtin_rvtt_rmwciB3((unsigned)(a0), (unsigned)(a1), (unsigned)(a2))
+#undef TTI_RMWCIB3
+#define TTI_RMWCIB3(a0, a1, a2) TT_RMWCIB3(a0, a1, a2)
+#undef TT_SEMGET
+#define TT_SEMGET(a0) __builtin_rvtt_bh_semget((unsigned)(a0))
+#undef TTI_SEMGET
+#define TTI_SEMGET(a0) TT_SEMGET(a0)
+#undef TT_SEMINIT
+#define TT_SEMINIT(a0, a1, a2) __builtin_rvtt_seminit((unsigned)(a0), (unsigned)(a1), (unsigned)(a2))
+#undef TTI_SEMINIT
+#define TTI_SEMINIT(a0, a1, a2) TT_SEMINIT(a0, a1, a2)
+#undef TT_SEMPOST
+#define TT_SEMPOST(a0) __builtin_rvtt_sempost((unsigned)(a0))
+#undef TTI_SEMPOST
+#define TTI_SEMPOST(a0) TT_SEMPOST(a0)
+#undef TT_SEMWAIT
+#define TT_SEMWAIT(a0, a1, a2) __builtin_rvtt_semwait((unsigned)(a0), (unsigned)(a1), (unsigned)(a2))
+#undef TTI_SEMWAIT
+#define TTI_SEMWAIT(a0, a1, a2) TT_SEMWAIT(a0, a1, a2)
+#undef TT_SETADC
+#define TT_SETADC(a0, a1, a2, a3) __builtin_rvtt_setadc((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_SETADC
+#define TTI_SETADC(a0, a1, a2, a3) TT_SETADC(a0, a1, a2, a3)
+#undef TT_SETADCXX
+#define TT_SETADCXX(a0, a1, a2) __builtin_rvtt_setadcxx((unsigned)(a0), (unsigned)(a1), (unsigned)(a2))
+#undef TTI_SETADCXX
+#define TTI_SETADCXX(a0, a1, a2) TT_SETADCXX(a0, a1, a2)
+#undef TT_SETADCXY
+#define TT_SETADCXY(a0, a1, a2, a3, a4, a5) __builtin_rvtt_setadcxy((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4), (unsigned)(a5))
+#undef TTI_SETADCXY
+#define TTI_SETADCXY(a0, a1, a2, a3, a4, a5) TT_SETADCXY(a0, a1, a2, a3, a4, a5)
+#undef TT_SETADCZW
+#define TT_SETADCZW(a0, a1, a2, a3, a4, a5) __builtin_rvtt_setadczw((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4), (unsigned)(a5))
+#undef TTI_SETADCZW
+#define TTI_SETADCZW(a0, a1, a2, a3, a4, a5) TT_SETADCZW(a0, a1, a2, a3, a4, a5)
+#undef TT_SETASHRMH
+#define TT_SETASHRMH(a0, a1) __builtin_rvtt_setashrmh((unsigned)(a0), (unsigned)(a1))
+#undef TTI_SETASHRMH
+#define TTI_SETASHRMH(a0, a1) TT_SETASHRMH(a0, a1)
+#undef TT_SETASHRMH0
+#define TT_SETASHRMH0(a0, a1) __builtin_rvtt_setashrmh0((unsigned)(a0), (unsigned)(a1))
+#undef TTI_SETASHRMH0
+#define TTI_SETASHRMH0(a0, a1) TT_SETASHRMH0(a0, a1)
+#undef TT_SETASHRMH1
+#define TT_SETASHRMH1(a0, a1) __builtin_rvtt_setashrmh1((unsigned)(a0), (unsigned)(a1))
+#undef TTI_SETASHRMH1
+#define TTI_SETASHRMH1(a0, a1) TT_SETASHRMH1(a0, a1)
+#undef TT_SETASHRMV
+#define TT_SETASHRMV(a0) __builtin_rvtt_setashrmv((unsigned)(a0))
+#undef TTI_SETASHRMV
+#define TTI_SETASHRMV(a0) TT_SETASHRMV(a0)
+#undef TT_SETC16
+#define TT_SETC16(a0, a1) __builtin_rvtt_bh_setc16((unsigned)(a0), (unsigned)(a1))
+#undef TTI_SETC16
+#define TTI_SETC16(a0, a1) TT_SETC16(a0, a1)
+#undef TT_SETDMAREG
+#define TT_SETDMAREG(a0, a1, a2, a3) __builtin_rvtt_setdmareg((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_SETDMAREG
+#define TTI_SETDMAREG(a0, a1, a2, a3) TT_SETDMAREG(a0, a1, a2, a3)
+#undef TT_SETDVALID
+#define TT_SETDVALID(a0) __builtin_rvtt_setdvalid((unsigned)(a0))
+#undef TTI_SETDVALID
+#define TTI_SETDVALID(a0) TT_SETDVALID(a0)
+#undef TT_SETIBRWC
+#define TT_SETIBRWC(a0, a1, a2) __builtin_rvtt_setibrwc((unsigned)(a0), (unsigned)(a1), (unsigned)(a2))
+#undef TTI_SETIBRWC
+#define TTI_SETIBRWC(a0, a1, a2) TT_SETIBRWC(a0, a1, a2)
+#undef TT_SETPKEDGOF
+#define TT_SETPKEDGOF(a0, a1, a2, a3) __builtin_rvtt_setpkedgof((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_SETPKEDGOF
+#define TTI_SETPKEDGOF(a0, a1, a2, a3) TT_SETPKEDGOF(a0, a1, a2, a3)
+#undef TT_SETRWC
+#define TT_SETRWC(a0, a1, a2, a3, a4, a5) __builtin_rvtt_setrwc((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4), (unsigned)(a5))
+#undef TTI_SETRWC
+#define TTI_SETRWC(a0, a1, a2, a3, a4, a5) TT_SETRWC(a0, a1, a2, a3, a4, a5)
+#undef TT_SFPABS
+#define TT_SFPABS(a0, a1, a2, a3) __builtin_rvtt_bh_sfpabs((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_SFPABS
+#define TTI_SFPABS(a0, a1, a2, a3) TT_SFPABS(a0, a1, a2, a3)
+#undef TT_SFPADD
+#define TT_SFPADD(a0, a1, a2, a3, a4) __builtin_rvtt_bh_sfpadd((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4))
+#undef TTI_SFPADD
+#define TTI_SFPADD(a0, a1, a2, a3, a4) TT_SFPADD(a0, a1, a2, a3, a4)
+#undef TT_SFPADDI
+#define TT_SFPADDI(a0, a1, a2) __builtin_rvtt_bh_sfpaddi((unsigned)(a0), (unsigned)(a1), (unsigned)(a2))
+#undef TTI_SFPADDI
+#define TTI_SFPADDI(a0, a1, a2) TT_SFPADDI(a0, a1, a2)
+#undef TT_SFPAND
+#define TT_SFPAND(a0, a1, a2, a3) __builtin_rvtt_bh_sfpand((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_SFPAND
+#define TTI_SFPAND(a0, a1, a2, a3) TT_SFPAND(a0, a1, a2, a3)
+#undef TT_SFPARECIP
+#define TT_SFPARECIP(a0, a1, a2, a3) __builtin_rvtt_bh_sfparecip((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_SFPARECIP
+#define TTI_SFPARECIP(a0, a1, a2, a3) TT_SFPARECIP(a0, a1, a2, a3)
+#undef TT_SFPCAST
+#define TT_SFPCAST(a0, a1, a2) __builtin_rvtt_bh_sfpcast((unsigned)(a0), (unsigned)(a1), (unsigned)(a2))
+#undef TTI_SFPCAST
+#define TTI_SFPCAST(a0, a1, a2) TT_SFPCAST(a0, a1, a2)
+#undef TT_SFPCOMPC
+#define TT_SFPCOMPC(a0, a1, a2, a3) __builtin_rvtt_bh_sfpcompc((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_SFPCOMPC
+#define TTI_SFPCOMPC(a0, a1, a2, a3) TT_SFPCOMPC(a0, a1, a2, a3)
+#undef TT_SFPCONFIG
+#define TT_SFPCONFIG(a0, a1, a2) __builtin_rvtt_bh_sfpconfig((unsigned)(a0), (unsigned)(a1), (unsigned)(a2))
+#undef TTI_SFPCONFIG
+#define TTI_SFPCONFIG(a0, a1, a2) TT_SFPCONFIG(a0, a1, a2)
+#undef TT_SFPDIVP2
+#define TT_SFPDIVP2(a0, a1, a2, a3) __builtin_rvtt_bh_sfpdivp2((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_SFPDIVP2
+#define TTI_SFPDIVP2(a0, a1, a2, a3) TT_SFPDIVP2(a0, a1, a2, a3)
+#undef TT_SFPENCC
+#define TT_SFPENCC(a0, a1, a2, a3) __builtin_rvtt_bh_sfpencc((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_SFPENCC
+#define TTI_SFPENCC(a0, a1, a2, a3) TT_SFPENCC(a0, a1, a2, a3)
+#undef TT_SFPEXEXP
+#define TT_SFPEXEXP(a0, a1, a2, a3) __builtin_rvtt_bh_sfpexexp((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_SFPEXEXP
+#define TTI_SFPEXEXP(a0, a1, a2, a3) TT_SFPEXEXP(a0, a1, a2, a3)
+#undef TT_SFPEXMAN
+#define TT_SFPEXMAN(a0, a1, a2, a3) __builtin_rvtt_bh_sfpexman((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_SFPEXMAN
+#define TTI_SFPEXMAN(a0, a1, a2, a3) TT_SFPEXMAN(a0, a1, a2, a3)
+#undef TT_SFPGT
+#define TT_SFPGT(a0, a1, a2, a3) __builtin_rvtt_bh_sfpgt((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_SFPGT
+#define TTI_SFPGT(a0, a1, a2, a3) TT_SFPGT(a0, a1, a2, a3)
+#undef TT_SFPIADD
+#define TT_SFPIADD(a0, a1, a2, a3) __builtin_rvtt_bh_sfpiadd((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_SFPIADD
+#define TTI_SFPIADD(a0, a1, a2, a3) TT_SFPIADD(a0, a1, a2, a3)
+#undef TT_SFPLE
+#define TT_SFPLE(a0, a1, a2, a3) __builtin_rvtt_bh_sfple((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_SFPLE
+#define TTI_SFPLE(a0, a1, a2, a3) TT_SFPLE(a0, a1, a2, a3)
+#undef TT_SFPLOAD
+#define TT_SFPLOAD(a0, a1, a2, a3) __builtin_rvtt_bh_sfpload((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_SFPLOAD
+#define TTI_SFPLOAD(a0, a1, a2, a3) TT_SFPLOAD(a0, a1, a2, a3)
+#undef TT_SFPLOADI
+#define TT_SFPLOADI(a0, a1, a2) __builtin_rvtt_bh_sfploadi((unsigned)(a0), (unsigned)(a1), (unsigned)(a2))
+#undef TTI_SFPLOADI
+#define TTI_SFPLOADI(a0, a1, a2) TT_SFPLOADI(a0, a1, a2)
+#undef TT_SFPLOADMACRO
+#define TT_SFPLOADMACRO(a0, a1, a2, a3) __builtin_rvtt_bh_sfploadmacro((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_SFPLOADMACRO
+#define TTI_SFPLOADMACRO(a0, a1, a2, a3) TT_SFPLOADMACRO(a0, a1, a2, a3)
+#undef TT_SFPLUT
+#define TT_SFPLUT(a0, a1, a2) __builtin_rvtt_bh_sfplut((unsigned)(a0), (unsigned)(a1), (unsigned)(a2))
+#undef TTI_SFPLUT
+#define TTI_SFPLUT(a0, a1, a2) TT_SFPLUT(a0, a1, a2)
+#undef TT_SFPLZ
+#define TT_SFPLZ(a0, a1, a2, a3) __builtin_rvtt_bh_sfplz((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_SFPLZ
+#define TTI_SFPLZ(a0, a1, a2, a3) TT_SFPLZ(a0, a1, a2, a3)
+#undef TT_SFPMAD
+#define TT_SFPMAD(a0, a1, a2, a3, a4) __builtin_rvtt_bh_sfpmad((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4))
+#undef TTI_SFPMAD
+#define TTI_SFPMAD(a0, a1, a2, a3, a4) TT_SFPMAD(a0, a1, a2, a3, a4)
+#undef TT_SFPMOV
+#define TT_SFPMOV(a0, a1, a2, a3) __builtin_rvtt_bh_sfpmov((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_SFPMOV
+#define TTI_SFPMOV(a0, a1, a2, a3) TT_SFPMOV(a0, a1, a2, a3)
+#undef TT_SFPMUL
+#define TT_SFPMUL(a0, a1, a2, a3, a4) __builtin_rvtt_bh_sfpmul((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4))
+#undef TTI_SFPMUL
+#define TTI_SFPMUL(a0, a1, a2, a3, a4) TT_SFPMUL(a0, a1, a2, a3, a4)
+#undef TT_SFPMUL24
+#define TT_SFPMUL24(a0, a1, a2, a3, a4) __builtin_rvtt_bh_sfpmul24((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4))
+#undef TTI_SFPMUL24
+#define TTI_SFPMUL24(a0, a1, a2, a3, a4) TT_SFPMUL24(a0, a1, a2, a3, a4)
+#undef TT_SFPMULI
+#define TT_SFPMULI(a0, a1, a2) __builtin_rvtt_bh_sfpmuli((unsigned)(a0), (unsigned)(a1), (unsigned)(a2))
+#undef TTI_SFPMULI
+#define TTI_SFPMULI(a0, a1, a2) TT_SFPMULI(a0, a1, a2)
+#undef TT_SFPNOT
+#define TT_SFPNOT(a0, a1, a2, a3) __builtin_rvtt_bh_sfpnot((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_SFPNOT
+#define TTI_SFPNOT(a0, a1, a2, a3) TT_SFPNOT(a0, a1, a2, a3)
+#undef TT_SFPOR
+#define TT_SFPOR(a0, a1, a2, a3) __builtin_rvtt_bh_sfpor((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_SFPOR
+#define TTI_SFPOR(a0, a1, a2, a3) TT_SFPOR(a0, a1, a2, a3)
+#undef TT_SFPPOPC
+#define TT_SFPPOPC(a0, a1, a2, a3) __builtin_rvtt_bh_sfppopc((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_SFPPOPC
+#define TTI_SFPPOPC(a0, a1, a2, a3) TT_SFPPOPC(a0, a1, a2, a3)
+#undef TT_SFPPUSHC
+#define TT_SFPPUSHC(a0, a1, a2, a3) __builtin_rvtt_bh_sfppushc((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_SFPPUSHC
+#define TTI_SFPPUSHC(a0, a1, a2, a3) TT_SFPPUSHC(a0, a1, a2, a3)
+#undef TT_SFPSETCC
+#define TT_SFPSETCC(a0, a1, a2, a3) __builtin_rvtt_bh_sfpsetcc((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_SFPSETCC
+#define TTI_SFPSETCC(a0, a1, a2, a3) TT_SFPSETCC(a0, a1, a2, a3)
+#undef TT_SFPSETEXP
+#define TT_SFPSETEXP(a0, a1, a2, a3) __builtin_rvtt_bh_sfpsetexp((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_SFPSETEXP
+#define TTI_SFPSETEXP(a0, a1, a2, a3) TT_SFPSETEXP(a0, a1, a2, a3)
+#undef TT_SFPSETSGN
+#define TT_SFPSETSGN(a0, a1, a2, a3) __builtin_rvtt_bh_sfpsetsgn((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_SFPSETSGN
+#define TTI_SFPSETSGN(a0, a1, a2, a3) TT_SFPSETSGN(a0, a1, a2, a3)
+#undef TT_SFPSHFT
+#define TT_SFPSHFT(a0, a1, a2, a3) __builtin_rvtt_bh_sfpshft((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_SFPSHFT
+#define TTI_SFPSHFT(a0, a1, a2, a3) TT_SFPSHFT(a0, a1, a2, a3)
+#undef TT_SFPSHFT2
+#define TT_SFPSHFT2(a0, a1, a2, a3) __builtin_rvtt_bh_sfpshft2((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_SFPSHFT2
+#define TTI_SFPSHFT2(a0, a1, a2, a3) TT_SFPSHFT2(a0, a1, a2, a3)
+#undef TT_SFPSTORE
+#define TT_SFPSTORE(a0, a1, a2, a3) __builtin_rvtt_bh_sfpstore((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_SFPSTORE
+#define TTI_SFPSTORE(a0, a1, a2, a3) TT_SFPSTORE(a0, a1, a2, a3)
+#undef TT_SFPSWAP
+#define TT_SFPSWAP(a0, a1, a2, a3) __builtin_rvtt_bh_sfpswap((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_SFPSWAP
+#define TTI_SFPSWAP(a0, a1, a2, a3) TT_SFPSWAP(a0, a1, a2, a3)
+#undef TT_SFPTRANSP
+#define TT_SFPTRANSP(a0, a1, a2, a3) __builtin_rvtt_bh_sfptransp((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_SFPTRANSP
+#define TTI_SFPTRANSP(a0, a1, a2, a3) TT_SFPTRANSP(a0, a1, a2, a3)
+#undef TT_SFPXOR
+#define TT_SFPXOR(a0, a1, a2, a3) __builtin_rvtt_bh_sfpxor((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_SFPXOR
+#define TTI_SFPXOR(a0, a1, a2, a3) TT_SFPXOR(a0, a1, a2, a3)
+#undef TT_SHIFTDMAREG
+#define TT_SHIFTDMAREG(a0, a1, a2, a3, a4) __builtin_rvtt_shiftdmareg((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4))
+#undef TTI_SHIFTDMAREG
+#define TTI_SHIFTDMAREG(a0, a1, a2, a3, a4) TT_SHIFTDMAREG(a0, a1, a2, a3, a4)
+#undef TT_SHIFTXA
+#define TT_SHIFTXA(a0, a1) __builtin_rvtt_shiftxa((unsigned)(a0), (unsigned)(a1))
+#undef TTI_SHIFTXA
+#define TTI_SHIFTXA(a0, a1) TT_SHIFTXA(a0, a1)
+#undef TT_SHIFTXB
+#define TT_SHIFTXB(a0, a1, a2) __builtin_rvtt_bh_shiftxb((unsigned)(a0), (unsigned)(a1), (unsigned)(a2))
+#undef TTI_SHIFTXB
+#define TTI_SHIFTXB(a0, a1, a2) TT_SHIFTXB(a0, a1, a2)
+#undef TT_STALLWAIT
+#define TT_STALLWAIT(a0, a1) __builtin_rvtt_stallwait((unsigned)(a0), (unsigned)(a1))
+#undef TTI_STALLWAIT
+#define TTI_STALLWAIT(a0, a1) TT_STALLWAIT(a0, a1)
+#undef TT_STOREIND
+#define TT_STOREIND(a0, a1, a2, a3, a4, a5, a6) __builtin_rvtt_storeind((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4), (unsigned)(a5), (unsigned)(a6))
+#undef TTI_STOREIND
+#define TTI_STOREIND(a0, a1, a2, a3, a4, a5, a6) TT_STOREIND(a0, a1, a2, a3, a4, a5, a6)
+#undef TT_STOREREG
+#define TT_STOREREG(a0, a1) __builtin_rvtt_storereg((unsigned)(a0), (unsigned)(a1))
+#undef TTI_STOREREG
+#define TTI_STOREREG(a0, a1) TT_STOREREG(a0, a1)
+#undef TT_STREAMWAIT
+#define TT_STREAMWAIT(a0, a1, a2, a3) __builtin_rvtt_streamwait((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_STREAMWAIT
+#define TTI_STREAMWAIT(a0, a1, a2, a3) TT_STREAMWAIT(a0, a1, a2, a3)
+#undef TT_STREAMWRCFG
+#define TT_STREAMWRCFG(a0, a1, a2) __builtin_rvtt_streamwrcfg((unsigned)(a0), (unsigned)(a1), (unsigned)(a2))
+#undef TTI_STREAMWRCFG
+#define TTI_STREAMWRCFG(a0, a1, a2) TT_STREAMWRCFG(a0, a1, a2)
+#undef TT_SUBDMAREG
+#define TT_SUBDMAREG(a0, a1, a2, a3) __builtin_rvtt_subdmareg((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_SUBDMAREG
+#define TTI_SUBDMAREG(a0, a1, a2, a3) TT_SUBDMAREG(a0, a1, a2, a3)
+#undef TT_UNPACR_NOP
+#define TT_UNPACR_NOP(a0, a1, a2, a3, a4, a5, a6, a7, a8) __builtin_rvtt_bh_unpacr_nop((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4), (unsigned)(a5), (unsigned)(a6), (unsigned)(a7), (unsigned)(a8))
+#undef TTI_UNPACR_NOP
+#define TTI_UNPACR_NOP(a0, a1, a2, a3, a4, a5, a6, a7, a8) TT_UNPACR_NOP(a0, a1, a2, a3, a4, a5, a6, a7, a8)
+#undef TT_WRCFG
+#define TT_WRCFG(a0, a1, a2) __builtin_rvtt_wrcfg((unsigned)(a0), (unsigned)(a1), (unsigned)(a2))
+#undef TTI_WRCFG
+#define TTI_WRCFG(a0, a1, a2) TT_WRCFG(a0, a1, a2)
+#undef TT_XMOV
+#define TT_XMOV(a0, a1) __builtin_rvtt_xmov((unsigned)(a0), (unsigned)(a1))
+#undef TTI_XMOV
+#define TTI_XMOV(a0, a1) TT_XMOV(a0, a1)
+#undef TT_ZEROACC
+#define TT_ZEROACC(a0, a1, a2, a3, a4) __builtin_rvtt_bh_zeroacc((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4))
+#undef TTI_ZEROACC
+#define TTI_ZEROACC(a0, a1, a2, a3, a4) TT_ZEROACC(a0, a1, a2, a3, a4)
+#undef TT_ZEROSRC
+#define TT_ZEROSRC(a0, a1, a2, a3) __builtin_rvtt_bh_zerosrc((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#undef TTI_ZEROSRC
+#define TTI_ZEROSRC(a0, a1, a2, a3) TT_ZEROSRC(a0, a1, a2, a3)
+
+#endif // __riscv_xtttensixbh

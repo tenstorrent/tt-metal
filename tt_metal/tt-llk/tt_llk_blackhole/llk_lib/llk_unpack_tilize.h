@@ -250,11 +250,11 @@ inline void _llk_unpack_tilize_(
         // Get tile address
         if (0 == unp_cfg_context)
         {
-            cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address;
+            cfg_store(cfg, THCON_SEC0_REG3_Base_address_ADDR32, address);
         }
         else
         {
-            cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address;
+            cfg_store(cfg, THCON_SEC0_REG3_Base_cntx1_address_ADDR32, address);
         }
 
         // Trisc::SEMPOST for context acquire

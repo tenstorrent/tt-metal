@@ -191,7 +191,7 @@ inline void unpack_tilize_to_dest_impl(
 
     LLK_ASSERT(is_valid_L1_address(address), "L1 address must be in valid L1 memory region");
     // Get tile address
-    cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address;
+    cfg_store(cfg, THCON_SEC0_REG3_Base_address_ADDR32, address);
 
     // Stall unpacker until pending CFG writes from Trisc have completed
     TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);

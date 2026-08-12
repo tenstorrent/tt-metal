@@ -326,13 +326,13 @@ inline void _llk_unpack_configure_addresses_(const std::uint32_t address_a, cons
     // Program srcA and srcB base addresses
     if (0 == unp_cfg_context)
     {
-        cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_a;
-        cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_b;
+        cfg_store(cfg, THCON_SEC0_REG3_Base_address_ADDR32, address_a);
+        cfg_store(cfg, THCON_SEC1_REG3_Base_address_ADDR32, address_b);
     }
     else
     {
-        cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address_a;
-        cfg[THCON_SEC1_REG3_Base_cntx1_address_ADDR32] = address_b;
+        cfg_store(cfg, THCON_SEC0_REG3_Base_cntx1_address_ADDR32, address_a);
+        cfg_store(cfg, THCON_SEC1_REG3_Base_cntx1_address_ADDR32, address_b);
     }
 }
 
@@ -352,10 +352,10 @@ inline void _llk_unpack_configure_single_address_(const std::uint32_t address, v
     // Program srcA base address
     if (0 == unp_cfg_context)
     {
-        cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address;
+        cfg_store(cfg, THCON_SEC0_REG3_Base_address_ADDR32, address);
     }
     else
     {
-        cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address;
+        cfg_store(cfg, THCON_SEC0_REG3_Base_cntx1_address_ADDR32, address);
     }
 }
