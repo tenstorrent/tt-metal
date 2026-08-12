@@ -339,22 +339,26 @@ static uint64_t get_pcie_base_cached(uint32_t device_id) {
 extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
     emule_require_self(__func__);
 
-    // Host-facing (PCIe) address: SimulationSysmemManager's device_io_addr space starts at
-    // pcie_base_ and shares the same 64-bit range as a real on-chip NOC address, so this branch
-    // must run FIRST, before any noc_x/noc_y/local_addr decomposition below.
+    // Host-facing (PCIe) address: SimulationSysmemManager's device_io_addr space shares the 64-bit
+    // range with on-chip NOC addresses, and pcie_base_ alone cannot separate them — on Wormhole it
+    // is 0x8'0000'0000, below the bit-36 coordinate field, so every on-chip address clears it.
+    // Membership in the mapped-buffer registry is the discriminator; the threshold is a pre-filter.
     uint32_t device_id = __emule_self->chip_id;
     if (noc_addr >= get_pcie_base_cached(device_id)) {
         auto* sw_emu = get_sw_emulated_chip(static_cast<tt::ChipId>(device_id));
         auto* sysmem = sw_emu ? static_cast<tt::umd::SimulationSysmemManager*>(sw_emu->get_sysmem_manager()) : nullptr;
         // A host-facing address (>= pcie_base) is by construction on an emule chip that has a
         // SimulationSysmemManager, so a null manager is a contract violation, not a resolvable miss.
-        // (A buffer miss still returns nullptr below — callers like noc_semaphore_set_remote rely on it.)
         TT_FATAL(
             sysmem != nullptr,
             "emule: host-facing NOC address 0x{:x} on chip {} has no SimulationSysmemManager.",
             noc_addr,
             device_id);
-        return static_cast<uint8_t*>(sysmem->get_mapped_host_ptr(noc_addr));
+        if (auto* host_ptr = static_cast<uint8_t*>(sysmem->get_mapped_host_ptr(noc_addr))) {
+            return host_ptr;
+        }
+        // Registry miss — fall through and decode as on-chip. A genuine host-facing miss finds no
+        // core either and still returns nullptr, which callers like noc_semaphore_set_remote need.
     }
 
     uint32_t noc_x = (noc_addr >> NOC_LOCAL_BITS) & NOC_NODE_MASK;
