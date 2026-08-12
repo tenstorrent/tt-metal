@@ -592,6 +592,17 @@ FORCE_INLINE void send_next_data(
         };
     }
     internal_::eth_send_packet_bytes_unsafe(sender_txq_id, src_addr, dest_addr, payload_size_bytes);
+    {  // FABRIC LOSS COUNTER: handed to the eth TXQ hardware.
+        volatile tt_l1_ptr uint32_t* dbg = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(458256 + MY_ERISC_ID * 44);
+        dbg[6]++;
+        if (pkt_header->noc_send_type == tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC) {
+            uint32_t semlo =
+                (uint32_t)(pkt_header->command_fields.unicast_seminc_fused.semaphore_noc_address & 0xFFFFFFFF);
+            if (semlo == 213440) {
+                dbg[8]++;
+            }
+        }
+    }
 
     // Note: We can only advance to the next buffer index if we have fully completed the send (both the payload and sync
     // messages)
@@ -608,6 +619,10 @@ FORCE_INLINE void send_next_data(
     while (internal_::eth_txq_is_busy(sender_txq_id)) {
     };
     remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(1U);
+    {  // FABRIC LOSS COUNTER: arrival signals sent (separate eth txn from the data)
+        volatile tt_l1_ptr uint32_t* dbg = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(458256 + MY_ERISC_ID * 44);
+        dbg[9]++;
+    }
 }
 
 /////////////////////////////////////////////
@@ -1682,12 +1697,25 @@ FORCE_INLINE
         did_something = true;
         progress = true;
         {  // FABRIC LOSS COUNTER: packet pushed onto the link
-            volatile tt_l1_ptr uint32_t* dbg = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(458256);
+            volatile tt_l1_ptr uint32_t* dbg =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(458256 + MY_ERISC_ID * 44);
             dbg[0]++;
         }
 
         auto* pkt_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
             local_sender_channel.get_cached_next_buffer_slot_addr());
+        {  // FABRIC LOSS COUNTER: classify what we are about to push onto the link,
+            // so sender R3 count is directly comparable with receiver fused_r3.
+            volatile tt_l1_ptr uint32_t* dbg =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(458256 + MY_ERISC_ID * 44);
+            if (pkt_header->noc_send_type == tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC) {
+                uint32_t semlo =
+                    (uint32_t)(pkt_header->command_fields.unicast_seminc_fused.semaphore_noc_address & 0xFFFFFFFF);
+                if (semlo == 213440) {
+                    dbg[5]++;  // +20 R3 fused-inc packets pushed onto the link
+                }
+            }
+        }
         if constexpr (!UPDATE_PKT_HDR_ON_RX_CH) {
             update_packet_header_before_eth_send<sender_channel_index>(pkt_header);
         }
@@ -1815,6 +1843,11 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     bool progress = false;
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
     auto pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_id>();
+    {  // FABRIC LOSS COUNTER: pending arrivals seen by the receiver. Non-zero at a
+        // hang means the packet ARRIVED and was never processed (not a link drop).
+        volatile tt_l1_ptr uint32_t* dbg = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(458256 + MY_ERISC_ID * 44);
+        dbg[10] = (uint32_t)pkts_received_since_last_check;
+    }
 
     bool unwritten_packets;
     if constexpr (enable_first_level_ack) {
@@ -1829,7 +1862,8 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
             increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
             {  // FABRIC LOSS COUNTER: packet consumed from the ethernet link
-                volatile tt_l1_ptr uint32_t* dbg = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(458256);
+                volatile tt_l1_ptr uint32_t* dbg =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(458256 + MY_ERISC_ID * 44);
                 dbg[1]++;
             }
 
@@ -2193,9 +2227,9 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     size_t did_nothing_count = 0;
     {  // FABRIC LOSS COUNTERS: zero the scratch once per boot (magic-word guarded),
         // so counts are cumulative across the run rather than starting from L1 garbage.
-        volatile tt_l1_ptr uint32_t* dbg = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(458256);
+        volatile tt_l1_ptr uint32_t* dbg = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(458256 + MY_ERISC_ID * 44);
         if (dbg[7] != 0x00C0FFEE) {
-            for (uint32_t i = 0; i < 8; ++i) {
+            for (uint32_t i = 0; i < 11; ++i) {
                 dbg[i] = 0;
             }
             dbg[7] = 0x00C0FFEE;

@@ -5,7 +5,6 @@
 #pragma once
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/dprint.h"
 
 #include "internal/tt-1xx/risc_common.h"
 #include "internal/ethernet/dataflow_api.h"
@@ -290,18 +289,6 @@ struct WorkerToFabricEdmSenderBase {
         invalidate_l1_cache();
         if constexpr (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
             auto used_slots = this->buffer_slot_write_counter.counter - *this->edm_buffer_local_free_slots_read_ptr;
-            // CREDIT PROBE: only when we are actually out of slots, and rate-limited so a
-            // stuck core reports occasionally while healthy cores stay silent.
-            if (used_slots >= this->num_buffers_per_channel) {
-                static uint32_t credit_stall_ticks = 0;
-                if ((++credit_stall_ticks & 0xFFFFF) == 0) {
-                    DPRINT(
-                        "CREDIT written={} freed={} nbuf={}\n",
-                        (uint32_t)this->buffer_slot_write_counter.counter,
-                        (uint32_t)*this->edm_buffer_local_free_slots_read_ptr,
-                        (uint32_t)this->num_buffers_per_channel);
-                }
-            }
             return used_slots >= this->num_buffers_per_channel ? 0 : this->num_buffers_per_channel - used_slots;
         } else {
             return get_ptr_val(worker_credits_stream_id);

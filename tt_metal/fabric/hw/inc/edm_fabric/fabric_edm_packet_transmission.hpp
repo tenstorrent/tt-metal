@@ -130,6 +130,20 @@ FORCE_INLINE void shift_to_next_chunk(uint8_t& chunk_encodings) { chunk_encoding
 // Core implementation of unicast-to-local-chip dispatch.
 // Accepts pre-resolved payload_size_bytes and noc_send_type to avoid redundant uncached L1 reads
 // when the caller has already loaded these (e.g. via a packed 4B load).
+
+// RX DISPATCH CASE COUNTERS (diagnostic): tally each executed send type per ERISC.
+FORCE_INLINE void rx_case_count(uint32_t case_idx, uint32_t send_type_raw) {
+    volatile tt_l1_ptr uint32_t* blk = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(458360 + MY_ERISC_ID * 32);
+    if (blk[0] != 0xCA5ECAFE) {
+        for (int i = 1; i < 8; i++) {
+            blk[i] = 0;
+        }
+        blk[0] = 0xCA5ECAFE;
+    }
+    blk[case_idx]++;
+    blk[7] = send_type_raw;
+}
+
 __attribute__((optimize("jump-tables")))
 #ifndef FABRIC_2D
 FORCE_INLINE
@@ -148,10 +162,18 @@ FORCE_INLINE
 
     channel_trimming_usage_recorder.set_noc_send_type_used(rx_channel_id, noc_send_type);
     if (noc_send_type > tt::tt_fabric::NocSendType::NOC_SEND_TYPE_LAST) {
-        __builtin_unreachable();
+        // RX HEADER SENTINEL (diagnostic): upstream declares this unreachable, which
+        // lets the optimiser drop the bounds check and dispatch straight through the
+        // jump table. A garbled noc_send_type then performs NO command and never
+        // retires the packet -- head-of-line blocking. Spin so triage names it and
+        // the offending header stays in L1.
+        while (true) {
+            asm volatile("nop");
+        }
     }
     switch (noc_send_type) {
         case tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE: {
+            rx_case_count(1, (uint32_t)noc_send_type);
             const auto dest_address = header.command_fields.unicast_write.noc_address;
             noc_async_write_one_packet_with_trid<update_counter, false>(
                 payload_start_address,
@@ -164,6 +186,7 @@ FORCE_INLINE
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC: {
+            rx_case_count(3, (uint32_t)noc_send_type);
             const uint64_t dest_address = header.command_fields.unicast_seminc.noc_address;
             const auto increment = header.command_fields.unicast_seminc.val;
             if (header.command_fields.unicast_seminc.flush) {
@@ -178,6 +201,7 @@ FORCE_INLINE
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_UNICAST_INLINE_WRITE: {
+            rx_case_count(2, (uint32_t)noc_send_type);
             const auto dest_address = header.command_fields.unicast_inline_write.noc_address;
             const auto value = header.command_fields.unicast_inline_write.value;
             noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(
@@ -189,6 +213,16 @@ FORCE_INLINE
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC: {
+            rx_case_count(4, (uint32_t)noc_send_type);
+            // SLOT-REUSE PROBE: snapshot the sem addr (volatile, so it is a distinct
+            // load from the one used for the inc) before anything else touches the slot.
+            const uint64_t dbg_sem_before = [&]() {
+                volatile tt_l1_ptr uint32_t* hs = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                    reinterpret_cast<uint32_t>(&header.command_fields.unicast_seminc_fused.semaphore_noc_address));
+                const uint32_t lo = hs[0];
+                const uint32_t hi = hs[1];
+                return ((uint64_t)hi << 32) | lo;
+            }();
             const auto dest_address = header.command_fields.unicast_seminc_fused.noc_address;
             noc_async_write_one_packet_with_trid<update_counter, false>(
                 payload_start_address,
@@ -201,14 +235,12 @@ FORCE_INLINE
 
             // FABRIC LOSS COUNTERS (diagnostic): tally locally-executed fused incs.
             {
-                volatile tt_l1_ptr uint32_t* dbg = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(458256);
+                volatile tt_l1_ptr uint32_t* dbg =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(458256 + MY_ERISC_ID * 44);
                 dbg[2]++;  // +72 total fused incs executed
                 uint32_t semlo =
                     (uint32_t)(header.command_fields.unicast_seminc_fused.semaphore_noc_address & 0xFFFFFFFF);
                 dbg[4] = semlo;  // +80 last sem addr
-                if (semlo == 213440) {
-                    dbg[3]++;  // +76 R3 sem specifically
-                }
             }
             const uint64_t semaphore_dest_address = header.command_fields.unicast_seminc_fused.semaphore_noc_address;
             const auto increment = header.command_fields.unicast_seminc_fused.val;
@@ -229,9 +261,27 @@ FORCE_INLINE
                 increment,
                 tt::tt_fabric::edm_to_local_chip_noc,
                 tt::tt_fabric::forward_and_local_write_noc_vc);
+            {  // SLOT-REUSE PROBE: re-read the slot after the inc. A change means the
+                // sender refilled this slot while we were still executing its packet.
+                invalidate_l1_cache();
+                volatile tt_l1_ptr uint32_t* hdr_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                    reinterpret_cast<uint32_t>(&header.command_fields.unicast_seminc_fused.semaphore_noc_address));
+                const uint32_t after_lo = hdr_sem[0];
+                const uint32_t after_hi = hdr_sem[1];
+                const uint64_t dbg_sem_after = ((uint64_t)after_hi << 32) | after_lo;
+                if (dbg_sem_before != semaphore_dest_address || semaphore_dest_address != dbg_sem_after) {
+                    volatile tt_l1_ptr uint32_t* dbg =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(458256 + MY_ERISC_ID * 44);
+                    dbg[3]++;
+                    dbg[8] = (uint32_t)(dbg_sem_before & 0xFFFFFFFF);
+                    dbg[9] = (uint32_t)(semaphore_dest_address & 0xFFFFFFFF);
+                    dbg[10] = (uint32_t)(dbg_sem_after & 0xFFFFFFFF);
+                }
+            }
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_UNICAST_SCATTER_WRITE: {
+            rx_case_count(5, (uint32_t)noc_send_type);
             using ChunkEncoding = tt::tt_fabric::NocScatterWriteChunkEncoding;
             const auto& scatter = header.command_fields.unicast_scatter_write;
             const uint8_t chunk_count = scatter.chunk_count;
