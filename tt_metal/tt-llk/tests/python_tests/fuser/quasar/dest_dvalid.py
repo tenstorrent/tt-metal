@@ -80,10 +80,9 @@ def enable(config: "GlobalConfig", operation: "L1Operation", thread: str) -> str
             continue
 
         index = order.index(client)
-        next_client = order[(index + 1) % len(order)]
         code += (
             f"_llk_dest_dvalid_enable_<dest_dvalid_client::{client}, "
-            f"dest_dvalid_client::{next_client}, {'true' if index == 0 else 'false'}>();\n"
+            f"{'true' if index == 0 else 'false'}>();\n"
         )
 
     return code
@@ -108,10 +107,17 @@ def signal(
         return ""
     if client not in clients_of(operation.math, thread):
         return ""
-    if client not in chain(operation.math):
+
+    order = chain(operation.math)
+    if client not in order:
         return ""
 
-    params = f"dest_dvalid_client::{client}, {operation.dest_sync.cpp_enum_value}"
+    next_client = order[(order.index(client) + 1) % len(order)]
+
+    params = (
+        f"dest_dvalid_client::{client}, dest_dvalid_client::{next_client}, "
+        f"{operation.dest_sync.cpp_enum_value}"
+    )
     if client == PACK:
         params += f", {config.dest_acc.cpp_enum_value}"
 
