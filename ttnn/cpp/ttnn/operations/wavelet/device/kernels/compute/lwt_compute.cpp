@@ -49,9 +49,13 @@ constexpr uint32_t kDstSource3 = 6;
 constexpr uint32_t kPackBase0 = 0;
 constexpr uint32_t kPackBase1 = 1;
 constexpr uint32_t kPackBase2 = 2;
-constexpr uint32_t kDstScale = 0;
+constexpr uint32_t kScaleTileCount = 3;
 constexpr bool kInlineTerminalScale = LWT_INLINE_TERMINAL_SCALE != 0;
 constexpr bool kInlineInverseScale = ILWT_INLINE_INVERSE_SCALE != 0;
+
+static_assert(
+    kDstBase2 < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x16>(),
+    "1D scale path exceeds the available FP32 narrow-tile destination capacity");
 
 #if defined(TRISC_MATH) || defined(LWT_SCHEME_HEADER)
 #define WAVELET_1D_STEP_ATTRIBUTES inline
@@ -254,22 +258,26 @@ inline void run_scale_step(
     CircularBuffer input_buffer(cb_input);
     CircularBuffer output_buffer(cb_output);
     for (uint32_t group = 0; group < output_group_count; ++group) {
-        input_buffer.wait_front(3);
-        output_buffer.reserve_back(3);
+        input_buffer.wait_front(kScaleTileCount);
+        output_buffer.reserve_back(kScaleTileCount);
 
-        for (uint32_t tile = 0; tile < 3; ++tile) {
-            tile_regs_acquire();
-            copy_tile_to_dst_init_short(cb_input);
-            copy_narrow_tile(cb_input, tile, kDstScale);
-            scale_narrow_tile(kDstScale, scalar_packed);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(kDstScale, cb_output, tile);
-            tile_regs_release();
-        }
+        tile_regs_acquire();
+        copy_tile_to_dst_init_short(cb_input);
+        copy_narrow_tile(cb_input, 0, kDstBase0);
+        copy_narrow_tile(cb_input, 1, kDstBase1);
+        copy_narrow_tile(cb_input, 2, kDstBase2);
+        scale_narrow_tile(kDstBase0, scalar_packed);
+        scale_narrow_tile(kDstBase1, scalar_packed);
+        scale_narrow_tile(kDstBase2, scalar_packed);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(kPackBase0, cb_output, 0);
+        pack_tile(kPackBase1, cb_output, 1);
+        pack_tile(kPackBase2, cb_output, 2);
+        tile_regs_release();
 
-        input_buffer.pop_front(3);
-        output_buffer.push_back(3);
+        input_buffer.pop_front(kScaleTileCount);
+        output_buffer.push_back(kScaleTileCount);
     }
 }
 
