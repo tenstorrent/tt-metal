@@ -155,7 +155,40 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
     // Min free_slots since the last transmitted packet. Reset on every TX (see fabric_dbg_inc_tx_pkt_count),
     // so after traffic stops it isolates the barrier window, where only the sync packet can ring the
     // doorbell. Reads no L1 -> immune to the cache staleness that broke the header-gated version.
-    fabric_dbg_track_min_free_since_tx(free_slots);
+    // [SELF-LOOPBACK PROBE] Read this core's OWN free-slots register back through the NOC and latch it
+    // beside the local read (word[25]) taken in this same iteration. See fabric_dbg_latch_loopback().
+    //
+    // Rate limiting matters here: this sits in the router's hot path, and a NOC read plus barrier on
+    // every iteration would both wreck throughput and perturb the timing we are trying to observe. It is
+    // therefore gated on a long run of consecutive EMPTY reads -- any packet at all resets the streak, so
+    // it cannot fire during normal traffic, only once the channel has been idle far longer than any gap
+    // in the 100M-packet stream. It then re-samples periodically so we can see whether the value ever
+    // changes while wedged.
+    {
+        static uint32_t empty_streak = 0;
+        static uint32_t loopback_samples = 0;
+        if (free_slots == WorkerInterfaceT::num_buffers) {
+            empty_streak++;
+            constexpr uint32_t LOOPBACK_FIRST = 1u << 20;
+            constexpr uint32_t LOOPBACK_PERIOD_MASK = (1u << 18) - 1;
+            if (empty_streak >= LOOPBACK_FIRST && (empty_streak & LOOPBACK_PERIOD_MASK) == 0) {
+                // Destination must be real L1. A `static` here lands in ERISC local data memory
+                // (observed at 0xFFB014E0), which is not NOC-addressable -- the watcher rejects it as
+                // "Local L1 address overflow". The debug slot itself is L1 (the host reads it over NOC),
+                // so land the value directly in word[23], then repack it locally with the sample count.
+                const uint64_t self_addr = get_noc_addr(static_cast<uint32_t>(STREAM_REG_ADDR(
+                    sender_channel_free_slots_stream_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX)));
+                noc_async_read(self_addr, MEM_AERISC_SYNC_MIN_FREE_ADDR, sizeof(uint32_t));
+                noc_async_read_barrier();
+                invalidate_l1_cache();
+                const uint32_t loopback_val = *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_SYNC_MIN_FREE_ADDR);
+                loopback_samples++;
+                fabric_dbg_latch_loopback(loopback_val, loopback_samples);
+            }
+        } else {
+            empty_streak = 0;
+        }
+    }
 #endif
 
     if (can_send) {
