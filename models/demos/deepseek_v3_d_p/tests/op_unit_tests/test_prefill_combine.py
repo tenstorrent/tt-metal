@@ -353,7 +353,7 @@ SINGLE_GLX_AND_PROXY_MESHES = _Test_Mesh(
         # Ideally all would run torus XY, but some HW configurations like LB/QB cannot support
         # rings in all configurations. Pick fabric option as representative as possible.
         (8, 4): ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
-        (8, 1): ttnn.FabricConfig.FABRIC_2D,  # unexpetedly FABRIC_2D_TORUS_Y hangs on LB
+        (8, 1): ttnn.FabricConfig.FABRIC_1D_RING,  # unexpectedly FABRIC_2D variants hang
         (4, 2): ttnn.FabricConfig.FABRIC_2D,
         (4, 1): ttnn.FabricConfig.FABRIC_1D_RING,  # unexpectedly FABRIC_2D variants hang
         (2, 2): ttnn.FabricConfig.FABRIC_2D,
