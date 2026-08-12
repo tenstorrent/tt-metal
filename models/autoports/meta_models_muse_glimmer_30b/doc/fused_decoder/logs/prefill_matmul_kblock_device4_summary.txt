@@ -1,0 +1,24 @@
+# models/autoports/meta_models_muse_glimmer_30b/doc/fused_decoder/tracy/probes/kblock_device4_ops.csv.gz
+# 390 'MinimalMatmul' rows in 80 groups
+=== rows=8192 attn_gate  default median 1866.5 us (96 rows) ===
+    M8_K4_N8                      1885.6 us   -1.02 %
+    M8_K6_N8                      1886.7 us   -1.07 %
+    M8_K8_N8                      1866.6 us   -0.01 %
+    M8_K10_N8                     1932.3 us   -3.40 %
+    M8_K12_N8                     1958.0 us   -4.67 %
+    M8_K13_N8                     1924.6 us   -3.02 %
+    M8_K16_N8                     1947.0 us   -4.14 %
+    M16_K4_N8                     1925.0 us   -3.04 %
+    M8_K4_N16                     1916.3 us   -2.60 %
+    M8_K6_N16                     1921.0 us   -2.84 %
+=== rows=4096 attn_gate  default median 1070.4 us (96 rows) ===
+    M8_K4_N8                      1185.6 us   -9.72 %
+    M8_K6_N8                      1172.9 us   -8.74 %
+    M8_K8_N8                      1175.2 us   -8.92 %
+    M8_K10_N8                     1215.0 us  -11.90 %
+    M8_K12_N8                     1235.4 us  -13.36 %
+    M8_K13_N8                     1212.4 us  -11.72 %
+    M8_K16_N8                     1220.3 us  -12.29 %
+    M16_K4_N8                     1276.8 us  -16.17 %
+    M8_K4_N16                     1084.1 us   -1.27 %
+    M8_K6_N16                     1089.0 us   -1.71 %

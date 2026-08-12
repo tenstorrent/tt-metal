@@ -1,0 +1,1508 @@
+2026-08-12 01:23:27.535 | INFO     | __main__:main:412 - Using port 8086
+2026-08-12 01:23:27.535 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-08-12 01:23:27.555 | INFO     | tracy:run_report_setup:112 - Capture command: ('/home/ttuser/dev/muse-glimmer/tt-metal/build/tools/profiler/bin/tracy-capture -o /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy -f -p 8086',)
+Connecting to 127.0.0.1:8086...2026-08-12 01:23:27.560 | INFO     | __main__:main:430 - Test process started
+2026-08-12 01:23:28.479 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.12, pytest-9.0.3, pluggy-1.6.0 -- /home/ttuser/dev/muse-glimmer/muse-glimmer_pyenv/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/ttuser/dev/muse-glimmer/tt-metal
+configfile: pytest.ini
+plugins: split-0.11.0, anyio-4.14.2, cov-7.0.0, dash-2.15.0, repeat-0.9.4, timeout-2.4.0, github-actions-annotate-failures-0.3.0, benchmark-5.2.3
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_prefill[8192-sliding] 2026-08-12 01:23:30.649 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-12 01:23:30.649 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-12 01:23:30.649 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-12 01:23:30.649 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-12 01:23:30.661 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-12 01:23:30.661 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-12 01:23:30.739 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-12 01:23:30.739 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-12 01:23:30.739 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-12 01:23:30.739 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-12 01:23:30.740 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-12 01:23:30.968 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-12 01:23:31.087 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-12 01:23:31.087 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-12 01:23:31.087 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-12 01:23:31.087 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-12 01:23:31.087 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-12 01:23:31.133 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-12 01:23:31.139 | info     |           Metal | Profiler started on device 3 (profiler_initializer.cpp:49)
+2026-08-12 01:23:34.972 | INFO     | tracy:signpost:49 - PERF_PREFILL
+2026-08-12 01:23:35.034 | INFO     | tracy:signpost:49 - PERF_PREFILL_END
+2026-08-12 01:23:35.035 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_perf_prefill:1168 - fused prefill perf window done: kind=sliding seq_len=8192 shape=(1, 1, 8192, 6656)
+PASSED2026-08-12 01:23:35.374 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:23:35.375 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:23:35.375 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:23:35.376 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:23:35.376 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:23:35.377 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:23:35.377 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:23:35.378 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:23:35.565 | info     |           Metal | Device kernel duration perf summary (device=3): count=94, min=866ns, avg=1759260.5ns, max=8808459ns (profiler_analysis.cpp:726)
+2026-08-12 01:23:35.565 | info     |           Metal | Device kernel duration perf histogram (device=3): (buckets=10, bucket_size=880800ns, range=[0..8808000), underflow(<0ns)=0, overflow(>=8808000ns)=1) (profiler_analysis.cpp:769)
+2026-08-12 01:23:35.565 | info     |           Metal |   [           0 ..       880800) |########################################|       55 (profiler_analysis.cpp:774)
+2026-08-12 01:23:35.565 | info     |           Metal |   [      880800 ..      1761600) |#########                               |       12 (profiler_analysis.cpp:774)
+2026-08-12 01:23:35.565 | info     |           Metal |   [     1761600 ..      2642400) |#########                               |       12 (profiler_analysis.cpp:774)
+2026-08-12 01:23:35.565 | info     |           Metal |   [     2642400 ..      3523200) |##                                      |        3 (profiler_analysis.cpp:774)
+2026-08-12 01:23:35.565 | info     |           Metal |   [     3523200 ..      4404000) |                                        |        0 (profiler_analysis.cpp:774)
+2026-08-12 01:23:35.565 | info     |           Metal |   [     4404000 ..      5284800) |                                        |        0 (profiler_analysis.cpp:774)
+2026-08-12 01:23:35.565 | info     |           Metal |   [     5284800 ..      6165600) |                                        |        0 (profiler_analysis.cpp:774)
+2026-08-12 01:23:35.565 | info     |           Metal |   [     6165600 ..      7046400) |                                        |        0 (profiler_analysis.cpp:774)
+2026-08-12 01:23:35.565 | info     |           Metal |   [     7046400 ..      7927200) |##                                      |        3 (profiler_analysis.cpp:774)
+2026-08-12 01:23:35.565 | info     |           Metal |   [     7927200 ..      8808000) |######                                  |        8 (profiler_analysis.cpp:774)
+
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+../muse-glimmer_pyenv/lib/python3.12/site-packages/pydantic/_internal/_config.py:291
+  /home/ttuser/dev/muse-glimmer/muse-glimmer_pyenv/lib/python3.12/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/ttuser/dev/muse-glimmer/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+3.05s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_prefill[8192-sliding]
+1.33s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_prefill[8192-sliding]
+0.71s teardown models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_prefill[8192-sliding]
+=========================== short test summary info ============================
+PASSED models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_prefill[8192-sliding]
+======================== 1 passed, 3 warnings in 6.07s =========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+nanobind: leaked 7 instances!
+ - leaked instance 0x7b01112e7468 of type "ttnn._ttnn.types.CoreGrid"
+ - leaked instance 0x7b014c0950d8 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x7b01112e6bf8 of type "ttnn._ttnn.tensor.CoreCoord"
+ - leaked instance 0x7b0146f61458 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x7b013233f8e8 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x7b01112e7678 of type "ttnn._ttnn.types.CoreGrid"
+ - leaked instance 0x7b014c094ef8 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+nanobind: leaked 28 types!
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.multi_device.MeshMapperConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - ... skipped remainder
+nanobind: leaked 297 functions!
+ - leaked function ""
+ - leaked function "devices"
+ - leaked function "__init__"
+ - leaked function "reset_sub_device_stall_group"
+ - leaked function "__init__"
+ - leaked function ""
+ - leaked function "volume"
+ - leaked function "deallocate"
+ - leaked function ""
+ - leaked function "dram_grid_size"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-12 01:23:37.395 | info     |    BuildKernels | JIT cache stats: 187/187 hits (100.0%) [187 cached, 29 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-12 01:23:37.395 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-12 01:23:37.409 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-12 01:23:37.409 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-12 01:23:37.849 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-12 01:23:37.849 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-12 01:23:37.849 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)
+
+Timer resolution: 0 ns
+
+Frames: 2
+Time span: 9.59 s
+Zones: 184,492
+Elapsed time: 9.41 s
+Saving trace... done!
+Trace size 1679.92 KB (18.14% ratio)
+2026-08-12 01:23:37.987 | INFO     | __main__:main:469 - Copying /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/ttuser/dev/muse-glimmer/tt-metal/build/profiler/build_wasm/traces/test_fused_decoder_2026_08_12_01_23_37.tracy
+2026-08-12 01:23:37.988 | INFO     | __main__:main:472 - Copied /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/ttuser/dev/muse-glimmer/tt-metal/build/profiler/build_wasm/traces/test_fused_decoder_2026_08_12_01_23_37.tracy
+2026-08-12 01:23:37.988 | INFO     | __main__:main:481 - embed.tracy -> traces/test_fused_decoder_2026_08_12_01_23_37.tracy
+2026-08-12 01:23:37.988 | INFO     | tracy.serve_wasm:launch_server_subprocess:284 - Launching tracy web app GUI server subprocess...
+2026-08-12 01:23:37.988 | INFO     | tracy.serve_wasm:launch_server_subprocess:287 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-08-12 01:23:37.988 | INFO     | tracy.serve_wasm:launch_server_subprocess:294 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
+2026-08-12 01:23:38.060 | INFO     | tracy:generate_report:162 - Host side ops time report generated at /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_ops_times.csv
+2026-08-12 01:23:38.065 | INFO     | tracy:generate_report:173 - Host side ops data report generated at /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_ops_data.csv
+2026-08-12 01:23:38.065 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:422 - Importing ops logs
+/home/ttuser/dev/muse-glimmer/tt-metal/tools/tracy/process_ops_logs.py:527: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(tracyOpTimesLog)
+2026-08-12 01:23:38.250 | INFO     | tracy.perf_counter_analysis:get_device_op_data:2140 - Getting device ops
+2026-08-12 01:23:38.250 | INFO     | tracy.process_ops_logs:append_device_data:1086 - Appending device data
+2026-08-12 01:23:38.447 | INFO     | tracy.process_ops_logs:generate_reports:1419 - OPs' perf analysis is finished! Generating reports ...
+2026-08-12 01:23:38.447 | INFO     | tracy.process_ops_logs:generate_reports:1439 - Copying runtime artifacts
+2026-08-12 01:23:38.455 | INFO     | tracy.process_ops_logs:generate_reports:1448 - Generating OPs CSV
+2026-08-12 01:23:38.479 | INFO     | tracy.process_ops_logs:generate_reports:1904 - OPs csv generated at: /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/reports/2026_08_12_01_23_38/ops_perf_results_2026_08_12_01_23_38.csv
+2026-08-12 01:23:40.147 | INFO     | __main__:main:412 - Using port 8086
+2026-08-12 01:23:40.147 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-08-12 01:23:40.154 | INFO     | tracy:run_report_setup:112 - Capture command: ('/home/ttuser/dev/muse-glimmer/tt-metal/build/tools/profiler/bin/tracy-capture -o /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy -f -p 8086',)
+Connecting to 127.0.0.1:8086...2026-08-12 01:23:40.159 | INFO     | __main__:main:430 - Test process started
+2026-08-12 01:23:41.082 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.12, pytest-9.0.3, pluggy-1.6.0 -- /home/ttuser/dev/muse-glimmer/muse-glimmer_pyenv/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/ttuser/dev/muse-glimmer/tt-metal
+configfile: pytest.ini
+plugins: split-0.11.0, anyio-4.14.2, cov-7.0.0, dash-2.15.0, repeat-0.9.4, timeout-2.4.0, github-actions-annotate-failures-0.3.0, benchmark-5.2.3
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_prefill[16384-sliding] 2026-08-12 01:23:43.271 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-12 01:23:43.271 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-12 01:23:43.271 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-12 01:23:43.271 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-12 01:23:43.283 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-12 01:23:43.283 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-12 01:23:43.361 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-12 01:23:43.361 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-12 01:23:43.361 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-12 01:23:43.361 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-12 01:23:43.362 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-12 01:23:43.569 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-12 01:23:43.684 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-12 01:23:43.684 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-12 01:23:43.684 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-12 01:23:43.684 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-12 01:23:43.684 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-12 01:23:43.729 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-12 01:23:43.736 | info     |           Metal | Profiler started on device 3 (profiler_initializer.cpp:49)
+2026-08-12 01:23:48.046 | INFO     | tracy:signpost:49 - PERF_PREFILL
+2026-08-12 01:23:48.189 | INFO     | tracy:signpost:49 - PERF_PREFILL_END
+2026-08-12 01:23:48.189 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_perf_prefill:1168 - fused prefill perf window done: kind=sliding seq_len=16384 shape=(1, 1, 16384, 6656)
+PASSED2026-08-12 01:23:48.562 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:23:48.562 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:23:48.563 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:23:48.563 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:23:48.564 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:23:48.564 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:23:48.565 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:23:48.565 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:23:48.800 | info     |           Metal | Device kernel duration perf summary (device=3): count=205, min=857ns, avg=1621119.5ns, max=11290377ns (profiler_analysis.cpp:726)
+2026-08-12 01:23:48.800 | info     |           Metal | Device kernel duration perf histogram (device=3): (buckets=10, bucket_size=1129000ns, range=[0..11290000), underflow(<0ns)=0, overflow(>=11290000ns)=1) (profiler_analysis.cpp:769)
+2026-08-12 01:23:48.800 | info     |           Metal |   [           0 ..      1129000) |########################################|      151 (profiler_analysis.cpp:774)
+2026-08-12 01:23:48.800 | info     |           Metal |   [     1129000 ..      2258000) |######                                  |       21 (profiler_analysis.cpp:774)
+2026-08-12 01:23:48.800 | info     |           Metal |   [     2258000 ..      3387000) |##                                      |        9 (profiler_analysis.cpp:774)
+2026-08-12 01:23:48.800 | info     |           Metal |   [     3387000 ..      4516000) |                                        |        0 (profiler_analysis.cpp:774)
+2026-08-12 01:23:48.800 | info     |           Metal |   [     4516000 ..      5645000) |                                        |        0 (profiler_analysis.cpp:774)
+2026-08-12 01:23:48.800 | info     |           Metal |   [     5645000 ..      6774000) |                                        |        0 (profiler_analysis.cpp:774)
+2026-08-12 01:23:48.800 | info     |           Metal |   [     6774000 ..      7903000) |#                                       |        3 (profiler_analysis.cpp:774)
+2026-08-12 01:23:48.800 | info     |           Metal |   [     7903000 ..      9032000) |#####                                   |       18 (profiler_analysis.cpp:774)
+2026-08-12 01:23:48.800 | info     |           Metal |   [     9032000 ..     10161000) |                                        |        0 (profiler_analysis.cpp:774)
+2026-08-12 01:23:48.800 | info     |           Metal |   [    10161000 ..     11290000) |#                                       |        2 (profiler_analysis.cpp:774)
+
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+../muse-glimmer_pyenv/lib/python3.12/site-packages/pydantic/_internal/_config.py:291
+  /home/ttuser/dev/muse-glimmer/muse-glimmer_pyenv/lib/python3.12/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/ttuser/dev/muse-glimmer/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+3.60s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_prefill[16384-sliding]
+1.31s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_prefill[16384-sliding]
+0.88s teardown models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_prefill[16384-sliding]
+=========================== short test summary info ============================
+PASSED models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_prefill[16384-sliding]
+======================== 1 passed, 3 warnings in 6.78s =========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+nanobind: leaked 7 instances!
+ - leaked instance 0x71568b8fb8e8 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x7156837e7078 of type "ttnn._ttnn.types.CoreGrid"
+ - leaked instance 0x7156be54d088 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x7156837e7258 of type "ttnn._ttnn.tensor.CoreCoord"
+ - leaked instance 0x7156837e7288 of type "ttnn._ttnn.types.CoreGrid"
+ - leaked instance 0x7156b04cd578 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x7156be54cea8 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+nanobind: leaked 28 types!
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.multi_device.MeshMapperConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - ... skipped remainder
+nanobind: leaked 297 functions!
+ - leaked function "grid_size"
+ - leaked function "__ne__"
+ - leaked function "from_json"
+ - leaked function "to_json"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "id"
+ - leaked function "__hash__"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-12 01:23:50.770 | info     |    BuildKernels | JIT cache stats: 197/197 hits (100.0%) [197 cached, 52 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-12 01:23:50.770 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-12 01:23:50.783 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-12 01:23:50.783 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-12 01:23:51.251 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-12 01:23:51.251 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-12 01:23:51.251 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)
+
+Timer resolution: 0 ns
+
+Frames: 2
+Time span: 10.42 s
+Zones: 355,187
+Elapsed time: 10.21 s
+Saving trace... done!
+Trace size 3263.68 KB (18.38% ratio)
+2026-08-12 01:23:51.405 | INFO     | __main__:main:469 - Copying /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/ttuser/dev/muse-glimmer/tt-metal/build/profiler/build_wasm/traces/test_fused_decoder_2026_08_12_01_23_51.tracy
+2026-08-12 01:23:51.406 | INFO     | __main__:main:472 - Copied /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/ttuser/dev/muse-glimmer/tt-metal/build/profiler/build_wasm/traces/test_fused_decoder_2026_08_12_01_23_51.tracy
+2026-08-12 01:23:51.406 | INFO     | __main__:main:481 - embed.tracy -> traces/test_fused_decoder_2026_08_12_01_23_51.tracy
+2026-08-12 01:23:51.406 | INFO     | tracy.serve_wasm:launch_server_subprocess:284 - Launching tracy web app GUI server subprocess...
+2026-08-12 01:23:51.406 | INFO     | tracy.serve_wasm:launch_server_subprocess:287 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-08-12 01:23:51.406 | INFO     | tracy.serve_wasm:launch_server_subprocess:294 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
+2026-08-12 01:23:51.546 | INFO     | tracy:generate_report:162 - Host side ops time report generated at /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_ops_times.csv
+2026-08-12 01:23:51.554 | INFO     | tracy:generate_report:173 - Host side ops data report generated at /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_ops_data.csv
+2026-08-12 01:23:51.554 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:422 - Importing ops logs
+/home/ttuser/dev/muse-glimmer/tt-metal/tools/tracy/process_ops_logs.py:527: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(tracyOpTimesLog)
+2026-08-12 01:23:51.916 | INFO     | tracy.perf_counter_analysis:get_device_op_data:2140 - Getting device ops
+2026-08-12 01:23:51.917 | INFO     | tracy.process_ops_logs:append_device_data:1086 - Appending device data
+2026-08-12 01:23:52.290 | INFO     | tracy.process_ops_logs:generate_reports:1419 - OPs' perf analysis is finished! Generating reports ...
+2026-08-12 01:23:52.290 | INFO     | tracy.process_ops_logs:generate_reports:1439 - Copying runtime artifacts
+2026-08-12 01:23:52.303 | INFO     | tracy.process_ops_logs:generate_reports:1448 - Generating OPs CSV
+2026-08-12 01:23:52.356 | INFO     | tracy.process_ops_logs:generate_reports:1904 - OPs csv generated at: /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/reports/2026_08_12_01_23_52/ops_perf_results_2026_08_12_01_23_52.csv
+2026-08-12 01:23:54.030 | INFO     | __main__:main:412 - Using port 8086
+2026-08-12 01:23:54.030 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-08-12 01:23:54.044 | INFO     | tracy:run_report_setup:112 - Capture command: ('/home/ttuser/dev/muse-glimmer/tt-metal/build/tools/profiler/bin/tracy-capture -o /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy -f -p 8086',)
+Connecting to 127.0.0.1:8086...2026-08-12 01:23:54.049 | INFO     | __main__:main:430 - Test process started
+2026-08-12 01:23:54.973 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.12, pytest-9.0.3, pluggy-1.6.0 -- /home/ttuser/dev/muse-glimmer/muse-glimmer_pyenv/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/ttuser/dev/muse-glimmer/tt-metal
+configfile: pytest.ini
+plugins: split-0.11.0, anyio-4.14.2, cov-7.0.0, dash-2.15.0, repeat-0.9.4, timeout-2.4.0, github-actions-annotate-failures-0.3.0, benchmark-5.2.3
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_decode_traced[2048-sliding] 2026-08-12 01:23:57.165 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-12 01:23:57.165 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-12 01:23:57.165 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-12 01:23:57.165 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-12 01:23:57.177 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-12 01:23:57.177 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-12 01:23:57.255 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-12 01:23:57.255 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-12 01:23:57.255 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-12 01:23:57.255 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-12 01:23:57.256 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-12 01:23:57.471 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-12 01:23:57.592 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-12 01:23:57.592 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-12 01:23:57.592 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-12 01:23:57.592 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-12 01:23:57.592 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-12 01:23:57.636 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-12 01:23:57.642 | info     |           Metal | Profiler started on device 3 (profiler_initializer.cpp:49)
+2026-08-12 01:24:01.339 | INFO     | tracy:signpost:49 - PERF_DECODE
+2026-08-12 01:24:01.361 | INFO     | tracy:signpost:49 - PERF_DECODE_END
+2026-08-12 01:24:01.361 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_perf_decode_traced:1206 - fused decode perf window done: kind=sliding context=2048 iters=8 shape=(1, 1, 1, 6656)
+PASSED2026-08-12 01:24:01.745 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:24:01.746 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:24:01.746 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:24:01.747 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:24:01.747 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:24:01.748 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:24:01.748 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:24:01.749 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:24:01.981 | info     |           Metal | Device kernel duration perf summary (device=3): count=618, min=479ns, avg=105194.7ns, max=2678151ns (profiler_analysis.cpp:726)
+2026-08-12 01:24:01.981 | info     |           Metal | Device kernel duration perf histogram (device=3): (buckets=10, bucket_size=267800ns, range=[0..2678000), underflow(<0ns)=0, overflow(>=2678000ns)=1) (profiler_analysis.cpp:769)
+2026-08-12 01:24:01.981 | info     |           Metal |   [           0 ..       267800) |########################################|      559 (profiler_analysis.cpp:774)
+2026-08-12 01:24:01.981 | info     |           Metal |   [      267800 ..       535600) |                                        |        3 (profiler_analysis.cpp:774)
+2026-08-12 01:24:01.981 | info     |           Metal |   [      535600 ..       803400) |###                                     |       46 (profiler_analysis.cpp:774)
+2026-08-12 01:24:01.981 | info     |           Metal |   [      803400 ..      1071200) |                                        |        1 (profiler_analysis.cpp:774)
+2026-08-12 01:24:01.981 | info     |           Metal |   [     1071200 ..      1339000) |                                        |        0 (profiler_analysis.cpp:774)
+2026-08-12 01:24:01.981 | info     |           Metal |   [     1339000 ..      1606800) |                                        |        0 (profiler_analysis.cpp:774)
+2026-08-12 01:24:01.981 | info     |           Metal |   [     1606800 ..      1874600) |                                        |        3 (profiler_analysis.cpp:774)
+2026-08-12 01:24:01.981 | info     |           Metal |   [     1874600 ..      2142400) |                                        |        0 (profiler_analysis.cpp:774)
+2026-08-12 01:24:01.981 | info     |           Metal |   [     2142400 ..      2410200) |                                        |        0 (profiler_analysis.cpp:774)
+2026-08-12 01:24:01.981 | info     |           Metal |   [     2410200 ..      2678000) |                                        |        5 (profiler_analysis.cpp:774)
+
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+../muse-glimmer_pyenv/lib/python3.12/site-packages/pydantic/_internal/_config.py:291
+  /home/ttuser/dev/muse-glimmer/muse-glimmer_pyenv/lib/python3.12/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/ttuser/dev/muse-glimmer/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+2.87s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_decode_traced[2048-sliding]
+1.33s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_decode_traced[2048-sliding]
+0.94s teardown models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_decode_traced[2048-sliding]
+=========================== short test summary info ============================
+PASSED models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_decode_traced[2048-sliding]
+======================== 1 passed, 3 warnings in 6.12s =========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+nanobind: leaked 7 instances!
+ - leaked instance 0x79cc50321088 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x79cc1a6eb558 of type "ttnn._ttnn.types.CoreGrid"
+ - leaked instance 0x79cc1a6eaf58 of type "ttnn._ttnn.types.CoreGrid"
+ - leaked instance 0x79cc1a6eb318 of type "ttnn._ttnn.tensor.CoreCoord"
+ - leaked instance 0x79cc226a78e8 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x79cc482c9398 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x79cc50320ea8 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+nanobind: leaked 28 types!
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.multi_device.MeshMapperConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - ... skipped remainder
+nanobind: leaked 297 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "__init__"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "to_json"
+ - leaked function "__repr__"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-12 01:24:04.012 | info     |    BuildKernels | JIT cache stats: 275/275 hits (100.0%) [275 cached, 54 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-12 01:24:04.012 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-12 01:24:04.027 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-12 01:24:04.027 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-12 01:24:04.453 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-12 01:24:04.453 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-12 01:24:04.453 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)
+
+Timer resolution: 0 ns
+
+Frames: 2
+Time span: 9.71 s
+Zones: 411,329
+Elapsed time: 9.51 s
+Saving trace... done!
+Trace size 3687.09 KB (17.90% ratio)
+2026-08-12 01:24:04.599 | INFO     | __main__:main:469 - Copying /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/ttuser/dev/muse-glimmer/tt-metal/build/profiler/build_wasm/traces/test_fused_decoder_2026_08_12_01_24_04.tracy
+2026-08-12 01:24:04.600 | INFO     | __main__:main:472 - Copied /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/ttuser/dev/muse-glimmer/tt-metal/build/profiler/build_wasm/traces/test_fused_decoder_2026_08_12_01_24_04.tracy
+2026-08-12 01:24:04.600 | INFO     | __main__:main:481 - embed.tracy -> traces/test_fused_decoder_2026_08_12_01_24_04.tracy
+2026-08-12 01:24:04.600 | INFO     | tracy.serve_wasm:launch_server_subprocess:284 - Launching tracy web app GUI server subprocess...
+2026-08-12 01:24:04.600 | INFO     | tracy.serve_wasm:launch_server_subprocess:287 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-08-12 01:24:04.600 | INFO     | tracy.serve_wasm:launch_server_subprocess:294 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
+2026-08-12 01:24:04.754 | INFO     | tracy:generate_report:162 - Host side ops time report generated at /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_ops_times.csv
+2026-08-12 01:24:04.763 | INFO     | tracy:generate_report:173 - Host side ops data report generated at /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_ops_data.csv
+2026-08-12 01:24:04.763 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:422 - Importing ops logs
+/home/ttuser/dev/muse-glimmer/tt-metal/tools/tracy/process_ops_logs.py:527: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(tracyOpTimesLog)
+2026-08-12 01:24:05.179 | INFO     | tracy.perf_counter_analysis:get_device_op_data:2140 - Getting device ops
+2026-08-12 01:24:05.180 | INFO     | tracy.process_ops_logs:append_device_data:1086 - Appending device data
+2026-08-12 01:24:05.638 | INFO     | tracy.process_ops_logs:generate_reports:1419 - OPs' perf analysis is finished! Generating reports ...
+2026-08-12 01:24:05.639 | INFO     | tracy.process_ops_logs:generate_reports:1439 - Copying runtime artifacts
+2026-08-12 01:24:05.653 | INFO     | tracy.process_ops_logs:generate_reports:1448 - Generating OPs CSV
+2026-08-12 01:24:05.819 | INFO     | tracy.process_ops_logs:generate_reports:1904 - OPs csv generated at: /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/reports/2026_08_12_01_24_05/ops_perf_results_2026_08_12_01_24_05.csv
+2026-08-12 01:24:07.538 | INFO     | __main__:main:412 - Using port 8086
+2026-08-12 01:24:07.538 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-08-12 01:24:07.551 | INFO     | tracy:run_report_setup:112 - Capture command: ('/home/ttuser/dev/muse-glimmer/tt-metal/build/tools/profiler/bin/tracy-capture -o /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy -f -p 8086',)
+Connecting to 127.0.0.1:8086...2026-08-12 01:24:07.556 | INFO     | __main__:main:430 - Test process started
+2026-08-12 01:24:08.474 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.12, pytest-9.0.3, pluggy-1.6.0 -- /home/ttuser/dev/muse-glimmer/muse-glimmer_pyenv/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/ttuser/dev/muse-glimmer/tt-metal
+configfile: pytest.ini
+plugins: split-0.11.0, anyio-4.14.2, cov-7.0.0, dash-2.15.0, repeat-0.9.4, timeout-2.4.0, github-actions-annotate-failures-0.3.0, benchmark-5.2.3
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_decode_traced[131071-sliding] 2026-08-12 01:24:10.651 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-12 01:24:10.651 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-12 01:24:10.652 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-12 01:24:10.652 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-12 01:24:10.663 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-12 01:24:10.664 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-12 01:24:10.741 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-12 01:24:10.741 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-12 01:24:10.741 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-12 01:24:10.741 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-12 01:24:10.743 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-12 01:24:10.972 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-12 01:24:11.090 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-12 01:24:11.090 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-12 01:24:11.090 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-12 01:24:11.091 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-12 01:24:11.091 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-12 01:24:11.134 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-12 01:24:11.140 | info     |           Metal | Profiler started on device 3 (profiler_initializer.cpp:49)
+2026-08-12 01:24:14.978 | INFO     | tracy:signpost:49 - PERF_DECODE
+2026-08-12 01:24:15.000 | INFO     | tracy:signpost:49 - PERF_DECODE_END
+2026-08-12 01:24:15.000 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_perf_decode_traced:1206 - fused decode perf window done: kind=sliding context=131071 iters=8 shape=(1, 1, 1, 6656)
+PASSED2026-08-12 01:24:15.403 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:24:15.404 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:24:15.404 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:24:15.405 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:24:15.405 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:24:15.406 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:24:15.406 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:24:15.407 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:24:15.639 | info     |           Metal | Device kernel duration perf summary (device=3): count=618, min=483ns, avg=109538.3ns, max=2690045ns (profiler_analysis.cpp:726)
+2026-08-12 01:24:15.639 | info     |           Metal | Device kernel duration perf histogram (device=3): (buckets=10, bucket_size=269000ns, range=[0..2690000), underflow(<0ns)=0, overflow(>=2690000ns)=1) (profiler_analysis.cpp:769)
+2026-08-12 01:24:15.639 | info     |           Metal |   [           0 ..       269000) |########################################|      553 (profiler_analysis.cpp:774)
+2026-08-12 01:24:15.639 | info     |           Metal |   [      269000 ..       538000) |#                                       |        7 (profiler_analysis.cpp:774)
+2026-08-12 01:24:15.639 | info     |           Metal |   [      538000 ..       807000) |###                                     |       48 (profiler_analysis.cpp:774)
+2026-08-12 01:24:15.639 | info     |           Metal |   [      807000 ..      1076000) |                                        |        1 (profiler_analysis.cpp:774)
+2026-08-12 01:24:15.639 | info     |           Metal |   [     1076000 ..      1345000) |                                        |        0 (profiler_analysis.cpp:774)
+2026-08-12 01:24:15.639 | info     |           Metal |   [     1345000 ..      1614000) |                                        |        0 (profiler_analysis.cpp:774)
+2026-08-12 01:24:15.639 | info     |           Metal |   [     1614000 ..      1883000) |                                        |        3 (profiler_analysis.cpp:774)
+2026-08-12 01:24:15.639 | info     |           Metal |   [     1883000 ..      2152000) |                                        |        0 (profiler_analysis.cpp:774)
+2026-08-12 01:24:15.639 | info     |           Metal |   [     2152000 ..      2421000) |                                        |        0 (profiler_analysis.cpp:774)
+2026-08-12 01:24:15.639 | info     |           Metal |   [     2421000 ..      2690000) |                                        |        5 (profiler_analysis.cpp:774)
+
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+../muse-glimmer_pyenv/lib/python3.12/site-packages/pydantic/_internal/_config.py:291
+  /home/ttuser/dev/muse-glimmer/muse-glimmer_pyenv/lib/python3.12/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/ttuser/dev/muse-glimmer/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+3.01s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_decode_traced[131071-sliding]
+1.34s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_decode_traced[131071-sliding]
+0.96s teardown models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_decode_traced[131071-sliding]
+=========================== short test summary info ============================
+PASSED models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_decode_traced[131071-sliding]
+======================== 1 passed, 3 warnings in 6.29s =========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+nanobind: leaked 7 instances!
+ - leaked instance 0x766430adf6d8 of type "ttnn._ttnn.tensor.CoreCoord"
+ - leaked instance 0x766451b4f8e8 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x76646b8d8ea8 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x766430adf588 of type "ttnn._ttnn.types.CoreGrid"
+ - leaked instance 0x76646b8d9088 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x766430adf5e8 of type "ttnn._ttnn.types.CoreGrid"
+ - leaked instance 0x766466789638 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 28 types!
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.multi_device.MeshMapperConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - ... skipped remainder
+nanobind: leaked 297 functions!
+ - leaked function "__repr__"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "from_json"
+ - leaked function ""
+ - leaked function "num_program_cache_entries"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-12 01:24:17.681 | info     |    BuildKernels | JIT cache stats: 275/275 hits (100.0%) [275 cached, 54 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-12 01:24:17.681 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-12 01:24:17.696 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-12 01:24:17.696 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-12 01:24:18.154 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-12 01:24:18.154 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-12 01:24:18.154 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)
+
+Timer resolution: 0 ns
+
+Frames: 2
+Time span: 9.91 s
+Zones: 411,811
+Elapsed time: 9.71 s
+Saving trace... done!
+Trace size 3696.06 KB (17.92% ratio)
+2026-08-12 01:24:18.294 | INFO     | __main__:main:469 - Copying /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/ttuser/dev/muse-glimmer/tt-metal/build/profiler/build_wasm/traces/test_fused_decoder_2026_08_12_01_24_18.tracy
+2026-08-12 01:24:18.295 | INFO     | __main__:main:472 - Copied /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/ttuser/dev/muse-glimmer/tt-metal/build/profiler/build_wasm/traces/test_fused_decoder_2026_08_12_01_24_18.tracy
+2026-08-12 01:24:18.295 | INFO     | __main__:main:481 - embed.tracy -> traces/test_fused_decoder_2026_08_12_01_24_18.tracy
+2026-08-12 01:24:18.295 | INFO     | tracy.serve_wasm:launch_server_subprocess:284 - Launching tracy web app GUI server subprocess...
+2026-08-12 01:24:18.295 | INFO     | tracy.serve_wasm:launch_server_subprocess:287 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-08-12 01:24:18.295 | INFO     | tracy.serve_wasm:launch_server_subprocess:294 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
+2026-08-12 01:24:18.439 | INFO     | tracy:generate_report:162 - Host side ops time report generated at /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_ops_times.csv
+2026-08-12 01:24:18.447 | INFO     | tracy:generate_report:173 - Host side ops data report generated at /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_ops_data.csv
+2026-08-12 01:24:18.448 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:422 - Importing ops logs
+/home/ttuser/dev/muse-glimmer/tt-metal/tools/tracy/process_ops_logs.py:527: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(tracyOpTimesLog)
+2026-08-12 01:24:18.874 | INFO     | tracy.perf_counter_analysis:get_device_op_data:2140 - Getting device ops
+2026-08-12 01:24:18.874 | INFO     | tracy.process_ops_logs:append_device_data:1086 - Appending device data
+2026-08-12 01:24:19.345 | INFO     | tracy.process_ops_logs:generate_reports:1419 - OPs' perf analysis is finished! Generating reports ...
+2026-08-12 01:24:19.345 | INFO     | tracy.process_ops_logs:generate_reports:1439 - Copying runtime artifacts
+2026-08-12 01:24:19.359 | INFO     | tracy.process_ops_logs:generate_reports:1448 - Generating OPs CSV
+2026-08-12 01:24:19.526 | INFO     | tracy.process_ops_logs:generate_reports:1904 - OPs csv generated at: /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/reports/2026_08_12_01_24_19/ops_perf_results_2026_08_12_01_24_19.csv
+2026-08-12 01:24:21.250 | INFO     | __main__:main:412 - Using port 8086
+2026-08-12 01:24:21.250 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-08-12 01:24:21.263 | INFO     | tracy:run_report_setup:112 - Capture command: ('/home/ttuser/dev/muse-glimmer/tt-metal/build/tools/profiler/bin/tracy-capture -o /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy -f -p 8086',)
+Connecting to 127.0.0.1:8086...2026-08-12 01:24:21.269 | INFO     | __main__:main:430 - Test process started
+2026-08-12 01:24:22.193 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.12, pytest-9.0.3, pluggy-1.6.0 -- /home/ttuser/dev/muse-glimmer/muse-glimmer_pyenv/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/ttuser/dev/muse-glimmer/tt-metal
+configfile: pytest.ini
+plugins: split-0.11.0, anyio-4.14.2, cov-7.0.0, dash-2.15.0, repeat-0.9.4, timeout-2.4.0, github-actions-annotate-failures-0.3.0, benchmark-5.2.3
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_prefill[8192-full] 2026-08-12 01:24:24.382 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-12 01:24:24.382 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-12 01:24:24.382 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-12 01:24:24.382 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-12 01:24:24.394 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-12 01:24:24.394 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-12 01:24:24.472 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-12 01:24:24.472 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-12 01:24:24.472 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-12 01:24:24.472 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-12 01:24:24.473 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-12 01:24:24.478 | warning  |             UMD | AICLK settled at 1343 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (tt_device.cpp:322)
+2026-08-12 01:24:24.576 | warning  |             UMD | AICLK settled at 1343 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (tt_device.cpp:322)
+2026-08-12 01:24:24.674 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-12 01:24:24.790 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-12 01:24:24.790 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-12 01:24:24.790 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-12 01:24:24.790 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-12 01:24:24.790 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-12 01:24:24.835 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-12 01:24:24.841 | info     |           Metal | Profiler started on device 3 (profiler_initializer.cpp:49)
+2026-08-12 01:24:28.749 | INFO     | tracy:signpost:49 - PERF_PREFILL
+2026-08-12 01:24:28.812 | INFO     | tracy:signpost:49 - PERF_PREFILL_END
+2026-08-12 01:24:28.812 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_perf_prefill:1168 - fused prefill perf window done: kind=full seq_len=8192 shape=(1, 1, 8192, 6656)
+PASSED2026-08-12 01:24:29.154 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:24:29.155 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:24:29.155 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:24:29.156 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:24:29.157 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:24:29.157 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:24:29.158 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:24:29.158 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:24:29.333 | info     |           Metal | Device kernel duration perf summary (device=3): count=86, min=870ns, avg=1875616.8ns, max=8828739ns (profiler_analysis.cpp:726)
+2026-08-12 01:24:29.333 | info     |           Metal | Device kernel duration perf histogram (device=3): (buckets=10, bucket_size=882800ns, range=[0..8828000), underflow(<0ns)=0, overflow(>=8828000ns)=1) (profiler_analysis.cpp:769)
+2026-08-12 01:24:29.333 | info     |           Metal |   [           0 ..       882800) |########################################|       50 (profiler_analysis.cpp:774)
+2026-08-12 01:24:29.333 | info     |           Metal |   [      882800 ..      1765600) |#######                                 |        9 (profiler_analysis.cpp:774)
+2026-08-12 01:24:29.333 | info     |           Metal |   [     1765600 ..      2648400) |##########                              |       13 (profiler_analysis.cpp:774)
+2026-08-12 01:24:29.333 | info     |           Metal |   [     2648400 ..      3531200) |##                                      |        2 (profiler_analysis.cpp:774)
+2026-08-12 01:24:29.333 | info     |           Metal |   [     3531200 ..      4414000) |                                        |        0 (profiler_analysis.cpp:774)
+2026-08-12 01:24:29.333 | info     |           Metal |   [     4414000 ..      5296800) |                                        |        0 (profiler_analysis.cpp:774)
+2026-08-12 01:24:29.333 | info     |           Metal |   [     5296800 ..      6179600) |                                        |        0 (profiler_analysis.cpp:774)
+2026-08-12 01:24:29.333 | info     |           Metal |   [     6179600 ..      7062400) |                                        |        0 (profiler_analysis.cpp:774)
+2026-08-12 01:24:29.333 | info     |           Metal |   [     7062400 ..      7945200) |##                                      |        3 (profiler_analysis.cpp:774)
+2026-08-12 01:24:29.333 | info     |           Metal |   [     7945200 ..      8828000) |######                                  |        8 (profiler_analysis.cpp:774)
+
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+../muse-glimmer_pyenv/lib/python3.12/site-packages/pydantic/_internal/_config.py:291
+  /home/ttuser/dev/muse-glimmer/muse-glimmer_pyenv/lib/python3.12/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/ttuser/dev/muse-glimmer/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+3.12s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_prefill[8192-full]
+1.31s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_prefill[8192-full]
+0.70s teardown models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_prefill[8192-full]
+=========================== short test summary info ============================
+PASSED models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_prefill[8192-full]
+======================== 1 passed, 3 warnings in 6.11s =========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+nanobind: leaked 7 instances!
+ - leaked instance 0x75e8c73d1088 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x75e88c5eb5e8 of type "ttnn._ttnn.types.CoreGrid"
+ - leaked instance 0x75e8c73d0ea8 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x75e88c5eb6d8 of type "ttnn._ttnn.tensor.CoreCoord"
+ - leaked instance 0x75e88c5eb618 of type "ttnn._ttnn.types.CoreGrid"
+ - leaked instance 0x75e8bc321458 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x75e8ad71b8e8 of type "ttnn._ttnn.tensor.MemoryConfig"
+nanobind: leaked 28 types!
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.multi_device.MeshMapperConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - ... skipped remainder
+nanobind: leaked 297 functions!
+ - leaked function "__init__"
+ - leaked function "dims"
+ - leaked function ""
+ - leaked function "ranges"
+ - leaked function ""
+ - leaked function "pad"
+ - leaked function ""
+ - leaked function "__repr__"
+ - leaked function ""
+ - leaked function "to_numpy"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-12 01:24:31.205 | info     |    BuildKernels | JIT cache stats: 165/165 hits (100.0%) [165 cached, 27 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-12 01:24:31.205 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-12 01:24:31.219 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-12 01:24:31.219 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-12 01:24:31.656 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-12 01:24:31.656 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-12 01:24:31.656 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)
+
+Timer resolution: 0 ns
+
+Frames: 2
+Time span: 9.7 s
+Zones: 167,120
+Elapsed time: 9.5 s
+Saving trace... done!
+Trace size 1513.35 KB (18.04% ratio)
+2026-08-12 01:24:31.784 | INFO     | __main__:main:469 - Copying /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/ttuser/dev/muse-glimmer/tt-metal/build/profiler/build_wasm/traces/test_fused_decoder_2026_08_12_01_24_31.tracy
+2026-08-12 01:24:31.785 | INFO     | __main__:main:472 - Copied /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/ttuser/dev/muse-glimmer/tt-metal/build/profiler/build_wasm/traces/test_fused_decoder_2026_08_12_01_24_31.tracy
+2026-08-12 01:24:31.785 | INFO     | __main__:main:481 - embed.tracy -> traces/test_fused_decoder_2026_08_12_01_24_31.tracy
+2026-08-12 01:24:31.785 | INFO     | tracy.serve_wasm:launch_server_subprocess:284 - Launching tracy web app GUI server subprocess...
+2026-08-12 01:24:31.785 | INFO     | tracy.serve_wasm:launch_server_subprocess:287 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-08-12 01:24:31.785 | INFO     | tracy.serve_wasm:launch_server_subprocess:294 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
+2026-08-12 01:24:31.855 | INFO     | tracy:generate_report:162 - Host side ops time report generated at /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_ops_times.csv
+2026-08-12 01:24:31.860 | INFO     | tracy:generate_report:173 - Host side ops data report generated at /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_ops_data.csv
+2026-08-12 01:24:31.860 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:422 - Importing ops logs
+/home/ttuser/dev/muse-glimmer/tt-metal/tools/tracy/process_ops_logs.py:527: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(tracyOpTimesLog)
+2026-08-12 01:24:32.028 | INFO     | tracy.perf_counter_analysis:get_device_op_data:2140 - Getting device ops
+2026-08-12 01:24:32.029 | INFO     | tracy.process_ops_logs:append_device_data:1086 - Appending device data
+2026-08-12 01:24:32.217 | INFO     | tracy.process_ops_logs:generate_reports:1419 - OPs' perf analysis is finished! Generating reports ...
+2026-08-12 01:24:32.217 | INFO     | tracy.process_ops_logs:generate_reports:1439 - Copying runtime artifacts
+2026-08-12 01:24:32.225 | INFO     | tracy.process_ops_logs:generate_reports:1448 - Generating OPs CSV
+2026-08-12 01:24:32.247 | INFO     | tracy.process_ops_logs:generate_reports:1904 - OPs csv generated at: /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/reports/2026_08_12_01_24_32/ops_perf_results_2026_08_12_01_24_32.csv
+2026-08-12 01:24:33.918 | INFO     | __main__:main:412 - Using port 8086
+2026-08-12 01:24:33.918 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-08-12 01:24:33.925 | INFO     | tracy:run_report_setup:112 - Capture command: ('/home/ttuser/dev/muse-glimmer/tt-metal/build/tools/profiler/bin/tracy-capture -o /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy -f -p 8086',)
+Connecting to 127.0.0.1:8086...2026-08-12 01:24:33.931 | INFO     | __main__:main:430 - Test process started
+2026-08-12 01:24:34.854 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.12, pytest-9.0.3, pluggy-1.6.0 -- /home/ttuser/dev/muse-glimmer/muse-glimmer_pyenv/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/ttuser/dev/muse-glimmer/tt-metal
+configfile: pytest.ini
+plugins: split-0.11.0, anyio-4.14.2, cov-7.0.0, dash-2.15.0, repeat-0.9.4, timeout-2.4.0, github-actions-annotate-failures-0.3.0, benchmark-5.2.3
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_prefill[16384-full] 2026-08-12 01:24:37.046 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-12 01:24:37.046 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-12 01:24:37.046 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-12 01:24:37.046 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-12 01:24:37.058 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-12 01:24:37.058 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-12 01:24:37.135 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-12 01:24:37.135 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-12 01:24:37.135 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-12 01:24:37.135 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-12 01:24:37.137 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-12 01:24:37.375 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-12 01:24:37.489 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-12 01:24:37.489 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-12 01:24:37.489 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-12 01:24:37.489 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-12 01:24:37.489 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-12 01:24:37.534 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-12 01:24:37.540 | info     |           Metal | Profiler started on device 3 (profiler_initializer.cpp:49)
+2026-08-12 01:24:41.910 | INFO     | tracy:signpost:49 - PERF_PREFILL
+2026-08-12 01:24:42.063 | INFO     | tracy:signpost:49 - PERF_PREFILL_END
+2026-08-12 01:24:42.063 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_perf_prefill:1168 - fused prefill perf window done: kind=full seq_len=16384 shape=(1, 1, 16384, 6656)
+PASSED2026-08-12 01:24:42.434 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:24:42.435 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:24:42.435 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:24:42.436 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:24:42.436 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:24:42.437 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:24:42.437 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:24:42.438 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:24:42.649 | info     |           Metal | Device kernel duration perf summary (device=3): count=161, min=853ns, avg=2181204.2ns, max=20615802ns (profiler_analysis.cpp:726)
+2026-08-12 01:24:42.649 | info     |           Metal | Device kernel duration perf histogram (device=3): (buckets=10, bucket_size=2061500ns, range=[0..20615000), underflow(<0ns)=0, overflow(>=20615000ns)=1) (profiler_analysis.cpp:769)
+2026-08-12 01:24:42.649 | info     |           Metal |   [           0 ..      2061500) |########################################|      122 (profiler_analysis.cpp:774)
+2026-08-12 01:24:42.649 | info     |           Metal |   [     2061500 ..      4123000) |#####                                   |       15 (profiler_analysis.cpp:774)
+2026-08-12 01:24:42.649 | info     |           Metal |   [     4123000 ..      6184500) |                                        |        0 (profiler_analysis.cpp:774)
+2026-08-12 01:24:42.649 | info     |           Metal |   [     6184500 ..      8246000) |#                                       |        3 (profiler_analysis.cpp:774)
+2026-08-12 01:24:42.649 | info     |           Metal |   [     8246000 ..     10307500) |######                                  |       18 (profiler_analysis.cpp:774)
+2026-08-12 01:24:42.649 | info     |           Metal |   [    10307500 ..     12369000) |                                        |        0 (profiler_analysis.cpp:774)
+2026-08-12 01:24:42.649 | info     |           Metal |   [    12369000 ..     14430500) |                                        |        0 (profiler_analysis.cpp:774)
+2026-08-12 01:24:42.649 | info     |           Metal |   [    14430500 ..     16492000) |                                        |        0 (profiler_analysis.cpp:774)
+2026-08-12 01:24:42.649 | info     |           Metal |   [    16492000 ..     18553500) |                                        |        0 (profiler_analysis.cpp:774)
+2026-08-12 01:24:42.649 | info     |           Metal |   [    18553500 ..     20615000) |#                                       |        2 (profiler_analysis.cpp:774)
+
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+../muse-glimmer_pyenv/lib/python3.12/site-packages/pydantic/_internal/_config.py:291
+  /home/ttuser/dev/muse-glimmer/muse-glimmer_pyenv/lib/python3.12/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/ttuser/dev/muse-glimmer/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+3.68s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_prefill[16384-full]
+1.34s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_prefill[16384-full]
+0.83s teardown models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_prefill[16384-full]
+=========================== short test summary info ============================
+PASSED models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_prefill[16384-full]
+======================== 1 passed, 3 warnings in 6.83s =========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+nanobind: leaked 7 instances!
+ - leaked instance 0x7a14e8fe1088 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x7a14ae1cf108 of type "ttnn._ttnn.types.CoreGrid"
+ - leaked instance 0x7a14e8fe0ea8 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x7a14dc31d638 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x7a14ae1cf138 of type "ttnn._ttnn.types.CoreGrid"
+ - leaked instance 0x7a14cf4ef8e8 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x7a14ae1cf288 of type "ttnn._ttnn.tensor.CoreCoord"
+nanobind: leaked 28 types!
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.multi_device.MeshMapperConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - ... skipped remainder
+nanobind: leaked 297 functions!
+ - leaked function ""
+ - leaked function "from_json"
+ - leaked function "get_optimal_dram_bank_to_logical_worker_assignment"
+ - leaked function "__init__"
+ - leaked function "__repr__"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "create_matmul_attributes"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-12 01:24:44.601 | info     |    BuildKernels | JIT cache stats: 173/173 hits (100.0%) [173 cached, 32 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-12 01:24:44.601 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-12 01:24:44.616 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-12 01:24:44.616 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-12 01:24:45.057 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-12 01:24:45.057 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-12 01:24:45.057 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)
+
+Timer resolution: 0 ns
+
+Frames: 2
+Time span: 10.41 s
+Zones: 298,071
+Elapsed time: 10.21 s
+Saving trace... done!
+Trace size 2731.44 KB (18.34% ratio)
+2026-08-12 01:24:45.194 | INFO     | __main__:main:469 - Copying /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/ttuser/dev/muse-glimmer/tt-metal/build/profiler/build_wasm/traces/test_fused_decoder_2026_08_12_01_24_45.tracy
+2026-08-12 01:24:45.195 | INFO     | __main__:main:472 - Copied /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/ttuser/dev/muse-glimmer/tt-metal/build/profiler/build_wasm/traces/test_fused_decoder_2026_08_12_01_24_45.tracy
+2026-08-12 01:24:45.195 | INFO     | __main__:main:481 - embed.tracy -> traces/test_fused_decoder_2026_08_12_01_24_45.tracy
+2026-08-12 01:24:45.195 | INFO     | tracy.serve_wasm:launch_server_subprocess:284 - Launching tracy web app GUI server subprocess...
+2026-08-12 01:24:45.195 | INFO     | tracy.serve_wasm:launch_server_subprocess:287 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-08-12 01:24:45.195 | INFO     | tracy.serve_wasm:launch_server_subprocess:294 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
+2026-08-12 01:24:45.304 | INFO     | tracy:generate_report:162 - Host side ops time report generated at /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_ops_times.csv
+2026-08-12 01:24:45.311 | INFO     | tracy:generate_report:173 - Host side ops data report generated at /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_ops_data.csv
+2026-08-12 01:24:45.311 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:422 - Importing ops logs
+/home/ttuser/dev/muse-glimmer/tt-metal/tools/tracy/process_ops_logs.py:527: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(tracyOpTimesLog)
+2026-08-12 01:24:45.610 | INFO     | tracy.perf_counter_analysis:get_device_op_data:2140 - Getting device ops
+2026-08-12 01:24:45.611 | INFO     | tracy.process_ops_logs:append_device_data:1086 - Appending device data
+2026-08-12 01:24:45.929 | INFO     | tracy.process_ops_logs:generate_reports:1419 - OPs' perf analysis is finished! Generating reports ...
+2026-08-12 01:24:45.929 | INFO     | tracy.process_ops_logs:generate_reports:1439 - Copying runtime artifacts
+2026-08-12 01:24:45.940 | INFO     | tracy.process_ops_logs:generate_reports:1448 - Generating OPs CSV
+2026-08-12 01:24:45.981 | INFO     | tracy.process_ops_logs:generate_reports:1904 - OPs csv generated at: /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/reports/2026_08_12_01_24_45/ops_perf_results_2026_08_12_01_24_45.csv
+2026-08-12 01:24:47.655 | INFO     | __main__:main:412 - Using port 8086
+2026-08-12 01:24:47.655 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-08-12 01:24:47.665 | INFO     | tracy:run_report_setup:112 - Capture command: ('/home/ttuser/dev/muse-glimmer/tt-metal/build/tools/profiler/bin/tracy-capture -o /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy -f -p 8086',)
+Connecting to 127.0.0.1:8086...2026-08-12 01:24:47.671 | INFO     | __main__:main:430 - Test process started
+2026-08-12 01:24:48.592 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.12, pytest-9.0.3, pluggy-1.6.0 -- /home/ttuser/dev/muse-glimmer/muse-glimmer_pyenv/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/ttuser/dev/muse-glimmer/tt-metal
+configfile: pytest.ini
+plugins: split-0.11.0, anyio-4.14.2, cov-7.0.0, dash-2.15.0, repeat-0.9.4, timeout-2.4.0, github-actions-annotate-failures-0.3.0, benchmark-5.2.3
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_decode_traced[2048-full] 2026-08-12 01:24:50.763 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-12 01:24:50.763 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-12 01:24:50.763 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-12 01:24:50.763 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-12 01:24:50.775 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-12 01:24:50.775 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-12 01:24:50.853 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-12 01:24:50.853 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-12 01:24:50.853 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-12 01:24:50.853 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-12 01:24:50.854 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-12 01:24:51.077 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-12 01:24:51.193 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-12 01:24:51.193 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-12 01:24:51.193 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-12 01:24:51.193 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-12 01:24:51.193 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-12 01:24:51.238 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-12 01:24:51.244 | info     |           Metal | Profiler started on device 3 (profiler_initializer.cpp:49)
+2026-08-12 01:24:54.940 | INFO     | tracy:signpost:49 - PERF_DECODE
+2026-08-12 01:24:54.962 | INFO     | tracy:signpost:49 - PERF_DECODE_END
+2026-08-12 01:24:54.962 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_perf_decode_traced:1206 - fused decode perf window done: kind=full context=2048 iters=8 shape=(1, 1, 1, 6656)
+PASSED2026-08-12 01:24:55.344 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:24:55.344 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:24:55.345 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:24:55.346 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:24:55.346 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:24:55.347 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:24:55.347 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:24:55.348 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:24:55.599 | info     |           Metal | Device kernel duration perf summary (device=3): count=484, min=481ns, avg=132843.2ns, max=2682852ns (profiler_analysis.cpp:726)
+2026-08-12 01:24:55.599 | info     |           Metal | Device kernel duration perf histogram (device=3): (buckets=10, bucket_size=268300ns, range=[0..2683000), underflow(<0ns)=0, overflow(>=2683000ns)=0) (profiler_analysis.cpp:769)
+2026-08-12 01:24:55.599 | info     |           Metal |   [           0 ..       268300) |########################################|      425 (profiler_analysis.cpp:774)
+2026-08-12 01:24:55.599 | info     |           Metal |   [      268300 ..       536600) |                                        |        3 (profiler_analysis.cpp:774)
+2026-08-12 01:24:55.599 | info     |           Metal |   [      536600 ..       804900) |####                                    |       46 (profiler_analysis.cpp:774)
+2026-08-12 01:24:55.599 | info     |           Metal |   [      804900 ..      1073200) |                                        |        1 (profiler_analysis.cpp:774)
+2026-08-12 01:24:55.599 | info     |           Metal |   [     1073200 ..      1341500) |                                        |        0 (profiler_analysis.cpp:774)
+2026-08-12 01:24:55.599 | info     |           Metal |   [     1341500 ..      1609800) |                                        |        0 (profiler_analysis.cpp:774)
+2026-08-12 01:24:55.599 | info     |           Metal |   [     1609800 ..      1878100) |                                        |        3 (profiler_analysis.cpp:774)
+2026-08-12 01:24:55.599 | info     |           Metal |   [     1878100 ..      2146400) |                                        |        0 (profiler_analysis.cpp:774)
+2026-08-12 01:24:55.599 | info     |           Metal |   [     2146400 ..      2414700) |                                        |        0 (profiler_analysis.cpp:774)
+2026-08-12 01:24:55.599 | info     |           Metal |   [     2414700 ..      2683000) |#                                       |        6 (profiler_analysis.cpp:774)
+
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+../muse-glimmer_pyenv/lib/python3.12/site-packages/pydantic/_internal/_config.py:291
+  /home/ttuser/dev/muse-glimmer/muse-glimmer_pyenv/lib/python3.12/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/ttuser/dev/muse-glimmer/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+2.87s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_decode_traced[2048-full]
+1.33s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_decode_traced[2048-full]
+0.95s teardown models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_decode_traced[2048-full]
+=========================== short test summary info ============================
+PASSED models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_decode_traced[2048-full]
+======================== 1 passed, 3 warnings in 6.12s =========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+nanobind: leaked 7 instances!
+ - leaked instance 0x73eac69bf318 of type "ttnn._ttnn.types.CoreGrid"
+ - leaked instance 0x73eac69bf288 of type "ttnn._ttnn.types.CoreGrid"
+ - leaked instance 0x73eafc525088 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x73eace8af8e8 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x73eaf44c94b8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x73eac69bf438 of type "ttnn._ttnn.tensor.CoreCoord"
+ - leaked instance 0x73eafc524ea8 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+nanobind: leaked 28 types!
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.multi_device.MeshMapperConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - ... skipped remainder
+nanobind: leaked 297 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "to_list"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "__repr__"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-12 01:24:57.610 | info     |    BuildKernels | JIT cache stats: 241/241 hits (100.0%) [241 cached, 49 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-12 01:24:57.610 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-12 01:24:57.624 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-12 01:24:57.624 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-12 01:24:58.059 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-12 01:24:58.059 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-12 01:24:58.059 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)
+
+Timer resolution: 0 ns
+
+Frames: 2
+Time span: 9.71 s
+Zones: 400,451
+Elapsed time: 9.51 s
+Saving trace... done!
+Trace size 3588.89 KB (17.93% ratio)
+2026-08-12 01:24:58.224 | INFO     | __main__:main:469 - Copying /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/ttuser/dev/muse-glimmer/tt-metal/build/profiler/build_wasm/traces/test_fused_decoder_2026_08_12_01_24_58.tracy
+2026-08-12 01:24:58.225 | INFO     | __main__:main:472 - Copied /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/ttuser/dev/muse-glimmer/tt-metal/build/profiler/build_wasm/traces/test_fused_decoder_2026_08_12_01_24_58.tracy
+2026-08-12 01:24:58.225 | INFO     | __main__:main:481 - embed.tracy -> traces/test_fused_decoder_2026_08_12_01_24_58.tracy
+2026-08-12 01:24:58.225 | INFO     | tracy.serve_wasm:launch_server_subprocess:284 - Launching tracy web app GUI server subprocess...
+2026-08-12 01:24:58.225 | INFO     | tracy.serve_wasm:launch_server_subprocess:287 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-08-12 01:24:58.225 | INFO     | tracy.serve_wasm:launch_server_subprocess:294 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
+2026-08-12 01:24:58.364 | INFO     | tracy:generate_report:162 - Host side ops time report generated at /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_ops_times.csv
+2026-08-12 01:24:58.373 | INFO     | tracy:generate_report:173 - Host side ops data report generated at /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_ops_data.csv
+2026-08-12 01:24:58.373 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:422 - Importing ops logs
+/home/ttuser/dev/muse-glimmer/tt-metal/tools/tracy/process_ops_logs.py:527: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(tracyOpTimesLog)
+2026-08-12 01:24:58.774 | INFO     | tracy.perf_counter_analysis:get_device_op_data:2140 - Getting device ops
+2026-08-12 01:24:58.774 | INFO     | tracy.process_ops_logs:append_device_data:1086 - Appending device data
+2026-08-12 01:24:59.221 | INFO     | tracy.process_ops_logs:generate_reports:1419 - OPs' perf analysis is finished! Generating reports ...
+2026-08-12 01:24:59.222 | INFO     | tracy.process_ops_logs:generate_reports:1439 - Copying runtime artifacts
+2026-08-12 01:24:59.236 | INFO     | tracy.process_ops_logs:generate_reports:1448 - Generating OPs CSV
+2026-08-12 01:24:59.368 | INFO     | tracy.process_ops_logs:generate_reports:1904 - OPs csv generated at: /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/reports/2026_08_12_01_24_59/ops_perf_results_2026_08_12_01_24_59.csv
+2026-08-12 01:25:01.076 | INFO     | __main__:main:412 - Using port 8086
+2026-08-12 01:25:01.076 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-08-12 01:25:01.091 | INFO     | tracy:run_report_setup:112 - Capture command: ('/home/ttuser/dev/muse-glimmer/tt-metal/build/tools/profiler/bin/tracy-capture -o /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy -f -p 8086',)
+Connecting to 127.0.0.1:8086...2026-08-12 01:25:01.097 | INFO     | __main__:main:430 - Test process started
+2026-08-12 01:25:02.018 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.12, pytest-9.0.3, pluggy-1.6.0 -- /home/ttuser/dev/muse-glimmer/muse-glimmer_pyenv/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/ttuser/dev/muse-glimmer/tt-metal
+configfile: pytest.ini
+plugins: split-0.11.0, anyio-4.14.2, cov-7.0.0, dash-2.15.0, repeat-0.9.4, timeout-2.4.0, github-actions-annotate-failures-0.3.0, benchmark-5.2.3
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_decode_traced[131071-full] 2026-08-12 01:25:04.215 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-12 01:25:04.215 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-12 01:25:04.215 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-12 01:25:04.215 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-12 01:25:04.227 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-12 01:25:04.227 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-12 01:25:04.305 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-12 01:25:04.305 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-12 01:25:04.305 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-12 01:25:04.305 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-12 01:25:04.306 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-12 01:25:04.579 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-12 01:25:04.695 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-12 01:25:04.695 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-12 01:25:04.695 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-12 01:25:04.695 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-12 01:25:04.695 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-12 01:25:04.740 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-12 01:25:04.746 | info     |           Metal | Profiler started on device 3 (profiler_initializer.cpp:49)
+2026-08-12 01:25:08.505 | INFO     | tracy:signpost:49 - PERF_DECODE
+2026-08-12 01:25:08.531 | INFO     | tracy:signpost:49 - PERF_DECODE_END
+2026-08-12 01:25:08.531 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_fused_decoder:test_perf_decode_traced:1206 - fused decode perf window done: kind=full context=131071 iters=8 shape=(1, 1, 1, 6656)
+PASSED2026-08-12 01:25:08.918 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:25:08.918 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:25:08.919 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:25:08.919 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:25:08.920 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:25:08.920 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:25:08.921 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:25:08.922 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:25:09.156 | info     |           Metal | Device kernel duration perf summary (device=3): count=484, min=482ns, avg=150544.2ns, max=2680410ns (profiler_analysis.cpp:726)
+2026-08-12 01:25:09.156 | info     |           Metal | Device kernel duration perf histogram (device=3): (buckets=10, bucket_size=268000ns, range=[0..2680000), underflow(<0ns)=0, overflow(>=2680000ns)=1) (profiler_analysis.cpp:769)
+2026-08-12 01:25:09.156 | info     |           Metal |   [           0 ..       268000) |########################################|      408 (profiler_analysis.cpp:774)
+2026-08-12 01:25:09.156 | info     |           Metal |   [      268000 ..       536000) |##                                      |       18 (profiler_analysis.cpp:774)
+2026-08-12 01:25:09.156 | info     |           Metal |   [      536000 ..       804000) |#####                                   |       48 (profiler_analysis.cpp:774)
+2026-08-12 01:25:09.156 | info     |           Metal |   [      804000 ..      1072000) |                                        |        1 (profiler_analysis.cpp:774)
+2026-08-12 01:25:09.156 | info     |           Metal |   [     1072000 ..      1340000) |                                        |        0 (profiler_analysis.cpp:774)
+2026-08-12 01:25:09.156 | info     |           Metal |   [     1340000 ..      1608000) |                                        |        0 (profiler_analysis.cpp:774)
+2026-08-12 01:25:09.156 | info     |           Metal |   [     1608000 ..      1876000) |                                        |        3 (profiler_analysis.cpp:774)
+2026-08-12 01:25:09.156 | info     |           Metal |   [     1876000 ..      2144000) |                                        |        0 (profiler_analysis.cpp:774)
+2026-08-12 01:25:09.156 | info     |           Metal |   [     2144000 ..      2412000) |                                        |        0 (profiler_analysis.cpp:774)
+2026-08-12 01:25:09.156 | info     |           Metal |   [     2412000 ..      2680000) |                                        |        5 (profiler_analysis.cpp:774)
+
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+../muse-glimmer_pyenv/lib/python3.12/site-packages/pydantic/_internal/_config.py:291
+  /home/ttuser/dev/muse-glimmer/muse-glimmer_pyenv/lib/python3.12/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/ttuser/dev/muse-glimmer/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+2.94s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_decode_traced[131071-full]
+1.38s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_decode_traced[131071-full]
+0.94s teardown models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_decode_traced[131071-full]
+=========================== short test summary info ============================
+PASSED models/autoports/meta_models_muse_glimmer_30b/tests/test_fused_decoder.py::test_perf_decode_traced[131071-full]
+======================== 1 passed, 3 warnings in 6.25s =========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+nanobind: leaked 7 instances!
+ - leaked instance 0x799f6c325518 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x799f3e1e32e8 of type "ttnn._ttnn.types.CoreGrid"
+ - leaked instance 0x799f5f4f38e8 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x799f3e1e3528 of type "ttnn._ttnn.tensor.CoreCoord"
+ - leaked instance 0x799f3e1e3438 of type "ttnn._ttnn.types.CoreGrid"
+ - leaked instance 0x799f78f8d088 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x799f78f8cea8 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+nanobind: leaked 28 types!
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.multi_device.MeshMapperConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - ... skipped remainder
+nanobind: leaked 297 functions!
+ - leaked function "unpad_from_tile"
+ - leaked function "sfpu_eps"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "reshape"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "__hash__"
+ - leaked function "__repr__"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-12 01:25:11.166 | info     |    BuildKernels | JIT cache stats: 241/241 hits (100.0%) [241 cached, 49 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-12 01:25:11.166 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-12 01:25:11.180 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-12 01:25:11.180 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-12 01:25:11.660 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-12 01:25:11.660 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-12 01:25:11.660 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)
+
+Timer resolution: 0 ns
+
+Frames: 2
+Time span: 9.91 s
+Zones: 400,733
+Elapsed time: 9.71 s
+Saving trace... done!
+Trace size 3602.94 KB (17.99% ratio)
+2026-08-12 01:25:11.829 | INFO     | __main__:main:469 - Copying /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/ttuser/dev/muse-glimmer/tt-metal/build/profiler/build_wasm/traces/test_fused_decoder_2026_08_12_01_25_11.tracy
+2026-08-12 01:25:11.830 | INFO     | __main__:main:472 - Copied /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/ttuser/dev/muse-glimmer/tt-metal/build/profiler/build_wasm/traces/test_fused_decoder_2026_08_12_01_25_11.tracy
+2026-08-12 01:25:11.830 | INFO     | __main__:main:481 - embed.tracy -> traces/test_fused_decoder_2026_08_12_01_25_11.tracy
+2026-08-12 01:25:11.830 | INFO     | tracy.serve_wasm:launch_server_subprocess:284 - Launching tracy web app GUI server subprocess...
+2026-08-12 01:25:11.830 | INFO     | tracy.serve_wasm:launch_server_subprocess:287 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-08-12 01:25:11.830 | INFO     | tracy.serve_wasm:launch_server_subprocess:294 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
+2026-08-12 01:25:11.974 | INFO     | tracy:generate_report:162 - Host side ops time report generated at /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_ops_times.csv
+2026-08-12 01:25:11.982 | INFO     | tracy:generate_report:173 - Host side ops data report generated at /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_ops_data.csv
+2026-08-12 01:25:11.982 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:422 - Importing ops logs
+/home/ttuser/dev/muse-glimmer/tt-metal/tools/tracy/process_ops_logs.py:527: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(tracyOpTimesLog)
+2026-08-12 01:25:12.392 | INFO     | tracy.perf_counter_analysis:get_device_op_data:2140 - Getting device ops
+2026-08-12 01:25:12.392 | INFO     | tracy.process_ops_logs:append_device_data:1086 - Appending device data
+2026-08-12 01:25:12.835 | INFO     | tracy.process_ops_logs:generate_reports:1419 - OPs' perf analysis is finished! Generating reports ...
+2026-08-12 01:25:12.836 | INFO     | tracy.process_ops_logs:generate_reports:1439 - Copying runtime artifacts
+2026-08-12 01:25:12.850 | INFO     | tracy.process_ops_logs:generate_reports:1448 - Generating OPs CSV
+2026-08-12 01:25:12.979 | INFO     | tracy.process_ops_logs:generate_reports:1904 - OPs csv generated at: /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/reports/2026_08_12_01_25_12/ops_perf_results_2026_08_12_01_25_12.csv
+2026-08-12 01:25:14.694 | INFO     | __main__:main:412 - Using port 8086
+2026-08-12 01:25:14.694 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-08-12 01:25:14.710 | INFO     | tracy:run_report_setup:112 - Capture command: ('/home/ttuser/dev/muse-glimmer/tt-metal/build/tools/profiler/bin/tracy-capture -o /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy -f -p 8086',)
+Connecting to 127.0.0.1:8086...2026-08-12 01:25:14.715 | INFO     | __main__:main:430 - Test process started
+2026-08-12 01:25:15.637 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.12, pytest-9.0.3, pluggy-1.6.0 -- /home/ttuser/dev/muse-glimmer/muse-glimmer_pyenv/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/ttuser/dev/muse-glimmer/tt-metal
+configfile: pytest.ini
+plugins: split-0.11.0, anyio-4.14.2, cov-7.0.0, dash-2.15.0, repeat-0.9.4, timeout-2.4.0, github-actions-annotate-failures-0.3.0, benchmark-5.2.3
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_perf_prefill[sliding] 2026-08-12 01:25:17.824 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-12 01:25:17.825 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-12 01:25:17.825 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-12 01:25:17.825 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-12 01:25:17.836 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-12 01:25:17.836 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-12 01:25:17.914 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-12 01:25:17.914 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-12 01:25:17.914 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-12 01:25:17.914 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-12 01:25:17.916 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-12 01:25:18.180 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-12 01:25:18.303 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-12 01:25:18.303 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-12 01:25:18.304 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-12 01:25:18.304 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-12 01:25:18.304 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-12 01:25:18.349 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-12 01:25:18.355 | info     |           Metal | Profiler started on device 3 (profiler_initializer.cpp:49)
+2026-08-12 01:25:22.932 | INFO     | tracy:signpost:49 - PERF_PREFILL
+2026-08-12 01:25:23.164 | INFO     | tracy:signpost:49 - PERF_PREFILL_END
+2026-08-12 01:25:23.164 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:test_perf_prefill:1000 - prefill perf window done: kind=sliding seq_len=16384 shape=(1, 1, 16384, 6656)
+PASSED2026-08-12 01:25:23.565 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:25:23.565 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:25:23.566 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:25:23.566 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:25:23.567 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:25:23.567 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:25:23.568 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:25:23.568 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:25:23.828 | info     |           Metal | Device kernel duration perf summary (device=3): count=305, min=864ns, avg=2150353.6ns, max=23231915ns (profiler_analysis.cpp:726)
+2026-08-12 01:25:23.828 | info     |           Metal | Device kernel duration perf histogram (device=3): (buckets=10, bucket_size=2323200ns, range=[0..23232000), underflow(<0ns)=0, overflow(>=23232000ns)=0) (profiler_analysis.cpp:769)
+2026-08-12 01:25:23.828 | info     |           Metal |   [           0 ..      2323200) |########################################|      261 (profiler_analysis.cpp:774)
+2026-08-12 01:25:23.828 | info     |           Metal |   [     2323200 ..      4646400) |##                                      |       14 (profiler_analysis.cpp:774)
+2026-08-12 01:25:23.828 | info     |           Metal |   [     4646400 ..      6969600) |#                                       |        6 (profiler_analysis.cpp:774)
+2026-08-12 01:25:23.828 | info     |           Metal |   [     6969600 ..      9292800) |                                        |        0 (profiler_analysis.cpp:774)
+2026-08-12 01:25:23.828 | info     |           Metal |   [     9292800 ..     11616000) |                                        |        0 (profiler_analysis.cpp:774)
+2026-08-12 01:25:23.828 | info     |           Metal |   [    11616000 ..     13939200) |                                        |        3 (profiler_analysis.cpp:774)
+2026-08-12 01:25:23.828 | info     |           Metal |   [    13939200 ..     16262400) |                                        |        0 (profiler_analysis.cpp:774)
+2026-08-12 01:25:23.828 | info     |           Metal |   [    16262400 ..     18585600) |                                        |        3 (profiler_analysis.cpp:774)
+2026-08-12 01:25:23.828 | info     |           Metal |   [    18585600 ..     20908800) |                                        |        0 (profiler_analysis.cpp:774)
+2026-08-12 01:25:23.828 | info     |           Metal |   [    20908800 ..     23232000) |###                                     |       18 (profiler_analysis.cpp:774)
+
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+../muse-glimmer_pyenv/lib/python3.12/site-packages/pydantic/_internal/_config.py:291
+  /home/ttuser/dev/muse-glimmer/muse-glimmer_pyenv/lib/python3.12/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/ttuser/dev/muse-glimmer/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+3.96s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_perf_prefill[sliding]
+1.38s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_perf_prefill[sliding]
+1.03s teardown models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_perf_prefill[sliding]
+=========================== short test summary info ============================
+PASSED models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_perf_prefill[sliding]
+======================== 1 passed, 3 warnings in 7.35s =========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+nanobind: leaked 4 instances!
+ - leaked instance 0x72d33c56d088 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x72d33c56cea8 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x72d33012d5a8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x72d3280df8e8 of type "ttnn._ttnn.tensor.MemoryConfig"
+nanobind: leaked 26 types!
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.multi_device.MeshMapperConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - ... skipped remainder
+nanobind: leaked 282 functions!
+ - leaked function "__init__"
+ - leaked function "__repr__"
+ - leaked function ""
+ - leaked function "reshape"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-12 01:25:25.876 | info     |    BuildKernels | JIT cache stats: 202/202 hits (100.0%) [202 cached, 59 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-12 01:25:25.876 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-12 01:25:25.890 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-12 01:25:25.890 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-12 01:25:26.361 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-12 01:25:26.362 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-12 01:25:26.362 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)
+
+Timer resolution: 0 ns
+
+Frames: 2
+Time span: 10.92 s
+Zones: 514,594
+Elapsed time: 10.81 s
+Saving trace... done!
+Trace size 4747.29 KB (18.50% ratio)
+2026-08-12 01:25:26.571 | INFO     | __main__:main:469 - Copying /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/ttuser/dev/muse-glimmer/tt-metal/build/profiler/build_wasm/traces/test_functional_decoder_2026_08_12_01_25_26.tracy
+2026-08-12 01:25:26.572 | INFO     | __main__:main:472 - Copied /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/ttuser/dev/muse-glimmer/tt-metal/build/profiler/build_wasm/traces/test_functional_decoder_2026_08_12_01_25_26.tracy
+2026-08-12 01:25:26.572 | INFO     | __main__:main:481 - embed.tracy -> traces/test_functional_decoder_2026_08_12_01_25_26.tracy
+2026-08-12 01:25:26.572 | INFO     | tracy.serve_wasm:launch_server_subprocess:284 - Launching tracy web app GUI server subprocess...
+2026-08-12 01:25:26.572 | INFO     | tracy.serve_wasm:launch_server_subprocess:287 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-08-12 01:25:26.572 | INFO     | tracy.serve_wasm:launch_server_subprocess:294 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
+2026-08-12 01:25:26.751 | INFO     | tracy:generate_report:162 - Host side ops time report generated at /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_ops_times.csv
+2026-08-12 01:25:26.761 | INFO     | tracy:generate_report:173 - Host side ops data report generated at /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_ops_data.csv
+2026-08-12 01:25:26.761 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:422 - Importing ops logs
+/home/ttuser/dev/muse-glimmer/tt-metal/tools/tracy/process_ops_logs.py:527: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(tracyOpTimesLog)
+2026-08-12 01:25:27.284 | INFO     | tracy.perf_counter_analysis:get_device_op_data:2140 - Getting device ops
+2026-08-12 01:25:27.285 | INFO     | tracy.process_ops_logs:append_device_data:1086 - Appending device data
+2026-08-12 01:25:27.824 | INFO     | tracy.process_ops_logs:generate_reports:1419 - OPs' perf analysis is finished! Generating reports ...
+2026-08-12 01:25:27.824 | INFO     | tracy.process_ops_logs:generate_reports:1439 - Copying runtime artifacts
+2026-08-12 01:25:27.842 | INFO     | tracy.process_ops_logs:generate_reports:1448 - Generating OPs CSV
+2026-08-12 01:25:27.918 | INFO     | tracy.process_ops_logs:generate_reports:1904 - OPs csv generated at: /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/reports/2026_08_12_01_25_27/ops_perf_results_2026_08_12_01_25_27.csv
+2026-08-12 01:25:29.601 | INFO     | __main__:main:412 - Using port 8086
+2026-08-12 01:25:29.601 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-08-12 01:25:29.619 | INFO     | tracy:run_report_setup:112 - Capture command: ('/home/ttuser/dev/muse-glimmer/tt-metal/build/tools/profiler/bin/tracy-capture -o /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy -f -p 8086',)
+Connecting to 127.0.0.1:8086...2026-08-12 01:25:29.624 | INFO     | __main__:main:430 - Test process started
+2026-08-12 01:25:30.543 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.12, pytest-9.0.3, pluggy-1.6.0 -- /home/ttuser/dev/muse-glimmer/muse-glimmer_pyenv/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/ttuser/dev/muse-glimmer/tt-metal
+configfile: pytest.ini
+plugins: split-0.11.0, anyio-4.14.2, cov-7.0.0, dash-2.15.0, repeat-0.9.4, timeout-2.4.0, github-actions-annotate-failures-0.3.0, benchmark-5.2.3
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_perf_prefill[full] 2026-08-12 01:25:32.764 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-12 01:25:32.764 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-12 01:25:32.764 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-12 01:25:32.764 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-12 01:25:32.776 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-12 01:25:32.776 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-12 01:25:32.854 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-12 01:25:32.854 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-12 01:25:32.854 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-12 01:25:32.854 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-12 01:25:32.855 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-12 01:25:32.984 | warning  |             UMD | AICLK settled at 1343 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (tt_device.cpp:322)
+2026-08-12 01:25:33.082 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-12 01:25:33.198 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-12 01:25:33.198 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-12 01:25:33.198 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-12 01:25:33.198 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-12 01:25:33.198 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-12 01:25:33.243 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-12 01:25:33.250 | info     |           Metal | Profiler started on device 3 (profiler_initializer.cpp:49)
+2026-08-12 01:25:37.804 | INFO     | tracy:signpost:49 - PERF_PREFILL
+2026-08-12 01:25:38.049 | INFO     | tracy:signpost:49 - PERF_PREFILL_END
+2026-08-12 01:25:38.050 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder:test_perf_prefill:1000 - prefill perf window done: kind=full seq_len=16384 shape=(1, 1, 16384, 6656)
+PASSED2026-08-12 01:25:38.421 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:25:38.422 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:25:38.422 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:25:38.423 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:25:38.423 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:25:38.424 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:25:38.424 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:25:38.425 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 01:25:38.646 | info     |           Metal | Device kernel duration perf summary (device=3): count=173, min=873ns, avg=3941105.5ns, max=34137223ns (profiler_analysis.cpp:726)
+2026-08-12 01:25:38.646 | info     |           Metal | Device kernel duration perf histogram (device=3): (buckets=10, bucket_size=3413700ns, range=[0..34137000), underflow(<0ns)=0, overflow(>=34137000ns)=1) (profiler_analysis.cpp:769)
+2026-08-12 01:25:38.646 | info     |           Metal |   [           0 ..      3413700) |########################################|      143 (profiler_analysis.cpp:774)
+2026-08-12 01:25:38.646 | info     |           Metal |   [     3413700 ..      6827400) |##                                      |        6 (profiler_analysis.cpp:774)
+2026-08-12 01:25:38.646 | info     |           Metal |   [     6827400 ..     10241100) |                                        |        0 (profiler_analysis.cpp:774)
+2026-08-12 01:25:38.646 | info     |           Metal |   [    10241100 ..     13654800) |#                                       |        3 (profiler_analysis.cpp:774)
+2026-08-12 01:25:38.646 | info     |           Metal |   [    13654800 ..     17068500) |                                        |        0 (profiler_analysis.cpp:774)
+2026-08-12 01:25:38.646 | info     |           Metal |   [    17068500 ..     20482200) |                                        |        0 (profiler_analysis.cpp:774)
+2026-08-12 01:25:38.646 | info     |           Metal |   [    20482200 ..     23895900) |#####                                   |       18 (profiler_analysis.cpp:774)
+2026-08-12 01:25:38.646 | info     |           Metal |   [    23895900 ..     27309600) |                                        |        0 (profiler_analysis.cpp:774)
+2026-08-12 01:25:38.646 | info     |           Metal |   [    27309600 ..     30723300) |                                        |        0 (profiler_analysis.cpp:774)
+2026-08-12 01:25:38.646 | info     |           Metal |   [    30723300 ..     34137000) |#                                       |        2 (profiler_analysis.cpp:774)
+
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+../muse-glimmer_pyenv/lib/python3.12/site-packages/pydantic/_internal/_config.py:291
+  /home/ttuser/dev/muse-glimmer/muse-glimmer_pyenv/lib/python3.12/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/ttuser/dev/muse-glimmer/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+3.95s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_perf_prefill[full]
+1.33s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_perf_prefill[full]
+0.84s teardown models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_perf_prefill[full]
+=========================== short test summary info ============================
+PASSED models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_perf_prefill[full]
+======================== 1 passed, 3 warnings in 7.13s =========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+nanobind: leaked 4 instances!
+ - leaked instance 0x79c0f5c5d088 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x79c0f5c5cea8 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x79c0c2ec38e8 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x79c0f0b69338 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 26 types!
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.multi_device.MeshMapperConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - ... skipped remainder
+nanobind: leaked 282 functions!
+ - leaked function ""
+ - leaked function "get_layout"
+ - leaked function ""
+ - leaked function "is_per_core_allocated"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "quiesce_devices"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-12 01:25:40.652 | info     |    BuildKernels | JIT cache stats: 187/187 hits (100.0%) [187 cached, 35 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-12 01:25:40.652 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-12 01:25:40.666 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-12 01:25:40.666 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-12 01:25:41.064 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-12 01:25:41.064 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-12 01:25:41.064 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)
+
+Timer resolution: 0 ns
+
+Frames: 2
+Time span: 10.7 s
+Zones: 324,534
+Elapsed time: 10.51 s
+Saving trace... done!
+Trace size 2983.03 KB (18.41% ratio)
+2026-08-12 01:25:41.202 | INFO     | __main__:main:469 - Copying /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/ttuser/dev/muse-glimmer/tt-metal/build/profiler/build_wasm/traces/test_functional_decoder_2026_08_12_01_25_41.tracy
+2026-08-12 01:25:41.203 | INFO     | __main__:main:472 - Copied /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/ttuser/dev/muse-glimmer/tt-metal/build/profiler/build_wasm/traces/test_functional_decoder_2026_08_12_01_25_41.tracy
+2026-08-12 01:25:41.203 | INFO     | __main__:main:481 - embed.tracy -> traces/test_functional_decoder_2026_08_12_01_25_41.tracy
+2026-08-12 01:25:41.203 | INFO     | tracy.serve_wasm:launch_server_subprocess:284 - Launching tracy web app GUI server subprocess...
+2026-08-12 01:25:41.203 | INFO     | tracy.serve_wasm:launch_server_subprocess:287 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-08-12 01:25:41.204 | INFO     | tracy.serve_wasm:launch_server_subprocess:294 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
+2026-08-12 01:25:41.320 | INFO     | tracy:generate_report:162 - Host side ops time report generated at /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_ops_times.csv
+2026-08-12 01:25:41.327 | INFO     | tracy:generate_report:173 - Host side ops data report generated at /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_ops_data.csv
+2026-08-12 01:25:41.327 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:422 - Importing ops logs
+/home/ttuser/dev/muse-glimmer/tt-metal/tools/tracy/process_ops_logs.py:527: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(tracyOpTimesLog)
+2026-08-12 01:25:41.660 | INFO     | tracy.perf_counter_analysis:get_device_op_data:2140 - Getting device ops
+2026-08-12 01:25:41.660 | INFO     | tracy.process_ops_logs:append_device_data:1086 - Appending device data
+2026-08-12 01:25:41.999 | INFO     | tracy.process_ops_logs:generate_reports:1419 - OPs' perf analysis is finished! Generating reports ...
+2026-08-12 01:25:41.999 | INFO     | tracy.process_ops_logs:generate_reports:1439 - Copying runtime artifacts
+2026-08-12 01:25:42.011 | INFO     | tracy.process_ops_logs:generate_reports:1448 - Generating OPs CSV
+2026-08-12 01:25:42.056 | INFO     | tracy.process_ops_logs:generate_reports:1904 - OPs csv generated at: /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/reports/2026_08_12_01_25_41/ops_perf_results_2026_08_12_01_25_41.csv
+=== dropped-marker integrity check (all must be 0) ===
+/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/fused_decoder/logs/tracy_decode_131071_full.log:0
+/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/fused_decoder/logs/tracy_decode_131071_sliding.log:0
+/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/fused_decoder/logs/tracy_decode_full.log:0
+/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/fused_decoder/logs/tracy_decode_sliding.log:0
+/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/fused_decoder/logs/tracy_prefill_16384_baseline_full.log:0
+/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/fused_decoder/logs/tracy_prefill_16384_baseline_sliding.log:0
+/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/fused_decoder/logs/tracy_prefill_16384_full.log:0
+/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/fused_decoder/logs/tracy_prefill_16384_sliding.log:0
+/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/fused_decoder/logs/tracy_prefill_full.log:0
+/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/fused_decoder/logs/tracy_prefill_sliding.log:0

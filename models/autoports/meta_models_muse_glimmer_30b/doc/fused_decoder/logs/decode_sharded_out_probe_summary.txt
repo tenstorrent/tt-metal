@@ -1,0 +1,6 @@
+# models/autoports/meta_models_muse_glimmer_30b/doc/fused_decoder/tracy/probes/decode_sharded_out_ops.csv
+# 102 'MatmulDeviceOperation,InterleavedToSharded' rows in 10 groups
+=== o_proj  shipped_dram_then_reshard median 149.4 us (32 rows)  [MatmulDeviceOperation:146.87 + InterleavedToSharded:2.48] ===
+    adapted_4x2                    222.1 us  -32.77 %
+=== mlp_down  shipped_dram_then_reshard median 700.9 us (32 rows)  [MatmulDeviceOperation:698.40 + InterleavedToSharded:2.47] ===
+    adapted_4x2                   1071.5 us  -34.59 %

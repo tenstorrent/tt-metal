@@ -1,0 +1,8 @@
+CK sliding  hifi2(shipped) S= 2049     20.77 ms  PCC=0.99947255680709
+CK sliding  hifi2(shipped) S= 8192     86.10 ms  PCC=0.9994306044971282
+CK sliding  op-default     S= 2049     23.35 ms  PCC=0.9997955416150899
+CK sliding  op-default     S= 8192     88.60 ms  PCC=0.9997733217600291
+CK full     hifi2(shipped) S= 2049     20.35 ms  PCC=0.9994255727053223
+CK full     hifi2(shipped) S= 8192     85.28 ms  PCC=0.9993389383445889
+CK full     op-default     S= 2049     20.68 ms  PCC=0.9997851722143067
+CK full     op-default     S= 8192     87.66 ms  PCC=0.9997380072921016

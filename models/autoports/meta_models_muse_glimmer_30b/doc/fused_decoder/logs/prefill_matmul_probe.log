@@ -1,0 +1,72 @@
+MM wqkv    auto (shipped)                           2.654 ms    189.3 TFLOPs  PCC=0.9998428690003954
+MM wqkv    auto+ck                                  2.659 ms    189.0 TFLOPs  PCC=0.9998428690003954
+MM wqkv    2D 8x1 in0=8 pcN=18                  FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+MM wqkv    2D 8x2 in0=8 pcN=18                  FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+MM wqkv    2D 8x4 in0=4 pcN=18                  FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+MM wqkv    2D 8x8 in0=2 pcN=18                  FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+MM wqkv    2D 11x1 in0=8 pcN=14                 FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+MM wqkv    2D 11x2 in0=8 pcN=14                 FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+MM wqkv    2D 11x4 in0=4 pcN=14                 FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+MM wqkv    minimal_matmul default ck                2.383 ms    210.9 TFLOPs  PCC=0.9999945066480682
+MM wqkv    minimal_matmul hifi2 ck (shipped)        2.328 ms    215.9 TFLOPs  PCC=0.9999468591659517
+MM wqkv    minimal_matmul fused_activation=silu     2.688 ms    186.9 TFLOPs  PCC=0.9934833395242033
+MM wqkv    minimal cfg M4 K2 N4 sw4                 3.316 ms    151.5 TFLOPs  PCC=0.9999139430614983
+MM wqkv    minimal cfg M8 K2 N4 sw4                 2.570 ms    195.5 TFLOPs  PCC=0.9999139430614983
+MM wqkv    minimal cfg M4 K4 N4 sw4                 2.758 ms    182.2 TFLOPs  PCC=0.9999434676876225
+MM wqkv    minimal cfg M8 K4 N8 sw4                 2.376 ms    211.5 TFLOPs  PCC=0.9999434966460603
+MM wqkv    minimal cfg M4 K2 N8 sw4                 2.896 ms    173.5 TFLOPs  PCC=0.9999139835438634
+MM wqkv    minimal cfg M16 K2 N4 sw4                2.532 ms    198.5 TFLOPs  PCC=0.9999139430614983
+MM o_proj  auto (shipped)                           4.890 ms     91.3 TFLOPs  PCC=0.9998980646142916
+MM o_proj  auto+ck                                  4.899 ms     91.2 TFLOPs  PCC=0.9998980646142916
+MM o_proj  2D 8x1 in0=8 pcN=26                  FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+MM o_proj  2D 8x2 in0=8 pcN=26                  FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+MM o_proj  2D 8x4 in0=8 pcN=26                  FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+MM o_proj  2D 8x8 in0=8 pcN=26                  FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+MM o_proj  2D 11x1 in0=8 pcN=19                 FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+MM o_proj  2D 11x2 in0=8 pcN=19                 FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+MM o_proj  2D 11x4 in0=8 pcN=19                 FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+MM o_proj  minimal_matmul default ck                2.274 ms    196.4 TFLOPs  PCC=0.9999945014714948
+MM o_proj  minimal_matmul hifi2 ck (shipped)        2.190 ms    203.9 TFLOPs  PCC=0.9999540229310571
+MM o_proj  minimal_matmul fused_activation=silu     2.584 ms    172.9 TFLOPs  PCC=0.995942641907694
+MM o_proj  minimal cfg M4 K2 N4 sw4                 3.140 ms    142.3 TFLOPs  PCC=0.999941751689013
+MM o_proj  minimal cfg M8 K2 N4 sw4                 2.440 ms    183.0 TFLOPs  PCC=0.999941751689013
+MM o_proj  minimal cfg M4 K4 N4 sw4                 2.642 ms    169.0 TFLOPs  PCC=0.9999575140818492
+MM o_proj  minimal cfg M8 K4 N8 sw4                 2.298 ms    194.4 TFLOPs  PCC=0.9999575191154579
+MM o_proj  minimal cfg M4 K2 N8 sw4                 2.711 ms    164.7 TFLOPs  PCC=0.9999417599502726
+MM o_proj  minimal cfg M16 K2 N4 sw4                2.376 ms    188.0 TFLOPs  PCC=0.999941751689013
+MM mlp_gate auto (shipped)                          23.789 ms     91.5 TFLOPs  PCC=0.9998429316552052
+MM mlp_gate auto+ck                                 23.742 ms     91.7 TFLOPs  PCC=0.9998429316552052
+MM mlp_gate 2D 8x1 in0=8 pcN=78                  FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+MM mlp_gate 2D 8x2 in0=8 pcN=78                  FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+MM mlp_gate 2D 8x4 in0=4 pcN=78                  FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+MM mlp_gate 2D 8x8 in0=2 pcN=78                  FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+MM mlp_gate 2D 11x1 in0=8 pcN=57                 FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+MM mlp_gate 2D 11x2 in0=8 pcN=57                 FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+MM mlp_gate 2D 11x4 in0=4 pcN=57                 FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+MM mlp_gate minimal_matmul default ck               10.496 ms    207.5 TFLOPs  PCC=0.9999945079510373
+MM mlp_gate minimal_matmul hifi2 ck (shipped)       10.283 ms    211.8 TFLOPs  PCC=0.9999468888619956
+MM mlp_gate minimal_matmul fused_activation=silu    12.101 ms    180.0 TFLOPs  PCC=0.9934857429700269
+MM mlp_gate minimal cfg M4 K2 N4 sw4                15.283 ms    142.5 TFLOPs  PCC=0.9999139425370113
+MM mlp_gate minimal cfg M8 K2 N4 sw4                13.846 ms    157.3 TFLOPs  PCC=0.9999139425370113
+MM mlp_gate minimal cfg M4 K4 N4 sw4                12.946 ms    168.2 TFLOPs  PCC=0.9999434937747448
+MM mlp_gate minimal cfg M8 K4 N8 sw4                10.349 ms    210.4 TFLOPs  PCC=0.9999435076518951
+MM mlp_gate minimal cfg M4 K2 N8 sw4                11.351 ms    191.8 TFLOPs  PCC=0.9999139322696344
+MM mlp_gate minimal cfg M16 K2 N4 sw4               13.005 ms    167.4 TFLOPs  PCC=0.9999139425370113
+MM mlp_down auto (shipped)                          22.608 ms     96.3 TFLOPs  PCC=0.9995564439531198
+MM mlp_down auto+ck                                 22.606 ms     96.3 TFLOPs  PCC=0.9995564439531198
+MM mlp_down 2D 8x1 in0=8 pcN=26                  FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+MM mlp_down 2D 8x2 in0=8 pcN=26                  FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+MM mlp_down 2D 8x4 in0=6 pcN=26                  FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+MM mlp_down 2D 8x8 in0=6 pcN=26                  FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+MM mlp_down 2D 11x1 in0=8 pcN=19                 FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+MM mlp_down 2D 11x2 in0=8 pcN=19                 FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+MM mlp_down 2D 11x4 in0=6 pcN=19                 FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+MM mlp_down minimal_matmul default ck               10.003 ms    217.7 TFLOPs  PCC=0.999994501296899
+MM mlp_down minimal_matmul hifi2 ck (shipped)        9.594 ms    227.0 TFLOPs  PCC=0.9999105979375552
+MM mlp_down minimal_matmul fused_activation=silu    10.212 ms    213.2 TFLOPs  PCC=0.9818324640332655
+MM mlp_down minimal cfg M4 K2 N4 sw4                14.778 ms    147.4 TFLOPs  PCC=0.9997703481304187
+MM mlp_down minimal cfg M8 K2 N4 sw4                11.397 ms    191.1 TFLOPs  PCC=0.9997703481304187
+MM mlp_down minimal cfg M4 K4 N4 sw4                12.243 ms    177.9 TFLOPs  PCC=0.9998714968064883
+MM mlp_down minimal cfg M8 K4 N8 sw4                10.729 ms    203.0 TFLOPs  PCC=0.9998714495443884
+MM mlp_down minimal cfg M4 K2 N8 sw4                12.386 ms    175.8 TFLOPs  PCC=0.9997703010290605
+MM mlp_down minimal cfg M16 K2 N4 sw4               11.018 ms    197.6 TFLOPs  PCC=0.9997703481304187

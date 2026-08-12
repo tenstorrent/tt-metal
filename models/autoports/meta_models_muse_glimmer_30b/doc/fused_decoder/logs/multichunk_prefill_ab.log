@@ -1,0 +1,60 @@
+2026-08-12 01:15:11.057 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-12 01:15:12.473 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-12 01:15:12.473 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-12 01:15:12.473 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-12 01:15:12.473 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-12 01:15:12.485 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-12 01:15:12.485 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-12 01:15:12.563 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-12 01:15:12.563 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-12 01:15:12.563 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-12 01:15:12.563 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-12 01:15:12.565 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-12 01:15:12.811 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-12 01:15:12.925 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-12 01:15:12.925 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-12 01:15:12.925 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-12 01:15:12.925 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-12 01:15:12.925 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-12 01:15:12.964 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+AB mc16384      impl=functional       kind=sliding  prefill16384=min  228.18 ms (229.43/228.18/229.01)  traced_decode@2048=min  3.201 ms/token (3.202/3.201/3.202)
+AB mc16384      impl=fused            kind=sliding  prefill16384=min  142.07 ms (142.07/142.75/142.60)  traced_decode@2048=min  2.734 ms/token (2.741/2.735/2.734)
+AB mc16384      impl=functional       kind=full     prefill16384=min  243.63 ms (243.63/244.39/244.08)  traced_decode@2048=min  3.103 ms/token (3.104/3.104/3.103)
+AB mc16384      impl=fused            kind=full     prefill16384=min  152.98 ms (152.98/153.97/153.94)  traced_decode@2048=min  2.708 ms/token (2.771/2.709/2.708)
+nanobind: leaked 3 instances!
+ - leaked instance 0x748c72a00c78 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x748cc69c4f98 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x748cc69c4db8 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+nanobind: leaked 24 types!
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.multi_device.MeshMapperConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - ... skipped remainder
+nanobind: leaked 282 functions!
+ - leaked function "from_json"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "set_program_cache_misses_allowed"
+ - leaked function "get_system_mesh_id"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "device"
+ - leaked function ""
+ - leaked function "to_json"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-12 01:15:34.910 | info     |    BuildKernels | JIT cache stats: 381/381 hits (100.0%) [381 cached, 144 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-12 01:15:34.910 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-12 01:15:34.926 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-12 01:15:34.926 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-12 01:15:35.392 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-12 01:15:35.392 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-12 01:15:35.392 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

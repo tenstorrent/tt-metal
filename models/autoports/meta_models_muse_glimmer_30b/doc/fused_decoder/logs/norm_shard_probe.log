@@ -1,0 +1,14 @@
+NORM interleaved DRAM (baseline, 1 core)          min    134.4 us/call  (rounds 134.6/134.4/134.4)  PCC=0.9999982778799701
+NORM rect 2x1   2c bw=104 sw=4                    FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1779: tt::exception
+NORM rect 2x2   4c bw= 52 sw=4                    min     31.0 us/call  (rounds 31.0/31.0/31.0)  PCC=0.9999964507383405
+NORM rect 4x1   4c bw= 52 sw=4                    min     29.3 us/call  (rounds 29.3/29.3/29.3)  PCC=0.9999964170427196
+NORM rect 4x2   8c bw= 26 sw=2                    min     22.8 us/call  (rounds 22.8/22.8/23.1)  PCC=0.9999964630585627
+NORM rect 2x4   8c bw= 26 sw=2                    min     23.4 us/call  (rounds 23.4/23.5/23.8)  PCC=0.9999965165194905
+NORM rect 8x1   8c bw= 26 sw=2                    min     23.0 us/call  (rounds 26.2/23.0/23.5)  PCC=0.9999963934330003
+NORM rect 4x4  16c bw= 13 sw=1                    min     25.4 us/call  (rounds 25.7/25.5/25.4)  PCC=0.9999965165194905
+NORM rect 8x2  16c bw= 13 sw=1                    min     24.4 us/call  (rounds 24.7/24.6/24.4)  PCC=0.9999964897946886
+NORM rect 2x8  16c bw= 13 sw=1                    min     26.4 us/call  (rounds 26.8/26.7/26.4)  PCC=0.9999964785174444
+NORM prefix bbox11x2  13c bw= 16 sw=4             min     25.3 us/call  (rounds 25.4/25.3/25.6)  PCC=0.9999964456570142
+NORM prefix bbox11x3  26c bw=  8 sw=4             min     28.0 us/call  (rounds 28.4/28.1/28.0)  PCC=0.9999964456570142
+NORM prefix bbox11x5  52c bw=  4 sw=4             min     37.7 us/call  (rounds 38.8/38.1/37.7)  PCC=0.9999964456570142
+NORM prefix bbox11x10 104c bw=  2 sw=2            min     57.6 us/call  (rounds 64.3/57.6/58.9)  PCC=0.9999964456570142

@@ -1,0 +1,68 @@
+2026-08-12 01:14:20.628 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-12 01:14:22.051 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-12 01:14:22.051 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-12 01:14:22.051 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-12 01:14:22.051 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-12 01:14:22.063 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-12 01:14:22.063 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-12 01:14:22.140 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-12 01:14:22.140 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-12 01:14:22.140 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-12 01:14:22.140 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-12 01:14:22.142 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-12 01:14:22.405 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-12 01:14:22.524 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-12 01:14:22.524 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-12 01:14:22.524 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-12 01:14:22.524 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-12 01:14:22.524 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-12 01:14:22.562 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+AB              impl=functional       kind=sliding  prefill8192=min  107.70 ms (107.76/107.88/107.70)  traced_decode@2048=min  3.201 ms/token (3.201/3.201/3.201)
+AB              impl=fused            kind=sliding  prefill8192=min   64.85 ms (64.85/67.01/67.09)  traced_decode@2048=min  2.734 ms/token (2.754/2.734/2.734)
+AB              impl=packed_gate_up   kind=sliding  prefill8192=min   66.42 ms (66.42/67.80/67.86)  traced_decode@2048=min  2.758 ms/token (2.776/2.758/2.758)
+AB              impl=swiglu           kind=sliding  prefill8192=min   67.73 ms (67.73/69.03/69.15)  traced_decode@2048=min  2.767 ms/token (2.786/2.767/2.768)
+AB              impl=packed_qkv_gate  kind=sliding  prefill8192=min   66.09 ms (66.09/67.39/67.78)  traced_decode@2048=min  2.737 ms/token (2.761/2.737/2.738)
+AB              impl=fused_kv_update  kind=sliding  prefill8192=min   65.62 ms (65.62/67.23/66.98)  traced_decode@2048=min  2.736 ms/token (2.764/2.736/2.736)
+AB              impl=functional       kind=full     prefill8192=min  107.98 ms (108.23/108.16/107.98)  traced_decode@2048=min  3.103 ms/token (3.103/3.103/3.103)
+AB              impl=fused            kind=full     prefill8192=min   64.06 ms (64.06/66.25/66.76)  traced_decode@2048=min  2.707 ms/token (2.738/2.707/2.707)
+AB              impl=packed_gate_up   kind=full     prefill8192=min   65.66 ms (65.66/68.08/67.94)  traced_decode@2048=min  2.729 ms/token (2.757/2.729/2.729)
+AB              impl=swiglu           kind=full     prefill8192=min   67.64 ms (67.64/69.23/69.33)  traced_decode@2048=min  2.739 ms/token (2.764/2.739/2.740)
+AB              impl=packed_qkv_gate  kind=full     prefill8192=min   65.31 ms (65.31/67.11/67.50)  traced_decode@2048=min  2.709 ms/token (2.746/2.709/2.709)
+AB              impl=fused_kv_update  kind=full     prefill8192=min   64.93 ms (64.93/66.48/66.77)  traced_decode@2048=min  2.705 ms/token (2.742/2.705/2.705)
+nanobind: leaked 3 instances!
+ - leaked instance 0x75bdb1eb0f48 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x75bdb1eb0d68 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x75bd5df8cb28 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 24 types!
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.multi_device.MeshMapperConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - ... skipped remainder
+nanobind: leaked 282 functions!
+ - leaked function ""
+ - leaked function "get_submeshes"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "get_view"
+ - leaked function "__init__"
+ - leaked function ""
+ - leaked function "get_num_devices"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-12 01:15:09.120 | info     |    BuildKernels | JIT cache stats: 428/428 hits (100.0%) [428 cached, 152 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-12 01:15:09.120 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-12 01:15:09.136 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-12 01:15:09.136 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-12 01:15:09.590 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-12 01:15:09.590 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-12 01:15:09.590 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

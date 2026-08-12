@@ -1,0 +1,16 @@
+PROBE device compute grid = 11x10 = 110 cores
+PROBE batch= 1 overlap_qk_coregrid=True  q={[0-0 - 0-0]} k={[0-0 - 0-0]} v={[0-0 - 0-0]} k_and_v_disjoint=False
+PROBE batch= 1 overlap=True  paged_fused_update_cache REJECTED: input_tensor1 ({[0-0 - 0-0]}) and input_tensor2 ({[0-0 - 0-0]}) must not overlap
+PROBE batch= 1 overlap_qk_coregrid=False q={[0-0 - 0-0]} k={[0-0 - 0-0]} v={[0-0 - 0-0]} k_and_v_disjoint=False
+PROBE batch= 1 overlap=False paged_fused_update_cache REJECTED: input_tensor1 ({[0-0 - 0-0]}) and input_tensor2 ({[0-0 - 0-0]}) must not overlap
+PROBE batch= 1 WIDTH_SHARDED input, overlap=False: k={[1-0 - 1-0]} v={[0-0 - 0-0]} k_and_v_disjoint=True
+PROBE batch= 4 overlap_qk_coregrid=True  q={[0-0 - 3-0]} k={[0-0 - 3-0]} v={[0-0 - 3-0]} k_and_v_disjoint=False
+PROBE batch= 4 overlap=True  paged_fused_update_cache REJECTED: input_tensor1 ({[0-0 - 3-0]}) and input_tensor2 ({[0-0 - 3-0]}) must not overlap
+PROBE batch= 4 overlap_qk_coregrid=False q={[0-0 - 3-0]} k={[0-0 - 3-0]} v={[0-0 - 3-0]} k_and_v_disjoint=False
+PROBE batch= 4 overlap=False paged_fused_update_cache REJECTED: input_tensor1 ({[0-0 - 3-0]}) and input_tensor2 ({[0-0 - 3-0]}) must not overlap
+PROBE batch= 4 WIDTH_SHARDED input, overlap=False: k={[4-0 - 7-0]} v={[0-0 - 3-0]} k_and_v_disjoint=True
+PROBE batch=32 overlap_qk_coregrid=True  q={[0-0 - 10-1], [0-2 - 9-2]} k={[0-0 - 10-1], [0-2 - 9-2]} v={[0-0 - 10-1], [0-2 - 9-2]} k_and_v_disjoint=False
+PROBE batch=32 overlap=True  paged_fused_update_cache REJECTED: input_tensor1 ({[0-0 - 10-1], [0-2 - 9-2]}) and input_tensor2 ({[0-0 - 10-1], [0-2 - 9-2]}) must not overlap
+PROBE batch=32 overlap_qk_coregrid=False q={[0-0 - 10-1], [0-2 - 9-2]} k={[0-0 - 10-1], [0-2 - 9-2]} v={[0-0 - 10-1], [0-2 - 9-2]} k_and_v_disjoint=False
+PROBE batch=32 overlap=False paged_fused_update_cache REJECTED: input_tensor1 ({[0-0 - 10-1], [0-2 - 9-2]}) and input_tensor2 ({[0-0 - 10-1], [0-2 - 9-2]}) must not overlap
+PROBE batch=32 WIDTH_SHARDED input, overlap=False: k={[10-2 - 10-2], [0-3 - 10-4], [0-5 - 8-5]} v={[0-0 - 10-1], [0-2 - 9-2]} k_and_v_disjoint=True

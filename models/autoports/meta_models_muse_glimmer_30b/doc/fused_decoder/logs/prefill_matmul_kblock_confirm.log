@@ -1,0 +1,84 @@
+2026-08-12 00:04:54.351 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-12 00:04:54.490 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-12 00:04:54.490 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-12 00:04:54.490 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-12 00:04:54.490 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-12 00:04:54.502 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-12 00:04:54.502 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-12 00:04:54.580 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-12 00:04:54.580 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-12 00:04:54.580 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-12 00:04:54.580 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-12 00:04:54.581 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-12 00:04:54.810 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-12 00:04:54.936 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-12 00:04:54.936 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-12 00:04:54.937 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-12 00:04:54.937 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-12 00:04:54.937 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-12 00:04:54.975 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+AB rows=8192 wqkv     control default  default    2.315 ms  cand    2.390 ms   -3.14 %  (default spread 0.547, cand spread 0.514)  PCC=0.9999468591659517
+AB rows=8192 wqkv     M8 K13 N8        default    2.329 ms  cand    2.429 ms   -4.12 %  (default spread 0.514, cand spread 0.496)  PCC=0.9999326705994029
+AB rows=8192 wqkv     M8 K6 N8         default    2.337 ms  cand    2.425 ms   -3.62 %  (default spread 0.530, cand spread 0.504)  PCC=0.9999483492739274
+AB rows=8192 o_proj   control default  default    2.205 ms  cand    2.275 ms   -3.07 %  (default spread 0.372, cand spread 0.341)  PCC=0.9999540229310571
+AB rows=8192 o_proj   M8 K13 N8        default    2.184 ms  cand    2.230 ms   -2.07 %  (default spread 0.358, cand spread 0.301)  PCC=0.9999377838953973
+AB rows=8192 o_proj   M16 K4 N8        default    2.197 ms  cand    2.196 ms   +0.05 %  (default spread 0.393, cand spread 0.373)  PCC=0.9999575191154579
+AB rows=8192 o_proj   M8 K4 N8         default    2.177 ms  cand    2.187 ms   -0.43 %  (default spread 0.427, cand spread 0.412)  PCC=0.9999575191154579
+AB rows=8192 mlp_gate control default  default   10.211 ms  cand   11.444 ms  -10.77 %  (default spread 3.833, cand spread 2.417)  PCC=0.9999468888619956
+AB rows=8192 mlp_gate M8 K6 N16        default   10.404 ms  cand   11.366 ms   -8.47 %  (default spread 3.771, cand spread 2.458)  PCC=0.9999483326008566
+AB rows=8192 mlp_gate M16 K6 N8        default   10.282 ms  cand   11.131 ms   -7.63 %  (default spread 3.646, cand spread 2.577)  PCC=0.9999483287744109
+AB rows=8192 mlp_gate M8 K13 N8        default   10.416 ms  cand   11.400 ms   -8.63 %  (default spread 3.577, cand spread 2.556)  PCC=0.9999327077945289
+AB rows=8192 mlp_down control default  default    9.729 ms  cand   10.907 ms  -10.81 %  (default spread 4.019, cand spread 2.933)  PCC=0.9999105979375552
+AB rows=8192 mlp_down M8 K6 N8         default    9.813 ms  cand   11.043 ms  -11.14 %  (default spread 4.026, cand spread 2.851)  PCC=0.9999002196621832
+AB rows=8192 mlp_down M8 K16 N8        default    9.795 ms  cand   11.018 ms  -11.10 %  (default spread 3.954, cand spread 2.786)  PCC=0.9999023437928024
+AB rows=8192 mlp_down M8 K6 N16        default    9.763 ms  cand   11.011 ms  -11.34 %  (default spread 4.009, cand spread 2.921)  PCC=0.9999002847755553
+AB rows=4096 wqkv     control default  default    1.361 ms  cand    1.388 ms   -1.95 %  (default spread 0.205, cand spread 0.197)  PCC=0.9999468819076885
+AB rows=4096 wqkv     M8 K13 N8        default    1.375 ms  cand    1.454 ms   -5.40 %  (default spread 0.183, cand spread 0.200)  PCC=0.9999327607766682
+AB rows=4096 wqkv     M8 K6 N8         default    1.358 ms  cand    1.409 ms   -3.60 %  (default spread 0.187, cand spread 0.206)  PCC=0.99994831622007
+AB rows=4096 o_proj   control default  default    1.217 ms  cand    1.224 ms   -0.51 %  (default spread 0.100, cand spread 0.112)  PCC=0.9999540393730542
+AB rows=4096 o_proj   M8 K13 N8        default    1.206 ms  cand    1.371 ms  -12.05 %  (default spread 0.149, cand spread 0.157)  PCC=0.9999377903091909
+AB rows=4096 o_proj   M16 K4 N8        default    1.215 ms  cand    1.373 ms  -11.55 %  (default spread 0.131, cand spread 0.159)  PCC=0.9999575158788823
+AB rows=4096 o_proj   M8 K4 N8         default    1.225 ms  cand    1.350 ms   -9.26 %  (default spread 0.123, cand spread 0.144)  PCC=0.9999575158788823
+AB rows=4096 mlp_gate control default  default    5.091 ms  cand    5.423 ms   -6.14 %  (default spread 1.921, cand spread 1.704)  PCC=0.9999468943149769
+AB rows=4096 mlp_gate M8 K6 N16        default    5.053 ms  cand    5.403 ms   -6.47 %  (default spread 1.968, cand spread 1.665)  PCC=0.9999483190584684
+AB rows=4096 mlp_gate M16 K6 N8        default    5.194 ms  cand    5.647 ms   -8.02 %  (default spread 1.693, cand spread 1.524)  PCC=0.9999483223295669
+AB rows=4096 mlp_gate M8 K13 N8        default    5.197 ms  cand    5.584 ms   -6.93 %  (default spread 1.888, cand spread 1.533)  PCC=0.99993269410124
+AB rows=4096 mlp_down control default  default    5.088 ms  cand    5.427 ms   -6.25 %  (default spread 1.819, cand spread 1.591)  PCC=0.9999105482331409
+AB rows=4096 mlp_down M8 K6 N8         default    5.113 ms  cand    6.342 ms  -19.39 %  (default spread 1.897, cand spread 1.818)  PCC=0.9999002600316084
+AB rows=4096 mlp_down M8 K16 N8        default    5.123 ms  cand    6.346 ms  -19.28 %  (default spread 1.874, cand spread 1.797)  PCC=0.9999023526712484
+AB rows=4096 mlp_down M8 K6 N16        default    5.066 ms  cand    6.532 ms  -22.45 %  (default spread 1.831, cand spread 1.858)  PCC=0.9999002258066444
+nanobind: leaked 1 instances!
+ - leaked instance 0x76d646101ed8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 42 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.types.Shape"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - ... skipped remainder
+nanobind: leaked 347 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function "__init__"
+ - leaked function ""
+ - leaked function "get_fabric_node_id"
+ - leaked function ""
+ - leaked function "is_allocated"
+ - leaked function "__init__"
+ - leaked function "to_rank"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-12 00:05:38.333 | info     |    BuildKernels | JIT cache stats: 218/218 hits (100.0%) [218 cached, 0 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-12 00:05:38.333 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-12 00:05:38.346 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-12 00:05:38.346 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-12 00:05:38.889 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-12 00:05:38.889 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-12 00:05:38.889 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

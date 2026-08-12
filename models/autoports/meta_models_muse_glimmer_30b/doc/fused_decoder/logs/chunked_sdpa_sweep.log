@@ -1,0 +1,8 @@
+CSDPA start=  8192 total= 16384 chunk= 128  min   36.204 ms  PCC=0.9997806846101951
+CSDPA start=  8192 total= 16384 chunk= 256  min   22.831 ms  PCC=0.9998157435168241
+CSDPA start=  8192 total= 16384 chunk= 320  SKIPPED (chunk_start_idx must divide by q_chunk_size)
+CSDPA start=  8192 total= 16384 chunk= 512  FAILED RuntimeError: info:
+CSDPA start= 32768 total= 40960 chunk= 128  min  109.992 ms  PCC=0.9996469923438803
+CSDPA start= 32768 total= 40960 chunk= 256  min   72.277 ms  PCC=0.9997461507688672
+CSDPA start= 32768 total= 40960 chunk= 320  SKIPPED (chunk_start_idx must divide by q_chunk_size)
+CSDPA start= 32768 total= 40960 chunk= 512  FAILED RuntimeError: info:

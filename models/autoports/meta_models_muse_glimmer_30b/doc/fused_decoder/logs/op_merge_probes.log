@@ -1,0 +1,25 @@
+--- activation placement ---
+PROBE silu + mul (unfused)                                 PCC=0.9999970554662446
+PROBE silu + mul (unfused)                                     4.458 ms
+PROBE mul(input_a_activations=[SILU])                      PCC=0.9999970554662446
+PROBE mul(input_a_activations=[SILU])                          2.539 ms
+PROBE ttnn.linear plain                                       23.964 ms
+PROBE ttnn.linear activation="silu"                           26.461 ms
+--- fused swiglu ---
+PROBE rows=8192 linear x2 + mul(SILU)                      PCC=0.9996729360161349
+PROBE rows=8192 linear x2 + mul(SILU)                         50.715 ms
+PROBE rows=8192 minimal x2 + mul(SILU)  [shipped]          PCC=0.9999854242126436
+PROBE rows=8192 minimal x2 + mul(SILU)  [shipped]             25.718 ms
+PROBE rows=8192 minimal fuse_swiglu                        PCC=0.9999897712417839
+PROBE rows=8192 minimal fuse_swiglu                           24.682 ms
+PROBE rows=32 linear x2 + mul(SILU)                        PCC=0.9998020208899996
+PROBE rows=32 linear x2 + mul(SILU)                            1.406 ms
+PROBE rows=32 minimal x2 + mul(SILU)  [shipped]            PCC=0.999985375116794
+PROBE rows=32 minimal x2 + mul(SILU)  [shipped]                2.175 ms
+PROBE rows=32 minimal fuse_swiglu                          PCC=0.9999897571431888
+PROBE rows=32 minimal fuse_swiglu                              2.593 ms
+--- rope ---
+PROBE rope spelled out (7 ops)                             PCC=0.9999971425603531
+PROBE rope spelled out (7 ops)                                 0.301 ms
+PROBE rotary_embedding_hf (1 op)                           PCC=0.9999961057137331
+PROBE rotary_embedding_hf (1 op)                               0.114 ms

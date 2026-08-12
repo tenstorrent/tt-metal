@@ -1,0 +1,32 @@
+# /tmp/k1.csv
+# 416 'MinimalMatmul' rows in 52 groups
+=== rows=8192 wqkv  default median 2133.7 us (24 rows) ===
+    M8_K13_N8                     2159.8 us   -1.21 %
+    M8_K6_N8                      2154.3 us   -0.95 %
+=== rows=8192 o_proj  default median 2011.9 us (32 rows) ===
+    M8_K13_N8                     1990.7 us   +1.06 %
+    M16_K4_N8                     1955.5 us   +2.88 %
+    M8_K4_N8                      1978.6 us   +1.68 %
+=== rows=8192 mlp_gate  default median 9060.6 us (32 rows) ===
+    M8_K6_N16                     8866.2 us   +2.19 %
+    M16_K6_N8                     8921.1 us   +1.56 %
+    M8_K13_N8                     9018.8 us   +0.46 %
+=== rows=8192 mlp_down  default median 8523.9 us (32 rows) ===
+    M8_K6_N8                      8531.5 us   -0.09 %
+    M8_K16_N8                     8551.2 us   -0.32 %
+    M8_K6_N16                     8579.9 us   -0.65 %
+=== rows=4096 wqkv  default median 1241.4 us (24 rows) ===
+    M8_K13_N8                     1305.6 us   -4.92 %
+    M8_K6_N8                      1277.7 us   -2.84 %
+=== rows=4096 o_proj  default median 1122.3 us (32 rows) ===
+    M8_K13_N8                     1248.2 us  -10.09 %
+    M16_K4_N8                     1258.2 us  -10.80 %
+    M8_K4_N8                      1223.5 us   -8.27 %
+=== rows=4096 mlp_gate  default median 4627.7 us (32 rows) ===
+    M8_K6_N16                     4612.8 us   +0.32 %
+    M16_K6_N8                     4727.1 us   -2.10 %
+    M8_K13_N8                     4657.1 us   -0.63 %
+=== rows=4096 mlp_down  default median 4578.5 us (32 rows) ===
+    M8_K6_N8                      5280.1 us  -13.29 %
+    M8_K16_N8                     5273.0 us  -13.17 %
+    M8_K6_N16                     5512.6 us  -16.94 %

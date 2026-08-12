@@ -1,0 +1,369 @@
+2026-08-12 00:00:25.554 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-12 00:00:25.693 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-12 00:00:25.693 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-12 00:00:25.693 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-12 00:00:25.693 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-12 00:00:25.705 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-12 00:00:25.705 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-12 00:00:25.783 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-12 00:00:25.783 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-12 00:00:25.783 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-12 00:00:25.783 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-12 00:00:25.785 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-12 00:00:26.078 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-12 00:00:26.193 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-12 00:00:26.193 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-12 00:00:26.194 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-12 00:00:26.194 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-12 00:00:26.194 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-12 00:00:26.233 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+grid 11x10  policy HiFi2 fp32_dest_acc_en=False packer_l1_acc=True
+
+=== wqkv     M=8192 K=6656 (208 tiles) N=4608  default subblock 4x2 ===
+MM wqkv     default no-config (shipped)            2.339 ms    214.8 TFLOPs  PCC=0.9999468591659517
+MM wqkv     explicit M8 K8 N8 (= default)          2.333 ms    215.4 TFLOPs  PCC=0.9999468591659517
+MM wqkv     M8 K4 N8 [div]                         2.379 ms    211.3 TFLOPs  PCC=0.9999434966460603
+MM wqkv     M8 K6 N8 [rag]                         2.372 ms    211.9 TFLOPs  PCC=0.9999483492739274
+MM wqkv     M8 K8 N8 [div]                         2.351 ms    213.7 TFLOPs  PCC=0.9999468591659517
+MM wqkv     M8 K10 N8 [rag]                        2.396 ms    209.8 TFLOPs  PCC=0.9999425220918756
+MM wqkv     M8 K12 N8 [rag]                        2.445 ms    205.5 TFLOPs  PCC=0.9999360765379685
+MM wqkv     M8 K13 N8 [div]                        2.370 ms    212.0 TFLOPs  PCC=0.9999326705994029
+MM wqkv     M8 K16 N8 [div]                        2.395 ms    209.8 TFLOPs  PCC=0.9999207695929345
+2026-08-12 00:00:35.757 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1815424 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM wqkv     M8 K20 N8 [rag]                    FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:00:36.258 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2077568 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM wqkv     M8 K24 N8 [rag]                    FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:00:36.768 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2208640 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM wqkv     M8 K26 N8 [div]                    FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:00:37.276 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2601856 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM wqkv     M8 K32 N8 [rag]                    FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:00:37.776 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 3060608 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM wqkv     M8 K39 N8 [rag]                    FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:00:38.277 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 3650432 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM wqkv     M8 K48 N8 [rag]                    FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:00:38.775 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 3912576 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM wqkv     M8 K52 N8 [div]                    FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:00:39.287 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4699008 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM wqkv     M8 K64 N8 [rag]                    FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:00:39.786 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 7320448 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM wqkv     M8 K104 N8 [div]                   FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:00:40.288 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 8893312 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM wqkv     M8 K128 N8 [rag]                   FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+--- wqkv     best K_block by time: [8, 13] ---
+MM wqkv     M4 K8 N8                               2.606 ms    192.9 TFLOPs  PCC=0.9999468591659517
+MM wqkv     M8 K8 N4                               2.373 ms    211.8 TFLOPs  PCC=0.9999468569378877
+MM wqkv     M4 K8 N4                               2.603 ms    193.1 TFLOPs  PCC=0.9999468569378877
+2026-08-12 00:00:43.828 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1684352 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM wqkv     M16 K8 N8                          FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:00:44.331 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1684352 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM wqkv     M8 K8 N16                          FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:00:44.830 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2732928 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM wqkv     M16 K8 N16                         FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+MM wqkv     M4 K13 N8                              2.667 ms    188.4 TFLOPs  PCC=0.9999326705994029
+MM wqkv     M8 K13 N4                              2.413 ms    208.3 TFLOPs  PCC=0.9999326630628914
+MM wqkv     M4 K13 N4                              2.612 ms    192.4 TFLOPs  PCC=0.9999326630628914
+2026-08-12 00:00:48.365 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2175872 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM wqkv     M16 K13 N8                         FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:00:48.857 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2175872 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM wqkv     M8 K13 N16                         FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:00:49.357 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 3388288 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM wqkv     M16 K13 N16                        FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+SUMMARY wqkv     default 2.339 ms vs best K_block=8 2.351 ms (-0.51 %)
+
+=== o_proj   M=8192 K=4096 (128 tiles) N=6656  default subblock 4x2 ===
+MM o_proj   default no-config (shipped)            2.179 ms    205.0 TFLOPs  PCC=0.9999540229310571
+MM o_proj   explicit M8 K8 N8 (= default)          2.203 ms    202.8 TFLOPs  PCC=0.9999540229310571
+MM o_proj   M8 K4 N8 [div]                         2.172 ms    205.7 TFLOPs  PCC=0.9999575191154579
+MM o_proj   M8 K6 N8 [rag]                         2.248 ms    198.7 TFLOPs  PCC=0.9999574840962464
+MM o_proj   M8 K8 N8 [div]                         2.175 ms    205.4 TFLOPs  PCC=0.9999540229310571
+MM o_proj   M8 K10 N8 [rag]                        2.322 ms    192.4 TFLOPs  PCC=0.9999484607300745
+MM o_proj   M8 K12 N8 [rag]                        2.341 ms    190.8 TFLOPs  PCC=0.9999416553427612
+MM o_proj   M8 K13 N8 [rag]                        2.120 ms    210.7 TFLOPs  PCC=0.9999377838953973
+MM o_proj   M8 K16 N8 [div]                        2.278 ms    196.1 TFLOPs  PCC=0.9999244879562343
+2026-08-12 00:00:59.685 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1815424 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM o_proj   M8 K20 N8 [rag]                    FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:01:00.189 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2077568 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM o_proj   M8 K24 N8 [rag]                    FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:01:00.683 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2208640 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM o_proj   M8 K26 N8 [rag]                    FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:01:01.184 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2601856 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM o_proj   M8 K32 N8 [div]                    FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:01:01.682 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 3060608 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM o_proj   M8 K39 N8 [rag]                    FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:01:02.184 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 3650432 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM o_proj   M8 K48 N8 [rag]                    FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:01:02.687 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 3912576 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM o_proj   M8 K52 N8 [rag]                    FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:01:03.187 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4699008 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM o_proj   M8 K64 N8 [div]                    FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:01:03.688 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 7320448 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM o_proj   M8 K104 N8 [rag]                   FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:01:04.193 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 8893312 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM o_proj   M8 K128 N8 [div]                   FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+--- o_proj   best K_block by time: [13, 4] ---
+MM o_proj   M4 K13 N8                              2.607 ms    171.3 TFLOPs  PCC=0.9999377838953973
+MM o_proj   M8 K13 N4                              2.154 ms    207.4 TFLOPs  PCC=0.999937783296237
+MM o_proj   M4 K13 N4                              2.424 ms    184.3 TFLOPs  PCC=0.999937783296237
+2026-08-12 00:01:08.251 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2175872 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM o_proj   M16 K13 N8                         FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:01:08.751 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2175872 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM o_proj   M8 K13 N16                         FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:01:09.250 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 3388288 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM o_proj   M16 K13 N16                        FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+MM o_proj   M4 K4 N8                               2.523 ms    177.1 TFLOPs  PCC=0.9999575191154579
+MM o_proj   M8 K4 N4                               2.261 ms    197.6 TFLOPs  PCC=0.9999575140818492
+MM o_proj   M4 K4 N4                               2.631 ms    169.8 TFLOPs  PCC=0.9999575140818492
+MM o_proj   M16 K4 N8                              2.137 ms    209.1 TFLOPs  PCC=0.9999575191154579
+MM o_proj   M8 K4 N16                              2.226 ms    200.6 TFLOPs  PCC=0.9999575216547817
+2026-08-12 00:01:15.510 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2208640 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM o_proj   M16 K4 N16                         FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+SUMMARY o_proj   default 2.179 ms vs best K_block=13 2.120 ms (+2.81 %)
+
+=== mlp_gate M=8192 K=6656 (208 tiles) N=19968  default subblock 2x4 ===
+MM mlp_gate default no-config (shipped)           10.274 ms    212.0 TFLOPs  PCC=0.9999468888619956
+MM mlp_gate explicit M8 K8 N8 (= default)         10.227 ms    212.9 TFLOPs  PCC=0.9999468888619956
+MM mlp_gate M8 K4 N8 [div]                        10.489 ms    207.6 TFLOPs  PCC=0.9999435076518951
+MM mlp_gate M8 K6 N8 [rag]                        10.170 ms    214.1 TFLOPs  PCC=0.9999483287744109
+MM mlp_gate M8 K8 N8 [div]                        10.241 ms    212.6 TFLOPs  PCC=0.9999468888619956
+MM mlp_gate M8 K10 N8 [rag]                       10.509 ms    207.2 TFLOPs  PCC=0.9999425414568305
+MM mlp_gate M8 K12 N8 [rag]                       10.579 ms    205.8 TFLOPs  PCC=0.999936072911368
+MM mlp_gate M8 K13 N8 [div]                       10.105 ms    215.5 TFLOPs  PCC=0.9999327077945289
+MM mlp_gate M8 K16 N8 [div]                       10.627 ms    204.9 TFLOPs  PCC=0.9999207692100468
+2026-08-12 00:01:39.141 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1815424 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM mlp_gate M8 K20 N8 [rag]                    FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:01:39.648 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2077568 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM mlp_gate M8 K24 N8 [rag]                    FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:01:40.147 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2208640 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM mlp_gate M8 K26 N8 [div]                    FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:01:40.650 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2601856 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM mlp_gate M8 K32 N8 [rag]                    FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:01:41.160 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 3060608 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM mlp_gate M8 K39 N8 [rag]                    FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:01:41.663 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 3650432 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM mlp_gate M8 K48 N8 [rag]                    FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:01:42.159 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 3912576 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM mlp_gate M8 K52 N8 [div]                    FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:01:42.665 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4699008 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM mlp_gate M8 K64 N8 [rag]                    FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:01:43.161 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 7320448 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM mlp_gate M8 K104 N8 [div]                   FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:01:43.660 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 8893312 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM mlp_gate M8 K128 N8 [rag]                   FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+--- mlp_gate best K_block by time: [13, 6] ---
+MM mlp_gate M4 K13 N8                             10.317 ms    211.1 TFLOPs  PCC=0.9999327077945289
+MM mlp_gate M8 K13 N4                             11.686 ms    186.3 TFLOPs  PCC=0.9999327148164788
+MM mlp_gate M4 K13 N4                             11.577 ms    188.1 TFLOPs  PCC=0.9999327148164788
+2026-08-12 00:01:51.289 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2175872 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM mlp_gate M16 K13 N8                         FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:01:51.789 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2175872 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM mlp_gate M8 K13 N16                         FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:01:52.290 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 3388288 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM mlp_gate M16 K13 N16                        FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+MM mlp_gate M4 K6 N8                              10.263 ms    212.2 TFLOPs  PCC=0.9999483287744109
+MM mlp_gate M8 K6 N4                              11.976 ms    181.8 TFLOPs  PCC=0.9999483532870252
+MM mlp_gate M4 K6 N4                              12.283 ms    177.3 TFLOPs  PCC=0.9999483532870252
+MM mlp_gate M16 K6 N8                             10.135 ms    214.9 TFLOPs  PCC=0.9999483287744109
+MM mlp_gate M8 K6 N16                              9.983 ms    218.1 TFLOPs  PCC=0.9999483326008566
+2026-08-12 00:02:04.691 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2470784 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM mlp_gate M16 K6 N16                         FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+SUMMARY mlp_gate default 10.274 ms vs best K_block=13 10.105 ms (+1.67 %)
+
+=== mlp_down M=8192 K=19968 (624 tiles) N=6656  default subblock 4x2 ===
+MM mlp_down default no-config (shipped)            9.620 ms    226.4 TFLOPs  PCC=0.9999105979375552
+MM mlp_down explicit M8 K8 N8 (= default)          9.648 ms    225.7 TFLOPs  PCC=0.9999105979375552
+MM mlp_down M8 K4 N8 [div]                         9.749 ms    223.4 TFLOPs  PCC=0.9998714495443884
+MM mlp_down M8 K6 N8 [div]                         9.580 ms    227.3 TFLOPs  PCC=0.9999002196621832
+MM mlp_down M8 K8 N8 [div]                         9.611 ms    226.6 TFLOPs  PCC=0.9999105979375552
+MM mlp_down M8 K10 N8 [rag]                        9.747 ms    223.4 TFLOPs  PCC=0.9999128426730156
+MM mlp_down M8 K12 N8 [div]                        9.673 ms    225.1 TFLOPs  PCC=0.9999118639616227
+MM mlp_down M8 K13 N8 [div]                        9.677 ms    225.0 TFLOPs  PCC=0.999910164563577
+MM mlp_down M8 K16 N8 [div]                        9.630 ms    226.1 TFLOPs  PCC=0.9999023437928024
+2026-08-12 00:02:18.334 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1815424 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM mlp_down M8 K20 N8 [rag]                    FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:02:18.833 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2077568 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM mlp_down M8 K24 N8 [div]                    FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:02:19.335 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2208640 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM mlp_down M8 K26 N8 [div]                    FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:02:19.839 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2601856 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM mlp_down M8 K32 N8 [rag]                    FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:02:20.351 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 3060608 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM mlp_down M8 K39 N8 [div]                    FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:02:20.850 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 3650432 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM mlp_down M8 K48 N8 [div]                    FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:02:21.357 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 3912576 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM mlp_down M8 K52 N8 [div]                    FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:02:21.864 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4699008 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM mlp_down M8 K64 N8 [rag]                    FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:02:22.379 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 7320448 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM mlp_down M8 K104 N8 [div]                   FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:02:22.890 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 8893312 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM mlp_down M8 K128 N8 [rag]                   FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+--- mlp_down best K_block by time: [6, 8] ---
+MM mlp_down M4 K6 N8                              10.346 ms    210.5 TFLOPs  PCC=0.9999002196621832
+MM mlp_down M8 K6 N4                              10.079 ms    216.0 TFLOPs  PCC=0.999900306467623
+MM mlp_down M4 K6 N4                              11.354 ms    191.8 TFLOPs  PCC=0.999900306467623
+MM mlp_down M16 K6 N8                              9.703 ms    224.4 TFLOPs  PCC=0.9999002196621832
+MM mlp_down M8 K6 N16                              9.666 ms    225.3 TFLOPs  PCC=0.9999002847755553
+2026-08-12 00:02:29.646 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2470784 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM mlp_down M16 K6 N16                         FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+MM mlp_down M4 K8 N8                              10.382 ms    209.7 TFLOPs  PCC=0.9999105979375552
+MM mlp_down M8 K8 N4                              10.123 ms    215.1 TFLOPs  PCC=0.9999105989061243
+MM mlp_down M4 K8 N4                              11.016 ms    197.7 TFLOPs  PCC=0.9999105989061243
+2026-08-12 00:02:33.813 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1684352 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM mlp_down M16 K8 N8                          FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:02:34.309 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1684352 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM mlp_down M8 K8 N16                          FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+2026-08-12 00:02:34.822 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2732928 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+MM mlp_down M16 K8 N16                         FAILED RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on
+SUMMARY mlp_down default 9.620 ms vs best K_block=6 9.580 ms (+0.42 %)
+nanobind: leaked 1 instances!
+ - leaked instance 0x791165947b58 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 42 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.types.Shape"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - ... skipped remainder
+nanobind: leaked 347 functions!
+ - leaked function "get_layout"
+ - leaked function "CloseDevice"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "to_json"
+ - leaked function "storage_type"
+ - leaked function "matmul_select_program_factory"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-12 00:02:35.325 | info     |    BuildKernels | JIT cache stats: 56/820 hits (6.8%) [56 cached, 20 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-12 00:02:35.325 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-12 00:02:35.339 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-12 00:02:35.339 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-12 00:02:35.865 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-12 00:02:35.865 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-12 00:02:35.865 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)
