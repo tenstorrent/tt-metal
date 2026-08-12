@@ -312,10 +312,10 @@ inline void _topk_xl_init_()
 // caller can fold a trailing INCRWC into the last store. See "Address-mod
 // recipe" at the top of the file.
 
-// set_dst_write_addr_offset (shared with deepseek_top32_rm) rebases the Dst
-// write pointer for subsequent SFPSTOREs; here it switches between the even
-// and odd columns of the two-tile DST region (offsets +0 and +2 from the
-// tile base).
+// set_dst_write_addr_offset (defined in ckernel_sfpu_set_dst_write_addr_offset.h,
+// shared with deepseek_top32_rm) rebases the Dst write pointer for subsequent
+// SFPSTOREs; here it switches between the even and odd columns of the two-tile
+// DST region (offsets +0 and +2 from the tile base).
 
 // Load 16 rows × 2 strips into LREG0..LREG7 (fused path).
 //   group 1: LREG0..3 at base+{0,4,8,12}
