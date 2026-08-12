@@ -213,7 +213,7 @@ def main():
         # The accuracy criterion is "no worse than the single-device path", whose mean is 49.45 dB --
         # not "above 49.45", which a `>=` against the rounded baseline fails by a hair even when the
         # two are bit-identical. Allow a small tolerance and say which it is.
-        BASELINE_PSNR = 49.45  # single-device fp32 mean, per goal.md
+        BASELINE_PSNR = 49.45  # single-device fp32 mean over these four clips; see README.md
         drop = BASELINE_PSNR - mean_psnr
         print(
             f"\nACCEPTANCE  psnr {mean_psnr:.2f} dB vs {BASELINE_PSNR} baseline "

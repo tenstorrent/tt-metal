@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import math
 import os
 from typing import Sequence
@@ -340,280 +339,19 @@ def depthwise_mac_preferred() -> bool:
 
 
 # Channel width the timestep-fold aims for. Above ~256 the per-row cost starts climbing (11.3 ns/row
-# at C=256 against 4.2 at C=8) and the returns flatten, so 256 is where `audio_perf/row_cost.py` puts
-# the knee rather than an arbitrary round number.
+# at C=256 against 4.2 at C=8) and the returns flatten, so 256 is the measured knee rather than an
+# arbitrary round number.
 TARGET_FOLDED_CHANNELS = int(os.environ.get("MINIMAX_H3_AUDIO_FOLD_TARGET", "256"))
 
-CONV1D_L1_MODES = ("off", "safe", "aggressive", "verify")
 
-# Shapes whose L1_FULL output has been checked against the DRAM path, keyed by (B, C, T_pad, K, stride)
-# and shared across layer instances -- the model builds ~127 `Activation1d`s over a handful of distinct
-# shapes, and the check costs a host round trip, so it must happen once per shape and not once per layer.
-_CONV1D_L1_VERIFIED: dict = {}
-
-
-def _l1_matches_dram(run) -> bool:
-    """Whether the L1_FULL route reproduces the DRAM route bit-for-bit at this shape.
-
-    L1_FULL is faster (1.2-2.3x) and is supposed to be a pure routing change, but at C=16 / B=2 it
-    returns a *different answer* -- max abs diff 1.459 on a ~0.3-scale signal, and identically so in
-    bf16, i.e. structural rather than numeric. C=8, C=32 and C=512 are all exact. Rather than encode a
-    list of widths that happen to work today, check the shape once and believe the measurement.
-    """
-    import torch as _torch
-
-    a = ttnn.to_torch(run("dram"))
-    b = ttnn.to_torch(run("l1"))
-    return a.shape == b.shape and _torch.equal(a, b)
-
-
-def conv1d_l1_full_mode() -> str:
-    """Whether the depthwise filters ask ``ttnn.conv1d`` to keep the activation in L1.
-
-    From ``MINIMAX_H3_AUDIO_CONV1D_L1`` (default ``off``). ``ttnn.conv1d`` picks its execution path in
-    ``determine_conv2d_execution_path``: an explicit ``L1_FULL`` slice config takes the L1 route, an
-    absent one takes L1 only when the input already lives there, and everything else falls to a DRAM
-    slicing loop. We hand it a DRAM-interleaved tensor with no slice config, so **every** call has been
-    taking the DRAM loop, and that loop is what emits the ``PaddedSlice -> Halo -> Move -> Conv2d ->
-    SliceWrite`` motif per slice. Requesting L1 instead measures 1.2-2.3x per call across the five
-    production shapes, and takes ~9 % off the 5 s decode (1.286 s -> 1.169 s).
-
-    **It is off by default because the L1 path is wrong at one production shape.** Comparing the two
-    routes output-to-output at the production batch (B=2, stereo), three of the four conv1d-capable
-    shapes are bit-exact and ``s5_up`` (C=16, K=7, stride 1) is not:
-
-        shape                  dtype     bit-exact   max abs diff
-        s0_down C512 K12 s2    float32   True           0.000e+00
-        s5_up   C16  K7  s1    float32   False          1.456e+00
-        s5_up   C16  K7  s1    bfloat16  False          1.457e+00
-        s6_up   C8   K7  s1    float32   True           0.000e+00
-        s6_down C8   K12 s2    float32   True           0.000e+00
-
-    1.456 absolute on a ~0.3-scale signal is a wrong answer, not a rounding difference, and bf16 shows
-    the same figure, so it is structural rather than numeric. End to end it costs 16 dB: PSNR against
-    the ``MINIMAX_H3_AUDIO_ACCURATE=1`` output falls 39.46 -> 23.26 dB, through the 28 dB floor
-    `test_decode` asserts. Note it does **not** reproduce at B=1, which is why a per-shape sweep at
-    batch 1 reports the two routes agreeing to four significant figures of rel_rmse.
-
-    **Worth almost nothing at the real shapes, which is why ``off`` is the default.** `verify` over a
-    full decode reports that **1 of 42 distinct shapes** can use L1 (C=512, K=12, stride 2); every
-    other one fails to fit. The 1.2-2.3x quoted from a per-shape sweep does not transfer, because that
-    sweep ran the analysis doc's §3 table at B=1 while production is B=2 and substantially longer --
-    C=16 is T_pad=165606, not the 82806 the table implies. Doubling the rows takes the activation out
-    of L1. Measured end to end, `verify` lands at 1.177 / 2.270 / 3.634 s against 1.158-1.213 s for
-    `off`: inside the run-to-run spread, and it pays a warm-up probe per shape for it.
-
-    * ``off`` (default) -- no slice config; previous behaviour exactly.
-    * ``verify`` -- check each shape once against the DRAM path and use L1 only where the output is
-      bit-identical. The safe way to try L1: it cannot introduce the C=16 defect below, because that
-      shape fails its own check. Costs one extra call plus a host round trip per distinct shape.
-    * ``safe`` -- L1 only for shapes the DRAM path can also serve, via a DRAM probe on the first call,
-      so enabling it cannot move a shape off the exact MAC fallback. This was intended to be
-      accuracy-neutral and **is not**, because it still routes ``s5_up`` through L1: measured 23.07 dB,
-      no better than ``aggressive``, and slower than ``off`` (1.743 s vs 1.203 s). Kept only to make
-      that result reproducible.
-    * ``aggressive`` -- request L1 wherever it works, including for shapes that would otherwise take
-      the exact MAC fallback (146 fallbacks per decode become 36).
-
-    Both non-``off`` modes are unsafe until the C=16 defect is fixed upstream or that shape is excluded.
-    The choice is memoised per shape, so a shape pays each failed config search once rather than on
-    every call.
-    """
-    mode = os.environ.get("MINIMAX_H3_AUDIO_CONV1D_L1", "off").lower()
-    if mode not in CONV1D_L1_MODES:
-        raise ValueError(f"MINIMAX_H3_AUDIO_CONV1D_L1 must be one of {CONV1D_L1_MODES}, got {mode!r}")
-    return mode
-
-
-# A conv1d failure we are willing to answer by picking a different execution path, as opposed to one
-# that means the call itself is wrong. The first two are the shard/slice config search coming up empty;
-# the rest are the activation not fitting the memory the chosen path requires. Matched on text because
-# ttnn raises all of these as plain `RuntimeError`.
+# A conv1d failure that means "this shape does not fit, take another route" rather than "this call is
+# wrong". ttnn raises all of these as plain `RuntimeError`.
 _CONV1D_RECOVERABLE = ("slice configuration", "found_valid_config", "out of memory", "not enough space")
 
 
 def _conv1d_recoverable(exc: Exception) -> bool:
     message = str(exc).lower()
     return any(needle in message for needle in _CONV1D_RECOVERABLE)
-
-
-def depthwise_split_mode() -> str:
-    """Operand-splitting mode for the depthwise FIR filters, from ``MINIMAX_H3_AUDIO_DEPTHWISE_SPLIT``.
-
-    The same argument as `conv_split_mode`, applied to the one op that dominates this stage's error.
-    ``ttnn.conv1d`` routes both operands through the matrix engine, whose multiplier sees ~9 significand
-    bits of SrcA and ~13 of SrcB, so an fp32 depthwise filter measures ~1.6e-03 against a float64 golden
-    at every production shape while the elementwise MAC form measures ~5e-08.
-
-    Today the only way to buy that accuracy back is `depthwise_mac_preferred`, which is exact but does K
-    full passes over the tensor -- measured at 26x the conv1d call on the s6 downsampler (35.2 ms vs
-    1.4 ms). Splitting is the obvious middle: ``hi = bf16(v)`` is represented exactly by the multiplier
-    and ``lo = v - hi`` carries the bits it dropped.
-
-    * ``off`` (default) -- one conv1d, today's behaviour.
-    * ``weight`` -- 2 calls, splitting the taps only. The activation is untouched, so it costs no
-      elementwise work at all, just a second cached tap vector.
-    * ``full`` -- 3 calls, splitting the activation too. ``lo*lo`` is omitted as negligible, matching
-      `conv3d_maybe_split`.
-
-    **Measured, and it does not pay.** At the five production FIR shapes, against a float64 golden:
-
-        shape             conv1d      weight      full        MAC
-        s0_down C512 K12  1.563e-03   1.374e-03   7.448e-04   7.062e-08
-        s5_up   C16  K7   1.679e-03   1.285e-03   5.859e-04   5.414e-08
-        s6_up   C8   K7   1.679e-03   1.285e-03   5.849e-04   5.400e-08
-        s6_down C8   K12  1.562e-03   1.372e-03   7.463e-04   7.057e-08
-
-    ``full`` buys 2.9x of accuracy for 4-6x of time and stops four orders short of MAC, which is the
-    signature of a floor that splitting does not reach -- so it plateaus where MAC is still 10,000x
-    better and, at s6_up, only 2x more expensive. Kept because it isolates *which* operand truncates
-    (splitting the activation helps more than splitting the taps, so SrcA dominates), which is evidence
-    for the SFPU tap accumulation being the real fix rather than a config lever. Do not turn it on
-    expecting a precision win.
-
-    Splitting only helps an fp32 datapath, and the caller enforces that.
-    """
-    mode = os.environ.get("MINIMAX_H3_AUDIO_DEPTHWISE_SPLIT", "off").lower()
-    if mode not in CONV_SPLIT_MODES:
-        raise ValueError(f"MINIMAX_H3_AUDIO_DEPTHWISE_SPLIT must be one of {CONV_SPLIT_MODES}, got {mode!r}")
-    return mode
-
-
-SNAKE_TILE_HEIGHT = 32
-
-
-def fuse_snake_into_conv_enabled() -> bool:
-    """Whether the per-channel snake rides the depthwise conv's output instead of its own op.
-
-    Off by default: it needs the `TT_CONV1D_SNAKE_PARAMS` path in `compute_depthwise_conv1d.cpp`,
-    which is itself env-gated on the C++ side, so the two must be turned on together or not at all.
-    """
-    return os.environ.get("MINIMAX_H3_AUDIO_FUSE_SNAKE_CONV", "0") == "1"
-
-
-class _snake_params_env:
-    """Turn on the program factory's snake path for the duration of one conv1d call.
-
-    The C++ side reads this at program-creation time. Scoping it to the single call keeps every other
-    conv in the decode on the untouched default path, and restoring the previous value rather than
-    deleting it keeps the block re-entrant.
-    """
-
-    def __enter__(self):
-        self._prev = os.environ.get("TT_CONV1D_SNAKE_PARAMS")
-        os.environ["TT_CONV1D_SNAKE_PARAMS"] = "1"
-        return self
-
-    def __exit__(self, *exc):
-        if self._prev is None:
-            os.environ.pop("TT_CONV1D_SNAKE_PARAMS", None)
-        else:
-            os.environ["TT_CONV1D_SNAKE_PARAMS"] = self._prev
-        return False
-
-
-def _snake_param_rows(alpha_1d: torch.Tensor, inv_beta_1d: torch.Tensor, width: int) -> torch.Tensor:
-    """Two tile-rows, ``(64, width)``: alpha then inv_beta, each replicated down all 32 rows.
-
-    The compute kernel multiplies these against a finished output tile whose columns are the channel
-    axis, so the parameter tile has to be constant down rows and per-channel across columns -- exactly
-    the layout a weight tile for one tap already has.
-    """
-    rows = []
-    for vec in (alpha_1d, inv_beta_1d):
-        padded = torch.zeros(width, dtype=torch.float32)
-        padded[: vec.numel()] = vec.to(torch.float32)
-        rows.append(padded.unsqueeze(0).expand(SNAKE_TILE_HEIGHT, width).contiguous())
-    return torch.cat(rows, dim=0)
-
-
-def depthwise_tap_filter_snake(x_BTC, taps, *, alpha, inv_beta, mesh_device, dtype, cache, cache_tag):
-    """Depthwise FIR with ``y = v + inv_beta * sin(alpha * v)^2`` applied to the conv's own output.
-
-    One op where the unfused form is two (conv, then `ttnn.snake_beta`) plus the tilize/untilize the
-    activation needs around it. The parameters ride as two extra tile-rows appended to the *prepared*
-    weight, which the reader fetches into a dedicated CB and mcasts to the receiver cores; the device
-    side is `compute_depthwise_conv1d.cpp`'s `apply_snake_beta`, gated on `TT_CONV1D_SNAKE_PARAMS`.
-
-    Deliberately not routed through `depthwise_tap_filter`: that function carries the L1-probe,
-    operand-split and C-chunk machinery, none of which composes with an appended weight (the probe
-    compares against a differently shaped weight, the split would apply the snake once per term). The
-    band is the only caller that wants this, and it wants the plain HEIGHT_SHARDED path.
-
-    `cache_tag` distinguishes the two polyphase sub-tap vectors, which share one cache dict.
-    """
-    B, T_pad, C = int(x_BTC.shape[0]), int(x_BTC.shape[1]), int(x_BTC.shape[2])
-    K = len(taps)
-    T_out = T_pad - K + 1
-
-    if "cc_snake" not in cache:
-        # Same compute config as the unfused phase conv, `packer_l1_acc` included: the point is to
-        # remove an op, not to change the arithmetic underneath it, and any difference here would show
-        # up as drift over the ~126 bands the decode chains together.
-        cache["cc_snake"] = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
-        )
-    conv_config = ttnn.Conv1dConfig(weights_dtype=dtype, shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED)
-
-    def _conv(weight, fused):
-        ctx = _snake_params_env() if fused else contextlib.nullcontext()
-        with ctx:
-            out, _, wb = ttnn.conv1d(
-                input_tensor=ttnn.reshape(x_BTC, (B, T_pad, 1, C)),
-                weight_tensor=weight,
-                device=mesh_device,
-                in_channels=C,
-                out_channels=C,
-                batch_size=B,
-                input_length=T_pad,
-                kernel_size=K,
-                stride=1,
-                padding=0,
-                dilation=1,
-                groups=C,
-                dtype=dtype,
-                conv_config=conv_config,
-                compute_config=cache["cc_snake"],
-                return_output_dim=True,
-                return_weights_and_bias=True,
-            )
-        return out, (wb[0] if isinstance(wb, (tuple, list)) else wb)
-
-    wkey = ("w_snake", cache_tag, C, K)
-    widened = cache.get(wkey)
-    if widened is None:
-        # The appended rows have to match the *prepared* layout, so let conv1d prepare the plain
-        # weight once and append to what it hands back. This costs one throwaway conv per band, on the
-        # first call only; a decode runs the same bands thousands of times.
-        wt = torch.tensor(taps, dtype=torch.float32).reshape(1, 1, K).expand(C, 1, K).contiguous()
-        base = ttnn.from_torch(
-            wt, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device)
-        )
-        throwaway, prepared = _conv(base, fused=False)
-        ttnn.deallocate(throwaway)
-
-        # `base` is replicated across the mesh, so `prepared` is too, and a bare `ttnn.to_torch` here
-        # hits `buffers.size() == 1` (pytensor.cpp:299) on any multi-device mesh. Every shard holds the
-        # same prepared weight, so read one -- the same shape as `prepare_conv3d_weight_state` above.
-        pw_shards = ttnn.get_device_tensors(prepared)
-        pw = ttnn.to_torch(pw_shards[0] if len(pw_shards) > 1 else prepared).float()
-        width = pw.shape[-1]
-        rows = torch.cat([pw.reshape(-1, width), _snake_param_rows(alpha, inv_beta, width)], dim=0)
-        rows = rows.reshape(1, 1, rows.shape[0], width)
-        # Must land on device: conv1d treats a host weight as unprepared and would re-prepare it,
-        # dropping the appended rows.
-        widened = ttnn.from_torch(
-            rows,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=dtype,
-            device=mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
-        cache[wkey] = widened
-
-    out, _ = _conv(widened, fused=True)
-    out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    return ttnn.reshape(out, (B, T_out, C))
 
 
 def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
@@ -672,7 +410,7 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
             # per-channel form is what lets a caller run several different filters over the same rows
             # in a single conv, by stacking their inputs along C -- the upsampler's two polyphase
             # phases being the case that matters. Two calls become one, at double the channel width,
-            # and by `audio_perf/row_cost.py` a wider row costs barely more than a narrow one.
+            # and a wider row costs barely more than a narrow one.
             tv = torch.tensor(taps_v, dtype=torch.float32)
             if tv.dim() == 1:
                 wt = tv.reshape(1, 1, K).expand(c_eff, 1, K).contiguous()
@@ -701,12 +439,8 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
             cache=cache,
             wkey=wkey,
             prepared=prepared,
-            slice_config=ttnn.Conv2dL1FullSliceConfig if path == "l1" else None,
+            slice_config=None,
         )
-
-    def _run_split_chunked(path: str, piece, chunk: int):
-        """conv1d on one channel slice. Splitting is skipped: the SFPU path is already exact."""
-        return _run(path, None, piece, chunk)
 
     def _run_chunks(path: str, chunk: int):
         # The reassembly below is a last-dim concat, which is lossy in fp32 unless the row is a
@@ -717,62 +451,15 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
         parts = []
         for start in range(0, C, chunk):
             piece = ttnn.slice(x_BTC, [0, 0, start], [B, T_pad, start + chunk])
-            parts.append(_run_split_chunked(path, piece, chunk))
+            parts.append(_run(path, None, piece, chunk))
             ttnn.deallocate(piece)
         return ttnn.concat(parts, dim=2)
 
-    def _run_split(path: str):
-        """`_run`, summed over operand-split terms. See `depthwise_split_mode`."""
-        mode = depthwise_split_mode() if dtype == ttnn.float32 else "off"
-        if mode == "off":
-            return _run(path)
-        taps_hi = torch.tensor(taps, dtype=torch.float32).bfloat16().float().tolist()
-        taps_lo = [t - h for t, h in zip(taps, taps_hi)]
-        if mode == "weight":
-            x_hi, x_lo = x_BTC, None
-        else:  # full — split the activation too
-            x_hi, x_lo = _split_operand(x_BTC)
-        out = ttnn.add(_run(path, taps_hi, x_hi), _run(path, taps_lo, x_hi))
-        if x_lo is not None:
-            out = ttnn.add(out, _run(path, taps_hi, x_lo))
-            ttnn.deallocate(x_lo)
-        if x_hi is not x_BTC:
-            ttnn.deallocate(x_hi)
-        return out
-
     # Which execution path this shape takes, memoised so a shape pays each failed config search once
-    # rather than on every call. See `conv1d_l1_full_mode` -- in particular why `safe` reaches L1 only
-    # via a DRAM probe, so that enabling it cannot move a shape off the exact MAC fallback.
-    l1_mode = conv1d_l1_full_mode()
+    # rather than on every call: "dram" is conv1d with the DRAM slicer, ("chunk", n) is conv1d over
+    # channel slices of n, and "mac" is the shift-multiply-add fallback for shapes conv1d cannot serve.
     pkey = ("path", B, C, T_pad, K, stride)
-    path = cache.get(pkey)
-    if path is None:
-        if l1_mode == "verify":
-            # Check this shape once, globally, then take the fast route only where it is exact.
-            vkey = (B, C, T_pad, K, stride)
-            verdict = _CONV1D_L1_VERIFIED.get(vkey)
-            if verdict is None:
-                why = "bit-exact, using L1"
-                try:
-                    verdict = _l1_matches_dram(_run_split)
-                    if not verdict:
-                        why = "DIFFERS from DRAM, staying on DRAM"
-                except RuntimeError:
-                    # Any failure while probing means "do not take the fast path", not "the call is
-                    # wrong" -- deliberately unfiltered, for the same reason the L1 attempt below is.
-                    # L1 exhaustion does not present consistently: this shape reports "Statically
-                    # allocated circular buffers ... grow to 2175936 B which is beyond max L1 size",
-                    # naming neither slicing nor memory. A real bug still surfaces, because the DRAM
-                    # path we fall back to runs the same convolution.
-                    verdict = False
-                    why = "does not fit L1, staying on DRAM"
-                _CONV1D_L1_VERIFIED[vkey] = verdict
-                logger.warning(
-                    f"depthwise conv1d L1_FULL at B={B}, T_pad={T_pad}, C={C}, K={K}, stride={stride}: {why}"
-                )
-            path = "l1" if verdict else "dram"
-        else:
-            path = {"off": "dram", "safe": "probe", "aggressive": "l1"}[l1_mode]
+    path = cache.get(pkey) or "dram"
 
     if path == "mac":
         return _depthwise_tap_mac(x_BTC, taps, stride, T_out=T_out)
@@ -780,42 +467,8 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
     if isinstance(path, tuple) and path[0] == "chunk":
         return _run_chunks("dram", path[1])
 
-    if path == "probe":
-        # First call for this shape under `safe`: run the DRAM path to find out whether conv1d can
-        # serve it at all. If it can, later calls take L1, which is bit-identical and faster. If it
-        # cannot, this shape keeps the exact MAC form it had before the L1 mode existed.
-        try:
-            out = _run_split("dram")
-            cache[pkey] = "l1"
-            return out
-        except RuntimeError as exc:
-            if not _conv1d_recoverable(exc):
-                raise
-            logger.warning(
-                f"depthwise conv1d unavailable at T_pad={T_pad}, C={C}, K={K}, stride={stride}; MAC fallback"
-            )
-            cache[pkey] = "mac"
-            return _depthwise_tap_mac(x_BTC, taps, stride, T_out=T_out)
-
-    if path == "l1":
-        try:
-            return _run_split("l1")
-        except RuntimeError:
-            # Deliberately *not* filtered through `_conv1d_recoverable`: requesting L1 is an
-            # optimisation over a DRAM path that already worked, so anything that goes wrong while
-            # trying it is answered by not trying it. Running out of L1 does not even present
-            # consistently -- s0's (2, 1041, 512) reports "Statically allocated circular buffers ...
-            # clash with L1 buffers", naming neither slicing nor memory -- and a failure that is a
-            # genuine bug rather than a capacity limit will fail on the DRAM path too, below, where it
-            # does propagate.
-            logger.warning(
-                f"depthwise conv1d L1_FULL unavailable at T_pad={T_pad}, C={C}, K={K}, stride={stride}; "
-                f"DRAM slicing for this shape"
-            )
-            path = "dram"
-
     try:
-        out = _run_split(path)
+        out = _run(path)
         cache[pkey] = path
         return out
     except RuntimeError as exc:
@@ -899,9 +552,8 @@ def _depthwise_tap_conv1d(
 ):
     """The HEIGHT_SHARDED ``ttnn.conv1d`` fast path (unchanged behaviour for LTX).
 
-    ``slice_config`` selects the execution path inside conv1d -- ``Conv2dL1FullSliceConfig`` keeps the
-    activation in L1 for the whole call, ``None`` leaves conv2d to auto-route, which for a
-    DRAM-interleaved input means its per-slice DRAM loop. See `conv1d_l1_full_mode`.
+    ``slice_config`` selects the execution path inside conv1d; ``None`` leaves conv2d to auto-route,
+    which for a DRAM-interleaved input means its per-slice DRAM loop.
     """
     out, _, (weight, _bias) = ttnn.conv1d(
         input_tensor=ttnn.reshape(x_BTC, (B, T_pad, 1, C)),
@@ -1062,7 +714,7 @@ def _zero_pad_t(x_BTC: ttnn.Tensor, pad_left: int, pad_right: int, mesh_device: 
     """Zero-pad along the T axis.
 
     ``ttnn.pad`` rather than a concat against zero tensors. Concat is the decode's single largest cost
-    -- 285.3 ms over 469 calls, 20.4 % of the whole stage in PROFILE_2026_08_06.txt, at ~608 us a call
+    -- 285.3 ms over 469 calls, 20.4 % of the whole stage when profiled, at ~608 us a call
     against a ~142 us average op -- and this expresses the same thing. Measured 2.1-2.3x faster at
     every tail-stage shape and bit-exact against both the concat it replaces and a CPU reference
     (`tpad_bench.py`). The same substitution already paid off in `_pad_channels_to_aligned`.
@@ -1839,8 +1491,8 @@ class SnakeBeta(Module):
         arranges. F must divide the local T exactly; padding to make it divide would cost an op at the
         *unfolded* row count, which is the very thing being avoided.
 
-        The factor to maximise is the row count, not tile occupancy. `audio_perf/row_cost.py` holds
-        total elements fixed and varies C:
+        The factor to maximise is the row count, not tile occupancy. Holding total elements fixed and
+        varying C measures:
 
             C      rows    fp32 ms   ns/row    GB/s   vs C=8
             8   662 424      2.765      4.2    23.0    1.00x
