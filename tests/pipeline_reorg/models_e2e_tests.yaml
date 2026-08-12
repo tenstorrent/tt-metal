@@ -964,6 +964,24 @@
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
 
+# ── Stable Diffusion 3.5 Large (TT-DiT) ────────────────────────────
+
+- name: TT-DiT Stable Diffusion 3.5 Large e2e tests
+  cmd: |
+    unset HF_HUB_OFFLINE
+    export NO_PROMPT=1
+    pytest --timeout 1200 models/tt_dit/tests/models/sd35/test_pipeline_sd35.py
+    pytest --timeout 600 models/tt_dit/tests/models/sd35/test_performance_sd35.py
+  model: sd35
+  model_family: Stable Diffusion
+  skus:
+    wh_llmbox_perf:
+      timeout: 20
+      tier: 3
+      release_ready: false
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
 # ── Panoptic DeepLab ───────────────────────────────────────────────
 - name: panoptic-deeplab e2e tests
   cmd: TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/panoptic_deeplab/demo/demo.py::test_panoptic_deeplab_demo_pipeline --timeout=1020
