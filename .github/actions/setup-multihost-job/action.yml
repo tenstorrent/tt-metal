@@ -75,9 +75,8 @@ runs:
         CREATE_PIPELINE_DIR: ${{ inputs.create-pipeline-dir }}
       run: |
         set -euo pipefail
-        # Move the cloned directory to workers. TODO: Clone directly to NFS
-        cp -r "$GITHUB_WORKSPACE" /ci/tt-metal
         shopt -s globstar nullglob
+
         build_archives=("${ARTIFACTS_PATH}"/**/*.tar.zst)
         echo "Found ${#build_archives[@]} .tar.zst candidate(s) under ${ARTIFACTS_PATH}"
         printf ' - %s\n' "${build_archives[@]}"
@@ -90,21 +89,6 @@ runs:
         BUILD_ARCHIVE="${build_archives[0]}"
         echo "Using build archive: ${BUILD_ARCHIVE}"
 
-        if [ "${CREATE_PIPELINE_DIR}" = "true" ] && [ -n "${PIPELINE_DIR:-}" ]; then
-          # Per-job NFS scratch (ranklogs, automapper cwd). Do NOT copy the full
-          # tt-metal tree here — that OOMs the 4Gi Actions runner.
-          mkdir -p "$PIPELINE_DIR"
-        fi
-
-        # Workers + runner local copy for runtime (local disk).
-
-        cp -r /home/user/tt-metal /ci/tt-metal 
-        tar --zstd -xf "${BUILD_ARCHIVE}" -C /home/user/tt-metal
-
-        mpirun --pernode bash -lc 'cp -r /ci/tt-metal /home/user/'
-        mpirun --pernode git -C /home/user/tt-metal submodule update --init --recursive
-        mpirun --pernode tar --zstd -xf "${BUILD_ARCHIVE}" -C /home/user/tt-metal
-
         ttnn_wheels=("${ARTIFACTS_PATH}"/**/ttnn-*.whl)
         echo "Found ${#ttnn_wheels[@]} ttnn wheel candidate(s) under ${ARTIFACTS_PATH}"
         printf ' - %s\n' "${ttnn_wheels[@]}"
@@ -114,8 +98,23 @@ runs:
           ls -R "${ARTIFACTS_PATH}"
           exit 1
         fi
-        # shellcheck disable=SC2086 # intentional word-split of EXTRA_PIP_PACKAGES
+
+        # Workers + runner local copy for runtime (local disk).
+        cp -r "$GITHUB_WORKSPACE" /ci/tt-metal
+        cp -r "${BUILD_ARCHIVE}" /ci/tt-metal 
+        cp -r "${ttnn_wheels[0]}" /ci/tt-metal
+        tar --zstd -xf "${BUILD_ARCHIVE}" -C /home/user/tt-metal
+
+        mpirun --pernode bash -lc 'cp -r /ci/tt-metal /home/user/'
+        mpirun --pernode git -C /home/user/tt-metal submodule update --init --recursive
+        mpirun --pernode tar --zstd -xf "/home/user/tt-metal/" -C /home/user/tt-metal
         mpirun --pernode uv pip install "${ttnn_wheels[@]}" ${EXTRA_PIP_PACKAGES}
+
+         if [ "${CREATE_PIPELINE_DIR}" = "true" ] && [ -n "${PIPELINE_DIR:-}" ]; then
+          # Per-job NFS scratch (ranklogs, automapper cwd). Do NOT copy the full
+          # tt-metal tree here — that OOMs the 4Gi Actions runner.
+          mkdir -p "$PIPELINE_DIR"
+        fi
 
     - name: Reset cards and validate cluster
       shell: bash
