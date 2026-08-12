@@ -1329,5 +1329,5 @@
     bh_p150b_civ2:
       timeout: 25
       tier: 3
-  owner_id: UPDATE_ME # TODO: XTTS owner's Slack ID before merging
+  owner_id: U087HGJ455E # Sudhanshu Singhal
   team: shield
