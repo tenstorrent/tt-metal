@@ -70,5 +70,5 @@ python models/autoports/tiiuae_falcon3_7b_base/doc/datatype_sweep/generate_artif
 
 Exact expanded commands are stored per row in both sweep result files. Final
 review returned `clean-pass` after remediation and four fresh review passes;
-the final report is `stage_review.md`. The first checkpoint SHA is appended in
-the follow-up metadata commit below.
+the final report is `stage_review.md`. Stage implementation/evidence checkpoint:
+`15048337ac4` (`Select Falcon3 full-model precision policy`). No push was made.
