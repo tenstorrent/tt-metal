@@ -572,8 +572,10 @@ with tempfile.TemporaryDirectory() as tmp:
     try:
         dispatch.load_job(work, "1-abcd")
         check("a collected handle is not reusable", False, "it was accepted")
-    except dispatch.DispatchError as exc:
-        check("a collected handle is not reusable", "start one first" in str(exc), str(exc))
+    except dispatch.Refusal as exc:
+        # A Refusal specifically: waiting on a spent handle is a mistake the agent can correct, and
+        # if it arrives as a crashed tool the agent will retry it rather than start a fresh one.
+        check("a collected handle is not reusable", "start a fresh build" in str(exc), str(exc))
 
 # The handle is agent-supplied text that reaches a command line, so the guard is lifted out of the
 # workflow rather than reimplemented, exactly as the resolve check above is.

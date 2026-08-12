@@ -513,11 +513,18 @@ def report_build(run: dict, api: Api) -> int:
 def report_verify(run: dict, api: Api, results: Path | None) -> int:
     gate = (results / "gate.json") if results else None
     if gate is None or not gate.is_file() or not gate.read_text().strip():
-        print(f"verify could not produce a verdict ({run.get('conclusion')}). {run['html_url']}\n")
+        print(
+            f"NO VERDICT -- the measurement ran but produced no gate.json, which usually means it "
+            f"could not get as far as measuring. This is not a verdict on your port and must not be "
+            f"reported as one.\n\nRun: {run['html_url']}\n"
+        )
         print(failure_output(api, run["id"]))
         return 2
 
     body = gate.read_text()
+    # Named for what it is, because the agent's next move is decided by reading the verdict inside
+    # rather than by anything about how the call ended.
+    print("VERDICT DELIVERED -- the measurement ran on hardware and this is its result.\n")
     print(body)
     try:
         verdict = json.loads(body).get("verdict")
@@ -569,9 +576,17 @@ def load_job(work: Path, handle: str) -> dict:
     path = jobs_dir(work) / f"{handle}.json"
     if not path.is_file():
         known = sorted(p.stem for p in jobs_dir(work).glob("*.json"))
-        raise DispatchError(
-            f"there is no dispatch called {handle!r}. "
-            + (f"In flight: {', '.join(known)}." if known else "Nothing is in flight; start one first.")
+        # A Refusal, not a failure: the usual cause is waiting on a handle that was already
+        # collected, or one that a later dispatch superseded, and in both cases the agent has
+        # something sensible to do next.
+        raise Refusal(
+            f"there is no dispatch called {handle!r}, so there is nothing to wait for. "
+            + (
+                f"Still in flight: {', '.join(known)} -- wait on one of those."
+                if known
+                else "Nothing is in flight. Either you already collected this one, or starting a "
+                "newer dispatch superseded it; start a fresh build or verify."
+            )
         )
     return json.loads(path.read_text())
 
@@ -598,6 +613,13 @@ def retire_inflight(api: Api, work: Path, repo: Path, remote: str, token_file: P
         try:
             if run_id and api.get_json(f"/repos/{api.repo}/actions/runs/{run_id}").get("status") != "completed":
                 log(f"  superseding {record.get('handle')}: cancelling run {run_id}")
+                # stdout as well, because the agent is holding that handle and would otherwise wait
+                # on a run this call just killed.
+                print(
+                    f"NOTE: cancelled the {record.get('mode')} still running under handle "
+                    f"{record.get('handle')}, because starting this one supersedes it. Do not wait "
+                    f"on that handle; it is gone."
+                )
                 api.post(f"/repos/{api.repo}/actions/runs/{run_id}/cancel")
         except ApiError as exc:
             log(f"  could not cancel the earlier run {run_id}: {exc}")
