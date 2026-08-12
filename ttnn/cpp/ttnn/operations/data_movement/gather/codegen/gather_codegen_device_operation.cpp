@@ -36,6 +36,39 @@ GatherCodegenDeviceOperation::program_factory_t GatherCodegenDeviceOperation::se
     return GatherCodegenProgramFactoryStreaming{};
 }
 
+// The default key is the attributes and the tensor specs, and a foreign L1 buffer is in neither.
+// Both the factory choice and the streaming block depth are read off the live L1 frontier, and
+// Program::validate_circular_buffer_region re-checks a cached program's baked CB region against the
+// CURRENT frontier on every enqueue -- so a plan cached against a clear frontier throws once an
+// unrelated L1 tensor moves it. Keying on the derived plan rather than on the frontier itself keeps
+// entries down to genuinely distinct plans: a frontier that shifts without changing the plan hits.
+//
+// Calling select_program_factory() here is sound because create_output_tensors() has already run by
+// the time the key is computed (ttnn/device_operation.hpp), so this sees the same frontier -- the
+// op's own L1 output included -- that create_descriptor() will.
+//
+// Cost: defining compute_program_hash at all opts this op out of the canonical program-cache key
+// (mesh_device_operation_adapter.hpp::compute_mesh_workload_canonical_key returns only the
+// op-identity prefix once a custom hash exists), so a 64-bit collision between two distinct gather
+// specs resolves to a wrong hit rather than a rebuild. Exposing the plan as an attribute instead
+// would keep that guarantee, but cannot: the plan depends on an own output that is not allocated
+// yet when the attributes are built.
+ttsl::hash::hash_t GatherCodegenDeviceOperation::compute_program_hash(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    const auto factory = select_program_factory(attributes, tensor_args);
+    // Only the streaming plan's CB depth varies with the budget; the other two factories size their
+    // CBs from the tensor specs alone, which the default traversal already discriminates.
+    const uint32_t chunk_tiles =
+        std::holds_alternative<GatherCodegenProgramFactoryStreaming>(factory)
+            ? gather_streaming_chunk_tiles(
+                  tensor_args.input_tensor, tensor_args.input_index_tensor, attributes.Wt_input)
+            : 0;
+    // Mirrors the default key and appends to it, rather than naming fields explicitly, so no
+    // discrimination the default traversal makes is dropped here by omission.
+    return ttsl::hash::hash_objects_with_default_seed(
+        ttsl::hash::type_hash<GatherCodegenDeviceOperation>, attributes, tensor_args, factory.index(), chunk_tiles);
+}
+
 void GatherCodegenDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     // Belt-and-suspenders behind the free function's early gate (call_parity.routing): the scope

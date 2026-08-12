@@ -212,6 +212,37 @@ def test_gather_codegen_streaming_honours_an_l1_output(device):
     assert_equal(golden, ttnn.to_torch(out))
 
 
+def test_gather_codegen_streaming_replans_when_l1_fills_after_the_first_dispatch(device):
+    # The two tests above put the L1 buffer down before the first dispatch, so the plan is derived
+    # under the lowered ceiling and cached that way. This is the opposite order: the first dispatch
+    # caches the deepest plan a clear frontier affords, and the second one arrives with the ceiling
+    # now below the baked CB region. Program::validate_circular_buffer_region re-reads
+    # lowest_occupied_compute_l1_address on every enqueue, cache hit included, and checks it against
+    # the region the cached program already carries — so unless the derived plan is part of the
+    # program-cache key, the second dispatch fails program creation on a plan that was legal when it
+    # was built. A brimful row leaves under a page of slack, so the displaced tensor only has to move
+    # the frontier at all.
+    shape, kwargs = _brimful_streaming_case(device, wt_index=16)
+    xt = ttnn.from_torch(_make_input(shape, ttnn.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    kwargs = _materialize_index(shape, kwargs, ttnn.TILE_LAYOUT, device)
+    golden = ttnn.to_torch(ttnn.gather(xt, **kwargs, implementation=_NATIVE))
+    assert_equal(golden, ttnn.to_torch(ttnn.gather(xt, **kwargs, implementation=_CODEGEN)))
+    resident = ttnn.from_torch(
+        torch.zeros([1, 1, 2048, 4096], dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    entries_before = device.num_program_cache_entries()
+    try:
+        assert_equal(golden, ttnn.to_torch(ttnn.gather(xt, **kwargs, implementation=_CODEGEN)))
+        msg = "the lowered ceiling did not re-key the program cache, so the second dispatch reused the deep plan"
+        assert device.num_program_cache_entries() > entries_before, msg
+    finally:
+        ttnn.deallocate(resident)
+
+
 def test_gather_codegen_tiled_honours_a_partial_core_grid(device):
     # Ht=4 tile-rows and Wt_index=6 select the tiled factory, and restricting the split to 5 cores
     # gives 5 of the 24 output tiles to each: every core after the first starts mid-row, so its

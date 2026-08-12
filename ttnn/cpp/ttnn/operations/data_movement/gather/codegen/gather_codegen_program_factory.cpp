@@ -46,10 +46,13 @@ constexpr const char* kWriterStreaming =
 // ends above the lowest occupied L1 address, and a routing gate that ignored it would fail program
 // creation instead of picking a plan that fits.
 //
-// The frontier is read at program-creation time and baked into the resulting program, but it is not
-// part of the program-cache key (the own-output contribution cannot be: the output is allocated
-// after the key is computed). A cached streaming program therefore keeps the block depth its first
-// dispatch could afford -- the same first-miss-wins property every op that sizes CBs to fill L1 has.
+// The frontier is read here at program-creation time and baked into the resulting program, so it
+// has to reach the program-cache key as well: validate_circular_buffer_region re-reads the frontier
+// on every enqueue, cache hit included, and checks it against the region the cached program already
+// carries, so a plan cached under a clear frontier throws once anything lowers it.
+// GatherCodegenDeviceOperation::compute_program_hash therefore folds in the plan this budget
+// derives -- the selected factory and, for streaming, the block depth -- rather than the frontier
+// itself, which would miss on every unrelated allocation.
 uint64_t gather_usable_l1(const Tensor& input_tensor) {
     auto* device = input_tensor.device();
     const uint64_t base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
