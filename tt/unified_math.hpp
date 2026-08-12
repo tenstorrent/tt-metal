@@ -328,8 +328,21 @@ struct Strategy<FPUFusion> {
         run(node, /*acc_cb=*/cb_id, /*out_cb=*/cb_id, /*reload=*/false, /*finish=*/true);
     }
 
-    template <typename Node>
-    static void run(const Node& node, uint32_t acc_cb, uint32_t out_cb, bool reload, bool finish) {
+    // `Node::chain` is the PER-STEP chain: it runs on every call. `EpilogueChain`
+    // runs only on the finishing call, against the completed accumulator.
+    //
+    //     accumulate(relu(mm), finish)                   -> per-step
+    //     accumulate(mm, finish, [](auto n){return relu(n);}) -> finish only
+    //
+    // NOTE for Dst mode: the reload happens before the matmul, so by the time
+    // either chain runs, DST holds the running total rather than this block's
+    // contribution alone. A per-step chain therefore sees f(total-so-far), not
+    // f(this contribution). Isolating the contribution would need a second
+    // rt*ct-sized scratch region to hold the reloaded partial, which does not
+    // fit; L1 mode gets it for free, since there the packer accumulates and DST
+    // only ever holds one block's product.
+    template <typename Node, typename EpilogueChain = expr::UnaryChain<>>
+    static void run(const Node& node, uint32_t acc_cb, uint32_t out_cb, bool reload, bool finish, EpilogueChain = {}) {
         using G = typename Node::geometry;
         constexpr uint32_t kAccTiles = G::out_subblock_num_tiles;
 
@@ -368,14 +381,19 @@ struct Strategy<FPUFusion> {
             in1_index += G::in1_row_stride;
         }
 
-        // Epilogue, on the final block only -- the accumulator is complete
-        // exactly here. The chain folds into each accumulator slot in place, on
-        // the SFPU, so relu(matmul(...)) needs no machinery beyond the chain the
-        // node already carries.
+        // Per-step chain: every call.
         if constexpr (!Chain::empty) {
+            for (uint32_t t = 0; t < kAccTiles; ++t) {
+                Chain::apply_in_place(t);
+            }
+        }
+
+        // Epilogue chain: the finishing call only, when the accumulator is
+        // complete. Both fold into the accumulator slots in place on the SFPU.
+        if constexpr (!EpilogueChain::empty) {
             if (finish) {
                 for (uint32_t t = 0; t < kAccTiles; ++t) {
-                    Chain::apply_in_place(t);
+                    EpilogueChain::apply_in_place(t);
                 }
             }
         }
