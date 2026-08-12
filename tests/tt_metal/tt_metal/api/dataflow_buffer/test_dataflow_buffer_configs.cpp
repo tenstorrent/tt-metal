@@ -295,7 +295,7 @@ TEST_F(UnitMeshFixture, DfbSerializeGlobalHeader1Sx1S) {
     CoreCoord logical_core = CoreCoord(0, 0);
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
     program.impl().finalize_dataflow_buffer_configs();
-    program.impl().allocate_dataflow_buffers(slow_dispatch::physical_device_from_unit_mesh(this->device()));
+    program.impl().allocate_dataflow_buffers(this->device().get_devices()[0]);
 
     const auto& dfbs = program.impl().dataflow_buffers_on_core(logical_core);
     ASSERT_EQ(dfbs.size(), 1u);
@@ -391,7 +391,7 @@ TEST_F(UnitMeshFixture, DfbSerializeTxnCentricImplicitSync1Sx1S) {
     CoreCoord logical_core = CoreCoord(0, 0);
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
     program.impl().finalize_dataflow_buffer_configs();
-    program.impl().allocate_dataflow_buffers(slow_dispatch::physical_device_from_unit_mesh(this->device()));
+    program.impl().allocate_dataflow_buffers(this->device().get_devices()[0]);
 
     const auto& dfbs = program.impl().dataflow_buffers_on_core(logical_core);
     ASSERT_EQ(dfbs.size(), 1u);

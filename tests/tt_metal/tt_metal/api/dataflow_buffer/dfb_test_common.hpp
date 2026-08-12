@@ -62,7 +62,7 @@ struct LiveTcSnapshot {
 
 inline LiveTcSnapshot read_live_tcs(
     distributed::MeshDevice& unit_mesh, const CoreCoord& logical_core, uint32_t neo_id) {
-    IDevice* device = slow_dispatch::physical_device_from_unit_mesh(unit_mesh);
+    IDevice* device = unit_mesh.get_devices()[0];
     const auto& hal = MetalContext::instance().hal();
     const uint32_t base = hal.get_neo_tile_counters_base_addr() + neo_id * hal.get_neo_tile_counters_stride();
     const uint32_t size = hal.get_neo_tile_counters_size();
