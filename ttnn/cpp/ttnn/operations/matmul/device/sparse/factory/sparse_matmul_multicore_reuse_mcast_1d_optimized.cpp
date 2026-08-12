@@ -262,6 +262,13 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
 
     uint32_t num_batch_compute = nnz.value_or(sparsity.logical_volume());
+    // Compact output packs only the `nnz` active batch pairs in scan order. Detect it exactly as the
+    // device op (device/sparse/sparse_matmul_device_operation.cpp): [1, nnz, M, N]. Shape matching,
+    // rather than volume matching, prevents a same-volume tensor with incompatible geometry from
+    // selecting compact writer indexing.
+    const bool compact_output =
+        nnz.has_value() &&
+        output_tensor.logical_shape() == ttnn::Shape{1U, nnz.value(), a.logical_shape()[-2], b.logical_shape()[-1]};
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
@@ -374,7 +381,8 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         (std::uint32_t)0,  // in3_tensor_stride_w
         // fuse op args
         (std::uint32_t)false,  // fuse_op
-        (std::uint32_t)false   // fuse_op_reduce_scatter
+        (std::uint32_t)false,  // fuse_op_reduce_scatter
+        (std::uint32_t)compact_output,
     };
 
     // Append TensorAccessorArgs
@@ -419,6 +427,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         ttnn::get_throttle_level(operation_attributes.compute_kernel_config));
 
     mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
+    mm_kernel_in1_sender_writer_defines["SPARSE_OUTPUT"] = "1";
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
     tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
