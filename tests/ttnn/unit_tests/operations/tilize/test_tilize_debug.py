@@ -648,3 +648,79 @@ def test_r2_a3d_wide_shard_crossover_keeps_the_cb_constant_in_w():
     assert wide_plan["mode"] == "streamed", "a wide shard must not grow the CB past the budget"
     clamped = blocking([1, 1, 128, 32768], 32, 2)["wt_block"]
     assert clamped * tile_bytes <= budget
+
+
+# ---------------------------------------------------------------------------
+# 6. Refinement 2b — the conftest xfail hook's oracle
+# ---------------------------------------------------------------------------
+#
+# `conftest.py` reports a typed `SupportRefusal` as XFAIL, which is the registry
+# model's colour for "outside SUPPORTED" (eval/golden_harness.py::_decorate does
+# the same thing at parametrize time for the golden suite). That reporting
+# convention is only sound while the refusal type tracks the DECLARED rectangle
+# exactly: a cell inside SUPPORTED must never raise it (or the hook would hide a
+# real failure), and a cell outside it must raise exactly it (or a genuine gap
+# would be reported as an unexplained red).
+#
+# This test derives BOTH directions from `SUPPORTED` itself, so it needs no edit
+# when a later refinement widens an axis — the same call flips from "expected
+# refusal" to "expected to run" automatically.
+
+
+def _dtype_is_supported(dtype):
+    from ttnn.operations.tilize.tilize import SUPPORTED
+
+    return dtype in SUPPORTED["dtype"]
+
+
+def _axis_has(axis, value):
+    from ttnn.operations.tilize.tilize import SUPPORTED
+
+    return value in SUPPORTED[axis]
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["in_rectangle_bf16", "dtype_fp32", "pad_auto", "tiny_tile", "retile_in_layout"],
+)
+def test_r2b_refusal_type_tracks_the_declared_rectangle(device, case, expect_error):
+    """`SupportRefusal` is raised exactly for calls outside SUPPORTED."""
+    from ttnn.operations._op_contract import SupportRefusal
+    from ttnn.operations.tilize.tilize import validate
+
+    shape = (1, 1, 64, 128)
+    kwargs = {}
+    expect_refusal = False
+
+    if case == "in_rectangle_bf16":
+        dtype = ttnn.bfloat16
+    elif case == "dtype_fp32":
+        dtype = ttnn.float32
+        expect_refusal = not _dtype_is_supported(ttnn.float32)
+    elif case == "pad_auto":
+        dtype = ttnn.bfloat16
+        shape = (1, 1, 60, 128)  # H tail -> padding is the only way to tilize it
+        kwargs = {"pad_value": 0.0}
+        expect_refusal = not _axis_has("pad_mode", "auto")
+    elif case == "tiny_tile":
+        dtype = ttnn.bfloat16
+        kwargs = {"tile": ttnn.Tile([16, 32])}
+        expect_refusal = not _axis_has("tile_height", 16)
+    else:  # retile_in_layout
+        dtype = ttnn.bfloat16
+        expect_refusal = not _axis_has("in_layout", ttnn.TILE_LAYOUT)
+
+    torch_input = torch.zeros(shape, dtype=torch.float32)
+    layout = ttnn.TILE_LAYOUT if case == "retile_in_layout" else ttnn.ROW_MAJOR_LAYOUT
+    tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=layout, device=device)
+
+    if expect_refusal:
+        # Outside the rectangle: the refusal must be the TYPED one, because that
+        # type is the hook's whole oracle. A bare ValueError/RuntimeError here
+        # would (correctly) still be reported red.
+        with expect_error(SupportRefusal, "not in SUPPORTED"):
+            validate(tt_input, **kwargs)
+    else:
+        # Inside the rectangle: never a support refusal, so the hook can never
+        # convert this case's failures into a silent xfail.
+        validate(tt_input, **kwargs)

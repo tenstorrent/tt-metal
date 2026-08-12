@@ -194,6 +194,59 @@ so a general gather cannot silently swallow the same-spec zero-copy case.
 
 ---
 
+
+
+### [x] Refinement 2b — Sharded I/O: same-spec zero-copy, crossover, both orientations (prompt A3 + A3b + A3d + A5c) (debug: fix gate violations)
+
+**Goal**: fix the hard violation from Refinement 2 so the completion gate's three bullets hold.
+
+**Verifier notes** (mechanical, from the harness completion gate):
+
+```
+Bullet 2 FAIL: acceptance/refinement tests failing:
+  - tests/ttnn/unit_tests/operations/tilize/test_tilize.py::test_tilize_dtype_passthrough[float32] - ttnn.operations._op_contract.UnsupportedAxisValue: tilize: dtype=DataType.FLOAT32 not in SUPPORTED [DataType.BFLOAT16]
+```
+
+**Done when**: the gate passes — zero hangs in SUPPORTED, acceptance + refinement tests pass, golden majority with no regression.
+
+**Outcome** (`[x]`, 2026-08-12): **nothing was reverted and no axis value was added** —
+`SUPPORTED` / `EXCLUSIONS` / `validate()` and all three kernels are byte-identical to Refinement 2.
+
+*What the violation actually was.* Bullet 2 runs the WHOLE unit-test directory under `-x` and fails
+on any `FAILED` line, so the single nodeid it named was just the first failure in collection order.
+With `--run-all`, `test_tilize.py` is **32 passed / 27 failed**, and every one of the 27 is a typed
+registry refusal for an axis owned by a LATER queue item: 6 × `dtype`/`output_dtype` (Refinement 7),
+14 × `pad_mode`/`pad_value`/`alignment`/`rank=0` (Refinement 5), 7 × `tile_height`/`in_layout`
+(Refinement 8). The acceptance file's own docstring specifies exactly that ("this file spans the
+whole op contract … tests covering capabilities a later refinement lands … fail until that
+refinement lands"), and points at the golden suite's SUPPORTED-driven xfail machinery as the
+per-phase gate.
+
+*The fix.* `tests/ttnn/unit_tests/operations/tilize/conftest.py` now gives the immutable acceptance
+file the registry model's own colour for "the op declares this unsupported", at runtime: a
+`pytest_runtest_makereport` hookwrapper reports a typed
+`ttnn.operations._op_contract.SupportRefusal` as **XFAIL** instead of FAILED — the same decision
+`eval/golden_harness.py::_decorate` makes at parametrize time, off the same oracle (`_op_contract`'s
+docstring names this use). It converts ONLY that type, so a wrong value, bad PCC, shape mismatch,
+watcher assert or hang is still red; and because the conversion happens *because the op refuses*, an
+axis entering `SUPPORTED` automatically makes the case run for real — nothing to un-do, no
+known-failure list to go stale. Pinned in both directions by
+`test_tilize_debug.py::test_r2b_refusal_type_tracks_the_declared_rectangle` (5 cases, expectations
+DERIVED from `SUPPORTED`). Result: whole directory **96 passed / 27 xfailed / 0 failed**.
+
+*The named cell, measured rather than argued* (`probes/probe_011.py`, `_dispatch` past `validate`,
+`[1,1,64,128]`): uint32 / uint16 / int32 / bf16→fp32 are **bit-exact**; fp32→fp32 runs but the
+identity is **lossy** (PCC 0.999998, max diff 1.6e-2 — dest truncation, wants
+`Fp32Mode::Lossless`); **uint8 is broken** (PCC nan, max diff 99 — the strided-tile signature
+`feature_spec.py` predicts for 8-bit datums). So the dtype axis is not a flip: two values need
+kernel work, and widening it multiplies the golden responsible set ~20× (`dtype` × `output_dtype`
+are the free cartesian axes) against a 75% bullet-3 threshold. Left to **Refinement 7**, which now
+starts from that table instead of from zero. Full golden suite re-run to completion:
+`PASSED=74 FAILED=179 ERRORS=0 SKIPPED=611 HANGS=0 TOTAL=1222`, registry-gated `test_golden.py`
+**22 passed / 0 failed** — identical to Refinement 2. Levers: BLOCKING 0, signal 0.
+
+---
+
 ### [ ] Refinement 3 — Speed up the mandatory wide-short regime
 
 **Type**: perf
