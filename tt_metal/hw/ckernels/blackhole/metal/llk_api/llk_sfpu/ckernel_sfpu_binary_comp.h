@@ -36,13 +36,29 @@ inline constexpr bool unsupported_fp32_compare_v = false;
 // NOTE: sfpi has no total-order float compare. It lowers every vFloat relational
 // operator to SFPMAD (a - b) followed by SFPSETCC on the sign, where the raw-TTI
 // original used SFPGT/SFPLE, which compare the sign-magnitude bit patterns directly.
-// The equality path below therefore compares bit patterns rather than subtracting.
-// The two ordered paths still subtract, which is exact except when a - b underflows
-// into the flushed denormal range: operands closer together than 2^-126 compare as
-// equal. That window is why test_sfpu_binary_float still disables Lt/Gt/Le/Ge, and
-// closing it needs either an sfpi total-order compare or a return to raw SFPGT/SFPLE.
+// Two consequences, both worked around below rather than fixed at the root:
+//
+//  1. a - b manufactures a NaN for a == b == ±inf, and SFPSETCC only reads the sign
+//     bit, so that NaN reads as "greater than or equal to zero". The equality and
+//     weak-ordered paths therefore test bitwise equality explicitly. The strict paths
+//     need no such clause only because their answer for a tie is already 0, and the
+//     manufactured NaN has a clear sign bit so it fails their LT0 test.
+//  2. The subtract is exact except when a - b underflows into the flushed denormal
+//     range, so operands that differ by less than 2^-126 compare as equal. This is
+//     the remaining reason test_sfpu_binary_float keeps Lt/Gt/Le/Ge disabled.
+//
+// Closing both properly needs an sfpi total-order compare or a return to raw
+// SFPGT/SFPLE, which is a perf tradeoff on these hot kernels.
 constexpr int FP32_INF_BITS = 0x7F800000;
 constexpr std::uint32_t dst_tile_size_sfpi_comp = 32;
+
+// Clear the sign bit at the bit level, as the raw-TTI original did with SFPSETSGN.
+// sfpi::abs() lowers to SFPABS in float mode, which leaves a NaN's sign bit intact;
+// |a| + |b| could then be a negative NaN, which reads back as a negative vInt and
+// slips past the "> +inf bits" test below.
+inline sfpi::vFloat clear_sign(sfpi::vFloat v) {
+    return sfpi::as<sfpi::vFloat>(sfpi::setsgn(sfpi::as<sfpi::vUInt>(v), 0));
+}
 
 template <int ITERATIONS, SfpuType RELATIONAL_OP>
 inline void calculate_binary_comp_fp32_equal(
@@ -56,7 +72,7 @@ inline void calculate_binary_comp_fp32_equal(
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi_comp];
         sfpi::vFloat b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi_comp];
-        sfpi::vFloat sum = sfpi::abs(a) + sfpi::abs(b);
+        sfpi::vFloat sum = clear_sign(a) + clear_sign(b);
         sfpi::vInt sum_bits = sfpi::as<sfpi::vInt>(sum);
         sfpi::vFloat result = default_result;
 
@@ -93,7 +109,7 @@ inline void calculate_binary_comp_fp32_strict_ordered(
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat a = sfpi::dst_reg[dst_index_a * dst_tile_size_sfpi_comp];
         sfpi::vFloat b = sfpi::dst_reg[dst_index_b * dst_tile_size_sfpi_comp];
-        sfpi::vFloat sum = sfpi::abs(a) + sfpi::abs(b);
+        sfpi::vFloat sum = clear_sign(a) + clear_sign(b);
         sfpi::vInt sum_bits = sfpi::as<sfpi::vInt>(sum);
         sfpi::vFloat result = 0.0f;
 
@@ -123,14 +139,20 @@ inline void calculate_binary_comp_fp32_weak_ordered(
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat a = sfpi::dst_reg[dst_index_a * dst_tile_size_sfpi_comp];
         sfpi::vFloat b = sfpi::dst_reg[dst_index_b * dst_tile_size_sfpi_comp];
-        sfpi::vFloat sum = sfpi::abs(a) + sfpi::abs(b);
+        sfpi::vFloat sum = clear_sign(a) + clear_sign(b);
         sfpi::vInt sum_bits = sfpi::as<sfpi::vInt>(sum);
         sfpi::vFloat result = 1.0f;
 
         // a > b (excluding both-±0/subnormal) -> 0
         v_if(a > b && sum != 0.0f) { result = 0.0f; }
         v_endif;
-        // NaN (|a|+|b| > inf) -> 0
+        // Restore the ties the subtract above cannot see. a > b is evaluated as
+        // (a - b) >= 0 && (a - b) != 0, and for a == b == ±inf that subtract yields a
+        // NaN whose sign bit is clear, so it satisfies both halves and wrongly clears
+        // the result. Bitwise equality is exact and puts identical operands back to 1.
+        v_if(sfpi::as<sfpi::vInt>(a) == sfpi::as<sfpi::vInt>(b)) { result = 1.0f; }
+        v_endif;
+        // NaN (|a|+|b| > inf) -> 0. Must stay last: NaN == NaN is bitwise true above.
         v_if(sum_bits > FP32_INF_BITS) { result = 0.0f; }
         v_endif;
 

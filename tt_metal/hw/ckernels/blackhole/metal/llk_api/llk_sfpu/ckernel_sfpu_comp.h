@@ -50,33 +50,37 @@ inline void calculate_comp() {
     // fp32 total-order comparison-to-zero. |v| is used to fold ±0 together and to
     // detect NaN: a NaN has |v| whose fp32 bit pattern is strictly greater than +inf
     // (0x7F800000), so `as<vInt>(|v|) > 0x7F800000` isolates it.
+    //
+    // The sign must be cleared at the bit level, with setsgn (SFPSETSGN), as the
+    // raw-TTI original did. sfpi::abs() lowers to SFPABS in float mode, which leaves
+    // a NaN's sign bit intact: -NaN then reads back as a negative vInt, the test above
+    // never fires, and ltz(-NaN) returns 1 instead of 0.
     constexpr int FP32_INF_BITS = 0x7F800000;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0];
-        vFloat abs_v = sfpi::abs(v);
-        vInt abs_bits = as<vInt>(abs_v);
+        vInt abs_bits = as<vInt>(sfpi::setsgn(as<vUInt>(v), 0));
         vFloat result;
 
         // eqz: 1 where |v| == 0 (handles ±0; NaN has |v| != 0 → 0)
         if constexpr (COMP_MODE == SfpuType::equal_zero) {
             result = 0.0f;
-            v_if(abs_v == 0.0f) { result = 1.0f; }
+            v_if(abs_bits == 0) { result = 1.0f; }
             v_endif;
         }
 
         // nez: 0 where |v| == 0 (handles ±0; NaN has |v| != 0 → 1)
         if constexpr (COMP_MODE == SfpuType::not_equal_zero) {
             result = 1.0f;
-            v_if(abs_v == 0.0f) { result = 0.0f; }
+            v_if(abs_bits == 0) { result = 0.0f; }
             v_endif;
         }
 
         // ltz: (v < 0) AND (|v| != 0) → 1, then NaN → 0
         if constexpr (COMP_MODE == SfpuType::less_than_zero) {
             result = 0.0f;
-            v_if(v < 0.0f && abs_v != 0.0f) { result = 1.0f; }
+            v_if(v < 0.0f && abs_bits != 0) { result = 1.0f; }
             v_endif;
             v_if(abs_bits > FP32_INF_BITS) { result = 0.0f; }
             v_endif;
@@ -85,7 +89,7 @@ inline void calculate_comp() {
         // gtz: (v >= 0) AND (|v| != 0) → 1, then NaN → 0
         if constexpr (COMP_MODE == SfpuType::greater_than_zero) {
             result = 0.0f;
-            v_if(v >= 0.0f && abs_v != 0.0f) { result = 1.0f; }
+            v_if(v >= 0.0f && abs_bits != 0) { result = 1.0f; }
             v_endif;
             v_if(abs_bits > FP32_INF_BITS) { result = 0.0f; }
             v_endif;
@@ -94,7 +98,7 @@ inline void calculate_comp() {
         // gez: default 1; negatives (excl. -0) → 0; NaN → 0
         if constexpr (COMP_MODE == SfpuType::greater_than_equal_zero) {
             result = 1.0f;
-            v_if(v < 0.0f && abs_v != 0.0f) { result = 0.0f; }
+            v_if(v < 0.0f && abs_bits != 0) { result = 0.0f; }
             v_endif;
             v_if(abs_bits > FP32_INF_BITS) { result = 0.0f; }
             v_endif;
@@ -103,7 +107,7 @@ inline void calculate_comp() {
         // lez: default 1; positives (excl. +0) → 0; NaN → 0
         if constexpr (COMP_MODE == SfpuType::less_than_equal_zero) {
             result = 1.0f;
-            v_if(v >= 0.0f && abs_v != 0.0f) { result = 0.0f; }
+            v_if(v >= 0.0f && abs_bits != 0) { result = 0.0f; }
             v_endif;
             v_if(abs_bits > FP32_INF_BITS) { result = 0.0f; }
             v_endif;
