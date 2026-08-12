@@ -224,14 +224,14 @@
       "phase": "A0",
       "followup": "APPLIED IN CODE (TensorAccessorArgs appended LAST as compile-time args in both dataflow kernels) but UNMEASURED, because a device-kernel-duration bench structurally CANNOT see it \u2014 the lever moves address-gen code and program-cache behaviour, not kernel ns. To close it: add a runtime-accessor-args arm (TensorAccessorArgs(..., ArgConfig::Runtime) plus the <cta, crta> kernel form) and compare dispatch time, or diff ttnn.compute_program_descriptor_hash. Named as a BENCH gap, not as a win.",
       "predicted_delta_pct": 0,
-      "reason": "Predicted ~0 on device kernel time; the payoff is dispatch/program-cache, which tests/ttnn/unit_tests/operations/tilize/test_tilize.py::test_tilize_program_cache_hit exercises together with D19."
+      "reason": "Predicted ~0 on device kernel time; the payoff is dispatch/program-cache, which tests/ttnn/unit_tests/operations/tilize/test_tilize.py::test_tilize_program_cache_hit exercises together with D19. OBSERVED: a probe (tests/ttnn/unit_tests/operations/tilize/probes/probe_002.py) shows num_program_cache_entries 1 -> 1 across two identical-spec calls with identity intact on both, so the CT/RT split does cache as intended \u2014 but that is a dispatch observation, not the ns counterfactual this status would need."
     },
     "D19": {
       "status": "deferred",
       "phase": "A0",
       "followup": "Same bench gap as D18. Runtime args are already only (buffer address, b0, nb) \u2014 every shape-derived quantity is compile-time \u2014 so a second call with the same spec reuses the program. Close it by asserting the cache hit in the bench rather than in kernel ns.",
       "predicted_delta_pct": 0,
-      "reason": "Applied in code, unmeasurable in device kernel duration by construction. Recorded as open rather than claimed as a measured win."
+      "reason": "Applied in code, unmeasurable in device kernel duration by construction. Recorded as open rather than claimed as a measured win. OBSERVED: a probe (tests/ttnn/unit_tests/operations/tilize/probes/probe_002.py) shows num_program_cache_entries 1 -> 1 across two identical-spec calls with identity intact on both, so the CT/RT split does cache as intended \u2014 but that is a dispatch observation, not the ns counterfactual this status would need."
     },
     "D20": {
       "status": "deferred",
