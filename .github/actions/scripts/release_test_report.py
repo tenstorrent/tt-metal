@@ -286,7 +286,7 @@ def render_plain(report, meta):
         "Scope: the requirement evidence above covers the RTL sim tests run by the release gate "
         f"({meta['sim_yaml_name']}, config {meta['config']}). Quasar tests that run "
         "only in the emulator job are not included -- that job reports to Slack and "
-        "does not feed this check. See tests/scripts/quasar/QUASAR_TEST_COVERAGE.md.",
+        "does not feed this check. Full inventory: the coverage doc in this artifact.",
     ]
     return "\n".join(out)
 
@@ -391,7 +391,7 @@ def render_markdown(report, meta):
         f"(`{meta['sim_yaml_name']}`, config `{meta['config']}`). Quasar tests that run "
         "only in the emulator job are not included — that job reports to Slack and does "
         "not feed this check. Full inventory: "
-        "[`tests/scripts/quasar/QUASAR_TEST_COVERAGE.md`](../../../tests/scripts/quasar/QUASAR_TEST_COVERAGE.md).",
+        "the coverage inventory attached to this same artifact.",
     ]
     return "\n".join(out)
 

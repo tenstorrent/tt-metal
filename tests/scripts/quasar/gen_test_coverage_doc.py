@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Generate QUASAR_TEST_COVERAGE.md from the quasar test yamls.
+"""Generate the Quasar test coverage inventory from the quasar test yamls.
 
-Hand-maintained notes about what runs where went stale within weeks, so this
-regenerates them from the yamls and cross-references ai_ip_tests.json.
+Run by the package-and-release workflow, which attaches the result as a release
+artifact. The output is deliberately not committed: it is a point-in-time view
+of the yamls and ai_ip_tests.json, and a checked-in copy goes stale silently.
 
-    gen_test_coverage_doc.py            # rewrite the doc
-    gen_test_coverage_doc.py --check    # exit 1 if out of date
+    gen_test_coverage_doc.py [-o PATH]
 """
 import argparse
 import fnmatch
@@ -297,20 +297,12 @@ def render():
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--check", action="store_true", help="exit 1 if the doc is out of date")
+    ap.add_argument("-o", "--out", default=str(OUT_PATH), help=f"output path (default: {OUT_PATH.name})")
     args = ap.parse_args()
 
-    content = render()
-    if args.check:
-        current = OUT_PATH.read_text() if OUT_PATH.is_file() else ""
-        if current != content:
-            print(f"ERROR: {OUT_PATH.name} is out of date; rerun {Path(__file__).name}", file=sys.stderr)
-            return 1
-        print(f"{OUT_PATH.name} is up to date")
-        return 0
-
-    OUT_PATH.write_text(content)
-    print(f"wrote {OUT_PATH}")
+    out = Path(args.out)
+    out.write_text(render())
+    print(f"wrote {out}")
     return 0
 
 
