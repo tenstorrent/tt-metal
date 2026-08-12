@@ -1,7 +1,10 @@
-# Goal: MiniMax-H3 audio decode — 0.93 s to 60 ms
+# Goal: MiniMax-H3 audio decode — 0.93 s to sub 200 ms
 
-**Target:** decode 207 latents (5.17 s of audio, batch 2) in **<= 60 ms** at **>= 49.45 dB PSNR vs
+**Target:** decode 207 latents (5.17 s of audio, batch 2) in **<= 200 ms** at **>= 49.45 dB PSNR vs
 the CPU reference**. Today: **0.9304 s**. That is ~15x still to find.
+
+Relaxed by the user on 2026-08-12: **222 ms is good, 300 ms is acceptable.** Item 1 measured a ~260 ms
+T-independent floor, so this relaxation is what makes any route feasible at all — see below.
 
 **Do item 1 before anything else.** It decides whether items 2 and 3 are the right work at all.
 
@@ -58,6 +61,12 @@ Device kernels are JIT-compiled from `TT_METAL_HOME` and need no build. Host C++
 you silently run the old binary and measure nothing. Both `--component` installs are required.
 A `.cpp`-only change is ~4 min; a header change ~10 min (ccache absorbs most of it).
 
+**Third trap, same class: a worktree's `build_Release` is a symlink to the main checkout's.** Its
+CMake cache has `CMAKE_HOME_DIRECTORY=/data/rshirvani/tt-metal`, so `ninja -C build_Release ttnn` run
+from a worktree compiles **main's** sources — C++ edits made in a worktree are silently not built, and
+you measure the unmodified binary. Either make C++ edits in the main checkout, or configure a separate
+build dir against the worktree source (2.6 GB, and ccache is warm).
+
 ---
 
 ## Scripts
@@ -82,7 +91,40 @@ listening test.
 
 ---
 
-## Item 1 — Settle host-bound vs kernel-bound  (BLOCKING, ~half a day)
+## Item 1 — Settle host-bound vs kernel-bound  ✅ DONE 2026-08-12
+
+**Answer: kernel-bound.** Device ~0.90 s of the 0.9304 s. Items 2 and 3 are the right work.
+Full write-up and scripts: `audio_perf/ITEM1_RESULT.md`.
+
+Settled **without** the profiler, because the profiler is what produced the contradiction — two
+totals are on record for this stage (224 ms and 1401 ms) and neither is device time. Instead:
+
+* **Trace.** `untraced 0.9450 s | traced 0.9081 s -> 1.04x`, and `dec_in_proj 0.0020 s`. Removing
+  *all* host dispatch buys 37 ms of 945, so the ~70%-host-bound docstring is wrong and the
+  `trace 1.00x` dead-end entry is right.
+* **T-sweep** (`t_sweep.py`, op count is T-independent): the decode is **~260 ms fixed + ~670 ms
+  data-proportional**.
+* **`op_pipeline.py`**: chained 141.9 / independent 125.7 / per-op-sync 138.8 us/op — all equal, so
+  that microbenchmark is host-*issue*-bound and never measured a device floor. Real per-op device
+  cost is ~37 us. **The "6955 x 180 us = 1254 ms floor" is retired.**
+
+**The consequence that changes the plan:** the ~260 ms floor is T-independent, so sharding does not
+divide it and trace does not remove it. Sharding-only routes cap at `260 + 670/factor` — ~298 ms at
+32 chips, ~344 ms at 8, and that ignores CCL cost. Item 2 is a **~3x lever with a hard floor at the
+target**, not the 10x lever described below. Reaching 300 ms with margin needs the floor cut too,
+which means deleting ops.
+
+**Two corrections to this file, both load-bearing:**
+1. Item 2's "there is no 8-chip configuration in that file" is **wrong** — `FACTORS = [(1,1), (4,0),
+   (8,1)]` at `test_audio_minimax_h3.py:729`, with t_factor=8 recorded at **0.898 s** (1.04x) and
+   PSNR −6.3 dB. This file asks for that to be reconciled first; it is now reconciled, and the 10x
+   premise was already contradicted in-tree.
+2. `row_model.py` sizes the sharding problem: the unsharded `ups` are only **2.7% of rows** (the
+   resblocks, 97.3%, shard correctly via the halo). So the 898 ms is **~540 ms of sharding overhead**,
+   not replicated work — profile the 126 per-conv halo CCLs, `_set_tpad_tail`, and the disabled snake
+   fusion, in that order.
+
+<details><summary>original item 1 brief</summary>
 
 **Why:** the whole week assumed kernel-bound. The evidence is contradictory and nobody has closed it.
 
@@ -108,12 +150,29 @@ Sum device op time from the profiler CSV; compare against `decode_bench.py`'s 0.
 * device ~= 0.2 s -> **host-bound**. Stop all kernel work. Trace / multi-CQ / dispatch is the whole
   game, and this week's layer was the wrong one.
 
+</details>
+
 ---
 
-## Item 2 — 32 chips  (the only 10x-shaped lever)
+## Item 2 — 32 chips  (~~the only 10x-shaped lever~~ a ~3x lever, floored at ~260 ms — see item 1)
 
-Every timing and PSNR test in `test_audio_minimax_h3.py` is `SINGLE_DEVICE = (1, 1)`. **There is no
-8-chip configuration in that file** — if someone believes there is, reconcile that first.
+> **Corrected 2026-08-12.** The claim below is false and the reconciliation it asks for is done.
+> `test_audio_minimax_h3.py:729` has `FACTORS = [(1, 1), (4, 0), (8, 1)]`, `KNOWN_BROKEN = {(8, 1)}`,
+> and the comment above it records **t_factor=8 at 0.898 s (1.04x) with PSNR −6.3 dB**. So multi-chip
+> configurations exist and 8-way T-sharding is already measured at no speedup.
+>
+> `row_model.py` says why that is not a replicated-work problem: the unsharded `ups` hold only **2.7%
+> of rows**, the halo-sharded resblocks hold 97.3%. The row model predicts ~360 ms at factor=8 against
+> the measured 898 ms, so **~540 ms is sharding overhead**. Profile in this order: (1) the 126
+> per-conv halo CCLs (7 stages x 3 branches x 6 convs), (2) `_set_tpad_tail`, called per stage *and*
+> per branch as a masked pass over the full local tensor, (3) the snake fusion, which declines when
+> `factor > 1` and silently gives back the week's 1.181x.
+>
+> Ceiling with item 1's floor: `260 + 670/32` ≈ **298 ms** at 32 chips even if sharding were free. That
+> clears the relaxed 300 ms bar but leaves no margin, so pair this with op-count reduction.
+
+Every timing and PSNR test in `test_audio_minimax_h3.py` is `SINGLE_DEVICE = (1, 1)`. ~~**There is no
+8-chip configuration in that file**~~ — if someone believes there is, reconcile that first.
 
 T-sharding is already implemented: `_t_neighbor_pad`, the halo exchange, `AudioTParallelConfig`.
 Its one test (`mesh4x8`, line 719) times out at 300 s, pre-existing.
@@ -143,8 +202,14 @@ Worth **2.94x on the conv pair at C=8**, ~1.2-1.5x end to end. Four `.cpp` edits
    `k = output_channels / groups`. **Env-gate this first** — it routes every grouped conv in the
    repo, and widening it silently re-routes callers the depthwise factory has never seen.
 2. `prepare_conv2d_weights.cpp` — the weight matrix goes `(K*C, C)` -> `(K*C, k*C)`; output column
-   `k*c + j` needs group `c`'s tap set `j`. **Write a standalone check for this before touching
-   anything downstream** — everything downstream reads this layout.
+   `k*c + j` needs group `c`'s tap set `j`. ~~**Write a standalone check for this before touching
+   anything downstream**~~ — **done 2026-08-12: `audio_perf/dw_layout_check.py`**, bit-exact in
+   float64 vs `F.conv1d(groups=C)` for k=1 (no regression), k=2/3/4, C=8/16/32/224, kw=3/7, and
+   broadcast repeats 2/4.
+   **This edit is smaller than scoped:** `conv_depthwise_weight_bcast_helper` already indexes axis 0
+   by `original_weight_shape[0]` = `out_channels` and never assumes `out_channels == groups`, so the
+   mapping needs no change — only the output shape derivation. `k*C` stays tile-clean at every shape
+   the decode uses.
 3. `conv2d_op_program_factory_common.cpp` — mostly verification; CB widths already key off
    `per_core_out_matrix_width_ntiles`, and SNAKE_PARAMS is already `2 *` that.
 4. `compute_depthwise_conv1d.cpp` — tile indexing. `block_w` is already threaded into the flat loops;
