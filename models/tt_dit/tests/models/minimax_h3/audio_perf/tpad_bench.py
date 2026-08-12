@@ -5,9 +5,8 @@ PROFILE_2026_08_06.txt puts ConcatDeviceOperation at **285.3 ms over 469 calls, 
 (Conv3d + Conv2d) is only 292 ms. So the decode is dominated by data movement, and concat leads it.
 
 `_zero_pad_t` builds `concat([zeros, x, zeros], dim=1)`, which is exactly what `ttnn.pad` expresses on
-the T axis. The same substitution in `_pad_channels_to_aligned` measured exact and 4-30x faster
-(pad_fix_candidates.py), so it is worth checking here at the T-padding shapes the bands actually use,
-before touching shipping code.
+the T axis. The same substitution in `_pad_channels_to_aligned` measured exact and 4-30x faster, so it is worth
+checking here at the T-padding shapes the bands actually use, before touching shipping code.
 
 Also times the replicate case, whose right-hand pad is a scaled copy of the last row rather than zeros
 -- pad cannot express that directly, so it is measured only to size what remains if zeros are fixed.

@@ -1,5 +1,14 @@
 """What does one ttnn op cost before it moves any data, and what bandwidth does it reach?
 
+RETRACTED 2026-08-12 -- do not quote this script's per-op number as a device floor. It synchronizes
+between ops, so what it measures is host *issue* cost. `op_pipeline.py` shows chained 141.9 /
+independent 125.7 / per-op-sync 138.8 us/op, all equal, i.e. that microbenchmark is host-issue-bound and
+cannot see device time at all. The "6955 ops x 180 us = 1254 ms floor" derived from this is void; real
+per-op device cost is ~37 us. Worse, the premise below ("Trace measured 1.00x, so it is not host
+dispatch") is true only on a single device -- trace is 3.06x on a sharded 32-chip mesh, and taking that
+1.00x unqualified is what sent a week of work down the kernel path. See ITEM1_RESULT.md and
+ITEM2_RESULT.md.
+
 Two results so far disagree about what binds this stage. Trace measured 1.00x, so it is not host
 dispatch. bf16 measured 1.23x rather than 2x, so it is not purely bytes either. The remaining
 candidate is fixed per-op device cost, and that is worth pinning down: a decode issues 6955 ops, so a
