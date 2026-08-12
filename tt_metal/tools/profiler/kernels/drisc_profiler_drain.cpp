@@ -304,9 +304,25 @@ void kernel_main() {
     // that did) and the limiter allows it. Spacing exists because the frame budget is small -- without it every
     // capture would land in the first few hundred sweeps and the rest of the run would be blind.
     constexpr uint32_t kSelfSample = get_compile_time_arg_val(33);
-    // Sparse IDLE samples, so the timeline still shows an idle drainer's true poll cadence rather than only
-    // its bursts. Derived, not another knob.
-    constexpr uint32_t kSelfIdleEvery = kSelfSample * 32u;
+    // Sparse IDLE samples: arg 36, and **0 (OFF) by default** -- they are what makes a capture unreadable.
+    //
+    // A drainer is resident from device open, so its idle sweeps span the WHOLE process (~190 ms measured)
+    // while the workload is a 1.9 ms sliver of it. Sampling them scatters DRISC zones across a window 100x
+    // the workload's, before it and after it, which is exactly what "the drainer activity is not aligned with
+    // the cores, it is all over the place" looks like in the GUI. Worse, they are not even inert: a FILLER's
+    // self frame is a real frame in its DRAM ring, so its MOVER then ships it -- manufacturing mover
+    // credit-wait and write zones at instants when no worker produced anything. MEASURED: every one of the 13
+    // pre-workload mover credit-wait zones followed a peer filler's captured-sweep publish by 1.7-2.4 us.
+    //
+    // With this off, every capture is work-triggered, so captures land inside the workload window and a
+    // filler's self frame joins a batch its mover was already shipping. The idle poll cadence is still visible
+    // WITHIN a captured sweep -- a mover's empty-peer READ zone and a filler's per-batch zones over cores with
+    // nothing live are the idle cost, in context.
+    constexpr uint32_t kSelfIdleEvery = get_compile_time_arg_val(36);
+    constexpr bool kSelfIdleOn = kSelfIdleEvery != 0;
+    // Never modulo by kSelfIdleEvery directly: it is legitimately 0, and a `% 0` in code the compiler cannot
+    // prove dead is a trap on device rather than a folded-away branch.
+    constexpr uint32_t kSelfIdleMod = kSelfIdleOn ? kSelfIdleEvery : 1u;
     // Spacing between WORK captures, which has to be far tighter than kSelfSample. A drainer is resident for
     // the whole process but the workload only occupies a short window of it, so a filler's ~113 busy sweeps are
     // not spread over its ~25,000 sweeps -- they are packed into a few hundred consecutive ones. MEASURED with
@@ -1097,7 +1113,7 @@ void kernel_main() {
             } else if (
                 sweeps >= self_next_sweep &&
                 (self_prev_busy ||
-                 ((sweeps % kSelfIdleEvery) == 0 && self_idle_frames < kSelfIdleFrames))) {
+                 (kSelfIdleOn && (sweeps % kSelfIdleMod) == 0 && self_idle_frames < kSelfIdleFrames))) {
                 self_on = true;
                 self_from_start = true;
                 self_mark(kernel_profiler::DRISC_ZONE_SWEEP, kernel_profiler::SPSC_TYPE_ZONE_START, t_sweep0);
@@ -1564,7 +1580,7 @@ void kernel_main() {
                     kernel_profiler::SPSC_TYPE_ZONE_END,
                     t_sweep0 + sweep_cyc);
                 const bool did_work = busy || self_work;
-                if (did_work || self_pub_in_sweep || (sweeps % kSelfIdleEvery) == 0) {
+                if (did_work || self_pub_in_sweep || (kSelfIdleOn && (sweeps % kSelfIdleMod) == 0)) {
                     const uint32_t before = self_frames;
                     self_publish();
                     self_sweeps++;

@@ -3654,25 +3654,25 @@ and `DRISC-CREDIT-WAIT` / `DRISC-WRITE` nested inside `DRISC-PROC` on a filler (
 a mover, which has no proc phase).
 
 Measured from `tracy_captures/drisc_selfzones.tracy` (`tracy_zone_csv`: **126 contexts** = 120 workers + 6
-drainers, 3,002,343 zone rows). Per-zone means, one row per drainer:
+drainers, 3,001,949 zone rows), every captured sweep work-triggered. Per-zone means, one row per drainer:
 
 | DRISC | role | ctx | SWEEP zones | DRISC zones | depths | SWEEP mean | READ | READ-WAIT | PROC | CREDIT-WAIT | WRITE | WR-BARRIER |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 0 | filler | 0 | 8  | 367 | 0:8, 1:309, 2:50  | 15.02 us | 128 ns | 69 ns | 667 ns | 53 ns | 141 ns | 86 ns |
-| 1 | filler | 1 | 4  | 160 | 0:4, 1:156        | 12.16 us | 128 ns | 73 ns | 405 ns | -     | -      | 58 ns |
-| 2 | filler | 2 | 8  | 367 | 0:8, 1:309, 2:50  | 14.81 us | 128 ns | 69 ns | 669 ns | 54 ns | 141 ns | 62 ns |
-| 3 | filler | 3 | 8  | 361 | 0:8, 1:301, 2:52  | 14.89 us | 128 ns | 70 ns | 682 ns | 54 ns | 140 ns | 72 ns |
-| 4 | mover  | 4 | 30 | 186 | 0:30, 1:156       |  6.51 us | 1,059 ns | - | -    | **1,839 ns** | 769 ns | 610 ns |
-| 5 | mover  | 5 | 35 | 224 | 0:35, 1:189       |  6.37 us |   990 ns | - | -    | **1,611 ns** | 909 ns | 487 ns |
+| 0 | filler | 0 |  5 | 251 | 0:5, 1:192, 2:54 | 16.80 us | 128 ns | 67 ns | 849 ns | 54 ns | 138 ns |  81 ns |
+| 1 | filler | 1 |  5 | 241 | 0:5, 1:184, 2:52 | 16.71 us | 128 ns | 68 ns | 856 ns | 54 ns | 140 ns | 103 ns |
+| 2 | filler | 2 |  5 | 247 | 0:5, 1:192, 2:50 | 16.39 us | 128 ns | 67 ns | 825 ns | 54 ns | 138 ns |  64 ns |
+| 3 | filler | 3 |  5 | 241 | 0:5, 1:184, 2:52 | 16.95 us | 128 ns | 69 ns | 864 ns | 54 ns | 140 ns | 120 ns |
+| 4 | mover  | 4 | 15 | 123 | 0:15, 1:108      | 11.95 us | 1,774 ns | - | - | **2,698 ns** | 1,065 ns | 359 ns |
+| 5 | mover  | 5 | 18 | 150 | 0:18, 1:132      | 11.47 us | 1,425 ns | - | - | **2,781 ns** |   831 ns | 525 ns |
 
 The mover rows are the point of the exercise. §N+38 established that the knee is the WORST sweep's credit wait;
-these are the first per-occurrence numbers for it, and **credit-wait is the largest single phase on a mover**
-(1.6-1.8 us mean, against a 990-1,059 ns read and a 769-909 ns write). A filler's zones say the opposite thing
-about itself: its 667-682 ns PROC per batch dwarfs everything, and its credit-wait (DRAM ring room) is 53 ns.
-DRISC 1 captured only idle sweeps in this run and correctly reports itself as such (see "no silent truncation").
+these are the first per-occurrence numbers for it, and **credit-wait is the largest single phase on a mover by
+a factor of ~1.6** (2.70-2.78 us mean, against a 1,425-1,774 ns read and an 831-1,065 ns write). A filler's
+zones say the opposite thing about itself: its 825-864 ns PROC per batch dwarfs everything, and its credit-wait
+(DRAM ring room) is 54 ns -- three orders of magnitude apart on the same named phase, in one capture.
 
-**Zone counts match the device's own capture accounting exactly on all six drainers** (8/4/8/8/30/35 SWEEP zones
-against 8/4/8/8/30/35 sweeps reported captured), which is what ties the Tracy rows to the counters.
+**Zone counts match the device's own capture accounting exactly on all six drainers** (5/5/5/5/15/18 SWEEP zones
+against 5/5/5/5/15/18 sweeps reported captured), which is what ties the Tracy rows to the counters.
 
 ### Mechanism: the frame is a worker span, and nothing else changed
 
@@ -3698,6 +3698,35 @@ against 8/4/8/8/30/35 sweeps reported captured), which is what ties the Tracy ro
   host-side next to PRODUCER-STALL, because these zones are not scoped by the `DeviceZoneScopedN` macros and so
   have no `#pragma message` source location for `generateZoneSourceLocationsHashes()` to harvest.
 
+### ALIGNMENT: idle samples make the capture unreadable, and they feed the movers phantom work
+
+Reported from the GUI, and correct: *"the activity on the DRISC is not aligned with the activity on the cores,
+they are all over the place, coming in both before and after."* Two causes, and **neither is the clock** -- the
+fillers' work zones landed inside the worker window all along, which is itself the proof that a DRAM core's
+wall clock agrees with the Tensix ones.
+
+| | worker zones | DRISC zone window | DRISC span |
+|---|---|---|---|
+| with idle sampling (as first built) | 1.926 ms | starts **-187 ms** to -150 ms before the workload, ends +2.9 ms after | 151-192 ms |
+| work-triggered only (now the default) | 1.931 ms | starts **+0.008 to +0.067 ms** after the first worker zone | 1.69-4.81 ms |
+
+1. **The drainer is resident from device open, so its idle sweeps span the whole process (~190 ms) while the
+   workload is a 1.9 ms sliver of it.** Sampling them scatters DRISC zones across a window 100x the
+   workload's. The first zone in the capture was an idle-sample sweep 187 ms before any worker zone existed.
+2. **The instrument feeds itself.** A FILLER's self frame is a real frame in its DRAM ring, so its MOVER then
+   ships it -- manufacturing mover credit-wait and write zones at instants when no worker produced anything.
+   Proven, not inferred: **all 13 pre-workload mover credit-wait zones followed a peer filler's captured-sweep
+   publish by 1.7-2.4 us** (median 2.0 us on mover 4, 2.1 us on mover 5), with the peer mapping matching
+   `peer_of` exactly. It also BIASED the mover's phase profile -- a self-frame push has no credit wait, so
+   mixing those in reported credit-wait as 1.6-1.8 us where the work-only figure is **2.70-2.78 us**.
+
+So idle sampling is now **OFF by default** (`TT_METAL_PERF_DEBUG_DRISC_ZONE_IDLE`), every capture is
+work-triggered, and the result lines up: all six drainers start within 8-67 us of the first worker zone, the
+four fillers end 148-202 us BEFORE the last one (they stop staging once the producers are drained), and the two
+movers extend **+2.5 and +2.9 ms past it** -- which is not misalignment but the DRAM ring's drain tail, the
+thing you would want to see. An idle drainer's poll cost is still visible WITHIN a captured sweep: a mover's
+empty-peer READ zone and a filler's per-batch zones over cores with nothing live ARE the idle cost, in context.
+
 ### The sampler: work-triggered, retroactively armed, rewindable
 
 A "sample every Nth sweep" rule was written first and is **refuted by the sweep distribution**: a filler moves
@@ -3711,7 +3740,8 @@ frames in ~114 of ~25,000 sweeps (0.5%) and a mover in ~350 of ~230,000 (0.15%).
 Three separate defects produced that first row, each of which looked healthy in the summary counts:
 
 1. **Uniform samples ate the budget.** A mover runs ~550,000 sweeps, so even 1-in-6,400 is ~85 captures; they
-   took 53 of a 64-frame budget and left 11 for the bursts. Idle samples now have their own eighth of the budget.
+   took 53 of a 64-frame budget and left 11 for the bursts. Idle samples were first given their own eighth of
+   the budget; they are now OFF by default outright (see ALIGNMENT above), which is the real fix.
 2. **An idle filler sweep could not be rewound.** It still walks 40 batches and emits ~320 markers = ~640 words,
    overflowing the 512-word ring, so it published a frame mid-sweep and became unrewindable. The ring-full path
    on a no-work sweep now **abandons** it (one assignment, nothing shipped).
@@ -3776,7 +3806,8 @@ Two further changes were needed on top of the guards:
 The device accumulates the same five phase totals over **exactly the sweeps the zones cover** (`out[74..84]`,
 restricted to sweeps instrumented from the top -- a retroactively-armed or truncated sweep has zones for only
 part of itself and is excluded). DRISC 1 is the clean case, where all 4 captured sweeps are fully instrumented,
-so the CSV totals and the counters cover the same set:
+so the CSV totals and the counters cover the same set (from the idle-sampling configuration, which is what
+produces a fully-instrumented-only drainer; still reachable with `TT_METAL_PERF_DEBUG_DRISC_ZONE_IDLE=1`):
 
 | phase | from the Tracy CSV | device counter | delta |
 |---|---|---|---|
