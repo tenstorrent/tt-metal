@@ -1,6 +1,6 @@
 # Porting an Op to Metal 2.0 — TTNN Integration
 
-> The TTNN device-operation glue a Metal 2.0 port needs: which factory concept the op lands on, the factory entry point that returns the spec, and the three device-op-class edits the port forces (custom-hash deletion, pybind cleanup, and dropping a pybind-hook-only factory parameter). Lives in its own document because the TTNN factory layer churns on a different cadence than the Metal 2.0 host API — the [port recipe](../port/metal2_port.md) covers building the `ProgramSpec` + `ProgramRunArgs` (stable); this doc covers wiring that into TTNN's framework (in flux).
+> The TTNN device-operation glue a Metal 2.0 port needs: which factory concept the op lands on, the factory entry point that returns the spec, and the two device-op-class edits the port forces (pybind cleanup, and dropping a pybind-hook-only factory parameter). Lives in its own document because the TTNN factory layer churns on a different cadence than the Metal 2.0 host API — the [port recipe](../port/metal2_port.md) covers building the `ProgramSpec` + `ProgramRunArgs` (stable); this doc covers wiring that into TTNN's framework (in flux).
 
 ## Read this first
 
@@ -94,25 +94,45 @@ Every `TensorParameter` enforces an exact `TensorSpec` match by default. **Don't
 
 ## Device-operation-class edits the port forces
 
-The port's writeable surface is the program factory body — the device-operation class (`validate`, `invoke`, `compute_output_specs`, attribute parsing) is otherwise off-limits (see the recipe's [Scope discipline](../port/metal2_port.md#scope-discipline)). There are **three** sanctioned exceptions, each forced by the port, each recorded prominently in the port report.
+The port's writeable surface is the program factory body — the device-operation class (`validate`, `invoke`, `compute_output_specs`, attribute parsing) is otherwise off-limits (see the recipe's [Scope discipline](../port/metal2_port.md#scope-discipline)). There are **two** sanctioned exceptions, each forced by the port, each recorded prominently in the port report. The op's cache key is *not* among them — see [The cache key: leave the custom hash alone](#the-cache-key-leave-the-custom-hash-alone).
 
-### 1. Delete a custom `compute_program_hash`
-
-If the device-operation defines a custom `compute_program_hash` (overriding the default reflection-based hash), **the port deletes it**, reverting to the default. This is sanctioned — not a freelance device-op edit — because:
-
-- No Metal 2.0 factory concept reads a custom hash; the framework's automatic hash of the op (type + attributes + tensor args) is the cache key.
-- ProgramDescriptor-ported custom hashes are frequently incorrect now: they silently omit `TensorSpec`, which trips `UpdateTensorArgs` legality failures on the *second and later* dispatches (program cache hot), not the first.
-- The default is correct-by-construction.
-
-Delete it as part of the port. Do **not** patch it to add `TensorSpec` (that path leads to subtle bugs), and do **not** defer it to "see if it bites at verification" — it's proactive port work. Record the deletion (file:line of what was removed) in the port report. If a custom hash is ever missed, its signature is `UpdateTensorArgs` `TensorSpec` legality failures on the second-and-later test invocations; the fix is the same — find and delete it.
-
-### 2. Remove pybound legacy factory entry points
+### 1. Remove pybound legacy factory entry points
 
 When the port causes a legacy factory entry point to vanish (`create_descriptor` is the canonical case), any pybind line referencing it must be deleted — leaving it would break the post-port build. This is a *user-visible* API surface change: downstream Python consumers (tests, notebooks, internal tooling) may reference the removed entry point. The exception is narrow — it applies *only* to the disappearing factory entry point, not to other pybind lines on the same op. See [Pattern: Removing pybound legacy factory entry points](port_patterns.md#pattern-removing-pybound-legacy-factory-entry-points) for the procedure, and record the removal in the port report under Handoff points (cite the pybind file, the function name, and what it was for).
 
-### 3. Drop a factory parameter that exists only for a pybind hook
+### 2. Drop a factory parameter that exists only for a pybind hook
 
-Some legacy factories carry a non-standard parameter that production code never sets — it exists only so a pybind test/introspection hook can drive the factory (layernorm's `create_descriptor` took an extra `const std::optional<CoreRangeSet>& core_range_set` used only by its pybind hook). The fixed `create_program_artifacts` signature (`attributes`, `tensor_args`, `tensor_return_value`) cannot carry it. Drop the parameter, inline its production default in the factory body, and delete the pybind hook that passed it (same procedure and report-handling as exception 2). This is mechanically the pybind-removal case with an extra parameter to unwind; flag it the same way. Don't try to preserve the hook — its `ProgramDescriptor` return is exactly what the port eliminates.
+Some legacy factories carry a non-standard parameter that production code never sets — it exists only so a pybind test/introspection hook can drive the factory (layernorm's `create_descriptor` took an extra `const std::optional<CoreRangeSet>& core_range_set` used only by its pybind hook). The fixed `create_program_artifacts` signature (`attributes`, `tensor_args`, `tensor_return_value`) cannot carry it. Drop the parameter, inline its production default in the factory body, and delete the pybind hook that passed it (same procedure and report-handling as exception 1). This is mechanically the pybind-removal case with an extra parameter to unwind; flag it the same way. Don't try to preserve the hook — its `ProgramDescriptor` return is exactly what the port eliminates.
+
+---
+
+## The cache key: leave the custom hash alone
+
+If the device-operation defines a custom `compute_program_hash` — or reaches one through the backdoor route (a hand-written `attribute_values` / `to_hash` that narrows what the default reflection hash sees) — **the port leaves it exactly as it is.** Not deleted, not patched, not "reverted to the default." Touching it is a scope violation like any other device-op-class edit.
+
+This holds on **every** port path; it is not specific to one factory concept.
+
+### Why: the call was already made, upstream, by a human
+
+The ops team analyses each op's custom hash *before* the port and records the verdict; that verdict reaches the audit, and the audit reaches you. **An op that arrives with a cleared audit is one whose hash a domain expert has already vetted against this port and green-lit.** You are not being asked to make that architectural call on the fly — you are being asked to respect one that has been made.
+
+That is also why deleting the hash is not a neutral simplification. The hash *is* the op's cache-equivalence class: removing it trades away the op's cache hits, which is a performance decision the port has no standing to make, and overrules the person who cleared it.
+
+Do not reason your way back to deleting it from "Metal 2.0 doesn't read a custom hash" — it does. The spec-path adapter uses the op's `compute_program_hash` whenever one is present ([`mesh_device_operation_adapter.hpp:982-983`](https://github.com/tenstorrent/tt-metal/blob/main/ttnn/api/ttnn/mesh_device_operation_adapter.hpp)), and the exact collision-resolution key beside it is deliberately built to accommodate one.
+
+### If the hash contradicts the audit, stop — you have found an upstream error
+
+The audit tells you which tensor relaxations apply to this op. Today that answer is always **none**, which means the hash has to pin the whole `TensorSpec`. A hash that tolerates *any* `TensorSpec` deviation contradicts that, and the contradiction means the pre-port vetting was wrong.
+
+It surfaces two ways, and they are the same defect:
+
+- **At verification** — an `UpdateTensorArgs` `TensorSpec` legality failure on the *second and later* dispatches (program cache hot), never the first.
+- **By reading** — you notice, while working from the inventory, that the hash omits part of the `TensorSpec`; equivalently, that its tolerance could be expressed as a relaxation. A failing test is not required to have found this. Don't go hunting for it — but don't sit on it either.
+
+Either way the response is the same, and it is **not** a fix:
+
+- **Stop, and flag it prominently.** Record the hash's file:line, exactly which deviation it tolerates (or what the legality check rejected, and on which dispatch), and that the audit declared no relaxations for this op.
+- Do **not** delete the hash to make the symptom go away, and do **not** patch it to fold in `TensorSpec`. Both bury a mistaken expert verdict inside a port, where the next person to hit it has no trail back to the decision that was actually wrong.
 
 ---
 
@@ -133,7 +153,8 @@ ProgramSpecFactoryConcept — or — BLOCKED (op-owned GlobalSemaphores / genuin
 - Legacy-to-Metal-2.0 shape: [1:1 with legacy — or — legacy MeshWorkload was a resource workaround, see heads-up]
 
 ### Custom compute_program_hash
-[present at file:line → port deletes it / none — already default reflection-based hash]
+[present at file:line / backdoor (attribute_values | to_hash) at file:line / none — default reflection-based hash]
+[Recorded so the porter knows it is there and leaves it alone; the port never edits it.]
 
 ### Stop signals
 [If BLOCKED: which framework capability is missing (op-owned GlobalSemaphores / genuine multi-program), and confirm the overall audit result is RED. Otherwise: "None."]
@@ -146,7 +167,7 @@ The porter inherits the audit's decision; the port plan's TTNN section is a brie
 ```markdown
 ## TTNN ProgramFactory
 - Concept (inherited from audit): ProgramSpecFactoryConcept
-- Custom compute_program_hash: [delete (was at file:line) / none]
+- Custom compute_program_hash: [present at file:line — leave intact / none]
 - Implementation notes: [optional — anything specific about how this op realizes the concept; most ports won't need this]
 ```
 
@@ -163,8 +184,8 @@ The porter adds the following to `METAL2_PORT_REPORT.md` at the end of the port.
 [Confirm ProgramSpecFactoryConcept, or — if something changed — explain why and confirm it was surfaced with the invoker before re-deciding.]
 
 ### Device-op-class edits
-- Custom compute_program_hash deleted: [file:line, or "none"]
 - Pybind entry points removed: [file + function, or "none"]
+- Custom compute_program_hash: [left intact at file:line — confirm untouched / none]
 
 ### Open items
 [Anything noticed about the factory layer during the port:
