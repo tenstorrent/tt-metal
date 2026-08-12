@@ -19,7 +19,7 @@ T-independent floor, so this relaxation is what makes any route feasible at all 
 | decode, both fusion flags | **0.9304 s** (1.181x) |
 | pre-week baseline `bd12ad2aeb2` | 1.2506 s — so the week bought 1.344x total |
 | PSNR vs CPU | **49.45 dB** mean (47.87 / 47.82 / 52.83 / 49.28 across 4 clips) |
-| gate | 24 passed, 1 failed — the failure is inherited, see below |
+| gate | ~~24 passed, 1 failed — the failure is inherited~~ → **25 passed, 0 failed** as of 2026-08-12; the T-parallel failure was not inherited, it was `conv_pre` under sharding, now fixed |
 
 Nothing is on by default. The 0.9304 s needs:
 

@@ -222,14 +222,15 @@ sharding bug for accurate mode regardless**.
 
 ## Gate
 
-    1 failed, 24 passed, 15 warnings in 971.11s (0:16:11)
-    FAILED test_audio_decode_t_parallel[blackhole-mesh4x8]
+    25 passed, 13 warnings in 670.78s (0:11:10)
 
-Run with both shard-0 fixes on `PYTHONPATH`. Matches goal.md's recorded 24 passed / 1 failed exactly,
-and the one failure is the T-parallel test -- which this document now explains rather than inherits:
-it is not a hang and not fabric, it is that T-sharding returns the wrong audio. Both fixes are no-ops
-on a single device by construction (`ttnn.get_device_tensors` returns one element, so the `len > 1`
-branch never fires), and the gate confirms it.
+**Fully green, including `test_audio_decode_t_parallel`** — with `KNOWN_BROKEN` emptied, so the
+factor-8 PSNR assert is enforced rather than excused. goal.md recorded 24 passed / 1 failed and called
+the failure inherited; it is now fixed rather than inherited.
+
+An intermediate run with only the two shard-0 fixes reproduced the old 24 passed / 1 failed exactly,
+which confirmed those fixes are no-ops on a single device by construction (`ttnn.get_device_tensors`
+returns one element, so the `len > 1` branch never fires) before the conv_pre fix changed the verdict.
 
 ## Fixed here: fusion could not run on a mesh at all
 
