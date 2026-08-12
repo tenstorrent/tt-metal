@@ -88,14 +88,23 @@ ALWI void mul_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 #endif
 }
 
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+/**
+ * @tparam is_fp32_dest_acc_en Enables fp32 DEST accumulation. Defaults to DST_ACCUM_MODE.
+ * @tparam dst_rounding_mode Controls bf16 narrowing for the result. Default truncates (native SFPSTORE
+ *         behavior); NearestEven applies IEEE 754 round-to-nearest-even in software before the store.
+ *         Ignored when fp32 DEST accumulation is enabled. Note: in WH and BH, mul_binary_tile and div_binary_tile
+ *         apply RNE rounding when narrowing to bf16.
+ */
+template <
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    ckernel::DstRoundingMode dst_rounding_mode = ckernel::DstRoundingMode::Default>
 ALWI void add_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 #ifdef ARCH_QUASAR
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         calculate_sfpu_binary,
-        (APPROX, ckernel::BinaryOp::ADD, is_fp32_dest_acc_en),
+        (APPROX, ckernel::BinaryOp::ADD, is_fp32_dest_acc_en, dst_rounding_mode),
         idst0,
         idst1,
         odst,
@@ -105,7 +114,7 @@ ALWI void add_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         calculate_sfpu_binary,
-        (APPROX, ckernel::BinaryOp::ADD, 8 /* ITERATIONS */),
+        (APPROX, ckernel::BinaryOp::ADD, 8 /* ITERATIONS */, is_fp32_dest_acc_en, dst_rounding_mode),
         idst0,
         idst1,
         odst,
@@ -113,14 +122,17 @@ ALWI void add_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 #endif
 }
 
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+/// @tparam is_fp32_dest_acc_en, dst_rounding_mode See add_binary_tile.
+template <
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    ckernel::DstRoundingMode dst_rounding_mode = ckernel::DstRoundingMode::Default>
 ALWI void sub_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 #ifdef ARCH_QUASAR
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         calculate_sfpu_binary,
-        (APPROX, ckernel::BinaryOp::SUB, is_fp32_dest_acc_en),
+        (APPROX, ckernel::BinaryOp::SUB, is_fp32_dest_acc_en, dst_rounding_mode),
         idst0,
         idst1,
         odst,
@@ -130,7 +142,7 @@ ALWI void sub_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         calculate_sfpu_binary,
-        (APPROX, ckernel::BinaryOp::SUB, 8 /* ITERATIONS */),
+        (APPROX, ckernel::BinaryOp::SUB, 8 /* ITERATIONS */, is_fp32_dest_acc_en, dst_rounding_mode),
         idst0,
         idst1,
         odst,
@@ -139,13 +151,16 @@ ALWI void sub_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 }
 
 #ifndef ARCH_QUASAR
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+/// @tparam is_fp32_dest_acc_en, dst_rounding_mode See add_binary_tile.
+template <
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    ckernel::DstRoundingMode dst_rounding_mode = ckernel::DstRoundingMode::Default>
 ALWI void rsub_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         calculate_sfpu_binary,
-        (APPROX, ckernel::BinaryOp::RSUB, 8 /* ITERATIONS */),
+        (APPROX, ckernel::BinaryOp::RSUB, 8 /* ITERATIONS */, is_fp32_dest_acc_en, dst_rounding_mode),
         idst0,
         idst1,
         odst,

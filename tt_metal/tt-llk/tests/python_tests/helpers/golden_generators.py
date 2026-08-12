@@ -32,6 +32,23 @@ from helpers.pack import (
     pack_mxint4,
     pack_mxint8,
 )
+from helpers.sfpu_dispatch_constants import (
+    CLAMP_MAX,
+    CLAMP_MIN,
+    HARDSHRINK_LAMBDA,
+    INT_MAXMIN_SCALAR,
+    LRELU_NEGATIVE_SLOPE,
+    PRELU_SLOPE,
+    RELU_MAX_THRESHOLD,
+    RELU_MIN_THRESHOLD,
+    SOFTPLUS_BETA,
+    SOFTPLUS_THRESHOLD,
+    SOFTSHRINK_LAMBDA,
+    THRESHOLD_T,
+    THRESHOLD_V,
+    UNARY_COMP_THRESHOLD,
+    UNARY_MAX_MIN_VALUE,
+)
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.unpack import (
     unpack_mxfp4,
@@ -2271,7 +2288,7 @@ class UnarySFPUGolden:
         # Fixed dispatch constants shared with sfpu_operations.h: unary shift by 3
         # bits, integer unary max/min against the scalar 1000.
         self._int_shift_amount = 3
-        self._int_maxmin_scalar = 1000
+        self._int_maxmin_scalar = INT_MAXMIN_SCALAR
         self.data_format = None
         # Precision the SFPU actually evaluates at, which is Dest's and not the output
         # format's. The per-element ops below read this rather than data_format: no
@@ -2699,8 +2716,8 @@ class UnarySFPUGolden:
             return 1.0
         return 0.5
 
-    def _softshrink(self, x, lambd=0.5):
-        # Matches calculate_softshrink with lambda = 0.5 (the dispatch constant).
+    def _softshrink(self, x, lambd=SOFTSHRINK_LAMBDA):
+        # Matches calculate_softshrink with lambda fixed to the dispatch constant.
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
@@ -2733,11 +2750,11 @@ class UnarySFPUGolden:
         # rdiv(x) = value / x; value fixed to the dispatch constant (2.0).
         return self._torch_unary(x, lambda t: value / t)
 
-    def _clamp(self, x, min_val=-1.0, max_val=1.0):
+    def _clamp(self, x, min_val=CLAMP_MIN, max_val=CLAMP_MAX):
         # tt-llk clamp with min/max fixed to the dispatch constants and offset 0.
         return self._torch_unary(x, lambda t: torch.clamp(t, min_val, max_val))
 
-    def _hardtanh(self, x, min_val=-1.0, max_val=1.0):
+    def _hardtanh(self, x, min_val=CLAMP_MIN, max_val=CLAMP_MAX):
         # hardtanh(x) = clamp(x, min, max); min/max fixed to the dispatch constants.
         return self._torch_unary(x, lambda t: torch.clamp(t, min_val, max_val))
 
@@ -2868,7 +2885,7 @@ class UnarySFPUGolden:
         )
         return torch.nn.functional.sigmoid(input_tensor).item()
 
-    def _threshold(self, x, t=5, v=10):
+    def _threshold(self, x, t=THRESHOLD_T, v=THRESHOLD_V):
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
@@ -2876,7 +2893,7 @@ class UnarySFPUGolden:
         )
         return torch.nn.functional.threshold(input_tensor, t, v).item()
 
-    def _relu_max(self, x, threshold=5):
+    def _relu_max(self, x, threshold=RELU_MAX_THRESHOLD):
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
@@ -2884,7 +2901,7 @@ class UnarySFPUGolden:
         )
         return torch.relu(torch.min(input_tensor, torch.tensor(threshold))).item()
 
-    def _relu_min(self, x, threshold=5):
+    def _relu_min(self, x, threshold=RELU_MIN_THRESHOLD):
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
@@ -2892,7 +2909,7 @@ class UnarySFPUGolden:
         )
         return torch.max(input_tensor, torch.tensor(threshold)).item()
 
-    def _lrelu(self, x, negative_slope=0.1):
+    def _lrelu(self, x, negative_slope=LRELU_NEGATIVE_SLOPE):
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
@@ -2965,21 +2982,24 @@ class UnarySFPUGolden:
     def _identity(self, x):
         return x
 
-    # Fixed scalar dispatch constants mirrored from sfpu_operations.h.
-    _PRELU_SLOPE = 0.25
+    # Fixed scalar dispatch constants mirrored from sfpu_operations.h. The ones an edge
+    # probe has to land on exactly come from sfpu_dispatch_constants, which both this
+    # golden and sfpu_domains._OP_EDGE_POINTS read — see that module for why they are not
+    # written twice. The rest are local because nothing probes at them.
+    _PRELU_SLOPE = PRELU_SLOPE
     _RPOW_BASE = 2.0
     _UNARY_POWER_EXP = 2.0
     _FMOD_DIVISOR = 2.0
     _REMAINDER_DIVISOR = 2.0
-    _UNARY_COMP_THRESHOLD = 0.5
-    _UNARY_MAX_MIN_VALUE = 0.0
+    _UNARY_COMP_THRESHOLD = UNARY_COMP_THRESHOLD
+    _UNARY_MAX_MIN_VALUE = UNARY_MAX_MIN_VALUE
     _POLYGAMMA_ORDER = 1
     _XIELU_ALPHA_P = 1.0
     _XIELU_ALPHA_N = 1.0
     _XIELU_BETA = 0.5
-    _HARDSHRINK_LAMBDA = 0.5
-    _SOFTPLUS_BETA = 1.0
-    _SOFTPLUS_THRESHOLD = 20.0
+    _HARDSHRINK_LAMBDA = HARDSHRINK_LAMBDA
+    _SOFTPLUS_BETA = SOFTPLUS_BETA
+    _SOFTPLUS_THRESHOLD = SOFTPLUS_THRESHOLD
 
     def _prelu(self, x):
         return x if x >= 0.0 else self._PRELU_SLOPE * x
@@ -4631,6 +4651,40 @@ class SdpaCorrectionGolden:
             tile[:, cols] = value[:, cols]
             out.append(tile)
         return out
+
+
+@register_golden
+class HadamardH128Golden:
+    """
+    Hadamard computes Y = H_128 @ x (* 1/sqrt(128) when normalizing), where
+    H_128 is the Sylvester matrix H_128 = kron(H_8, H_16) and, for row a < 8,
+    H_16[a, r < 8] == H_8[a, r], so the first 8 rows of H_16 @ X_pad are H_8 @ X.
+    """
+
+    @staticmethod
+    def sylvester(order: int) -> torch.Tensor:
+        """The Sylvester Hadamard matrix of the given pow2 order."""
+        if order <= 0 or order & (order - 1):
+            raise ValueError(f"Hadamard order must be a power of two, got {order}")
+        matrix = torch.ones(1, 1, dtype=torch.float32)
+        while matrix.shape[0] < order:
+            matrix = torch.cat(
+                [
+                    torch.cat([matrix, matrix], dim=1),
+                    torch.cat([matrix, -matrix], dim=1),
+                ],
+                dim=0,
+            )
+        return matrix
+
+    def __call__(self, x, normalize: bool = True):
+        x = x.reshape(-1).to(torch.float32)
+        if x.numel() != 128:
+            raise ValueError(f"H128 takes a 128-element input, got {x.numel()}")
+        result = HadamardH128Golden.sylvester(128) @ x
+        if normalize:
+            result = result * (1.0 / math.sqrt(128.0))
+        return result
 
 
 @register_golden
