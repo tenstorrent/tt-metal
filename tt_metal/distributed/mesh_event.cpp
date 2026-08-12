@@ -14,6 +14,9 @@ MeshEventImpl::MeshEventImpl(
     uint32_t id, MeshDevice* device, uint32_t mesh_cq_id, const MeshCoordinateRange& device_range) :
     id_(id), device_(device), mesh_cq_id_(mesh_cq_id), device_range_(device_range) {}
 
+MeshEvent::MeshEvent(uint32_t id, MeshDevice* device, uint32_t mesh_cq_id, const MeshCoordinateRange& device_range) :
+    MeshEvent(MeshEventImpl(id, device, mesh_cq_id, device_range)) {}
+
 MeshEvent::MeshEvent(MeshEventImpl impl) : impl_(std::make_unique<MeshEventImpl>(std::move(impl))) {}
 
 MeshEvent::MeshEvent(const MeshEvent& other) :
@@ -43,7 +46,7 @@ const MeshEventImpl& MeshEvent::impl() const {
 
 MeshEvent make_mesh_event(
     uint32_t id, MeshDevice* device, uint32_t mesh_cq_id, const MeshCoordinateRange& device_range) {
-    return MeshEvent(MeshEventImpl(id, device, mesh_cq_id, device_range));
+    return MeshEvent(id, device, mesh_cq_id, device_range);
 }
 
 std::ostream& operator<<(std::ostream& os, const MeshEvent& event) {
