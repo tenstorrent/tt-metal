@@ -120,8 +120,8 @@ inline void _llk_unpack_A_mop_config_(
     {
         if constexpr (acc_to_dest)
         {
-            // Destination reuse moves the retained DEST face into SrcA. The dummy SrcA unpack
-            // must wait for that move before clearing the unpacker bank.
+            // Use unpacker-bank readiness for the dummy SrcA publication so unpack can prepare
+            // the next bank while math consumes the current bank.
             static constexpr std::uint32_t unpack_srca_reuse = (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA)
                                                                    ? llk_unpack_a_detail::dest_reuse_dummy_unpack<EltwiseBinaryReuseDestType::DEST_TO_SRCA>()
                                                                    : unpack_srca_set_dvalid;
@@ -145,11 +145,16 @@ inline void _llk_unpack_A_mop_config_(
     }
     else if constexpr (BType == BroadcastType::ROW)
     {
-        constexpr std::uint32_t innerloop = 2;
-        constexpr std::uint32_t outerloop = 2; // TODO: add support for num_faces
+        const std::uint32_t outerloop = tensor_shape.num_faces_r_dim;
+        const std::uint32_t innerloop = tensor_shape.num_faces_c_dim;
         if constexpr (acc_to_dest)
         {
-            ckernel_template tmp(outerloop, innerloop, unpack_srcb, unpack_srca_set_dvalid);
+            // Publish one dummy SrcA DVALID per tensor face, using unpacker-bank readiness so
+            // unpack can prepare the next bank while math consumes the current bank.
+            static constexpr std::uint32_t unpack_srca_reuse = (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA)
+                                                                   ? llk_unpack_a_detail::dest_reuse_dummy_unpack<EltwiseBinaryReuseDestType::DEST_TO_SRCA>()
+                                                                   : unpack_srca_set_dvalid;
+            ckernel_template tmp(outerloop, innerloop, unpack_srcb, unpack_srca_reuse);
             tmp.set_end_op(srcb_clear_z);
             tmp.program();
         }
@@ -204,8 +209,8 @@ inline void _llk_unpack_A_mop_config_(
         {
             if constexpr (acc_to_dest)
             {
-                // The dummy source must wait on the unpacker's bank before clearing it. Otherwise
-                // it can race a destination-to-source move using a bank retained by the prior op.
+                // Use unpacker-bank readiness for destination-reuse dummy source publication so
+                // unpack can prepare the next bank while math consumes the current bank.
                 static constexpr std::uint32_t unpack_srca_reuse =
                     (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA)
                         ? llk_unpack_a_detail::dest_reuse_dummy_unpack<EltwiseBinaryReuseDestType::DEST_TO_SRCA>()

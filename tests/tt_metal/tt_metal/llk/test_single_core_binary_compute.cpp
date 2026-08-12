@@ -85,6 +85,7 @@ struct SingleCoreBinaryConfig {
     MathFidelity math_fidelity = MathFidelity::HiFi4;
     BinaryDestReuseType dest_reuse_type = BinaryDestReuseType::SrcA;
     bool col_broadcast = false;
+    bool row_broadcast = false;
     bool precede_dest_reuse_with_col_broadcast = false;
     bool enable_32_bit_dest = false;
     tt::tt_metal::Tile tile = tt::tt_metal::Tile({32, 32});
@@ -143,6 +144,28 @@ static std::vector<T> apply_col_broadcast_to_tiled_input(const std::vector<T>& i
     return broadcast_input;
 }
 
+template <typename T>
+static std::vector<T> apply_row_broadcast_to_tiled_input(const std::vector<T>& input, const tt::tt_metal::Tile& tile) {
+    const auto [face_height, face_width] = tile.get_face_shape();
+    const size_t face_size = face_height * face_width;
+    const size_t faces_per_row = tile.get_width() / face_width;
+    const size_t tile_size = tile.get_tile_hw();
+    TT_FATAL(
+        input.size() % tile_size == 0 && faces_per_row > 0,
+        "ROW broadcast requires complete tiles with at least one face");
+
+    std::vector<T> broadcast_input(input.size());
+    for (size_t i = 0; i < input.size(); ++i) {
+        const size_t tile_base = (i / tile_size) * tile_size;
+        const size_t index_in_tile = i % tile_size;
+        const size_t face = index_in_tile / face_size;
+        const size_t col_in_face = index_in_tile % face_width;
+        const size_t top_face = face % faces_per_row;
+        broadcast_input[i] = input[tile_base + top_face * face_size + col_in_face];
+    }
+    return broadcast_input;
+}
+
 static BinaryStimulus generate_binary_stimulus(const SingleCoreBinaryConfig& test_config, bool is_quasar) {
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
     BinaryStimulus s;
@@ -180,10 +203,13 @@ static BinaryStimulus generate_binary_stimulus(const SingleCoreBinaryConfig& tes
             }
         } else {
             TT_FATAL(
-                test_config.col_broadcast && test_config.binary_op == "mul_with_dest_reuse" &&
+                (test_config.col_broadcast || test_config.row_broadcast) &&
+                    test_config.binary_op == "mul_with_dest_reuse" &&
                     test_config.dest_reuse_type == BinaryDestReuseType::SrcA,
-                "Float32 stimulus without a predecessor is only supported for COL-broadcast DEST_TO_SRCA multiply");
-            const auto broadcast_input0 = apply_col_broadcast_to_tiled_input(input0);
+                "Float32 stimulus without a predecessor is only supported for broadcast DEST_TO_SRCA multiply");
+            const auto broadcast_input0 = test_config.col_broadcast
+                                              ? apply_col_broadcast_to_tiled_input(input0)
+                                              : apply_row_broadcast_to_tiled_input(input0, test_config.tile);
             for (size_t i = 0; i < golden.size(); ++i) {
                 golden[i] = input2[i] * broadcast_input0[i];
             }
@@ -228,7 +254,10 @@ static BinaryStimulus generate_binary_stimulus(const SingleCoreBinaryConfig& tes
         return s;
     }
 
-    const auto golden_input0 = test_config.col_broadcast ? apply_col_broadcast_to_tiled_input(input0) : input0;
+    const auto golden_input0 = test_config.col_broadcast ? apply_col_broadcast_to_tiled_input(input0)
+                               : test_config.row_broadcast
+                                   ? apply_row_broadcast_to_tiled_input(input0, test_config.tile)
+                                   : input0;
     std::vector<float> temp_golden(golden_input0.size());
     std::transform(
         golden_input0.begin(),
@@ -347,6 +376,8 @@ static std::map<std::string, std::string> build_binary_defines(const SingleCoreB
                                                  : "EltwiseBinaryReuseDestType::DEST_TO_SRCB";
         if (test_config.col_broadcast) {
             defines["ELTWISE_BROADCAST_TYPE"] = "BroadcastType::COL";
+        } else if (test_config.row_broadcast) {
+            defines["ELTWISE_BROADCAST_TYPE"] = "BroadcastType::ROW";
         }
         if (test_config.precede_dest_reuse_with_col_broadcast) {
             defines["PRECEDE_DEST_REUSE_WITH_COL_BROADCAST"] = "1";
@@ -379,6 +410,7 @@ bool single_core_binary(
     TT_FATAL(
         num_runs > 0 && test_config.block_size > 0 && test_config.num_tiles % test_config.block_size == 0,
         "num_runs and block_size must be positive, and num_tiles must be divisible by block_size");
+    TT_FATAL(!(test_config.col_broadcast && test_config.row_broadcast), "Only one broadcast type may be selected");
     const bool is_quasar = MetalContext::instance().get_cluster().arch() == ARCH::QUASAR;
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
     auto& cq = mesh_device->mesh_command_queue();
@@ -850,6 +882,31 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiT
         .dest_reuse_type = unit_tests::compute::binary::BinaryDestReuseType::SrcA,
         .col_broadcast = true,
         .enable_32_bit_dest = true,
+    };
+
+    for (auto& device : this->devices_) {
+        ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config, 2));
+    }
+}
+
+TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeTinyTileRowBroadcastWithDestReuse) {
+    if (this->arch_ != ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Tiny-tile ROW-broadcast destination reuse is a Blackhole-specific regression";
+    }
+
+    unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
+        .num_tiles = 8,
+        .block_size = 4,
+        .tile_byte_size = 4 * 16 * 32,
+        .l1_input_data_format = tt::DataFormat::Float32,
+        .l1_output_data_format = tt::DataFormat::Float32,
+        .core = CoreCoord(0, 0),
+        .binary_op = "mul_with_dest_reuse",
+        .math_fidelity = MathFidelity::HiFi4,
+        .dest_reuse_type = unit_tests::compute::binary::BinaryDestReuseType::SrcA,
+        .row_broadcast = true,
+        .enable_32_bit_dest = true,
+        .tile = tt::tt_metal::Tile({16, 32}),
     };
 
     for (auto& device : this->devices_) {
