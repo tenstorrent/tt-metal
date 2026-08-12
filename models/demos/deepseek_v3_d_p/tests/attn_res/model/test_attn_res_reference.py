@@ -1,25 +1,31 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The torch reference against itself, in fp64. No device, no PCC.
+"""The reference ladder, on CPU. No device, no PCC.
 
 Every device gate in this directory is measured against `reference/attn_res/attn_res.py`,
 which is not the definition — it is the definition with two algebraic shortcuts already
 taken: the two weight vectors folded into one query, and `rsqrt` pulled out of the dot.
 A device test cannot see an error in either, because it compares against the shortcut.
+So the ladder is pinned here instead, one rung at a time, and each rung is what makes
+the rung above it worth trusting:
 
-So the reference is pinned here instead, one rung at a time:
-
-  * `attn_res_reference.read` is the naive fp64 form, written from the published
-    definition and materializing the normalized keys. Folding is exact, so the folded
-    form has to reproduce it to fp64 and not to a tolerance.
+  * `hf_attn_res` is upstream's own `_apply_attn_res`, vendored byte-identical. It is
+    the only rung not written here, and the only evidence that the equation the naive
+    form transcribes from the published definition is the equation upstream runs.
+  * `attn_res_reference.read` is that definition in fp64, materializing the normalized
+    keys. Folding is exact, so the folded form has to reproduce it to fp64 rather than
+    to a tolerance.
   * `attn_res_inter_block` + `attn_res_merge` are the split the device op is structured
     around. Splitting is a reassociation of the same softmax, so it has to reproduce the
     direct form too.
+  * `attn_res_stack` is the walk the device's 186-read gate calls. Which layers seal and
+    which reads see how many candidates is scheduling, not algebra, and no read-level
+    rung above can reach it — so it is pinned against the naive walk directly.
 
-Both run on CPU in milliseconds at a `d` far below production's. What is under test is
-algebra, and algebra does not depend on the shape — the shapes production runs are what
-the device suites exist for.
+All of it runs in milliseconds at a `d` far below production's. What is under test is
+algebra and scheduling, neither of which depends on the shape — the shapes production
+runs are what the device suites exist for.
 """
 
 import pytest
@@ -31,17 +37,31 @@ from models.demos.deepseek_v3_d_p.reference.attn_res.attn_res import (
     attn_res,
     attn_res_inter_block,
     attn_res_merge,
+    attn_res_stack,
     fold_query,
 )
+from models.demos.deepseek_v3_d_p.reference.attn_res.hf_attn_res import hf_attn_res
 
 # fp64 throughout, so what survives is the algebra rather than the rounding. The residual
 # slack is the two forms' different multiply order over `d`, which lands a few ULPs apart.
 TOL = 1e-12
 
+# Upstream widens with `.float()`, so it computes in fp32 whatever it is handed and this
+# one rung cannot be held to fp64. Absolute, not relative: the read is a convex
+# combination, so an output row that happens to cancel to near zero carries a large
+# relative error at fp32 rounding while every algebra error shows up at O(0.1) or more.
+UPSTREAM_TOL = 1e-5
+
 NUM_TOKENS = 64
 HIDDEN_SIZE = 256
 READ_SITES = 3
 PROJ_STD = 0.02
+
+# Enough layers to cross a block boundary more than once, which is the whole content of
+# the walk: seals land on layers 0, 2 and 4, and the pre-attention read is skipped only
+# before the first of them.
+NUM_LAYERS = 5
+BLOCK_SIZE = 2
 
 
 def _case(num_sealed, seed=0):
@@ -58,6 +78,26 @@ def _case(num_sealed, seed=0):
 
 def _max_abs(got, want):
     return (got - want).abs().max().item()
+
+
+@pytest.mark.parametrize("num_sealed", [0, 1, 8])
+def test_naive_matches_upstream(num_sealed):
+    """The naive form computes the equation upstream computes.
+
+    Everything else in this file compares one of our transcriptions against another of
+    ours, which cannot catch a definition read wrong in the first place. This is the one
+    rung that can, and it is the reason `hf_attn_res.py` is vendored rather than
+    paraphrased: the two differ in how they spell the mixture — an explicit weighted sum
+    here, a `matmul` against a softmax upstream — and agreeing anyway is the claim.
+    """
+    prefix_sum, block_residual, norm_weight, proj_weight = _case(num_sealed)
+
+    want = ref.read(prefix_sum, block_residual, norm_weight, proj_weight, EPS)
+    got = hf_attn_res(prefix_sum, block_residual, norm_weight, proj_weight, EPS)
+
+    assert got.shape == want.shape, f"{got.shape} != {want.shape}"
+    delta = _max_abs(got, want)
+    assert delta <= UPSTREAM_TOL, f"S={num_sealed}: the naive form differs from upstream by {delta:.3e}"
 
 
 @pytest.mark.parametrize("num_sealed", [0, 1, 8])
@@ -104,3 +144,52 @@ def test_split_matches_direct(num_sealed):
         got = attn_res_merge(partials[site], shifts[site], masses[site], prefix_sum, q, EPS)
         delta = _max_abs(got, want)
         assert delta <= TOL, f"S={num_sealed} site {site}: split differs from the direct read by {delta:.3e}"
+
+
+def _stack_case(seed=0):
+    """A whole stack's inputs: two queries per layer, one model-level, and the modules.
+
+    The modules only have to be deterministic and to mix `d`, since what is under test is
+    where the reads and seals land rather than what the layers compute.
+    """
+    generator = torch.Generator().manual_seed(seed)
+    randn = lambda *shape: torch.randn(*shape, generator=generator, dtype=torch.float64)
+    query = lambda: (1.0 + 0.1 * randn(HIDDEN_SIZE), PROJ_STD * randn(1, HIDDEN_SIZE))
+
+    q_pre = [query() for _ in range(NUM_LAYERS)]
+    q_post = [query() for _ in range(NUM_LAYERS)]
+    q_out = query()
+    weights = [randn(HIDDEN_SIZE, HIDDEN_SIZE) * HIDDEN_SIZE**-0.5 for _ in range(2 * NUM_LAYERS)]
+    module_fns = [(lambda h, w=w: h @ w) for w in weights]
+
+    return randn(NUM_TOKENS, HIDDEN_SIZE), q_pre, q_post, q_out, module_fns[:NUM_LAYERS], module_fns[NUM_LAYERS:]
+
+
+def test_stack_matches_naive():
+    """The two walk drivers place the same reads and seals.
+
+    `attn_res_stack` is what the device's 186-read gate scores against, and it carries
+    the part of AttnRes that is not algebra: a layer seals on a block boundary, the
+    live stream is `None` until the next accumulate, and the pre-attention read is
+    skipped only while nothing is sealed. Get any of that wrong in both the driver and
+    the device and every read still matches its reference — the walk is self-consistent
+    and wrong. Pinning it against the naive walk, whose bookkeeping was written out
+    separately, is what closes that.
+    """
+    hidden_states, q_pre, q_post, q_out, attn_fns, mlp_fns = _stack_case()
+
+    want = ref.stack(hidden_states, q_pre, q_post, q_out, attn_fns, mlp_fns, block_size=BLOCK_SIZE, eps=EPS)
+    got = attn_res_stack(
+        hidden_states,
+        [fold_query(*q) for q in q_pre],
+        [fold_query(*q) for q in q_post],
+        fold_query(*q_out),
+        attn_fns,
+        mlp_fns,
+        block_size=BLOCK_SIZE,
+        eps=EPS,
+    )
+
+    assert got.shape == want.shape, f"{got.shape} != {want.shape}"
+    delta = _max_abs(got, want)
+    assert delta <= TOL, f"the folded walk differs from the naive one by {delta:.3e}"
