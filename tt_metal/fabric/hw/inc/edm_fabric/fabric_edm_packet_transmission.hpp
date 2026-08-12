@@ -244,6 +244,20 @@ FORCE_INLINE
             }
             const uint64_t semaphore_dest_address = header.command_fields.unicast_seminc_fused.semaphore_noc_address;
             const auto increment = header.command_fields.unicast_seminc_fused.val;
+            {   // RX HEADER VALIDATOR (diagnostic): garbage fused target about to execute.
+                if ((uint32_t)(semaphore_dest_address & 0xFFFFFFFF) >= 0x180000u ||
+                    (uint32_t)(dest_address & 0xFFFFFFFF) >= 0x180000u) {
+                    volatile tt_l1_ptr uint32_t* rec =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(458432 + MY_ERISC_ID * 64 + 32);
+                    rec[0] = 0xBADC0DE6;
+                    rec[1] = (uint32_t)(semaphore_dest_address & 0xFFFFFFFF);
+                    rec[2] = (uint32_t)(dest_address & 0xFFFFFFFF);
+                    rec[3] = (uint32_t)increment;
+                    while (true) {
+                        asm volatile("nop");
+                    }
+                }
+            }
             if (header.command_fields.unicast_seminc_fused.flush) {
                 flush_write_to_noc_pipeline(rx_channel_id);
             }

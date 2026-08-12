@@ -591,17 +591,46 @@ FORCE_INLINE void send_next_data(
         while (internal_::eth_txq_is_busy(sender_txq_id)) {
         };
     }
+    {   // TX HEADER VALIDATOR (diagnostic): the packet is about to leave this chip.
+        // If its header is already garbage HERE, the corruption happened in worker
+        // L1 / the sender channel, NOT on the wire or at the receiver.
+        bool hdr_bad = false;
+        const uint32_t st = (uint32_t)pkt_header->noc_send_type;
+        if (st > (uint32_t)tt::tt_fabric::NocSendType::NOC_SEND_TYPE_LAST) {
+            hdr_bad = true;
+        }
+        if (payload_size_bytes > 15360) {
+            hdr_bad = true;
+        }
+        if (!hdr_bad && st == (uint32_t)tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC) {
+            const uint32_t semlo =
+                (uint32_t)(pkt_header->command_fields.unicast_seminc_fused.semaphore_noc_address & 0xFFFFFFFF);
+            const uint32_t dstlo =
+                (uint32_t)(pkt_header->command_fields.unicast_seminc_fused.noc_address & 0xFFFFFFFF);
+            if (semlo >= 0x180000u || dstlo >= 0x180000u) {
+                hdr_bad = true;
+            }
+        }
+        if (hdr_bad) {
+            volatile tt_l1_ptr uint32_t* rec =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(458432 + MY_ERISC_ID * 64);
+            rec[1] = rec[0] == 0xBADC0DE5 ? rec[1] + 1 : 1;
+            rec[2] = (uint32_t)sender_channel_index;
+            rec[3] = (uint32_t)payload_size_bytes;
+            volatile tt_l1_ptr uint32_t* hw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_addr);
+            for (int i = 0; i < 12; i++) {
+                rec[4 + i] = hw[i];
+            }
+            rec[0] = 0xBADC0DE5;
+            while (true) {
+                asm volatile("nop");
+            }
+        }
+    }
     internal_::eth_send_packet_bytes_unsafe(sender_txq_id, src_addr, dest_addr, payload_size_bytes);
     {  // FABRIC LOSS COUNTER: handed to the eth TXQ hardware.
         volatile tt_l1_ptr uint32_t* dbg = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(458256 + MY_ERISC_ID * 44);
         dbg[6]++;
-        if (pkt_header->noc_send_type == tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC) {
-            uint32_t semlo =
-                (uint32_t)(pkt_header->command_fields.unicast_seminc_fused.semaphore_noc_address & 0xFFFFFFFF);
-            if (semlo == 213440) {
-                dbg[8]++;
-            }
-        }
     }
 
     // Note: We can only advance to the next buffer index if we have fully completed the send (both the payload and sync
