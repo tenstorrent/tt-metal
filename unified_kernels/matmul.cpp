@@ -32,10 +32,11 @@ namespace u = tt::unified;
 constexpr uint32_t kCbIn0 = 0;
 constexpr uint32_t kCbIn1 = 1;
 constexpr uint32_t kCbOut = 16;
+constexpr uint32_t kCbAcc = 24;  // running total; a separate CB from kCbOut
 
 // Geometry is compile-time so the strategy can unroll and the DST budget is
 // checked by static_assert. Supplied by the host as -D flags.
-using Geom = u::MatmulGeometry<MM_RT_DIM, MM_CT_DIM, MM_KT_DIM>;
+using Geom = u::MatmulGeometry<MM_RT_DIM, MM_CT_DIM, MM_KT_DIM, MM_K_BLOCKS>;
 
 constexpr uint32_t kIn0Tiles = MM_RT_DIM * MM_KT_DIM;
 constexpr uint32_t kIn1Tiles = MM_KT_DIM * MM_CT_DIM;
@@ -52,6 +53,7 @@ void kernel_main() {
 
     u::Storage in0_storage(kCbIn0, kIn0Tiles);
     u::Storage in1_storage(kCbIn1, kIn1Tiles);
+    u::Storage acc_storage(kCbAcc, kOutTiles);  // running total -- must NOT be kCbOut
     u::Storage out_storage(kCbOut, kOutTiles);
 
     // The FPU path needs its own hardware startup: SrcOrder::Reverse plus the
@@ -63,13 +65,25 @@ void kernel_main() {
     const auto in1 = TensorAccessor(in1_args, in1_addr);
     const auto out = TensorAccessor(out_args, out_addr);
 
-    // Reader (DM thread 1) fills both operand buffers; compute waits on them.
-    u::ComputeBlock a = u::noc_load<1>(in0_storage, in0, 0).wait();
-    u::ComputeBlock b = u::noc_load<1>(in1_storage, in1, 0).wait();
+    u::Accumulator<u::AccumulatorMode::Dst> acc(acc_storage, out_storage);
+    acc.clear();
 
-    // The FPU strategy owns the k-loop; `matmul` yields an FPUFusion node.
-    u::Block result = out_storage.store(u::matmul<Geom>(a, b));
+    for (uint32_t k = 0; k < Geom::num_blocks; ++k) {
+        const bool finish = (k == Geom::num_blocks - 1);
 
-    // Writer (DM thread 0) drains it.
-    u::noc_store<0>(std::move(result), out, 0);
+        u::ComputeBlock a = u::noc_load<1>(in0_storage, in0, k).wait();
+        u::ComputeBlock b = u::noc_load<1>(in1_storage, in1, k).wait();
+
+#ifdef MM_EPILOGUE_RELU
+        // relu() appends to the node's epilogue chain; the strategy folds it
+        // into DST on the final block.
+        u::Block result = acc.accumulate(u::relu(u::matmul<Geom>(a, b)), finish);
+#else
+        u::Block result = acc.accumulate(u::matmul<Geom>(a, b), finish);
+#endif
+
+        if (finish) {
+            u::noc_store<0>(std::move(result), out, 0);
+        }
+    }
 }

@@ -110,11 +110,9 @@ struct ExpOp {
 // accumulates across the tile loop and packs once, so it wants a third
 // Strategy alongside SFPUFusion/FPUFusion.
 
-// A unary usable in either kind. The two entry points are genuinely different
-// hardware paths: `apply`/`apply_in_place` run on the SFPU during math, while
-// `apply_from_pack` is the packer-side epilogue the FPU strategy uses -- it
-// replaces tile_regs_wait(). An op that offers only the former simply fails to
-// compile in an FPU chain, which is the intent.
+// A unary usable in either kind: as a node in an SFPU expression tree, or as a
+// link in an FPU node's epilogue chain. Both run on the SFPU against DST, so
+// one implementation serves both -- `apply_in_place` is just apply(s, s).
 //
 // The `*_tile_init()` calls are inline rather than hoisted: they are cheap, and
 // metal kernels routinely re-init per use (see SFPU_OP_CHAIN_0 in
@@ -132,18 +130,6 @@ struct ReluOp {
     }
 
     static void apply_in_place(uint32_t slot) { apply(slot, slot); }
-
-    // Templated so it is only instantiated when an FPU chain actually uses it;
-    // the pack-side epilogue is not yet bound to metal (see unified_metal.hpp).
-    template <int = 0>
-    static void apply_from_pack(uint32_t base, uint32_t count) {
-#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
-        relu_from_pack(base, count);
-#else
-        (void)base;
-        (void)count;
-#endif
-    }
 };
 
 // ---------------------------------------------------------------------------
@@ -322,71 +308,92 @@ struct Strategy<SFPUFusion> {
     }
 };
 
-// FPU: the node owns the loop. matmul_block accumulates into DST across the
-// inner (k) dimension, and the result is packed once, on the final block, after
-// the unary epilogue runs from pack.
+// FPU: one k-block per call. The kernel owns the k-loop (see Accumulator in
+// tt/unified_api.h), because the operand CBs must be waited and popped per
+// block so the reader can stream them.
 //
-// Mirrors bmm_large_block_zm_fused_bias_activation.cpp: matmul_block_init once,
-// then a k-loop stepping in0 right by one tile and in1 down by one row.
+// Mirrors bmm_large_block_zm_fused_bias_activation.cpp:
+//   acquire -> [reload partials into DST] -> matmul_block across k
+//           -> [epilogue on DST] -> commit -> pack to partials, or to out on
+//              the final block.
 template <>
 struct Strategy<FPUFusion> {
+    // Single-shot: one k-block, no accumulation buffer. This is the shape
+    // Storage::store() uses, so `out.store(matmul<Geom>(a, b))` still works for
+    // a one-round matmul -- and for any future FPU op that does not accumulate.
+    // With reload=false and finish=true the accumulation buffer is never
+    // touched, so passing the destination for both is safe.
     template <typename Node>
     static void run(const Node& node, uint32_t cb_id, uint32_t /*num_tiles*/) {
+        run(node, /*acc_cb=*/cb_id, /*out_cb=*/cb_id, /*reload=*/false, /*finish=*/true);
+    }
+
+    template <typename Node>
+    static void run(const Node& node, uint32_t acc_cb, uint32_t out_cb, bool reload, bool finish) {
         using G = typename Node::geometry;
-        static_assert(
-            G::out_subblock_num_tiles <= kMaxDstTiles, "matmul rt_dim * ct_dim exceeds the DST register file");
+        constexpr uint32_t kAccTiles = G::out_subblock_num_tiles;
+
+        static_assert(kAccTiles <= kMaxDstTiles, "matmul rt_dim * ct_dim exceeds the DST register file");
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
         using Chain = typename Node::chain;
         constexpr uint32_t kTranspose = 0;
 
-        // Startup is the kernel's job -- see matmul_init() above.
+        ckernel::tile_regs_acquire();
 
-        for (uint32_t block = 0; block < G::num_blocks; ++block) {
-            const bool last_out = (block == G::num_blocks - 1);
-            ckernel::tile_regs_acquire();
-
-            // Accumulate across the inner dimension. matmul_block internally
-            // advances dst_index, so the whole rt_dim x ct_dim subblock is the
-            // accumulator -- there is nothing here for the allocator to hand out.
-            uint32_t in0_index = 0;
-            uint32_t in1_index = 0;
-            for (uint32_t k = 0; k < G::kt_dim; ++k) {
-                ckernel::matmul_block(
-                    node.in0_cb,
-                    node.in1_cb,
-                    in0_index,
-                    in1_index,
-                    /*idst=*/0,
-                    kTranspose,
-                    G::ct_dim,
-                    G::rt_dim,
-                    G::kt_dim);
-                in0_index += 1;                  // step right along A
-                in1_index += G::in1_row_stride;  // step down one row of B
-            }
-
-            ckernel::tile_regs_commit();
-            if (last_out) {
-                cb_reserve_back(cb_id, G::out_subblock_num_tiles);
-                if constexpr (Chain::empty) {
-                    ckernel::tile_regs_wait();
-                } else {
-                    // The pack-side epilogue replaces tile_regs_wait().
-                    Chain::apply_from_pack(0, G::out_subblock_num_tiles);
-                }
-                ckernel::pack_block(0, cb_id, G::out_subblock_num_tiles);
-                cb_push_back(cb_id, G::out_subblock_num_tiles);
-            } else {
-                ckernel::tile_regs_wait();
-                // TODO: real kernels spill/reload partials through an
-                // intermediate CB here (mm_partials). Omitted -- so num_blocks
-                // > 1 currently drops everything but the last block.
-            }
-            ckernel::tile_regs_release();
+        if (reload) {
+            // Partials L1 -> DST, then restore the state matmul_block needs.
+            ckernel::copy_tile_to_dst_init_short_with_dt(node.in1_cb, acc_cb);
+            cb_wait_front(acc_cb, kAccTiles);
+            ckernel::copy_block(acc_cb, 0, 0, kAccTiles);
+            cb_pop_front(acc_cb, kAccTiles);
+            ckernel::reconfig_data_format_srca(acc_cb, node.in1_cb);
+            ckernel::matmul_block_init(node.in0_cb, node.in1_cb, kTranspose, G::ct_dim, G::rt_dim, G::kt_dim);
         }
+
+        // Accumulate this k-block on top of whatever DST already holds.
+        uint32_t in0_index = 0;
+        uint32_t in1_index = 0;
+        for (uint32_t k = 0; k < G::kt_dim; ++k) {
+            ckernel::matmul_block(
+                node.in0_cb,
+                node.in1_cb,
+                in0_index,
+                in1_index,
+                /*idst=*/0,
+                kTranspose,
+                G::ct_dim,
+                G::rt_dim,
+                G::kt_dim);
+            in0_index += 1;
+            in1_index += G::in1_row_stride;
+        }
+
+        // Epilogue, on the final block only -- the accumulator is complete
+        // exactly here. The chain folds into each accumulator slot in place, on
+        // the SFPU, so relu(matmul(...)) needs no machinery beyond the chain the
+        // node already carries.
+        if constexpr (!Chain::empty) {
+            if (finish) {
+                for (uint32_t t = 0; t < kAccTiles; ++t) {
+                    Chain::apply_in_place(t);
+                }
+            }
+        }
+
+        ckernel::tile_regs_commit();
+
+        const uint32_t dest = finish ? out_cb : acc_cb;
+        cb_reserve_back(dest, kAccTiles);
+        ckernel::tile_regs_wait();
+        ckernel::pack_block(0, dest, kAccTiles);
+        ckernel::tile_regs_release();
+        cb_push_back(dest, kAccTiles);
 #else
         (void)node;
-        (void)cb_id;
+        (void)acc_cb;
+        (void)out_cb;
+        (void)reload;
+        (void)finish;
 #endif
     }
 };
