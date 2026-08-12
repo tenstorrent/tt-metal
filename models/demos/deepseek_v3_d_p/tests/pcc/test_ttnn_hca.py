@@ -119,7 +119,7 @@ def test_hca_compressor_mesh(mesh_device, device_params, topology, seq_len):
     )
 
     signpost("HCA_START")
-    compressed_kv_tt, block_bias_tt = tt_model(tt_input, position_ids, seq_len_actual=seq_len_actual)
+    compressed_kv_tt, mask_block_tt = tt_model(tt_input, position_ids, seq_len_actual=seq_len_actual)
     signpost("HCA_END")
     # Fully replicated (SP-gathered + TP-replicated): take a single replica.
     compressed_kv_out = ttnn.to_torch(
@@ -142,7 +142,17 @@ def test_hca_compressor_mesh(mesh_device, device_params, topology, seq_len):
     logger.debug(f"mesh compressor PCC: {pcc_message}")
     assert pcc_passed, f"HCA mesh compressor PCC test failed: {pcc_message}"
 
-    torch.testing.assert_close(block_bias_tt, block_bias_ref.to(torch.float32), rtol=0, atol=0)
+    # The compressor now emits the mask's compressed columns straight to device, which is what production
+    # consumes -- hca_block_bias is only the reference. The block spans every entry the cache can hold and
+    # every PADDED query row, so slice it down to what the reference covers: real rows x this call's
+    # entries. Values are only 0 and -inf, both exact in bfloat16, so the check stays exact.
+    mask_block = ttnn.to_torch(
+        mask_block_tt,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(2, 3)),
+    )
+    width = mask_block.shape[-1] // mesh_device.shape[1]  # TP-replicated; keep one replica
+    got = mask_block[:, :, :seq_len_actual, :width][..., :t_real].to(torch.float32)
+    torch.testing.assert_close(got, block_bias_ref.to(torch.float32), rtol=0, atol=0)
     logger.debug("PCC test passed!")
 
 
