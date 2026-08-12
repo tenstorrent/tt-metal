@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 import torch
 
 import ttnn
@@ -125,7 +129,11 @@ class TtRTDetrResNetEmbeddings:
         ]
 
     def __call__(
-        self, pixel_values: ttnn.Tensor, batch_size: int, input_height: int, input_width: int
+        self,
+        pixel_values: ttnn.Tensor,
+        batch_size: int,
+        input_height: int,
+        input_width: int,
     ) -> tuple[ttnn.Tensor, int, int]:
         height = input_height
         width = input_width
@@ -133,7 +141,10 @@ class TtRTDetrResNetEmbeddings:
         pixel_values = ttnn.permute(pixel_values, (0, 2, 3, 1))
         for layer in self.layers:
             pixel_values, height, width = layer(
-                pixel_values, batch_size=batch_size, input_height=height, input_width=width
+                pixel_values,
+                batch_size=batch_size,
+                input_height=height,
+                input_width=width,
             )
 
         pixel_values = ttnn.max_pool2d(

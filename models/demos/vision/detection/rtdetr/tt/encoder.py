@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 import torch
 
 import ttnn
@@ -194,7 +198,11 @@ class TtRTDetrHybridEncoder:
             top_feature_map, top_height, top_width = pan_feature_maps[-1]
             fpn_feature_map, _, _ = fpn_feature_maps[ix + 1]
 
-            downsampled_feature_map, downsampled_height, downsampled_width = downsample_conv(
+            (
+                downsampled_feature_map,
+                downsampled_height,
+                downsampled_width,
+            ) = downsample_conv(
                 top_feature_map,
                 batch_size=batch_size,
                 input_height=top_height,
@@ -383,7 +391,12 @@ class TtRTDetrAIFILayer:
         embedding_w = grid_w.flatten().outer(omega)
 
         position_embedding = torch.cat(
-            [embedding_h.sin(), embedding_h.cos(), embedding_w.sin(), embedding_w.cos()],
+            [
+                embedding_h.sin(),
+                embedding_h.cos(),
+                embedding_w.sin(),
+                embedding_w.cos(),
+            ],
             dim=-1,
         )
         return position_embedding.to(torch.float32).unsqueeze(0)
@@ -624,7 +637,12 @@ class TtRTDetrMLP:
         )
 
     def __call__(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
-        hidden_states = ttnn.linear(hidden_states, self.fc1_weight, bias=self.fc1_bias, activation=self.activation)
+        hidden_states = ttnn.linear(
+            hidden_states,
+            self.fc1_weight,
+            bias=self.fc1_bias,
+            activation=self.activation,
+        )
 
         hidden_states = ttnn.linear(hidden_states, self.fc2_weight, bias=self.fc2_bias)
 

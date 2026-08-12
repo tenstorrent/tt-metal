@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 import pytest
 import requests
 import torch
@@ -1313,9 +1317,11 @@ def test_rtdetr_resnet_encoder(device):
     )
 
     hidden_sizes = torch_rtdetr.config.backbone_config.hidden_sizes
-    for stage_index, (torch_output, (tt_output, output_height, output_width), out_channels) in enumerate(
-        zip(torch_outputs, tt_outputs, hidden_sizes), start=1
-    ):
+    for stage_index, (
+        torch_output,
+        (tt_output, output_height, output_width),
+        out_channels,
+    ) in enumerate(zip(torch_outputs, tt_outputs, hidden_sizes), start=1):
         tt_output = ttnn.to_torch(tt_output)
         tt_output = tt_output.reshape(batch_size, output_height, output_width, out_channels)
         tt_output = tt_output.permute(0, 3, 1, 2)
@@ -1366,9 +1372,11 @@ def test_rtdetr_resnet_backbone(device):
     )
 
     hidden_sizes = torch_rtdetr.config.backbone_config.hidden_sizes
-    for stage_index, (torch_output, (tt_output, output_height, output_width), out_channels) in enumerate(
-        zip(torch_outputs, tt_outputs, hidden_sizes), start=1
-    ):
+    for stage_index, (
+        torch_output,
+        (tt_output, output_height, output_width),
+        out_channels,
+    ) in enumerate(zip(torch_outputs, tt_outputs, hidden_sizes), start=1):
         tt_output = ttnn.to_torch(tt_output)
         tt_output = tt_output.reshape(batch_size, output_height, output_width, out_channels)
         tt_output = tt_output.permute(0, 3, 1, 2)
@@ -1417,9 +1425,11 @@ def test_rtdetr_conv_encoder(device):
     out_indices = torch_rtdetr.config.backbone_config.out_indices
     out_channels = [hidden_sizes[index - 1] for index in out_indices]
 
-    for output_index, (torch_output, (tt_output, output_height, output_width), channels) in enumerate(
-        zip(torch_outputs, tt_outputs, out_channels)
-    ):
+    for output_index, (
+        torch_output,
+        (tt_output, output_height, output_width),
+        channels,
+    ) in enumerate(zip(torch_outputs, tt_outputs, out_channels)):
         tt_output = ttnn.to_torch(tt_output)
         tt_output = tt_output.reshape(batch_size, output_height, output_width, channels)
         tt_output = tt_output.permute(0, 3, 1, 2)

@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 import torch
 
 import ttnn
@@ -265,10 +269,18 @@ class TtRTDetrModel:
             source = ttnn.reshape(source, (batch_size, height * width, self.decoder_hidden_dim))
             source_flatten.append(source)
         source_flatten = ttnn.concat(source_flatten, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        source_flatten = ttnn.to_layout(source_flatten, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        source_flatten = ttnn.to_layout(
+            source_flatten,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
         # use the valid_mask to selectively retain values in the feature map where the mask is `True`
-        output_memory = ttnn.linear(self.valid_mask * source_flatten, self.enc_output_weight, bias=self.enc_output_bias)
+        output_memory = ttnn.linear(
+            self.valid_mask * source_flatten,
+            self.enc_output_weight,
+            bias=self.enc_output_bias,
+        )
 
         # enc_output
         output_memory = ttnn.layer_norm(
@@ -283,15 +295,23 @@ class TtRTDetrModel:
 
         # enc_bbox_head
         enc_outputs_coord_logits = ttnn.linear(
-            output_memory, self.enc_bbox_head_0_weight, bias=self.enc_bbox_head_0_bias, activation="relu"
+            output_memory,
+            self.enc_bbox_head_0_weight,
+            bias=self.enc_bbox_head_0_bias,
+            activation="relu",
         )
 
         enc_outputs_coord_logits = ttnn.linear(
-            enc_outputs_coord_logits, self.enc_bbox_head_1_weight, bias=self.enc_bbox_head_1_bias, activation="relu"
+            enc_outputs_coord_logits,
+            self.enc_bbox_head_1_weight,
+            bias=self.enc_bbox_head_1_bias,
+            activation="relu",
         )
 
         enc_outputs_coord_logits = ttnn.linear(
-            enc_outputs_coord_logits, self.enc_bbox_head_2_weight, bias=self.enc_bbox_head_2_bias
+            enc_outputs_coord_logits,
+            self.enc_bbox_head_2_weight,
+            bias=self.enc_bbox_head_2_bias,
         )
 
         enc_outputs_coord_logits = ttnn.add(enc_outputs_coord_logits, self.anchors)

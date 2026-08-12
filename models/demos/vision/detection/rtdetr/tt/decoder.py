@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 import ttnn
 from models.demos.vision.detection.rtdetr.tt.encoder import TtRTDetrSelfAttention
 
@@ -242,9 +246,15 @@ class TtRTDetrMultiscaleDeformableAttention:
 
         level_outputs = []
         for level_id, (height, width) in enumerate(value_spatial_shapes_list):
-            value_l = ttnn.reshape(value_list[level_id], (batch_size * num_heads, height, width, hidden_dim))
+            value_l = ttnn.reshape(
+                value_list[level_id],
+                (batch_size * num_heads, height, width, hidden_dim),
+            )
             sampling_grid_l = sampling_grid_list[level_id]
-            sampling_grid_l = ttnn.reshape(sampling_grid_l, (batch_size * num_heads, num_queries * num_points, 1, 2))
+            sampling_grid_l = ttnn.reshape(
+                sampling_grid_l,
+                (batch_size * num_heads, num_queries * num_points, 1, 2),
+            )
 
             attention_weights_l = attention_weights_list[level_id]
             attention_weights_l = ttnn.reshape(
@@ -309,30 +319,47 @@ class TtRTDetrMultiscaleDeformableAttention:
             self.value_proj_weight,
             bias=self.value_proj_bias,
         )
-        value = ttnn.reshape(value, (batch_size, sequence_length, self.num_heads, self.d_model // self.num_heads))
+        value = ttnn.reshape(
+            value,
+            (
+                batch_size,
+                sequence_length,
+                self.num_heads,
+                self.d_model // self.num_heads,
+            ),
+        )
 
         sampling_offsets = ttnn.linear(hidden_states, self.sampling_offsets_weight, bias=self.sampling_offsets_bias)
         sampling_offsets = ttnn.reshape(
-            sampling_offsets, (batch_size, num_queries, self.num_heads, self.n_levels, self.n_points, 2)
+            sampling_offsets,
+            (batch_size, num_queries, self.num_heads, self.n_levels, self.n_points, 2),
         )
 
-        attention_weights = ttnn.linear(hidden_states, self.attention_weights_weight, bias=self.attention_weights_bias)
+        attention_weights = ttnn.linear(
+            hidden_states,
+            self.attention_weights_weight,
+            bias=self.attention_weights_bias,
+        )
         attention_weights = ttnn.reshape(
-            attention_weights, (batch_size, num_queries, self.num_heads, self.n_levels * self.n_points)
+            attention_weights,
+            (batch_size, num_queries, self.num_heads, self.n_levels * self.n_points),
         )
         attention_weights = ttnn.softmax(attention_weights, dim=-1)
         attention_weights = ttnn.reshape(
-            attention_weights, (batch_size, num_queries, self.num_heads, self.n_levels, self.n_points)
+            attention_weights,
+            (batch_size, num_queries, self.num_heads, self.n_levels, self.n_points),
         )
 
         num_reference_levels = reference_points.shape[-2]
         reference_points_xy = reference_points[..., :2]
         reference_points_wh = reference_points[..., 2:]
         reference_points_xy = ttnn.reshape(
-            reference_points_xy, (batch_size, num_queries, 1, num_reference_levels, 1, 2)
+            reference_points_xy,
+            (batch_size, num_queries, 1, num_reference_levels, 1, 2),
         )
         reference_points_wh = ttnn.reshape(
-            reference_points_wh, (batch_size, num_queries, 1, num_reference_levels, 1, 2)
+            reference_points_wh,
+            (batch_size, num_queries, 1, num_reference_levels, 1, 2),
         )
 
         sampling_locations = ttnn.addcmul(

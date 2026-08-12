@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 import argparse
 import statistics
 import time
@@ -375,7 +379,13 @@ def main():
     parser.add_argument("--sample_image", type=int, default=0, help="Sample input image number from 0-9")
     parser.add_argument("--threshold", type=float, default=0.5, help="Detection confidence threshold")
     parser.add_argument("--device-id", type=int, default=0, help="TT device ID")
-    parser.add_argument("--model_version", type=int, choices=(1, 2), default=1, help="RT-DETR model version")
+    parser.add_argument(
+        "--model_version",
+        type=int,
+        choices=(1, 2),
+        default=1,
+        help="RT-DETR model version",
+    )
 
     args = parser.parse_args()
 
