@@ -303,10 +303,9 @@ class TtLatentMoeProjections(LightweightModule):
 
     # --------------------------------------------------------------- forward
 
-    # NOTE on coverage: the tp_factor == 1 branches below (no all-gather here, no reduce-scatter in
-    # from_latent) are reachable only from the linear-8 / mesh-4x2 params of test_kimi_k3_moe, which no
-    # CI stage selects -- both blaze rows pin fabric2d-mesh-8x4, i.e. tp=4. They are exercised by local
-    # runs only.
+    # NOTE on coverage: K3's retained 4x2 and production 8x4 rows both have TP > 1. The former 8x1
+    # Fabric1D proxy was redundant and was removed during the Fabric2D migration, so K3 no longer
+    # reaches the tp_factor == 1 branches below. Those generic branches remain for non-K3 callers.
     def to_latent(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """emb_dim (replicated) -> routed_emb_dim (replicated). Runs before dispatch.
 
