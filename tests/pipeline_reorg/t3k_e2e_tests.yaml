@@ -126,7 +126,7 @@
   cmd: |
     EXPECT_NUM_TESTS=16 pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ds_moe -vvv --tb=short -k "fabric2d-mesh-4x2" --timeout 900
     EXPECT_NUM_TESTS=4 pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_ds_mla -k "fabric2d-2x4 and random and scaled_sl and check_pcc" -vvv --tb=short
-    EXPECT_NUM_TESTS=4 pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "maxedge-1u and cpu and fabric2d-2x4" -vvv --tb=short
+    EXPECT_NUM_TESTS=4 pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "maxedge-1u and cpu and fabric2d-2x4 and (dsv3 or kimi) and no_determinism" -vvv --tb=short
   skus:
     wh_llmbox:
       timeout: 30

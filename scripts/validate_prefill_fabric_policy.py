@@ -44,6 +44,9 @@ FORBIDDEN_PROFILE_VALUE = re.compile(
     r"\bPREFILL_FABRIC_MODE[\"']?\s*[:=]\s*[\"']?(?P<mode>1d(?:_ring)?)(?![\w-])", re.IGNORECASE
 )
 LEGACY_TOPOLOGY_ID = re.compile(r"^(?:line|ring|linear-[0-9]+)$", re.IGNORECASE)
+TORUS_XY_PROFILE = re.compile(r"(?<![\w])(?:torus[-_]xy|2d_torus_xy)(?![\w])", re.IGNORECASE)
+TORUS_XY_DESCRIPTOR = "single_bh_galaxy_torus_xy_graph_descriptor.textproto"
+YAML_LITERAL_COMMAND = re.compile(r"^(?:cmd|run):\s*[|>]", re.IGNORECASE)
 
 
 def _is_fabric_config_reference(node: ast.expr) -> bool:
@@ -154,6 +157,26 @@ def _logical_shell_command(lines: list[str], start: int) -> tuple[str, int]:
     return " ".join(parts), end
 
 
+def _yaml_literal_command_context(lines: list[str], command_index: int) -> str:
+    """Return the enclosing YAML ``cmd: |``/``run: |`` body for one shell command."""
+    command_indent = len(lines[command_index]) - len(lines[command_index].lstrip())
+    for start in range(command_index - 1, -1, -1):
+        stripped = lines[start].strip()
+        if not stripped:
+            continue
+        indent = len(lines[start]) - len(lines[start].lstrip())
+        if indent >= command_indent or YAML_LITERAL_COMMAND.match(stripped) is None:
+            continue
+        end = start + 1
+        while end < len(lines):
+            candidate = lines[end]
+            if candidate.strip() and len(candidate) - len(candidate.lstrip()) <= indent:
+                break
+            end += 1
+        return "\n".join(lines[start:end])
+    return lines[command_index]
+
+
 def audit_pipeline_selectors() -> list[str]:
     errors = []
     for relative_path in PIPELINE_FILES:
@@ -180,6 +203,14 @@ def audit_pipeline_selectors() -> list[str]:
                     f"{relative_path}:{line_number}: scoped pytest command has no positive EXPECT_NUM_TESTS; "
                     "lock its exact nonzero execution count"
                 )
+            if TORUS_XY_PROFILE.search(command) is not None:
+                literal_context = _yaml_literal_command_context(lines, index - 1)
+                if "TT_MESH_GRAPH_DESC_PATH" not in literal_context or TORUS_XY_DESCRIPTOR not in literal_context:
+                    errors.append(
+                        f"{relative_path}:{line_number}: TorusXY pytest command has no matching explicit "
+                        f"TT_MESH_GRAPH_DESC_PATH={TORUS_XY_DESCRIPTOR}; production TorusXY jobs must fail "
+                        "closed before device open"
+                    )
             if "-k" not in command:
                 continue
             match = PYTEST_SELECTOR.search(command)

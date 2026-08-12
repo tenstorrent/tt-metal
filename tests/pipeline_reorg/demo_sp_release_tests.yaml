@@ -68,8 +68,8 @@
     # deepseek and kimi prefill on 2x4 mesh
     EXPECT_NUM_TESTS=2 pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_ds_mla -k "fabric2d-2x4 and random and scaled_sl and check_pcc and 100k" -vvv --tb=short
     EXPECT_NUM_TESTS=1 pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_kimi_mla -k "fabric2d-2x4 and random and scaled_sl and check_pcc and seq5k" -vvv --tb=short
-    EXPECT_NUM_TESTS=2 python -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k 'maxedge-1u and kimi and cpu and fabric2d-2x4'
-    EXPECT_NUM_TESTS=2 python -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k 'maxedge-1u and ds and cpu and fabric2d-2x4'
+    EXPECT_NUM_TESTS=2 python -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k 'maxedge-1u and kimi and cpu and fabric2d-2x4 and no_determinism'
+    EXPECT_NUM_TESTS=2 python -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k 'maxedge-1u and ds and cpu and fabric2d-2x4 and no_determinism'
     # deepseek and kimi moe blocks. NOTE: pcc-device-256 (DSv3) is pinned exact + `not pad50` so it stays
     # 1 test — bare `pcc-device` would substring-match `pcc-device-glm-256` and inflate the count.
     EXPECT_NUM_TESTS=1 pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ds_moe -k "fabric2d-mesh-4x2 and pcc-device-256 and not pad50" -vvv --tb=short --timeout=1800
