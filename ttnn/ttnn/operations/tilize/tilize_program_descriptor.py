@@ -106,6 +106,32 @@ SPREAD_CORES = 1
 # behind a DRAM bank).
 STAGGER_READS = 0
 
+# --- Knob: stateful, bank-grouped NoC reads (R6 / master.md B13 + D21) -----
+# The low-work-per-core regimes are ISSUE-bound, not bandwidth-bound: measured,
+# `[1,1,32,64]` spends 968 ns of a 1 901 ns call on 32 reads that move 4 KB in
+# total (~30 ns per read), and `[1,1,32,32]` spends 1 084 ns on 32 reads of 64 B.
+# What costs there is the SIX command-buffer register writes a plain
+# `noc_async_read` performs (RET_LO, TARG_LO, TARG_MID, TARG_COORD, LEN,
+# CMD_CTRL), not the bytes. `set_state` programs the source NODE once and each
+# subsequent issue writes only three registers.
+#
+# The state is per source NODE, so the sticks are issued in BANK-PHASE order
+# (page p of an interleaved buffer lives in bank `p % num_banks`), which is what
+# makes one `set_state` cover several sticks. `read_bank_period` below is a pure
+# performance hint — the kernel compares the programmed node against every
+# address and re-programs on a mismatch, so a wrong period costs a few extra
+# `set_state`s and can never read the wrong bytes.
+STATEFUL_READS = 1
+
+# --- Knob: fold the dataflow kernels away on the resident path (R6 / C14-2) -
+# master.md C14 has TWO degrees: removing the NoC traffic (Refinement 2 — the CBs
+# ARE the shards) and removing the KERNELS (a resident reader exists only to run
+# the CB handshake). This is the second. 1 = emit the compute kernel only, which
+# self-arms the input CB and self-drains the output CB; 0 = keep the three-kernel
+# structure. `examples/zero_copy_fold` measured folding at 0.74x on Wormhole at
+# 2 tiles/core, so this ships at whatever THIS part measures, not at that.
+FOLD_RESIDENT = 0
+
 # --- Knob: cross-spec reshard direction (R4 / A3c) -------------------------
 # Which SIDE of a cross-spec reshard holds the resident block: 1 = PULL (the
 # output shard, op_design §4.3's contract), 0 = PUSH (the input shard).
@@ -161,6 +187,19 @@ DEFAULT_LEVERS = {
     # `tile_h` source pages, so an unstaggered fleet requests one page (one DRAM
     # bank) at a time. `None` = the regime default (`placement_defaults`).
     "stagger_reads": None,
+    # R6 (master.md B13 + D21): configure the NoC command buffer ONCE per source
+    # bank and issue the block's remaining same-shape reads with `with_state`
+    # (three register writes instead of six). `None` = the shipped default
+    # (`STATEFUL_READS`), 0 = plain `noc_async_read` per stick, i.e. the
+    # `read_sticks_for_tilize` helper call byte-for-byte. Only ever armed where
+    # bank grouping can pay (`read_bank_period` decides); a lever value of 1 on a
+    # shape whose period is 0 is still the plain path.
+    "stateful_reads": None,
+    # R6 (master.md C14, SECOND degree): fold the two dataflow kernels away on
+    # the same-spec resident path, where they exist only to run the CB handshake
+    # (zero NoC bytes on both sides). 1 = compute-only program, 0 = the
+    # three-kernel structure. Unreachable off `MODE_RESIDENT`.
+    "fold_resident": None,
     "double_buffer": 1,  # C16: CB depth 2 vs 1  (also the user-facing kwarg)
     # A2/C14 off-arm: consume a resident shard through a TensorAccessor instead
     # of aliasing the CB onto it. 1 = the NON-zero-copy counterfactual (the
@@ -917,6 +956,31 @@ def placement_defaults(in_memory_config, out_memory_config):
     }
 
 
+def read_bank_period(num_banks: int, tile_height: int, is_dram_interleaved: bool) -> int:
+    """Source pages per bank cycle for the R6 stateful-read arm, or 0 = off.
+
+    An interleaved buffer round-robins its pages over `num_banks` banks, so the
+    sticks whose page index is congruent mod `num_banks` share a source NODE and
+    one `set_state` covers all of them (master.md B13). Returns 0 — the plain
+    per-stick `noc_async_read` path — whenever grouping cannot pay:
+
+      * a SHARDED or L1 source: an L1-interleaved buffer's banks are the worker
+        cores (110 here), i.e. more banks than a block has sticks, so every group
+        would hold one stick and the state would be re-programmed every read;
+        a sharded source is addressed by the R4 band gather instead.
+      * `num_banks >= tile_height`: same degeneracy stated on the geometry.
+      * `num_banks <= 1`: nothing to group by.
+
+    Pure (ints + a bool) so the gate is unit-testable without a device. The
+    period is a PERFORMANCE hint only — the kernel re-programs the state whenever
+    an address's node does not match the one it programmed, so a wrong period
+    cannot produce a wrong read.
+    """
+    if not is_dram_interleaved:
+        return 0
+    return num_banks if 1 < num_banks < tile_height else 0
+
+
 def pipeline_capped_cores(total_blocks: int, grid_cores: int, min_blocks_per_core: int):
     """The pipeline-depth cap on the core count, or None when it does not bind.
 
@@ -1119,6 +1183,23 @@ def create_program_descriptor(
     if resident_in:  # the input is never read at all — keep the trivial value
         n_bands, band_bytes = 1, band_bytes
 
+    # R6 (B13/D21): the stateful-read arm. It is the SAME transfers in the same
+    # block, issued with the NoC command buffer configured once per source bank
+    # instead of once per stick. Armed only where the plain per-stick reader is
+    # actually the emitted code (no pad body, no band gather, not resident) and
+    # where the R3 stagger — which owns the issue ORDER — is off.
+    in_mem = input_tensor.memory_config()
+    stateful_knob = STATEFUL_READS if lv["stateful_reads"] is None else lv["stateful_reads"]
+    bank_period = 0
+    if stateful_knob and not resident_in and n_bands == 1 and not pad_enabled and not int(_knob("stagger_reads")):
+        dram_grid = device.dram_grid_size()
+        bank_period = read_bank_period(
+            dram_grid.x * dram_grid.y,
+            tile_height,
+            is_dram_interleaved=(not in_mem.is_sharded() and in_mem.buffer_type == ttnn.BufferType.DRAM),
+        )
+    stateful_reads = 1 if bank_period else 0
+
     # The shard hands you the block width on any resident side (op_design §6.2).
     blk = blocking(shape, tile_height, elem_size, lv["target_read_bytes"], wt_block_override=plan["wt_block"])
     nt_h = blk["nt_h"]
@@ -1283,6 +1364,8 @@ def create_program_descriptor(
         int(resident_in),
         int(_knob("stagger_reads")),
         n_bands,  # R4: source pages per row (1 = whole-row pages, the Phase-0 path)
+        # (R6's two CT args are appended after the R5 block below, so the pad
+        # geometry terms keep the indices Refinement 5 pinned.)
         band_bytes,  # R4: bytes per source page
         # R5 (P1/P2/P4/P5): the pad body's CT selector and its four geometry
         # terms. `pad_enabled == 0` erases the whole body, so Track A is
@@ -1293,6 +1376,9 @@ def create_program_descriptor(
         pad["h_real"] if pad_enabled else tile_height,  # real rows per image
         pad["nimg_real"] if pad_enabled else 1,  # real images
         pad["real_row_bytes"] if pad_enabled else tile_row_bytes,  # real bytes per stick
+        # R6 (B13/D21): the stateful-read arm and the bank period it groups by.
+        int(stateful_reads),
+        bank_period,
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
@@ -1310,6 +1396,14 @@ def create_program_descriptor(
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
+    # R6 (C14 second degree): the fold is only meaningful where BOTH dataflow
+    # kernels are pure CB handshakes — i.e. the same-spec resident path, where
+    # neither side moves a byte. A crossover or a reshard still has one real
+    # dataflow kernel, so folding it would serialize genuine NoC work onto the
+    # compute thread rather than remove an empty kernel.
+    fold_knob = FOLD_RESIDENT if lv["fold_resident"] is None else lv["fold_resident"]
+    fold_resident = int(bool(fold_knob) and plan["mode"] == MODE_RESIDENT)
+
     compute_ct_args = [
         CB_INPUT_STICKS,
         CB_OUTPUT_TILES,
@@ -1317,6 +1411,7 @@ def create_program_descriptor(
         wt_tail,
         needs_cast,
         lv["stub_compute"],
+        fold_resident,
     ]
 
     reader_rt = ttnn.RuntimeArgs()
@@ -1340,7 +1435,10 @@ def create_program_descriptor(
 
         reader_rt[core.x][core.y] = [in_addr, block_start, num_blocks]
         writer_rt[core.x][core.y] = [out_addr, block_start, num_blocks]
-        compute_rt[core.x][core.y] = [n_full, n_tail]
+        # `num_blocks * wt_block` is the page count BOTH dataflow kernels use on
+        # the resident path — stated once here so the fold cannot disagree with
+        # the kernels it replaces.
+        compute_rt[core.x][core.y] = [n_full, n_tail, num_blocks * wt_block]
 
     # B9 off-arm: swap the two configs so the read stream lands on the writer's
     # RISC/NoC and vice versa.
@@ -1369,8 +1467,13 @@ def create_program_descriptor(
         config=ttnn.ComputeConfigDescriptor(),
     )
 
+    # R6 / C14 second degree: on the folded resident path the two dataflow
+    # kernels are not merely idle, they are ABSENT — the compute kernel owns both
+    # ends of the handshake, so the program launches one kernel per core.
+    kernels = [compute_kernel] if fold_resident else [reader_kernel, writer_kernel, compute_kernel]
+
     return ttnn.ProgramDescriptor(
-        kernels=[reader_kernel, writer_kernel, compute_kernel],
+        kernels=kernels,
         semaphores=[],
         cbs=[cb_input_sticks, cb_output_tiles],
     )

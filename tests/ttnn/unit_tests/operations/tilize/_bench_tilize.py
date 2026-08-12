@@ -248,6 +248,17 @@ ARMS = {
     # block index, so a fleet that shares source pages does not queue on one bank.
     "lever_r3_stagger_off": dict(levers=dict(stagger_reads=0)),
     "lever_r3_stagger_force": dict(levers=dict(stagger_reads=1)),
+    # R6 (master.md B13 + D21): configure the NoC command buffer once per source
+    # BANK and issue the block's remaining reads with `with_state` — three
+    # command-buffer register writes instead of six. A per-ISSUE-cost lever, so
+    # per master.md B0 its off-arm is measured on the smallest regimes first.
+    "lever_r6_stateful_off": dict(levers=dict(stateful_reads=0)),
+    "lever_r6_stateful_force": dict(levers=dict(stateful_reads=1)),
+    # R6 (master.md C14, SECOND degree): fold the resident path's two dataflow
+    # kernels into compute. Both arms are forcing arms because the choice is a
+    # per-regime measurement, not a default.
+    "lever_r6_fold_off": dict(levers=dict(fold_resident=0)),
+    "lever_r6_fold_force": dict(levers=dict(fold_resident=1)),
     "lever_b5_face_writes": dict(levers=dict(coalesce_writes=0)),
     "lever_b9_noc_swap": dict(levers=dict(noc_split=0)),
     # ---- buffering lever (C16) ------------------------------------------

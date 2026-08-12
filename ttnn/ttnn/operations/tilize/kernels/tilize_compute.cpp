@@ -31,9 +31,11 @@ void kernel_main() {
     constexpr uint32_t wt_tail = get_compile_time_arg_val(3);
     constexpr bool needs_cast = get_compile_time_arg_val(4) == 1;
     constexpr uint32_t stub_compute = get_compile_time_arg_val(5);  // ablation (0 = off)
+    constexpr uint32_t fold_resident = get_compile_time_arg_val(6);  // lever R6/C14-2 (1 = on)
 
     const uint32_t n_full = get_arg_val<uint32_t>(0);
     const uint32_t n_tail = get_arg_val<uint32_t>(1);
+    const uint32_t fold_pages = get_arg_val<uint32_t>(2);  // R6: pages on each aliased CB
 
     using namespace compute_kernel_lib::tilize_config;
     constexpr ReconfigureRegisterDatatypeMode reconfig_mode =
@@ -41,6 +43,24 @@ void kernel_main() {
                    : ReconfigureRegisterDatatypeMode::NoReconfigure;
 
     compute_kernel_hw_startup(cb_input_sticks, cb_output_tiles);
+
+    // R6 (master.md C14, SECOND degree): the FOLD. On the same-spec resident
+    // path both CBs are aliased onto this core's own L1 shards, so the reader
+    // and writer move zero bytes and exist only to run the CB handshake —
+    // `cb_reserve_back + cb_push_back` once on the input, `cb_wait_front +
+    // cb_pop_front` once on the output. `fold_resident == 1` drops those two
+    // kernels from the program entirely and takes the handshake here instead.
+    //
+    // The two halves land on DIFFERENT compute threads, which is what makes this
+    // legal rather than a self-deadlock: `cb_reserve_back`/`cb_push_back` are
+    // PACK-thread ops and `cb_wait_front`/`cb_pop_front` are UNPACK-thread ops
+    // (compute_kernel_api/cb_api.h), so the arm below is issued by the same
+    // thread that packs the tiles and the drain by the same thread that unpacks
+    // them — exactly the producer/consumer split the two dataflow RISCs had.
+    if constexpr (fold_resident == 1) {
+        cb_reserve_back(cb_input_sticks, fold_pages);
+        cb_push_back(cb_input_sticks, fold_pages);
+    }
 
     // /perf-measure ablation arm: keep the CB reserve/push/wait/pop scaffolding
     // and the block trip counts, drop ONLY the tilize math, so the duration diff
@@ -56,6 +76,10 @@ void kernel_main() {
                 cb_push_back(cb_output_tiles, w);
                 cb_pop_front(cb_input_sticks, w);
             }
+        }
+        if constexpr (fold_resident == 1) {
+            cb_wait_front(cb_output_tiles, fold_pages);
+            cb_pop_front(cb_output_tiles, fold_pages);
         }
         return;
     }
@@ -80,5 +104,10 @@ void kernel_main() {
             WaitMode::WaitBlock,
             reconfig_mode,
             Fp32Mode::Fast>(n_tail);
+    }
+
+    if constexpr (fold_resident == 1) {
+        cb_wait_front(cb_output_tiles, fold_pages);
+        cb_pop_front(cb_output_tiles, fold_pages);
     }
 }

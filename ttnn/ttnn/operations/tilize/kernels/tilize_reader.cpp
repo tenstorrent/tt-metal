@@ -59,6 +59,17 @@
 // and scatter the sticks. So the fill is a plain L1 store loop (no NoC traffic
 // at all) and the clamped read is `noc_async_read` + `get_noc_addr(page, off)`.
 //
+// HELPER SUBSTITUTION, declared (Refinement 6): `stateful_reads == 1` issues the
+// SAME `tile_h` reads to the SAME L1 destinations, but configures the NoC
+// command buffer once per DRAM bank instead of once per transaction (master.md
+// B13, and D21's "shifts, not multiplies" half falls out of it). It is a
+// per-ISSUE-cost lever, and `read_sticks_for_tilize` cannot express it for two
+// reasons: it calls plain `noc_async_read` per stick (six command-buffer
+// register writes each: RET_LO, TARG_LO, TARG_MID, TARG_COORD, LEN, CMD_CTRL),
+// and — like the R3 stagger — it walks its pages sequentially, whereas the
+// grouping needs the sticks issued in bank-phase order. The helper remains the
+// emitted code whenever the lever is off.
+//
 // HELPER SUBSTITUTION, declared (Refinement 3): `stagger_reads == 1` issues the
 // same `tile_h` reads to the same L1 destinations in a ROTATED order, and
 // `read_sticks_for_tilize` cannot express that — it walks `start_page ..
@@ -119,7 +130,14 @@ void kernel_main() {
     constexpr uint32_t pad_h_real = get_compile_time_arg_val(16);        // R5: REAL rows per image
     constexpr uint32_t pad_nimg = get_compile_time_arg_val(17);          // R5: REAL images
     constexpr uint32_t pad_row_bytes = get_compile_time_arg_val(18);     // R5: REAL bytes per stick
-    constexpr auto src_args = TensorAccessorArgs<19>();
+    constexpr uint32_t stateful_reads = get_compile_time_arg_val(19);    // lever R6/B13 (1 = on)
+    constexpr uint32_t bank_period = get_compile_time_arg_val(20);       // R6: source pages per bank cycle
+    constexpr auto src_args = TensorAccessorArgs<21>();
+
+    // The largest transfer this kernel can issue. `one_packet` NoC state is only
+    // legal at or below the part's burst size, so the arch decides which
+    // stateful primitive pair the B13 arm uses — never a hardcoded byte count.
+    constexpr bool stateful_one_packet = (wt_block * tile_row_bytes) <= NOC_MAX_BURST_SIZE;
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t b0 = get_arg_val<uint32_t>(1);
@@ -267,6 +285,59 @@ void kernel_main() {
             if constexpr (barrier_per_block == 1) {
                 noc_async_read_barrier();
             }
+            cb_push_back(cb_input_sticks, w);
+        } else if constexpr (stateful_reads == 1 && barrier_per_block == 1) {
+            // R6 (master.md B13 + D21) STATEFUL, BANK-GROUPED READS.
+            //
+            // The low-work-per-core regimes are ISSUE-bound, not bandwidth-bound:
+            // `[1,1,32,64]` moves 4 KB in 32 reads and spends ~30 ns per read, so
+            // what costs is the six command-buffer register writes a plain
+            // `noc_async_read` performs, not the bytes. `set_state` writes the
+            // source NODE (TARG_MID + TARG_COORD, plus the length in one-packet
+            // mode) once; each `with_state` issue then writes only RET_LO,
+            // TARG_LO and CMD_CTRL.
+            //
+            // The state is per SOURCE NODE, so the sticks are issued in
+            // BANK-PHASE order: an interleaved buffer puts page p in bank
+            // `p % bank_period`, so all the sticks of one phase share a node and
+            // one `set_state` covers them. The order is free — `s` indexes both
+            // the source page and its L1 slot, exactly as in the R3 stagger arm,
+            // so the block lands stick-ordered whichever stick is issued first,
+            // and the single barrier below still covers all of them.
+            //
+            // `bank_period` is a pure PERFORMANCE hint, never a correctness
+            // assumption: the coordinate of every address is compared against the
+            // state actually programmed and a mismatch re-programs it. A wrong
+            // period therefore costs a few extra `set_state`s and can never read
+            // the wrong bytes.
+            cb_reserve_back(cb_input_sticks, w);
+            const uint32_t l1_base = get_write_ptr(cb_input_sticks);
+            const uint32_t page0 = r * tile_h;
+            uint32_t state_node = 0;
+            bool have_state = false;
+            for (uint32_t phase = 0; phase < bank_period; ++phase) {
+                for (uint32_t s = phase; s < tile_h; s += bank_period) {
+                    if constexpr (stub_read == 0) {
+                        const uint64_t addr = src.get_noc_addr(page0 + s, byte_offset);
+                        const uint32_t node = static_cast<uint32_t>(addr >> 32);
+                        if (!have_state || node != state_node) {
+                            if constexpr (stateful_one_packet) {
+                                noc_async_read_one_packet_set_state(addr, row_bytes);
+                            } else {
+                                noc_async_read_set_state(addr);
+                            }
+                            state_node = node;
+                            have_state = true;
+                        }
+                        if constexpr (stateful_one_packet) {
+                            noc_async_read_one_packet_with_state(static_cast<uint32_t>(addr), l1_base + s * row_bytes);
+                        } else {
+                            noc_async_read_with_state(static_cast<uint32_t>(addr), l1_base + s * row_bytes, row_bytes);
+                        }
+                    }
+                }
+            }
+            noc_async_read_barrier();
             cb_push_back(cb_input_sticks, w);
         } else if constexpr (barrier_per_block == 1 && stub_read == 0 && stagger_reads == 0) {
             dataflow_kernel_lib::read_sticks_for_tilize<cb_input_sticks>(
