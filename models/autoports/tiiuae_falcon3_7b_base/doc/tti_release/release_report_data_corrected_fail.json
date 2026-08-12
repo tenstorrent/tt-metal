@@ -1,0 +1,495 @@
+{
+    "metadata": {
+        "model_name": "tiiuae/Falcon3-7B-Base",
+        "device": "P300X2",
+        "generated_at": "2026-08-12T22:58:15+00:00",
+        "report_id": "tiiuae__Falcon3-7B-Base_2026-08-12T225815+0000",
+        "workflow": "release",
+        "server_mode": "API",
+        "run_command": "python run.py --workflow release --runtime-model-spec-json /home/mvasiljevic/tt-metal/models/autoports/tiiuae_falcon3_7b_base/doc/tti_release/autoport_release_spec.json --tt-device p300x2 --service-port 8000 --server-url http://127.0.0.1 --no-auth --skip-system-sw-validation --disable-trace-capture",
+        "runtime_model_spec_json": "/home/mvasiljevic/tti-release-cache/falcon3-base-release/workflow_logs/runtime_model_specs/runtime_model_spec_2026-08-12_22-50-29_id_autoport-Falcon3-7B-Base_p300x2_Qxbe2kf5.json",
+        "model_id": "id_autoport-Falcon3-7B-Base_p300x2",
+        "model_repo": "tiiuae/Falcon3-7B-Base",
+        "inference_engine": "vLLM",
+        "tt_metal_commit": "053fb3f6362189a6fae76632143ec8faa569f532",
+        "vllm_commit": "7c99bd3b8",
+        "model_impl": "autoport-falcon3-7b-base"
+    },
+    "sections": [
+        {
+            "kind": "evals",
+            "data": {
+                "task_name": "ifeval",
+                "tolerance": 0.05,
+                "published_score": 34.3,
+                "published_score_ref": "https://huggingface.co/tiiuae/Falcon3-7B-Base#benchmarks",
+                "gpu_reference_score": 34.3,
+                "gpu_reference_score_ref": "https://huggingface.co/tiiuae/Falcon3-7B-Base#benchmarks",
+                "score": 18.66913123844732,
+                "ratio_to_published": 0.5442895404795137,
+                "ratio_to_reference": 0.5442895404795137,
+                "accuracy_check": 3
+            },
+            "title": "LLM Eval \u2014 ifeval",
+            "task_type": "llm",
+            "id": "Falcon3-7B-Base_P300X2",
+            "targets": {
+                "task_name": "ifeval",
+                "tolerance": 0.05,
+                "published_score": 34.3,
+                "published_score_ref": "https://huggingface.co/tiiuae/Falcon3-7B-Base#benchmarks"
+            }
+        },
+        {
+            "kind": "evals",
+            "data": {
+                "task_name": "gpqa_diamond_generative_n_shot",
+                "tolerance": 0.05,
+                "published_score": 35.5,
+                "published_score_ref": "https://huggingface.co/tiiuae/Falcon3-7B-Base#benchmarks",
+                "score": null,
+                "accuracy_check": 3,
+                "error": "no eval results parsed (rc=1)"
+            },
+            "title": "LLM Eval \u2014 gpqa_diamond_generative_n_shot",
+            "task_type": "llm",
+            "id": "Falcon3-7B-Base_P300X2",
+            "targets": {
+                "task_name": "gpqa_diamond_generative_n_shot"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 8,
+                "input_sequence_length": 128,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 200.7652,
+                "p50_ttft": 178.5223,
+                "p99_ttft": 336.2467,
+                "mean_tpot_ms": 16.0969,
+                "mean_e2el_ms": 2245.0662,
+                "tps_decode_throughput": 57.008,
+                "request_throughput": 0.4454,
+                "error_request_count": null,
+                "target_check": 2,
+                "target_checks": {
+                    "functional": {
+                        "ttft": 250.0,
+                        "ttft_ratio": 0.8030608,
+                        "ttft_check": 2,
+                        "tput_user": 50.0,
+                        "tput_user_ratio": 1.2424752592114008,
+                        "tput_user_check": 2,
+                        "tput": 50.0,
+                        "tput_ratio": 1.14016,
+                        "tput_check": 2
+                    },
+                    "complete": {
+                        "ttft": 250.0,
+                        "ttft_ratio": 0.8030608,
+                        "ttft_check": 2,
+                        "tput_user": 50.0,
+                        "tput_user_ratio": 1.2424752592114008,
+                        "tput_user_check": 2,
+                        "tput": 50.0,
+                        "tput_ratio": 1.14016,
+                        "tput_check": 2
+                    },
+                    "target": {
+                        "ttft": 250.0,
+                        "ttft_ratio": 0.8030608,
+                        "ttft_check": 2,
+                        "tput_user": 50.0,
+                        "tput_user_ratio": 1.2424752592114008,
+                        "tput_user_check": 2,
+                        "tput": 50.0,
+                        "tput_ratio": 1.14016,
+                        "tput_check": 2
+                    }
+                }
+            },
+            "title": "vLLM Benchmark Targets \u2014 ISL 128 / OSL 128, concurrency 1",
+            "id": "tiiuae__Falcon3-7B-Base_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "tiiuae/Falcon3-7B-Base",
+                "device": "P300X2",
+                "timestamp": "2026-08-12 22:58:38"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 32,
+                "num_requests": 256,
+                "input_sequence_length": 128,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 481.5564,
+                "p50_ttft": 406.5734,
+                "p99_ttft": 598.5701,
+                "mean_tpot_ms": 16.7152,
+                "mean_e2el_ms": 2604.3911,
+                "tps_decode_throughput": 1572.1192,
+                "request_throughput": 12.2822,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "tiiuae__Falcon3-7B-Base_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "tiiuae/Falcon3-7B-Base",
+                "device": "P300X2",
+                "timestamp": "2026-08-12 22:59:06"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 4,
+                "input_sequence_length": 128,
+                "output_sequence_length": 1024.0,
+                "mean_ttft_ms": 222.5886,
+                "p50_ttft": 185.0317,
+                "p99_ttft": 337.6282,
+                "mean_tpot_ms": 15.1334,
+                "mean_e2el_ms": 15704.0858,
+                "tps_decode_throughput": 65.2049,
+                "request_throughput": 0.0637,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "tiiuae__Falcon3-7B-Base_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "tiiuae/Falcon3-7B-Base",
+                "device": "P300X2",
+                "timestamp": "2026-08-12 23:00:16"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 28,
+                "num_requests": 112,
+                "input_sequence_length": 128,
+                "output_sequence_length": 1024.0,
+                "mean_ttft_ms": 844.0566,
+                "p50_ttft": 580.0301,
+                "p99_ttft": 1207.1519,
+                "mean_tpot_ms": 16.5116,
+                "mean_e2el_ms": 17735.45,
+                "tps_decode_throughput": 1616.5431,
+                "request_throughput": 1.5787,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "tiiuae__Falcon3-7B-Base_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "tiiuae/Falcon3-7B-Base",
+                "device": "P300X2",
+                "timestamp": "2026-08-12 23:01:34"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 4,
+                "input_sequence_length": 1024,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 2813.5041,
+                "p50_ttft": 1364.4729,
+                "p99_ttft": 6989.6868,
+                "mean_tpot_ms": 16.7717,
+                "mean_e2el_ms": 4943.5139,
+                "tps_decode_throughput": 25.8912,
+                "request_throughput": 0.2023,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "tiiuae__Falcon3-7B-Base_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "tiiuae/Falcon3-7B-Base",
+                "device": "P300X2",
+                "timestamp": "2026-08-12 23:02:01"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 28,
+                "num_requests": 112,
+                "input_sequence_length": 1024,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 4300.9688,
+                "p50_ttft": 2859.6625,
+                "p99_ttft": 8813.2666,
+                "mean_tpot_ms": 20.6167,
+                "mean_e2el_ms": 6919.2921,
+                "tps_decode_throughput": 517.8767,
+                "request_throughput": 4.0459,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "tiiuae__Falcon3-7B-Base_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "tiiuae/Falcon3-7B-Base",
+                "device": "P300X2",
+                "timestamp": "2026-08-12 23:02:36"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 4,
+                "input_sequence_length": 2048,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 3001.3408,
+                "p50_ttft": 2973.3026,
+                "p99_ttft": 3085.3368,
+                "mean_tpot_ms": 17.4279,
+                "mean_e2el_ms": 5214.6873,
+                "tps_decode_throughput": 24.5449,
+                "request_throughput": 0.1918,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "tiiuae__Falcon3-7B-Base_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "tiiuae/Falcon3-7B-Base",
+                "device": "P300X2",
+                "timestamp": "2026-08-12 23:03:04"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 15,
+                "num_requests": 60,
+                "input_sequence_length": 2048,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 5850.5058,
+                "p50_ttft": 6049.6316,
+                "p99_ttft": 6059.4202,
+                "mean_tpot_ms": 20.559,
+                "mean_e2el_ms": 8461.4991,
+                "tps_decode_throughput": 226.8884,
+                "request_throughput": 1.7726,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "tiiuae__Falcon3-7B-Base_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "tiiuae/Falcon3-7B-Base",
+                "device": "P300X2",
+                "timestamp": "2026-08-12 23:03:46"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 4,
+                "input_sequence_length": 4096,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 6615.9077,
+                "p50_ttft": 6465.4396,
+                "p99_ttft": 7052.6008,
+                "mean_tpot_ms": 18.7989,
+                "mean_e2el_ms": 9003.3618,
+                "tps_decode_throughput": 14.2164,
+                "request_throughput": 0.1111,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "tiiuae__Falcon3-7B-Base_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "tiiuae/Falcon3-7B-Base",
+                "device": "P300X2",
+                "timestamp": "2026-08-12 23:04:29"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 7,
+                "num_requests": 28,
+                "input_sequence_length": 4096,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 12228.75,
+                "p50_ttft": 12983.2286,
+                "p99_ttft": 13786.7853,
+                "mean_tpot_ms": 26.6345,
+                "mean_e2el_ms": 15611.3271,
+                "tps_decode_throughput": 57.3924,
+                "request_throughput": 0.4484,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "tiiuae__Falcon3-7B-Base_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "tiiuae/Falcon3-7B-Base",
+                "device": "P300X2",
+                "timestamp": "2026-08-12 23:05:39"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 2,
+                "input_sequence_length": 8192,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 15805.1266,
+                "p50_ttft": 15805.1266,
+                "p99_ttft": 16595.3858,
+                "mean_tpot_ms": 21.6317,
+                "mean_e2el_ms": 18552.3544,
+                "tps_decode_throughput": 6.8993,
+                "request_throughput": 0.0539,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "tiiuae__Falcon3-7B-Base_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "tiiuae/Falcon3-7B-Base",
+                "device": "P300X2",
+                "timestamp": "2026-08-12 23:06:24"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 3,
+                "num_requests": 6,
+                "input_sequence_length": 8192,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 24991.7243,
+                "p50_ttft": 29978.2567,
+                "p99_ttft": 29984.5404,
+                "mean_tpot_ms": 60.9018,
+                "mean_e2el_ms": 32726.2554,
+                "tps_decode_throughput": 11.7335,
+                "request_throughput": 0.0917,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "tiiuae__Falcon3-7B-Base_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "tiiuae/Falcon3-7B-Base",
+                "device": "P300X2",
+                "timestamp": "2026-08-12 23:07:36"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 2,
+                "input_sequence_length": 16384,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 39337.59,
+                "p50_ttft": 39337.59,
+                "p99_ttft": 40454.1675,
+                "mean_tpot_ms": 27.0305,
+                "mean_e2el_ms": 42770.4698,
+                "tps_decode_throughput": 2.9927,
+                "request_throughput": 0.0234,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "tiiuae__Falcon3-7B-Base_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "tiiuae/Falcon3-7B-Base",
+                "device": "P300X2",
+                "timestamp": "2026-08-12 23:09:09"
+            }
+        }
+    ],
+    "acceptance_criteria": false,
+    "acceptance_blockers": {
+        "evals:LLM Eval \u2014 ifeval": "Accuracy check failed.",
+        "evals:LLM Eval \u2014 gpqa_diamond_generative_n_shot": "Accuracy check failed."
+    },
+    "acceptance_criteria_metadata": {
+        "enforcement_result": "FAIL",
+        "model_status": "EXPERIMENTAL",
+        "categories": [
+            {
+                "name": "Benchmarks",
+                "status": "PASS",
+                "total": 13,
+                "passed": 1,
+                "failed": 0,
+                "na": 12,
+                "skipped": 0,
+                "blockers": {},
+                "waived": {}
+            },
+            {
+                "name": "Evals",
+                "status": "FAIL",
+                "total": 2,
+                "passed": 0,
+                "failed": 2,
+                "na": 0,
+                "skipped": 0,
+                "blockers": {
+                    "evals:LLM Eval \u2014 ifeval": "Accuracy check failed.",
+                    "evals:LLM Eval \u2014 gpqa_diamond_generative_n_shot": "Accuracy check failed."
+                },
+                "waived": {}
+            },
+            {
+                "name": "Spec Tests",
+                "status": "NA",
+                "total": 0,
+                "passed": 0,
+                "failed": 0,
+                "na": 0,
+                "skipped": 0,
+                "blockers": {},
+                "waived": {}
+            }
+        ]
+    },
+    "acceptance_summary_markdown": "### Acceptance Criteria\n\n- Acceptance status: \u274c `FAIL`\n- Model status: `EXPERIMENTAL`\n- Benchmarks: \u2705 `PASS` (1/13 passed, 12 NA)\n- Evals: \u274c `FAIL` (0/2 passed, 2 failed)\n- Spec Tests: \ud83d\udfe8 `NA` (no blocks present)\n\n#### Blockers\n\n- Accuracy check failed. (2 blocks)\n  - `evals:LLM Eval \u2014 ifeval`\n  - `evals:LLM Eval \u2014 gpqa_diamond_generative_n_shot`"
+}

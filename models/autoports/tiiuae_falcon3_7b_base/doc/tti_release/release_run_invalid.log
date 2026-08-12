@@ -1,0 +1,1397 @@
+2026-08-12 22:50:29,897 - run.py:1027 - INFO: TT-Inference version: 0.19.0
+2026-08-12 22:50:29,897 - run.py:1028 - INFO: TT-Inference SHA: c8509ac20b4c
+2026-08-12 22:50:29,897 - run.py:1029 - INFO:
+============================================================
+tt-inference-server run.py CLI args summary
+============================================================
+
+Model Options:
+  model:                      Falcon3-7B-Base
+  device:                     p300x2
+  impl:                       autoport-falcon3-7b-base
+  engine:                     vLLM
+  workflow:                   release
+  tools:                      vllm
+
+Optional args:
+  dev_mode:                   False
+  docker_server:              False
+  local_server:               False
+  no_auth:                    True
+  tt_metal_python_venv_dir:   None
+  tt_metal_home:              None
+  vllm_dir:                   None
+  service_port:               8000
+  bind_host:                  0.0.0.0
+  docker_override_image:      None
+  docker_interactive:         False
+  device_id:                  None
+  disable_trace_capture:      True
+  override_tt_config:         None
+  vllm_override_args:         None
+  workflow_args:              None
+  limit_samples_mode:         None
+  eval_samples:               None
+  skip_system_sw_validation:  True
+
+Host Storage Options:
+  host_volume:                None
+  host_hf_cache:              None
+  host_weights_dir:           None
+  image_user:                 1000
+
+============================================================
+2026-08-12 22:50:29,898 - run.py:1035 - INFO: Runtime model spec saved to: /home/mvasiljevic/tti-release-cache/falcon3-base-release/workflow_logs/runtime_model_specs/runtime_model_spec_2026-08-12_22-50-29_id_autoport-Falcon3-7B-Base_p300x2_Qxbe2kf5.json
+2026-08-12 22:50:29,898 - validate_setup.py:341 - INFO: Starting local setup validation
+2026-08-12 22:50:29,898 - validate_setup.py:377 - INFO: ✅ validating local setup completed
+2026-08-12 22:50:29,898 - run.py:1149 - INFO: Model Falcon3-7B-Base (model_type=LLM) routes through the workflow engine.
+2026-08-12 22:50:29,898 - runner.py:31 - INFO: → command=release
+2026-08-12 22:50:29,898 - utils.py:272 - INFO: Running command: /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_bootstrap_uv/bin/uv pip install --managed-python --python /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_workflow_run_script/bin/python --index-strategy unsafe-best-match -r /home/mvasiljevic/tt-inference-server/requirements/workflow-run-script.txt
+Using Python 3.10.20 environment at: .workflow_venvs/.venv_workflow_run_script
+Checked 19 packages in 4ms
+2026-08-12 22:50:29,908 - utils.py:272 - INFO: Running command: /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_bootstrap_uv/bin/uv pip install --managed-python --python /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_evals_common/bin/python --index-strategy unsafe-best-match -r /home/mvasiljevic/tt-inference-server/requirements/evals-common.txt
+Using Python 3.10.20 environment at: .workflow_venvs/.venv_evals_common
+Resolved 103 packages in 867ms
+Checked 103 packages in 0.65ms
+2026-08-12 22:50:30,783 - workflow_venvs.py:132 - INFO: sub-dir already exists for llm_vllm: /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_llm_vllm/artifacts
+2026-08-12 22:50:30,784 - utils.py:272 - INFO: Running command: /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_bootstrap_uv/bin/uv pip install --managed-python --python /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_llm_vllm/bin/python --index-strategy unsafe-best-match --override /home/mvasiljevic/tt-inference-server/requirements/llm-vllm-overrides.txt -r /home/mvasiljevic/tt-inference-server/requirements/llm-vllm.txt
+Using Python 3.11.15 environment at: .workflow_venvs/.venv_llm_vllm
+Checked 7 packages in 7ms
+2026-08-12 22:50:30,796 - utils.py:272 - INFO: Running command: /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_workflow_run_script/bin/python /home/mvasiljevic/tt-inference-server/run_workflows.py --model Falcon3-7B-Base --workflow release --device p300x2 --service-port 8000 --runtime-model-spec-json /home/mvasiljevic/tti-release-cache/falcon3-base-release/workflow_logs/runtime_model_specs/runtime_model_spec_2026-08-12_22-50-29_id_autoport-Falcon3-7B-Base_p300x2_Qxbe2kf5.json --output-dir /home/mvasiljevic/tti-release-cache/falcon3-base-release/workflow_logs/reports_output/release --server-url http://127.0.0.1
+2026-08-12 22:50:30,997 [INFO] workflow_module.runner: → command=workflow
+2026-08-12 22:50:30,997 [INFO] workflow.release: === Workflow start: release | model=Falcon3-7B-Base device=P300X2 port=8000 output=/home/mvasiljevic/tti-release-cache/falcon3-base-release/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release ===
+2026-08-12 22:50:30,997 [INFO] workflow.release: --- release: evals ---
+2026-08-12 22:50:31,010 [INFO] workflow.evals: → task=llm_eval
+2026-08-12 22:50:31,011 [INFO] utils.remote_readiness: ✅ Remote OpenAI endpoint ready at http://127.0.0.1:8000/v1/models
+2026-08-12 22:50:31,012 [INFO] test_module.llm_tests.llm_eval_tests: Running eval task=ifeval
+2026-08-12 22:50:31,012 [INFO] test_module.llm_tests.llm_eval_tests: Running command: /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_evals_common/bin/lm_eval --tasks ifeval --model local-completions --model_args model=tiiuae/Falcon3-7B-Base,base_url=http://127.0.0.1:8000/v1/completions,tokenizer_backend=huggingface,num_concurrent=32,max_retries=1 --gen_kwargs stream=False,seed=42 --output_path /home/mvasiljevic/tti-release-cache/falcon3-base-release/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/eval_id_autoport-Falcon3-7B-Base_p300x2 --seed 42 --num_fewshot 0 --batch_size 1 --log_samples --show_config --trust_remote_code --confirm_run_unsafe_code
+2026-08-12 22:50:34,059 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-12:22:50:34 INFO     [_cli.run:376] Selected Tasks: ['ifeval']
+2026-08-12 22:50:35,149 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-12:22:50:35 INFO     [evaluator:210] Setting random seed to 42 | Setting numpy seed to 42 | Setting torch manual seed to 42 | Setting fewshot manual seed to 42
+2026-08-12 22:50:35,149 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-12:22:50:35 WARNING  [evaluator:222] generation_kwargs: {'stream': False, 'seed': 42} specified through cli, these settings will update set parameters in yaml tasks. Ensure 'do_sample=True' for non-greedy decoding!
+2026-08-12 22:50:35,149 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-12:22:50:35 INFO     [evaluator:235] Initializing local-completions model, with arguments: {'model': 'tiiuae/Falcon3-7B-Base', 'base_url': 'http://127.0.0.1:8000/v1/completions', 'tokenizer_backend': 'huggingface', 'num_concurrent': 32, 'max_retries': 1, 'trust_remote_code': True}
+2026-08-12 22:50:35,247 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-12:22:50:35 INFO     [models.api_models:284] Using max length 2048 - 1
+2026-08-12 22:50:35,247 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-12:22:50:35 INFO     [models.api_models:305] Using tokenizer huggingface
+2026-08-12 22:50:39,280 [INFO] test_module.llm_tests.llm_eval_tests: [nltk_data] Downloading package punkt_tab to
+2026-08-12 22:50:39,280 [INFO] test_module.llm_tests.llm_eval_tests: [nltk_data]     /home/mvasiljevic/nltk_data...
+2026-08-12 22:50:39,337 [INFO] test_module.llm_tests.llm_eval_tests: [nltk_data]   Unzipping tokenizers/punkt_tab.zip.
+2026-08-12 22:50:40,271 [INFO] test_module.llm_tests.llm_eval_tests:
+2026-08-12 22:50:40,316 [INFO] test_module.llm_tests.llm_eval_tests: Generating train split:   0%|          | 0/541 [00:00<?, ? examples/s]
+2026-08-12 22:50:40,316 [INFO] test_module.llm_tests.llm_eval_tests: Generating train split: 100%|██████████| 541/541 [00:00<00:00, 11959.03 examples/s]
+2026-08-12 22:50:40,334 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-12:22:50:40 INFO     [tasks:700] Selected tasks:
+2026-08-12 22:50:40,334 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-12:22:50:40 INFO     [tasks:691] Task: ifeval (ifeval/ifeval.yaml)
+2026-08-12 22:50:40,334 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-12:22:50:40 INFO     [evaluator:313] ifeval: Using gen_kwargs: {'until': [], 'do_sample': False, 'temperature': 0.0, 'max_gen_toks': 1280, 'stream': False, 'seed': 42}
+2026-08-12 22:50:40,334 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-12:22:50:40 INFO     [evaluator:328] num_fewshot has been set to 0 for ifeval in its config. Manual configuration will be ignored.
+2026-08-12 22:50:40,335 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-12:22:50:40 INFO     [api.task:310] Building contexts for ifeval on rank 0...
+2026-08-12 22:50:40,347 [INFO] test_module.llm_tests.llm_eval_tests:
+2026-08-12 22:50:40,352 [INFO] test_module.llm_tests.llm_eval_tests: 0%|          | 0/541 [00:00<?, ?it/s]
+2026-08-12 22:50:40,352 [INFO] test_module.llm_tests.llm_eval_tests: 100%|██████████| 541/541 [00:00<00:00, 110430.14it/s]
+2026-08-12 22:50:40,352 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-12:22:50:40 INFO     [evaluator:583] Running generate_until requests
+2026-08-12 22:50:40,407 [INFO] test_module.llm_tests.llm_eval_tests:
+2026-08-12 22:50:52,179 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   0%|          | 0/541 [00:00<?, ?it/s]
+2026-08-12 22:50:52,631 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   0%|          | 1/541 [00:11<1:45:56, 11.77s/it]
+2026-08-12 22:50:53,078 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   0%|          | 2/541 [00:12<45:56,  5.11s/it]
+2026-08-12 22:50:53,910 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   1%|          | 3/541 [00:12<26:44,  2.98s/it]
+2026-08-12 22:50:54,742 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   1%|          | 4/541 [00:13<19:05,  2.13s/it]
+2026-08-12 22:50:55,353 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   1%|          | 6/541 [00:14<10:54,  1.22s/it]
+2026-08-12 22:50:56,055 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   1%|▏         | 7/541 [00:14<09:23,  1.06s/it]
+2026-08-12 22:50:57,130 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   1%|▏         | 8/541 [00:15<08:29,  1.05it/s]
+2026-08-12 22:50:58,604 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   2%|▏         | 10/541 [00:16<06:48,  1.30it/s]
+2026-08-12 22:50:59,037 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   2%|▏         | 11/541 [00:18<08:17,  1.06it/s]
+2026-08-12 22:51:01,103 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   2%|▏         | 12/541 [00:18<07:08,  1.24it/s]
+2026-08-12 22:51:01,976 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   2%|▏         | 13/541 [00:20<10:05,  1.15s/it]
+2026-08-12 22:51:02,409 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   3%|▎         | 14/541 [00:21<09:24,  1.07s/it]
+2026-08-12 22:51:04,144 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   3%|▎         | 15/541 [00:22<07:48,  1.12it/s]
+2026-08-12 22:51:06,202 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   3%|▎         | 16/541 [00:23<09:55,  1.13s/it]
+2026-08-12 22:51:19,245 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   3%|▎         | 17/541 [00:25<12:15,  1.40s/it]
+2026-08-12 22:51:19,920 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   3%|▎         | 18/541 [00:38<42:04,  4.83s/it]
+2026-08-12 22:51:20,389 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   7%|▋         | 38/541 [00:39<04:33,  1.84it/s]
+2026-08-12 22:51:20,933 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   7%|▋         | 39/541 [00:39<04:30,  1.86it/s]
+2026-08-12 22:51:21,707 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   7%|▋         | 40/541 [00:40<04:30,  1.85it/s]
+2026-08-12 22:51:22,425 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   8%|▊         | 41/541 [00:41<04:41,  1.78it/s]
+2026-08-12 22:51:22,847 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   8%|▊         | 42/541 [00:42<04:50,  1.72it/s]
+2026-08-12 22:51:23,378 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   8%|▊         | 43/541 [00:42<04:37,  1.79it/s]
+2026-08-12 22:51:23,580 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   8%|▊         | 44/541 [00:42<04:35,  1.81it/s]
+2026-08-12 22:51:24,382 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   8%|▊         | 45/541 [00:43<03:58,  2.08it/s]
+2026-08-12 22:51:24,836 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   9%|▊         | 46/541 [00:43<04:34,  1.81it/s]
+2026-08-12 22:51:25,650 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   9%|▊         | 47/541 [00:44<04:21,  1.89it/s]
+2026-08-12 22:51:26,135 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   9%|▉         | 48/541 [00:45<04:57,  1.66it/s]
+2026-08-12 22:51:27,502 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   9%|▉         | 49/541 [00:45<04:40,  1.75it/s]
+2026-08-12 22:51:28,023 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   9%|▉         | 50/541 [00:47<06:29,  1.26it/s]
+2026-08-12 22:51:28,463 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   9%|▉         | 51/541 [00:47<05:50,  1.40it/s]
+2026-08-12 22:51:29,327 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  10%|▉         | 52/541 [00:48<05:10,  1.57it/s]
+2026-08-12 22:51:30,102 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  10%|▉         | 53/541 [00:48<05:42,  1.42it/s]
+2026-08-12 22:51:30,952 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  10%|▉         | 54/541 [00:49<05:52,  1.38it/s]
+2026-08-12 22:51:31,652 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  10%|█         | 55/541 [00:50<06:09,  1.31it/s]
+2026-08-12 22:51:32,488 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  10%|█         | 56/541 [00:51<06:00,  1.35it/s]
+2026-08-12 22:51:32,696 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  11%|█         | 57/541 [00:52<06:13,  1.30it/s]
+2026-08-12 22:51:33,315 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  11%|█         | 58/541 [00:52<04:51,  1.66it/s]
+2026-08-12 22:51:33,895 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  11%|█         | 59/541 [00:52<04:52,  1.65it/s]
+2026-08-12 22:51:35,399 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  11%|█         | 60/541 [00:53<04:48,  1.67it/s]
+2026-08-12 22:51:36,346 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  11%|█▏        | 61/541 [00:54<06:57,  1.15it/s]
+2026-08-12 22:51:37,798 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  11%|█▏        | 62/541 [00:55<07:07,  1.12it/s]
+2026-08-12 22:51:38,004 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  12%|█▏        | 63/541 [00:57<08:26,  1.06s/it]
+2026-08-12 22:51:38,899 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  12%|█▏        | 65/541 [00:57<04:54,  1.62it/s]
+2026-08-12 22:51:40,113 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  12%|█▏        | 66/541 [00:58<05:26,  1.46it/s]
+2026-08-12 22:51:41,633 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  12%|█▏        | 67/541 [00:59<06:31,  1.21it/s]
+2026-08-12 22:51:42,619 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  13%|█▎        | 68/541 [01:01<07:59,  1.01s/it]
+2026-08-12 22:51:52,349 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  13%|█▎        | 69/541 [01:02<07:54,  1.01s/it]
+2026-08-12 22:51:52,911 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  13%|█▎        | 70/541 [01:11<27:27,  3.50s/it]
+2026-08-12 22:51:53,380 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  14%|█▍        | 77/541 [01:12<07:28,  1.03it/s]
+2026-08-12 22:51:53,855 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  14%|█▍        | 78/541 [01:12<06:57,  1.11it/s]
+2026-08-12 22:51:54,416 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  15%|█▍        | 79/541 [01:13<06:25,  1.20it/s]
+2026-08-12 22:51:55,152 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  15%|█▍        | 80/541 [01:14<06:01,  1.28it/s]
+2026-08-12 22:51:55,575 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  15%|█▍        | 81/541 [01:14<05:55,  1.29it/s]
+2026-08-12 22:51:56,528 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  15%|█▌        | 82/541 [01:15<05:18,  1.44it/s]
+2026-08-12 22:51:57,435 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  15%|█▌        | 83/541 [01:16<05:46,  1.32it/s]
+2026-08-12 22:51:58,058 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  16%|█▌        | 85/541 [01:17<04:48,  1.58it/s]
+2026-08-12 22:51:58,628 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  16%|█▌        | 86/541 [01:17<04:46,  1.59it/s]
+2026-08-12 22:51:59,312 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  16%|█▌        | 87/541 [01:18<04:39,  1.63it/s]
+2026-08-12 22:52:00,399 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  16%|█▋        | 89/541 [01:18<03:47,  1.99it/s]
+2026-08-12 22:52:01,070 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  17%|█▋        | 90/541 [01:19<04:46,  1.57it/s]
+2026-08-12 22:52:01,597 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  17%|█▋        | 91/541 [01:20<04:49,  1.55it/s]
+2026-08-12 22:52:02,543 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  17%|█▋        | 92/541 [01:21<04:35,  1.63it/s]
+2026-08-12 22:52:03,320 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  17%|█▋        | 93/541 [01:22<05:15,  1.42it/s]
+2026-08-12 22:52:04,174 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  17%|█▋        | 94/541 [01:22<05:23,  1.38it/s]
+2026-08-12 22:52:04,773 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  18%|█▊        | 95/541 [01:23<05:39,  1.31it/s]
+2026-08-12 22:52:05,262 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  18%|█▊        | 96/541 [01:24<05:17,  1.40it/s]
+2026-08-12 22:52:06,101 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  18%|█▊        | 97/541 [01:24<04:47,  1.54it/s]
+2026-08-12 22:52:06,746 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  18%|█▊        | 98/541 [01:25<05:12,  1.42it/s]
+2026-08-12 22:52:07,331 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  18%|█▊        | 100/541 [01:26<03:53,  1.89it/s]
+2026-08-12 22:52:10,507 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  19%|█▊        | 101/541 [01:26<03:59,  1.84it/s]
+2026-08-12 22:52:11,270 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  19%|█▉        | 102/541 [01:30<08:59,  1.23s/it]
+2026-08-12 22:52:11,795 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  19%|█▉        | 103/541 [01:30<08:02,  1.10s/it]
+2026-08-12 22:52:12,375 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  19%|█▉        | 104/541 [01:31<06:51,  1.06it/s]
+2026-08-12 22:52:13,216 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  19%|█▉        | 105/541 [01:31<06:05,  1.19it/s]
+2026-08-12 22:52:13,973 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  20%|█▉        | 106/541 [01:32<06:05,  1.19it/s]
+2026-08-12 22:52:15,107 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  20%|█▉        | 107/541 [01:33<05:53,  1.23it/s]
+2026-08-12 22:52:16,075 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  20%|█▉        | 108/541 [01:34<06:33,  1.10it/s]
+2026-08-12 22:52:17,335 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  20%|██        | 109/541 [01:35<06:40,  1.08it/s]
+2026-08-12 22:52:18,494 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  20%|██        | 110/541 [01:36<07:22,  1.03s/it]
+2026-08-12 22:52:24,522 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  21%|██        | 111/541 [01:38<07:38,  1.07s/it]
+2026-08-12 22:52:24,938 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  21%|██        | 112/541 [01:44<18:12,  2.55s/it]
+2026-08-12 22:52:25,768 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  21%|██        | 113/541 [01:44<13:37,  1.91s/it]
+2026-08-12 22:52:27,522 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  21%|██        | 114/541 [01:45<11:17,  1.59s/it]
+2026-08-12 22:52:28,081 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  21%|██▏       | 115/541 [01:47<11:37,  1.64s/it]
+2026-08-12 22:52:28,568 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  22%|██▏       | 121/541 [01:47<03:40,  1.90it/s]
+2026-08-12 22:52:29,206 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  23%|██▎       | 122/541 [01:48<03:37,  1.92it/s]
+2026-08-12 22:52:29,992 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  23%|██▎       | 123/541 [01:48<03:45,  1.85it/s]
+2026-08-12 22:52:30,946 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  23%|██▎       | 124/541 [01:49<04:05,  1.70it/s]
+2026-08-12 22:52:31,674 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  23%|██▎       | 125/541 [01:50<04:38,  1.49it/s]
+2026-08-12 22:52:32,287 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  23%|██▎       | 127/541 [01:51<03:48,  1.81it/s]
+2026-08-12 22:52:32,851 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  24%|██▎       | 128/541 [01:51<03:53,  1.77it/s]
+2026-08-12 22:52:33,354 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  24%|██▍       | 129/541 [01:52<03:52,  1.77it/s]
+2026-08-12 22:52:34,193 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  24%|██▍       | 131/541 [01:52<02:59,  2.28it/s]
+2026-08-12 22:52:35,108 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  24%|██▍       | 132/541 [01:53<03:35,  1.89it/s]
+2026-08-12 22:52:35,620 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  25%|██▍       | 133/541 [01:54<04:13,  1.61it/s]
+2026-08-12 22:52:36,556 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  25%|██▍       | 135/541 [01:55<03:11,  2.12it/s]
+2026-08-12 22:52:37,331 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  25%|██▌       | 136/541 [01:56<03:53,  1.73it/s]
+2026-08-12 22:52:37,787 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  25%|██▌       | 137/541 [01:56<04:12,  1.60it/s]
+2026-08-12 22:52:38,487 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  26%|██▌       | 138/541 [01:57<03:54,  1.72it/s]
+2026-08-12 22:52:38,913 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  26%|██▌       | 139/541 [01:58<04:06,  1.63it/s]
+2026-08-12 22:52:39,376 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  26%|██▌       | 140/541 [01:58<03:45,  1.78it/s]
+2026-08-12 22:52:39,873 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  26%|██▌       | 141/541 [01:58<03:33,  1.87it/s]
+2026-08-12 22:52:40,709 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  26%|██▌       | 142/541 [01:59<03:28,  1.91it/s]
+2026-08-12 22:52:41,262 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  26%|██▋       | 143/541 [02:00<04:04,  1.63it/s]
+2026-08-12 22:52:41,677 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  27%|██▋       | 144/541 [02:00<03:56,  1.68it/s]
+2026-08-12 22:52:43,266 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  27%|██▋       | 145/541 [02:01<03:34,  1.84it/s]
+2026-08-12 22:52:43,694 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  27%|██▋       | 146/541 [02:02<05:37,  1.17it/s]
+2026-08-12 22:52:44,896 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  27%|██▋       | 147/541 [02:03<04:46,  1.38it/s]
+2026-08-12 22:52:46,581 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  27%|██▋       | 148/541 [02:04<05:41,  1.15it/s]
+2026-08-12 22:52:47,801 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  28%|██▊       | 149/541 [02:06<07:16,  1.11s/it]
+2026-08-12 22:52:48,565 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  28%|██▊       | 150/541 [02:07<07:27,  1.14s/it]
+2026-08-12 22:52:49,285 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  28%|██▊       | 151/541 [02:08<06:42,  1.03s/it]
+2026-08-12 22:52:50,053 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  28%|██▊       | 152/541 [02:08<06:04,  1.07it/s]
+2026-08-12 22:52:51,034 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  28%|██▊       | 153/541 [02:09<05:44,  1.13it/s]
+2026-08-12 22:52:52,308 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  28%|██▊       | 154/541 [02:10<05:54,  1.09it/s]
+2026-08-12 22:52:55,540 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  29%|██▊       | 155/541 [02:11<06:34,  1.02s/it]
+2026-08-12 22:52:59,553 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  29%|██▉       | 156/541 [02:15<10:48,  1.69s/it]
+2026-08-12 22:53:00,399 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  29%|██▉       | 157/541 [02:19<15:15,  2.38s/it]
+2026-08-12 22:53:02,139 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  29%|██▉       | 158/541 [02:19<12:16,  1.92s/it]
+2026-08-12 22:53:02,703 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  29%|██▉       | 159/541 [02:21<11:53,  1.87s/it]
+2026-08-12 22:53:03,190 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  30%|██▉       | 162/541 [02:22<05:49,  1.08it/s]
+2026-08-12 22:53:03,807 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  30%|███       | 163/541 [02:22<05:13,  1.20it/s]
+2026-08-12 22:53:04,352 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  30%|███       | 164/541 [02:23<04:54,  1.28it/s]
+2026-08-12 22:53:04,958 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  30%|███       | 165/541 [02:23<04:31,  1.38it/s]
+2026-08-12 22:53:05,921 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  31%|███       | 166/541 [02:24<04:19,  1.45it/s]
+2026-08-12 22:53:06,605 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  31%|███       | 167/541 [02:25<04:46,  1.31it/s]
+2026-08-12 22:53:07,206 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  31%|███       | 169/541 [02:26<03:35,  1.72it/s]
+2026-08-12 22:53:07,643 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  31%|███▏      | 170/541 [02:26<03:37,  1.71it/s]
+2026-08-12 22:53:08,220 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  32%|███▏      | 171/541 [02:27<03:22,  1.83it/s]
+2026-08-12 22:53:08,735 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  32%|███▏      | 172/541 [02:27<03:24,  1.80it/s]
+2026-08-12 22:53:09,182 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  32%|███▏      | 174/541 [02:28<02:36,  2.34it/s]
+2026-08-12 22:53:09,731 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  32%|███▏      | 175/541 [02:28<02:37,  2.32it/s]
+2026-08-12 22:53:10,316 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  33%|███▎      | 176/541 [02:29<02:48,  2.17it/s]
+2026-08-12 22:53:11,054 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  33%|███▎      | 177/541 [02:29<02:59,  2.03it/s]
+2026-08-12 22:53:11,590 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  33%|███▎      | 178/541 [02:30<03:23,  1.78it/s]
+2026-08-12 22:53:12,110 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  33%|███▎      | 179/541 [02:31<03:20,  1.81it/s]
+2026-08-12 22:53:12,867 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  33%|███▎      | 180/541 [02:31<03:16,  1.84it/s]
+2026-08-12 22:53:13,931 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  33%|███▎      | 181/541 [02:32<03:38,  1.65it/s]
+2026-08-12 22:53:14,644 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  34%|███▎      | 182/541 [02:33<04:25,  1.35it/s]
+2026-08-12 22:53:15,053 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  34%|███▍      | 183/541 [02:34<04:22,  1.37it/s]
+2026-08-12 22:53:15,710 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  34%|███▍      | 184/541 [02:34<03:47,  1.57it/s]
+2026-08-12 22:53:16,190 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  34%|███▍      | 185/541 [02:35<03:48,  1.56it/s]
+2026-08-12 22:53:16,851 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  34%|███▍      | 186/541 [02:35<03:30,  1.68it/s]
+2026-08-12 22:53:17,395 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  35%|███▍      | 187/541 [02:36<03:37,  1.63it/s]
+2026-08-12 22:53:17,823 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  35%|███▍      | 188/541 [02:36<03:29,  1.69it/s]
+2026-08-12 22:53:18,900 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  35%|███▍      | 189/541 [02:37<03:11,  1.84it/s]
+2026-08-12 22:53:19,622 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  35%|███▌      | 190/541 [02:38<04:06,  1.42it/s]
+2026-08-12 22:53:20,211 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  35%|███▌      | 191/541 [02:39<04:08,  1.41it/s]
+2026-08-12 22:53:20,981 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  35%|███▌      | 192/541 [02:39<03:54,  1.49it/s]
+2026-08-12 22:53:21,776 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  36%|███▌      | 193/541 [02:40<04:04,  1.42it/s]
+2026-08-12 22:53:23,452 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  36%|███▌      | 194/541 [02:41<04:13,  1.37it/s]
+2026-08-12 22:53:25,074 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  36%|███▌      | 195/541 [02:43<05:50,  1.01s/it]
+2026-08-12 22:53:25,801 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  36%|███▌      | 196/541 [02:44<06:52,  1.20s/it]
+2026-08-12 22:53:27,168 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  36%|███▋      | 197/541 [02:45<06:03,  1.06s/it]
+2026-08-12 22:53:27,858 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  37%|███▋      | 198/541 [02:46<06:34,  1.15s/it]
+2026-08-12 22:53:28,807 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  37%|███▋      | 199/541 [02:47<05:45,  1.01s/it]
+2026-08-12 22:53:32,035 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  37%|███▋      | 200/541 [02:48<05:38,  1.01it/s]
+2026-08-12 22:53:35,770 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  37%|███▋      | 201/541 [02:51<09:25,  1.66s/it]
+2026-08-12 22:53:35,983 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  38%|███▊      | 203/541 [02:55<09:54,  1.76s/it]
+2026-08-12 22:53:36,564 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  38%|███▊      | 204/541 [02:55<07:43,  1.37s/it]
+2026-08-12 22:53:37,251 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  38%|███▊      | 205/541 [02:56<06:32,  1.17s/it]
+2026-08-12 22:53:39,424 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  38%|███▊      | 206/541 [02:56<05:47,  1.04s/it]
+2026-08-12 22:53:39,980 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  38%|███▊      | 207/541 [02:59<07:32,  1.35s/it]
+2026-08-12 22:53:40,665 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  38%|███▊      | 208/541 [02:59<06:15,  1.13s/it]
+2026-08-12 22:53:41,524 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  39%|███▊      | 209/541 [03:00<05:31,  1.00it/s]
+2026-08-12 22:53:42,234 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  39%|███▉      | 210/541 [03:01<05:17,  1.04it/s]
+2026-08-12 22:53:43,183 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  39%|███▉      | 211/541 [03:01<04:51,  1.13it/s]
+2026-08-12 22:53:43,794 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  39%|███▉      | 212/541 [03:02<04:57,  1.11it/s]
+2026-08-12 22:53:44,237 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  39%|███▉      | 213/541 [03:03<04:27,  1.22it/s]
+2026-08-12 22:53:44,936 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  40%|███▉      | 214/541 [03:03<03:50,  1.42it/s]
+2026-08-12 22:53:45,387 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  40%|███▉      | 215/541 [03:04<03:49,  1.42it/s]
+2026-08-12 22:53:45,933 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  40%|███▉      | 216/541 [03:04<03:24,  1.59it/s]
+2026-08-12 22:53:46,516 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  40%|████      | 217/541 [03:05<03:15,  1.66it/s]
+2026-08-12 22:53:47,324 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  40%|████      | 218/541 [03:06<03:12,  1.67it/s]
+2026-08-12 22:53:47,943 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  40%|████      | 219/541 [03:06<03:32,  1.51it/s]
+2026-08-12 22:53:48,709 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  41%|████      | 220/541 [03:07<03:27,  1.54it/s]
+2026-08-12 22:53:49,500 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  41%|████      | 221/541 [03:08<03:38,  1.46it/s]
+2026-08-12 22:53:49,918 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  41%|████      | 222/541 [03:09<03:48,  1.40it/s]
+2026-08-12 22:53:50,844 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  41%|████      | 223/541 [03:09<03:19,  1.60it/s]
+2026-08-12 22:53:51,721 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  41%|████▏     | 224/541 [03:10<03:47,  1.40it/s]
+2026-08-12 22:53:52,209 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  42%|████▏     | 226/541 [03:11<03:05,  1.70it/s]
+2026-08-12 22:53:52,870 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  42%|████▏     | 227/541 [03:11<02:56,  1.78it/s]
+2026-08-12 22:53:53,393 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  42%|████▏     | 228/541 [03:12<03:04,  1.70it/s]
+2026-08-12 22:53:53,814 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  42%|████▏     | 229/541 [03:12<02:58,  1.75it/s]
+2026-08-12 22:53:54,368 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  43%|████▎     | 230/541 [03:13<02:44,  1.89it/s]
+2026-08-12 22:53:54,821 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  43%|████▎     | 231/541 [03:13<02:46,  1.86it/s]
+2026-08-12 22:53:55,651 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  43%|████▎     | 232/541 [03:14<02:38,  1.95it/s]
+2026-08-12 22:53:56,068 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  43%|████▎     | 233/541 [03:15<03:06,  1.65it/s]
+2026-08-12 22:53:56,850 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  43%|████▎     | 234/541 [03:15<02:48,  1.82it/s]
+2026-08-12 22:53:57,325 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  43%|████▎     | 235/541 [03:16<03:09,  1.62it/s]
+2026-08-12 22:53:58,097 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  44%|████▎     | 236/541 [03:16<02:55,  1.74it/s]
+2026-08-12 22:54:00,189 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  44%|████▍     | 237/541 [03:17<03:12,  1.58it/s]
+2026-08-12 22:54:01,963 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  44%|████▍     | 238/541 [03:19<05:24,  1.07s/it]
+2026-08-12 22:54:02,864 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  44%|████▍     | 240/541 [03:21<04:56,  1.01it/s]
+2026-08-12 22:54:04,242 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  45%|████▍     | 242/541 [03:22<03:51,  1.29it/s]
+2026-08-12 22:54:04,449 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  45%|████▍     | 243/541 [03:23<04:30,  1.10it/s]
+2026-08-12 22:54:05,296 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  45%|████▌     | 244/541 [03:24<03:39,  1.35it/s]
+2026-08-12 22:54:06,100 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  45%|████▌     | 245/541 [03:24<03:46,  1.30it/s]
+2026-08-12 22:54:07,496 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  45%|████▌     | 246/541 [03:25<03:49,  1.29it/s]
+2026-08-12 22:54:09,822 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  46%|████▌     | 247/541 [03:27<04:38,  1.06it/s]
+2026-08-12 22:54:10,027 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  46%|████▌     | 248/541 [03:29<06:31,  1.34s/it]
+2026-08-12 22:54:12,498 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  46%|████▌     | 249/541 [03:29<04:55,  1.01s/it]
+2026-08-12 22:54:13,620 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  46%|████▌     | 250/541 [03:32<06:58,  1.44s/it]
+2026-08-12 22:54:14,475 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  46%|████▋     | 251/541 [03:33<06:29,  1.34s/it]
+2026-08-12 22:54:15,081 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  47%|████▋     | 252/541 [03:34<05:46,  1.20s/it]
+2026-08-12 22:54:15,774 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  47%|████▋     | 254/541 [03:34<03:46,  1.27it/s]
+2026-08-12 22:54:16,786 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  47%|████▋     | 255/541 [03:35<03:38,  1.31it/s]
+2026-08-12 22:54:18,475 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  47%|████▋     | 256/541 [03:36<03:56,  1.21it/s]
+2026-08-12 22:54:20,567 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  48%|████▊     | 257/541 [03:38<05:01,  1.06s/it]
+2026-08-12 22:54:21,174 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  48%|████▊     | 258/541 [03:40<06:22,  1.35s/it]
+2026-08-12 22:54:21,617 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  48%|████▊     | 259/541 [03:40<05:20,  1.14s/it]
+2026-08-12 22:54:22,320 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  48%|████▊     | 260/541 [03:41<04:23,  1.07it/s]
+2026-08-12 22:54:22,949 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  48%|████▊     | 261/541 [03:41<04:03,  1.15it/s]
+2026-08-12 22:54:23,540 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  48%|████▊     | 262/541 [03:42<03:42,  1.25it/s]
+2026-08-12 22:54:24,360 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  49%|████▊     | 263/541 [03:43<03:24,  1.36it/s]
+2026-08-12 22:54:24,977 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  49%|████▉     | 264/541 [03:43<03:30,  1.31it/s]
+2026-08-12 22:54:25,927 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  49%|████▉     | 265/541 [03:44<03:18,  1.39it/s]
+2026-08-12 22:54:26,362 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  49%|████▉     | 266/541 [03:45<03:36,  1.27it/s]
+2026-08-12 22:54:26,915 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  49%|████▉     | 267/541 [03:45<03:06,  1.47it/s]
+2026-08-12 22:54:27,327 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  50%|████▉     | 268/541 [03:46<02:55,  1.55it/s]
+2026-08-12 22:54:27,984 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  50%|████▉     | 269/541 [03:46<02:36,  1.74it/s]
+2026-08-12 22:54:28,618 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  50%|████▉     | 270/541 [03:47<02:42,  1.67it/s]
+2026-08-12 22:54:29,442 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  50%|█████     | 271/541 [03:48<02:44,  1.64it/s]
+2026-08-12 22:54:30,501 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  50%|█████     | 273/541 [03:49<02:18,  1.93it/s]
+2026-08-12 22:54:31,409 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  51%|█████     | 274/541 [03:50<02:54,  1.53it/s]
+2026-08-12 22:54:31,830 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  51%|█████     | 275/541 [03:51<03:11,  1.39it/s]
+2026-08-12 22:54:33,128 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  51%|█████     | 276/541 [03:51<02:49,  1.57it/s]
+2026-08-12 22:54:34,010 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  51%|█████     | 277/541 [03:52<03:37,  1.22it/s]
+2026-08-12 22:54:35,155 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  51%|█████▏    | 278/541 [03:53<03:40,  1.19it/s]
+2026-08-12 22:54:35,970 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  52%|█████▏    | 279/541 [03:54<04:03,  1.08it/s]
+2026-08-12 22:54:36,616 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  52%|█████▏    | 280/541 [03:55<03:53,  1.12it/s]
+2026-08-12 22:54:37,962 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  52%|█████▏    | 282/541 [03:56<02:44,  1.58it/s]
+2026-08-12 22:54:38,620 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  52%|█████▏    | 283/541 [03:57<03:28,  1.24it/s]
+2026-08-12 22:54:39,770 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  53%|█████▎    | 285/541 [03:58<02:36,  1.64it/s]
+2026-08-12 22:54:40,428 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  53%|█████▎    | 286/541 [03:59<03:07,  1.36it/s]
+2026-08-12 22:54:41,561 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  53%|█████▎    | 287/541 [04:00<03:01,  1.40it/s]
+2026-08-12 22:54:42,266 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  53%|█████▎    | 288/541 [04:01<03:28,  1.21it/s]
+2026-08-12 22:54:43,368 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  53%|█████▎    | 289/541 [04:01<03:19,  1.26it/s]
+2026-08-12 22:54:44,567 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  54%|█████▎    | 290/541 [04:02<03:40,  1.14it/s]
+2026-08-12 22:54:46,077 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  54%|█████▍    | 291/541 [04:04<04:02,  1.03it/s]
+2026-08-12 22:54:48,377 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  54%|█████▍    | 292/541 [04:05<04:40,  1.13s/it]
+2026-08-12 22:54:49,509 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  54%|█████▍    | 293/541 [04:07<06:04,  1.47s/it]
+2026-08-12 22:54:50,352 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  54%|█████▍    | 294/541 [04:09<05:38,  1.37s/it]
+2026-08-12 22:54:51,113 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  55%|█████▍    | 295/541 [04:09<04:58,  1.21s/it]
+2026-08-12 22:54:52,126 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  55%|█████▍    | 297/541 [04:10<03:22,  1.20it/s]
+2026-08-12 22:54:53,560 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  55%|█████▌    | 298/541 [04:11<03:32,  1.14it/s]
+2026-08-12 22:54:54,329 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  55%|█████▌    | 299/541 [04:13<04:07,  1.02s/it]
+2026-08-12 22:54:56,248 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  55%|█████▌    | 300/541 [04:13<03:49,  1.05it/s]
+2026-08-12 22:54:56,847 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  56%|█████▌    | 301/541 [04:15<04:53,  1.22s/it]
+2026-08-12 22:54:57,288 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  56%|█████▌    | 302/541 [04:16<04:09,  1.04s/it]
+2026-08-12 22:54:58,474 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  56%|█████▌    | 303/541 [04:16<03:27,  1.15it/s]
+2026-08-12 22:54:59,299 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  56%|█████▌    | 304/541 [04:18<03:48,  1.04it/s]
+2026-08-12 22:54:59,921 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  56%|█████▋    | 305/541 [04:18<03:37,  1.08it/s]
+2026-08-12 22:55:00,944 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  57%|█████▋    | 306/541 [04:19<03:15,  1.20it/s]
+2026-08-12 22:55:01,493 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  57%|█████▋    | 307/541 [04:20<03:28,  1.12it/s]
+2026-08-12 22:55:01,907 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  57%|█████▋    | 308/541 [04:21<03:03,  1.27it/s]
+2026-08-12 22:55:02,566 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  57%|█████▋    | 309/541 [04:21<02:36,  1.48it/s]
+2026-08-12 22:55:03,187 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  57%|█████▋    | 310/541 [04:22<02:35,  1.49it/s]
+2026-08-12 22:55:03,949 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  57%|█████▋    | 311/541 [04:22<02:30,  1.52it/s]
+2026-08-12 22:55:04,382 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  58%|█████▊    | 312/541 [04:23<02:37,  1.45it/s]
+2026-08-12 22:55:05,439 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  58%|█████▊    | 313/541 [04:23<02:19,  1.64it/s]
+2026-08-12 22:55:05,960 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  58%|█████▊    | 314/541 [04:25<02:49,  1.34it/s]
+2026-08-12 22:55:06,535 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  58%|█████▊    | 315/541 [04:25<02:33,  1.48it/s]
+2026-08-12 22:55:07,069 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  58%|█████▊    | 316/541 [04:26<02:25,  1.55it/s]
+2026-08-12 22:55:08,433 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  59%|█████▊    | 317/541 [04:26<02:17,  1.63it/s]
+2026-08-12 22:55:09,053 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  59%|█████▉    | 318/541 [04:28<03:06,  1.19it/s]
+2026-08-12 22:55:09,711 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  59%|█████▉    | 319/541 [04:28<02:51,  1.29it/s]
+2026-08-12 22:55:11,298 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  59%|█████▉    | 320/541 [04:29<02:43,  1.35it/s]
+2026-08-12 22:55:12,923 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  59%|█████▉    | 321/541 [04:30<03:38,  1.01it/s]
+2026-08-12 22:55:13,481 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  60%|█████▉    | 323/541 [04:32<03:18,  1.10it/s]
+2026-08-12 22:55:14,148 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  60%|██████    | 325/541 [04:33<02:22,  1.52it/s]
+2026-08-12 22:55:14,569 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  60%|██████    | 326/541 [04:33<02:22,  1.51it/s]
+2026-08-12 22:55:15,758 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  60%|██████    | 327/541 [04:34<02:09,  1.66it/s]
+2026-08-12 22:55:16,412 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  61%|██████    | 328/541 [04:35<02:40,  1.33it/s]
+2026-08-12 22:55:17,260 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  61%|██████    | 329/541 [04:36<02:34,  1.38it/s]
+2026-08-12 22:55:17,952 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  61%|██████    | 330/541 [04:36<02:40,  1.32it/s]
+2026-08-12 22:55:19,545 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  61%|██████    | 331/541 [04:37<02:35,  1.35it/s]
+2026-08-12 22:55:19,756 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  61%|██████▏   | 332/541 [04:39<03:26,  1.01it/s]
+2026-08-12 22:55:20,577 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  62%|██████▏   | 333/541 [04:39<02:38,  1.32it/s]
+2026-08-12 22:55:22,070 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  62%|██████▏   | 334/541 [04:40<02:41,  1.29it/s]
+2026-08-12 22:55:24,349 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  62%|██████▏   | 335/541 [04:41<03:23,  1.01it/s]
+2026-08-12 22:55:24,557 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  62%|██████▏   | 336/541 [04:43<04:41,  1.37s/it]
+2026-08-12 22:55:25,609 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  62%|██████▏   | 337/541 [04:44<03:29,  1.03s/it]
+2026-08-12 22:55:26,203 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  62%|██████▏   | 338/541 [04:45<03:29,  1.03s/it]
+2026-08-12 22:55:27,032 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  63%|██████▎   | 339/541 [04:45<03:02,  1.11it/s]
+2026-08-12 22:55:27,776 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  63%|██████▎   | 340/541 [04:46<02:56,  1.14it/s]
+2026-08-12 22:55:28,795 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  63%|██████▎   | 342/541 [04:47<02:08,  1.55it/s]
+2026-08-12 22:55:30,621 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  63%|██████▎   | 343/541 [04:48<02:26,  1.35it/s]
+2026-08-12 22:55:32,506 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  64%|██████▎   | 344/541 [04:50<03:21,  1.02s/it]
+2026-08-12 22:55:33,103 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  64%|██████▍   | 345/541 [04:52<04:06,  1.26s/it]
+2026-08-12 22:55:33,536 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  64%|██████▍   | 346/541 [04:52<03:29,  1.07s/it]
+2026-08-12 22:55:34,289 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  64%|██████▍   | 347/541 [04:53<02:52,  1.12it/s]
+2026-08-12 22:55:35,101 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  64%|██████▍   | 348/541 [04:53<02:44,  1.18it/s]
+2026-08-12 22:55:35,922 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  65%|██████▍   | 349/541 [04:54<02:41,  1.19it/s]
+2026-08-12 22:55:37,180 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  65%|██████▍   | 350/541 [04:55<02:39,  1.20it/s]
+2026-08-12 22:55:38,570 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  65%|██████▌   | 352/541 [04:56<02:19,  1.35it/s]
+2026-08-12 22:55:39,106 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  65%|██████▌   | 353/541 [04:58<02:49,  1.11it/s]
+2026-08-12 22:55:39,538 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  65%|██████▌   | 354/541 [04:58<02:30,  1.24it/s]
+2026-08-12 22:55:40,489 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  66%|██████▌   | 355/541 [04:59<02:10,  1.42it/s]
+2026-08-12 22:55:41,128 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  66%|██████▌   | 356/541 [05:00<02:23,  1.29it/s]
+2026-08-12 22:55:41,713 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  66%|██████▌   | 357/541 [05:00<02:15,  1.36it/s]
+2026-08-12 22:55:42,552 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  66%|██████▌   | 358/541 [05:01<02:06,  1.45it/s]
+2026-08-12 22:55:43,507 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  66%|██████▋   | 359/541 [05:02<02:13,  1.36it/s]
+2026-08-12 22:55:44,538 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  67%|██████▋   | 360/541 [05:03<02:24,  1.25it/s]
+2026-08-12 22:55:46,130 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  67%|██████▋   | 361/541 [05:04<02:36,  1.15it/s]
+2026-08-12 22:55:47,762 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  67%|██████▋   | 362/541 [05:05<03:13,  1.08s/it]
+2026-08-12 22:55:48,853 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  67%|██████▋   | 363/541 [05:07<03:41,  1.25s/it]
+2026-08-12 22:55:49,500 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  67%|██████▋   | 365/541 [05:08<02:42,  1.08it/s]
+2026-08-12 22:55:50,423 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  68%|██████▊   | 366/541 [05:09<02:29,  1.17it/s]
+2026-08-12 22:55:51,085 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  68%|██████▊   | 367/541 [05:10<02:31,  1.14it/s]
+2026-08-12 22:55:51,761 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  68%|██████▊   | 368/541 [05:10<02:21,  1.23it/s]
+2026-08-12 22:55:52,577 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  68%|██████▊   | 369/541 [05:11<02:13,  1.29it/s]
+2026-08-12 22:55:52,999 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  68%|██████▊   | 370/541 [05:12<02:14,  1.27it/s]
+2026-08-12 22:55:54,621 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  69%|██████▊   | 371/541 [05:12<01:55,  1.47it/s]
+2026-08-12 22:55:55,462 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  69%|██████▉   | 372/541 [05:14<02:41,  1.05it/s]
+2026-08-12 22:55:56,955 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  69%|██████▉   | 374/541 [05:15<01:59,  1.40it/s]
+2026-08-12 22:55:57,165 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  69%|██████▉   | 375/541 [05:16<02:30,  1.11it/s]
+2026-08-12 22:55:57,865 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  70%|██████▉   | 377/541 [05:16<01:34,  1.74it/s]
+2026-08-12 22:55:58,940 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  70%|██████▉   | 378/541 [05:17<01:38,  1.66it/s]
+2026-08-12 22:55:59,474 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  70%|███████   | 379/541 [05:18<01:56,  1.39it/s]
+2026-08-12 22:56:00,705 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  70%|███████   | 380/541 [05:19<01:48,  1.49it/s]
+2026-08-12 22:56:01,479 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  70%|███████   | 381/541 [05:20<02:11,  1.22it/s]
+2026-08-12 22:56:01,955 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  71%|███████   | 382/541 [05:21<02:08,  1.24it/s]
+2026-08-12 22:56:02,540 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  71%|███████   | 383/541 [05:21<01:52,  1.40it/s]
+2026-08-12 22:56:03,367 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  71%|███████   | 384/541 [05:22<01:46,  1.48it/s]
+2026-08-12 22:56:04,110 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  71%|███████   | 385/541 [05:22<01:52,  1.39it/s]
+2026-08-12 22:56:05,116 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  72%|███████▏  | 387/541 [05:23<01:26,  1.78it/s]
+2026-08-12 22:56:06,937 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  72%|███████▏  | 388/541 [05:24<01:42,  1.49it/s]
+2026-08-12 22:56:08,810 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  72%|███████▏  | 389/541 [05:26<02:27,  1.03it/s]
+2026-08-12 22:56:09,020 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  72%|███████▏  | 390/541 [05:28<03:03,  1.21s/it]
+2026-08-12 22:56:09,774 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  72%|███████▏  | 391/541 [05:28<02:20,  1.07it/s]
+2026-08-12 22:56:10,213 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  72%|███████▏  | 392/541 [05:29<02:11,  1.13it/s]
+2026-08-12 22:56:10,955 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  73%|███████▎  | 393/541 [05:29<01:51,  1.33it/s]
+2026-08-12 22:56:11,750 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  73%|███████▎  | 394/541 [05:30<01:50,  1.33it/s]
+2026-08-12 22:56:12,867 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  73%|███████▎  | 395/541 [05:31<01:51,  1.31it/s]
+2026-08-12 22:56:13,727 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  73%|███████▎  | 396/541 [05:32<02:05,  1.15it/s]
+2026-08-12 22:56:14,183 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  73%|███████▎  | 397/541 [05:33<02:04,  1.15it/s]
+2026-08-12 22:56:15,805 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  74%|███████▎  | 398/541 [05:33<01:46,  1.34it/s]
+2026-08-12 22:56:17,247 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  74%|███████▍  | 399/541 [05:35<02:22,  1.01s/it]
+2026-08-12 22:56:17,849 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  74%|███████▍  | 400/541 [05:36<02:40,  1.14s/it]
+2026-08-12 22:56:18,445 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  74%|███████▍  | 401/541 [05:37<02:16,  1.02it/s]
+2026-08-12 22:56:19,063 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  74%|███████▍  | 402/541 [05:38<01:59,  1.16it/s]
+2026-08-12 22:56:19,774 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  74%|███████▍  | 403/541 [05:38<01:48,  1.27it/s]
+2026-08-12 22:56:20,951 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  75%|███████▍  | 404/541 [05:39<01:44,  1.31it/s]
+2026-08-12 22:56:22,537 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  75%|███████▌  | 406/541 [05:40<01:32,  1.46it/s]
+2026-08-12 22:56:24,163 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  75%|███████▌  | 407/541 [05:42<02:01,  1.10it/s]
+2026-08-12 22:56:25,369 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  75%|███████▌  | 408/541 [05:43<02:25,  1.10s/it]
+2026-08-12 22:56:26,290 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  76%|███████▌  | 409/541 [05:44<02:28,  1.13s/it]
+2026-08-12 22:56:27,730 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  76%|███████▌  | 410/541 [05:45<02:19,  1.07s/it]
+2026-08-12 22:56:28,144 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  76%|███████▌  | 411/541 [05:47<02:32,  1.17s/it]
+2026-08-12 22:56:29,764 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  76%|███████▌  | 412/541 [05:47<02:03,  1.05it/s]
+2026-08-12 22:56:31,584 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  76%|███████▋  | 413/541 [05:49<02:27,  1.15s/it]
+2026-08-12 22:56:32,311 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  77%|███████▋  | 414/541 [05:51<02:51,  1.35s/it]
+2026-08-12 22:56:33,401 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  77%|███████▋  | 416/541 [05:51<01:52,  1.11it/s]
+2026-08-12 22:56:33,937 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  77%|███████▋  | 417/541 [05:52<01:57,  1.06it/s]
+2026-08-12 22:56:34,673 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  77%|███████▋  | 418/541 [05:53<01:43,  1.19it/s]
+2026-08-12 22:56:35,546 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  77%|███████▋  | 419/541 [05:54<01:38,  1.23it/s]
+2026-08-12 22:56:36,321 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  78%|███████▊  | 420/541 [05:55<01:40,  1.21it/s]
+2026-08-12 22:56:36,786 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  78%|███████▊  | 421/541 [05:55<01:37,  1.23it/s]
+2026-08-12 22:56:37,362 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  78%|███████▊  | 422/541 [05:56<01:24,  1.40it/s]
+2026-08-12 22:56:38,192 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  78%|███████▊  | 423/541 [05:56<01:19,  1.49it/s]
+2026-08-12 22:56:39,079 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  78%|███████▊  | 424/541 [05:57<01:24,  1.39it/s]
+2026-08-12 22:56:39,949 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  79%|███████▊  | 425/541 [05:58<01:29,  1.30it/s]
+2026-08-12 22:56:41,769 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  79%|███████▊  | 426/541 [05:59<01:31,  1.25it/s]
+2026-08-12 22:56:43,305 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  79%|███████▉  | 427/541 [06:01<02:05,  1.10s/it]
+2026-08-12 22:56:44,041 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  79%|███████▉  | 428/541 [06:02<02:19,  1.23s/it]
+2026-08-12 22:56:44,814 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  79%|███████▉  | 429/541 [06:03<02:01,  1.08s/it]
+2026-08-12 22:56:45,252 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  80%|███████▉  | 431/541 [06:04<01:23,  1.31it/s]
+2026-08-12 22:56:46,425 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  80%|███████▉  | 432/541 [06:04<01:14,  1.47it/s]
+2026-08-12 22:56:48,135 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  80%|████████  | 433/541 [06:06<01:27,  1.23it/s]
+2026-08-12 22:56:49,699 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  80%|████████  | 435/541 [06:07<01:27,  1.21it/s]
+2026-08-12 22:56:50,140 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  81%|████████  | 436/541 [06:09<01:45,  1.00s/it]
+2026-08-12 22:56:51,283 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  81%|████████  | 437/541 [06:09<01:29,  1.16it/s]
+2026-08-12 22:56:51,494 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  81%|████████  | 438/541 [06:10<01:36,  1.07it/s]
+2026-08-12 22:56:52,156 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  81%|████████  | 439/541 [06:11<01:15,  1.36it/s]
+2026-08-12 22:56:52,692 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  81%|████████▏ | 440/541 [06:11<01:12,  1.40it/s]
+2026-08-12 22:56:53,307 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  82%|████████▏ | 441/541 [06:12<01:06,  1.50it/s]
+2026-08-12 22:56:53,887 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  82%|████████▏ | 442/541 [06:12<01:04,  1.54it/s]
+2026-08-12 22:56:54,513 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  82%|████████▏ | 443/541 [06:13<01:01,  1.59it/s]
+2026-08-12 22:56:55,205 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  82%|████████▏ | 444/541 [06:14<01:00,  1.59it/s]
+2026-08-12 22:56:56,200 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  82%|████████▏ | 445/541 [06:14<01:02,  1.55it/s]
+2026-08-12 22:56:56,709 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  83%|████████▎ | 447/541 [06:15<00:54,  1.73it/s]
+2026-08-12 22:56:57,195 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  83%|████████▎ | 448/541 [06:16<00:52,  1.78it/s]
+2026-08-12 22:56:57,870 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  83%|████████▎ | 449/541 [06:16<00:49,  1.85it/s]
+2026-08-12 22:56:58,287 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  83%|████████▎ | 450/541 [06:17<00:52,  1.73it/s]
+2026-08-12 22:56:59,027 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  83%|████████▎ | 451/541 [06:17<00:47,  1.88it/s]
+2026-08-12 22:57:00,895 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  84%|████████▎ | 452/541 [06:18<00:52,  1.69it/s]
+2026-08-12 22:57:01,103 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  84%|████████▎ | 453/541 [06:20<01:24,  1.04it/s]
+2026-08-12 22:57:02,450 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  84%|████████▍ | 454/541 [06:20<01:04,  1.35it/s]
+2026-08-12 22:57:02,657 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  84%|████████▍ | 455/541 [06:22<01:19,  1.09it/s]
+2026-08-12 22:57:03,731 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  84%|████████▍ | 456/541 [06:22<01:00,  1.41it/s]
+2026-08-12 22:57:05,152 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  85%|████████▍ | 458/541 [06:23<00:52,  1.59it/s]
+2026-08-12 22:57:05,576 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  85%|████████▍ | 459/541 [06:24<01:07,  1.21it/s]
+2026-08-12 22:57:07,185 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  85%|████████▌ | 460/541 [06:25<00:58,  1.39it/s]
+2026-08-12 22:57:09,152 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  85%|████████▌ | 461/541 [06:26<01:16,  1.04it/s]
+2026-08-12 22:57:10,412 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  86%|████████▌ | 463/541 [06:28<01:15,  1.03it/s]
+2026-08-12 22:57:10,936 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  86%|████████▌ | 465/541 [06:30<01:03,  1.19it/s]
+2026-08-12 22:57:11,660 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  86%|████████▌ | 466/541 [06:30<00:57,  1.30it/s]
+2026-08-12 22:57:12,685 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  86%|████████▋ | 467/541 [06:31<00:56,  1.31it/s]
+2026-08-12 22:57:13,560 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  87%|████████▋ | 469/541 [06:32<00:47,  1.51it/s]
+2026-08-12 22:57:14,140 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  87%|████████▋ | 470/541 [06:33<00:50,  1.41it/s]
+2026-08-12 22:57:14,747 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  87%|████████▋ | 471/541 [06:33<00:47,  1.48it/s]
+2026-08-12 22:57:15,705 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  87%|████████▋ | 472/541 [06:34<00:45,  1.52it/s]
+2026-08-12 22:57:17,683 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  87%|████████▋ | 473/541 [06:35<00:50,  1.35it/s]
+2026-08-12 22:57:19,735 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  88%|████████▊ | 474/541 [06:37<01:12,  1.08s/it]
+2026-08-12 22:57:19,951 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  88%|████████▊ | 475/541 [06:39<01:29,  1.36s/it]
+2026-08-12 22:57:20,837 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  88%|████████▊ | 476/541 [06:39<01:06,  1.03s/it]
+2026-08-12 22:57:21,442 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  88%|████████▊ | 477/541 [06:40<01:03,  1.01it/s]
+2026-08-12 22:57:21,880 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  88%|████████▊ | 478/541 [06:41<00:55,  1.14it/s]
+2026-08-12 22:57:22,919 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  89%|████████▊ | 479/541 [06:41<00:46,  1.34it/s]
+2026-08-12 22:57:23,421 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  89%|████████▊ | 480/541 [06:42<00:50,  1.20it/s]
+2026-08-12 22:57:24,163 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  89%|████████▉ | 481/541 [06:43<00:44,  1.36it/s]
+2026-08-12 22:57:24,376 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  89%|████████▉ | 482/541 [06:43<00:43,  1.36it/s]
+2026-08-12 22:57:25,395 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  89%|████████▉ | 483/541 [06:43<00:33,  1.72it/s]
+2026-08-12 22:57:26,244 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  89%|████████▉ | 484/541 [06:44<00:40,  1.41it/s]
+2026-08-12 22:57:26,954 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  90%|████████▉ | 485/541 [06:45<00:42,  1.33it/s]
+2026-08-12 22:57:28,421 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  90%|████████▉ | 486/541 [06:46<00:40,  1.35it/s]
+2026-08-12 22:57:29,394 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  90%|█████████ | 487/541 [06:48<00:51,  1.04it/s]
+2026-08-12 22:57:30,485 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  90%|█████████ | 488/541 [06:48<00:51,  1.04it/s]
+2026-08-12 22:57:31,317 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  91%|█████████ | 490/541 [06:50<00:39,  1.30it/s]
+2026-08-12 22:57:31,890 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  91%|█████████ | 491/541 [06:50<00:39,  1.27it/s]
+2026-08-12 22:57:33,278 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  91%|█████████ | 492/541 [06:51<00:35,  1.37it/s]
+2026-08-12 22:57:33,943 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  91%|█████████ | 493/541 [06:52<00:43,  1.10it/s]
+2026-08-12 22:57:34,371 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  91%|█████████▏| 494/541 [06:53<00:39,  1.19it/s]
+2026-08-12 22:57:35,119 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  91%|█████████▏| 495/541 [06:53<00:33,  1.38it/s]
+2026-08-12 22:57:36,996 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  92%|█████████▏| 496/541 [06:54<00:32,  1.37it/s]
+2026-08-12 22:57:38,351 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  92%|█████████▏| 497/541 [06:56<00:46,  1.07s/it]
+2026-08-12 22:57:39,435 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  92%|█████████▏| 499/541 [06:57<00:37,  1.12it/s]
+2026-08-12 22:57:40,502 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  93%|█████████▎| 501/541 [06:59<00:30,  1.33it/s]
+2026-08-12 22:57:41,215 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  93%|█████████▎| 502/541 [07:00<00:32,  1.22it/s]
+2026-08-12 22:57:42,029 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  93%|█████████▎| 503/541 [07:00<00:30,  1.26it/s]
+2026-08-12 22:57:43,253 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  93%|█████████▎| 504/541 [07:01<00:29,  1.25it/s]
+2026-08-12 22:57:45,950 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  93%|█████████▎| 505/541 [07:02<00:32,  1.09it/s]
+2026-08-12 22:57:46,480 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  94%|█████████▎| 507/541 [07:05<00:37,  1.10s/it]
+2026-08-12 22:57:47,219 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  94%|█████████▍| 508/541 [07:06<00:31,  1.03it/s]
+2026-08-12 22:57:48,087 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  94%|█████████▍| 509/541 [07:06<00:29,  1.10it/s]
+2026-08-12 22:57:48,606 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  94%|█████████▍| 510/541 [07:07<00:27,  1.11it/s]
+2026-08-12 22:57:49,067 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  94%|█████████▍| 511/541 [07:08<00:23,  1.26it/s]
+2026-08-12 22:57:49,662 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  95%|█████████▍| 512/541 [07:08<00:20,  1.43it/s]
+2026-08-12 22:57:51,266 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  95%|█████████▍| 513/541 [07:09<00:18,  1.49it/s]
+2026-08-12 22:57:52,949 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  95%|█████████▌| 514/541 [07:10<00:25,  1.06it/s]
+2026-08-12 22:57:54,409 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  95%|█████████▌| 515/541 [07:12<00:30,  1.16s/it]
+2026-08-12 22:57:54,780 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  95%|█████████▌| 516/541 [07:14<00:31,  1.25s/it]
+2026-08-12 22:57:55,278 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  96%|█████████▌| 517/541 [07:14<00:23,  1.01it/s]
+2026-08-12 22:57:55,761 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  96%|█████████▌| 519/541 [07:14<00:14,  1.54it/s]
+2026-08-12 22:57:57,196 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  96%|█████████▌| 520/541 [07:15<00:12,  1.65it/s]
+2026-08-12 22:57:57,790 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  96%|█████████▋| 521/541 [07:16<00:16,  1.21it/s]
+2026-08-12 22:57:58,329 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  96%|█████████▋| 522/541 [07:17<00:14,  1.31it/s]
+2026-08-12 22:57:58,786 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  97%|█████████▋| 524/541 [07:17<00:09,  1.83it/s]
+2026-08-12 22:57:59,001 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  97%|█████████▋| 525/541 [07:18<00:08,  1.90it/s]
+2026-08-12 22:57:59,977 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  97%|█████████▋| 526/541 [07:18<00:06,  2.24it/s]
+2026-08-12 22:58:00,267 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  97%|█████████▋| 527/541 [07:19<00:08,  1.70it/s]
+2026-08-12 22:58:00,682 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  98%|█████████▊| 528/541 [07:19<00:06,  1.98it/s]
+2026-08-12 22:58:02,117 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  98%|█████████▊| 530/541 [07:20<00:04,  2.67it/s]
+2026-08-12 22:58:02,897 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  98%|█████████▊| 531/541 [07:21<00:06,  1.59it/s]
+2026-08-12 22:58:03,410 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  99%|█████████▊| 533/541 [07:22<00:04,  1.88it/s]
+2026-08-12 22:58:04,401 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  99%|█████████▊| 534/541 [07:23<00:03,  1.90it/s]
+2026-08-12 22:58:04,819 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  99%|█████████▉| 535/541 [07:23<00:03,  1.56it/s]
+2026-08-12 22:58:05,607 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  99%|█████████▉| 536/541 [07:24<00:02,  1.72it/s]
+2026-08-12 22:58:07,758 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  99%|█████████▉| 537/541 [07:25<00:02,  1.57it/s]
+2026-08-12 22:58:07,909 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API: 100%|█████████▉| 539/541 [07:27<00:01,  1.21it/s]
+2026-08-12 22:58:08,247 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API: 100%|█████████▉| 540/541 [07:27<00:00,  1.50it/s]
+2026-08-12 22:58:08,247 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API: 100%|██████████| 541/541 [07:27<00:00,  1.71it/s]
+2026-08-12 22:58:08,247 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API: 100%|██████████| 541/541 [07:27<00:00,  1.21it/s]
+2026-08-12 22:58:09,600 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-12:22:58:09 INFO     [loggers.evaluation_tracker:269] Saving results aggregated
+2026-08-12 22:58:09,601 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-12:22:58:09 INFO     [loggers.evaluation_tracker:119] Saving per-task samples to /home/mvasiljevic/tti-release-cache/falcon3-base-release/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/eval_id_autoport-Falcon3-7B-Base_p300x2/tiiuae__Falcon3-7B-Base/*.jsonl
+2026-08-12 22:58:10,623 [INFO] test_module.llm_tests.llm_eval_tests: Running eval task=gpqa_diamond_generative_n_shot
+2026-08-12 22:58:10,623 [INFO] test_module.llm_tests.llm_eval_tests: Running command: /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_evals_common/bin/lm_eval --tasks gpqa_diamond_generative_n_shot --model local-completions --model_args model=tiiuae/Falcon3-7B-Base,base_url=http://127.0.0.1:8000/v1/completions,tokenizer_backend=huggingface,num_concurrent=32,max_retries=1 --gen_kwargs stream=False,seed=42 --output_path /home/mvasiljevic/tti-release-cache/falcon3-base-release/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/eval_id_autoport-Falcon3-7B-Base_p300x2 --seed 42 --num_fewshot 0 --batch_size 1 --log_samples --show_config --trust_remote_code --confirm_run_unsafe_code
+2026-08-12 22:58:12,461 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-12:22:58:12 INFO     [_cli.run:376] Selected Tasks: ['gpqa_diamond_generative_n_shot']
+2026-08-12 22:58:12,993 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-12:22:58:12 INFO     [evaluator:210] Setting random seed to 42 | Setting numpy seed to 42 | Setting torch manual seed to 42 | Setting fewshot manual seed to 42
+2026-08-12 22:58:12,993 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-12:22:58:12 WARNING  [evaluator:222] generation_kwargs: {'stream': False, 'seed': 42} specified through cli, these settings will update set parameters in yaml tasks. Ensure 'do_sample=True' for non-greedy decoding!
+2026-08-12 22:58:12,993 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-12:22:58:12 INFO     [evaluator:235] Initializing local-completions model, with arguments: {'model': 'tiiuae/Falcon3-7B-Base', 'base_url': 'http://127.0.0.1:8000/v1/completions', 'tokenizer_backend': 'huggingface', 'num_concurrent': 32, 'max_retries': 1, 'trust_remote_code': True}
+2026-08-12 22:58:12,997 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-12:22:58:12 INFO     [models.api_models:284] Using max length 2048 - 1
+2026-08-12 22:58:12,997 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-12:22:58:12 INFO     [models.api_models:305] Using tokenizer huggingface
+2026-08-12 22:58:15,117 [INFO] test_module.llm_tests.llm_eval_tests: Traceback (most recent call last):
+2026-08-12 22:58:15,117 [INFO] test_module.llm_tests.llm_eval_tests: File "/home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_evals_common/bin/lm_eval", line 10, in <module>
+2026-08-12 22:58:15,117 [INFO] test_module.llm_tests.llm_eval_tests: sys.exit(cli_evaluate())
+2026-08-12 22:58:15,117 [INFO] test_module.llm_tests.llm_eval_tests: File "/home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/lm_eval/__main__.py", line 10, in cli_evaluate
+2026-08-12 22:58:15,117 [INFO] test_module.llm_tests.llm_eval_tests: parser.execute(args)
+2026-08-12 22:58:15,117 [INFO] test_module.llm_tests.llm_eval_tests: File "/home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/lm_eval/_cli/harness.py", line 60, in execute
+2026-08-12 22:58:15,117 [INFO] test_module.llm_tests.llm_eval_tests: args.func(args)
+2026-08-12 22:58:15,117 [INFO] test_module.llm_tests.llm_eval_tests: File "/home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/lm_eval/_cli/run.py", line 379, in _execute
+2026-08-12 22:58:15,117 [INFO] test_module.llm_tests.llm_eval_tests: results = simple_evaluate(
+2026-08-12 22:58:15,117 [INFO] test_module.llm_tests.llm_eval_tests: File "/home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/lm_eval/utils.py", line 491, in _wrapper
+2026-08-12 22:58:15,117 [INFO] test_module.llm_tests.llm_eval_tests: return fn(*args, **kwargs)
+2026-08-12 22:58:15,117 [INFO] test_module.llm_tests.llm_eval_tests: File "/home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/lm_eval/evaluator.py", line 291, in simple_evaluate
+2026-08-12 22:58:15,117 [INFO] test_module.llm_tests.llm_eval_tests: task_dict = get_task_dict(
+2026-08-12 22:58:15,117 [INFO] test_module.llm_tests.llm_eval_tests: File "/home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/lm_eval/tasks/__init__.py", line 646, in get_task_dict
+2026-08-12 22:58:15,117 [INFO] test_module.llm_tests.llm_eval_tests: task_name_from_string_dict = task_manager.load_task_or_group(
+2026-08-12 22:58:15,117 [INFO] test_module.llm_tests.llm_eval_tests: File "/home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/lm_eval/tasks/__init__.py", line 428, in load_task_or_group
+2026-08-12 22:58:15,117 [INFO] test_module.llm_tests.llm_eval_tests: collections.ChainMap(
+2026-08-12 22:58:15,117 [INFO] test_module.llm_tests.llm_eval_tests: File "/home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/lm_eval/tasks/__init__.py", line 430, in <lambda>
+2026-08-12 22:58:15,117 [INFO] test_module.llm_tests.llm_eval_tests: lambda task: self._load_individual_task_or_group(task),
+2026-08-12 22:58:15,117 [INFO] test_module.llm_tests.llm_eval_tests: File "/home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/lm_eval/tasks/__init__.py", line 328, in _load_individual_task_or_group
+2026-08-12 22:58:15,117 [INFO] test_module.llm_tests.llm_eval_tests: return _load_task(task_config, task=name_or_config)
+2026-08-12 22:58:15,117 [INFO] test_module.llm_tests.llm_eval_tests: File "/home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/lm_eval/tasks/__init__.py", line 288, in _load_task
+2026-08-12 22:58:15,117 [INFO] test_module.llm_tests.llm_eval_tests: task_object = ConfigurableTask(config=config)
+2026-08-12 22:58:15,117 [INFO] test_module.llm_tests.llm_eval_tests: File "/home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/lm_eval/api/task.py", line 747, in __init__
+2026-08-12 22:58:15,117 [INFO] test_module.llm_tests.llm_eval_tests: self.download(self.config.dataset_kwargs)
+2026-08-12 22:58:15,117 [INFO] test_module.llm_tests.llm_eval_tests: File "/home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/lm_eval/api/task.py", line 863, in download
+2026-08-12 22:58:15,117 [INFO] test_module.llm_tests.llm_eval_tests: self.dataset = datasets.load_dataset(
+2026-08-12 22:58:15,117 [INFO] test_module.llm_tests.llm_eval_tests: File "/home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/datasets/load.py", line 2132, in load_dataset
+2026-08-12 22:58:15,117 [INFO] test_module.llm_tests.llm_eval_tests: builder_instance = load_dataset_builder(
+2026-08-12 22:58:15,117 [INFO] test_module.llm_tests.llm_eval_tests: File "/home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/datasets/load.py", line 1853, in load_dataset_builder
+2026-08-12 22:58:15,117 [INFO] test_module.llm_tests.llm_eval_tests: dataset_module = dataset_module_factory(
+2026-08-12 22:58:15,117 [INFO] test_module.llm_tests.llm_eval_tests: File "/home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/datasets/load.py", line 1717, in dataset_module_factory
+2026-08-12 22:58:15,117 [INFO] test_module.llm_tests.llm_eval_tests: raise e1 from None
+2026-08-12 22:58:15,117 [INFO] test_module.llm_tests.llm_eval_tests: File "/home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/datasets/load.py", line 1701, in dataset_module_factory
+2026-08-12 22:58:15,117 [INFO] test_module.llm_tests.llm_eval_tests: raise DatasetNotFoundError(message) from e
+2026-08-12 22:58:15,117 [INFO] test_module.llm_tests.llm_eval_tests: datasets.exceptions.DatasetNotFoundError: Dataset 'Idavidrein/gpqa' is a gated dataset on the Hub. Visit the dataset page at https://huggingface.co/datasets/Idavidrein/gpqa to ask for access.
+2026-08-12 22:58:15,815 [ERROR] test_module.llm_tests.llm_eval_tests: ⛔ subprocess.Popen command failed with return code: 1
+command: /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_evals_common/bin/lm_eval --tasks gpqa_diamond_generative_n_shot --model local-completions --model_args model=tiiuae/Falcon3-7B-Base,base_url=http://127.0.0.1:8000/v1/completions,tokenizer_backend=huggingface,num_concurrent=32,max_retries=1 --gen_kwargs stream=False,seed=42 --output_path /home/mvasiljevic/tti-release-cache/falcon3-base-release/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/eval_id_autoport-Falcon3-7B-Base_p300x2 --seed 42 --num_fewshot 0 --batch_size 1 --log_samples --show_config --trust_remote_code --confirm_run_unsafe_code
+
+See error messages in logs above this RuntimeError for details on actual cause of failure.
+
+This command is optional or can be recovered from failure (check=False set). Continuing ...
+
+2026-08-12 22:58:15,816 [INFO] workflow_module.blocks_sink: BlockAccumulator: +2 block(s), total=2
+2026-08-12 22:58:15,816 [INFO] workflow_module.blocks_sink:   - kind=evals id=Falcon3-7B-Base_P300X2 targets={'task_name': 'ifeval', 'tolerance': 0.05, 'published_score': 34.3, 'published_score_ref': 'https://huggingface.co/tiiuae/Falcon3-7B-Base#benchmarks'}
+2026-08-12 22:58:15,816 [INFO] workflow_module.blocks_sink:   - kind=evals id=Falcon3-7B-Base_P300X2 targets={'task_name': 'gpqa_diamond_generative_n_shot'}
+2026-08-12 22:58:15,816 [INFO] workflow.evals: ✅ llm_eval blocks=2 kind=evals (464.8s)
+2026-08-12 22:58:15,816 [INFO] workflow.release: --- release: benchmarks ---
+2026-08-12 22:58:15,817 [INFO] workflow.benchmarks: → task=llm_benchmark tools=vllm
+2026-08-12 22:58:15,822 [INFO] test_module.llm_tests.llm_benchmark_tests: Running LLM benchmark: tool=vllm over 13 sweep point(s)
+2026-08-12 22:58:15,823 [INFO] utils.remote_readiness: ✅ Remote OpenAI endpoint ready at http://127.0.0.1:8000/v1/models
+2026-08-12 22:58:15,824 [INFO] llm_module.runner: Running vllm sweep point 1/13  isl=128 osl=128 max_conc=1 n=8
+2026-08-12 22:58:15,824 [INFO] llm_module.drivers._subprocess: Executing: /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model tiiuae/Falcon3-7B-Base --dataset-name random --max-concurrency 1 --num-prompts 8 --random-input-len 128 --random-output-len 128 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /home/mvasiljevic/tti-release-cache/falcon3-base-release/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-12_22-58-15_isl-128_osl-128_maxcon-1_n-8.json --base-url http://127.0.0.1:8000 --ready-check-timeout-sec 0 --trust-remote-code --header Accept-Encoding=identity
+INFO 08-12 22:58:18 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 08-12 22:58:18 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 08-12 22:58:18 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 08-12 22:58:19 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x73eab2b018a0>, seed=0, num_prompts=8, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=128, random_output_len=128, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=1, model='tiiuae/Falcon3-7B-Base', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=True, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/home/mvasiljevic/tti-release-cache/falcon3-base-release/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-12_22-58-15_isl-128_osl-128_maxcon-1_n-8.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-8ebe0546-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 08-12 22:58:20 [datasets.py:612] Sampling input_len from [128, 128] and output_len from [128, 128]
+[transformers] Ignoring clean_up_tokenization_spaces=True for BPE tokenizer CachedTokenizersBackend. The clean_up_tokenization post-processing step is designed for WordPiece tokenizers and is destructive for BPE (it strips spaces before punctuation). Set clean_up_tokenization_spaces=False to suppress this warning, or set clean_up_tokenization_spaces_for_bpe_even_though_it_will_corrupt_output=True to force cleanup anyway.
+WARNING 08-12 22:58:20 [datasets.py:549] Across all generated prompts, there were 1 more tokens than expected after decoding and re-encoding. This is expected due to the imperfect nature of the sampling procedure.
+Starting initial single prompt test run...
+
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 1
+0%|          | 0/8 [00:00<?, ?it/s]
+12%|█▎        | 1/8 [00:02<00:15,  2.23s/it]
+25%|██▌       | 2/8 [00:04<00:13,  2.22s/it]
+38%|███▊      | 3/8 [00:06<00:11,  2.30s/it]
+50%|█████     | 4/8 [00:09<00:09,  2.27s/it]
+62%|██████▎   | 5/8 [00:11<00:06,  2.25s/it]
+75%|███████▌  | 6/8 [00:13<00:04,  2.24s/it]
+88%|████████▊ | 7/8 [00:15<00:02,  2.24s/it]
+100%|██████████| 8/8 [00:17<00:00,  2.23s/it]
+100%|██████████| 8/8 [00:17<00:00,  2.25s/it]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     8
+Failed requests:                         0
+Maximum request concurrency:             1
+Benchmark duration (s):                  17.96
+Total input tokens:                      1025
+Total generated tokens:                  1024
+Request throughput (req/s):              0.45
+Output token throughput (tok/s):         57.01
+Peak output token throughput (tok/s):    69.00
+Peak concurrent requests:                2.00
+Total token throughput (tok/s):          114.07
+---------------Time to First Token----------------
+Mean TTFT (ms):                          200.77
+Median TTFT (ms):                        178.52
+P99 TTFT (ms):                           336.25
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          16.10
+Median TPOT (ms):                        16.08
+P99 TPOT (ms):                           16.14
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           15.97
+Median ITL (ms):                         14.62
+P99 ITL (ms):                            15.36
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          2245.07
+Median E2EL (ms):                        2226.52
+P99 E2EL (ms):                           2378.62
+==================================================
+2026-08-12 22:58:38,774 [INFO] llm_module.runner: Running vllm sweep point 2/13  isl=128 osl=128 max_conc=32 n=256
+2026-08-12 22:58:40,776 [INFO] llm_module.drivers._subprocess: Executing: /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model tiiuae/Falcon3-7B-Base --dataset-name random --max-concurrency 32 --num-prompts 256 --random-input-len 128 --random-output-len 128 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /home/mvasiljevic/tti-release-cache/falcon3-base-release/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-12_22-58-40_isl-128_osl-128_maxcon-32_n-256.json --base-url http://127.0.0.1:8000 --ready-check-timeout-sec 0 --trust-remote-code --header Accept-Encoding=identity
+INFO 08-12 22:58:43 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 08-12 22:58:43 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 08-12 22:58:43 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 08-12 22:58:44 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x70cd821f5300>, seed=0, num_prompts=256, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=128, random_output_len=128, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=32, model='tiiuae/Falcon3-7B-Base', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=True, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/home/mvasiljevic/tti-release-cache/falcon3-base-release/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-12_22-58-40_isl-128_osl-128_maxcon-32_n-256.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-46302205-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 08-12 22:58:45 [datasets.py:612] Sampling input_len from [128, 128] and output_len from [128, 128]
+[transformers] Ignoring clean_up_tokenization_spaces=True for BPE tokenizer CachedTokenizersBackend. The clean_up_tokenization post-processing step is designed for WordPiece tokenizers and is destructive for BPE (it strips spaces before punctuation). Set clean_up_tokenization_spaces=False to suppress this warning, or set clean_up_tokenization_spaces_for_bpe_even_though_it_will_corrupt_output=True to force cleanup anyway.
+WARNING 08-12 22:58:45 [datasets.py:549] Across all generated prompts, there were 4 more tokens than expected after decoding and re-encoding. This is expected due to the imperfect nature of the sampling procedure.
+Starting initial single prompt test run...
+
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 32
+0%|          | 0/256 [00:00<?, ?it/s]
+0%|          | 1/256 [00:02<11:32,  2.71s/it]
+13%|█▎        | 33/256 [00:05<00:31,  7.10it/s]
+25%|██▌       | 65/256 [00:08<00:20,  9.27it/s]
+38%|███▊      | 97/256 [00:10<00:15, 10.57it/s]
+50%|█████     | 129/256 [00:13<00:11, 11.34it/s]
+63%|██████▎   | 161/256 [00:15<00:08, 11.81it/s]
+75%|███████▌  | 193/256 [00:18<00:05, 12.13it/s]
+88%|████████▊ | 225/256 [00:20<00:02, 12.05it/s]
+100%|██████████| 256/256 [00:20<00:00, 12.28it/s]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     256
+Failed requests:                         0
+Maximum request concurrency:             32
+Benchmark duration (s):                  20.84
+Total input tokens:                      32772
+Total generated tokens:                  32768
+Request throughput (req/s):              12.28
+Output token throughput (tok/s):         1572.12
+Peak output token throughput (tok/s):    2112.00
+Peak concurrent requests:                64.00
+Total token throughput (tok/s):          3144.43
+---------------Time to First Token----------------
+Mean TTFT (ms):                          481.56
+Median TTFT (ms):                        406.57
+P99 TTFT (ms):                           598.57
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          16.72
+Median TPOT (ms):                        16.61
+P99 TPOT (ms):                           18.93
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           16.58
+Median ITL (ms):                         15.12
+P99 ITL (ms):                            17.58
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          2604.39
+Median E2EL (ms):                        2604.84
+P99 E2EL (ms):                           2713.72
+==================================================
+2026-08-12 22:59:06,834 [WARNING] llm_module.target_checks: No perf targets for sweep point isl=128 osl=128 max_concurrency=32; benchmark block is reported as NA (ungraded).
+2026-08-12 22:59:06,836 [INFO] llm_module.runner: Running vllm sweep point 3/13  isl=128 osl=1024 max_conc=1 n=4
+2026-08-12 22:59:08,838 [INFO] llm_module.drivers._subprocess: Executing: /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model tiiuae/Falcon3-7B-Base --dataset-name random --max-concurrency 1 --num-prompts 4 --random-input-len 128 --random-output-len 1024 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /home/mvasiljevic/tti-release-cache/falcon3-base-release/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-12_22-59-08_isl-128_osl-1024_maxcon-1_n-4.json --base-url http://127.0.0.1:8000 --ready-check-timeout-sec 0 --trust-remote-code --header Accept-Encoding=identity
+INFO 08-12 22:59:11 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 08-12 22:59:11 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 08-12 22:59:11 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 08-12 22:59:12 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7106777098a0>, seed=0, num_prompts=4, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=128, random_output_len=1024, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=1, model='tiiuae/Falcon3-7B-Base', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=True, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/home/mvasiljevic/tti-release-cache/falcon3-base-release/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-12_22-59-08_isl-128_osl-1024_maxcon-1_n-4.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-f12da433-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 08-12 22:59:13 [datasets.py:612] Sampling input_len from [128, 128] and output_len from [1024, 1024]
+[transformers] Ignoring clean_up_tokenization_spaces=True for BPE tokenizer CachedTokenizersBackend. The clean_up_tokenization post-processing step is designed for WordPiece tokenizers and is destructive for BPE (it strips spaces before punctuation). Set clean_up_tokenization_spaces=False to suppress this warning, or set clean_up_tokenization_spaces_for_bpe_even_though_it_will_corrupt_output=True to force cleanup anyway.
+WARNING 08-12 22:59:13 [datasets.py:549] Across all generated prompts, there were 1 more tokens than expected after decoding and re-encoding. This is expected due to the imperfect nature of the sampling procedure.
+Starting initial single prompt test run...
+
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 1
+0%|          | 0/4 [00:00<?, ?it/s]
+25%|██▌       | 1/4 [00:15<00:46, 15.66s/it]
+50%|█████     | 2/4 [00:31<00:31, 15.66s/it]
+75%|███████▌  | 3/4 [00:47<00:15, 15.74s/it]
+100%|██████████| 4/4 [01:02<00:00, 15.71s/it]
+100%|██████████| 4/4 [01:02<00:00, 15.70s/it]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     4
+Failed requests:                         0
+Maximum request concurrency:             1
+Benchmark duration (s):                  62.82
+Total input tokens:                      513
+Total generated tokens:                  4096
+Request throughput (req/s):              0.06
+Output token throughput (tok/s):         65.20
+Peak output token throughput (tok/s):    69.00
+Peak concurrent requests:                2.00
+Total token throughput (tok/s):          73.37
+---------------Time to First Token----------------
+Mean TTFT (ms):                          222.59
+Median TTFT (ms):                        185.03
+P99 TTFT (ms):                           337.63
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          15.13
+Median TPOT (ms):                        15.13
+P99 TPOT (ms):                           15.13
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           15.12
+Median ITL (ms):                         15.02
+P99 ITL (ms):                            15.55
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          15704.09
+Median E2EL (ms):                        15667.03
+P99 E2EL (ms):                           15819.97
+==================================================
+2026-08-12 23:00:16,692 [WARNING] llm_module.target_checks: No perf targets for sweep point isl=128 osl=1024 max_concurrency=1; benchmark block is reported as NA (ungraded).
+2026-08-12 23:00:16,694 [INFO] llm_module.runner: Running vllm sweep point 4/13  isl=128 osl=1024 max_conc=28 n=112
+2026-08-12 23:00:18,696 [INFO] llm_module.drivers._subprocess: Executing: /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model tiiuae/Falcon3-7B-Base --dataset-name random --max-concurrency 28 --num-prompts 112 --random-input-len 128 --random-output-len 1024 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /home/mvasiljevic/tti-release-cache/falcon3-base-release/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-12_23-00-18_isl-128_osl-1024_maxcon-28_n-112.json --base-url http://127.0.0.1:8000 --ready-check-timeout-sec 0 --trust-remote-code --header Accept-Encoding=identity
+INFO 08-12 23:00:21 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 08-12 23:00:21 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 08-12 23:00:21 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 08-12 23:00:22 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7452c110d8a0>, seed=0, num_prompts=112, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=128, random_output_len=1024, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=28, model='tiiuae/Falcon3-7B-Base', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=True, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/home/mvasiljevic/tti-release-cache/falcon3-base-release/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-12_23-00-18_isl-128_osl-1024_maxcon-28_n-112.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-52bf70c5-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 08-12 23:00:23 [datasets.py:612] Sampling input_len from [128, 128] and output_len from [1024, 1024]
+[transformers] Ignoring clean_up_tokenization_spaces=True for BPE tokenizer CachedTokenizersBackend. The clean_up_tokenization post-processing step is designed for WordPiece tokenizers and is destructive for BPE (it strips spaces before punctuation). Set clean_up_tokenization_spaces=False to suppress this warning, or set clean_up_tokenization_spaces_for_bpe_even_though_it_will_corrupt_output=True to force cleanup anyway.
+WARNING 08-12 23:00:23 [datasets.py:549] Across all generated prompts, there were 3 more tokens than expected after decoding and re-encoding. This is expected due to the imperfect nature of the sampling procedure.
+Starting initial single prompt test run...
+
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 28
+0%|          | 0/112 [00:00<?, ?it/s]
+1%|          | 1/112 [00:17<32:12, 17.41s/it]
+26%|██▌       | 29/112 [00:35<01:27,  1.05s/it]
+51%|█████     | 57/112 [00:52<00:44,  1.25it/s]
+76%|███████▌  | 85/112 [01:10<00:19,  1.37it/s]
+100%|██████████| 112/112 [01:10<00:00,  1.58it/s]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     112
+Failed requests:                         0
+Maximum request concurrency:             28
+Benchmark duration (s):                  70.95
+Total input tokens:                      14339
+Total generated tokens:                  114688
+Request throughput (req/s):              1.58
+Output token throughput (tok/s):         1616.54
+Peak output token throughput (tok/s):    1876.00
+Peak concurrent requests:                56.00
+Total token throughput (tok/s):          1818.65
+---------------Time to First Token----------------
+Mean TTFT (ms):                          844.06
+Median TTFT (ms):                        580.03
+P99 TTFT (ms):                           1207.15
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          16.51
+Median TPOT (ms):                        16.47
+P99 TPOT (ms):                           17.43
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           16.50
+Median ITL (ms):                         16.31
+P99 ITL (ms):                            17.95
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          17735.45
+Median E2EL (ms):                        17738.28
+P99 E2EL (ms):                           18052.61
+==================================================
+2026-08-12 23:01:34,934 [WARNING] llm_module.target_checks: No perf targets for sweep point isl=128 osl=1024 max_concurrency=28; benchmark block is reported as NA (ungraded).
+2026-08-12 23:01:34,936 [INFO] llm_module.runner: Running vllm sweep point 5/13  isl=1024 osl=128 max_conc=1 n=4
+2026-08-12 23:01:36,938 [INFO] llm_module.drivers._subprocess: Executing: /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model tiiuae/Falcon3-7B-Base --dataset-name random --max-concurrency 1 --num-prompts 4 --random-input-len 1024 --random-output-len 128 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /home/mvasiljevic/tti-release-cache/falcon3-base-release/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-12_23-01-36_isl-1024_osl-128_maxcon-1_n-4.json --base-url http://127.0.0.1:8000 --ready-check-timeout-sec 0 --trust-remote-code --header Accept-Encoding=identity
+INFO 08-12 23:01:39 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 08-12 23:01:39 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 08-12 23:01:39 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 08-12 23:01:40 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x734f375f5300>, seed=0, num_prompts=4, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=1024, random_output_len=128, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=1, model='tiiuae/Falcon3-7B-Base', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=True, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/home/mvasiljevic/tti-release-cache/falcon3-base-release/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-12_23-01-36_isl-1024_osl-128_maxcon-1_n-4.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-bf070ff6-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 08-12 23:01:41 [datasets.py:612] Sampling input_len from [1024, 1024] and output_len from [128, 128]
+[transformers] Ignoring clean_up_tokenization_spaces=True for BPE tokenizer CachedTokenizersBackend. The clean_up_tokenization post-processing step is designed for WordPiece tokenizers and is destructive for BPE (it strips spaces before punctuation). Set clean_up_tokenization_spaces=False to suppress this warning, or set clean_up_tokenization_spaces_for_bpe_even_though_it_will_corrupt_output=True to force cleanup anyway.
+Starting initial single prompt test run...
+
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 1
+0%|          | 0/4 [00:00<?, ?it/s]
+25%|██▌       | 1/4 [00:09<00:27,  9.29s/it]
+50%|█████     | 2/4 [00:12<00:11,  5.88s/it]
+75%|███████▌  | 3/4 [00:16<00:04,  4.79s/it]
+100%|██████████| 4/4 [00:19<00:00,  4.28s/it]
+100%|██████████| 4/4 [00:19<00:00,  4.94s/it]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     4
+Failed requests:                         0
+Maximum request concurrency:             1
+Benchmark duration (s):                  19.78
+Total input tokens:                      4096
+Total generated tokens:                  512
+Request throughput (req/s):              0.20
+Output token throughput (tok/s):         25.89
+Peak output token throughput (tok/s):    66.00
+Peak concurrent requests:                2.00
+Total token throughput (tok/s):          233.02
+---------------Time to First Token----------------
+Mean TTFT (ms):                          2813.50
+Median TTFT (ms):                        1364.47
+P99 TTFT (ms):                           6989.69
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          16.77
+Median TPOT (ms):                        16.77
+P99 TPOT (ms):                           16.80
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           16.64
+Median ITL (ms):                         15.31
+P99 ITL (ms):                            16.31
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          4943.51
+Median E2EL (ms):                        3496.52
+P99 E2EL (ms):                           9116.04
+==================================================
+2026-08-12 23:02:01,746 [WARNING] llm_module.target_checks: No perf targets for sweep point isl=1024 osl=128 max_concurrency=1; benchmark block is reported as NA (ungraded).
+2026-08-12 23:02:01,748 [INFO] llm_module.runner: Running vllm sweep point 6/13  isl=1024 osl=128 max_conc=28 n=112
+2026-08-12 23:02:03,750 [INFO] llm_module.drivers._subprocess: Executing: /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model tiiuae/Falcon3-7B-Base --dataset-name random --max-concurrency 28 --num-prompts 112 --random-input-len 1024 --random-output-len 128 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /home/mvasiljevic/tti-release-cache/falcon3-base-release/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-12_23-02-03_isl-1024_osl-128_maxcon-28_n-112.json --base-url http://127.0.0.1:8000 --ready-check-timeout-sec 0 --trust-remote-code --header Accept-Encoding=identity
+INFO 08-12 23:02:06 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 08-12 23:02:06 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 08-12 23:02:06 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 08-12 23:02:07 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7aed759058a0>, seed=0, num_prompts=112, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=1024, random_output_len=128, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=28, model='tiiuae/Falcon3-7B-Base', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=True, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/home/mvasiljevic/tti-release-cache/falcon3-base-release/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-12_23-02-03_isl-1024_osl-128_maxcon-28_n-112.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-00bdf47c-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 08-12 23:02:08 [datasets.py:612] Sampling input_len from [1024, 1024] and output_len from [128, 128]
+[transformers] Ignoring clean_up_tokenization_spaces=True for BPE tokenizer CachedTokenizersBackend. The clean_up_tokenization post-processing step is designed for WordPiece tokenizers and is destructive for BPE (it strips spaces before punctuation). Set clean_up_tokenization_spaces=False to suppress this warning, or set clean_up_tokenization_spaces_for_bpe_even_though_it_will_corrupt_output=True to force cleanup anyway.
+WARNING 08-12 23:02:08 [datasets.py:549] Across all generated prompts, there were 1 more tokens than expected after decoding and re-encoding. This is expected due to the imperfect nature of the sampling procedure.
+Starting initial single prompt test run...
+
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 28
+0%|          | 0/112 [00:00<?, ?it/s]
+1%|          | 1/112 [00:05<09:44,  5.27s/it]
+26%|██▌       | 29/112 [00:11<00:27,  2.98it/s]
+51%|█████     | 57/112 [00:22<00:20,  2.68it/s]
+76%|███████▌  | 85/112 [00:27<00:07,  3.46it/s]
+100%|██████████| 112/112 [00:27<00:00,  4.05it/s]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     112
+Failed requests:                         0
+Maximum request concurrency:             28
+Benchmark duration (s):                  27.68
+Total input tokens:                      114689
+Total generated tokens:                  14336
+Request throughput (req/s):              4.05
+Output token throughput (tok/s):         517.88
+Peak output token throughput (tok/s):    1596.00
+Peak concurrent requests:                56.00
+Total token throughput (tok/s):          4660.93
+---------------Time to First Token----------------
+Mean TTFT (ms):                          4300.97
+Median TTFT (ms):                        2859.66
+P99 TTFT (ms):                           8813.27
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          20.62
+Median TPOT (ms):                        18.94
+P99 TPOT (ms):                           35.56
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           20.46
+Median ITL (ms):                         17.49
+P99 ITL (ms):                            20.58
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          6919.29
+Median E2EL (ms):                        5608.29
+P99 E2EL (ms):                           11215.57
+==================================================
+2026-08-12 23:02:37,016 [WARNING] llm_module.target_checks: No perf targets for sweep point isl=1024 osl=128 max_concurrency=28; benchmark block is reported as NA (ungraded).
+2026-08-12 23:02:37,018 [INFO] llm_module.runner: Running vllm sweep point 7/13  isl=2048 osl=128 max_conc=1 n=4
+2026-08-12 23:02:39,020 [INFO] llm_module.drivers._subprocess: Executing: /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model tiiuae/Falcon3-7B-Base --dataset-name random --max-concurrency 1 --num-prompts 4 --random-input-len 2048 --random-output-len 128 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /home/mvasiljevic/tti-release-cache/falcon3-base-release/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-12_23-02-39_isl-2048_osl-128_maxcon-1_n-4.json --base-url http://127.0.0.1:8000 --ready-check-timeout-sec 0 --trust-remote-code --header Accept-Encoding=identity
+INFO 08-12 23:02:41 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 08-12 23:02:41 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 08-12 23:02:41 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 08-12 23:02:42 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7d100bbf9300>, seed=0, num_prompts=4, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=2048, random_output_len=128, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=1, model='tiiuae/Falcon3-7B-Base', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=True, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/home/mvasiljevic/tti-release-cache/falcon3-base-release/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-12_23-02-39_isl-2048_osl-128_maxcon-1_n-4.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-6843583d-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 08-12 23:02:43 [datasets.py:612] Sampling input_len from [2048, 2048] and output_len from [128, 128]
+[transformers] Ignoring clean_up_tokenization_spaces=True for BPE tokenizer CachedTokenizersBackend. The clean_up_tokenization post-processing step is designed for WordPiece tokenizers and is destructive for BPE (it strips spaces before punctuation). Set clean_up_tokenization_spaces=False to suppress this warning, or set clean_up_tokenization_spaces_for_bpe_even_though_it_will_corrupt_output=True to force cleanup anyway.
+Starting initial single prompt test run...
+
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 1
+0%|          | 0/4 [00:00<?, ?it/s]
+25%|██▌       | 1/4 [00:05<00:15,  5.32s/it]
+50%|█████     | 2/4 [00:10<00:10,  5.24s/it]
+75%|███████▌  | 3/4 [00:15<00:05,  5.21s/it]
+100%|██████████| 4/4 [00:20<00:00,  5.20s/it]
+100%|██████████| 4/4 [00:20<00:00,  5.21s/it]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     4
+Failed requests:                         0
+Maximum request concurrency:             1
+Benchmark duration (s):                  20.86
+Total input tokens:                      8192
+Total generated tokens:                  512
+Request throughput (req/s):              0.19
+Output token throughput (tok/s):         24.54
+Peak output token throughput (tok/s):    63.00
+Peak concurrent requests:                2.00
+Total token throughput (tok/s):          417.26
+---------------Time to First Token----------------
+Mean TTFT (ms):                          3001.34
+Median TTFT (ms):                        2973.30
+P99 TTFT (ms):                           3085.34
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          17.43
+Median TPOT (ms):                        17.40
+P99 TPOT (ms):                           17.55
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           17.29
+Median ITL (ms):                         15.92
+P99 ITL (ms):                            16.77
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          5214.69
+Median E2EL (ms):                        5181.70
+P99 E2EL (ms):                           5313.80
+==================================================
+2026-08-12 23:03:05,022 [WARNING] llm_module.target_checks: No perf targets for sweep point isl=2048 osl=128 max_concurrency=1; benchmark block is reported as NA (ungraded).
+2026-08-12 23:03:05,024 [INFO] llm_module.runner: Running vllm sweep point 8/13  isl=2048 osl=128 max_conc=15 n=60
+2026-08-12 23:03:07,026 [INFO] llm_module.drivers._subprocess: Executing: /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model tiiuae/Falcon3-7B-Base --dataset-name random --max-concurrency 15 --num-prompts 60 --random-input-len 2048 --random-output-len 128 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /home/mvasiljevic/tti-release-cache/falcon3-base-release/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-12_23-03-07_isl-2048_osl-128_maxcon-15_n-60.json --base-url http://127.0.0.1:8000 --ready-check-timeout-sec 0 --trust-remote-code --header Accept-Encoding=identity
+INFO 08-12 23:03:09 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 08-12 23:03:09 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 08-12 23:03:09 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 08-12 23:03:10 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7dddd19098a0>, seed=0, num_prompts=60, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=2048, random_output_len=128, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=15, model='tiiuae/Falcon3-7B-Base', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=True, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/home/mvasiljevic/tti-release-cache/falcon3-base-release/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-12_23-03-07_isl-2048_osl-128_maxcon-15_n-60.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-6276bcdc-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 08-12 23:03:11 [datasets.py:612] Sampling input_len from [2048, 2048] and output_len from [128, 128]
+[transformers] Ignoring clean_up_tokenization_spaces=True for BPE tokenizer CachedTokenizersBackend. The clean_up_tokenization post-processing step is designed for WordPiece tokenizers and is destructive for BPE (it strips spaces before punctuation). Set clean_up_tokenization_spaces=False to suppress this warning, or set clean_up_tokenization_spaces_for_bpe_even_though_it_will_corrupt_output=True to force cleanup anyway.
+Starting initial single prompt test run...
+
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 15
+0%|          | 0/60 [00:00<?, ?it/s]
+2%|▏         | 1/60 [00:08<08:20,  8.48s/it]
+27%|██▋       | 16/60 [00:16<00:40,  1.09it/s]
+52%|█████▏    | 31/60 [00:25<00:20,  1.40it/s]
+77%|███████▋  | 46/60 [00:33<00:09,  1.55it/s]
+100%|██████████| 60/60 [00:33<00:00,  1.77it/s]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     60
+Failed requests:                         0
+Maximum request concurrency:             15
+Benchmark duration (s):                  33.85
+Total input tokens:                      122880
+Total generated tokens:                  7680
+Request throughput (req/s):              1.77
+Output token throughput (tok/s):         226.89
+Peak output token throughput (tok/s):    870.00
+Peak concurrent requests:                30.00
+Total token throughput (tok/s):          3857.10
+---------------Time to First Token----------------
+Mean TTFT (ms):                          5850.51
+Median TTFT (ms):                        6049.63
+P99 TTFT (ms):                           6059.42
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          20.56
+Median TPOT (ms):                        18.97
+P99 TPOT (ms):                           42.82
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           20.40
+Median ITL (ms):                         17.50
+P99 ITL (ms):                            20.81
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          8461.50
+Median E2EL (ms):                        8459.17
+P99 E2EL (ms):                           8475.25
+==================================================
+2026-08-12 23:03:46,398 [WARNING] llm_module.target_checks: No perf targets for sweep point isl=2048 osl=128 max_concurrency=15; benchmark block is reported as NA (ungraded).
+2026-08-12 23:03:46,400 [INFO] llm_module.runner: Running vllm sweep point 9/13  isl=4096 osl=128 max_conc=1 n=4
+2026-08-12 23:03:48,402 [INFO] llm_module.drivers._subprocess: Executing: /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model tiiuae/Falcon3-7B-Base --dataset-name random --max-concurrency 1 --num-prompts 4 --random-input-len 4096 --random-output-len 128 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /home/mvasiljevic/tti-release-cache/falcon3-base-release/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-12_23-03-48_isl-4096_osl-128_maxcon-1_n-4.json --base-url http://127.0.0.1:8000 --ready-check-timeout-sec 0 --trust-remote-code --header Accept-Encoding=identity
+INFO 08-12 23:03:51 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 08-12 23:03:51 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 08-12 23:03:51 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 08-12 23:03:52 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x755793ff5300>, seed=0, num_prompts=4, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=4096, random_output_len=128, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=1, model='tiiuae/Falcon3-7B-Base', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=True, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/home/mvasiljevic/tti-release-cache/falcon3-base-release/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-12_23-03-48_isl-4096_osl-128_maxcon-1_n-4.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-da58cdb3-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 08-12 23:03:53 [datasets.py:612] Sampling input_len from [4096, 4096] and output_len from [128, 128]
+[transformers] Ignoring clean_up_tokenization_spaces=True for BPE tokenizer CachedTokenizersBackend. The clean_up_tokenization post-processing step is designed for WordPiece tokenizers and is destructive for BPE (it strips spaces before punctuation). Set clean_up_tokenization_spaces=False to suppress this warning, or set clean_up_tokenization_spaces_for_bpe_even_though_it_will_corrupt_output=True to force cleanup anyway.
+Starting initial single prompt test run...
+
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 1
+0%|          | 0/4 [00:00<?, ?it/s]
+25%|██▌       | 1/4 [00:09<00:28,  9.47s/it]
+50%|█████     | 2/4 [00:18<00:18,  9.10s/it]
+75%|███████▌  | 3/4 [00:27<00:08,  8.99s/it]
+100%|██████████| 4/4 [00:36<00:00,  8.93s/it]
+100%|██████████| 4/4 [00:36<00:00,  9.00s/it]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     4
+Failed requests:                         0
+Maximum request concurrency:             1
+Benchmark duration (s):                  36.01
+Total input tokens:                      16384
+Total generated tokens:                  512
+Request throughput (req/s):              0.11
+Output token throughput (tok/s):         14.22
+Peak output token throughput (tok/s):    58.00
+Peak concurrent requests:                2.00
+Total token throughput (tok/s):          469.14
+---------------Time to First Token----------------
+Mean TTFT (ms):                          6615.91
+Median TTFT (ms):                        6465.44
+P99 TTFT (ms):                           7052.60
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          18.80
+Median TPOT (ms):                        18.80
+P99 TPOT (ms):                           18.86
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           18.65
+Median ITL (ms):                         17.26
+P99 ITL (ms):                            17.88
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          9003.36
+Median E2EL (ms):                        8852.77
+P99 E2EL (ms):                           9447.31
+==================================================
+2026-08-12 23:04:29,723 [WARNING] llm_module.target_checks: No perf targets for sweep point isl=4096 osl=128 max_concurrency=1; benchmark block is reported as NA (ungraded).
+2026-08-12 23:04:29,724 [INFO] llm_module.runner: Running vllm sweep point 10/13  isl=4096 osl=128 max_conc=7 n=28
+2026-08-12 23:04:31,727 [INFO] llm_module.drivers._subprocess: Executing: /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model tiiuae/Falcon3-7B-Base --dataset-name random --max-concurrency 7 --num-prompts 28 --random-input-len 4096 --random-output-len 128 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /home/mvasiljevic/tti-release-cache/falcon3-base-release/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-12_23-04-31_isl-4096_osl-128_maxcon-7_n-28.json --base-url http://127.0.0.1:8000 --ready-check-timeout-sec 0 --trust-remote-code --header Accept-Encoding=identity
+INFO 08-12 23:04:34 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 08-12 23:04:34 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 08-12 23:04:34 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 08-12 23:04:35 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x71b251bf18a0>, seed=0, num_prompts=28, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=4096, random_output_len=128, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=7, model='tiiuae/Falcon3-7B-Base', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=True, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/home/mvasiljevic/tti-release-cache/falcon3-base-release/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-12_23-04-31_isl-4096_osl-128_maxcon-7_n-28.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-d1ffd94a-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 08-12 23:04:36 [datasets.py:612] Sampling input_len from [4096, 4096] and output_len from [128, 128]
+[transformers] Ignoring clean_up_tokenization_spaces=True for BPE tokenizer CachedTokenizersBackend. The clean_up_tokenization post-processing step is designed for WordPiece tokenizers and is destructive for BPE (it strips spaces before punctuation). Set clean_up_tokenization_spaces=False to suppress this warning, or set clean_up_tokenization_spaces_for_bpe_even_though_it_will_corrupt_output=True to force cleanup anyway.
+WARNING 08-12 23:04:36 [datasets.py:549] Across all generated prompts, there were 1 more tokens than expected after decoding and re-encoding. This is expected due to the imperfect nature of the sampling procedure.
+Starting initial single prompt test run...
+
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 7
+0%|          | 0/28 [00:00<?, ?it/s]
+4%|▎         | 1/28 [00:15<06:56, 15.41s/it]
+29%|██▊       | 8/28 [00:30<01:08,  3.40s/it]
+54%|█████▎    | 15/28 [00:47<00:36,  2.79s/it]
+79%|███████▊  | 22/28 [01:02<00:15,  2.53s/it]
+100%|██████████| 28/28 [01:02<00:00,  2.23s/it]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     28
+Failed requests:                         0
+Maximum request concurrency:             7
+Benchmark duration (s):                  62.45
+Total input tokens:                      114689
+Total generated tokens:                  3584
+Request throughput (req/s):              0.45
+Output token throughput (tok/s):         57.39
+Peak output token throughput (tok/s):    399.00
+Peak concurrent requests:                14.00
+Total token throughput (tok/s):          1893.97
+---------------Time to First Token----------------
+Mean TTFT (ms):                          12228.75
+Median TTFT (ms):                        12983.23
+P99 TTFT (ms):                           13786.79
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          26.63
+Median TPOT (ms):                        19.13
+P99 TPOT (ms):                           74.75
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           26.43
+Median ITL (ms):                         17.69
+P99 ITL (ms):                            19.39
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          15611.33
+Median E2EL (ms):                        15410.88
+P99 E2EL (ms):                           16221.79
+==================================================
+2026-08-12 23:05:39,887 [WARNING] llm_module.target_checks: No perf targets for sweep point isl=4096 osl=128 max_concurrency=7; benchmark block is reported as NA (ungraded).
+2026-08-12 23:05:39,889 [INFO] llm_module.runner: Running vllm sweep point 11/13  isl=8192 osl=128 max_conc=1 n=2
+2026-08-12 23:05:41,891 [INFO] llm_module.drivers._subprocess: Executing: /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model tiiuae/Falcon3-7B-Base --dataset-name random --max-concurrency 1 --num-prompts 2 --random-input-len 8192 --random-output-len 128 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /home/mvasiljevic/tti-release-cache/falcon3-base-release/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-12_23-05-41_isl-8192_osl-128_maxcon-1_n-2.json --base-url http://127.0.0.1:8000 --ready-check-timeout-sec 0 --trust-remote-code --header Accept-Encoding=identity
+INFO 08-12 23:05:44 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 08-12 23:05:44 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 08-12 23:05:44 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 08-12 23:05:45 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7357d6f11300>, seed=0, num_prompts=2, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=8192, random_output_len=128, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=1, model='tiiuae/Falcon3-7B-Base', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=True, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/home/mvasiljevic/tti-release-cache/falcon3-base-release/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-12_23-05-41_isl-8192_osl-128_maxcon-1_n-2.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-5afae53d-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 08-12 23:05:46 [datasets.py:612] Sampling input_len from [8192, 8192] and output_len from [128, 128]
+[transformers] Ignoring clean_up_tokenization_spaces=True for BPE tokenizer CachedTokenizersBackend. The clean_up_tokenization post-processing step is designed for WordPiece tokenizers and is destructive for BPE (it strips spaces before punctuation). Set clean_up_tokenization_spaces=False to suppress this warning, or set clean_up_tokenization_spaces_for_bpe_even_though_it_will_corrupt_output=True to force cleanup anyway.
+Starting initial single prompt test run...
+
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 1
+0%|          | 0/2 [00:00<?, ?it/s]
+50%|█████     | 1/2 [00:19<00:19, 19.37s/it]
+100%|██████████| 2/2 [00:37<00:00, 18.41s/it]
+100%|██████████| 2/2 [00:37<00:00, 18.55s/it]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     2
+Failed requests:                         0
+Maximum request concurrency:             1
+Benchmark duration (s):                  37.11
+Total input tokens:                      16384
+Total generated tokens:                  256
+Request throughput (req/s):              0.05
+Output token throughput (tok/s):         6.90
+Peak output token throughput (tok/s):    50.00
+Peak concurrent requests:                2.00
+Total token throughput (tok/s):          448.45
+---------------Time to First Token----------------
+Mean TTFT (ms):                          15805.13
+Median TTFT (ms):                        15805.13
+P99 TTFT (ms):                           16595.39
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          21.63
+Median TPOT (ms):                        21.63
+P99 TPOT (ms):                           21.72
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           21.46
+Median ITL (ms):                         20.06
+P99 ITL (ms):                            20.71
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          18552.35
+Median E2EL (ms):                        18552.35
+P99 E2EL (ms):                           19353.44
+==================================================
+2026-08-12 23:06:24,265 [WARNING] llm_module.target_checks: No perf targets for sweep point isl=8192 osl=128 max_concurrency=1; benchmark block is reported as NA (ungraded).
+2026-08-12 23:06:24,267 [INFO] llm_module.runner: Running vllm sweep point 12/13  isl=8192 osl=128 max_conc=3 n=6
+2026-08-12 23:06:26,268 [INFO] llm_module.drivers._subprocess: Executing: /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model tiiuae/Falcon3-7B-Base --dataset-name random --max-concurrency 3 --num-prompts 6 --random-input-len 8192 --random-output-len 128 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /home/mvasiljevic/tti-release-cache/falcon3-base-release/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-12_23-06-26_isl-8192_osl-128_maxcon-3_n-6.json --base-url http://127.0.0.1:8000 --ready-check-timeout-sec 0 --trust-remote-code --header Accept-Encoding=identity
+INFO 08-12 23:06:28 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 08-12 23:06:28 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 08-12 23:06:29 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 08-12 23:06:29 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x734d3a905300>, seed=0, num_prompts=6, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=8192, random_output_len=128, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=3, model='tiiuae/Falcon3-7B-Base', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=True, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/home/mvasiljevic/tti-release-cache/falcon3-base-release/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-12_23-06-26_isl-8192_osl-128_maxcon-3_n-6.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-dcc72391-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 08-12 23:06:30 [datasets.py:612] Sampling input_len from [8192, 8192] and output_len from [128, 128]
+[transformers] Ignoring clean_up_tokenization_spaces=True for BPE tokenizer CachedTokenizersBackend. The clean_up_tokenization post-processing step is designed for WordPiece tokenizers and is destructive for BPE (it strips spaces before punctuation). Set clean_up_tokenization_spaces=False to suppress this warning, or set clean_up_tokenization_spaces_for_bpe_even_though_it_will_corrupt_output=True to force cleanup anyway.
+Starting initial single prompt test run...
+
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 3
+0%|          | 0/6 [00:00<?, ?it/s]
+17%|█▋        | 1/6 [00:32<02:43, 32.72s/it]
+67%|██████▋   | 4/6 [01:05<00:30, 15.04s/it]
+100%|██████████| 6/6 [01:05<00:00, 10.91s/it]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     6
+Failed requests:                         0
+Maximum request concurrency:             3
+Benchmark duration (s):                  65.45
+Total input tokens:                      49152
+Total generated tokens:                  768
+Request throughput (req/s):              0.09
+Output token throughput (tok/s):         11.73
+Peak output token throughput (tok/s):    150.00
+Peak concurrent requests:                6.00
+Total token throughput (tok/s):          762.68
+---------------Time to First Token----------------
+Mean TTFT (ms):                          24991.72
+Median TTFT (ms):                        29978.26
+P99 TTFT (ms):                           29984.54
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          60.90
+Median TPOT (ms):                        21.67
+P99 TPOT (ms):                           139.54
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           60.43
+Median ITL (ms):                         20.13
+P99 ITL (ms):                            21.37
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          32726.26
+Median E2EL (ms):                        32726.19
+P99 E2EL (ms):                           32736.39
+==================================================
+2026-08-12 23:07:36,876 [WARNING] llm_module.target_checks: No perf targets for sweep point isl=8192 osl=128 max_concurrency=3; benchmark block is reported as NA (ungraded).
+2026-08-12 23:07:36,878 [INFO] llm_module.runner: Running vllm sweep point 13/13  isl=16384 osl=128 max_conc=1 n=2
+2026-08-12 23:07:38,880 [INFO] llm_module.drivers._subprocess: Executing: /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model tiiuae/Falcon3-7B-Base --dataset-name random --max-concurrency 1 --num-prompts 2 --random-input-len 16384 --random-output-len 128 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /home/mvasiljevic/tti-release-cache/falcon3-base-release/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-12_23-07-38_isl-16384_osl-128_maxcon-1_n-2.json --base-url http://127.0.0.1:8000 --ready-check-timeout-sec 0 --trust-remote-code --header Accept-Encoding=identity
+INFO 08-12 23:07:41 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 08-12 23:07:41 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 08-12 23:07:41 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 08-12 23:07:42 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x79d02a5ed300>, seed=0, num_prompts=2, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=16384, random_output_len=128, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=1, model='tiiuae/Falcon3-7B-Base', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=True, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/home/mvasiljevic/tti-release-cache/falcon3-base-release/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-12_23-07-38_isl-16384_osl-128_maxcon-1_n-2.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-79a9b54c-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 08-12 23:07:43 [datasets.py:612] Sampling input_len from [16384, 16384] and output_len from [128, 128]
+[transformers] Ignoring clean_up_tokenization_spaces=True for BPE tokenizer CachedTokenizersBackend. The clean_up_tokenization post-processing step is designed for WordPiece tokenizers and is destructive for BPE (it strips spaces before punctuation). Set clean_up_tokenization_spaces=False to suppress this warning, or set clean_up_tokenization_spaces_for_bpe_even_though_it_will_corrupt_output=True to force cleanup anyway.
+Starting initial single prompt test run...
+
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 1
+0%|          | 0/2 [00:00<?, ?it/s]
+50%|█████     | 1/2 [00:43<00:43, 43.92s/it]
+100%|██████████| 2/2 [01:25<00:00, 42.57s/it]
+100%|██████████| 2/2 [01:25<00:00, 42.77s/it]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     2
+Failed requests:                         0
+Maximum request concurrency:             1
+Benchmark duration (s):                  85.54
+Total input tokens:                      32768
+Total generated tokens:                  256
+Request throughput (req/s):              0.02
+Output token throughput (tok/s):         2.99
+Peak output token throughput (tok/s):    40.00
+Peak concurrent requests:                2.00
+Total token throughput (tok/s):          386.06
+---------------Time to First Token----------------
+Mean TTFT (ms):                          39337.59
+Median TTFT (ms):                        39337.59
+P99 TTFT (ms):                           40454.17
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          27.03
+Median TPOT (ms):                        27.03
+P99 TPOT (ms):                           27.08
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           26.82
+Median ITL (ms):                         25.50
+P99 ITL (ms):                            26.71
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          42770.47
+Median E2EL (ms):                        42770.47
+P99 E2EL (ms):                           43893.47
+==================================================
+2026-08-12 23:09:09,615 [WARNING] llm_module.target_checks: No perf targets for sweep point isl=16384 osl=128 max_concurrency=1; benchmark block is reported as NA (ungraded).
+2026-08-12 23:09:09,615 [INFO] test_module.llm_tests.llm_performance_tests: LLM sweep produced 13 Block(s) over 13 sweep point(s)
+2026-08-12 23:09:09,615 [INFO] workflow_module.blocks_sink: BlockAccumulator: +13 block(s), total=15
+2026-08-12 23:09:09,615 [INFO] workflow_module.blocks_sink:   - kind=benchmarks id=tiiuae__Falcon3-7B-Base_P300X2 targets={'tool': 'vllm', 'model': 'tiiuae/Falcon3-7B-Base', 'device': 'P300X2', 'timestamp': '2026-08-12 22:58:38'}
+2026-08-12 23:09:09,615 [INFO] workflow_module.blocks_sink:   - kind=benchmarks id=tiiuae__Falcon3-7B-Base_P300X2 targets={'tool': 'vllm', 'model': 'tiiuae/Falcon3-7B-Base', 'device': 'P300X2', 'timestamp': '2026-08-12 22:59:06'}
+2026-08-12 23:09:09,615 [INFO] workflow_module.blocks_sink:   - kind=benchmarks id=tiiuae__Falcon3-7B-Base_P300X2 targets={'tool': 'vllm', 'model': 'tiiuae/Falcon3-7B-Base', 'device': 'P300X2', 'timestamp': '2026-08-12 23:00:16'}
+2026-08-12 23:09:09,615 [INFO] workflow_module.blocks_sink:   - kind=benchmarks id=tiiuae__Falcon3-7B-Base_P300X2 targets={'tool': 'vllm', 'model': 'tiiuae/Falcon3-7B-Base', 'device': 'P300X2', 'timestamp': '2026-08-12 23:01:34'}
+2026-08-12 23:09:09,615 [INFO] workflow_module.blocks_sink:   - kind=benchmarks id=tiiuae__Falcon3-7B-Base_P300X2 targets={'tool': 'vllm', 'model': 'tiiuae/Falcon3-7B-Base', 'device': 'P300X2', 'timestamp': '2026-08-12 23:02:01'}
+2026-08-12 23:09:09,615 [INFO] workflow_module.blocks_sink:   - kind=benchmarks id=tiiuae__Falcon3-7B-Base_P300X2 targets={'tool': 'vllm', 'model': 'tiiuae/Falcon3-7B-Base', 'device': 'P300X2', 'timestamp': '2026-08-12 23:02:36'}
+2026-08-12 23:09:09,615 [INFO] workflow_module.blocks_sink:   - kind=benchmarks id=tiiuae__Falcon3-7B-Base_P300X2 targets={'tool': 'vllm', 'model': 'tiiuae/Falcon3-7B-Base', 'device': 'P300X2', 'timestamp': '2026-08-12 23:03:04'}
+2026-08-12 23:09:09,615 [INFO] workflow_module.blocks_sink:   - kind=benchmarks id=tiiuae__Falcon3-7B-Base_P300X2 targets={'tool': 'vllm', 'model': 'tiiuae/Falcon3-7B-Base', 'device': 'P300X2', 'timestamp': '2026-08-12 23:03:46'}
+2026-08-12 23:09:09,615 [INFO] workflow_module.blocks_sink:   - kind=benchmarks id=tiiuae__Falcon3-7B-Base_P300X2 targets={'tool': 'vllm', 'model': 'tiiuae/Falcon3-7B-Base', 'device': 'P300X2', 'timestamp': '2026-08-12 23:04:29'}
+2026-08-12 23:09:09,615 [INFO] workflow_module.blocks_sink:   - kind=benchmarks id=tiiuae__Falcon3-7B-Base_P300X2 targets={'tool': 'vllm', 'model': 'tiiuae/Falcon3-7B-Base', 'device': 'P300X2', 'timestamp': '2026-08-12 23:05:39'}
+2026-08-12 23:09:09,615 [INFO] workflow_module.blocks_sink:   - kind=benchmarks id=tiiuae__Falcon3-7B-Base_P300X2 targets={'tool': 'vllm', 'model': 'tiiuae/Falcon3-7B-Base', 'device': 'P300X2', 'timestamp': '2026-08-12 23:06:24'}
+2026-08-12 23:09:09,615 [INFO] workflow_module.blocks_sink:   - kind=benchmarks id=tiiuae__Falcon3-7B-Base_P300X2 targets={'tool': 'vllm', 'model': 'tiiuae/Falcon3-7B-Base', 'device': 'P300X2', 'timestamp': '2026-08-12 23:07:36'}
+2026-08-12 23:09:09,615 [INFO] workflow_module.blocks_sink:   - kind=benchmarks id=tiiuae__Falcon3-7B-Base_P300X2 targets={'tool': 'vllm', 'model': 'tiiuae/Falcon3-7B-Base', 'device': 'P300X2', 'timestamp': '2026-08-12 23:09:09'}
+2026-08-12 23:09:09,615 [INFO] workflow.benchmarks: ✅ task=llm_benchmark blocks=13 kind=benchmarks (653.8s)
+2026-08-12 23:09:09,615 [INFO] workflow.release: --- release: spec_tests ---
+2026-08-12 23:09:09,617 [INFO] workflow.spec_tests: → task=spec_tests
+2026-08-12 23:09:09,617 [INFO] test_module.dispatch: Running spec_tests for model=Falcon3-7B-Base, device=P300X2
+2026-08-12 23:09:09,619 [INFO] test_module.test_categorization_system.test_filter: Loading server tests configuration
+2026-08-12 23:09:09,619 [INFO] test_module.test_categorization_system.suite_loader: Loading server tests configuration from server_tests_config.json
+2026-08-12 23:09:09,619 [INFO] test_module.test_categorization_system.test_filter: Loading test suites from discovery
+2026-08-12 23:09:09,619 [INFO] test_module.test_categorization_system.suite_loader: Loading suite files from /home/mvasiljevic/tt-inference-server/test_module/test_suites
+2026-08-12 23:09:09,619 [INFO] test_module.test_categorization_system.suite_loader: Loading server tests configuration from server_tests_config.json
+2026-08-12 23:09:09,620 [INFO] test_module.test_categorization_system.suite_loader: Expanded 3 test matrices into 5 suites
+2026-08-12 23:09:09,620 [INFO] test_module.test_categorization_system.suite_loader: Loaded 8 suites from audio.json (AUDIO)
+2026-08-12 23:09:09,620 [WARNING] test_module.test_categorization_system.suite_loader: Skipping efficientnet on n300: not in compatible_devices ['n150']
+2026-08-12 23:09:09,620 [WARNING] test_module.test_categorization_system.suite_loader: Skipping segformer on n300: not in compatible_devices ['n150']
+2026-08-12 23:09:09,620 [WARNING] test_module.test_categorization_system.suite_loader: Skipping unet on n300: not in compatible_devices ['n150']
+2026-08-12 23:09:09,620 [WARNING] test_module.test_categorization_system.suite_loader: Skipping vit on n300: not in compatible_devices ['n150']
+2026-08-12 23:09:09,620 [WARNING] test_module.test_categorization_system.suite_loader: Skipping vovnet on n300: not in compatible_devices ['n150']
+2026-08-12 23:09:09,620 [INFO] test_module.test_categorization_system.suite_loader: Expanded 1 test matrices into 9 suites
+2026-08-12 23:09:09,620 [INFO] test_module.test_categorization_system.suite_loader: Loaded 9 suites from cnn.json (CNN)
+2026-08-12 23:09:09,620 [INFO] test_module.test_categorization_system.suite_loader: Expanded 1 test matrices into 6 suites
+2026-08-12 23:09:09,620 [INFO] test_module.test_categorization_system.suite_loader: Loaded 6 suites from embedding.json (EMBEDDING)
+2026-08-12 23:09:09,621 [WARNING] test_module.test_categorization_system.suite_loader: Skipping motif on p300: not in compatible_devices ['t3k', 'galaxy', 'p150x4', 'p150x8', 'p300x2']
+2026-08-12 23:09:09,621 [INFO] test_module.test_categorization_system.suite_loader: Expanded 6 test matrices into 29 suites
+2026-08-12 23:09:09,621 [INFO] test_module.test_categorization_system.suite_loader: Loaded 32 suites from image.json (IMAGE)
+2026-08-12 23:09:09,621 [WARNING] test_module.test_categorization_system.suite_loader: Skipping qwen3_32b on n150: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x8', 'p300x2']
+2026-08-12 23:09:09,621 [WARNING] test_module.test_categorization_system.suite_loader: Skipping qwen3_32b on n300: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x8', 'p300x2']
+2026-08-12 23:09:09,621 [WARNING] test_module.test_categorization_system.suite_loader: Skipping qwen3_32b on gpu: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x8', 'p300x2']
+2026-08-12 23:09:09,621 [WARNING] test_module.test_categorization_system.suite_loader: Skipping qwen3_32b on p100: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x8', 'p300x2']
+2026-08-12 23:09:09,621 [WARNING] test_module.test_categorization_system.suite_loader: Skipping qwen3_32b on p150: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x8', 'p300x2']
+2026-08-12 23:09:09,621 [WARNING] test_module.test_categorization_system.suite_loader: Skipping qwen3_32b on p150x4: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x8', 'p300x2']
+2026-08-12 23:09:09,621 [WARNING] test_module.test_categorization_system.suite_loader: Skipping qwen3_32b on p300: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x8', 'p300x2']
+2026-08-12 23:09:09,621 [WARNING] test_module.test_categorization_system.suite_loader: Skipping llama_70b_family on n150: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x4', 'p150x8', 'p300x2']
+2026-08-12 23:09:09,621 [WARNING] test_module.test_categorization_system.suite_loader: Skipping llama_70b_family on n300: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x4', 'p150x8', 'p300x2']
+2026-08-12 23:09:09,621 [WARNING] test_module.test_categorization_system.suite_loader: Skipping llama_70b_family on gpu: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x4', 'p150x8', 'p300x2']
+2026-08-12 23:09:09,621 [WARNING] test_module.test_categorization_system.suite_loader: Skipping llama_70b_family on p100: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x4', 'p150x8', 'p300x2']
+2026-08-12 23:09:09,621 [WARNING] test_module.test_categorization_system.suite_loader: Skipping llama_70b_family on p150: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x4', 'p150x8', 'p300x2']
+2026-08-12 23:09:09,621 [WARNING] test_module.test_categorization_system.suite_loader: Skipping llama_70b_family on p300: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x4', 'p150x8', 'p300x2']
+2026-08-12 23:09:09,621 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gpt_oss_20b on n150: not in compatible_devices ['t3k', 'galaxy_t3k', 'galaxy']
+2026-08-12 23:09:09,621 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gpt_oss_20b on n300: not in compatible_devices ['t3k', 'galaxy_t3k', 'galaxy']
+2026-08-12 23:09:09,621 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gpt_oss_20b on gpu: not in compatible_devices ['t3k', 'galaxy_t3k', 'galaxy']
+2026-08-12 23:09:09,621 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gpt_oss_20b on p100: not in compatible_devices ['t3k', 'galaxy_t3k', 'galaxy']
+2026-08-12 23:09:09,621 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gpt_oss_20b on p150: not in compatible_devices ['t3k', 'galaxy_t3k', 'galaxy']
+2026-08-12 23:09:09,621 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gpt_oss_20b on p150x4: not in compatible_devices ['t3k', 'galaxy_t3k', 'galaxy']
+2026-08-12 23:09:09,621 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gpt_oss_20b on p150x8: not in compatible_devices ['t3k', 'galaxy_t3k', 'galaxy']
+2026-08-12 23:09:09,621 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gpt_oss_20b on p300: not in compatible_devices ['t3k', 'galaxy_t3k', 'galaxy']
+2026-08-12 23:09:09,621 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gpt_oss_20b on p300x2: not in compatible_devices ['t3k', 'galaxy_t3k', 'galaxy']
+2026-08-12 23:09:09,621 [INFO] test_module.test_categorization_system.suite_loader: Expanded 3 test matrices into 34 suites
+2026-08-12 23:09:09,621 [INFO] test_module.test_categorization_system.suite_loader: Loaded 34 suites from llm.json (LLM)
+2026-08-12 23:09:09,621 [INFO] test_module.test_categorization_system.suite_loader: Expanded 1 test matrices into 2 suites
+2026-08-12 23:09:09,621 [INFO] test_module.test_categorization_system.suite_loader: Loaded 2 suites from tts.json (TTS)
+2026-08-12 23:09:09,621 [INFO] test_module.test_categorization_system.suite_loader: Expanded 3 test matrices into 15 suites
+2026-08-12 23:09:09,621 [INFO] test_module.test_categorization_system.suite_loader: Loaded 15 suites from video.json (VIDEO)
+2026-08-12 23:09:09,621 [INFO] test_module.test_categorization_system.test_filter: Building reverse mapping: model -> category
+2026-08-12 23:09:09,621 [INFO] test_module.test_categorization_system.test_filter: Expanding 106 test suites
+2026-08-12 23:09:09,622 [INFO] test_module.test_categorization_system.test_filter: Including prerequisites by default
+2026-08-12 23:09:09,622 [INFO] test_module.test_categorization_system.test_filter: Getting filtered tests
+2026-08-12 23:09:09,622 [WARNING] test_module.dispatch: No spec test suites match model='Falcon3-7B-Base' device='p300x2' — skipping spec_tests.
+2026-08-12 23:09:09,622 [INFO] workflow.spec_tests: ⏭  task=spec_tests no-op rc=0 (0.0s)
+2026-08-12 23:09:09,623 [INFO] workflow.release: Acceptance: PASS (0 blocker(s))
+2026-08-12 23:09:09,624 [INFO] report_module.report_file_saver: Saved markdown to: /home/mvasiljevic/tti-release-cache/falcon3-base-release/workflow_logs/reports_output/release/report_tiiuae__Falcon3-7B-Base_2026-08-12T225815+0000.md
+2026-08-12 23:09:09,624 [INFO] report_module.report_file_saver: Saved JSON to: /home/mvasiljevic/tti-release-cache/falcon3-base-release/workflow_logs/reports_output/release/data/report_data_tiiuae__Falcon3-7B-Base_2026-08-12T225815+0000.json
+2026-08-12 23:09:09,625 [INFO] report_module.report_file_saver: Saved JSON to: /home/mvasiljevic/tti-release-cache/falcon3-base-release/workflow_logs/reports_output/release/data/report_data_tiiuae__Falcon3-7B-Base_2026-08-12T225815+0000.json
+2026-08-12 23:09:09,625 [INFO] report_module.generator: Generated report: md=/home/mvasiljevic/tti-release-cache/falcon3-base-release/workflow_logs/reports_output/release/report_tiiuae__Falcon3-7B-Base_2026-08-12T225815+0000.md, json=/home/mvasiljevic/tti-release-cache/falcon3-base-release/workflow_logs/reports_output/release/data/report_data_tiiuae__Falcon3-7B-Base_2026-08-12T225815+0000.json
+2026-08-12 23:09:09,625 [INFO] workflow.release: Wrote markdown: /home/mvasiljevic/tti-release-cache/falcon3-base-release/workflow_logs/reports_output/release/report_tiiuae__Falcon3-7B-Base_2026-08-12T225815+0000.md
+2026-08-12 23:09:09,625 [INFO] workflow.release: Wrote json:     /home/mvasiljevic/tti-release-cache/falcon3-base-release/workflow_logs/reports_output/release/data/report_data_tiiuae__Falcon3-7B-Base_2026-08-12T225815+0000.json
+2026-08-12 23:09:09,625 [INFO] workflow.release: === Workflow done: release (rc=0) ===
+2026-08-12 23:09:09,625 [INFO] workflow_module.runner: ✅ command=workflow rc=0
+2026-08-12 23:09:09,648 - runner.py:42 - INFO: ✅ command=release rc=0
+2026-08-12 23:09:09,649 - run.py:1168 - INFO: Completed run.py.
+2026-08-12 23:09:09,649 - run.py:1174 - INFO: The output of the workflows is not checked and any errors will be in the logs above and in the saved log file.
+2026-08-12 23:09:09,649 - run.py:1178 - INFO: If you encounter any issues please share the log file in a GitHub issue and server log if available.
+2026-08-12 23:09:09,649 - run.py:1182 - INFO: This log file is saved on local machine at: /home/mvasiljevic/tti-release-cache/falcon3-base-release/workflow_logs/run_logs/run_2026-08-12_22-50-29_id_autoport-Falcon3-7B-Base_p300x2_release_WNbJWvoT.log

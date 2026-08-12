@@ -1,0 +1,123 @@
+{
+    "metadata": {
+        "model_name": "tiiuae/Falcon3-7B-Base",
+        "device": "P300X2",
+        "generated_at": "2026-08-12T22:41:24+00:00",
+        "report_id": "tiiuae__Falcon3-7B-Base_2026-08-12T224124+0000",
+        "workflow": "benchmarks",
+        "server_mode": "API",
+        "run_command": "python run.py --workflow benchmarks --runtime-model-spec-json /home/mvasiljevic/tt-metal/models/autoports/tiiuae_falcon3_7b_base/doc/tti_release/autoport_smoke_spec.json --tt-device p300x2 --service-port 8000 --server-url http://127.0.0.1 --no-auth --skip-system-sw-validation --disable-trace-capture --limit-samples-mode smoke-test",
+        "runtime_model_spec_json": "/home/mvasiljevic/tti-release-cache/falcon3-base-smoke/workflow_logs/runtime_model_specs/runtime_model_spec_2026-08-12_22-41-13_id_autoport-Falcon3-7B-Base_p300x2_-L5HNwAK.json",
+        "model_id": "id_autoport-Falcon3-7B-Base_p300x2",
+        "model_repo": "tiiuae/Falcon3-7B-Base",
+        "inference_engine": "vLLM",
+        "tt_metal_commit": "053fb3f6362189a6fae76632143ec8faa569f532",
+        "vllm_commit": "7c99bd3b8",
+        "model_impl": "autoport-falcon3-7b-base"
+    },
+    "sections": [
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 1,
+                "input_sequence_length": 8,
+                "output_sequence_length": 8.0,
+                "mean_ttft_ms": 194.4294,
+                "p50_ttft": 194.4294,
+                "p99_ttft": 194.4294,
+                "mean_tpot_ms": 45.3358,
+                "mean_e2el_ms": 511.7802,
+                "tps_decode_throughput": 15.619,
+                "request_throughput": 1.9524,
+                "error_request_count": null,
+                "target_check": 2,
+                "target_checks": {
+                    "functional": {
+                        "ttft": 60000.0,
+                        "ttft_ratio": 0.00324049,
+                        "ttft_check": 2,
+                        "tput_user": 0.01,
+                        "tput_user_ratio": 2205.762333520088,
+                        "tput_user_check": 2,
+                        "tput": 0.01,
+                        "tput_ratio": 1561.8999999999999,
+                        "tput_check": 2
+                    },
+                    "complete": {
+                        "ttft": 60000.0,
+                        "ttft_ratio": 0.00324049,
+                        "ttft_check": 2,
+                        "tput_user": 0.01,
+                        "tput_user_ratio": 2205.762333520088,
+                        "tput_user_check": 2,
+                        "tput": 0.01,
+                        "tput_ratio": 1561.8999999999999,
+                        "tput_check": 2
+                    },
+                    "target": {
+                        "ttft": 60000.0,
+                        "ttft_ratio": 0.00324049,
+                        "ttft_check": 2,
+                        "tput_user": 0.01,
+                        "tput_user_ratio": 2205.762333520088,
+                        "tput_user_check": 2,
+                        "tput": 0.01,
+                        "tput_ratio": 1561.8999999999999,
+                        "tput_check": 2
+                    }
+                }
+            },
+            "title": "vLLM Benchmark Targets \u2014 ISL 8 / OSL 8, concurrency 1",
+            "id": "tiiuae__Falcon3-7B-Base_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "tiiuae/Falcon3-7B-Base",
+                "device": "P300X2",
+                "timestamp": "2026-08-12 22:41:24"
+            }
+        }
+    ],
+    "acceptance_criteria": true,
+    "acceptance_blockers": {},
+    "acceptance_criteria_metadata": {
+        "enforcement_result": "PASS",
+        "model_status": "EXPERIMENTAL",
+        "categories": [
+            {
+                "name": "Benchmarks",
+                "status": "PASS",
+                "total": 1,
+                "passed": 1,
+                "failed": 0,
+                "na": 0,
+                "skipped": 0,
+                "blockers": {},
+                "waived": {}
+            },
+            {
+                "name": "Evals",
+                "status": "NA",
+                "total": 0,
+                "passed": 0,
+                "failed": 0,
+                "na": 0,
+                "skipped": 0,
+                "blockers": {},
+                "waived": {}
+            },
+            {
+                "name": "Spec Tests",
+                "status": "NA",
+                "total": 0,
+                "passed": 0,
+                "failed": 0,
+                "na": 0,
+                "skipped": 0,
+                "blockers": {},
+                "waived": {}
+            }
+        ]
+    },
+    "acceptance_summary_markdown": "### Acceptance Criteria\n\n- Acceptance status: \u2705 `PASS`\n- Model status: `EXPERIMENTAL`\n- Benchmarks: \u2705 `PASS` (1/1 passed)\n- Evals: \ud83d\udfe8 `NA` (no blocks present)\n- Spec Tests: \ud83d\udfe8 `NA` (no blocks present)\n- All acceptance criteria passed."
+}

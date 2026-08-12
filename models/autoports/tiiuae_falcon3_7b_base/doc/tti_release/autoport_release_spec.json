@@ -1,0 +1,114 @@
+{
+  "model_id": "id_autoport-Falcon3-7B-Base_p300x2",
+  "impl": {
+    "impl_id": "autoport_falcon3_7b_base",
+    "impl_name": "autoport-falcon3-7b-base",
+    "repo_url": "https://github.com/tenstorrent/tt-metal",
+    "code_path": "models/autoports/tiiuae_falcon3_7b_base"
+  },
+  "hf_model_repo": "tiiuae/Falcon3-7B-Base",
+  "model_name": "Falcon3-7B-Base",
+  "inference_engine": "vLLM",
+  "device_type": "P300X2",
+  "device_model_spec": {
+    "device": "P300X2",
+    "max_concurrency": 32,
+    "max_context": 32768,
+    "default_impl": true,
+    "perf_reference": [
+      {
+        "isl": 128,
+        "osl": 128,
+        "max_concurrency": 1,
+        "num_prompts": 8,
+        "task_type": "text",
+        "targets": {
+          "functional": {
+            "ttft_ms": 250.0,
+            "tput_user": 50.0,
+            "tput": 50.0,
+            "tolerance": 0.0
+          },
+          "complete": {
+            "ttft_ms": 250.0,
+            "tput_user": 50.0,
+            "tput": 50.0,
+            "tolerance": 0.0
+          },
+          "target": {
+            "ttft_ms": 250.0,
+            "tput_user": 50.0,
+            "tput": 50.0,
+            "tolerance": 0.0
+          }
+        }
+      }
+    ],
+    "vllm_args": {
+      "model": "tiiuae/Falcon3-7B-Base",
+      "block_size": "32",
+      "max_model_len": "32768",
+      "max_num_seqs": "32",
+      "max_num_batched_tokens": "32768",
+      "seed": "9472",
+      "additional_config": "{\"tt\": {\"sample_on_device_mode\": \"all\", \"trace_region_size\": 512000000, \"fabric_config\": \"FABRIC_1D_RING\"}}"
+    },
+    "override_tt_config": {
+      "sample_on_device_mode": "all",
+      "trace_region_size": 512000000,
+      "fabric_config": "FABRIC_1D_RING"
+    },
+    "env_vars": {
+      "MESH_DEVICE": "P300x2",
+      "ARCH_NAME": "blackhole"
+    },
+    "known_issues": [],
+    "eval_max_retries": 1
+  },
+  "env_vars": {
+    "VLLM_CONFIGURE_LOGGING": "1",
+    "VLLM_RPC_TIMEOUT": "900000",
+    "VLLM_TARGET_DEVICE": "tt",
+    "TORCHDYNAMO_DISABLE": "1",
+    "MESH_DEVICE": "P300x2",
+    "ARCH_NAME": "blackhole"
+  },
+  "tt_metal_commit": "053fb3f6362189a6fae76632143ec8faa569f532",
+  "vllm_commit": "7c99bd3b8",
+  "hf_weights_repo": "tiiuae/Falcon3-7B-Base",
+  "param_count": 7,
+  "min_disk_gb": 34,
+  "min_ram_gb": 18,
+  "model_type": "LLM",
+  "status": "EXPERIMENTAL",
+  "code_link": "models/autoports/tiiuae_falcon3_7b_base",
+  "override_tt_config": {
+    "sample_on_device_mode": "all",
+    "trace_region_size": 512000000,
+    "fabric_config": "FABRIC_1D_RING"
+  },
+  "supported_modalities": ["text"],
+  "uses_tensor_model_cache": true,
+  "has_builtin_warmup": true,
+  "metadata": {
+    "prompt_mode": "completion",
+    "tokenizer_chat_template_present": false,
+    "autoport_generator": "models/autoports/tiiuae_falcon3_7b_base/tt/generator_vllm.py",
+    "context_contract": "models/autoports/tiiuae_falcon3_7b_base/doc/context_contract.json",
+    "benchmark_target_basis": "optimized-vLLM measured 128/128/c1: TTFT 183.68 ms, tput_user 62.36 tok/s, aggregate 57.64 tok/s"
+  },
+  "cli_args": {
+    "model": "Falcon3-7B-Base",
+    "workflow": "release",
+    "device": "p300x2",
+    "tt_device": "p300x2",
+    "docker_server": false,
+    "local_server": false,
+    "service_port": "8000",
+    "server_url": "http://127.0.0.1",
+    "disable_trace_capture": true,
+    "no_auth": true,
+    "skip_system_sw_validation": true,
+    "limit_samples_mode": null
+  }
+}

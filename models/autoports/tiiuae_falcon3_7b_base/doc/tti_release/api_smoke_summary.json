@@ -1,0 +1,14 @@
+{
+  "health_http_status": 200,
+  "endpoint": "/v1/completions",
+  "object": "text_completion",
+  "model": "tiiuae/Falcon3-7B-Base",
+  "choices_count": 1,
+  "finish_reasons": ["length"],
+  "usage": {
+    "prompt_tokens": 5,
+    "completion_tokens": 8,
+    "total_tokens": 13
+  },
+  "generated_text_copied": false
+}
