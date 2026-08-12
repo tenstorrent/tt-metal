@@ -68,7 +68,20 @@ permissions:
   contents: read
   copilot-requests: write
 
-engine: copilot
+# The MCP gateway cancels a tool call after its own deadline, independent of the per-tool `timeout`
+# values further down -- those bound the handler process, this bounds the request. It defaults to 60
+# seconds, so `build` died at 1m00s four times in a row on the first real run, each retry starting
+# another CIv2 build that then ran on unwatched.
+#
+# 10m is the ceiling gh-aw allows, not a chosen number. It is enough for `build`, which measured 8.5
+# minutes, though not with much room once the pool is busy. It is nowhere near `verify`, which is a
+# build plus the bands. Making `verify` work at all means the launcher cannot block: it has to start
+# the run, return a handle, and be polled. Until that lands, treat `verify` as known-broken rather
+# than merely slow.
+engine:
+  id: copilot
+  mcp:
+    tool-timeout: 10m
 
 # The agent firewall's API proxy meters AI credits on every request, and it prices them from a table
 # keyed by model. `engine: copilot` with no model pinned resolves to `auto`, which is not in that
