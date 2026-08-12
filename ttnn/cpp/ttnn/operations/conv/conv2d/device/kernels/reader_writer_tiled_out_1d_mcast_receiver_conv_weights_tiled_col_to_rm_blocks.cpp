@@ -97,6 +97,24 @@ void kernel_main() {
         split_reader_enabled ? (uint32_t)(packed_reader_indices_ptr[reader_idx] & 0xffff) + 1 : 0;
     const uint32_t cb_start_addr = split_reader_enabled ? dfb_act_second_obj.get_write_ptr() : 0;
 
+#ifdef SNAKE_PARAMS
+    // Per-channel snake parameters, mcast once by the weights sender before its block loop. This core
+    // has no weight TensorAccessor, so receiving them is the only way to get them; the compute kernel
+    // waits on this CB for every output tile and never pops it. Same semaphore pair as the weights,
+    // and first in sequence on both sides, so the two handshakes stay in step.
+    {
+        DataflowBuffer dfb_snake(SNAKE_PARAMS_CB_ID);
+        constexpr uint32_t snake_num_tiles = 2 * SNAKE_PARAM_NUM_COLS;
+        dfb_snake.reserve_back(snake_num_tiles);
+
+        weights_mcast_receiver_sem.set(INVALID);
+        weights_mcast_sender_sem.up(noc, weights_mcast_sender_noc_x, weights_mcast_sender_noc_y, 1);
+        weights_mcast_receiver_sem.wait(VALID);
+
+        dfb_snake.push_back(snake_num_tiles);
+    }
+#endif
+
     // read in bias if enabled (done only once for all batches)
     bool load_bias = true;
     uint32_t l1_write_addr_act = 0;

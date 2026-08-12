@@ -919,6 +919,45 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         compute_defines.merge(ttnn::operations::unary::utils::get_defines(
             fused_activation.value().op_type, fused_activation.value().params, "ACTIVATION", "i"));
     }
+    // Fused per-channel snake on the 1D depthwise path. The compute kernel reads the two parameter
+    // tiles from a dedicated CB and never pops them -- they cannot ride the weights CB because the
+    // non-coalesced compute path pops in1 once per tile per tap, which would consume them
+    // `block_num_tiles` times over. The CB is allocated with zero pages unless this same env var is
+    // set, so define and allocation stay in step.
+    if (is_conv_1d_depthwise_conv && std::getenv("TT_CONV1D_SNAKE_PARAMS") != nullptr) {
+        compute_defines["SNAKE_PARAMS_CB_ID"] =
+            std::to_string(get_cb_info_by_name(cb_info, Conv2dCb::SNAKE_PARAMS).index);
+        // The parameters live as the last two tile-rows of the weight matrix, alpha then inv_beta.
+        // Safe to append there because the reader's strides come from the matrix *width*
+        // (weight_stride_h = weight_matrix_width_ntiles) and the block height, never from its total
+        // height -- weight_matrix_height is read only by the % TILE_HEIGHT assertion. The reader
+        // fetches them into the dedicated CB above, not into the streaming weights CB.
+        const uint32_t weight_matrix_height_ntiles = weight_matrix_height / tt::constants::TILE_HEIGHT;
+        // Each core holds every column of the parameter rows and picks its own by output column, which
+        // is only well defined while a core's weight block spans the whole matrix width -- true for the
+        // height-sharded depthwise path this rides on. Fail loudly rather than silently apply column
+        // 0's parameters everywhere, which is exactly the bug this replaced.
+        TT_FATAL(
+            weight_block_w_ntiles == weight_matrix_width_ntiles,
+            "Fused snake needs the weight block to span the full matrix width, got {} of {}",
+            weight_block_w_ntiles,
+            weight_matrix_width_ntiles);
+        writer_mcast_sender_defines["SNAKE_PARAMS"] = "1";
+        writer_mcast_sender_defines["SNAKE_PARAM_NUM_COLS"] = std::to_string(weight_matrix_width_ntiles);
+        compute_defines["SNAKE_PARAM_NUM_COLS"] = std::to_string(weight_matrix_width_ntiles);
+        writer_mcast_sender_defines["SNAKE_PARAMS_CB_ID"] =
+            std::to_string(get_cb_info_by_name(cb_info, Conv2dCb::SNAKE_PARAMS).index);
+        writer_mcast_sender_defines["SNAKE_ALPHA_ROW_TILE_ID"] =
+            std::to_string((weight_matrix_height_ntiles - 2) * weight_matrix_width_ntiles);
+        writer_mcast_sender_defines["SNAKE_PARAM_ROW_STRIDE"] = std::to_string(weight_matrix_width_ntiles);
+        // The mcast receivers have no weight TensorAccessor, so the sender mcasts the two tiles to
+        // them over the weights semaphore pair. They need the CB id to reserve and push it, but not
+        // the page ids -- they never read from DRAM. writer_defines feeds only the receiver kernel.
+        writer_defines["SNAKE_PARAMS"] = "1";
+        writer_defines["SNAKE_PARAMS_CB_ID"] =
+            std::to_string(get_cb_info_by_name(cb_info, Conv2dCb::SNAKE_PARAMS).index);
+        writer_defines["SNAKE_PARAM_NUM_COLS"] = std::to_string(weight_matrix_width_ntiles);
+    }
     if (enable_split_reader) {
         compute_defines["SPLIT_READER"] = "1";
         reader_defines["SPLIT_READER"] = "1";
@@ -1033,6 +1072,17 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
 
     const bool check_skip_compute = input_cores != output_cores;
 
+    // Unpack-to-Dest overrides for the fp32 depthwise path. Empty (i.e. "leave the default") for
+    // every other conv, so no existing caller changes.
+    //
+    // Why it is needed: an fp32 operand consumed through SrcA/SrcB is rounded to TF32 on the way in
+    // (`tech_reports/op_kernel_dev/accuracy_tips/accuracy_tips.md:51-77`). That truncation is what
+    // makes an fp32 depthwise conv1d measure ~1.6e-03 against a float64 golden while the same filter
+    // written as elementwise multiply-add measures ~5e-08. Routing the SFPU multiply in
+    // `compute_depthwise_conv1d.cpp` does **not** fix it on its own -- `copy_tile` still unpacks via
+    // SrcA -- so the operands must be delivered to Dest as true fp32 for that branch to mean anything.
+    // Matmul already does exactly this for its partial reload.
+    std::vector<tt::tt_metal::UnpackToDestMode> depthwise_unpack_to_dest;
     std::vector<uint32_t> compute_kernel_args;
     if (is_conv_1d_depthwise_conv) {
         // compute_depthwise_conv1d.cpp uses a specialized dest-reuse accumulation path. The last
@@ -1044,6 +1094,37 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         const bool use_partials_scratch = !coalesce_1d_depthwise_kw_reads && num_blocks_act_h_per_core > 1;
         const uint32_t dest_reuse_scratch_cb_id =
             get_cb_info_by_name(cb_info, use_partials_scratch ? Conv2dCb::MATMUL_PARTIALS : Conv2dCb::OUT).index;
+
+        // Only when both operands really are fp32: a bf16 unpack already widens into the full 32-bit
+        // Dest slot, so overriding it there would be a behaviour change for no gain.
+        if (fp32_dest_acc_en && a.dtype() == DataType::FLOAT32 && b.dtype() == DataType::FLOAT32) {
+            depthwise_unpack_to_dest.assign(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+            // ACT is included as well as ACT_TILIZED: the tilize step unpacks ACT through SrcA, which
+            // rounds fp32 to TF32 *before* ACT_TILIZED is ever written, so overriding only the tilized
+            // buffer leaves the activation pre-truncated. That shows up as a residual 4.154e-04 --
+            // 2^-11.2, i.e. exactly TF32 -- which is constant across shapes and which splitting the
+            // activation (but not the weight) removes.
+            for (const uint32_t cb :
+                 {get_cb_info_by_name(cb_info, Conv2dCb::ACT).index,
+                  get_cb_info_by_name(cb_info, Conv2dCb::ACT_TILIZED).index,
+                  get_cb_info_by_name(cb_info, Conv2dCb::WEIGHTS).index,
+                  dest_reuse_scratch_cb_id}) {
+                depthwise_unpack_to_dest[cb] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+            }
+            // The snake parameters are read with `copy_tile` exactly like the operands above, so they
+            // need the same override or they arrive through SrcA at TF32 -- 10 mantissa bits, and
+            // truncated toward zero rather than rounded. Measured without it: both alpha and inv_beta
+            // come back low, never high, by an amount that matches 10-bit truncation column by column
+            // (col 9 predicted 4.5e-04 against 4.59e-04 measured), for rel_rmse 4.4e-04 overall --
+            // the same 2^-11-ish TF32 residual this block already describes for the activation.
+            //
+            // Gated on the env var like the rest of the snake path: the CB carries zero pages when it
+            // is off, and this keeps the default path's generated formats untouched.
+            if (std::getenv("TT_CONV1D_SNAKE_PARAMS") != nullptr) {
+                depthwise_unpack_to_dest[get_cb_info_by_name(cb_info, Conv2dCb::SNAKE_PARAMS).index] =
+                    tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+            }
+        }
 
         compute_kernel_args = {
             act_block_w_ntiles,                                         // 0: in0_block_w
@@ -1176,6 +1257,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
+        .unpack_to_dest_mode = depthwise_unpack_to_dest,
     };
 
     // Helper lambda to setup mcast arguments
