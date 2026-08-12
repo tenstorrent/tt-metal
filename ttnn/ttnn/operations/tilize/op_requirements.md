@@ -65,7 +65,7 @@
 
 ---
 
-### [ ] Refinement 1 — The interleaved path at full generality (prompt A1 + A5 + A6)
+### [x] Refinement 1 — The interleaved path at full generality (prompt A1 + A5 + A6)
 
 **Goal**: flip the already-wired distribution / placement / buffering parameters into SUPPORTED and
 prove them on the golden suite:
@@ -103,6 +103,28 @@ Refinement 2.
 `xfail_expected` to `supported_pass` with zero `supported_fail` / `xpass_drift` / `xfail_wrong_mode`;
 the wide-short cell demonstrably occupies `min(total_blocks, grid_cores)` cores; the depth-1 vs
 depth-2 L1 bytes/core and device-ns delta are recorded in `changelog.md`.
+
+**Outcome** (`[x]`, 2026-08-12): all four axes are in SUPPORTED with **no kernel-source change** —
+`git diff` on `kernels/` is empty, which is the knob-turn classification confirmed rather than
+assumed. Golden registry suite **1 -> 11 supported_pass**, `supported_fail` / `xpass_drift` /
+`xfail_wrong_mode` all **0**; the whole `eval/golden_tests/tilize/` directory runs to completion in
+**33 s** (100 passed / 194 failed, and all 194 are typed `UnsupportedAxisValue` refusals for later
+refinements — zero non-refusal failures, zero hangs, zero XPASS). Unit dir 47 -> 64 passed.
+**Perf**: the delivery here is the SHIPPED path — Phase 0 shipped the single-core square at
+**334.3 µs**, this ships the measured **44.3 µs** (`multicore=0` off-arm = **7.544x**; wide_short
+6.092x, tall_narrow 16.809x, new l1_to_l1 11.520x). Ceiling unchanged (square achieved **0.92**,
+wide_short **0.70**); cumulative bench set re-measured with every shape inside the 2-3% noise band.
+A6 recorded: depth-1 halves per-core CB L1 (128 -> 64 KiB at `WT_BLOCK=16`, 16 -> 8 KiB at 2, 8 -> 4
+KiB at 1) for an off/on cost of 0.998x-1.023x, i.e. **inside noise** — so C16 stays
+`measured-no-payoff` as a perf lever and A6 is an L1-vs-noise knob, not an L1-vs-perf one.
+**Remaining headroom, as a FINDING (not a queue item)**: (a) wide_short is still at 0.70 of its
+DRAM target — that is Refinement 3's declared region and its diagnosis is unchanged (32 of 110
+cores at `WT_BLOCK=16`); (b) the new `l1_to_l1` direction has a **different bottleneck profile from
+every DRAM shape** — ablation gives read 0.615x / write 0.578x / **compute 0.596x** / all 0.078x, so
+with both operands in L1 the DM is ~1.7x faster (654 GB/s) and **compute stops being overlap-hidden
+and becomes co-binding**. A future L1<->L1 perf round therefore has to shorten compute *and* both
+NoC halves; a DM-only lever will be absorbed. Not chased here because this is a generality slot and
+the roofline work belongs to the perf slots, which begin from a fresh whole-op breakdown.
 
 ---
 

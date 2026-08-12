@@ -3,21 +3,21 @@
   "levers": {
     "A0": {
       "status": "applied",
-      "phase": "A0",
+      "phase": "Refinement 1",
       "knob": "multicore",
-      "reason": "Active-core count checked PER REGIME against A0's criterion (interleaved: active == min(grid, total_blocks)) on this 11x10=110 grid: square 256 blocks -> 110 cores; wide_short 32 blocks -> 32 cores; tall_narrow 64 -> 64; smallest 1 -> 1. All four match. No bandwidth-knee cap: tilize's reader is transaction-rate bound and master.md A0 records the cap measuring ~2.4x SLOWER on this very op, so the full grid is used. NOTE: Phase 0's SUPPORTED rectangle only ACCEPTS use_multicore=False, so the SHIPPED default path is the 1-core value of this parameter; the multi-core value is wired, correctness-tested (test_tilize_debug.py::test_multicore_identity, ::test_multicore_fills_the_grid_on_wide_short) and measured here. Refinement A1 flips the SUPPORTED entry and changes no kernel code.",
+      "reason": "Active-core count checked PER REGIME against A0's criterion (interleaved: active == min(grid, total_blocks)) on this 11x10=110 grid: square 256 blocks -> 110 cores; wide_short 32 blocks -> 32 cores; tall_narrow 64 -> 64; l1_to_l1 64 -> 64; smallest 1 -> 1. All match. No bandwidth-knee cap: tilize's reader is transaction-rate bound and master.md A0 records the cap measuring ~2.4x SLOWER on this very op, so the full grid is used. REFINEMENT 1 (A1): use_multicore=True is now IN SUPPORTED, so this lever is the SHIPPED default path rather than a wired-but-unclaimed parameter value (Phase 0 shipped the 1-core value). Re-measured this phase; the off-arm is the same `levers=dict(multicore=0)` bench arm. Core count asserted, never inferred: test_tilize_debug.py::test_multicore_fills_the_grid_on_wide_short and ::test_a1_wide_short_golden_cell_fills_the_grid.",
       "measured": {
-        "on_ns": 44590.0,
-        "off_ns": 333972.7,
+        "on_ns": 44316.7,
+        "off_ns": 334309.3,
         "shape": [
           1,
           1,
           2048,
           2048
         ],
-        "note": "per-regime off/on: square 7.49x, wide_short 6.008x, tall_narrow 16.87x, smallest[1,1,32,32] 0.986x, smallest[1,1,32,64] 1.026x"
+        "note": "Refinement 1 re-measure, per-regime off/on: square 7.544x, wide_short 6.092x, tall_narrow 16.809x, l1_to_l1[1,1,512,2048] 11.520x, smallest[1,1,32,64] 1.000x, smallest[1,1,32,32] 1.004x. The two 1-block shapes are 1.00x BY CONSTRUCTION (one block cannot be spread), which is master.md B0's requirement satisfied rather than a miss."
       },
-      "delta_pct": 649.0
+      "delta_pct": 654.0
     },
     "A1": {
       "status": "applied",
@@ -197,21 +197,21 @@
     },
     "C16": {
       "status": "measured-no-payoff",
-      "phase": "A0",
+      "phase": "Refinement 1",
       "knob": "double_buffer",
-      "reason": "Depth-2 CBs measured INSIDE the noise band against depth-1 in every regime. That matches op_design.md's own prediction that depth-2 stops paying once DRAM is saturated, and the ablation agrees about the mechanism: compute is fully overlap-hidden (ablate_compute is 0.994x on the square), so a deeper CB has nothing left to overlap. The code KEEPS depth-2 as the default because use_double_buffer is a user-facing contract (refinement A6) \u2014 but as a PERF lever it is refuted here, and depth-1 halves per-core CB L1 (128 KiB -> 64 KiB at bf16) for free, which is the finding A6 should record. per-regime off/on: square 0.995x, wide_short 0.993x, tall_narrow 1.01x, smallest[1,1,32,32] 1.002x, smallest[1,1,32,64] 1.018x",
+      "reason": "Depth-2 CBs measure INSIDE the noise band against depth-1 in every regime, in BOTH phases that measured them. The ablation gives the mechanism on the DRAM shapes: compute is fully overlap-hidden (ablate_compute 0.994x on the square), so a deeper CB has nothing left to overlap. REFINEMENT 1 (A6): double_buffer=False is now IN SUPPORTED, so this is a user-facing L1-vs-perf knob, not just an internal lever - and the measurement says the L1 half is free: depth-1 HALVES per-core CB L1 (128 KiB -> 64 KiB at bf16 WT_BLOCK=16; 16 -> 8 KiB at WT_BLOCK=2) at a cost inside noise. Depth-2 stays the DEFAULT because use_double_buffer=True is the documented default of the public API. Re-measured this phase on all 6 bench shapes including the new l1_to_l1 direction, where the ablation profile is DIFFERENT (compute is co-binding at 0.596x, not hidden) and depth-1 still costs only 1.023x.",
       "measured": {
-        "on_ns": 44590.0,
-        "off_ns": 44355.7,
+        "on_ns": 44316.7,
+        "off_ns": 44244.7,
         "shape": [
           1,
           1,
           2048,
           2048
         ],
-        "note": "per-regime off/on: square 0.995x, wide_short 0.993x, tall_narrow 1.01x, smallest[1,1,32,32] 1.002x, smallest[1,1,32,64] 1.018x"
+        "note": "Refinement 1 re-measure, per-regime off/on: square 0.998x, wide_short 1.009x, tall_narrow 1.001x, l1_to_l1[1,1,512,2048] 1.023x, smallest[1,1,32,64] 1.021x, smallest[1,1,32,32] 1.019x. Every regime within or just outside the 2-3% noise band; the two smallest regimes are the ones where depth-1 costs the most, per master.md B0."
       },
-      "delta_pct": -0.5
+      "delta_pct": -0.2
     },
     "C17": {
       "status": "structurally-impossible",

@@ -79,7 +79,25 @@ SHAPES = {
     # counterpart with the identical per-core geometry (nt_h=1, Wt=1, 1 block).
     # master.md B0's per-core-overhead levers are counterfactualed here.
     "smallest_aligned": (1, 1, 32, 32),
+    # Refinement 1 (A5) adds the three L1 buffer directions. `l1_to_l1` is the
+    # worst case of the new axis: BOTH operands are L1-interleaved, so they spend
+    # the same per-core L1 the CBs do (which is why `cb_budget_bytes` subtracts
+    # them). Carried forward as a bench shape so a later phase cannot regress the
+    # L1 directions while tuning the DRAM ones.
+    "l1_to_l1": (1, 1, 512, 2048),
 }
+
+# Per-shape memory placement; DRAM interleaved on both sides unless named here.
+# ONE source of truth for a shape's placement — `_bench_input` and the `_dispatch`
+# call both read it.
+_MEM_BY_SHAPE = {
+    "l1_to_l1": (ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
+}
+
+
+def _mem_for(shape_name):
+    return _MEM_BY_SHAPE.get(shape_name, (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG))
+
 
 # arm name -> the kwargs handed to `_dispatch`. `base` is the shipped
 # configuration (`levers=dict()` == DEFAULT_LEVERS); every other arm flips
@@ -126,14 +144,14 @@ def _selected(env_name, universe):
     return names
 
 
-def _bench_input(shape, device, dtype=ttnn.bfloat16):
+def _bench_input(shape, device, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG):
     torch.manual_seed(0)
     return ttnn.from_torch(
         torch.randn(shape).bfloat16(),
         dtype=dtype,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=memory_config,
     )
 
 
@@ -173,10 +191,11 @@ def test_bench(device):
     results = {}
     for shape_name in shape_names:
         shape = SHAPES[shape_name]
-        tt_input = _bench_input(shape, device)
+        in_mem, out_mem = _mem_for(shape_name)
+        tt_input = _bench_input(shape, device, memory_config=in_mem)
         for arm in arm_names:
             kwargs = ARMS[arm]
-            run_fn = lambda kw=kwargs, t=tt_input: _dispatch(t, use_multicore=True, **kw)
+            run_fn = lambda kw=kwargs, t=tt_input, om=out_mem: _dispatch(t, om, use_multicore=True, **kw)
             ns = _measure_ns(device, run_fn)
             assert ns is not None, f"profiler produced no data for {shape_name}/{arm}"
             results[(shape_name, arm)] = ns

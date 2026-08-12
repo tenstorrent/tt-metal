@@ -213,3 +213,157 @@ code. The 44.6 us row is the number A1's gate inherits.
   spread). No other tests added — the acceptance suite, the debug/blocking-model pins, the golden
   registry suite and the perf bench already cover the Phase-0 surface; further coverage belongs to
   the refinements.
+
+---
+
+## [x] Refinement 1 — The interleaved path at full generality (prompt A1 + A5 + A6)
+
+- **Date**: 2026-08-12
+- **Box/arch**: same stamp as A0 (Blackhole, 11x10 = 110 cores, AICLK 1349.98 MHz, bf16,
+  `DEVICE KERNEL DURATION [ns]`, 3 launches averaged after 2 cache-warming launches).
+
+### What was done
+
+A **knob-turn**, exactly as the queue classified it: four SUPPORTED entries flipped onto the
+parameters the design already exposed, with **no kernel-source change** (`git diff` on
+`kernels/` is empty for this refinement).
+
+| axis | Phase 0 | now | the parameter it turns |
+|---|---|---|---|
+| `use_multicore` | `[False]` | `[False, True]` | `grid_cores` — the 2-D `b = wchunk*nt_h + r` split IS the only code path; `False` is its `grid_cores = 1` value |
+| `rank` | `[4]` | `[2, 3, 4, 5]` | `nimg = prod(shape[:-2])` was already rank-agnostic |
+| `buffer` | `[dram_to_dram]` | all four directions | `TensorAccessor` buffer-type CT arg |
+| `double_buffer` | `[True]` | `[False, True]` | `CB_DEPTH` (`2 if use_double_buffer and depth2_fits_l1 else 1`) |
+
+`PROPERTIES["multi_core"]` moved `False/declared` -> **`True/verified`** (the core count is
+asserted per regime, never inferred).
+
+One piece of real host logic was added, and it is the verifier note's own concern: **the depth-2
+L1 fallback now sees the L1-resident operands the new buffer directions introduce.**
+`get_max_worker_l1_unreserved_size()` is a *static* device property, so Phase 0's
+`budget = unreserved * 0.5` was blind to an L1-interleaved input/output spending the same per-core
+L1 the CBs spend. Three small single-source functions replace the one opaque call:
+`l1_bytes_per_core` (per-core footprint of an L1-interleaved operand; **0 for a DRAM operand, and
+0 for an L1-*sharded* one by design** — Refinement 2 aliases the CB onto the shard, so counting it
+would double-count), `cb_budget_bytes` (`min(fraction of unreserved, unreserved − L1-resident)`),
+and the pure `cb_depth_for`. Today's shapes are unaffected (the fraction still binds); the
+subtraction is what keeps the fallback honest once an L1 operand is large.
+
+### Accuracy achieved
+
+Exact — `torch.equal`, not PCC. tilize is a byte bijection, so every new cell is bit-identical:
+`test_a5_rank_and_buffer_direction_cross` covers rank {2,3,5} x {dram_to_l1, l1_to_l1, l1_to_dram}
+(9 cells, all `torch.equal`), `test_a6_double_buffer_is_exact_on_both_depths` covers depth 1 and 2
+on a tail-block geometry (`Wt = 9 > WT_BLOCK_MAX`, the geometry where depth-1's tighter CB would
+deadlock rather than merely slow down), and the golden suite's identity oracle passes on all 11
+reachable cells. PCC = 1.000000 / max_abs_err = 0.0 (precision baseline unchanged, 5 passed).
+
+### Golden test progress
+
+| suite | Phase 0 | Refinement 1 |
+|---|---|---|
+| `test_golden.py` (registry) | **1** passed, 379 xfailed, 580 skipped | **11** passed, 369 xfailed, 580 skipped |
+| whole `eval/golden_tests/tilize/` dir | 78 passed / 216 failed | **100 passed / 194 failed**, 656 skipped, 956 xfailed |
+
+- **`supported_pass = 11`, `supported_fail = 0`, `xpass_drift = 0` (0 XPASS in the whole
+  directory), `xfail_wrong_mode = 0`, hangs = 0.** The full directory completes in **33 s**.
+- All **194** remaining hard failures in the directory are typed support refusals
+  (`UnsupportedAxisValue`) for axes later refinements own — verified by histogramming every
+  `FAILED` line: 194/194 `UnsupportedAxisValue`, **zero** non-refusal failures.
+- The 11 supported cells are exactly the interleaved bf16 unpadded rectangle: the 8 Phase-1
+  interleaved scenarios (incl. `[1,1,32,4096]` wide-short and `[1,1,2048,64]` tall-narrow), the
+  `use_double_buffer=False` cell `[1,1,64,2048]`, and both rank-5 cells.
+- Unit dir: **64 passed** (was 47), 34 failures — all typed refusals (dtype / pad / shard / tiny
+  tile / retile). `test_tilize.py` 8 -> 25 passed; `test_tilize_debug.py` 34 -> 49; precision
+  baseline 5 unchanged.
+
+### Perf gate
+
+**Bound classification is unchanged on the DRAM shapes and DIFFERENT on the new L1 direction** —
+ablation, all CB scaffolding and trip counts kept:
+
+| shape | base | ablate_read | ablate_write | ablate_compute | ablate_all | reading |
+|---|---|---|---|---|---|---|
+| `l1_to_l1 (1,1,512,2048)` | **6414** | 3946 (0.615x) | 3707 (0.578x) | 3822 (**0.596x**) | 499 (0.078x) | **all three stages co-binding** |
+
+That is a genuinely new profile: on DRAM shapes compute is overlap-hidden (`ablate_compute`
+0.994x on the square), but with both operands in L1 the data movement is ~1.7x faster
+(654 GB/s), so **compute stops being free and becomes co-binding**. Three single removals each
+taking ~40% with a 7.8% all-stubbed floor is the signature of balanced overlapping stages, not
+overhead — so an L1<->L1 perf round would have to shorten compute *and* both NoC halves, not just
+DM. Recorded as a finding; the perf slots (Refinements 3 / 6) own the follow-through.
+
+**What this refinement actually delivers in performance** is the SHIPPED default path, and it is
+the largest single number in the run so far: Phase 0's SUPPORTED rectangle only accepted
+`use_multicore=False`, so the shipped square was the **334 µs** single-core value. Flipping the
+axis ships the measured **44.3 µs** — **7.54x**, with no kernel change.
+
+| shape | off-arm | shipped (base) | ratio |
+|---|---|---|---|
+| square `(1,1,2048,2048)` | `multicore=0` 334 309 | **44 317** | **7.544x** |
+| wide_short `(1,1,32,16384)` | 43 979 | **7 220** | **6.092x** |
+| tall_narrow `(1,1,2048,64)` | 82 245 | **4 893** | **16.809x** |
+| l1_to_l1 `(1,1,512,2048)` | 73 886 | **6 414** | **11.520x** |
+| smallest `(1,1,32,64)` | 1 930 | 1 930 | 1.000x (1 block — nothing to spread, by construction) |
+
+Ceiling reconciliation (targets from A0's `/perf-ceiling-dm` audit; the transfer algorithm and
+every knob are unchanged, so the targets carry over): square **44.3 µs vs 40.7 µs practical =
+achieved 0.92**; wide_short **7.22 µs vs 5.1 µs = 0.70**. wide_short's gap is Refinement 3's
+region and its diagnosis is unchanged (32 of 110 cores at `WT_BLOCK=16`, `ablate_all` 6.5%).
+
+**A6 — depth-1 vs depth-2, the required record.** Per-core CB L1 is
+`CB_DEPTH * WT_BLOCK * (in_tile_bytes + out_tile_bytes)`, i.e. exactly halved by depth-1:
+
+| regime | WT_BLOCK | depth-2 L1/core | depth-1 L1/core | depth-1 device-ns (off/on) |
+|---|---|---|---|---|
+| square / wide_short / l1_to_l1 | 16 | 131 072 B (**128 KiB**) | 65 536 B (**64 KiB**) | 0.998x / 1.009x / 1.023x |
+| tall_narrow / smallest | 2 | 16 384 B (16 KiB) | 8 192 B (8 KiB) | 1.001x / 1.021x |
+| smallest_aligned | 1 | 8 192 B (8 KiB) | 4 096 B (4 KiB) | 1.019x |
+
+So **depth-1 buys half the CB L1 for a cost inside (or barely outside) the 2-3% noise band** —
+C16 stays `measured-no-payoff` as a *perf* lever in the ledger, now with a second phase's
+measurement and the new L1 regime, and A6's user-facing knob is documented as an L1-vs-noise
+trade rather than an L1-vs-perf one. Depth-2 remains the default because
+`use_double_buffer=True` is the documented default of the public API.
+
+**Non-regression across the cumulative bench set** (all prior shapes re-measured, not only this
+phase's target):
+
+| shape | Phase 0 base ns | Refinement 1 base ns | delta | verdict |
+|---|---|---|---|---|
+| `(1,1,2048,2048)` square | 44 153 | 44 317 | +0.4% | noise |
+| `(1,1,32,16384)` wide_short | 7 227 | 7 220 | −0.1% | noise |
+| `(1,1,2048,64)` tall_narrow | 4 869 | 4 893 | +0.5% | noise |
+| `(1,1,32,64)` smallest | 1 893 | 1 930 | +2.0% | noise (2-3% band) |
+| `(1,1,32,32)` smallest_aligned | 1 867 | 1 846 | −1.1% | noise |
+| `(1,1,512,2048)` **l1_to_l1** (new) | — | **6 414** (654 GB/s) | — | added to the set |
+
+`l1_to_l1` is **added to the cumulative bench set** and carried forward: it is the worst case of
+the axis this refinement opened (both operands L1-resident, competing with the CBs for the same
+per-core L1), so a later phase tuning the DRAM directions cannot silently regress it. The bench
+grew one DRY hook for it (`_MEM_BY_SHAPE` / `_mem_for`, one source of truth read by both
+`_bench_input` and the `_dispatch` call).
+
+Lever ledger: `python3 -m eval.verify_levers ttnn/ttnn/operations/tilize/lever_ledger.json
+--phase "Refinement 1" --bench tests/.../_bench_tilize.py` -> **clean, 0 blocking, 0 signal**;
+still 24/24 rows, 11 closed with evidence. Rows **A0** (now the shipped default, re-measured with
+the l1_to_l1 regime added) and **C16** (now a user-facing knob, re-measured on all 6 shapes) were
+rewritten this phase; no lever was newly applied, because this refinement adds no data path.
+
+### Issues encountered
+
+None. No hang, no race (both correctness modes exercised via the suites), no numerical
+divergence, no fix cycle — the design's claim that these four axes are parameter *values* rather
+than code paths held exactly.
+
+### Tests added
+
+`tests/ttnn/unit_tests/operations/tilize/test_tilize_debug.py` group 5 (**+15 cases**):
+`test_a1_wide_short_golden_cell_fills_the_grid` (the golden cell's core count, asserted),
+`test_a5_rank_and_buffer_direction_cross` (rank {2,3,5} x the 3 L1 directions, 9 cases, through
+the PUBLIC entry point), `test_a6_double_buffer_is_exact_on_both_depths` (2 cases, tail-block
+geometry), `test_a6_depth2_fallback_is_pure_and_monotone`,
+`test_a6_cb_budget_subtracts_the_l1_resident_operands`,
+`test_a6_l1_bytes_per_core_counts_only_interleaved_l1`. No new test file — the directory's
+existing debug/structure file is the right home, and the acceptance spec (`test_tilize.py`) was
+not touched (it is immutable and already covered these axes).
