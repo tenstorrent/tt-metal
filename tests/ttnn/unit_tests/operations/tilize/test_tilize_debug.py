@@ -1705,6 +1705,9 @@ def test_r9_per_core_vc_gate_arms_only_where_it_measured_positive():
     # Partially-filled DRAM grid (wide_short 0.948x, tall_narrow 0.980x): the
     # READ half only.
     assert per_core_vc_default(dram, dram, active_cores=32, grid_cores=110) == VC_READER
+    # ... but NOT on one core: there is no second reader to be serialized
+    # against, so the arm would be pure per-core setup (master.md B0).
+    assert per_core_vc_default(dram, dram, active_cores=1, grid_cores=110) == 0
     # All-L1 (l1_to_l1 0.937x): the WRITE half, at any core count.
     assert per_core_vc_default(l1, l1, active_cores=32, grid_cores=110) == VC_WRITER
     assert per_core_vc_default(l1, l1, active_cores=110, grid_cores=110) == VC_WRITER

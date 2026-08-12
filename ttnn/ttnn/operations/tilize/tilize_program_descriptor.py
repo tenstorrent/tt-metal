@@ -1374,7 +1374,13 @@ def per_core_vc_default(in_memory_config, out_memory_config, *, active_cores: in
         return 0
     types = (in_memory_config.buffer_type, out_memory_config.buffer_type)
     mask = 0
-    if all(t == ttnn.BufferType.DRAM for t in types) and active_cores < grid_cores:
+    # `1 < active_cores < grid_cores`: below the grid there is room to separate
+    # the routes, and with ONE core there is no other reader to be serialized
+    # against — B10 is inert by definition there, and master.md B0 says a lever
+    # that only adds per-core setup in its own dead regime does not belong in it
+    # (measured: [1,1,32,32] +2.2 %, [1,1,32,64] +2.6 % against Refinement 8
+    # while armed, back inside noise once excluded).
+    if all(t == ttnn.BufferType.DRAM for t in types) and 1 < active_cores < grid_cores:
         mask |= PER_CORE_VC_DRAM_PARTIAL_GRID
     if all(t == ttnn.BufferType.L1 for t in types):
         mask |= PER_CORE_VC_ALL_L1
