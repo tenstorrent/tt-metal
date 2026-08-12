@@ -4,9 +4,13 @@
 
 """Cosmos3-I2V package init.
 
-Applies two cosmos3-local power-mitigation patches to shared tt_dit infra at
-import time. Both are runtime mutations confined to this package — no edits to
-files outside experimental/cosmos3_i2v/.
+Applies two power-mitigation patches to shared tt_dit infra at import time.
+The mutations are PROCESS-GLOBAL: any tt_dit model constructed in the same
+Python process after this package is imported runs with these clamps. That is
+accepted deliberately — importing cosmos3 means cosmos3 kernels can run on the
+mesh, and a tray power trip takes down every model on the box, so the clamp
+must win over per-model grid preferences. Import this package only in
+processes that run cosmos3.
 
 1. Trunk matmul grid clamp (10x10 on multi-chip BH). Cosmos3-Super's FF
    matmuls are ~3.7x larger than Wan2.2 (intermediate=25600 vs 13824, plus
@@ -19,8 +23,8 @@ files outside experimental/cosmos3_i2v/.
    activations are wider than Wan's, so the unclamped 12x10 conv3d is a real
    power risk. Intercept `get_conv3d_config` and clamp its `grid_size` arg.
 
-The patches are gated so they only fire on multi-chip BH; single-chip and WH
-runs are unaffected.
+Both clamps fire only on multi-chip BH (the PDU hazard is per-tray current
+draw across chips); single-chip BH and WH runs are unaffected.
 """
 
 import ttnn as _ttnn
@@ -28,8 +32,8 @@ from models.tt_dit.models.vae import vae_wan2_1 as _wan_vae_mod
 from models.tt_dit.utils import conv3d as _tt_dit_conv3d
 from models.tt_dit.utils import matmul as _tt_dit_matmul
 
-# --- (1) Trunk matmul grid: lower threshold to 1 (any multi-chip BH) and cap to 10x10 ---
-_tt_dit_matmul._BH_GALAXY_MIN_DEVICES = 1
+# --- (1) Trunk matmul grid: lower threshold to any multi-chip BH and cap to 10x10 ---
+_tt_dit_matmul._BH_GALAXY_MIN_DEVICES = 2
 _tt_dit_matmul._BH_GALAXY_MAX_CORE_GRID = (10, 10)
 
 
@@ -43,6 +47,7 @@ def _clamped_get_conv3d_config(in_channels, out_channels, kernel_size, weights_d
     if (
         grid_size is not None
         and _ttnn.device.is_blackhole()
+        and _ttnn.GetNumAvailableDevices() >= 2
         and (grid_size.x > _VAE_CONV3D_CAP[0] or grid_size.y > _VAE_CONV3D_CAP[1])
     ):
         grid_size = _ttnn.CoreCoord(min(grid_size.x, _VAE_CONV3D_CAP[0]), min(grid_size.y, _VAE_CONV3D_CAP[1]))

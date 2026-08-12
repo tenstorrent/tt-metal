@@ -32,6 +32,7 @@ from ....models.vae.vae_wan2_1 import WanEncoder, WanVAEDecoderAdapter
 from ....utils import cache
 from ....utils.conv3d import conv_pad_height, conv_pad_in_channels, conv_pad_width, register_conv3d_configs
 from ....utils.tensor import bf16_tensor_2dshard, fast_device_to_host
+from ..model_config import HF_REPO, HF_REVISION
 
 # Conservative conv3d blockings for Cosmos3's channel set (base_dim=160,
 # dim_mult=[1,2,4,4] → 160/320/640). The default fallback table in
@@ -203,7 +204,10 @@ class Cosmos3VAEEncoderAdapter:
         # Allow callers to inject an already-loaded torch VAE (so a co-located
         # decoder adapter and encoder adapter can share one host copy).
         self._torch_vae = torch_vae or AutoencoderKLWan.from_pretrained(
-            checkpoint_name, subfolder="vae", trust_remote_code=True
+            checkpoint_name,
+            subfolder="vae",
+            trust_remote_code=True,
+            revision=HF_REVISION if checkpoint_name == HF_REPO else None,
         )
         cfg = self._torch_vae.config
 

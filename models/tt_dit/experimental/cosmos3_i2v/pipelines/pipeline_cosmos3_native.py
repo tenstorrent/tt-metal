@@ -54,7 +54,7 @@ import torch
 import torch.nn as nn
 
 import ttnn
-from models.tt_dit.experimental.cosmos3_i2v.model_config import HF_REPO
+from models.tt_dit.experimental.cosmos3_i2v.model_config import HF_REPO, HF_REVISION
 from models.tt_dit.experimental.cosmos3_i2v.pipelines.cosmos3_prompt import install_json_prompt_parsing
 
 if TYPE_CHECKING:
@@ -705,7 +705,15 @@ def build_cosmos3_i2v_native_pipeline(
     _diffusers.Cosmos3OmniPipeline = Cosmos3OmniPipeline
     _diffusers.Cosmos3AVAEAudioTokenizer = Cosmos3AVAEAudioTokenizer
 
-    pipe = Cosmos3OmniPipeline.from_pretrained(hf_repo, torch_dtype=dtype, enable_safety_checker=False)
+    # Pin the checkpoint revision when loading the project default: the vendored
+    # reference code and cached TT tensors are only known-compatible with it. A
+    # caller-supplied repo loads at its head — the pin would be wrong for forks.
+    pipe = Cosmos3OmniPipeline.from_pretrained(
+        hf_repo,
+        torch_dtype=dtype,
+        enable_safety_checker=False,
+        revision=HF_REVISION if hf_repo == HF_REPO else None,
+    )
 
     # VAE tiling is BROKEN in diffusers 0.35.1 AND main for the Wan/Cosmos3 patch_size config:
     #   - tiled_encode: forgets to call patchify() before encoder → channel mismatch

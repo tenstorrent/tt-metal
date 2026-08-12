@@ -164,19 +164,21 @@ class Server:
         from diffusers.utils import export_to_video
 
         from models.tt_dit.experimental.cosmos3_i2v.pipelines.cosmos3_mode import run_cosmos3
-        from models.tt_dit.experimental.cosmos3_i2v.pipelines.pipeline_cosmos3_native import _make_release_callback
 
         p = job.params
         job.status = "running"
         job.phase = "denoise"
         job.t_start = time.time()
-        release = _make_release_callback(p["steps"])
 
-        def progress(pipe_ref, step, timestep, callback_kwargs):
+        # Trunk weights stay resident across requests — the release-at-final-step
+        # callback the one-shot CLI uses would leave a long-lived server with
+        # deallocated Parameters on the second request (there is no reload path).
+        # DRAM headroom for the VAE decode is covered on the serving mesh.
+        def progress(pipe_ref, step, timestep, callback_kwargs):  # noqa: ARG001
             job.step = step + 1  # step is 0-indexed; report 1-based to humans
             if step >= p["steps"] - 1:
                 job.phase = "vae_decode"
-            return release(pipe_ref, step, timestep, callback_kwargs)
+            return callback_kwargs
 
         generator = torch.Generator(device="cpu").manual_seed(p["seed"]) if p["seed"] is not None else None
         call_kwargs = dict(
@@ -388,14 +390,17 @@ document.getElementById('f').onsubmit=async(e)=>{e.preventDefault();
 function media(j){if(j.status!=='done'||!j.media)return '';
   return j.media.endsWith('.png')?`<br><img src="${j.media}" style="max-width:320px">`
     :`<br><video src="${j.media}" controls style="max-width:420px"></video>`;}
+// Prompts and error strings come from request bodies — escape before templating
+// into innerHTML or a crafted prompt runs script in every viewer's browser.
+function esc(s){const d=document.createElement('div');d.textContent=s==null?'':String(s);return d.innerHTML;}
 async function poll(){const r=await fetch('/jobs');const js=await r.json();
   document.getElementById('jobs').innerHTML=js.map(j=>{
     const pct=j.total_steps?Math.round(100*j.step/j.total_steps):0;
-    const st=j.status==='running'?`${j.phase} ${j.step}/${j.total_steps}`:j.status;
+    const st=j.status==='running'?`${esc(j.phase)} ${j.step}/${j.total_steps}`:esc(j.status);
     const tm=j.wall_s?`wall ${j.wall_s}s`:(j.elapsed_s!=null?`${j.elapsed_s}s`:'');
-    return `<div class="job"><b>${j.mode}</b> — ${st} <span class="t">${tm} ${j.error||''}</span>
+    return `<div class="job"><b>${esc(j.mode)}</b> — ${st} <span class="t">${tm} ${esc(j.error||'')}</span>
       <div class="bar"><div class="fill" style="width:${pct}%"></div></div>
-      <div class="t">${j.prompt}</div>${media(j)}</div>`;}).join('')||'(none yet)';}
+      <div class="t">${esc(j.prompt)}</div>${media(j)}</div>`;}).join('')||'(none yet)';}
 poll();setInterval(poll,1500);
 </script>
 </body></html>
