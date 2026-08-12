@@ -108,7 +108,6 @@ class PrefillTraceLifecycle:
                     prepared,
                     prepared.request.chunks[0],
                     persistent.device_inputs,
-                    dynamic_start=True,
                 )
             # The captured padded identity must record every physical row so
             # replay does not depend on which active count registered it.

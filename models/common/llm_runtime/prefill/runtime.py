@@ -13,6 +13,7 @@ import torch
 from models.common.llm_runtime.config import PageTableLayout
 from models.common.llm_runtime.prefill import assembly as prefill_assembly
 from models.common.llm_runtime.prefill import postprocess as prefill_postprocess
+from models.common.llm_runtime.prefill import sequence as prefill_sequence
 from models.common.llm_runtime.prefill import trace as prefill_trace
 from models.common.llm_runtime.prefill.config import PrefillRuntimeConfig
 from models.common.llm_runtime.prefill.inputs import (
@@ -37,7 +38,6 @@ from models.common.llm_runtime.prefill.signatures import (
 )
 from models.common.llm_runtime.tensor_resources import (
     TensorResourceOrphan,
-    attach_cleanup_failures,
     best_effort_deallocate_owned_tensors,
     raise_cleanup_failures,
     release_orphans,
@@ -80,6 +80,13 @@ class PrefillRuntime:
         self.assembler = prefill_assembly.PrefillResultAssembler(
             config,
             postprocessor=self.postprocessor,
+            release_transient=lambda values: self._release_or_retain_transient(values),
+        )
+        self.sequence = prefill_sequence.PrefillSequenceExecutor(
+            input_stager=self.inputs,
+            postprocessor=self.postprocessor,
+            run_hidden_body=lambda *args, **kwargs: self._run_hidden_body(*args, **kwargs),
+            run_chunk_body=lambda *args, **kwargs: self._run_chunk_body(*args, **kwargs),
             release_transient=lambda values: self._release_or_retain_transient(values),
         )
         self.trace = prefill_trace.PrefillTraceLifecycle(
@@ -220,7 +227,7 @@ class PrefillRuntime:
         """Run a prepared request eagerly without replanning or reclassification."""
 
         self._ensure_usable()
-        return self._run_prefill_sequence(prepared)
+        return self.sequence.invoke(prepared)
 
     def capture_plan(self, prepared: PreparedPrefill) -> prefill_trace.PrefillCapturePlan:
         """Describe persistent inputs and capture work for one eligible request."""
@@ -273,108 +280,12 @@ class PrefillRuntime:
 
     # Private implementation
 
-    def _run_prefill_sequence(self, prepared: PreparedPrefill) -> prefill_assembly.InvocationResult:
-        """Execute the request's planned chunks as one eager prefill sequence."""
-
-        request = prepared.request
-        final_chunk = request.chunks[-1]
-        if request.uses_chunked_prefill:
-            final_relative_last = (request.last_token_indices[0] - final_chunk.chunk_start_idx) % final_chunk.chunk_size
-        else:
-            final_relative_last = max(
-                last - cached for last, cached in zip(request.last_token_indices, request.cached_tokens)
-            )
-
-        owned: list[Any] = []
-        kpt = None
-        kpt_prepared = False
-        final_step_output = None
-        final_position_inputs = None
-        sampled_output = None
-        try:
-            if request.uses_chunked_prefill:
-                kpt = self.postprocessor.make_device_kpt(
-                    prepared.sampling_params,
-                    self.postprocessor.sampling_output_rows(prepared),
-                    force_topk=prepared.sampling_path == "topk",
-                )
-                kpt_prepared = True
-                prefill_postprocess.retain_owned(owned, kpt)
-
-            for chunk in request.chunks:
-                device_inputs, position_inputs = self.inputs.stage_step(
-                    request,
-                    chunk,
-                    final_relative_last,
-                )
-                prefill_postprocess.retain_owned(owned, device_inputs)
-                prefill_postprocess.retain_owned(owned, position_inputs)
-                if not kpt_prepared:
-                    kpt = self.postprocessor.make_device_kpt(
-                        prepared.sampling_params,
-                        self.postprocessor.sampling_output_rows(prepared),
-                        force_topk=prepared.sampling_path == "topk",
-                    )
-                    kpt_prepared = True
-                    prefill_postprocess.retain_owned(owned, kpt)
-                step_output = self._execute_prefill_step(
-                    prepared,
-                    chunk,
-                    device_inputs,
-                    position_inputs,
-                )
-                if chunk.contains_last_token:
-                    final_step_output = step_output
-                    final_position_inputs = position_inputs
-                    prefill_postprocess.retain_owned(owned, final_step_output)
-                    break
-                intermediate_output = step_output
-                step_output = None
-                failures = self._release_or_retain_transient(intermediate_output)
-                if failures:
-                    raise_cleanup_failures(failures)
-
-            if final_step_output is None or final_position_inputs is None:
-                raise RuntimeError("planned prefill sequence did not produce a final output")
-            if not request.uses_chunked_prefill and prepared.sampling_path == "topk":
-                sampled_output = self.postprocessor.make_sampling_output(
-                    self.postprocessor.sampling_output_rows(prepared)
-                )
-                prefill_postprocess.retain_owned(owned, sampled_output)
-            output = self.postprocessor.finish_prefill_sequence(
-                prepared,
-                final_step_output,
-                kpt,
-                final_position_inputs,
-                sampled_output=sampled_output,
-                owned=owned,
-            )
-        except BaseException as primary:
-            failures = self._release_or_retain_transient(tuple(owned))
-            attach_cleanup_failures(primary, failures)
-            raise
-        return prefill_assembly.InvocationResult(value=output, owned=tuple(owned))
-
-    def _execute_prefill_step(
-        self,
-        prepared: PreparedPrefill,
-        chunk: PrefillChunk,
-        device_inputs: PrefillDeviceInputs,
-        position_inputs: PrefillPositionInputs,
-    ) -> Any:
-        request = prepared.request
-        if not request.uses_chunked_prefill:
-            return self._run_hidden_body(request, device_inputs)
-        return self._run_chunk_body(prepared, chunk, device_inputs, position_inputs)
-
     def _run_chunk_body(
         self,
         prepared: PreparedPrefill,
         chunk: PrefillChunk,
         device_inputs: PrefillDeviceInputs,
         position_inputs: PrefillPositionInputs,
-        *,
-        dynamic_start: bool = False,
     ) -> Any:
         return self.config.model.prefill_forward(
             self.config.model.embed_prefill(device_inputs.tokens),
@@ -382,7 +293,7 @@ class PrefillRuntime:
             user_id=0,
             page_table=device_inputs.page_table,
             chunk_page_table=device_inputs.chunk_page_table,
-            chunk_start_idx=None if dynamic_start else chunk.chunk_start_idx,
+            chunk_start_idx=chunk.chunk_start_idx,
             get_last_token=-1,
             chunk_start_idx_tensor=device_inputs.chunk_start_idx,
             last_token_slice=(position_inputs.slice_start, position_inputs.slice_end),
@@ -394,8 +305,6 @@ class PrefillRuntime:
         prepared: PreparedPrefill,
         chunk: PrefillChunk,
         device_inputs: PrefillDeviceInputs,
-        *,
-        dynamic_start: bool,
     ) -> Any:
         """Run only the shared model body; postprocessing remains alias-local."""
 
@@ -405,7 +314,7 @@ class PrefillRuntime:
             user_id=0,
             page_table=device_inputs.page_table,
             chunk_page_table=device_inputs.chunk_page_table,
-            chunk_start_idx=None if dynamic_start else chunk.chunk_start_idx,
+            chunk_start_idx=None,
             get_last_token=-1,
             chunk_start_idx_tensor=device_inputs.chunk_start_idx,
             last_token_slice=None,
