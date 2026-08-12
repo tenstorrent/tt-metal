@@ -3775,7 +3775,15 @@ Two further changes were needed on top of the guards:
 - **One ring per captured sweep, hard.** A captured busy filler sweep wants ~480 markers (~960 words) and so
   needed a mid-sweep publish; the marker writes plus that publish put the worst sweep at 23.2 us. Past one ring
   the sweep is now **truncated** (counted, excluded from the counter cross-check, `DRISC-SWEEP` still closed so
-  no lane's Tracy stack is left open). This alone took 292-362 stalls down to 49-140.
+  no lane's Tracy stack is left open).
+
+  **RETRACTED: this bound was credited with taking 292-362 stalls down to 49-140. Not supported.** A
+  re-check of every ON run found truncation NEVER FIRED -- 0 runs report it. A filler slice is 27-30
+  cores = 9-10 batches = ~100 markers = ~200 words, comfortably inside the 504-word ring; the "~480
+  markers, 40 batches" figure behind the claim was the UN-SPLIT 120-core drainer, not the 4-filler
+  split. The measured win was moving the `self_on` guards to the call sites (idle sweep 10.2 -> 8.72 us).
+  The 300 -> 100 stall change across those runs is UNEXPLAINED, and most likely the same bimodal
+  run-to-run variance documented below. The bound stays as cheap insurance for wider slices.
 
 ### Perturbation, 4 warm reps each (run 1 of every config discarded)
 
@@ -3876,10 +3884,24 @@ The per-busy-sweep means that produced the original (wrong) framing, kept for th
 and the OFF-path worst-sweep credit wait agrees independently (53.0 us mean under FD against 32.5 us under SD
 at the tighter delay). Fast dispatch removes the host round trip between ops, so producers fill their rings in
 harder bursts; the drainer's egress is unchanged, so the extra burstiness lands on the socket credit wait --
-the one phase §N+38 identified as setting the knee. **The two movers also differ by 1.6x from each other**
-(7.7 vs 12.7 us), which a single aggregate figure would have hidden entirely -- and per the distribution above,
-that 1.6x is a difference in TAIL FREQUENCY (40% vs 29% of pushes >= 5 us), not in their typical cost, which is
-identical at 66-67 ns.
+the one phase §N+38 identified as setting the knee.
+
+**DO NOT QUOTE MOVER CREDIT-WAIT MEANS, INCLUDING THE ONES IN THE TABLE ABOVE.** With n ~= 30 captured pushes
+and a third of them ~100x the median, the mean tracks how many tail events the sampler happened to catch. Two
+slow-dispatch captures of the SAME config, compared directly:
+
+| | mover 4 | mover 5 |
+|---|---|---|
+| capture A | p50 66 ns, mean 2,659 ns, 30% >= 5 us | p50 66 ns, mean **783** ns, **6%** >= 5 us |
+| capture B | p50 66 ns, mean 2,698 ns, 27% >= 5 us | p50 66 ns, mean **2,781** ns, **28%** >= 5 us |
+
+The p50 is 66 ns in all four. The MEAN on one core moved 3.6x between runs, and its tail fraction moved
+6% -> 28%. So an earlier claim here that "the two movers differ by 1.6x from each other" is WITHDRAWN -- that
+gap is inside run-to-run noise; mover 5 alone spans 783-2,781 ns across two runs of one config.
+
+**Quote p50 (stable at 66-67 ns across every capture), the tail threshold and fraction with n stated, and the
+max. Never the mean.** Raising the sample count would tighten the tail fraction but is NOT free -- see the
+coverage/bias note below.
 
 ### Cross-check: the zones agree with the counters
 
@@ -3902,6 +3924,36 @@ Agreement is within the log's print rounding (one decimal) plus the difference b
 CSV covers 1-14 more sweeps than the counters and is larger by the right amount in every phase (e.g. DRISC 4:
 CSV credit-wait 60.7 us vs counter 60.2 us over 22 of 30 sweeps -- the 8 extra are idle samples, which have no
 credit wait).
+
+### This is a SAMPLER, and the sweeps you can see are the ones you perturbed
+
+Coverage, measured (`TT_METAL_PERF_DEBUG_DRISC_ZONES=200`):
+
+| | captured sweeps | busy sweeps | total sweeps | coverage of BUSY |
+|---|---|---|---|---|
+| fillers 0-3 | 5 each | 113-116 | 167k-379k | **~4.4%** |
+| mover 4 | 15 | 349 | 946k | **~4.3%** |
+| mover 5 | 18 | 370 | 247k | **~4.9%** |
+
+~4-5% of sweeps that did work, ~0.002% of all sweeps. **Every gap between `DRISC-SWEEP` zones is an uncaptured
+sweep, not idle time.** The sampler is unbiased WITHIN busy sweeps (rate-limited by sweep number, not by cost),
+so per-zone statistics are representative -- but you cannot reason about a specific burst from that timeline,
+and the worst sweep is invisible unless it happens to be one of the few captured.
+
+**The cost is not uniform, and that is the reason not to just raise coverage:**
+
+| | cost |
+|---|---|
+| sweeps NOT captured | +4% idle (8.38 -> 8.72 us), +5% busy (13.28 -> 13.94 us) -- irreducible, the guards and register pressure of the code being present |
+| sweeps BEING captured | **+13-15%** (worst sweep 18.57 -> 21.03 us): ~100 markers ~= 0.7 us plus one 10,560 B publish and its barrier ~= 1-2 us |
+| at the knee (SD delay 15) | 49-140 producer stalls vs 0 -- one late sweep blocks dozens of lossless producers at 472-488/512 occupancy |
+| off the knee (delay 60, SD and FD) | **0 stalls, 4/4 reps each** |
+
+So a captured sweep is inflated ~15%: this is a **measurement bias**, not merely overhead. Lowering
+`DRISC_ZONES` to gather more samples buys tighter statistics on progressively more-perturbed sweeps -- the
+opposite of what more samples is supposed to do. If coverage must rise, cut the per-captured-sweep cost first;
+the publish (~1-2 us) is dearer than the markers (~0.7 us), so publishing every 2nd captured sweep (200 words
+means two sweeps fit one ring) and the 592-word/37-page short frame are the levers, NOT a smaller N.
 
 ### No silent truncation
 
