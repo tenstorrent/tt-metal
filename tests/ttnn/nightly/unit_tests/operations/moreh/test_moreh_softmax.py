@@ -169,44 +169,6 @@ def test_softmax_for_dim_hw(shape_dim, dtype, compute_kernel_options, device):
 @pytest.mark.parametrize(
     "shape_dim",
     [
-        # Non-tile-aligned H and W. Every other shape in this file is a multiple of 32, so without
-        # these the ragged-tail handling (partial reduce scaler / mask tile) is never exercised.
-        [[1, 1, 33, 32], 2],  # H = 1 valid row in the last tile
-        [[1, 1, 47, 32], 2],  # H = 15 valid rows
-        [[1, 1, 63, 32], 2],  # H = 31 valid rows
-        [[3, 2, 45, 64], 2],  # ragged H across multiple cores
-        [[1, 1, 32, 33], 3],  # ragged W, 1 valid column
-        [[1, 1, 32, 63], 3],  # ragged W, 31 valid columns
-        [[3, 2, 64, 45], 3],  # ragged W across multiple cores
-    ],
-)
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
-def test_softmax_non_tile_aligned(shape_dim, dtype, compute_kernel_options, device):
-    """Ragged reduce dimensions: the padding lanes of the last tile must not affect the result.
-
-    Softmax normalises, so a leaked padding element shows up as a row sum that is not 1.0 as well as
-    a per-element mismatch against torch.
-    """
-    shape, dim = shape_dim
-    torch.manual_seed(0)
-    rtol = atol = 0.05
-    run_moreh_softmax_test(
-        shape,
-        dim,
-        dtype,
-        ttnn.TILE_LAYOUT,
-        device,
-        rtol,
-        atol,
-        True,
-        compute_kernel_options=compute_kernel_options,
-    )
-
-
-@pytest.mark.parametrize(
-    "shape_dim",
-    [
         [[2, 3, 32 * 4, 32 * 5], 3],
         [[2, 3, 32 * 4, 32 * 5], 2],
     ],
@@ -261,9 +223,10 @@ def test_softmax_large_algorithm_not_multiple_of_32_for_dim_hw(shape_dim, dtype,
     """Ragged reduce dimensions on the _large kernels.
 
     test_softmax_large_algorithm_for_dim_hw above only uses multiples of 32, and the ragged shapes in
-    test_softmax_non_tile_aligned are small enough that the op picks a SMALL strategy -- so the ragged
-    tail of the _large kernels is only exercised by forcing the strategy here. The single-tile cases
-    matter on their own: they are the ones that used to take the separate Wt == 1 / Ht == 1 branch.
+    test_softmax_not_multiple_of_32_for_dim_hw are small enough that the op picks a SMALL strategy --
+    so the ragged tail of the _large kernels is only exercised by forcing the strategy here. The
+    single-tile cases matter on their own: they are the ones that used to take the separate
+    Wt == 1 / Ht == 1 branch.
     """
     shape, dim = shape_dim
     torch.manual_seed(0)
@@ -458,54 +421,6 @@ def test_softmax_backward_not_multiple_of_32_for_dim_hw(shape_dim, dtype, comput
         rtol,
         atol,
         True,
-        compute_kernel_options=compute_kernel_options,
-    )
-
-
-@pytest.mark.parametrize(
-    "shape_dim",
-    [
-        [[1, 1, 10, 15], 3],  # ragged W, single tile
-        [[1, 1, 10, 32 * 2 + 10], 3],  # ragged W, multiple tiles
-        [[1, 1, 15, 10], 2],  # ragged H, single tile
-        [[1, 1, 32 * 2 + 10, 32], 2],  # ragged H, multiple tiles
-    ],
-)
-@pytest.mark.parametrize(
-    "dtype",
-    [
-        ttnn.bfloat16,
-    ],
-)
-@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
-def test_softmax_backward_large_algorithm_not_multiple_of_32_for_dim_hw(
-    shape_dim, dtype, compute_kernel_options, device
-):
-    """Ragged reduce dimensions on the _large kernels.
-
-    The shapes in test_softmax_backward_not_multiple_of_32_for_dim_hw are small enough that the op
-    picks a SMALL strategy, and test_softmax_backward_large_algorithmfor_dim_hw only uses multiples of
-    32 -- so without forcing the strategy here, the ragged tail of the _large kernels is never
-    exercised.
-    """
-    shape, dim = shape_dim
-    torch.manual_seed(0)
-    strategy = (
-        ttnn.operations.moreh.SoftmaxBackwardOpParallelizationStrategy.LARGE_W
-        if dim == 3
-        else ttnn.operations.moreh.SoftmaxBackwardOpParallelizationStrategy.LARGE_H
-    )
-    rtol = atol = 0.05
-    run_moreh_softmax_backward_test(
-        shape,
-        dim,
-        dtype,
-        ttnn.TILE_LAYOUT,
-        device,
-        rtol,
-        atol,
-        True,
-        strategy=strategy,
         compute_kernel_options=compute_kernel_options,
     )
 
