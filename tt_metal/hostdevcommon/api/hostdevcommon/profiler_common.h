@@ -190,6 +190,35 @@ enum SpscControlBuffer {
     SPSC_CONTROL_END = SPSC_STALL_COUNT_0 + SPSC_STALL_COUNT_MAX,  // first unused word; grow the layout here
 };
 
+// Size of the drain kernel's results block, in words. Shared because the host both ZEROES and READS it and
+// lays the handshake block out immediately behind it -- three places that silently disagreed would each fail
+// differently (a stale counter, a short read, an overlapping handshake). Was 64 and exactly full; the DRISC
+// self-profiling counters need out[64..84].
+static constexpr std::uint32_t SPSC_DRAIN_RESULT_WORDS = 96;
+
+// ---- Reserved zone ids for DRAINER-AUTHORED zones (DRISC self-profiling) ----------------------------
+//
+// The drainer emits its own zones into its own span frame, so those zones need ids the host can name. They
+// cannot come from Hash16_CT: the host resolves names by harvesting `#pragma message` source locations out
+// of the JIT build log, and the drain kernel's zones are not scoped by the DeviceZoneScopedN macros (they
+// are stamped from timestamps the drain loop had already read -- see drisc_profiler_drain.cpp). So they take
+// FIXED ids in the same reserved band PROFILER_STALL_ZONE_ID (0x7FFF) already uses, and the host registers
+// their names explicitly next to PRODUCER-STALL.
+//
+// 0x7FF0..0x7FF6, i.e. immediately below the stall zone: a 16-bit hash landing here is possible in principle
+// but has the same (accepted) probability the stall id has carried since it was introduced.
+static constexpr std::uint32_t PROFILER_DRISC_ZONE_BASE = 0x7FF0;
+enum DriscSelfZone : std::uint32_t {
+    DRISC_ZONE_SWEEP = PROFILER_DRISC_ZONE_BASE + 0,        // one whole poll sweep (the parent)
+    DRISC_ZONE_READ = PROFILER_DRISC_ZONE_BASE + 1,         // filler: span-read ISSUE. mover: the DRAM read
+    DRISC_ZONE_READ_WAIT = PROFILER_DRISC_ZONE_BASE + 2,    // filler: the read-barrier wait left after proc
+    DRISC_ZONE_PROC = PROFILER_DRISC_ZONE_BASE + 3,         // control-vector scan + head write-back
+    DRISC_ZONE_CREDIT_WAIT = PROFILER_DRISC_ZONE_BASE + 4,  // filler: DRAM ring room. mover: socket credit
+    DRISC_ZONE_WRITE = PROFILER_DRISC_ZONE_BASE + 5,        // the egress write itself
+    DRISC_ZONE_WR_BARRIER = PROFILER_DRISC_ZONE_BASE + 6,   // write barrier before staging is reused
+    DRISC_ZONE_COUNT = 7,
+};
+
 // STICKY_META (SPSC/drainer backend): an 8B context packet emitted once per RISC per launch at the main
 // zone scope. High word carries (core_x, core_y, risc) + this type; low word a 32-bit host-side ID. The
 // host forward-fills that identity onto the following timing markers so the drainer reader can bulk-copy raw
@@ -302,6 +331,26 @@ inline std::uint32_t spsc_span_live(std::uint32_t head, std::uint32_t tail, std:
 }
 
 inline std::uint32_t spsc_span_w0() { return SPSC_SPAN_PACKET_TYPE << SPSC_SPAN_TYPE_SHIFT; }
+
+// ---- Packing for a DRAINER-AUTHORED marker (DRISC self-profiling) ----------------------------------
+//
+// The drain kernel produces its own zones, so it needs the same 2-word packing kernel_profiler.hpp's ppfmt
+// does -- but it cannot use that header: kernel_profiler.hpp binds itself to the mailbox profiler region and
+// to PROCESSOR_INDEX, and a DRISC drain kernel emits into a span frame it assembles in its staging area
+// instead. These are the two encodings it needs, defined here where the wire's producer, its host decoder
+// and the frame layout above all already live. Codes MUST match spsc_packet.h's PP_* -- asserted in
+// spsc_marker_decode.hpp, which is the one place that sees both headers.
+static constexpr std::uint32_t SPSC_TYPE_ZONE_START = 0;
+static constexpr std::uint32_t SPSC_TYPE_ZONE_END = 1;
+static constexpr std::uint32_t SPSC_TYPE_STICKY_TIMER = 9;
+static constexpr std::uint32_t SPSC_TIMER_HI_MASK = 0x7FFFFFFu;  // the 27-bit low field of word0
+
+inline std::uint32_t spsc_marker_w0(std::uint32_t type, std::uint32_t zone_id) {
+    return (type << SPSC_SPAN_TYPE_SHIFT) | (zone_id & 0xFFFFu);
+}
+inline std::uint32_t spsc_sticky_timer_w0(std::uint32_t timer_hi) {
+    return (SPSC_TYPE_STICKY_TIMER << SPSC_SPAN_TYPE_SHIFT) | (timer_hi & SPSC_TIMER_HI_MASK);
+}
 
 // Total words a frame occupies on the wire, including the prefix and the pad up to a socket page.
 inline std::uint32_t spsc_span_frame_words(std::uint32_t payload_words) {

@@ -223,7 +223,10 @@ private:
     struct DeviceCtx {
         uint32_t chip_id = 0;
         std::unique_ptr<distributed::D2HSocket> sockets[kNSockets];
-        uint32_t nl = 0;           // lanes = num_cores * NRISC
+        uint32_t nl = 0;           // lanes = num_cores * NRISC (+ n_drisc * NRISC with self-profiling on)
+        // Worker cores only, i.e. where the DRISC self-profiling lane block starts inside core_virt. 0 when
+        // self-profiling is off, in which case core_virt holds nothing but workers.
+        uint32_t n_worker_cores = 0;
         // ---- DRISC drainer ----
         // The program stays alive for the life of the profiler: its kernel is still running. It was
         // launched OUTSIDE the command queue (detail::LaunchProgram with force_slow_dispatch), which is
@@ -425,6 +428,10 @@ private:
     std::atomic<bool> stop_{false};
     std::atomic<bool> stopped_{false};
     std::unordered_map<uint16_t, std::string> zone_names_;  // srcloc hash -> zone name (Tracy)
+    // chip -> the NOC0 coords of that chip's drainer cores, when DRISC self-profiling is on. Filled during
+    // boot_device (the only place a drainer's placement is known) and consumed in start() to pre-create their
+    // Tracy contexts, which is off the drain hot path.
+    std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, uint32_t>>> self_zone_cores_;
     std::once_flag names_once_;  // zone names are loaded LAZILY on first drain (after kernels JIT-compile,
                                  // so the zone-source-location log exists) -- not at start()/bring-up.
 };
