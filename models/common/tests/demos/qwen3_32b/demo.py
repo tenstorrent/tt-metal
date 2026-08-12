@@ -158,11 +158,9 @@ EXPECTED_METRICS_BATCH32: dict = {
 # prefill matmuls cuts ci-32 TTFT: same-box median-of-3 (2026-07-25) perf 47.3ms (OFF) -> 40.3ms (ON),
 # acc ~56 -> 48.8ms — closing most of the old +28/36% gap vs TTTv1 (perf 37.4 / acc 41.5ms) down to
 # ~+8% / +18%. Accuracy is unchanged with it ON (eval-32 64/64 host, batched ON+OFF; token-accuracy
-# 90.6/98.6 perf, 96.7/100 acc). The residual TTFT gap is the shared-engine batched-prefill FOLD term
-# (32 users -> passes capped at max_prefill_batch_size vs TTTv1's single pass); the fold-cap lever is
-# dead (8->32 single-pass moved TTFT only ~1ms), so it is NOT per-model closeable and is escalated as a
-# shared-engine item. The ttft gate is a CEILING TTTv2 clears (batched-ON ~40/49 << the sequential-OFF
-# ~103/113); the tolerance-free parity RED lives in PR.md, not a lowered gate.
+# 90.6/98.6 perf, 96.7/100 acc). The ttft gate is a CEILING TTTv2 clears
+# (batched-ON ~40/49 << the sequential-OFF ~103/113); the tolerance-free parity RED lives in PR.md,
+# not a lowered gate.
 EXPECTED_METRICS_BATCH32_CI: dict = {
     "host": {
         "performance": {},
@@ -172,8 +170,7 @@ EXPECTED_METRICS_BATCH32_CI: dict = {
         # best-of{TTTv2, same-box TTTv1 ci-32}. Decode: TTTv2 25.3/20.5 vs TTTv1 25.75/20.89 — ~1.7/1.9%
         # under (diffuse shared-engine per-step delta; NOT lowered to the TTTv2 number — see PR.md).
         # ttft is a CEILING TTTv2 clears (minimal_matmul-ON batched ~40/49 << the sequential-OFF ~103/113);
-        # the tolerance-free TTFT parity RED (residual batched-prefill fold, +8/18% after minimal_matmul)
-        # is documented in PR.md + the shared-gap ticket.
+        # the tolerance-free TTFT parity RED is documented in PR.md + the shared-gap ticket.
         "performance": {"T3K": {"tok_s_u": 25.7, "ttft_ms": 110}},
         "accuracy": {"T3K": {"tok_s_u": 20.8, "ttft_ms": 120}},
     },

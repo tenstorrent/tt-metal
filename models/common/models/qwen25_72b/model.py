@@ -93,7 +93,7 @@ class Qwen25_72BExecutorRuntimeConfig:
     # batches models whose prefill_forward threads ``batch_size`` — Qwen2.5-72B does, below).
     # Qwen2.5-72B is a standard dense Qwen2.5 attention (NO QK-norm), so every prefill op is
     # row-independent and the batched fold is bit-safe (same as the qwen25_7b / Coder-32B ports).
-    # ``max_prefill_batch_size`` caps the per-group batch; 32 folds the whole batch-32 prefill in ONE
+    # ``max_prefill_batch_size`` is the largest supported padded wave; 32 folds batch-32 prefill in ONE
     # 32-user pass (TTTv1 structural parity) so the eager norm+lm_head tail + full-vocab readback run
     # once instead of 4×. At the natural 128 bucket the fold is 32*128=4096=2*2048, an exact multiple of
     # MAX_QKV_MM_SEQ_LEN (reshape-safe), and 4096 % mlp_prefill_len_cutoff(1024) == 0 for the FF reshape;

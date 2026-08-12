@@ -112,9 +112,7 @@ class Qwen25Executor:
                 device_sampling_enabled=config.device_sampling_enabled,
                 can_enable_trace=runtime_config.can_enable_trace,
                 supports_batched_prefill=bool(runtime_config.supports_batched_prefill),
-                disable_batched_prefill=(
-                    bool(runtime_config.disable_batched_prefill) or config.device_sampling_enabled
-                ),
+                disable_batched_prefill=bool(runtime_config.disable_batched_prefill),
                 max_prefill_batch_size=int(runtime_config.max_prefill_batch_size),
                 batched_prefill_batched_extract=bool(runtime_config.batched_prefill_batched_extract),
             )
@@ -139,7 +137,11 @@ class Qwen25Executor:
         self.traced_executor: TracedExecutor | None = None
         if config.trace.mode != "none":
             self.trace_compiler = TraceCompiler(self.program_compiler)
-            self.traced_executor = TracedExecutor(eager=self.eager_executor, trace_compiler=self.trace_compiler)
+            self.traced_executor = TracedExecutor(
+                eager=self.eager_executor,
+                trace_compiler=self.trace_compiler,
+                trace_mode=config.trace.mode,
+            )
         self.eager_execution = self.eager_executor
         self.traced_prefill_execution = (
             self.traced_executor if config.trace.prefill_enabled and self.traced_executor is not None else None

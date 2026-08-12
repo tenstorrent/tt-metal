@@ -47,6 +47,7 @@ class Llama33_70BRuntimeConfig:
     max_context_len: int
     max_seq_len: int
     trace_prefill_supported_seq_lens: tuple[int, ...]
+    trace_prefill_warmup_seq_lens: tuple[int, ...] = ()
     supports_batched_prefill: bool = True
     max_prefill_batch_size: int = 32
     disable_batched_prefill: bool = False
@@ -146,7 +147,14 @@ def load_tokenizer(hf_model: str):
 def _trace_seq_lens(num_devices: int, max_prefill_chunk_size: int, max_seq_len: int) -> tuple[int, ...]:
     if num_devices != 8:
         raise ValueError(f"Llama-3.3-70B supports exactly 8 devices (T3K), got {num_devices}")
-    return tuple(length for length in (128,) if length <= min(max_prefill_chunk_size, max_seq_len))
+    return tuple(length for length in (128, max_prefill_chunk_size) if length <= max_seq_len)
+
+
+def _trace_warmup_seq_lens(max_prefill_chunk_size: int, max_seq_len: int) -> tuple[int, ...]:
+    """Return logical representatives for regular and fixed-chunk traces."""
+
+    candidates = (128, max_prefill_chunk_size, 2 * max_prefill_chunk_size)
+    return tuple(dict.fromkeys(length for length in candidates if length <= max_seq_len))
 
 
 def _cache_path(hf_model: str, mesh_device, cache_dir: Path | str | None) -> Path:
@@ -291,6 +299,7 @@ def from_pretrained(
         max_context_len=int(hf_config.max_position_embeddings),
         max_seq_len=max_seq_len,
         trace_prefill_supported_seq_lens=_trace_seq_lens(num_devices, 2048, max_seq_len),
+        trace_prefill_warmup_seq_lens=_trace_warmup_seq_lens(2048, max_seq_len),
         disable_batched_prefill=bool(os.getenv("DISABLE_BATCHED_PREFILL")),
     )
     del hf

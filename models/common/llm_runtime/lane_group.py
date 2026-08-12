@@ -9,6 +9,7 @@ import copy
 import dataclasses
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor, wait
+from contextlib import ExitStack
 from typing import Any, Callable, Iterator, Sequence, TypedDict
 
 import torch
@@ -211,7 +212,7 @@ class LaneGroupExecutor:
                     enable_trace=enable_trace,
                 )
 
-        self._run_guarded(operation)
+        self._run_guarded(lambda: self._run_warmup_barrier(operation, enable_trace=enable_trace))
 
     def warmup_model_decode(
         self,
@@ -233,7 +234,7 @@ class LaneGroupExecutor:
                     enable_trace=enable_trace,
                 )
 
-        self._run_guarded(operation)
+        self._run_guarded(lambda: self._run_warmup_barrier(operation, enable_trace=enable_trace))
 
     def prefill_forward(
         self,
@@ -250,18 +251,32 @@ class LaneGroupExecutor:
         """Fan out prefill rows by slot and restore their source-row order."""
 
         def operation() -> Any:
+            lane_requests = tuple(
+                self._prefill_lane_requests(
+                    tokens,
+                    page_table,
+                    prompt_lens=prompt_lens,
+                    start_pos=start_pos,
+                    empty_slots=empty_slots,
+                    kv_cache=kv_cache,
+                    sampling_params=sampling_params,
+                    execution=execution,
+                )
+            )
+            traced_calls = self._preflight_prefill_traces(lane_requests)
             lane_results = []
-            for lane_idx, rows, lane_kwargs in self._prefill_lane_requests(
-                tokens,
-                page_table,
-                prompt_lens=prompt_lens,
-                start_pos=start_pos,
-                empty_slots=empty_slots,
-                kv_cache=kv_cache,
-                sampling_params=sampling_params,
-                execution=execution,
-            ):
-                result = self.lanes[lane_idx].prefill_forward(**lane_kwargs)
+            for lane_idx, rows, lane_kwargs in lane_requests:
+                traced_call = traced_calls.get(lane_idx)
+                if traced_call is None:
+                    result = self.lanes[lane_idx].prefill_forward(**lane_kwargs)
+                else:
+                    selected, preflighted = traced_call
+                    result = selected.execute_prepared_prefill(
+                        preflighted,
+                        batch_size=int(lane_kwargs["tokens"].shape[0]),
+                        sampling_params=lane_kwargs["sampling_params"],
+                        lane=lane_idx,
+                    )
                 lane_results.append((rows, result))
             return _aggregate_prefill_outputs(lane_results, int(tokens.shape[0]))
 
@@ -385,6 +400,89 @@ class LaneGroupExecutor:
             raise primary
 
     # Private implementation
+
+    def _run_warmup_barrier(self, operation: Callable[[], None], *, enable_trace: bool) -> None:
+        if not enable_trace:
+            operation()
+            return
+        coordinators = tuple(getattr(lane, "warmup", None) for lane in self.lanes)
+        if all(coordinator is None for coordinator in coordinators):
+            # Lightweight eager/dispatch contract doubles have no coordinator.
+            operation()
+            return
+        required = ("defer_capture", "activate_pending_capture", "capture_pending", "trace_activated")
+        if any(
+            coordinator is None or any(not hasattr(coordinator, name) for name in required)
+            for coordinator in coordinators
+        ):
+            raise RuntimeError("Every DP lane must expose the trace activation barrier")
+
+        with ExitStack() as stack:
+            for coordinator in coordinators:
+                stack.enter_context(coordinator.defer_capture())
+            operation()
+            states = tuple(
+                "activated"
+                if coordinator.trace_activated
+                else "pending"
+                if coordinator.capture_pending
+                else "incomplete"
+                for coordinator in coordinators
+            )
+            if len(set(states)) != 1:
+                raise RuntimeError(f"DP lanes have mixed trace activation readiness: {states}")
+            if states[0] == "pending":
+                for coordinator in coordinators:
+                    coordinator.activate_pending_capture()
+
+    def _preflight_prefill_traces(
+        self,
+        lane_requests: Sequence[tuple[int, list[int], _LanePrefillKwargs]],
+    ) -> dict[int, tuple[TracedExecutor, tuple[tuple[Any, Any], ...]]]:
+        """Prepare and preflight every selected DP trace before any KV write."""
+
+        traced_calls = {}
+        for lane_idx, _, lane_kwargs in lane_requests:
+            selected = lane_kwargs["execution"]
+            lane = self.lanes[lane_idx]
+            if selected is None or not (
+                isinstance(selected, TracedExecutor) or selected is getattr(lane, "traced_prefill_execution", None)
+            ):
+                continue
+            if isinstance(selected, TracedExecutor):
+                validate_cache = getattr(lane, "_validate_bound_cache", None)
+                if callable(validate_cache):
+                    validate_cache(lane_kwargs["kv_cache"])
+                ensure_sampling = getattr(lane, "_ensure_sampling_for", None)
+                if callable(ensure_sampling):
+                    ensure_sampling(lane_kwargs["sampling_params"])
+                prepared = selected.prepare_prefill(
+                    tokens=lane_kwargs["tokens"],
+                    page_table=lane_kwargs["page_table"],
+                    prompt_lens=lane_kwargs["prompt_lens"],
+                    start_pos=lane_kwargs["start_pos"],
+                    empty_slots=lane_kwargs["empty_slots"],
+                    sampling_params=lane_kwargs["sampling_params"],
+                )
+                try:
+                    traced_calls[lane_idx] = (selected, selected.preflight_prefill(prepared))
+                except RuntimeError as error:
+                    raise RuntimeError(
+                        f"Required traced prefill is unavailable for DP lane {lane_idx}; no DP lane executed: {error}"
+                    ) from error
+                continue
+            can_trace = getattr(lane, "can_trace_prefill", None)
+            if not callable(can_trace):
+                raise RuntimeError(f"DP lane {lane_idx} cannot preflight required traced prefill")
+            if not can_trace(
+                tokens=lane_kwargs["tokens"],
+                prompt_lens=lane_kwargs["prompt_lens"],
+                start_pos=lane_kwargs["start_pos"],
+            ):
+                raise RuntimeError(
+                    f"Required traced prefill is unavailable for DP lane {lane_idx}; no DP lane executed"
+                )
+        return traced_calls
 
     def _prefill_lane_requests(
         self,

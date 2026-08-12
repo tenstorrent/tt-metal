@@ -67,7 +67,7 @@ class OutputSpec:
         raise TypeError(f"Cannot derive an output specification from {type(value).__name__}")
 
 
-@dataclass
+@dataclass(frozen=True)
 class CompiledProgram:
     """Program metadata retained independently from all trace state."""
 
@@ -95,6 +95,7 @@ class ProgramCompiler:
         self._trace_capture_in_progress = False
         self._trace_active = False
         self._released = False
+        self._post_activation_compile_rejections = 0
 
     # Public API
 
@@ -109,6 +110,18 @@ class ProgramCompiler:
     @property
     def compile_orphan_count(self) -> int:
         return len(self._compile_orphans)
+
+    @property
+    def compiled_programs(self) -> tuple[CompiledProgram, ...]:
+        """Return an immutable snapshot of the authoritative program registry."""
+
+        return tuple(self._programs.values())
+
+    @property
+    def post_activation_compile_rejections(self) -> int:
+        """Return unseen-program compile attempts rejected after activation."""
+
+        return self._post_activation_compile_rejections
 
     def key_for(self, signature: Any) -> ProgramKey:
         """Return the stable program key for one operation signature."""
@@ -144,6 +157,7 @@ class ProgramCompiler:
         if self._trace_capture_in_progress:
             raise RuntimeError(f"Cannot compile uncompiled program key {key.digest} while trace capture is in progress")
         if self._trace_active:
+            self._post_activation_compile_rejections += 1
             raise RuntimeError(f"Cannot compile uncompiled program key {key.digest} after trace activation")
 
         cache_context = self._bound_cache_context()

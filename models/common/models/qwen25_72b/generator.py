@@ -224,13 +224,9 @@ class Qwen25_72BGenerator:
         return self.target.cleanup()
 
     def _select_prefill_execution(self, normalized: NormalizedPrefillKwargs, trace_requested: bool):
-        if trace_requested and not self.target.can_trace_prefill(
-            tokens=normalized["tokens"],
-            prompt_lens=normalized["prompt_lens"],
-            start_pos=normalized["start_pos"],
-            empty_slots=normalized["empty_slots"],
-        ):
-            trace_requested = False
+        # Static trace intent is authoritative. Eligibility and configured
+        # coverage are preflighted by the selected execution target; this
+        # facade must never turn a required trace miss into eager KV writes.
         return self._select_execution("prefill", trace_requested)
 
     def _select_execution(self, operation: str, enable_trace: bool):
@@ -274,11 +270,8 @@ def build_qwen25_72b_generator(config: Qwen25_72BGeneratorConfig) -> Qwen25_72BG
                 paged_attention_config=paged_attention_config,
             )
             model_kv_cache_dtypes, _, _, _ = _model_kv_metadata(llm.model)
-            trace_mode = config.trace_mode
-            if trace_mode == "all" and not llm.runtime_config.trace_prefill_supported_seq_lens:
-                trace_mode = "decode_only"
             executor_config = Qwen25_72BExecutorConfig(
-                trace=TraceConfig(mode=trace_mode),
+                trace=TraceConfig(mode=config.trace_mode),
                 warmup=WarmupConfig(),
                 paged_kv_cache=PagedKVCacheConfig(
                     block_size=_PROVISIONAL_BLOCK_SIZE,

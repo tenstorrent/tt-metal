@@ -17,6 +17,7 @@ from models.common.llm_runtime.prefill.config import PrefillRuntimeConfig
 from models.common.llm_runtime.prefill.plan import (
     PrefillChunk,
     PrefillRequest,
+    _max_prefill_chunk_size,
     _padded_prefill_length,
     _plan_prefill_requests,
 )
@@ -44,28 +45,14 @@ PrefillVariant = Literal["regular-single", "regular-batched", "chunked"]
 class PrefillProgramSignature:
     """Material values selecting one eager prefill program variant.
 
-    Batched-prefill key-space note: when device sampling is on, top-k is
-    compiled into the prefill program (sampling_path is key material), so
-    every distinct (padded_batch_size, active_batch_size, ...) combination is
-    a separate program. Under async admission, a 15-request wave plans as
-    groups of 8 and 7, and active_batch_size 8 and 7 are different programs.
-    The set of reachable keys is effectively unbounded at runtime, and the
-    compiler freezes once trace mode activates. Batch-1 prefill collapses the
-    sampled-prefill key space to one warmed shape per seq bucket.
-
-    TODO(perf): This is a warmup-coverage/trace-memory budget decision, not a
-    kernel limitation — it could be lifted by pre-compiling the full admission
-    set (padded {2,4,8} x active 1..8 x seq {128,1024} ≈ 28 sampled variants
-    per lane) and paying the compile time + trace region. Nobody has chosen to
-    pay that. Cheaper middle grounds to evaluate: let vLLM tell the model
-    which batch sizes to capture traces for, or capture exactly two traces per
-    bucket — bs=1 (universal fallback when there are not enough users to fill
-    up to max_num_seqs) and bs=max_num_seqs.
+    Active row count is deliberately absent: regular paged fill uses ``-1``
+    skip rows, so all active counts with the same padded geometry execute the
+    same compiled program. Sampling remains material because it changes the
+    postprocessing program family.
     """
 
     operation_variant: PrefillVariant
     padded_batch_size: int
-    active_batch_size: int
     invocation_sequence_length: int
     page_table_width: int
     chunk_page_table_width: int | None
@@ -76,7 +63,6 @@ class PrefillProgramSignature:
         return (
             ("operation_variant", self.operation_variant),
             ("padded_batch_size", self.padded_batch_size),
-            ("active_batch_size", self.active_batch_size),
             ("invocation_sequence_length", self.invocation_sequence_length),
             ("page_table_width", self.page_table_width),
             ("chunk_page_table_width", self.chunk_page_table_width),
@@ -87,19 +73,21 @@ class PrefillProgramSignature:
 
 @dataclass(frozen=True)
 class PrefillTraceSignature:
-    """Identity of the regular prefill hidden body and persistent schema."""
+    """Identity of one static prefill body and persistent input geometry."""
 
+    operation_variant: PrefillVariant
     padded_batch_size: int
-    active_batch_size: int
     padded_sequence_length: int
     page_table_width: int
+    chunk_page_table_width: int | None
 
     def key_material(self) -> tuple[tuple[str, str | int | None], ...]:
         return (
+            ("operation_variant", self.operation_variant),
             ("padded_batch_size", self.padded_batch_size),
-            ("active_batch_size", self.active_batch_size),
             ("padded_sequence_length", self.padded_sequence_length),
             ("page_table_width", self.page_table_width),
+            ("chunk_page_table_width", self.chunk_page_table_width),
         )
 
 
@@ -174,6 +162,17 @@ class PrefillPositionInputs:
 class InvocationResult:
     value: Any
     owned: Any
+    replay_ownership: "PrefillReplayOwnership | None" = None
+
+
+@dataclass(frozen=True)
+class PrefillReplayOwnership:
+    """Explicit ownership split for one hidden-trace postprocess result."""
+
+    trace_owned_hidden_output: Any
+    nested_persistent_output: Any | None
+    new_logprob_output: Any | None
+    replay_local_intermediates: tuple[Any, ...]
 
 
 @dataclass(frozen=True)
@@ -190,12 +189,39 @@ class PrefillPersistentInputs:
 
 
 @dataclass(frozen=True)
+class PrefillHiddenPersistentInputs:
+    """Canonical trace-owned model inputs; deliberately sampling-free."""
+
+    device_inputs: PrefillDeviceInputs
+
+    def owned_tensor_values(self) -> tuple[Any, ...]:
+        return self.device_inputs.model_values()
+
+
+@dataclass(frozen=True)
+class PrefillReplayWorkspace:
+    """Program-alias-local postprocessing and sampling state."""
+
+    position_inputs: PrefillPositionInputs
+    kpt: tuple[Any, Any, Any] | None
+    sampled_output: Any | None = None
+    position_signature: list[int] | None = None
+    kpt_signature: list[Any] | None = None
+
+    def owned_tensor_values(self) -> tuple[Any, ...]:
+        return self.position_inputs.values(), self.kpt, self.sampled_output
+
+
+@dataclass(frozen=True)
 class PrefillCapturePlan:
     """Operation hooks consumed by the trace compiler."""
 
     signature: PrefillTraceSignature
-    prepare_inputs: Callable[[], PrefillPersistentInputs]
-    capture: Callable[[PrefillPersistentInputs], Any]
+    prepare_inputs: Callable[[], PrefillHiddenPersistentInputs]
+    capture: Callable[[PrefillHiddenPersistentInputs], Any]
+    prepare_workspace: Callable[[], PrefillReplayWorkspace]
+    schema_fingerprint: Any
+    workspace_fingerprint: Any
     refresh_fields: tuple[str, ...] = ("tokens", "page_table", "last_token", "sampling")
 
 
@@ -253,10 +279,23 @@ class PrefillRuntime:
         if len(lengths) != batch_size or len(cached) != batch_size:
             return False
         for length, num_cached_tokens in zip(lengths, cached):
-            if num_cached_tokens != 0 or length <= 0 or length > token_width:
+            if (
+                num_cached_tokens < 0
+                or num_cached_tokens % self.config.page_table_layout.block_size
+                or length <= num_cached_tokens
+                or length > token_width
+            ):
                 return False
-            padded_length = _padded_prefill_length(length)
-            if padded_length > self.config.max_prefill_chunk_size or not self.config.can_enable_trace(padded_length, 0):
+            padded_length = _padded_prefill_length(length - num_cached_tokens)
+            invocation_length = (
+                _max_prefill_chunk_size(padded_length, self.config.max_prefill_chunk_size)
+                if padded_length > self.config.max_prefill_chunk_size
+                else padded_length
+            )
+            # Cached/chunk starts are runtime tensors. Static trace capability
+            # is therefore checked against invocation geometry, not the
+            # request's current cached offset.
+            if not self.config.can_enable_trace(invocation_length, 0):
                 return False
         return True
 
@@ -332,24 +371,78 @@ class PrefillRuntime:
 
         self._ensure_usable()
         if prepared.trace_signature is None:
-            raise ValueError("cached and multi-chunk prefill requests are trace-ineligible")
+            raise ValueError("prepared prefill request has no configured trace family")
 
-        def prepare_inputs() -> PrefillPersistentInputs:
-            return self._prepare_persistent_inputs(prepared)
+        def prepare_inputs() -> PrefillHiddenPersistentInputs:
+            return self._prepare_hidden_persistent_inputs(prepared)
 
-        def capture(persistent: PrefillPersistentInputs) -> Any:
-            return self._run_hidden_body(prepared.request, persistent.device_inputs)
+        def prepare_workspace() -> PrefillReplayWorkspace:
+            return self._prepare_replay_workspace(prepared)
+
+        def capture(persistent: PrefillHiddenPersistentInputs) -> Any:
+            if prepared.request.uses_chunked_prefill:
+                return self._run_chunk_hidden_body(
+                    prepared,
+                    prepared.request.chunks[0],
+                    persistent.device_inputs,
+                    dynamic_start=True,
+                )
+            # Eager fill touches active rows only. A captured padded identity
+            # must record every physical row so replay never depends on which
+            # active count registered the shared trace first; planner-owned
+            # ``-1`` rows make the additional fills no-ops for KV ownership.
+            return self._run_hidden_body(
+                prepared.request,
+                persistent.device_inputs,
+                fill_rows=prepared.request.padded_batch_size,
+            )
 
         return PrefillCapturePlan(
             signature=prepared.trace_signature,
             prepare_inputs=prepare_inputs,
             capture=capture,
+            prepare_workspace=prepare_workspace,
+            schema_fingerprint=self._capture_schema_fingerprint(prepared),
+            workspace_fingerprint=self._workspace_fingerprint(prepared),
         )
 
-    def refresh_trace(self, prepared: PreparedPrefill, persistent: PrefillPersistentInputs) -> None:
+    def refresh_trace(
+        self,
+        prepared: PreparedPrefill,
+        persistent: PrefillHiddenPersistentInputs | PrefillPersistentInputs,
+        workspace: PrefillReplayWorkspace | None = None,
+        chunk: PrefillChunk | None = None,
+    ) -> None:
         """Refresh borrowed persistent inputs for one replay."""
 
+        legacy_chunk_workspace = isinstance(workspace, PrefillChunk) and chunk is None
+        if legacy_chunk_workspace:
+            chunk = workspace
+            workspace = None
+        if workspace is None:
+            if not isinstance(persistent, PrefillPersistentInputs):
+                raise TypeError("workspace is required with canonical hidden persistent inputs")
+            position_signature = persistent.position_signature
+            if legacy_chunk_workspace and position_signature is None:
+                final_chunk = prepared.request.chunks[-1]
+                relative_last = (
+                    prepared.request.last_token_indices[0] - final_chunk.chunk_start_idx
+                ) % final_chunk.chunk_size
+                position_signature = [relative_last]
+            workspace = PrefillReplayWorkspace(
+                position_inputs=persistent.position_inputs,
+                kpt=persistent.kpt,
+                sampled_output=persistent.sampled_output,
+                position_signature=position_signature,
+                kpt_signature=persistent.kpt_signature,
+            )
+            persistent = PrefillHiddenPersistentInputs(persistent.device_inputs)
         request = prepared.request
+        if request.uses_chunked_prefill:
+            if chunk is None:
+                chunk = request.chunks[0]
+            self._refresh_chunk_trace_inputs(prepared, chunk, persistent, workspace)
+            return
         relative_last = max(last - cached for last, cached in zip(request.last_token_indices, request.cached_tokens))
         # Trace-eligible prefill fixes rotary positions and has no chunk inputs.
         # Rebuilding those capture-owned host tensors on every replay adds TTFT
@@ -376,12 +469,19 @@ class PrefillRuntime:
         )
         if not self._uses_static_q128_topk(request, prepared.sampling_path) and not uses_static_single_logits:
             position_value = relative_last
-            position_signature = persistent.position_signature
+            position_signature = workspace.position_signature
             if position_signature is None or position_signature[0] != position_value:
                 position_inputs = self._prepare_position_inputs_host(relative_last, request.padded_sequence_length)
-                _copy_host_to_device(position_inputs.values(), persistent.position_inputs.values())
+                _copy_host_to_device(position_inputs.values(), workspace.position_inputs.values())
                 if position_signature is not None:
                     position_signature[0] = position_value
+        self._refresh_workspace_sampling(prepared, workspace)
+
+    def _refresh_workspace_sampling(
+        self,
+        prepared: PreparedPrefill,
+        workspace: PrefillReplayWorkspace,
+    ) -> None:
         if prepared.sampling_path == "topk":
             sampling_batch_size = self._sampling_output_rows(prepared)
             if prepared.sampling_params is None:
@@ -389,10 +489,10 @@ class PrefillRuntime:
             else:
                 k, p, temperature, _ = _formatted_sampling_values(prepared.sampling_params, sampling_batch_size)
                 kpt_value = k, p, temperature
-            kpt_signature = persistent.kpt_signature
+            kpt_signature = workspace.kpt_signature
             if kpt_signature is None or kpt_signature[0] != kpt_value:
                 self._refresh_kpt(
-                    persistent.kpt,
+                    workspace.kpt,
                     prepared.sampling_params,
                     sampling_batch_size,
                     force_topk=True,
@@ -404,19 +504,50 @@ class PrefillRuntime:
         self,
         prepared: PreparedPrefill,
         hidden: Any,
-        persistent: PrefillPersistentInputs,
+        workspace: PrefillReplayWorkspace | PrefillPersistentInputs,
     ) -> InvocationResult:
         """Post-process a replayed hidden-state tensor into a normal result."""
 
+        if isinstance(workspace, PrefillPersistentInputs):
+            workspace = PrefillReplayWorkspace(
+                position_inputs=workspace.position_inputs,
+                kpt=workspace.kpt,
+                sampled_output=workspace.sampled_output,
+                position_signature=workspace.position_signature,
+                kpt_signature=workspace.kpt_signature,
+            )
+        replay_local: list[Any] = []
         output = self._finish_regular_prefill(
             prepared,
             hidden,
-            persistent.kpt if prepared.sampling_path == "topk" else None,
-            persistent.position_inputs,
-            sampled_output=persistent.sampled_output,
+            workspace.kpt if prepared.sampling_path == "topk" else None,
+            workspace.position_inputs,
+            sampled_output=workspace.sampled_output,
+            owned=replay_local,
         )
-        owned = () if persistent.sampled_output is not None else (output,)
-        return InvocationResult(value=output, owned=owned)
+        new_logprob = _new_logprob_output(output, workspace.sampled_output)
+        sampled_output_alias = output[0] if workspace.sampled_output is not None else None
+        caller_owned = _without_borrowed(
+            replay_local,
+            (hidden, workspace.sampled_output, sampled_output_alias),
+        )
+        ownership = PrefillReplayOwnership(
+            trace_owned_hidden_output=hidden,
+            nested_persistent_output=workspace.sampled_output,
+            new_logprob_output=new_logprob,
+            replay_local_intermediates=_without_borrowed(
+                replay_local,
+                (hidden, workspace.sampled_output, sampled_output_alias, new_logprob),
+            ),
+        )
+        return InvocationResult(value=output, owned=caller_owned, replay_ownership=ownership)
+
+    def trace_replay_steps(self, prepared: PreparedPrefill) -> tuple[PrefillChunk, ...]:
+        """Return the host-orchestrated replay sequence for one prepared item."""
+
+        if prepared.trace_signature is None:
+            raise ValueError("prepared prefill request has no configured trace family")
+        return prepared.request.chunks
 
     def assemble(
         self,
@@ -562,7 +693,6 @@ class PrefillRuntime:
                 PrefillProgramSignature(
                     operation_variant=variant,
                     padded_batch_size=request.padded_batch_size,
-                    active_batch_size=len(request.source_rows),
                     invocation_sequence_length=chunk.chunk_size,
                     page_table_width=request.page_table_width,
                     chunk_page_table_width=(
@@ -575,23 +705,43 @@ class PrefillRuntime:
         return tuple(dict.fromkeys(signatures))
 
     def _trace_signature(self, request: PrefillRequest) -> PrefillTraceSignature | None:
-        if request.uses_chunked_prefill:
-            return None
-        if (
-            request.kind == "batched"
-            and len(request.source_rows) != request.padded_batch_size
-            and self.config.supports_batched_prefill is not None
-        ):
-            return None
-        if any(request.cached_tokens):
-            return None
-        if not self.config.can_enable_trace(request.padded_sequence_length, 0):
+        chunk = request.chunks[0]
+        invocation_length = chunk.chunk_size
+        if not self.config.can_enable_trace(invocation_length, 0):
             return None
         return PrefillTraceSignature(
+            operation_variant=(
+                "chunked"
+                if request.uses_chunked_prefill
+                else "regular-batched"
+                if request.kind == "batched"
+                else "regular-single"
+            ),
             padded_batch_size=request.padded_batch_size,
-            active_batch_size=len(request.source_rows),
-            padded_sequence_length=request.padded_sequence_length,
+            padded_sequence_length=invocation_length,
             page_table_width=request.page_table_width,
+            chunk_page_table_width=(
+                int(chunk.chunk_page_table.shape[-1]) if chunk.chunk_page_table is not None else None
+            ),
+        )
+
+    def _capture_schema_fingerprint(self, prepared: PreparedPrefill) -> tuple[Any, ...]:
+        """Describe the sampling-free hidden trace allocation."""
+
+        return (
+            "prefill-hidden-v2",
+            prepared.trace_signature,
+            tuple(field for field, value in prepared.trace_signature.key_material() if value is not None),
+        )
+
+    def _workspace_fingerprint(self, prepared: PreparedPrefill) -> tuple[Any, ...]:
+        """Describe one program alias's separately owned postprocess state."""
+
+        return (
+            "prefill-postprocess-v1",
+            prepared.sampling_path,
+            self._sampling_output_rows(prepared),
+            prepared.sampling_params is not None,
         )
 
     def _run_prefill_sequence(self, prepared: PreparedPrefill) -> InvocationResult:
@@ -715,17 +865,51 @@ class PrefillRuntime:
         request = prepared.request
         if not request.uses_chunked_prefill:
             return self._run_hidden_body(request, device_inputs)
+        return self._run_chunk_body(prepared, chunk, device_inputs, position_inputs)
+
+    def _run_chunk_body(
+        self,
+        prepared: PreparedPrefill,
+        chunk: PrefillChunk,
+        device_inputs: PrefillDeviceInputs,
+        position_inputs: PrefillPositionInputs,
+        *,
+        dynamic_start: bool = False,
+    ) -> Any:
         return self.config.model.prefill_forward(
             self.config.model.embed_prefill(device_inputs.tokens),
             [device_inputs.rotary_cos, device_inputs.rotary_sin],
             user_id=0,
             page_table=device_inputs.page_table,
             chunk_page_table=device_inputs.chunk_page_table,
-            chunk_start_idx=chunk.chunk_start_idx,
+            chunk_start_idx=None if dynamic_start else chunk.chunk_start_idx,
             get_last_token=-1,
             chunk_start_idx_tensor=device_inputs.chunk_start_idx,
             last_token_slice=(position_inputs.slice_start, position_inputs.slice_end),
             last_token_index=(position_inputs.row_index if prepared.sampling_params is not None else None),
+        )
+
+    def _run_chunk_hidden_body(
+        self,
+        prepared: PreparedPrefill,
+        chunk: PrefillChunk,
+        device_inputs: PrefillDeviceInputs,
+        *,
+        dynamic_start: bool,
+    ) -> Any:
+        """Run only the shared model body; postprocessing remains alias-local."""
+
+        return self.config.model.prefill_forward(
+            self.config.model.embed_prefill(device_inputs.tokens),
+            [device_inputs.rotary_cos, device_inputs.rotary_sin],
+            user_id=0,
+            page_table=device_inputs.page_table,
+            chunk_page_table=device_inputs.chunk_page_table,
+            chunk_start_idx=None if dynamic_start else chunk.chunk_start_idx,
+            get_last_token=-1,
+            chunk_start_idx_tensor=device_inputs.chunk_start_idx,
+            last_token_slice=None,
+            last_token_index=None,
         )
 
     def _finish_prefill_sequence(
@@ -753,46 +937,94 @@ class PrefillRuntime:
                 self._sampling_output_rows(prepared),
             )
             _retain_owned(owned, selected)
-            output = self._sample_device(selected, kpt)
+            output = self._sample_device(selected, kpt, sampled_output)
         else:
             output = ttnn.untilize(final_step_output, use_multicore=True)
         _retain_owned(owned, output)
         return output
 
-    def _prepare_persistent_inputs(self, prepared: PreparedPrefill) -> PrefillPersistentInputs:
+    def _trace_input_geometry(self, prepared: PreparedPrefill) -> tuple[Any, ...]:
         request = prepared.request
-        relative_last = max(last - cached for last, cached in zip(request.last_token_indices, request.cached_tokens))
+        chunk = request.chunks[0]
+        if request.uses_chunked_prefill:
+            final_chunk = request.chunks[-1]
+            relative_last = (request.last_token_indices[0] - final_chunk.chunk_start_idx) % final_chunk.chunk_size
+            tokens = request.tokens[:, chunk.token_slice]
+            start_pos = chunk.chunk_start_idx
+            chunk_page_table = chunk.chunk_page_table
+            chunk_start_idx = chunk.chunk_start_idx
+            sequence_length = chunk.chunk_size
+        else:
+            relative_last = max(
+                last - cached for last, cached in zip(request.last_token_indices, request.cached_tokens)
+            )
+            tokens = request.tokens
+            start_pos = 0
+            chunk_page_table = None
+            chunk_start_idx = None
+            sequence_length = request.padded_sequence_length
+        return (
+            chunk,
+            relative_last,
+            tokens,
+            start_pos,
+            chunk_page_table,
+            chunk_start_idx,
+            sequence_length,
+        )
+
+    def _prepare_hidden_persistent_inputs(self, prepared: PreparedPrefill) -> PrefillHiddenPersistentInputs:
+        request = prepared.request
+        _, _, tokens, start_pos, chunk_page_table, chunk_start_idx, _ = self._trace_input_geometry(prepared)
         host_inputs = self._prepare_inputs_host(
-            request.tokens,
+            tokens,
             request.page_table,
+            start_pos=start_pos,
+            chunk_page_table=chunk_page_table,
+            chunk_start_idx=chunk_start_idx,
             last_token_idx=max(request.last_token_indices),
         )
         device_inputs = None
+        try:
+            device_inputs = self._stage_device_inputs(host_inputs)
+            if prepared.request.uses_chunked_prefill:
+                # Prime the exact dynamic rotary-copy programs before trace
+                # activation; chunk replay refreshes these buffers in place.
+                self._copy_rotary_inputs(device_inputs)
+        except BaseException as primary:
+            failures = self._release_or_retain_transient(device_inputs)
+            attach_cleanup_failures(primary, failures)
+            raise
+        return PrefillHiddenPersistentInputs(device_inputs=device_inputs)
+
+    def _prepare_replay_workspace(self, prepared: PreparedPrefill) -> PrefillReplayWorkspace:
+        _, relative_last, _, _, _, _, sequence_length = self._trace_input_geometry(prepared)
         position_inputs = None
         kpt = None
         sampled_output = None
         try:
             sampling_batch_size = self._sampling_output_rows(prepared)
-            device_inputs, position_inputs, kpt = self._stage_inputs_and_kpt(
-                host_inputs,
+            position_values = _copy_host_to_device(
+                self._prepare_position_inputs_host(relative_last, sequence_length).values(),
+                mesh_device=self.config.mesh_device,
+            )
+            position_inputs = PrefillPositionInputs(*position_values)
+            kpt = self._make_device_kpt(
                 prepared.sampling_params,
                 sampling_batch_size,
-                relative_last=relative_last,
-                sequence_length=request.padded_sequence_length,
                 force_topk=prepared.sampling_path == "topk",
             )
             if prepared.sampling_params is not None:
                 sampled_output = self._make_sampling_output(self._sampling_output_rows(prepared))
         except BaseException as primary:
-            failures = self._release_or_retain_transient((device_inputs, position_inputs, kpt, sampled_output))
+            failures = self._release_or_retain_transient((position_inputs, kpt, sampled_output))
             attach_cleanup_failures(primary, failures)
             raise
         kpt_signature = None
         if prepared.sampling_params is not None:
             k, p, temperature, _ = _formatted_sampling_values(prepared.sampling_params, sampling_batch_size)
             kpt_signature = k, p, temperature
-        return PrefillPersistentInputs(
-            device_inputs=device_inputs,
+        return PrefillReplayWorkspace(
             position_inputs=position_inputs,
             kpt=kpt,
             sampled_output=sampled_output,
@@ -800,11 +1032,97 @@ class PrefillRuntime:
             kpt_signature=[kpt_signature],
         )
 
-    def _run_hidden_body(self, request: PrefillRequest, device_inputs: PrefillDeviceInputs) -> Any:
+    def _prepare_persistent_inputs(self, prepared: PreparedPrefill) -> PrefillPersistentInputs:
+        """Compatibility helper returning the former combined persistent view."""
+
+        hidden = self._prepare_hidden_persistent_inputs(prepared)
+        try:
+            workspace = self._prepare_replay_workspace(prepared)
+        except BaseException as primary:
+            failures = self._release_or_retain_transient(hidden)
+            attach_cleanup_failures(primary, failures)
+            raise
+        return PrefillPersistentInputs(
+            device_inputs=hidden.device_inputs,
+            position_inputs=workspace.position_inputs,
+            kpt=workspace.kpt,
+            sampled_output=workspace.sampled_output,
+            position_signature=workspace.position_signature,
+            kpt_signature=workspace.kpt_signature,
+        )
+
+    def _refresh_chunk_trace_inputs(
+        self,
+        prepared: PreparedPrefill,
+        chunk: PrefillChunk,
+        persistent: PrefillHiddenPersistentInputs,
+        workspace: PrefillReplayWorkspace,
+    ) -> None:
+        """Refresh every dynamic chunk input while preserving trace-owned storage."""
+
+        request = prepared.request
+        host_inputs = self._prepare_inputs_host(
+            request.tokens[:, chunk.token_slice],
+            request.page_table,
+            start_pos=chunk.chunk_start_idx,
+            chunk_page_table=chunk.chunk_page_table,
+            chunk_start_idx=chunk.chunk_start_idx,
+            last_token_idx=max(request.last_token_indices),
+        )
+        _copy_host_to_device(
+            host_inputs.values(),
+            (
+                persistent.device_inputs.tokens,
+                persistent.device_inputs.position_indices,
+                persistent.device_inputs.page_table,
+                persistent.device_inputs.chunk_page_table,
+                persistent.device_inputs.chunk_start_idx,
+            ),
+        )
+
+        # Rotary lookup is dynamic with cached/chunk start. Build the new
+        # values before replay, copy them into trace-owned buffers, then release
+        # the temporary lookup outputs.
+        self._copy_rotary_inputs(persistent.device_inputs)
+
+        final_chunk = request.chunks[-1]
+        relative_last = (request.last_token_indices[0] - final_chunk.chunk_start_idx) % final_chunk.chunk_size
+        if workspace.position_signature is None or workspace.position_signature[0] != relative_last:
+            position_inputs = self._prepare_position_inputs_host(relative_last, final_chunk.chunk_size)
+            _copy_host_to_device(position_inputs.values(), workspace.position_inputs.values())
+            if workspace.position_signature is not None:
+                workspace.position_signature[0] = relative_last
+        self._refresh_workspace_sampling(prepared, workspace)
+
+    def _copy_rotary_inputs(self, device_inputs: PrefillDeviceInputs) -> None:
+        rot_mats = None
+        try:
+            rot_mats = tuple(self.config.model.prepare_prefill_rot_mats(device_inputs.position_indices))
+            ttnn.copy(input_a=rot_mats[0], input_b=device_inputs.rotary_cos)
+            ttnn.copy(input_a=rot_mats[1], input_b=device_inputs.rotary_sin)
+        except BaseException as primary:
+            failures = self._release_or_retain_transient(rot_mats)
+            attach_cleanup_failures(primary, failures)
+            raise
+        failures = self._release_or_retain_transient(rot_mats)
+        if failures:
+            raise_cleanup_failures(failures)
+
+    def _run_hidden_body(
+        self,
+        request: PrefillRequest,
+        device_inputs: PrefillDeviceInputs,
+        *,
+        fill_rows: int | None = None,
+    ) -> Any:
+        if fill_rows is None:
+            fill_rows = len(request.source_rows)
+        if fill_rows < len(request.source_rows) or fill_rows > request.padded_batch_size:
+            raise ValueError("fill_rows must cover active rows without exceeding padded batch size")
         return self.config.model.prefill_forward(
             self.config.model.embed_prefill(device_inputs.tokens),
             [device_inputs.rotary_cos, device_inputs.rotary_sin],
-            user_id=list(range(len(request.source_rows))) if request.kind == "batched" else 0,
+            user_id=list(range(fill_rows)) if request.kind == "batched" else 0,
             page_table=device_inputs.page_table,
             chunk_page_table=device_inputs.chunk_page_table,
             get_last_token=-1,
@@ -857,7 +1175,7 @@ class PrefillRuntime:
                 hidden,
                 relative_last[0],
                 last_token_slice=(position_inputs.slice_start, position_inputs.slice_end),
-                last_token_index=position_inputs.row_index,
+                last_token_index=(position_inputs.row_index if prepared.sampling_params is not None else None),
             )
         _retain_owned(owned, logits)
         if prepared.sampling_params is not None:
@@ -1157,6 +1475,33 @@ def _retain_owned(owned: list[Any] | None, value: Any) -> None:
     if owned is None or value is None or any(existing is value for existing in owned):
         return
     owned.append(value)
+
+
+def _without_borrowed(values: Iterable[Any], borrowed: Iterable[Any]) -> tuple[Any, ...]:
+    """Remove trace/workspace-owned leaves from replay-local ownership."""
+
+    borrowed_ids = {id(value) for value in borrowed if value is not None}
+
+    def prune(value):
+        if value is None or id(value) in borrowed_ids:
+            return None
+        if isinstance(value, tuple):
+            kept = tuple(item for item in (prune(item) for item in value) if item is not None)
+            return kept or None
+        if isinstance(value, list):
+            kept = [item for item in (prune(item) for item in value) if item is not None]
+            return kept or None
+        return value
+
+    return tuple(item for item in (prune(value) for value in values) if item is not None)
+
+
+def _new_logprob_output(output: Any, persistent_sampled_output: Any | None) -> Any | None:
+    if persistent_sampled_output is None:
+        return None
+    if not isinstance(output, tuple) or len(output) != 2:
+        raise TypeError("sampled prefill output must contain (tokens, log_probs)")
+    return output[1]
 
 
 def _copy_host_to_device(host_tensors, device_tensors=None, mesh_device=None):

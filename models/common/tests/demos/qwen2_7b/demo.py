@@ -790,6 +790,11 @@ def _run_dp_smoke(
             sampling_params=sampling_params,
             prefill_sampling_params=None,
         )
+        logger.info(
+            f"Performance [ci-b1-DP-{data_parallel}] — TTFT: {result.ttft_ms:.1f}ms, "
+            f"tok/s/u: {result.tok_s_u:.1f}, tok/s: {result.tok_s:.1f}, "
+            f"decode latency: {result.decode_latency_mean_ms:.2f}ms"
+        )
         assert len(result.generated_token_ids) == data_parallel
         assert all(result.generated_token_ids), f"ci-b1-DP-{data_parallel}: every TP2 lane must return output"
         log_generated_text(prompts, result.generated_token_ids, tokenizer)

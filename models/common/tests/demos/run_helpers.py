@@ -164,7 +164,7 @@ def _compile_prefill_and_decode(
         )
         return
 
-    prefill_output = execution_target.compile_prefill(
+    execution_target.compile_prefill(
         tokens=prefill_tokens,
         page_table=prefill_page_table,
         kv_cache=kv_cache,
@@ -174,10 +174,6 @@ def _compile_prefill_and_decode(
         sampling_params=None,
     )
     decode_tokens = torch.zeros(batch_size, dtype=torch.long, device=prefill_tokens.device)
-    if isinstance(prefill_output, tuple):
-        decode_tokens = prefill_output[0].view(-1)[:batch_size].to(dtype=torch.long, device=prefill_tokens.device)
-    elif prefill_output is not None:
-        decode_tokens = torch.argmax(prefill_output[:, -1:, :], dim=-1).view(-1)
 
     execution_target.compile_decode(
         tokens=decode_tokens,

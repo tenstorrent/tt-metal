@@ -4,6 +4,7 @@
 """Generic host-only executor/generator integration for migrated siblings."""
 
 import inspect
+from dataclasses import replace
 from importlib import import_module
 from types import SimpleNamespace
 from unittest.mock import MagicMock, create_autospec
@@ -622,6 +623,101 @@ def test_model_owned_executor_has_exact_composition_and_owner_counts(binding, mo
         assert executor.traced_decode_execution is executor.traced_executor
 
 
+def _device_sampling_executor(binding, monkeypatch, *, runtime_disable: bool):
+    class FakeSampling1D:
+        config = SimpleNamespace(
+            is_resolved=lambda: True,
+            allow_force_argmax=False,
+            max_batch_size=32,
+        )
+
+        def decode_forward(self):
+            raise AssertionError("construction-policy test must not execute sampling")
+
+    monkeypatch.setattr(binding.executor_module, "Sampling1D", FakeSampling1D)
+    model = binding.make_model()
+    model.sampling = FakeSampling1D()
+    runtime_config = binding.make_runtime_config()
+    runtime_config.disable_batched_prefill = runtime_disable
+    config = replace(
+        binding.make_executor_config("none"),
+        device_sampling_enabled=True,
+    )
+    return binding.executor_class(model, runtime_config, config)
+
+
+@pytest.mark.parametrize(
+    ("runtime_disable", "environment_disable", "expected_kinds"),
+    [
+        (False, False, ("batched",)),
+        (True, False, ("single", "single")),
+        (False, True, ("single", "single")),
+    ],
+    ids=("device-sampled-batched", "runtime-disabled", "environment-disabled"),
+)
+def test_device_sampling_does_not_implicitly_disable_batched_prefill(
+    binding,
+    monkeypatch,
+    runtime_disable,
+    environment_disable,
+    expected_kinds,
+):
+    if environment_disable:
+        monkeypatch.setenv("DISABLE_BATCHED_PREFILL", "1")
+    else:
+        monkeypatch.delenv("DISABLE_BATCHED_PREFILL", raising=False)
+    executor = _device_sampling_executor(
+        binding,
+        monkeypatch,
+        runtime_disable=runtime_disable,
+    )
+
+    prepared = executor.prefill_runtime.prepare(
+        tokens=torch.ones((2, 128), dtype=torch.long),
+        page_table=torch.arange(8, dtype=torch.int32).reshape(2, 4),
+        prompt_lens=torch.full((2,), 128, dtype=torch.long),
+        empty_slots=[0, 1],
+    )
+
+    assert tuple(item.request.kind for item in prepared) == expected_kinds
+    if expected_kinds == ("batched",):
+        assert prepared[0].request.source_rows == (0, 1)
+        assert not prepared[0].request.uses_chunked_prefill
+
+
+def test_llama32_1b_warms_every_q128_topk_tile_start_once_per_execution_mode():
+    executor = object.__new__(llama32_executor.Llama32_1BExecutor)
+    executor._q128_topk_tile_ends_warmed = set()
+    executor.eager_executor = object()
+    executor.traced_executor = object()
+    executor.page_table_layout = SimpleNamespace(block_size=32)
+    executor.prefill_runtime = SimpleNamespace(config=SimpleNamespace(static_q128_topk_supported=True))
+    executor.warmup = SimpleNamespace(
+        config=SimpleNamespace(
+            prefill_sequence_lengths=(128,),
+            prime_q128_tile_ends=False,
+        )
+    )
+    executor.compile_prefill = MagicMock()
+    kv_cache = object()
+
+    for enable_trace in (False, False, True, True):
+        executor._warmup_q128_topk_tile_ends(
+            kv_cache=kv_cache,
+            can_sample_on_device=True,
+            enable_trace=enable_trace,
+        )
+
+    assert executor.compile_prefill.call_count == 6
+    calls = executor.compile_prefill.call_args_list
+    assert [call.kwargs["tokens"].shape[1] for call in calls] == [32, 64, 96, 32, 64, 96]
+    assert [call.kwargs["page_table"].shape[1] for call in calls] == [1, 2, 3, 1, 2, 3]
+    assert all(call.kwargs["kv_cache"] is kv_cache for call in calls)
+    assert all(call.kwargs["execution"] is executor.eager_executor for call in calls[:3])
+    assert all(call.kwargs["execution"] is executor.traced_executor for call in calls[3:])
+    assert executor._q128_topk_tile_ends_warmed == {False, True}
+
+
 @pytest.mark.parametrize(
     "method,positional,keyword_only",
     [
@@ -697,6 +793,48 @@ def test_executor_call_contract(binding, method, positional, keyword_only):
     assert signature.return_annotation is not inspect.Signature.empty
 
 
+@pytest.mark.parametrize(
+    "executor_class",
+    [
+        qwen25_72b_executor.Qwen25_72BExecutor,
+        qwen25_coder_32b_executor.Qwen25Coder32BExecutor,
+        qwen3_32b_executor.Qwen3_32BExecutor,
+    ],
+)
+def test_qwen32_family_delegates_resolved_sampling_warmup_and_activation_to_coordinator(executor_class):
+    warmup = SimpleNamespace(warmup_prefill=MagicMock(), warmup_decode=MagicMock())
+    executor = SimpleNamespace(_ensure_active=MagicMock(), warmup=warmup)
+
+    executor_class.warmup_model_prefill(
+        executor,
+        kv_cache="cache",
+        can_sample_on_device=True,
+        enable_trace=True,
+    )
+    executor_class.warmup_model_decode(
+        executor,
+        kv_cache="cache",
+        max_batch_size=32,
+        num_blocks=64,
+        can_sample_on_device=True,
+        enable_trace=True,
+    )
+
+    warmup.warmup_prefill.assert_called_once_with(
+        kv_cache="cache",
+        can_sample_on_device=True,
+        enable_trace=True,
+    )
+    warmup.warmup_decode.assert_called_once_with(
+        kv_cache="cache",
+        max_batch_size=32,
+        num_blocks=64,
+        can_sample_on_device=True,
+        enable_trace=True,
+    )
+    assert "capture_all" not in inspect.getsource(executor_class.warmup_model_decode)
+
+
 class _RecordingTarget:
     model_args = object()
     mesh_device = object()
@@ -719,18 +857,39 @@ class _RecordingTarget:
         self.calls.append(("prefill_forward", kwargs))
         return kwargs["execution"]
 
+    def decode_forward(self, **kwargs):
+        self.calls.append(("decode_forward", kwargs))
+        return kwargs["execution"]
+
     def cleanup(self):
         self.calls.append(("cleanup", {}))
 
 
-def test_generator_falls_back_to_eager_before_trace_ineligible_prefill(binding):
+def test_generator_preserves_required_trace_intent_for_ineligible_prefill(binding):
     target = binding.make_recording_target(traceable=False)
     target.config = binding.make_executor_config("all")
     generator = binding.generator_class(target, binding.generator_module._build_vllm_adapter(target))
     tokens = __import__("torch").tensor([[1]])
     page_table = __import__("torch").tensor([[0]], dtype=__import__("torch").int32)
-    assert generator.prefill_forward(tokens, page_table, enable_trace=True) is target.eager_execution
-    assert [name for name, _ in target.calls] == ["can_trace_prefill", "prefill_forward"]
+    assert generator.prefill_forward(tokens, page_table, enable_trace=True) is target.traced_prefill_execution
+    assert [name for name, _ in target.calls] == ["prefill_forward"]
+
+
+def test_generator_routes_external_decode_only_policy_with_all_trace_targets(binding):
+    target = binding.make_recording_target()
+    target.config = binding.make_executor_config("all")
+    generator = binding.generator_class(target, binding.generator_module._build_vllm_adapter(target))
+    torch = __import__("torch")
+    tokens = torch.tensor([[1]])
+    page_table = torch.tensor([[0]], dtype=torch.int32)
+    start_pos = torch.tensor([0])
+
+    assert generator.prefill_forward(tokens, page_table, enable_trace=False) is target.eager_execution
+    assert (
+        generator.decode_forward(tokens[:, 0], start_pos, page_table, enable_trace=True)
+        is target.traced_decode_execution
+    )
+    assert [name for name, _ in target.calls] == ["prefill_forward", "decode_forward"]
 
 
 def test_executor_validates_borrowed_cache_then_omits_it_from_execution(binding):
@@ -1201,3 +1360,48 @@ def test_executor_cleanup_is_ordered_retryable_and_idempotent(binding, expect_er
 
     executor.cleanup()
     assert calls == expected_order * 2
+
+
+def test_llama33_generator_emits_runtime_summary_before_owned_cleanup():
+    events = []
+    traced = SimpleNamespace(log_runtime_summary=lambda **kwargs: events.append(("summary", kwargs)))
+    target = SimpleNamespace(
+        traced_executor=traced,
+        cleanup=lambda: events.append("cleanup"),
+    )
+    generator = llama33_70b_generator.Llama33_70BGenerator(target, SimpleNamespace())
+
+    generator.cleanup()
+
+    assert events == [("summary", {"phase": "shutdown"}), "cleanup"]
+
+
+def test_llama33_generator_emits_serving_ready_and_idempotent_shutdown_summaries():
+    phases = []
+    trace_compiler = SimpleNamespace(trace_active=False)
+    traced = SimpleNamespace(
+        trace_compiler=trace_compiler,
+        log_runtime_summary=lambda **kwargs: phases.append(kwargs["phase"]),
+    )
+    target = SimpleNamespace(
+        traced_executor=traced,
+        warmup_model_prefill=lambda **kwargs: None,
+        warmup_model_decode=lambda **kwargs: None,
+        cleanup=lambda: None,
+    )
+    generator = llama33_70b_generator.Llama33_70BGenerator(target, SimpleNamespace())
+
+    generator.warmup_model_prefill(kv_cache="cache", can_sample_on_device=True, enable_trace=True)
+    trace_compiler.trace_active = True
+    generator.warmup_model_decode(
+        kv_cache="cache",
+        max_batch_size=16,
+        num_blocks=128,
+        can_sample_on_device=True,
+        enable_trace=True,
+    )
+    generator.warmup_model_prefill(kv_cache="cache", can_sample_on_device=True, enable_trace=True)
+    generator._shutdown_summary_callback()
+    generator.cleanup()
+
+    assert phases == ["serving_ready", "shutdown"]

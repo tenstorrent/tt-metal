@@ -33,7 +33,8 @@ def _runtime_config():
         max_prefill_chunk_size=2048,
         max_context_len=131072,
         max_seq_len=4096,
-        trace_prefill_supported_seq_lens=(128,),
+        trace_prefill_supported_seq_lens=(128, 2048),
+        trace_prefill_warmup_seq_lens=(128, 2048, 4096),
     )
 
 
@@ -41,14 +42,17 @@ def test_runtime_config_preserves_t3k_trace_and_batched_prefill_policy():
     runtime = _runtime_config()
     assert runtime.can_enable_trace(128)
     assert runtime.can_enable_trace(128, num_cached_tokens=32)
+    assert runtime.can_enable_trace(2048)
     assert not runtime.can_enable_trace(1024)
+    assert not runtime.can_enable_trace(4096)
     assert runtime.supports_batched_prefill
     assert runtime.max_prefill_batch_size == 32
     assert runtime.batched_prefill_batched_extract
 
 
-def test_trace_policy_is_tp8_only_and_restricted_to_128(expect_error):
-    assert hf_adaptor._trace_seq_lens(8, 2048, 4096) == (128,)
+def test_trace_policy_is_tp8_only_and_includes_fixed_chunk_invocation(expect_error):
+    assert hf_adaptor._trace_seq_lens(8, 2048, 4096) == (128, 2048)
+    assert hf_adaptor._trace_warmup_seq_lens(2048, 4096) == (128, 2048, 4096)
     for devices in (1, 2, 4):
         with expect_error(ValueError, "exactly 8 devices"):
             hf_adaptor._trace_seq_lens(devices, 2048, 4096)

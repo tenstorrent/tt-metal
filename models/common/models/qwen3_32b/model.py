@@ -85,8 +85,8 @@ class Qwen3_32BExecutorRuntimeConfig:
     # batch-32 TTFT gap. ``supports_batched_prefill`` is the per-model opt-in (the shared engine only
     # batches models whose prefill_forward threads ``batch_size`` — Qwen3-32B does, below). Qwen3's
     # per-head QK-norm is a row-independent RMSNorm on ``[B, n_heads, S, head_dim]`` (each user's rows
-    # normalized independently), so the batched fold is bit-safe. ``max_prefill_batch_size`` caps the
-    # per-group batch; 32 folds the whole batch-32 prefill in ONE 32-user pass (TTTv1 structural parity,
+    # normalized independently), so the batched fold is bit-safe. ``max_prefill_batch_size`` is the
+    # largest supported padded wave; 32 folds the whole batch-32 prefill in ONE 32-user pass (TTTv1 structural parity,
     # generator.py:679-700) so the eager norm+lm_head tail + full-vocab readback run once instead of 4×.
     # At S=128 the fold is 32*128=4096=2*2048, an exact multiple of MAX_QKV_MM_SEQ_LEN (reshape-safe).
     # ``disable_batched_prefill`` is the escape hatch back to the sequential loop;

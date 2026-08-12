@@ -189,29 +189,28 @@ def _plan_prefill_requests(
                 [cached[source_row] for source_row in source_rows],
                 supports_batched_prefill=supports_batched_prefill,
                 disable_batched_prefill=disable_batched_prefill,
+                max_batch_size=max_batch_size,
                 max_prefill_batch_size=max_prefill_batch_size,
                 max_prefill_chunk_size=max_prefill_chunk_size,
             )
         if padded_batch is None:
             sequential_rows.extend(source_rows)
             continue
-        for offset in range(0, len(source_rows), padded_batch):
-            group_rows = source_rows[offset : offset + padded_batch]
-            batched_requests.append(
-                _make_batched_request(
-                    tokens=tokens,
-                    page_table=page_table,
-                    lengths=lengths,
-                    cached=cached,
-                    slots=slots,
-                    source_rows=group_rows,
-                    padded_batch=padded_batch,
-                    sequence_length=sequence_length,
-                    block_size=block_size,
-                    max_actual_page_table_width=max_actual_page_table_width,
-                    canonical_page_table_width=canonical_page_table_width,
-                )
+        batched_requests.append(
+            _make_batched_request(
+                tokens=tokens,
+                page_table=page_table,
+                lengths=lengths,
+                cached=cached,
+                slots=slots,
+                source_rows=source_rows,
+                padded_batch=padded_batch,
+                sequence_length=sequence_length,
+                block_size=block_size,
+                max_actual_page_table_width=max_actual_page_table_width,
+                canonical_page_table_width=canonical_page_table_width,
             )
+        )
 
     requests = list(batched_requests)
     sequential_rows.sort()
@@ -290,20 +289,27 @@ def _make_batched_request(
     canonical_page_table_width: int | None,
 ) -> PrefillRequest:
     request_tokens = torch.zeros((padded_batch, sequence_length), dtype=torch.long, device=tokens.device)
-    bucket_width = _num_blocks(sequence_length, block_size)
     page_width = canonical_page_table_width or _num_blocks(sequence_length, block_size)
-    _validate_page_table_width(bucket_width, page_table, max_actual_page_table_width, "batched prefill")
-    # Padding rows still execute in the folded model pass, so map them to block zero
-    # instead of feeding an invalid sentinel through paged attention.
-    request_page_table = torch.zeros(
+    # -1 is the paged-fill skip sentinel. Leaving padding rows and unused active
+    # tails at -1 prevents stale vLLM row tails from writing reassigned blocks;
+    # only each prompt's actually allocated prefix is safe to copy.
+    request_page_table = torch.full(
         (padded_batch, page_width),
+        -1,
         dtype=torch.int32,
         device=page_table.device,
     )
     for local_row, source_row in enumerate(source_rows):
         length = lengths[source_row]
+        actual_width = _num_blocks(length, block_size)
+        _validate_page_table_width(
+            actual_width,
+            page_table,
+            max_actual_page_table_width,
+            f"batched prefill row {source_row}",
+        )
         request_tokens[local_row, :length] = tokens[source_row, :length]
-        request_page_table[local_row, :bucket_width] = page_table[source_row, :bucket_width].to(torch.int32)
+        request_page_table[local_row, :actual_width] = page_table[source_row, :actual_width].to(torch.int32)
     chunk = PrefillChunk(
         token_slice=slice(0, sequence_length),
         chunk_start_idx=0,
@@ -364,6 +370,9 @@ def _plan_chunks(
             chunk_width,
             max(0, _num_blocks(prompt_length, block_size) - chunk_start_block),
         )
+        # Chunked SDPA consumes the full request table, so that table keeps its
+        # nonnegative zero filler. This fill-only view is skip-aware and may use
+        # -1; copying just the mapped prefix also excludes stale scheduler tails.
         chunk_page_table = torch.full(
             (int(page_table.shape[0]), chunk_width),
             -1,
@@ -414,6 +423,7 @@ def _batched_prefill_size(
     *,
     supports_batched_prefill,
     disable_batched_prefill,
+    max_batch_size,
     max_prefill_batch_size,
     max_prefill_chunk_size,
 ):
@@ -423,15 +433,13 @@ def _batched_prefill_size(
         return None
     if sequence_length > max_prefill_chunk_size:
         return None
-    group_size = min(batch_size, max_prefill_batch_size)
-    padded_batch = next(
-        (candidate for candidate in _SUPPORTED_PREFILL_BATCH_SIZES if candidate >= group_size), group_size
-    )
-    if padded_batch > batch_size:
-        padded_batch = max(
-            (candidate for candidate in _SUPPORTED_PREFILL_BATCH_SIZES if candidate <= batch_size), default=1
-        )
-    if padded_batch <= 1 or padded_batch * sequence_length >= _MAX_BATCHED_PREFILL_TOKENS:
+    padded_batch = _next_supported_prefill_batch_size(batch_size)
+    if (
+        padded_batch is None
+        or padded_batch > max_prefill_batch_size
+        or padded_batch > max_batch_size
+        or padded_batch * sequence_length >= _MAX_BATCHED_PREFILL_TOKENS
+    ):
         return None
     return padded_batch
 
@@ -451,19 +459,18 @@ def _legacy_batched_prefill_size(
         return None
     if any(value != 0 for value in cached_tokens) or sequence_length > max_prefill_chunk_size:
         return None
-    padded_batch = next(
-        (
-            candidate
-            for candidate in _SUPPORTED_PREFILL_BATCH_SIZES
-            if candidate >= batch_size and candidate <= max_batch_size
-        ),
-        None,
-    )
-    if padded_batch is None and batch_size <= max_batch_size:
-        padded_batch = max_batch_size
+    padded_batch = _next_supported_prefill_batch_size(batch_size)
+    if padded_batch is not None and padded_batch > max_batch_size:
+        padded_batch = None
     if padded_batch is None or padded_batch * sequence_length >= _MAX_BATCHED_PREFILL_TOKENS:
         return None
     return padded_batch
+
+
+def _next_supported_prefill_batch_size(batch_size: int) -> int | None:
+    """Return the supported physical size for one whole lane-local wave."""
+
+    return next((candidate for candidate in _SUPPORTED_PREFILL_BATCH_SIZES if candidate >= batch_size), None)
 
 
 def _max_prefill_chunk_size(sequence_length: int, maximum: int) -> int:

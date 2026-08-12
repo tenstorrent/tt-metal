@@ -106,6 +106,23 @@ class FakeExecutionTarget:
         return self.decode_outputs.pop(0)
 
 
+def test_compile_only_helper_ignores_compiled_prefill_programs():
+    target = FakeExecutionTarget(
+        compile_prefill_output=(object(),),
+        prefill_output=None,
+        decode_outputs=[],
+    )
+
+    run_helpers._compile_prefill_and_decode(
+        target,
+        prefill_tokens=torch.tensor([[1, 2], [3, 4]]),
+        prefill_page_table=torch.zeros(2, 1, dtype=torch.int32),
+    )
+
+    assert [name for name, _ in target.calls] == ["compile_prefill", "compile_decode"]
+    assert torch.equal(target.calls[1][1]["tokens"], torch.zeros(2, dtype=torch.long))
+
+
 def test_teacher_forcing_uses_public_target_surface_and_preserves_user_order():
     target = FakeExecutionTarget(
         compile_prefill_output=_logits([3, 4]),

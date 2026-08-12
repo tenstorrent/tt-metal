@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import atexit
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -81,6 +82,10 @@ class Llama33_70BGenerator:
     def __init__(self, target: Any, adapter: VLLMAdapter):
         self.target = target
         self._adapter = adapter
+        self._serving_ready_summary_logged = False
+        self._shutdown_summary_logged = False
+        self._shutdown_summary_callback = self._log_shutdown_summary
+        atexit.register(self._shutdown_summary_callback)
 
     # Public vLLM API
 
@@ -306,11 +311,13 @@ class Llama33_70BGenerator:
         can_sample_on_device: bool,  # ↓ Execution policy
         enable_trace: bool,
     ) -> None:
-        return self.target.warmup_model_prefill(
+        result = self.target.warmup_model_prefill(
             kv_cache=kv_cache,
             can_sample_on_device=can_sample_on_device,
             enable_trace=enable_trace,
         )
+        self._log_serving_ready_summary_if_active()
+        return result
 
     def warmup_model_decode(
         self,
@@ -321,33 +328,49 @@ class Llama33_70BGenerator:
         can_sample_on_device: bool,  # ↓ Execution policy
         enable_trace: bool,
     ) -> None:
-        return self.target.warmup_model_decode(
+        result = self.target.warmup_model_decode(
             kv_cache=kv_cache,
             max_batch_size=max_batch_size,
             num_blocks=num_blocks,
             can_sample_on_device=can_sample_on_device,
             enable_trace=enable_trace,
         )
+        self._log_serving_ready_summary_if_active()
+        return result
 
     def cleanup(self):
         """Release every resource owned by the concrete target."""
 
+        self._log_shutdown_summary()
+        atexit.unregister(self._shutdown_summary_callback)
         return self.target.cleanup()
 
     # Private implementation
+
+    def _log_serving_ready_summary_if_active(self) -> None:
+        traced = getattr(self.target, "traced_executor", None)
+        trace_compiler = getattr(traced, "trace_compiler", None)
+        if traced is None or self._serving_ready_summary_logged or not getattr(trace_compiler, "trace_active", False):
+            return
+        traced.log_runtime_summary(phase="serving_ready")
+        self._serving_ready_summary_logged = True
+
+    def _log_shutdown_summary(self) -> None:
+        if self._shutdown_summary_logged:
+            return
+        traced = getattr(self.target, "traced_executor", None)
+        if traced is not None:
+            traced.log_runtime_summary(phase="shutdown")
+        self._shutdown_summary_logged = True
 
     def _select_prefill_execution(
         self,
         normalized: NormalizedPrefillKwargs,
         trace_requested: bool,
     ):
-        if trace_requested and not self.target.can_trace_prefill(
-            tokens=normalized["tokens"],
-            prompt_lens=normalized["prompt_lens"],
-            start_pos=normalized["start_pos"],
-            empty_slots=normalized["empty_slots"],
-        ):
-            trace_requested = False
+        # Static trace intent is authoritative. Eligibility and configured
+        # coverage are preflighted by the selected execution target; this
+        # facade must never turn a required trace miss into eager KV writes.
         return self._select_execution("prefill", trace_requested)
 
     def _select_execution(self, operation: str, enable_trace: bool):
@@ -393,11 +416,8 @@ def build_llama33_70b_generator(config: Llama33_70BGeneratorConfig) -> Llama33_7
                 paged_attention_config=paged_attention_config,
             )
             model_kv_cache_dtypes, _, _, _ = _model_kv_metadata(llm.model)
-            trace_mode = config.trace_mode
-            if trace_mode == "all" and not llm.runtime_config.trace_prefill_supported_seq_lens:
-                trace_mode = "decode_only"
             executor_config = Llama33_70BExecutorConfig(
-                trace=TraceConfig(mode=trace_mode),
+                trace=TraceConfig(mode=config.trace_mode),
                 warmup=WarmupConfig(),
                 paged_kv_cache=PagedKVCacheConfig(
                     block_size=_PROVISIONAL_BLOCK_SIZE,

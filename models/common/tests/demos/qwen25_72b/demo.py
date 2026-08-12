@@ -154,9 +154,7 @@ EXPECTED_METRICS_BATCH32_CI: dict = {
         # minimal_matmul ENABLED (2026-07-25, model.py) TTTv2 b32-ci = 81.2 ms ON (A/B: minimal_matmul OFF
         # 97.2 ms → a −16.5% prefill win). Same-box TTTv1 ci-32 = 68.74 ms (batched) but ONLY runs after a
         # TEMPORARY, uncommitted trace-region bump (its committed 70 MB region trace-OOMs the 32-user
-        # batched-prefill trace); TTTv2 is +18.1% over it — a documented shared batched-prefill-fold TTFT
-        # residual (ticket b32ci-prefill-ttft-minimal-matmul; fold-cap dead lever; same family as
-        # qwen3_32b/coder-32b/deepseek). ttft gate 185 is a best-of ceiling covering batched ON (81.2) AND
+        # batched-prefill trace). ttft gate 185 is a best-of ceiling covering batched ON (81.2) AND
         # the DISABLE_BATCHED_PREFILL=1 sequential A/B baseline (~179); never lowered to a slow number.
         "performance": {"T3K": {"tok_s_u": 15.5, "ttft_ms": 185}},
         "accuracy": {"T3K": {"tok_s_u": 15.5, "ttft_ms": 185}},

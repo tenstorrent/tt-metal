@@ -464,17 +464,19 @@ def _force_decode_top_k(sampling_mode, sampling_params, num_devices):
     return sampling_params is not None and sampling_mode == "on_device_topk" and int(num_devices) == 8
 
 
-def _warmup_demo_executor(executor, *, kv_cache, page_table):
+def _warmup_demo_executor(executor, *, kv_cache, page_table, prefill_can_sample_on_device=None):
     config = getattr(executor, "config", None)
     if config is None:
         config = executor.lanes[0].config
     can_sample_on_device = config.device_sampling_enabled
+    if prefill_can_sample_on_device is None:
+        prefill_can_sample_on_device = can_sample_on_device
     max_batch_size = getattr(executor, "max_batch_size", None)
     if max_batch_size is None:
         max_batch_size = int(executor.model.config.max_batch_size)
     prefill_kwargs = {
         "kv_cache": kv_cache,
-        "can_sample_on_device": can_sample_on_device,
+        "can_sample_on_device": bool(prefill_can_sample_on_device),
     }
     decode_kwargs = {
         "kv_cache": kv_cache,
@@ -941,14 +943,17 @@ def _run_dp_smoke(mesh_device, optimizations: str, case: DemoCase) -> None:
                 max_seq_len=case.max_seq_len,
             )
             llms.append(llm)
+
+        sampling_mode, sampling_params = _sampling_params_for_model(llms[0].model, case_name=case.name)
+        for llm in llms:
             lanes.append(
                 _build_demo_executor(
                     llm,
                     trace_mode="all",
-                    device_sampling_enabled=True,
+                    device_sampling_enabled=sampling_params is not None,
                     include_decode_top_k=_force_decode_top_k(
-                        "on_device_topk",
-                        SamplingParams(temperature=0.0, top_k=32, top_p=0.08),
+                        sampling_mode,
+                        sampling_params,
                         llm.model.config.num_devices,
                     ),
                 )
@@ -957,7 +962,12 @@ def _run_dp_smoke(mesh_device, optimizations: str, case: DemoCase) -> None:
         group = LaneGroupExecutor(lanes, mesh_device=mesh_device)
         kv_cache = group.allocate_kv_cache()
         page_table = _contiguous_page_table(case.batch_size, case.max_seq_len, repeat_per_lane=True)
-        _warmup_demo_executor(group, kv_cache=kv_cache, page_table=page_table)
+        _warmup_demo_executor(
+            group,
+            kv_cache=kv_cache,
+            page_table=page_table,
+            prefill_can_sample_on_device=False,
+        )
 
         prompts = load_input_prompts(
             DEMO_DIR / "sample_prompts" / "input_data_questions_prefill_128.json", case.batch_size
@@ -967,7 +977,6 @@ def _run_dp_smoke(mesh_device, optimizations: str, case: DemoCase) -> None:
             llms[0],
             reserve_decode_tokens=case.num_decode_tokens,
         )
-        sampling_mode, sampling_params = _sampling_params_for_model(llms[0].model, case_name=case.name)
         profiler = BenchmarkProfiler()
         profiler.start("run")
         try:

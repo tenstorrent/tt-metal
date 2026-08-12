@@ -23,6 +23,7 @@ from models.common.llm_runtime.trace_compiler import TraceCompiler
 from models.common.llm_runtime.warmup import WarmupCoordinator, WarmupCoordinatorConfig
 from models.common.models.llama32_1b.hf_adaptor import Llama32_1BForCausalLM
 from models.common.modules.sampling.sampling_1d import Sampling1D
+from models.common.sampling import SamplingParams
 
 
 @dataclass(frozen=True)
@@ -88,6 +89,7 @@ class Llama32_1BExecutor:
         self._cleaned_up = False
         self._sampling_buffers_loaded = False
         self._runtime_configuration_sealed = False
+        self._q128_topk_tile_ends_warmed: set[bool] = set()
 
         sampling = getattr(model, "sampling", None)
         if config.device_sampling_enabled:
@@ -135,7 +137,11 @@ class Llama32_1BExecutor:
         self.traced_executor: TracedExecutor | None = None
         if config.trace.mode != "none":
             self.trace_compiler = TraceCompiler(self.program_compiler)
-            self.traced_executor = TracedExecutor(eager=self.eager_executor, trace_compiler=self.trace_compiler)
+            self.traced_executor = TracedExecutor(
+                eager=self.eager_executor,
+                trace_compiler=self.trace_compiler,
+                trace_mode=config.trace.mode,
+            )
         self.eager_execution = self.eager_executor
         self.traced_prefill_execution = (
             self.traced_executor if config.trace.prefill_enabled and self.traced_executor is not None else None
@@ -388,6 +394,11 @@ class Llama32_1BExecutor:
         enable_trace: bool,
     ) -> None:
         self._ensure_active()
+        self._warmup_q128_topk_tile_ends(
+            kv_cache=kv_cache,
+            can_sample_on_device=can_sample_on_device,
+            enable_trace=enable_trace,
+        )
         return self.warmup.warmup_prefill(
             kv_cache=kv_cache,
             can_sample_on_device=can_sample_on_device,
@@ -443,6 +454,45 @@ class Llama32_1BExecutor:
         self._cleaned_up = True
 
     # Private implementation
+
+    def _warmup_q128_topk_tile_ends(
+        self,
+        *,
+        kv_cache: Any,
+        can_sample_on_device: bool,
+        enable_trace: bool,
+    ) -> None:
+        """Prime Llama-3.2-1B's single-user Q128 top-k slice programs."""
+
+        if (
+            enable_trace in self._q128_topk_tile_ends_warmed
+            or not can_sample_on_device
+            or (enable_trace and self.traced_executor is None)
+            or 128 not in self.warmup.config.prefill_sequence_lengths
+            or not self.prefill_runtime.config.static_q128_topk_supported
+            or self.warmup.config.prime_q128_tile_ends
+        ):
+            return
+        sampling = SamplingParams(
+            temperature=torch.ones(1),
+            top_k=torch.full((1,), 32, dtype=torch.int32),
+            top_p=torch.full((1,), 0.08),
+        )
+        execution = self.traced_executor if enable_trace else self.eager_executor
+        for sequence_length in (32, 64, 96):
+            page_table_width = (
+                sequence_length + self.page_table_layout.block_size - 1
+            ) // self.page_table_layout.block_size
+            self.compile_prefill(
+                tokens=torch.zeros((1, sequence_length), dtype=torch.long),
+                page_table=torch.zeros((1, page_table_width), dtype=torch.int32),
+                prompt_lens=torch.full((1,), sequence_length, dtype=torch.long),
+                empty_slots=[0],
+                kv_cache=kv_cache,
+                sampling_params=sampling,
+                execution=execution,
+            )
+        self._q128_topk_tile_ends_warmed.add(enable_trace)
 
     def _resolve_page_table_layout(self) -> PageTableLayout:
         kv_config = self.kv_cache_manager.config

@@ -806,27 +806,26 @@ def test_generator_delegates_without_concrete_type_checks():
     page_table = torch.tensor([[0]], dtype=torch.int32)
 
     assert generator.prefill_forward(tokens, page_table, enable_trace=True) == "prefill_forward"
-    assert generator.decode_forward(tokens, start_pos, page_table, enable_trace=False) == "decode_forward"
+    assert generator.decode_forward(tokens, start_pos, page_table, enable_trace=True) == "decode_forward"
     assert generator.cleanup() == "cleanup"
     assert [name for name, _, _ in target.calls] == [
-        "can_trace_prefill",
         "prefill_forward",
         "decode_forward",
         "cleanup",
     ]
-    assert target.calls[1][2]["execution"] is target.traced_prefill_execution
-    assert target.calls[2][2]["execution"] is target.eager_execution
+    assert target.calls[0][2]["execution"] is target.traced_prefill_execution
+    assert target.calls[1][2]["execution"] is target.traced_decode_execution
 
 
-def test_generator_selects_eager_before_trace_ineligible_prefill_enters_execution():
+def test_generator_preserves_required_trace_intent_for_ineligible_prefill():
     target = _RecordingTarget(traceable_prefill=False)
     generator = _recording_generator(target)
     tokens = torch.tensor([[1]], dtype=torch.long)
     page_table = torch.tensor([[0]], dtype=torch.int32)
 
     assert generator.prefill_forward(tokens, page_table, enable_trace=True) == "prefill_forward"
-    assert [name for name, _, _ in target.calls] == ["can_trace_prefill", "prefill_forward"]
-    assert target.calls[1][2]["execution"] is target.eager_execution
+    assert [name for name, _, _ in target.calls] == ["prefill_forward"]
+    assert target.calls[0][2]["execution"] is target.traced_prefill_execution
 
 
 def test_generator_rejects_unavailable_traced_execution(expect_error):
@@ -895,4 +894,19 @@ def test_demo_uses_model_owned_config_and_order_independent_warmup(monkeypatch):
         ("decode", kv_cache, 4, 8, False, False),
         ("prefill", kv_cache, False, True),
         ("decode", kv_cache, 4, 8, False, True),
+    ]
+
+    calls.clear()
+    executor.config.device_sampling_enabled = True
+    llama_demo._warmup_demo_executor(
+        executor,
+        kv_cache=kv_cache,
+        page_table=SimpleNamespace(shape=(4, 8)),
+        prefill_can_sample_on_device=False,
+    )
+    assert calls == [
+        ("prefill", kv_cache, False, False),
+        ("decode", kv_cache, 4, 8, True, False),
+        ("prefill", kv_cache, False, True),
+        ("decode", kv_cache, 4, 8, True, True),
     ]
