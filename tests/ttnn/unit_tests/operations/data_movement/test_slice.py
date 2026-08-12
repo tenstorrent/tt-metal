@@ -1192,6 +1192,49 @@ def test_slice_tensor_args_device_path(input_shape, dim, start, end, step, layou
 
 @pytest.mark.parametrize(
     "input_shape, dim, start, end",
+    (
+        # Rank 4: non-zero start on dim 0 (minimal repro for Horner loop fix)
+        ([2, 3, 64, 64], 0, [1, 0, 0, 0], [2, 3, 64, 64]),
+        # Rank 4: different upper-dim sizes to distinguish forward vs reverse Horner
+        ([4, 2, 32, 32], 0, [2, 0, 0, 0], [4, 2, 32, 32]),
+        # Rank 4: asymmetric upper dims (6 vs 4) to maximise Horner ordering difference
+        ([6, 4, 32, 32], 0, [3, 0, 0, 0], [6, 4, 32, 32]),
+        # Rank 5: non-zero start on outermost dim
+        ([3, 2, 4, 64, 64], 0, [1, 0, 0, 0, 0], [2, 2, 4, 64, 64]),
+        # Rank 5: non-zero start on dim 0 with larger slice
+        ([6, 3, 2, 32, 32], 0, [3, 0, 0, 0, 0], [6, 3, 2, 32, 32]),
+    ),
+)
+def test_slice_tensor_args_upper_dim_offset(input_shape, dim, start, end, device):
+    """Regression test for issue #52901: the TILE tensor-args reader kernel
+    used a reverse Horner loop to compute the upper-dimension start offset,
+    producing wrong tile-page IDs for rank >= 4 tensors with non-zero start on
+    upper dimensions."""
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+
+    torch_start_tensor = torch.tensor(start)
+    torch_end_tensor = torch.tensor(end)
+
+    slices = tuple(slice(start[i], end[i]) for i in range(len(start)))
+    torch_output_tensor = torch_input[slices]
+
+    ttnn_start_tensor = ttnn.from_torch(torch_start_tensor, device=device)
+    ttnn_end_tensor = ttnn.from_torch(torch_end_tensor, device=device)
+
+    ttnn_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+
+    num_devices_calc = input_shape[dim] // (end[dim] - start[dim])
+    ttnn_output = ttnn.slice(
+        ttnn_tensor, ttnn_start_tensor, ttnn_end_tensor, slice_dim=dim, num_devices=num_devices_calc
+    )
+
+    ttnn_output_tensor = ttnn.to_torch(ttnn_output)
+
+    assert_with_pcc(torch_output_tensor, ttnn_output_tensor, 0.999)
+
+
+@pytest.mark.parametrize(
+    "input_shape, dim, start, end",
     (([32, 131072], 1, [0, 0], [32, 1024]),),
 )
 @pytest.mark.parametrize("step", ([1, 1], [4, 4]))
