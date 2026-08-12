@@ -149,7 +149,11 @@ Tensor pre_scatter_transform_tensor(
     const bool is_dim_last_idx,
     const bool is_rank_le_4d,
     const std::optional<Shape>& index_shape = std::nullopt) {
-    if (input_tensor.logical_shape() == ttnn::Shape{1} || input_tensor.logical_shape() == ttnn::Shape{0}) {
+    // Empty tensors are passed through; length-1 tensors must NOT be — the
+    // kernel derives per-dimension shape varargs from the transformed ranks,
+    // and a rank-1 index/source alongside a 4-D input reads past the provided
+    // varargs, silently skipping the scatter (tt-mlir#9210).
+    if (input_tensor.logical_shape() == ttnn::Shape{0}) {
         return input_tensor;
     }
 
@@ -178,7 +182,11 @@ Tensor pre_scatter_transform_tensor(
     const bool is_dim_last_idx,
     const bool is_rank_le_4d,
     const std::optional<Shape>& index_shape = std::nullopt) {
-    if (input_tensor.logical_shape() == ttnn::Shape{1} || input_tensor.logical_shape() == ttnn::Shape{0}) {
+    // Empty tensors are passed through; length-1 tensors must NOT be — the
+    // kernel derives per-dimension shape varargs from the transformed ranks,
+    // and a rank-1 index/source alongside a 4-D input reads past the provided
+    // varargs, silently skipping the scatter (tt-mlir#9210).
+    if (input_tensor.logical_shape() == ttnn::Shape{0}) {
         return input_tensor;
     }
 
