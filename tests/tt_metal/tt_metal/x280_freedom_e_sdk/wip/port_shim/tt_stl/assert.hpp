@@ -2,16 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Bare-metal port shim for tt_stl/tt_stl/assert.hpp
-//
-// fabric_edm_packet_header.hpp includes <tt_stl/assert.hpp> on its non-kernel
-// (host) path. The real header is firmly host-only: <fmt/format.h>, <cxxabi.h>,
-// <execinfo.h> (backtrace), <iostream>, <sstream>, <stdexcept> and tt-logger.
-// None of that survives on a bare-metal target with no OS, no unwinder and
-// -fno-exceptions.
-//
-// This shim provides the same three macros with bare-metal behaviour: report
-// over whatever stdout the BSP wired up, then trap.
+// Bare-metal shim for tt_stl/assert.hpp (host-only fmt/backtrace/exceptions).
+// Same macros: print then trap.
 
 #pragma once
 
@@ -29,8 +21,6 @@ namespace tt::assert::baremetal {
 
 }  // namespace tt::assert::baremetal
 
-// TT_ASSERT is a debug-only check in the real header too (compiled out in
-// release builds), so keep it cheap but honour the condition when DEBUG is set.
 #ifdef DEBUG
 #define TT_ASSERT(condition, ...)                                                       \
     do {                                                                                \

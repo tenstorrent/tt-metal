@@ -2,17 +2,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
-"""STRICTLY READ-ONLY probe of the L2CPU / X280 state on this chip.
+"""Read-only L2CPU/X280 probe (no writes). Safe on shared Galaxy.
 
-Performs no writes of any kind: no ARC messages, no reset-register writes, no
-WayEnable, no PLL programming. Just reads, so it is safe to run on a shared
-Galaxy chassis.
-
-Answers:
-  1. does the exalens backend open this device at all?
-  2. is any L2CPU enabled (not harvested) on this chip?
-  3. is the L2CPU currently held in reset?
-  4. is LIM readable, and does it look like SRAM or like something else?
+Checks: exalens open, enabled L2CPUs, reset state, LIM readability, WayEnable.
 """
 import os
 import sys

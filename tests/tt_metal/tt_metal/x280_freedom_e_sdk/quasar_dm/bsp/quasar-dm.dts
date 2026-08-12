@@ -2,26 +2,9 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * Devicetree description of a Quasar node's DM-core complex, in the form
- * freedom-e-sdk consumes.
- *
- * THIS FILE IS REFERENCE MATERIAL, NOT AN INPUT TO build.sh.
- *
- * freedom-e-sdk generates a BSP (metal.h, metal-inline.h, metal-platform.h and
- * the linker scripts) from a design.dts using freedom-devicetree-tools plus
- * dtc. Neither is installed here, so build.sh instead derives its BSP from the
- * nearest upstream rv64 target and retargets it -- see build.sh and README.md.
- * This file records what the generated-from-scratch BSP should describe, so the
- * proper generation step is a matter of running the tools rather than working
- * out the hardware description.
- *
- * Numbers below come from:
- *   tt_metal/hw/inc/internal/tt-2xx/quasar/dev_mem_map.h
- *   tt_metal/hw/inc/internal/tt-2xx/risc_common.h  (cache geometry)
- *   tests/tt_metal/tt_metal/data_movement/quasar_cache/quasar_dm_cache_management.md
- *
- * Items marked (?) are taken from the cache-management doc, which flags them as
- * needing hardware verification.
+ * Reference DTS for a Quasar DM complex (not used by build.sh — needs dtc).
+ * Sources: quasar/dev_mem_map.h, risc_common.h, quasar_dm_cache_management.md.
+ * (?) = unverified sizes from the cache-management doc.
  */
 
 /dts-v1/;

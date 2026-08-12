@@ -2,33 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// hello_fabric_x280 -- a "hello world" that links tt-metal's fabric device code
-// against SiFive's freedom-e-sdk and runs it on a RISC-V core under QEMU.
-//
-// Why this exists
-// ---------------
-// tt-metal builds fabric device code for Quasar's DM cores with
-// `-mcpu=tt-qsr64-rocc` (rv64, lp64). Those cores are rocket-chip/SiFive X280
-// derivatives -- tt_metal/hw/inc/internal/tt-2xx/risc_common.h cites the "SiFive
-// X280 Core Manual" for its CFLUSH.D.L1 / CDISCARD.D.L1 sequences and points at
-// freedom-metal's src/cache.c as the reference implementation. freedom-e-sdk
-// ships exactly that freedom-metal. So the question this program answers is:
-// how much of the fabric stack is actually portable to a stock SiFive
-// bare-metal environment, and what has to be stubbed to get there?
-//
-// What it exercises
-// -----------------
-//   1. freedom-metal itself   -- hart identity and the machine timer.
-//   2. Fabric packet headers  -- tt::tt_fabric::LowLatencyPacketHeader layout,
-//                                verified against the sizes the router assumes.
-//   3. Fabric routing encoder -- routing_encoding::encode_1d_unicast /
-//                                encode_1d_multicast, checked against the bit
-//                                patterns documented in fabric_common.h.
-//   4. Fabric flow control    -- ChannelBufferPointer credit/wrap arithmetic,
-//                                the same code the EDM sender channel runs.
-//
-// Everything above is real, unmodified tt-metal source. Nothing here touches the
-// NOC -- see README.md for why that boundary is where it is.
+// WIP: freedom-metal + tt-fabric device headers (no NOC). Does not build —
+// see README.md. Exercises packet headers, 1D routing encode, ChannelBufferPointer.
 
 #include <cstdint>
 #include <cstddef>
@@ -72,7 +47,7 @@ void check_hex(const char* what, uint32_t got, uint32_t want) {
     }
 }
 
-// -- 1. freedom-metal is alive ----------------------------------------------
+// -- 1. freedom-metal -------------------------------------------------------
 void report_platform() {
     printf("[1] freedom-metal / platform\n");
 
@@ -96,11 +71,7 @@ void report_platform() {
     printf("\n");
 }
 
-// -- 2. Fabric packet header layout -----------------------------------------
-//
-// The router reads these structures straight out of L1, so their sizes are load
-// bearing. If a different toolchain/ABI laid them out differently, fabric would
-// be silently wire-incompatible -- which is exactly what we want to catch here.
+// -- 2. Packet header layout (sizes are wire-load-bearing) ------------------
 void check_packet_header_layout() {
     printf("[2] fabric packet header layout (tt::tt_fabric)\n");
 
@@ -122,10 +93,7 @@ void check_packet_header_layout() {
     printf("\n");
 }
 
-// -- 3. Fabric 1D routing encoder -------------------------------------------
-//
-// Expected bit patterns are the worked examples in the encoder's own docs in
-// tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h.
+// -- 3. 1D routing encoder (patterns from fabric_common.h) ------------------
 void check_routing_encoder() {
     printf("[3] fabric 1D routing encoder (routing_encoding)\n");
 
@@ -160,11 +128,7 @@ void check_routing_encoder() {
     printf("\n");
 }
 
-// -- 4. Fabric flow-control arithmetic --------------------------------------
-//
-// ChannelBufferPointer is what the EDM sender/receiver channels use to track
-// credits. It wraps at 2*NUM_BUFFERS so that "full" and "empty" stay
-// distinguishable, and get_buffer_index() folds that back to a real slot.
+// -- 4. ChannelBufferPointer credit/wrap arithmetic -------------------------
 void check_flow_control() {
     printf("[4] fabric flow control (ChannelBufferPointer)\n");
 

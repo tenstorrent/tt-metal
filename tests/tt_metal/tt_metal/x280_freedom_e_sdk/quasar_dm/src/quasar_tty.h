@@ -8,10 +8,8 @@
 #include <stdint.h>
 
 #define QUASAR_TTY_BUF_SIZE 2048
-#define QUASAR_TTY_MAGIC 0x28028028u /* "x280" flavoured, easy to spot in a dump */
+#define QUASAR_TTY_MAGIC 0x28028028u
 
-// Header is deliberately first and fixed-width so a host-side reader can pick
-// up magic/len without knowing anything else about the build.
 struct quasar_tty_buf {
     uint32_t magic;
     uint32_t len;

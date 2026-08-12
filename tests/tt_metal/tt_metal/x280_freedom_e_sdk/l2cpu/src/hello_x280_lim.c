@@ -2,44 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// hello_x280_lim -- "Hello, World" for a SiFive X280 hart in a Blackhole L2CPU
-// tile, built from SiFive's freedom-e-sdk.
-//
-// What this is
-// ------------
-// A Blackhole chip has four L2CPU tiles, each an X280 cluster of 4 harts
-// (rv64gcv, VLEN=512), each tile with 2 MB of L3/LIM, a DDR front port and NOC
-// paths. tt-llm-engine's x280/ directory already runs bare-metal firmware there
-// with a hand-rolled boot stub, a hand-rolled linker script and a stock
-// riscv64-unknown-elf toolchain.
-//
-// This program replaces the hand-rolled boot stub and linker script with
-// freedom-metal's, keeps everything else, and prints. It is the same core, the
-// same toolchain (tt-llm-engine's own vendored riscv64-unknown-elf-gcc), the
-// same ISA (-march=rv64gc -mabi=lp64d), and the same load address
-// (X280_ACTIVE_FW_LOAD_ADDR = 0x08001000).
-//
-// Where the output goes
-// ---------------------
-// An L2CPU tile has no UART. printf lands in a LIM block at a fixed address
-// (see x280_lim_console.h) that the host reads back over the NOC, and the
-// program finishes by writing the same sentinel tt-llm-engine's host loader
-// already polls. See ../README.md for the run path -- and for why running it on
-// a Galaxy chassis needs care.
+// Hello world for a Blackhole L2CPU X280 via freedom-e-sdk.
+// Same toolchain/ISA/load addr as tt-llm-engine x280/; boot/link via freedom-metal.
+// No UART: printf → LIM console (x280_lim_console.h); host polls sentinel over NOC.
+// See ../README.md for build/run and Galaxy hazards.
 
 #include <stdint.h>
 #include <stdio.h>
 
-// --- freedom-e-sdk / freedom-metal ------------------------------------------
 #include <metal/cpu.h>
 
-// --- this demo --------------------------------------------------------------
 #include "x280_lim_console.h"
 
 __attribute__((noreturn)) void x280_cease(void);
 
-// Symbols freedom-metal's linker script defines; used to report where we landed.
-// _enter is the image's first instruction, so it doubles as .text start.
+// freedom-metal linker symbols; _enter is the image's first instruction.
 extern char _enter[];
 extern char metal_segment_bss_target_end[];
 extern char metal_segment_stack_begin[];
@@ -61,17 +38,11 @@ static void report_core(void) {
     printf("  mimpid                              = 0x%lx\n", (unsigned long)READ_CSR("mimpid"));
     printf("  misa                                = 0x%lx\n", (unsigned long)READ_CSR("misa"));
 
-    // misa bit 21 ('V' is letter 22, so bit 'V'-'A' = 21) reports the vector
-    // extension. An X280 sets it; a generic U54 (what qemu models) does not.
-    // Only read vlenb when V is actually present -- otherwise CSR 0xc22 is an
-    // illegal instruction and we would trap for no reason.
+    // misa bit 21 = V. Skip vlenb if absent (illegal insn on U54/qemu).
     const uintptr_t misa = READ_CSR("misa");
     const int has_v = (misa >> 21) & 1;
     if (has_v) {
-        // Reading vlenb also traps if mstatus.VS is still Off, which is where it
-        // sits at reset. freedom-metal's _enter does not change it;
-        // src/x280_bringup.c's __metal_before_start hook does. So a sane number
-        // here is a live check that the hook ran.
+        // Also traps if mstatus.VS still Off — nonzero vlenb means bringup hook ran.
         const unsigned long vlenb = (unsigned long)READ_CSR("0xc22");
         printf("  misa.V (vector)                     = yes\n");
         printf("  vlenb (CSR 0xc22)                   = %lu bytes -> VLEN=%lu\n", vlenb, vlenb * 8);
@@ -133,10 +104,7 @@ static void report_lim(void) {
 }
 
 static void report_float(void) {
-    // The X280 has F and D, and -mabi=lp64d passes doubles in FP registers. The
-    // Quasar DM port next door had neither, so its newlib was soft-float only;
-    // doing real FP here is a cheap way to show this target is the full rv64gc
-    // core freedom-e-sdk's rv64 BSPs already assume.
+    // Smoke-test hardware F/D under -mabi=lp64d (Quasar DM is soft-float only).
     printf("[4] hardware floating point (rv64gc / lp64d)\n");
     volatile double a = 1.0;
     volatile double b = 3.0;
@@ -170,9 +138,8 @@ int main(void) {
     printf("---------------------------------------------------------------------\n");
     printf("\n");
 
-    // Tell the host we got here, using the sentinel its loader already polls.
+    // Host loader already polls this sentinel.
     *X280_SENTINEL_ADDR = X280_SENTINEL_VALUE;
 
-    // Retire the hart rather than spinning, so the tile is quiet afterwards.
     x280_cease();
 }

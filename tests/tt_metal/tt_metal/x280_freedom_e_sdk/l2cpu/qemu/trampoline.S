@@ -3,27 +3,11 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * Reset trampoline for running the LIM firmware under qemu-system-riscv64
- * -machine sifive_u.
- *
- * Why this exists
- * ---------------
- * qemu's sifive_u mask ROM at 0x1000 jumps to a fixed address -- the DRAM base
- * 0x80000000 -- regardless of the entry point of whatever you pass to -kernel.
- * The firmware we want to run lives in L2 LIM at 0x08001000, which is where
- * Blackhole's host loader puts it too (X280_ACTIVE_FW_LOAD_ADDR).
- *
- * So this three-instruction stub is linked at the DRAM base, gets control from
- * the mask ROM, and jumps into LIM. That is a fair analogue of the real thing:
- * on Blackhole the host writes the image into LIM over the NOC and then releases
- * the L2CPU from reset. Here qemu writes the image into LIM with
- * `-device loader` and the trampoline performs the "release".
- *
- * It also parks every hart except hart 1. qemu's sifive_u is heterogeneous the
- * way a real FU740 is: hart 0 is an E51 (rv64imac -- no FP), harts 1..n are U54s
- * (rv64gc). The firmware is built -mabi=lp64d and uses hardware doubles, so it
- * must run on a U54. A real Blackhole L2CPU tile is 4 identical X280 harts and
- * needs no such filtering.
+ * sifive_u mask ROM jumps to DRAM 0x80000000; firmware lives in LIM at
+ * 0x08001000. This stub is linked at DRAM base and jumps into LIM (analogue of
+ * host loading LIM then releasing reset). Parks all harts except 1: sifive_u
+ * hart 0 is an E51 (no FP); firmware needs a U54 for -mabi=lp64d. Blackhole
+ * X280 harts are identical and need no such filter.
  */
 
 .section .text.start, "ax"

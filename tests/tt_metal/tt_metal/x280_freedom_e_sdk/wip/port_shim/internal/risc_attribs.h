@@ -2,15 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Bare-metal port shim for tt_metal/hw/inc/internal/risc_attribs.h
-//
-// The in-tree header decorates pointers with `__attribute__((rvtt_l1_ptr))` and
-// `__attribute__((rvtt_reg_ptr))`. Those attributes exist only in Tenstorrent's
-// GCC fork (sfpi). An upstream riscv64-unknown-elf-gcc -- which is what
-// freedom-e-sdk drives -- does not know them and warns under -Wattributes.
-//
-// This shim keeps the same names and semantics but drops the TT-specific
-// attributes, so the fabric headers compile under a stock RISC-V toolchain.
+// Bare-metal shim for risc_attribs.h: drop sfpi-only rvtt_* attributes.
 
 #ifndef _RISC_ATTRIBS_H_
 #define _RISC_ATTRIBS_H_
@@ -25,9 +17,6 @@ union tt_uint64_t {
     };
 };
 
-// On a real Tensix/Quasar target these mark pointers into device L1 / register
-// space so the compiler can pick the right load/store forms. A generic core has
-// no such distinction, so they degrade to nothing.
 #define tt_l1_ptr
 #define tt_reg_ptr
 

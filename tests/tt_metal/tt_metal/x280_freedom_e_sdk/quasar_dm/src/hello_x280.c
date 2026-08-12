@@ -2,33 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// hello_x280 -- "Hello, World" for a Quasar DM core, built out of SiFive's
-// freedom-e-sdk and tt-metal at the same time.
-//
-// The claim being demonstrated
-// ---------------------------
-// tt-metal builds Quasar DM-core code with `-mcpu=tt-qsr64-rocc`. Those cores
-// are SiFive X280 derivatives: tt_metal/hw/inc/internal/tt-2xx/risc_common.h
-// cites the "SiFive X280 Core Manual" for its CFLUSH.D.L1 / CDISCARD.D.L1
-// sequences and names freedom-metal's src/cache.c as the reference
-// implementation. freedom-e-sdk ships that freedom-metal. So the two should be
-// able to occupy one binary -- and they do.
-//
-// This program is that binary. Every layer in it comes from one side or the
-// other, nothing is reimplemented:
-//
-//   entry / crt0 / stdio    freedom-metal (freedom-e-sdk)
-//   libc                    newlib, from tt-metal's sfpi toolchain
-//   hart identity, caches   freedom-metal's metal/cpu.h, metal/cache.h
-//   cache maintenance       tt-metal's risc_common.h (via x280_cache_tt.cc)
-//   console                 quasar_tty.c -- freedom-metal stdio into Tensix L1,
-//                           flushed with tt-metal's X280 cache primitives
-//   link addresses          tt-metal's dev_mem_map.h (DM kernel window)
-//
-// Running it
-// ----------
-// There is no Quasar silicon and no Quasar simulator, so this is not executed
-// here; build.sh builds it and verifies the artifact. See README.md.
+// Hello world for Quasar DM: freedom-metal + tt-metal risc_common.h X280 cache
+// ops in one binary (-mcpu=tt-qsr64-rocc). Build/verify only — no Quasar silicon.
+// See README.md.
 
 #include <stdint.h>
 #include <stdio.h>
@@ -46,8 +22,7 @@
 
 int main(void);
 
-// A scratch buffer to hand between the two cache APIs. 64B aligned so it starts
-// on an L1 D$ / L2 line boundary, which is what both flush paths operate on.
+// 64B-aligned handoff buffer for both cache flush APIs (line-sized).
 static volatile char handoff[128] __attribute__((aligned(64)));
 
 static void report_toolchain(void) {

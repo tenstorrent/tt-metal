@@ -3,27 +3,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# Actually execute the hello world, in emulation.
-#
-# What this does and does not prove
-# ---------------------------------
-# PROVES: the whole software integration runs. freedom-metal's _enter boots,
-# sets up gp / mtvec / per-hart stacks, clears the SiFive Feature Disable CSR,
-# zeroes .bss, copies .data, calls the C runtime, and reaches main(); newlib's
-# printf works; our metal_tty_putc hook receives the bytes; the LIM console block
-# and the sentinel land at the addresses tt-llm-engine's host loader reads.
-#
-# DOES NOT PROVE: anything X280-specific. qemu's sifive_u models a generic SiFive
-# FU740 -- U54 harts, no vector unit, no CEASE, and none of Blackhole's NOC, DMA
-# or DDR front port. Those need real silicon.
-#
-# It is not a stand-in for the hardware run; it is the part of the claim that can
-# be checked without a Blackhole card. What makes it worth doing is that qemu's
-# sifive_u has its L2 LIM at 0x08000000 -- the same address as Blackhole's X280
-# LIM, because it is the same SiFive core-complex convention -- so the firmware
-# runs at its real link address, unmodified.
-#
-# Usage: ./run_qemu.sh          (run ../build.sh first)
+# Run hello world under qemu-system-riscv64 -machine sifive_u.
+# Exercises software integration at the real LIM link address (0x08001000).
+# Does not cover X280 vector/CEASE/NOC — those need silicon. See ../README.md.
+# Usage: ./run_qemu.sh  (run ../build.sh first)
 
 set -euo pipefail
 
@@ -42,8 +25,7 @@ die() {
 # ---------------------------------------------------------------------------
 say "1. qemu-system-riscv64"
 
-# Prefer a system qemu; otherwise unpack the Ubuntu packages locally. No root
-# needed -- dpkg-deb -x into a private prefix and point LD_LIBRARY_PATH at it.
+# System qemu, or unpack Ubuntu debs into build/qemu/ (no root).
 QEMU="$(command -v qemu-system-riscv64 || true)"
 QEMU_LIBS=""
 if [[ -z "$QEMU" ]]; then
@@ -64,8 +46,7 @@ fi
 run_qemu() { LD_LIBRARY_PATH="$QEMU_LIBS" "$QEMU" "$@"; }
 run_qemu --version | head -1
 
-# The whole reason sifive_u is the right machine: its L2 LIM is at the same
-# address as Blackhole's X280 LIM. Assert it rather than trusting it.
+# sifive_u L2 LIM must be at 0x08000000 (same as Blackhole X280).
 say "2. confirm the emulated L2 LIM covers X280_ACTIVE_FW_LOAD_ADDR"
 mtree=$(printf 'info mtree\nquit\n' | run_qemu -machine sifive_u -smp 2 -bios none \
     -display none -monitor stdio -serial null 2>/dev/null | grep -i "l2lim" | head -1)
@@ -104,19 +85,11 @@ FLAGS=(-march="$RISCV_ARCH" -mabi="$RISCV_ABI" -mcmodel="$RISCV_CMODEL"
     -Os -g -Wall -ffunction-sections -fdata-sections --specs=nano.specs
     -DX280_QEMU -I "$BSP/install/include" -I "$L2CPU/src")
 
-# Identical sources and identical BSP to the hardware build. The only difference
-# is -DX280_QEMU, which adds the UART mirror and drops CEASE.
+# Same sources/BSP as hardware; -DX280_QEMU adds UART mirror and drops CEASE.
 for src in hello_x280_lim.c x280_lim_console.c x280_bringup.c; do
     "$TC_GCC" "${FLAGS[@]}" -std=gnu11 -c "$L2CPU/src/$src" -o "$QOUT/${src%.c}.o"
 done
-# Which hart runs main() is a link-time constant: the BSP's linker script says
-# PROVIDE(__metal_boot_hart = 0), and freedom-metal's gloss/crt0.S parks every
-# other hart in secondary_main(). qemu's sifive_u is heterogeneous -- hart 0 is an
-# E51 with no FP -- so point the boot hart at hart 1, a U54. Because the BSP uses
-# PROVIDE, a --defsym on the command line wins with no BSP edit.
-#
-# On Blackhole all four X280 harts in a tile are identical, so this would be set
-# to whichever hart the host releases from reset (0 by default).
+# Boot hart 1: sifive_u hart 0 is E51 (no FP). Blackhole would keep 0.
 "$TC_GCC" "${FLAGS[@]}" -Wl,--gc-sections -nostartfiles -nostdlib \
     -Wl,--defsym=__metal_boot_hart=1 \
     -Wl,--defsym=__stack_size=0x8000 -u _printf_float \
@@ -126,7 +99,7 @@ done
     -o "$QOUT/hello_qemu.elf"
 "$TC_BIN/riscv64-unknown-elf-objcopy" -O binary "$QOUT/hello_qemu.elf" "$QOUT/hello_qemu.bin"
 
-# The trampoline that stands in for "host releases the L2CPU from reset".
+# Trampoline: stands in for "host releases L2CPU from reset".
 "$TC_GCC" -march=rv64imac_zicsr -mabi=lp64 -nostdlib -nostartfiles \
     -Wl,-Ttext=0x80000000 -Wl,--entry=_start \
     "$HERE/trampoline.S" -o "$QOUT/trampoline.elf"
@@ -141,13 +114,8 @@ SER="$QOUT/serial.txt"
 MON="$QOUT/monitor.txt"
 rm -f "$SER" "$MON"
 
-# The monitor commands read back the sentinel and the LIM console header -- what
-# the real host loader would poll over the NOC.
-#
-# The `sleep` is load bearing. qemu services monitor input as soon as it arrives,
-# and `quit` tears the VM down immediately; without a delay the monitor wins the
-# race against the guest and everything reads back as zero. The guest needs only
-# milliseconds, so a few seconds is ample slack.
+# Read sentinel + console header (host-loader contract). sleep is required:
+# without it, monitor quit races the guest and LIM reads back as zero.
 {
     sleep 4
     printf 'xp /1xg 0x08100000\n'  # sentinel
@@ -195,8 +163,6 @@ has "build flavor                        = X280_QEMU" &&
     check "X280_QEMU flavor confirmed at runtime" pass ||
     check "X280_QEMU flavor confirmed at runtime" fail
 
-# The sentinel and console block are the host-visible contract; read them back
-# out of emulated LIM exactly as the real loader would over the NOC.
 grep -qi "deadbeefcafebabe" "$MON" &&
     check "sentinel 0xDEADBEEFCAFEBABE present in LIM at 0x08100000" pass ||
     check "sentinel 0xDEADBEEFCAFEBABE present in LIM at 0x08100000" fail
@@ -212,9 +178,7 @@ if ((fails == 0)); then
     echo "  monitor $MON"
     echo "  elf     $QOUT/hello_qemu.elf"
     echo
-    echo "This exercised the software integration only -- see the header of this"
-    echo "script for what emulation cannot cover, and ../../README.md for the"
-    echo "hardware path."
+    echo "Software integration only; see script header and ../../README.md."
 else
     printf '\033[31m%d check(s) failed.\033[0m\n' "$fails"
     exit 1
