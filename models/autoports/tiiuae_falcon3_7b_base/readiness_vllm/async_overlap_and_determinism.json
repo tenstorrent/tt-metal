@@ -1,0 +1,452 @@
+{
+  "model": "/home/mvasiljevic/hf-cache/hub/models--tiiuae--Falcon3-7B-Base/snapshots/bf3d7ed586cb22a921520e2d681a9d3d7642cde8",
+  "sampling": {
+    "temperature": 0.0,
+    "ignore_eos": true
+  },
+  "async_overlap": {
+    "target_max_tokens": 300,
+    "crosses_initial_rope_boundary": true,
+    "admission_delays_s": [
+      0.2,
+      0.45,
+      1.0
+    ],
+    "control_elapsed_s": 4.717100905254483,
+    "overlap_elapsed_s": 5.596261505968869,
+    "control_output_tokens": 300,
+    "overlap_output_tokens": 300,
+    "exact_output_match": true,
+    "control_completion": "\n\n**Answer:**\nA solar cell, also known as a photovoltaic cell, converts sunlight into electricity through the following process:\n1. **Absorption of Light:** When sunlight hits the solar cell, it is absorbed by a semiconductor material, typically silicon.\n2. **Generation of Electron-Hole Pairs:** The absorbed light energy excites electrons in the silicon, causing them to break free from their atoms and create a flow of electrons (electric current).\n3. **Electric Field:** The solar cell is designed with a built-in electric field that separates the electrons from the holes (missing electrons). This separation of charges creates a voltage.\n4. **Current Flow:** The separated electrons flow through an external circuit, generating electricity.\n\n#### 10. **Question:**\nWhat is the function of a transformer in an AC circuit?\n\n**Answer:**\nA transformer is a device used to transfer electrical energy from one circuit to another through inductively coupled conductors (windings). Its primary functions in an AC circuit include:\n1. **Voltage Transformation:** Transformers can step up (increase) or step down (decrease) the voltage of an AC supply. This is crucial for efficient power transmission over long distances, as higher voltages reduce current and thus minimize power loss due to resistance in the transmission lines.\n2. **Isolation:** Transformers can provide electrical isolation between the primary and secondary circuits, which is",
+    "overlap_completion": "\n\n**Answer:**\nA solar cell, also known as a photovoltaic cell, converts sunlight into electricity through the following process:\n1. **Absorption of Light:** When sunlight hits the solar cell, it is absorbed by a semiconductor material, typically silicon.\n2. **Generation of Electron-Hole Pairs:** The absorbed light energy excites electrons in the silicon, causing them to break free from their atoms and create a flow of electrons (electric current).\n3. **Electric Field:** The solar cell is designed with a built-in electric field that separates the electrons from the holes (missing electrons). This separation of charges creates a voltage.\n4. **Current Flow:** The separated electrons flow through an external circuit, generating electricity.\n\n#### 10. **Question:**\nWhat is the function of a transformer in an AC circuit?\n\n**Answer:**\nA transformer is a device used to transfer electrical energy from one circuit to another through inductively coupled conductors (windings). Its primary functions in an AC circuit include:\n1. **Voltage Transformation:** Transformers can step up (increase) or step down (decrease) the voltage of an AC supply. This is crucial for efficient power transmission over long distances, as higher voltages reduce current and thus minimize power loss due to resistance in the transmission lines.\n2. **Isolation:** Transformers can provide electrical isolation between the primary and secondary circuits, which is",
+    "churn": {
+      "short_admission": {
+        "elapsed_s": 1.4777823612093925,
+        "output_tokens": 30,
+        "completion": "\n- **Answer:** Three names for a friendly robot are:\n  1. **Robo-Buddy**\n  2"
+      },
+      "medium_admission": {
+        "elapsed_s": 2.5278764003887773,
+        "output_tokens": 120,
+        "completion": "\n- **Answer:** The water cycle is a continuous process that moves water on, above, and below the Earth's surface. It includes the following steps:\n  1. **Evaporation:** Water from oceans, lakes, and rivers turns into water vapor and rises into the air.\n  2. **Condensation:** The water vapor cools and turns back into liquid droplets, forming clouds.\n  3. **Precipitation:** The water droplets in the clouds fall back to the Earth as rain, snow, sleet, or hail.\n "
+      },
+      "late_admission": {
+        "elapsed_s": 0.7223850302398205,
+        "output_tokens": 24,
+        "completion": "\n- **Answer:** \n  1. **Electrical Conductivity:** Copper is used in electrical wiring"
+      }
+    }
+  },
+  "vllm_logit_determinism": {
+    "prompt": "State one practical benefit of renewable energy.",
+    "logprobs": 10,
+    "repeat_and_cross_batch_position_exact_match": true,
+    "signatures": [
+      {
+        "text": "\n- State one practical benefit of non",
+        "tokens": [
+          "\n",
+          "-",
+          " State",
+          " one",
+          " practical",
+          " benefit",
+          " of",
+          " non"
+        ],
+        "token_logprobs": [
+          -1.0275638103485107,
+          -1.5230252742767334,
+          -1.1561113595962524,
+          -0.33869972825050354,
+          -1.1405272483825684,
+          -1.2438488006591797,
+          -0.046321142464876175,
+          -0.6870681643486023
+        ],
+        "top_logprobs": [
+          {
+            "\n": -1.0275638103485107,
+            " State": -2.2775638103485107,
+            " ": -2.2775638103485107,
+            " What": -3.7775638103485107,
+            " One": -3.7775638103485107,
+            " Write": -4.02756404876709,
+            " Renewable": -4.02756404876709,
+            "  ": -4.02756404876709,
+            " For": -4.02756404876709,
+            " Explain": -4.27756404876709
+          },
+          {
+            "-": -1.5230252742767334,
+            "(": -2.1480252742767334,
+            "\n": -2.1480252742767334,
+            "   ": -2.8980252742767334,
+            "1": -3.2730252742767334,
+            "*": -3.3980252742767334,
+            "The": -3.6480252742767334,
+            "2": -3.6480252742767334,
+            "**": -3.8980252742767334,
+            " ": -3.8980252742767334
+          },
+          {
+            " State": -1.1561113595962524,
+            " ": -1.9061113595962524,
+            " One": -2.656111240386963,
+            " What": -3.656111240386963,
+            " Identify": -4.156111240386963,
+            " Renewable": -4.156111240386963,
+            " Discuss": -4.156111240386963,
+            " Practical": -4.406111240386963,
+            " Describe": -4.406111240386963,
+            " Answer": -4.406111240386963
+          },
+          {
+            " one": -0.33869972825050354,
+            " a": -2.5886998176574707,
+            " two": -2.5886998176574707,
+            " the": -3.0886998176574707,
+            " another": -3.8386998176574707,
+            " an": -4.588699817657471,
+            " whether": -4.838699817657471,
+            " why": -5.088699817657471,
+            " three": -5.088699817657471,
+            " what": -5.338699817657471
+          },
+          {
+            " practical": -1.1405272483825684,
+            " drawback": -2.3905272483825684,
+            " benefit": -2.8905272483825684,
+            " disadvantage": -2.8905272483825684,
+            " environmental": -2.8905272483825684,
+            " advantage": -3.3905272483825684,
+            " challenge": -3.8905272483825684,
+            " social": -3.8905272483825684,
+            " economic": -4.140527248382568,
+            " theoretical": -4.140527248382568
+          },
+          {
+            " benefit": -1.2438488006591797,
+            " drawback": -1.2438488006591797,
+            " disadvantage": -2.4938488006591797,
+            " difficulty": -2.7438488006591797,
+            " problem": -2.9938488006591797,
+            " challenge": -3.2438488006591797,
+            " advantage": -3.4938488006591797,
+            " barrier": -3.7438488006591797,
+            " use": -4.24384880065918,
+            " obstacle": -4.24384880065918
+          },
+          {
+            " of": -0.046321142464876175,
+            " for": -4.046320915222168,
+            " and": -4.796320915222168,
+            " that": -5.546320915222168,
+            " to": -5.796320915222168,
+            " ": -6.046320915222168,
+            " renewable": -6.546320915222168,
+            " or": -7.296320915222168,
+            " in": -7.296320915222168,
+            " as": -7.796320915222168
+          },
+          {
+            " non": -0.6870681643486023,
+            " fossil": -1.437068223953247,
+            " nuclear": -2.437068223953247,
+            " a": -3.187068223953247,
+            " using": -4.437067985534668,
+            " traditional": -4.687067985534668,
+            " the": -4.687067985534668,
+            " solar": -5.187067985534668,
+            " ": -5.437067985534668,
+            " renewable": -5.437067985534668
+          }
+        ]
+      },
+      {
+        "text": "\n- State one practical benefit of non",
+        "tokens": [
+          "\n",
+          "-",
+          " State",
+          " one",
+          " practical",
+          " benefit",
+          " of",
+          " non"
+        ],
+        "token_logprobs": [
+          -1.0275638103485107,
+          -1.5230252742767334,
+          -1.1561113595962524,
+          -0.33869972825050354,
+          -1.1405272483825684,
+          -1.2438488006591797,
+          -0.046321142464876175,
+          -0.6870681643486023
+        ],
+        "top_logprobs": [
+          {
+            "\n": -1.0275638103485107,
+            " State": -2.2775638103485107,
+            " ": -2.2775638103485107,
+            " What": -3.7775638103485107,
+            " One": -3.7775638103485107,
+            " Write": -4.02756404876709,
+            " Renewable": -4.02756404876709,
+            "  ": -4.02756404876709,
+            " For": -4.02756404876709,
+            " Explain": -4.27756404876709
+          },
+          {
+            "-": -1.5230252742767334,
+            "(": -2.1480252742767334,
+            "\n": -2.1480252742767334,
+            "   ": -2.8980252742767334,
+            "1": -3.2730252742767334,
+            "*": -3.3980252742767334,
+            "The": -3.6480252742767334,
+            "2": -3.6480252742767334,
+            "**": -3.8980252742767334,
+            " ": -3.8980252742767334
+          },
+          {
+            " State": -1.1561113595962524,
+            " ": -1.9061113595962524,
+            " One": -2.656111240386963,
+            " What": -3.656111240386963,
+            " Identify": -4.156111240386963,
+            " Renewable": -4.156111240386963,
+            " Discuss": -4.156111240386963,
+            " Practical": -4.406111240386963,
+            " Describe": -4.406111240386963,
+            " Answer": -4.406111240386963
+          },
+          {
+            " one": -0.33869972825050354,
+            " a": -2.5886998176574707,
+            " two": -2.5886998176574707,
+            " the": -3.0886998176574707,
+            " another": -3.8386998176574707,
+            " an": -4.588699817657471,
+            " whether": -4.838699817657471,
+            " why": -5.088699817657471,
+            " three": -5.088699817657471,
+            " what": -5.338699817657471
+          },
+          {
+            " practical": -1.1405272483825684,
+            " drawback": -2.3905272483825684,
+            " benefit": -2.8905272483825684,
+            " disadvantage": -2.8905272483825684,
+            " environmental": -2.8905272483825684,
+            " advantage": -3.3905272483825684,
+            " challenge": -3.8905272483825684,
+            " social": -3.8905272483825684,
+            " economic": -4.140527248382568,
+            " theoretical": -4.140527248382568
+          },
+          {
+            " benefit": -1.2438488006591797,
+            " drawback": -1.2438488006591797,
+            " disadvantage": -2.4938488006591797,
+            " difficulty": -2.7438488006591797,
+            " problem": -2.9938488006591797,
+            " challenge": -3.2438488006591797,
+            " advantage": -3.4938488006591797,
+            " barrier": -3.7438488006591797,
+            " use": -4.24384880065918,
+            " obstacle": -4.24384880065918
+          },
+          {
+            " of": -0.046321142464876175,
+            " for": -4.046320915222168,
+            " and": -4.796320915222168,
+            " that": -5.546320915222168,
+            " to": -5.796320915222168,
+            " ": -6.046320915222168,
+            " renewable": -6.546320915222168,
+            " or": -7.296320915222168,
+            " in": -7.296320915222168,
+            " as": -7.796320915222168
+          },
+          {
+            " non": -0.6870681643486023,
+            " fossil": -1.437068223953247,
+            " nuclear": -2.437068223953247,
+            " a": -3.187068223953247,
+            " using": -4.437067985534668,
+            " traditional": -4.687067985534668,
+            " the": -4.687067985534668,
+            " solar": -5.187067985534668,
+            " ": -5.437067985534668,
+            " renewable": -5.437067985534668
+          }
+        ]
+      },
+      {
+        "text": "\n- State one practical benefit of non",
+        "tokens": [
+          "\n",
+          "-",
+          " State",
+          " one",
+          " practical",
+          " benefit",
+          " of",
+          " non"
+        ],
+        "token_logprobs": [
+          -1.0275638103485107,
+          -1.5230252742767334,
+          -1.1561113595962524,
+          -0.33869972825050354,
+          -1.1405272483825684,
+          -1.2438488006591797,
+          -0.046321142464876175,
+          -0.6870681643486023
+        ],
+        "top_logprobs": [
+          {
+            "\n": -1.0275638103485107,
+            " State": -2.2775638103485107,
+            " ": -2.2775638103485107,
+            " What": -3.7775638103485107,
+            " One": -3.7775638103485107,
+            " Write": -4.02756404876709,
+            " Renewable": -4.02756404876709,
+            "  ": -4.02756404876709,
+            " For": -4.02756404876709,
+            " Explain": -4.27756404876709
+          },
+          {
+            "-": -1.5230252742767334,
+            "(": -2.1480252742767334,
+            "\n": -2.1480252742767334,
+            "   ": -2.8980252742767334,
+            "1": -3.2730252742767334,
+            "*": -3.3980252742767334,
+            "The": -3.6480252742767334,
+            "2": -3.6480252742767334,
+            "**": -3.8980252742767334,
+            " ": -3.8980252742767334
+          },
+          {
+            " State": -1.1561113595962524,
+            " ": -1.9061113595962524,
+            " One": -2.656111240386963,
+            " What": -3.656111240386963,
+            " Identify": -4.156111240386963,
+            " Renewable": -4.156111240386963,
+            " Discuss": -4.156111240386963,
+            " Practical": -4.406111240386963,
+            " Describe": -4.406111240386963,
+            " Answer": -4.406111240386963
+          },
+          {
+            " one": -0.33869972825050354,
+            " a": -2.5886998176574707,
+            " two": -2.5886998176574707,
+            " the": -3.0886998176574707,
+            " another": -3.8386998176574707,
+            " an": -4.588699817657471,
+            " whether": -4.838699817657471,
+            " why": -5.088699817657471,
+            " three": -5.088699817657471,
+            " what": -5.338699817657471
+          },
+          {
+            " practical": -1.1405272483825684,
+            " drawback": -2.3905272483825684,
+            " benefit": -2.8905272483825684,
+            " disadvantage": -2.8905272483825684,
+            " environmental": -2.8905272483825684,
+            " advantage": -3.3905272483825684,
+            " challenge": -3.8905272483825684,
+            " social": -3.8905272483825684,
+            " economic": -4.140527248382568,
+            " theoretical": -4.140527248382568
+          },
+          {
+            " benefit": -1.2438488006591797,
+            " drawback": -1.2438488006591797,
+            " disadvantage": -2.4938488006591797,
+            " difficulty": -2.7438488006591797,
+            " problem": -2.9938488006591797,
+            " challenge": -3.2438488006591797,
+            " advantage": -3.4938488006591797,
+            " barrier": -3.7438488006591797,
+            " use": -4.24384880065918,
+            " obstacle": -4.24384880065918
+          },
+          {
+            " of": -0.046321142464876175,
+            " for": -4.046320915222168,
+            " and": -4.796320915222168,
+            " that": -5.546320915222168,
+            " to": -5.796320915222168,
+            " ": -6.046320915222168,
+            " renewable": -6.546320915222168,
+            " or": -7.296320915222168,
+            " in": -7.296320915222168,
+            " as": -7.796320915222168
+          },
+          {
+            " non": -0.6870681643486023,
+            " fossil": -1.437068223953247,
+            " nuclear": -2.437068223953247,
+            " a": -3.187068223953247,
+            " using": -4.437067985534668,
+            " traditional": -4.687067985534668,
+            " the": -4.687067985534668,
+            " solar": -5.187067985534668,
+            " ": -5.437067985534668,
+            " renewable": -5.437067985534668
+          }
+        ]
+      }
+    ],
+    "standalone_comparison": {
+      "reference": "HuggingFace eager BF16",
+      "vllm_first_token_id": 12,
+      "vllm_first_token_hf_rank": 1,
+      "hf_top_token_ids": [
+        12,
+        2226,
+        2263,
+        4019,
+        4416,
+        45767,
+        3490,
+        52067,
+        4614,
+        28101
+      ],
+      "hf_top_token_text": [
+        "\n",
+        " ",
+        "  ",
+        " What",
+        " One",
+        " Explain",
+        " How",
+        " Renewable",
+        " State",
+        " Answer"
+      ],
+      "hf_top_logprobs": [
+        -0.4722222089767456,
+        -2.886284828186035,
+        -3.698784828186035,
+        -4.167534828186035,
+        -4.183159828186035,
+        -4.198784828186035,
+        -4.605034828186035,
+        -4.683159828186035,
+        -4.730034828186035,
+        -4.886284828186035
+      ],
+      "top1_match": true
+    }
+  }
+}

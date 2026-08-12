@@ -1,0 +1,22 @@
+{
+  "hf_model_id": "tiiuae/Falcon3-7B-Base",
+  "revision": "bf3d7ed586cb22a921520e2d681a9d3d7642cde8",
+  "tokenizer_class": "TokenizersBackend",
+  "chat_template_present": false,
+  "prompt_mode": "completion",
+  "endpoint": "/v1/completions",
+  "rendering_method": "plain checkpoint-native completion prompts",
+  "prompt_source": "models/common/readiness_check/vllm_prompts.txt",
+  "prompt_count": 6,
+  "generation_profiles": [
+    {"max_tokens": 256, "temperature": 0.0},
+    {"max_tokens": 256, "temperature": 0.7, "top_p": 0.9}
+  ],
+  "controls": {
+    "exact_hf_256_token_controls": "hf_exact_qualitative_controls.json",
+    "full_model_prompt_format": "../doc/full_model/results/qualitative_suite/qualitative_prompt_format.json",
+    "optimized_full_model_verdict": "../doc/optimized_full_model/qualitative_verdict.md",
+    "optimized_full_model_hf_completion": "../doc/optimized_full_model/results/autoregressive/hf_completion.txt",
+    "optimized_full_model_tt_completion": "../doc/optimized_full_model/results/autoregressive/tt_completion.txt"
+  }
+}

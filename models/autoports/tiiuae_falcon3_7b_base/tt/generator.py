@@ -393,6 +393,7 @@ class Falcon3Generator(Generator):
         for slot, position in enumerate(positions.reshape(-1).tolist()[:active_batch]):
             if position < 0:
                 continue
+            logical_pages = math.ceil((int(position) + 1) / self.model.page_block_size)
             rounded_pages = self._sdpa_rounded_page_count(int(position) + 1)
             if rounded_pages > page_table.shape[1]:
                 raise ValueError(f"slot {slot} page table is too narrow for decode position {position}")
@@ -401,9 +402,14 @@ class Falcon3Generator(Generator):
                 raise ValueError(
                     f"slot {slot} lacks valid physical pages for the rounded SDPA read at position {position}"
                 )
-            if len(set(physical_pages)) != len(physical_pages) or assigned.intersection(physical_pages):
+            # vLLM owns only the logical cache blocks. Its fixed-width block
+            # table pads the causally masked SDPA tail with block zero, so tail
+            # aliases are expected and cannot be treated as live ownership.
+            # Continue to require strict uniqueness for every logical page.
+            live_pages = physical_pages[:logical_pages]
+            if len(set(live_pages)) != len(live_pages) or assigned.intersection(live_pages):
                 raise ValueError("active page-table rows must map disjoint physical cache pages")
-            assigned.update(physical_pages)
+            assigned.update(live_pages)
 
     def _ensure_sampling_params(self):
         if self._sampling_params is not None:
@@ -440,12 +446,18 @@ class Falcon3Generator(Generator):
                 temperature, active_batch=active_batch, inactive_value=0.0, name="temperature"
             )
         ]
-        if any(value < 1 or value > 32 for value in k[:active_batch]):
-            raise ValueError("top_k must be in [1,32]")
         if any(value < 0.0 or value > 1.0 for value in p[:active_batch]):
             raise ValueError("top_p must be in [0,1]")
         if any(value < 0.0 for value in public_temp[:active_batch]):
             raise ValueError("temperature must be non-negative")
+        # vLLM represents greedy requests as temperature=0/top_k=0. Greedy
+        # normalization below is exactly top-1 and stays on the canonical
+        # split sampler; unrestricted stochastic top_k=0 remains unsupported.
+        for slot in range(active_batch):
+            if public_temp[slot] == 0.0 and k[slot] == 0:
+                k[slot] = 1
+        if any(value < 1 or value > 32 for value in k[:active_batch]):
+            raise ValueError("top_k must be in [1,32] (top_k=0 is accepted only for greedy temperature=0)")
         device_temp = []
         for slot, value in enumerate(public_temp):
             if value == 0.0:

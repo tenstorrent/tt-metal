@@ -1,0 +1,22 @@
+{
+  "findings": [],
+  "measured": [
+    {
+      "artifact": "models/autoports/tiiuae_falcon3_7b_base/readiness_vllm/async_overlap_qualitative_outputs.json",
+      "label": "prompt[0] greedy_completion ('Explain how a solar cell converts sunlight into electricity ')",
+      "source": "words",
+      "num_tokens": 213,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0282
+    },
+    {
+      "artifact": "models/autoports/tiiuae_falcon3_7b_base/readiness_vllm/async_overlap_qualitative_outputs.json",
+      "label": "prompt[0] sampled_completion ('Explain how a solar cell converts sunlight into electricity ')",
+      "source": "words",
+      "num_tokens": 213,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0282
+    }
+  ],
+  "exit_code": 0
+}

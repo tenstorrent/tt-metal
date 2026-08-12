@@ -158,6 +158,7 @@ _FATAL_LOG_PATTERNS = (
 _MESH_SHAPES: dict[str, tuple[int, int]] = {
     "N150": (1, 1),
     "N300": (1, 2),
+    "P300x2": (1, 4),
     "T3K": (1, 8),
     "TG": (8, 4),
 }
@@ -235,7 +236,7 @@ def _launch_server(
     # Pass TT plugin config as a single JSON dict so JSON quoting can't be
     # mangled by intermediate shells. The dict already has
     # `sample_on_device_mode` enforced; callers extend via `tt_config`.
-    cmd += ["--plugin-config", json.dumps({"tt": tt_config})]
+    cmd += ["--additional-config", json.dumps({"tt": tt_config})]
     cmd += additional_args
 
     env = {
@@ -404,6 +405,26 @@ def _run_qualitative_prompts(
 
     print(f"  Loaded {len(prompts)} prompts")
     client = openai.OpenAI(base_url=f"{server_url.rstrip('/')}/v1", api_key="dummy")
+
+    # Exact token-id input proves the serving boundary accepts a valid prompt
+    # length which is deliberately unaligned to page/tile/chunk/trace sizes.
+    non_aligned_token_ids = list(range(1000, 1037))
+    non_aligned = client.completions.create(
+        model=hf_model,
+        prompt=non_aligned_token_ids,
+        max_tokens=5,
+        temperature=0.0,
+    )
+    non_aligned_artifact = {
+        "prompt_token_ids": non_aligned_token_ids,
+        "prompt_token_count": len(non_aligned_token_ids),
+        "output_token_count": non_aligned.usage.completion_tokens if non_aligned.usage else None,
+        "completion": non_aligned.choices[0].text,
+        "status": "pass",
+    }
+    non_aligned_file = output_dir / "non_aligned_prompt_37.json"
+    non_aligned_file.write_text(json.dumps(non_aligned_artifact, indent=2) + "\n")
+    print(f"  Non-aligned 37-token request: PASS ({non_aligned_file})")
 
     results: List[dict[str, Any]] = []
     for i, prompt in enumerate(prompts, 1):

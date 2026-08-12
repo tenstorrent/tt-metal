@@ -1,0 +1,3 @@
+{%- for message in messages -%}
+{{ message['content'] }}{% if not loop.last %}{{ '\n' }}{% endif %}
+{%- endfor -%}

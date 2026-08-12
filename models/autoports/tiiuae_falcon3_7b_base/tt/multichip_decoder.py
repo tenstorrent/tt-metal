@@ -704,8 +704,13 @@ class MultichipDecoder(LightweightModule):
             pages_per_user = math.ceil(cache_len / self.page_block_size)
             required_blocks = self.batch * pages_per_user
             physical_blocks = required_blocks if num_blocks is None else int(num_blocks)
-            if physical_blocks < required_blocks:
-                raise ValueError(f"paged cache needs at least {required_blocks} blocks, got {physical_blocks}")
+            if physical_blocks <= 0:
+                raise ValueError(f"paged cache needs a positive physical block count, got {physical_blocks}")
+            # An explicit block count is an external cache-owner contract. In
+            # particular, vLLM sizes one shared serving cache for the admitted
+            # token budget; it does not reserve max_context for every request.
+            # The standalone generator omits num_blocks (or supplies its exact
+            # full reservation), so its original sizing remains unchanged.
             shape = (physical_blocks, self.local_num_kv_heads, self.page_block_size, self.head_dim)
         else:
             shape = (self.batch, self.local_num_kv_heads, cache_len, self.head_dim)
