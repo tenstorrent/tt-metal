@@ -33,11 +33,11 @@
 #include "impl/dataflow_buffer/dataflow_buffer.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel.hpp"
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
-#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/tensor/spec/layout/page_config.hpp>
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
@@ -46,8 +46,46 @@
 #include <tt-metalium/bfloat16.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
+#include "impl/context/metal_context.hpp"
+#include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_metal {
+
+// Host readback of NEO-local tile-counter mirror fields used by isolation tests.
+// NEO mirror: tiles_available@0x8, space_available@0xC, capacity@0x10.
+struct LiveTcSnapshot {
+    std::vector<uint32_t> capacity;
+    std::vector<uint32_t> tiles_available;
+    std::vector<uint32_t> space_available;
+};
+
+inline LiveTcSnapshot read_live_tcs(IDevice* device, const CoreCoord& logical_core, uint32_t neo_id) {
+    const auto& hal = MetalContext::instance().hal();
+    const uint32_t base = hal.get_neo_tile_counters_base_addr() + neo_id * hal.get_neo_tile_counters_stride();
+    const uint32_t size = hal.get_neo_tile_counters_size();
+    const uint32_t cap_offset = hal.get_neo_tile_counters_buffer_capacity_offset();
+    const uint32_t tiles_available_offset = hal.get_neo_tile_counters_tiles_available_offset();
+    // Same offset as NEO_REGS_*_SPACE_AVAILABLE.
+    constexpr uint32_t space_available_offset = 0x0000000Cu;
+    const uint32_t num_counters = size != 0 ? static_cast<uint32_t>(::dfb::NUM_TILE_COUNTERS_PER_TENSIX) : 0u;
+    const CoreCoord virtual_core = device->worker_core_from_logical_core(logical_core);
+
+    LiveTcSnapshot snap;
+    snap.capacity.reserve(num_counters);
+    snap.tiles_available.reserve(num_counters);
+    snap.space_available.reserve(num_counters);
+    auto& cluster = MetalContext::instance().get_cluster();
+    for (uint32_t i = 0; i < num_counters; i++) {
+        const uint32_t tc_base = base + i * size;
+        snap.capacity.push_back(
+            cluster.read_core(device->id(), virtual_core, tc_base + cap_offset, sizeof(uint32_t))[0]);
+        snap.tiles_available.push_back(
+            cluster.read_core(device->id(), virtual_core, tc_base + tiles_available_offset, sizeof(uint32_t))[0]);
+        snap.space_available.push_back(
+            cluster.read_core(device->id(), virtual_core, tc_base + space_available_offset, sizeof(uint32_t))[0]);
+    }
+    return snap;
+}
 
 namespace m2 = experimental;
 

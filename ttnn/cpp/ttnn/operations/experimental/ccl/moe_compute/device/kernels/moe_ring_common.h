@@ -122,8 +122,7 @@ struct MoeRingConfig {
     static constexpr uint32_t w0_w1_dram_tiles_h = has_bias ? Ht + 1 : Ht;
     static constexpr uint32_t w0_w1_blocks_per_col =
         (w0_w1_dram_tiles_h + W0_W1_BLOCK_TILES_H - 1) / W0_W1_BLOCK_TILES_H;
-    static constexpr uint32_t in2_tiles_per_step =
-        even_stride_at_least_a2a_width((Nt + num_cores - 1) / num_cores);
+    static constexpr uint32_t in2_tiles_per_step = even_stride_at_least_a2a_width((Nt + num_cores - 1) / num_cores);
     static constexpr uint32_t w0_w1_blocks_per_expert = w0_w1_blocks_per_col * in2_tiles_per_step / 2;
 
     // Shared-expert (TpNt) variants: the intermediate dim is TP-split to TpNt = ceil(Nt/tp).

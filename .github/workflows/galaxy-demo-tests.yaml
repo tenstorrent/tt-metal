@@ -10,9 +10,7 @@ on:
         type: choice
         options:
           - all
-          - sentence_bert
           - sd35
-          - flux1
           - motif
           - wan22
           - mochi

@@ -463,6 +463,11 @@ def prepare_w0_w1_tensor_for_moe_compute(
     # in general, pad K up to a factor of transaction size (32*7)
     Kp = math.ceil(K // ttnn.TILE_SIZE / BLOCK_TILES_H) * ttnn.TILE_SIZE * BLOCK_TILES_H
     num_cores = len(shard_map)
+    if num_cores == 0:
+        raise ValueError("shard_map must contain one entry per ring core")
+    expected_shard_map = [_shard_tiles(Nt, core_id, num_cores) for core_id in range(num_cores)]
+    if shard_map != expected_shard_map:
+        raise RuntimeError(f"W0W1 shard map must match the kernel distribution {expected_shard_map}, got: {shard_map}")
 
     if K < Kp:
         padding = torch.zeros((L, E, Kp - K, N), dtype=torch_w0.dtype)
@@ -489,10 +494,6 @@ def prepare_w0_w1_tensor_for_moe_compute(
 
     each_shard = []
     max_shard_size = _even_stride_at_least_a2a_width(max(shard_map))
-    if any(x > max_shard_size for x in shard_map):
-        raise RuntimeError(
-            f"W0W1 shard sizes must be <= physical stride {max_shard_size}, got: {shard_map}"
-        )
 
     # Pick appropriate number of column tiles for each core based on the ring position.
     start_tile = 0

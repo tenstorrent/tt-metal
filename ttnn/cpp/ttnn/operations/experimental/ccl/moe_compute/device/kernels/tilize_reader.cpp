@@ -6,6 +6,8 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 #include "api/tensor/noc_traits.h"
@@ -93,7 +95,7 @@ void print_tile_rows(
 // 3. Parallel dispatch remaining copies at max efficiency
 // 4. Handle remainder rows
 //
-// Caller must call noc_async_read_barrier() before using the buffer.
+// Caller must call noc.async_read_barrier() before using the buffer.
 template <uint32_t selected_experts_k, uint32_t tokens, uint32_t experts_per_device, uint32_t l1_alignment>
 FORCE_INLINE void init_expert_activation_buffer_async(Noc& noc, CircularBuffer& cb) {
     constexpr uint32_t row_elements = 2 * experts_per_device + 1;
@@ -368,8 +370,6 @@ void kernel_main() {
     // Device 2.0 migration: legacy primitives retained: these raw L1 semaphore addresses are
     // used as bases for multicast destinations (set_multicast / get_safe_multicast_noc_addr /
     // get_noc_addr) and for inter-core semaphore inc with precomposed uint64_t addresses.
-    uint32_t partial_metadata_ready_semaphore_addr = get_semaphore(partial_metadata_ready_semaphore_id);
-    uint32_t metadata_ready_semaphore_addr = get_semaphore(metadata_ready_semaphore_id);
     const uint32_t combine_sync_addr = get_semaphore(combine_sync_semaphore_id);
 
     // Noc typed wrapper (reader uses default noc_index)
@@ -497,19 +497,22 @@ void kernel_main() {
         // Calculate drain core's source addresses
         // Note: CB addresses are allocated at same L1 offset on all cores, so we use local get_read_ptr
         // and apply it to drain core's NOC address
-        uint64_t drain_indices_noc_addr = get_noc_addr(drain_core_noc_x, drain_core_noc_y, local_indices_addr);
-        uint64_t drain_scores_noc_addr = get_noc_addr(drain_core_noc_x, drain_core_noc_y, local_scores_addr);
 
         // NOC read indices and scores for this core's token range
 
         if (num_tokens_this_core > 0) {
-            // Device 2.0 migration: legacy primitive retained: src is a precomposed uint64_t
-            // cross-core NoC address from get_noc_addr(x,y,addr)
-            noc_async_read(
-                drain_indices_noc_addr, local_indices_addr, num_tokens_this_core * aligned_indices_page_size);
-            // Device 2.0 migration: legacy primitive retained: src is a precomposed uint64_t
-            // cross-core NoC address from get_noc_addr(x,y,addr)
-            noc_async_read(drain_scores_noc_addr, local_scores_addr, num_tokens_this_core * aligned_scores_page_size);
+            noc_obj.async_read(
+                UnicastEndpoint{},
+                CoreLocalMem<uint32_t>(local_indices_addr),
+                num_tokens_this_core * aligned_indices_page_size,
+                {.noc_x = drain_core_noc_x, .noc_y = drain_core_noc_y, .addr = local_indices_addr},
+                {});
+            noc_obj.async_read(
+                UnicastEndpoint{},
+                CoreLocalMem<uint32_t>(local_scores_addr),
+                num_tokens_this_core * aligned_scores_page_size,
+                {.noc_x = drain_core_noc_x, .noc_y = drain_core_noc_y, .addr = local_scores_addr},
+                {});
         }
     }
 
@@ -736,15 +739,17 @@ void kernel_main() {
                     if (remote_count > 0) {
                         // Source: remote core's e_t buffer, expert e's section starts at 0
                         uint32_t remote_e_t_addr = cb_e_t.get_write_ptr() + e * (tokens + 1) * e_t_entry_size;
-                        uint64_t remote_e_t_noc_addr = get_noc_addr(remote_noc_x, remote_noc_y, remote_e_t_addr);
 
                         // Destination: drain's e_t buffer, after current entries for this expert
                         uint32_t local_e_t_dst =
                             e_t_buffer_base + (e * (tokens + 1) + num_activated_tokens_per_expert[e]) * e_t_entry_size;
 
-                        // Device 2.0 migration: legacy primitive retained: src is a precomposed
-                        // uint64_t cross-core NoC address from get_noc_addr(x,y,addr)
-                        noc_async_read(remote_e_t_noc_addr, local_e_t_dst, remote_count * e_t_entry_size);
+                        noc_obj.async_read(
+                            UnicastEndpoint{},
+                            CoreLocalMem<uint32_t>(local_e_t_dst),
+                            remote_count * e_t_entry_size,
+                            {.noc_x = remote_noc_x, .noc_y = remote_noc_y, .addr = remote_e_t_addr},
+                            {});
 
                         // Update drain's count for this expert
                         num_activated_tokens_per_expert[e] += remote_count;
@@ -755,19 +760,17 @@ void kernel_main() {
                 if (remote_activated_count > 0) {
                     // Source: remote core's expert_activation buffer, rows start at 0
                     uint32_t remote_activation_addr = cb_expert_activation.get_write_ptr();
-                    uint64_t remote_activation_noc_addr =
-                        get_noc_addr(remote_noc_x, remote_noc_y, remote_activation_addr);
 
                     // Destination: drain's expert_activation buffer, after current rows
                     uint32_t local_activation_dst =
                         expert_activation_base + num_activated_tokens * aligned_activation_row_bytes;
 
-                    // Device 2.0 migration: legacy primitive retained: src is a precomposed
-                    // uint64_t cross-core NoC address from get_noc_addr(x,y,addr)
-                    noc_async_read(
-                        remote_activation_noc_addr,
-                        local_activation_dst,
-                        remote_activated_count * aligned_activation_row_bytes);
+                    noc_obj.async_read(
+                        UnicastEndpoint{},
+                        CoreLocalMem<uint32_t>(local_activation_dst),
+                        remote_activated_count * aligned_activation_row_bytes,
+                        {.noc_x = remote_noc_x, .noc_y = remote_noc_y, .addr = remote_activation_addr},
+                        {});
 
                     // Update drain's total activated count
                     num_activated_tokens += remote_activated_count;
@@ -862,23 +865,19 @@ void kernel_main() {
             // First, set the local semaphore to 1 - this is the value that will be multicast
             metadata_ready_sem.set(1);
 
-            uint64_t semaphore_mcast_addr = get_safe_multicast_noc_addr(
-                tilize_mcast_start_x,
-                tilize_mcast_start_y,
-                tilize_mcast_end_x,
-                tilize_mcast_end_y,
-                metadata_ready_semaphore_addr);
-
             // Flush writes since we change the local value of metadata_ready_semaphore when signalling
             // to the matmul cores (vs here where we signal to the non-drain-sync tilize cores )
             noc_obj.async_writes_flushed();
 
             // Multicast the value 1 to all non-drain tilize cores
-            // Device 2.0 migration: legacy primitive retained: multicast loopback semaphore set with
-            // precomposed uint64_t multicast destination (get_safe_multicast_noc_addr) and raw local
-            // sem address as source
-            noc_semaphore_set_multicast(
-                metadata_ready_semaphore_addr, semaphore_mcast_addr, tilize_bounding_box_num_cores - 1);
+            set_multicast_safe(
+                metadata_ready_sem,
+                noc_obj,
+                tilize_mcast_start_x,
+                tilize_mcast_start_y,
+                tilize_mcast_end_x,
+                tilize_mcast_end_y,
+                tilize_bounding_box_num_cores - 1);
         }
 
         volatile tt_l1_ptr uint32_t* num_tokens_per_expert =
@@ -907,19 +906,15 @@ void kernel_main() {
         // Signal readiness via semaphore
         metadata_ready_sem.set(1);
 
-        // get mcast address for semaphore
-        uint64_t matmul_metadata_ready_semaphore_mcast_addr = get_safe_multicast_noc_addr(
+        // multicast semaphore
+        set_multicast_safe(
+            metadata_ready_sem,
+            noc_obj,
             matmul_mcast_start_x,
             matmul_mcast_start_y,
             matmul_mcast_end_x,
             matmul_mcast_end_y,
-            metadata_ready_semaphore_addr);
-
-        // multicast semaphore
-        // Device 2.0 migration: legacy primitive retained: multicast loopback semaphore set with
-        // precomposed uint64_t multicast destination
-        noc_semaphore_set_multicast(
-            metadata_ready_semaphore_addr, matmul_metadata_ready_semaphore_mcast_addr, matmul_bounding_box_num_cores);
+            matmul_bounding_box_num_cores);
     }  // End of is_drain_tilize_core block
     else {
         // ========== NON-DRAIN tilize CORE: Step 4 - Send counts to drain ==========
@@ -933,8 +928,6 @@ void kernel_main() {
 
         // Get drain core's remote_counts_cb address
         uint32_t local_counts_addr = cb_remote_counts.get_read_ptr();
-        uint64_t drain_counts_noc_addr =
-            get_noc_addr(drain_core_noc_x, drain_core_noc_y, local_counts_addr + remote_counts_offset);
 
         // Pack counts into local buffer first (we can use the local remote_counts_cb space temporarily)
         uint32_t* counts_ptr = reinterpret_cast<uint32_t*>(local_counts_addr);
@@ -944,17 +937,16 @@ void kernel_main() {
         counts_ptr[experts_per_device] = num_activated_tokens;
 
         // Write counts to drain core's remote_counts_cb
-        // Device 2.0 migration: legacy primitive retained: dst is a precomposed uint64_t
-        // cross-core NoC address from get_noc_addr(x,y,addr)
-        noc_async_write(local_counts_addr, drain_counts_noc_addr, remote_counts_entry_size);
+        noc_obj.async_write(
+            CoreLocalMem<uint32_t>(local_counts_addr),
+            UnicastEndpoint{},
+            remote_counts_entry_size,
+            {},
+            {.noc_x = drain_core_noc_x, .noc_y = drain_core_noc_y, .addr = local_counts_addr + remote_counts_offset});
         noc_obj.async_write_barrier();
 
         // Signal drain core via semaphore increment
-        // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address cannot
-        // be wrapped by Semaphore<>::inc which binds to a per-program id
-        uint64_t drain_semaphore_noc_addr =
-            get_noc_addr(drain_core_noc_x, drain_core_noc_y, partial_metadata_ready_semaphore_addr);
-        noc_semaphore_inc(drain_semaphore_noc_addr, 1);
+        partial_metadata_ready_sem.up(noc_obj, drain_core_noc_x, drain_core_noc_y, 1);
 
         // ========== NON-DRAIN tilize CORE: Wait for drain core to multicast data ==========
         // Wait for the semaphore signal from drain core
