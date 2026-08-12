@@ -315,6 +315,51 @@ class Qwen36ModelArgs(ModelArgs):
                 )
             )
         )
+        # WORMHOLE ONLY: same one-K-pass fix, for the fused attention QKV(+gate) in-projection.
+        # attn_qkv_fused_dim_tp=5120 (160 tiles) -> per_core_N=20 at 8 cols. With fp32_dest_acc_en=True
+        # (today) the subblock cap is 4, giving out_subblock_w=4 / out_block_w=4 -- FIVE K passes.
+        # Dropping fp32 dest acc raises the cap to 8, so out_subblock_w=5 (20%5==0) and
+        # out_block_w=per_core_N=20 divides evenly -- ONE K pass.
+        #
+        # MEASURED (device kernel duration, N300, M=2048 K=4096 N=5120;
+        # tests/perf/test_attn_qkv_inproj_sweep.py):
+        #     baseline fp32T/pkT in0=DRAM   1683.7us   <- today (matches the 1,706us layer profile)
+        #     kpass1   fp32F/pkT in0=DRAM   1011.5us   -39.9%   pcc=0.99992 (vs 0.99997 baseline)
+        # in0=L1 measured within noise of in0=DRAM at this blocking (one K pass already reads in0
+        # once), so no companion input-placement change is needed — unlike the GDN in-proj, this one
+        # needs no norm-side changes at all.
+        #
+        # None on Blackhole: BH prefill takes the fused all_gather_matmul_prefill path (_fuse_agmm),
+        # which pins its own grid and progcfg, so this would never be consulted there.
+        self.attn_qkv_fused_prefill_progcfg = (
+            None
+            if tpc.is_blackhole()
+            else (
+                lambda seq_len, k, n: tpc.create_prefill_kpass1_matmul_program_config(
+                    seq_len, k, n, grid_size=self._prefill_grid
+                )
+            )
+        )
+        # WORMHOLE ONLY: same one-K-pass fix, for the attention wo (output) projection.
+        # K=attn_out_dim_tp=2048, N=dim=4096 (128 tiles) -> per_core_N=16 at 8 cols: fp32 dest acc on
+        # caps out_subblock_w at 4 (blk_w=8, TWO K passes); off, cap rises to 8 (blk_w=16, ONE pass).
+        #
+        # MEASURED (device kernel duration, N300, M=2048 K=2048 N=4096;
+        # tests/perf/test_attn_qkv_inproj_sweep.py):
+        #     baseline fp32T/pkT in0=DRAM   558.6us   <- today (matches the 531-536us layer profile)
+        #     kpass1   fp32F/pkT in0=DRAM   517.2us   -7.4%   pcc=0.99993 (vs 0.99997 baseline)
+        # Smaller win than the QKV in-proj (2->1 pass here vs 5->1 there), but same fix, same low risk.
+        #
+        # None on Blackhole: this progcfg is only consulted by attention/tp.py's _wo_proj when set.
+        self.attn_wo_prefill_progcfg = (
+            None
+            if tpc.is_blackhole()
+            else (
+                lambda seq_len, k, n: tpc.create_prefill_kpass1_matmul_program_config(
+                    seq_len, k, n, grid_size=self._prefill_grid
+                )
+            )
+        )
 
         # Activation shard configs
         self.act_shard_hidden = tpc.create_activation_shard_config(self.dim)
