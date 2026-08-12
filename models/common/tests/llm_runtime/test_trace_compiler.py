@@ -11,7 +11,7 @@ import models.common.llm_runtime.trace_compiler as trace_compiler_module
 import ttnn
 from models.common.llm_runtime.decode import DecodeDeviceInputs, DecodePersistentInputs
 from models.common.llm_runtime.prefill.inputs import PrefillDeviceInputs, PrefillPositionInputs
-from models.common.llm_runtime.prefill.runtime import PrefillHiddenPersistentInputs, PrefillReplayState
+from models.common.llm_runtime.prefill.trace import PrefillHiddenPersistentInputs, PrefillReplayState
 from models.common.llm_runtime.program_compiler import ProgramCompiler
 from models.common.llm_runtime.trace_compiler import InputRefreshPolicy, TraceCapturePlan, TraceCompiler
 

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from models.common.llm_runtime import tensor_resources
 from models.common.llm_runtime.decode import DecodeDeviceInputs, DecodePersistentInputs
 from models.common.llm_runtime.prefill.inputs import PrefillDeviceInputs, PrefillPositionInputs
-from models.common.llm_runtime.prefill.runtime import PrefillHiddenPersistentInputs, PrefillReplayState
+from models.common.llm_runtime.prefill.trace import PrefillHiddenPersistentInputs, PrefillReplayState
 
 
 def test_owned_runtime_containers_release_aliased_tensors_once(monkeypatch):

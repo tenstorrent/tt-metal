@@ -25,7 +25,8 @@ from models.common.llm_runtime.prefill.config import PrefillRuntimeConfig
 from models.common.llm_runtime.prefill.inputs import PrefillDeviceInputs, PrefillHostInputs, PrefillPositionInputs
 from models.common.llm_runtime.prefill.plan import _plan_prefill_requests
 from models.common.llm_runtime.prefill.postprocess import fit_prefill_sampling_logits
-from models.common.llm_runtime.prefill.runtime import PrefillHiddenPersistentInputs, PrefillReplayState, PrefillRuntime
+from models.common.llm_runtime.prefill.runtime import PrefillRuntime
+from models.common.llm_runtime.prefill.trace import PrefillHiddenPersistentInputs, PrefillReplayState
 from models.common.llm_runtime.program_compiler import ProgramCompiler
 from models.common.sampling import SamplingParams
 
