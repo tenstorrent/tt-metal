@@ -44,7 +44,6 @@ ttnn::Tensor pad_leading_dimension_via_reshape(
     const PadSpecDim& pad_spec,
     const float value,
     const bool use_multicore,
-    const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     const auto& shape = input_tensor.logical_shape();
     const int rank = static_cast<int>(shape.rank());
@@ -76,7 +75,7 @@ ttnn::Tensor pad_leading_dimension_via_reshape(
         {0, 0}, {pad_spec.before_elements * inner_extent, pad_spec.after_elements * inner_extent}, {0, 0}, {0, 0}};
 
     auto padded = ttnn::operations::experimental::quasar::pad(
-        reshaped, padding_4d, value, use_multicore, memory_config_arg, sub_core_grids);
+        reshaped, padding_4d, value, use_multicore, std::nullopt, sub_core_grids);
 
     ttsl::SmallVector<uint32_t> output_shape(shape.view().begin(), shape.view().end());
     output_shape[dim] += pad_spec.before_elements + pad_spec.after_elements;
@@ -88,7 +87,6 @@ ttnn::Tensor pad_leading_dimensions(
     ttsl::SmallVector<PadSpecDim>& padding,
     const float value,
     const bool use_multicore,
-    const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     auto result = input_tensor;
     const int rank = static_cast<int>(input_tensor.logical_shape().rank());
@@ -97,8 +95,7 @@ ttnn::Tensor pad_leading_dimensions(
         if (padding[dim].before_elements == 0 && padding[dim].after_elements == 0) {
             continue;
         }
-        result = pad_leading_dimension_via_reshape(
-            result, dim, padding[dim], value, use_multicore, memory_config_arg, sub_core_grids);
+        result = pad_leading_dimension_via_reshape(result, dim, padding[dim], value, use_multicore, sub_core_grids);
         padding[dim] = {0, 0};
     }
     return result;
@@ -482,11 +479,17 @@ ttnn::Tensor pad(
 
     ttnn::Tensor working_tensor = input_tensor;
     if (original_rank > 4) {
+        // Mirror of ttnn/cpp/ttnn/operations/data_movement/pad/pad.cpp. Rank > 4 coverage is exercised
+        // through ttnn.pad device tests(see #52870).
         working_tensor = operations::experimental::quasar::detail::pad_leading_dimensions(
-            working_tensor, working_padding, value, use_multicore, memory_config_arg, sub_core_grids);
+            working_tensor, working_padding, value, use_multicore, sub_core_grids);
         if (std::all_of(working_padding.begin(), working_padding.end(), [](auto& p) {
                 return p.before_elements == 0 && p.after_elements == 0;
             })) {
+            if (memory_config_arg.has_value()) {
+                return ttnn::operations::experimental::quasar::to_memory_config(
+                    working_tensor, memory_config_arg.value());
+            }
             return working_tensor;
         }
     }

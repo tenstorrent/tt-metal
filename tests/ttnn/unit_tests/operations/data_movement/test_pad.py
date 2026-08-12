@@ -1341,6 +1341,36 @@ def _ttnn_padding_to_torch(padding):
     return tuple(v for i in reversed(range(len(padding))) for v in padding[i])
 
 
+def _assert_pad_fill_regions(output_tensor, input_shape, padding, value):
+    """Exact check that every padded slice equals the fill value."""
+    for dim, (before, after) in enumerate(padding):
+        if before:
+            slices = [slice(None)] * len(input_shape)
+            slices[dim] = slice(0, before)
+            assert torch.all(output_tensor[tuple(slices)] == value)
+        if after:
+            slices = [slice(None)] * len(input_shape)
+            slices[dim] = slice(before + input_shape[dim], before + input_shape[dim] + after)
+            assert torch.all(output_tensor[tuple(slices)] == value)
+
+
+def _assert_pad_body_matches(output_tensor, input_tensor, padding, *, atol=0.0):
+    """Check the unpadded region matches the input."""
+    slices = []
+    for dim, (before, _after) in enumerate(padding):
+        slices.append(slice(before, before + input_tensor.shape[dim]))
+    body_out = output_tensor[tuple(slices)]
+    if atol == 0.0:
+        assert torch.equal(body_out, input_tensor)
+    else:
+        assert_allclose(body_out.float(), input_tensor.float(), rtol=0, atol=atol)
+
+
+# Rank > 4 regression coverage below exercises ttnn.pad on device. The Quasar mirror
+# (ttnn.experimental.quasar.pad / experimental/quasar/pad/pad.cpp) carries the same
+# logic and is verified-by-inspection, same as the Quasar slice fix in #52902.
+
+
 @pytest.mark.parametrize(
     "shape,padding",
     [
@@ -1480,31 +1510,41 @@ def test_pad_rank_gt4_tile_bfloat8_b(device, padding):
     """bfloat8_b is padded via a bfloat16 round trip; make sure the rank > 4 path preserves that."""
     torch.manual_seed(0)
     shape = (1, 4, 4, 32, 128)
+    value = 7.0
 
     torch_input_tensor = torch.randn(shape, dtype=torch.bfloat16)
-    torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, _ttnn_padding_to_torch(padding), value=0.0)
+    torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, _ttnn_padding_to_torch(padding), value=value)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn.to_torch(ttnn.pad(input_tensor, padding, 0.0))
+    output_tensor = ttnn.to_torch(ttnn.pad(input_tensor, padding, value))
 
     assert output_tensor.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor.float(), output_tensor.float(), 0.999)
+    _assert_pad_fill_regions(output_tensor, shape, padding, value)
+    _assert_pad_body_matches(output_tensor, torch_input_tensor, padding, atol=0.05)
 
 
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
-def test_pad_rank_gt4_memory_config(device, layout, memory_config):
+@pytest.mark.parametrize(
+    "shape,padding",
+    [
+        # Single leading dim: trailing squeeze path still applies memory_config.
+        ((1, 4, 4, 32, 128), ((0, 0), (0, 1), (0, 0), (0, 0), (0, 0))),
+        # Multiple leading dims only: memory_config must be applied after the reshape passes.
+        ((2, 4, 4, 4, 128), ((0, 1), (0, 2), (0, 0), (0, 0), (0, 0))),
+    ],
+    ids=["single_leading_dim", "all_leading_dims"],
+)
+def test_pad_rank_gt4_memory_config(device, layout, memory_config, shape, padding):
     """The requested output memory config must survive the reshape/pad/reshape round trip."""
     torch.manual_seed(0)
-    shape = (1, 4, 4, 32, 128)
-    # Tile layout does not support front padding on device.
-    padding = ((0, 0), (0, 1), (0, 0), (0, 0), (0, 0))
+    value = 0.0
 
     torch_input_tensor = torch.randn(shape, dtype=torch.bfloat16)
-    torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, _ttnn_padding_to_torch(padding), value=0.0)
+    torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, _ttnn_padding_to_torch(padding), value=value)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=layout, device=device)
-    output = ttnn.pad(input_tensor, padding, 0.0, memory_config=memory_config)
+    output = ttnn.pad(input_tensor, padding, value, memory_config=memory_config)
 
     assert output.memory_config().buffer_type == memory_config.buffer_type
     output_tensor = ttnn.to_torch(output)
