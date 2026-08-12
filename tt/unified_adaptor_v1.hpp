@@ -110,12 +110,6 @@ namespace unified {
 // Compute
 // ---------------------------------------------------------------------------
 
-// TODO: the FPU pack-side epilogue is not bound to metal yet. Declared without a
-// definition so the (uninstantiated) template body type-checks -- a program that
-// actually reaches it fails to LINK with this name, rather than silently doing
-// nothing.
-void relu_from_pack(uint32_t base, uint32_t count);
-
 #else
 
 // ---------------------------------------------------------------------------

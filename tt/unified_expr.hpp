@@ -109,9 +109,9 @@ using kind_of_t = typename kind_of<Node>::type;
 // file, so there is nothing to allocate and nothing to copy: the ops rewrite
 // the accumulator where it already sits.
 //
-// Ops in a chain must provide `apply_in_place(int slot)`. Chains destined for a
-// pack-side epilogue must also provide `apply_from_pack(int base, int count)`;
-// an op lacking it simply fails to compile there, which is the intent.
+// Ops in a chain must provide `apply_in_place(uint32_t slot)`. The chain folds
+// into the slot it is given, so a chain is exactly the right shape for an
+// epilogue on an accumulator that lives in DST.
 
 template <typename... Ops>
 struct UnaryChain {
@@ -119,8 +119,6 @@ struct UnaryChain {
     static constexpr uint32_t size = sizeof...(Ops);
 
     static void apply_in_place(uint32_t slot) { (Ops::apply_in_place(slot), ...); }
-
-    static void apply_from_pack(uint32_t base, uint32_t count) { (Ops::apply_from_pack(base, count), ...); }
 };
 
 template <typename Chain, typename Op>
