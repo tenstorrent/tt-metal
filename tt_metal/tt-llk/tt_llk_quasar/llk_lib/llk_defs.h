@@ -98,6 +98,7 @@ enum class SfpuType : std::uint32_t
     acosh,
     asinh,
     atanh,
+    log1p,
     fill,
     swiglu,
     where,

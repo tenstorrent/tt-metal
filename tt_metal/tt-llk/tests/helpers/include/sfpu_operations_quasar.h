@@ -20,6 +20,7 @@
 #include "llk_sfpu/ckernel_sfpu_comp.h"
 #include "llk_sfpu/ckernel_sfpu_exp.h"
 #include "llk_sfpu/ckernel_sfpu_gelu.h"
+#include "llk_sfpu/ckernel_sfpu_log1p.h"
 #include "llk_sfpu/ckernel_sfpu_negative.h"
 #include "llk_sfpu/ckernel_sfpu_recip.h"
 #include "llk_sfpu/ckernel_sfpu_rsqrt.h"
@@ -123,6 +124,12 @@ void init_unary_sfpu_operation_quasar()
     else if constexpr (is_trig_op(OPERATION))
     {
         init_trigonometry<OPERATION, is_fp32_dest_acc_en>();
+    }
+    else if constexpr (OPERATION == SfpuType::log1p)
+    {
+        // Loads vConstFloatPrgm0/1/2: the log(2)*2^-23 exponent scale and the two Horner
+        // coefficients, which differ between the fp32 and bf16 polynomials.
+        log1p_init<APPROX, false /* FAST_APPROX */, is_fp32_dest_acc_en>();
     }
 }
 
@@ -266,6 +273,13 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
         // at compile time. APPROXIMATION_MODE=false selects the full-polynomial (accurate) path;
         // VectorMode::RC (the params default) runs the functor once per face.
         _llk_math_eltwise_unary_sfpu_params_(calculate_trigonometry<OPERATION, false /* APPROX */, is_fp32_dest_acc_en, ITERATIONS>, dst_index);
+    }
+    else if constexpr (OPERATION == SfpuType::log1p)
+    {
+        // APPROX / FAST_APPROX are ignored; is_fp32_dest_acc_en picks the 9-term fp32 polynomial
+        // or the 3-term bf16 one plus its narrowing store.
+        SFPU_UNARY_CALL(
+            DST_SYNC, is_fp32_dest_acc_en, calculate_log1p, (APPROX, false /* FAST_APPROX */, is_fp32_dest_acc_en, ITERATIONS), dst_index, VectorMode::RC);
     }
     else if constexpr (OPERATION == SfpuType::negative)
     {
