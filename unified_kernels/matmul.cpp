@@ -86,6 +86,11 @@ void kernel_main() {
 #elif defined(MM_RELU_PER_STEP)
         // per-step: relu on every k-block, carried forward in the accumulator
         u::Block result = acc.accumulate(u::relu(u::matmul<Geom>(a, b)), finish);
+#elif defined(MM_RELU_BOTH)
+        // both chains at once: relu per k-block, then exp once on the total.
+        // exp rather than relu for the epilogue so the two stages stay
+        // distinguishable -- relu of a sum of relus would be a no-op.
+        u::Block result = acc.accumulate(u::relu(u::matmul<Geom>(a, b)), finish, [](auto mm) { return u::exp_(mm); });
 #else
         u::Block result = acc.accumulate(u::matmul<Geom>(a, b), finish);
 #endif
