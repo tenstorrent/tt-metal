@@ -85,7 +85,7 @@ Declare each `TensorParameter` from the tensor's `tensor_spec()`, and reference 
 
 ## The custom concept: `CustomProgramSpecFactoryConcept`
 
-Everything above still applies. This concept **is** the base concept plus one method, and its adapter inherits the base's cache-miss path unchanged — same `create_program_artifacts`, same stamping, same op-owned-tensor parking. Only the cache hit differs.
+Everything above still applies. This concept **is** the base concept plus one method — same `create_program_artifacts`, same stamping onto each mesh coordinate range, and the cache-miss path is inherited unchanged, **op-owned tensor support included**. Only the cache hit differs.
 
 ```cpp
 struct MyProgramFactory {
@@ -126,7 +126,7 @@ So the address-handling statements in the ported-from override do not disappear 
 
 **The failure that is silent is the opposite mistake:** assuming the framework still patches bindings for you. It does on the base concept — which is what every other example in these docs shows — and it does not here. An override that simply omits `tensor_args` compiles, runs, and returns wrong numbers only on cache hits, and only once the incoming tensors stop landing at the first call's addresses.
 
-**In practice this means rebuilding `tensor_args` for every `TensorParameter`, on every dispatch** — because that is what the ported-from override was already doing. The API header takes the same position on the general API: a partial set is marked *advanced users only*, with a caution that a stale binding to a destroyed `MeshTensor` is undefined behavior.
+**In practice this means rebuilding `tensor_args` for every `TensorParameter` bound to an io tensor, on every dispatch** — because that is what the ported-from override was already doing. **Op-owned tensors are the exception, and they are excluded automatically:** the override's parameters do not expose them, and they do not need refreshing — the framework parks them at a stable address for the cached `Program`'s lifetime, so the binding written at cache-miss stays valid. The API header takes the same position on the general API: a partial set is marked *advanced users only*, with a caution that a stale binding to a destroyed `MeshTensor` is undefined behavior.
 
 ```cpp
 ProgramRunArgs MyProgramFactory::override_runtime_arguments(
@@ -272,7 +272,7 @@ The porter adds the following to `METAL2_PORT_REPORT.md` at the end of the port.
 
 ### Concept realized
 [Confirm the concept the audit chose, or — if something changed — explain why and confirm it was surfaced with the invoker before re-deciding.
-On CustomProgramSpecFactoryConcept, also confirm the override returns a TensorArgument for every TensorParameter, or name the ones deliberately skipped and the audit line that authorized it.]
+On CustomProgramSpecFactoryConcept, also confirm the override returns a TensorArgument for every io-tensor TensorParameter (op-owned ones are excluded by construction), or name the ones deliberately skipped and the ported-from statement that justifies each.]
 
 ### Device-op-class edits
 - Pybind entry points removed: [file + function, or "none"]
