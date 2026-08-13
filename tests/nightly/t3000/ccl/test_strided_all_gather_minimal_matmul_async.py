@@ -62,6 +62,7 @@ def run_strided_all_gather_minimal_matmul_impl(
     shard_weights=False,
     ag_core_grid_offset=(0, 6),
     read_local_slice_from_input=False,
+    mm_signal_aggregator_mode=ttnn.MMSignalAggregatorMode.Auto,
 ):
     torch.manual_seed(0)
 
@@ -305,6 +306,7 @@ def run_strided_all_gather_minimal_matmul_impl(
                 fused_ternary_input_b=ternary_b_tensor_mesh_list[i] if use_ternary else None,
                 fused_ternary_scalar=ternary_scalar if use_ternary else None,
                 chunks=chunks,
+                mm_signal_aggregator_mode=mm_signal_aggregator_mode,
             )
             # Op returns [all_gather_output, matmul_chunk_0, ..., matmul_chunk_{chunks-1}].
             tt_all_gather_out_tensor = fused_outputs[0]
