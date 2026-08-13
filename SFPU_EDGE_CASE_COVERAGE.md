@@ -2,13 +2,23 @@
 
 **Issue:** [tenstorrent/tt-metal#49739 — [LLK] SFPU testing edge cases](https://github.com/tenstorrent/tt-metal/issues/49739)
 **Plan for what is left:** [SFPU_EDGE_CASE_EXPANSION_PLAN.md](SFPU_EDGE_CASE_EXPANSION_PLAN.md)
-**Audited:** 2026-07-23 · **Regenerated from code:** 2026-08-13 (revision 12)
+**Audited:** 2026-07-23 · **Regenerated from code:** 2026-08-13 (revision 13)
 **Scope:** All SFPU LLK kernels in `tt-metal/tt_metal/tt-llk`, audited through the tt-llk Python test
 infra (`tests/python_tests/`). Wormhole B0 and Blackhole share essentially the same SFPU kernel set
 (BH adds only `topk_xl`), so this audit treats them together and notes arch-specific gaps inline.
 Quasar has its own suite under `quasar/` and is **out of scope** — an op driven only from `quasar/`
 counts as untested here.
 
+> ### Revision 13 — a review caught the shift rule, and this document had it wrong too
+>
+> Copilot's review of #52938 found that `calculate_left_shift` and `calculate_right_shift` do **not**
+> share an out-of-range rule: left zeroes, right clamps the amount to 31 and shifts anyway, so a
+> negative operand gives `-1`. §2.3 asserted the shared rule and is corrected, as are the goldens.
+>
+> The correction is currently unreachable — negative int32 operands cannot be delivered at all, which
+> was re-tested rather than assumed — so what changed is that the golden is right where it was wrong,
+> and §2.3 now says how much the assertion actually covers rather than implying it covers both signs.
+>
 > ### Revision 12 — the seven ops the ISA freed are enrolled
 >
 > The total order is now modelled (`sfpu_total_order_key` and its `min`/`max`/`clamp`/`relu_max`
@@ -263,18 +273,37 @@ Both suites now read `sfpu_domains.SHIFT_EDGE_AMOUNTS` — `{0, 1, 2, 7, 15, 16,
 63, 100, 1000, −1, −5, −32, −1000}` — rather than each holding a copy, so "interesting shift"
 cannot come to mean two different things.
 
-**The half that was completely untested is the out-of-range half.** The kernel defines any amount
-outside `[0, 31]` as producing 0, which a fixed shift of 3 could never reach; it is now asserted for
-the unary path. Two constraints the fixed amount had been hiding, both recorded in the test:
+**The half that was completely untested is the out-of-range half**, which a fixed shift of 3 could
+never reach. It is now asserted for the unary path — but read the next paragraph before trusting how
+much it asserts.
+
+**The two unary shifts do not share an out-of-range rule.** Revisions before 13 said here that "the
+kernel defines any amount outside `[0, 31]` as producing 0", which is true for the binary shifts and
+for the unary *left* shift and false for the unary *right* shift:
+
+| | out-of-range amount |
+|---|---|
+| binary shifts | 0, both signs |
+| `calculate_left_shift` | `out_of_range ? vInt(0) : (v << amt)` → 0 |
+| `calculate_right_shift` | `eff = (amt >= 32) ? 31u` → clamps and shifts, so a **negative operand gives -1** |
+
+The goldens now state and implement each kernel's own rule rather than one shared one.
+
+Three constraints the fixed amount had been hiding, all recorded in the test:
 
 - **The stimulus has to depend on the amount.** A left shift is the only one that can leave int32,
   so values are filtered per variant against two bounds — the result must fit, and must not be
   `INT32_MIN`, which Dst stores as sign-magnitude and cannot represent. At a shift of 31 only 0
   survives, so that variant skips with a reason rather than passing vacuously.
 - **Positive-only stimuli**, for the reason §4.3's int sweep already gave: sign-magnitude Dst does
-  not round-trip a negative the way two's complement would. Driving negatives made every
-  `RightShift` variant except a shift of 0 disagree — a stimulus limitation that would have been
-  recorded as a kernel divergence.
+  not round-trip a negative the way two's complement would. Driving negatives makes every
+  `RightShift` variant except a shift of 0 disagree, **in range as well as out** — which is what
+  identifies it as delivery rather than arithmetic, and would otherwise have been recorded as a
+  kernel divergence.
+- **So the `RightShift` half of this is weaker than it looks.** The `-1` saturation is modelled but
+  cannot be probed while negatives cannot be delivered, so the assertion covers only the positive
+  half, where the two kernels' rules coincide at 0. Re-measure the day a negative int32 operand can
+  be delivered.
 
 ### 2.4 Ops with no WH/BH correctness test at all
 
