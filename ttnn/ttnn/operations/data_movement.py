@@ -154,7 +154,12 @@ ttnn.attach_golden_function(ttnn.repeat_interleave, golden_function=_golden_func
 
 
 def _golden_function(tensor, shape, **_):
-    return tensor.repeat(shape[0], shape[1], shape[2], shape[3])
+    repeat_dims = [int(shape[i]) for i in range(len(shape))]
+    # ttnn.repeat allows fewer repeat dims than tensor rank (pads trailing 1s);
+    # torch.repeat requires len(dims) >= tensor.dim(), so pad to match.
+    if len(repeat_dims) < tensor.dim():
+        repeat_dims = repeat_dims + [1] * (tensor.dim() - len(repeat_dims))
+    return tensor.repeat(*repeat_dims)
 
 
 ttnn.attach_golden_function(ttnn.repeat, golden_function=_golden_function)
@@ -175,7 +180,13 @@ ttnn.attach_golden_function(
 )
 
 
-def _golden_function(input_tensor, slice_start, slice_end, slice_step=None, *args, **kwargs):
+def _golden_function(input_tensor, slice_start=None, slice_end=None, slice_step=None, *args, **kwargs):
+    if slice_start is None:
+        slice_start = kwargs.get("starts")
+    if slice_end is None:
+        slice_end = kwargs.get("ends")
+    if slice_step is None:
+        slice_step = kwargs.get("steps", kwargs.get("slice_step"))
     if slice_step is None:
         slice_step = [1] * len(slice_start)
     slices = tuple(slice(int(s), int(e), int(st)) for s, e, st in zip(slice_start, slice_end, slice_step))
