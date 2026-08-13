@@ -565,6 +565,74 @@ def broadcast_sampling_params(
     return SamplingParams(**kwargs)
 
 
+def scatter_sampling_params_to_slots(
+    formatted_sampling_params,
+    empty_slots,
+    slot_len: int = 32,
+):
+    """Move each request's params from its prefill position to its slot row.
+
+    A batched prefill lays its device rows out by physical slot, so the sampling
+    rows must be too: row ``empty_slots[i]`` samples request ``i``'s logits and
+    needs request ``i``'s temperature/top_k/top_p/penalties. Callers receive
+    params in prefill order, which only coincides with the slot order when the
+    slots happen to be ``range(len(empty_slots))``.
+
+    ``seed`` is left in prefill order: ``SeedManager.reset_seed`` takes the slot
+    list separately and does its own mapping. Rows no request occupies inherit the
+    last real request's values rather than the formatter's padding, so they stay
+    valid instead of sampling from a default row. Does not mutate the input.
+    """
+    if not empty_slots:
+        return formatted_sampling_params
+    slots = [int(s) for s in empty_slots]
+
+    def _scatter(values):
+        if not isinstance(values, List):
+            return values
+        values = list(values)
+        if len(values) == 1 and len(slots) > 1:
+            values = values * len(slots)
+        request_values = values[: len(slots)]
+        if not request_values:
+            return values
+        filler = request_values[-1]
+        scattered = [filler] * slot_len
+        for value, slot in zip(request_values, slots):
+            if 0 <= slot < slot_len:
+                scattered[slot] = value
+        return scattered
+
+    kwargs = {}
+    for f in fields(formatted_sampling_params):
+        value = getattr(formatted_sampling_params, f.name)
+        kwargs[f.name] = value if f.name == "seed" else _scatter(value)
+    return SamplingParams(**kwargs)
+
+
+def slice_sampling_params(sampling_params, start: int, stop: int):
+    """Take the ``[start, stop)`` requests out of a prefill-ordered SamplingParams.
+
+    For callers that split one prefill batch into several forward passes: each pass
+    must carry its own requests' params, not the first ``stop - start`` of the batch.
+    List fields are sliced, scalars are shared. Falls back to dataclass defaults for
+    missing attributes so vLLM's ``TTSamplingParams`` works transparently.
+    """
+    if sampling_params is None:
+        return None
+    sliced = {}
+    for field_name in SAMPLING_PARAM_FIELDS:
+        try:
+            value = getattr(sampling_params, field_name)
+        except AttributeError:
+            if hasattr(SamplingParams, field_name):
+                value = getattr(SamplingParams, field_name)
+            else:
+                raise
+        sliced[field_name] = value[start:stop] if isinstance(value, list) else value
+    return SamplingParams(**sliced)
+
+
 def chunk_sampling_params(sampling_params, sampling_dp: int) -> list:
     """
     Chunk a SamplingParams (or duck-type-compatible object) into ``sampling_dp`` pieces.

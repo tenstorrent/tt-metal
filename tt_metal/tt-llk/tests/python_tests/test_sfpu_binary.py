@@ -2,8 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import itertools
+import math
 from dataclasses import dataclass, replace
 from enum import Enum
+from typing import Dict
 
 import pytest
 import torch
@@ -24,12 +26,16 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    runtime,
 )
 from helpers.sfpu_domains import (
     _OP_DOMAIN_REGISTRY,
     _SFPU_BINARY_OPS,
+    edge_pair_values,
     exclude_undefined_pair,
     for_op,
+    integer_specials,
+    ops_with_singularity,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import DistributionKind, StimuliSpec, generate_stimuli
@@ -125,14 +131,20 @@ def _positions_and_ramp(size):
 # =============================================================================
 # Which ops take their domain from _OP_DOMAIN_REGISTRY
 #
-# Float-only on purpose: SfpuElwadd/SfpuElwsub and the shift ops also run through
-# test_sfpu_binary_int, where a float domain like uniform(-1, 1) would collapse to
-# {-1, 0, 1} and gut the int coverage. Ops with crafted stimuli (mask / isclose /
-# eq-ne / logsigmoid / shift edge cases) pass their own spec and ignore any default.
+# Every op driven through sfpu_binary() belongs to exactly one of the three sets below,
+# and _classify_stimuli_source() enforces that in the driver. The classification is the
+# only record of *why* an op is fed what it is fed, so an unclassified op is a coverage
+# question nobody asked rather than a default anybody chose.
 #
-# Everything else this suite drives is declared too -- in _UNREGISTERED_BINARY_OPS if it
-# has no registry entry, or _INT_ONLY_REGISTERED_OPS if it has one that integer stimuli
-# never consult -- so every op's domain decision is written down rather than defaulted to.
+#   _REGISTRY_DOMAIN_OPS            - rerouted onto the op's registered domain.
+#   _UNREGISTERED_BINARY_OPS        - no registry entry exists; keeps the format default.
+#   _REGISTERED_DEFAULT_STIMULI_OPS - a registry entry exists but is deliberately not
+#                                     used here, with the reason recorded per op.
+#
+# The reroute is float-only on purpose: SfpuElwadd/SfpuElwsub and the shift ops also run
+# through test_sfpu_binary_int, where a float domain like uniform(-1, 1) would collapse
+# to {-1, 0, 1} and gut the int coverage. Ops with crafted stimuli (mask / isclose /
+# eq-ne / logsigmoid / shift edge cases) pass their own spec and ignore any default.
 # =============================================================================
 
 _REGISTRY_DOMAIN_OPS = frozenset(
@@ -188,38 +200,49 @@ _UNREGISTERED_BINARY_OPS = frozenset(
     }
 )
 
-# Registered ops this suite only ever drives under an integer format, where sfpu_binary's
-# `not is_integer()` conjunct blocks registry routing regardless of membership (a float
-# domain like uniform(-1, 1) would collapse to {-1, 0, 1} under Int32). They belong in
-# neither set above: not rerouted, but not unregistered either. Declared so the
-# completeness check below can account for every op the file drives.
-_INT_ONLY_REGISTERED_OPS = frozenset(
-    {
-        MathOperation.SfpuElwLeftShift,
-        MathOperation.SfpuElwRightShift,
-        MathOperation.SfpuElwLogicalRightShift,
-    }
-)
+# Ops with an _OP_DOMAIN_REGISTRY entry that this suite deliberately does not read, and
+# why. Distinct from _UNREGISTERED_BINARY_OPS: there the registry has nothing to offer,
+# here it has something we are choosing not to take. Without this set the three shift ops
+# sat outside both lists, so the consistency check below passed while saying nothing about
+# them — the exact silent-drift hole it exists to close.
+_REGISTERED_DEFAULT_STIMULI_OPS: Dict[MathOperation, str] = {
+    MathOperation.SfpuElwLeftShift: "driven as Int32 here; the registered float domain "
+    "uniform(0, 255) is for the shift *amount* and the value operand needs the full "
+    "int32 range, so crafted stimuli / the format default are what these want",
+    MathOperation.SfpuElwRightShift: "as SfpuElwLeftShift",
+    MathOperation.SfpuElwLogicalRightShift: "as SfpuElwLeftShift",
+}
 
-_DECLARED_BINARY_OPS = (
-    _REGISTRY_DOMAIN_OPS | _UNREGISTERED_BINARY_OPS | _INT_ONLY_REGISTERED_OPS
-)
+# Ops this file tests without going through sfpu_binary(), so no stimulus classification
+# applies to them. Declared rather than merely absent, so that routing one of them onto
+# the shared driver later forces a decision instead of silently picking the default.
+_OPS_NOT_USING_SHARED_DRIVER: Dict[MathOperation, str] = {
+    MathOperation.SfpuAddTopRow: "test_sfpu_binary_add_top_row builds its own stimuli, "
+    "golden and TestConfig (the top-row semantics need a [64, 32] single-pair layout)",
+}
 
 
 def _assert_domain_sets_consistent():
-    """The rerouted ops must be registered, the fallback ops must not be, and every
-    binary SFPU op must sit in exactly one of the three sets.
+    """The three stimulus-source sets must be disjoint and consistent with the registry.
 
-    All three halves fail quietly otherwise: an op in _REGISTRY_DOMAIN_OPS with no
-    registry entry raises deep inside the driver mid-sweep; an op that gains a domain
-    while sitting in _UNREGISTERED_BINARY_OPS silently keeps the positive-only default;
-    and an op in none of the sets is the same silent default with nothing even claiming
-    responsibility for it -- which is how the shift ops went 39-declared-against-42-driven
-    until this check existed.
+    Each half fails quietly otherwise: an op in _REGISTRY_DOMAIN_OPS with no registry
+    entry raises deep inside the driver mid-sweep; an op that gains a domain while sitting
+    in _UNREGISTERED_BINARY_OPS silently keeps the positive-only default; and an op in no
+    set at all keeps the default while looking, to a reader of this file, like it was never
+    considered.
+
+    Totality — every op reaching the driver is classified — cannot be asserted here,
+    because the set of ops this suite drives is only known once pytest has collected the
+    parametrize lists. _classify_stimuli_source() enforces it in the driver instead.
+
+    What *can* be asserted here is family totality: every op sfpu_domains records as a
+    binary SFPU op is either classified or declared as not using the shared driver. That
+    catches an op added to the family and to no list at all, which the driver-side check
+    cannot see until something drives it.
     """
     missing = sorted(
         op.name
-        for op in _REGISTRY_DOMAIN_OPS | _INT_ONLY_REGISTERED_OPS
+        for op in _REGISTRY_DOMAIN_OPS | _REGISTERED_DEFAULT_STIMULI_OPS.keys()
         if op not in _OP_DOMAIN_REGISTRY
     )
     assert not missing, (
@@ -231,37 +254,65 @@ def _assert_domain_sets_consistent():
     )
     assert not now_registered, (
         "these ops now have a domain in _OP_DOMAIN_REGISTRY but are still on the "
-        "positive-only fallback list; move them to _REGISTRY_DOMAIN_OPS (float ops), "
-        "_INT_ONLY_REGISTERED_OPS (integer-only ops), or drop them from "
-        f"_UNREGISTERED_BINARY_OPS: {now_registered}"
+        "positive-only fallback list; move them to _REGISTRY_DOMAIN_OPS (float ops) or "
+        f"to _REGISTERED_DEFAULT_STIMULI_OPS with a reason: {now_registered}"
     )
-    for left, right in (
-        ("_REGISTRY_DOMAIN_OPS", "_UNREGISTERED_BINARY_OPS"),
-        ("_REGISTRY_DOMAIN_OPS", "_INT_ONLY_REGISTERED_OPS"),
-        ("_UNREGISTERED_BINARY_OPS", "_INT_ONLY_REGISTERED_OPS"),
-    ):
-        overlap = globals()[left] & globals()[right]
-        assert not overlap, (
-            f"{left} and {right} must be disjoint, but share: "
-            f"{sorted(op.name for op in overlap)}"
-        )
-    # SfpuAddTopRow is the one member of the binary family that never reaches
-    # sfpu_binary (test_sfpu_binary_add_top_row builds its own stimuli), so it has no
-    # domain decision to declare.
+    unregistered = sorted(
+        op.name
+        for op in _REGISTERED_DEFAULT_STIMULI_OPS
+        if op not in _OP_DOMAIN_REGISTRY
+    )
+    assert not unregistered, (
+        "these ops are listed as registered-but-not-read, yet have no entry in "
+        f"_OP_DOMAIN_REGISTRY; move them to _UNREGISTERED_BINARY_OPS: {unregistered}"
+    )
+    sets = {
+        "_REGISTRY_DOMAIN_OPS": set(_REGISTRY_DOMAIN_OPS),
+        "_UNREGISTERED_BINARY_OPS": set(_UNREGISTERED_BINARY_OPS),
+        "_REGISTERED_DEFAULT_STIMULI_OPS": set(_REGISTERED_DEFAULT_STIMULI_OPS),
+    }
+    for a, b in itertools.combinations(sorted(sets), 2):
+        overlap = sorted(op.name for op in sets[a] & sets[b])
+        assert not overlap, f"{a} and {b} both claim: {overlap}"
     undeclared = sorted(
         op.name
         for op in _SFPU_BINARY_OPS
-        - {MathOperation.SfpuAddTopRow}
-        - _DECLARED_BINARY_OPS
+        - set().union(*sets.values())
+        - _OPS_NOT_USING_SHARED_DRIVER.keys()
     )
     assert not undeclared, (
-        "these ops are in sfpu_domains._SFPU_BINARY_OPS but are in none of this "
-        "suite's three domain sets, so nothing states what they are fed: "
-        f"{undeclared}"
+        "these ops are in sfpu_domains._SFPU_BINARY_OPS but are in none of this suite's "
+        "three stimulus-source sets, so nothing states what they are fed; classify them "
+        f"or declare them in _OPS_NOT_USING_SHARED_DRIVER: {undeclared}"
     )
 
 
 _assert_domain_sets_consistent()
+
+_CLASSIFIED_STIMULI_OPS = (
+    set(_REGISTRY_DOMAIN_OPS)
+    | set(_UNREGISTERED_BINARY_OPS)
+    | set(_REGISTERED_DEFAULT_STIMULI_OPS)
+)
+
+
+def _classify_stimuli_source(mathop):
+    """True if *mathop* reads its domain from the registry; False if it keeps the default.
+
+    Raises for an op in none of the three declared sets. That is the case the collection
+    -time assertion cannot see: adding an op to a parametrize list is enough to drive it,
+    and an unclassified op would silently inherit generate_stimuli's positive-only
+    uniform(0.1, 1.1) — which is finding #1 of the coverage audit, reintroduced one op at
+    a time.
+    """
+    if mathop not in _CLASSIFIED_STIMULI_OPS:
+        raise KeyError(
+            f"MathOperation.{mathop.name} is driven through sfpu_binary() but is in none "
+            "of _REGISTRY_DOMAIN_OPS / _UNREGISTERED_BINARY_OPS / "
+            "_REGISTERED_DEFAULT_STIMULI_OPS. Add it to whichever describes what it "
+            "should be fed; the last two want a recorded reason."
+        )
+    return mathop in _REGISTRY_DOMAIN_OPS
 
 
 def _mask_stimuli_specs():
@@ -361,16 +412,6 @@ def sfpu_binary(
     input_dimensions=None,
 ):
 
-    # Every op driven through here must have declared what it is fed. The collection-time
-    # check above covers the registered ops; this covers the rest, so a new op added to a
-    # `mathop` list and to neither set fails loudly instead of silently inheriting
-    # generate_stimuli's positive-only uniform(0.1, 1.1).
-    assert mathop in _DECLARED_BINARY_OPS, (
-        f"{mathop.name} is driven through sfpu_binary but appears in none of "
-        "_REGISTRY_DOMAIN_OPS / _UNREGISTERED_BINARY_OPS / _INT_ONLY_REGISTERED_OPS; "
-        "add it to the set that describes the domain it should get"
-    )
-
     # Seed the draw so the stimuli are identical run to run. Nothing below sets a seed,
     # and an unseeded redraw makes a variant sitting near its tolerance pass or fail
     # depending on the draw -- an unreproducible failure. eltwise_unary_sfpu seeds too.
@@ -391,11 +432,8 @@ def sfpu_binary(
     # makes the registered undefined-range holes (SfpuElwdiv divisor, SfpuXlogy B,
     # SfpuElwpow A) reachable. Unlike the unary sweep, most ops here are not registered; a
     # missing entry falls back to generate_stimuli's format default rather than raising.
-    if (
-        spec_A is None
-        and mathop in _REGISTRY_DOMAIN_OPS
-        and not formats.input_format.is_integer()
-    ):
+    reads_registry = _classify_stimuli_source(mathop)
+    if spec_A is None and reads_registry and not formats.input_format.is_integer():
         specs = exclude_undefined_pair(mathop, for_op(mathop, formats.input_format))
         spec_A, spec_B = specs.spec_A, specs.spec_B
 
@@ -1014,16 +1052,23 @@ def _build_shift_edge_case_src(mathop):
     dest_acc=[DestAccumulation.Yes],
 )
 def test_sfpu_binary_int_shift_edge_cases(
+    request,
     formats,
     dest_acc,
     mathop,
 ):
     if TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE:
-        pytest.skip(
-            reason="Blackhole shift kernels (left / arithmetic right / logical right) are "
-            "unmigrated TTI microcode whose predicated out-of-range/sign handling breaks "
-            "under INT32_2S_COMP for negative operands, so all three diverge from the "
-            "two's-complement golden. See docs/SFPU_INT32_SHIFT.md."
+        # xfail rather than skip so a Blackhole kernel port surfaces as XPASS instead of
+        # staying silently green-by-omission. The bug is an external dependency of this
+        # suite, not a task in it, but a skip cannot tell us when it is fixed.
+        request.node.add_marker(
+            pytest.mark.xfail(
+                reason="Blackhole shift kernels (left / arithmetic right / logical right) "
+                "are unmigrated TTI microcode whose predicated out-of-range/sign handling "
+                "breaks under INT32_2S_COMP for negative operands, so all three diverge "
+                "from the two's-complement golden. See docs/SFPU_INT32_SHIFT.md.",
+                strict=False,
+            )
         )
 
     sfpu_binary(
@@ -1031,6 +1076,350 @@ def test_sfpu_binary_int_shift_edge_cases(
         dest_acc,
         mathop,
         src_A_override=_build_shift_edge_case_src(mathop),
+    )
+
+
+# =============================================================================
+# Deliberate edge values (Phase 4, binary side)
+#
+# _build_shift_edge_case_src above is the shape this generalizes: walk the cartesian
+# product of both operands' interesting values into a two-tile override tensor, which
+# tilize pairs by index. The product is the point — a divisor of 0 against a positive, a
+# negative and a zero numerator are three different cases, and element-wise pairing would
+# test one of them.
+#
+# Values come from sfpu_domains.edge_pair_values(), so the ops enrol by having a registered
+# singularity rather than by being listed here.
+# =============================================================================
+
+
+# The edge-pair probe is partitioned before it is driven, and the partition is what makes
+# the xfails below mean anything. One tensor holding every pole of an op mixes failure
+# classes that have nothing to do with each other: div's lost zero sign is documented
+# Wormhole SFPMAD behaviour that Blackhole is documented to fix, while div(0, 0) returning
+# inf is the kernel's own reciprocal composition and fixed nowhere. Bundled into one
+# variant, one xfail covers both — so the zero sign improving on Blackhole still reports
+# XFAIL rather than the XPASS it was recorded to produce, and a *new* mismatch anywhere in
+# the tensor is invisible for as long as either known one survives.
+#
+# Classified by what the golden says the answer is, rather than by a per-op predicate on
+# the operands, because that is where the classes actually live and the golden is the
+# authority on it: `fmod(-2, +1/64)` is a negative-zero case and `fmod(+2, -1/64)` is not,
+# which no reading of the operand signs gets right.
+_EDGE_CLASS_BOTH_ZERO = "both_zero"
+_EDGE_CLASS_NAN = "nan_golden"
+_EDGE_CLASS_NEGATIVE_ZERO = "negative_zero_golden"
+_EDGE_CLASS_ORDINARY = "ordinary"
+
+# both_zero first: 0/0, xlogy(0, 0) and 0**0 are indeterminate forms produced by the
+# kernel's own composition (a reciprocal, an exp(b·ln a)), which is a different cause from
+# x % 0 even where both goldens are NaN.
+_EDGE_CLASSES = (
+    _EDGE_CLASS_BOTH_ZERO,
+    _EDGE_CLASS_NAN,
+    _EDGE_CLASS_NEGATIVE_ZERO,
+    _EDGE_CLASS_ORDINARY,
+)
+
+
+def _classify_edge_pair(mathop, a, b):
+    """Which failure class the pair (*a*, *b*) belongs to for *mathop*."""
+    if a == 0.0 and b == 0.0:
+        return _EDGE_CLASS_BOTH_ZERO
+
+    golden = get_golden_generator(BinarySFPUGolden)
+    result = float(golden.ops[mathop](torch.tensor(a), torch.tensor(b)))
+    if math.isnan(result):
+        return _EDGE_CLASS_NAN
+    if result == 0.0 and math.copysign(1.0, result) < 0.0:
+        return _EDGE_CLASS_NEGATIVE_ZERO
+    return _EDGE_CLASS_ORDINARY
+
+
+def _build_edge_pair_src(mathop, formats, edge_class):
+    """Two-tile override: tile 0 holds operand A, tile 1 holds operand B, paired by index.
+
+    Only the pairs in *edge_class* are driven, so each class fails or passes on its own
+    evidence. Returns None when neither operand has an edge worth probing, or when this
+    class is empty for this op — both are the caller's cue to skip. Cycles the pair list to
+    fill a full tile the way the shift builder does, so the override divides evenly into
+    whatever buffer sfpu_binary picks.
+    """
+    pairs = [
+        pair
+        for pair in edge_pair_values(
+            mathop, formats.input_format, formats.output_format
+        )
+        if _classify_edge_pair(mathop, *pair) == edge_class
+    ]
+    if not pairs:
+        return None
+    num_elements = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
+    a = [pairs[i % len(pairs)][0] for i in range(num_elements)]
+    b = [pairs[i % len(pairs)][1] for i in range(num_elements)]
+    dtype = torch.int32 if formats.input_format.is_integer() else torch.float32
+    return torch.tensor(a + b, dtype=dtype)
+
+
+# The ops this suite drives on an integer format. This sweep is float — its format axis is
+# Float16_b/Float32 and the override built above carries float values — so an integer op
+# that gains a singularity belongs in test_sfpu_binary_int_extremes or the shift edge tests
+# rather than here. Assembled from the lists that already drive them, so the two cannot
+# disagree.
+_INT_DRIVEN_BINARY_OPS = frozenset(
+    set(_INT_BINARY_STIMULI)
+    | set(_UINT32_BINARY_OPS)
+    | set(_SHIFT_EDGE_OPS)
+    | {
+        MathOperation.SfpuBitwiseAnd,
+        MathOperation.SfpuBitwiseOr,
+        MathOperation.SfpuBitwiseXor,
+        MathOperation.SfpuEqInt,
+        MathOperation.SfpuNeInt,
+        MathOperation.SfpuRsubInt32,
+    }
+)
+
+# Derived rather than listed, which is what the section header above promises: an op joins
+# this sweep by gaining an _OP_SINGULARITIES entry in sfpu_domains. Today that resolves to
+# div and fmod/remainder (which divide by B), xlogy (log of B) and pow (exp(B·ln A)). The
+# two intersections are what this sweep can actually drive — the same table holds the unary
+# poles (Reciprocal, Log, Asin, ...), and _CLASSIFIED_STIMULI_OPS is the declared set of ops
+# reaching sfpu_binary().
+_BINARY_EDGE_OPS = sorted(
+    (ops_with_singularity() & _CLASSIFIED_STIMULI_OPS) - _INT_DRIVEN_BINARY_OPS,
+    key=lambda op: op.name,
+)
+
+assert _BINARY_EDGE_OPS, (
+    "no float binary op reaching sfpu_binary() has an entry in "
+    "sfpu_domains._OP_SINGULARITIES, so test_sfpu_binary_edges would collect nothing"
+)
+
+
+# What driving the poles found on Wormhole, cross-checked against tt-isa-documentation.
+# One of the two causes is documented hardware behaviour; the other is not.
+#
+# DOCUMENTED, and expected to XPASS on Blackhole:
+#
+#   The sign of a zero result is lost. div(0, -x) returns +0.0 where IEEE gives -0.0, and
+#   fmod/remainder do the same for a negative divisor, as does xlogy(0, tiny).
+#
+#   This is SFPMAD, which every one of these ops is built on:
+#     Wormhole  — "If the output (before rounding) is denormal or negative zero, it'll be
+#                  flushed to positive zero."          (WormholeB0/.../SFPMAD.md)
+#     Blackhole — "If the output (after rounding) is denormal, it'll be flushed to
+#                  sign-preserved zero."               (BlackholeA0/.../SFPMAD.md)
+#   and Blackhole's page lists "improved edge-case handling of NaNs and of negative zero"
+#   among its upgrades over Wormhole. So this is a documented Wormhole limitation that
+#   Blackhole is documented to fix — the xfails below are non-strict precisely so they
+#   report XPASS there rather than failing the suite.
+#
+# STILL OPEN — not explained by the ISA:
+#
+#   0/0 and x%0 return inf where IEEE says nan. div(0, 0) -> inf against a nan golden,
+#   fmod(x, 0) and remainder(x, 0) -> inf, xlogy(0, 0) -> -inf. SFPMAD says "if any input
+#   is NaN or ±Infinity, then the result will be NaN or ±Infinity, following the usual
+#   IEEE754 rules", which makes 0 x inf a NaN — so this is the kernels' own reciprocal
+#   composition, not the multiply. The finite poles agree exactly (div(-2, ±1/64) = ∓128,
+#   every ±inf lines up), so it is specifically the indeterminate form.
+#
+#   0**0 returns 0 where C, torch and the golden give 1. pow evaluates exp(b·ln a), so this
+#   is a composition artifact rather than anything the ISA prescribes.
+#
+# Those two groups are exactly the classes the probe is partitioned into: the documented
+# one is _EDGE_CLASS_NEGATIVE_ZERO, and the open ones are _EDGE_CLASS_BOTH_ZERO (the
+# indeterminate forms, and 0**0) and _EDGE_CLASS_NAN (x % 0). _EDGE_CLASS_ORDINARY holds
+# everything that agreed — the ±inf poles, the finite quotients, the exact remainders — and
+# is asserted rather than tolerated, which is only possible now that it is not sharing a
+# tensor with the others.
+#
+# Recorded as non-strict xfails per Phase 0's precedent for approximate exp: the case still
+# executes and reports XPASS if the behaviour changes. Enumerated per (input, output,
+# dest_acc) rather than by predicate so a combination drifting in or out shows up here.
+#
+# Keyed by (op, edge class): the combination lists below started as one list per op, and
+# every class of an op inherits it. That is the honest starting point rather than a
+# measurement — the old bundled variant could only report "something in this tensor
+# diverges", so which class drove which combination into the list is not recoverable from
+# it. The first per-class run on each arch tightens them: a class that XPASSes across the
+# board loses its entry, and one that XPASSes on Blackhole alone becomes arch-gated the way
+# the reduce xfail is.
+_BINARY_EDGE_COMBINATIONS = {
+    MathOperation.SfpuElwdiv: (
+        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.No),
+        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.Yes),
+        (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.No),
+        (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
+    ),
+    MathOperation.SfpuXlogy: (
+        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.No),
+        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.Yes),
+        (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.No),
+        (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
+    ),
+    MathOperation.SfpuElwpow: (
+        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.No),
+        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.Yes),
+        (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.No),
+        (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.Yes),
+        (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
+        (DataFormat.Float32, DataFormat.Float32, DestAccumulation.Yes),
+    ),
+    MathOperation.SfpuBinaryFmod: (
+        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.No),
+        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.Yes),
+        (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.No),
+        (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
+    ),
+    MathOperation.SfpuBinaryRemainder: (
+        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.No),
+        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.Yes),
+        (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.No),
+        (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
+    ),
+}
+
+_ZERO_SIGN_ISA_NOTE = (
+    "the lost zero sign is documented Wormhole SFPMAD behaviour ('flushed to positive "
+    "zero'); Blackhole is documented to preserve it, so expect XPASS there"
+)
+
+# Which classes of each op are expected to diverge, and why — one reason per class, so the
+# xfail says what it is waiting for. A class absent from an op's dict is asserted to pass:
+# the ±inf poles, the finite quotients and the exact remainders all agreed on Wormhole.
+_BINARY_EDGE_REASON = {
+    MathOperation.SfpuElwdiv: {
+        _EDGE_CLASS_BOTH_ZERO: "div(0, 0) returns inf, not nan. SFPMAD follows IEEE for "
+        "0 x inf, so this is the kernel's own reciprocal composition rather than the "
+        "multiply — not explained by the ISA, and not expected to change on Blackhole.",
+        _EDGE_CLASS_NEGATIVE_ZERO: f"div(0, -x) returns +0.0, not -0.0 "
+        f"({_ZERO_SIGN_ISA_NOTE}).",
+    },
+    MathOperation.SfpuXlogy: {
+        _EDGE_CLASS_BOTH_ZERO: "xlogy(0, 0) returns -inf, not nan — the same "
+        "indeterminate 0 x inf as div, and equally unexplained by the ISA.",
+        _EDGE_CLASS_NEGATIVE_ZERO: f"xlogy(0, tiny) returns +0.0, not -0.0 "
+        f"({_ZERO_SIGN_ISA_NOTE}).",
+    },
+    MathOperation.SfpuElwpow: {
+        _EDGE_CLASS_BOTH_ZERO: "0**0 returns 0; C, torch and the golden all give 1. Not "
+        "explained by the ISA — pow evaluates exp(b·ln a), so this is composition.",
+    },
+    MathOperation.SfpuBinaryFmod: {
+        _EDGE_CLASS_BOTH_ZERO: "fmod(0, 0) returns inf, not nan.",
+        _EDGE_CLASS_NAN: "fmod(x, 0) returns inf, not nan. Not explained by the ISA.",
+        _EDGE_CLASS_NEGATIVE_ZERO: f"fmod loses the sign of a zero result "
+        f"({_ZERO_SIGN_ISA_NOTE}).",
+    },
+    MathOperation.SfpuBinaryRemainder: {
+        _EDGE_CLASS_BOTH_ZERO: "remainder(0, 0) returns inf, not nan.",
+        _EDGE_CLASS_NAN: "remainder(x, 0) returns inf, not nan. Not explained by the ISA.",
+        _EDGE_CLASS_NEGATIVE_ZERO: f"remainder loses the sign of a zero result "
+        f"({_ZERO_SIGN_ISA_NOTE}).",
+    },
+}
+
+# No op may claim a divergence without a combination list to apply it to, and none may
+# list combinations with nothing to apply them to.
+assert set(_BINARY_EDGE_REASON) == set(_BINARY_EDGE_COMBINATIONS), (
+    "_BINARY_EDGE_REASON and _BINARY_EDGE_COMBINATIONS disagree on which ops diverge: "
+    f"{set(_BINARY_EDGE_REASON) ^ set(_BINARY_EDGE_COMBINATIONS)}"
+)
+assert all(
+    cls in _EDGE_CLASSES for classes in _BINARY_EDGE_REASON.values() for cls in classes
+), "_BINARY_EDGE_REASON names an edge class that _classify_edge_pair never returns"
+
+
+@pytest.mark.nightly
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    mathop=_BINARY_EDGE_OPS,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    # runtime(): the class selects which values go in the override tensor and nothing
+    # else, so all four share one ELF instead of compiling the same kernel four times.
+    edge_class=runtime(list(_EDGE_CLASSES)),
+)
+def test_sfpu_binary_edges(request, formats, dest_acc, mathop, edge_class):
+    """Drive one class of each binary op's registered pole against its counterparts.
+
+    One variant per (op, class) rather than per op: see the comment above _EDGE_CLASSES for
+    why a single tensor holding every pole cannot report which behaviour changed.
+    """
+    _skip_fp32_no_dest_acc(formats, dest_acc)
+    _skip_bh_float16_no_dest_acc(formats, dest_acc)
+
+    reason = _BINARY_EDGE_REASON.get(mathop, {}).get(edge_class)
+    if reason is not None and (
+        (formats.input_format, formats.output_format, dest_acc)
+        in _BINARY_EDGE_COMBINATIONS[mathop]
+    ):
+        request.node.add_marker(pytest.mark.xfail(reason=reason, strict=False))
+
+    src = _build_edge_pair_src(mathop, formats, edge_class)
+    if src is None:
+        pytest.skip(
+            reason=f"{mathop.name} has no {edge_class} pair among its registered "
+            "per-operand edges"
+        )
+
+    sfpu_binary(formats, dest_acc, mathop, src_A_override=src)
+
+
+# Integer extremes (cat C). Delivered as a raw override rather than a StimuliSpec because
+# CustomStrategy clamps integers through _get_integer_bounds, which returns info.min + 1 —
+# so a spec asking for INT32_MIN silently yields INT32_MIN + 1, the worst failure mode for
+# an edge test.
+#
+# Scope is deliberately narrow, and _INT_BINARY_STIMULI above is why: almost every int
+# binary kernel documents a *sub-range* it is valid on (div/fmod < 2**24 for an exact
+# int->fp32 reciprocal, mul < ~46340 so the product stays under 2**31, lcm assuming
+# |a|,|b| < 2**15, max/min non-negative so signed and unsigned agree). Feeding those the
+# int32 extremes would produce failures that are documented limitations rather than
+# findings. The bitwise ops are the exception — "exact on the full default int range" — so
+# they and the exact eq/ne comparisons are what cat C can honestly cover here.
+#
+# INT32_MIN itself is excluded: sign-magnitude Dst reads 0x80000000 as "negative zero" and
+# cannot round-trip it. That is hardware, not a gap, and it already has a dedicated xfail
+# (test_sfpu_binary_int_shift_int32_min_unsupported). INT32_MIN + 1 stands in for it.
+_INT_EXTREME_OPS = [
+    MathOperation.SfpuBitwiseAnd,
+    MathOperation.SfpuBitwiseOr,
+    MathOperation.SfpuBitwiseXor,
+    MathOperation.SfpuEqInt,
+    MathOperation.SfpuNeInt,
+]
+
+
+def _build_int_extremes_src():
+    """Two-tile Int32 override walking the product of the int32 extremes, minus INT32_MIN."""
+    vals = [v for v in integer_specials(DataFormat.Int32) if v != _INT32_MIN]
+    pairs = [(a, b) for a in vals for b in vals]
+    num_elements = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
+    a = [pairs[i % len(pairs)][0] for i in range(num_elements)]
+    b = [pairs[i % len(pairs)][1] for i in range(num_elements)]
+    return torch.tensor(a + b, dtype=torch.int32)
+
+
+@pytest.mark.nightly
+@parametrize(
+    formats=input_output_formats([DataFormat.Int32]),
+    mathop=_INT_EXTREME_OPS,
+    dest_acc=[DestAccumulation.Yes],
+)
+def test_sfpu_binary_int_extremes(formats, dest_acc, mathop):
+    # twos_complement=True is required, not decorative. Without it the buffer is packed
+    # sign-magnitude, and the bitwise kernels then operate on the wrong bits for negative
+    # operands: (INT32_MIN+1) & -1 came back as -1 instead of INT32_MIN+1. The existing
+    # test_sfpu_binary_bitwise never caught this because its default stimuli are
+    # positive-only, so nothing had established that these kernels need the two's-
+    # complement pack path. test_sfpu_binary_rsub_int32 already sets the same flag.
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        src_A_override=_build_int_extremes_src(),
+        twos_complement=True,
     )
 
 
