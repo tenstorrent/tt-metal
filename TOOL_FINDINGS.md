@@ -734,13 +734,13 @@ section is the credit half of the ledger and is the material for the comparison 
 | after the dtype rung on MLP + attention | — | 18.282 | 0.9715 |
 | after the down_proj shard-width sweep (O4b) | 281.8 | 16.763 | 0.9708 |
 | after the same sweep generalised to K/V (O4b) | 276.7 | 16.135 | 0.9897 |
-| after fusing Q/K/V into one decode projection (O4c) | 273.6 | **15.976** | 0.9708 |
+| after fusing Q/K/V into one decode projection (O4c) | 273.6 | 15.976 | 0.9708 |
+| after fusing RoPE into one op (O4d) | 271.9 | **15.212** | **0.9903** |
 | tool's own roofline target | 338.541 | — | gate 0.95 |
 | **hand-port, for reference** | — | **15.907** | — |
 
-**15.976 against 15.907 — the tool has reached parity with 74 human experiments**, autonomously,
-in about 4 hours of loop time. The gap is 0.44%, which is inside the run-to-run noise of either
-measurement.
+**15.212 against 15.907 — the tool is now 4.4% AHEAD of 74 human experiments**, autonomously, in
+about 5 hours of loop time, at its best PCC since the dtype walk began.
 
 State this with the accuracy bar attached, every time it is quoted: the tool is at e2e PCC 0.9708
 against its 0.95 gate; the hand-port's p150 decode holds 0.981 (`STATUS.md`, and 0.99991 on the
@@ -921,6 +921,48 @@ It also recorded what it deliberately did **not** take: `nlp_create_qkv_heads_de
 collapse the 3 reshapes + 3 permutes as well, because it emits `[1,B,H,D]` while this SDPA path
 consumes `[1,H,S,D]` — a contract change across the cache write and SDPA, so it belongs in its own
 attempt rather than riding along. That is the same boundary §6.68/§6.72 negotiated by hand.
+
+### O4d — RoPE as one op, and where the tool's remaining lead actually comes from
+
+The generated stub wrote `x*cos + rotate_half(x)*sin` out longhand — two slices, a neg and a concat
+to build `rotate_half`, then two multiplies and an add. **Seven dispatches for one elementwise
+rotation, twice per layer, 26 layers ≈ 360 launches per token** against tensors of a few KB. That is
+why the roofline tagged this model's `BinaryNg`/`Reshape`/`Concat`/`Slice` ops `bound_by=dispatch`.
+It replaced the chain with `ttnn.experimental.rotary_embedding_hf`: `15.976 → 15.212 ms/token`
+(−4.79%), **and PCC rose** 0.9714 → 0.9903, because the fused kernel accumulates the rotation
+internally instead of round-tripping two bf16 products through DRAM.
+
+Two things in that commit are worth lifting on their own:
+
+- **It explained a metric disagreement rather than picking the flattering number.** *"device_ms
+  barely moves because it SUMS per-op durations — what shrank is the inter-op gap those ops were
+  tagged for, which only the wall metric sees."* 273.62 → 271.87 device, against −4.79% wall.
+- **It shipped a latched fallback** — the explicit chain is retained for operands the fused op
+  refuses, and the flag latches after the first refusal *"so it cannot raise inside a captured
+  trace."*
+
+**This one is NOT a finding for the hand-port — it is the tool catching up.** `ttnn_voxtral_gpt.py`
+has used `rotary_embedding_hf` from the start (`_rope`, and both decode call sites). Worth noting
+the hand-port is still ahead on this specific op: it calls the **decode-specialised** path
+(`is_decode_mode=True`, with cos/sin sharded to match, per the comment at line 53), where the tool
+calls prefill mode with `s=1`.
+
+#### So where does the tool's 0.7 ms lead actually come from?
+
+Now that both implementations agree on fused QKV and fused RoPE, the remaining delta is a short
+list — and it splits cleanly into "free" and "paid for":
+
+| the tool has | hand-port equivalent | free? |
+|---|---|---|
+| per-op narrow grids: `w2` 24c, K/V 16c | one global `_MM_GRID` (12,6) = 72c for all five | **FREE — precision-neutral. This is the one to take.** |
+| `down_proj` at `bfloat8_b` | `w2` at bf16 **on purpose** (§6.16) | PAID — 77% of the precision stack's accuracy cost |
+| LM head at `bfloat4_b` | n/a — Block 2 consumes the hidden state | n/a |
+| `ttnn.argmax` on a ROW_MAJOR input | argmax on the **host** (§6.8) | FREE — but re-measure, see O4 |
+
+**The conclusion for the comparison write-up:** roughly the whole of the tool's lead is (a) per-op
+grid sweeps the hand-port never ran, which cost nothing in accuracy, and (b) one precision trade the
+hand-port evaluated and deliberately declined. Take (a); (b) is already settled and settled
+correctly.
 
 ### O5 — the ladder's escalation is real, and it gives up in the right place
 
