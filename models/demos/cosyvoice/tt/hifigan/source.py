@@ -126,9 +126,12 @@ class TtSineGen:
             return out
         nb = t // blk
 
+        # `x` is a VIEW of F, not a copy: [b, t, c] and [b, nb, blk, c] tile to the same
+        # tiles in the same order, so ttnn.reshape returns the same buffer. Deallocating
+        # it would free F out from under the caller. Same for `out` at the end of this
+        # function -- do not "tidy up" by adding deallocates for either.
         x = ttnn.reshape(F, (b, nb, blk, c))
         within = ttnn.cumsum(x, dim=2, dtype=ttnn.float32)  # [b, nb, blk, c]
-        ttnn.deallocate(x)
 
         totals = ttnn.slice(within, [0, 0, blk - 1, 0], [b, nb, blk, c])  # [b, nb, 1, c]
         # mod 1 BEFORE accumulating across blocks -- this is the whole trick
@@ -146,8 +149,7 @@ class TtSineGen:
         ttnn.deallocate(omod)
         frac = ttnn.subtract(phase, ttnn.floor(phase))
         ttnn.deallocate(phase)
-        out = ttnn.reshape(frac, (b, t, c))
-        ttnn.deallocate(frac)
+        out = ttnn.reshape(frac, (b, t, c))  # a view of `frac`; freeing `frac` frees `out`
         return out
 
     def __call__(self, f0, phase_vec=None, noise=None, noise_unit=None):
