@@ -41,6 +41,19 @@ ttnn::Tensor adamw(
 // Precondition: both tensors hold beta^t for a step count t >= 1, so beta^t < 1.
 // Same requirement the float overload already carries, except the value stays on
 // device and so cannot be checked on host.
+//
+// Advancing beta^t between steps: update the tensors IN PLACE, keeping the same
+// buffers, e.g. `ttnn::multiply_(beta1_pow, beta1)`. Reassigning them
+//
+//     beta1_pow = ttnn::multiply(beta1_pow, beta1);   // new buffer every step
+//
+// works under eager dispatch but breaks a captured trace. Trace capture records
+// the buffer addresses into the reader's runtime args and replay does not
+// recompute them, so a replayed trace keeps reading the buffer that existed at
+// capture time - which by then may have been freed and handed to another tensor.
+// No error is raised; the optimizer just applies a wrong bias correction. This is
+// the same rule the parameter and moment tensors already follow, and it is the
+// reason to prefer this overload over the float one.
 ttnn::Tensor adamw(
     const ttnn::Tensor& param_in,
     const ttnn::Tensor& grad,

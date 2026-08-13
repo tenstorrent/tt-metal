@@ -4,11 +4,14 @@
 
 #include "adamw_program_factory.hpp"
 
+#include <algorithm>
 #include <common/TracyQueue.hpp>
 #include <cstdint>
 #include <enchantum/enchantum.hpp>
 #include <optional>
+#include <string>
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "adamw_device_operation_types.hpp"
@@ -328,17 +331,16 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
             intermediate_num_tiles);
     }
 
-    // Holds the two beta^t scalars as whole tiles. The compute kernel reads
-    // element (0, 0) of each straight out of L1, so only the first word of each
-    // tile is ever touched - a tile is simply the unit the reader can DMA.
+    // Reader -> compute mailbox for the two beta^t scalars: one page holding two
+    // floats, each padded up to the alignment the NOC needs. Only 8 bytes carry
+    // information, so this is deliberately not a pair of tiles - every core in the
+    // grid would then DMA 8 KB of mostly-padding out of DRAM and hold it in L1 to
+    // read two words. Compute pulls both out with read_tile_value(cb, 0, offset).
+    const uint32_t bias_scalar_stride_bytes = std::max(
+        tt::tt_metal::hal::get_l1_alignment(), tt::tt_metal::hal::get_dram_alignment());
     if (bias_correction_on_device) {
-        [[maybe_unused]] auto cb_bias_correction = create_circular_buffer(
-            program,
-            all_cores,
-            kBiasCorrectionCbIndex,
-            intermediate_data_format,
-            float32_single_tile_size_bytes,
-            2U);
+        [[maybe_unused]] auto cb_bias_correction = create_circular_buffer_bytes(
+            program, all_cores, kBiasCorrectionCbIndex, intermediate_data_format, 2U * bias_scalar_stride_bytes);
     }
 
     // Intermediate CBs are always fp32
@@ -374,6 +376,7 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
     std::map<std::string, std::string> defines;
     defines["AMSGRAD"] = operation_attributes.amsgrad ? "1" : "0";
     defines["BIAS_CORRECTION_TENSORS"] = bias_correction_on_device ? "1" : "0";
+    defines["BIAS_SCALAR_STRIDE_BYTES"] = std::to_string(bias_scalar_stride_bytes);
     defines["STOCH_ROUND"] = operation_attributes.stochastic_rounding == StochasticRounding::Enabled ? "1" : "0";
 
     AdamWKernels kernels{};

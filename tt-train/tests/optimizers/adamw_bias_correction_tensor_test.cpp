@@ -19,6 +19,7 @@
 #include "core/tt_tensor_utils.hpp"
 #include "metal/optimizers/adamw/adamw.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace {
@@ -120,8 +121,10 @@ protected:
             kWeightDecay);
     }
 
-    static ttnn::Tensor run_tensor(
-        const StepInputs& inputs, float beta1_pow, float beta2_pow, ttnn::DataType bias_dtype, float lr = kLr) {
+    // Takes the bias tensors as-is, so a caller can hand the same two buffers to
+    // several successive steps instead of allocating a fresh pair each time.
+    static ttnn::Tensor run_tensor_with(
+        const StepInputs& inputs, const ttnn::Tensor& beta1_pow, const ttnn::Tensor& beta2_pow, float lr) {
         return ttml::metal::adamw(
             inputs.param,
             inputs.grad,
@@ -131,10 +134,16 @@ protected:
             lr,
             kBeta1,
             kBeta2,
-            make_scalar(beta1_pow, bias_dtype),
-            make_scalar(beta2_pow, bias_dtype),
+            beta1_pow,
+            beta2_pow,
             kEpsilon,
             kWeightDecay);
+    }
+
+    static ttnn::Tensor run_tensor(
+        const StepInputs& inputs, float beta1_pow, float beta2_pow, ttnn::DataType bias_dtype, float lr) {
+        return run_tensor_with(
+            inputs, make_scalar(beta1_pow, bias_dtype), make_scalar(beta2_pow, bias_dtype), lr);
     }
 
     static void expect_all_near(
@@ -345,6 +354,49 @@ TEST_F(AdamWBiasCorrectionTensorTest, CachedProgramPicksUpNewBetaPow) {
         /* tolerance = */ 1e-5F));
 }
 
+// The usage pattern adamw.hpp mandates for trace: hold beta^t in two buffers and
+// advance them in place, so the addresses the reader was given stay valid. Runs
+// two successive steps against one pair of bias tensors, advancing them with an
+// in-place device multiply between dispatches, and requires the result to match
+// the float overload driven over the same two steps.
+//
+// Deliberately not a trace capture/replay test: tt-train opens its mesh device
+// with DEFAULT_TRACE_REGION_SIZE == 0 (see ttml::core::MeshDevice), so no trace
+// can be captured here without changing device setup for the whole test suite.
+// What this does cover is the device-side half - the kernel reading whatever the
+// buffers hold at dispatch, never a value bound earlier.
+TEST_F(AdamWBiasCorrectionTensorTest, InPlaceBetaPowUpdateAcrossSteps) {
+    const ttnn::Shape shape({1U, 1U, 64U, 64U});
+    constexpr uint32_t kSteps = 2U;
+
+    auto tensor_inputs = make_inputs(shape, ttnn::DataType::FLOAT32, /* amsgrad = */ false);
+    auto float_inputs = make_inputs(shape, ttnn::DataType::FLOAT32, /* amsgrad = */ false);
+
+    // One pair of buffers for the whole run, as a trace-capturing caller must do.
+    auto beta1_pow = make_scalar(1.0F, ttnn::DataType::FLOAT32);
+    auto beta2_pow = make_scalar(1.0F, ttnn::DataType::FLOAT32);
+    const auto* beta1_pow_buffer = beta1_pow.buffer();
+    const auto* beta2_pow_buffer = beta2_pow.buffer();
+
+    for (uint32_t step = 1U; step <= kSteps; ++step) {
+        // beta^t *= beta, in place - same buffers, new contents.
+        ttnn::multiply_(beta1_pow, kBeta1);
+        ttnn::multiply_(beta2_pow, kBeta2);
+        ASSERT_EQ(beta1_pow.buffer(), beta1_pow_buffer) << "beta1_pow was reallocated at step " << step;
+        ASSERT_EQ(beta2_pow.buffer(), beta2_pow_buffer) << "beta2_pow was reallocated at step " << step;
+
+        run_tensor_with(tensor_inputs, beta1_pow, beta2_pow, kLr);
+        run_float(
+            float_inputs,
+            std::pow(kBeta1, static_cast<float>(step)),
+            std::pow(kBeta2, static_cast<float>(step)),
+            kLr);
+    }
+
+    expect_all_near(
+        ttml::core::to_vector(tensor_inputs.param), ttml::core::to_vector(float_inputs.param), 1e-5F, "param");
+}
+
 // Two dispatches of the same step over identical inputs must land on the same
 // values. Only checks determinism - it cannot distinguish a fresh L1 read from a
 // captured scalar, since both dispatches use the same beta^t. That distinction is
@@ -355,10 +407,10 @@ TEST_F(AdamWBiasCorrectionTensorTest, RepeatedDispatchIsStable) {
     const float beta2_pow = std::pow(kBeta2, 7.0F);
 
     auto first_inputs = make_inputs(shape, ttnn::DataType::FLOAT32, /* amsgrad = */ false);
-    auto first = ttml::core::to_vector(run_tensor(first_inputs, beta1_pow, beta2_pow, ttnn::DataType::FLOAT32));
+    auto first = ttml::core::to_vector(run_tensor(first_inputs, beta1_pow, beta2_pow, ttnn::DataType::FLOAT32, kLr));
 
     auto second_inputs = make_inputs(shape, ttnn::DataType::FLOAT32, /* amsgrad = */ false);
-    auto second = ttml::core::to_vector(run_tensor(second_inputs, beta1_pow, beta2_pow, ttnn::DataType::FLOAT32));
+    auto second = ttml::core::to_vector(run_tensor(second_inputs, beta1_pow, beta2_pow, ttnn::DataType::FLOAT32, kLr));
 
     ASSERT_EQ(first.size(), second.size());
     for (size_t i = 0; i < first.size(); ++i) {

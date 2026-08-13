@@ -69,18 +69,20 @@ void kernel_main() {
     // square root has to run on the RISC-V core.
     float recip_bias_correction2 = 0.0F;
     {
-        cb_wait_front(cb_bias_correction_idx, 2);
+        cb_wait_front(cb_bias_correction_idx, 1);
 #if defined(ARCH_BLACKHOLE)
         // Same workaround as ttnn's embedding_backward compute kernel: force the
         // read to go out to L1 rather than hit a stale cache line.
         asm volatile("fence");
 #endif
-        // Tile 0 holds beta1^t, tile 1 beta2^t, each at element (0, 0).
+        // One page, two words: beta1^t at offset 0, beta2^t one stride further on.
         // read_tile_value hands back the raw 32-bit word, which is the float32
         // value: the op rejects any other bias dtype.
+        constexpr uint32_t beta2_word_offset = BIAS_SCALAR_STRIDE_BYTES / sizeof(uint32_t);
         const float beta1_pow = __builtin_bit_cast(float, read_tile_value(cb_bias_correction_idx, 0, 0));
-        const float beta2_pow = __builtin_bit_cast(float, read_tile_value(cb_bias_correction_idx, 1, 0));
-        cb_pop_front(cb_bias_correction_idx, 2);
+        const float beta2_pow =
+            __builtin_bit_cast(float, read_tile_value(cb_bias_correction_idx, 0, beta2_word_offset));
+        cb_pop_front(cb_bias_correction_idx, 1);
 
         const float learning_rate = __builtin_bit_cast(float, lr);
         step_size = __builtin_bit_cast(uint32_t, learning_rate / (1.0F - beta1_pow));

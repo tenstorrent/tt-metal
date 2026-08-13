@@ -49,20 +49,25 @@ void kernel_main() {
     const auto max_exp_avg_sq_addr_gen = TensorAccessor(max_exp_avg_sq_args, max_exp_avg_sq_addr);
 
 #if BIAS_CORRECTION_TENSORS
-    // beta1^t and beta2^t arrive as single-tile tensors. Fetch both once, before the
-    // main loop: they do not vary per tile, and the compute kernel reads element
-    // (0, 0) of each out of L1 to derive step_size and 1 / bias_correction2.
+    // beta1^t and beta2^t arrive as single-element tensors. Fetch both once, before
+    // the main loop: they do not vary per tile, and the compute kernel reads them
+    // out of L1 to derive step_size and 1 / bias_correction2.
+    //
+    // Only the leading float of each tensor carries anything, and in TILE layout
+    // element (0, 0) sits at byte offset 0, so this reads 4 bytes rather than
+    // pulling a whole 4 KB tile per scalar onto every core. The two slots are
+    // BIAS_SCALAR_STRIDE_BYTES apart to keep both NOC destinations aligned.
     {
-        const uint32_t bias_tile_size_bytes = get_tile_size(cb_bias_correction_idx);
         const auto beta1_pow_addr_gen = TensorAccessor(beta1_pow_args, beta1_pow_addr);
         const auto beta2_pow_addr_gen = TensorAccessor(beta2_pow_args, beta2_pow_addr);
 
-        cb_reserve_back(cb_bias_correction_idx, 2);
+        cb_reserve_back(cb_bias_correction_idx, 1);
         const uint32_t l1_write_addr = get_write_ptr(cb_bias_correction_idx);
-        noc_async_read_tile(0, beta1_pow_addr_gen, l1_write_addr);
-        noc_async_read_tile(0, beta2_pow_addr_gen, l1_write_addr + bias_tile_size_bytes);
+        noc_async_read(get_noc_addr(0, beta1_pow_addr_gen), l1_write_addr, sizeof(float));
+        noc_async_read(
+            get_noc_addr(0, beta2_pow_addr_gen), l1_write_addr + BIAS_SCALAR_STRIDE_BYTES, sizeof(float));
         noc_async_read_barrier();
-        cb_push_back(cb_bias_correction_idx, 2);
+        cb_push_back(cb_bias_correction_idx, 1);
     }
 #endif
 
