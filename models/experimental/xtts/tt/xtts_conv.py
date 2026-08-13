@@ -8,26 +8,6 @@ import ttnn
 
 from models.common.lightweightmodule import LightweightModule
 
-# from_device in the bias fold is fatal inside a ttnn trace; warm up first or use cond_bias_trace_safe().
-_COND_BIAS_TRACE_SAFE = False
-
-
-def set_cond_bias_trace_safe(flag: bool) -> bool:
-    global _COND_BIAS_TRACE_SAFE
-    prev = _COND_BIAS_TRACE_SAFE
-    _COND_BIAS_TRACE_SAFE = bool(flag)
-    return prev
-
-
-class cond_bias_trace_safe:
-    def __enter__(self):
-        self._prev = set_cond_bias_trace_safe(True)
-        return self
-
-    def __exit__(self, *exc):
-        set_cond_bias_trace_safe(self._prev)
-        return False
-
 
 def _interleaved(x: ttnn.Tensor, shape, *, row_major: bool) -> ttnn.Tensor:
     x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
@@ -189,8 +169,9 @@ class TtConv1d(LightweightModule):
         key = (batch_size, input_length, x.dtype, x.layout, x.memory_config())
         if key != self._prepared_for:
             self.tt_weight, self.tt_bias = self._host_weight, self._host_bias
-        # from_device is fatal inside a trace; _COND_BIAS_TRACE_SAFE uses a post-conv device add.
-        fold = cond_bias is not None and not _COND_BIAS_TRACE_SAFE
+        # The fold calls from_device, which is fatal inside a trace — warm up before capturing so
+        # the fold lands in _folded_bias and the captured run only reads it.
+        fold = cond_bias is not None
         bias_tensor = self.tt_bias
         fold_key = (id(cond_bias), key) if fold else None
         cached = self._folded_bias.get(fold_key) if fold else None
@@ -226,15 +207,9 @@ class TtConv1d(LightweightModule):
         else:
             self.tt_bias = bias
         self._prepared_for = key
-        if keep_sharded and not (cond_bias is not None and not fold):
+        if keep_sharded:
             return ttnn.reshape(out, [batch_size, out_length, self.out_channels])
-        out = _interleaved(out, [batch_size, out_length, self.out_channels], row_major=False)
-        if cond_bias is not None and not fold:
-            cb = ttnn.reshape(cond_bias, [1, 1, self.out_channels])
-            if cb.dtype != out.dtype:
-                cb = ttnn.typecast(cb, out.dtype)
-            out = ttnn.add(out, cb)
-        return out
+        return _interleaved(out, [batch_size, out_length, self.out_channels], row_major=False)
 
 
 class TtConvTranspose1d(LightweightModule):
@@ -339,6 +314,15 @@ class TtConv2d(LightweightModule):
             packer_l1_acc=packer_l1_acc,
         )
 
+    def set_double_buffer(self, enabled: bool) -> None:
+        """Act/weights double buffering, which doubles the conv's activation CB.
+
+        Callers whose input is long enough that the doubled CBs collide with the L1 buffers turn it
+        off for those shapes (see the speaker encoder). Numerically identical either way.
+        """
+        self.conv_config.enable_act_double_buffer = enabled
+        self.conv_config.enable_weights_double_buffer = enabled
+
     def forward(
         self,
         x: ttnn.Tensor,
@@ -346,8 +330,20 @@ class TtConv2d(LightweightModule):
         input_width: int,
         memory_config: ttnn.MemoryConfig | None = None,
     ) -> tuple[ttnn.Tensor, int, int]:
-        # Prepared weights are shape-specific; ttnn cannot detect a stale cache.
-        key = (x.shape[0], input_height, input_width, x.dtype, x.layout, x.memory_config(), memory_config)
+        # Prepared weights are shape-specific; ttnn cannot detect a stale cache. The double-buffer
+        # flags belong in the key too: strided layers map several input lengths onto the same
+        # height, so a toggle can land on an otherwise identical key.
+        key = (
+            x.shape[0],
+            input_height,
+            input_width,
+            x.dtype,
+            x.layout,
+            x.memory_config(),
+            memory_config,
+            self.conv_config.enable_act_double_buffer,
+            self.conv_config.enable_weights_double_buffer,
+        )
         if key != self._prepared_for:
             self.tt_weight, self.tt_bias = self._host_weight, self._host_bias
         out, (out_h, out_w), [weight, bias] = ttnn.conv2d(
