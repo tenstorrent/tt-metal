@@ -4,6 +4,11 @@
 
 #include "ttnn/distributed/distributed_nanobind.hpp"
 
+#include <tt-metalium/tt_metal.hpp>
+#include <nanobind/stl/vector.h>
+#include <nanobind/stl/string.h>
+#include <nanobind/stl/map.h>
+
 #include <tt_stl/reflection.hpp>
 #include <cstddef>
 #include <memory>
@@ -516,6 +521,81 @@ void py_module(nb::module_& mod) {
                     >>> logical_core = ttnn.CoreCoord(0, 0)
                     >>> worker_core = device.worker_core_from_logical_core(logical_core)
                     >>> print(f"Worker core: x={worker_core.x}, y={worker_core.y}")
+            )doc")
+        .def(
+            "dram_core_from_logical_core",
+            [](MeshDevice* device, const CoreCoord& logical_core) {
+                return device->virtual_core_from_logical_core(logical_core, tt::CoreType::DRAM);
+            },
+            nb::arg("logical_core"),
+            R"doc(
+                Convert a logical DRAM coordinate to a virtual (NoC) coordinate.
+
+                The DRAM counterpart of worker_core_from_logical_core, for building NoC
+                addresses on the host -- e.g. the runtime binary-reload stage table, whose
+                entries name a source by NoC coordinates and an address.
+
+                Args:
+                    logical_core (CoreCoord): Logical DRAM coordinate, x = bank index.
+
+                Returns:
+                    CoreCoord: The virtual coordinate of that DRAM bank.
+            )doc")
+        .def(
+            "read_core_l1",
+            [](MeshDevice* device, const CoreCoord& logical_core, uint32_t address, uint32_t size) {
+                std::vector<uint32_t> data;
+                tt::tt_metal::detail::ReadFromDeviceL1(device->get_devices().at(0), logical_core, address, size, data);
+                return data;
+            },
+            nb::arg("logical_core"),
+            nb::arg("address"),
+            nb::arg("size"),
+            R"doc(
+                Read raw L1 words from one core.
+
+                For capturing state the device wrote and the host has no other view of --
+                the runtime binary reload uses it to copy a stage's kernel-config block
+                (CB configs, runtime args, semaphores and text) after that stage has run
+                once, and to read the launch message describing it.
+
+                Args:
+                    logical_core (CoreCoord): Core whose L1 to read.
+                    address (int): Byte address in L1.
+                    size (int): Bytes to read; must be a multiple of 4.
+
+                Returns:
+                    List[int]: The words read.
+            )doc")
+        .def(
+            "read_kernel_config",
+            [](MeshDevice* device, const CoreCoord& logical_core) {
+                auto cfg = tt::tt_metal::detail::ReadKernelConfig(device->get_devices().at(0), logical_core);
+                std::map<std::string, std::vector<uint32_t>> out;
+                out["kernel_config_base"] = cfg.kernel_config_base;
+                out["kernel_text_offset"] = cfg.kernel_text_offset;
+                out["kernel_text_size"] = cfg.kernel_text_size;
+                out["sem_offset"] = cfg.sem_offset;
+                out["rta_offset"] = cfg.rta_offset;
+                out["crta_offset"] = cfg.crta_offset;
+                out["local_cb_offset"] = {cfg.local_cb_offset};
+                out["remote_cb_offset"] = {cfg.remote_cb_offset};
+                out["local_cb_mask"] = {
+                    static_cast<uint32_t>(cfg.local_cb_mask & 0xFFFFFFFFu),
+                    static_cast<uint32_t>(cfg.local_cb_mask >> 32)};
+                out["enables"] = {cfg.enables};
+                out["min_remote_cb_start_index"] = {cfg.min_remote_cb_start_index};
+                return out;
+            },
+            nb::arg("logical_core"),
+            R"doc(
+                Read back the kernel config a core is running, field by field.
+
+                Everything a kernel needs -- circular buffers, runtime args, semaphores,
+                text -- is addressed as kernel_config_base + offset, so these offsets plus
+                the bytes at that base are a complete description of a program on a core.
+                The runtime binary reload captures both after a stage has run once, and
+                replays them at a new base to bring that stage back.
             )doc")
         .def(
             "get_optimal_dram_bank_to_logical_worker_assignment",

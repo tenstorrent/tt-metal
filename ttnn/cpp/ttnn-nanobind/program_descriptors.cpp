@@ -1155,7 +1155,15 @@ void py_module_types(nb::module_& mod) {
         .def_rw(
             "custom_program_hash",
             &tt::tt_metal::ProgramDescriptor::custom_program_hash,
-            "Optional memoized program hash (skips full descriptor walk when set)");
+            "Optional memoized program hash (skips full descriptor walk when set)")
+        .def_rw(
+            "reload_table_addr",
+            &tt::tt_metal::ProgramDescriptor::reload_table_addr,
+            "L1 address of the runtime binary-reload stage table, 0 if this program does not reload")
+        .def_rw(
+            "reload_core_ranges",
+            &tt::tt_metal::ProgramDescriptor::reload_core_ranges,
+            "Cores that walk the reload table; every other core in the program ignores it");
 
     mod.def(
         "merge_program_descriptors",

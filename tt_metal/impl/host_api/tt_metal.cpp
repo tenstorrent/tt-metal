@@ -1001,6 +1001,45 @@ void WaitProgramDone(IDevice* device, Program& program, bool read_device_profile
     }
 }
 
+CoreKernelConfig ReadKernelConfig(IDevice* device, const CoreCoord& logical_core) {
+    // Decode through the same generated view firmware compiles against, so the layout is
+    // stated once (dev_msgs.h) rather than mirrored here.
+    const auto& hal = MetalContext::instance().hal();
+    const auto core_type = HalProgrammableCoreType::TENSIX;
+    auto factory = hal.get_dev_msgs_factory(core_type);
+    auto launch = factory.create<dev_msgs::launch_msg_t>();
+
+    std::vector<uint32_t> raw;
+    ReadFromDeviceL1(
+        device,
+        logical_core,
+        hal.get_dev_addr(core_type, HalL1MemAddrType::MAILBOX) +
+            factory.offset_of<dev_msgs::mailboxes_t>(dev_msgs::mailboxes_t::Field::launch),
+        launch.size(),
+        raw);
+
+    auto view = factory.create_view<dev_msgs::launch_msg_t>(reinterpret_cast<const std::byte*>(raw.data()));
+    auto kc = view.kernel_config();
+
+    CoreKernelConfig out;
+    for (uint32_t i = 0; i < kc.kernel_config_base().size(); i++) {
+        out.kernel_config_base.push_back(kc.kernel_config_base()[i]);
+        out.sem_offset.push_back(kc.sem_offset()[i]);
+    }
+    for (uint32_t i = 0; i < kc.kernel_text_offset().size(); i++) {
+        out.kernel_text_offset.push_back(kc.kernel_text_offset()[i]);
+        out.kernel_text_size.push_back(kc.kernel_text_size()[i]);
+        out.rta_offset.push_back(kc.rta_offset()[i].rta_offset());
+        out.crta_offset.push_back(kc.rta_offset()[i].crta_offset());
+    }
+    out.local_cb_offset = kc.local_cb_offset();
+    out.remote_cb_offset = kc.remote_cb_offset();
+    out.local_cb_mask = kc.local_cb_mask();
+    out.enables = kc.enables();
+    out.min_remote_cb_start_index = kc.min_remote_cb_start_index();
+    return out;
+}
+
 bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_slow_dispatch) {
     ZoneScoped;
     bool pass = true;

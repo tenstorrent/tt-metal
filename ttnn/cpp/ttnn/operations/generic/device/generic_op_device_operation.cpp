@@ -108,6 +108,11 @@ ttsl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDe
     for (const auto& semaphore : program_descriptor.semaphores) {
         ttsl::hash::hash_combine(hash, hash_semaphore(semaphore));
     }
+    // The reload table address is baked into the cached program's launch message, so
+    // two descriptors that differ only here are different programs. Without this a
+    // program first run without a table keeps running without one.
+    ttsl::hash::hash_combine(hash, program_descriptor.reload_table_addr);
+    ttsl::hash::hash_combine(hash, program_descriptor.reload_core_ranges);
     return hash;
 }
 

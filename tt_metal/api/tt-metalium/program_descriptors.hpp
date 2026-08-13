@@ -256,6 +256,14 @@ struct ProgramDescriptor {
     SemaphoreDescriptors semaphores;
     CBDescriptors cbs;
     std::optional<std::uint64_t> custom_program_hash;
+    // Runtime binary reload: L1 address of this program's stage table, 0 if it does
+    // not reload. Goes into every kernel group's launch message, where firmware
+    // reads it (kernel_config_msg_t::reload_table_addr).
+    uint32_t reload_table_addr = 0;
+    // Which cores walk that table. A program spans every core its kernels cover, and
+    // only some of them reload -- a core given a table it was not built for would run
+    // another core's binary. Empty means no core reloads.
+    CoreRangeSet reload_core_ranges;
 
     std::optional<uint32_t> find_available_semaphore_id(const CoreCoord& core, CoreType core_type) const;
 };

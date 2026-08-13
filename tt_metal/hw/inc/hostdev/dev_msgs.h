@@ -174,12 +174,20 @@ struct kernel_config_msg_t {
     volatile uint32_t host_assigned_id;
     // bit i set => processor i enabled
     volatile uint32_t enables;
+    // Runtime binary reload: L1 address of this program's stage table, 0 if the program
+    // does not reload. Per program and per core, written by the host with the rest of
+    // the launch message, so firmware needs no probing, no magic word and no
+    // cross-RISC handoff to find it, and a stale value cannot outlive the program.
+    volatile uint32_t reload_table_addr;
     volatile uint16_t watcher_kernel_ids[MaxProcessorsPerCoreType];
     volatile uint16_t ncrisc_kernel_size16;  // size in 16 byte units
 
     volatile uint8_t sub_device_origin_x;  // Logical X coordinate of the sub device origin
     volatile uint8_t sub_device_origin_y;  // Logical Y coordinate of the sub device origin
-    volatile uint8_t pad3[1 + ((1 - MaxProcessorsPerCoreType % 2) * 2) + 4];  // CODEGEN:skip
+    // Was ... + 4; those 4 bytes now carry reload_table_addr above, so the message
+    // keeps its size and its NoC write alignment on every arch (Quasar's mailbox
+    // has no room to grow: sizeof(mailboxes_t) <= MEM_MAILBOX_SIZE is exact).
+    volatile uint8_t pad3[1 + ((1 - MaxProcessorsPerCoreType % 2) * 2)];  // CODEGEN:skip
 
     // Per-processor kernel thread info (Quasar: num threads for kernel on this processor; thread_id in that kernel;
     // values fit in 8 bits) The array sizes are rounded up to a multiple of 8 bytes for alignment (i.e. a multiple of
@@ -198,6 +206,7 @@ static_assert(offsetof(kernel_config_msg_t, remote_cb_offset) % sizeof(uint16_t)
 static_assert(offsetof(kernel_config_msg_t, rta_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, kernel_text_offset) % sizeof(uint32_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, kernel_text_size) % sizeof(uint32_t) == 0);
+static_assert(offsetof(kernel_config_msg_t, reload_table_addr) % sizeof(uint32_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, local_cb_mask) % sizeof(uint64_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, host_assigned_id) % sizeof(uint32_t) == 0);
 

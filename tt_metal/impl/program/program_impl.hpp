@@ -241,6 +241,17 @@ public:
         return ProgramBinaryStatus::NotSent;
     }
     void set_cached(uint64_t device_hash) { this->cached_device_hash_ = device_hash; }
+    void set_reload_table(uint32_t addr, const CoreRangeSet& cores) {
+        this->reload_table_addr_ = addr;
+        this->reload_core_ranges_ = cores;
+    }
+    // The address only applies to cores the caller nominated; every other core in the
+    // program must see 0 or it would reload a binary that is not its own.
+    uint32_t get_reload_table_addr(const CoreRangeSet& group_cores) const {
+        return (this->reload_table_addr_ != 0 && this->reload_core_ranges_.intersects(group_cores))
+                   ? this->reload_table_addr_
+                   : 0;
+    }
     const std::optional<uint64_t>& get_cached() const { return this->cached_device_hash_; }
     void set_program_binary_status(ChipId device_id, ProgramBinaryStatus status);
     std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
@@ -260,6 +271,10 @@ public:
     HWCommandQueue* get_last_used_command_queue() const;
 
     void set_kernels_bin_buffer(const std::shared_ptr<Buffer>& buffer);
+
+    // Runtime binary reload: see ProgramDescriptor::reload_table_addr.
+    uint32_t reload_table_addr_ = 0;
+    CoreRangeSet reload_core_ranges_;
 
     void populate_dispatch_data(IDevice* device);
 
