@@ -135,6 +135,59 @@ def _sample(vec, generated):
     return int(torch.multinomial(probs, 1).item())
 
 
+# --------------------------------------------------------------------------- #
+# Output content checks
+# --------------------------------------------------------------------------- #
+# Generating fluent, non-repeating text proves the LLM half works; it does NOT prove the image ever
+# reached it. A broken vision path produces confident prose about the wrong thing — e.g. a bad
+# patch-embed had the model call Qwen's beach photo "a corrupted or improperly rendered image file"
+# while the suite still reported 5/5 PASSED on the length/degeneracy asserts alone.
+#
+# So assert on CONTENT: each prompt needs some minimum number of terms that only a model actually
+# seeing the input could produce, and must avoid the phrases that characterize a garbage-embedding
+# answer. Kept deliberately loose (any-of with a threshold, not exact match) so ordinary wording
+# drift does not fail the run, while "wrong subject entirely" does.
+_EXPECTED_CONTENT = {
+    # Qwen demo.jpeg: a woman sitting on a beach at sunset with her dog.
+    "vision_demo.json": {"any_of": ("beach", "dog", "woman", "sand", "sunset", "shore", "ocean", "sea"), "min_hits": 2},
+    # Same image twice; the question asks for differences, so "identical/same/no differences" is right.
+    "vision_multi_image.json": {"any_of": ("identical", "same", "no differences", "no difference"), "min_hits": 1},
+    # space_woaudio.mp4: footage from/of space.
+    "vision_video.json": {
+        "any_of": ("space", "earth", "planet", "orbit", "astronaut", "star", "spacecraft"),
+        "min_hits": 1,
+    },
+    # Text-only prompt: nothing visual to check, so only the forbidden phrases apply.
+    "vision_text_only.json": {"any_of": (), "min_hits": 0},
+}
+# Hallmarks of a model being handed noise instead of an image.
+_FORBIDDEN_CONTENT = ("corrupted", "improperly rendered", "digital artifact", "not a photograph", "random noise")
+
+
+def _assert_describes_input(text, prompt_file):
+    """Fail when the generated text does not actually describe the prompt's image/video."""
+    spec = _EXPECTED_CONTENT.get(prompt_file)
+    if spec is None:
+        return
+    low = text.lower()
+
+    bad = [p for p in _FORBIDDEN_CONTENT if p in low]
+    # A text-only prompt can legitimately discuss these words; only gate visual prompts on them.
+    if bad and prompt_file != "vision_text_only.json":
+        raise AssertionError(
+            f"{prompt_file}: output reads like the vision embeddings are wrong "
+            f"(matched {bad}). Check the vision tower / patch embed. OUTPUT: {text[:300]!r}"
+        )
+
+    hits = [w for w in spec["any_of"] if w in low]
+    if len(hits) < spec["min_hits"]:
+        raise AssertionError(
+            f"{prompt_file}: output does not describe the input — expected >= {spec['min_hits']} of "
+            f"{list(spec['any_of'])}, matched {hits}. OUTPUT: {text[:300]!r}"
+        )
+    logger.info(f"  output content check OK (matched {hits})")
+
+
 def _load_conversation(prompt_file):
     """Load the first conversation (a list of message dicts) from a sample-prompt JSON file."""
     with open(prompt_file) as f:
@@ -359,6 +412,7 @@ def test_demo_vision(mesh_device, prompt_file, use_trace, max_generated_tokens, 
 
     assert len(generated) >= 1, "should generate at least 1 token"
     assert len(set(generated)) > 1, f"degenerate generation: {generated}"
+    _assert_describes_input(text, prompt_file)
 
 
 def _run_traced_vision_generation(model, tokenizer, device, token_ids, vision_inputs, max_generated_tokens, num_blocks):

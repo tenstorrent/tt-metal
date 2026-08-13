@@ -195,11 +195,18 @@ class Qwen36RoPESetup:
     def _extend_req_table(self, length):
         """Grow the per-request M-RoPE table to >= `length` positions with text-continuation rows
         (post-prompt positions have t==h==w, advancing as rope_pos = seq_idx + rope_delta). Used so
-        the masked-bucket padding past the real prompt still has cos/sin."""
+        the masked-bucket padding past the real prompt still has cos/sin.
+
+        Grows GEOMETRICALLY (at least double) rather than to exactly `length`. Every call
+        reallocates and copies the whole table, and the callers extend by a chunk at a time, so
+        exact growth makes a long generation quadratic in host memcpy; doubling amortizes it to
+        linear. Capped at max_seq_len, past which no position can be requested anyway.
+        """
         cur = self._req_cos.shape[0]
         if length <= cur:
             return
-        pos = torch.arange(cur, length, dtype=torch.float32) + self.rope_delta
+        target = min(max(length, 2 * cur), max(length, self.max_seq_len))
+        pos = torch.arange(cur, target, dtype=torch.float32) + self.rope_delta
         emb = torch.cat([torch.outer(pos, self.inv_freq)] * 2, dim=-1)
         self._req_cos = torch.cat([self._req_cos, emb.cos().to(torch.bfloat16)], dim=0)
         self._req_sin = torch.cat([self._req_sin, emb.sin().to(torch.bfloat16)], dim=0)
