@@ -17,11 +17,7 @@ using namespace tt::tt_metal;
 
 std::uniform_int_distribution distribution(1, std::numeric_limits<int32_t>::max());
 
-// Persistent generator for the unseeded path.  Constructing a fresh
-// std::mt19937(std::time(nullptr)) per dispatch gave every call made within the same
-// wall-clock second an identical seed sequence, so consecutive unseeded randn calls
-// returned bitwise-identical tensors.  Seeding one generator once and letting it advance
-// matches rand, uniform and bernoulli.
+// Persistent generator for the unseeded path, so consecutive calls advance instead of repeating.
 std::mt19937 default_rng(std::random_device{}());
 
 auto get_random_seed(std::mt19937& rng) -> uint32_t { return distribution(rng); }

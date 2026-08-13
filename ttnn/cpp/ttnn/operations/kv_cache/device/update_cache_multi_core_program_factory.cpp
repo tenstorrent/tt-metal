@@ -156,9 +156,7 @@ ProgramDescriptor UpdateCacheMultiCoreProgramFactory::create_descriptor(
     uint32_t Bcache = cache_tensor.padded_shape()[0];
     // Each kernel walks u_count iterations of an inner loop of `granularity` user rows, so
     // granularity must divide u_range exactly or the trailing rows are never visited.
-    // Deriving granularity from u_range preserves that invariant. The previous
-    // std::min(2, Bcache) left u_count = u_range / 2 truncating for odd Bcache >= 3, which
-    // silently skipped the last user's cache update.
+    // Deriving granularity from u_range preserves that invariant.
     const uint32_t u_range = std::min(static_cast<uint32_t>(32), Bcache);
     const uint32_t granularity = (u_range % 2 == 0) ? 2u : 1u;  // granularity = 2 best for performance
     uint32_t num_batched_heads = input_tensor.padded_shape()[1] * B / tt::constants::TILE_HEIGHT;
