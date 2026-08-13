@@ -36,11 +36,24 @@ TILE_HW = 32 * 32
 DTYPE_TILE_BYTES = {ttnn.bfloat16: TILE_HW * 2, ttnn.float32: TILE_HW * 4}
 
 
+# Two multicast handshake semaphores per data-movement thread.
+MCAST_SEMAPHORES = 4
+
+
 def make_runtime_args(cores, values):
-    """A RuntimeArgs with the same `values` on every core in `cores`."""
+    """A RuntimeArgs over `cores`.
+
+    `values` is either one flat sequence, used on every core, or a dict keyed by
+    CoreCoord for per-core args (a multicast sender needs to know it is the
+    sender, and each core needs its own output slice).
+    """
     args = ttnn.RuntimeArgs()
-    for core in cores:
-        args[core.x][core.y] = list(values)
+    if isinstance(values, dict):
+        for core in cores:
+            args[core.x][core.y] = list(values[core])
+    else:
+        for core in cores:
+            args[core.x][core.y] = list(values)
     return args
 
 
@@ -51,6 +64,27 @@ def make_cb(cb_index, core_ranges, dtype=ttnn.bfloat16, num_pages=2):
         total_size=num_pages * page_size,
         core_ranges=core_ranges,
         format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=cb_index, data_format=dtype, page_size=page_size)],
+    )
+
+
+def make_semaphore(sem_id, core_ranges, initial_value=0, core_type=None):
+    """Reserve semaphore slot `sem_id` on every core in `core_ranges`.
+
+    `sem_id` is an INPUT, not an index into the list you pass to
+    unified_program(): the runtime honours SemaphoreDescriptor.id directly
+    (program.cpp add_semaphore). It defaults to 0 in the descriptor, so two
+    semaphores built without distinct ids silently land on the same slot. The
+    kernel passes the matching id to u::Semaphore.
+
+    Host-side allocation is the point: every core resolves an id to the same L1
+    offset, independent of which RISC is running, and the runtime stamps
+    initial_value on every launch. A kernel-owned counter gets neither.
+    """
+    return ttnn.SemaphoreDescriptor(
+        id=sem_id,
+        core_type=core_type if core_type is not None else ttnn.CoreType.WORKER,
+        core_ranges=core_ranges,
+        initial_value=initial_value,
     )
 
 
@@ -78,14 +112,27 @@ def unified_program(
         runtime_args: list of ints, shared by all three descriptors.
         reader_processor / writer_processor: which RISC-V runs which DM role.
             Metal's convention is RISCV_1 for readers, RISCV_0 for writers.
+        semaphores: optional list of ttnn.SemaphoreDescriptor (see make_semaphore).
+            Four more are appended for the multicast handshake, above your ids.
         defines: optional extra (name, value) pairs, applied to all three.
     """
+    # Reserve the multicast handshake semaphores: two per DM thread, placed ABOVE
+    # any id the caller used so their choices stay unconstrained. Their base goes
+    # to the kernel as a define; tt/unified_api.h derives each thread's pair from
+    # it. Four slots out of NUM_SEMAPHORES = 16.
+    user_semaphores = list(semaphores or [])
+    mcast_sem_base = 1 + max((s.id for s in user_semaphores), default=-1)
+    all_semaphores = user_semaphores + [
+        make_semaphore(mcast_sem_base + i, core_ranges, initial_value=0) for i in range(MCAST_SEMAPHORES)
+    ]
+    defines = list(defines or []) + [("TT_UNIFIED_MCAST_SEM_BASE", str(mcast_sem_base))]
+
     shared = dict(
         kernel_source=kernel_source,
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=core_ranges,
         compile_time_args=list(compile_time_args),
-        defines=list(defines or []),
+        defines=defines,
         compiler_include_paths=UNIFIED_INCLUDE_PATHS,
     )
 
@@ -116,7 +163,7 @@ def unified_program(
         ),
     ]
 
-    return ttnn.ProgramDescriptor(kernels=kernels, semaphores=list(semaphores or []), cbs=list(cbs))
+    return ttnn.ProgramDescriptor(kernels=kernels, semaphores=all_semaphores, cbs=list(cbs))
 
 
 def single_core():
