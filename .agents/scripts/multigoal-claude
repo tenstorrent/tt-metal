@@ -23,13 +23,14 @@ import json
 import os
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
 import threading
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 MAX_GOAL_OBJECTIVE_CHARS = 100_000  # generous; Claude has no app-server cap
 SKILL_RE = re.compile(r"\$([A-Za-z0-9][A-Za-z0-9_-]*)")
@@ -46,6 +47,7 @@ ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 CHECK_PASS = 0
 CHECK_ADVISORY = 1
 CHECK_CRITICAL = 2
+CHECK_TIMEOUT_CODE = 124  # synthesized when a check script exceeds --check-timeout
 
 # Terminal goal statuses. "complete"/"blocked" come from the agent verdict; the
 # rest are runner-classified infra outcomes.
@@ -151,10 +153,13 @@ class ClaudeRunner:
         resume_session: str | None = None,
     ) -> GoalResult:
         cmd = self._base_cmd()
-        if session_id is not None:
-            cmd += ["--session-id", session_id]
+        # Mutually exclusive: the CLI rejects --session-id together with --resume
+        # unless --fork-session is also passed, and it reports that on stderr while
+        # still exiting 0 - which would surface here as an opaque "no result event".
         if resume_session is not None:
             cmd += ["--resume", resume_session]
+        elif session_id is not None:
+            cmd += ["--session-id", session_id]
 
         proc = subprocess.Popen(
             cmd,
@@ -201,6 +206,24 @@ class ClaudeRunner:
         hb_thread = threading.Thread(target=heartbeat, daemon=True)
         hb_thread.start()
 
+        # The stage timeout runs on its own timer rather than being checked inside
+        # the stdout loop below: the case it exists for is a child that stops
+        # emitting events entirely, and in that case the loop is blocked in
+        # readline() and would never reach an inline check.
+        timed_out = threading.Event()
+
+        def watchdog() -> None:
+            if self.stage_timeout is None:
+                return
+            if stop_heartbeat.wait(self.stage_timeout):
+                return  # finished normally
+            timed_out.set()
+            print(f"stage exceeded --stage-timeout={self.stage_timeout}s; terminating", file=sys.stderr)
+            proc.kill()
+
+        wd_thread = threading.Thread(target=watchdog, daemon=True)
+        wd_thread.start()
+
         try:
             with output_log.open("w", encoding="utf-8") as log:
                 for line in proc.stdout:
@@ -220,10 +243,6 @@ class ClaudeRunner:
                         seen_session_id = sid
                     if event.get("type") == "result":
                         result_obj = event
-                    if self.stage_timeout is not None and (time.monotonic() - start) > self.stage_timeout:
-                        print(f"stage exceeded --stage-timeout={self.stage_timeout}s; terminating", file=sys.stderr)
-                        proc.kill()
-                        break
         finally:
             stop_heartbeat.set()
             try:
@@ -235,6 +254,17 @@ class ClaudeRunner:
                 writer_thread.join(timeout=1)
             if stderr_thread.is_alive():
                 stderr_thread.join(timeout=1)
+            if wd_thread.is_alive():
+                wd_thread.join(timeout=1)
+
+        if timed_out.is_set():
+            return GoalResult(
+                terminal_status=TERMINAL_TURN_FAILED,
+                session_id=seen_session_id,
+                structured_output=None,
+                result_obj=result_obj,
+                error=f"stage exceeded --stage-timeout={self.stage_timeout}s",
+            )
 
         terminal, structured, error = classify_terminal(result_obj, stderr_tail, returncode)
         if isinstance(result_obj, dict):
@@ -295,16 +325,44 @@ def classify_terminal(
     structured = structured if isinstance(structured, dict) else None
     result_text = result_obj.get("result")
     result_text = result_text if isinstance(result_text, str) else ""
+    # The error variant of the result event has no `result` and no
+    # `structured_output`; its detail lives in an `errors` string array. Without
+    # reading it, every failure detail came out empty or as a bare stderr tail.
+    errors = result_obj.get("errors")
+    error_text = "; ".join(str(e) for e in errors) if isinstance(errors, list) else ""
 
-    error_blob = " ".join(str(x) for x in (subtype, terminal_reason, api_error, result_text, stderr_text))
+    error_blob = " ".join(str(x) for x in (subtype, terminal_reason, api_error, error_text, result_text, stderr_text))
 
     if subtype == "error_max_turns" or terminal_reason == "max_turns":
-        return TERMINAL_MAX_TURNS, structured, "reached max turns before completing the goal"
+        return (
+            TERMINAL_MAX_TURNS,
+            structured,
+            error_text or "reached max turns before completing the goal",
+        )
+
+    # The agent could not produce a schema-conforming verdict within the CLI's
+    # retry budget. The stage work may well be done, so this is recoverable with
+    # --resume-stage rather than a hard failure; the stage check remains the
+    # independent arbiter either way.
+    if subtype == "error_max_structured_output_retries" or terminal_reason == "structured_output_retry_exhausted":
+        return (
+            TERMINAL_BLOCKED,
+            structured,
+            error_text or "agent could not emit a schema-conforming status verdict",
+        )
 
     if is_error or subtype.startswith("error") or api_error:
         if looks_usage_limited(error_blob):
-            return TERMINAL_USAGE_LIMITED, structured, (result_text or stderr_text)[-400:] or "usage/rate limit"
-        return TERMINAL_TURN_FAILED, structured, (result_text or api_error or stderr_text or "turn failed")
+            return (
+                TERMINAL_USAGE_LIMITED,
+                structured,
+                (error_text or result_text or stderr_text)[-400:] or "usage/rate limit",
+            )
+        return (
+            TERMINAL_TURN_FAILED,
+            structured,
+            (error_text or result_text or api_error or stderr_text or "turn failed"),
+        )
 
     # Successful process: trust the agent verdict.
     if structured and structured.get("status") in (TERMINAL_COMPLETE, TERMINAL_BLOCKED):
@@ -417,6 +475,20 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional wall-clock seconds after which a stuck stage is killed (default: no limit).",
     )
+    parser.add_argument(
+        "--check-timeout",
+        type=float,
+        default=1800,
+        help=(
+            "Seconds before a stage check script is killed and treated as a broken "
+            "check (default: 1800). Without this a hung check hangs the pipeline."
+        ),
+    )
+    parser.add_argument(
+        "--claude-config-dir",
+        type=pathlib.Path,
+        help="Sets CLAUDE_CONFIG_DIR for the agent processes (auth/config home).",
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     if args.start_index < 1:
@@ -450,6 +522,38 @@ def replacement_value(replacements: list[tuple[str, str]], name: str) -> str | N
         if old == name:
             value = new
     return value
+
+
+def claude_env(env: dict[str, str], explicit: pathlib.Path | None) -> pathlib.Path:
+    """Pin the agent's auth path and return its config home.
+
+    Unattended bringup runs are hours of high-effort work. An ambient
+    ANTHROPIC_API_KEY takes precedence over the subscription login, so leaving it
+    in the child environment can silently move a whole run onto metered API
+    billing. Mirrors the Codex runner's OPENAI_API_KEY/CODEX_API_KEY hygiene.
+    """
+    env.pop("ANTHROPIC_API_KEY", None)
+    env.pop("ANTHROPIC_AUTH_TOKEN", None)
+    if explicit is not None:
+        home = explicit.expanduser()
+        env["CLAUDE_CONFIG_DIR"] = str(home)
+        return home
+    return pathlib.Path(env.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser()
+
+
+def resolve_claude_bin(explicit: str | None) -> str:
+    """Resolve the CLI up front so a bad binary fails at launch, not hours in."""
+    candidate = explicit or "claude"
+    found = shutil.which(candidate)
+    if found:
+        return found
+    path = pathlib.Path(candidate).expanduser()
+    if path.is_file() and os.access(path, os.X_OK):
+        return str(path)
+    raise SystemExit(
+        f"The claude CLI ({candidate}) was not found on PATH or is not executable. "
+        "Install Claude Code or pass --claude-bin/$CLAUDE_BIN."
+    )
 
 
 def load_prompt(path: pathlib.Path, replacements: list[tuple[str, str]]) -> str:
@@ -607,6 +711,7 @@ def write_manifest_header(
     path: pathlib.Path,
     repo: pathlib.Path,
     claude_bin: str,
+    claude_home: pathlib.Path,
     args: argparse.Namespace,
     replacements: list[tuple[str, str]],
     model_dir: str | None,
@@ -618,6 +723,7 @@ def write_manifest_header(
                 f"started_at_utc={timestamp()}",
                 f"repo={repo}",
                 f"claude_bin={claude_bin}",
+                f"claude_config_dir={claude_home}",
                 f"hf_model={hf_model or ''}",
                 f"model_dir={model_dir or ''}",
                 "runner=claude-code",
@@ -669,11 +775,19 @@ def execute_goal(
     objective: str,
     output_log: pathlib.Path,
     stderr_log: pathlib.Path,
+    on_session_id: Callable[[str], None] | None = None,
 ) -> GoalResult:
-    """Run one objective in a fresh session to a terminal verdict."""
+    """Run one objective in a fresh session to a terminal verdict.
+
+    The session id is reported through ``on_session_id`` BEFORE the agent starts.
+    Recording it only after the goal returns loses the resume anchor whenever the
+    runner or host dies mid-stage - exactly the case --resume-stage exists for.
+    """
     skill_context, _missing = build_skill_context(repo, objective)
     prompt_text = wrap_fresh_prompt(objective, skill_context)
     session_id = str(uuid.uuid4())
+    if on_session_id is not None:
+        on_session_id(session_id)
     return runner.run(prompt_text, output_log, stderr_log, session_id=session_id)
 
 
@@ -736,25 +850,37 @@ def run_check_script(
     repo: pathlib.Path,
     extra_env: dict[str, str],
     check_log: pathlib.Path,
+    check_timeout: float,
 ) -> int:
     env = os.environ.copy()
     env.update(extra_env)
-    result = subprocess.run(
-        ["bash", str(script)],
-        cwd=repo,
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
-    check_log.write_text(result.stdout or "", encoding="utf-8")
-    tail = "\n".join((result.stdout or "").splitlines()[-15:])
-    print(f"check {script.name} exited {result.returncode}; log: {check_log}", file=sys.stderr)
+    try:
+        result = subprocess.run(
+            ["bash", str(script)],
+            cwd=repo,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=check_timeout or None,
+        )
+        output = result.stdout or ""
+        returncode = result.returncode
+    except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout
+        if isinstance(stdout, bytes):
+            stdout = stdout.decode("utf-8", errors="replace")
+        output = (stdout or "") + f"\n[multigoal] check killed after --check-timeout {check_timeout:.0f}s\n"
+        # Outside the 0/1/2 contract, so the gate treats it as a broken check.
+        returncode = CHECK_TIMEOUT_CODE
+    check_log.write_text(output, encoding="utf-8")
+    tail = "\n".join(output.splitlines()[-15:])
+    print(f"check {script.name} exited {returncode}; log: {check_log}", file=sys.stderr)
     if tail:
         print(tail, file=sys.stderr)
-    return result.returncode
+    return returncode
 
 
 def remediation_objective(
@@ -823,12 +949,12 @@ def run_stage_checks(
     code = -1
     for attempt in range(args.check_retries + 1):
         check_log = log_dir / f"{name}.check-{attempt + 1}.log"
-        code = run_check_script(script, repo, extra_env, check_log)
+        code = run_check_script(script, repo, extra_env, check_log, args.check_timeout)
         append_manifest(manifest, [f"{manifest_key_prefix}_check_attempt_{attempt + 1}=exit{code}"])
         if code not in (CHECK_PASS, CHECK_ADVISORY, CHECK_CRITICAL):
             # Broken check or environment: retry once for transients.
             check_log = log_dir / f"{name}.check-{attempt + 1}-retry.log"
-            code = run_check_script(script, repo, extra_env, check_log)
+            code = run_check_script(script, repo, extra_env, check_log, args.check_timeout)
             append_manifest(manifest, [f"{manifest_key_prefix}_check_attempt_{attempt + 1}_retry=exit{code}"])
         if code == CHECK_PASS:
             append_manifest(manifest, [f"{manifest_key_prefix}_check=pass"])
@@ -849,11 +975,16 @@ def run_stage_checks(
         remediation_stderr = log_dir / f"{name}.remediation-{attempt + 1}.stderr.log"
         print(f"\n== Stage {index} remediation {attempt + 1}: check failed (exit {code}) ==", file=sys.stderr)
         print(f"+ log: {remediation_log}", file=sys.stderr)
-        result = execute_goal(runner, repo, objective, remediation_log, remediation_stderr)
-        if result.session_id:
-            append_manifest(
-                manifest, [f"{manifest_key_prefix}_remediation_{attempt + 1}_session_id={result.session_id}"]
-            )
+        result = execute_goal(
+            runner,
+            repo,
+            objective,
+            remediation_log,
+            remediation_stderr,
+            on_session_id=lambda sid: append_manifest(
+                manifest, [f"{manifest_key_prefix}_remediation_{attempt + 1}_session_id={sid}"]
+            ),
+        )
         append_manifest(
             manifest,
             [f"{manifest_key_prefix}_remediation_{attempt + 1}_terminal_status={result.terminal_status}"],
@@ -980,9 +1111,14 @@ def run_stage(
         ],
     )
 
-    result = execute_goal(runner, repo, objective, output_log, stderr_log)
-    if result.session_id:
-        append_manifest(manifest, [f"stage_{index}_session_id={result.session_id}"])
+    result = execute_goal(
+        runner,
+        repo,
+        objective,
+        output_log,
+        stderr_log,
+        on_session_id=lambda sid: append_manifest(manifest, [f"stage_{index}_session_id={sid}"]),
+    )
 
     return _finish_stage(
         runner,
@@ -1062,6 +1198,7 @@ def main() -> int:
     args = parse_args()
     repo = args.repo.expanduser().resolve()
     env = os.environ.copy()
+    claude_home = claude_env(env, args.claude_config_dir)
     default_log_root = pathlib.Path(
         os.environ.get(
             "RUN_MULTIGOAL_LOG_DIR",
@@ -1082,9 +1219,9 @@ def main() -> int:
     )
     if model_dir and replacement_value(replacements, "MODEL_DIR") is None:
         replacements.append(("MODEL_DIR", model_dir))
-    claude_bin = args.claude_bin
+    claude_bin = resolve_claude_bin(args.claude_bin)
     if args.resume_stage is None:
-        write_manifest_header(manifest, repo, claude_bin, args, replacements, model_dir)
+        write_manifest_header(manifest, repo, claude_bin, claude_home, args, replacements, model_dir)
     elif model_dir and not manifest_values.get("model_dir"):
         append_manifest(manifest, [f"model_dir={model_dir}"])
 
