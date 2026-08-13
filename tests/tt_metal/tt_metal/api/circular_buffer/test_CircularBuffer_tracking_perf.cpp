@@ -700,6 +700,113 @@ TEST_F(UnitMeshCQSingleCardTraceFixture, TensixCircularBufferTrackingAcrossTrace
     }
 }
 
+// The per-core CB footprint is computed once per program and cached (ProgramImpl::
+// cb_bytes_per_core), and a re-dispatch of the program that is already resident is skipped by
+// comparing footprint identity -- without that, the enqueue path paid per-core work on every
+// dispatch (~80 ns/core, which doubled host dispatch cost on a full grid).
+//
+// Both halves of that can go stale, and neither is visible to the tests above, which dispatch
+// each program once:
+//   - alternating programs: the identity check must not report the previously resident program
+//   - resizing a CB: the cache must be dropped when the layout it was computed from is
+//     invalidated, or the figure is pinned to the old size forever
+TEST_F(UnitMeshCQSingleCardProgramFixture, TensixCircularBufferTrackingFollowsProgramChanges) {
+    for (auto& mesh_device : this->devices_) {
+        auto* device = dynamic_cast<Device*>(mesh_device->get_devices().at(0));
+        ASSERT_NE(device, nullptr);
+        if (device->get_shm_stats_provider() == nullptr) {
+            GTEST_SKIP() << "SHM tracking disabled";
+        }
+
+        const CoreCoord grid = device->compute_with_storage_grid_size();
+        const CoreRange cr(CoreCoord(0, 0), CoreCoord(grid.x - 1, grid.y - 1));
+        const CoreRangeSet cr_set({cr});
+        const CBConfig cb_config;
+        const uint32_t num_cores = grid.x * grid.y;
+        auto zero = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero, zero);
+        auto& cq = mesh_device->mesh_command_queue();
+
+        // Two programs of different CB size on the same cores, plus the handle of one of A's
+        // CBs so we can resize it later.
+        std::vector<CBHandle> a_handles;
+        auto make_workload = [&](uint32_t mult, std::vector<CBHandle>* handles, uint64_t& bytes_per_core) {
+            auto workload = std::make_shared<distributed::MeshWorkload>();
+            Program p;
+            workload->add_program(device_range, std::move(p));
+            auto& prog = workload->get_programs().at(device_range);
+            bytes_per_core = 0;
+            for (uint32_t cb_id = 0; cb_id < 2; cb_id++) {
+                const uint32_t total_size = cb_config.page_size * mult;
+                CircularBufferConfig config = CircularBufferConfig(total_size, {{cb_id, cb_config.data_format}})
+                                                  .set_page_size(cb_id, cb_config.page_size);
+                const CBHandle handle = CreateCircularBuffer(prog, cr_set, config);
+                if (handles != nullptr) {
+                    handles->push_back(handle);
+                }
+                bytes_per_core += total_size;
+            }
+            initialize_program(prog, cr_set);
+            return workload;
+        };
+
+        uint64_t a_bytes_per_core = 0;
+        uint64_t b_bytes_per_core = 0;
+        auto workload_a = make_workload(1, &a_handles, a_bytes_per_core);
+        auto workload_b = make_workload(4, nullptr, b_bytes_per_core);
+        ASSERT_NE(a_bytes_per_core, b_bytes_per_core);
+
+        auto dispatch = [&](distributed::MeshWorkload& workload) {
+            distributed::EnqueueMeshWorkload(cq, workload, false);
+            distributed::Finish(cq);
+            return device->get_total_cb_allocated();
+        };
+
+        // Unlike the tests above, this one dispatches several times, so the device's CB config
+        // table cannot be used as the oracle: the helper reads the address reported by
+        // ProgramImpl::get_cb_base_addr, which is the static KERNEL_CONFIG base rather than the
+        // rotating config slot the dispatcher actually wrote (program_base_addr_on_core takes
+        // get_last_slot_addr only on the MeshWorkloadImpl path). After the ring has rotated, that
+        // address holds a previous program's config. The sum of the program's own CB sizes is an
+        // unambiguous expectation here, and the single-dispatch tests above cover the device.
+        //
+        // A, then B, then A again. The last one is the interesting one: the footprint A is
+        // being asked to record is no longer the one resident, even though A was resident
+        // two dispatches ago.
+        EXPECT_EQ(dispatch(*workload_a), a_bytes_per_core * num_cores) << "first dispatch of A";
+        EXPECT_EQ(dispatch(*workload_b), b_bytes_per_core * num_cores) << "dispatch of B did not displace A";
+        const uint64_t back_to_a = dispatch(*workload_a);
+        EXPECT_EQ(back_to_a, a_bytes_per_core * num_cores)
+            << "re-dispatching A after B still reports B's footprint; the cached per-program "
+               "footprint is being treated as resident when it is not";
+
+        auto& program_a = workload_a->get_programs().at(device_range);
+
+        // Now resize one of A's circular buffers and dispatch it again. The cached footprint was
+        // computed from the old layout and must have been dropped when the CB allocation was
+        // invalidated.
+        const uint32_t grown = cb_config.page_size * 8;
+        UpdateCircularBufferTotalSize(program_a, a_handles.at(0), grown);
+        const uint64_t expected_after_resize = grown + cb_config.page_size;  // resized CB + the other one
+        const uint64_t after_resize = dispatch(*workload_a);
+
+        log_info(
+            tt::LogTest,
+            "device {}: A={} B={} A-again={} A-after-resize={} (expected {}, {} cores)",
+            device->id(),
+            a_bytes_per_core * num_cores,
+            b_bytes_per_core * num_cores,
+            back_to_a,
+            after_resize,
+            expected_after_resize * num_cores,
+            num_cores);
+
+        EXPECT_EQ(after_resize, expected_after_resize * num_cores)
+            << "resizing a circular buffer did not move the reported total; the footprint cached "
+               "from the previous layout was not invalidated";
+    }
+}
+
 // Ground truth for the NON-CB columns. Everything else in this file validates circular
 // buffer accounting; DRAM / L1 / L1_SMALL / TRACE come from a different mechanism (the
 // GraphTracker buffer alloc/dealloc path) and had never been checked against anything.

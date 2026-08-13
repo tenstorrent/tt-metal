@@ -531,9 +531,9 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         // Telemetry: this program's circular buffer config is about to be written to L1,
         // so record its CB footprint as what is now resident on those cores. Doing it here
         // rather than at program registration is what makes the reported figure "in use
-        // now" instead of a high-water mark over every cached program -- and it costs
-        // O(CBs in this program) instead of O(all live programs). No-op when SHM tracking
-        // is disabled.
+        // now" instead of a high-water mark over every cached program. The footprint is
+        // cached on the program, so re-dispatching the resident program is a pointer
+        // comparison. No-op when SHM tracking is disabled.
         for_each_local(mesh_device_, device_range, [&](const MeshCoordinate& coord) {
             if (auto* device = dynamic_cast<Device*>(mesh_device_->impl().get_device(coord))) {
                 device->record_dispatched_program_cbs(program.impl());

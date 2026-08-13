@@ -196,9 +196,9 @@ public:
     // is correct -- their L1 CB config was not overwritten.
     void record_dispatched_program_cbs(const detail::ProgramImpl& program);
 
-    // A program's CB footprint per logical core. Device-independent: the CB layout is a
-    // property of the program, not of the device it runs on. Exposed so that trace
-    // capture can accumulate the footprint a trace will produce.
+    // Accumulate a program's CB footprint into `per_core`. Used by trace capture to build up
+    // the footprint a whole trace will produce; later programs overwrite earlier ones on
+    // shared cores, matching what the replayed command stream does to L1.
     static void compute_program_cb_bytes_per_core(
         const detail::ProgramImpl& program, std::map<CoreCoord, uint64_t>& per_core);
 
@@ -302,10 +302,25 @@ private:
 
     // Program tracking for CB memory reporting
 
+    // Merge `per_core` into cb_bytes_per_core_ and update total_cb_resident_. Returns whether
+    // the total moved, i.e. whether there is anything to publish. Caller holds
+    // cb_residency_mutex_; publishing is done outside it.
+    bool apply_cb_residency_locked(const std::map<CoreCoord, uint64_t>& per_core);
+
+    // Push the current CB total to shared memory. Must be called without cb_residency_mutex_.
+    void publish_cb_residency();
+
     // CB bytes resident per core, keyed by logical core, updated on dispatch.
     mutable std::mutex cb_residency_mutex_;
     std::map<CoreCoord, uint64_t> cb_bytes_per_core_;
+    // Kept in step with cb_bytes_per_core_ incrementally, under cb_residency_mutex_. Re-summing
+    // the whole map per dispatch made the enqueue path scale with the program's grid.
     std::atomic<uint64_t> total_cb_resident_{0};
+    // The program footprint last applied to this device, or null if the residency was last set
+    // by something other than a program dispatch (trace replay). Holding the shared_ptr keeps
+    // the object alive, so its address cannot be recycled by a later footprint while it is
+    // still the one being compared against.
+    std::shared_ptr<const std::map<CoreCoord, uint64_t>> last_cb_footprint_;
 
     // Friend declaration for experimental API
     friend uint32_t experimental::Device::get_worker_noc_hop_distance(

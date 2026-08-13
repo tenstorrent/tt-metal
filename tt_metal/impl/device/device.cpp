@@ -1110,9 +1110,35 @@ void Device::record_dispatched_program_cbs(const detail::ProgramImpl& program) {
     if (shm_stats_provider_ == nullptr) {
         return;
     }
-    std::map<CoreCoord, uint64_t> per_core;
-    compute_program_cb_bytes_per_core(program, per_core);
-    apply_cb_residency(per_core);
+
+    // The footprint is a property of the program, computed once and cached there, so this is a
+    // shared_ptr copy rather than a walk of the program's circular buffers.
+    std::shared_ptr<const std::map<CoreCoord, uint64_t>> footprint = program.cb_bytes_per_core();
+    if (footprint == nullptr) {
+        // No locally-allocated CBs: dispatching this program overwrites no CB config, so what
+        // is resident does not change.
+        return;
+    }
+
+    bool changed = false;
+    {
+        std::lock_guard<std::mutex> lock(cb_residency_mutex_);
+        // Fast path: this exact footprint is already the one resident on this device, and
+        // nothing has been applied since (anything else that touches the residency clears
+        // last_cb_footprint_). So the per-core state and the total cannot have moved, and there
+        // is nothing to publish. Steady-state execution re-dispatches the same program over and
+        // over, which makes this the common case -- and it is what keeps the enqueue path from
+        // paying per-core work on every dispatch.
+        if (last_cb_footprint_ == footprint) {
+            return;
+        }
+        changed = apply_cb_residency_locked(*footprint);
+        last_cb_footprint_ = std::move(footprint);
+    }
+
+    if (changed) {
+        publish_cb_residency();
+    }
 }
 
 void Device::apply_cb_residency(const std::map<CoreCoord, uint64_t>& per_core) {
@@ -1122,16 +1148,31 @@ void Device::apply_cb_residency(const std::map<CoreCoord, uint64_t>& per_core) {
     bool changed = false;
     {
         std::lock_guard<std::mutex> lock(cb_residency_mutex_);
-        for (const auto& [core, bytes] : per_core) {
-            cb_bytes_per_core_[core] = bytes;
-        }
-        uint64_t total = 0;
-        for (const auto& [core, bytes] : cb_bytes_per_core_) {
-            total += bytes;
-        }
-        changed = total != total_cb_resident_.exchange(total, std::memory_order_relaxed);
+        changed = apply_cb_residency_locked(per_core);
+        // The residency is no longer described by a program footprint, so a later dispatch of
+        // the program that was resident before must not take the fast path above.
+        last_cb_footprint_.reset();
     }
 
+    if (changed) {
+        publish_cb_residency();
+    }
+}
+
+bool Device::apply_cb_residency_locked(const std::map<CoreCoord, uint64_t>& per_core) {
+    // Maintain the total incrementally instead of re-summing cb_bytes_per_core_: this runs on
+    // the enqueue path, and a full re-sum made its cost scale with the number of cores the
+    // device has ever had circular buffers on.
+    uint64_t total = total_cb_resident_.load(std::memory_order_relaxed);
+    for (const auto& [core, bytes] : per_core) {
+        auto [slot, inserted] = cb_bytes_per_core_.try_emplace(core, 0);
+        total = total - slot->second + bytes;
+        slot->second = bytes;
+    }
+    return total != total_cb_resident_.exchange(total, std::memory_order_relaxed);
+}
+
+void Device::publish_cb_residency() {
     // Publish to shared memory only when the figure actually changed. Steady-state
     // execution re-dispatches the same programs over and over, so the CB footprint is
     // usually identical to the last dispatch and there is nothing to publish. Publishing
@@ -1140,52 +1181,18 @@ void Device::apply_cb_residency(const std::map<CoreCoord, uint64_t>& per_core) {
     // This is deliberately NOT a rate limit: a rate limiter drops the final update and
     // never retries it, leaving a stale figure in shared memory forever once a workload
     // goes idle. Publishing on change is both cheaper and always eventually correct.
-    // Done outside the lock -- the provider never takes cb_residency_mutex_.
-    if (changed) {
-        shm_stats_provider_->update_from_allocator(this, getpid());
-    }
+    // Called outside cb_residency_mutex_ -- the provider never takes it.
+    shm_stats_provider_->update_from_allocator(this, getpid());
 }
 
 void Device::compute_program_cb_bytes_per_core(
     const detail::ProgramImpl& program, std::map<CoreCoord, uint64_t>& per_core) {
-    // Only locally-allocated CBs are counted here. Globally-allocated CBs are backed by
-    // real L1 Buffers and are already tracked through the buffer path (the L1 column).
-    for (const CoreRange& core_range : program.circular_buffers_unique_coreranges()) {
-        std::vector<std::pair<uint64_t, uint64_t>> regions;
-        for (const auto& cb : program.circular_buffers_on_corerange(core_range)) {
-            if (cb->globally_allocated()) {
-                continue;
-            }
-            const uint64_t start = cb->address();
-            regions.emplace_back(start, start + cb->size());
-        }
-        if (regions.empty()) {
-            continue;
-        }
-
-        // Merge overlapping ranges: CBs sharing a core may reuse addresses, and we want
-        // physical bytes occupied, not the sum of CB sizes.
-        std::sort(regions.begin(), regions.end());
-        std::vector<std::pair<uint64_t, uint64_t>> merged{regions.front()};
-        for (size_t i = 1; i < regions.size(); i++) {
-            auto& last = merged.back();
-            if (regions[i].first <= last.second) {
-                last.second = std::max(last.second, regions[i].second);
-            } else {
-                merged.push_back(regions[i]);
-            }
-        }
-        uint64_t bytes = 0;
-        for (const auto& [start, end] : merged) {
-            bytes += end - start;
-        }
-
-        // Every core in this range holds this program's CB config once it is dispatched.
-        for (uint32_t x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
-            for (uint32_t y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-                per_core[CoreCoord(x, y)] = bytes;
-            }
-        }
+    const std::shared_ptr<const std::map<CoreCoord, uint64_t>> footprint = program.cb_bytes_per_core();
+    if (footprint == nullptr) {
+        return;
+    }
+    for (const auto& [core, bytes] : *footprint) {
+        per_core[core] = bytes;
     }
 }
 

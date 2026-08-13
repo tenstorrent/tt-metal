@@ -1401,6 +1401,12 @@ std::vector<CoreRange> detail::ProgramImpl::circular_buffers_unique_coreranges()
 }
 
 void detail::ProgramImpl::invalidate_circular_buffer_allocation() {
+    // Drop the cached CB footprint unconditionally, before the early return below: the
+    // addresses it was computed from are about to be reassigned. Every mutation that can move
+    // or resize a locally-allocated CB routes through here (add_circular_buffer_,
+    // UpdateCircularBufferTotalSize), which is what keeps the cache honest.
+    this->cb_bytes_per_core_.reset();
+
     if (this->local_circular_buffer_allocation_needed_) {
         return;
     }
@@ -1408,6 +1414,64 @@ void detail::ProgramImpl::invalidate_circular_buffer_allocation() {
         cb_allocator.reset_available_addresses();
     }
     this->local_circular_buffer_allocation_needed_ = true;
+}
+
+std::shared_ptr<const std::map<CoreCoord, uint64_t>> detail::ProgramImpl::cb_bytes_per_core() const {
+    if (this->cb_bytes_per_core_ != nullptr) {
+        return this->cb_bytes_per_core_;
+    }
+
+    auto per_core = std::make_shared<std::map<CoreCoord, uint64_t>>();
+    for (const CoreRange& core_range : this->circular_buffers_unique_coreranges()) {
+        // Only locally-allocated CBs are counted here. Globally-allocated CBs are backed by
+        // real L1 Buffers and are already tracked through the buffer path (the L1 column).
+        std::vector<std::pair<uint64_t, uint64_t>> regions;
+        for (const auto& cb : this->circular_buffers_on_corerange(core_range)) {
+            if (cb->globally_allocated()) {
+                continue;
+            }
+            const uint64_t start = cb->address();
+            regions.emplace_back(start, start + cb->size());
+        }
+        if (regions.empty()) {
+            continue;
+        }
+
+        // Merge overlapping ranges: CBs sharing a core may reuse addresses, and we want
+        // physical bytes occupied, not the sum of CB sizes.
+        std::sort(regions.begin(), regions.end());
+        std::vector<std::pair<uint64_t, uint64_t>> merged{regions.front()};
+        for (size_t i = 1; i < regions.size(); i++) {
+            auto& last = merged.back();
+            if (regions[i].first <= last.second) {
+                last.second = std::max(last.second, regions[i].second);
+            } else {
+                merged.push_back(regions[i]);
+            }
+        }
+        uint64_t bytes = 0;
+        for (const auto& [start, end] : merged) {
+            bytes += end - start;
+        }
+
+        // Every core in this range holds this program's CB config once it is dispatched.
+        // circular_buffers_unique_coreranges() returns non-overlapping ranges, so no core is
+        // written twice here.
+        for (uint32_t x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+            for (uint32_t y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
+                (*per_core)[CoreCoord(x, y)] = bytes;
+            }
+        }
+    }
+
+    if (per_core->empty()) {
+        // No locally-allocated CBs. Left uncached: it is cheap to redo, and caching it would
+        // hand out an identity that claims this program is what is resident on the cores it
+        // covers, which it is not -- dispatching it overwrites nothing.
+        return nullptr;
+    }
+    this->cb_bytes_per_core_ = std::move(per_core);
+    return this->cb_bytes_per_core_;
 }
 
 // Scratchpad is a Metal 2.0-only construct.
