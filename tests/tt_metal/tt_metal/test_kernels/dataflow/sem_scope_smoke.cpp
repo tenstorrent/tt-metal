@@ -4,7 +4,7 @@
 
 // SemScope smoke kernel: a single DM thread up()s sem::counter increment_times, reads it back
 // with value(), and reports the result to a scratch L1 word for the host to check. Scope is
-// host-baked and picked up via CTAD, so the same source runs under EXTERNAL, DM_LOCAL_CACHED,
+// host-picked (invisible table), so the same source runs under EXTERNAL, DM_LOCAL_CACHED,
 // or LOCAL_NONATOMIC.
 
 #include "api/dataflow/dataflow_api.h"
@@ -16,10 +16,22 @@ void kernel_main() {
     const uint32_t increment_times = get_arg(args::increment_times);
 
     // A DM_LOCAL_CACHED semaphore's pool slot is seeded by the auto-injected sem::init_dm_cached().
-    Semaphore s(sem::counter);  // CTAD deduces the host-baked scope
+    Semaphore s(sem::counter);  // mechanism comes from the host's scope table
+#if defined(SEM_SCOPE_SENTINEL_DOWN)
+    // Exercise EXTERNAL down()'s sentinel escape hatch: with the word AT the 0xFFFFFFFF
+    // CAS-return sentinel, the subtract's pre-op return is indistinguishable from the sentinel,
+    // so the bounded poll inside the lock must give up instead of wedging -- and the SECOND
+    // down(1) proves the ret slot and lock survived for the next acquire. set() is the
+    // documented init/reset store. (void)increment_times: this mode takes no up() loop.
+    (void)increment_times;
+    s.set(0xFFFFFFFFu);
+    s.down(1);
+    s.down(1);  // expect value 0xFFFFFFFD reported below
+#else
     for (uint32_t i = 0; i < increment_times; i++) {
         s.up(1);
     }
+#endif
 #if defined(SEM_SCOPE_UPDOWN)
     // Exercise down() per scope (EXTERNAL uses the atomic NoC decrement). Single
     // writer: up(N) then down(N) must leave the semaphore at 0.

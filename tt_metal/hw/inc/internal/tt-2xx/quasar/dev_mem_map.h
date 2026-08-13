@@ -203,10 +203,14 @@
 // from the NoC-written kernel_config ring (which starts at MEM_MAP_END). Whole, aligned 64B
 // cache lines, so a DM cached-AMO's write-back line can never overlap any word written over
 // the NoC / uncached alias -> no cross-domain clobber by construction. Sized to
-// NUM_SEMAPHORES=16 slots * L1_ALIGNMENT=16B = 256B, indexed by the semaphore's normal id.
+// NUM_SEMAPHORES=16 rows * 8B = 128B, indexed by the semaphore's normal id.
+// Row layout: [0]=counter, [1]=protocol word for the generated entry/exit stubs' seed-once
+// protocol -- entered[15:0] (amoadd +1), exited[30:16] (amoadd +0x10000), seeded[31] (amoor).
+// Boot-zeroed by dm.cc, self-restored per program by the last binder hart's single store of 0.
 // See tt_metal/hw/inc/api/dataflow/noc_semaphore.h (DM_LOCAL_CACHED routing).
 #define MEM_DM_CACHED_SEM_BASE (MEM_NOC_SEM_LOCK_BASE + MEM_NOC_SEM_LOCK_SIZE)
-#define MEM_DM_CACHED_SEM_SIZE 256  // 16 semaphores * 16B; keep >= NUM_SEMAPHORES * L1_ALIGNMENT
+#define MEM_DM_CACHED_SEM_ROW 8
+#define MEM_DM_CACHED_SEM_SIZE 128  // keep >= NUM_SEMAPHORES * MEM_DM_CACHED_SEM_ROW
 // Guard size edits: all three regions must stay whole, 64B-aligned cache lines.
 #if (MEM_NOC_CAS_RET_SIZE % 64 != 0) || (MEM_NOC_SEM_LOCK_SIZE % 64 != 0) || (MEM_DM_CACHED_SEM_BASE % 64 != 0) || \
     (MEM_DM_CACHED_SEM_SIZE % 64 != 0)

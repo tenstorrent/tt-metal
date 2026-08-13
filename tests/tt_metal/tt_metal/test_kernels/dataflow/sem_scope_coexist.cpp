@@ -6,7 +6,7 @@
 // DM_LOCAL_CACHED semaphore (pool, cached RISC-V AMO) and an EXTERNAL semaphore
 // (kernel_config ring, NoC atomic). The pool is physically disjoint from the ring, so the
 // cached sem's dirty-line write-back can't clobber the NoC-written ring word (or vice
-// versa); both final counts must be exact. Scopes are host-baked (CTAD). Quasar-only.
+// versa); both final counts must be exact. Scopes are host-picked (invisible table). Quasar-only.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc_semaphore.h"
@@ -26,8 +26,8 @@ void kernel_main() {
     const uint32_t num_threads = get_arg(args::num_threads);
 
     // sem::cached's pool slot is seeded by the auto-injected sem::init_dm_cached().
-    Semaphore cached(sem::cached);      // CTAD -> DM_LOCAL_CACHED (pool, cached AMO)
-    Semaphore external(sem::external);  // CTAD -> EXTERNAL (ring, NoC atomic)
+    Semaphore cached(sem::cached);      // host-picked DM_LOCAL_CACHED (pool, cached AMO)
+    Semaphore external(sem::external);  // host-picked EXTERNAL (ring, NoC atomic)
     Semaphore done(sem::done);          // EXTERNAL: cross-thread completion barrier
 
     // Interleave both semaphores so the pool AMOs and ring NoC atomics are maximally concurrent.
@@ -43,5 +43,9 @@ void kernel_main() {
         done.wait_min(num_threads);
         report_value(report_addr, cached.value());                       // expect num_threads * increment_times
         report_value(report_addr + sizeof(uint32_t), external.value());  // expect num_threads * increment_times
+        // Baked mechanisms, so the census can't silently demote the pool/ring split while
+        // the counts (exact under any atomic tier) keep the test green.
+        report_value(report_addr + 2 * sizeof(uint32_t), static_cast<uint32_t>(sem_scope_of(sem::cached)));
+        report_value(report_addr + 3 * sizeof(uint32_t), static_cast<uint32_t>(sem_scope_of(sem::external)));
     }
 }

@@ -54,6 +54,7 @@
 #endif
 
 #include "impl/kernels/kernel.hpp"
+#include "jit_build/jit_build_settings.hpp"
 #include "impl/program/program_impl.hpp"
 #include "jit_build/jit_build_utils.hpp"  // format_named_ct_arg_map (shared with the silicon JIT path)
 #include "impl/buffers/circular_buffer.hpp"
@@ -581,10 +582,9 @@ struct Metal2BindingsSnapshot {
             s += ":dfb:" + name + "=" + std::to_string(id);
         }
         for (const auto& [name, h] : sem_accessors) {
-            // Fold the baked scope and access too: same id under a different scope or access
-            // compiles a different token and must not reuse the first kernel's .so.
-            s += ":sem:" + name + "=" + std::to_string(h.id) + "@" + std::to_string(static_cast<int>(h.scope)) + ":a" +
-                 std::to_string(static_cast<int>(h.access));
+            // Fold the baked scope too: same id under a different scope compiles a different
+            // scope table and must not reuse the first kernel's .so.
+            s += ":sem:" + name + "=" + std::to_string(h.id) + "@" + std::to_string(static_cast<int>(h.scope));
         }
         for (const auto& ta : ta_accessors) {
             s += ":ta:" + ta.name + "=" + std::to_string(ta.cta_offset) + "," +
@@ -802,8 +802,8 @@ static Metal2BindingsSnapshot build_metal2_snapshot(const tt::tt_metal::Kernel& 
     kernel.process_dataflow_buffer_binding_handles(
         [&s](const std::string& name, uint16_t id) { s.dfb_accessors[name] = id; });
     kernel.process_semaphore_binding_handles(
-        [&s](const std::string& name, uint16_t id, SemScope scope, SemAccess access, bool external_multi_consumer) {
-            s.sem_accessors[name] = {id, scope, access, external_multi_consumer};
+        [&s](const std::string& name, uint16_t id, SemScope scope, uint32_t total_binder_harts) {
+            s.sem_accessors[name] = {id, scope, total_binder_harts};
         });
     kernel.process_tensor_binding_handles(
         // Match the genfiles.cpp pattern: drop num_runtime_field_crta_words. Emule's
@@ -843,15 +843,21 @@ static void emit_metal2_namespaces(
     const std::unordered_map<std::string, uint32_t>& named_compile_args) {
     const bool has_args =
         !s.runtime_arg_names.empty() || !s.common_runtime_arg_names.empty() || !named_compile_args.empty();
+    std::vector<tt::tt_metal::SemBindingEntry> sem_entries;
+    sem_entries.reserve(s.sem_accessors.size());
+    for (const auto& [name, h] : s.sem_accessors) {
+        sem_entries.push_back({name, h.id, h.scope});
+    }
+    if (!sem_entries.empty()) {
+        // Scope table FIRST -- shared emission with genfiles.cpp (emit_sem_scope_table), so the
+        // two backends' text cannot drift.
+        tt::tt_metal::emit_sem_scope_table(f, sem_entries, tt::tt_metal::NUM_SEMAPHORES);
+    }
     if (has_args) {
         f << "#include \"experimental/kernel_args.h\"\n";
     }
     if (!s.dfb_accessors.empty()) {
         f << "#include \"api/dataflow/dataflow_buffer.h\"\n";
-    }
-    if (!s.sem_accessors.empty()) {
-        // SemaphoreBindingToken<Id, SemScope, SemAccess> token header (pulls in both enums); see genfiles.cpp.
-        f << "#include \"api/dataflow/semaphore_binding_token.h\"\n";
     }
     if (!s.ta_accessors.empty()) {
         f << "#include \"api/tensor/tensor_binding_token.h\"\n";
@@ -900,16 +906,12 @@ static void emit_metal2_namespaces(
         }
         f << "}  // namespace dfb\n";
     }
-    if (!s.sem_accessors.empty()) {
-        // Emit each bound semaphore as a SemaphoreBindingToken<id, scope, access> (see
-        // genfiles.cpp). Backend-capability refusals live in collect_kernels, not here:
-        // this emitter runs only on a JIT-cache miss.
-        f << "namespace sem {\n";
-        for (const auto& [name, h] : s.sem_accessors) {
-            f << "constexpr ::SemaphoreBindingToken<" << h.id << "u, static_cast<::SemScope>("
-              << static_cast<int>(h.scope) << "), static_cast<::SemAccess>(" << static_cast<int>(h.access) << ")> "
-              << name << "{};\n";
-        }
+    if (!sem_entries.empty()) {
+        // Each bound semaphore is its plain id; the mechanism travels in the scope table above.
+        // Backend-capability refusals live in collect_kernels, not here: this emitter runs only
+        // on a JIT-cache miss. Shared emission with genfiles.cpp; the helper leaves the
+        // namespace open (emule injects no seeder, so close it right away).
+        tt::tt_metal::emit_sem_ids_and_tripwires(f, sem_entries);
         f << "}  // namespace sem\n";
     }
     if (!s.ta_accessors.empty()) {
@@ -1764,18 +1766,13 @@ static void collect_kernels(
             for (const auto& [sem_name, h] : bindings.sem_accessors) {
                 TT_FATAL(
                     h.scope != SemScope::DM_LOCAL_CACHED,
-                    "Semaphore '{}' resolved to DM_LOCAL_CACHED, which the emule backend does not model (it "
-                    "emits no pool seeder and seeds only the kernel_config ring). Force SemaphoreScope::EXTERNAL "
-                    "or LOCAL_NONATOMIC for this semaphore when running under emule.",
+                    "Internal error: semaphore '{}' resolved to DM_LOCAL_CACHED under emule, but the emule "
+                    "backend does not model the cached pool (no seeder is emitted); the classifier "
+                    "(ResolveSemaphoreScope) must never pick the cached tier for this backend.",
                     sem_name);
-                // The instance count is a deliberately conservative per-binding over-approximation
-                // (cores x threads per CONSUME binding); the refusal is loud and states the workaround.
-                TT_FATAL(
-                    !(h.scope == SemScope::EXTERNAL && h.external_multi_consumer),
-                    "Semaphore '{}' is EXTERNAL with more than one consuming (down()) instance, but the "
-                    "emule backend compiles the single-consumer Gen1 down() arm -- results would be "
-                    "silently wrong. Restructure to one consumer under emule, or run on real Quasar.",
-                    sem_name);
+                // KNOWN LIMIT: emule compiles the single-consumer Gen1 down() arm for EXTERNAL
+                // (see the down() doc block); a multi-consumer down() under emule is the user's
+                // responsibility.
             }
             const std::string metal2_key_suffix = bindings.cache_key_suffix();
 
