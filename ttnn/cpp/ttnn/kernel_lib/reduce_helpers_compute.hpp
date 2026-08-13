@@ -153,6 +153,74 @@ enum class ReduceInputPolicy { WaitAndPopPerTile, BulkWaitBulkPop, WaitUpfrontNo
 enum class ReduceAlgorithm { Auto, ReduceTile, AccumulateViaAdd };
 
 /**
+ * @brief Whether AccumulateViaAdd runs the WITHIN-TILE collapse at the end of the reduction.
+ *
+ * CONTRACT — Skip is valid ONLY with `ReduceAlgorithm::AccumulateViaAdd` and `PoolType::SUM`.
+ * Both are asserted. Note `ReduceAlgorithm::Auto` resolves to ReduceTile, so `Auto` + `Skip` does NOT
+ * compile: request AccumulateViaAdd EXPLICITLY. AVG and MAX are both rejected — see below for AVG; MAX
+ * because the accumulate datapath's cross-tile step is an add, so "skip the collapse" has no meaning for
+ * a max reduction.
+ *
+ * AccumulateViaAdd is two distinct steps: (1) sum the reduce-dim TILES into one DST register with pairwise
+ * add_tiles(acc_to_dest), then (2) collapse the 32 lanes INSIDE that tile with sfpu_reduce. Step (2) is only
+ * needed when the inputs carry real data across the reduce axis.
+ *
+ * Skip is for inputs that are ALREADY collapsed on that axis — the classic case is summing per-core PARTIALS
+ * that each came out of an earlier reduce<..., REDUCE_ROW> and are therefore column-0-valid. The sum of
+ * column-0-valid tiles is column-0-valid, so the sfpu_reduce would be a no-op over 31 garbage lanes. Skipping
+ * it removes an SFPU pass per output tile.
+ *
+ * With Skip, DST holds the raw cross-tile SUM and `post_reduce_op` still runs on it (so a caller 1/N, eps-add
+ * or rsqrt composes exactly as before). AVG is rejected: its 1/N is derived from tile geometry, which only
+ * means anything once the axis has actually been collapsed — use SUM plus a post_reduce_op.
+ *
+ * ReduceTile cannot express Skip: there the reduce_tile matmul-with-ones IS the collapse, so there is nothing
+ * to skip (asserted).
+ */
+enum class ReduceWithinTile { Collapse, Skip };
+
+/*
+ * SUMMING TILES THAT ARE ALREADY REDUCED (the cross-core combine) — two ways, NEITHER of which
+ * needs a tile of zeros.
+ *
+ * The situation: each core produced a partial with reduce<SUM, REDUCE_ROW> (so it is column-0-valid),
+ * the partials have been gathered, and you now want their sum. It is tempting to reach for a BinaryFpu
+ * whose B operand is a zero tile, because BinaryFpu takes TWO CB inputs and you only have one stream.
+ * Do not — the zero tile has to be filled, and that fill is never free.
+ *
+ * (1) THIS HELPER. `reduce<SUM, ..., ReduceAlgorithm::AccumulateViaAdd, ..., ReduceWithinTile::Skip>`
+ *     sums the tiles and skips the within-tile collapse they do not need. Prefer this when the shape
+ *     fits a ReduceInputBlockShape.
+ *
+ * (2) A RAW PAIRWISE CHAIN, when you want the fold inline in an eltwise_chain. Point BOTH operands at
+ *     the SAME CB and offset the second by half the run: step i then computes `x[i] + x[i + N/2]`, and
+ *     DestAccumulation sums those N/2 pair-sums into one DEST — the N-way total, in N/2 FPU steps,
+ *     with no identity operand:
+ *
+ *         constexpr uint32_t HALF = N / 2;              // N = tiles to sum; N must be EVEN
+ *         ckl::eltwise_chain(
+ *             ckl::EltwiseShape::tiles(HALF),
+ *             ckl::BinaryFpu<
+ *                 ckl::input(cb_in, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Block),
+ *                 ckl::input(cb_in, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Block,
+ *                            ckl::TileOffset::Set),
+ *                 ckl::BinaryFpuOp::Add,
+ *                 ckl::BroadcastDim::None,
+ *                 ckl::Dst::D0,
+ *                 ckl::DestAccumulation::WholeShape>{0, HALF},   // <- the two operand BASES
+ *             ckl::PackTile<ckl::output(cb_out, ckl::ReservePolicy::PerOuter, ckl::PushPolicy::PerOuter,
+ *                                       ckl::DataFormatReconfig::Enabled, ckl::PackRelu::Disabled,
+ *                                       ckl::L1Accumulation::Disabled,
+ *                                       ckl::DestAccumulation::WholeShape)>{});
+ *
+ *     `{0, HALF}` are the A and B operand base offsets — that brace pair is the whole trick, and it is
+ *     the same idiom the `eltwise_l1_vs_dest_accumulate` example measures. `tiles(...)` is one
+ *     contiguous shape, so the accumulation scope is WholeShape (PerRow is rejected there); for a 2D
+ *     walk use `grid(H, W)` with `TileOffset::Strided` and a `StridedTileRange{base, row_stride}` per
+ *     operand. ODD N does not tile into halves — fall back to (1), or handle the leftover separately.
+ */
+
+/**
  * @brief How AccumulateViaAdd's cross-call Accumulate folds the running accumulator (cb_accumulator) with a
  * later chunk's new tiles. Only affects AccumulateViaAdd + Accumulate later chunks (ignored for the first
  * chunk / NoAccumulation / ReduceTile).
@@ -533,7 +601,8 @@ template <
     ReduceFp32Mode fp32_mode = ReduceFp32Mode::Fast,
     ReduceAlgorithm algorithm = ReduceAlgorithm::Auto,
     typename AccumulateT = NoAccumulation,
-    typename PostReduceOp = NoOp>
+    typename PostReduceOp = NoOp,
+    ReduceWithinTile within_tile = ReduceWithinTile::Collapse>
 ALWI void reduce(
     ReduceInputBlockShape input_block_shape,
     ReduceInputMemoryLayout input_memory_layout = ReduceInputMemoryLayout::contiguous(),
