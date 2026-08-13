@@ -1,0 +1,6 @@
+2026-08-13 server command used --model-dir models/autoports/tiiuae_falcon3_7b_base
+API server config chat_template=models/autoports/tiiuae_falcon3_7b_base/doc/vllm_integration/base_chat_template.jinja
+TT vLLM backend generator=models.autoports.tiiuae_falcon3_7b_base.tt.generator_vllm
+Weight-cache paths observed under models/autoports/tiiuae_falcon3_7b_base/weight_cache/full_model/
+Served model=tiiuae/Falcon3-7B-Base; max_model_len=32768; block_size=32; max_num_seqs=32
+External server on reservation container b30c965c728b; no Docker and no TTI local server

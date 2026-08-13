@@ -1,0 +1,911 @@
+2026-08-13 10:27:49,683 - run.py:1027 - INFO: TT-Inference version: 0.19.0
+2026-08-13 10:27:49,683 - run.py:1028 - INFO: TT-Inference SHA: ca152fe22322
+2026-08-13 10:27:49,683 - run.py:1029 - INFO:
+============================================================
+tt-inference-server run.py CLI args summary
+============================================================
+
+Model Options:
+  model:                      Falcon3-7B-Base
+  device:                     p300x2
+  impl:                       autoport-falcon3-7b-base
+  engine:                     vLLM
+  workflow:                   release
+  tools:                      vllm
+
+Optional args:
+  dev_mode:                   False
+  docker_server:              False
+  local_server:               False
+  no_auth:                    True
+  tt_metal_python_venv_dir:   None
+  tt_metal_home:              None
+  vllm_dir:                   None
+  service_port:               8000
+  bind_host:                  0.0.0.0
+  docker_override_image:      None
+  docker_interactive:         False
+  device_id:                  None
+  disable_trace_capture:      True
+  override_tt_config:         None
+  vllm_override_args:         None
+  workflow_args:              None
+  limit_samples_mode:         ci-nightly
+  eval_samples:               None
+  skip_system_sw_validation:  True
+
+Host Storage Options:
+  host_volume:                None
+  host_hf_cache:              None
+  host_weights_dir:           None
+  image_user:                 1000
+
+============================================================
+2026-08-13 10:27:49,684 - run.py:1035 - INFO: Runtime model spec saved to: /home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final/workflow_logs/runtime_model_specs/runtime_model_spec_2026-08-13_10-27-49_id_autoport-Falcon3-7B-Base_p300x2_v3cF9JIW.json
+2026-08-13 10:27:49,684 - validate_setup.py:341 - INFO: Starting local setup validation
+2026-08-13 10:27:49,684 - validate_setup.py:377 - INFO: ✅ validating local setup completed
+2026-08-13 10:27:49,684 - run.py:1149 - INFO: Model Falcon3-7B-Base (model_type=LLM) routes through the workflow engine.
+2026-08-13 10:27:49,684 - runner.py:31 - INFO: → command=release
+2026-08-13 10:27:49,684 - utils.py:272 - INFO: Running command: /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_bootstrap_uv/bin/uv pip install --managed-python --python /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_workflow_run_script/bin/python --index-strategy unsafe-best-match -r /home/mvasiljevic/tt-inference-server/requirements/workflow-run-script.txt
+Using Python 3.10.20 environment at: .workflow_venvs/.venv_workflow_run_script
+Checked 19 packages in 4ms
+2026-08-13 10:27:49,693 - utils.py:272 - INFO: Running command: /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_bootstrap_uv/bin/uv pip install --managed-python --python /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_evals_common/bin/python --index-strategy unsafe-best-match -r /home/mvasiljevic/tt-inference-server/requirements/evals-common.txt
+Using Python 3.10.20 environment at: .workflow_venvs/.venv_evals_common
+Resolved 103 packages in 494ms
+Checked 103 packages in 0.68ms
+2026-08-13 10:27:50,195 - workflow_venvs.py:132 - INFO: sub-dir already exists for llm_vllm: /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_llm_vllm/artifacts
+2026-08-13 10:27:50,195 - utils.py:272 - INFO: Running command: /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_bootstrap_uv/bin/uv pip install --managed-python --python /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_llm_vllm/bin/python --index-strategy unsafe-best-match --override /home/mvasiljevic/tt-inference-server/requirements/llm-vllm-overrides.txt -r /home/mvasiljevic/tt-inference-server/requirements/llm-vllm.txt
+Using Python 3.11.15 environment at: .workflow_venvs/.venv_llm_vllm
+Checked 7 packages in 7ms
+2026-08-13 10:27:50,207 - utils.py:272 - INFO: Running command: /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_workflow_run_script/bin/python /home/mvasiljevic/tt-inference-server/run_workflows.py --model Falcon3-7B-Base --workflow release --device p300x2 --service-port 8000 --runtime-model-spec-json /home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final/workflow_logs/runtime_model_specs/runtime_model_spec_2026-08-13_10-27-49_id_autoport-Falcon3-7B-Base_p300x2_v3cF9JIW.json --output-dir /home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final/workflow_logs/reports_output/release --server-url http://127.0.0.1
+2026-08-13 10:27:50,402 [INFO] workflow_module.runner: → command=workflow
+2026-08-13 10:27:50,402 [INFO] workflow.release: === Workflow start: release | model=Falcon3-7B-Base device=P300X2 port=8000 output=/home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release ===
+2026-08-13 10:27:50,403 [INFO] workflow.release: --- release: evals ---
+2026-08-13 10:27:50,414 [INFO] workflow.evals: → task=llm_eval
+2026-08-13 10:27:50,416 [INFO] utils.remote_readiness: ✅ Remote OpenAI endpoint ready at http://127.0.0.1:8000/v1/models
+2026-08-13 10:27:50,417 [INFO] test_module.llm_tests.llm_eval_tests: Running eval task=ifeval
+2026-08-13 10:27:50,417 [INFO] test_module.llm_tests.llm_eval_tests: Running command: /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_evals_common/bin/lm_eval --tasks ifeval --model local-completions --model_args model=tiiuae/Falcon3-7B-Base,base_url=http://127.0.0.1:8000/v1/completions,tokenizer_backend=huggingface,num_concurrent=32,max_retries=1 --gen_kwargs stream=False,seed=42 --output_path /home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/eval_id_autoport-Falcon3-7B-Base_p300x2 --seed 42 --num_fewshot 0 --batch_size 1 --log_samples --show_config --trust_remote_code --confirm_run_unsafe_code --limit 0.05
+2026-08-13 10:27:50,542 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-13:10:27:50 WARNING  [config.evaluate_config:281] --limit SHOULD ONLY BE USED FOR TESTING. REAL METRICS SHOULD NOT BE COMPUTED USING LIMIT.
+2026-08-13 10:27:52,213 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-13:10:27:52 INFO     [_cli.run:376] Selected Tasks: ['ifeval']
+2026-08-13 10:27:52,735 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-13:10:27:52 INFO     [evaluator:210] Setting random seed to 42 | Setting numpy seed to 42 | Setting torch manual seed to 42 | Setting fewshot manual seed to 42
+2026-08-13 10:27:52,735 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-13:10:27:52 WARNING  [evaluator:222] generation_kwargs: {'stream': False, 'seed': 42} specified through cli, these settings will update set parameters in yaml tasks. Ensure 'do_sample=True' for non-greedy decoding!
+2026-08-13 10:27:52,735 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-13:10:27:52 INFO     [evaluator:235] Initializing local-completions model, with arguments: {'model': 'tiiuae/Falcon3-7B-Base', 'base_url': 'http://127.0.0.1:8000/v1/completions', 'tokenizer_backend': 'huggingface', 'num_concurrent': 32, 'max_retries': 1, 'trust_remote_code': True}
+2026-08-13 10:27:52,739 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-13:10:27:52 INFO     [models.api_models:284] Using max length 2048 - 1
+2026-08-13 10:27:52,739 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-13:10:27:52 INFO     [models.api_models:305] Using tokenizer huggingface
+2026-08-13 10:27:55,051 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-13:10:27:55 INFO     [tasks:700] Selected tasks:
+2026-08-13 10:27:55,051 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-13:10:27:55 INFO     [tasks:691] Task: ifeval (ifeval/ifeval.yaml)
+2026-08-13 10:27:55,051 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-13:10:27:55 INFO     [evaluator:313] ifeval: Using gen_kwargs: {'until': [], 'do_sample': False, 'temperature': 0.0, 'max_gen_toks': 1280, 'stream': False, 'seed': 42}
+2026-08-13 10:27:55,051 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-13:10:27:55 INFO     [evaluator:328] num_fewshot has been set to 0 for ifeval in its config. Manual configuration will be ignored.
+2026-08-13 10:27:55,052 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-13:10:27:55 INFO     [api.task:310] Building contexts for ifeval on rank 0...
+2026-08-13 10:27:55,053 [INFO] test_module.llm_tests.llm_eval_tests:
+2026-08-13 10:27:55,053 [INFO] test_module.llm_tests.llm_eval_tests: 0%|          | 0/28 [00:00<?, ?it/s]
+2026-08-13 10:27:55,053 [INFO] test_module.llm_tests.llm_eval_tests: 100%|██████████| 28/28 [00:00<00:00, 98606.64it/s]
+2026-08-13 10:27:55,053 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-13:10:27:55 INFO     [evaluator:583] Running generate_until requests
+2026-08-13 10:27:55,057 [INFO] test_module.llm_tests.llm_eval_tests:
+2026-08-13 10:27:55,903 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   0%|          | 0/28 [00:00<?, ?it/s]
+2026-08-13 10:27:56,449 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   4%|▎         | 1/28 [00:00<00:22,  1.18it/s]
+2026-08-13 10:27:57,628 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   7%|▋         | 2/28 [00:01<00:17,  1.49it/s]
+2026-08-13 10:27:58,307 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  11%|█         | 3/28 [00:02<00:22,  1.11it/s]
+2026-08-13 10:28:00,349 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  14%|█▍        | 4/28 [00:03<00:19,  1.23it/s]
+2026-08-13 10:28:01,353 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  18%|█▊        | 5/28 [00:05<00:28,  1.26s/it]
+2026-08-13 10:28:06,005 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  21%|██▏       | 6/28 [00:06<00:25,  1.17s/it]
+2026-08-13 10:28:16,098 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  25%|██▌       | 7/28 [00:10<00:48,  2.31s/it]
+2026-08-13 10:28:16,099 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  29%|██▊       | 8/28 [00:21<01:35,  4.79s/it]
+2026-08-13 10:28:16,099 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API: 100%|██████████| 28/28 [00:21<00:00,  1.33it/s]
+2026-08-13 10:28:16,334 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-13:10:28:16 INFO     [loggers.evaluation_tracker:269] Saving results aggregated
+2026-08-13 10:28:16,334 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-13:10:28:16 INFO     [loggers.evaluation_tracker:119] Saving per-task samples to /home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/eval_id_autoport-Falcon3-7B-Base_p300x2/tiiuae__Falcon3-7B-Base/*.jsonl
+2026-08-13 10:28:17,476 [INFO] test_module.llm_tests.llm_eval_tests: Running eval task=gpqa_diamond_generative_n_shot
+2026-08-13 10:28:17,476 [INFO] test_module.llm_tests.llm_eval_tests: Running command: /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_evals_common/bin/lm_eval --tasks gpqa_diamond_generative_n_shot --model local-completions --model_args model=tiiuae/Falcon3-7B-Base,base_url=http://127.0.0.1:8000/v1/completions,tokenizer_backend=huggingface,num_concurrent=32,max_retries=1 --gen_kwargs stream=False,seed=42 --output_path /home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/eval_id_autoport-Falcon3-7B-Base_p300x2 --seed 42 --num_fewshot 0 --batch_size 1 --log_samples --show_config --trust_remote_code --confirm_run_unsafe_code --limit 0.05
+2026-08-13 10:28:17,600 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-13:10:28:17 WARNING  [config.evaluate_config:281] --limit SHOULD ONLY BE USED FOR TESTING. REAL METRICS SHOULD NOT BE COMPUTED USING LIMIT.
+2026-08-13 10:28:19,278 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-13:10:28:19 INFO     [_cli.run:376] Selected Tasks: ['gpqa_diamond_generative_n_shot']
+2026-08-13 10:28:19,812 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-13:10:28:19 INFO     [evaluator:210] Setting random seed to 42 | Setting numpy seed to 42 | Setting torch manual seed to 42 | Setting fewshot manual seed to 42
+2026-08-13 10:28:19,812 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-13:10:28:19 WARNING  [evaluator:222] generation_kwargs: {'stream': False, 'seed': 42} specified through cli, these settings will update set parameters in yaml tasks. Ensure 'do_sample=True' for non-greedy decoding!
+2026-08-13 10:28:19,812 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-13:10:28:19 INFO     [evaluator:235] Initializing local-completions model, with arguments: {'model': 'tiiuae/Falcon3-7B-Base', 'base_url': 'http://127.0.0.1:8000/v1/completions', 'tokenizer_backend': 'huggingface', 'num_concurrent': 32, 'max_retries': 1, 'trust_remote_code': True}
+2026-08-13 10:28:19,816 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-13:10:28:19 INFO     [models.api_models:284] Using max length 2048 - 1
+2026-08-13 10:28:19,816 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-13:10:28:19 INFO     [models.api_models:305] Using tokenizer huggingface
+2026-08-13 10:28:22,236 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-13:10:28:22 INFO     [tasks:700] Selected tasks:
+2026-08-13 10:28:22,237 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-13:10:28:22 INFO     [tasks:691] Task: gpqa_diamond_generative_n_shot (gpqa/generative/gpqa_diamond_generative_n_shot.yaml)
+2026-08-13 10:28:22,237 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-13:10:28:22 INFO     [evaluator:313] gpqa_diamond_generative_n_shot: Using gen_kwargs: {'until': ['</s>', 'Question:', '<|im_end|>'], 'temperature': 0.0, 'stream': False, 'seed': 42}
+2026-08-13 10:28:22,237 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-13:10:28:22 WARNING  [evaluator:332] Overwriting default num_fewshot of gpqa_diamond_generative_n_shot from None to 0
+2026-08-13 10:28:22,241 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-13:10:28:22 INFO     [api.task:310] Building contexts for gpqa_diamond_generative_n_shot on rank 0...
+2026-08-13 10:28:22,246 [INFO] test_module.llm_tests.llm_eval_tests:
+2026-08-13 10:28:22,250 [INFO] test_module.llm_tests.llm_eval_tests: 0%|          | 0/10 [00:00<?, ?it/s]
+2026-08-13 10:28:22,250 [INFO] test_module.llm_tests.llm_eval_tests: 100%|██████████| 10/10 [00:00<00:00, 2321.78it/s]
+2026-08-13 10:28:22,250 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-13:10:28:22 INFO     [evaluator:583] Running generate_until requests
+2026-08-13 10:28:22,255 [INFO] test_module.llm_tests.llm_eval_tests:
+2026-08-13 10:28:23,906 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   0%|          | 0/10 [00:00<?, ?it/s]
+2026-08-13 10:28:24,015 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  10%|█         | 1/10 [00:01<00:14,  1.65s/it]
+2026-08-13 10:28:27,567 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  80%|████████  | 8/10 [00:01<00:00,  6.09it/s]
+2026-08-13 10:28:27,567 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API: 100%|██████████| 10/10 [00:05<00:00,  1.88it/s]
+2026-08-13 10:28:27,812 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-13:10:28:27 INFO     [loggers.evaluation_tracker:269] Saving results aggregated
+2026-08-13 10:28:27,813 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-13:10:28:27 INFO     [loggers.evaluation_tracker:119] Saving per-task samples to /home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/eval_id_autoport-Falcon3-7B-Base_p300x2/tiiuae__Falcon3-7B-Base/*.jsonl
+2026-08-13 10:28:28,529 [INFO] workflow_module.blocks_sink: BlockAccumulator: +2 block(s), total=2
+2026-08-13 10:28:28,529 [INFO] workflow_module.blocks_sink:   - kind=evals id=Falcon3-7B-Base_P300X2 targets={'task_name': 'ifeval', 'tolerance': 0.05, 'published_score': 34.3, 'published_score_ref': 'https://huggingface.co/tiiuae/Falcon3-7B-Base#benchmarks'}
+2026-08-13 10:28:28,529 [INFO] workflow_module.blocks_sink:   - kind=evals id=Falcon3-7B-Base_P300X2 targets={'task_name': 'gpqa_diamond_generative_n_shot', 'tolerance': 0.05, 'published_score': 35.5, 'published_score_ref': 'https://huggingface.co/tiiuae/Falcon3-7B-Base#benchmarks'}
+2026-08-13 10:28:28,529 [INFO] workflow.evals: ✅ llm_eval blocks=2 kind=evals (38.1s)
+2026-08-13 10:28:28,529 [INFO] workflow.release: --- release: benchmarks ---
+2026-08-13 10:28:28,529 [INFO] workflow.benchmarks: → task=llm_benchmark tools=vllm
+2026-08-13 10:28:28,532 [INFO] test_module.llm_tests.llm_benchmark_tests: Running LLM benchmark: tool=vllm over 13 sweep point(s)
+2026-08-13 10:28:28,533 [INFO] utils.remote_readiness: ✅ Remote OpenAI endpoint ready at http://127.0.0.1:8000/v1/models
+2026-08-13 10:28:28,534 [INFO] llm_module.runner: Running vllm sweep point 1/13  isl=128 osl=128 max_conc=1 n=8
+2026-08-13 10:28:28,534 [INFO] llm_module.drivers._subprocess: Executing: /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model tiiuae/Falcon3-7B-Base --dataset-name random --max-concurrency 1 --num-prompts 8 --random-input-len 128 --random-output-len 128 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-13_10-28-28_isl-128_osl-128_maxcon-1_n-8.json --base-url http://127.0.0.1:8000 --ready-check-timeout-sec 0 --trust-remote-code --header Accept-Encoding=identity
+INFO 08-13 10:28:31 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 08-13 10:28:31 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 08-13 10:28:31 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 08-13 10:28:32 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x73796a5f5300>, seed=0, num_prompts=8, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=128, random_output_len=128, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=1, model='tiiuae/Falcon3-7B-Base', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=True, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-13_10-28-28_isl-128_osl-128_maxcon-1_n-8.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-af50495a-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 08-13 10:28:32 [datasets.py:612] Sampling input_len from [128, 128] and output_len from [128, 128]
+[transformers] Ignoring clean_up_tokenization_spaces=True for BPE tokenizer CachedTokenizersBackend. The clean_up_tokenization post-processing step is designed for WordPiece tokenizers and is destructive for BPE (it strips spaces before punctuation). Set clean_up_tokenization_spaces=False to suppress this warning, or set clean_up_tokenization_spaces_for_bpe_even_though_it_will_corrupt_output=True to force cleanup anyway.
+WARNING 08-13 10:28:32 [datasets.py:549] Across all generated prompts, there were 1 more tokens than expected after decoding and re-encoding. This is expected due to the imperfect nature of the sampling procedure.
+Starting initial single prompt test run...
+
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 1
+0%|          | 0/8 [00:00<?, ?it/s]
+12%|█▎        | 1/8 [00:02<00:15,  2.24s/it]
+25%|██▌       | 2/8 [00:04<00:13,  2.23s/it]
+38%|███▊      | 3/8 [00:06<00:11,  2.32s/it]
+50%|█████     | 4/8 [00:09<00:09,  2.28s/it]
+62%|██████▎   | 5/8 [00:11<00:06,  2.26s/it]
+75%|███████▌  | 6/8 [00:13<00:04,  2.25s/it]
+88%|████████▊ | 7/8 [00:15<00:02,  2.24s/it]
+100%|██████████| 8/8 [00:17<00:00,  2.23s/it]
+100%|██████████| 8/8 [00:17<00:00,  2.25s/it]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     8
+Failed requests:                         0
+Maximum request concurrency:             1
+Benchmark duration (s):                  18.00
+Total input tokens:                      1025
+Total generated tokens:                  1024
+Request throughput (req/s):              0.44
+Output token throughput (tok/s):         56.90
+Peak output token throughput (tok/s):    69.00
+Peak concurrent requests:                2.00
+Total token throughput (tok/s):          113.85
+---------------Time to First Token----------------
+Mean TTFT (ms):                          206.38
+Median TTFT (ms):                        180.25
+P99 TTFT (ms):                           366.46
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          16.09
+Median TPOT (ms):                        16.08
+P99 TPOT (ms):                           16.11
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           15.96
+Median ITL (ms):                         14.60
+P99 ITL (ms):                            15.36
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          2249.37
+Median E2EL (ms):                        2223.85
+P99 E2EL (ms):                           2409.76
+==================================================
+2026-08-13 10:28:51,434 [INFO] llm_module.runner: Running vllm sweep point 2/13  isl=128 osl=128 max_conc=32 n=256
+2026-08-13 10:28:53,436 [INFO] llm_module.drivers._subprocess: Executing: /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model tiiuae/Falcon3-7B-Base --dataset-name random --max-concurrency 32 --num-prompts 256 --random-input-len 128 --random-output-len 128 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-13_10-28-53_isl-128_osl-128_maxcon-32_n-256.json --base-url http://127.0.0.1:8000 --ready-check-timeout-sec 0 --trust-remote-code --header Accept-Encoding=identity
+INFO 08-13 10:28:56 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 08-13 10:28:56 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 08-13 10:28:56 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 08-13 10:28:57 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x770a297f1300>, seed=0, num_prompts=256, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=128, random_output_len=128, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=32, model='tiiuae/Falcon3-7B-Base', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=True, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-13_10-28-53_isl-128_osl-128_maxcon-32_n-256.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-014f34a0-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 08-13 10:28:57 [datasets.py:612] Sampling input_len from [128, 128] and output_len from [128, 128]
+[transformers] Ignoring clean_up_tokenization_spaces=True for BPE tokenizer CachedTokenizersBackend. The clean_up_tokenization post-processing step is designed for WordPiece tokenizers and is destructive for BPE (it strips spaces before punctuation). Set clean_up_tokenization_spaces=False to suppress this warning, or set clean_up_tokenization_spaces_for_bpe_even_though_it_will_corrupt_output=True to force cleanup anyway.
+WARNING 08-13 10:28:58 [datasets.py:549] Across all generated prompts, there were 4 more tokens than expected after decoding and re-encoding. This is expected due to the imperfect nature of the sampling procedure.
+Starting initial single prompt test run...
+
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 32
+0%|          | 0/256 [00:00<?, ?it/s]
+0%|          | 1/256 [00:02<11:35,  2.73s/it]
+13%|█▎        | 33/256 [00:05<00:31,  7.10it/s]
+25%|██▌       | 65/256 [00:08<00:20,  9.27it/s]
+38%|███▊      | 97/256 [00:10<00:15, 10.58it/s]
+50%|█████     | 129/256 [00:13<00:11, 11.33it/s]
+63%|██████▎   | 161/256 [00:15<00:08, 11.79it/s]
+75%|███████▌  | 193/256 [00:18<00:05, 12.09it/s]
+88%|████████▊ | 225/256 [00:21<00:02, 10.96it/s]
+100%|██████████| 256/256 [00:21<00:00, 11.82it/s]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     256
+Failed requests:                         0
+Maximum request concurrency:             32
+Benchmark duration (s):                  21.66
+Total input tokens:                      32772
+Total generated tokens:                  32768
+Request throughput (req/s):              11.82
+Output token throughput (tok/s):         1512.60
+Peak output token throughput (tok/s):    2144.00
+Peak concurrent requests:                64.00
+Total token throughput (tok/s):          3025.39
+---------------Time to First Token----------------
+Mean TTFT (ms):                          569.61
+Median TTFT (ms):                        411.10
+P99 TTFT (ms):                           1368.32
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          16.83
+Median TPOT (ms):                        16.61
+P99 TPOT (ms):                           25.88
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           16.70
+Median ITL (ms):                         15.10
+P99 ITL (ms):                            17.54
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          2706.97
+Median E2EL (ms):                        2605.40
+P99 E2EL (ms):                           3478.76
+==================================================
+2026-08-13 10:29:20,147 [WARNING] llm_module.target_checks: No perf targets for sweep point isl=128 osl=128 max_concurrency=32; benchmark block is reported as NA (ungraded).
+2026-08-13 10:29:20,149 [INFO] llm_module.runner: Running vllm sweep point 3/13  isl=128 osl=1024 max_conc=1 n=4
+2026-08-13 10:29:22,151 [INFO] llm_module.drivers._subprocess: Executing: /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model tiiuae/Falcon3-7B-Base --dataset-name random --max-concurrency 1 --num-prompts 4 --random-input-len 128 --random-output-len 1024 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-13_10-29-22_isl-128_osl-1024_maxcon-1_n-4.json --base-url http://127.0.0.1:8000 --ready-check-timeout-sec 0 --trust-remote-code --header Accept-Encoding=identity
+INFO 08-13 10:29:24 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 08-13 10:29:24 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 08-13 10:29:24 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 08-13 10:29:25 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7d112bdf5300>, seed=0, num_prompts=4, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=128, random_output_len=1024, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=1, model='tiiuae/Falcon3-7B-Base', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=True, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-13_10-29-22_isl-128_osl-1024_maxcon-1_n-4.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-6ae4351c-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 08-13 10:29:26 [datasets.py:612] Sampling input_len from [128, 128] and output_len from [1024, 1024]
+[transformers] Ignoring clean_up_tokenization_spaces=True for BPE tokenizer CachedTokenizersBackend. The clean_up_tokenization post-processing step is designed for WordPiece tokenizers and is destructive for BPE (it strips spaces before punctuation). Set clean_up_tokenization_spaces=False to suppress this warning, or set clean_up_tokenization_spaces_for_bpe_even_though_it_will_corrupt_output=True to force cleanup anyway.
+WARNING 08-13 10:29:26 [datasets.py:549] Across all generated prompts, there were 1 more tokens than expected after decoding and re-encoding. This is expected due to the imperfect nature of the sampling procedure.
+Starting initial single prompt test run...
+
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 1
+0%|          | 0/4 [00:00<?, ?it/s]
+25%|██▌       | 1/4 [00:15<00:46, 15.65s/it]
+50%|█████     | 2/4 [00:31<00:31, 15.66s/it]
+75%|███████▌  | 3/4 [00:47<00:15, 15.73s/it]
+100%|██████████| 4/4 [01:02<00:00, 15.69s/it]
+100%|██████████| 4/4 [01:02<00:00, 15.69s/it]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     4
+Failed requests:                         0
+Maximum request concurrency:             1
+Benchmark duration (s):                  62.76
+Total input tokens:                      513
+Total generated tokens:                  4096
+Request throughput (req/s):              0.06
+Output token throughput (tok/s):         65.26
+Peak output token throughput (tok/s):    69.00
+Peak concurrent requests:                2.00
+Total token throughput (tok/s):          73.44
+---------------Time to First Token----------------
+Mean TTFT (ms):                          223.77
+Median TTFT (ms):                        187.11
+P99 TTFT (ms):                           336.28
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          15.12
+Median TPOT (ms):                        15.12
+P99 TPOT (ms):                           15.13
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           15.10
+Median ITL (ms):                         14.99
+P99 ITL (ms):                            15.53
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          15690.36
+Median E2EL (ms):                        15654.20
+P99 E2EL (ms):                           15804.78
+==================================================
+2026-08-13 10:30:29,858 [WARNING] llm_module.target_checks: No perf targets for sweep point isl=128 osl=1024 max_concurrency=1; benchmark block is reported as NA (ungraded).
+2026-08-13 10:30:29,860 [INFO] llm_module.runner: Running vllm sweep point 4/13  isl=128 osl=1024 max_conc=28 n=112
+2026-08-13 10:30:31,862 [INFO] llm_module.drivers._subprocess: Executing: /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model tiiuae/Falcon3-7B-Base --dataset-name random --max-concurrency 28 --num-prompts 112 --random-input-len 128 --random-output-len 1024 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-13_10-30-31_isl-128_osl-1024_maxcon-28_n-112.json --base-url http://127.0.0.1:8000 --ready-check-timeout-sec 0 --trust-remote-code --header Accept-Encoding=identity
+INFO 08-13 10:30:34 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 08-13 10:30:34 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 08-13 10:30:34 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 08-13 10:30:35 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7f2ce4f0d8a0>, seed=0, num_prompts=112, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=128, random_output_len=1024, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=28, model='tiiuae/Falcon3-7B-Base', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=True, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-13_10-30-31_isl-128_osl-1024_maxcon-28_n-112.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-3a929570-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 08-13 10:30:36 [datasets.py:612] Sampling input_len from [128, 128] and output_len from [1024, 1024]
+[transformers] Ignoring clean_up_tokenization_spaces=True for BPE tokenizer CachedTokenizersBackend. The clean_up_tokenization post-processing step is designed for WordPiece tokenizers and is destructive for BPE (it strips spaces before punctuation). Set clean_up_tokenization_spaces=False to suppress this warning, or set clean_up_tokenization_spaces_for_bpe_even_though_it_will_corrupt_output=True to force cleanup anyway.
+WARNING 08-13 10:30:36 [datasets.py:549] Across all generated prompts, there were 3 more tokens than expected after decoding and re-encoding. This is expected due to the imperfect nature of the sampling procedure.
+Starting initial single prompt test run...
+
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 28
+0%|          | 0/112 [00:00<?, ?it/s]
+1%|          | 1/112 [00:17<32:12, 17.41s/it]
+26%|██▌       | 29/112 [00:35<01:27,  1.05s/it]
+51%|█████     | 57/112 [00:53<00:44,  1.24it/s]
+76%|███████▌  | 85/112 [01:10<00:19,  1.39it/s]
+100%|██████████| 112/112 [01:10<00:00,  1.59it/s]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     112
+Failed requests:                         0
+Maximum request concurrency:             28
+Benchmark duration (s):                  70.25
+Total input tokens:                      14339
+Total generated tokens:                  114688
+Request throughput (req/s):              1.59
+Output token throughput (tok/s):         1632.64
+Peak output token throughput (tok/s):    1876.00
+Peak concurrent requests:                56.00
+Total token throughput (tok/s):          1836.77
+---------------Time to First Token----------------
+Mean TTFT (ms):                          663.63
+Median TTFT (ms):                        574.73
+P99 TTFT (ms):                           1178.44
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          16.52
+Median TPOT (ms):                        16.46
+P99 TPOT (ms):                           17.41
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           16.50
+Median ITL (ms):                         16.30
+P99 ITL (ms):                            17.93
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          17560.52
+Median E2EL (ms):                        17496.95
+P99 E2EL (ms):                           18007.50
+==================================================
+2026-08-13 10:31:47,247 [WARNING] llm_module.target_checks: No perf targets for sweep point isl=128 osl=1024 max_concurrency=28; benchmark block is reported as NA (ungraded).
+2026-08-13 10:31:47,248 [INFO] llm_module.runner: Running vllm sweep point 5/13  isl=1024 osl=128 max_conc=1 n=4
+2026-08-13 10:31:49,251 [INFO] llm_module.drivers._subprocess: Executing: /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model tiiuae/Falcon3-7B-Base --dataset-name random --max-concurrency 1 --num-prompts 4 --random-input-len 1024 --random-output-len 128 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-13_10-31-49_isl-1024_osl-128_maxcon-1_n-4.json --base-url http://127.0.0.1:8000 --ready-check-timeout-sec 0 --trust-remote-code --header Accept-Encoding=identity
+INFO 08-13 10:31:51 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 08-13 10:31:51 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 08-13 10:31:51 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 08-13 10:31:52 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x70dbe69f5300>, seed=0, num_prompts=4, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=1024, random_output_len=128, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=1, model='tiiuae/Falcon3-7B-Base', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=True, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-13_10-31-49_isl-1024_osl-128_maxcon-1_n-4.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-d8557a31-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 08-13 10:31:53 [datasets.py:612] Sampling input_len from [1024, 1024] and output_len from [128, 128]
+[transformers] Ignoring clean_up_tokenization_spaces=True for BPE tokenizer CachedTokenizersBackend. The clean_up_tokenization post-processing step is designed for WordPiece tokenizers and is destructive for BPE (it strips spaces before punctuation). Set clean_up_tokenization_spaces=False to suppress this warning, or set clean_up_tokenization_spaces_for_bpe_even_though_it_will_corrupt_output=True to force cleanup anyway.
+Starting initial single prompt test run...
+
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 1
+0%|          | 0/4 [00:00<?, ?it/s]
+25%|██▌       | 1/4 [00:03<00:10,  3.56s/it]
+50%|█████     | 2/4 [00:07<00:07,  3.52s/it]
+75%|███████▌  | 3/4 [00:10<00:03,  3.51s/it]
+100%|██████████| 4/4 [00:14<00:00,  3.50s/it]
+100%|██████████| 4/4 [00:14<00:00,  3.51s/it]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     4
+Failed requests:                         0
+Maximum request concurrency:             1
+Benchmark duration (s):                  14.04
+Total input tokens:                      4096
+Total generated tokens:                  512
+Request throughput (req/s):              0.28
+Output token throughput (tok/s):         36.47
+Peak output token throughput (tok/s):    66.00
+Peak concurrent requests:                2.00
+Total token throughput (tok/s):          328.27
+---------------Time to First Token----------------
+Mean TTFT (ms):                          1377.28
+Median TTFT (ms):                        1361.85
+P99 TTFT (ms):                           1422.75
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          16.79
+Median TPOT (ms):                        16.80
+P99 TPOT (ms):                           16.81
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           16.65
+Median ITL (ms):                         15.29
+P99 ITL (ms):                            16.43
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          3509.06
+Median E2EL (ms):                        3496.42
+P99 E2EL (ms):                           3555.17
+==================================================
+2026-08-13 10:32:08,292 [WARNING] llm_module.target_checks: No perf targets for sweep point isl=1024 osl=128 max_concurrency=1; benchmark block is reported as NA (ungraded).
+2026-08-13 10:32:08,294 [INFO] llm_module.runner: Running vllm sweep point 6/13  isl=1024 osl=128 max_conc=28 n=112
+2026-08-13 10:32:10,296 [INFO] llm_module.drivers._subprocess: Executing: /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model tiiuae/Falcon3-7B-Base --dataset-name random --max-concurrency 28 --num-prompts 112 --random-input-len 1024 --random-output-len 128 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-13_10-32-10_isl-1024_osl-128_maxcon-28_n-112.json --base-url http://127.0.0.1:8000 --ready-check-timeout-sec 0 --trust-remote-code --header Accept-Encoding=identity
+INFO 08-13 10:32:12 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 08-13 10:32:12 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 08-13 10:32:12 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 08-13 10:32:13 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7e79b55098a0>, seed=0, num_prompts=112, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=1024, random_output_len=128, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=28, model='tiiuae/Falcon3-7B-Base', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=True, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-13_10-32-10_isl-1024_osl-128_maxcon-28_n-112.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-043ce105-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 08-13 10:32:14 [datasets.py:612] Sampling input_len from [1024, 1024] and output_len from [128, 128]
+[transformers] Ignoring clean_up_tokenization_spaces=True for BPE tokenizer CachedTokenizersBackend. The clean_up_tokenization post-processing step is designed for WordPiece tokenizers and is destructive for BPE (it strips spaces before punctuation). Set clean_up_tokenization_spaces=False to suppress this warning, or set clean_up_tokenization_spaces_for_bpe_even_though_it_will_corrupt_output=True to force cleanup anyway.
+WARNING 08-13 10:32:15 [datasets.py:549] Across all generated prompts, there were 1 more tokens than expected after decoding and re-encoding. This is expected due to the imperfect nature of the sampling procedure.
+Starting initial single prompt test run...
+
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 28
+0%|          | 0/112 [00:00<?, ?it/s]
+1%|          | 1/112 [00:05<09:42,  5.25s/it]
+26%|██▌       | 29/112 [00:10<00:25,  3.21it/s]
+51%|█████     | 57/112 [00:16<00:13,  4.09it/s]
+76%|███████▌  | 85/112 [00:21<00:05,  4.57it/s]
+100%|██████████| 112/112 [00:21<00:00,  5.27it/s]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     112
+Failed requests:                         0
+Maximum request concurrency:             28
+Benchmark duration (s):                  21.27
+Total input tokens:                      114689
+Total generated tokens:                  14336
+Request throughput (req/s):              5.27
+Output token throughput (tok/s):         674.16
+Peak output token throughput (tok/s):    1624.00
+Peak concurrent requests:                56.00
+Total token throughput (tok/s):          6067.47
+---------------Time to First Token----------------
+Mean TTFT (ms):                          2858.43
+Median TTFT (ms):                        2843.11
+P99 TTFT (ms):                           3113.33
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          19.34
+Median TPOT (ms):                        18.93
+P99 TPOT (ms):                           30.18
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           19.19
+Median ITL (ms):                         17.48
+P99 ITL (ms):                            20.51
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          5315.00
+Median E2EL (ms):                        5251.44
+P99 E2EL (ms):                           5517.88
+==================================================
+2026-08-13 10:32:37,000 [WARNING] llm_module.target_checks: No perf targets for sweep point isl=1024 osl=128 max_concurrency=28; benchmark block is reported as NA (ungraded).
+2026-08-13 10:32:37,002 [INFO] llm_module.runner: Running vllm sweep point 7/13  isl=2048 osl=128 max_conc=1 n=4
+2026-08-13 10:32:39,004 [INFO] llm_module.drivers._subprocess: Executing: /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model tiiuae/Falcon3-7B-Base --dataset-name random --max-concurrency 1 --num-prompts 4 --random-input-len 2048 --random-output-len 128 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-13_10-32-39_isl-2048_osl-128_maxcon-1_n-4.json --base-url http://127.0.0.1:8000 --ready-check-timeout-sec 0 --trust-remote-code --header Accept-Encoding=identity
+INFO 08-13 10:32:41 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 08-13 10:32:41 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 08-13 10:32:41 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 08-13 10:32:42 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7974f41f58a0>, seed=0, num_prompts=4, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=2048, random_output_len=128, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=1, model='tiiuae/Falcon3-7B-Base', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=True, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-13_10-32-39_isl-2048_osl-128_maxcon-1_n-4.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-bf35184a-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 08-13 10:32:43 [datasets.py:612] Sampling input_len from [2048, 2048] and output_len from [128, 128]
+[transformers] Ignoring clean_up_tokenization_spaces=True for BPE tokenizer CachedTokenizersBackend. The clean_up_tokenization post-processing step is designed for WordPiece tokenizers and is destructive for BPE (it strips spaces before punctuation). Set clean_up_tokenization_spaces=False to suppress this warning, or set clean_up_tokenization_spaces_for_bpe_even_though_it_will_corrupt_output=True to force cleanup anyway.
+Starting initial single prompt test run...
+
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 1
+0%|          | 0/4 [00:00<?, ?it/s]
+25%|██▌       | 1/4 [00:05<00:15,  5.28s/it]
+50%|█████     | 2/4 [00:10<00:10,  5.22s/it]
+75%|███████▌  | 3/4 [00:15<00:05,  5.21s/it]
+100%|██████████| 4/4 [00:20<00:00,  5.20s/it]
+100%|██████████| 4/4 [00:20<00:00,  5.21s/it]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     4
+Failed requests:                         0
+Maximum request concurrency:             1
+Benchmark duration (s):                  20.83
+Total input tokens:                      8192
+Total generated tokens:                  512
+Request throughput (req/s):              0.19
+Output token throughput (tok/s):         24.58
+Peak output token throughput (tok/s):    63.00
+Peak concurrent requests:                2.00
+Total token throughput (tok/s):          417.94
+---------------Time to First Token----------------
+Mean TTFT (ms):                          2991.97
+Median TTFT (ms):                        2975.06
+P99 TTFT (ms):                           3047.10
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          17.44
+Median TPOT (ms):                        17.40
+P99 TPOT (ms):                           17.55
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           17.30
+Median ITL (ms):                         15.92
+P99 ITL (ms):                            16.76
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          5206.26
+Median E2EL (ms):                        5184.46
+P99 E2EL (ms):                           5275.46
+==================================================
+2026-08-13 10:33:04,854 [WARNING] llm_module.target_checks: No perf targets for sweep point isl=2048 osl=128 max_concurrency=1; benchmark block is reported as NA (ungraded).
+2026-08-13 10:33:04,856 [INFO] llm_module.runner: Running vllm sweep point 8/13  isl=2048 osl=128 max_conc=15 n=60
+2026-08-13 10:33:06,858 [INFO] llm_module.drivers._subprocess: Executing: /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model tiiuae/Falcon3-7B-Base --dataset-name random --max-concurrency 15 --num-prompts 60 --random-input-len 2048 --random-output-len 128 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-13_10-33-06_isl-2048_osl-128_maxcon-15_n-60.json --base-url http://127.0.0.1:8000 --ready-check-timeout-sec 0 --trust-remote-code --header Accept-Encoding=identity
+INFO 08-13 10:33:09 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 08-13 10:33:09 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 08-13 10:33:09 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 08-13 10:33:10 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7888b6105300>, seed=0, num_prompts=60, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=2048, random_output_len=128, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=15, model='tiiuae/Falcon3-7B-Base', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=True, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-13_10-33-06_isl-2048_osl-128_maxcon-15_n-60.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-d3d9fc86-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 08-13 10:33:11 [datasets.py:612] Sampling input_len from [2048, 2048] and output_len from [128, 128]
+[transformers] Ignoring clean_up_tokenization_spaces=True for BPE tokenizer CachedTokenizersBackend. The clean_up_tokenization post-processing step is designed for WordPiece tokenizers and is destructive for BPE (it strips spaces before punctuation). Set clean_up_tokenization_spaces=False to suppress this warning, or set clean_up_tokenization_spaces_for_bpe_even_though_it_will_corrupt_output=True to force cleanup anyway.
+Starting initial single prompt test run...
+
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 15
+0%|          | 0/60 [00:00<?, ?it/s]
+2%|▏         | 1/60 [00:08<08:18,  8.45s/it]
+27%|██▋       | 16/60 [00:16<00:40,  1.09it/s]
+52%|█████▏    | 31/60 [00:25<00:20,  1.40it/s]
+77%|███████▋  | 46/60 [00:33<00:09,  1.55it/s]
+100%|██████████| 60/60 [00:33<00:00,  1.77it/s]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     60
+Failed requests:                         0
+Maximum request concurrency:             15
+Benchmark duration (s):                  33.81
+Total input tokens:                      122880
+Total generated tokens:                  7680
+Request throughput (req/s):              1.77
+Output token throughput (tok/s):         227.14
+Peak output token throughput (tok/s):    855.00
+Peak concurrent requests:                30.00
+Total token throughput (tok/s):          3861.39
+---------------Time to First Token----------------
+Mean TTFT (ms):                          5793.52
+Median TTFT (ms):                        6040.96
+P99 TTFT (ms):                           6054.85
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          20.93
+Median TPOT (ms):                        18.95
+P99 TPOT (ms):                           42.77
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           20.77
+Median ITL (ms):                         17.50
+P99 ITL (ms):                            19.69
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          8452.11
+Median E2EL (ms):                        8450.68
+P99 E2EL (ms):                           8461.65
+==================================================
+2026-08-13 10:33:46,128 [WARNING] llm_module.target_checks: No perf targets for sweep point isl=2048 osl=128 max_concurrency=15; benchmark block is reported as NA (ungraded).
+2026-08-13 10:33:46,130 [INFO] llm_module.runner: Running vllm sweep point 9/13  isl=4096 osl=128 max_conc=1 n=4
+2026-08-13 10:33:48,132 [INFO] llm_module.drivers._subprocess: Executing: /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model tiiuae/Falcon3-7B-Base --dataset-name random --max-concurrency 1 --num-prompts 4 --random-input-len 4096 --random-output-len 128 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-13_10-33-48_isl-4096_osl-128_maxcon-1_n-4.json --base-url http://127.0.0.1:8000 --ready-check-timeout-sec 0 --trust-remote-code --header Accept-Encoding=identity
+INFO 08-13 10:33:50 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 08-13 10:33:50 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 08-13 10:33:50 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 08-13 10:33:51 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7c5a96f11300>, seed=0, num_prompts=4, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=4096, random_output_len=128, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=1, model='tiiuae/Falcon3-7B-Base', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=True, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-13_10-33-48_isl-4096_osl-128_maxcon-1_n-4.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-5497e2f5-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 08-13 10:33:52 [datasets.py:612] Sampling input_len from [4096, 4096] and output_len from [128, 128]
+[transformers] Ignoring clean_up_tokenization_spaces=True for BPE tokenizer CachedTokenizersBackend. The clean_up_tokenization post-processing step is designed for WordPiece tokenizers and is destructive for BPE (it strips spaces before punctuation). Set clean_up_tokenization_spaces=False to suppress this warning, or set clean_up_tokenization_spaces_for_bpe_even_though_it_will_corrupt_output=True to force cleanup anyway.
+Starting initial single prompt test run...
+
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 1
+0%|          | 0/4 [00:00<?, ?it/s]
+25%|██▌       | 1/4 [00:08<00:26,  8.90s/it]
+50%|█████     | 2/4 [00:17<00:17,  8.87s/it]
+75%|███████▌  | 3/4 [00:26<00:08,  8.86s/it]
+100%|██████████| 4/4 [00:35<00:00,  8.85s/it]
+100%|██████████| 4/4 [00:35<00:00,  8.86s/it]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     4
+Failed requests:                         0
+Maximum request concurrency:             1
+Benchmark duration (s):                  35.44
+Total input tokens:                      16384
+Total generated tokens:                  512
+Request throughput (req/s):              0.11
+Output token throughput (tok/s):         14.45
+Peak output token throughput (tok/s):    58.00
+Peak concurrent requests:                2.00
+Total token throughput (tok/s):          476.76
+---------------Time to First Token----------------
+Mean TTFT (ms):                          6472.59
+Median TTFT (ms):                        6469.32
+P99 TTFT (ms):                           6492.25
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          18.80
+Median TPOT (ms):                        18.76
+P99 TPOT (ms):                           18.92
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           18.65
+Median ITL (ms):                         17.25
+P99 ITL (ms):                            17.93
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          8859.64
+Median E2EL (ms):                        8850.67
+P99 E2EL (ms):                           8894.37
+==================================================
+2026-08-13 10:34:28,651 [WARNING] llm_module.target_checks: No perf targets for sweep point isl=4096 osl=128 max_concurrency=1; benchmark block is reported as NA (ungraded).
+2026-08-13 10:34:28,653 [INFO] llm_module.runner: Running vllm sweep point 10/13  isl=4096 osl=128 max_conc=7 n=28
+2026-08-13 10:34:30,655 [INFO] llm_module.drivers._subprocess: Executing: /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model tiiuae/Falcon3-7B-Base --dataset-name random --max-concurrency 7 --num-prompts 28 --random-input-len 4096 --random-output-len 128 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-13_10-34-30_isl-4096_osl-128_maxcon-7_n-28.json --base-url http://127.0.0.1:8000 --ready-check-timeout-sec 0 --trust-remote-code --header Accept-Encoding=identity
+INFO 08-13 10:34:33 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 08-13 10:34:33 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 08-13 10:34:33 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 08-13 10:34:34 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7cd1cb7f5300>, seed=0, num_prompts=28, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=4096, random_output_len=128, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=7, model='tiiuae/Falcon3-7B-Base', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=True, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-13_10-34-30_isl-4096_osl-128_maxcon-7_n-28.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-bde00954-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 08-13 10:34:35 [datasets.py:612] Sampling input_len from [4096, 4096] and output_len from [128, 128]
+[transformers] Ignoring clean_up_tokenization_spaces=True for BPE tokenizer CachedTokenizersBackend. The clean_up_tokenization post-processing step is designed for WordPiece tokenizers and is destructive for BPE (it strips spaces before punctuation). Set clean_up_tokenization_spaces=False to suppress this warning, or set clean_up_tokenization_spaces_for_bpe_even_though_it_will_corrupt_output=True to force cleanup anyway.
+WARNING 08-13 10:34:35 [datasets.py:549] Across all generated prompts, there were 1 more tokens than expected after decoding and re-encoding. This is expected due to the imperfect nature of the sampling procedure.
+Starting initial single prompt test run...
+
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 7
+0%|          | 0/28 [00:00<?, ?it/s]
+4%|▎         | 1/28 [00:15<06:56, 15.42s/it]
+29%|██▊       | 8/28 [00:30<01:08,  3.40s/it]
+54%|█████▎    | 15/28 [00:46<00:35,  2.74s/it]
+79%|███████▊  | 22/28 [01:01<00:15,  2.50s/it]
+100%|██████████| 28/28 [01:01<00:00,  2.21s/it]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     28
+Failed requests:                         0
+Maximum request concurrency:             7
+Benchmark duration (s):                  61.92
+Total input tokens:                      114689
+Total generated tokens:                  3584
+Request throughput (req/s):              0.45
+Output token throughput (tok/s):         57.88
+Peak output token throughput (tok/s):    399.00
+Peak concurrent requests:                14.00
+Total token throughput (tok/s):          1910.20
+---------------Time to First Token----------------
+Mean TTFT (ms):                          11190.41
+Median TTFT (ms):                        12985.98
+P99 TTFT (ms):                           13225.97
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          33.77
+Median TPOT (ms):                        19.16
+P99 TPOT (ms):                           71.50
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           33.50
+Median ITL (ms):                         17.68
+P99 ITL (ms):                            19.37
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          15478.61
+Median E2EL (ms):                        15420.34
+P99 E2EL (ms):                           15659.44
+==================================================
+2026-08-13 10:35:38,109 [WARNING] llm_module.target_checks: No perf targets for sweep point isl=4096 osl=128 max_concurrency=7; benchmark block is reported as NA (ungraded).
+2026-08-13 10:35:38,111 [INFO] llm_module.runner: Running vllm sweep point 11/13  isl=8192 osl=128 max_conc=1 n=2
+2026-08-13 10:35:40,113 [INFO] llm_module.drivers._subprocess: Executing: /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model tiiuae/Falcon3-7B-Base --dataset-name random --max-concurrency 1 --num-prompts 2 --random-input-len 8192 --random-output-len 128 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-13_10-35-40_isl-8192_osl-128_maxcon-1_n-2.json --base-url http://127.0.0.1:8000 --ready-check-timeout-sec 0 --trust-remote-code --header Accept-Encoding=identity
+INFO 08-13 10:35:42 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 08-13 10:35:42 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 08-13 10:35:42 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 08-13 10:35:43 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7594fa3e5300>, seed=0, num_prompts=2, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=8192, random_output_len=128, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=1, model='tiiuae/Falcon3-7B-Base', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=True, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-13_10-35-40_isl-8192_osl-128_maxcon-1_n-2.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-333a8d30-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 08-13 10:35:44 [datasets.py:612] Sampling input_len from [8192, 8192] and output_len from [128, 128]
+[transformers] Ignoring clean_up_tokenization_spaces=True for BPE tokenizer CachedTokenizersBackend. The clean_up_tokenization post-processing step is designed for WordPiece tokenizers and is destructive for BPE (it strips spaces before punctuation). Set clean_up_tokenization_spaces=False to suppress this warning, or set clean_up_tokenization_spaces_for_bpe_even_though_it_will_corrupt_output=True to force cleanup anyway.
+Starting initial single prompt test run...
+
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 1
+0%|          | 0/2 [00:00<?, ?it/s]
+50%|█████     | 1/2 [00:17<00:17, 17.77s/it]
+100%|██████████| 2/2 [00:35<00:00, 17.76s/it]
+100%|██████████| 2/2 [00:35<00:00, 17.76s/it]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     2
+Failed requests:                         0
+Maximum request concurrency:             1
+Benchmark duration (s):                  35.52
+Total input tokens:                      16384
+Total generated tokens:                  256
+Request throughput (req/s):              0.06
+Output token throughput (tok/s):         7.21
+Peak output token throughput (tok/s):    50.00
+Peak concurrent requests:                2.00
+Total token throughput (tok/s):          468.51
+---------------Time to First Token----------------
+Mean TTFT (ms):                          15010.62
+Median TTFT (ms):                        15010.62
+P99 TTFT (ms):                           15019.36
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          21.63
+Median TPOT (ms):                        21.63
+P99 TPOT (ms):                           21.66
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           21.47
+Median ITL (ms):                         20.03
+P99 ITL (ms):                            20.72
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          17758.15
+Median E2EL (ms):                        17758.15
+P99 E2EL (ms):                           17770.37
+==================================================
+2026-08-13 10:36:20,832 [WARNING] llm_module.target_checks: No perf targets for sweep point isl=8192 osl=128 max_concurrency=1; benchmark block is reported as NA (ungraded).
+2026-08-13 10:36:20,834 [INFO] llm_module.runner: Running vllm sweep point 12/13  isl=8192 osl=128 max_conc=3 n=6
+2026-08-13 10:36:22,836 [INFO] llm_module.drivers._subprocess: Executing: /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model tiiuae/Falcon3-7B-Base --dataset-name random --max-concurrency 3 --num-prompts 6 --random-input-len 8192 --random-output-len 128 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-13_10-36-22_isl-8192_osl-128_maxcon-3_n-6.json --base-url http://127.0.0.1:8000 --ready-check-timeout-sec 0 --trust-remote-code --header Accept-Encoding=identity
+INFO 08-13 10:36:25 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 08-13 10:36:25 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 08-13 10:36:25 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 08-13 10:36:26 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7747a25e58a0>, seed=0, num_prompts=6, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=8192, random_output_len=128, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=3, model='tiiuae/Falcon3-7B-Base', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=True, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-13_10-36-22_isl-8192_osl-128_maxcon-3_n-6.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-8a6cccc6-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 08-13 10:36:27 [datasets.py:612] Sampling input_len from [8192, 8192] and output_len from [128, 128]
+[transformers] Ignoring clean_up_tokenization_spaces=True for BPE tokenizer CachedTokenizersBackend. The clean_up_tokenization post-processing step is designed for WordPiece tokenizers and is destructive for BPE (it strips spaces before punctuation). Set clean_up_tokenization_spaces=False to suppress this warning, or set clean_up_tokenization_spaces_for_bpe_even_though_it_will_corrupt_output=True to force cleanup anyway.
+Starting initial single prompt test run...
+
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 3
+0%|          | 0/6 [00:00<?, ?it/s]
+17%|█▋        | 1/6 [00:32<02:43, 32.73s/it]
+67%|██████▋   | 4/6 [01:05<00:30, 15.04s/it]
+100%|██████████| 6/6 [01:05<00:00, 10.91s/it]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     6
+Failed requests:                         0
+Maximum request concurrency:             3
+Benchmark duration (s):                  65.47
+Total input tokens:                      49152
+Total generated tokens:                  768
+Request throughput (req/s):              0.09
+Output token throughput (tok/s):         11.73
+Peak output token throughput (tok/s):    150.00
+Peak concurrent requests:                6.00
+Total token throughput (tok/s):          762.44
+---------------Time to First Token----------------
+Mean TTFT (ms):                          22512.30
+Median TTFT (ms):                        22515.26
+P99 TTFT (ms):                           29993.52
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          80.51
+Median TPOT (ms):                        80.48
+P99 TPOT (ms):                           139.53
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           79.88
+Median ITL (ms):                         20.10
+P99 ITL (ms):                            21.20
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          32736.56
+Median E2EL (ms):                        32736.77
+P99 E2EL (ms):                           32741.36
+==================================================
+2026-08-13 10:37:33,495 [WARNING] llm_module.target_checks: No perf targets for sweep point isl=8192 osl=128 max_concurrency=3; benchmark block is reported as NA (ungraded).
+2026-08-13 10:37:33,496 [INFO] llm_module.runner: Running vllm sweep point 13/13  isl=16384 osl=128 max_conc=1 n=2
+2026-08-13 10:37:35,499 [INFO] llm_module.drivers._subprocess: Executing: /home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model tiiuae/Falcon3-7B-Base --dataset-name random --max-concurrency 1 --num-prompts 2 --random-input-len 16384 --random-output-len 128 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-13_10-37-35_isl-16384_osl-128_maxcon-1_n-2.json --base-url http://127.0.0.1:8000 --ready-check-timeout-sec 0 --trust-remote-code --header Accept-Encoding=identity
+INFO 08-13 10:37:38 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 08-13 10:37:38 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 08-13 10:37:38 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 08-13 10:37:39 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7a2e63b058a0>, seed=0, num_prompts=2, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=16384, random_output_len=128, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=1, model='tiiuae/Falcon3-7B-Base', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=True, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final/workflow_logs/reports_output/release/Falcon3-7B-Base_p300x2_release/llm/benchmark_tiiuae__Falcon3-7B-Base_2026-08-13_10-37-35_isl-16384_osl-128_maxcon-1_n-2.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-b5148ca8-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 08-13 10:37:40 [datasets.py:612] Sampling input_len from [16384, 16384] and output_len from [128, 128]
+[transformers] Ignoring clean_up_tokenization_spaces=True for BPE tokenizer CachedTokenizersBackend. The clean_up_tokenization post-processing step is designed for WordPiece tokenizers and is destructive for BPE (it strips spaces before punctuation). Set clean_up_tokenization_spaces=False to suppress this warning, or set clean_up_tokenization_spaces_for_bpe_even_though_it_will_corrupt_output=True to force cleanup anyway.
+Starting initial single prompt test run...
+
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 1
+0%|          | 0/2 [00:00<?, ?it/s]
+50%|█████     | 1/2 [00:41<00:41, 41.67s/it]
+100%|██████████| 2/2 [01:23<00:00, 41.65s/it]
+100%|██████████| 2/2 [01:23<00:00, 41.66s/it]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     2
+Failed requests:                         0
+Maximum request concurrency:             1
+Benchmark duration (s):                  83.31
+Total input tokens:                      32768
+Total generated tokens:                  256
+Request throughput (req/s):              0.02
+Output token throughput (tok/s):         3.07
+Peak output token throughput (tok/s):    40.00
+Peak concurrent requests:                2.00
+Total token throughput (tok/s):          396.38
+---------------Time to First Token----------------
+Mean TTFT (ms):                          38243.94
+Median TTFT (ms):                        38243.94
+P99 TTFT (ms):                           38254.06
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          26.87
+Median TPOT (ms):                        26.87
+P99 TPOT (ms):                           26.89
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           26.66
+Median ITL (ms):                         25.32
+P99 ITL (ms):                            26.14
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          41656.42
+Median E2EL (ms):                        41656.42
+P99 E2EL (ms):                           41668.72
+==================================================
+2026-08-13 10:39:03,978 [WARNING] llm_module.target_checks: No perf targets for sweep point isl=16384 osl=128 max_concurrency=1; benchmark block is reported as NA (ungraded).
+2026-08-13 10:39:03,978 [INFO] test_module.llm_tests.llm_performance_tests: LLM sweep produced 13 Block(s) over 13 sweep point(s)
+2026-08-13 10:39:03,978 [INFO] workflow_module.blocks_sink: BlockAccumulator: +13 block(s), total=15
+2026-08-13 10:39:03,978 [INFO] workflow_module.blocks_sink:   - kind=benchmarks id=tiiuae__Falcon3-7B-Base_P300X2 targets={'tool': 'vllm', 'model': 'tiiuae/Falcon3-7B-Base', 'device': 'P300X2', 'timestamp': '2026-08-13 10:28:51'}
+2026-08-13 10:39:03,978 [INFO] workflow_module.blocks_sink:   - kind=benchmarks id=tiiuae__Falcon3-7B-Base_P300X2 targets={'tool': 'vllm', 'model': 'tiiuae/Falcon3-7B-Base', 'device': 'P300X2', 'timestamp': '2026-08-13 10:29:19'}
+2026-08-13 10:39:03,978 [INFO] workflow_module.blocks_sink:   - kind=benchmarks id=tiiuae__Falcon3-7B-Base_P300X2 targets={'tool': 'vllm', 'model': 'tiiuae/Falcon3-7B-Base', 'device': 'P300X2', 'timestamp': '2026-08-13 10:30:29'}
+2026-08-13 10:39:03,978 [INFO] workflow_module.blocks_sink:   - kind=benchmarks id=tiiuae__Falcon3-7B-Base_P300X2 targets={'tool': 'vllm', 'model': 'tiiuae/Falcon3-7B-Base', 'device': 'P300X2', 'timestamp': '2026-08-13 10:31:46'}
+2026-08-13 10:39:03,978 [INFO] workflow_module.blocks_sink:   - kind=benchmarks id=tiiuae__Falcon3-7B-Base_P300X2 targets={'tool': 'vllm', 'model': 'tiiuae/Falcon3-7B-Base', 'device': 'P300X2', 'timestamp': '2026-08-13 10:32:08'}
+2026-08-13 10:39:03,979 [INFO] workflow_module.blocks_sink:   - kind=benchmarks id=tiiuae__Falcon3-7B-Base_P300X2 targets={'tool': 'vllm', 'model': 'tiiuae/Falcon3-7B-Base', 'device': 'P300X2', 'timestamp': '2026-08-13 10:32:36'}
+2026-08-13 10:39:03,979 [INFO] workflow_module.blocks_sink:   - kind=benchmarks id=tiiuae__Falcon3-7B-Base_P300X2 targets={'tool': 'vllm', 'model': 'tiiuae/Falcon3-7B-Base', 'device': 'P300X2', 'timestamp': '2026-08-13 10:33:04'}
+2026-08-13 10:39:03,979 [INFO] workflow_module.blocks_sink:   - kind=benchmarks id=tiiuae__Falcon3-7B-Base_P300X2 targets={'tool': 'vllm', 'model': 'tiiuae/Falcon3-7B-Base', 'device': 'P300X2', 'timestamp': '2026-08-13 10:33:45'}
+2026-08-13 10:39:03,979 [INFO] workflow_module.blocks_sink:   - kind=benchmarks id=tiiuae__Falcon3-7B-Base_P300X2 targets={'tool': 'vllm', 'model': 'tiiuae/Falcon3-7B-Base', 'device': 'P300X2', 'timestamp': '2026-08-13 10:34:28'}
+2026-08-13 10:39:03,979 [INFO] workflow_module.blocks_sink:   - kind=benchmarks id=tiiuae__Falcon3-7B-Base_P300X2 targets={'tool': 'vllm', 'model': 'tiiuae/Falcon3-7B-Base', 'device': 'P300X2', 'timestamp': '2026-08-13 10:35:37'}
+2026-08-13 10:39:03,979 [INFO] workflow_module.blocks_sink:   - kind=benchmarks id=tiiuae__Falcon3-7B-Base_P300X2 targets={'tool': 'vllm', 'model': 'tiiuae/Falcon3-7B-Base', 'device': 'P300X2', 'timestamp': '2026-08-13 10:36:20'}
+2026-08-13 10:39:03,979 [INFO] workflow_module.blocks_sink:   - kind=benchmarks id=tiiuae__Falcon3-7B-Base_P300X2 targets={'tool': 'vllm', 'model': 'tiiuae/Falcon3-7B-Base', 'device': 'P300X2', 'timestamp': '2026-08-13 10:37:33'}
+2026-08-13 10:39:03,979 [INFO] workflow_module.blocks_sink:   - kind=benchmarks id=tiiuae__Falcon3-7B-Base_P300X2 targets={'tool': 'vllm', 'model': 'tiiuae/Falcon3-7B-Base', 'device': 'P300X2', 'timestamp': '2026-08-13 10:39:03'}
+2026-08-13 10:39:03,979 [INFO] workflow.benchmarks: ✅ task=llm_benchmark blocks=13 kind=benchmarks (635.4s)
+2026-08-13 10:39:03,979 [INFO] workflow.release: --- release: spec_tests ---
+2026-08-13 10:39:03,979 [INFO] workflow.spec_tests: → task=spec_tests
+2026-08-13 10:39:03,979 [INFO] test_module.dispatch: Running spec_tests for model=Falcon3-7B-Base, device=P300X2
+2026-08-13 10:39:03,979 [INFO] test_module.test_categorization_system.test_filter: Loading server tests configuration
+2026-08-13 10:39:03,979 [INFO] test_module.test_categorization_system.suite_loader: Loading server tests configuration from server_tests_config.json
+2026-08-13 10:39:03,980 [INFO] test_module.test_categorization_system.test_filter: Loading test suites from discovery
+2026-08-13 10:39:03,980 [INFO] test_module.test_categorization_system.suite_loader: Loading suite files from /home/mvasiljevic/tt-inference-server/test_module/test_suites
+2026-08-13 10:39:03,980 [INFO] test_module.test_categorization_system.suite_loader: Loading server tests configuration from server_tests_config.json
+2026-08-13 10:39:03,980 [INFO] test_module.test_categorization_system.suite_loader: Expanded 3 test matrices into 5 suites
+2026-08-13 10:39:03,980 [INFO] test_module.test_categorization_system.suite_loader: Loaded 8 suites from audio.json (AUDIO)
+2026-08-13 10:39:03,980 [WARNING] test_module.test_categorization_system.suite_loader: Skipping efficientnet on n300: not in compatible_devices ['n150']
+2026-08-13 10:39:03,980 [WARNING] test_module.test_categorization_system.suite_loader: Skipping segformer on n300: not in compatible_devices ['n150']
+2026-08-13 10:39:03,980 [WARNING] test_module.test_categorization_system.suite_loader: Skipping unet on n300: not in compatible_devices ['n150']
+2026-08-13 10:39:03,980 [WARNING] test_module.test_categorization_system.suite_loader: Skipping vit on n300: not in compatible_devices ['n150']
+2026-08-13 10:39:03,980 [WARNING] test_module.test_categorization_system.suite_loader: Skipping vovnet on n300: not in compatible_devices ['n150']
+2026-08-13 10:39:03,980 [INFO] test_module.test_categorization_system.suite_loader: Expanded 1 test matrices into 9 suites
+2026-08-13 10:39:03,980 [INFO] test_module.test_categorization_system.suite_loader: Loaded 9 suites from cnn.json (CNN)
+2026-08-13 10:39:03,980 [INFO] test_module.test_categorization_system.suite_loader: Expanded 1 test matrices into 6 suites
+2026-08-13 10:39:03,980 [INFO] test_module.test_categorization_system.suite_loader: Loaded 6 suites from embedding.json (EMBEDDING)
+2026-08-13 10:39:03,981 [WARNING] test_module.test_categorization_system.suite_loader: Skipping motif on p300: not in compatible_devices ['t3k', 'galaxy', 'p150x4', 'p150x8', 'p300x2']
+2026-08-13 10:39:03,981 [INFO] test_module.test_categorization_system.suite_loader: Expanded 6 test matrices into 29 suites
+2026-08-13 10:39:03,981 [INFO] test_module.test_categorization_system.suite_loader: Loaded 32 suites from image.json (IMAGE)
+2026-08-13 10:39:03,981 [WARNING] test_module.test_categorization_system.suite_loader: Skipping qwen3_32b on n150: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x8', 'p300x2']
+2026-08-13 10:39:03,981 [WARNING] test_module.test_categorization_system.suite_loader: Skipping qwen3_32b on n300: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x8', 'p300x2']
+2026-08-13 10:39:03,981 [WARNING] test_module.test_categorization_system.suite_loader: Skipping qwen3_32b on gpu: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x8', 'p300x2']
+2026-08-13 10:39:03,981 [WARNING] test_module.test_categorization_system.suite_loader: Skipping qwen3_32b on p100: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x8', 'p300x2']
+2026-08-13 10:39:03,981 [WARNING] test_module.test_categorization_system.suite_loader: Skipping qwen3_32b on p150: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x8', 'p300x2']
+2026-08-13 10:39:03,981 [WARNING] test_module.test_categorization_system.suite_loader: Skipping qwen3_32b on p150x4: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x8', 'p300x2']
+2026-08-13 10:39:03,981 [WARNING] test_module.test_categorization_system.suite_loader: Skipping qwen3_32b on p300: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x8', 'p300x2']
+2026-08-13 10:39:03,982 [WARNING] test_module.test_categorization_system.suite_loader: Skipping llama_70b_family on n150: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x4', 'p150x8', 'p300x2']
+2026-08-13 10:39:03,982 [WARNING] test_module.test_categorization_system.suite_loader: Skipping llama_70b_family on n300: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x4', 'p150x8', 'p300x2']
+2026-08-13 10:39:03,982 [WARNING] test_module.test_categorization_system.suite_loader: Skipping llama_70b_family on gpu: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x4', 'p150x8', 'p300x2']
+2026-08-13 10:39:03,982 [WARNING] test_module.test_categorization_system.suite_loader: Skipping llama_70b_family on p100: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x4', 'p150x8', 'p300x2']
+2026-08-13 10:39:03,982 [WARNING] test_module.test_categorization_system.suite_loader: Skipping llama_70b_family on p150: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x4', 'p150x8', 'p300x2']
+2026-08-13 10:39:03,982 [WARNING] test_module.test_categorization_system.suite_loader: Skipping llama_70b_family on p300: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x4', 'p150x8', 'p300x2']
+2026-08-13 10:39:03,982 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gpt_oss_20b on n150: not in compatible_devices ['t3k', 'galaxy_t3k', 'galaxy']
+2026-08-13 10:39:03,982 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gpt_oss_20b on n300: not in compatible_devices ['t3k', 'galaxy_t3k', 'galaxy']
+2026-08-13 10:39:03,982 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gpt_oss_20b on gpu: not in compatible_devices ['t3k', 'galaxy_t3k', 'galaxy']
+2026-08-13 10:39:03,982 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gpt_oss_20b on p100: not in compatible_devices ['t3k', 'galaxy_t3k', 'galaxy']
+2026-08-13 10:39:03,982 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gpt_oss_20b on p150: not in compatible_devices ['t3k', 'galaxy_t3k', 'galaxy']
+2026-08-13 10:39:03,982 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gpt_oss_20b on p150x4: not in compatible_devices ['t3k', 'galaxy_t3k', 'galaxy']
+2026-08-13 10:39:03,982 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gpt_oss_20b on p150x8: not in compatible_devices ['t3k', 'galaxy_t3k', 'galaxy']
+2026-08-13 10:39:03,982 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gpt_oss_20b on p300: not in compatible_devices ['t3k', 'galaxy_t3k', 'galaxy']
+2026-08-13 10:39:03,982 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gpt_oss_20b on p300x2: not in compatible_devices ['t3k', 'galaxy_t3k', 'galaxy']
+2026-08-13 10:39:03,982 [INFO] test_module.test_categorization_system.suite_loader: Expanded 3 test matrices into 34 suites
+2026-08-13 10:39:03,982 [INFO] test_module.test_categorization_system.suite_loader: Loaded 34 suites from llm.json (LLM)
+2026-08-13 10:39:03,982 [INFO] test_module.test_categorization_system.suite_loader: Expanded 1 test matrices into 2 suites
+2026-08-13 10:39:03,982 [INFO] test_module.test_categorization_system.suite_loader: Loaded 2 suites from tts.json (TTS)
+2026-08-13 10:39:03,982 [INFO] test_module.test_categorization_system.suite_loader: Expanded 3 test matrices into 15 suites
+2026-08-13 10:39:03,982 [INFO] test_module.test_categorization_system.suite_loader: Loaded 15 suites from video.json (VIDEO)
+2026-08-13 10:39:03,982 [INFO] test_module.test_categorization_system.test_filter: Building reverse mapping: model -> category
+2026-08-13 10:39:03,982 [INFO] test_module.test_categorization_system.test_filter: Expanding 106 test suites
+2026-08-13 10:39:03,983 [INFO] test_module.test_categorization_system.test_filter: Including prerequisites by default
+2026-08-13 10:39:03,983 [INFO] test_module.test_categorization_system.test_filter: Getting filtered tests
+2026-08-13 10:39:03,983 [WARNING] test_module.dispatch: No spec test suites match model='Falcon3-7B-Base' device='p300x2' — skipping spec_tests.
+2026-08-13 10:39:03,983 [INFO] workflow.spec_tests: ⏭  task=spec_tests no-op rc=0 (0.0s)
+2026-08-13 10:39:03,983 [INFO] workflow.release: Acceptance: PASS (0 blocker(s))
+2026-08-13 10:39:03,985 [INFO] report_module.report_file_saver: Saved markdown to: /home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final/workflow_logs/reports_output/release/report_tiiuae__Falcon3-7B-Base_2026-08-13T102828+0000.md
+2026-08-13 10:39:03,985 [INFO] report_module.report_file_saver: Saved JSON to: /home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final/workflow_logs/reports_output/release/data/report_data_tiiuae__Falcon3-7B-Base_2026-08-13T102828+0000.json
+2026-08-13 10:39:03,985 [INFO] report_module.report_file_saver: Saved JSON to: /home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final/workflow_logs/reports_output/release/data/report_data_tiiuae__Falcon3-7B-Base_2026-08-13T102828+0000.json
+2026-08-13 10:39:03,986 [INFO] report_module.generator: Generated report: md=/home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final/workflow_logs/reports_output/release/report_tiiuae__Falcon3-7B-Base_2026-08-13T102828+0000.md, json=/home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final/workflow_logs/reports_output/release/data/report_data_tiiuae__Falcon3-7B-Base_2026-08-13T102828+0000.json
+2026-08-13 10:39:03,986 [INFO] workflow.release: Wrote markdown: /home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final/workflow_logs/reports_output/release/report_tiiuae__Falcon3-7B-Base_2026-08-13T102828+0000.md
+2026-08-13 10:39:03,986 [INFO] workflow.release: Wrote json:     /home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final/workflow_logs/reports_output/release/data/report_data_tiiuae__Falcon3-7B-Base_2026-08-13T102828+0000.json
+2026-08-13 10:39:03,986 [INFO] workflow.release: === Workflow done: release (rc=0) ===
+2026-08-13 10:39:03,986 [INFO] workflow_module.runner: ✅ command=workflow rc=0
+2026-08-13 10:39:04,010 - runner.py:42 - INFO: ✅ command=release rc=0
+2026-08-13 10:39:04,010 - run.py:1168 - INFO: Completed run.py.
+2026-08-13 10:39:04,010 - run.py:1174 - INFO: The output of the workflows is not checked and any errors will be in the logs above and in the saved log file.
+2026-08-13 10:39:04,010 - run.py:1178 - INFO: If you encounter any issues please share the log file in a GitHub issue and server log if available.
+2026-08-13 10:39:04,010 - run.py:1182 - INFO: This log file is saved on local machine at: /home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final/workflow_logs/run_logs/run_2026-08-13_10-27-49_id_autoport-Falcon3-7B-Base_p300x2_release_tb76MpvS.log

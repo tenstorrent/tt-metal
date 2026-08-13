@@ -109,6 +109,6 @@
     "disable_trace_capture": true,
     "no_auth": true,
     "skip_system_sw_validation": true,
-    "limit_samples_mode": null
+    "limit_samples_mode": "ci-nightly"
   }
 }

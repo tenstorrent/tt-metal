@@ -201,3 +201,86 @@ Remaining gates before Stage 11 can pass:
 3. Rerun the no-Docker release with corrected acceptance, copy the replacement
    report, obtain an independent `stage-review` `clean-pass`, and then record
    the final local tt-inference-server and tt-metal commit SHAs. Never push.
+
+## Final Stage 11 CI-nightly release — 2026-08-13
+
+The previously listed accuracy gates were resolved and superseded by this
+run. GPQA access became available to the active identity. Exact-snapshot BF16
+CPU Hugging Face controls were then run for the same deterministic first-5%
+documents, installed task versions, raw prompt mode, zero-shot settings, and
+seed as TTI. The aggregate-only evidence is
+`hf_paired_ci_references.json`; raw samples were not copied.
+
+- IFEval v4 prompt-strict reference: HF 5/28 (17.857%). The final TT release
+  run scored 6/28 (21.429%). An earlier paired TT probe scored 4/28; both are
+  within the existing sample-count-aware CI policy's one-item quantization
+  allowance. Other HF aggregates are retained in the compact reference JSON.
+- GPQA generative v2 flexible-extract reference: HF 5/10 (50%). The final TT
+  run scored 6/10 (60%), also a one-item difference.
+- These values are configured only through `CI_NIGHTLY`
+  `ModeReferenceScore`. Unrestricted `gpu_reference_score` remains unset and
+  the model-card publisher values remain provenance, so no unrestricted gate
+  was weakened or re-keyed.
+- The measured CPU IFEval subset took 2h14m51s; a linear full-set estimate is
+  about 45 hours. Stage 11 therefore claims nightly-equivalent subset
+  readiness, not unrestricted full-set readiness, as allowed by the stage
+  contract.
+
+Server mode and context:
+
+- Reservation container hostname: `b30c965c728b`; four P300 chips, mesh shape
+  1x4 (`P300x2` product naming). A fresh open/close mesh probe passed before
+  serving. No reset was required in this resumed run.
+- External no-Docker server, port 8000. TTI used neither Docker nor its local
+  server. `disable_trace_capture=true` was preserved.
+- Server context remained 32,768 tokens with block size 32 and max sequences
+  32. The 13-point release sweep reached ISL 16,384 plus OSL 128 and included
+  naturally generated tokenization-length variation. No context cap, prompt
+  alignment, request truncation, or invalid-request waiver was introduced.
+- `server_autoport_provenance.log`, the runtime spec, and the server log prove
+  the backend imported
+  `models.autoports.tiiuae_falcon3_7b_base.tt.generator_vllm`. It did not use
+  `models/tt_transformers`, `models/demos`, or another packaged model path.
+
+TTI identity and command:
+
+- Checkout: `/home/mvasiljevic/tt-inference-server`
+- Tag/version: `0.19.0`; starting SHA `ca152fe223227f85f1a0d86cef7d372023b9de77`
+- Final local TTI SHA: `bd15f1cdcf1bbb12187bd68b120e814b7e8a1e83`
+  (`Add Falcon3 Base nightly eval references`); never pushed.
+- Docker image: not used
+- Key environment: `CACHE_ROOT=/home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final`,
+  `SERVICE_PORT=8000`; no token value was printed or copied.
+
+```text
+CACHE_ROOT=/home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final SERVICE_PORT=8000 python3 run.py --workflow release --runtime-model-spec-json /home/mvasiljevic/tt-metal/models/autoports/tiiuae_falcon3_7b_base/doc/tti_release/autoport_release_spec.json --tt-device p300x2 --service-port 8000 --server-url http://127.0.0.1 --no-auth --skip-system-sw-validation --limit-samples-mode ci-nightly --disable-trace-capture
+```
+
+The embedded spec itself contains `workflow=release`,
+`limit_samples_mode=ci-nightly`, `docker_server=false`,
+`local_server=false`, `service_port=8000`, and the autoport implementation and
+context-contract paths. The loaded copy is
+`release_runtime_spec_ci_nightly.json`.
+
+Final result: PASS, exit code 0, zero blockers and zero waivers. Evals passed
+2/2. Benchmarks passed 1/13 graded rows with 12 explicitly NA coverage rows;
+all requests succeeded. The graded 128/128/concurrency-1 row measured 206.4 ms
+mean TTFT, 56.9 decode tokens/s, and 62.1 user tokens/s against 250 ms / 50 /
+50 targets. Spec tests were NA because TTI has no matching custom-model suite;
+the prior health/completion smoke and successful OpenAI-compatible eval and
+benchmark traffic provide the available API-path evidence.
+
+Final copied artifacts:
+
+- `release_report_ci_nightly_pass.md`
+- `release_report_data_ci_nightly_pass.json`
+- `release_runtime_spec_ci_nightly.json`
+- `release_run_ci_nightly.log`
+- `release_target_benchmark_ci_nightly.json`
+- `hf_paired_ci_references.json`
+- `server_autoport_provenance.log`
+
+No raw eval JSONL, generated text, secret, model weight, cache, Docker layer,
+or persistent TT cache was copied. The final report was skimmed: both formerly
+blocking eval rows pass without waivers, the graded benchmark has every metric,
+and no failed or missing graded row remains.

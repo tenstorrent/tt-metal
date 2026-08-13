@@ -1,0 +1,24 @@
+{
+  "model": "tiiuae/Falcon3-7B-Base",
+  "snapshot": "bf3d7ed586cb22a921520e2d681a9d3d7642cde8",
+  "backend": "lm-eval hf on CPU, BF16, raw prompts, seed 42, batch_size 1",
+  "limit_samples_mode": "ci-nightly (limit 0.05)",
+  "ifeval": {
+    "task_version": 4.0,
+    "effective_samples": 28,
+    "original_samples": 541,
+    "prompt_level_strict_acc": 0.17857142857142858,
+    "inst_level_strict_acc": 0.32558139534883723,
+    "prompt_level_loose_acc": 0.21428571428571427,
+    "inst_level_loose_acc": 0.3488372093023256
+  },
+  "gpqa_diamond_generative_n_shot": {
+    "task_version": 2.0,
+    "num_fewshot": 0,
+    "effective_samples": 10,
+    "original_samples": 198,
+    "exact_match_strict": 0.0,
+    "exact_match_flexible_extract": 0.5
+  },
+  "note": "Aggregate/config evidence only; raw prompts and completions are intentionally not copied."
+}
