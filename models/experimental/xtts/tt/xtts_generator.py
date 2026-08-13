@@ -244,4 +244,26 @@ class TtTracedDecoder:
         return codes_out, lat[:, 1 : cut + 1, :].to(torch.bfloat16), decode_replay_s
 
     def release(self):
-        ttnn.release_trace(self.device, self.tid)
+        if self.tid is not None:
+            ttnn.release_trace(self.device, self.tid)
+            self.tid = None
+        # Free decode scratch before the vocoder compiles — these sit in L1/DRAM otherwise.
+        for name in (
+            "latents_buf",
+            "codes_buf",
+            "gumbel_dev",
+            "bias_dev",
+            "noise_buf",
+            "stop_bias_buf",
+            "tok_buf",
+            "step_f",
+            "cpos_buf",
+            "arange_col",
+        ):
+            t = getattr(self, name, None)
+            if t is not None and t.is_allocated():
+                ttnn.deallocate(t)
+            setattr(self, name, None)
+        if getattr(self, "sampler", None) is not None:
+            self.sampler.release()
+            self.sampler = None

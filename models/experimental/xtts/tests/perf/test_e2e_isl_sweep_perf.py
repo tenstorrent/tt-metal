@@ -1,87 +1,65 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""End-to-end performance sweep across input sequence length (ISL) for XTTS-v2.
+"""End-to-end performance cases across input sequence length (ISL) for XTTS-v2.
 
-Runs the production ``inference_fully_traced`` path (setup + decode + vocoder, three chained
-ttnn traces — what the demo runs) at a range of text lengths and reports the standard
-metrics per ISL: TTFT, tokens/s, ms/token, RTF, and the per-leg replay split.
+One pytest case per ISL. Each case opens/closes its own device (same as the demo per
+take) — no shared pytest ``device`` fixture — so compiles do not stack L1 leftovers.
 
-**Envelope — why this stops at 352, not 404.** The PCC sweep
-(``tests/pcc/test_gpt_isl_sweep.py``) goes to the *architectural* ceiling: 384 tile-aligned
-text ids under the checkpoint's 404-row text position table. This sweep covers only what
-actually runs **end to end**, which is lower: the demo caps text at ``MAX_TEXT_IDS`` 352 and
-a single pass at ``MAX_SINGLE_PASS_CODES`` 205, because the fp32 HiFi-GAN vocoder hits an L1
-circular-buffer allocation collision ("Statically allocated circular buffers ... clash with
-L1 buffers") above that. That is an allocation collision, not a clean size limit — per the
-demo's own measurements it degrades as device open/close cycles accumulate in one process,
-so a sweep that runs many generations back to back is exactly the case it punishes. If a
-row fails to allocate, that is a real data point about the envelope, not a flaky test.
+Path matches ``demo/xtts_demo.py``: text that fits one pass goes through
+``inference_fully_traced``; text over the single-pass code budget is sentence-split
+(``CHUNKING``) and replayed off one ``traced_session`` capture.
 
-Concretely and reproducibly: **ISL 64 runs fine on its own** (7.767 ms/code, RTF 0.176) but
-throws when it runs immediately after ISL 32 in the same process, while every larger ISL in
-the same sweep succeeds. So the failure is positional, not a length limit — which is exactly
-why ``demo/xtts_demo.py`` opens a **fresh device per chunk** instead of reusing one. Skipped
-rows are recorded and reported rather than failing the test.
+Single-pass opens with the ~50 MB one-shot trace region (like ``test_e2e_perf``);
+chunked opens with ``SESSION_TRACE_REGION`` (all three traces live). Decode budget is
+``chunk_max_tokens`` (192) — under the ~205-code vocoder wall (see ``ChunkingConfig``).
 
-**What to expect in the numbers.** Unlike an LLM, XTTS's decode cost is driven by
-``max_seq`` — the size of the fixed KV cache — rather than by how far into the sequence you
-are, because each decode step attends over the *entire* cache and the traced cache write
-rewrites all of it (see the README's per-op decode breakdown: that write is ~31% of a step).
-``max_seq`` grows with the prompt, so **ms/code rises with ISL** even though the model is
-generating the same number of codes. That is the headline this sweep exists to quantify.
-
-Metric definitions (XTTS is **non-streaming** — one generate call emits the whole clip):
-
-  * ``TTFT``      — time to first *code*: setup replay + one decode step. The LLM-analogous
-                    number, derived as ``setup + decode/n_codes`` rather than instrumented.
-  * ``TTFA``      — time to first *audio*: the full replay, since no audio exists until the
-                    vocoder has run over every latent. This is what a listener waits for.
-  * ``codes/s``   — decode throughput (the TPS analogue). One code is 46.4 ms of audio.
-  * ``RTF``       — replay / generated audio duration. Below 1.0 is faster than real time.
-
-Run:
+Run all ISLs:
     source python_env/bin/activate
     export TT_METAL_HOME=$(pwd)
     export PYTHONPATH=$(pwd)
     pytest models/experimental/xtts/tests/perf/test_e2e_isl_sweep_perf.py -v -s
 
+Run one ISL:
+    pytest models/experimental/xtts/tests/perf/test_e2e_isl_sweep_perf.py -v -s -k isl_96
+
 Env:
-  ``XTTS_ISL_SWEEP`` — comma list of text lengths, to shorten a smoke run
+  ``XTTS_ISL_SWEEP`` — comma list of text lengths to collect as cases
                        (e.g. ``XTTS_ISL_SWEEP=32,96``).
 """
 
 import math
 import os
+import re
 
 import pytest
 import torch
+import torch.nn.functional as F
 from loguru import logger
 
-import ttnn
-from models.experimental.xtts.reference.xtts_conditioning import GPT_COND_LEN_SEC, MEL_SR, load_coqui_test_audio
-from models.experimental.xtts.reference.xtts_gpt_block import load_xtts_state_dict
-from models.experimental.xtts.reference.xtts_gpt_generate import wrap_text_ids
-from models.experimental.xtts.reference.xtts_hifi_decoder import OUTPUT_SAMPLE_RATE, XttsHifiDecoderFull
-from models.experimental.xtts.reference.xtts_mel import SAMPLE_RATE as SPK_SR
-from models.experimental.xtts.reference.xtts_text_embedding import preprocess_text
-from models.experimental.xtts.tt.xtts_inference import TtXtts
+from models.experimental.xtts.config import (
+    CHUNKING,
+    DEMO,
+    GENERATION,
+    NUM_LATENTS,
+    SENTENCE_FINAL_PUNCT_RE,
+    SENTENCE_SPLIT_RE,
+    SESSION_TRACE_REGION,
+    TILE,
+)
 
-TILE = 32
-N_COND = 32  # conditioning latents prepended to the text prompt
-
-# Demo-validated envelope: MAX_TEXT_IDS 352, tile-aligned. See the module docstring for why this
-# does not reach the PCC sweep's 384.
+# Demo-validated envelope: MAX_TEXT_IDS 352, tile-aligned.
+# Single-pass vs chunked (SWEEP_TEXT sentence ≈73 wrapped ids, CHUNKING.max_single_pass_codes=205):
+#   ISL 32–64 → one pass (``inference_fully_traced``); ISL 96+ → sentence-chunked (``traced_session``).
 DEFAULT_ISL_SWEEP = [32, 64, 96, 128, 192, 256, 320, 352]
-MAX_NEW_TOKENS = 205  # demo's MAX_SINGLE_PASS_CODES
-TEMPERATURE, TOP_K, TOP_P, REP_PENALTY = 0.65, 50, 0.85, 5.0
+LANG = DEMO.language
 
-# Same reference voice as the demo and test_e2e_perf.py: 30 s = 8 conditioning windows.
+# One-shot path (setup released before decode, decode before vocoder) — same as test_e2e_perf.
+ONESHOT_TRACE_REGION = 52_428_800
+
 REF_CLIPS = ("LJ001-0001.wav", "LJ001-0003.wav", "LJ001-0004.wav", "LJ001-0005.wav")
-SPK_SECONDS = 8  # speaker-embedding window; 30 s clashes L1 in the speaker ResNet
+SPK_SECONDS = DEMO.spk_seconds
 
-# Real English text, repeated and trimmed to each ISL. Real text (not [STOP] padding) so the
-# generation behaves like a real request — the PCC sweep documents how badly padding distorts.
 SWEEP_TEXT = (
     "Voice synthesis has come a long way, and modern systems can already generate natural sounding "
     "speech with remarkable accuracy. "
@@ -95,103 +73,232 @@ def _isl_sweep():
     return [int(x) for x in raw.split(",") if x.strip()]
 
 
-@pytest.mark.timeout(7200)
-@pytest.mark.models_performance_bare_metal
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 65536, "trace_region_size": 52428800}], indirect=True)
-def test_xtts_e2e_isl_sweep_perf(device, reset_seeds):
+def _ids_of(text, lang=LANG):
+    from models.experimental.xtts.reference.xtts_gpt_generate import wrap_text_ids
+    from models.experimental.xtts.reference.xtts_text_embedding import preprocess_text
+
+    clean = re.sub(SENTENCE_FINAL_PUNCT_RE, "", text.strip())
+    return wrap_text_ids(preprocess_text(clean, lang=lang)).shape[1]
+
+
+def _text_for_isl(target_ids, lang=LANG):
+    """Accumulate whole sentences until wrapped length reaches ``target_ids``."""
+    sentences = [p.strip() for p in re.split(SENTENCE_SPLIT_RE, SWEEP_TEXT) if p.strip()]
+    assert sentences, "SWEEP_TEXT produced no sentences"
+    acc, i = [], 0
+    while True:
+        acc.append(sentences[i % len(sentences)])
+        i += 1
+        text = " ".join(acc)
+        if _ids_of(text, lang) >= target_ids:
+            return text
+
+
+def _prepare_chunks(text, lang=LANG):
+    """Demo-identical: sentence-split if needed, wrap, pad all chunks to a common tile length."""
+    from models.experimental.xtts.demo.xtts_demo import _split_into_chunks
+    from models.experimental.xtts.reference.xtts_gpt_generate import STOP_TEXT_TOKEN, wrap_text_ids
+    from models.experimental.xtts.reference.xtts_text_embedding import preprocess_text
+
+    chunk_texts = _split_into_chunks(text, lang)
+    wrapped_chunks = [
+        (clean, wrap_text_ids(preprocess_text(clean, lang=lang)))
+        for clean in (re.sub(SENTENCE_FINAL_PUNCT_RE, "", ct.strip()) for ct in chunk_texts)
+    ]
+    pad_to = -(-max(w.shape[1] for _, w in wrapped_chunks) // TILE) * TILE
+    chunks = [(clean, F.pad(w, (0, pad_to - w.shape[1]), value=STOP_TEXT_TOKEN)) for clean, w in wrapped_chunks]
+    return chunks, pad_to
+
+
+def _run_single(tt, wrapped, cond_wav, spk_wav_tt, gen, budget):
+    prompt_len = NUM_LATENTS + wrapped.shape[1]
+    max_seq = -(-(prompt_len + budget + 2) // TILE) * TILE
+    wav_dev, codes, perf = tt.inference_fully_traced(
+        wrapped,
+        cond_wav,
+        spk_wav_tt,
+        max_seq,
+        max_new_tokens=budget,
+        temperature=gen.temperature,
+        top_k=gen.top_k,
+        top_p=gen.top_p,
+        repetition_penalty=gen.repetition_penalty,
+        min_new_tokens=gen.min_tokens,
+    )
+    import ttnn
+    from models.experimental.xtts.reference.xtts_hifi_decoder import OUTPUT_SAMPLE_RATE
+
+    audio_s = ttnn.to_torch(wav_dev).float().numel() / OUTPUT_SAMPLE_RATE
+    return {
+        "n_chunks": 1,
+        "pad_to": wrapped.shape[1],
+        "prompt_len": prompt_len,
+        "max_seq": max_seq,
+        "codes": codes.shape[1],
+        "audio_s": audio_s,
+        "setup_s": perf["setup_replay_s"],
+        "first_setup_s": perf["setup_replay_s"],
+        "decode_s": perf["decode_replay_s"],
+        "vocoder_s": perf["vocoder_replay_s"],
+        "replay_s": perf["replay_s"],
+        "compile_s": perf["compile_s"],
+        "ttfa_s": perf["replay_s"],
+    }
+
+
+def _run_chunked(tt, chunks, cond_wav, spk_wav_tt, gen, budget):
+    from models.experimental.xtts.reference.xtts_hifi_decoder import OUTPUT_SAMPLE_RATE
+
+    text_len = chunks[0][1].shape[1]
+    prompt_len = NUM_LATENTS + text_len
+    max_seq = -(-(prompt_len + budget + 2) // TILE) * TILE
+    session = tt.traced_session(
+        cond_wav,
+        spk_wav_tt,
+        text_len,
+        max_seq,
+        budget,
+        temperature=gen.temperature,
+        top_k=gen.top_k,
+        top_p=gen.top_p,
+        repetition_penalty=gen.repetition_penalty,
+        min_new_tokens=gen.min_tokens,
+    )
+    try:
+        setup_s = decode_s = vocoder_s = replay_s = 0.0
+        first_setup_s = None
+        n_codes = 0
+        audio_s = 0.0
+        ttfa_s = None
+        for j, (_, w) in enumerate(chunks):
+            wav_t, codes_j, perf = session.run(w)
+            setup_s += perf["setup_replay_s"]
+            decode_s += perf["decode_replay_s"]
+            vocoder_s += perf["vocoder_replay_s"]
+            replay_s += perf["replay_s"]
+            n_codes += codes_j.shape[1]
+            audio_s += float(wav_t.numel()) / OUTPUT_SAMPLE_RATE
+            if ttfa_s is None:
+                ttfa_s = perf["replay_s"]
+                first_setup_s = perf["setup_replay_s"]
+            logger.info(
+                f"  chunk {j + 1}/{len(chunks)}: setup {perf['setup_replay_s']:.3f}s | "
+                f"decode {perf['decode_replay_s']:.3f}s ({codes_j.shape[1]} codes) | "
+                f"vocoder {perf['vocoder_replay_s']:.3f}s"
+            )
+        return {
+            "n_chunks": len(chunks),
+            "pad_to": text_len,
+            "prompt_len": prompt_len,
+            "max_seq": max_seq,
+            "codes": n_codes,
+            "audio_s": audio_s,
+            "setup_s": setup_s,
+            "first_setup_s": first_setup_s,
+            "decode_s": decode_s,
+            "vocoder_s": vocoder_s,
+            "replay_s": replay_s,
+            "compile_s": session.compile_s,
+            "ttfa_s": ttfa_s,
+        }
+    finally:
+        session.close()
+
+
+def _run_isl_case(text_len):
+    """Open device, run one ISL, close device. Meant to run in a fresh process."""
+    import random
+
+    import numpy as np
+    import ttnn
     from scipy.signal import resample_poly
 
-    sd = load_xtts_state_dict()
-    tt = TtXtts(device, sd, XttsHifiDecoderFull(sd))
+    from models.experimental.xtts.reference.xtts_conditioning import GPT_COND_LEN_SEC, MEL_SR, load_coqui_test_audio
+    from models.experimental.xtts.reference.xtts_gpt_block import load_xtts_state_dict
+    from models.experimental.xtts.reference.xtts_gpt_generate import STOP_TEXT_TOKEN
+    from models.experimental.xtts.reference.xtts_hifi_decoder import XttsHifiDecoderFull
+    from models.experimental.xtts.reference.xtts_mel import SAMPLE_RATE as SPK_SR
+    from models.experimental.xtts.tt.xtts_inference import TtXtts
 
-    wav = load_coqui_test_audio(samples=REF_CLIPS, max_seconds=GPT_COND_LEN_SEC)  # [1, s] @ 22050
-    g = math.gcd(SPK_SR, MEL_SR)
-    spk_src = wav[0].numpy()[: MEL_SR * SPK_SECONDS]
-    spk_wav = torch.from_numpy(resample_poly(spk_src, SPK_SR // g, MEL_SR // g).astype("float32")).unsqueeze(0)
-    spk_wav_tt = ttnn.from_torch(
-        spk_wav.reshape(1, -1).float(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.float32
-    )
+    # Match conftest ``reset_seeds`` — parent fixture does not apply inside the spawn child.
+    torch.manual_seed(213919)
+    np.random.seed(213919)
+    random.seed(213919)
 
-    full_ids = wrap_text_ids(preprocess_text(SWEEP_TEXT, lang="en"))
-    rows, skipped = [], []
+    assert text_len % TILE == 0, f"ISL {text_len} must be tile-aligned"
 
-    for text_len in _isl_sweep():
-        assert text_len % TILE == 0, f"ISL {text_len} must be tile-aligned"
-        assert full_ids.shape[1] >= text_len, f"SWEEP_TEXT yields {full_ids.shape[1]} ids, need {text_len}"
-        wrapped = full_ids[:, :text_len].contiguous()
-        prompt_len = N_COND + text_len
-        max_seq = -(-(prompt_len + MAX_NEW_TOKENS + 2) // TILE) * TILE
-
-        try:
-            wav_dev, codes, perf = tt.inference_fully_traced(
-                wrapped,
-                wav,
-                spk_wav_tt,
-                max_seq,
-                max_new_tokens=MAX_NEW_TOKENS,
-                temperature=TEMPERATURE,
-                top_k=TOP_K,
-                top_p=TOP_P,
-                repetition_penalty=REP_PENALTY,
-            )
-        except RuntimeError as e:
-            # The L1 allocation collision described in the module docstring. Record the ISL that
-            # hit it rather than failing the sweep — where the wall is IS the deliverable.
-            skipped.append((text_len, max_seq, str(e).strip().splitlines()[0][:120]))
-            logger.warning(f"ISL {text_len} (max_seq {max_seq}) did not run: {skipped[-1][2]}")
-            continue
-
-        n_codes = codes.shape[1]
-        assert n_codes > 0, f"ISL {text_len} generated no codes"
-        audio_s = ttnn.to_torch(wav_dev).float().numel() / OUTPUT_SAMPLE_RATE
-        ms_per_code = perf["decode_replay_s"] / n_codes * 1000
-        rows.append(
-            {
-                "isl": text_len,
-                "prompt_len": prompt_len,
-                "max_seq": max_seq,
-                "codes": n_codes,
-                "audio_s": audio_s,
-                "setup_ms": perf["setup_replay_s"] * 1000,
-                "decode_s": perf["decode_replay_s"],
-                "vocoder_ms": perf["vocoder_replay_s"] * 1000,
-                "replay_s": perf["replay_s"],
-                "ms_per_code": ms_per_code,
-                "codes_per_s": n_codes / perf["decode_replay_s"],
-                "ttft_s": perf["setup_replay_s"] + ms_per_code / 1000,  # setup + one decode step
-                "ttfa_s": perf["replay_s"],  # non-streaming: no audio until the vocoder has run
-                "rtf": perf["replay_s"] / audio_s,
-                "compile_s": perf["compile_s"],
-            }
-        )
-        logger.info(
-            f"ISL={text_len:>3} max_seq={max_seq:>4} codes={n_codes:>3} | TTFT={rows[-1]['ttft_s'] * 1000:.1f}ms "
-            f"decode={ms_per_code:.3f}ms/code ({rows[-1]['codes_per_s']:.1f} codes/s) "
-            f"replay={perf['replay_s']:.3f}s RTF={rows[-1]['rtf']:.3f}"
-        )
-
-    assert rows, "ISL sweep produced no rows"
-
+    text = _text_for_isl(text_len)
+    chunks, pad_to = _prepare_chunks(text)
+    chunked = len(chunks) > 1
+    # 192 stays under the ~205-code vocoder CB/L1 wall with margin (ChunkingConfig).
+    budget = CHUNKING.chunk_max_tokens
+    trace_region = SESSION_TRACE_REGION if chunked else ONESHOT_TRACE_REGION
+    mode = f"chunked ({len(chunks)} chunks)" if chunked else "single-pass"
     logger.info(
-        f"\n{'ISL':>5}{'prompt':>8}{'max_seq':>9}{'codes':>7}{'audio_s':>9}{'TTFT_ms':>9}"
-        f"{'codes/s':>9}{'ms/code':>9}{'setup_ms':>10}{'voc_ms':>8}{'replay_s':>10}{'RTF':>7}"
+        f"ISL {text_len}: {mode} | single-pass through ISL 64; chunked from ISL 96 "
+        f"(pad_to={pad_to}, budget={budget} codes, trace_region={trace_region})"
     )
-    for r in rows:
-        logger.info(
-            f"{r['isl']:>5}{r['prompt_len']:>8}{r['max_seq']:>9}{r['codes']:>7}{r['audio_s']:>9.2f}"
-            f"{r['ttft_s'] * 1000:>9.1f}{r['codes_per_s']:>9.1f}{r['ms_per_code']:>9.3f}"
-            f"{r['setup_ms']:>10.1f}{r['vocoder_ms']:>8.2f}{r['replay_s']:>10.3f}{r['rtf']:>7.3f}"
-        )
-    if skipped:
-        logger.warning(f"{len(skipped)} ISL(s) did not run (L1 allocation envelope):")
-        for text_len, max_seq, msg in skipped:
-            logger.warning(f"  ISL={text_len} max_seq={max_seq}: {msg}")
 
-    # ms/code is expected to RISE with max_seq (the whole KV cache is rewritten every step).
-    lo, hi = rows[0], rows[-1]
-    if hi["max_seq"] > lo["max_seq"]:
-        logger.info(
-            f"decode cost vs cache size: {lo['ms_per_code']:.3f} ms/code at max_seq {lo['max_seq']} -> "
-            f"{hi['ms_per_code']:.3f} ms/code at max_seq {hi['max_seq']} "
-            f"({(hi['ms_per_code'] / lo['ms_per_code'] - 1) * 100:+.1f}%)"
+    device = ttnn.open_device(
+        device_id=DEMO.device_id,
+        l1_small_size=DEMO.l1_small_size,
+        trace_region_size=trace_region,
+    )
+    try:
+        sd = load_xtts_state_dict()
+        tt = TtXtts(device, sd, XttsHifiDecoderFull(sd))
+        gen = GENERATION
+
+        wav = load_coqui_test_audio(samples=REF_CLIPS, max_seconds=GPT_COND_LEN_SEC)
+        g = math.gcd(SPK_SR, MEL_SR)
+        spk_src = wav[0].numpy()[: MEL_SR * SPK_SECONDS]
+        spk_wav = torch.from_numpy(resample_poly(spk_src, SPK_SR // g, MEL_SR // g).astype("float32")).unsqueeze(0)
+        spk_wav_tt = ttnn.from_torch(
+            spk_wav.reshape(1, -1).float(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.float32
         )
+
+        if not chunked:
+            # Exact-ISL trim of a longer wrap (sentence ≈73 ids) drops the trailing [STOP].
+            # Without it the sampler drones toward the code cap and the vocoder CB-clashes —
+            # ISL 64 was the failure mode; the demo always keeps STOP (+ STOP pad) and passes.
+            wrapped = chunks[0][1][:, :text_len].contiguous().clone()
+            if wrapped.shape[1] < text_len:
+                wrapped = F.pad(wrapped, (0, text_len - wrapped.shape[1]), value=STOP_TEXT_TOKEN)
+            wrapped[:, -1] = STOP_TEXT_TOKEN
+            result = _run_single(tt, wrapped, wav, spk_wav_tt, gen, budget)
+        else:
+            for i, (clean, w) in enumerate(chunks):
+                logger.info(f"  [{i + 1}/{len(chunks)}] {w.shape[1]:3d} tokens  {clean!r}")
+            result = _run_chunked(tt, chunks, wav, spk_wav_tt, gen, budget)
+    finally:
+        ttnn.close_device(device)
+
+    n_codes = result["codes"]
+    assert n_codes > 0, f"ISL {text_len} generated no codes"
+    ms_per_code = result["decode_s"] / n_codes * 1000
+    result.update(
+        {
+            "isl": text_len,
+            "ms_per_code": ms_per_code,
+            "codes_per_s": n_codes / result["decode_s"],
+            "ttft_s": result["first_setup_s"] + ms_per_code / 1000,
+            "rtf": result["replay_s"] / result["audio_s"],
+        }
+    )
+    return result
+
+
+@pytest.mark.timeout(1800)
+@pytest.mark.models_performance_bare_metal
+@pytest.mark.parametrize("text_len", _isl_sweep(), ids=lambda n: f"isl_{n}")
+def test_xtts_e2e_isl_perf(text_len, reset_seeds):
+    """One ISL with its own open_device/close_device (no shared device fixture)."""
+    r = _run_isl_case(text_len)
+    logger.info(
+        f"ISL={r['isl']:>3} chunks={r['n_chunks']} pad_to={r['pad_to']:>3} "
+        f"prompt={r['prompt_len']:>4} max_seq={r['max_seq']:>4} codes={r['codes']:>4} "
+        f"audio={r['audio_s']:.2f}s | TTFT={r['ttft_s'] * 1000:.1f}ms "
+        f"decode={r['ms_per_code']:.3f}ms/code ({r['codes_per_s']:.1f} codes/s) "
+        f"setup={r['setup_s'] * 1000:.1f}ms voc={r['vocoder_s'] * 1000:.2f}ms "
+        f"replay={r['replay_s']:.3f}s RTF={r['rtf']:.3f} compile={r['compile_s']:.1f}s"
+    )

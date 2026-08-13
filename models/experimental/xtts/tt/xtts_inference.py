@@ -42,7 +42,13 @@ class TtXtts(LightweightModule):
         return self.conditioning.forward_dev(ttnn.typecast(mel_dev, ttnn.bfloat16))
 
     def _style_window(self, wav_dev):
-        style = self._style_from_mel(self.cond_mel_fe(wav_dev))
+        mel = self.cond_mel_fe(wav_dev)
+        mel_bf = ttnn.typecast(mel, ttnn.bfloat16)
+        style = self.conditioning.forward_dev(mel_bf)
+        # forward_dev keeps the input alive; drop mel chain once style is produced.
+        for t in (mel_bf, mel):
+            if t.is_allocated():
+                ttnn.deallocate(t)
         out = ttnn.to_memory_config(style, ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(style)
         return out
@@ -127,8 +133,11 @@ class TtXtts(LightweightModule):
             g = self.decoder.speaker_embedding(ref_wav_spk)
             return g, gpt.prefill_on_device(text_dev, cl)
 
-        _setup()
+        # Warmup allocs a throwaway speaker emb — free it before capture so L1 is clear for CBs.
+        g_warm, _ = _setup()
         ttnn.synchronize_device(dev)
+        if g_warm.is_allocated():
+            ttnn.deallocate(g_warm)
         stid = ttnn.begin_trace_capture(dev, cq_id=0)
         g, prompt_len = _setup()
         ttnn.end_trace_capture(dev, stid, cq_id=0)
@@ -137,6 +146,12 @@ class TtXtts(LightweightModule):
         ttnn.execute_trace(dev, stid, blocking=True)
         setup_replay_s = time.perf_counter() - t0
         ttnn.release_trace(dev, stid)
+        # Setup inputs are no longer bound once the setup trace is released.
+        for w in wav_devs:
+            if w.is_allocated():
+                ttnn.deallocate(w)
+        if text_dev.is_allocated():
+            ttnn.deallocate(text_dev)
 
         codes, latents, decode_replay_s = self.generator.generate_ondevice_traced(
             prompt_len,
@@ -151,7 +166,9 @@ class TtXtts(LightweightModule):
         # Warmup primes folded cond-bias (from_device is fatal inside a trace).
         lat_in = latents
         voc = self.decoder.decoder
-        _ = voc(ttnn.clone(lat_in), g)
+        warm_wav = voc(ttnn.clone(lat_in), g)
+        if warm_wav.is_allocated():
+            ttnn.deallocate(warm_wav)
         ttnn.synchronize_device(dev)
         vtid = ttnn.begin_trace_capture(dev, cq_id=0)
         wav_dev = voc(ttnn.clone(lat_in), g)
@@ -163,6 +180,11 @@ class TtXtts(LightweightModule):
         ttnn.release_trace(dev, vtid)
         # Release only after release_trace — never evict under a live trace.
         voc.generator.release_conditioning()
+        voc.upsampler.release_cache()
+        if lat_in.is_allocated():
+            ttnn.deallocate(lat_in)
+        if g.is_allocated():
+            ttnn.deallocate(g)
         replay_s = setup_replay_s + decode_replay_s + vocoder_replay_s
         compile_s = max(0.0, time.perf_counter() - t_all0 - replay_s)
         perf = {
@@ -236,7 +258,9 @@ class TtXttsTracedSession:
         warm_prompt_len = _setup()
         assert warm_prompt_len == prompt_len, f"prefill gave prompt_len {warm_prompt_len}, expected {prompt_len}"
         self.decoder.warmup()
-        _ = voc(ttnn.clone(self.voc_in), self.g)
+        warm_wav = voc(ttnn.clone(self.voc_in), self.g)
+        if warm_wav.is_allocated():
+            ttnn.deallocate(warm_wav)
         ttnn.synchronize_device(dev)
 
         self.setup_tid = ttnn.begin_trace_capture(dev, cq_id=0)
@@ -260,7 +284,10 @@ class TtXttsTracedSession:
             f"session captured for {self.text_dev.shape[1]} text tokens, got {text_ids.shape[1]} — "
             "every chunk must be padded to the same length"
         )
-        ttnn.copy(self.tt.gpt.text_ids_to_device(text_ids), self.text_dev)
+        text_tmp = self.tt.gpt.text_ids_to_device(text_ids)
+        ttnn.copy(text_tmp, self.text_dev)
+        if text_tmp.is_allocated():
+            ttnn.deallocate(text_tmp)
         t0 = time.perf_counter()
         ttnn.execute_trace(dev, self.setup_tid, blocking=True)
         setup_replay_s = time.perf_counter() - t0
@@ -271,10 +298,10 @@ class TtXttsTracedSession:
         frames = lat_host.shape[1]
         padded = torch.zeros(1, self.N, HIDDEN_SIZE, dtype=torch.float32)
         padded[:, :frames, :] = lat_host.float()
-        ttnn.copy(
-            ttnn.from_torch(padded, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, dtype=ttnn.float32),
-            self.voc_in,
-        )
+        lat_tmp = ttnn.from_torch(padded, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, dtype=ttnn.float32)
+        ttnn.copy(lat_tmp, self.voc_in)
+        if lat_tmp.is_allocated():
+            ttnn.deallocate(lat_tmp)
         t0 = time.perf_counter()
         ttnn.execute_trace(dev, self.voc_tid, blocking=True)
         vocoder_replay_s = time.perf_counter() - t0
@@ -294,3 +321,10 @@ class TtXttsTracedSession:
         for tid in (self.setup_tid, self.voc_tid):
             ttnn.release_trace(self.device, tid)
         self.decoder.release()
+        voc = self.tt.decoder.decoder
+        voc.generator.release_conditioning()
+        voc.upsampler.release_cache()
+        for t in (*self.wav_devs, self.text_dev, self.voc_in, self.g, getattr(self, "wav_dev", None)):
+            if t is not None and t.is_allocated():
+                ttnn.deallocate(t)
+        self.wav_devs = []

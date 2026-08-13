@@ -38,6 +38,14 @@ class TtSampler:
             torch.zeros((1, self.v)), device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
         )
 
+    def release(self):
+        """Free device tables after the decode trace is released (not while bound)."""
+        for name in ("seen", "_neg", "_one", "_arange_v"):
+            t = getattr(self, name, None)
+            if t is not None and t.is_allocated():
+                ttnn.deallocate(t)
+            setattr(self, name, None)
+
     def _mark(self, token):
         idx = ttnn.from_torch(
             torch.tensor([[token]], dtype=torch.int32), device=self.device, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT
