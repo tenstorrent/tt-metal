@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import torch
 from loguru import logger
 
@@ -17,9 +19,15 @@ from models.tt_transformers.tt.load_checkpoints import (
     standardize_hf_keys_multimodal,
 )
 
+from .patch_embed import VisionEmbed
 from .patch_merger import PatchMerger
 from .vision_block import VisionBlock
 from .vision_model_config import VisionModelArgs
+
+try:  # transformers >= the release that split these helpers out of the model class
+    from transformers.vision_utils import get_vision_bilinear_indices_and_weights as _bilinear_corners_hf
+except ImportError:  # pragma: no cover - older transformers keeps the math inside the model
+    _bilinear_corners_hf = None
 
 
 class VisionTransformer(LightweightModule):
@@ -164,6 +172,7 @@ class DropInVisionTransformer(torch.nn.Module):
         dtype=ttnn.bfloat8_b,
         debug=False,
         tt_ccl=None,
+        weight_cache_path=None,
     ):
         """
         Initialize the TorchVisionTransformer wrapper.
@@ -185,13 +194,46 @@ class DropInVisionTransformer(torch.nn.Module):
         state_dict_prefix = model_args.get_state_dict_prefix("VisionTransformer")
         state_dict = {f"{state_dict_prefix}.{k}": v for k, v in state_dict.items()}
 
+        # A caller passing random/synthetic weights MUST pass its own weight_cache_path: the ttnn
+        # weight cache is keyed by name only, so writing random tensors under the checkpoint's
+        # cache dir poisons it for every later run that loads the same names.
+        cache_root = model_args.weight_cache_path(dtype) if weight_cache_path is None else weight_cache_path
+
         # Initialize TT model
         self.tt_model = VisionTransformer(
             args=model_args,
             state_dict=state_dict,
-            weight_cache_path=model_args.weight_cache_path(dtype),
+            weight_cache_path=cache_root,
             dtype=dtype,
             tt_ccl=tt_ccl,
+        )
+
+        # Patch embedding + interpolated positional embedding on device. Both used to run as host
+        # torch on the HF reference module, once per image: an nn.Conv3d over [n_patches, 1536] and
+        # four [n_patches, 1152] gathers. QWEN36_HOST_VISION_EMBED=1 keeps the old host path.
+        self.tt_embed = None
+        if os.environ.get("QWEN36_HOST_VISION_EMBED", "0") != "1":
+            if _bilinear_corners_hf is None:
+                logger.warning(
+                    "transformers.vision_utils.get_vision_bilinear_indices_and_weights is unavailable; "
+                    "falling back to the host patch/pos embed"
+                )
+            else:
+                self.tt_embed = VisionEmbed(
+                    model_args.mesh_device, model_args, reference_model, weight_cache_path=cache_root
+                )
+
+    def _bilinear_corners(self, grid_thw):
+        """[4, n_patches] corner indices and weights into the positional-embedding table.
+
+        Pure index arithmetic over the grid — vectorized per image, so it stays on host; only the
+        gathers it feeds were worth moving to the device.
+        """
+        vcfg = self.model_args.hf_config.vision_config
+        return _bilinear_corners_hf(
+            grid_thw,
+            num_grid_per_side=int(vcfg.num_position_embeddings**0.5),
+            spatial_merge_size=vcfg.spatial_merge_size,
         )
 
     @property
@@ -239,44 +281,45 @@ class DropInVisionTransformer(torch.nn.Module):
                 spatial_merge_size=self.model_args.hf_config.vision_config.spatial_merge_size,
             )
 
-            # 3. Use reference model's patch embedding
-            patch_input = self.reference_model.patch_embed(pixel_values)
-            pos_embeds = self.reference_model.fast_pos_embed_interpolate(grid_thw)
-            patch_input = patch_input + pos_embeds
+            # 3. Patch embedding + interpolated positional embedding (device by default).
+            tt_input = None
+            if self.tt_embed is not None:
+                idx, wts = self._bilinear_corners(grid_thw)
+                tt_input = self.tt_embed.forward(pixel_values, idx, wts, seq_len)
+            else:
+                patch_input = self.reference_model.patch_embed(pixel_values)
+                pos_embeds = self.reference_model.fast_pos_embed_interpolate(grid_thw)
+                patch_input = patch_input + pos_embeds
 
-            # 4. Prepare rotational embeddings (cos, sin) -> pad -> convert to TT tensors
+            # 4. Prepare rotational embeddings (cos, sin) -> upload -> pad to seq_len on device.
+            # The pad is the identity rotation (cos=1, sin=0), and it is by far the larger part of
+            # the tensor when an image's token count sits just above a 2048 boundary — padding on
+            # device means only the real rows cross PCIe.
             cos_orig, sin_orig = position_embeddings
             cos_orig, sin_orig = convert_rope_style_hf_to_meta(cos_orig, sin_orig)
-            # pad sequence length with cos = 1, sin = 0 (identity rotation)
-            cos_padded = (
-                torch.nn.functional.pad(cos_orig, (0, 0, 0, seq_len - unpadded_seq_len), value=1)
-                .unsqueeze(0)
-                .unsqueeze(0)
-            )
-            sin_padded = (
-                torch.nn.functional.pad(sin_orig, (0, 0, 0, seq_len - unpadded_seq_len), value=0)
-                .unsqueeze(0)
-                .unsqueeze(0)
-            )
-            # Convert to TT tensors on the mesh device
-            cos = ttnn.from_torch(
-                cos_padded,
-                dtype=ttnn.bfloat16,  # Use bfloat16 for RoPE
-                layout=ttnn.TILE_LAYOUT,
-                device=self.model_args.mesh_device,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.model_args.mesh_device),
-            )
-            sin = ttnn.from_torch(
-                sin_padded,
-                dtype=ttnn.bfloat16,  # Use bfloat16 for RoPE
-                layout=ttnn.TILE_LAYOUT,
-                device=self.model_args.mesh_device,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.model_args.mesh_device),
-            )
+            mesh = self.model_args.mesh_device
+
+            def _upload_padded(t, pad_value):
+                tt = ttnn.from_torch(
+                    t.unsqueeze(0).unsqueeze(0).contiguous(),
+                    dtype=ttnn.bfloat16,  # Use bfloat16 for RoPE
+                    layout=ttnn.TILE_LAYOUT,
+                    device=mesh,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+                )
+                if seq_len == unpadded_seq_len:
+                    return tt
+                padded = ttnn.pad(tt, [(0, 0), (0, 0), (0, seq_len - unpadded_seq_len), (0, 0)], value=pad_value)
+                ttnn.deallocate(tt)
+                return padded
+
+            cos = _upload_padded(cos_orig, 1.0)
+            sin = _upload_padded(sin_orig, 0.0)
             rot_mats = [cos, sin]
 
             # 5. Prepare input tensor for the TT model using window_index
-            tt_input = self.tt_model.prepare_input(patch_input, seq_len)
+            if tt_input is None:
+                tt_input = self.tt_model.prepare_input(patch_input, seq_len)
 
             # --- TT Model Execution ---
             tt_out = self.tt_model(
