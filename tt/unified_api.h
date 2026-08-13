@@ -310,6 +310,43 @@ inline constexpr uint32_t kMcastReadySem = kMcastSemBase + 2 * thread;
 template <int thread>
 inline constexpr uint32_t kMcastSentSem = kMcastSemBase + 2 * thread + 1;
 
+// The program's core grid, so a whole-program barrier needs no arguments. Also
+// supplied by the harness, which is the only place that knows the core range.
+#if defined(TT_UNIFIED_CORE_GRID_H) && defined(TT_UNIFIED_CORE_GRID_W)
+inline constexpr bool kCoreGridKnown = true;
+inline constexpr uint32_t kCoreGridH = TT_UNIFIED_CORE_GRID_H;
+inline constexpr uint32_t kCoreGridW = TT_UNIFIED_CORE_GRID_W;
+#else
+inline constexpr bool kCoreGridKnown = false;
+inline constexpr uint32_t kCoreGridH = 1;
+inline constexpr uint32_t kCoreGridW = 1;
+#endif
+
+// ---------------------------------------------------------------------------
+// synchronize_cores -- barrier across the CORES of a region
+//
+// Every participating core runs the same statement; one of them (the region's
+// start corner) acts as the rendezvous point. Reuses the reserved multicast
+// handshake pair, which is why every operation that touches those semaphores
+// leaves both at 0 on every core.
+//
+// It synchronizes CORES, not the five threads on a core: only DM thread `thread`
+// participates, and the other projections run straight past. Two threads can
+// barrier independently, since each has its own reserved pair.
+//
+// The no-argument form spans the program's whole core grid with logical (0,0) as
+// the rendezvous point.
+// ---------------------------------------------------------------------------
+
+template <int thread>
+void synchronize_cores(PhysicalMcast region);
+
+template <int thread>
+void synchronize_cores(LogicalMcast region);
+
+template <int thread>
+void synchronize_cores();
+
 // ---------------------------------------------------------------------------
 // Semaphore -- a host-allocated L1 counter, projected onto one DM thread
 //

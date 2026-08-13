@@ -563,11 +563,17 @@ NocAsyncReadTx<thread> noc_load(
             // The flag must not overtake the payload it describes.
             noc_async_writes_flushed();
 
-            // Held at 1 on the sender: this is the constant being broadcast, and
-            // resetting it here would race the outbound read of its own L1. Each
-            // receiver clears its own copy instead.
             data_sent.set(1);
             data_sent.set_mcast(mcast);
+
+            // Put it back to 0 so BOTH semaphores read 0 on every core once this
+            // returns. The flush is what makes that safe: set_mcast sources the
+            // value from local L1, so the write has to have departed before the
+            // value can be overwritten. Without this the sender would sit at 1,
+            // and anything else sharing the pair -- synchronize_cores() -- would
+            // see a stale release and skip its wait.
+            noc_async_writes_flushed();
+            data_sent.set(0);
         } else {
             receivers_ready.inc_remote(mcast.start);
             data_sent.wait(1);
@@ -618,6 +624,68 @@ NocAsyncReadTx<thread> noc_load(const Storage& storage, PhysicalMcast mcast, con
 template <int thread, typename Accessor>
 NocAsyncReadTx<thread> noc_load(const Storage& storage, LogicalMcast mcast, const Accessor& acc, uint32_t block_idx) {
     return noc_load<thread>(storage, mcast.to_physical(), acc, block_idx);
+}
+
+// ---------------------------------------------------------------------------
+// synchronize_cores -- a barrier across CORES, for one data-movement thread
+// ---------------------------------------------------------------------------
+
+template <int thread>
+void synchronize_cores(PhysicalMcast region) {
+#if defined(IS_DM_THREAD) && IS_DM_THREAD
+    if constexpr (thread == TT_DM_THREAD_ID) {
+        static_assert(
+            kMcastSemsReserved,
+            "synchronize_cores() needs the reserved handshake semaphores: build the program through "
+            "unified_program(), which reserves them and defines TT_UNIFIED_MCAST_SEM_BASE");
+
+        // Same pair the multicast handshake uses, in the same roles: count the
+        // participants in, then release them.
+        Semaphore<thread> arrived(kMcastReadySem<thread>);
+        Semaphore<thread> release(kMcastSentSem<thread>);
+
+        const uint32_t others = region.volume() - 1;
+        if (others == 0) {
+            return;  // nothing to synchronize with; a 0-destination mcast is not a thing
+        }
+
+        if (PhysicalCoord::this_core() == region.start) {
+            arrived.wait(others);
+
+            // Clear BEFORE releasing anyone. A core let go early can re-enter the
+            // next barrier and increment `arrived` immediately; if the reset came
+            // after the release, that arrival would be erased and the next
+            // barrier would hang. While everyone is still parked on `release`,
+            // no such increment is possible.
+            arrived.set(0);
+
+            release.set(1);
+            release.set_mcast(region);
+            noc_async_writes_flushed();
+            release.set(0);  // leave the pair as we found it
+        } else {
+            arrived.inc_remote(region.start);
+            release.wait(1);
+            release.set(0);
+        }
+    }
+#else
+    (void)region;
+#endif
+}
+
+template <int thread>
+void synchronize_cores(LogicalMcast region) {
+    synchronize_cores<thread>(region.to_physical());
+}
+
+template <int thread>
+void synchronize_cores() {
+    static_assert(
+        kCoreGridKnown,
+        "synchronize_cores() with no region needs the program's core grid: build the program through "
+        "unified_program(), which defines TT_UNIFIED_CORE_GRID_H/W -- or pass a region explicitly");
+    synchronize_cores<thread>(LogicalMcast{LogicalCoord{0, 0}, Shape{kCoreGridH, kCoreGridW}});
 }
 
 // ---------------------------------------------------------------------------
