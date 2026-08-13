@@ -3638,9 +3638,16 @@ void PerfDebugProfiler::stop() {
             dropped_.load());
     log_info(
         tt::LogMetal,
-        "[perf-debug profiler] order/loss: per-lane ts regressions {} of {} at publish, {} of {} at consume "
-        "[both MUST be 0; non-zero = records reordered => Tracy nesting corrupt] | lane-bound drops {} | "
-        "batch flushes {}",
+        // "order-checked", not "records": these counts are the records the per-lane ORDER INVARIANT examined,
+        // which is fewer than the records published once the NoC-footprint series is on. A PP_DATA sample
+        // carries a counter value, not a per-lane monotonic timestamp, so there is no ordering to test and it
+        // is correctly excluded. Labelling it "of N at publish" made a healthy run look like it had lost 6,000
+        // records next to "consumer took" -- same defect as reporting `dropped N` without saying the survivors
+        // are scrambled. The difference (took - order-checked) is a useful free cross-check: it measures series
+        // records emitted, independently of what the device reports.
+        "[perf-debug profiler] order/loss: per-lane ts regressions {} of {} order-checked at publish, {} of {} "
+        "order-checked at consume [both MUST be 0; non-zero = records reordered => Tracy nesting corrupt] | "
+        "lane-bound drops {} | batch flushes {}",
         w_pub_regress_.load(),
         w_pub_ok_.load() + w_pub_regress_.load(),
         w_con_regress_.load(),
