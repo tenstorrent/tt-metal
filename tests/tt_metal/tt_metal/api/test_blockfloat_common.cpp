@@ -91,18 +91,13 @@ INSTANTIATE_TEST_SUITE_P(
     // clang-format on
 );
 
-// ============================================================================
-// Quasar arch-enablement: the Fp8_e4m3 pack-src-format guard must admit QUASAR.
-// get_single_pack_src_format() previously FATAL'd unless arch == BLACKHOLE; it now
-// gates on is_data_format_supported(Fp8_e4m3, arch) (true for BLACKHOLE and QUASAR,
-// false for WORMHOLE_B0). Host-only: exercises the guard directly via the public
-// get_pack_src_formats() wrapper, no device required.
-// ============================================================================
+// FP8_E4M3 is supported on Blackhole and Quasar but not Wormhole. Verify the arch guard in
+// get_single_pack_src_format() matches that: QUASAR and BLACKHOLE pass, WORMHOLE_B0 throws.
+// Host-only: calls the public get_pack_src_formats() wrapper, no device required.
 TEST(DataFormatFp8ArchGuard, Fp8E4m3PackSrcFormatPerArch) {
     const std::array<tt::DataFormat, 1> fp8_formats{tt::DataFormat::Fp8_e4m3};
     constexpr auto unpack_dst = tt::DataFormat::Float16_b;
 
-    // QUASAR supports Fp8_e4m3 -> must NOT throw the "only available in Blackhole" guard.
     EXPECT_NO_THROW(tt::get_pack_src_formats(
         fp8_formats,
         unpack_dst,
@@ -111,9 +106,7 @@ TEST(DataFormatFp8ArchGuard, Fp8E4m3PackSrcFormatPerArch) {
         /*int_fpu_en=*/false,
         tt::ARCH::QUASAR));
 
-    // BLACKHOLE: baseline, still allowed (no regression).
     EXPECT_NO_THROW(tt::get_pack_src_formats(fp8_formats, unpack_dst, true, false, false, tt::ARCH::BLACKHOLE));
 
-    // WORMHOLE_B0: still rejected (is_data_format_supported(Fp8_e4m3, WORMHOLE_B0) == false) -> no regression.
     EXPECT_ANY_THROW(tt::get_pack_src_formats(fp8_formats, unpack_dst, true, false, false, tt::ARCH::WORMHOLE_B0));
 }

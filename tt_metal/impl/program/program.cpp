@@ -2566,7 +2566,6 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         // width formats that are supported mostly in tt-metal. This conservative check fires whenever a
         // compute kernel shares a core with any FP8 CB — the old Program API has no way to know which CB
         // a given kernel actually reads, so we err on the side of catching the misconfiguration.
-        // (Wormhole has no FP8 support at all; get_single_pack_src_format rejects it earlier.)
         if ((build_options.build_env.get_arch() == tt::ARCH::BLACKHOLE ||
              build_options.build_env.get_arch() == tt::ARCH::QUASAR) &&
             kernel->get_kernel_processor_class() == HalProcessorClassType::COMPUTE &&

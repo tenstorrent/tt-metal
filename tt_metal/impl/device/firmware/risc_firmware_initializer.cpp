@@ -960,8 +960,6 @@ dev_msgs::core_info_msg_t RiscFirmwareInitializer::populate_core_info_msg(
             dev_msgs::AddressableCoreType::UNKNOWN);
     }
     int non_worker_cores_idx = 0;
-    // Whether PCIE/DRAM non-worker cores are addressed virtually (Blackhole, Quasar) or physically
-    // (Wormhole) is a per-arch HAL capability; ETH is virtualized on every arch.
     const bool virtualizes_non_worker_cores = hal_.virtualizes_non_worker_cores();
     bool skip_physical = hal_.is_coordinate_virtualization_enabled() and virtualizes_non_worker_cores;
     if (not skip_physical) {
@@ -978,24 +976,13 @@ dev_msgs::core_info_msg_t RiscFirmwareInitializer::populate_core_info_msg(
                 core_info.non_worker_cores()[non_worker_cores_idx++], core, dev_msgs::AddressableCoreType::ETH);
         }
     }
-    // DISPATCH cores are never written into virtual_non_worker_cores below, so register them in the
-    // physical list unconditionally. This restores the mailbox content produced for Quasar before
-    // skip_physical became true for it; without it these cores appear in neither mailbox array and fall
-    // through to the permissive physical-Tensix range check in debug/sanitize.h, which returns TENSIX for
-    // any in-grid coordinate -- so the watcher mislabels them and a multicast covering a dispatch core is
-    // no longer flagged as touching a non-worker. Only Quasar registers a DISPATCH programmable core type,
-    // so dispatch_cores is empty on Wormhole and Blackhole and this loop is a no-op there. Bounded by the
-    // pcie+dram+eth+dispatch TT_ASSERT above (debug-only; capacity is MAX_PHYSICAL_NON_WORKER_CORES).
+    // DISPATCH cores (Quasar-only) are never virtualized, so always register them in the physical list.
     for (tt::umd::CoreCoord core : dispatch_cores) {
         set_addressable_core(
             core_info.non_worker_cores()[non_worker_cores_idx++], core, dev_msgs::AddressableCoreType::DISPATCH);
     }
 
     if (hal_.is_coordinate_virtualization_enabled()) {
-        // Guard the fixed-size virtual_non_worker_cores mailbox array (MAX_VIRTUAL_NON_WORKER_CORES,
-        // hand-sized for Blackhole's topology). ETH is always written; PCIE/DRAM are written when this
-        // arch virtualizes its non-worker cores. Fail loudly at config time rather than silently overrunning
-        // the array into adjacent mailbox fields on an arch whose core count exceeds the constant.
         const size_t num_virtual_non_worker_cores =
             eth_cores.size() + (virtualizes_non_worker_cores ? pcie_cores.size() + dram_cores.size() : 0);
         TT_FATAL(
@@ -1012,8 +999,6 @@ dev_msgs::core_info_msg_t RiscFirmwareInitializer::populate_core_info_msg(
                 dev_msgs::AddressableCoreType::ETH);
         }
 
-        // Set virtual PCIE/DRAM cores for arches that virtualize them (Blackhole, Quasar). ETH is handled
-        // for all virtualized arches above; Wormhole addresses PCIE/DRAM physically instead.
         if (virtualizes_non_worker_cores) {
             for (const CoreCoord& core : pcie_cores) {
                 auto virtual_core =
@@ -1059,10 +1044,6 @@ dev_msgs::core_info_msg_t RiscFirmwareInitializer::populate_core_info_msg(
             if (hal_.get_tensix_harvest_axis() == HalTensixHarvestAxis::ROW) {
                 end_virtual_grid = hal_.get_virtual_worker_start_y() + logical_grid_size.y;
             } else if (cluster_.arch() != ARCH::WORMHOLE_B0) {
-                // COL-harvest arches (Blackhole, Quasar, and future arches) place a harvested column at
-                // this virtual coordinate. Wormhole is ROW-harvest and never reaches this COL branch, but
-                // keeping the guard as "not Wormhole" future-proofs new COL-harvest arches (GRAYSKULL is
-                // retired). The x-based fallback below remains for any arch that opts out.
                 end_virtual_grid = max_along_axis - 1;
             } else {
                 end_virtual_grid = hal_.get_virtual_worker_start_x() + logical_grid_size.x;
