@@ -56,16 +56,7 @@ void kernel_main() {
     // One CAS on the lock word; returns its PRE-OP value (0 or 1).
     auto lock_cas = [&](uint32_t cmp, uint32_t swap) -> uint32_t {
         *uncached(ret_slot) = SENTINEL;
-        noc_fast_atomic_cas4<DM_DEDICATED_NOC, true /*program_ret_addr*/>(
-            noc_index,
-            0 /*cmd_buf unused*/,
-            lock_noc_addr,
-            NOC_UNICAST_WRITE_VC,
-            cmp,
-            swap,
-            false /*linked*/,
-            false /*posted*/,
-            ret_slot);
+        noc_fast_atomic_cas4<DM_DEDICATED_NOC>(noc_index, lock_noc_addr, NOC_UNICAST_WRITE_VC, cmp, swap, ret_slot);
         noc_async_atomic_barrier();
         while (*uncached(ret_slot) == SENTINEL) {
         }

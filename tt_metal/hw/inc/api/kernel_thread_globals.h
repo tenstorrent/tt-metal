@@ -44,18 +44,13 @@ struct KernelBarrier {
 // different thread counts would still share a slot (host validation admits at most one
 // same-role DFB instance per node today, so this is not a reachable topology); if that
 // ever becomes supported, key the barrier per kernel-group instead of per DFB role.
-// [0] = DFB producer side, [1] = DFB consumer side, [2] = free for kernel use. Any slot
-// tolerates at most ONE rendezvous group (one participant count) per worker at a time --
-// mixed counts on one slot deadlock or release early (see wait_threads_on).
-constexpr uint32_t NUM_KERNEL_BARRIERS = 3;
+// [0] = DFB producer side, [1] = DFB consumer side. Any slot tolerates at most ONE
+// rendezvous group (one participant count) per worker at a time -- mixed counts on one
+// slot deadlock or release early (see wait_threads_on).
+constexpr uint32_t NUM_KERNEL_BARRIERS = 2;
 extern volatile KernelBarrier g_kernel_barrier[NUM_KERNEL_BARRIERS];
 
-// Dedicated barrier for the auto-injected sem::init_dm_cached() rendezvous (see genfiles.cpp).
-// Deliberately NOT an array slot, so sync_threads(idx) can never mix a user rendezvous with it.
-extern volatile KernelBarrier g_cached_sem_init_barrier;
-
-// Generation-based barrier body shared by wait_threads() and the injected seeder; reusable
-// (each pass advances the generation).
+// Generation-based barrier body for wait_threads(); reusable (each pass advances the generation).
 inline void wait_threads_on(volatile KernelBarrier& barrier, uint32_t participants) {
     if (participants <= 1) {
         return;
@@ -115,8 +110,6 @@ inline void thread_sync_init() {
         g_kernel_barrier[i].arrived = 0;
         g_kernel_barrier[i].generation = 0;
     }
-    g_cached_sem_init_barrier.arrived = 0;
-    g_cached_sem_init_barrier.generation = 0;
 #endif
 }
 

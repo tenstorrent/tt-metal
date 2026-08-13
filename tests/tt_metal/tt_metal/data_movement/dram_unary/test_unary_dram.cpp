@@ -75,12 +75,6 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramCo
         .unique_id = SemaphoreSpecName{"dram_unary_rw_sync"},
         .target_nodes = core_range_set,
     };
-    // The honest labels below (reader SETs, writer CONSUMEs) trip AUTO's racing-SET check;
-    // forcing the scope is the documented escape for this phase-separated shape, and EXTERNAL
-    // matches what AUTO resolves on Quasar today. Gen1 stays AUTO (the check is Gen2-only).
-    if (device->arch() == tt::ARCH::QUASAR) {
-        rw_sync_sem.scope = SemaphoreScope::EXTERNAL;
-    }
 
     KernelSpec::CompileTimeArgs reader_cta = {
         {"test_id", (uint32_t)test_config.test_id},
@@ -112,9 +106,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramCo
         .source = reader_kernel_path,
         .num_threads = 1,
         .semaphore_bindings = {KernelSpec::SemaphoreBinding{
-            .semaphore_spec_name = rw_sync_sem.unique_id,
-            .accessor_name = "dram_sync",
-            .access_type = SemaphoreAccessType::SET}},
+            .semaphore_spec_name = rw_sync_sem.unique_id, .accessor_name = "dram_sync"}},
         .compile_time_args = reader_cta,
         .runtime_arg_schema =
             {
@@ -137,9 +129,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramCo
         .source = writer_kernel_path,
         .num_threads = 1,
         .semaphore_bindings = {KernelSpec::SemaphoreBinding{
-            .semaphore_spec_name = rw_sync_sem.unique_id,
-            .accessor_name = "dram_sync",
-            .access_type = SemaphoreAccessType::CONSUME}},
+            .semaphore_spec_name = rw_sync_sem.unique_id, .accessor_name = "dram_sync"}},
         .compile_time_args = writer_cta,
         .runtime_arg_schema =
             {

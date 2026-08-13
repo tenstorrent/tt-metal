@@ -160,7 +160,7 @@ TEST_F(NocAtomicOpsFixture, TestAtomicCas) {
     EXPECT_EQ(observed, 9u) << "Raw NOC_AT_INS_CAS did not compare-and-swap as expected.";
 }
 
-// CAS return-value keystone: noc_fast_atomic_cas4 with program_ret_addr=true must deliver the
+// CAS return-value keystone: noc_fast_atomic_cas4 must deliver the
 // PRE-OP word to the caller-supplied slot on success AND on failure -- what lets a CAS loser
 // learn the current value (the EXTERNAL down() lock builds on this). word2 (upper-28 bits set)
 // checks the word[31:4]==0 success condition. The kernel also records the slot value read right

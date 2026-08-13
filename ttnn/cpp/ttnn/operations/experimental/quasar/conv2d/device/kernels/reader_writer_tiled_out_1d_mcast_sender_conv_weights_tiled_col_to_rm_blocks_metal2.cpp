@@ -93,8 +93,8 @@ void kernel_main() {
         get_arg(args::mcast_dest_noc_end_y)};
     const uint32_t weights_mcast_num_dests = get_arg(args::weights_mcast_num_dests);
     const uint32_t weights_mcast_num_cores = get_arg(args::weights_mcast_num_cores);
-    Semaphore weights_mcast_sender_sem(sem::weights_mcast_sender);
-    Semaphore weights_mcast_receiver_sem(sem::weights_mcast_receiver);
+    Semaphore<> weights_mcast_sender_sem(sem::weights_mcast_sender);
+    Semaphore<> weights_mcast_receiver_sem(sem::weights_mcast_receiver);
     MulticastEndpoint mcast_ep;
     DataflowBuffer cb_weight_obj(dfb::weights);
 #ifdef SPLIT_READER

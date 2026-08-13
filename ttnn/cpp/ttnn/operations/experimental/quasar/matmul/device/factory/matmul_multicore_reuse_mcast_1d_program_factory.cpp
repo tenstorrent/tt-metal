@@ -5810,17 +5810,11 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
 
     // ---- Semaphores (in0 sender / receiver + in1 sender / receiver). Default init; kernels set
     // VALID/INVALID. The in1_sender_writer SKIP_MCASTs here but still binds the in1 semaphores. ----
-    // SET-labeled handshake bindings trip AUTO's racing-SET check; forced EXTERNAL is the
-    // documented escape and matches what AUTO resolves today.
     m2::Group<m2::SemaphoreSpec> semaphores = {
-        m2::SemaphoreSpec{
-            .unique_id = RO_IN0_SENDER_SEM, .target_nodes = all_cores, .scope = m2::SemaphoreScope::EXTERNAL},
-        m2::SemaphoreSpec{
-            .unique_id = RO_IN0_RECEIVER_SEM, .target_nodes = all_cores, .scope = m2::SemaphoreScope::EXTERNAL},
-        m2::SemaphoreSpec{
-            .unique_id = RO_IN1_SENDER_SEM, .target_nodes = all_cores, .scope = m2::SemaphoreScope::EXTERNAL},
-        m2::SemaphoreSpec{
-            .unique_id = RO_IN1_RECEIVER_SEM, .target_nodes = all_cores, .scope = m2::SemaphoreScope::EXTERNAL},
+        m2::SemaphoreSpec{.unique_id = RO_IN0_SENDER_SEM, .target_nodes = all_cores},
+        m2::SemaphoreSpec{.unique_id = RO_IN0_RECEIVER_SEM, .target_nodes = all_cores},
+        m2::SemaphoreSpec{.unique_id = RO_IN1_SENDER_SEM, .target_nodes = all_cores},
+        m2::SemaphoreSpec{.unique_id = RO_IN1_RECEIVER_SEM, .target_nodes = all_cores},
     };
 
     m2::ComputeHardwareConfig compute_hw_config = ttnn::to_compute_hardware_config(
@@ -5961,14 +5955,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
         .dfb_bindings = in0_dfb_bindings(),
         .semaphore_bindings =
             {
-                m2::SemaphoreBinding{
-                    .semaphore_spec_name = RO_IN0_SENDER_SEM,
-                    .accessor_name = "in0_sender",
-                    .access_type = m2::SemaphoreAccessType::SET},
-                m2::SemaphoreBinding{
-                    .semaphore_spec_name = RO_IN0_RECEIVER_SEM,
-                    .accessor_name = "in0_receiver",
-                    .access_type = m2::SemaphoreAccessType::SET},
+                m2::SemaphoreBinding{.semaphore_spec_name = RO_IN0_SENDER_SEM, .accessor_name = "in0_sender"},
+                m2::SemaphoreBinding{.semaphore_spec_name = RO_IN0_RECEIVER_SEM, .accessor_name = "in0_receiver"},
             },
         .tensor_bindings =
             {
@@ -6001,14 +5989,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
             .dfb_bindings = in0_dfb_bindings(),
             .semaphore_bindings =
                 {
-                    m2::SemaphoreBinding{
-                        .semaphore_spec_name = RO_IN0_SENDER_SEM,
-                        .accessor_name = "in0_sender",
-                        .access_type = m2::SemaphoreAccessType::SET},
-                    m2::SemaphoreBinding{
-                        .semaphore_spec_name = RO_IN0_RECEIVER_SEM,
-                        .accessor_name = "in0_receiver",
-                        .access_type = m2::SemaphoreAccessType::SET},
+                    m2::SemaphoreBinding{.semaphore_spec_name = RO_IN0_SENDER_SEM, .accessor_name = "in0_sender"},
+                    m2::SemaphoreBinding{.semaphore_spec_name = RO_IN0_RECEIVER_SEM, .accessor_name = "in0_receiver"},
                 },
             .tensor_bindings =
                 {
@@ -6033,14 +6015,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
             .dfb_bindings = in0_dfb_bindings(),
             .semaphore_bindings =
                 {
-                    m2::SemaphoreBinding{
-                        .semaphore_spec_name = RO_IN0_SENDER_SEM,
-                        .accessor_name = "in0_sender",
-                        .access_type = m2::SemaphoreAccessType::SET},
-                    m2::SemaphoreBinding{
-                        .semaphore_spec_name = RO_IN0_RECEIVER_SEM,
-                        .accessor_name = "in0_receiver",
-                        .access_type = m2::SemaphoreAccessType::SET},
+                    m2::SemaphoreBinding{.semaphore_spec_name = RO_IN0_SENDER_SEM, .accessor_name = "in0_sender"},
+                    m2::SemaphoreBinding{.semaphore_spec_name = RO_IN0_RECEIVER_SEM, .accessor_name = "in0_receiver"},
                 },
             .tensor_bindings =
                 {
@@ -6074,10 +6050,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
             .semaphore_bindings =
                 {
                     m2::SemaphoreBinding{.semaphore_spec_name = RO_IN0_SENDER_SEM, .accessor_name = "in0_sender"},
-                    m2::SemaphoreBinding{
-                        .semaphore_spec_name = RO_IN0_RECEIVER_SEM,
-                        .accessor_name = "in0_receiver",
-                        .access_type = m2::SemaphoreAccessType::SET},
+                    m2::SemaphoreBinding{.semaphore_spec_name = RO_IN0_RECEIVER_SEM, .accessor_name = "in0_receiver"},
                 },
             .compile_time_args =
                 {
@@ -6197,14 +6170,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
             .dfb_bindings = std::move(b),
             .semaphore_bindings =
                 {
-                    m2::SemaphoreBinding{
-                        .semaphore_spec_name = RO_IN1_SENDER_SEM,
-                        .accessor_name = "in1_sender",
-                        .access_type = m2::SemaphoreAccessType::SET},
-                    m2::SemaphoreBinding{
-                        .semaphore_spec_name = RO_IN1_RECEIVER_SEM,
-                        .accessor_name = "in1_receiver",
-                        .access_type = m2::SemaphoreAccessType::SET},
+                    m2::SemaphoreBinding{.semaphore_spec_name = RO_IN1_SENDER_SEM, .accessor_name = "in1_sender"},
+                    m2::SemaphoreBinding{.semaphore_spec_name = RO_IN1_RECEIVER_SEM, .accessor_name = "in1_receiver"},
                 },
             .tensor_bindings = std::move(tb),
             .compile_time_args = std::move(cta),
@@ -6864,21 +6831,13 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
     // in1 sender/receiver. The in1 sems span the multicast bounding box (== all_cores on a rectangular
     // grid; includes the bbox-only noop-pad cores on a ragged grid) so the receiver_sem VALID
     // broadcast lands in program-owned L1 on every core the multicast rectangle touches. ----
-    // SET-labeled handshake bindings trip AUTO's racing-SET check; forced EXTERNAL is the
-    // documented escape and matches what AUTO resolves today.
     m2::Group<m2::SemaphoreSpec> semaphores = {
+        m2::SemaphoreSpec{.unique_id = RO_IN0_SENDER_SEM, .target_nodes = all_cores},
+        m2::SemaphoreSpec{.unique_id = RO_IN0_RECEIVER_SEM, .target_nodes = all_cores},
         m2::SemaphoreSpec{
-            .unique_id = RO_IN0_SENDER_SEM, .target_nodes = all_cores, .scope = m2::SemaphoreScope::EXTERNAL},
+            .unique_id = RO_IN1_SENDER_SEM, .target_nodes = CoreRangeSet(in1_mcast_receiver_cores_bounding_box)},
         m2::SemaphoreSpec{
-            .unique_id = RO_IN0_RECEIVER_SEM, .target_nodes = all_cores, .scope = m2::SemaphoreScope::EXTERNAL},
-        m2::SemaphoreSpec{
-            .unique_id = RO_IN1_SENDER_SEM,
-            .target_nodes = CoreRangeSet(in1_mcast_receiver_cores_bounding_box),
-            .scope = m2::SemaphoreScope::EXTERNAL},
-        m2::SemaphoreSpec{
-            .unique_id = RO_IN1_RECEIVER_SEM,
-            .target_nodes = CoreRangeSet(in1_mcast_receiver_cores_bounding_box),
-            .scope = m2::SemaphoreScope::EXTERNAL},
+            .unique_id = RO_IN1_RECEIVER_SEM, .target_nodes = CoreRangeSet(in1_mcast_receiver_cores_bounding_box)},
     };
 
     m2::ComputeHardwareConfig compute_hw_config = ttnn::to_compute_hardware_config(
@@ -6931,14 +6890,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
             .dfb_bindings = std::move(b),
             .semaphore_bindings =
                 {
-                    m2::SemaphoreBinding{
-                        .semaphore_spec_name = RO_IN0_SENDER_SEM,
-                        .accessor_name = "in0_sender",
-                        .access_type = m2::SemaphoreAccessType::SET},
-                    m2::SemaphoreBinding{
-                        .semaphore_spec_name = RO_IN0_RECEIVER_SEM,
-                        .accessor_name = "in0_receiver",
-                        .access_type = m2::SemaphoreAccessType::SET},
+                    m2::SemaphoreBinding{.semaphore_spec_name = RO_IN0_SENDER_SEM, .accessor_name = "in0_sender"},
+                    m2::SemaphoreBinding{.semaphore_spec_name = RO_IN0_RECEIVER_SEM, .accessor_name = "in0_receiver"},
                 },
             .tensor_bindings =
                 {
@@ -7091,14 +7044,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
             .dfb_bindings = std::move(b),
             .semaphore_bindings =
                 {
-                    m2::SemaphoreBinding{
-                        .semaphore_spec_name = RO_IN1_SENDER_SEM,
-                        .accessor_name = "in1_sender",
-                        .access_type = m2::SemaphoreAccessType::SET},
-                    m2::SemaphoreBinding{
-                        .semaphore_spec_name = RO_IN1_RECEIVER_SEM,
-                        .accessor_name = "in1_receiver",
-                        .access_type = m2::SemaphoreAccessType::SET},
+                    m2::SemaphoreBinding{.semaphore_spec_name = RO_IN1_SENDER_SEM, .accessor_name = "in1_sender"},
+                    m2::SemaphoreBinding{.semaphore_spec_name = RO_IN1_RECEIVER_SEM, .accessor_name = "in1_receiver"},
                 },
             .tensor_bindings = std::move(tb),
             .compile_time_args = std::move(cta),
@@ -7177,10 +7124,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
             .semaphore_bindings =
                 {
                     m2::SemaphoreBinding{.semaphore_spec_name = RO_IN1_SENDER_SEM, .accessor_name = "in1_sender"},
-                    m2::SemaphoreBinding{
-                        .semaphore_spec_name = RO_IN1_RECEIVER_SEM,
-                        .accessor_name = "in1_receiver",
-                        .access_type = m2::SemaphoreAccessType::SET},
+                    m2::SemaphoreBinding{.semaphore_spec_name = RO_IN1_RECEIVER_SEM, .accessor_name = "in1_receiver"},
                 },
             .tensor_bindings =
                 {
