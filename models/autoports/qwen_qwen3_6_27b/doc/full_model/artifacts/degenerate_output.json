@@ -1,0 +1,20 @@
+{
+  "findings": [],
+  "measured": [
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_27b/doc/full_model/autoregressive_final/autoregressive_meta.json",
+      "label": "tt free-running completion",
+      "source": "words",
+      "num_tokens": 57,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0526
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_27b/doc/full_model/autoregressive_final/autoregressive_meta.json",
+      "label": "hf/tt token agreement (informational)",
+      "matching_tokens": 3,
+      "compared_tokens": 100
+    }
+  ],
+  "exit_code": 0
+}

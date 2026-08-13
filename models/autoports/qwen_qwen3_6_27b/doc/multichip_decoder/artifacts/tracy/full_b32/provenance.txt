@@ -1,0 +1,1 @@
+models/autoports/qwen_qwen3_6_27b/doc/multichip_decoder/artifacts/tracy/full_b32/reports/2026_08_13_13_57_59/ops_perf_results_2026_08_13_13_57_59.csv

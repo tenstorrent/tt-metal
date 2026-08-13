@@ -1,0 +1,117 @@
+models/common/sampling/tt_sampling.py:38:        max_top_k: Maximum number of top-k tokens to consider
+models/common/sampling/tt_sampling.py:53:    def _is_force_argmax_sampling(self, k, p, temp):
+models/common/sampling/tt_sampling.py:58:        temperature / RNG pipeline and use a single all-gather + argmax instead.
+models/common/sampling/tt_sampling.py:65:        The model config must also set allow_force_argmax=True for this to activate.
+models/common/sampling/tt_sampling.py:68:        SamplingGenerator maintains separate trace slots keyed by force_argmax.
+models/common/sampling/tt_sampling.py:71:            self._allow_force_argmax_sampling
+models/common/sampling/tt_sampling.py:89:    def force_argmax_sampling(self) -> bool:
+models/common/sampling/tt_sampling.py:90:        return self._force_argmax_sampling
+models/common/sampling/tt_sampling.py:104:        # Multi-step reduction is supported only on single device
+models/common/sampling/tt_sampling.py:130:        self.max_top_k = getattr(args, "max_top_k", 32)
+models/common/sampling/tt_sampling.py:161:                args.max_top_k // 32 if args.max_top_k // 32 <= max_num_gather_links else max_num_gather_links
+models/common/sampling/tt_sampling.py:175:            self._allow_force_argmax_sampling = sampling_ag_config["allow_force_argmax"]
+models/common/sampling/tt_sampling.py:181:            self._allow_force_argmax_sampling = False
+models/common/sampling/tt_sampling.py:198:        self._force_argmax_sampling = self._is_force_argmax_sampling(k, p, temp)
+models/common/sampling/tt_sampling.py:207:            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=self._param_dims, mesh_shape=self.cluster_shape),
+models/common/sampling/tt_sampling.py:214:            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=self._param_dims, mesh_shape=self.cluster_shape),
+models/common/sampling/tt_sampling.py:221:            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=self._param_dims, mesh_shape=self.cluster_shape),
+models/common/sampling/tt_sampling.py:244:            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=self._param_dims, mesh_shape=self.cluster_shape)
+models/common/sampling/tt_sampling.py:260:        # For multi-step reduction, we use reduce over 2 steps in a single device
+models/common/sampling/tt_sampling.py:264:            # If the mesh is effectively 1D, use the non-singleton dimension.
+models/common/sampling/tt_sampling.py:275:            1, 1, self.max_batch_size, self.max_top_k * num_devices_in_mesh, dtype=torch.int64
+models/common/sampling/tt_sampling.py:281:            indices_device_offsets[:, :, :, device_id * self.max_top_k : (device_id + 1) * self.max_top_k] = (
+models/common/sampling/tt_sampling.py:289:            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, None), mesh_shape=self.cluster_shape),
+models/common/sampling/tt_sampling.py:314:            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, None), mesh_shape=self.cluster_shape),
+models/common/sampling/tt_sampling.py:357:    def _get_force_argmax_all_gather_config(self, cluster_axis):
+models/common/sampling/tt_sampling.py:371:    def reset_params(
+models/common/sampling/tt_sampling.py:381:        self._force_argmax_sampling = self._is_force_argmax_sampling(k, p, temp)
+models/common/sampling/tt_sampling.py:384:            "TTSampling reset params",
+models/common/sampling/tt_sampling.py:385:            force_argmax=self._force_argmax_sampling,
+models/common/sampling/tt_sampling.py:387:            top_k=_compact_debug_list(k),
+models/common/sampling/tt_sampling.py:388:            top_p=_compact_debug_list(p),
+models/common/sampling/tt_sampling.py:394:        if not self._force_argmax_sampling:
+models/common/sampling/tt_sampling.py:398:                mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=self._param_dims, mesh_shape=self.cluster_shape)
+models/common/sampling/tt_sampling.py:454:            force_argmax=self._force_argmax_sampling,
+models/common/sampling/tt_sampling.py:457:            max_top_k=self.max_top_k,
+models/common/sampling/tt_sampling.py:461:        if self._force_argmax_sampling:
+models/common/sampling/tt_sampling.py:467:                num_links, topology = self._get_force_argmax_all_gather_config(cluster_axis)
+models/common/sampling/tt_sampling.py:524:                    k=self.max_top_k,
+models/common/sampling/tt_sampling.py:557:                k=self.max_top_k,
+models/common/sampling/tt_sampling.py:660:            # Old path: single sampled-token logprob
+models/autoports/qwen_qwen3_6_27b/tt/model.py:30:        value.contiguous(), device=mesh, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh), dtype=dtype,
+models/autoports/qwen_qwen3_6_27b/tt/model.py:37:        value.contiguous(), device=mesh, mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=dim), dtype=dtype,
+models/autoports/qwen_qwen3_6_27b/tt/model.py:102:        # A single 62,080-column local projection exceeds worker L1 even with
+models/autoports/qwen_qwen3_6_27b/tt/model.py:141:    def bind_kv_cache(self, kv_cache):
+models/autoports/qwen_qwen3_6_27b/tt/model.py:159:    def allocate_page_table(self, batch: int | None = None):
+models/autoports/qwen_qwen3_6_27b/tt/model.py:164:    def reset_cache(self):
+models/autoports/qwen_qwen3_6_27b/tt/model.py:245:        self, *, token_ids, page_table, current_positions, sequence_mask=None, conv_state_selectors=None,
+models/autoports/qwen_qwen3_6_27b/tt/model.py:253:                hidden_states=hidden, page_table=page_table, current_positions=current_positions,
+models/autoports/qwen_qwen3_6_27b/tt/model.py:258:    def decode_forward(self, *, token_ids, page_table, current_positions, active_mask=None, return_hidden=False):
+models/autoports/qwen_qwen3_6_27b/tt/model.py:273:                hidden_states=hidden, page_table=page_table, current_positions=current_positions,
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:29:    max_top_k: int = 32
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:36:                "allow_force_argmax": True,
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:53:        host_sampling_compatibility=False, force_argmax_greedy=True,
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:56:        self.host_sampling_compatibility = bool(host_sampling_compatibility)
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:58:        self.page_table_host = model.allocate_page_table()
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:59:        self._page_table = self._upload(self.page_table_host, dtype=ttnn.int32)
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:61:        sampling_args.model_config["SAMPLING_AG_CONFIG"]["allow_force_argmax"] = bool(force_argmax_greedy)
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:66:        greedy = SamplingParams(temperature=1.0, top_k=1, top_p=0.0)
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:67:        self.sampling.reset_sampling_params(format_sampling_params(greedy, 32))
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:73:        self._trace_page_table = None
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:83:            "page_table_refreshes": 0, "readbacks": 0,
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:90:            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device), dtype=dtype,
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:96:        return ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1))[..., : self.model.vocab_size]
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:98:    def _check_state(self, page_table, kv_cache):
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:100:            self.model.bind_kv_cache(kv_cache)
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:102:        return self._page_table if page_table is None else page_table
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:105:        self, tokens: torch.Tensor, *, page_table, kv_cache, prompt_lens: List[int],
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:108:        page_table = self._check_state(page_table, kv_cache)
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:141:            token_ids=token_tt, page_table=page_table, current_positions=position_tt,
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:155:        self, tokens: torch.Tensor, start_pos: torch.Tensor, *, page_table, kv_cache, active_mask=None, **kwargs: Any
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:157:        page_table = self._check_state(page_table, kv_cache)
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:164:            token_ids=token_tt, page_table=page_table, current_positions=position_tt, active_mask=active_mask_tt
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:168:    def _capture_token_out_trace(self, first_token, start_pos, active_mask=None, page_table=None):
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:191:            positions, device=self.mesh_device, mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:197:            active_positions, device=self.mesh_device, mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:201:        self._trace_page_table = self._page_table if page_table is None else page_table
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:219:            token_ids=self._trace_token, page_table=self._trace_page_table, current_positions=self._trace_position,
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:229:            token_ids=self._trace_token, page_table=self._trace_page_table, current_positions=self._trace_position,
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:251:        if not self.sampling.tt_sampling.force_argmax_sampling or logits.shape[-2] == self.model.batch:
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:260:        value = ttnn.to_torch(ttnn.get_device_tensors(self._trace_token)[0])
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:264:        self, tokens, positions, *, page_table=None, kv_cache=None, active_mask=None,
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:273:        resolved_page_table = self._check_state(page_table, kv_cache)
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:274:        if isinstance(page_table, torch.Tensor):
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:275:            self.refresh_page_table(page_table)
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:276:            resolved_page_table = self._page_table
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:278:            sampling_params = SamplingParams(temperature=1.0, top_k=1, top_p=0.0)
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:279:        self.sampling.reset_sampling_params(format_sampling_params(sampling_params, 32))
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:280:        self._capture_token_out_trace(tokens, positions, active_mask=active_mask, page_table=resolved_page_table)
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:285:            "page_table": self._trace_page_table,
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:290:    def token_out_decode_step(self, *, page_table=None, readback: bool = False):
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:294:        if page_table is not None:
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:295:            if not isinstance(page_table, torch.Tensor):
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:297:            self.refresh_page_table(page_table)
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:304:        values = ttnn.to_torch(ttnn.get_device_tensors(self._trace_token)[0]).reshape(-1)
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:335:            token_ids=self._compat_token, page_table=self._page_table, current_positions=self._compat_position
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:344:            token_ids=self._compat_token, page_table=self._page_table, current_positions=self._compat_position
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:364:        enable_trace: bool = True, host_sampling_compatibility: bool | None = None, **kwargs: Any,
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:370:        host_mode = self.host_sampling_compatibility if host_sampling_compatibility is None else host_sampling_compatibility
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:371:        self.reset()
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:374:            tokens, page_table=self._page_table, kv_cache=self.kv_cache, prompt_lens=[len(prompt_token_ids)]
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:376:        predicted = int(torch.argmax(prefill_logits[0, 0]).item())
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:387:                predicted = int(torch.argmax(logits[0]).item())
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:393:            raise ValueError("teacher forcing requires host_sampling_compatibility=True; optimized autoregressive mode is device-owned")
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:401:    def refresh_page_table(self, page_table: torch.Tensor):
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:402:        if torch.equal(page_table, self.page_table_host):
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:404:        host = ttnn.from_torch(page_table.to(torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:405:        ttnn.copy_host_to_device_tensor(host, self._page_table)
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:406:        self.page_table_host = page_table.clone()
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:407:        self.trace_counters["page_table_refreshes"] += 1
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:409:    def reset(self) -> None:
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:411:        self.model.reset_cache()
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:420:        self.sampling.reset_trace()
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:422:        self._trace_token = self._trace_position = self._trace_page_table = None
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:437:    host_sampling_compatibility = kwargs.pop("host_sampling_compatibility", False)
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:438:    force_argmax_greedy = kwargs.pop("force_argmax_greedy", True)
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:443:        host_sampling_compatibility=host_sampling_compatibility,
+models/autoports/qwen_qwen3_6_27b/tt/generator.py:444:        force_argmax_greedy=force_argmax_greedy,

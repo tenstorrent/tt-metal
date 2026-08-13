@@ -1,0 +1,13 @@
+{
+  "hf_model_id": "Qwen/Qwen3.6-27B",
+  "revision": "6a9e13bd6fc8f0983b9b99948120bc37f49c13e9",
+  "tokenizer_class": "Qwen2Tokenizer",
+  "prompt_source": "aime24",
+  "aime24_prompt_index": 0,
+  "chat_template": true,
+  "prompt_tokens": 161,
+  "generation_tokens": 100,
+  "top_k": 100,
+  "artifact": "readiness_aime24_chat.refpt",
+  "command": "python -m models.common.readiness_check.generate --hf-model /huggingface/hub/models--Qwen--Qwen3.6-27B/snapshots/6a9e13bd6fc8f0983b9b99948120bc37f49c13e9 --prompt-source aime24 --chat-template --gen-len 100 --top-k 100 --output models/autoports/qwen_qwen3_6_27b/doc/full_model/readiness_aime24_chat.refpt"
+}

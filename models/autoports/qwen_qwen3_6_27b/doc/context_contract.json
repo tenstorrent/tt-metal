@@ -1,6 +1,6 @@
 {
   "hf_advertised_context": 262144,
-  "current_supported_context": 262144,
+  "current_supported_context": 192511,
   "schema_version": 1,
   "model_id": "Qwen/Qwen3.6-27B",
   "model_revision": "6a9e13bd6fc8f0983b9b99948120bc37f49c13e9",
@@ -183,6 +183,32 @@
     "smallest_failed_batch_32_context": 82496,
     "plan_artifact": "doc/multichip_decoder/mesh_plan.md"
   },
+  "full_model": {
+    "status": "implemented_and_physically_validated",
+    "target_mesh": [1, 4],
+    "tensor_parallel_size": 4,
+    "batch_1_supported_context": 192511,
+    "batch_1_decode_cache_context": 262144,
+    "batch_1_supported_single_pass_prefill": 192511,
+    "decoder_resident_bytes_per_device": 10599141888,
+    "token_embedding_bytes_per_device": 2542796800,
+    "final_norm_bytes_per_device": 10240,
+    "vocab_sharded_lm_head_bytes_per_device": 318504960,
+    "full_model_weight_bytes_per_device": 13460453888,
+    "batch_1_kv_bytes_per_device_at_context_262144": 2281701376,
+    "batch_32_kv_bytes_per_device_per_context_token": 278528,
+    "batch_32_linear_state_bytes_per_device": 572522496,
+    "decoder_trace_activation_reserve_bytes_per_device": 1969152,
+    "capacity_accounting_note": "Terminal allocations are recomputed from the real 248320x5120 BF16 replicated embedding, 5120-element BF16 norm, and TP4-sharded BFP8 LM head. The LM head is split device-locally into 30976/31104 columns; the second DRAM-bank shard pads to 31232, so physical local width is 62208. Fresh isolated physical probes reserve the same 64-layer selected-policy residency plus terminal tensors, linear state, measured workspace, and all 16 TP-local paged K/V pairs.",
+    "batch_32_largest_feasible_context": 72192,
+    "batch_32_smallest_failed_context": 72256,
+    "batch_32_context_status": "physically_bracketed_with_full_model_terminal_residency",
+    "capacity_artifacts": {
+      "batch_1": "doc/full_model/artifacts/capacity/capacity_b1.json",
+      "batch_32": "doc/full_model/artifacts/capacity/capacity_b32.json",
+      "batch_1_trace_snapshot": "doc/full_model/artifacts/capacity_trace/capacity_b1_trace.json"
+    }
+  },
   "layer_kinds": {
     "linear_attention": {
       "representative_layer": 0,
@@ -196,7 +222,7 @@
     }
   },
   "notes": [
-    "current_supported_context (262144) relocated post-stage from functional_decoder.supported_context (the stage's explicit claim) so check_context_contract.py can read it. No capability claim changed.",
-    "SCOPED CAPABILITY REDUCTION -- single-pass full-layer prefill on one Blackhole device: hard device DRAM contiguous-allocation limit; largest feasible tested 192511. The top-level current_supported_context reflects the contract's overall supported context; see functional_decoder.capability_reduction for the path that does not reach it and its byte evidence."
+    "Public supported prompt/context is 192511, matching the generator's accepted prefill extent and the largest physically feasible tested full-layer prompt.",
+    "Decode cache allocation and absolute positions remain supported through 262144 for prompts at or below 192511 followed by generation; this is recorded separately and is not advertised as public prompt capacity."
   ]
 }
