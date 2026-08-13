@@ -149,14 +149,8 @@ class RaggedRouting:
 # scale once the original tensor was collected and a new one was allocated at the same
 # address -- wrong routing weights, no error raised. Pinning costs nothing real here:
 # the tensor is a ``[num_experts]`` router weight that already lives for the model's
-# lifetime. ``clear_router_scale_host_cache()`` exists for tests that build and tear
-# down several models in one process.
+# lifetime.
 _ROUTER_SCALE_HOST_CACHE = {}
-
-
-def clear_router_scale_host_cache() -> None:
-    """Drop every cached router per-expert scale (and the tensor refs pinning them)."""
-    _ROUTER_SCALE_HOST_CACHE.clear()
 
 
 def ragged_router_forward(router, hidden_states):

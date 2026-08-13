@@ -17,6 +17,7 @@ from models.experimental.diffusion_gemma.reference.generate import (
     make_replay_canvas_init_fn,
     make_replay_noise_fn,
 )
+from models.experimental.diffusion_gemma.tt import ccl as dg_ccl
 from models.experimental.diffusion_gemma.tt import generate as G
 from models.experimental.diffusion_gemma.tt.generate import (
     GeneratedBlock,
@@ -1673,6 +1674,9 @@ def test_host_canvas_to_device_uses_controller_token_layout(monkeypatch):
             return "device-canvas"
 
     monkeypatch.setattr(G, "ttnn", _FakeTtnn)
+    # The replicate mapper lives in tt.ccl (shared across the host-transfer helpers),
+    # so its ttnn must be faked alongside the caller's.
+    monkeypatch.setattr(dg_ccl, "ttnn", _FakeTtnn)
     canvas = torch.tensor([[1, 2, 3]], dtype=torch.long)
 
     out = host_canvas_to_device(_FakeMesh(), canvas)
@@ -1703,6 +1707,7 @@ def test_host_gumbel_noise_to_device_uses_logits_layout(monkeypatch):
             return "device-gumbel"
 
     monkeypatch.setattr(G, "ttnn", _FakeTtnn)
+    monkeypatch.setattr(dg_ccl, "ttnn", _FakeTtnn)
     noise = torch.arange(24, dtype=torch.float64).reshape(1, 4, 6)
 
     out = host_gumbel_noise_to_device(_FakeMesh(), noise)
@@ -1734,6 +1739,7 @@ def test_host_tokens_to_device_uses_embedding_token_layout(monkeypatch):
             return "device-tokens"
 
     monkeypatch.setattr(G, "ttnn", _FakeTtnn)
+    monkeypatch.setattr(dg_ccl, "ttnn", _FakeTtnn)
     tokens = torch.tensor([[1, 2, 3]], dtype=torch.long)
 
     out = host_tokens_to_device(_FakeMesh(), tokens)

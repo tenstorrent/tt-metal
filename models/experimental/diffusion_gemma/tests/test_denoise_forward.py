@@ -1602,7 +1602,6 @@ def test_per_layer_ownership_never_frees_a_window_buffer():
     reader.read_span = P_MAX
     reader.tt_model = None
     reader._window_bufs = {0: ("k", "v"), 2: ("k", "v")}
-    reader._window_lo = {0: 0, 2: 0}
     reader.window_layers = {0: W, 2: W}
 
     # Windowed layers: never owned, even though the reader's global flag says owned.

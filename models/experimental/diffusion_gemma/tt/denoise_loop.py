@@ -18,6 +18,7 @@ import ttnn
 
 from models.experimental.diffusion_gemma.config import DiffusionConfig
 from models.experimental.diffusion_gemma.reference.denoise_loop import DenoiseTrajectory, StepRecord
+from models.experimental.diffusion_gemma.reference.sampling import temperature_at_step
 from models.experimental.diffusion_gemma.tt import sampling as TS
 
 TtLogitsFn = Callable[[ttnn.Tensor, int], ttnn.Tensor]
@@ -51,14 +52,6 @@ class TtDenoiseStepResult(NamedTuple):
     entropy: ttnn.Tensor
     sampled: ttnn.Tensor
     argmax: ttnn.Tensor
-
-
-def temperature_at_step(step: int, num_steps: int, t_start: float, t_end: float) -> float:
-    """HF reversed-step linear temperature schedule."""
-    if num_steps <= 0:
-        return t_start
-    cur_step = num_steps - step
-    return t_end + (t_start - t_end) * (cur_step / num_steps)
 
 
 class DenoiseConstants(NamedTuple):

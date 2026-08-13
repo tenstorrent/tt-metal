@@ -514,8 +514,9 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         # after a 256K-KV allocation; the "chunked" descriptor mode that dodged it was removed
         # 2026-08-10 (bring-up-era workaround, known QB2 1024-wide RNG bias, ~25 s per block —
         # a standing perf trap). If the 256K envelope resurfaces, pursue the TP-sharded denoise
-        # terminal (DG_TERMINAL_SHARDED, tt/sampling.py) instead. "argmax" remains the fast
-        # deterministic RUN control.
+        # terminal (unimplemented design note at the bottom of tt/sampling.py) instead. "argmax"
+        # remains the fast deterministic RUN control (requires DG_UPFRONT_CAPTURE=0; the captured
+        # path raises on any other mode than "device").
         self._gumbel_mode = os.environ.get("DG_VLLM_GUMBEL_MODE", gumbel_mode)
         # One active session per batch row. A single model-owned hybrid cache backs
         # one active sequence today (see module docstring); the dict is keyed by

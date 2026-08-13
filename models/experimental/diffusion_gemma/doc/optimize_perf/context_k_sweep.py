@@ -97,7 +97,6 @@ def _configure_environment(args, prompt_lengths: list[int], *, reveal_pmax: int)
     os.environ["DG_TRACE_REGION_SIZE"] = str(args.trace_region_size)
     os.environ["DG_UPFRONT_CAPTURE"] = "1"
     os.environ["DG_VLLM_GUMBEL_MODE"] = "device"
-    os.environ["DG_MODEL_OWNED_HYBRID_KV"] = "1"
     os.environ["DG_DENOISE_REVEAL_PMAX"] = str(reveal_pmax)
     os.environ["DG_UPFRONT_PREFILL_WARMUP_LENS"] = ",".join(str(value) for value in prompt_lengths)
     os.environ["DG_UPFRONT_STRICT_PREFILL_LENS"] = "1"
@@ -173,7 +172,6 @@ def run(args) -> dict:
                 "DG_TRACE_REGION_SIZE",
                 "DG_UPFRONT_CAPTURE",
                 "DG_VLLM_GUMBEL_MODE",
-                "DG_MODEL_OWNED_HYBRID_KV",
                 "DG_DENOISE_REVEAL_PMAX",
                 "DG_UPFRONT_PREFILL_WARMUP_LENS",
                 "DG_UPFRONT_STRICT_PREFILL_LENS",

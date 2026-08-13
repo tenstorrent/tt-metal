@@ -80,12 +80,6 @@ class KVPhaseMapping:
         return tuple(range(self.canvas_len))
 
     @property
-    def full_attention_frozen_positions(self) -> tuple[int, ...]:
-        """Full-attention frozen cache positions visible before commit."""
-
-        return tuple(range(self.prompt_len))
-
-    @property
     def sliding_frozen_positions(self) -> tuple[int, ...]:
         """Absolute positions retained in a bounded sliding cache before commit."""
 
