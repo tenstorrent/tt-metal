@@ -942,7 +942,6 @@ jobs:
                         "description": "Select model to test",
                         "enum": [
                           "all",
-                          "mistral-small-3.1-24b",
                           "mochi",
                           "wan2.2-t2v-a14b",
                           "z-image-turbo"
@@ -1348,7 +1347,6 @@ jobs:
                         "description": "Select model to test",
                         "enum": [
                           "all",
-                          "resnet50",
                           "unit",
                           "sd35",
                           "wan22",
@@ -1614,7 +1612,6 @@ jobs:
                         "description": "Select model to test",
                         "enum": [
                           "all",
-                          "resnet50",
                           "stable_diffusion_35_large",
                           "mochi",
                           "flux1-dev",
@@ -1724,7 +1721,6 @@ jobs:
                           "all",
                           "tteager",
                           "trace stress",
-                          "resnet",
                           "sd35_large",
                           "flux1",
                           "motif",
@@ -1956,7 +1952,6 @@ jobs:
                         "description": "Select model to test",
                         "enum": [
                           "all",
-                          "resnet50",
                           "sd35_large",
                           "flux1-dev",
                           "motif",
@@ -2019,7 +2014,6 @@ jobs:
                           "dits",
                           "deepseek",
                           "tttv2 modules",
-                          "mistral-small-3.1-24b-vision",
                           "qwen3_vl"
                         ],
                         "type": "string"
@@ -2283,7 +2277,8 @@ jobs:
                           "gemma-4-31b",
                           "mixtral-8x7b",
                           "gpt-oss-20b",
-                          "sdxl"
+                          "sdxl",
+                          "vit"
                         ],
                         "type": "string"
                       },
@@ -2377,7 +2372,8 @@ jobs:
                           "mixtral-8x7b",
                           "shallow-unet",
                           "gpt-oss-20b",
-                          "sdxl"
+                          "sdxl",
+                          "vit"
                         ],
                         "type": "string"
                       },
@@ -2468,7 +2464,15 @@ jobs:
                           "gemma-2-9b",
                           "gemma-4-e2b",
                           "gemma-4-e4b",
-                          "panoptic-deeplab"
+                          "panoptic-deeplab",
+                          "mistral-small-3.1-24b",
+                          "vggnet",
+                          "bert-tiny",
+                          "bert-large",
+                          "distilbert",
+                          "squeezebert",
+                          "mnist-mlp",
+                          "resnet50"
                         ],
                         "type": "string"
                       },
@@ -2561,7 +2565,10 @@ jobs:
                           "gemma-4-e2b",
                           "gemma-4-e4b",
                           "panoptic-deeplab",
-                          "bevformer"
+                          "bevformer",
+                          "mistral-small-3.1-24b",
+                          "bert-large",
+                          "resnet50"
                         ],
                         "type": "string"
                       },
@@ -2648,7 +2655,7 @@ jobs:
                       },
                       "requested-models": {
                         "default": "all",
-                        "description": "List of requested models as JSON array, for example: [\"resnet50\", \"vit\"]. Default is 'all'",
+                        "description": "List of requested models as JSON array, for example: [\"vit\"]. Default is 'all'",
                         "type": "string"
                       }
                     },
@@ -2686,7 +2693,7 @@ jobs:
                       },
                       "models-to-run": {
                         "default": "all",
-                        "description": "List of requested models as JSON array, for example: [\"common_models\", \"functional_unet\"]. Default is 'all'",
+                        "description": "List of requested models as JSON array, for example: [\"bge_m3\"]. Default is 'all'",
                         "type": "string"
                       },
                       "platform": {
@@ -2750,7 +2757,7 @@ jobs:
                       },
                       "requested-models": {
                         "default": "all",
-                        "description": "List of requested models as JSON array, for example: [\"resnet\", \"sdxl\"]. Default is 'all'",
+                        "description": "List of requested models as JSON array, for example: [\"bge_m3\"]. Default is 'all'",
                         "type": "string"
                       },
                       "run-perf-tests": {

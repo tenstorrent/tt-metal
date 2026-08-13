@@ -286,6 +286,38 @@
   owner_id: U088413NP0Q # Ashai Reddy Ginuga
   team: models
 
+- name: BERT-Large unit tests
+  cmd: |
+    pytest --timeout 180 \
+      models/demos/metal_BERT_large_11/tests/test_bert_batch_dram.py \
+      models/demos/metal_BERT_large_11/tests/test_demo.py
+  model: bert-large
+  model_family: BERT
+  skus:
+    wh_n150:
+      timeout: 4
+      tier: 3
+  owner_id: U024A4EFV6U # Brian Liu
+  team: ttnn
+
+- name: ResNet-50 unit tests
+  cmd: |
+    pytest --timeout 1140 \
+      models/demos/vision/classification/resnet50/wormhole/tests/test_resnet50_performant.py \
+      models/demos/vision/classification/resnet50/wormhole/tests/test_ttnn_functional_resnet50_large.py
+    pytest --timeout 420 models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_resnet50_performant.py
+  model: resnet50
+  model_family: ResNet
+  skus:
+    wh_n150:
+      timeout: 20
+      tier: 1
+    wh_llmbox:
+      timeout: 8
+      tier: 1
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  team: ttnn
+
 - name: Gemma-3-4B unit tests
   cmd: |
     export TT_METAL_WATCHER=30
