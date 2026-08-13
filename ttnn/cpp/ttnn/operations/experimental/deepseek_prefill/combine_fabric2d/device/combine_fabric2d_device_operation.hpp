@@ -42,9 +42,5 @@ ttnn::Tensor combine_fabric2d(
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
     const tt::tt_metal::MemoryConfig& memory_config,
-    bool init_zeros,
-    uint32_t num_l1_slots,
-    uint32_t fwd_bump_every,
-    uint32_t assignment_order,
-    uint32_t stall_telemetry);
+    bool init_zeros);
 }  // namespace ttnn::prim

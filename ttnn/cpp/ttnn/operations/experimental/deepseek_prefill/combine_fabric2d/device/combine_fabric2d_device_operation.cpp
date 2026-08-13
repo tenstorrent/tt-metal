@@ -60,12 +60,6 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(args.device != nullptr, "combine_fabric2d requires a mesh device in attributes");
     TT_FATAL(args.num_links >= 1 && args.num_links <= 4, "num_links must be between 1 and 4 (got {})", args.num_links);
     TT_FATAL(
-        args.num_l1_slots >= 2,
-        "num_l1_slots must be >= 2 for the reader and producer to overlap (got {})",
-        args.num_l1_slots);
-    TT_FATAL(args.fwd_bump_every >= 1, "fwd_bump_every must be >= 1 (got {})", args.fwd_bump_every);
-    TT_FATAL(args.assignment_order <= 1, "assignment_order must be 0 or 1 (got {})", args.assignment_order);
-    TT_FATAL(
         !args.init_zeros,
         "combine_fabric2d: init_zeros=true is not implemented. Output slots with no expert contribution are "
         "left as allocated, exactly as the production op leaves them with init_zeros=false.");
@@ -73,12 +67,12 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
         !args.output_mem_config.is_sharded(),
         "combine_fabric2d: output memory config must be interleaved, not sharded");
 
-    const uint32_t extent = args.device->shape()[static_cast<int32_t>(args.axis)];
     TT_FATAL(
         args.axis < args.device->shape().dims(),
         "combine_fabric2d: axis {} is out of range for a {} mesh",
         args.axis,
         args.device->shape());
+    const uint32_t extent = args.device->shape()[static_cast<int32_t>(args.axis)];
     TT_FATAL(
         args.dispatch_group_size == extent,
         "combine_fabric2d: dispatch_group_size {} must equal the mesh extent {} along axis {} — the op rings "
@@ -195,11 +189,7 @@ ttnn::Tensor combine_fabric2d(
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
     const tt::tt_metal::MemoryConfig& memory_config,
-    bool init_zeros,
-    uint32_t num_l1_slots,
-    uint32_t fwd_bump_every,
-    uint32_t assignment_order,
-    uint32_t stall_telemetry) {
+    bool init_zeros) {
     using OperationType =
         ttnn::operations::experimental::deepseek_prefill::combine_fabric2d::CombineFabric2dDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
@@ -213,11 +203,7 @@ ttnn::Tensor combine_fabric2d(
             .num_links = num_links,
             .topology = topology,
             .output_mem_config = memory_config,
-            .init_zeros = init_zeros,
-            .num_l1_slots = num_l1_slots,
-            .fwd_bump_every = fwd_bump_every,
-            .assignment_order = assignment_order,
-            .stall_telemetry = stall_telemetry},
+            .init_zeros = init_zeros},
         OperationType::tensor_args_t{
             .dispatched_buffer = dispatched_buffer,
             .dispatched_metadata = dispatched_metadata,

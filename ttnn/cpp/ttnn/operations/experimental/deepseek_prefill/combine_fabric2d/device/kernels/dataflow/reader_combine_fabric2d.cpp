@@ -2,13 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Reader kernel (reader RISC, NOC_0). Feeds the L1 ring the producer sends from, and — from phase 9 — is
-// where ALL routing decisions are made. The producer writes L1 -> eth over NOC_1, so the two do not contend.
+// Reader kernel (reader RISC, NOC_0). Feeds the L1 ring the producer sends from and makes ALL routing
+// decisions. The producer writes L1 -> eth over NOC_1, so the two do not contend.
 //
-// Phase 9: the fabric no longer forwards. Every packet the producer sends travels exactly ONE hop, to the
-// chip across its own cable. A token bound further than that neighbour therefore cannot go straight to its
-// final destination; it is staged into the NEIGHBOUR's forwarding buffer and re-sent from there by the
-// neighbour's reader on the same (plane, direction). So this kernel has two phases:
+// Every packet the producer sends travels exactly one hop, to the chip across its own cable, so a token
+// bound further is staged into that neighbour's forwarding buffer and re-sent from there by the neighbour's
+// reader on the same (plane, direction). Hence two phases:
 //
 //   A. Its OWN assignments — its plane's share of this chip's movements. Each destination is either our
 //      immediate neighbour (=> CMD_FINAL_WRITE, the neighbour writes it straight into its output region) or
@@ -28,9 +27,8 @@
 // token_size+16 bytes straight into the slot base: payload and both metadata words land where the producer
 // already expects them, with no unpacking.
 //
-// The ring is hand-rolled rather than a metal CB because the op's telemetry and packet headers live at
-// fixed offsets from the L1 allocator base — where a CB would be allocated — and the host telemetry
-// readback depends on those offsets being predictable without knowing anything about allocation.
+// The ring is hand-rolled rather than a metal CB because the packet headers live at fixed offsets from the
+// L1 allocator base — where a CB would be allocated — and a producer on another chip addresses them there.
 //
 // Two monotonic single-writer counters, each bumped by a NoC atomic to our OWN core (the proven idiom for
 // cross-RISC visibility on one core; a plain store can sit in a write buffer where the other RISC will not
@@ -40,37 +38,9 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc_semaphore.h"
-
-constexpr uint32_t TELEM_T_START_LO = 4;
-constexpr uint32_t TELEM_T_START_HI = 5;
-
-// Slot metadata tail, as uint64_t indices from (slot_base + token_size_bytes). Must match the producer.
-constexpr uint32_t TAIL_FINAL_ADDR = 0;
-constexpr uint32_t TAIL_DST_CHIP = 1;
-constexpr uint32_t TAIL_CMD = 2;
-constexpr uint32_t TAIL_THIS_ADDR = 3;
-constexpr uint64_t CMD_END = 0;
-constexpr uint64_t CMD_FINAL_WRITE = 1;
-constexpr uint64_t CMD_FORWARD = 2;
-// A sentinel carries no usable token; it exists only to mark the end of a forwarding chunk. UINT64_MAX can
-// never collide with a real chip id.
-constexpr uint64_t SENTINEL_DST_CHIP = UINT64_MAX;
-
-inline uint64_t wall_clock() {
-#if defined(RISCV_DEBUG_REG_WALL_CLOCK_L) && defined(RISCV_DEBUG_REG_WALL_CLOCK_H)
-    volatile uint32_t tt_reg_ptr* lo = reinterpret_cast<volatile uint32_t tt_reg_ptr*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
-    volatile uint32_t tt_reg_ptr* hi = reinterpret_cast<volatile uint32_t tt_reg_ptr*>(RISCV_DEBUG_REG_WALL_CLOCK_H);
-    const uint32_t low = lo[0];  // latches high
-    return static_cast<uint64_t>(low) | (static_cast<uint64_t>(hi[0]) << 32);
-#else
-    return 0;
-#endif
-}
+#include "combine_fabric2d_slot_tail.hpp"
 
 void kernel_main() {
-    // End-to-end kernel zone; see producer_combine_fabric2d.cpp for what CMB_E2E means and why the
-    // name is shared across both combine implementations. No-op unless the device profiler is on.
-    DeviceZoneScopedN("CMB_E2E");
     constexpr uint32_t num_l1_slots = get_compile_time_arg_val(0);
     constexpr uint32_t token_size_bytes = get_compile_time_arg_val(1);
     constexpr uint32_t slot_tail_bytes = get_compile_time_arg_val(2);
@@ -80,45 +50,43 @@ void kernel_main() {
     constexpr uint32_t freed_addr = get_compile_time_arg_val(6);
     constexpr uint32_t my_noc_x = get_compile_time_arg_val(7);
     constexpr uint32_t my_noc_y = get_compile_time_arg_val(8);
-    constexpr uint32_t telemetry_addr = get_compile_time_arg_val(9);
-    constexpr uint32_t dram_in_base_addr = get_compile_time_arg_val(10);
-    constexpr uint32_t dram_out_base_addr = get_compile_time_arg_val(11);
-    constexpr uint32_t dram_fwd_base_addr = get_compile_time_arg_val(12);
-    constexpr uint32_t fwd_chunks_per_quarter = get_compile_time_arg_val(13);
-    constexpr uint32_t fwd_pages_per_chunk = get_compile_time_arg_val(14);
+    constexpr uint32_t dram_in_base_addr = get_compile_time_arg_val(9);
+    constexpr uint32_t dram_out_base_addr = get_compile_time_arg_val(10);
+    constexpr uint32_t dram_fwd_base_addr = get_compile_time_arg_val(11);
+    constexpr uint32_t fwd_chunks_per_quarter = get_compile_time_arg_val(12);
+    constexpr uint32_t fwd_pages_per_chunk = get_compile_time_arg_val(13);
     // Our quarter of the forwarding buffer. (plane, direction) identifies the upstream producer uniquely
     // from the downstream chip's point of view, so we WRITE quarter q of the neighbour's buffer and READ
     // quarter q of our own — the same q, because every chip runs this same code.
-    constexpr uint32_t my_quarter = get_compile_time_arg_val(15);
-    constexpr uint32_t num_incoming_chunks = get_compile_time_arg_val(16);
-    constexpr uint32_t fwd_sem_addr = get_compile_time_arg_val(17);
+    constexpr uint32_t my_quarter = get_compile_time_arg_val(14);
+    constexpr uint32_t num_incoming_chunks = get_compile_time_arg_val(15);
+    constexpr uint32_t fwd_sem_addr = get_compile_time_arg_val(16);
     // The chip across our own cable. A destination equal to this is one hop away, so the neighbour can put
     // it straight into its output region.
-    constexpr uint32_t nbr_chip_id = get_compile_time_arg_val(18);
-    constexpr uint32_t num_assignments = get_compile_time_arg_val(19);
-    constexpr uint32_t schedule_len = get_compile_time_arg_val(20);
-    // ---- Phase 10: the work itself lives in the control tensors, so what arrives here is where they are
+    constexpr uint32_t nbr_chip_id = get_compile_time_arg_val(17);
+    constexpr uint32_t num_assignments = get_compile_time_arg_val(18);
+    constexpr uint32_t schedule_len = get_compile_time_arg_val(19);
+    // ---- The work itself lives in the control tensors, so what arrives here is where they are
     // and the shape constants needed to index them.
-    constexpr uint32_t dram_meta_base_addr = get_compile_time_arg_val(21);
-    constexpr uint32_t dram_counts_base_addr = get_compile_time_arg_val(22);
-    constexpr uint32_t dram_region_base_addr = get_compile_time_arg_val(23);
-    constexpr uint32_t dram_expert_offsets_base_addr = get_compile_time_arg_val(24);
-    constexpr uint32_t num_routed_experts = get_compile_time_arg_val(25);
-    constexpr uint32_t experts_per_chip = get_compile_time_arg_val(26);
+    constexpr uint32_t dram_meta_base_addr = get_compile_time_arg_val(20);
+    constexpr uint32_t dram_counts_base_addr = get_compile_time_arg_val(21);
+    constexpr uint32_t dram_region_base_addr = get_compile_time_arg_val(22);
+    constexpr uint32_t dram_expert_offsets_base_addr = get_compile_time_arg_val(23);
+    constexpr uint32_t num_routed_experts = get_compile_time_arg_val(24);
+    constexpr uint32_t experts_per_chip = get_compile_time_arg_val(25);
     // First of the `experts_per_chip` columns THIS chip hosts. Everything this kernel does is confined to
     // those columns: they are the experts whose tokens are physically here.
-    constexpr uint32_t my_expert_base = get_compile_time_arg_val(27);
-    constexpr uint32_t num_experts_per_tok = get_compile_time_arg_val(28);
-    constexpr uint32_t dispatch_group_size = get_compile_time_arg_val(29);
+    constexpr uint32_t my_expert_base = get_compile_time_arg_val(26);
+    constexpr uint32_t num_experts_per_tok = get_compile_time_arg_val(27);
+    constexpr uint32_t dispatch_group_size = get_compile_time_arg_val(28);
     // Our slice of the same-chip run, done after all the fabric work (see the local phase at the end).
-    constexpr uint32_t local_split_idx = get_compile_time_arg_val(30);
-    constexpr uint32_t local_split_count = get_compile_time_arg_val(31);
-    constexpr uint32_t my_row = get_compile_time_arg_val(32);
-    constexpr uint32_t control_addr = get_compile_time_arg_val(33);
+    constexpr uint32_t local_split_idx = get_compile_time_arg_val(29);
+    constexpr uint32_t local_split_count = get_compile_time_arg_val(30);
+    constexpr uint32_t my_row = get_compile_time_arg_val(31);
+    constexpr uint32_t control_addr = get_compile_time_arg_val(32);
     // Work schedule: one entry per unit of work, high bit set = "relay forwarding chunk k", clear = "own
-    // assignment k". Which order to do them in is the factory's call (assignment_order); this kernel just
-    // walks the list. Interleaving own work with relaying is what keeps downstream cores fed.
-    constexpr uint32_t SCHED_BASE = 35;
+    // assignment k". The order is the factory's call; this kernel just walks the list.
+    constexpr uint32_t SCHED_BASE = 34;
     constexpr uint32_t SCHED_FWD = 0x80000000u;
     // Per-assignment table: [dst_chip_id, dst_row, split_idx, split_count]. Read through
     // kernel_compile_time_args (a constexpr std::array) because get_compile_time_arg_val needs a literal
@@ -144,7 +112,7 @@ void kernel_main() {
     // Batching is what makes the per-token loop cheap. A token's destination page comes from its metadata,
     // and turning that page into an address costs an interleaved-bank division — so if the metadata arrived
     // per token, that arithmetic would sit AFTER the read barrier, serialised between tokens. With the batch
-    // already in L1 the loop goes back to phase 9's shape: compute the tail, issue the token read, barrier.
+    // already in L1 the loop is: compute the tail, issue the token read, barrier.
     // The arithmetic overlaps the 14 kB read instead of following it.
     //
     // The batch is capped rather than sized to the run: run lengths are data-dependent and a whole expert
@@ -153,14 +121,14 @@ void kernel_main() {
     constexpr uint32_t meta_pads_addr = control_addr;
     constexpr uint32_t META_PAD_STRIDE = 64;
     constexpr uint32_t META_READ_BYTES = 64;
-    constexpr uint32_t META_PREFETCH_CAP = get_compile_time_arg_val(34);
+    constexpr uint32_t META_PREFETCH_CAP = get_compile_time_arg_val(33);
     constexpr uint32_t control_tables_addr = control_addr + META_PREFETCH_CAP * META_PAD_STRIDE;
 
     // Written only by the producer; we just read it.
     volatile tt_l1_ptr uint32_t* freed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(freed_addr);
     const uint64_t my_filled_noc = get_noc_addr(my_noc_x, my_noc_y, filled_addr);
-    // Bumped by the UPSTREAM chip's producer as it fills our quarter. A GlobalSemaphore, so the framework
-    // zeroes it before launch — the phase-6 lesson about raw L1 counters underflowing on stale values.
+    // Bumped by the UPSTREAM chip's producer as it fills our quarter. A GlobalSemaphore rather than a raw L1
+    // counter so the framework zeroes it before launch; a stale value here underflows the wait below.
     volatile tt_l1_ptr uint32_t* fwd_arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_sem_addr);
 
     const auto dram_in = TensorAccessor(dram_in_args, dram_in_base_addr);
@@ -199,13 +167,6 @@ void kernel_main() {
         return row + 1 < dispatch_group_size ? ctl_offsets[(row + 1) * num_routed_experts + e]
                                              : ctl_region[e] + ctl_counts[e];
     };
-
-    // The effective-bandwidth window opens HERE: the first DRAM read is part of the measured cost, not prep
-    // work factored out of it. The producer folds nothing into this — the host reads it directly.
-    volatile tt_l1_ptr uint32_t* telem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(telemetry_addr);
-    const uint64_t t_start = wall_clock();
-    telem[TELEM_T_START_LO] = (uint32_t)(t_start & 0xFFFFFFFFu);
-    telem[TELEM_T_START_HI] = (uint32_t)(t_start >> 32);
 
     // Page of a chunk within OUR quarter. The same formula serves both directions: the quarter index is ours
     // either way, only the chip differs, and the buffer's device-local address is uniform across the mesh.
@@ -262,11 +223,8 @@ void kernel_main() {
         }
     };
 
-    // ---- Stream one token: read it and its routing metadata, work out where it must end up, hand the slot
-    // to the producer. `chunk_page` is where it goes in the downstream forwarding chunk when this is not the
-    // last hop; it is ignored for a direct write.
-    // Read the metadata for pages [lo, hi) into the pads, one page read each, awaited together. Returns
-    // nothing: pad k then holds page lo + k's record.
+    // Read the metadata for pages [lo, hi) into the pads, one page read each, awaited together: pad k then
+    // holds page lo + k's record.
     auto prefetch_metadata = [&](uint32_t lo, uint32_t hi) {
         for (uint32_t p = lo; p < hi; p++) {
             noc_async_read(dram_meta.get_noc_addr(p), meta_pads_addr + (p - lo) * META_PAD_STRIDE, META_READ_BYTES);
@@ -274,8 +232,9 @@ void kernel_main() {
         noc_async_read_barrier();
     };
 
-    // Issues one token's read and fills its tail, but does NOT barrier or announce it — the caller does both
-    // once per batch, so several reads are in flight together.
+    // Issues one token's read and fills its tail but does NOT barrier or announce it: the caller does both
+    // once per batch, so several reads are in flight together. `chunk_page` is where the token goes in the
+    // downstream forwarding chunk, and is ignored for a direct write.
     auto issue_token = [&](uint32_t in_page, uint32_t pad, bool direct, uint32_t dst_chip_id, uint32_t chunk_page) {
         const uint32_t slot = claim_slot();
         const uint32_t slot_addr = ring_addr + slot * slot_stride;
@@ -285,14 +244,12 @@ void kernel_main() {
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(meta_pads_addr + pad * META_PAD_STRIDE);
 
         noc_async_read(dram_in.get_noc_addr(in_page), slot_addr, token_size_bytes);
-        // Everything below is done while that read is in flight — which is the point of prefetching the
-        // metadata. Record layout: [0] linearized_coord, [1] token_idx, [2] topk_idx. The destination chip is
-        // already known from the run this token came out of, so only its slot within that chip's output is
-        // taken from here.
+        // Everything below runs while that read is in flight, which is the point of prefetching the metadata.
+        // Record layout: [0] linearized_coord, [1] token_idx, [2] topk_idx; the destination chip is already
+        // known from the run this token came out of.
         const uint32_t out_page = meta[1] * num_experts_per_tok + meta[2];
-        // The FINAL destination address is computed here, once, and then travels with the token for however
-        // many hops it takes. Valid on any chip because the output buffer's base address and interleaved bank
-        // mapping are uniform across the mesh.
+        // Computed once and then travelling with the token for however many hops it takes. Valid on any chip
+        // because the output buffer's base address and interleaved bank mapping are uniform across the mesh.
         const uint64_t final_addr = dram_out.get_noc_addr(out_page);
         if (direct) {
             tail[TAIL_CMD] = CMD_FINAL_WRITE;
