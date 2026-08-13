@@ -2002,12 +2002,25 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
                     ctx.dram_frames);
             }
         } catch (const std::exception& e) {
-            log_warning(
+            // A code-region overflow makes the drainer fail to LOAD, not merely fail to start, and the run
+            // then completes with exit 0 while every marker is dropped. Measured cost of that being quiet:
+            // a 101 KB capture with zero device zones that looked like a successful run, whose only tells
+            // were a warning 47 lines in and the ABSENCE of the per-DRISC report. Name the cause at the
+            // top, at error level, and say what it costs the capture.
+            const std::string what = e.what();
+            const bool elf_too_big = what.find("overflows region") != std::string::npos;
+            log_error(
                 tt::LogMetal,
-                "[perf-debug profiler] Device {}: DRISC {} failed to start ({}); continuing without capture",
+                "[perf-debug profiler] Device {}: DRISC {} FAILED TO LOAD{} -- THIS CAPTURE WILL BE EMPTY. No "
+                "device zones will be produced and the run will still exit 0.{} ({})",
                 device_id,
                 d,
-                e.what());
+                elf_too_big ? " (drain kernel ELF EXCEEDS THE DRISC CODE REGION)" : "",
+                elf_too_big ? " Reduce drain-kernel code or disable a feature: "
+                              "TT_METAL_PERF_DEBUG_DRISC_ZONES and TT_METAL_PERF_DEBUG_NOC_FOOTPRINT together "
+                              "are within 32 B of the limit."
+                            : "",
+                what);
             ctx.drain_program[d].reset();
             if (has_socket) {
                 ctx.sockets[sk].reset();
