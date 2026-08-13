@@ -236,16 +236,27 @@ def ccl_cp_allgather(tensor, mesh_config, ccl_manager, dim, memory_config=None):
     takes ttnn's native all_gather; a row-major input whose page is unaligned
     would silently fall back to composite_all_gather, which deadlocks at high
     device counts (see docs/superpowers/specs/2026-08-03-gemma4-context-parallel-prefill-design.md).
+
+    Ring, and via the async op so that is actually enforced. FABRIC_2D_TORUS_XY
+    wraps the CP axis, and on a torus fabric every op on the axis has to agree:
+    a Linear op emulates the wrap with a longer route than the fabric will
+    actually take. ttnn.all_gather would drop the topology argument entirely and
+    infer one (see _fabric_config_for_shape in tests/test_factory.py).
     """
     if cp_degree(mesh_config) <= 1:
         return tensor
     assert (
         tensor.layout == ttnn.TILE_LAYOUT
     ), f"ccl_cp_allgather requires TILE layout to stay on the native all_gather path, got {tensor.layout}"
-    gathered = ttnn.all_gather(
+    gathered = ttnn.experimental.all_gather_async(
         tensor,
         dim=dim,
         cluster_axis=mesh_config.sp_axis,
+        mesh_device=ccl_manager.mesh_device,
+        topology=ttnn.Topology.Ring,
+        multi_device_global_semaphore=ccl_manager.get_ag_semaphore(),
+        num_links=ccl_manager.num_links,
+        barrier_semaphore=ccl_manager.get_barrier_semaphore(),
         memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG,
     )
     tensor.deallocate(True)
@@ -264,7 +275,7 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
         tensor,
         cluster_axis=tp_axis,
         num_links=ccl_manager.num_links,
-        topology=ttnn.Topology.Linear,
+        topology=ttnn.Topology.Ring,
         memory_config=memory_config,
     )
     tensor.deallocate(True)
@@ -301,36 +312,34 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
 
 
 def ccl_allgather(tensor, mesh_config, ccl_manager, dim=3, memory_config=None):
-    """All-gather across TP devices."""
+    """All-gather across TP devices.
+
+    Ring, matching ccl_allreduce: TP is the size-8 mesh dim, which
+    FABRIC_2D_TORUS_Y physically wraps, so the ring closes. This goes through the
+    async op because ttnn.all_gather ignores its topology argument and would infer
+    Linear here — get_axis_topology() maps mesh axis 1 -> TORUS_X, which the
+    mesh->fabric rotation makes the wrong axis (see _fabric_config_for_shape).
+
+    Both links, matching ccl_allreduce. GEMMA4_NUM_LINKS drops this back to 1 to
+    re-test whether the two parallel link workers race each other in the ring
+    replay deadlock (see default_num_links).
+    """
     if mesh_config is None or mesh_config.tp <= 1:
         return tensor
 
     memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
     tp_axis = mesh_config.tp_axis
 
-    gathered = ttnn.all_gather(
+    gathered = ttnn.experimental.all_gather_async(
         tensor,
         dim=dim,
         cluster_axis=tp_axis,
+        mesh_device=ccl_manager.mesh_device,
+        topology=ttnn.Topology.Ring,
+        multi_device_global_semaphore=ccl_manager.get_ag_semaphore(),
         num_links=ccl_manager.num_links,
-        topology=ttnn.Topology.Linear,
+        barrier_semaphore=ccl_manager.get_barrier_semaphore(),
         memory_config=memory_config,
     )
     tensor.deallocate(True)
     return gathered
-
-    # TODO: Sweep experimental async all_gather for optimal performance.
-    #
-    # gathered = ttnn.experimental.all_gather_async(
-    #     tensor,
-    #     dim=dim,
-    #     cluster_axis=tp_axis,
-    #     mesh_device=ccl_manager.mesh_device,
-    #     num_links=ccl_manager.num_links,
-    #     topology=ccl_manager.topology,
-    #     multi_device_global_semaphore=ccl_manager.get_ag_semaphore(),
-    #     barrier_semaphore=ccl_manager.get_barrier_semaphore(),
-    #     memory_config=memory_config,
-    # )
-    # tensor.deallocate(True)
-    # return gathered

@@ -1202,15 +1202,24 @@ class Gemma4Model:
 
         Deliberately does not deallocate its input: one call site hands us a trace
         output the caller still owns.
+
+        Ring via the async op, for the reason spelled out in ccl_cp_allgather: the
+        CP axis is wrapped under FABRIC_2D_TORUS_XY, and ttnn.all_gather ignores
+        its topology argument rather than honouring it.
         """
         from models.demos.gemma4.tt.ccl import cp_degree
 
         if cp_degree(self.mesh_config) <= 1:
             return hidden_states
-        return ttnn.all_gather(
+        return ttnn.experimental.all_gather_async(
             hidden_states,
             dim=2,
             cluster_axis=self.mesh_config.sp_axis,
+            mesh_device=self.ccl_manager.mesh_device,
+            topology=ttnn.Topology.Ring,
+            multi_device_global_semaphore=self.ccl_manager.get_ag_semaphore(),
+            num_links=self.ccl_manager.num_links,
+            barrier_semaphore=self.ccl_manager.get_barrier_semaphore(),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 

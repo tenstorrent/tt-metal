@@ -356,7 +356,7 @@ def _prefill_forward_single(
             is_causal=False,
             attn_mask=cp_attn_mask,
             scale=1.0,
-            program_config=prefill_sdpa_program_config(config.head_dim, seq_len),
+            program_config=prefill_sdpa_program_config(config.head_dim, seq_len, tt_q.device()),
             compute_kernel_config=cp_ckc,
         )
     elif sliding_chunked:
@@ -394,7 +394,7 @@ def _prefill_forward_single(
                 is_causal=True,
                 scale=1.0,
                 sliding_window_size=sliding_window,
-                program_config=prefill_sdpa_program_config(config.head_dim, hist + seq_len),
+                program_config=prefill_sdpa_program_config(config.head_dim, hist + seq_len, q_cat.device()),
                 compute_kernel_config=sdpa_ckc,
             )
             q_cat.deallocate(True)
@@ -414,7 +414,7 @@ def _prefill_forward_single(
                 is_causal=True,
                 scale=1.0,
                 sliding_window_size=sliding_window,
-                program_config=prefill_sdpa_program_config(config.head_dim, seq_len),
+                program_config=prefill_sdpa_program_config(config.head_dim, seq_len, tt_q.device()),
                 compute_kernel_config=sdpa_ckc,
             )
         # Save this chunk's last ``hist`` K/V tokens as the next chunk's tail.
@@ -476,7 +476,7 @@ def _prefill_forward_single(
             is_causal=True,
             scale=1.0,
             sliding_window_size=sliding_window,
-            program_config=prefill_sdpa_program_config(config.head_dim, seq_len),
+            program_config=prefill_sdpa_program_config(config.head_dim, seq_len, tt_q.device()),
             compute_kernel_config=sdpa_compute_kernel_config,
         )
     tt_q.deallocate(True)

@@ -442,12 +442,36 @@ def _fabric_config_for_shape(shape):
     system fails the is_device_active() check, since fabric expects every device to
     be opened. A line mesh only ever routes along one axis, so FABRIC_1D suffices.
     A mesh with both dims > 1 runs collectives on both axes — tensor parallel on
-    one, context parallel on the other — and needs 2D routing.
+    one, context parallel on the other — and needs 2D routing, and TP wants Ring.
+
+    We ask for a (4,8) mesh but the BH Galaxy system mesh is [8,4], so SystemMesh
+    rotates the request to make it fit and maps logical (i,j) -> physical (j,i)
+    (see get_mapped_devices in tt_metal/distributed/system_mesh.cpp). That puts
+    logical axis 1 (TP, size 8) on physical dim 0 (Y) and logical axis 0 (CP,
+    size 4) on physical dim 1 (X).
+
+    TORUS_XY wraps both physical dims, so both axes run Ring. Wrapping both is
+    also what makes the rotation harmless: get_axis_topology() maps mesh axis 1 ->
+    TORUS_X and axis 0 -> TORUS_Y without accounting for it, so under a
+    single-axis torus it names the wrong axis, but under XY either answer is
+    serviceable.
+
+    Every CCL call on both axes must then ask for Ring, because a torus fabric and
+    a Linear-topology op are mutually exclusive. Ring attention's sliding halo is
+    the sharp edge: its logical layout is cyclic either way, but under Linear the
+    last rank emulates the wrap by routing its tail BACKWARD over ring-1 hops to
+    rank 0, whereas the fabric on a torus resolves that as one hop forward over
+    the wrap. The opened connection and the packet route then disagree and both
+    ring endpoints hang (see linear_wrap_halo in ring_joint_sdpa_program_factory).
+    Under Ring the last rank simply uses its forward neighbour, which is rank 0.
+
+    Plain FABRIC_2D services no wrap at all, so an explicit Ring hangs forever
+    (get_usable_topology() still returns Ring because the coords span the axis).
     """
     if shape == (1, 1):
         return None
     if shape[0] > 1 and shape[1] > 1:
-        return ttnn.FabricConfig.FABRIC_2D
+        return ttnn.FabricConfig.FABRIC_2D_TORUS_XY
     return ttnn.FabricConfig.FABRIC_1D
 
 

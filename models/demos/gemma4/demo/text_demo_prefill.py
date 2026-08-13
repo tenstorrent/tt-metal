@@ -645,12 +645,16 @@ def test_prefill_layer(mesh_device, layer_type, chunk, traced, reset_seeds, requ
 # ── Tests 2 and 3: the full 60-layer stack ────────────────────────────────────
 
 
-def _build_prefill_model(mesh_device, model_path, chunk, context_len=None):
-    """Create the full model from cache, sized for a ``context_len``-token prefill.
+def _build_prefill_model(mesh_device, model_path, chunk, context_len=None, num_layers=None):
+    """Create the model from cache, sized for a ``context_len``-token prefill.
 
     ``context_len`` defaults to a single ``chunk``. When larger, prefill runs as
     ``context_len / chunk`` chunks and the model is told the chunk size so it can lay
     the RoPE cache out chunk-major per CP rank and size the ring KV cache slabs.
+
+    ``num_layers`` truncates the stack (the cache is checked against the FULL config
+    layer count so a single-layer run still finds its ``layer_0``). ``None`` keeps
+    the config's full depth — the existing callers are unchanged.
 
     Returns ``(model_args, model, kv_cache, page_table_tt)``.
     """
@@ -664,10 +668,11 @@ def _build_prefill_model(mesh_device, model_path, chunk, context_len=None):
 
     cache_root = _cache_root(model_path)
     hf_config = Gemma4ModelArgs.load_hf_config(model_path)
-    num_layers = Gemma4ModelArgs.from_hf_config(hf_config).num_hidden_layers
-    _require_cache(cache_root, tp, num_layers)
+    config_num_layers = Gemma4ModelArgs.from_hf_config(hf_config).num_hidden_layers
+    _require_cache(cache_root, tp, config_num_layers)
 
-    logger.info(f"Creating Gemma4 ({num_layers} layers, TP={tp}, max_seq_len={max_seq_len})...")
+    build_layers = num_layers if num_layers is not None else config_num_layers
+    logger.info(f"Creating Gemma4 ({build_layers} layers, TP={tp}, max_seq_len={max_seq_len})...")
     t0 = time.time()
     model_args, model, kv_cache, _state_dict = create_tt_model(
         mesh_device=mesh_device,
@@ -679,6 +684,7 @@ def _build_prefill_model(mesh_device, model_path, chunk, context_len=None):
         create_kv_cache=True,
         paged_attention_config=paged_config,
         prefill_chunk_size=chunk if context_len > chunk else None,
+        num_layers=build_layers,
     )
     logger.info(f"Model ready in {time.time() - t0:.1f}s")
 
@@ -2492,4 +2498,283 @@ def test_prefill_layer_perf(mesh_device, layer_type, reset_seeds, request):
     logger.info(
         f"[layer_perf] {layer_type} x{share} layers = {share * measured_s * 1000:.0f}ms of a 60-layer chunk "
         f"(excludes embedding/head and inter-layer CCL not in this graph)"
+    )
+
+
+# ── Test: one-layer ring-attention prefill, minimal forward calls ────────────
+
+
+@parametrize_mesh_with_fabric([GALAXY_MESH], **_MESH_PARAMS)
+@pytest.mark.parametrize("layer_type", ["sliding_attention", "full_attention"], ids=["sliding", "global"])
+def test_prefill_layer_ring_perf(mesh_device, layer_type, reset_seeds, request):
+    """One decoder layer run as a multi-chunk CP prefill, traced, so a replay enters the ring path.
+
+    A sibling of ``test_prefill_layer_perf`` that exercises the chunked ring-attention
+    SDPA (``prefill.py:use_ring_attention``) instead of the single-chunk mask path.
+    The model is built with ``num_layers=1`` so only one decoder layer runs.
+
+    Chunk 0 (``chunk_start_idx=0``) has no predecessor Q group, so it attends via the
+    mask CP path but still writes its K/V into the ring cache. Every later chunk reads
+    that growing history back through ``ring_prefill_attention``. Two chunks is the
+    floor: one chunk would have no history to read (``GEMMA4_RING_CHUNK0`` can force
+    chunk 0 through the ring gather, but with an empty prefix it is a probe, not a
+    meaningful ring read).
+
+    Traced: two captures, because the mask and ring chunks are different graphs. The
+    mask trace is captured at chunk 0 and replayed only for chunk 0; the ring trace is
+    captured at a chunk that has a predecessor (chunk 1) and replayed for every later
+    chunk. Everything that varies per chunk (tokens, ring metadata, RoPE positions,
+    ring-attention semaphores) is refreshed on the host BETWEEN replays, never inside a
+    captured region -- a trace records addresses, not values. This mirrors
+    ``test_prefill_long_context_traced``'s staging/capture/replay, just with one layer
+    and the signposted region on the last chunk.
+
+    The number of chunks is ``GEMMA4_RING_PERF_CHUNKS`` (default 2, the minimum). Under
+    tracing the measured replay is always a clean replay (compile happens at warmup,
+    before capture), so unlike the eager version n_chunks=2 does NOT put a compile in
+    the measured region. n_chunks=3 still has value: the ring trace is captured at
+    chunk 1 and replayed for chunk 2, a deeper ring read with different metadata, so
+    it exercises replay-with-changing-per-chunk-scalars. The measured (last) chunk is
+    bracketed by signposts named ``gemma4-layer-ring-<sliding|global>-start``/``-stop``
+    so tt-perf-report can slice exactly that one ring-path replay:
+
+        tt-perf-report --start-signpost gemma4-layer-ring-sliding-start \\
+                       --end-signpost   gemma4-layer-ring-sliding-stop  REPORT.csv
+    """
+    from models.demos.gemma4.tt.attention import ring_prefill
+    from models.demos.gemma4.tt.ccl import cp_degree
+
+    chunk = LONG_CONTEXT_CHUNK
+    _guard_chunk(request, chunk)
+    mesh_config = _mesh_config(mesh_device)
+    cp = cp_degree(mesh_config)
+    if cp <= 1:
+        pytest.skip(f"ring prefill targets CP>1; mesh {tuple(mesh_device.shape)} gives CP={cp}")
+
+    # 2 chunks is the minimum (chunk 0 writes the ring cache, chunk 1 reads it). Bump
+    # GEMMA4_RING_PERF_CHUNKS to 3 to replay the ring trace for a chunk deeper than the
+    # capture chunk (exercises replay with different per-chunk scalars). The ring KV
+    # cache is sized to context_len so it holds every chunk's history
+    # (ring_cache_seq_len asserts max_seq_len % cp == 0; chunk=4096 is divisible by the
+    # usual CP degrees).
+    n_chunks = max(2, int(os.environ.get("GEMMA4_RING_PERF_CHUNKS", "2")))
+    context_len = n_chunks * chunk
+    assert context_len % cp == 0, f"context {context_len} not divisible by CP={cp}"
+
+    model_path = _model_path()
+    model_args, model, kv_cache, page_table_tt = _build_prefill_model(
+        mesh_device, model_path, chunk, context_len=context_len, num_layers=1
+    )
+    logger.info(f"[layer_ring_perf] {layer_type}: {context_len} tokens = {n_chunks} x {chunk}, CP={cp}, layers=1")
+
+    # Real prompt for chunk 0, deterministic filler for the rest. Content does not
+    # matter for the ring-path liveness check; position handling does. Precompute one
+    # torch tensor per chunk so the per-replay stage is just a host->device copy into
+    # the pinned input buffer.
+    tokens_first, _tokenizer, _prompt_len = _prompt_tokens(model_path, chunk)
+    torch.manual_seed(1234)
+    tokens_per_chunk = [tokens_first] + [
+        torch.randint(0, model_args.vocab_size, (1, chunk), dtype=torch.int32) for _ in range(1, n_chunks)
+    ]
+
+    # Pinned device buffers that the trace reads by address. Both are refreshed
+    # out-of-trace per chunk via copy_host_to_device_tensor (a host write is rejected
+    # inside a capture region).
+    device_input = ttnn.to_device(
+        _host_tensor(
+            mesh_device,
+            tokens_per_chunk[0],
+            ttnn.uint32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            mesh_config=mesh_config,
+            seq_dim=-1,
+        ),
+        device=mesh_device,
+    )
+    device_positions = ttnn.to_device(
+        _host_tensor(
+            mesh_device,
+            torch.arange(0, chunk, dtype=torch.int32).unsqueeze(0),
+            ttnn.uint32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            mesh_config=mesh_config,
+            seq_dim=-1,
+        ),
+        device=mesh_device,
+    )
+    model.set_prefill_rope_positions(device_positions)
+    # The model would otherwise set ring metadata inside the forward, which is a host
+    # write the capture rejects. Owning it from the staging path also lets one capture
+    # serve every chunk.
+    model._ring_metadata_external = True
+
+    # The measured chunk is the last one -- a ring-path replay. Only this chunk sits
+    # between the signposts, so the profiled region holds one ring-path replay.
+    measured_idx = n_chunks - 1
+    tag = "sliding" if layer_type == "sliding_attention" else "global"
+    sp_start, sp_stop = f"gemma4-layer-ring-{tag}-start", f"gemma4-layer-ring-{tag}-stop"
+
+    stage_breakdown = {"tokens": 0.0, "metadata": 0.0, "rope": 0.0, "semaphores": 0.0}
+
+    def _stage(chunk_idx):
+        """Host-side refresh of everything that varies per chunk. Never inside a trace."""
+        chunk_start = chunk_idx * chunk
+        _t = time.time()
+        staged = _host_tensor(
+            mesh_device,
+            tokens_per_chunk[chunk_idx],
+            ttnn.uint32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            mesh_config=mesh_config,
+            seq_dim=-1,
+        )
+        ttnn.copy_host_to_device_tensor(staged, device_input)
+        stage_breakdown["tokens"] += time.time() - _t
+        _t = time.time()
+        model.ccl_manager.set_ring_metadata(slot_idx=0, kv_actual_global=chunk_start)
+        stage_breakdown["metadata"] += time.time() - _t
+        _t = time.time()
+        # REQUIRED for liveness, not an optimization. Ring attention's global semaphores
+        # persist across replays, and back-to-back replays deadlock without this reset
+        # (see test_prefill_long_context_traced for the characterization). Costs ~4ms.
+        for _sem in model.ccl_manager.ring_attention_ccl_semaphore_handles:
+            ttnn.reset_global_semaphore_value(_sem, 0)
+        stage_breakdown["semaphores"] += time.time() - _t
+        _t = time.time()
+        # Absolute global positions for this chunk, CP-sharded the same way tokens are.
+        pos_host = _host_tensor(
+            mesh_device,
+            torch.arange(chunk_start, chunk_start + chunk, dtype=torch.int32).unsqueeze(0),
+            ttnn.uint32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            mesh_config=mesh_config,
+            seq_dim=-1,
+        )
+        ttnn.copy_host_to_device_tensor(pos_host, device_positions)
+        stage_breakdown["rope"] += time.time() - _t
+        return chunk_start
+
+    def _forward(chunk_start):
+        with _lm_head_deferred(model):
+            embeds, page_table, chunk_page_table, _ = model.transform_and_embed_prefill_inputs_device(
+                device_input, page_table_tt, None, None
+            )
+            return model.ttnn_prefill_forward(
+                x=embeds,
+                page_table=page_table,
+                chunk_page_table=chunk_page_table,
+                chunk_start_idx=chunk_start,
+                kv_cache=kv_cache,
+                get_last_token=-1,
+                user_id=0,
+            )
+
+    # The ring trace must be captured at a chunk WITH a predecessor (the halo layout
+    # is built host-side at create time and needs a complete predecessor group). With
+    # the default n_chunks=2, cap_idx=1 is also the measured chunk; the capture itself
+    # is not measured (only the later replay is), so this is fine.
+    cap_idx = 1
+
+    # -- Warm up: compile both graphs (mask + ring) that will be captured. A metal
+    # trace cannot compile kernels during capture.
+    t0 = time.time()
+    for warm_idx in (0, cap_idx):
+        out = _forward(_stage(warm_idx))
+        ttnn.synchronize_device(mesh_device)
+        out.deallocate(True)
+    warmup_s = time.time() - t0
+
+    # -- Capture: one trace per distinct graph. The mask trace serves chunk 0 only;
+    # the ring trace serves every later chunk.
+    t0 = time.time()
+    start0 = _stage(0)
+    tid_mask = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    out_mask = _forward(start0)
+    ttnn.end_trace_capture(mesh_device, tid_mask, cq_id=0)
+
+    ring_prefill.reset_ring_attention_calls()
+    start1 = _stage(cap_idx)
+    tid_ring = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    out_ring = _forward(start1)
+    ttnn.end_trace_capture(mesh_device, tid_ring, cq_id=0)
+    ttnn.synchronize_device(mesh_device)
+    capture_s = time.time() - t0
+    logger.info(
+        f"[layer_ring_perf] warmup(compile)={warmup_s:.1f}s capture={capture_s:.1f}s for 2 traces (mask + ring)"
+    )
+
+    # Ring reads are counted in Python, and a replay runs no Python -- so the counter
+    # can only be read at capture, where it confirms the ring graph is inside the
+    # recorded trace. During replay it stays put by construction; replay correctness
+    # is established by the liveness/scale checks below, not by this counter.
+    captured_ring_calls = ring_prefill.ring_attention_calls()
+    assert captured_ring_calls >= len(model.layers), (
+        f"only {captured_ring_calls} ring calls recorded while capturing the ring trace, expected "
+        f">= {len(model.layers)} (one per layer) -- the ring path is not in the captured trace"
+    )
+
+    # Warm replay of each, so the measured pass excludes one-off dispatch setup.
+    for tid, idx in ((tid_mask, 0), (tid_ring, cap_idx)):
+        _stage(idx)
+        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+    ttnn.synchronize_device(mesh_device)
+
+    chunk_device_s = []
+    stats = []
+    measured_s = None
+    try:
+        for chunk_idx in range(n_chunks):
+            chunk_start = _stage(chunk_idx)
+            is_mask = chunk_idx == 0
+            tid = tid_mask if is_mask else tid_ring
+            out = out_mask if is_mask else out_ring
+            is_measured = chunk_idx == measured_idx
+            if is_measured:
+                signpost(sp_start)
+            t_c = time.time()
+            ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+            device_s = time.time() - t_c
+            if is_measured:
+                signpost(sp_stop)
+                measured_s = device_s
+            chunk_device_s.append(device_s)
+
+            # Read every chunk's hidden so the scale-drift check below can compare the
+            # mask-path chunk against the ring-path chunks. A prefill server would read
+            # back only the last chunk; this is a test artifact.
+            hidden = _cp_gather_torch(out, mesh_device, mesh_config)
+            finite = bool(torch.isfinite(hidden).all())
+            std = float(hidden.std())
+            absmax = float(hidden.abs().max())
+            stats.append((chunk_idx, finite, std, absmax))
+            path = "mask (writes ring cache)" if is_mask else "ring (reads history)"
+            marker = " [MEASURED]" if is_measured else ""
+            logger.info(
+                f"[layer_ring_perf] chunk {chunk_idx + 1}/{n_chunks} [{chunk_start}, {chunk_start + chunk}) "
+                f"{path} device={device_s * 1000:.1f}ms finite={finite} std={std:.4f} absmax={absmax:.2f}{marker}"
+            )
+            assert finite, f"chunk {chunk_idx} produced non-finite output"
+            assert std > 0.01, f"chunk {chunk_idx} output is degenerate (std={std})"
+    finally:
+        ttnn.release_trace(mesh_device, tid_mask)
+        ttnn.release_trace(mesh_device, tid_ring)
+
+    # The ring read must not blow up the output scale vs the mask-path chunk.
+    first_std, last_std = stats[0][2], stats[-1][2]
+    assert last_std / first_std < 5.0 and first_std / last_std < 5.0, (
+        f"output scale drifted across chunks: first std={first_std:.4f}, last std={last_std:.4f} -- "
+        f"suspect the ring history read"
+    )
+
+    replay_note = (
+        " (ring trace replayed for a deeper chunk than capture; exercises changing per-chunk scalars)"
+        if n_chunks >= 3
+        else " (ring trace captured and replayed at the same chunk)"
+    )
+    logger.info(f"[layer_ring_perf] profiled region: --start-signpost {sp_start} --end-signpost {sp_stop}")
+    logger.info(
+        f"[layer_ring_perf] {layer_type} TOTAL {context_len} tokens in "
+        f"{sum(chunk_device_s):.1f}s device | measured chunk {measured_idx + 1}/{n_chunks} "
+        f"={measured_s * 1000:.1f}ms{replay_note}"
     )

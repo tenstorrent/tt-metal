@@ -259,7 +259,14 @@ def ring_prefill_attention(
         num_links=ccl_manager.num_links,
         cluster_axis=mesh_config.sp_axis,
         mesh_device=mesh_device,
-        topology=ttnn.Topology.Linear,
+        # Ring, because FABRIC_2D_TORUS_XY wraps the CP axis. The halo's logical
+        # layout is cyclic under either topology; what changes is the route. Linear
+        # emulates the wrap by sending the last rank's tail backward over cp-1 hops
+        # to rank 0, which a torus fabric instead resolves as one hop forward over
+        # the wrap — the opened connection and the packet route disagree and both
+        # ring endpoints hang. Ring just uses the forward neighbour, which IS rank
+        # 0. See linear_wrap_halo in ring_joint_sdpa_program_factory.cpp.
+        topology=ttnn.Topology.Ring,
         ccl_core_grid_offset=ttnn.CoreCoord(*ccl_manager.ring_attention_ccl_core_grid_offset),
         use_column_major_ccl=True,
         is_causal=True,
