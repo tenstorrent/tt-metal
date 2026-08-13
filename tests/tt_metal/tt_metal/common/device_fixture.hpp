@@ -169,27 +169,16 @@ protected:
 
 class MeshDeviceSingleCardBufferFixture : public MeshDeviceSingleCardFixture {};
 
-// Single unit-mesh fixture: always owns exactly one MeshDevice and exposes
-// RunProgram / FinishCommands overloads that do not take a device arg.
+// Single unit-mesh fixture: always owns exactly one unit MeshDevice.
 class UnitMeshFixture : public MeshDeviceSingleCardFixture {
 public:
-    distributed::MeshDevice& device() { return *device_; }
+    distributed::MeshDevice& device() { return *devices_.front(); }
 
-    void RunProgram(Program program, bool skip_finish = false) {
-        distributed::MeshWorkload workload;
-        workload.add_program(distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0)), std::move(program));
-        MeshDispatchFixture::RunProgram(device_, workload, skip_finish);
-    }
-    void FinishCommands() { MeshDispatchFixture::FinishCommands(device_); }
-
-private:
+protected:
     void create_devices() override {
         const ChipId mmio_device_id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
         AnyDispatchMeshDeviceSingleCardFixture::create_devices({mmio_device_id});
-        device_ = devices_.front();
     }
-
-    std::shared_ptr<distributed::MeshDevice> device_;
 };
 
 class BlackholeSingleCardFixture : public MeshDeviceSingleCardFixture {

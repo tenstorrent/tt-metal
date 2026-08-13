@@ -172,8 +172,20 @@ MinimalMatmulStridedReduceScatterAsync::compute_output_specs(
         tt::tt_metal::TensorLayout(
             mm_output_spec.data_type(), mm_output_spec.page_config(), attributes.rs_output_mem_config));
 
-    // --- L1 handoff (step 1): block-shard the MM output across the matmul core grid so the RS reader's
-    if (attributes.matmul_struct.config.has_value() &&
+    // --- L1 handoff (step 1): block-shard the MM output across the matmul core grid so the RS reader
+    // consumes it straight out of L1 instead of round-tripping through DRAM.
+    //
+    // Opt-in only. Without a window the resident shard is Mt_per_core * Nt_per_core tiles on every
+    // matmul core, which for a large M crowds out the L1 that later programs need for their own
+    // circular buffers — and past roughly Mt/gy * Nt/gx > bank capacity does not fit at all. A caller
+    // that asked for a DRAM MM output therefore keeps getting one. Opting in means either requesting
+    // an L1 MM output outright, or setting mm_window_blocks, which bounds the shard to W M blocks and
+    // is only meaningful in L1.
+    const bool caller_requested_l1_mm_output =
+        attributes.matmul_struct.output_mem_config.has_value() &&
+        attributes.matmul_struct.output_mem_config->buffer_type() == BufferType::L1;
+    const bool use_l1_handoff = attributes.mm_window_blocks.has_value() || caller_requested_l1_mm_output;
+    if (use_l1_handoff && attributes.matmul_struct.config.has_value() &&
         attributes.matmul_struct.config->compute_with_storage_grid_size.x > 0) {
         const auto grid = attributes.matmul_struct.config->compute_with_storage_grid_size;
         const uint32_t gx = grid.x;

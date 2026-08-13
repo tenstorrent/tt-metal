@@ -148,6 +148,11 @@ void kernel_main() {
                     (void)ckernel::load_blocking(
                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_idx) + (idx_bytes - 1) / sizeof(uint32_t));
                 }
+                // All TILE_H writes share the same (already-drained) source page and differ only in
+                // destination, so issue them all before a single barrier - a barrier per row costs
+                // a full DRAM round-trip each, on one core, for every one of the Wt tiles. The
+                // source page is not popped until after the barrier, so it cannot be recycled
+                // while a write is still in flight.
                 for (uint32_t row = 0; row < TILE_H; row++) {
                     noc.async_write(
                         use<CircularBuffer::AddrSelector::WRITE_PTR>(rm_coord_index_row),
@@ -155,8 +160,8 @@ void kernel_main() {
                         W_index_bytes,
                         {.offset_bytes = 0},
                         {.page_id = row_base + row, .offset_bytes = static_cast<uint32_t>(w * W_index_bytes)});
-                    noc.async_write_barrier();
                 }
+                noc.async_write_barrier();
                 rm_coord_index_row.push_back(one_tile);
                 rm_coord_index_row.pop_front(one_tile);
 

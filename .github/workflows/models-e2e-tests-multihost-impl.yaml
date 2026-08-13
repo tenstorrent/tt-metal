@@ -76,7 +76,6 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           extra-pip-packages: pytest==9.0.3 pytest-timeout==2.4.0
-          unpack-build-on-nfs: "true"
 
       - name: ${{ matrix.test-group.name }}
         id: run-test

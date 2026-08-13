@@ -48,7 +48,6 @@ on:
           - llama3_90b_vision
           - llama3_70b
           - resnet50
-          - sd35_large
           - motif
           - mixtral
           - whisper
@@ -65,7 +64,6 @@ on:
           - disabled
           - all
           - resnet50
-          - stable_diffusion_35_large
           - mochi
           - motif
       t3000-integration:
@@ -79,7 +77,6 @@ on:
           - ethernet
           - trace stress
           - resnet
-          - sd35_large
           - motif
           - mochi
           - deepseek-modules

@@ -60,10 +60,6 @@ run_t3000_mochi_tests() {
   fi
 }
 
-run_t3000_stable_diffusion_35_large_tests() {
-  run_t3000_dit_tests "models/tt_dit/tests/models/sd35/test_performance_sd35.py -k 2x4cfg1sp0tp1 --timeout 600"
-}
-
 run_t3000_motif_tests() {
   run_t3000_dit_tests "models/tt_dit/tests/models/motif/test_performance_motif.py --timeout 600"
 }

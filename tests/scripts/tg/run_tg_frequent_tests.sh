@@ -13,12 +13,6 @@ run_tg_tests() {
     pytest tests/ttnn/distributed/test_multidevice_TG.py --timeout=900 ; fail+=$?
     pytest tests/ttnn/unit_tests/base_functionality/test_multi_device_trace_TG.py --timeout=900 ; fail+=$?
 
-  elif [[ "$1" == "sd35" ]]; then
-    echo "LOG_METAL: running stable diffusion 3.5 Large run_tg_frequent_tests"
-    pytest models/tt_dit/tests/models/sd35/test_vae_sd35.py -k "tg" --timeout=300; fail+=$?
-    pytest models/tt_dit/tests/models/sd35/test_attention_sd35.py -k "4x4sp0tp1" --timeout=300; fail+=$?
-    pytest models/tt_dit/tests/models/sd35/test_transformer_sd35.py::test_sd35_transformer_block -k "4x4sp0tp1" --timeout=300; fail+=$?
-
   elif [[ "$1" == "motif" ]]; then
     echo "LOG_METAL: running Motif run_tg_frequent_tests"
     HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest models/tt_dit/tests/models/motif/test_attention_motif.py::test_attention_motif -k "4x" --timeout=300; fail+=$?

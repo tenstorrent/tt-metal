@@ -20,6 +20,7 @@
 #include <stack>
 #include <tracy/TracyTTDevice.hpp>
 #include <tt_metal.hpp>
+#include "tt_metal_profiler.hpp"
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>

@@ -158,7 +158,7 @@ run_t3000_dit_tests() {
 
   echo "LOG_METAL: Running ${test_name}"
 
-  # Run test_model for sd35 large
+  # Run each caller-supplied pytest invocation, accumulating failures
   for test_cmd in "$@"; do
     pytest ${test_cmd} ; fail+=$?
   done
@@ -170,13 +170,6 @@ run_t3000_dit_tests() {
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
-}
-
-run_t3000_sd35large_tests() {
-  run_t3000_dit_tests \
-    "models/tt_dit/tests/models/sd35/test_vae_sd35.py -k t3k" \
-    "models/tt_dit/tests/models/sd35/test_attention_sd35.py" \
-    "models/tt_dit/tests/models/sd35/test_transformer_sd35.py::test_sd35_transformer_block"
 }
 
 run_t3000_motif_tests() {
@@ -232,9 +225,6 @@ run_t3000_tests() {
 
   # Run resnet tests
   run_t3000_resnet_tests
-
-  # Run sd35_large tests
-  run_t3000_sd35large_tests
 
   # Run motif tests
   run_t3000_motif_tests

@@ -910,3 +910,33 @@ def test_block_sharded(layout, device):
     ), f"values mismatch max_diff={(out - ref_vals.float()).abs().max():.4f}"
     gathered = torch.gather(t, -1, ttnn.to_torch(i).to(torch.int64))
     assert torch.allclose(gathered.float(), ref_vals.float(), rtol=1e-2, atol=1e-2), "index gather mismatch"
+
+
+@pytest.mark.parametrize("descending", [False, True])
+def test_sort_row_major_multi_core_correctness(descending, device):
+    torch.manual_seed(42)
+
+    grid = device.compute_with_storage_grid_size()
+    total_cores = grid.x * grid.y
+    wt = _next_pow2(total_cores * 128 + 1)  # smallest pow2 Wt on the DRAM multi-core path
+    shape = [1, 1, TILE_HEIGHT, wt * TILE_WIDTH]
+
+    input_t = torch.randn(shape, dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(input_t, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=-1, descending=descending)
+
+    assert ttnn_values.get_layout() == ttnn.ROW_MAJOR_LAYOUT, "output layout must be ROW_MAJOR"
+    assert ttnn_indices.get_layout() == ttnn.ROW_MAJOR_LAYOUT, "index layout must be ROW_MAJOR"
+    assert list(ttnn_values.shape) == shape, f"values shape mismatch: got {list(ttnn_values.shape)}, expected {shape}"
+    assert (
+        list(ttnn_indices.shape) == shape
+    ), f"indices shape mismatch: got {list(ttnn_indices.shape)}, expected {shape}"
+
+    torch_values, _ = torch.sort(input_t, dim=-1, descending=descending)
+
+    out_vals = ttnn.to_torch(ttnn_values)
+    assert_equal(torch_values, out_vals)
+
+    ttnn_gathered = torch.gather(input_t, -1, ttnn.to_torch(ttnn_indices).to(torch.int64))
+    assert_equal(torch_values, ttnn_gathered)

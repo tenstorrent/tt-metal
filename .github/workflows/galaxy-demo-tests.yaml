@@ -10,7 +10,6 @@ on:
         type: choice
         options:
           - all
-          - sd35
           - motif
           - wan22
           - mochi
