@@ -20,6 +20,7 @@
 #include "tt-metalium/tensor/spec/tensor_spec.hpp"                               // Metal 2.0 TensorParameter registry
 #include "tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp"  // Metal 2.0 TensorParameter relaxations
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
+#include <impl/context/context_types.hpp>
 
 #include <umd/device/types/core_coordinates.hpp>        // CoreType
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
@@ -72,6 +73,7 @@ void assemble_device_commands(
 
 struct KernelGroup {
     uint32_t programmable_core_type_index{};
+    ContextId context_id_{DEFAULT_CONTEXT_ID};
     CoreRangeSet core_ranges;
     // kernel_ids are ordered by processor index
     std::vector<KernelHandle> kernel_ids;
@@ -181,7 +183,7 @@ public:
 // The internal implementation of the Program class. Program is a view of this class that's usable by API clients.
 class ProgramImpl : public std::enable_shared_from_this<ProgramImpl> {
 public:
-    ProgramImpl();
+    explicit ProgramImpl(ContextId context_id = DEFAULT_CONTEXT_ID);
 
     ProgramImpl(const ProgramImpl& other) = delete;
     ProgramImpl& operator=(const ProgramImpl& other) = delete;
@@ -195,6 +197,8 @@ public:
     using LocalCBMaskType = typename dev_msgs::kernel_config_msg_t::
         FieldTraits<false, dev_msgs::kernel_config_msg_t::Field::local_cb_mask>::element_type;
     static constexpr size_t cb_mask_width_ = sizeof(LocalCBMaskType) * 8;
+
+    ContextId get_context_id() const { return context_id_; }
 
     void set_runtime_id(ProgramId id);
     ProgramId get_runtime_id() const;
@@ -467,6 +471,7 @@ private:
         // Reset when circular buffer allocation is invalidated
         void reset_available_addresses() { this->l1_regions.clear(); }
     };
+    ContextId context_id_{DEFAULT_CONTEXT_ID};
     uint32_t programmable_core_count_;
     uint32_t max_cbs_;  // Architecture-specific max CBs
     uint64_t id;  // Need to make non-const due to move constructor

@@ -67,7 +67,6 @@ on:
           - disabled
           - all
           - llama3
-          - resnet50
           - unit
           - wan22
           - motif

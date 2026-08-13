@@ -13,7 +13,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/tt_metal_profiler.hpp>
 #include <algorithm>
 #include <array>
 #include <cstdint>

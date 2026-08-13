@@ -10,7 +10,6 @@ on:
         default: all
         options:
           - all
-          - resnet50
           - motif
           - qwenimage
       platform:

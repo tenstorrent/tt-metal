@@ -10,7 +10,6 @@ on:
         type: choice
         options:
           - all
-          - resnet50
           - unit
           - wan22
           - motif

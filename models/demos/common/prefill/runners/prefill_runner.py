@@ -1025,25 +1025,38 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                 )
                 logger.info(f"[mock-migration] merged KV chunk table -> {table_path} (no migration worker)")
             logger.info(f"[mock-migration] rank {rank}: local device map -> {device_map_path}")
-        elif is_first_rank:
-            # RANK 0: model runtime builds + serializes the merged table (spanning all gathered
-            # stages), then publish the serialized path + block on WORKER_READY.
-            table_path = runtime.build_kv_chunk_table(
-                kv_caches,
-                table_path,
-                first_layer_idx=first_layer_idx,
-                num_my_layers=num_my_layers,
-                stage_layout=stage_layout,
-            )
-            migration_endpoint = publish_serialized_table_and_wait_ready(
-                table_path=table_path,
-                wait_ready_timeout_ms=wait_ready_ms,
-            )
         else:
-            logger.info(
-                f"[migration] rank {rank}: delivered local device map + contributed stage "
-                f"(first_layer={first_layer_idx}, count={num_my_layers}); rank 0 sends the merged table."
-            )
+            # EVERY rank serializes its own local fabric_node -> ASIC unique_id map, exactly as the
+            # mock path above does. The real path used to skip this, which silently disabled every
+            # device-less reader downstream: migration_driver's destination verification
+            # (--verify-migration, both dst-bytes and dst-golden) and prefill_producer's source-KV
+            # PCC each resolve chips through this file, log "device map ... not found", and FAIL —
+            # so a real migration run could never verify what it copied. Host-local by design (one
+            # file per host, each rank overwriting its own).
+            device_map_path = os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json")
+            serialize_device_map(mesh_device, device_map_path)
+            logger.info(f"[migration] rank {rank}: local device map -> {device_map_path}")
+
+        if not _mock_migration:
+            if is_first_rank:
+                # RANK 0: model runtime builds + serializes the merged table (spanning all gathered
+                # stages), then publish the serialized path + block on WORKER_READY.
+                table_path = runtime.build_kv_chunk_table(
+                    kv_caches,
+                    table_path,
+                    first_layer_idx=first_layer_idx,
+                    num_my_layers=num_my_layers,
+                    stage_layout=stage_layout,
+                )
+                migration_endpoint = publish_serialized_table_and_wait_ready(
+                    table_path=table_path,
+                    wait_ready_timeout_ms=wait_ready_ms,
+                )
+            else:
+                logger.info(
+                    f"[migration] rank {rank}: delivered local device map + contributed stage "
+                    f"(first_layer={first_layer_idx}, count={num_my_layers}); rank 0 sends the merged table."
+                )
 
     elif os.environ.get("PREFILL_MOCK_MIGRATION", "0") == "1":
         # Mock integration (prefill_producer.py): serialize the KV chunk table so an external
