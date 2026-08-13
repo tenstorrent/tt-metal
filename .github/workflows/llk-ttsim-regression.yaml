@@ -27,7 +27,7 @@ on:
       workers:
         description: "Number of xdist workers per run"
         required: false
-        default: 10
+        default: 16
         type: number
       per_test_timeout_seconds:
         description: "Per-test timeout (passed as --timeout to pytest via the script)"
