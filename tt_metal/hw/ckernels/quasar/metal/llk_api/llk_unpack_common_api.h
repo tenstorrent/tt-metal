@@ -52,7 +52,8 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
         // face, which is what the tiny-tile LLK paths index against). Writing the face count
         // straight into z_dim programmed the HW-invalid z_dim == 2 for every 2-face tile (16x32, 32x16).
         // This is every DFB, so a 2-face operand now reaches the LLKs that still index L1 in whole
-        // tiles as one HW tile per face; those paths are guarded by @ref assert_full_tile_operand.
+        // tiles as one HW tile per face; those paths assert total_num_faces() == MAX_NUM_FACES in
+        // their init (tracked in tt-metal #47597).
         const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(i);
         const tdma_descriptor_t td_val = ckernel::trisc::construct_tdma_desc(
             tensor_shape,
@@ -78,25 +79,6 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
  */
 inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand) {
     llk_unpack_hw_configure(unpA_operand, unpA_operand);
-}
-
-/**
- * @brief Assert that an operand is a full 2x2 face tile, for the LLKs that index L1 in whole tiles.
- *
- * A tiny tile is registered as one HW tile per face (buffer-descriptor z_dim = 1, see
- * @ref ckernel::trisc::construct_tdma_desc), so an LLK that neither scales its L1 tile index by the
- * face count nor issues one UNPACR per face would move a fraction of the tile and step L1 by a single
- * face. The Quasar LLKs still in that state take no TensorShape at all, so they cannot scale:
- * @ref _llk_unpack_binary_operands_, @ref _llk_unpack_binary_broadcast_operands_,
- * @ref _llk_unpack_unary_broadcast_operands_ and @ref _llk_unpack_matmul_. Guard at this layer, where
- * the shape is already in hand, until they are converted (tracked in tt-metal #47597).
- *
- * @param operand_id: DFB id of the operand whose tile shape is checked.
- */
-inline void assert_full_tile_operand(const std::uint32_t operand_id) {
-    LLK_ASSERT(
-        get_operand_tensor_shape(operand_id).total_num_faces() == ckernel::MAX_NUM_FACES,
-        "this path indexes L1 in whole tiles, so it supports full 32x32 tiles only");
 }
 
 inline bool should_reconfig_src_reg_df(std::uint32_t old_operand, std::uint32_t new_operand) {

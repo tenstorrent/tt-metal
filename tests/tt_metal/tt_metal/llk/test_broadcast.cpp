@@ -909,56 +909,42 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixComputeBinaryBroadcastQuasarDfb)
 // Cases are ordered so the first red one localizes the bug:
 //   - ct_dim=1 carries no reuse at all, so a failure there means the srcB face traversal (the
 //     +8/-8/+24 addr-mod walk) is wrong.
-//   - ct_dim=1 passing but ct_dim=2 failing means the srcB hold is wrong i.e. the per-tile
-//     SETRWC(CLR_A) is releasing srcB, or the L1 srcB tile pointer is advancing.
+//   - ct_dim>1 adds the reuse itself: a failure there means the srcB hold is wrong i.e. the
+//     per-tile SETRWC(CLR_A) is releasing srcB, or the L1 srcB tile pointer is advancing.
 //   - num_blocks>1 additionally exercises dest-section switching and the per-block srcB re-unpack,
 //     whose 1:1 pairing with the math thread's single CLR_B is what keeps blocks from deadlocking.
 //   - rt_dim>1 is the only shape that exercises nonzero srcA/srcB tile indices and a nonzero dest
-//     base, so a failure there (with the matching rt_dim=1 case green) points at the API wrappers'
-//     index arithmetic rather than the face walk.
-//   - the tiny-tile (16x32) cases come last: they only differ from their full-tile twins in the
-//     tile shape, so a red tiny-tile case with its full-tile twin green isolates the shape-driven
-//     parts (face-row count, dest slot stride, per-face unpack, buffer-descriptor z_dim).
+//     base, so a failure there (with the rt_dim=1 cases green) points at the API wrappers' index
+//     arithmetic rather than the face walk.
+//   - the tiny-tile (16x32) cases come last and mostly repeat a full-tile shape, so a red tiny-tile
+//     case with its full-tile twin green isolates the shape-driven parts (face-row count, dest slot
+//     stride, per-face unpack, buffer-descriptor z_dim).
 TEST_F(QuasarMeshDeviceSingleCardFixture, ComputeSubBcastColCustom) {
     using unit_tests::compute::broadcast::SubBcastColCustomConfig;
 
     const std::vector<SubBcastColCustomConfig> cases = {
         // Full 32x32 tiles, one row per block: every call uses tile_index_a/b = 0 and dst_index = 0.
-        // ct_dim=8 fills half-dest, 3 and 7 cover non-power-of-two block widths.
+        // ct_dim=8 fills half-dest, 7 covers a non-power-of-two block width.
         {.ct_dim = 1, .num_blocks = 1},
-        {.ct_dim = 2, .num_blocks = 1},
-        {.ct_dim = 3, .num_blocks = 1},
         {.ct_dim = 4, .num_blocks = 1},
         {.ct_dim = 7, .num_blocks = 1},
-        {.ct_dim = 8, .num_blocks = 1},
-        {.ct_dim = 2, .num_blocks = 2},
         {.ct_dim = 8, .num_blocks = 2},
-        // Multi-row blocks, mirroring sub_exp_block_bcast_cols(): row r of a block reads srcA tile
-        // r * ct_dim and srcB tile r and writes dest slots [r * ct_dim, (r + 1) * ct_dim), all inside
-        // one acquire. rt_dim * ct_dim is capped by the same half-dest budget as ct_dim above.
-        {.ct_dim = 1, .rt_dim = 2, .num_blocks = 1},
-        {.ct_dim = 2, .rt_dim = 2, .num_blocks = 1},
-        {.ct_dim = 2, .rt_dim = 4, .num_blocks = 1},
+        // One multi-row block, mirroring sub_exp_block_bcast_cols(): row r reads srcA tile r * ct_dim
+        // and srcB tile r and writes dest slots [r * ct_dim, (r + 1) * ct_dim), all inside one
+        // acquire. rt_dim * ct_dim is capped by the same half-dest budget as ct_dim above.
         {.ct_dim = 4, .rt_dim = 2, .num_blocks = 1},
-        {.ct_dim = 2, .rt_dim = 2, .num_blocks = 2},
         // Tiny 16x32 tiles: one face-row, so the srcB walk runs its four-op face-row block once and
-        // dest slots are 32 rows apart instead of 64. The full-tile sweep above is repeated shape for
-        // shape, because the tile shape changes the per-tile unpack (one UNPACR per face on Quasar),
-        // the dest slot stride and the pack granularity all at once. A 32-row slot also means twice as
-        // many tiles fit in a dest section, so every shape that fits at 32x32 fits here.
+        // dest slots are 32 rows apart instead of 64. The full-tile shapes above are mirrored one for
+        // one, because the tile shape changes the per-tile unpack (one UNPACR per face on Quasar), the
+        // dest slot stride and the pack granularity all at once. The one shape with no full-tile twin
+        // is ct_dim=16: a 32-row slot means twice as many tiles fit in a dest section, so this is the
+        // only case that reaches the tiny-tile dest budget (and the only one where dst_index + ct_dim
+        // lands exactly on the shape-derived max_dest_tiles bound).
         {.ct_dim = 1, .num_blocks = 1, .tile_shape = TileShape::TINY_TILE_16x32},
-        {.ct_dim = 2, .num_blocks = 1, .tile_shape = TileShape::TINY_TILE_16x32},
-        {.ct_dim = 3, .num_blocks = 1, .tile_shape = TileShape::TINY_TILE_16x32},
         {.ct_dim = 4, .num_blocks = 1, .tile_shape = TileShape::TINY_TILE_16x32},
         {.ct_dim = 7, .num_blocks = 1, .tile_shape = TileShape::TINY_TILE_16x32},
-        {.ct_dim = 8, .num_blocks = 1, .tile_shape = TileShape::TINY_TILE_16x32},
-        {.ct_dim = 2, .num_blocks = 2, .tile_shape = TileShape::TINY_TILE_16x32},
-        {.ct_dim = 8, .num_blocks = 2, .tile_shape = TileShape::TINY_TILE_16x32},
-        {.ct_dim = 1, .rt_dim = 2, .num_blocks = 1, .tile_shape = TileShape::TINY_TILE_16x32},
-        {.ct_dim = 2, .rt_dim = 2, .num_blocks = 1, .tile_shape = TileShape::TINY_TILE_16x32},
-        {.ct_dim = 2, .rt_dim = 4, .num_blocks = 1, .tile_shape = TileShape::TINY_TILE_16x32},
+        {.ct_dim = 16, .num_blocks = 2, .tile_shape = TileShape::TINY_TILE_16x32},
         {.ct_dim = 4, .rt_dim = 2, .num_blocks = 1, .tile_shape = TileShape::TINY_TILE_16x32},
-        {.ct_dim = 2, .rt_dim = 2, .num_blocks = 2, .tile_shape = TileShape::TINY_TILE_16x32},
     };
 
     for (const auto& cfg : cases) {

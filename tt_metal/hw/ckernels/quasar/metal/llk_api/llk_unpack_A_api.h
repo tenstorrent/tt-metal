@@ -81,8 +81,10 @@ inline void llk_unpack_A_init(
             }
         } else {
             // Unlike the unary path above, the broadcast LLK takes no TensorShape, so it does not scale
-            // its L1 tile index by the face count.
-            assert_full_tile_operand(operand_id);
+            // its L1 tile index by the face count. Full-tile only until it is converted (tt-metal #47597).
+            LLK_ASSERT(
+                get_operand_tensor_shape(operand_id).total_num_faces() == ckernel::MAX_NUM_FACES,
+                "this path indexes L1 in whole tiles, so it supports full 32x32 tiles only");
 
             constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_A : p_unpacr::UNP_B;
             constexpr bool is_fp32_dest_acc_en = unpack_to_dest ? false : DST_ACCUM_MODE;

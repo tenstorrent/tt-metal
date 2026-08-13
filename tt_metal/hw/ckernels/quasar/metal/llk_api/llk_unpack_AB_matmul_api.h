@@ -39,8 +39,12 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
 
     // _llk_unpack_matmul_ takes no TensorShape, so it does not scale its L1 tile indices by the face
     // count; Quasar matmul is full-tile only (tt-metal #45208).
-    assert_full_tile_operand(operandA_id);
-    assert_full_tile_operand(operandB_id);
+    LLK_ASSERT(
+        get_operand_tensor_shape(operandA_id).total_num_faces() == ckernel::MAX_NUM_FACES,
+        "this path indexes L1 in whole tiles, so it supports full 32x32 tiles only");
+    LLK_ASSERT(
+        get_operand_tensor_shape(operandB_id).total_num_faces() == ckernel::MAX_NUM_FACES,
+        "this path indexes L1 in whole tiles, so it supports full 32x32 tiles only");
 
     _llk_unpack_matmul_init_<TRANSPOSE_EN>(operandA_id, operandB_id, ct_dim, rt_dim, kt_dim);
 }
