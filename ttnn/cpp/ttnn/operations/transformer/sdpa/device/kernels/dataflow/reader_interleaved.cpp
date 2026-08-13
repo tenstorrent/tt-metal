@@ -206,7 +206,18 @@ void kernel_main() {
     constexpr uint32_t q_num_subblocks = Sq_chunk_t / qk_subblock_h;
     constexpr bool use_q_subblock_push = (q_num_subblocks > 1);
 
-    constexpr uint32_t barrier_threshold = get_barrier_read_threshold<q_tile_bytes, num_cores>();
+    // Size the NoC read-ahead budget by the cores that actually read, not the whole grid.
+    // The Q-chunk space is pair-distributed when causal, so at B=1/NQH=6/q_num_chunks=16 only
+    // 48 of ~130 cores get work; dividing the budget by 130 floors the threshold to 1, which
+    // means one async_read_barrier per tile and no read pipelining at all. See
+    // get_num_active_readers() in dataflow_common.hpp.
+    //
+    // Still derived from q_tile_bytes and applied to K/V/mask reads too. That is only exact
+    // when those share Q's dtype; with bfloat8_b K/V it under-estimates the budget (a
+    // conservative direction). Left as-is here because the K/V/mask call sites share this one
+    // constant and splitting them is a separate, riskier change.
+    constexpr uint32_t num_active_readers = get_num_active_readers<B, NQH, q_num_chunks, is_causal != 0, num_cores>();
+    constexpr uint32_t barrier_threshold = get_barrier_read_threshold<q_tile_bytes, num_active_readers>();
 
     const auto q_reader = TensorAccessor(q_args, q_addr);
     const auto k_reader = TensorAccessor(k_args, k_addr);
