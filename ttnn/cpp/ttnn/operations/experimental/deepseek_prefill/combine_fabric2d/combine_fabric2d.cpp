@@ -23,11 +23,7 @@ ttnn::Tensor combine_fabric2d(
     std::optional<tt::tt_fabric::Topology> topology,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     bool init_zeros,
-    bool use_fp8_combine,
-    uint32_t num_l1_slots,
-    uint32_t fwd_bump_every,
-    uint32_t assignment_order,
-    uint32_t stall_telemetry) {
+    bool use_fp8_combine) {
     // Accepted for signature parity with the production op, but there is nowhere to produce fp8: it comes
     // out of the packer during untilize and this op has no untilize stage.
     TT_FATAL(!use_fp8_combine, "combine_fabric2d does not support fp8 output (no untilize stage to produce it)");
@@ -47,11 +43,7 @@ ttnn::Tensor combine_fabric2d(
         topology.value_or(tt::tt_fabric::Topology::Mesh),
         memory_config.value_or(
             tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM}),
-        init_zeros,
-        num_l1_slots,
-        fwd_bump_every,
-        assignment_order,
-        stall_telemetry);
+        init_zeros);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d

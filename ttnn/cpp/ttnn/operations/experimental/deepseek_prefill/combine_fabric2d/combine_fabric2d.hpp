@@ -16,14 +16,9 @@
 
 namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d {
 
-// Same call as ttnn::experimental::deepseek_prefill::combine, plus `expert_offsets` and this op's tuning
-// knobs. Allocates and returns the combined output: (1, 1, seq_len_per_chip, num_experts_per_tok, emb_dim)
-// BFLOAT16 ROW_MAJOR per device. See CombineFabric2dParams for what each tensor carries.
-//
-// The leading parameters and their names deliberately match the production op exactly, so one caller can
-// dispatch to either without special-casing the argument list: no `device` parameter (it comes from
-// `dispatched_buffer`), `cluster_axis` rather than `axis`, and `use_fp8_combine` accepted so the call
-// compiles even though this op has to reject it. Tuning knobs follow, defaulted to the tuned values.
+// Same call as ttnn::experimental::deepseek_prefill::combine, plus `expert_offsets`. Parameter names match
+// the production op exactly so one caller can dispatch to either without special-casing the argument list;
+// `use_fp8_combine` is accepted even though this op rejects it, for that reason.
 ttnn::Tensor combine_fabric2d(
     const ttnn::Tensor& dispatched_buffer,
     const ttnn::Tensor& dispatched_metadata,
@@ -39,11 +34,7 @@ ttnn::Tensor combine_fabric2d(
     std::optional<tt::tt_fabric::Topology> topology = std::nullopt,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
     bool init_zeros = false,
-    bool use_fp8_combine = false,
-    uint32_t num_l1_slots = 8,
-    uint32_t fwd_bump_every = 32,
-    uint32_t assignment_order = 1,
-    uint32_t stall_telemetry = 0);
+    bool use_fp8_combine = false);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d
 

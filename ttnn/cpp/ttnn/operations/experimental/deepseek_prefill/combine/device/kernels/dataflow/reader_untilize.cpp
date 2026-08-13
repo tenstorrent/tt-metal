@@ -43,9 +43,6 @@
 #endif
 
 void kernel_main() {
-    // End-to-end kernel zone; see producer_combine_fabric2d.cpp for what CMB_E2E means and why the
-    // name is shared across both combine implementations. No-op unless the device profiler is on.
-    DeviceZoneScopedN("CMB_E2E");
     // ===== Compile-time args =====
     //   0: cb_experts_tok_counter_id             - CB that receives the multicasted expert token counts
     //   1: experts_tok_counter_pages             - number of pages in the expert_token_counts tensor
