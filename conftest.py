@@ -571,13 +571,18 @@ def mesh_device(request, silicon_arch_name, device_params):
     # open_mesh_device with a TT_FATAL; also accounting for the system mesh size lets us skip
     # gracefully on such machines instead.
     #
-    # Query the system mesh once, guarded: on hosts where control-plane / mesh-graph discovery
-    # itself throws (missing descriptor, untrained eth links, ...) we skip gracefully at setup
-    # instead of erroring out every parametrized test.
+    # Query the system mesh once. A failure here means control-plane / mesh-graph discovery itself
+    # errored (missing descriptor, untrained eth links, control-plane regression, ...). That is an
+    # infrastructure/software fault, not a capacity mismatch, so we must FAIL fixture setup instead
+    # of skipping: turning discovery errors into skips would let a broken machine report false-green
+    # CI with no device path exercised. The confirmed capacity-mismatch case is handled below via
+    # pytest.skip, once the system mesh size is known.
     try:
         system_mesh_size = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size()
     except Exception as e:
-        pytest.skip(f"Could not query the system mesh descriptor (control-plane/mesh discovery failed): {e}")
+        raise RuntimeError(
+            f"Could not query the system mesh descriptor (control-plane/mesh discovery failed): {e}"
+        ) from e
 
     if param is None:
         param = system_mesh_size
