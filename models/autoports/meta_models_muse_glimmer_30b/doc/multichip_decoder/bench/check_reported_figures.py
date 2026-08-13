@@ -123,6 +123,25 @@ def matmul_dram_rows(window: str) -> dict[str, tuple[float, float]]:
     }
 
 
+def script_to_logs() -> dict[str, list[str]]:
+    """``bench/x.py`` -> the ``logs/*.log`` the committed chain scripts redirect it to.
+
+    Round 5's P1 got past the first version of the cited-figure check by citing
+    the *script* rather than its log, so a stale table was never compared with
+    anything.  The mapping is read out of the chain scripts rather than guessed,
+    with a stem fallback for probes no chain runs.
+    """
+    mapping: dict[str, set[str]] = {}
+    for script in sorted((ROOT / "bench").glob("*.sh")):
+        for call, log in re.findall(r"bench/(\w+\.py)\"?[^\n]*?>\s*\"?\$D/(logs/[\w./-]+)\"?", script.read_text()):
+            mapping.setdefault(f"bench/{call}", set()).add(log)
+    for probe in sorted((ROOT / "bench").glob("*.py")):
+        guess = f"logs/{probe.stem}.log"
+        if (ROOT / guess).exists():
+            mapping.setdefault(f"bench/{probe.name}", set()).add(guess)
+    return {name: sorted(logs) for name, logs in mapping.items()}
+
+
 def cited_figure_violations(doc: pathlib.Path) -> list[str]:
     """Every measurement a doc attributes to a log, that is in none of them.
 
@@ -146,11 +165,25 @@ def cited_figure_violations(doc: pathlib.Path) -> list[str]:
     ``<!-- superseded -->`` comment, which forces that choice to be written down
     rather than merely being true on the day.
     """
-    root = doc.parent
+    root = doc.parent if doc.parent.name == "multichip_decoder" else ROOT
+    scripts = script_to_logs()
     violations = []
-    blocks = re.split(r"\n\s*\n", doc.read_text())
+    suppressed = 0
+    # Numbered list items are separate claims with separate citations even
+    # though no blank line separates them, so they are separate blocks.
+    blocks = [part for chunk in re.split(r"\n\s*\n", doc.read_text()) for part in re.split(r"\n(?=\d+\. )", chunk)]
     for index, block in enumerate(blocks):
-        if "<!-- superseded" in block:
+        # At line start only: §15.1 *describes* the marker in prose, inside
+        # backticks, and that is not a use of it.
+        if re.search(r"^<!-- superseded", block, re.MULTILINE):
+            # The marker must say why and point somewhere; an empty one would be
+            # a silent mute for any live claim sharing the block.
+            reason = re.search(r"<!-- superseded:\s*(.+?)-->", block, re.DOTALL)
+            if not reason or len(reason.group(1).strip()) < 20:
+                violations.append(
+                    f"{doc.name}: <!-- superseded --> with no reason -- {' '.join(block.split())[:60]}..."
+                )
+            suppressed += 1
             continue
         # A table's citation is usually in the sentence that introduces it, one
         # block up, so a table inherits the previous block's artifacts.  Without
@@ -159,7 +192,12 @@ def cited_figure_violations(doc: pathlib.Path) -> list[str]:
         scope = block
         if block.lstrip().startswith("|") and index:
             scope = blocks[index - 1] + "\n" + block
-        cited = sorted(set(re.findall(r"`+(logs/[\w./-]+)`+", scope)))
+        cited = set(re.findall(r"`+(logs/[\w./-]+)`+", scope))
+        # A block may cite the probe instead of the log it wrote, or a Tracy CSV.
+        for script in re.findall(r"`+(bench/\w+\.py)`+", scope):
+            cited.update(scripts.get(script, ()))
+        cited.update(re.findall(r"`+(tracy/[\w./-]+\.csv)`+", scope))
+        cited = sorted(cited)
         haystack = "".join((root / name).read_text(errors="ignore") for name in cited if (root / name).exists())
         if not haystack:
             continue  # nothing cited, or the cited-artifact-exists check owns it
@@ -171,14 +209,33 @@ def cited_figure_violations(doc: pathlib.Path) -> list[str]:
                 continue
             # A doc may quote a rounding of a full-precision log value on
             # purpose -- PCC prints 17 digits and the tables show 6.
+            places = len(value.split(".")[1])
+            if places >= 4:
+                # PCC prints 17 digits and the tables show 6, so a rounding is
+                # legitimate.  Only at 4+ places, where a coincidental match in a
+                # large log is unlikely -- at 2 places it would accept ~1 value
+                # in 9 against logs/full_test_run.log.
+                if measured is None:
+                    measured = [float(v) for v in re.findall(r"\d+\.\d+", haystack)]
+                target = float(value)
+                if any(round(number, places) == target for number in measured):
+                    continue
+            # A doc legitimately *adds* two logged values -- "reduce_scatter +
+            # all_gather" is one number in a table and two rows in the log.  A
+            # sum or difference of two logged values is still checkable against
+            # the artifact, so accept it rather than mute the block.
             if measured is None:
                 measured = [float(v) for v in re.findall(r"\d+\.\d+", haystack)]
-            places = len(value.split(".")[1])
-            target = float(value)
-            if any(round(number, places) == target for number in measured):
-                continue
+            if len(measured) <= 2000:
+                target = round(float(value), places)
+                pool = sorted({round(number, places) for number in measured})
+                wanted = set(pool)
+                if any(round(target - a, places) in wanted or round(target + a, places) in wanted for a in pool):
+                    continue
             head = " ".join(block.split())[:70]
             violations.append(f"{doc.name}: {value} in none of {', '.join(cited)} -- {head}...")
+    if suppressed:
+        print(f"   ({doc.name}: {suppressed} block(s) marked superseded and skipped)")
     return violations
 
 
@@ -408,7 +465,9 @@ def main() -> int:
                 print(f"   quotes {wrong} but the module defines {expected}")
 
     # ---- every figure a doc attributes to a log is in that log ---------------
-    violations = cited_figure_violations(README) + cited_figure_violations(WORK_LOG)
+    # The module's own docstring tables cite logs too, and round 5 found a stale
+    # figure in one of them that nothing was checking.
+    violations = cited_figure_violations(README) + cited_figure_violations(WORK_LOG) + cited_figure_violations(SOURCE)
     failures.check("docs: quoted figures found in the cited artifact", len(violations), 0, exact=True)
     for violation in violations:
         print(f"   {violation}")

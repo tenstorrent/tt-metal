@@ -196,10 +196,10 @@ FABRIC_CONFIG = ttnn.FabricConfig.FABRIC_1D_RING
 #:
 #: So the runtime's advice is right for the decode payload and wrong for the
 #: shipped prefill one.  8192 ships because the decode step is the per-token
-#: metric: it saves 1.96 us per token per layer (two sublayers x 0.98) against
-#: 34.7 us per 8192-token prefill chunk, i.e. 0.0042 us per prefill token.  The
-#: consequence is that the warning still fires on the prefill collectives, now
-#: recommending 4352; that is the 1.1 % row above, measured and taken knowingly.
+#: metric: it saves 1.96 us per token per layer (two sublayers x 0.98), against
+#: 34.7 us spread over a whole 8192-token prefill chunk.  The consequence is that
+#: the warning still fires on the prefill collectives, now recommending 4352;
+#: that is the 1.1 % row above, measured and taken knowingly.
 #: 15232 (the Blackhole maximum) was measured too and adds nothing over 8192.
 FABRIC_PACKET_PAYLOAD_BYTES = 8192
 
@@ -227,7 +227,8 @@ ROW_PARALLEL_ROLES = ("o_proj", "mlp_down")
 #: for ``mlp_down``).  ``gcd`` of those admits only 1, 2, 4, 8 and 16, and the
 #: sharded RMSNorm additionally needs the count to divide 208.  So 16 is the
 #: largest legal grid, and it is the measured winner
-#: (``logs/layer_ab_geometry3.log``, traced decode ms/token, sliding / full):
+#: (``logs/layer_ab_geometry1.log``, ``logs/layer_ab_geometry3.log``, traced
+#: decode ms/token, sliding / full):
 #:
 #: ================================  ===============  ===============
 #: candidate                         sliding          full
@@ -370,7 +371,8 @@ DEFAULT_DECODE_CCL_DTYPE = None
 #: **shipped** (split)    **0.4573 / 0.4258**         **18.89 / 18.36**
 #: =====================  ==========================  ==========================
 #:
-#: The pair wins decode by 1.1 %, and prefill is a wash once both payloads are
+#: The pair wins decode by 1.10 % (``sliding``) / 1.21 % (``full``), and prefill is
+#: a wash once both payloads are
 #: tuned: see :data:`DEFAULT_PREFILL_CCL_RS_WORKERS` for the 0.24 % op-level gap
 #: and ``logs/layer_ab_reducer_final.log`` for the whole-layer A/B that measures
 #: every reducer candidate in one invocation.  The two modes are still split
@@ -382,7 +384,7 @@ DEFAULT_DECODE_CCL_DTYPE = None
 #: the collective is latency-bound and the fused op's internal barrier is worth
 #: less than the two dispatches cost, while at 8192 rows it is bandwidth-bound and
 #: one dispatch wins.  (The fractured-residual contract is decided by a different
-#: number -- the cost of the *distributed norm* it forces, 14.89 us against the
+#: number -- the cost of the *distributed norm* it forces, 14.90 us against the
 #: shipped full-width norm's 8.11 us; see the README and
 #: ``bench/fractured_decode_probe.py``.)
 DEFAULT_PREFILL_CCL_MODE = "all_reduce"
@@ -1055,7 +1057,7 @@ class MultichipDecoder(OptimizedDecoder):
         ring all-reduce *is* a reduce-scatter plus an all-gather, so both forms
         move the same bytes and the only question is one fused dispatch against
         two.  At the 40 KB decode payload the collective is latency-bound and the
-        pair wins by 1.1 %; at the 107 MB prefill payload, with each payload's own
+        pair wins by 1.10 / 1.21 %; at the 107 MB prefill payload, with each payload's own
         ``num_workers_per_link``, the two are within 0.24 % and prefill keeps the
         single dispatch (``logs/layer_ab_reducer_final.log``,
         ``logs/fabric_packet_probe.log``).  See

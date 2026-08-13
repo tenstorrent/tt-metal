@@ -205,9 +205,13 @@ column-parallel matmul` — each ending on the contract it started on, so a winn
 is stackable. Not "reduce-scatter followed by an immediate all-gather back to the
 old contract", which would measure the wrong thing.
 
-Both columns are from the **shipped** configuration — the 8192 B packet, and
-`num_workers_per_link` at each payload's own shipped value (1 at 32 rows, 4 at
-8192; the logs' headers record which). That per-payload split matters: pinning
+Both columns use the **shipped** packet size and each payload's own shipped
+`num_workers_per_link` (1 at 32 rows, 4 at 8192; the logs' headers record which).
+One thing is deliberately *not* the shipped choice: every arm reduces with the
+`rs_ag` pair, including at 8192 rows where the layer ships `all_reduce`. That
+keeps the arms comparable with each other, which is what a contract comparison
+needs, and it costs 0.24 % — the op-level gap measured in
+[Reducer form](#reducer-form-and-worker-count). That per-payload split matters: pinning
 the decode value at the prefill payload costs the reduce-scatter 2.4x, which
 inflates every arm that uses one and lets the `gather_heads*` arms — which use
 only `all_gather` — escape it. Review round 4 caught the 8192-row column doing
@@ -356,9 +360,9 @@ prefill spread at 2.3 % on `sliding` (19.43 vs 18.99) with everything else held
 fixed. Rows 1 and 5 dispatch the same prefill collective as each other and differ
 by 1.3 %.
 
-**Decode is decided**: the pair wins by **1.1 %** on both layer kinds, four times
-larger than the 0.02–0.05 % decode spread in [Result](#result), and repeatable
-(three rounds inside each run agree to 3e-4).
+**Decode is decided**: the pair wins by **1.10 % (`sliding`) / 1.21 % (`full`)**, an order of magnitude
+above the 0.02–0.05 % decode spread in [Result](#result), and repeatable (three
+rounds inside each run agree to 3e-4).
 
 **Prefill at whole-layer granularity cannot resolve the reducer form** — the
 `rs_ag`-both-modes row is 2.9 % slower than shipped on `sliding` and 1.6 % *faster*

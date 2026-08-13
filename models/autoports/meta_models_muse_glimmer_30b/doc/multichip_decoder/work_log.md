@@ -375,23 +375,32 @@ version rejected it partly on an L1 argument -- that a fractured residual forces
 ≤4-core grid, citing `grid4`'s CB clash. That is wrong: `grid4` is a
 *replicated*-residual run whose per-core shards are 4x wider, and in the fractured
 contract the matmul inputs are the *gathered* tensors and stay on 16 cores while
-the fractured tensors sit on any count dividing their 52 tiles. Re-measured
-properly, at the shipped sharded memory configs (`bench/fractured_decode_probe.py`):
+the fractured tensors sit on any count dividing their 52 tiles. Re-measured at the
+shipped sharded memory configs (`logs/fractured_decode_probe.log`):
+
+**The table this section originally carried is superseded twice over**, and both
+times by its own probe. Its rows were single-point traces, so every number in it
+included the ~3-10 μs replay floor, and it then differenced two of them against a
+third undifferenced one — which §14.1 shows is not a valid comparison. It also
+priced only one term of the distributed norm, on DRAM-interleaved inputs. The
+probe now calibrates the floor and prices the whole path on the sharded layout.
+Current numbers, from the committed log:
+
+<!-- superseded: single-point traces, floor not calibrated, distributed norm priced on the wrong layout; see 14.1 and README "the decode regime" for the current measurement -->
 
 | term | replicated | fractured |
 | --- | --- | --- |
-| hidden RMSNorm | 15.46 μs (16 cores) | 10.83 / 12.88 / 15.55 / 19.24 μs (4 / 13 / 26 / 52 cores) |
-| residual add | 8.44 μs | 8.08-8.44 μs |
-| stats all-gather | — | 10.42 μs |
-| `rms_norm_pre_all_gather` | — | 27.01 μs |
+| hidden RMSNorm, per op | 8.11 μs (16 cores) | the distributed path it forces: 14.90 μs (`pre` 3.19 + stats `all_gather` 6.41 + `post` 5.29, 4 cores) |
+| residual add, per op | 5.41 μs | 5.42 μs at every legal core count |
 
-Best case 4.63 μs saved per norm against 10.42 μs added, i.e. a net loss of
-5.8 μs per distributed norm before the `pre_all_gather` and the extra residual
-all-gather. The interleaved probe reaches the opposite answer because an
-interleaved full-width norm is the expensive thing there; these norms are not
-interleaved. The probe was also re-run with the shipped reducer on both arms
-(`--tuned`, now the default) in case the tuning had confounded it: `fractured`
-282.81 vs `replicated` 315.36, i.e. unchanged.
+So the fractured contract pays **+6.79 μs per distributed norm** and **+13.57 μs
+per decode step** (`logs/fractured_decode_probe.log`), not the 5.8 μs this entry
+originally computed. The interleaved
+probe reaches the opposite answer because an interleaved full-width norm is the
+expensive thing there; these norms are not interleaved. The boundary-chain probe
+was also re-run with the shipped reducer on both arms in case the tuning had
+confounded it (`logs/topology_probe_decode32_tuned.log`): `fractured` 282.21 vs
+`replicated` 314.91, i.e. the ranking is unchanged.
 
 ## 8. Profiles
 
@@ -611,7 +620,7 @@ against the single-chip layer (worst 0.999183), 30 on the released checkpoint
 31 node ids, `TT_METAL_WATCHER=10 TT_METAL_WATCHER_APPEND=0
 TT_METAL_WATCHER_NOINLINE=1`, in a run with no profiler attached: **31 passed**,
 zero `Watcher detected` / tripped / sanitize / `TT_ASSERT` / `DEBUG_ASSERT` /
-out-of-bounds / fault / Error lines across 28,788 log lines and 50 dumps
+out-of-bounds / fault / Error lines across 28,788 log lines and 25 dumps
 (`logs/watcher_run.log`, `watcher/watcher.log.gz`).
 
 The process then aborts **at teardown**, after every test has reported, with
@@ -957,3 +966,64 @@ corrected in the README.
   is a statement about the *host*, and §7.2 now says so. It also explains why the
   two forms measure so nearly alike at a bandwidth-bound payload, which had been
   presented as a surprise.
+
+## 16. Review round 5: the gate had two holes, and both were occupied
+
+Round 5 found the round-4 gate green over a work log that still contradicted its
+own logs. Two holes let it happen, and each had a live instance sitting in it:
+
+1. **A block could cite the probe instead of the log.** §7.4's fractured table
+   introduced itself with `bench/fractured_decode_probe.py`, and the gate only
+   harvested `` `logs/...` `` paths — so the whole table and its conclusion were
+   never compared with anything. That table was two generations stale: it was the
+   single-point capture whose arithmetic §14.1 refuted (floor-inclusive absolutes
+   differenced against each other), and it still concluded "a net loss of 5.8 μs
+   per distributed norm" where the calibrated measurement gives **+6.79**. The
+   gate now resolves `bench/x.py` to the log that a committed chain script
+   redirects it to, with a stem fallback, and also accepts `tracy/*.csv`.
+2. **Nothing checked the shipped module.** `multichip_decoder.py`'s docstrings
+   carry three measurement tables citing logs, and only two integer constants in
+   it were being checked. Pointed at the module, the gate immediately found the
+   `14.89` the README had already corrected to `14.90`, a geometry table citing
+   one of the two logs its rows came from, and a derived per-token figure with no
+   check behind it.
+
+Three narrower changes came out of the same review:
+
+- **The rounding shortcut was too generous.** Accepting any log value that rounds
+  to the quoted one is right for PCC (17 digits printed, 6 quoted) and wrong for
+  a two-decimal microsecond figure: against a log with ~1450 numbers it would
+  accept about one arbitrary value in nine. Rounding is now accepted only at four
+  or more decimals.
+- **Sums are checked, not muted.** A table that reports `reduce_scatter +
+  all_gather` as one number is adding two logged rows. Rather than let that mute
+  a block, the gate accepts a value that is the sum or difference of two values in
+  the cited artifact — still checkable against the evidence.
+- **`<!-- superseded -->` cannot be an empty mute.** It must carry at least a
+  sentence of reason, the check counts and prints how many blocks it skipped, and
+  it is only recognised at the start of a line so that §15.1 describing the marker
+  in prose does not accidentally silence itself.
+
+Three of the stage's own tables are now explicitly marked superseded, each with a
+pointer to the current numbers: §4's contract-families capture, §7.2's reducer
+table, and §7.4's fractured table.
+
+### 16.1 The gate is tested, not just asserted
+
+Each fix was verified by planting the defect it is supposed to catch and
+confirming the gate fires, then restoring:
+
+| planted | caught |
+| --- | --- |
+| a stale μs figure in a live block that cites only a probe script | ✅ `399.99 in none of logs/fractured_decode_probe.log, ...` |
+| a stale ms/token figure in the shipped module's docstring table | ✅ `0.4111 in none of logs/layer_ab_geometry1.log, ...` |
+| a `<!-- superseded -->` marker with no reason, used as a mute | ✅ `<!-- superseded --> with no reason` |
+
+Also corrected this round: §9.4's "50 dumps" (25 — the same double-count the
+README and `run_watcher.sh` had already been fixed for), the decode reducer
+margin quoted as "1.1 % on both layer kinds" when it is 1.10 % `sliding` and
+1.21 % `full` (README and module), and the contract-families claim that both
+columns are "the shipped configuration" — every arm reduces with the `rs_ag`
+pair, including at 8192 rows where the layer ships `all_reduce`, which keeps the
+arms comparable with each other at a measured cost of 0.24 %. The README now says
+so instead of implying the prefill reducer was pinned to the shipped one.
