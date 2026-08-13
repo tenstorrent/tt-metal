@@ -2,19 +2,18 @@
 
 ## Status
 
-Stage 11 is **not ready to pass**. The no-Docker smoke and unrestricted
-performance sweep succeeded against the generated autoport, but both accuracy
-rows are unresolved blockers. `release_report_invalid.md` is retained as
-diagnostic evidence only; its top-level PASS is invalid because the TTI client
-treated `EXPERIMENTAL` model status as an implicit eval waiver. That client bug
-has been fixed locally and covered by tests, but no replacement passing release
-report exists yet.
+Stage 11 has a context-preserving nightly-equivalent no-Docker release PASS
+against the generated autoport. The current passing report is
+`release_report_ci_nightly_pass.md`; the detailed final run is documented in
+the last section of this file. The first review's 2,047-token lm-eval adapter
+finding was fixed: the regenerated release log records `Using max length 32768
+- 1` for both mandatory evals and ends with zero blockers. Final closure is
+subject only to the independent rereview recorded in `STAGE_REVIEW.md`.
 
-After TTI commit `ca152fe2`, the preserved release schema was rendered again
-offline through the corrected acceptance code. `release_report_corrected_fail.md`
-and `release_report_data_corrected_fail.json` now truthfully report acceptance
-FAIL with two eval blockers and zero waivers. This proves the reporting repair;
-it is not a fresh model run and is not a passing release handoff.
+The earlier `release_report_invalid.md` and corrected FAIL render are retained
+only as historical diagnostics. They capture the former publisher-reference
+and GPQA-access blockers and must not be confused with the replacement nightly
+release evidence.
 
 ## Evaluated implementation and server
 
@@ -246,14 +245,15 @@ TTI identity and command:
 
 - Checkout: `/home/mvasiljevic/tt-inference-server`
 - Tag/version: `0.19.0`; starting SHA `ca152fe223227f85f1a0d86cef7d372023b9de77`
-- Final local TTI SHA: `bd15f1cdcf1bbb12187bd68b120e814b7e8a1e83`
-  (`Add Falcon3 Base nightly eval references`); never pushed.
+- Final local TTI SHA: `e26e723bf0266cde85f674e381fbee10068ae0ec`
+  (`Propagate model context to API evals`), following reference commit
+  `bd15f1cdcf1bbb12187bd68b120e814b7e8a1e83`; never pushed.
 - Docker image: not used
-- Key environment: `CACHE_ROOT=/home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final`,
+- Key environment: `CACHE_ROOT=/home/mvasiljevic/tti-release-cache/falcon3-base-stage11-contextfix-final`,
   `SERVICE_PORT=8000`; no token value was printed or copied.
 
 ```text
-CACHE_ROOT=/home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final SERVICE_PORT=8000 python3 run.py --workflow release --runtime-model-spec-json /home/mvasiljevic/tt-metal/models/autoports/tiiuae_falcon3_7b_base/doc/tti_release/autoport_release_spec.json --tt-device p300x2 --service-port 8000 --server-url http://127.0.0.1 --no-auth --skip-system-sw-validation --limit-samples-mode ci-nightly --disable-trace-capture
+CACHE_ROOT=/home/mvasiljevic/tti-release-cache/falcon3-base-stage11-contextfix-final SERVICE_PORT=8000 python3 run.py --workflow release --runtime-model-spec-json /home/mvasiljevic/tt-metal/models/autoports/tiiuae_falcon3_7b_base/doc/tti_release/autoport_release_spec.json --tt-device p300x2 --service-port 8000 --server-url http://127.0.0.1 --no-auth --skip-system-sw-validation --limit-samples-mode ci-nightly --disable-trace-capture
 ```
 
 The embedded spec itself contains `workflow=release`,
@@ -284,3 +284,13 @@ No raw eval JSONL, generated text, secret, model weight, cache, Docker layer,
 or persistent TT cache was copied. The final report was skimmed: both formerly
 blocking eval rows pass without waivers, the graded benchmark has every metric,
 and no failed or missing graded row remains.
+
+The final context-preserving rerun used cache root
+`/home/mvasiljevic/tti-release-cache/falcon3-base-stage11-contextfix-final`
+at TTI SHA `e26e723bf026`. Its lm-eval commands passed
+`max_length=32768`, and the copied run log confirms `Using max length 32768 -
+1` for both IFEval and GPQA. It supersedes the earlier passing report that
+exposed lm-eval's 2,048-token default. The stage artifact commit before this
+rereview cycle was `53521e54ffb856b331a3015ffd6320ed9a1a8412`;
+the final tt-metal SHA is recorded after the replacement artifacts and rereview
+are committed.

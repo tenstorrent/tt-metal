@@ -2,12 +2,12 @@
     "metadata": {
         "model_name": "tiiuae/Falcon3-7B-Base",
         "device": "P300X2",
-        "generated_at": "2026-08-13T10:28:28+00:00",
-        "report_id": "tiiuae__Falcon3-7B-Base_2026-08-13T102828+0000",
+        "generated_at": "2026-08-13T10:50:32+00:00",
+        "report_id": "tiiuae__Falcon3-7B-Base_2026-08-13T105032+0000",
         "workflow": "release",
         "server_mode": "API",
         "run_command": "python run.py --workflow release --runtime-model-spec-json /home/mvasiljevic/tt-metal/models/autoports/tiiuae_falcon3_7b_base/doc/tti_release/autoport_release_spec.json --tt-device p300x2 --service-port 8000 --server-url http://127.0.0.1 --no-auth --skip-system-sw-validation --limit-samples-mode ci-nightly --disable-trace-capture",
-        "runtime_model_spec_json": "/home/mvasiljevic/tti-release-cache/falcon3-base-stage11-final/workflow_logs/runtime_model_specs/runtime_model_spec_2026-08-13_10-27-49_id_autoport-Falcon3-7B-Base_p300x2_v3cF9JIW.json",
+        "runtime_model_spec_json": "/home/mvasiljevic/tti-release-cache/falcon3-base-stage11-contextfix-final/workflow_logs/runtime_model_specs/runtime_model_spec_2026-08-13_10-49-53_id_autoport-Falcon3-7B-Base_p300x2_Kpm7-0VD.json",
         "model_id": "id_autoport-Falcon3-7B-Base_p300x2",
         "model_repo": "tiiuae/Falcon3-7B-Base",
         "inference_engine": "vLLM",
@@ -71,47 +71,47 @@
                 "num_requests": 8,
                 "input_sequence_length": 128,
                 "output_sequence_length": 128.0,
-                "mean_ttft_ms": 206.3783,
-                "p50_ttft": 180.2466,
-                "p99_ttft": 366.4637,
-                "mean_tpot_ms": 16.0865,
-                "mean_e2el_ms": 2249.3673,
-                "tps_decode_throughput": 56.8987,
-                "request_throughput": 0.4445,
+                "mean_ttft_ms": 200.8049,
+                "p50_ttft": 179.1149,
+                "p99_ttft": 332.7303,
+                "mean_tpot_ms": 16.114,
+                "mean_e2el_ms": 2247.2837,
+                "tps_decode_throughput": 56.9517,
+                "request_throughput": 0.4449,
                 "error_request_count": null,
                 "target_check": 2,
                 "target_checks": {
                     "functional": {
                         "ttft": 250.0,
-                        "ttft_ratio": 0.8255132,
+                        "ttft_ratio": 0.8032196,
                         "ttft_check": 2,
                         "tput_user": 50.0,
-                        "tput_user_ratio": 1.2432785254716687,
+                        "tput_user_ratio": 1.2411567580985479,
                         "tput_user_check": 2,
                         "tput": 50.0,
-                        "tput_ratio": 1.137974,
+                        "tput_ratio": 1.139034,
                         "tput_check": 2
                     },
                     "complete": {
                         "ttft": 250.0,
-                        "ttft_ratio": 0.8255132,
+                        "ttft_ratio": 0.8032196,
                         "ttft_check": 2,
                         "tput_user": 50.0,
-                        "tput_user_ratio": 1.2432785254716687,
+                        "tput_user_ratio": 1.2411567580985479,
                         "tput_user_check": 2,
                         "tput": 50.0,
-                        "tput_ratio": 1.137974,
+                        "tput_ratio": 1.139034,
                         "tput_check": 2
                     },
                     "target": {
                         "ttft": 250.0,
-                        "ttft_ratio": 0.8255132,
+                        "ttft_ratio": 0.8032196,
                         "ttft_check": 2,
                         "tput_user": 50.0,
-                        "tput_user_ratio": 1.2432785254716687,
+                        "tput_user_ratio": 1.2411567580985479,
                         "tput_user_check": 2,
                         "tput": 50.0,
-                        "tput_ratio": 1.137974,
+                        "tput_ratio": 1.139034,
                         "tput_check": 2
                     }
                 }
@@ -122,7 +122,7 @@
                 "tool": "vllm",
                 "model": "tiiuae/Falcon3-7B-Base",
                 "device": "P300X2",
-                "timestamp": "2026-08-13 10:28:51"
+                "timestamp": "2026-08-13 10:50:55"
             }
         },
         {
@@ -132,13 +132,13 @@
                 "num_requests": 256,
                 "input_sequence_length": 128,
                 "output_sequence_length": 128.0,
-                "mean_ttft_ms": 569.6143,
-                "p50_ttft": 411.1001,
-                "p99_ttft": 1368.3249,
-                "mean_tpot_ms": 16.8296,
-                "mean_e2el_ms": 2706.9727,
-                "tps_decode_throughput": 1512.6009,
-                "request_throughput": 11.8172,
+                "mean_ttft_ms": 483.0681,
+                "p50_ttft": 419.6124,
+                "p99_ttft": 614.0911,
+                "mean_tpot_ms": 16.7302,
+                "mean_e2el_ms": 2607.8003,
+                "tps_decode_throughput": 1570.0688,
+                "request_throughput": 12.2662,
                 "error_request_count": null,
                 "status": "na",
                 "target_check": 1
@@ -149,7 +149,7 @@
                 "tool": "vllm",
                 "model": "tiiuae/Falcon3-7B-Base",
                 "device": "P300X2",
-                "timestamp": "2026-08-13 10:29:19"
+                "timestamp": "2026-08-13 10:51:23"
             }
         },
         {
@@ -159,12 +159,12 @@
                 "num_requests": 4,
                 "input_sequence_length": 128,
                 "output_sequence_length": 1024.0,
-                "mean_ttft_ms": 223.7712,
-                "p50_ttft": 187.1131,
-                "p99_ttft": 336.2806,
-                "mean_tpot_ms": 15.1189,
-                "mean_e2el_ms": 15690.3573,
-                "tps_decode_throughput": 65.2619,
+                "mean_ttft_ms": 224.3861,
+                "p50_ttft": 188.1234,
+                "p99_ttft": 337.0396,
+                "mean_tpot_ms": 15.1249,
+                "mean_e2el_ms": 15697.1422,
+                "tps_decode_throughput": 65.2338,
                 "request_throughput": 0.0637,
                 "error_request_count": null,
                 "status": "na",
@@ -176,7 +176,7 @@
                 "tool": "vllm",
                 "model": "tiiuae/Falcon3-7B-Base",
                 "device": "P300X2",
-                "timestamp": "2026-08-13 10:30:29"
+                "timestamp": "2026-08-13 10:52:33"
             }
         },
         {
@@ -186,13 +186,13 @@
                 "num_requests": 112,
                 "input_sequence_length": 128,
                 "output_sequence_length": 1024.0,
-                "mean_ttft_ms": 663.6293,
-                "p50_ttft": 574.735,
-                "p99_ttft": 1178.4382,
-                "mean_tpot_ms": 16.517,
-                "mean_e2el_ms": 17560.5181,
-                "tps_decode_throughput": 1632.644,
-                "request_throughput": 1.5944,
+                "mean_ttft_ms": 513.1753,
+                "p50_ttft": 401.8965,
+                "p99_ttft": 738.9408,
+                "mean_tpot_ms": 16.4798,
+                "mean_e2el_ms": 17372.0446,
+                "tps_decode_throughput": 1650.3625,
+                "request_throughput": 1.6117,
                 "error_request_count": null,
                 "status": "na",
                 "target_check": 1
@@ -203,7 +203,7 @@
                 "tool": "vllm",
                 "model": "tiiuae/Falcon3-7B-Base",
                 "device": "P300X2",
-                "timestamp": "2026-08-13 10:31:46"
+                "timestamp": "2026-08-13 10:53:49"
             }
         },
         {
@@ -213,13 +213,13 @@
                 "num_requests": 4,
                 "input_sequence_length": 1024,
                 "output_sequence_length": 128.0,
-                "mean_ttft_ms": 1377.2758,
-                "p50_ttft": 1361.8544,
-                "p99_ttft": 1422.7499,
-                "mean_tpot_ms": 16.7857,
-                "mean_e2el_ms": 3509.0615,
-                "tps_decode_throughput": 36.4742,
-                "request_throughput": 0.285,
+                "mean_ttft_ms": 1377.784,
+                "p50_ttft": 1363.5813,
+                "p99_ttft": 1419.531,
+                "mean_tpot_ms": 16.7827,
+                "mean_e2el_ms": 3509.1824,
+                "tps_decode_throughput": 36.4733,
+                "request_throughput": 0.2849,
                 "error_request_count": null,
                 "status": "na",
                 "target_check": 1
@@ -230,7 +230,7 @@
                 "tool": "vllm",
                 "model": "tiiuae/Falcon3-7B-Base",
                 "device": "P300X2",
-                "timestamp": "2026-08-13 10:32:08"
+                "timestamp": "2026-08-13 10:54:10"
             }
         },
         {
@@ -240,13 +240,13 @@
                 "num_requests": 112,
                 "input_sequence_length": 1024,
                 "output_sequence_length": 128.0,
-                "mean_ttft_ms": 2858.4323,
-                "p50_ttft": 2843.1098,
-                "p99_ttft": 3113.3254,
-                "mean_tpot_ms": 19.343,
-                "mean_e2el_ms": 5314.9971,
-                "tps_decode_throughput": 674.1585,
-                "request_throughput": 5.2669,
+                "mean_ttft_ms": 2823.2496,
+                "p50_ttft": 2846.4917,
+                "p99_ttft": 3109.0653,
+                "mean_tpot_ms": 19.6164,
+                "mean_e2el_ms": 5314.5277,
+                "tps_decode_throughput": 674.2127,
+                "request_throughput": 5.2673,
                 "error_request_count": null,
                 "status": "na",
                 "target_check": 1
@@ -257,7 +257,7 @@
                 "tool": "vllm",
                 "model": "tiiuae/Falcon3-7B-Base",
                 "device": "P300X2",
-                "timestamp": "2026-08-13 10:32:36"
+                "timestamp": "2026-08-13 10:54:39"
             }
         },
         {
@@ -267,13 +267,13 @@
                 "num_requests": 4,
                 "input_sequence_length": 2048,
                 "output_sequence_length": 128.0,
-                "mean_ttft_ms": 2991.973,
-                "p50_ttft": 2975.0567,
-                "p99_ttft": 3047.1034,
-                "mean_tpot_ms": 17.4353,
-                "mean_e2el_ms": 5206.2598,
-                "tps_decode_throughput": 24.5846,
-                "request_throughput": 0.1921,
+                "mean_ttft_ms": 3002.1483,
+                "p50_ttft": 2976.933,
+                "p99_ttft": 3081.7706,
+                "mean_tpot_ms": 17.445,
+                "mean_e2el_ms": 5217.6601,
+                "tps_decode_throughput": 24.5308,
+                "request_throughput": 0.1916,
                 "error_request_count": null,
                 "status": "na",
                 "target_check": 1
@@ -284,7 +284,7 @@
                 "tool": "vllm",
                 "model": "tiiuae/Falcon3-7B-Base",
                 "device": "P300X2",
-                "timestamp": "2026-08-13 10:33:04"
+                "timestamp": "2026-08-13 10:55:07"
             }
         },
         {
@@ -294,13 +294,13 @@
                 "num_requests": 60,
                 "input_sequence_length": 2048,
                 "output_sequence_length": 128.0,
-                "mean_ttft_ms": 5793.5239,
-                "p50_ttft": 6040.9618,
-                "p99_ttft": 6054.8462,
-                "mean_tpot_ms": 20.9337,
-                "mean_e2el_ms": 8452.107,
-                "tps_decode_throughput": 227.1407,
-                "request_throughput": 1.7745,
+                "mean_ttft_ms": 5448.4591,
+                "p50_ttft": 6044.2138,
+                "p99_ttft": 6059.8734,
+                "mean_tpot_ms": 23.6479,
+                "mean_e2el_ms": 8451.7421,
+                "tps_decode_throughput": 227.1494,
+                "request_throughput": 1.7746,
                 "error_request_count": null,
                 "status": "na",
                 "target_check": 1
@@ -311,7 +311,7 @@
                 "tool": "vllm",
                 "model": "tiiuae/Falcon3-7B-Base",
                 "device": "P300X2",
-                "timestamp": "2026-08-13 10:33:45"
+                "timestamp": "2026-08-13 10:55:48"
             }
         },
         {
@@ -321,12 +321,12 @@
                 "num_requests": 4,
                 "input_sequence_length": 4096,
                 "output_sequence_length": 128.0,
-                "mean_ttft_ms": 6472.5875,
-                "p50_ttft": 6469.3164,
-                "p99_ttft": 6492.2458,
-                "mean_tpot_ms": 18.7957,
-                "mean_e2el_ms": 8859.6445,
-                "tps_decode_throughput": 14.4471,
+                "mean_ttft_ms": 6465.6144,
+                "p50_ttft": 6461.0325,
+                "p99_ttft": 6484.6993,
+                "mean_tpot_ms": 18.8172,
+                "mean_e2el_ms": 8855.3993,
+                "tps_decode_throughput": 14.454,
                 "request_throughput": 0.1129,
                 "error_request_count": null,
                 "status": "na",
@@ -338,7 +338,7 @@
                 "tool": "vllm",
                 "model": "tiiuae/Falcon3-7B-Base",
                 "device": "P300X2",
-                "timestamp": "2026-08-13 10:34:28"
+                "timestamp": "2026-08-13 10:56:31"
             }
         },
         {
@@ -348,12 +348,12 @@
                 "num_requests": 28,
                 "input_sequence_length": 4096,
                 "output_sequence_length": 128.0,
-                "mean_ttft_ms": 11190.4108,
-                "p50_ttft": 12985.9802,
-                "p99_ttft": 13225.9745,
-                "mean_tpot_ms": 33.7653,
-                "mean_e2el_ms": 15478.6086,
-                "tps_decode_throughput": 57.8844,
+                "mean_ttft_ms": 12113.3844,
+                "p50_ttft": 12993.285,
+                "p99_ttft": 13217.1103,
+                "mean_tpot_ms": 26.4947,
+                "mean_e2el_ms": 15478.2101,
+                "tps_decode_throughput": 57.886,
                 "request_throughput": 0.4522,
                 "error_request_count": null,
                 "status": "na",
@@ -365,7 +365,7 @@
                 "tool": "vllm",
                 "model": "tiiuae/Falcon3-7B-Base",
                 "device": "P300X2",
-                "timestamp": "2026-08-13 10:35:37"
+                "timestamp": "2026-08-13 10:57:40"
             }
         },
         {
@@ -375,13 +375,13 @@
                 "num_requests": 2,
                 "input_sequence_length": 8192,
                 "output_sequence_length": 128.0,
-                "mean_ttft_ms": 15010.6165,
-                "p50_ttft": 15010.6165,
-                "p99_ttft": 15019.3607,
-                "mean_tpot_ms": 21.6341,
-                "mean_e2el_ms": 17758.1493,
-                "tps_decode_throughput": 7.2078,
-                "request_throughput": 0.0563,
+                "mean_ttft_ms": 14988.1534,
+                "p50_ttft": 14988.1534,
+                "p99_ttft": 15000.7815,
+                "mean_tpot_ms": 21.6182,
+                "mean_e2el_ms": 17733.6597,
+                "tps_decode_throughput": 7.2178,
+                "request_throughput": 0.0564,
                 "error_request_count": null,
                 "status": "na",
                 "target_check": 1
@@ -392,7 +392,7 @@
                 "tool": "vllm",
                 "model": "tiiuae/Falcon3-7B-Base",
                 "device": "P300X2",
-                "timestamp": "2026-08-13 10:36:20"
+                "timestamp": "2026-08-13 10:58:23"
             }
         },
         {
@@ -402,13 +402,13 @@
                 "num_requests": 6,
                 "input_sequence_length": 8192,
                 "output_sequence_length": 128.0,
-                "mean_ttft_ms": 22512.2955,
-                "p50_ttft": 22515.2585,
-                "p99_ttft": 29993.5241,
-                "mean_tpot_ms": 80.506,
-                "mean_e2el_ms": 32736.5562,
-                "tps_decode_throughput": 11.7298,
-                "request_throughput": 0.0916,
+                "mean_ttft_ms": 24992.0258,
+                "p50_ttft": 29977.456,
+                "p99_ttft": 29983.3818,
+                "mean_tpot_ms": 60.9347,
+                "mean_e2el_ms": 32730.7383,
+                "tps_decode_throughput": 11.7319,
+                "request_throughput": 0.0917,
                 "error_request_count": null,
                 "status": "na",
                 "target_check": 1
@@ -419,7 +419,7 @@
                 "tool": "vllm",
                 "model": "tiiuae/Falcon3-7B-Base",
                 "device": "P300X2",
-                "timestamp": "2026-08-13 10:37:33"
+                "timestamp": "2026-08-13 10:59:36"
             }
         },
         {
@@ -429,12 +429,12 @@
                 "num_requests": 2,
                 "input_sequence_length": 16384,
                 "output_sequence_length": 128.0,
-                "mean_ttft_ms": 38243.9373,
-                "p50_ttft": 38243.9373,
-                "p99_ttft": 38254.0584,
-                "mean_tpot_ms": 26.8699,
-                "mean_e2el_ms": 41656.4171,
-                "tps_decode_throughput": 3.0727,
+                "mean_ttft_ms": 38235.3,
+                "p50_ttft": 38235.3,
+                "p99_ttft": 38247.6592,
+                "mean_tpot_ms": 26.8964,
+                "mean_e2el_ms": 41651.1426,
+                "tps_decode_throughput": 3.0731,
                 "request_throughput": 0.024,
                 "error_request_count": null,
                 "status": "na",
@@ -446,7 +446,7 @@
                 "tool": "vllm",
                 "model": "tiiuae/Falcon3-7B-Base",
                 "device": "P300X2",
-                "timestamp": "2026-08-13 10:39:03"
+                "timestamp": "2026-08-13 11:01:06"
             }
         }
     ],
