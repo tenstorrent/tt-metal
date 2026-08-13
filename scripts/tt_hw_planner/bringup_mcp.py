@@ -1070,21 +1070,43 @@ def termination_check() -> dict:
     systemic_hint: str | None = None
     try:
         _pending = [c for c in comps if not _grad_for_run(c) and c not in terminal]
-        _class_counts: dict[str, list[str]] = {}
+        # COUNT BY FAMILY, NOT BY CLASS NAME. One shared bug can surface under several class
+        # names, and counting names hides exactly the broadest bugs. The canonical-constructor
+        # template in bringup_loop.py passes a FIXED kwarg set (mesh_device, args, state_dict,
+        # layer_num, dtype) to every component class; classes needing more raise MISSING_KWARG
+        # and classes rejecting mesh_device raise UNEXPECTED_KWARG. Same line of code, same fix,
+        # two names -- so a 5-component model split 2/2/1 never reached the >=3 threshold and the
+        # agent was told to keep doing per-component repairs that cannot work.
+        _FAMILY = {
+            "MISSING_KWARG": "CONSTRUCTOR_SIGNATURE",
+            "UNEXPECTED_KWARG": "CONSTRUCTOR_SIGNATURE",
+            "API_SIGNATURE": "CONSTRUCTOR_SIGNATURE",
+        }
+        _fam_counts: dict[str, list[str]] = {}
+        _fam_classes: dict[str, set] = {}
         for _c in _pending:
             _cls = last_class_map.get(_c, "") or ""
             if not _cls or _cls in ("OK", "GRADUATED", "SKIPPED"):
                 continue
-            _class_counts.setdefault(_cls, []).append(_c)
-        _hot = [(cls, cs) for cls, cs in _class_counts.items() if len(cs) >= 3]
+            _fam = _FAMILY.get(_cls, _cls)
+            _fam_counts.setdefault(_fam, []).append(_c)
+            _fam_classes.setdefault(_fam, set()).add(_cls)
+        _hot = [(fam, cs) for fam, cs in _fam_counts.items() if len(cs) >= 3]
         if _hot:
-            _cls, _cs = sorted(_hot, key=lambda kv: -len(kv[1]))[0]
+            _fam, _cs = sorted(_hot, key=lambda kv: -len(kv[1]))[0]
             _examples = ", ".join(sorted(_cs)[:5])
+            _seen_classes = ", ".join(sorted(_fam_classes.get(_fam, {_fam})))
+            _where = (
+                "the CANONICAL CONSTRUCTOR call emitted into each stub (it passes one fixed kwarg "
+                "set to every component class -- read the real __init__ signature in the tt_ "
+                "module named in the error and pass what IT takes), or tests/pcc/conftest.py"
+                if _fam == "CONSTRUCTOR_SIGNATURE"
+                else "the shared harness (tests/pcc/conftest.py or the common _make_arg_for helper)"
+            )
             systemic_hint = (
-                f"SYSTEMIC PATTERN: {len(_cs)} components are failing with class '{_cls}' "
-                f"(e.g. {_examples}). This is likely a TEST-HARNESS / conftest / synthetic-input "
-                f"issue, not per-stub bugs. Fix the shared harness (tests/pcc/conftest.py or the "
-                f"common _make_arg_for helper) BEFORE iterating on individual stubs; per-component "
+                f"SYSTEMIC PATTERN: {len(_cs)} components are failing with family '{_fam}' "
+                f"(classes seen: {_seen_classes}; e.g. {_examples}). This is a SHARED bug, not "
+                f"per-stub bugs. Fix {_where} BEFORE iterating on individual stubs; per-component "
                 f"repair will keep re-hitting the same wall."
             )
     except Exception:

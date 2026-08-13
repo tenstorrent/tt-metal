@@ -651,7 +651,14 @@ _OVERALL_FROM_STATUSES = [
         "shared library. Plan on lifting/adapting demo code.",
     ),
     (
-        lambda _: [],
+        # UNCONDITIONAL CATCH-ALL, and it must stay truthy. This was `lambda _: []`, which is
+        # always FALSY, so the READY arm could never fire: a report with nothing MISSING and
+        # nothing PARTIAL matched no predicate and `overall` kept its "UNKNOWN" default, which
+        # scaffold.py:214 treats as fatal. The better the compat result, the surer the failure --
+        # 11 ready / 0 partial / 0 missing refused to scaffold. Models already in
+        # SUPPORTED_HF_MODELS return "ALREADY SUPPORTED" before this loop, which is why it went
+        # unnoticed: only a model that is architecturally ready but not yet demo-wired lands here.
+        lambda _: True,
         "READY",
         "All required blocks already exist in models/tt_transformers/. Likely "
         "drop-in via the existing porting checklist.",

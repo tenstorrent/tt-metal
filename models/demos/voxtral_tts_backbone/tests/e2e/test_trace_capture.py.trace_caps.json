@@ -1,0 +1,22 @@
+{
+  "trace_1cq": true,
+  "trace_1cq_path": "models/demos/voxtral_tts_backbone/tt/pipeline.py::trace_capture_selftest",
+  "eager_terminal": false,
+  "measured_by": "models/demos/voxtral_tts_backbone/tests/e2e/test_trace_capture.py",
+  "stages": {
+    "prefill": {
+      "captured": true,
+      "replay_matches_eager": true,
+      "replay_corr": 1.0,
+      "replay_ms": 51.899,
+      "step": "prefill_trace_step"
+    },
+    "decode": {
+      "captured": true,
+      "replay_matches_eager": true,
+      "replay_corr": 1.0,
+      "replay_ms": 33.006,
+      "step": "decode_trace_step"
+    }
+  }
+}

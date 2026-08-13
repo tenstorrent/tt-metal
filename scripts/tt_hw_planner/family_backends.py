@@ -286,6 +286,18 @@ _BACKENDS: List[FamilyBackend] = [
         smoke_test_entry=None,
         use_module_tree=True,
     ),
+    FamilyBackend(
+        category='LLM',
+        name='Voxtral TTS Backbone (mistral decoder)',
+        demo_path='models/demos/voxtral_tts_backbone/',
+        routing_mode='template',
+        canonical_hf_id='/localdev/lserbedzija/hf_models/voxtral-tts-backbone',
+        notes='Mistral-architecture decoder-only transformer used as the text/audio token backbone inside the Voxtral TTS pipeline; standard stack of MistralDecoderLayer blocks (MistralAttention + MistralMLP + MistralRMSNorm, rotary embeddings), structurally identical to a plain Mistral causal LM despite its TTS role.',
+        model_type_keys=['mistral'],
+        pipeline_tags=[],
+        smoke_test_entry=None,
+        use_module_tree=True,
+    ),
 ]
 
 

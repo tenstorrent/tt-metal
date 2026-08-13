@@ -1,0 +1,22 @@
+[
+  {
+    "parent_name": "decoder_layer",
+    "children": [
+      {
+        "name": "attention",
+        "submodule_path": "layers.0.self_attn",
+        "class_name": "MistralAttention"
+      },
+      {
+        "name": "m_l_p",
+        "submodule_path": "layers.0.mlp",
+        "class_name": "MistralMLP"
+      },
+      {
+        "name": "r_m_s_norm",
+        "submodule_path": "layers.0.input_layernorm",
+        "class_name": "MistralRMSNorm"
+      }
+    ]
+  }
+]

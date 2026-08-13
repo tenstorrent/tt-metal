@@ -1,0 +1,301 @@
+{
+  "plan_version": "1.0",
+  "generated": "2026-08-13",
+  "model": {
+    "hf_path": "/localdev/lserbedzija/hf_models/voxtral-tts-backbone",
+    "source_A_facts": {
+      "architectures": ["MistralForCausalLM"],
+      "auto_class_that_loads_it": "AutoModelForCausalLM (verified: AutoConfig -> MistralConfig, AutoModelForCausalLM.from_pretrained returns MistralForCausalLM)",
+      "task_head_registry": "exactly ONE task head: causal language modelling (text -> text). No audio/vision/codec sub-config, no vocoder, is_encoder_decoder=False. The `tts-backbone` name refers to the checkpoint's downstream use; the checkpoint itself is a pure text decoder, so there is NO vocode stage.",
+      "model_type": "mistral",
+      "hidden_size": 3072,
+      "num_hidden_layers": 26,
+      "num_attention_heads": 32,
+      "num_key_value_heads": 8,
+      "head_dim": 128,
+      "intermediate_size": 9216,
+      "hidden_act": "silu",
+      "rms_norm_eps": 1e-05,
+      "rope_theta": 1000000.0,
+      "rope_parameters": {"rope_theta": 1000000.0, "rope_type": "default"},
+      "rotary_attention_scaling": 1.0,
+      "vocab_size": 131072,
+      "max_position_embeddings": 128000,
+      "tie_word_embeddings": true,
+      "sliding_window": null,
+      "bos_token_id": 1,
+      "eos_token_id": 2,
+      "torch_dtype": "bfloat16",
+      "generation_config": "{bos_token_id: 1, eos_token_id: 2, use_cache: true} -- carries NO max_new_tokens and NO max_length",
+      "tokenizer": "AutoTokenizer.from_pretrained(path) -> TokenizersBackend, loads from tokenizer.json. `tok(text, return_tensors='pt')` works and returns input_ids/attention_mask. NOTE: tok.eos_token_id==130074 disagrees with config/generation_config eos_token_id==2; model.generate() obeys generation_config, so 2 is the authoritative stop id and BOTH sides must use it.",
+      "transformers_version_present": "5.12.1"
+    },
+    "source_B_facts": {
+      "demo_dir": "models/demos/voxtral_tts_backbone",
+      "topology": "parallelism_manifest.json -> chips=1, tp=1, dp=1, mesh=[1,1] => single-device NATIVE bodies (no ShardTensorToMesh, no all_reduce). TP>1 sharded-body rules do not apply.",
+      "runtime_fallbacks": "_runtime_fallbacks.json == {} (no component fell back to CPU)",
+      "arch": "blackhole (IRD_ARCH_NAME), 1 device visible at /dev/tenstorrent/3",
+      "python": "/opt/venv/bin/python (this checkout has NO ./python_env; /opt/venv is the env where `import ttnn` resolves against this build). Run tests as: TT_METAL_HOME=$PWD PYTHONPATH=$PWD /opt/venv/bin/python -m pytest <file> -s"
+    }
+  },
+
+  "graduated_module_verification": {
+    "rule_applied": "GRADUATED == a component that owns `_stubs/<name>.py` AND a `_stubs/<name>.py.last_good_native` (or `.last_good_sharded`) snapshot. The live `_stubs/<name>.py` IS the graduated body and is composed as-is.",
+    "label_correction": "bringup_status.json `counts` says {REUSE: 4, NEW: 1} and marks attention / m_l_p / r_m_s_norm / rotary_embedding as REUSE. That label is WRONG for this run and must NOT be used to filter the pipeline: all four have a real `_stubs/<name>.py`, a byte-identical `.last_good_native` snapshot, a `.native_probe.json` with torch_ops==0, and RUN_REPORT.md lists all five under `ON_DEVICE (5): graduated, native ttnn, PCC verified` with a per-module PCC test. Their `tt_reuse_target`s were evaluated and rejected in the stub docstrings (ModelArgs/CCL plumbing, Meta interleaved RoPE layout), i.e. the reuse path was NOT taken and a native body was written and graduated instead. Treating them as non-graduated would waste 4 of the 5 work products, so the pipeline routes ALL FIVE.",
+    "verified_evidence": [
+      {"name": "decoder_layer", "status_in_json": "NEW", "stub": "_stubs/decoder_layer.py (66 lines)", "last_good_native": "present, byte-identical to live stub", "native_probe": {"ttnn_dispatch": 38, "torch_ops": 0}, "class": "TtDecoderLayer", "entry": "build(device, torch_module)", "graduated": true},
+      {"name": "attention", "status_in_json": "REUSE (label wrong -- see label_correction)", "stub": "_stubs/attention.py (175 lines)", "last_good_native": "present, byte-identical to live stub", "native_probe": {"ttnn_dispatch": 29, "torch_ops": 0}, "class": "TtAttention", "entry": "build(device, torch_module)", "graduated": true},
+      {"name": "m_l_p", "status_in_json": "REUSE (label wrong)", "stub": "_stubs/m_l_p.py (83 lines)", "last_good_native": "present, byte-identical to live stub", "native_probe": {"ttnn_dispatch": 5, "torch_ops": 0}, "class": "TtMLP", "entry": "build(device, torch_module, compute_kernel_config=None)", "graduated": true},
+      {"name": "r_m_s_norm", "status_in_json": "REUSE (label wrong)", "stub": "_stubs/r_m_s_norm.py (68 lines)", "last_good_native": "present, byte-identical to live stub", "native_probe": {"ttnn_dispatch": 1, "torch_ops": 0}, "class": "TtRMSNorm (adapter over models/common/rmsnorm.py::RMSNorm)", "entry": "build(device, torch_module)", "graduated": true},
+      {"name": "rotary_embedding", "status_in_json": "REUSE (label wrong)", "stub": "_stubs/rotary_embedding.py (111 lines)", "last_good_native": "present, byte-identical to live stub", "native_probe": {"ttnn_dispatch": 8, "torch_ops": 0}, "class": "TtRotaryEmbedding", "entry": "build(device, torch_module)", "graduated": true}
+    ],
+    "count": 5,
+    "none_left_out": "All 5 appear in `routing` below with a concrete call site and an expected invocation count per pipeline run.",
+    "composition_note": "_stubs/decoder_layer.py IMPORTS TtAttention, TtMLP and TtRMSNorm from their own stub modules (no second copies). So routing decoder_layer necessarily executes attention, m_l_p and r_m_s_norm; r_m_s_norm is ADDITIONALLY routed directly at model level as the final `model.norm`, and rotary_embedding is routed directly at model level. Every graduated body is inside the real forward path -- no coverage sweep is used or permitted."
+  },
+
+  "routing": {
+    "embed_tokens": {
+      "graduated": false,
+      "note": "NOT a graduated component (no stub emitted). Authored as pipeline glue in tt/pipeline.py and MUST be ttnn: `ttnn.embedding(ids_uint32_rowmajor, weight_rowmajor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)`. torch.embedding is FORBIDDEN.",
+      "weights": "hf.model.embed_tokens.weight [131072, 3072]"
+    },
+    "rotary_embedding": {
+      "stub": "_stubs/rotary_embedding.py::TtRotaryEmbedding",
+      "built_from": "hf.model.rotary_emb",
+      "call_site": "once per prefill (position_ids = arange(S) staged as a device tensor) and once per decode step (position_ids = the resident [1,1] device position tensor)",
+      "returns": "(cos, sin) each [b, s, 128] ttnn float32",
+      "expected_invocations_per_run": ">= 1 + n_decode_steps",
+      "contract": "__call__(x=None, position_ids=<ttnn tensor>) -- position_ids MUST be a ttnn tensor (it typecasts to float32 internally and matmuls with inv_freq). Feed the SAME positions to the HF reference."
+    },
+    "decoder_layer": {
+      "stub": "_stubs/decoder_layer.py::TtDecoderLayer",
+      "built_from": "hf.model.layers[i] for i in range(depth)",
+      "call_site": "the 26-deep stack, in order, for BOTH prefill and decode",
+      "expected_invocations_per_run": "depth * (1 + n_decode_steps)",
+      "contract": "__call__(hidden_states, attention_mask=None, position_embeddings=(cos,sin), **kv-cache kwargs) -> hidden_states"
+    },
+    "attention": {
+      "stub": "_stubs/attention.py::TtAttention",
+      "built_from": "hf.model.layers[i].self_attn (via TtDecoderLayer.build)",
+      "call_site": "inside TtDecoderLayer.__call__, on the input_layernorm output; its output feeds the residual add",
+      "expected_invocations_per_run": "depth * (1 + n_decode_steps)"
+    },
+    "m_l_p": {
+      "stub": "_stubs/m_l_p.py::TtMLP",
+      "built_from": "hf.model.layers[i].mlp (via TtDecoderLayer.build)",
+      "call_site": "inside TtDecoderLayer.__call__, on the post_attention_layernorm output; its output feeds the second residual add",
+      "expected_invocations_per_run": "depth * (1 + n_decode_steps)"
+    },
+    "r_m_s_norm": {
+      "stub": "_stubs/r_m_s_norm.py::TtRMSNorm",
+      "built_from": "hf.model.layers[i].input_layernorm, hf.model.layers[i].post_attention_layernorm (via TtDecoderLayer.build) AND hf.model.norm (built DIRECTLY by tt/pipeline.py as the final norm before the LM head)",
+      "call_site": "2x per decoder layer + 1x model-level final norm feeding lm_head",
+      "expected_invocations_per_run": "(2 * depth + 1) * (1 + n_decode_steps)"
+    },
+    "lm_head": {
+      "graduated": false,
+      "note": "NOT a graduated component. Authored glue, MUST be ttnn: `ttnn.linear(hidden, w_lm_head)` with w_lm_head = transpose(hf.lm_head.weight) staged bf16 TILE. tie_word_embeddings=true and the pointers are verified identical, so this is the embedding matrix transposed. torch.matmul is FORBIDDEN."
+    }
+  },
+
+  "pipeline": {
+    "module": "models/demos/voxtral_tts_backbone/tt/pipeline.py",
+    "PIPELINE_STAGES": ["prefill", "decode"],
+    "stages_derived_from": "Source A config: architectures=['MistralForCausalLM'] and is_encoder_decoder=False => [prefill, decode]. No encoder stage (no sub-config / no encoder tower). No vocode stage (no speech output head, no vocoder module).",
+    "stack_inventory": {
+      "n_stacks": 1,
+      "stacks": [{"name": "language_model_decoder", "hf_path": "hf.model.layers", "depth": 26, "owned_by_stages": ["prefill", "decode"]}],
+      "consequence": "prefill and decode share the ONE repeated stack, so `layers` fully describes the depth. `prefill_layers` and `decode_layers` are still accepted (they are the PIPELINE_STAGES-derived names) and alias the single stack; if both are given with different non-None values the factory must raise ValueError rather than silently pick one."
+    },
+    "forward_chain_prefill": [
+      "ids_tt = <pre-staged uint32 ROW_MAJOR [1, S] on device>",
+      "h = ttnn.embedding(ids_tt, w_embed, layout=TILE, dtype=bfloat16)            # [1, S, 3072]",
+      "cos, sin = rotary_embedding(position_ids=pos_tt)                            # GRADUATED, [1, S, 128]",
+      "mask = <pre-staged additive causal mask [1, 1, S, S], 0 / -1e9>",
+      "for i in range(depth): h = decoder_layer[i](h, attention_mask=mask, position_embeddings=(cos,sin), kv_cache=(k_cache[i], v_cache[i]), cache_fill=True)   # GRADUATED (=> attention, m_l_p, r_m_s_norm x2)",
+      "h = final_norm(h)                                                           # GRADUATED r_m_s_norm on hf.model.norm",
+      "logits = ttnn.linear(h, w_lm_head)                                          # [1, S, 131072]"
+    ],
+    "forward_chain_decode_step": [
+      "h = ttnn.embedding(tok_tt, w_embed, layout=TILE, dtype=bfloat16)            # [1, 1, 3072]; tok_tt is the PREVIOUS TT step's own argmax output -- never a reference token",
+      "cos, sin = rotary_embedding(position_ids=pos_tt)                            # GRADUATED, resident [1,1] device position tensor",
+      "for i in range(depth): h = decoder_layer[i](h, attention_mask=None, position_embeddings=(cos,sin), kv_cache=(k_cache[i], v_cache[i]), cache_pos=p)        # GRADUATED",
+      "h = final_norm(h)                                                           # GRADUATED r_m_s_norm",
+      "logits = ttnn.linear(h, w_lm_head)                                          # [1, 1, 131072]",
+      "tok_tt = ttnn.argmax(logits, dim=-1)                                        # on-device greedy sampling -> uint32 ROW_MAJOR [1,1]; torch.argmax is FORBIDDEN",
+      "pos_tt = ttnn.add(pos_tt, 1.0) into the resident position buffer            # on-device position advance; no from_torch in the loop"
+    ],
+    "kv_cache_design": {
+      "why": "The graduated attention body computes full SDPA over whatever sequence it is handed and keeps no cache. A resident cache is required by the AR decode contract (decode_prefill seeds resident self-KV, decode_step reads it and never recomputes) and it is what makes the decode step O(1).",
+      "allowed_change": "Extend `_stubs/attention.py::TtAttention.__call__` and `_stubs/decoder_layer.py::TtDecoderLayer.__call__` with OPTIONAL cache kwargs, pure ttnn, defaulting to None so the existing behaviour (and the 5 per-component PCC tests) is bit-for-bit unchanged when they are absent. Do NOT fork a second attention body -- one graduated body serves prefill and decode, or Gate 1 is meaningless.",
+      "cache_shape": "per layer: k_cache, v_cache = [1, 8, C, 128] bfloat16 TILE in DRAM (batch, n_kv_heads, capacity, head_dim)",
+      "verified_ops": {
+        "prefill_write": "ttnn.fill_cache(cache, k_[1,8,S,128], 0) -- VERIFIED on device: writes rows [0:S) exactly, leaves the rest zero. S must be a multiple of 32 (pad the prompt up to a tile and mask the pad).",
+        "decode_write": "ttnn.update_cache(cache, k_[1,8,1,128], p) -- VERIFIED on device: writes row p only (input dim1 must equal cache dim1 == n_kv_heads; the [1,B,NKV,HD] layout FAILS with `input_tensor.padded_shape()[1] == cache_tensor.padded_shape()[1]`).",
+        "decode_attention": "ttnn.transformer.scaled_dot_product_attention_decode(q_[1,1,32,128], k_cache, v_cache, cur_pos_tensor=<int32 [1] device tensor> | cur_pos=[p], scale=head_dim**-0.5) -> [1, 1, 32, 128] -- VERIFIED both forms. Reshape q from the stub's [1,32,1,128] via permute (2,0,1,3); reshape the output back via permute (1,0,2,3) + reshape to [1,1,4096] before o_proj.",
+        "prefill_attention": "unchanged graduated path: ttnn.transformer.scaled_dot_product_attention(q,k,v, attn_mask=<additive causal mask>, scale=...)",
+        "greedy_sampling": "ttnn.argmax(logits, dim=-1) -> UINT32 ROW_MAJOR [1,1]; VERIFIED it feeds straight back into ttnn.embedding, so the token loop never leaves the device.",
+        "position_advance": "ttnn.add on a resident position tensor -- VERIFIED for int32 and usable for float32 (the rotary stub typecasts to float32 anyway)."
+      }
+    },
+    "decode_horizon": {
+      "priority_1_stop_token": "STOP on generated token id == generation_config.eos_token_id (== 2). This is read from the model, not hardcoded, and is applied IDENTICALLY to the TT loop and to model.generate() (generate() natively obeys generation_config.eos_token_id).",
+      "safety_cap": "max_new_tokens = min(config.max_position_embeddings - prompt_len, E2E_GATE_HORIZON)",
+      "E2E_GATE_HORIZON": 48,
+      "priority_3_justification": "generation_config carries neither max_new_tokens nor max_length, and config.max_position_embeddings is 128000 -- not a runnable bound for an on-device gate. So the horizon bound (48) is an explicit LLM-chosen value for lack of any model signal, recorded here; it is a CAP, not the stop rule, and it is passed IDENTICALLY to model.generate(max_new_tokens=H) and to the TT loop so both sides are compared over the same length. Overridable via --max-new-tokens / TT_E2E_MAX_NEW_TOKENS.",
+      "eos_handling_for_pcc": "If either side emits eos, both sequences are truncated to the same common length before comparison (never force the golden to a length the TT side invented)."
+    },
+    "shapes": {
+      "prompt": "the demo/test prompt, tokenized by the HF tokenizer (real input, not synthetic)",
+      "S": "prompt_len padded up to a multiple of 32 (TILE); positions >= prompt_len are masked out of attention and their logits are ignored",
+      "C": "trace/KV capacity, default 128 (multiple of 32, >= S + horizon, <= max_position_embeddings)"
+    },
+    "dtype_policy": "activations bfloat16 TILE; rotary table float32 (the stub's own choice -- RoPE angles at rope_theta=1e6 need it); matmuls with HiFi4 + fp32_dest_acc (already set inside the stubs)."
+  },
+
+  "task_heads": [
+    {
+      "call": 1,
+      "id": "text_generation",
+      "kind": "GENERATIVE (reference is model.generate())",
+      "task": "text -> text",
+      "real_input": "a natural-language prompt string -> HF tokenizer (AutoTokenizer.from_pretrained(model_path), return_tensors='pt') -> input_ids [1, prompt_len]",
+      "real_output": "generated token ids + the tokenizer-decoded continuation string",
+      "tt_chain": "run_generate(): prefill chain (seeds the resident KV cache and emits the first token by argmax on the last prompt position) -> N x decode_step chain, each step consuming the PREVIOUS TT step's own argmax token and the resident KV cache. No reference tensor is injected at any joint.",
+      "hf_reference": "_hf_reference_generate(): hf.generate(input_ids, max_new_tokens=H, do_sample=False, num_beams=1, use_cache=True, output_scores=True, return_dict_in_generate=True) -- the ONLY place HF forward code runs",
+      "pass_means": "TT logits track HF's per-step scores at PCC >= 0.95 over the common horizon AND the pipeline is native ttnn AND all 5 graduated modules were invoked",
+      "primary_metric": "PCC(stack(TT per-step next-token logits) [H, 131072], stack(hf .scores) [H, 131072]) >= 0.95",
+      "behavioral_proof": "generated token-id sequence equality vs HF over the common horizon, plus decoded-string equality; the first divergence index is printed. Greedy + same stop rule on both sides, so a wiring bug shows up as an early divergence, not as a silently-passing metric.",
+      "demo": "demo/demo_text_generation.py -- argparse (--prompt, --max-new-tokens, --layers), prints the prompt, the TT continuation, the HF continuation and the PCC",
+      "graduated_modules_used": ["decoder_layer", "attention", "m_l_p", "r_m_s_norm", "rotary_embedding"]
+    },
+    {
+      "call": 2,
+      "id": "causal_lm_logits",
+      "kind": "TEACHER-FORCED (reference is hf_model(**inputs).logits)",
+      "task": "text -> next-token logits over the whole prompt (the CausalLM head's own forward; this is also the prefill stage's parity gate)",
+      "real_input": "the same tokenizer output: input_ids [1, prompt_len]",
+      "real_output": "logits [1, prompt_len, 131072] and the argmax next-token continuation of the prompt",
+      "tt_chain": "run_prefill_logits(): the prefill chain, unpadded slice [:, :prompt_len, :]",
+      "hf_reference": "_hf_reference_logits(): hf(input_ids=..., use_cache=False).logits",
+      "pass_means": "PCC(TT logits, HF logits) >= 0.95 over the real (unpadded) positions, native ttnn, all 5 graduated modules invoked",
+      "primary_metric": "PCC(TT logits[:, :prompt_len, :], HF logits[:, :prompt_len, :]) >= 0.95",
+      "behavioral_proof": "argmax of the last-position logits matches HF's next token; top-5 next-token sets are compared and printed",
+      "demo": "demo/demo_causal_lm_logits.py -- argparse (--prompt, --layers), prints the next-token prediction and the PCC",
+      "graduated_modules_used": ["decoder_layer", "attention", "m_l_p", "r_m_s_norm", "rotary_embedding"]
+    }
+  ],
+
+  "agent_assignment": {
+    "rule": "one agent per call unless two calls share a graduated module, in which case ONE agent owns them both",
+    "decision": "Call 1 and Call 2 share ALL FIVE graduated modules (they are the same stack; Call 2 IS Call 1's prefill stage with the head applied to every position). So exactly ONE implementation agent owns both calls and the single shared tt/pipeline.py. Splitting them would produce two copies of the wiring, which the STRUCTURE rule forbids.",
+    "agents": [
+      {"id": "agent_A", "owns": ["call_1 text_generation", "call_2 causal_lm_logits", "tt/pipeline.py", "the optional-KV-cache extension of _stubs/attention.py + _stubs/decoder_layer.py", "demo/*", "tests/e2e/*", "README.md"], "gates": ["Gate 1", "Gate 2", "Gate 3"]},
+      {"id": "agent_B", "owns": ["per-stage trace contract, build_pipeline factory, trace_capture_selftest, host_op_selftest, tests/e2e/test_trace_capture.py"], "depends_on": "agent_A (gates 1-3 green)", "note": "sequential, not parallel -- it edits the same tt/pipeline.py"}
+    ]
+  },
+
+  "gates": {
+    "gate_1_native": {
+      "requirement": "every routed graduated stub is still real ttnn, no torch fallback. TP=1 here, so bodies are NATIVE single-device (no sharding to preserve).",
+      "checks": [
+        "run the pipeline's prefill under models/common/native_probe.run_native_probe once per stub file and assert torch_ops == 0 for each of the 5 stubs",
+        "static scan of tt/pipeline.py + the 5 stubs for the FORBIDDEN hot-path patterns: model.generate, hf_model.<submodule>(...), assignment to <hf>.forward, torch.matmul/mm/bmm/einsum/softmax/layer_norm/rms_norm/embedding/conv*/scaled_dot_product_attention/argmax/topk/multinomial, F.<x>",
+        "re-run all 5 per-component PCC tests under tests/pcc/ and require them still to pass at their 0.99 target (proves the optional-cache extension did not regress the graduated bodies)"
+      ]
+    },
+    "gate_2_all_invoked": {
+      "requirement": "every graduated module is actually INVOKED in the real forward path, feeding downstream compute",
+      "method": "the e2e test installs a counting wrapper on the 5 stub CLASSES' __call__ (TtDecoderLayer, TtAttention, TtMLP, TtRMSNorm, TtRotaryEmbedding) before calling the shared pipeline, then asserts the counts match the architecture:",
+      "expected_counts_full_depth_prefill_plus_D_decode_steps": {
+        "rotary_embedding": ">= 1 + D",
+        "decoder_layer": "26 * (1 + D)",
+        "attention": "26 * (1 + D)",
+        "m_l_p": "26 * (1 + D)",
+        "r_m_s_norm": "(2*26 + 1) * (1 + D)"
+      },
+      "forbidden": "no coverage_step / coverage_sweep / invoke_all_stubs helper. Counting is done by the TEST wrapping the classes; the pipeline itself contains no touch-only calls. A count of exactly 1 for a per-layer module is a FAILURE, not a pass.",
+      "note": "counts scale with the `layers` cap; the assertion is expressed in terms of the depth actually built."
+    },
+    "gate_3_pcc": {
+      "requirement": "final task output PCC vs the HF golden >= 0.95, for BOTH calls",
+      "metric_impl": "models.common.utility_functions.comp_pcc(golden, calc, 0.95) -> (ok, pcc)",
+      "print_contract": "print(f\"e2e PCC={achieved_pcc}\") on its own line IMMEDIATELY BEFORE the final assert, on every run, pass or fail. Also print a per-call line: `FINAL_PCC call=<id> pcc=<value>`.",
+      "threshold": 0.95
+    }
+  },
+
+  "validation_metric": {
+    "primary": "Pearson PCC between the TT pipeline's real task output and the HF reference's, via comp_pcc",
+    "call_1": "PCC over the stacked per-step decode logits (free-running TT decode vs HF generate scores), plus token-sequence equality",
+    "call_2": "PCC over the full prompt logits (teacher-forced), plus last-position argmax equality",
+    "secondary_reported": ["per-step PCC list for call 1", "first token divergence index", "top-5 next-token overlap for call 2", "invocation counts per graduated module", "native_probe torch_ops per stub"]
+  },
+
+  "self_validation_plan": {
+    "step_1": "sanity: HF loads as MistralForCausalLM (VERIFIED), tokenizer round-trips (VERIFIED), 26 layers present (VERIFIED), lm_head tied to embed_tokens (VERIFIED by data_ptr identity)",
+    "step_2": "single-layer equivalence, on device: prefill chain with layers=1 vs hf.model.layers[0] fed the same staged inputs -> PCC >= 0.99. Catches embedding / mask / RoPE-layout wiring before spending 26 layers on it.",
+    "step_3": "prefill/decode consistency, on device: after prefilling S tokens, one decode step at position S must equal a full re-prefill of S+1 tokens at its last position -> PCC >= 0.99. This is the KV-cache correctness proof and it needs no HF reference.",
+    "step_4": "Call 2 full-depth prefill logits vs HF logits -> PCC >= 0.95 (expect >= 0.99)",
+    "step_5": "Call 1 free-running greedy decode vs HF generate over the same horizon and stop rule -> token equality + logits PCC >= 0.95",
+    "step_6": "Gate 1 native_probe + static forbidden-pattern scan; Gate 2 invocation counts; re-run the 5 tests/pcc tests",
+    "step_7": "run BOTH demo entrypoints as `python -m models.demos.voxtral_tts_backbone.demo.demo_<task>` and confirm they emit real task output through the SAME tt/pipeline.py function the test calls",
+    "failure_playbook": [
+      "PCC ~0.0 at step 2 -> mask sign/shape or (cos,sin) rank; the stub wants cos/sin as [b, s, head_dim] and broadcasts internally",
+      "PCC ok at step 2 but bad full-depth -> residual accumulation dtype; keep bf16 activations but verify HiFi4 is actually applied (compute_kernel_config not None)",
+      "step 3 fails -> cache write index or the [1,NKV,1,HD] layout for update_cache (see verified_ops)",
+      "token divergence late in the horizon with per-step PCC >= 0.99 -> near-tie logits; report the divergence index and the margin, do NOT relax the metric"
+    ]
+  },
+
+  "trace_contract_phase_2": {
+    "when": "AFTER gates 1-3 pass on device",
+    "PIPELINE_STAGES": ["prefill", "decode"],
+    "per_stage_api_on_the_pipeline_object": {
+      "prefill_trace_setup(inputs)": "pin the sequence axis to capacity C (default 128, bounded by max_position_embeddings); pad input_ids to C and PRE-UPLOAD into PERSISTENT device buffers: padded ids, the additive causal+padding mask (values from the HF reference: MistralModel's own mask builder / create_causal_mask, else the equivalent 0/-1e9 additive mask), the RoPE cos/sin for positions arange(C) taken from hf.model.rotary_emb itself, and the per-layer KV buffers [1, 8, C, 128]. Padded positions masked so output on [0:real_len] is unchanged.",
+      "prefill_trace_step()": "ONE host-op-free forward at the fixed [1, C, 3072] shape reading ONLY those persistent buffers. No from_torch, no ttnn.zeros/arange inside.",
+      "prefill_trace_inputs()": "ZERO-ARG; returns exactly what prefill_trace_setup takes, assembled from the captured golden inputs under _captured/ (the pipeline-level golden input_ids are persisted to _captured/e2e_pipeline/input_ids.pt by the e2e test; if absent, regenerate by tokenizing the same demo prompt and write it there). Model-specific assembly lives HERE behind the fixed name.",
+      "decode_trace_setup(inputs)": "run decode_prefill(inputs) to seed the resident self-KV at capacity C, then pin ONE decode step: persistent [1,1] token buffer, persistent position buffer, persistent cos/sin for the pinned position, resident per-layer KV. (No cross-attention KV: this is a decoder-only model.)",
+      "decode_trace_step()": "ONE host-op-free decode forward reading ONLY resident buffers; never recomputes the prompt KV.",
+      "decode_trace_inputs()": "ZERO-ARG, same captured source as prefill_trace_inputs."
+    },
+    "ar_decode_contract": ["decode_prefill(inputs) seeds resident self-attention KV (no cross-attn KV for a decoder-only model)", "decode_step() reads the resident KV and advances the resident position"],
+    "build_pipeline": {
+      "signature": "build_pipeline(device, model=None, layers=None, prefill_layers=None, decode_layers=None, **kwargs)",
+      "returns": "the resident pipeline OBJECT carrying PIPELINE_STAGES, the per-stage hooks and the AR decode contract. It MUST NOT run generation.",
+      "layers_semantics": "layers caps the depth of the ONE repeated stack; None means all 26 (never 0). Embeddings, both per-layer norms, the final norm and the LM head are always built, so a capped build still exercises every distinct op the full model runs.",
+      "per_stack_overrides": "prefill_layers / decode_layers (names derived from PIPELINE_STAGES). This model has ONE stack shared by both stages, so each override aliases that stack's depth; None falls back to `layers`; two conflicting non-None values must raise ValueError instead of silently collapsing.",
+      "kwargs": "accept and ignore demo kwargs (prompt, text, language, ...) for call-signature compatibility",
+      "single_build_surface": "trace_capture_selftest and BOTH demo entrypoints must build through this factory"
+    },
+    "discoverability": "hold the stack as a plain Python list of SAME-TYPED elements (`self.layers = [TtDecoderLayer, ...]`), keep the HF reference reachable from the built object (`self.hf` / `self.reference`) so a walk finds hf.model.layers (26) as ground truth for section structure. No marker base class.",
+    "trace_capture_selftest(device)": "for EACH stage in PIPELINE_STAGES: setup -> ttnn.begin_trace_capture / end_trace_capture around ONE step -> ttnn.execute_trace -> PCC-check the trace output against the eager reference -> ttnn.release_trace BEFORE the next stage (stage traces must not co-reside). Return True only if every stage captured host-free AND matched. Size trace_region_size from the largest stage (C x depth); on overflow, shrink C and PRINT the fallback.",
+    "host_op_selftest()": "run each task head's forward inside scripts.tt_hw_planner.host_op_observer.observe_host_ops() with tokenization and the one-time weight build OUTSIDE the region and the whole encoded-inputs->output math (incl. the prefix embedding and greedy sampling) INSIDE it; readback (ttnn.to_torch) must also be outside. Return host_op_observer.verdict(ops); fail if ANY head fires non-benign aten ops."
+  },
+
+  "package_layout": {
+    "root": "models/demos/voxtral_tts_backbone/",
+    "files": {
+      "tt/__init__.py": "",
+      "tt/pipeline.py": "THE ONE shared chained pipeline: build_pipeline factory, VoxtralTtsBackbonePipeline (PIPELINE_STAGES, run_prefill_logits, run_generate, decode_prefill, decode_step, per-stage trace hooks, selftests) + the HF reference helpers (_hf_reference_logits, _hf_reference_generate) kept strictly out of the TT path",
+      "demo/demo_text_generation.py": "Call 1 entrypoint, __main__ + argparse, `python -m models.demos.voxtral_tts_backbone.demo.demo_text_generation`",
+      "demo/demo_causal_lm_logits.py": "Call 2 entrypoint, __main__ + argparse",
+      "tests/e2e/__init__.py": "",
+      "tests/e2e/test_e2e_pipeline.py": "Gate 1/2/3 for both calls, importing the SAME tt/pipeline.py functions the demos call",
+      "tests/e2e/test_trace_capture.py": "phase-2: trace_capture_selftest + host_op_selftest",
+      "README.md": "what each Call does, how to run demo + test, the measured PCC numbers"
+    },
+    "shared_pipeline_rule": "the demos MUST NOT contain their own copy of the wiring; each imports build_pipeline + run_* from tt/pipeline.py. A green test therefore guarantees a working demo.",
+    "conventions": "follow the existing demo package style already present in this repo's models/demos/<model>/{demo,tt,tests} layout; device fixtures via the repo conftest `device` fixture with @pytest.mark.parametrize('device_params', [{...}], indirect=True) (l1_small_size=24576, plus trace_region_size for the trace test)."
+  },
+
+  "run_commands": {
+    "env": "cd /localdev/lserbedzija/repos/tt-metal-pr46283 && export TT_METAL_HOME=$PWD PYTHONPATH=$PWD",
+    "e2e_test": "/opt/venv/bin/python -m pytest models/demos/voxtral_tts_backbone/tests/e2e/test_e2e_pipeline.py -s",
+    "trace_test": "/opt/venv/bin/python -m pytest models/demos/voxtral_tts_backbone/tests/e2e/test_trace_capture.py -s",
+    "demo_1": "/opt/venv/bin/python -m models.demos.voxtral_tts_backbone.demo.demo_text_generation --prompt 'The quick brown fox' --max-new-tokens 48",
+    "demo_2": "/opt/venv/bin/python -m models.demos.voxtral_tts_backbone.demo.demo_causal_lm_logits --prompt 'The quick brown fox'",
+    "component_pcc": "/opt/venv/bin/python -m pytest models/demos/voxtral_tts_backbone/tests/pcc -s"
+  }
+}

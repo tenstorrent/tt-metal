@@ -1,0 +1,31 @@
+{
+  "component": "m_l_p",
+  "submodule_path": "model.layers.0.mlp",
+  "args": {
+    "kind": "tuple",
+    "items": [
+      {
+        "kind": "tensor",
+        "shape": [
+          1,
+          1,
+          3072
+        ],
+        "dtype": "torch.bfloat16"
+      }
+    ]
+  },
+  "kwargs": {
+    "kind": "dict",
+    "items": {}
+  },
+  "output": {
+    "kind": "tensor",
+    "shape": [
+      1,
+      1,
+      3072
+    ],
+    "dtype": "torch.bfloat16"
+  }
+}

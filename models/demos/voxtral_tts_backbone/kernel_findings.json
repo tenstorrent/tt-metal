@@ -1,0 +1,34 @@
+{
+  "findings": [
+    {
+      "op": "models/tt_transformers/tt/rope.py",
+      "field": "rope_parameters (HF-newer field)",
+      "value": "set",
+      "constraint": "this HF config uses `rope_parameters` (the newer field) but tt_transformers/tt/model_config.py:2736 only reads `rope_scaling`. The runtime will silently treat this model as having NO scaling, potentially diverging from HF reference at long contexts.",
+      "passes": false,
+      "severity": "warn",
+      "fix": "Mirror `rope_parameters` into `rope_scaling` in the model_params/<model>/config.json override, OR extend tt_transformers/tt/model_config.py to also read `rope_parameters`. Safe at short contexts; matters at the model's full native context.",
+      "source": "models/tt_transformers/tt/model_config.py:2736"
+    },
+    {
+      "op": "ttnn.topk (sampling)",
+      "field": "vocab_size",
+      "value": 131072,
+      "constraint": "multi-core top-k requires vocab to be a power of 2 AND < 65536; else falls back to single-core",
+      "passes": false,
+      "severity": "warn",
+      "fix": "No action needed - kernel will use the single-core path. Decode throughput will be lower.",
+      "source": "ttnn/cpp/ttnn/operations/reduction/topk/device/topk_device_operation.cpp"
+    },
+    {
+      "op": "nlp_concat_heads_decode (KV sharding)",
+      "field": "num_key_value_heads",
+      "value": 8,
+      "constraint": "num_key_value_heads must be divisible by TP(32); GQA/MQA shards KV across the mesh's TP dim",
+      "passes": false,
+      "severity": "blocker",
+      "fix": "Use TP that divides 8 (e.g. 1, 2, 4, 8), or replicate KV (not supported in tt_transformers).",
+      "source": "models/tt_transformers/tt/model_config.py: `assert self.n_kv_heads % self.cluster_shape[1] == 0`"
+    }
+  ]
+}

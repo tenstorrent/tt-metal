@@ -836,6 +836,71 @@ def _parse_frontmatter_lines(block: str) -> dict:
     return {"pipeline_tag": pipeline_tag, "tags": tags}
 
 
+def _attach_arch_and_memory(probe: ModelProbe, cfg: dict, total_params, weight_bytes) -> ModelProbe:
+    """Fill in `arch_spec`, `arch_family`, `config_status` and `memory_model` from the config.
+
+    SHARED BY BOTH PROBE PATHS ON PURPOSE. This used to live inline in the Hub path only, so a
+    LOCAL directory came back with `memory_model=None` -- and nothing downstream said so. The
+    memory-fit gate reported "no LLM-style memory model produced -- typically a vision /
+    multi-modal model" (a guess, contradicted by the probe's own `category='LLM'`), returned
+    "unknown", and `scaffold.py` then refused the run with `unexpected compat verdict 'UNKNOWN'`
+    -- three layers after the actual cause, and on a model whose compat report read 11 ready /
+    0 partial / 0 missing.
+
+    Keep it one function. Two copies is how the paths diverged in the first place.
+    """
+    if probe.category not in TRANSFORMER_CATEGORIES:
+        probe.config_status = None
+        return probe
+
+    NESTED_KEYS = (
+        "text_config",
+        "llm_config",
+        "language_config",
+        "decoder_config",
+        "text_model_config",
+        "language_model_config",
+    )
+    candidates = [cfg] + [cfg.get(k) for k in NESTED_KEYS if isinstance(cfg.get(k), dict)]
+    for c in candidates:
+        if c.get("hidden_size") and c.get("num_hidden_layers"):
+            text_cfg = c
+            break
+    else:
+        text_cfg = cfg
+
+    family = detect_architecture(text_cfg)
+    arch_spec = build_arch_spec(text_cfg, family)
+    probe.arch_spec = arch_spec
+    probe.arch_family = family
+
+    if arch_spec.hidden_size and arch_spec.num_layers:
+        probe.config_status = True
+        probe.memory_model = select_model(arch_spec, total_params, weight_bytes)
+
+        if family == "mla":
+            probe.flags.append("MLA (compressed KV cache) detected — DeepSeek family")
+        if family == "moe":
+            probe.flags.append(f"MoE detected ({arch_spec.num_experts} experts, top-{arch_spec.experts_per_token})")
+        if family == "ssm":
+            probe.flags.append("State-space model — no per-token KV cache")
+        if arch_spec.sliding_window:
+            probe.flags.append(f"Sliding-window attention (window={arch_spec.sliding_window})")
+    else:
+        if probe.category in {"LLM", "VLM"}:
+            probe.flags.append(
+                "Category downgraded to CNN after config inspection: no causal-LM fields found in config.json."
+            )
+            probe.category = "CNN"
+            probe.arch_spec = None
+            probe.arch_family = None
+            probe.config_status = None
+        else:
+            probe.config_status = False
+
+    return probe
+
+
 def _probe_local_model(model_id: str) -> ModelProbe:
     """Build a ModelProbe from a local directory (bypasses the HF Hub API)."""
     weight_exts_legacy = (".bin", ".pt", ".pth", ".ckpt", ".msgpack", ".nemo")
@@ -927,7 +992,9 @@ def _probe_local_model(model_id: str) -> ModelProbe:
             f"{pipeline_tag!r} with no recognized model_type/architectures — verify. "
             f"('text-to-audio' spans text-to-speech AND music/audio-generation.)"
         )
-    return probe
+    # Same arch/memory work the Hub path does -- see _attach_arch_and_memory for why this is
+    # shared rather than duplicated, and what a local dir used to fail with.
+    return _attach_arch_and_memory(probe, cfg, total_params, weight_bytes)
 
 
 def probe_model(model_id: str) -> ModelProbe:
@@ -1088,53 +1155,4 @@ def probe_model(model_id: str) -> ModelProbe:
             f"routing uses the module-tree fingerprint, so a diffusion/DiT trunk still routes correctly.)"
         )
 
-    if probe.category not in TRANSFORMER_CATEGORIES:
-        probe.config_status = None
-        return probe
-
-    NESTED_KEYS = (
-        "text_config",
-        "llm_config",
-        "language_config",
-        "decoder_config",
-        "text_model_config",
-        "language_model_config",
-    )
-    candidates = [cfg] + [cfg.get(k) for k in NESTED_KEYS if isinstance(cfg.get(k), dict)]
-    for c in candidates:
-        if c.get("hidden_size") and c.get("num_hidden_layers"):
-            text_cfg = c
-            break
-    else:
-        text_cfg = cfg
-
-    family = detect_architecture(text_cfg)
-    arch_spec = build_arch_spec(text_cfg, family)
-    probe.arch_spec = arch_spec
-    probe.arch_family = family
-
-    if arch_spec.hidden_size and arch_spec.num_layers:
-        probe.config_status = True
-        probe.memory_model = select_model(arch_spec, total_params, weight_bytes)
-
-        if family == "mla":
-            probe.flags.append("MLA (compressed KV cache) detected — DeepSeek family")
-        if family == "moe":
-            probe.flags.append(f"MoE detected ({arch_spec.num_experts} experts, top-{arch_spec.experts_per_token})")
-        if family == "ssm":
-            probe.flags.append("State-space model — no per-token KV cache")
-        if arch_spec.sliding_window:
-            probe.flags.append(f"Sliding-window attention (window={arch_spec.sliding_window})")
-    else:
-        if probe.category in {"LLM", "VLM"}:
-            probe.flags.append(
-                "Category downgraded to CNN after config inspection: no causal-LM fields found in config.json."
-            )
-            probe.category = "CNN"
-            probe.arch_spec = None
-            probe.arch_family = None
-            probe.config_status = None
-        else:
-            probe.config_status = False
-
-    return probe
+    return _attach_arch_and_memory(probe, cfg, total_params, weight_bytes)
