@@ -8,10 +8,14 @@
 #
 # On a mesh capture, tt-perf-report sees all four devices' ops and merges them:
 # it prints "Detected data from 4 devices. Merging device data..." and emits one
-# row per op *instance*, attributed to the device that ran it, rather than four
-# summed rows.  So a Device Time column is already one chip's work -- verified by
-# summing it over a decode window and dividing by the 8 replays, which reproduces
-# the end-to-end ms/token to within the host gap.  No --device-id is passed.
+# row per op *instance*, not four summed rows.  The merge rule is in
+# tt_perf_report/perf_report.py:1926-1939 -- the **max** of the four devices for
+# an ordinary op, the **mean** for a collective (AllGather / ReduceScatter /
+# AllReduce), since a collective's four rows are the same collective.  So a
+# Device Time column is one chip's (worst-case) work, which is the right basis
+# for a speedup -- verified by summing it over a decode window and dividing by
+# the 8 replays, which reproduces the end-to-end ms/token to within the host gap.
+# No --device-id is passed.
 set -euo pipefail
 cd "$(dirname "$0")/../../../../../.."          # repo root
 D=$PWD/models/autoports/meta_models_muse_glimmer_30b/doc/multichip_decoder

@@ -1884,7 +1884,7 @@ def test_replicas_are_bit_identical(multichip_mesh, decoder_cache, kind):
 @pytest.mark.timeout(1800)
 @pytest.mark.parametrize("kind", LAYER_KINDS)
 def test_kv_cache_holds_the_expected_head(multichip_mesh, decoder_cache, reference_layers, kind):
-    """Device ``d``'s K cache holds global KV head ``kv_head_of_device(d)``, and nothing else.
+    """Device ``d``'s K *and* V caches hold global KV head ``kv_head_of_device(d)``, and nothing else.
 
     The other side of ``test_qkv_weight_is_gqa_assigned``: that test checks the
     *weight* slice landed on the right device, this one checks what the forward
@@ -1901,7 +1901,9 @@ def test_kv_cache_holds_the_expected_head(multichip_mesh, decoder_cache, referen
     hidden = R.synthetic_hidden_states(1, seq_len, seed=seed)
     _, cache = R.reference_prefill(layer, layer_idx, hidden)
     reference_keys = cache.layers[layer_idx].keys  # [1, 2, seq_len, 128]
+    reference_values = cache.layers[layer_idx].values
     assert tuple(reference_keys.shape) == (1, 2, seq_len, decoder.config.head_dim)
+    assert tuple(reference_values.shape) == tuple(reference_keys.shape)
 
     page_rows = _page_table_rows(1, SHORT_MAX_SEQ, seed=seed)
     page_table = ttnn.from_torch(
@@ -1915,25 +1917,32 @@ def test_kv_cache_holds_the_expected_head(multichip_mesh, decoder_cache, referen
     ttnn.deallocate(decoder.prefill_forward(to_device_hidden(multichip_mesh, hidden), page_table=page_table, user_id=0))
 
     blocks = seq_len // PAGE_BLOCK_SIZE
-    for device in range(decoder.plan.tp):
-        head = decoder.plan.kv_head_of_device(device)
-        cached = ttnn.to_torch(ttnn.get_device_tensors(decoder.k_cache)[device]).float()
-        assert cached.shape[1] == 1, "each device's cache holds one KV head"
-        gathered = torch.cat(
-            [cached[int(page_rows[0, block]), 0] for block in range(blocks)], dim=0
-        )  # [seq_len, head_dim]
-        for candidate in range(int(reference_keys.shape[1])):
-            _, message = comp_pcc(reference_keys[0, candidate].float(), gathered, 0.0)
-            logger.info(f"multichip K cache[{kind}] device={device} vs global KV head {candidate}: {message}")
-        # BFP8 cache, so a loose bar -- but far tighter than the wrong head scores.
-        assert_pcc(
-            f"multichip K cache[{kind}] device={device} holds global KV head {head}",
-            reference_keys[0, head],
-            gathered,
-            threshold=QUANTISED_TENSOR_PCC,
-        )
-        del cached, gathered
-        gc.collect()
+    # Both caches, not just K: they are written by separate ``paged_fill_cache``
+    # calls off separate slices of the fused QKV output, so a head-assignment
+    # mistake can land in one and not the other.
+    for label, cache_tensor, expected in (
+        ("K", decoder.k_cache, reference_keys),
+        ("V", decoder.v_cache, reference_values),
+    ):
+        for device in range(decoder.plan.tp):
+            head = decoder.plan.kv_head_of_device(device)
+            cached = ttnn.to_torch(ttnn.get_device_tensors(cache_tensor)[device]).float()
+            assert cached.shape[1] == 1, "each device's cache holds one KV head"
+            gathered = torch.cat(
+                [cached[int(page_rows[0, block]), 0] for block in range(blocks)], dim=0
+            )  # [seq_len, head_dim]
+            for candidate in range(int(expected.shape[1])):
+                _, message = comp_pcc(expected[0, candidate].float(), gathered, 0.0)
+                logger.info(f"multichip {label} cache[{kind}] device={device} vs global KV head {candidate}: {message}")
+            # BFP8 cache, so a loose bar -- but far tighter than the wrong head scores.
+            assert_pcc(
+                f"multichip {label} cache[{kind}] device={device} holds global KV head {head}",
+                expected[0, head],
+                gathered,
+                threshold=QUANTISED_TENSOR_PCC,
+            )
+            del cached, gathered
+            gc.collect()
 
 
 # ---------------------------------------------------------------- geometry / knobs

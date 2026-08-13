@@ -123,7 +123,7 @@ The consequence is that per-device KV cache **halves** rather than quarters. The
 alternative — splitting the KV *sequence* across each device pair and merging the
 two SDPA partials with their log-sum-exps — would quarter it, and is rejected
 here as scope: it needs a partial-softmax merge TTNN does not expose for the
-paged decode op, and the SDPA is 4.7 % of the decode step at 2048 and 23.0 % at
+paged decode op, and the SDPA is 4.7 % of the `sliding` decode step at 2048 and 23.2 % of the `full` one at
 131071 (`tracy/full/decode_131071_perf_report.txt`), so the ceiling on it is
 smaller than the risk. Recorded, not hidden.
 
@@ -144,7 +144,9 @@ shard must not be padded, because the padded columns would be summed into the
 reduction. So the count has to divide every width that is an `in0` — 208
 (hidden), 32 (the gated attention output, for `o_proj`) and 160 (the padded MLP
 intermediate, for `mlp_down`) — which admits only {1, 2, 4, 8, 16}. 16 is the
-largest, and it is the measured winner (`logs/layer_ab_geometry_final.log`):
+largest, and it is the measured winner (`logs/layer_ab_geometry_final.log`, with
+the two-reshard rows from `logs/layer_ab_geometry2.log` and
+`logs/layer_ab_geometry3.log`):
 
 | grid | sliding | full |
 | --- | --- | --- |
@@ -203,17 +205,23 @@ column-parallel matmul` — each ending on the contract it started on, so a winn
 is stackable. Not "reduce-scatter followed by an immediate all-gather back to the
 old contract", which would measure the wrong thing.
 
-Both columns are from the **shipped** configuration — the tuned reducer on every
-arm and the 8192 B packet — so they compare with each other and with the layer
-(`logs/topology_probe_decode32_tuned.log`, `logs/topology_probe_prefill8192.log`):
+Both columns are from the **shipped** configuration — the 8192 B packet, and
+`num_workers_per_link` at each payload's own shipped value (1 at 32 rows, 4 at
+8192; the logs' headers record which). That per-payload split matters: pinning
+the decode value at the prefill payload costs the reduce-scatter 2.4x, which
+inflates every arm that uses one and lets the `gather_heads*` arms — which use
+only `all_gather` — escape it. Review round 4 caught the 8192-row column doing
+exactly that, and re-running it at 4 workers moved `replicated` 8.4 % while
+`gather_heads` barely moved (`logs/topology_probe_decode32_tuned.log`,
+`logs/topology_probe_prefill8192.log`):
 
 | candidate | CCL bytes/device | 32 rows | 8192 rows |
 | --- | --- | --- | --- |
-| `replicated` (all-reduce) | 1.50 S | 314.91 μs | 9002.41 μs |
-| `replicated_bfp8` | 0.75 S | 312.46 | 8417.14 |
-| `fractured` (reduce-scatter residual) | 1.50 S | **282.21** | 7756.40 |
-| `gather_heads` (column `o_proj`) | 1.21 S | 343.71 | 6811.28 |
-| `gather_heads_fractured` | 1.21 S | 311.44 | **5789.59** |
+| `replicated` (all-reduce) | 1.50 S | 314.91 μs | 8242.22 μs |
+| `replicated_bfp8` | 0.75 S | 312.46 | 7364.22 |
+| `fractured` (reduce-scatter residual) | 1.50 S | **282.21** | 7212.19 |
+| `gather_heads` (column `o_proj`) | 1.21 S | 343.71 | 7108.30 |
+| `gather_heads_fractured` | 1.21 S | 311.44 | **5791.07** |
 
 `S = rows * 6656 * 2 B`. Two things this table says plainly:
 
@@ -251,23 +259,23 @@ Per-op, floor removed (`logs/fractured_decode_probe.log`):
 
 | term | replicated pays | fractured pays |
 | --- | --- | --- |
-| the norm | **8.11 μs** — one `rms_norm`, 6656 wide, 16 cores | **14.89 μs** — `pre_all_gather` 3.19 + stats `all_gather` 6.40 + `post_all_gather` 5.30, 1664 wide, 4 cores |
-| residual add | 5.41 μs | 5.33–5.42 μs — latency-bound, no saving |
+| the norm | **8.11 μs** — one `rms_norm`, 6656 wide, 16 cores | **14.90 μs** — `pre_all_gather` 3.19 + stats `all_gather` 6.41 + `post_all_gather` 5.29, 1664 wide, 4 cores |
+| residual add | 5.41 μs | 5.42 μs at every core count — latency-bound, no saving; the 4-core row, the only one where a distributed norm is legal, is 5.42, i.e. marginally *worse* |
 | collective bytes | 1.50 S | 1.50 S — identical, see the table above |
 
-So the fractured contract pays **+6.78 μs per distributed norm**. Two of the four
-hidden norms would be distributed, so it costs **+13.55 μs per decode step** on a
+So the fractured contract pays **+6.79 μs per distributed norm**. Two of the four
+hidden norms would be distributed, so it costs **+13.57 μs per decode step** on a
 444 μs step (3.1 %), and buys nothing measurable anywhere else: the residual add
 does not get cheaper, and the collective moves the same bytes. A plain 1664-wide
-norm *would* be cheaper (5.72 μs at 13 cores) but is not on offer — a fractured
+norm *would* be cheaper (5.73 μs at 13 cores) but is not on offer — a fractured
 residual has no full row to normalise over, which is the whole reason the
 distributed form exists.
 
 There is also a hard legality constraint, measured in the same probe: of the four
 core counts that divide the fractured width's 52 tiles, the distributed norm is
-legal only at **4**. 13 and 26 raise *"Sharded layernorm does not support a
-non-rectangular core grid for distributed norm"*
-(`layernorm_device_operation.cpp:197`), and 16 does not divide 52. This is
+legal only at **4**. 13, 26 and 52 were each attempted and each raises *"Sharded
+layernorm does not support a non-rectangular core grid for distributed norm"*
+(`layernorm_device_operation.cpp:197`); 16 does not divide 52 at all. This is
 narrower than the plain-norm case and it is why the 4-core row is the one costed
 above.
 
@@ -283,8 +291,9 @@ distributed norm, not to the matmuls, and the rejection does not rest on it.)
 
 `gather_heads` is a genuine trade rather than a blocker, and it is rejected on
 measured whole-layer grounds: `o_proj`'s parallelism is a single load-time choice
-shared by prefill and decode, so buying prefill's 24 % costs decode 9.1 % (343.71
-against 314.91 at 32 rows) and adds a third collective to every decode step. A
+shared by prefill and decode, so buying prefill's 13.8 % costs decode 9.1 %
+(343.71 against 314.91 at 32 rows) and adds a third collective to every decode
+step. A
 decoder layer is judged on decode, so the row-parallel `o_proj` stays and the
 prefill payload dtype below recovers most of the prefill gap instead.
 
@@ -313,7 +322,7 @@ the BFP8 decode payload was measured twice on the **released checkpoint**:
 | evidence | worst real-weight check | against |
 | --- | --- | --- |
 | `logs/real_weight_ccl_dtype_gate.log` — 8-step decode off a real 3000-token prefill, both kinds | 0.995354 | 0.995440 for BF16 |
-| `logs/real_weight_decode_bfp8_experiment.log` — the suite's *whole* real-weight surface with the payload flipped, via `MG_MULTICHIP_DECODE_CCL_DTYPE=bfloat8_b` | **0.9950028** on `decode[sliding] step=6 pos=3006` | 0.995105 for BF16 |
+| `logs/real_weight_decode_bfp8_experiment.log` — the suite's *whole* real-weight surface with the payload flipped, via `MG_MULTICHIP_DECODE_CCL_DTYPE=bfloat8_b` | **0.9950028** on `decode[sliding] step=6 pos=3006` | 0.995105 for BF16 (`logs/full_test_run.log`) |
 
 So it **passes**, by 2.8e-6, where the shipped BF16 payload passes by 1.05e-4. It
 spends 97 % of the layer's remaining accuracy budget to buy 1.6 % of the decode
@@ -393,8 +402,9 @@ The flag is what the shipped decode reduce-scatter passes, and it works.
 At 40 KB the collective is pure fixed cost — 2.7 GB/s against the **120.6 GB/s**
 the same fabric reaches on the 8192-row BF16 all-gather at the shipped packet
 size (`logs/fabric_packet_probe.log`, 81,788,928 B in 678.41 μs) — so extra
-workers only add setup and sync. Whole-layer: 0.4618/0.4311 at the default
-against **0.4589/0.4284** at one worker, in the same run.
+workers only add setup and sync. Whole-layer (`logs/layer_ab_ccl_workers.log`):
+0.4618/0.4311 at the default against **0.4589/0.4284** at one worker, in the same
+run.
 
 ## Performance accounting
 
@@ -526,7 +536,7 @@ and [`logs/pcc_summary.txt`](logs/pcc_summary.txt) for the full surface:
   sublayer on `Topology.Ring`, the padded QKV output, bit-identical replicas, and
   each device's cache holding the KV head its query heads read.
 
-**104 tests, 104 passed, 290 asserted PCC checks** ([`logs/pcc_summary.txt`](logs/pcc_summary.txt)):
+**104 tests, 104 passed, 298 asserted PCC checks** ([`logs/pcc_summary.txt`](logs/pcc_summary.txt)):
 
 | population | checks | bar | worst |
 | --- | --- | --- | --- |
@@ -546,7 +556,7 @@ layer *n+1*'s, with the same dtype, memory config and shape, and no conversion.
 TT_METAL_WATCHER_APPEND=0 TT_METAL_WATCHER_NOINLINE=1` over 31 node ids covering
 every structurally distinct multichip path: **31 passed**, and zero
 `Watcher detected` / tripped / sanitize / `TT_ASSERT` / `DEBUG_ASSERT` /
-out-of-bounds / fault / Error lines across 28,788 log lines and 50 dumps
+out-of-bounds / fault / Error lines across 28,788 log lines and 25 dumps
 ([`logs/watcher_run.log`](logs/watcher_run.log), `watcher/watcher.log.gz`). Run
 separately from every profiler capture.
 
@@ -702,8 +712,8 @@ correctness constraint, unlike `l1_small_size`.
 | candidate | verdict | evidence |
 | --- | --- | --- |
 | `2x2` mesh view | rejected: every collective demoted to `Linear`, 19 % slower reduce-scatter | `logs/ccl_tuning_probe.log`, `ccl_common.cpp:98-123` |
-| fractured (reduce-scatter) residual, decode | rejected on measurement, floor-corrected and path-vs-path: the distributed norm it forces costs 14.89 μs against the shipped full-width norm's 8.11 μs, i.e. **+13.55 μs per decode step** (3.1 %), against no measured saving on the residual add and identical collective bytes | `logs/fractured_decode_probe.log`, `logs/topology_probe_decode32_tuned.log` |
-| `gather_heads` (column-parallel `o_proj`) | rejected: **−9.1 %** decode for +24 % prefill on the boundary chain, and `o_proj`'s layout is one load-time choice for both modes | `logs/topology_probe_decode32_tuned.log`, `logs/topology_probe_prefill8192.log` |
+| fractured (reduce-scatter) residual, decode | rejected on measurement, floor-corrected and path-vs-path: the distributed norm it forces costs 14.90 μs against the shipped full-width norm's 8.11 μs, i.e. **+13.57 μs per decode step** (3.1 %), against no measured saving on the residual add and identical collective bytes | `logs/fractured_decode_probe.log`, `logs/topology_probe_decode32_tuned.log` |
+| `gather_heads` (column-parallel `o_proj`) | rejected: **−9.1 %** decode for +13.8 % prefill on the boundary chain, and `o_proj`'s layout is one load-time choice for both modes | `logs/topology_probe_decode32_tuned.log`, `logs/topology_probe_prefill8192.log` |
 | BFP8 **decode** collective payload | rejected: **passes** the 0.995 real-weight bar by 2.8e-6 (against 1.05e-4 for BF16) to buy 1.6 % of decode | `logs/real_weight_ccl_dtype_gate.log`, `logs/real_weight_decode_bfp8_experiment.log` |
 | `rs_ag` reducer for prefill | rejected as a wash, not as slower: **0.24 %** apart at the op level (1584.9 vs 1581.1 μs), and whole-layer the gap is inside a prefill spread its own repeat control puts at 2.3 %. The superseded "12 % slower" figure was the *worker count*, not the reducer — re-measured directly as row 4 of the reducer table (11.4 % / 12.5 % at one worker). | `logs/fabric_packet_probe.log`, `logs/layer_ab_reducer_final.log` |
 | `all_reduce` reducer for decode | rejected: **1.1 %** slower on both layer kinds, in one like-for-like invocation | `logs/layer_ab_reducer_final.log` |
@@ -713,7 +723,7 @@ correctness constraint, unlike `l1_small_size`.
 | `max_cores_per_head_batch` 16 / 64 | rejected: 12 % slower at long context / 0.4 % slower | `logs/layer_ab_sdpa_*.log` |
 | `chunks_per_sync`, `num_buffers_per_channel`, `num_links` | rejected: under 1 %, or slower | `logs/ccl_tuning_probe.log` |
 | 4352 B fabric packet (what the runtime advises on every prefill collective) | rejected: **0.35 % / 0.49 %** slower decode whole-layer, against a prefill difference that is inside the noise, even though it is 1.1 % faster on the isolated prefill collective | `logs/layer_ab_packet4352.log`, `logs/layer_ab_packet8192.log`, `logs/fabric_packet_probe.log` |
-| KV sequence-split across the device pair | not attempted: needs a partial-softmax merge the paged decode op does not expose; ceiling is the SDPA's 4.7 % / 23.0 % | — |
+| KV sequence-split across the device pair | not attempted: needs a partial-softmax merge the paged decode op does not expose; ceiling is the SDPA's 4.7 % (`sliding` @2048) / 23.2 % (`full` @131071) | — |
 
 ## The `$multichip` checklist
 
@@ -724,9 +734,9 @@ correctness constraint, unlike `l1_small_size`.
 | tensor/config/shard table with per-device shapes and padding | ✅ | [Tensors](#tensors), [The one grid](#the-one-grid) |
 | context contract updated for the mesh | ✅ | [`../context_contract.json`](../context_contract.json) |
 | non-aligned logical lengths still work | ✅ | nine prefill lengths, 130073, continuation splits |
-| multi-chip prefill and decode PCC vs the single-chip TTNN baseline | ✅ | `test_multichip_matches_single_chip`: both kinds x {2049 batch 1, 12345 batch 4}, worst 0.999183 at a 0.999 bar |
+| multi-chip prefill and decode PCC vs the single-chip TTNN baseline | ✅ | `test_multichip_matches_single_chip`: both kinds x {2049 batch 1, 12345 batch 4}, worst 0.999183 at a 0.999 bar (`logs/vs_single_chip_run.log`) |
 | stacked-decoder input/output contract | ✅ | `test_two_layers_stack`: layer *n*'s output is layer *n+1*'s input, same dtype/memory config/shape, no conversion |
-| paged KV behaviour on the target mesh | ✅ | `test_kv_cache_holds_the_expected_head`, batched non-zero slot, full context |
+| paged KV behaviour on the target mesh | ✅ | `test_kv_cache_holds_the_expected_head` (**both** K and V, unpicked through the permuted page table), batched non-zero slot, full context |
 | warmed trace replay for decode | ✅ | `test_traced_decode_pcc`, all decode perf windows |
 | determinism / stress | ✅ | 3 repeats bit-identical, 64-step soak |
 | runtime fallback audit clean | ✅ | `test_no_host_fallback_in_forward` |
@@ -765,14 +775,17 @@ residual layout that is a first-class decision rather than a leftover.
 
 ## Limitations and known issues
 
-1. **The four hidden-size RMSNorms do not shrink with TP**, and they are 7.6 % of
-   the decode step and **19.0 % of the prefill layer**. A replicated residual
+1. **The hidden-size RMSNorms do not shrink with TP.** The four hidden-size ones
+   are 7.6 % of the `sliding` decode step; all six RMSNorms together are
+   **19.0 % of the `sliding` prefill layer** (the prefill capture does not
+   separate them by core count, so the prefill share is quoted for all six). A
+   replicated residual
    means every device computes the same 6656-wide normalisation. The fractured
    residual that would quarter it is refuted for decode with two independent
    pieces of evidence (above), but **not** for prefill, where the regime is
    DRAM-interleaved and `bench/topology_probe.py` measures the fractured family
-   **1.16x** faster on the boundary chain at 8192 rows (7756.40 against 9002.41 μs),
-   and 1.55x with a column-parallel `o_proj` on top. Making prefill fractured
+   **1.14x** faster on the boundary chain at 8192 rows (7212.19 against 8242.22 μs),
+   and 1.42x with a column-parallel `o_proj` on top. Making prefill fractured
    while decode stays replicated is expressible — the two modes are separate call
    paths — and is the single largest remaining prefill lever, worth an estimated
    11 % of the prefill layer. It is not taken here because it introduces a second
@@ -784,8 +797,9 @@ residual layout that is a first-class decision rather than a leftover.
 3. **The BFP4 MLP rows are unpack-bound at 52 % of peak**, inherited unchanged
    from the single-chip stage along with its cause
    (`matmul_multicore_reuse_mcast_dram_sharded_program_factory.cpp:240` fixes the
-   worker count to the DRAM bank count). They are 45 % of the decode step, so
-   this is still the largest single lever and it still needs a TTNN change.
+   worker count to the DRAM bank count). They are 43.4 % of the `sliding` decode
+   step and 45.5 % of the `full` one, so this is still the largest single lever
+   and it still needs a TTNN change.
 4. **Per-device KV cache halves rather than quarters**, because the model has 2 KV
    heads and the mesh has 4 devices. This is the model's GQA ratio, not a mesh
    limit, and the sequence-split alternative is recorded above.

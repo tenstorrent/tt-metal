@@ -349,13 +349,16 @@ DEFAULT_PREFILL_CCL_DTYPE = ttnn.bfloat8_b
 DEFAULT_DECODE_CCL_DTYPE = None
 
 #: How the full-width partial is reduced, per mode.  A ring all-reduce *is* a
-#: reduce-scatter followed by an all-gather, so both forms move the same bytes and
-#: the only difference is one fused dispatch against two.  Measured
-#: (``logs/layer_ab_ccl_mode.log``, traced decode ms/token and 8192-token prefill
-#: ms, sliding / full):
+#: reduce-scatter followed by an all-gather, so both forms move the same bytes --
+#: and on device they run the same pair, since ``ttnn.all_reduce`` decomposes into
+#: ``reduce_scatter_minimal_async`` + ``all_gather_async``
+#: (``ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce.cpp``).  The difference is
+#: one *host* dispatch against two, which is why the two measure so nearly alike
+#: at a bandwidth-bound payload.
 #:
 #: All rows from one invocation of the A/B harness at the shipped configuration
-#: (``logs/layer_ab_reducer_final.log``); an earlier version of this table quoted
+#: (``logs/layer_ab_reducer_final.log``, traced decode ms/token and 8192-token
+#: prefill ms, sliding / full); an earlier version of this table quoted
 #: ``logs/layer_ab_ccl_mode.log``, which predates the per-payload worker counts:
 #:
 #: =====================  ==========================  ==========================

@@ -123,6 +123,65 @@ def matmul_dram_rows(window: str) -> dict[str, tuple[float, float]]:
     }
 
 
+def cited_figure_violations(doc: pathlib.Path) -> list[str]:
+    """Every measurement a doc attributes to a log, that is in none of them.
+
+    This is the gate the first four review rounds needed and did not have. Three
+    rounds running, a correction landed in one document while another kept
+    quoting the superseded number, and twice a regenerated log left a table
+    behind still citing it. Nothing mechanical could see either.
+
+    The unit is a **block** -- a run of non-blank lines, i.e. a table or a
+    paragraph. Every block that names one or more ``logs/...`` artifacts is
+    checked: each measurement in it must appear literally in at least one of the
+    artifacts that block cites.
+
+    "Measurement" is three decimals or more (``0.4573``), or two decimals at a
+    magnitude of 5 or more (``8598.18``, ``27.01``, ``5.33``). That rule selects
+    what a probe prints and skips what a document is supposed to compute --
+    ratios (``1.16x``), percentages (``0.24 %``) and small differences, none of
+    which are in any log by construction.
+
+    A block that is *deliberately* historical opts out with a
+    ``<!-- superseded -->`` comment, which forces that choice to be written down
+    rather than merely being true on the day.
+    """
+    root = doc.parent
+    violations = []
+    blocks = re.split(r"\n\s*\n", doc.read_text())
+    for index, block in enumerate(blocks):
+        if "<!-- superseded" in block:
+            continue
+        # A table's citation is usually in the sentence that introduces it, one
+        # block up, so a table inherits the previous block's artifacts.  Without
+        # this the round-4 findings -- a whole table gone stale under a
+        # regenerated log -- are invisible to the gate.
+        scope = block
+        if block.lstrip().startswith("|") and index:
+            scope = blocks[index - 1] + "\n" + block
+        cited = sorted(set(re.findall(r"`+(logs/[\w./-]+)`+", scope)))
+        haystack = "".join((root / name).read_text(errors="ignore") for name in cited if (root / name).exists())
+        if not haystack:
+            continue  # nothing cited, or the cited-artifact-exists check owns it
+        measured = None
+        for value in sorted(set(re.findall(r"\d+\.\d{2,}", block))):
+            if len(value.split(".")[1]) < 3 and float(value) < 5:
+                continue
+            if value in haystack:
+                continue
+            # A doc may quote a rounding of a full-precision log value on
+            # purpose -- PCC prints 17 digits and the tables show 6.
+            if measured is None:
+                measured = [float(v) for v in re.findall(r"\d+\.\d+", haystack)]
+            places = len(value.split(".")[1])
+            target = float(value)
+            if any(round(number, places) == target for number in measured):
+                continue
+            head = " ".join(block.split())[:70]
+            violations.append(f"{doc.name}: {value} in none of {', '.join(cited)} -- {head}...")
+    return violations
+
+
 def doc_anchors(text: str) -> set[str]:
     """Every in-document anchor GitHub would generate for a markdown body."""
     anchors = set()
@@ -347,6 +406,12 @@ def main() -> int:
             failures.check(f"{doc_name}: shipped {label} == {name}", len(wrong), 0, exact=True)
             if wrong:
                 print(f"   quotes {wrong} but the module defines {expected}")
+
+    # ---- every figure a doc attributes to a log is in that log ---------------
+    violations = cited_figure_violations(README) + cited_figure_violations(WORK_LOG)
+    failures.check("docs: quoted figures found in the cited artifact", len(violations), 0, exact=True)
+    for violation in violations:
+        print(f"   {violation}")
 
     print()
     if failures:

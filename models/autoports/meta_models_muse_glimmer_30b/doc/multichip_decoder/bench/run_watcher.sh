@@ -9,9 +9,9 @@
 # batch-core rectangle) and batch 32 (the op's ceiling), the non-zero cache slot,
 # traced replay, the 64-step soak, the real-weight decode off the BFP8 cache, the
 # graph audits that assert the DRAM-sharded dispatches and the two reductions,
-# the BFP8-payload and reduce-scatter/all-reduce overrides, and -- in the same
-# run -- the sequential 1x1-then-1x4 comparison, which is the only node that
-# opens two meshes.
+# and the BFP8-payload and reduce-scatter/all-reduce overrides.  The sequential
+# 1x1-then-1x4 comparison module is *not* in this run; the note further down
+# explains why.
 #
 # Must be a separate run from any profiling ($tt-device-usage: never combine
 # TT_METAL_WATCHER with Tracy / the device profiler).
@@ -72,7 +72,11 @@ rm -rf "$D/watcher/generated"
 for pat in "Watcher detected" tripped sanitize TT_ASSERT DEBUG_ASSERT "out of bounds" fault Error; do
   printf '%-18s %s\n' "$pat" "$(grep -ci "$pat" "$D/watcher/watcher.log" || true)"
 done
-printf 'lines %s, dumps %s\n' "$(wc -l < "$D/watcher/watcher.log")" "$(grep -c Dump "$D/watcher/watcher.log" || true)"
+# Each dump writes a "Dump #N" line and a "Dump #N completed" line, so the raw
+# grep count is double the number of dumps.  Review round 4 caught the README
+# quoting the doubled figure.
+printf 'lines %s, dumps %s\n' "$(wc -l < "$D/watcher/watcher.log")" \
+  "$(grep -c 'Dump #[0-9]* completed' "$D/watcher/watcher.log" || true)"
 gzip -9 -f "$D/watcher/watcher.log" "$D/watcher/kernel_names.txt"
 echo "WATCHER_EXIT=$watcher_exit"
 exit "$watcher_exit"

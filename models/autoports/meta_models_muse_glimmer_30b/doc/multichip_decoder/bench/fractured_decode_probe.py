@@ -199,14 +199,14 @@ def main() -> None:
         # the fractured width, in L1.
         # Which core counts a *distributed* norm is even legal at, on this layout,
         # is itself a result: of the four that divide the fractured width's 52
-        # tiles, only 4 works.  13 and 26 raise
+        # tiles, only 4 works.  13, 26 and 52 raise
         #   "Sharded layernorm does not support a non-rectangular core grid for
         #    distributed norm" (layernorm_device_operation.cpp:197)
         # and 16 does not divide 52 at all.  A distributed norm also *requires*
         # the sharded program config -- without one it raises "std::get: wrong
         # index for variant", which is why an earlier version of this probe
         # measured the pre-op on DRAM-interleaved inputs instead.
-        for cores in (13, 26):
+        for cores in (13, 26, 52):
             tensor, memcfg, program, _weight = sharded(fractured_width, cores)
             try:
                 out = ttnn.rms_norm_pre_all_gather(tensor, dtype=ttnn.bfloat16, program_config=program)

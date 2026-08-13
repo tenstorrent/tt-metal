@@ -189,7 +189,7 @@
     }
   },
   "performance": {
-    "note": "'e2e' is warmed host wall time from bench/layer_ab.py, min of 3 rounds, no profiler attached; 'device' is the Device Time column of tt-perf-report over a warmed signposted Tracy window (decode divided by its 8 trace replays). Both multichip and baseline rows come from the same bench/run_evidence_chain.sh run of the final shipped code (logs/layer_ab_final.log, logs/layer_ab_single_baseline.log). Traced decode reproduces to 1e-4 across rounds and runs; warmed prefill spans about 1.6-3.5% run to run, so the prefill speedups are quoted from the final run rather than the best one.",
+    "note": "'e2e' is warmed host wall time from bench/layer_ab.py, min of 3 rounds, no profiler attached; 'device' is the Device Time column of tt-perf-report over a warmed signposted Tracy window (decode divided by its 8 trace replays). Both multichip and baseline rows come from the same bench/run_evidence_chain.sh run of the final shipped code (logs/layer_ab_final.log, logs/layer_ab_single_baseline.log). Traced decode reproduces to 1e-4 across rounds and runs; warmed prefill spans 1.3-4.1% run to run, measured from the three committed runs of the identical shipped build (layer_ab_final, the tp4 rows of layer_ab_reducer_final and layer_ab_packet8192), so the prefill speedups are quoted from the final run rather than the best one.",
     "traced_decode_ms_per_token_e2e": {
       "sliding@2048": 0.4572,
       "full@2048": 0.426
@@ -259,12 +259,12 @@
     "total": 104,
     "passed": 104,
     "skipped": 0,
-    "asserted_pcc_checks": 290,
+    "asserted_pcc_checks": 298,
     "vs_single_chip_checks": 20,
     "min_pcc_vs_single_chip": 0.999183,
     "real_weight_checks": 30,
     "min_pcc_real_weights": 0.995105,
-    "synthetic_checks": 238,
+    "synthetic_checks": 246,
     "min_pcc_synthetic": 0.990516,
     "two_layer_stack_checks": 2,
     "min_pcc_two_layer_stack": 0.967946

@@ -48,7 +48,9 @@ import torch
 import ttnn
 from models.autoports.meta_models_muse_glimmer_30b.tt.multichip_decoder import (
     CCL_TOPOLOGY,
+    DEFAULT_DECODE_CCL_RS_WORKERS,
     DEFAULT_MESH_SHAPE,
+    DEFAULT_PREFILL_CCL_RS_WORKERS,
     close_multichip_mesh,
     open_multichip_mesh,
 )
@@ -63,7 +65,7 @@ EPS = 1e-5
 class Chain:
     """One boundary contract, built once and callable in a loop or a trace."""
 
-    def __init__(self, mesh, rows: int, tp: int, dtype=ttnn.bfloat16, tuned: bool = True):
+    def __init__(self, mesh, rows: int, tp: int, dtype=ttnn.bfloat16, tuned: bool = True, rs_workers: int = 1):
         self.mesh = mesh
         self.rows = rows
         self.tp = tp
@@ -72,6 +74,13 @@ class Chain:
         #: arm rather than the op defaults.  ``False`` reproduces the original
         #: capture, which predates the collective tuning.
         self.tuned = tuned
+        #: ``num_workers_per_link`` is a **per-payload** knob (see
+        #: ``DEFAULT_DECODE_CCL_RS_WORKERS`` / ``DEFAULT_PREFILL_CCL_RS_WORKERS``).
+        #: Pinning it to the decode value at a prefill payload costs 2.4x on the
+        #: reduce-scatter alone, which inflates every arm that uses one and lets
+        #: the ``gather_heads*`` arms -- which use only ``all_gather`` -- escape
+        #: it.  Review round 4 caught the 8192-row column doing exactly that.
+        self.rs_workers = rs_workers
         self.local_attn = ATTN // tp
         self.local_hidden = HIDDEN // tp
         self.replicate = ttnn.ReplicateTensorToMesh(mesh)
@@ -162,7 +171,7 @@ class Chain:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=CCL_TOPOLOGY,
-            num_workers_per_link=1,
+            num_workers_per_link=self.rs_workers,
             use_l1_small_for_semaphores=True,
         )
         out = ttnn.all_gather(scattered, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -179,7 +188,7 @@ class Chain:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=CCL_TOPOLOGY,
-            num_workers_per_link=1,
+            num_workers_per_link=self.rs_workers,
             use_l1_small_for_semaphores=True,
         )
 
@@ -328,17 +337,27 @@ def main() -> None:
     parser.add_argument("--candidates", default=",".join(CANDIDATES))
     parser.add_argument("--mesh", default="x".join(str(d) for d in DEFAULT_MESH_SHAPE))
     parser.add_argument("--untuned", action="store_true", help="use the op-default collectives (the original capture)")
+    parser.add_argument(
+        "--rs-workers",
+        type=int,
+        default=None,
+        help="num_workers_per_link for the reduce-scatter; default follows the payload, "
+        "as the shipped layer does (decode rows<=32 -> 1, prefill -> 4)",
+    )
     args = parser.parse_args()
 
     mesh_shape = tuple(int(v) for v in args.mesh.split("x"))
     mesh = open_multichip_mesh(mesh_shape, trace_region_size=90112 * 24 if args.traced else 0)
     tp = mesh.get_num_devices()
     try:
-        chain = Chain(mesh, args.rows, tp, tuned=not args.untuned)
+        rs_workers = args.rs_workers
+        if rs_workers is None:
+            rs_workers = DEFAULT_DECODE_CCL_RS_WORKERS if args.rows <= 32 else DEFAULT_PREFILL_CCL_RS_WORKERS
+        chain = Chain(mesh, args.rows, tp, tuned=not args.untuned, rs_workers=rs_workers)
         payload = args.rows * HIDDEN * 2
         print(
             f"TOPO rows={args.rows} tp={tp} traced={args.traced} "
-            f"reducer={'op-default' if args.untuned else 'shipped(rs_w1+ag)'} S={payload/1024:.1f} KiB"
+            f"reducer={'op-default' if args.untuned else f'shipped(rs_w{rs_workers}+ag)'} S={payload/1024:.1f} KiB"
         )
         for name in args.candidates.split(","):
             try:

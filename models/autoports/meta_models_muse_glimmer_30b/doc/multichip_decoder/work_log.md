@@ -132,7 +132,13 @@ contract it started on, so the comparison is stack-compatible rather than
 "reduce-scatter followed by an immediate all-gather back to the old contract".
 
 `logs/topology_probe_decode32.log` (traced, 32 rows) and
-`logs/topology_probe_prefill8192.log` (warmed, 8192 rows):
+`logs/topology_probe_prefill8192.log` (warmed, 8192 rows), **as they read at the
+time**. Both logs have since been regenerated at the shipped configuration and
+the 8192 column moved by up to 8 % (§14.3, §15.2); the current numbers are in the
+README's contract-families table. This table is kept as the capture the decision
+below was actually made on.
+
+<!-- superseded: regenerated at the shipped packet and per-payload worker count; see README "The contract families" and §15.2 -->
 
 | candidate | 32 rows | 8192 rows | CCL bytes |
 | --- | --- | --- | --- |
@@ -148,24 +154,27 @@ decode regime — the shipped decode step keeps every activation width-sharded i
 L1 and dispatches DRAM-sharded matmuls. Two things follow, and both are decided
 against the fractured contract by evidence collected later:
 
-1. **It cannot be expressed on the decode L1 grid.** A fractured residual is
-   1664 wide = 52 tiles, so the shard core count must divide 52; the gated
-   attention output that feeds `o_proj` is 32 tiles (or 128 gathered), so it must
-   also divide 32 (or 128). `gcd` leaves {1, 2, 4}, and 4 cores fails L1 in this
-   layer — measured, `logs/layer_ab_geometry_final.log`: *"Statically allocated
-   circular buffers in program 298 clash with L1 buffers"*. Padding a matmul
-   **input** shard instead is not an option: the padded columns would be summed
-   into the reduction.
-2. **The extra dispatches cost more than the saved work.** Section 6 puts a
-   decode-shape collective at 16 + 14 μs of device time; the fractured contract
-   adds two distributed-norm stats gathers per layer against ~12 μs of saved
-   norm/add work (four hidden-size norms are 34 μs total, two of them would
-   shrink 4x).
+1. ~~**It cannot be expressed on the decode L1 grid.**~~ **Withdrawn** — this
+   argument was wrong and is retracted in §7.4, §14.1 and the README. It claimed
+   a fractured residual forces a ≤4-core grid that fails L1; in fact the matmul
+   inputs are the *gathered* tensors and stay on 16 cores, and all four core
+   counts dividing the fractured width fit. (A real 4-core constraint does exist,
+   but it is on the *distributed norm*, not the matmuls, and it was not found
+   until §14.1.)
+2. ~~**The extra dispatches cost more than the saved work.**~~ **Withdrawn** —
+   the arithmetic here mixed a floor-inclusive collective cost with a
+   floor-cancelling norm difference. §14.1 replaces it with a floor-calibrated,
+   path-vs-path measurement: 8.11 μs for the shipped full-width norm against
+   14.90 μs for the distributed one it would force, i.e. +13.57 μs per decode
+   step. The rejection stands; this reasoning for it does not.
 
 The gather-heads family is a real trade and is rejected on a measured
 whole-layer basis, not on bytes: `o_proj`'s parallelism is a single load-time
-choice shared by prefill and decode, so buying prefill's 17 % costs decode 8.8 %
-(345.08 vs 317.24 at 32 rows) and adds a third collective to the decode step.
+choice shared by prefill and decode, so buying prefill costs decode, and it adds
+a third collective to the decode step. (The percentages this paragraph originally
+carried came from the superseded capture above; at the shipped configuration it
+is +13.8 % prefill for −9.1 % decode — see the README's rejected-candidates
+table.)
 Decode is the metric a stacked decoder layer is judged on, so the row-parallel
 `o_proj` stays and the prefill payload dtype (section 7) recovers most of the
 prefill gap instead.
@@ -199,13 +208,14 @@ min of 3 rounds, sliding / full, one knob changed per row against `tp4`.
 The core-count candidate set is bounded by a hard rule: a matmul's **input**
 shard must not be padded, so the count has to divide every width that is an
 `in0` — 208 (hidden), 32 (gated attention) and 160 (padded MLP intermediate).
-That admits only {1, 2, 4, 8, 16}.
+That admits only {1, 2, 4, 8, 16}. Rows from `logs/layer_ab_geometry_final.log`
+unless the note says otherwise:
 
 | candidate | sliding | full | note |
 | --- | --- | --- | --- |
 | **`tp4` (16 cores everywhere)** | **0.4669** | **0.4360** | shipped grid |
 | `grid8` | 0.5012 | 0.4702 | 7.3 % slower |
-| `grid8_mlp16` | 0.4885 | 0.4579 | separate MLP grid + 2 reshards (`logs/layer_ab_geometry_mlpgrid.log`) |
+| `grid8_mlp16` | 0.4885 | 0.4579 | separate MLP grid + 2 reshards (`logs/layer_ab_geometry_mlpgrid.log`, `logs/layer_ab_geometry2.log`, `logs/layer_ab_geometry3.log`) |
 | `grid16_mlp8` | 0.4866 | 0.4562 | |
 | `grid4` | L1 clash | L1 clash | CB overflow, program.cpp:1779 |
 | `qkv_bw1` | 0.7158 | 0.6845 | `in0_block_w` 13 -> 1 |
@@ -264,7 +274,7 @@ prefill number ($optimize OPT-012):
 | evidence | worst real-weight check | BF16 for comparison |
 | --- | --- | --- |
 | `logs/real_weight_ccl_dtype_gate.log`, 8-step decode off a real 3000-token prefill, both kinds | 0.995354 | 0.995440 |
-| `logs/real_weight_decode_bfp8_experiment.log`, the suite's whole real-weight surface with the payload flipped (`MG_MULTICHIP_DECODE_CCL_DTYPE=bfloat8_b`, reproducible from committed code) | **0.9950028** (`decode[sliding] step=6 pos=3006`) | 0.995105 |
+| `logs/real_weight_decode_bfp8_experiment.log`, the suite's whole real-weight surface with the payload flipped (`MG_MULTICHIP_DECODE_CCL_DTYPE=bfloat8_b`, reproducible from committed code) | **0.9950028** (`decode[sliding] step=6 pos=3006`) | 0.995105 (`logs/full_test_run.log`) |
 
 It passes, by 2.8e-6, where BF16 passes by 1.05e-4 — 97 % of the layer's
 remaining accuracy budget for 1.6 % of the decode step, on a layer whose whole
@@ -274,8 +284,19 @@ purpose is to be stacked 52 times and whose two-layer chain already measures
 ### 7.2 Reducer form, split by mode
 
 A ring all-reduce is a reduce-scatter plus an all-gather, so the two forms move
-identical bytes and the question is one fused dispatch against two
-(`logs/layer_ab_ccl_mode.log`, `logs/layer_ab_ccl_workers.log`):
+identical bytes and the question is one *host* dispatch against two — on device
+both forms run the same pair, since `ttnn.all_reduce` decomposes into
+`reduce_scatter_minimal_async` + `all_gather_async`
+(`ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce.cpp`), which is why the two
+measure so nearly alike at a bandwidth-bound payload.
+
+**This table is superseded.** Its prefill column was taken before the worker
+count was split per payload, so the `rs_ag` row measures a prefill payload at the
+decode-tuned single worker; §14.2 re-measures that directly as an 11.4 % / 12.5 %
+worker-count effect, and the reducer form itself is worth 0.24 %. The current
+reducer table is in the README (`logs/layer_ab_reducer_final.log`).
+
+<!-- superseded: prefill column predates DEFAULT_PREFILL_CCL_RS_WORKERS=4; see 14.2 and README "Reducer form and worker count" -->
 
 | reducer | traced decode | prefill 8192 |
 | --- | --- | --- |
@@ -380,13 +401,18 @@ are free of dropped profiler markers (`grep -c "markers were dropped"` is 0 in
 every `logs/tracy_*.log`). Findings are in the README's
 "Performance accounting"; the two that changed decisions:
 
-* the two reductions are **55.9 μs per decode replay** (12.6 %) at a 40 KB
+* the two reductions are **53.2 μs per decode replay** (12.0 %) at a 40 KB
   payload, i.e. pure fixed cost, which is what makes an extra collective
   expensive and settles the residual-contract question;
-* the four hidden-size RMSNorms are **33.7 μs** (7.6 %) of decode and
-  **3433.0 μs** (19.2 %) of the 8192-token prefill layer, and they do not shrink
-  at all under a replicated residual — the largest non-matmul cost in both
-  regimes, and the subject of limitation 1.
+* the four hidden-size RMSNorms are **33.7 μs** (7.6 %) of the `sliding` decode
+  step, and all six RMSNorms are **3460.4 μs** (19.0 %) of the 8192-token
+  `sliding` prefill layer, and they do not shrink at all under a replicated
+  residual — the largest non-matmul cost in both regimes, and the subject of
+  limitation 1.
+
+(Both figures are re-derived from the committed CSVs by
+`bench/check_reported_figures.py`; an earlier version of this entry said 55.9 μs
+/ 12.6 % and 3433.0 μs / 19.2 %, which are in no capture.)
 
 One capture had to be re-taken. `run_tracy.sh` originally copied the newest
 `ops_perf_results_*.csv`, and Tracy's post-processing writes a *device-only* CSV
@@ -575,7 +601,7 @@ sliding tail crosses a chunk boundary), batch 4 gives four cache slots and ragge
 decode positions, and the length divides by neither tile, page block nor chunk.
 
 The rest of the surface is in `logs/full_test_run.log`, `test_results.xml` and
-`logs/pcc_summary.txt`: **104 tests, 104 passed, 290 asserted PCC checks** -- 20
+`logs/pcc_summary.txt`: **104 tests, 104 passed, 298 asserted PCC checks** -- 20
 against the single-chip layer (worst 0.999183), 30 on the released checkpoint
 (worst 0.995105, bar 0.995), 238 single-layer synthetic (worst 0.990516, bar
 0.99) and 2 two-layer-chain (worst 0.967946, bar 0.96).
@@ -692,7 +718,7 @@ row).
    (`logs/layer_ab_reducer_final.log`), because the README's three-row reducer
    table had been stitched from three different runs. The result is more useful
    than the fix: rows 1 and 4 dispatch the *same* prefill collective and differ by
-   0.57 ms (19.43 vs 18.86 on `sliding`, 3.0 %), so whole-layer prefill cannot
+   0.57 ms on `sliding` (3.0 %), so whole-layer prefill cannot
    resolve a reducer choice at all — and the `rs_ag` prefill row is 2.8 % slower on
    `sliding` and 0.6 % *faster* on `full`. Decode is decided and repeatable: the
    pair wins 1.1 % on both kinds. The prefill claim now rests on the op-level
@@ -793,15 +819,16 @@ shipped sharded layout.
   sharded"*, `layernorm_device_operation.cpp:236`).
 
 The rejection survives, with a bigger and better-founded margin: **8.11 µs** for
-the shipped full-width norm against **14.89 µs** for the distributed path
-(3.19 + 6.40 + 5.30), i.e. **+6.78 µs per distributed norm** and **+13.55 µs per
+the shipped full-width norm against **14.90 µs** for the distributed path
+(3.19 + 6.41 + 5.29), i.e. **+6.79 µs per distributed norm** and **+13.57 µs per
 decode step** (3.1 % of 444 µs), against no saving on the residual add
-(5.41 vs 5.33–5.42) and identical collective bytes.
+(5.41 replicated vs 5.42 at every fractured core count) and identical collective
+bytes.
 
 And a constraint fell out that neither earlier version had found: of the four core
 counts that divide the fractured width's 52 tiles, a *distributed* norm is legal
-only at **4**. 13 and 26 raise *"Sharded layernorm does not support a
-non-rectangular core grid for distributed norm"*. This is not the ≤4-core claim
+only at **4**. 13, 26 and 52 are each attempted and each raises *"Sharded
+layernorm does not support a non-rectangular core grid for distributed norm"*. This is not the ≤4-core claim
 round 1 withdrew — that one was about the matmuls and was wrong — but it is a real
 one, in a different place, and the probe now records it as a measurement rather
 than an assumption.
@@ -826,12 +853,10 @@ reducer form on prefill is worth 0.24 % and the worker count is worth 12 %.
 
 `logs/topology_probe_prefill8192.log` was the last artifact still carrying the old
 4352 B packet and the untuned reducer, and it is the sole evidence for limitation 1
-and for the 8192-row column of the contract-families table. Re-run at the shipped
-configuration, the ranking is unchanged and the margins move: `fractured` is now
-**1.16x** faster than `replicated` on the boundary chain (7756.40 against
-9002.41 µs) rather than 1.17x, and `gather_heads_fractured` **1.55x** rather than
-1.40x. The contract-families table now takes both columns from the shipped
-configuration instead of mixing a tuned decode column with an untuned prefill one.
+and for the 8192-row column of the contract-families table. It was re-run at the
+shipped packet and the tuned reducer — which round 4 then showed was still not the
+shipped *configuration*, because the probe pinned `num_workers_per_link=1` at the
+prefill payload. See §15.2; the numbers that round produced are superseded.
 
 `bench/run_review2_chain.sh` runs all six device jobs in order. Round 3 noticed
 that the committed *console transcript* of that script had been stitched from two
@@ -839,3 +864,96 @@ versions of it, so no transcript is committed at all now: each of the six steps
 writes its own log, those are the artifacts, and every one of them is reproduced
 by the committed script. A console transcript that can drift from the per-step
 logs is a second source of truth for nothing.
+
+
+## 15. Review round 4: the gate now reads the numbers, not just the paths
+
+Round 4 returned `more-work-needed` on six items, and every one of them was the
+same defect round 3 had already named — a correction landing in one document
+while another kept the superseded figure. Round 3's own fix *caused* most of
+them: it regenerated six logs and rewrote the README, and left the earlier
+sections of this log quoting the numbers those logs used to contain. §4's entire
+8192-row column, §7.2's reducer table, and a dozen figures in §7.4 and §13.1 had
+become unfindable in any artifact.
+
+### 15.1 The check that ends this class
+
+`bench/check_reported_figures.py` gained the check the last three rounds needed.
+For every block of README.md and work_log.md that cites a `logs/...` artifact,
+every **measurement** in that block must appear in one of the artifacts it cites.
+A measurement is three decimals or more (`0.4573`), or two decimals at magnitude
+5 or more (`8598.18`, `27.01`) — which selects what a probe prints and skips what
+a document computes: ratios, percentages and differences are in no log by
+construction. Two refinements were needed to make it usable rather than noisy:
+
+- a table inherits the citation of the paragraph that introduces it, since that
+  is where a doc normally names its source. Without this the round-4 findings —
+  a whole table gone stale under a regenerated log — stay invisible;
+- a quoted value may be a **rounding** of a full-precision log value, because PCC
+  prints 17 digits and the tables show six. The check accepts any log value that
+  rounds to the quoted one at the quoted precision.
+
+A block that is deliberately historical opts out with `<!-- superseded: … -->`,
+which forces that decision to be written down instead of merely being true today.
+§4's contract table and §7.2's reducer table now carry one, each with a pointer
+to the current numbers.
+
+Run against HEAD it found **40 violations in ten blocks**, including all six
+round-4 items and three the review had not reached. Every one is now either
+re-derived, re-cited, or explicitly marked superseded.
+
+### 15.2 One finding was not bookkeeping
+
+The 8192-row contract-families column was labelled "the shipped configuration"
+after §14.3 re-ran it at the shipped packet — but `bench/topology_probe.py` still
+pinned `num_workers_per_link=1` on every arm, and 1 is the *decode* value. At the
+prefill payload that costs the reduce-scatter 2.4x (§7.4: 1814.9 μs against
+759.9 at four workers), which inflates every arm that uses one — while the
+`gather_heads*` arms, which use only `all_gather`, escape it entirely. The
+comparison was not like-for-like, and the number handed to limitation 1 was
+wrong.
+
+The probe now takes `--rs-workers`, defaulted from the row count exactly as the
+shipped layer does (`DEFAULT_DECODE_CCL_RS_WORKERS` at 32 rows,
+`DEFAULT_PREFILL_CCL_RS_WORKERS` at 8192), and prints it in its header line so a
+log says which it used. Re-run, the confound is visible and large:
+
+| candidate | 8192 rows, `rs_w1` (round 3) | 8192 rows, `rs_w4` (shipped) |
+| --- | --- | --- |
+| `replicated` | 9002.41 μs | **8242.22 μs** (−8.4 %) |
+| `fractured` | 7756.40 | 7212.19 (−7.0 %) |
+| `gather_heads` | 6811.28 | 7108.30 (+4.4 %) |
+| `gather_heads_fractured` | 5789.59 | 5791.07 (+0.0 %) |
+
+The two arms with no reduce-scatter did not move; the two with one gained 7–8 %.
+The ranking survives, but the margins limitation 1 hands to the full-model stage
+change materially: the fractured family is **1.14x** faster on the prefill chain,
+not 1.16x, and `gather_heads` buys **13.8 %** of prefill, not 24 %. Both are
+corrected in the README.
+
+### 15.3 The rest
+
+- The distributed-norm legality claim was evidenced for 13 and 26 cores only. 52
+  is now attempted too and also raises *"Sharded layernorm does not support a
+  non-rectangular core grid for distributed norm"*, so "legal only at 4" is
+  measured at every count rather than at two of three.
+- `55.9 μs (12.6 %)` for the two decode reductions and `3433.0 μs (19.2 %)` for
+  the prefill norms are in no capture; the CSVs give 53.2 μs (12.0 %) and, for
+  all six norms, 3460.4 μs (19.0 %). The README's copies were already right.
+- The watcher run has **25** dumps, not 50 — `grep -c Dump` counts each dump's
+  start and completion lines. `bench/run_watcher.sh` made the same miscount and
+  now divides.
+- Three README percentages silently mixed capture windows: the SDPA's 4.7 % is
+  `sliding`@2048 and the 23.2 % is `full`@131071; the BFP4 MLP rows are 43.4 % of
+  the `sliding` decode step and 45.5 % of the `full` one; and the 19.0 % of
+  prefill is all six RMSNorms, not the four hidden ones.
+- `test_kv_cache_holds_the_expected_head` checked the **K** cache's head identity
+  and gave V only shape and dtype. K and V are written by separate
+  `paged_fill_cache` calls off separate slices of the fused QKV output, so a
+  head-assignment mistake can land in one and not the other. It now unpicks both
+  through the permuted page table (8 more asserted PCC checks: 298, not 290).
+- `ttnn.all_reduce` is not one device program — it decomposes into
+  `reduce_scatter_minimal_async` + `all_gather_async`. "One dispatch against two"
+  is a statement about the *host*, and §7.2 now says so. It also explains why the
+  two forms measure so nearly alike at a bandwidth-bound payload, which had been
+  presented as a surprise.
