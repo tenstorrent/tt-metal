@@ -89,20 +89,6 @@
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
 
-# ResNet-50 is tier 1, and models/model_ci_tiers.md gives tier 1 "Device OP Perf Tests:
-# Yes", so this entry is exactly where it belongs. It replaces the resnet50 step removed
-# from perf-device-models-impl.yaml by this PR, kept at review request because the
-# convolution / pooling teams use the run day to day while developing those ops.
-#
-# SKUs match the CIv2 runners the old step used, which is load-bearing rather than
-# cosmetic. test_perf_device_resnet50.py spawns a NESTED pytest against the same device;
-# on a shared CIv1 cloud VM that nested process blocks on `CHIP_IN_USE_0_PCIe` and the
-# parent's 300 s pytest-timeout expires (seen in run 31596168974). On dedicated CIv2
-# hardware the same test has been green on main in every recent run, in ~1.5 min.
-#
-# The legacy step ran WH on N300 and BH on P150b. The N300 leg is deliberately dropped
-# here: WH device-perf runs on N150 instead, which is where the conv/pool teams develop.
-# bh_p150b_civ2 is an exact match for the old BH runner, `tt-ubuntu-2204-P150b-stable`.
 - name: ResNet-50 device perf tests
   cmd: |
     pytest models/demos/vision/classification/resnet50/{arch_dir}/tests/test_perf_device_resnet50.py -m models_device_performance_bare_metal
@@ -111,35 +97,12 @@
     bh_p150b_civ2:
       timeout: 7
       arch_dir: blackhole
-    # Not a legacy leg -- the old step ran WH only on N300. Added because the conv/pool
-    # teams develop on N150 too, and it is cheap. The nested-pytest deadlock that made
-    # this SKU fail earlier was an import-time device probe in this PR, since fixed.
     wh_n150:
       timeout: 5
       arch_dir: wormhole
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
 
-# This is an END-TO-END model-perf test, not a device-perf one. It carries
-# model_perf_t3000 / model_perf_tg rather than models_device_performance_bare_metal, and
-# what it asserts is host wall-clock: run_perf_resnet times "compile" and
-# "run_model_pipeline_<n>cqs" with models.common.utility_functions.profiler and checks them
-# against PERF_EXPECTATIONS (inference_time 0.0033-0.0175s, compile_time 60s). It never
-# looks at device kernel duration, which is what the sibling test_perf_device_resnet50.py
-# entry above measures via a nested tracy run. It lives here because the tiered CI has no
-# e2e-perf pipeline and this registry is the only one with a perf identity.
-#
-# Consequence worth knowing: the impl's "Merge test reports" step still runs and still
-# produces a Models_Device_Perf_*.csv, merged from the host-side perf_ttnn_resnet50_*.csv
-# that prep_perf_report writes. Its CHECK pass is vacuous -- there are no device-kernel
-# rows to threshold, so check_device_perf_results iterates nothing. Harmless, but the
-# report machinery does run rather than being skipped.
-#
-# It is the one ResNet-50 test the migration would otherwise drop: it ran as
-# t3k_CNN_resnet50_model_perf_tests in t3k_perf_tests.yaml (wh_llmbox_perf, 75 min), and
-# its only other reference is run_tg_model_perf_tests.sh, which no workflow invokes.
-#
-# Timeout is the measured step duration (3.5 min in run 31612240250) x ~1.5.
 - name: ResNet-50 e2e model perf tests
   cmd: |
     pytest models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_perf_e2e_resnet50.py -m model_perf_t3000
