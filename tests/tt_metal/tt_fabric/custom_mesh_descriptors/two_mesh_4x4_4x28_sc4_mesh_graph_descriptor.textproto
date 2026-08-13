@@ -1,0 +1,34 @@
+# M0 4x4 RING/RING connected to M1 4x28 RING/LINE = 16 + 112 = 128 ASICs, i.e. a full SC4 quad
+# galaxy viewed as a 4x32 row of four 4x8 galaxies. M0 takes the first 4 columns, M1 the remaining
+# 28, joined by a 16-channel intermesh link.
+#
+# NOTE: this does NOT currently map on the SC4 quad mock. The 4x28 mesh is not galaxy-aligned --
+# the 128-ASIC system exposes 4x32 / 8x16 groupings, so a 4x28 cannot be carved out to leave a
+# disjoint 4x4 (topology mapper: M1=1 placement, M0=8 placements, none mutually disjoint,
+# success=false). Kept as a shape/coverage test case.
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 4 ] dim_types: [ RING, RING ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+mesh_descriptors {
+  name: "M1"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 28 ] dim_types: [ RING, LINE ] }
+  host_topology   { dims: [ 1, 4 ] }
+  channels { count: 2 policy: RELAXED }
+}
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+    channels { count: 16 policy: RELAXED }
+  }
+}
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
