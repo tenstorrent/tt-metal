@@ -10,37 +10,43 @@ import ttnn.decorators
 
 def _preprocess_golden_function_inputs(args, kwargs):
     input_tensor, args, kwargs = ttnn.reflection.pop_argument("input_tensor", args, kwargs)
-    padding, args, kwargs = ttnn.reflection.pop_argument("padding", args, kwargs)
+    pad_arg, args, kwargs = ttnn.reflection.pop_argument("padding", args, kwargs)
 
-    if len(padding) != len(input_tensor.shape):
-        raise RuntimeError("ttnn.pad: padding must be the same length as the input tensor rank")
+    rank = len(input_tensor.shape)
+    input_shape = list(input_tensor.shape)
+
+    # ttnn.pad has two overloads:
+    #   A) pad(input, padding, value, ...)          where padding is a list of (start, end) pairs
+    #   B) pad(input, output_padded_shape, input_tensor_start, value, ...)  (legacy shape form)
+    # Distinguish them by whether the elements of the second argument are (start, end) pairs or ints.
+    if len(pad_arg) > 0 and isinstance(pad_arg[0], (list, tuple)):
+        padding = list(pad_arg)
+        value, args, kwargs = ttnn.reflection.pop_argument("value", args, kwargs)
+    else:
+        padded_shape = list(pad_arg)
+        input_tensor_start, args, kwargs = ttnn.reflection.pop_argument("input_tensor_start", args, kwargs)
+        value, args, kwargs = ttnn.reflection.pop_argument("value", args, kwargs)
+        padding = [
+            (input_tensor_start[i], padded_shape[i] - input_shape[i] - input_tensor_start[i]) for i in range(rank)
+        ]
+
+    # A shorter padding list applies to the trailing dimensions; leading dims are left unpadded.
+    if len(padding) > rank:
+        raise RuntimeError("ttnn.pad: padding len can't be larger than input tensor rank")
+    if len(padding) < rank:
+        padding = [(0, 0)] * (rank - len(padding)) + list(padding)
 
     for start, end in padding:
         if start < 0 or end < 0:
             raise RuntimeError("ttnn.pad: padding must be non-negative")
 
-    pad_start = tuple(start for start, _ in padding)
-    *_, pad_start_height, pad_start_width = pad_start
-    if input_tensor.layout == ttnn.TILE_LAYOUT:
-        if pad_start_height % ttnn.TILE_SIZE != 0 or pad_start_width % ttnn.TILE_SIZE != 0:
-            raise RuntimeError(
-                "ttnn.pad: padding end must be a multiple of the tile size on height and width for a tensor in tile layout"
-            )
-
-    pad_end = tuple(end for _, end in padding)
-    *_, pad_end_height, pad_end_width = pad_end
-    if input_tensor.layout == ttnn.TILE_LAYOUT:
-        if pad_end_height % ttnn.TILE_SIZE != 0 or pad_end_width % ttnn.TILE_SIZE != 0:
-            raise RuntimeError(
-                "ttnn.pad: padding end must be a multiple of the tile size on height and width for a tensor in tile layout"
-            )
-
     input_tensor = ttnn.to_torch(input_tensor)
 
-    return (input_tensor, padding, *args), kwargs
+    # Device-only kwargs (use_multicore, sub_core_grids, memory_config, queue_id) are irrelevant to the golden.
+    return (input_tensor, padding, value), {}
 
 
-def _golden_function(input_tensor: ttnn.Tensor, padding, value):
+def _golden_function(input_tensor: ttnn.Tensor, padding, value, **_):
     import torch
 
     torch_padding = []
