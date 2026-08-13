@@ -123,7 +123,13 @@ CANDIDATES: dict[str, dict] = {
     "ccl_rs_ag": {"ccl_mode": "rs_ag"},
     "ccl_all_reduce": {"ccl_mode": "all_reduce"},
     "ccl_rs_w2": {"ccl_rs_workers": 2},
+    # NOTE: identical to ``ccl_rs_ag`` -- ``ccl_mode="rs_ag"`` resolves to the same
+    # per-mode pair, and both take the shipped per-payload worker counts.  Kept as
+    # a **same-config repeat control**: running it alongside ``ccl_rs_ag`` in one
+    # invocation is how the prefill noise floor is measured.  For a genuinely
+    # different prefill reducer, use ``ccl_rs_ag_prefill_w1``.
     "ccl_rs_ag_prefill": {"prefill_ccl_mode": "rs_ag"},
+    "ccl_rs_ag_prefill_w1": {"prefill_ccl_mode": "rs_ag", "prefill_ccl_rs_workers": 1},
     # -- fold the activations into the matmul instead of the elementwise op --
     "fused_act": {"decode_fused_activation": True},
 }

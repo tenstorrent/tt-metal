@@ -354,14 +354,20 @@ DEFAULT_DECODE_CCL_DTYPE = None
 #: (``logs/layer_ab_ccl_mode.log``, traced decode ms/token and 8192-token prefill
 #: ms, sliding / full):
 #:
-#: ==============  ==========================  ==========================
-#: reducer         traced decode               prefill 8192
-#: ==============  ==========================  ==========================
-#: ``all_reduce``  0.4661 / 0.4351             **18.88 / 18.47**
-#: ``rs_ag``       **0.4617 / 0.4311**         19.10 / 18.51
-#: ==============  ==========================  ==========================
+#: All rows from one invocation of the A/B harness at the shipped configuration
+#: (``logs/layer_ab_reducer_final.log``); an earlier version of this table quoted
+#: ``logs/layer_ab_ccl_mode.log``, which predates the per-payload worker counts:
 #:
-#: The pair wins decode by 0.9 %, and prefill is a wash once both payloads are
+#: =====================  ==========================  ==========================
+#: reducer                traced decode               prefill 8192
+#: =====================  ==========================  ==========================
+#: ``all_reduce``         0.4624 / 0.4310             19.13 / 18.64
+#: ``rs_ag``              0.4571 / 0.4259             19.43 / 18.34
+#: ``rs_ag`` prefill @1w  0.4570 / 0.4259             21.04 / 20.65
+#: **shipped** (split)    **0.4573 / 0.4258**         **18.89 / 18.36**
+#: =====================  ==========================  ==========================
+#:
+#: The pair wins decode by 1.1 %, and prefill is a wash once both payloads are
 #: tuned: see :data:`DEFAULT_PREFILL_CCL_RS_WORKERS` for the 0.24 % op-level gap
 #: and ``logs/layer_ab_reducer_final.log`` for the whole-layer A/B that measures
 #: every reducer candidate in one invocation.  The two modes are still split
@@ -372,9 +378,10 @@ DEFAULT_DECODE_CCL_DTYPE = None
 #: with the decode-tuned single worker.)  The mechanism is that at 32 rows
 #: the collective is latency-bound and the fused op's internal barrier is worth
 #: less than the two dispatches cost, while at 8192 rows it is bandwidth-bound and
-#: one dispatch wins.  The ~14 us a decode-shape collective costs
-#: (``tracy/sliding/decode_2048_perf_report.txt``) is also the number that decides
-#: against the fractured-residual contract; see the README.
+#: one dispatch wins.  (The fractured-residual contract is decided by a different
+#: number -- the cost of the *distributed norm* it forces, 14.89 us against the
+#: shipped full-width norm's 8.11 us; see the README and
+#: ``bench/fractured_decode_probe.py``.)
 DEFAULT_PREFILL_CCL_MODE = "all_reduce"
 DEFAULT_DECODE_CCL_MODE = "rs_ag"
 
@@ -1045,7 +1052,7 @@ class MultichipDecoder(OptimizedDecoder):
         ring all-reduce *is* a reduce-scatter plus an all-gather, so both forms
         move the same bytes and the only question is one fused dispatch against
         two.  At the 40 KB decode payload the collective is latency-bound and the
-        pair wins by 0.9 %; at the 107 MB prefill payload, with each payload's own
+        pair wins by 1.1 %; at the 107 MB prefill payload, with each payload's own
         ``num_workers_per_link``, the two are within 0.24 % and prefill keeps the
         single dispatch (``logs/layer_ab_reducer_final.log``,
         ``logs/fabric_packet_probe.log``).  See

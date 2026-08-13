@@ -9,7 +9,7 @@ and the per-device KV cache down 2x.
 
 | item | value |
 | --- | --- |
-| mesh open | `l1_small_size=6144` (a correctness constraint, [TTNN behaviour 1](#1-ccl-semaphores-fragment-l1-unless-the-mesh-has-an-l1_small-region)) and an 8192 B fabric packet payload (worth 0.33–0.54 % of decode, [Fabric packet size](#fabric-packet-size)) |
+| mesh open | `l1_small_size=6144` (a correctness constraint, [TTNN behaviour 1](#1-ccl-semaphores-fragment-l1-unless-the-mesh-has-an-l1_small-region)) and an 8192 B fabric packet payload (worth 0.35–0.49 % of decode, [Fabric packet size](#fabric-packet-size)) |
 | implementation | `models/autoports/meta_models_muse_glimmer_30b/tt/multichip_decoder.py` |
 | tests | `tests/test_multichip_decoder.py` + `tests/test_multichip_vs_single_chip.py` |
 | baseline | `models/autoports/meta_models_muse_glimmer_30b/tt/optimized_decoder.py`, re-measured on this host in the same harness |
@@ -34,11 +34,23 @@ shipped code** re-measured after the last change (`logs/layer_ab_final.log`).
 | prefill 8192, sliding | 44.12 | **19.14 ms** | **2.30x** | 58 % |
 | prefill 8192, full | 43.59 | **18.68 ms** | **2.33x** | 58 % |
 
-Traced decode is reproducible to four decimals across rounds and runs (three
-rounds inside a run agree to 1e-4, and the five A/B runs of the shipped config
-span 0.4572-0.4590 on `sliding` across the configuration changes). Warmed prefill is noisier: repeat runs of the *same* build
-span about 1.6-3.5 % (18.72 / 19.08 / 19.14 / 19.34 / 19.39 ms on `sliding`), so the prefill
-speedups above are quoted from the final run rather than from the best one.
+**Run-to-run spread, from the three committed runs of the identical shipped
+build** (`logs/layer_ab_final.log`, the `tp4` rows of
+`logs/layer_ab_reducer_final.log` and `logs/layer_ab_packet8192.log` — same code,
+same configuration, three processes):
+
+| window | the three runs | spread |
+| --- | --- | --- |
+| traced decode, sliding | 0.4572 / 0.4573 / 0.4573 | **0.02 %** |
+| traced decode, full | 0.4260 / 0.4258 / 0.4260 | **0.05 %** |
+| prefill 8192, sliding | 19.14 / 18.89 / 18.97 | **1.3 %** |
+| prefill 8192, full | 18.68 / 18.36 / 19.11 | **4.1 %** |
+
+Traced decode is reproducible to four decimals; three rounds inside a run agree to
+1e-4. Warmed prefill is not: at whole-layer granularity it cannot resolve anything
+below a few percent, which is why every prefill-side rejection below is either
+much larger than that or is decided on op-level evidence instead. The speedups
+above are quoted from the final run rather than the best one.
 
 Device time from the committed Tracy tables (`tracy/`), decode divided by its 8
 trace replays, against the optimized stage's own committed tables:
@@ -191,13 +203,17 @@ column-parallel matmul` — each ending on the contract it started on, so a winn
 is stackable. Not "reduce-scatter followed by an immediate all-gather back to the
 old contract", which would measure the wrong thing.
 
+Both columns are from the **shipped** configuration — the tuned reducer on every
+arm and the 8192 B packet — so they compare with each other and with the layer
+(`logs/topology_probe_decode32_tuned.log`, `logs/topology_probe_prefill8192.log`):
+
 | candidate | CCL bytes/device | 32 rows | 8192 rows |
 | --- | --- | --- | --- |
-| `replicated` (all-reduce) | 1.50 S | 317.24 μs | 8598.18 μs |
-| `replicated_bfp8` | 0.75 S | 312.87 | 7406.71 |
-| `fractured` (reduce-scatter residual) | 1.50 S | **284.30** | 7356.10 |
-| `gather_heads` (column `o_proj`) | 1.21 S | 345.08 | 7156.12 |
-| `gather_heads_fractured` | 1.21 S | 312.79 | **6153.76** |
+| `replicated` (all-reduce) | 1.50 S | 314.91 μs | 9002.41 μs |
+| `replicated_bfp8` | 0.75 S | 312.46 | 8417.14 |
+| `fractured` (reduce-scatter residual) | 1.50 S | **282.21** | 7756.40 |
+| `gather_heads` (column `o_proj`) | 1.21 S | 343.71 | 6811.28 |
+| `gather_heads_fractured` | 1.21 S | 311.44 | **5789.59** |
 
 `S = rows * 6656 * 2 B`. Two things this table says plainly:
 
@@ -208,45 +224,67 @@ old contract", which would measure the wrong thing.
    DRAM-interleaved regime — i.e. the prefill regime.
 
 Both are why the decision needed decode-regime evidence rather than this table
-alone. The probe's regime *is* the prefill regime, and in it the ranking survives
-tuning: re-run with the shipped reducer on **both** arms
-(`logs/topology_probe_decode32_tuned.log`), `fractured` is 282.19 μs against
-`replicated`'s 315.15 — the same 10 % it showed before the collective tuning.
+alone. The probe's regime *is* the prefill regime — its tensors are
+DRAM-interleaved at both row counts — and the 32-row column does not become decode
+evidence by having 32 rows in it. The ranking is also stable under tuning:
+before the collective tuning and the packet change, `fractured` read 284.30 μs
+against `replicated`'s 317.24 (`logs/topology_probe_decode32.log`), the same 10 %.
 
 The decode regime is different in exactly one way, and it is the way that
-decides: its RMSNorms are already **width-sharded in L1**. So the three terms the
-fractured contract trades were measured at the shipped memory configs, traced
-(`bench/fractured_decode_probe.py`, `logs/fractured_decode_probe.log`; every row
-is a one-op trace, so they share a replay floor and only the differences are
-meaningful):
+decides: its RMSNorms are already **width-sharded in L1**, where a full-width norm
+is cheap. `bench/fractured_decode_probe.py` prices the two paths against each
+other at the shipped memory configs. Two things about how it measures, both of
+which the round-3 review required:
+
+- **the replay floor is calibrated, not assumed.** Each op is traced at 1, 2, 4
+  and 8 copies per trace; the per-op cost is the *slope* and the replay floor the
+  intercept. An earlier version of this section summed floor-cancelling
+  differences and floor-inclusive absolutes together, which is not a valid
+  comparison — the floor here is 3–10 μs, larger than the effect;
+- **the distributed norm is priced whole.** A fractured residual does not add a
+  stats gather to an otherwise unchanged norm. It *replaces* one full-width
+  `rms_norm` with `rms_norm_pre_all_gather` → `all_gather` → `rms_norm_post_all_gather`,
+  all three at the fractured width. An earlier version measured only the middle
+  term at the shipped layout and the first on DRAM-interleaved inputs.
+
+Per-op, floor removed (`logs/fractured_decode_probe.log`):
 
 | term | replicated pays | fractured pays |
 | --- | --- | --- |
-| hidden-size RMSNorm | 15.47 μs (6656 on 16 cores) | 10.80 / 12.93 / 15.55 / 19.25 μs (1664 on 4 / 13 / 26 / 52) |
-| residual add | 8.44 μs | 8.09–8.43 μs — latency-bound, no saving |
-| distributed-norm stats all-gather | — | **10.47 μs** |
-| `rms_norm_pre_all_gather` | — | **26.97 μs** |
+| the norm | **8.11 μs** — one `rms_norm`, 6656 wide, 16 cores | **14.89 μs** — `pre_all_gather` 3.19 + stats `all_gather` 6.40 + `post_all_gather` 5.30, 1664 wide, 4 cores |
+| residual add | 5.41 μs | 5.33–5.42 μs — latency-bound, no saving |
+| collective bytes | 1.50 S | 1.50 S — identical, see the table above |
 
-The best case for the fractured contract is 15.47 − 10.80 = **4.67 μs** saved per
-norm, against **10.47 μs** for the stats gather it must add — a net loss of
-5.8 μs per distributed norm before the `pre_all_gather` and before the extra
-all-gather of the residual. Two of the four hidden norms would be distributed, so
-the contract loses ≥11.6 μs per decode step, on a 444 μs step. The interleaved
-probe reaches the opposite answer because an interleaved full-width norm is the
-expensive thing there, and this layer's decode norms are not interleaved.
+So the fractured contract pays **+6.78 μs per distributed norm**. Two of the four
+hidden norms would be distributed, so it costs **+13.55 μs per decode step** on a
+444 μs step (3.1 %), and buys nothing measurable anywhere else: the residual add
+does not get cheaper, and the collective moves the same bytes. A plain 1664-wide
+norm *would* be cheaper (5.72 μs at 13 cores) but is not on offer — a fractured
+residual has no full row to normalise over, which is the whole reason the
+distributed form exists.
 
-(An earlier version of this section rejected the contract on an L1 argument — that
-a fractured residual forces a ≤4-core grid — and that argument was **wrong**: the
-matmul inputs are the *gathered* tensors and stay on 16 cores, while the fractured
-tensors can sit on any count dividing their 52 tiles. All four counts are in the
-table above; none of them fails L1. The rejection stands on the measurements, not
-on that.)
+There is also a hard legality constraint, measured in the same probe: of the four
+core counts that divide the fractured width's 52 tiles, the distributed norm is
+legal only at **4**. 13 and 26 raise *"Sharded layernorm does not support a
+non-rectangular core grid for distributed norm"*
+(`layernorm_device_operation.cpp:197`), and 16 does not divide 52. This is
+narrower than the plain-norm case and it is why the 4-core row is the one costed
+above.
+
+The interleaved probe reaches the opposite answer because an interleaved
+full-width norm is the expensive thing *there*, and this layer's decode norms are
+not interleaved. Both results stand; they are different regimes.
+
+(An earlier version of this section rejected the contract on a different L1
+argument — that a fractured residual forces a ≤4-core grid for the *matmuls* — and
+that argument was **wrong**: the matmul inputs are the gathered tensors and stay
+on 16 cores. The 4-core constraint above is a real one, but it applies to the
+distributed norm, not to the matmuls, and the rejection does not rest on it.)
 
 `gather_heads` is a genuine trade rather than a blocker, and it is rejected on
 measured whole-layer grounds: `o_proj`'s parallelism is a single load-time choice
-shared by prefill and decode, so buying prefill's 17 % costs decode 9.1 % (343.70
-against 315.15 at 32 rows, tuned) and adds a third collective to every decode
-step. A
+shared by prefill and decode, so buying prefill's 24 % costs decode 9.1 % (343.71
+against 314.91 at 32 rows) and adds a third collective to every decode step. A
 decoder layer is judged on decode, so the row-parallel `o_proj` stays and the
 prefill payload dtype below recovers most of the prefill gap instead.
 
@@ -295,31 +333,39 @@ sliding / full):
 
 | reducer | traced decode | prefill 8192 |
 | --- | --- | --- |
-| `all_reduce` both modes | 0.4624 / 0.4310 | 19.43 / 18.42 ms |
-| `rs_ag` both modes | 0.4572 / 0.4261 | 19.00 / 18.44 ms |
-| `rs_ag` decode + `rs_ag` prefill @4 workers | 0.4573 / 0.4256 | 19.38 / 18.66 ms |
-| **`rs_ag` decode, `all_reduce` prefill (shipped)** | **0.4572 / 0.4259** | **18.86 / 18.78 ms** |
+| `all_reduce` both modes | 0.4624 / 0.4310 | 19.13 / 18.64 ms |
+| `rs_ag` both modes | 0.4571 / 0.4259 | 19.43 / 18.34 ms |
+| *(same config again — repeat control)* | 0.4572 / 0.4260 | 18.99 / 18.50 ms |
+| `rs_ag` prefill at **1** worker | 0.4570 / 0.4259 | 21.04 / 20.65 ms |
+| **`rs_ag` decode, `all_reduce` prefill (shipped)** | **0.4573 / 0.4258** | **18.89 / 18.36 ms** |
 
-Decode is decided: the pair wins by **1.1 %** on both layer kinds, repeatably
+Row 3 is not a fifth configuration: `ccl_mode="rs_ag"` and
+`prefill_ccl_mode="rs_ag"` resolve to the same per-mode pair at the same shipped
+worker counts, so it is `ccl_rs_ag` run twice in one invocation. That makes it the
+useful row — a **same-config repeat inside a single process**, which puts the
+prefill spread at 2.3 % on `sliding` (19.43 vs 18.99) with everything else held
+fixed. Rows 1 and 5 dispatch the same prefill collective as each other and differ
+by 1.3 %.
+
+**Decode is decided**: the pair wins by **1.1 %** on both layer kinds, four times
+larger than the 0.02–0.05 % decode spread in [Result](#result), and repeatable
 (three rounds inside each run agree to 3e-4).
 
-Prefill is **not** resolvable at whole-layer granularity, and this table is the
-evidence for that rather than against it. Rows 1 and 4 dispatch the *same* prefill
-collective and still differ by 0.57 ms on `sliding` (19.43 vs 18.86, 3.0 %), which
-is the run-to-run prefill noise floor quoted in [Result](#result); the `rs_ag`
-prefill row is 2.8 % slower on `sliding` and 0.6 % *faster* on `full`, i.e. the
-sign flips with the layer kind. The op-level measurement is the one with signal:
-at the shipped packet size `reduce_scatter(w=4) + all_gather` is 775.8 + 809.2 =
-1584.9 μs against `all_reduce`'s 1581.1 μs — the same to **0.24 %**
+**Prefill at whole-layer granularity cannot resolve the reducer form** — the
+`rs_ag`-both-modes row is 2.9 % slower than shipped on `sliding` and 1.6 % *faster*
+on `full`, and its own repeat differs from it by 2.3 %. So prefill is decided on
+op-level evidence: at the shipped packet size `reduce_scatter(w=4) + all_gather` is
+775.8 + 809.2 = 1584.9 μs against `all_reduce`'s 1581.1 μs, the same to **0.24 %**
 (`logs/fabric_packet_probe.log`). Prefill keeps the single dispatch because it
 costs nothing to keep, not because the pair was measured slower.
 
-(An earlier version of this section reported the prefill pair as "12 % slower"
-from `logs/layer_ab_ccl_workers.log`. That run predates
-`DEFAULT_PREFILL_CCL_RS_WORKERS = 4` and so measured a prefill payload with the
-decode-tuned single worker; it is superseded by the table above. The shipped
-row's *final* re-measurement after the last code change is the 0.4572 / 0.4260
-and 19.14 / 18.68 ms in [Result](#result), from `logs/layer_ab_final.log`.)
+**Row 4 is what the superseded "12 % slower" figure was measuring.** `rs_ag`
+prefill at one worker is 21.04 / 20.65 ms against the shipped 18.89 / 18.36 —
+**11.4 % / 12.5 %** slower, far outside the noise. That is a real effect and it is
+about the *worker count*, not the reducer form: the old rejection quoted it as if
+it were the reducer, from a run that predates
+`DEFAULT_PREFILL_CCL_RS_WORKERS = 4`. Split per payload, the reducer choice on
+prefill is worth nothing; the worker count is worth 12 %.
 
 And the single largest non-matmul win in the stage is one integer,
 `num_workers_per_link=1` on the decode reduce-scatter
@@ -636,14 +682,15 @@ is not enough to decide, because 8192 makes one shipped op slower.
 
 | packet | traced decode | prefill 8192 |
 | --- | --- | --- |
-| 4352 B | 0.4589 / 0.4282 ms/token | 19.11 / 18.32 ms |
-| **8192 B (shipped)** | **0.4574 / 0.4259** | **18.84 / 18.29** |
+| 4352 B | 0.4589 / 0.4281 ms/token | 19.02 / 18.72 ms |
+| **8192 B (shipped)** | **0.4573 / 0.4260** | **18.97 / 19.11** |
 
-8192 is better or equal on all four windows: decode by **0.33 % / 0.54 %**,
-consistently (the three rounds inside each run agree to 1e-4), and prefill by
-1.4 % / 0.2 %, which is inside the noise floor and only says the op-level prefill
-regression does not survive to the layer. So the isolated 1.1 % prefill-collective
-cost is real but is not what the layer pays.
+Decode is where the signal is: 8192 wins by **0.35 % / 0.49 %**, an order of
+magnitude above the 0.02–0.05 % decode spread in [Result](#result). Prefill splits
+— 0.3 % better on `sliding`, 2.1 % worse on `full` — and both are inside the
+1.3–4.1 % same-build prefill spread, so the layer neither confirms nor contradicts
+the isolated 1.1 % prefill-collective regression. What it does show is that the
+regression is not large enough to reach the layer.
 
 This is a **small** effect — half a percent of decode — and the summary table at
 the top calls the setting load-bearing only in the sense that dropping it silently
@@ -655,17 +702,17 @@ correctness constraint, unlike `l1_small_size`.
 | candidate | verdict | evidence |
 | --- | --- | --- |
 | `2x2` mesh view | rejected: every collective demoted to `Linear`, 19 % slower reduce-scatter | `logs/ccl_tuning_probe.log`, `ccl_common.cpp:98-123` |
-| fractured (reduce-scatter) residual, decode | rejected on measurement: the sharded norm saves 4.67 μs at best and the stats all-gather it must add costs 10.47 μs, a net **≥11.6 μs per decode step** on a 444 μs step. (Not on L1 — an earlier version of this row claimed a ≤4-core grid that fails L1, and that claim was withdrawn as wrong; all four legal core counts fit.) | `logs/fractured_decode_probe.log`, `logs/topology_probe_decode32_tuned.log` |
-| `gather_heads` (column-parallel `o_proj`) | rejected: −8.8 % decode for +17 % prefill, and `o_proj`'s layout is one choice for both | `logs/topology_probe_*.log` |
+| fractured (reduce-scatter) residual, decode | rejected on measurement, floor-corrected and path-vs-path: the distributed norm it forces costs 14.89 μs against the shipped full-width norm's 8.11 μs, i.e. **+13.55 μs per decode step** (3.1 %), against no measured saving on the residual add and identical collective bytes | `logs/fractured_decode_probe.log`, `logs/topology_probe_decode32_tuned.log` |
+| `gather_heads` (column-parallel `o_proj`) | rejected: **−9.1 %** decode for +24 % prefill on the boundary chain, and `o_proj`'s layout is one load-time choice for both modes | `logs/topology_probe_decode32_tuned.log`, `logs/topology_probe_prefill8192.log` |
 | BFP8 **decode** collective payload | rejected: **passes** the 0.995 real-weight bar by 2.8e-6 (against 1.05e-4 for BF16) to buy 1.6 % of decode | `logs/real_weight_ccl_dtype_gate.log`, `logs/real_weight_decode_bfp8_experiment.log` |
-| `rs_ag` reducer for prefill | rejected as a wash, not as slower: **0.24 %** apart at the op level (1584.9 vs 1581.1 μs), and whole-layer the gap is inside the 3.0 % prefill noise floor and flips sign between layer kinds. The superseded "12 % slower" figure came from a run that predates the per-payload worker count. | `logs/fabric_packet_probe.log`, `logs/layer_ab_reducer_final.log` |
+| `rs_ag` reducer for prefill | rejected as a wash, not as slower: **0.24 %** apart at the op level (1584.9 vs 1581.1 μs), and whole-layer the gap is inside a prefill spread its own repeat control puts at 2.3 %. The superseded "12 % slower" figure was the *worker count*, not the reducer — re-measured directly as row 4 of the reducer table (11.4 % / 12.5 % at one worker). | `logs/fabric_packet_probe.log`, `logs/layer_ab_reducer_final.log` |
 | `all_reduce` reducer for decode | rejected: **1.1 %** slower on both layer kinds, in one like-for-like invocation | `logs/layer_ab_reducer_final.log` |
 | 8-core and 4-core decode grids | rejected: 7.3 % slower / fails L1 | `logs/layer_ab_geometry_final.log` |
 | separate MLP working grid (the single-chip shape) | rejected: 4.4–4.8 % slower | `logs/layer_ab_geometry_mlpgrid.log` |
 | folding the activations into the matmul | rejected: 2.0–2.6 % slower, as on one chip | `logs/layer_ab_geometry_final.log` |
 | `max_cores_per_head_batch` 16 / 64 | rejected: 12 % slower at long context / 0.4 % slower | `logs/layer_ab_sdpa_*.log` |
 | `chunks_per_sync`, `num_buffers_per_channel`, `num_links` | rejected: under 1 %, or slower | `logs/ccl_tuning_probe.log` |
-| 4352 B fabric packet (what the runtime advises on every prefill collective) | rejected: 0.33 % / 0.54 % slower decode whole-layer, and no prefill gain, even though it is 1.1 % faster on the isolated prefill collective | `logs/layer_ab_packet4352.log`, `logs/layer_ab_packet8192.log`, `logs/fabric_packet_probe.log` |
+| 4352 B fabric packet (what the runtime advises on every prefill collective) | rejected: **0.35 % / 0.49 %** slower decode whole-layer, against a prefill difference that is inside the noise, even though it is 1.1 % faster on the isolated prefill collective | `logs/layer_ab_packet4352.log`, `logs/layer_ab_packet8192.log`, `logs/fabric_packet_probe.log` |
 | KV sequence-split across the device pair | not attempted: needs a partial-softmax merge the paged decode op does not expose; ceiling is the SDPA's 4.7 % / 23.0 % | — |
 
 ## The `$multichip` checklist
@@ -724,7 +771,8 @@ residual layout that is a first-class decision rather than a leftover.
    residual that would quarter it is refuted for decode with two independent
    pieces of evidence (above), but **not** for prefill, where the regime is
    DRAM-interleaved and `bench/topology_probe.py` measures the fractured family
-   1.2–1.4x faster on the boundary chain at 8192 rows. Making prefill fractured
+   **1.16x** faster on the boundary chain at 8192 rows (7756.40 against 9002.41 μs),
+   and 1.55x with a column-parallel `o_proj` on top. Making prefill fractured
    while decode stays replicated is expressible — the two modes are separate call
    paths — and is the single largest remaining prefill lever, worth an estimated
    11 % of the prefill layer. It is not taken here because it introduces a second

@@ -301,10 +301,18 @@ configs the layer could hand it:
 | `ttnn.all_gather` (not tunable) | 16.39 | 17.22 |
 
 `chunks_per_sync` (2/5/10/20) and `num_buffers_per_channel` (2/4/8) move it by
-under 1 %; `use_l1_small_for_semaphores=True` cannot allocate on this part
-(*"Not enough space to allocate 1760 B L1_SMALL buffer across 110 banks"*). At
-40 KB the collective is pure fixed cost — 2.7 GB/s against the 90–120 GB/s the
-same fabric reaches at 512 KB — so extra workers only add setup and sync.
+under 1 %. The `use_l1_small_for_semaphores=True` row of that sweep reads *"Out
+of Memory: Not enough space to allocate 1760 B L1_SMALL buffer across 110
+banks"*, which the first version of this entry recorded as the flag being
+unusable on this part. **That was wrong** (a round-1 finding, propagated here
+only in round 3): the probe reaches that case as roughly its 19th distinct CCL
+program and had exhausted its *own* `L1_SMALL` region — see §9.1b. The shipped
+decode reduce-scatter passes the flag, and it works.
+
+At 40 KB the collective is pure fixed cost — 2.7 GB/s against the **120.6 GB/s**
+the same fabric reaches on the 8192-row BF16 all-gather at the shipped packet
+size (`logs/fabric_packet_probe.log`, 81,788,928 B in 678.41 µs) — so extra
+workers only add setup and sync.
 
 Whole-layer effect (`logs/layer_ab_ccl_workers.log`): 0.4618/0.4311 at the
 default against **0.4589/0.4284** at one worker.
@@ -474,16 +482,29 @@ at 354 cached programs, in `test_batched_prefill_decode_pcc[13-sliding]`.
 buffers end at 1,137,536 B and its live L1 tensors take 316,544 B from the top, so
 it uses 1,454,080 of the 1,461,376 B pool and has 7,296 B to give away -- at 8 KB
 it is 896 B short (*"L1 buffer allocated at 1136640 and static circular buffer
-region ends at 1137536"*, in the graph-audit tests). Shipped at **4096**: 256
-semaphores, 3,200 B of decode margin, and:
+region ends at 1137536"*, in the graph-audit tests).
+
+**What ships is 6144, not the 4096 this section originally recorded.** 4096 was
+the first value that worked, and it is what the measurements below were taken at.
+The full ladder came later, when the fabric packet probe swept it (§7.4), and 6144
+is the largest value that keeps a four-figure margin: **24** distinct CCL programs
+and 1,152 B of decode margin, against 16 and 3,200 B at 4096. The README ladder,
+`DEFAULT_L1_SMALL_SIZE` and `context_contract.json` all say 6144/24; review round 3
+caught this section still saying 4096/16 — a value the README ladder describes as
+"passes; the region itself becomes the constraint".
+
+At the 4096 it was measured at: 256 semaphores, 3,200 B of decode margin, and:
 
 | point | allocated/bank | largest contiguous free/bank |
 | --- | --- | --- |
 | fresh mesh | 0 | 1,459,328 |
 | after prefill + decode, both kinds | 256 | 1,459,328 |
 
-Whole-layer latency is unchanged by the fix (`logs/layer_ab_final.log`:
-0.4590 / 0.4281 ms/token against 0.4589 / 0.4284 before).
+No whole-layer latency claim is attached to this change. An earlier version of
+this line cited a before/after pair that appears in no committed log, and the runs
+that bracket the change also moved the packet size and the per-payload worker
+counts, so the artifacts cannot isolate it. What is verified is the shipped
+configuration's final numbers, in `logs/layer_ab_final.log`.
 
 **How much room 4 KB is, measured rather than assumed.** Six distinct
 `reduce_scatter` shapes take 1,536 B of the region -- 256 B each -- and
@@ -495,7 +516,8 @@ L1_SMALL[after 6 shapes]           alloc=1536 free=2560  progs=12
 L1_SMALL[after clear_program_cache] alloc=0   free=4096  progs=0
 ```
 
-So a mesh holds **16 distinct CCL programs** at a time. The suite exceeded that
+So a mesh held **16 distinct CCL programs** at 4096 — 256 B each, which is the
+arithmetic that gives **24** at the shipped 6144. The suite exceeded that
 twice before it was bounded: once at 354 cached programs with a 2 KB region, and
 once inside a single `test_batched_prefill_decode_pcc[32-*]`, whose 32 distinct
 per-user prefill lengths are 32 distinct CCL programs and which no
@@ -601,8 +623,8 @@ in the 31 nodes above.
 
 ## 12. Review round 1, and the artifact it could not reproduce
 
-The first `$stage-review` returned `more-work-needed` on six required items; §7.4,
-§7.5 and §10 above are the measurements that closed them (the fractured-residual
+The first `$stage-review` returned `more-work-needed` on six required items; §7.3
+and §7.4 above are the measurements that closed them (the fractured-residual
 rejection rebuilt on decode-regime numbers, the fabric packet size measured per
 payload dtype, the "cannot allocate on this part" claim corrected to "the probe
 exhausted its own L1_SMALL region", the `l1_small` ladder recorded, per-payload
@@ -645,8 +667,10 @@ the README prose but not the work log. The result was a document that contradict
 itself 300 lines apart — the README both stated that the semaphore flag cannot
 allocate and that the shipped code passes it.
 
-Fixed by propagating each correction to **every** site: the flag (README §7.3 and
-this log §7.3), the fractured rejection (the "Measured and rejected" row now cites
+Fixed by propagating each correction to **every** site — except, as round 3 then
+found, in this log, which was appended to rather than edited, so this section as
+originally written claimed a §7.3 fix that had not been made. §14 records that.
+The corrections were: the flag (README §7.3), the fractured rejection (the "Measured and rejected" row now cites
 `logs/fractured_decode_probe.log` and the *tuned* topology log, and states the
 ≥11.6 μs net loss instead of the retracted L1 blocker), and the prefill reducer
 (`_all_reduce`'s docstring, `DEFAULT_PREFILL_CCL_MODE`, and the rejected-candidates
@@ -712,3 +736,106 @@ And one artifact disagreement: `context_contract.json` said the `l1_small` ladde
 "2048/4096/6144/7168 all pass" while the README and the source both record 2048
 filling the region mid-suite. The contract is the machine-read artifact, so it now
 carries the whole ladder verbatim.
+
+## 14. Review round 3: the log itself was the defect
+
+Round 3 returned `more-work-needed` with six required items, and the diagnosis was
+sharper than the list. Rounds 1 and 2 had both been closed by editing the README
+and the source and **appending** to this log. Round 3 checked the log against them
+and found that three withdrawn claims were still asserted here, that §9.1b still
+documented `l1_small_size = 4096` and 16 CCL programs as shipped when the module
+had shipped 6144 and 24 since the ladder was measured, and that §13 claimed a fix
+to §7.3 that had never been made. An append-only log is not a log; it is a pile of
+drafts, and the only automated gate read the README.
+
+So the fix has two halves.
+
+**The log is now edited in place.** §7.3 carries the retraction of the
+`use_l1_small_for_semaphores` claim and the sourced 120.6 GB/s figure. §9.1b says
+what ships (6144 / 24) and labels its own measurements as taken at the 4096 that
+was current when they were made. The before/after latency pair it quoted for the
+`l1_small` fix is gone: it appears in no committed log, and the runs that bracket
+that change also moved the packet size and the worker counts, so nothing committed
+can isolate it — saying so is better than quoting a number that cannot be found.
+§12's references to two sections that do not exist (7.5 and 10) are corrected —
+written without the section sigil here, because the gate below cannot tell a
+reference from a mention of a broken one.
+
+**The gate now reads this file.** `bench/check_reported_figures.py` gained three
+checks over `work_log.md`: every ``logs/…`` path it cites must exist, every §N.N
+cross-reference must resolve to a heading, and any *shipped* value it quotes for
+`l1_small_size` or the fabric packet payload must equal the constant the module
+defines. The last of those is the one that would have caught the 4096 the day it
+went stale. It found two more problems as soon as it ran: a bad cross-reference in
+§12 and this section's own forward reference before it was written.
+
+### 14.1 The fractured-residual rejection, rebuilt properly
+
+The substantive finding was that the decode-regime rejection did not survive its
+own methodology. It summed floor-cancelling *differences* (two norms) with
+floor-inclusive *absolutes* (a stats gather), and the replay floor is 3–10 µs —
+larger than the effect being measured. It also priced only one term of the
+distributed norm, and priced it on DRAM-interleaved inputs while claiming the
+shipped sharded layout.
+
+`bench/fractured_decode_probe.py` was rewritten:
+
+- **the floor is calibrated.** Each op runs at 1, 2, 4 and 8 copies per trace; the
+  per-op cost is the slope, the floor the intercept. Both print. (The full-width
+  norm: 8.11 µs per op on a 7.36 µs floor — the old probe's single point read
+  15.49, which is the sum.)
+- **the distributed norm is priced whole, on the sharded layout**, as
+  `rms_norm_pre_all_gather` → `all_gather` → `rms_norm_post_all_gather`. Getting
+  there needed two TTNN facts the old probe had walked around: the pre-op requires
+  the sharded program config (without one it raises *"std::get: wrong index for
+  variant"*, which is why the old probe fell back to DRAM), and the post-op
+  requires the gathered statistics to be **sharded** too (*"Stats must be
+  sharded"*, `layernorm_device_operation.cpp:236`).
+
+The rejection survives, with a bigger and better-founded margin: **8.11 µs** for
+the shipped full-width norm against **14.89 µs** for the distributed path
+(3.19 + 6.40 + 5.30), i.e. **+6.78 µs per distributed norm** and **+13.55 µs per
+decode step** (3.1 % of 444 µs), against no saving on the residual add
+(5.41 vs 5.33–5.42) and identical collective bytes.
+
+And a constraint fell out that neither earlier version had found: of the four core
+counts that divide the fractured width's 52 tiles, a *distributed* norm is legal
+only at **4**. 13 and 26 raise *"Sharded layernorm does not support a
+non-rectangular core grid for distributed norm"*. This is not the ≤4-core claim
+round 1 withdrew — that one was about the matmuls and was wrong — but it is a real
+one, in a different place, and the probe now records it as a measurement rather
+than an assumption.
+
+### 14.2 The reducer family, completed
+
+Round 3 also caught that the "four candidates in one invocation" table had only
+three distinct configurations: `ccl_mode="rs_ag"` and `prefill_ccl_mode="rs_ag"`
+resolve to the same thing. Rather than delete the duplicate, it is now labelled as
+what it is — a **same-config repeat inside one process**, which measures the
+prefill spread with everything else held fixed (2.3 % on `sliding`) — and a
+genuinely distinct candidate was added: `ccl_rs_ag_prefill_w1`, prefill `rs_ag` at
+**one** worker.
+
+That row explains the figure this stage has now corrected twice. At one worker,
+prefill `rs_ag` is 21.04 / 20.65 ms against the shipped 18.89 / 18.36 — **11.4 % /
+12.5 %** slower. So the original "12 % slower" was a real measurement of the
+*worker count*, recorded as if it were the *reducer form*. Split per payload, the
+reducer form on prefill is worth 0.24 % and the worker count is worth 12 %.
+
+### 14.3 Everything re-run at the shipped configuration
+
+`logs/topology_probe_prefill8192.log` was the last artifact still carrying the old
+4352 B packet and the untuned reducer, and it is the sole evidence for limitation 1
+and for the 8192-row column of the contract-families table. Re-run at the shipped
+configuration, the ranking is unchanged and the margins move: `fractured` is now
+**1.16x** faster than `replicated` on the boundary chain (7756.40 against
+9002.41 µs) rather than 1.17x, and `gather_heads_fractured` **1.55x** rather than
+1.40x. The contract-families table now takes both columns from the shipped
+configuration instead of mixing a tuned decode column with an untuned prefill one.
+
+`bench/run_review2_chain.sh` runs all six device jobs in order. Round 3 noticed
+that the committed *console transcript* of that script had been stitched from two
+versions of it, so no transcript is committed at all now: each of the six steps
+writes its own log, those are the artifacts, and every one of them is reproduced
+by the committed script. A console transcript that can drift from the per-step
+logs is a second source of truth for nothing.

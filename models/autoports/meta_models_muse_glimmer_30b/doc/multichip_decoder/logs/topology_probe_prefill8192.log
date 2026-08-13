@@ -1,63 +1,51 @@
-2026-08-12 15:06:38.566 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+2026-08-12 20:45:48.358 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
 Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
-2026-08-12 15:06:38.751 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
-2026-08-12 15:06:38.751 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
-2026-08-12 15:06:38.751 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
-2026-08-12 15:06:38.751 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
-2026-08-12 15:06:38.763 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
-2026-08-12 15:06:38.763 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
-2026-08-12 15:06:38.841 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
-2026-08-12 15:06:38.841 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
-2026-08-12 15:06:38.841 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
-2026-08-12 15:06:38.841 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
-2026-08-12 15:06:38.842 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
-2026-08-12 15:06:39.030 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
-2026-08-12 15:06:39.149 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
-2026-08-12 15:06:39.149 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
-2026-08-12 15:06:39.149 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
-2026-08-12 15:06:39.149 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
-2026-08-12 15:06:39.149 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
-2026-08-12 15:06:39.189 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
-2026-08-12 15:06:39.190 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
-2026-08-12 15:06:39.190 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
-2026-08-12 15:06:39.191 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
-2026-08-12 15:06:39.191 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
-2026-08-12 15:06:39.192 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
-2026-08-12 15:06:39.193 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
-2026-08-12 15:06:39.193 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
-2026-08-12 15:06:39.193 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
-2026-08-12 15:06:39.219 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:550)
-2026-08-12 15:06:39.220 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:550)
-2026-08-12 15:06:39.221 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:550)
-2026-08-12 15:06:39.222 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:550)
-2026-08-12 15:06:39.222 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
-2026-08-12 15:06:39.222 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
-2026-08-12 15:06:44.297 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_unicast_factory.cpp:56)
-2026-08-12 15:06:44.298 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
-2026-08-12 15:06:44.299 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
-2026-08-12 15:06:44.299 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
-2026-08-12 15:06:44.300 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
-TOPO rows=8192 tp=4 traced=False S=106496.0 KiB
-TOPO replicated                  8598.18 us   expected_ccl_bytes= 159744.0 KiB (1.50 S)
-2026-08-12 15:06:45.268 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_unicast_factory.cpp:56)
-TOPO replicated_bfp8             7406.71 us   expected_ccl_bytes=  79872.0 KiB (0.75 S)
-2026-08-12 15:06:45.379 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_unicast_factory.cpp:56)
-2026-08-12 15:06:45.380 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
-2026-08-12 15:06:45.380 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
-2026-08-12 15:06:45.380 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
-2026-08-12 15:06:45.380 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
-TOPO fractured                   7356.10 us   expected_ccl_bytes= 159744.0 KiB (1.50 S)
-2026-08-12 15:06:46.144 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_unicast_factory.cpp:56)
-2026-08-12 15:06:46.145 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
-2026-08-12 15:06:46.145 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
-2026-08-12 15:06:46.146 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
-2026-08-12 15:06:46.146 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
-TOPO gather_heads                7156.12 us   expected_ccl_bytes= 129024.0 KiB (1.21 S)
-TOPO gather_heads_fractured      6153.76 us   expected_ccl_bytes= 129024.0 KiB (1.21 S)
+2026-08-12 20:45:48.541 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-12 20:45:48.541 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-12 20:45:48.541 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-12 20:45:48.541 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-12 20:45:48.553 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-12 20:45:48.553 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-12 20:45:48.631 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-12 20:45:48.631 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-12 20:45:48.631 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-12 20:45:48.631 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-12 20:45:48.633 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-12 20:45:48.854 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-12 20:45:48.969 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-12 20:45:48.969 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-12 20:45:48.969 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-12 20:45:48.969 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-12 20:45:48.969 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-12 20:45:49.010 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 20:45:49.010 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 20:45:49.011 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 20:45:49.011 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 20:45:49.012 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 20:45:49.012 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 20:45:49.013 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 20:45:49.013 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 20:45:49.014 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-12 20:45:49.044 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:550)
+2026-08-12 20:45:49.045 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:550)
+2026-08-12 20:45:49.046 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:550)
+2026-08-12 20:45:49.047 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:550)
+2026-08-12 20:45:49.047 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-12 20:45:49.047 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+TOPO rows=8192 tp=4 traced=False reducer=shipped(rs_w1+ag) S=106496.0 KiB
+TOPO replicated                  9002.41 us   expected_ccl_bytes= 159744.0 KiB (1.50 S)
+2026-08-12 20:45:54.128 | warning  |              Op | Fabric packet size 8192 B is suboptimal for transporting 1088 B pages. Configure 4352 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 20:45:54.128 | warning  |              Op | Fabric packet size 8192 B is suboptimal for transporting 1088 B pages. Configure 4352 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 20:45:54.128 | warning  |              Op | Fabric packet size 8192 B is suboptimal for transporting 1088 B pages. Configure 4352 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 20:45:54.128 | warning  |              Op | Fabric packet size 8192 B is suboptimal for transporting 1088 B pages. Configure 4352 B packet size to maximize throughput. (ccl_common.cpp:70)
+TOPO replicated_bfp8             8417.14 us   expected_ccl_bytes=  79872.0 KiB (0.75 S)
+TOPO fractured                   7756.40 us   expected_ccl_bytes= 159744.0 KiB (1.50 S)
+TOPO gather_heads                6811.28 us   expected_ccl_bytes= 129024.0 KiB (1.21 S)
+TOPO gather_heads_fractured      5789.59 us   expected_ccl_bytes= 129024.0 KiB (1.21 S)
 nanobind: leaked 3 instances!
- - leaked instance 0x7ec82acbe2f8 of type "ttnn._ttnn.multi_device.MeshCoordinate"
- - leaked instance 0x7ec82acbe4d8 of type "ttnn._ttnn.multi_device.MeshCoordinate"
- - leaked instance 0x7ec7d6e81218 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x72ab6a4c2a28 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x72ab6a4c2848 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x72ab16696028 of type "ttnn._ttnn.tensor.CoreRangeSet"
 nanobind: leaked 45 types!
  - leaked type "DispatchCoreAxis"
  - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
@@ -72,21 +60,21 @@ nanobind: leaked 45 types!
  - ... skipped remainder
 nanobind: leaked 372 functions!
  - leaked function ""
- - leaked function "__init__"
- - leaked function "initialize_fast_dispatch"
- - leaked function "GetNumAvailableDevices"
- - leaked function "get_tile_size"
+ - leaked function "to"
+ - leaked function "get_device_ids"
  - leaked function ""
+ - leaked function "host_buffer"
+ - leaked function "__ne__"
+ - leaked function ""
+ - leaked function "__ne__"
+ - leaked function "buffer_page_size"
  - leaked function "from_json"
- - leaked function "tensor_topology"
- - leaked function "__init__"
- - leaked function "__getitem__"
  - ... skipped remainder
 nanobind: this is likely caused by a reference counting issue in the binding code.
-See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-12 15:06:47.244 | info     |    BuildKernels | JIT cache stats: 136/174 hits (78.2%) [136 cached, 125 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
-2026-08-12 15:06:47.244 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
-2026-08-12 15:06:47.258 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
-2026-08-12 15:06:47.258 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
-2026-08-12 15:06:47.692 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
-2026-08-12 15:06:47.693 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
-2026-08-12 15:06:47.693 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-12 20:45:57.408 | info     |    BuildKernels | JIT cache stats: 168/172 hits (97.7%) [168 cached, 63 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-12 20:45:57.408 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-12 20:45:57.423 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-12 20:45:57.423 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-12 20:45:57.976 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-12 20:45:57.977 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-12 20:45:57.977 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

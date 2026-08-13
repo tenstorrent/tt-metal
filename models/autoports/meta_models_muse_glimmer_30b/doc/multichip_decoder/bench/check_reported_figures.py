@@ -31,7 +31,9 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]  # doc/multichip_decoder/
 README = ROOT / "README.md"
+WORK_LOG = ROOT / "work_log.md"
 CONTRACT = ROOT.parent / "context_contract.json"
+SOURCE = ROOT.parent.parent / "tt/multichip_decoder.py"
 
 TOLERANCE = 0.005  # 0.5 % on measured quantities, exact on byte counts
 
@@ -121,14 +123,34 @@ def matmul_dram_rows(window: str) -> dict[str, tuple[float, float]]:
     }
 
 
-def readme_headings() -> set[str]:
-    """Every in-document anchor GitHub would generate for this README."""
+def doc_anchors(text: str) -> set[str]:
+    """Every in-document anchor GitHub would generate for a markdown body."""
     anchors = set()
-    for line in README.read_text().splitlines():
+    for line in text.splitlines():
         if line.startswith("#"):
             title = line.lstrip("#").strip().lower()
             anchors.add(re.sub(r"[^a-z0-9 _-]", "", title).replace(" ", "-"))
     return anchors
+
+
+def source_constant(name: str) -> int:
+    """An int constant's value, read out of the shipped module's text.
+
+    Text, not an import: this checker must run without a device, and importing
+    ``multichip_decoder`` pulls in ttnn.
+    """
+    match = re.search(rf"^{name} = (\d+)", SOURCE.read_text(), re.MULTILINE)
+    if not match:
+        raise SystemExit(f"no constant {name} in {SOURCE}")
+    return int(match.group(1))
+
+
+def section_numbers(text: str) -> set[str]:
+    return {match.group(1) for match in re.finditer(r"^#+ (\d+(?:\.\d+[a-z]?)?)\.?\s", text, re.MULTILINE)}
+
+
+def readme_headings() -> set[str]:
+    return doc_anchors(README.read_text())
 
 
 def main() -> int:
@@ -291,6 +313,40 @@ def main() -> int:
     failures.check("README: in-document links that resolve", len(dangling), 0, exact=True)
     if dangling:
         print("   dangling: " + ", ".join(dangling))
+
+    # ---- the work log, which no gate read until round 3 ----------------------
+    # Every finding that survived round 2 lived in work_log.md.  It is prose, so
+    # it cannot be re-derived wholesale -- but the three defect classes that
+    # actually occurred can be.
+    work_log = WORK_LOG.read_text()
+    cited = {name for name in re.findall(r"`+(logs/[\w./-]+)`+", work_log) if "..." not in name}
+    missing = sorted({name for name in cited if not (ROOT / name).exists()})
+    failures.check("work log: cited artifacts that exist", len(missing), 0, exact=True)
+    if missing:
+        print("   missing: " + ", ".join(missing))
+    sections = section_numbers(work_log)
+    referenced = {ref for ref in re.findall(r"§(\d+(?:\.\d+[a-z]?)?)", work_log)}
+    unresolved = sorted(referenced - sections)
+    failures.check("work log: section references that resolve", len(unresolved), 0, exact=True)
+    if unresolved:
+        print("   unresolved: " + ", ".join("§" + ref for ref in unresolved))
+
+    # ---- prose against the shipped constants ---------------------------------
+    # The round-3 P1 was work_log.md documenting l1_small_size 4096 as shipped
+    # while the code shipped 6144.  Every doc that names a shipped value for one
+    # of these three knobs must name the value the module actually defines.
+    for name, pattern, label in (
+        # "opens with"/"ships at" -- not the ladder rows, which quote values on purpose
+        ("DEFAULT_L1_SMALL_SIZE", r"(?:opens with|ships at|shipped) `l1_small_size ?= ?(\d+)`", "l1_small_size"),
+        ("FABRIC_PACKET_PAYLOAD_BYTES", r"an? \*?\*?(\d+) B\*?\*? fabric packet", "fabric packet"),
+    ):
+        expected = source_constant(name)
+        for doc_name, text in (("README", README.read_text()), ("work log", work_log)):
+            quoted = {int(value) for value in re.findall(pattern, text)}
+            wrong = sorted(quoted - {expected})
+            failures.check(f"{doc_name}: shipped {label} == {name}", len(wrong), 0, exact=True)
+            if wrong:
+                print(f"   quotes {wrong} but the module defines {expected}")
 
     print()
     if failures:
