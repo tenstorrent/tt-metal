@@ -1,0 +1,44 @@
+=== 1/3 fractured-residual decode probe, at the shipped 8192 B packet
+exit=0
+FRAC rows=32 full=6656 fractured=1664 devices=4
+FRAC norm      width= 6656 cores= 16   15.47 us
+FRAC add       width= 6656 cores= 16    8.44 us
+FRAC norm      width= 1664 cores=  4   10.80 us
+FRAC add       width= 1664 cores=  4    8.43 us
+FRAC norm      width= 1664 cores= 13   12.93 us
+FRAC add       width= 1664 cores= 13    8.16 us
+FRAC norm      width= 1664 cores= 26   15.55 us
+FRAC add       width= 1664 cores= 26    8.09 us
+FRAC norm      width= 1664 cores= 52   19.25 us
+FRAC add       width= 1664 cores= 52    8.09 us
+FRAC stats shape=(1, 1, 32, 32)
+FRAC stats_ag  width=   32 cores=  -   10.47 us
+FRAC stats_pre width= 1664 cores=  -   26.97 us
+=== 2/3 tuned topology probe, decode shape, at the shipped 8192 B packet
+exit=0
+TOPO rows=32 tp=4 traced=True reducer=shipped(rs_w1+ag) S=416.0 KiB
+TOPO replicated                   315.15 us   expected_ccl_bytes=    624.0 KiB (1.50 S)
+TOPO replicated_bfp8              312.32 us   expected_ccl_bytes=    312.0 KiB (0.75 S)
+TOPO fractured                    282.19 us   expected_ccl_bytes=    624.0 KiB (1.50 S)
+TOPO gather_heads                 343.70 us   expected_ccl_bytes=    504.0 KiB (1.21 S)
+TOPO gather_heads_fractured       311.25 us   expected_ccl_bytes=    504.0 KiB (1.21 S)
+=== 3/3 every reducer candidate, whole layer, one invocation
+exit=0
+AB       tp4              kind=sliding  mesh=1x4 batch=1 prefill8192=   18.86 ms  traced_decode@2048= 0.4572 ms/token  prefill_pcc=0.993700 decode_pcc=0.993488  (0.4573/0.4572/0.4575)
+AB       ccl_all_reduce   kind=sliding  mesh=1x4 batch=1 prefill8192=   19.43 ms  traced_decode@2048= 0.4624 ms/token  prefill_pcc=0.993700 decode_pcc=0.993488  (0.4628/0.4624/0.4625)
+AB       ccl_rs_ag        kind=sliding  mesh=1x4 batch=1 prefill8192=   19.00 ms  traced_decode@2048= 0.4572 ms/token  prefill_pcc=0.993700 decode_pcc=0.993488  (0.4573/0.4572/0.4572)
+AB       ccl_rs_ag_prefill kind=sliding  mesh=1x4 batch=1 prefill8192=   19.38 ms  traced_decode@2048= 0.4573 ms/token  prefill_pcc=0.993700 decode_pcc=0.993488  (0.4578/0.4573/0.4574)
+AB       tp4              kind=full     mesh=1x4 batch=1 prefill8192=   18.78 ms  traced_decode@2048= 0.4259 ms/token  prefill_pcc=0.992220 decode_pcc=0.992188  (0.4260/0.4259/0.4260)
+AB       ccl_all_reduce   kind=full     mesh=1x4 batch=1 prefill8192=   18.42 ms  traced_decode@2048= 0.4310 ms/token  prefill_pcc=0.992220 decode_pcc=0.992188  (0.4313/0.4312/0.4310)
+AB       ccl_rs_ag        kind=full     mesh=1x4 batch=1 prefill8192=   18.44 ms  traced_decode@2048= 0.4261 ms/token  prefill_pcc=0.992220 decode_pcc=0.992188  (0.4261/0.4261/0.4261)
+AB       ccl_rs_ag_prefill kind=full     mesh=1x4 batch=1 prefill8192=   18.66 ms  traced_decode@2048= 0.4256 ms/token  prefill_pcc=0.992220 decode_pcc=0.992188  (0.4256/0.4258/0.4256)
+=== review2 chain done ===
+=== 4/5 the shipped 8192 B fabric packet, whole layer
+exit=0
+AB       tp4              kind=sliding  mesh=1x4 batch=1 prefill8192=   18.84 ms  traced_decode@2048= 0.4574 ms/token  prefill_pcc=0.993700 decode_pcc=0.993488  (0.4574/0.4575/0.4575)
+AB       tp4              kind=full     mesh=1x4 batch=1 prefill8192=   18.29 ms  traced_decode@2048= 0.4259 ms/token  prefill_pcc=0.992220 decode_pcc=0.992188  (0.4260/0.4261/0.4259)
+=== 5/5 the rejected 4352 B fabric packet, whole layer, same harness
+exit=0
+AB       tp4              kind=sliding  mesh=1x4 batch=1 prefill8192=   19.11 ms  traced_decode@2048= 0.4589 ms/token  prefill_pcc=0.993700 decode_pcc=0.993488  (0.4589/0.4590/0.4590)
+AB       tp4              kind=full     mesh=1x4 batch=1 prefill8192=   18.32 ms  traced_decode@2048= 0.4282 ms/token  prefill_pcc=0.992220 decode_pcc=0.992188  (0.4283/0.4283/0.4282)
+=== packet A/B done ===

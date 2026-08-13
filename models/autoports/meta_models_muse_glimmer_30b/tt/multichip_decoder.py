@@ -361,10 +361,15 @@ DEFAULT_DECODE_CCL_DTYPE = None
 #: ``rs_ag``       **0.4617 / 0.4311**         19.10 / 18.51
 #: ==============  ==========================  ==========================
 #:
-#: The pair wins decode by 0.9 % and loses prefill by 12 %, so the two modes are
-#: split (the prefill row above is one run of each; the 12 % figure is the
-#: like-for-like ``ccl_rs_ag_prefill`` candidate in ``logs/layer_ab_ccl_workers.log``,
-#: 21.03 / 20.59 ms against 18.72 / 18.43 ms).  The mechanism is that at 32 rows
+#: The pair wins decode by 0.9 %, and prefill is a wash once both payloads are
+#: tuned: see :data:`DEFAULT_PREFILL_CCL_RS_WORKERS` for the 0.24 % op-level gap
+#: and ``logs/layer_ab_reducer_final.log`` for the whole-layer A/B that measures
+#: every reducer candidate in one invocation.  The two modes are still split
+#: because decode is the per-token metric and the fused op costs nothing to keep
+#: on prefill.  (An earlier version of this comment recorded the prefill gap as
+#: "12 % slower" from ``logs/layer_ab_ccl_workers.log``, which predates
+#: :data:`DEFAULT_PREFILL_CCL_RS_WORKERS` and therefore measured a prefill payload
+#: with the decode-tuned single worker.)  The mechanism is that at 32 rows
 #: the collective is latency-bound and the fused op's internal barrier is worth
 #: less than the two dispatches cost, while at 8192 rows it is bandwidth-bound and
 #: one dispatch wins.  The ~14 us a decode-shape collective costs
@@ -377,7 +382,9 @@ DEFAULT_DECODE_CCL_MODE = "rs_ag"
 #:
 #: The single largest non-matmul win in this stage, and it is one integer.  At the
 #: decode payload (40 KB) the reduce-scatter is pure fixed cost -- 2.7 GB/s against
-#: the 90-120 GB/s the same fabric reaches at 512 KB -- and the op's default worker
+#: the **120.6 GB/s** the same fabric reaches on the 8192-row BF16 all-gather at
+#: the shipped packet size (``logs/fabric_packet_probe.log``, 678.41 us for
+#: 81,788,928 B) -- and the op's default worker
 #: count *costs* time there because each worker's setup and sync is paid whether or
 #: not there is payload for it.  Traced, at the real decode shape, both memory
 #: configs (``logs/ccl_tuning_probe.log``):
@@ -411,11 +418,13 @@ DEFAULT_DECODE_CCL_MODE = "rs_ag"
 #: the same op is bandwidth-bound and wants four -- 1814.9 us at one worker
 #: against **759.9** at four, on the shipped BFP8 payload
 #: (``logs/fabric_packet_probe.log``).  That is also why the prefill reducer is
-#: not the pair: ``reduce_scatter(w=4) + all_gather`` is 759.9 + 810.2 = 1570.1 us
-#: against ``all_reduce``'s **1563.7**, i.e. the same to 0.4 %, so prefill keeps
-#: the single dispatch.  An earlier version of this stage recorded that gap as
-#: "12 % slower", which was the decode-tuned one-worker value applied to a
-#: prefill payload.
+#: not the pair.  At the **shipped** 8192 B packet, ``reduce_scatter(w=4) +
+#: all_gather`` is 775.8 + 809.2 = 1584.9 us against ``all_reduce``'s **1581.1**,
+#: i.e. the same to 0.24 %; at the op default 4352 B the same rows read 759.9 +
+#: 810.2 = 1570.1 against 1563.7, the same to 0.4 %.  Either way the pair buys
+#: nothing on prefill, so prefill keeps the single dispatch.  An earlier version
+#: of this stage recorded that gap as "12 % slower", which was the decode-tuned
+#: one-worker value applied to a prefill payload.
 DEFAULT_DECODE_CCL_RS_WORKERS = 1
 #: The same knob at the prefill payload, where the op is bandwidth-bound rather
 #: than latency-bound and wants four workers instead of one (1814.9 -> 759.9 us on
@@ -1036,9 +1045,10 @@ class MultichipDecoder(OptimizedDecoder):
         ring all-reduce *is* a reduce-scatter plus an all-gather, so both forms
         move the same bytes and the only question is one fused dispatch against
         two.  At the 40 KB decode payload the collective is latency-bound and the
-        pair wins by 0.9 %; at the 107 MB prefill payload it is bandwidth-bound
-        and the fused op wins by 12 % (``logs/layer_ab_ccl_mode.log``,
-        ``logs/layer_ab_ccl_workers.log``).  See
+        pair wins by 0.9 %; at the 107 MB prefill payload, with each payload's own
+        ``num_workers_per_link``, the two are within 0.24 % and prefill keeps the
+        single dispatch (``logs/layer_ab_reducer_final.log``,
+        ``logs/fabric_packet_probe.log``).  See
         :data:`DEFAULT_DECODE_CCL_MODE`.
         """
         if (self.prefill_ccl_mode if prefill else self.decode_ccl_mode) == "rs_ag":

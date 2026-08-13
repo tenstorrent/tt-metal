@@ -92,6 +92,45 @@ def readme_numbers(pattern: str) -> list[float]:
     return [float(value.replace(",", "")) for value in match.groups()]
 
 
+def matmul_dram_rows(window: str) -> dict[str, tuple[float, float]]:
+    """Per-role mean ``(GB/s, % of peak)`` over every replay in a decode capture.
+
+    The report emits one row per op *instance*, so a role appears once per replay
+    and the README quotes the mean.  Roles are keyed on what the CSV actually
+    carries -- the weight dtype, the inner-dim block size, and (for the two BFP8
+    rows that share both) the FLOP count, since ``wqkv``'s per-device N is 1280
+    against ``attn_gate``'s 1024.
+    """
+    import pandas as pd
+
+    frame = pd.read_csv(ROOT / f"tracy/{window}_perf_report.csv")
+    frame = frame[frame["OP Code"].astype(str).str.contains("Matmul", na=False)].copy()
+    for column in ("DRAM", "DRAM %", "FLOPs", "Inner Dim Block Size"):
+        frame[column] = pd.to_numeric(frame[column], errors="coerce")
+
+    def role(row) -> str:
+        dtype, block = row["Input 1 Datatype"], row["Inner Dim Block Size"]
+        if dtype == "BFLOAT8_B":
+            return "o_proj" if block == 2 else ("wqkv" if row["FLOPs"] > 23.5 else "attn_gate")
+        return "mlp_gate_up" if block == 13 else "mlp_down"
+
+    frame["role"] = frame.apply(role, axis=1)
+    return {
+        name: (round(float(group["DRAM"].mean()), 2), round(float(group["DRAM %"].mean()), 2))
+        for name, group in frame.groupby("role")
+    }
+
+
+def readme_headings() -> set[str]:
+    """Every in-document anchor GitHub would generate for this README."""
+    anchors = set()
+    for line in README.read_text().splitlines():
+        if line.startswith("#"):
+            title = line.lstrip("#").strip().lower()
+            anchors.add(re.sub(r"[^a-z0-9 _-]", "", title).replace(" ", "-"))
+    return anchors
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true", help="exit 1 on any stale figure (default behaviour)")
@@ -225,6 +264,33 @@ def main() -> int:
         failures.check(
             f"vs single-chip worst[{kind} {seq_len} b{batch}]", readme_numbers(row)[1], round(min(values), 6)
         )
+
+    # ---- the DRAM/%-of-peak table --------------------------------------------
+    # Round-2 review: this table was quoted from eyeballed instances (one value
+    # was a minimum, not the mean), and nothing re-derived it.
+    dram = matmul_dram_rows("sliding/decode_2048")
+    for role, row in (
+        ("wqkv", r"\(`wqkv`\) \| BFP8 \| ([0-9.]+) GB/s \| ([0-9.]+) %"),
+        ("attn_gate", r"\(`attn_gate`\) \| BFP8 \| ([0-9.]+) GB/s \| ([0-9.]+) %"),
+        ("o_proj", r"\(`o_proj`\) \| BFP8 \| ([0-9.]+) \| ([0-9.]+) %"),
+        ("mlp_gate_up", r"\(gate, up\) \| BFP4 \| ([0-9.]+) \| ([0-9.]+) %"),
+        ("mlp_down", r"\(`mlp_down`\) \| BFP4 \| ([0-9.]+) \| ([0-9.]+) %"),
+    ):
+        reported_gbs, reported_pct = readme_numbers(row)
+        failures.check(f"dram table: {role} GB/s", reported_gbs, dram[role][0])
+        failures.check(f"dram table: {role} % of peak", reported_pct, dram[role][1])
+
+    # ---- every artifact the prose cites, and every anchor it links to ---------
+    text = README.read_text()
+    missing_logs = sorted({name for name in re.findall(r"`(logs/[\w./-]+)`", text) if not (ROOT / name).exists()})
+    failures.check("README: cited artifacts that exist", len(missing_logs), 0, exact=True)
+    if missing_logs:
+        print("   missing: " + ", ".join(missing_logs))
+    anchors = readme_headings()
+    dangling = sorted({a for a in re.findall(r"\]\(#([\w-]+)\)", text) if a not in anchors})
+    failures.check("README: in-document links that resolve", len(dangling), 0, exact=True)
+    if dangling:
+        print("   dangling: " + ", ".join(dangling))
 
     print()
     if failures:

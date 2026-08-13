@@ -632,3 +632,83 @@ printed digit -- 16 passed, worst real-weight PCC **0.9950028290443281** on
 `decode[sliding] step=6 pos=3006`, against 0.995105 for the shipped BF16 payload.
 The env var is test-only plumbing; it is not read by `multichip_decoder.py` and
 changes no default.
+
+## 13. Review round 2, and the five things it caught
+
+The second `$stage-review` returned `more-work-needed`. Nothing it found was a
+defect in `multichip_decoder.py`; all eight items were the same failure mode in
+different places — **a correction applied at one site and not at the others**.
+Round 1 withdrew three claims (the `use_l1_small_for_semaphores` "part" claim, the
+fractured-residual L1 argument, and the "rs_ag prefill is 12 % slower" figure) and
+each withdrawal reached the source comment but not the README summary table, or
+the README prose but not the work log. The result was a document that contradicted
+itself 300 lines apart — the README both stated that the semaphore flag cannot
+allocate and that the shipped code passes it.
+
+Fixed by propagating each correction to **every** site: the flag (README §7.3 and
+this log §7.3), the fractured rejection (the "Measured and rejected" row now cites
+`logs/fractured_decode_probe.log` and the *tuned* topology log, and states the
+≥11.6 μs net loss instead of the retracted L1 blocker), and the prefill reducer
+(`_all_reduce`'s docstring, `DEFAULT_PREFILL_CCL_MODE`, and the rejected-candidates
+row).
+
+### 13.1 Three device runs, because three claims were under-measured
+
+`bench/run_review2_chain.sh`, one job at a time:
+
+1. **`fractured_decode_probe` and the tuned topology probe re-run.** Both predated
+   the 8192 B packet change and logged the old 4352 B warning, so neither measured
+   the shipped fabric. Re-run at 8192: norms 15.47 / 10.80–19.25, stats gather
+   10.47, `pre_all_gather` 26.97 (was 15.46 / 10.83–19.24 / 10.42 / 27.01), and
+   `fractured` 282.19 against `replicated` 315.15 (was 282.81 / 315.36). Every
+   number moved by less than 0.5 % and the rejection is unchanged, but it now
+   rests on the configuration that ships.
+
+2. **One A/B invocation for all four reducer candidates**
+   (`logs/layer_ab_reducer_final.log`), because the README's three-row reducer
+   table had been stitched from three different runs. The result is more useful
+   than the fix: rows 1 and 4 dispatch the *same* prefill collective and differ by
+   0.57 ms (19.43 vs 18.86 on `sliding`, 3.0 %), so whole-layer prefill cannot
+   resolve a reducer choice at all — and the `rs_ag` prefill row is 2.8 % slower on
+   `sliding` and 0.6 % *faster* on `full`. Decode is decided and repeatable: the
+   pair wins 1.1 % on both kinds. The prefill claim now rests on the op-level
+   0.24 % at the shipped packet size, and the README says so.
+
+3. **The fabric packet size, measured whole-layer for the first time.** `layer_ab`
+   gained `--packet-bytes` (a mesh-open argument, so it needs one process per
+   value, not a CANDIDATE). 8192 against 4352: decode **0.4574 / 0.4259** against
+   0.4589 / 0.4282, prefill **18.84 / 18.29** against 19.11 / 18.32. 8192 wins or
+   ties all four windows. The isolated 1.1 % prefill-collective regression at 8192
+   is real and does **not** survive to the layer. The runtime's advice is also
+   provably unsatisfiable: at 8192 it asks for 4352 (1088 B BFP8 prefill pages), at
+   4352 it asks for 8192 (2048 B BF16 decode pages). Both warnings are in the two
+   logs. The README now has the `Fabric packet size` section it had been linking
+   to, and "load-bearing" is restated as what it is: half a percent of decode, not
+   a correctness constraint.
+
+### 13.2 The gate that should have caught all of this
+
+Every round-2 finding lived in the part of the README `check_reported_figures.py`
+did not cover. It now covers three more classes:
+
+- **the DRAM/%-of-peak table** — per-role means over the 8 replays, re-derived from
+  the CSV. This immediately caught two stale entries: `wqkv` was 384 / 75.0 against
+  a real 382.41 / 74.69, and `attn_gate`'s 68.4 was the *minimum* instance, not the
+  mean (68.55);
+- **every artifact the prose cites** — a ``logs/...`` path that does not exist is
+  now a failure;
+- **every in-document link** — which found the dangling `#fabric-packet-size`
+  anchor the summary table had been pointing at since the packet decision was made.
+
+Also classified, at the review's request: the `No output subblock size found`
+advice on 32 of 48 decode matmul rows. Not actionable —
+`MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig` exposes only `in0_block_w`,
+`per_core_M`, `per_core_N` and `fused_activation`, and the report's subblock
+columns are empty for every matmul row in this stage *and* the single-chip one
+(24 of 48 rows there). The count rises 24 → 32 only because `o_proj` joins the
+SLOW set, which is the per-device K=1024 blocking limit already documented.
+
+And one artifact disagreement: `context_contract.json` said the `l1_small` ladder
+"2048/4096/6144/7168 all pass" while the README and the source both record 2048
+filling the region mid-suite. The contract is the machine-read artifact, so it now
+carries the whole ladder verbatim.

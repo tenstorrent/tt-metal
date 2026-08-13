@@ -13,6 +13,8 @@ measured on this host with this protocol rather than quoted from another log.
     # the shipped multichip layer plus geometry candidates, four chips
     python .../bench/layer_ab.py --mesh 1x4 --candidates tp4,mlp_bw26,sdpa_mc16
     python .../bench/layer_ab.py --list
+    # the fabric packet payload, which is a mesh-open argument
+    python .../bench/layer_ab.py --mesh 1x4 --candidates tp4 --packet-bytes 4352
 """
 
 from __future__ import annotations
@@ -29,6 +31,7 @@ from models.autoports.meta_models_muse_glimmer_30b.tt.functional_decoder import 
 from models.autoports.meta_models_muse_glimmer_30b.tt.multichip_decoder import (
     DEFAULT_L1_SMALL_SIZE,
     FABRIC_CONFIG,
+    FABRIC_PACKET_PAYLOAD_BYTES,
     MULTICHIP_DECODE_MATMUL,
     MultichipDecoder,
     close_multichip_mesh,
@@ -278,6 +281,10 @@ def main():
     ap.add_argument("--decode-iters", type=int, default=64)
     ap.add_argument("--batch", type=int, default=1)
     ap.add_argument("--rounds", type=int, default=3)
+    # The fabric packet payload is a mesh-open argument, not a decoder argument,
+    # so it cannot be a CANDIDATE: measuring it whole-layer needs one process per
+    # value.  ``bench/run_review2_chain.sh`` runs the pair.
+    ap.add_argument("--packet-bytes", type=int, default=FABRIC_PACKET_PAYLOAD_BYTES)
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--real-weights", action="store_true")
     args = ap.parse_args()
@@ -296,6 +303,7 @@ def main():
         mesh_shape,
         trace_region_size=90112 * 12,
         l1_small_size=0 if single else DEFAULT_L1_SMALL_SIZE,
+        packet_payload_bytes=args.packet_bytes,
         fabric_config=None if single else FABRIC_CONFIG,
     )
     ttnn.SetDefaultDevice(mesh)
