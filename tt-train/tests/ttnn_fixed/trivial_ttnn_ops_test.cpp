@@ -286,11 +286,11 @@ TEST_F(TrivialTnnFixedTest, TestSamplingPositiveTemperatureWithMask) {
     // Test sampling with positive temperature, with mask, and xarray of shape {1, 1, 32, 65}
     xt::xarray<float>::shape_type shape = {1, 1, 32, 65};
     xt::xarray<float> a = ttml::test_utils::make_uniform_xarray<float>(shape, 0.0F, 1.0F, 84U);
-    // Create a mask: mask out the last column (set to large negative value)
-    xt::xarray<float> mask = xt::zeros<float>(shape);
-    for (size_t i = 0; i < 32; ++i) {
-        mask(0, 0, i, 64) = 1e4F;
-    }
+    // Mask out the last column. Shape is {1, 1, 1, 65}: one row broadcast across every token, which
+    // is what callers build (padding columns do not depend on token position).
+    xt::xarray<float>::shape_type mask_shape = {1, 1, 1, 65};
+    xt::xarray<float> mask = xt::zeros<float>(mask_shape);
+    mask(0, 0, 0, 64) = 1e4F;
     auto tensor_a = ttml::core::from_xtensor(a, &ttml::autograd::ctx().get_device());
     auto tensor_mask = ttml::core::from_xtensor(mask, &ttml::autograd::ctx().get_device());
     float temperature = 1.0F;
@@ -323,10 +323,10 @@ TEST_F(TrivialTnnFixedTest, TestSamplingDoesNotMutateInputs) {
     constexpr uint32_t kVocab = 64;
     xt::xarray<float>::shape_type shape = {1, 1, kRows, kVocab};
     xt::xarray<float> a = ttml::test_utils::make_uniform_xarray<float>(shape, -2.0F, 2.0F, 42U);
-    xt::xarray<float> m = xt::zeros<float>(shape);
-    for (uint32_t i = 0; i < kRows; ++i) {
-        m(0, 0, i, kVocab - 1) = 1e4F;
-    }
+    // [1, 1, 1, V]: the broadcast shape every caller passes.
+    xt::xarray<float>::shape_type mask_shape = {1, 1, 1, kVocab};
+    xt::xarray<float> m = xt::zeros<float>(mask_shape);
+    m(0, 0, 0, kVocab - 1) = 1e4F;
 
     auto* device = &ttml::autograd::ctx().get_device();
     auto tensor_a = ttml::core::from_xtensor(a, device);
@@ -386,28 +386,161 @@ TEST_F(TrivialTnnFixedTest, TestSamplingTemperatureScalesLogitsNotNoise) {
     EXPECT_NE(hot, expected) << "high temperature must not reduce to argmax";
 }
 
+TEST_F(TrivialTnnFixedTest, TestSamplingBroadcastPaddingMask) {
+    // The padding mask every real caller builds is [1, 1, 1, V] -- ONE row, because which vocab
+    // columns are padding does not depend on the token position (see _sample_logits_mask in
+    // generate.py and _build_logits_mask in llama_completer.py). It must apply to every token row.
+    //
+    // The other masked tests in this file hand in a FULL-SIZE [1, 1, rows, V] mask, which exercises
+    // a shape no caller passes and cannot catch a missing broadcast. This one can: in TILE layout a
+    // height-1 tensor carries data only in row 0 of each tile, with rows 1..31 zero-filled, so an
+    // implementation that subtracts tile-for-tile masks only token row 0 and lets every other row
+    // argmax onto the first padding column.
+    constexpr uint32_t kRows = 32;          // must exceed 1, or the unmasked rows do not exist
+    constexpr uint32_t kVocab = 64;         // real vocabulary
+    constexpr uint32_t kPaddedVocab = 128;  // what a TP-padded LM head actually emits
+    constexpr uint32_t kBestRealId = 42;
+
+    // Real columns are negative (kBestRealId least so); padding columns sit at 0.0, exactly as
+    // zero-filled LM-head rows do. So an UNMASKED argmax lands on kVocab -- the first padding
+    // column -- and a correctly masked one lands on kBestRealId.
+    xt::xarray<float>::shape_type logits_shape = {1, 1, kRows, kPaddedVocab};
+    xt::xarray<float> logits = xt::zeros<float>(logits_shape);
+    for (uint32_t r = 0; r < kRows; ++r) {
+        for (uint32_t c = 0; c < kVocab; ++c) {
+            logits(0, 0, r, c) = -1.0F;
+        }
+        logits(0, 0, r, kBestRealId) = -0.5F;
+        // columns [kVocab, kPaddedVocab) stay at 0.0
+    }
+
+    xt::xarray<float>::shape_type mask_shape = {1, 1, 1, kPaddedVocab};
+    xt::xarray<float> mask = xt::zeros<float>(mask_shape);
+    for (uint32_t c = kVocab; c < kPaddedVocab; ++c) {
+        mask(0, 0, 0, c) = 1e4F;
+    }
+
+    auto* device = &ttml::autograd::ctx().get_device();
+    auto tensor_logits = ttml::core::from_xtensor(logits, device);
+    auto tensor_mask = ttml::core::from_xtensor(mask, device);
+
+    // Greedy: exact and deterministic, so assert the strongest thing -- every row picks the best
+    // REAL column. A row that missed the mask would report kVocab instead.
+    auto greedy = ttml::core::to_vector<uint32_t>(ttml::ttnn_fixed::sample(tensor_logits, 0.0F, 42, tensor_mask));
+    ASSERT_EQ(greedy.size(), kRows);
+    EXPECT_EQ(greedy, std::vector<uint32_t>(kRows, kBestRealId))
+        << "a [1, 1, 1, V] mask must apply to every token row, not just row 0";
+
+    // Positive temperature compiles a different kernel (the noise and the scaling are no longer
+    // compiled out), so the broadcast has to hold there too. The noise makes the winner among the
+    // real columns unpredictable, but the 1e4 penalty is far beyond the noise span, so a padding
+    // column must never win.
+    // TODO: shares the BH accuracy issue guarding TestSamplingPositiveTemperatureWithMask
+    // (https://github.com/tenstorrent/tt-metal/issues/37342); the greedy half above still runs.
+    auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
+    if (board != tt::BoardType::P100 && board != tt::BoardType::P150) {
+        auto sampled =
+            ttml::core::to_vector<uint32_t>(ttml::ttnn_fixed::sample(tensor_logits, 1.0F, 4242, tensor_mask));
+        ASSERT_EQ(sampled.size(), kRows);
+        for (uint32_t r = 0; r < kRows; ++r) {
+            EXPECT_LT(sampled[r], kVocab) << "row " << r << " sampled a masked padding column";
+        }
+    }
+}
+
+TEST_F(TrivialTnnFixedTest, TestSamplingRaggedShapes) {
+    // Every other sampling test uses tile-aligned dimensions (32 or 2048 tokens, 32/64 vocab) and a
+    // single batch entry, which leaves three pieces of the op untested:
+    //
+    //   * tokens % 32 != 0  -- the last tile row of each batch entry is partly padding, so the
+    //                          writer must emit only `valid_rows` results for it.
+    //   * V % 32 != 0       -- the last vocab tile is partly padding, so the argmax scan must stop
+    //                          at the logical width (`cols_to_scan`).
+    //   * batch > 1         -- output pages are indexed as batch_index * tokens + first_token, and
+    //                          with one batch entry that term is always zero.
+    //
+    // Padding is what makes this a real test rather than a shape smoke test: from_xtensor zero-fills
+    // the padded region, and every REAL logit here is negative, so any padding element the scan
+    // wrongly visits (0.0) beats the whole row and shows up as an out-of-range index.
+    constexpr uint32_t kBatch = 2U;
+    constexpr uint32_t kTokens = 37U;  // 37 = 32 + 5 -> Ht = 2, last tile row has 5 valid rows
+    constexpr uint32_t kVocab = 77U;   // 77 = 2*32 + 13 -> Wt = 3, last tile has 13 valid columns
+
+    xt::xarray<float>::shape_type shape = {kBatch, 1, kTokens, kVocab};
+    xt::xarray<float> a = xt::zeros<float>(shape);
+    a.fill(-1.0F);
+
+    // A distinct winner per (batch, token) so a row/page mix-up cannot pass by coincidence.
+    std::vector<uint32_t> expected(kBatch * kTokens);
+    for (uint32_t b = 0; b < kBatch; ++b) {
+        for (uint32_t t = 0; t < kTokens; ++t) {
+            const uint32_t winner = ((b * kTokens + t) * 7U) % kVocab;
+            a(b, 0, t, winner) = -0.5F;
+            expected[b * kTokens + t] = winner;
+        }
+    }
+
+    auto tensor_a = ttml::core::from_xtensor(a, &ttml::autograd::ctx().get_device());
+
+    // Greedy is exact, so assert the full result vector: one id per token, in [batch, token] order.
+    auto greedy = ttml::core::to_vector<uint32_t>(ttml::ttnn_fixed::sample(tensor_a, 0.0F, 7));
+    ASSERT_EQ(greedy.size(), kBatch * kTokens) << "one sampled id per token, across all batch entries";
+    EXPECT_EQ(greedy, expected);
+
+    // The scan bounds also have to hold in the sampled kernel, which is a separate binary
+    // (DO_GUMBEL_NOISE). The noise makes the winner unpredictable, but no index may ever leave the
+    // logical vocabulary -- reaching the zero-filled padding would.
+    auto sampled = ttml::core::to_vector<uint32_t>(ttml::ttnn_fixed::sample(tensor_a, 1.0F, 99));
+    ASSERT_EQ(sampled.size(), kBatch * kTokens);
+    for (uint32_t i = 0; i < sampled.size(); ++i) {
+        EXPECT_LT(sampled[i], kVocab) << "index " << i << " left the logical vocabulary";
+    }
+}
+
 TEST_F(TrivialTnnFixedTest, TestSamplingGumbelMatchesSoftmaxDistribution) {
     // The Gumbel-max trick guarantees P(argmax == i) == softmax(logits / temperature)_i. This is the
     // only assertion in the suite that actually pins down the -log(-log(U)) chain: dropping or
     // reordering a step still yields in-range indices, so the shape and bounds checks stay green.
-    constexpr uint32_t kRows = 2048;
-    constexpr uint32_t kVocab = 32;
+    //
+    // The shape is deliberately awkward on every axis, so the distribution has to survive the same
+    // padding and page arithmetic the rest of the op relies on:
+    //   kBatch = 2       -> results are gathered across batch entries (page = batch * tokens + t)
+    //   kRows  % 32 = 1  -> the last of 33 tile rows per batch entry contributes a SINGLE sample
+    //   kVocab % 32 = 24 -> the last of 4 vocab tiles is partly padding
+    // kBatch * kRows * seeds still totals 8200 samples, so the tolerances below are unchanged.
+    constexpr uint32_t kBatch = 2;
+    constexpr uint32_t kRows = 1025;
+    constexpr uint32_t kVocab = 120;
     constexpr uint32_t kActive = 4;
-    // Unnormalized weights on the first four columns; every other column is pushed far enough down
-    // that the bounded noise can never lift it (-60 + 16.6 is still well below 0 - 3.1).
+    // The active columns sit in FOUR DIFFERENT vocab tiles and in both half-faces of a tile (a tile
+    // is 32 wide and splits into 16-column faces). With every weight packed into column 0..3 they
+    // would all land in one face of one tile, and a running argmax that failed to carry its maximum
+    // across tile or face boundaries would still pass.
+    //   5 -> tile 0 face 0 | 52 -> tile 1 face 1 | 70 -> tile 2 face 0 | 115 -> tile 3 face 1
+    constexpr std::array<uint32_t, kActive> kActiveCols = {5U, 52U, 70U, 115U};
+    // Unnormalized weights on those columns; every other column is pushed far enough down that the
+    // bounded noise can never lift it (-60 + 16.6 is still well below 0 - 3.1).
     constexpr std::array<float, kActive> kWeights = {8.0F, 4.0F, 2.0F, 1.0F};
     constexpr float kWeightTotal = 15.0F;
     constexpr float kSuppressed = -60.0F;
 
-    xt::xarray<float>::shape_type shape = {1, 1, kRows, kVocab};
+    xt::xarray<float>::shape_type shape = {kBatch, 1, kRows, kVocab};
     xt::xarray<float> a = xt::zeros<float>(shape);
     a.fill(kSuppressed);
-    for (uint32_t r = 0; r < kRows; ++r) {
-        for (uint32_t c = 0; c < kActive; ++c) {
-            a(0, 0, r, c) = std::log(kWeights[c]);
+    for (uint32_t b = 0; b < kBatch; ++b) {
+        for (uint32_t r = 0; r < kRows; ++r) {
+            for (uint32_t c = 0; c < kActive; ++c) {
+                a(b, 0, r, kActiveCols[c]) = std::log(kWeights[c]);
+            }
         }
     }
     auto tensor_a = ttml::core::from_xtensor(a, &ttml::autograd::ctx().get_device());
+
+    // Reverse map so a sampled column can be attributed to its weight.
+    std::vector<int> col_to_slot(kVocab, -1);
+    for (uint32_t c = 0; c < kActive; ++c) {
+        col_to_slot[kActiveCols[c]] = static_cast<int>(c);
+    }
 
     // Pool several seeds so the result does not hinge on the internal structure of one RNG stream.
     const std::vector<uint32_t> seeds = {1U, 2U, 3U, 4U};
@@ -415,10 +548,13 @@ TEST_F(TrivialTnnFixedTest, TestSamplingGumbelMatchesSoftmaxDistribution) {
     uint32_t total_samples = 0U;
     for (auto seed : seeds) {
         auto picks = ttml::core::to_vector<uint32_t>(ttml::ttnn_fixed::sample(tensor_a, 1.0F, seed));
-        ASSERT_EQ(picks.size(), kRows);
+        ASSERT_EQ(picks.size(), kBatch * kRows);
         for (auto pick : picks) {
-            ASSERT_LT(pick, kActive) << "sampled a column whose logit was " << kSuppressed;
-            ++counts[pick];
+            // Past kVocab is tile padding, which from_xtensor zero-fills -- reaching it would beat
+            // the weight-1 column outright, so this also guards the ragged-width scan bound.
+            ASSERT_LT(pick, kVocab) << "sampled index left the logical vocabulary";
+            ASSERT_NE(col_to_slot[pick], -1) << "sampled column " << pick << ", whose logit was " << kSuppressed;
+            ++counts[static_cast<uint32_t>(col_to_slot[pick])];
             ++total_samples;
         }
     }
@@ -430,7 +566,8 @@ TEST_F(TrivialTnnFixedTest, TestSamplingGumbelMatchesSoftmaxDistribution) {
         const double expected_count = p * total_samples;
         const double tolerance = 5.0 * std::sqrt(total_samples * p * (1.0 - p));
         EXPECT_NEAR(static_cast<double>(counts[c]), expected_count, tolerance)
-            << "column " << c << " selected " << counts[c] << " / " << total_samples;
+            << "column " << kActiveCols[c] << " (weight " << kWeights[c] << ") selected " << counts[c] << " / "
+            << total_samples;
     }
 
     // A nonzero seed is contractually reproducible, and distinct seeds must actually decorrelate --

@@ -4,39 +4,23 @@
 
 #include "trivial_ttnn_ops.hpp"
 
-#include <algorithm>
 #include <optional>
-#include <tt-logger/tt-logger.hpp>
 #include <vector>
 
-#include "autograd/auto_context.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
-#include "ttnn/operations/copy/typecast/typecast.hpp"
+#include "metal/ops/gumbel_sample/gumbel_sample.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/moreh/moreh_mean/moreh_mean.hpp"
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
 #include "ttnn/operations/normalization/softmax/softmax.hpp"
-#include "ttnn/operations/rand/rand.hpp"
-#include "ttnn/operations/reduction/argmax/argmax.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttml::ttnn_fixed {
-
-namespace {
-
-// The inverse Gumbel CDF, -log(-log(u)), is finite only for u in (0, 1).
-// Half of the 31-bit RNG step is a natural strictly-positive lower endpoint;
-// ttnn::rand's half-open contract keeps the upper endpoint strictly below 1.
-constexpr float gumbel_uniform_lower_bound = 0x1p-32F;
-constexpr float gumbel_uniform_upper_bound = 1.0F;
-
-}  // namespace
 
 ttnn::Tensor sum_over_dim(const ttnn::Tensor& t, uint32_t dim) {
     return sum_moreh(t, dim, /* keepdim */ true);
@@ -108,180 +92,14 @@ ttnn::Tensor sample(
     uint32_t seed,
     std::optional<ttnn::Tensor> logits_padding_mask,
     std::optional<std::vector<uint32_t>> seed_axes) {
-    auto* device = &ttml::autograd::ctx().get_device();
-
-    ttnn::Tensor out = t;
-    // `out` starts out aliasing the caller's logits, so the in-place steps below (and the final
-    // deallocate) are gated on this flag: they are only legal once `out` is a tensor we produced.
-    bool out_is_owned = false;
-
-    if (temperature > 0.0F) {
-        namespace distributed = tt::tt_metal::distributed;
-        using EltwiseUnary = ttnn::operations::unary::EltwiseUnaryWithParam;
-
-        // NOTE on seed==0: we deliberately pass it through to ttnn::rand verbatim to honor that
-        // op's documented contract (seed==0 => host time-based entropy, non-reproducible). The
-        // tradeoff: ttnn::rand applies the per-device seed offset (see below) ONLY on the seed!=0
-        // path, so with seed==0 each device's noise comes from an independent host-entropy draw --
-        // neither reproducible nor *guaranteed* distinct across devices (divergence then depends on
-        // host RNG ordering, not on the sharded mesh index). Callers that need reproducible,
-        // guaranteed-per-device-distinct sampling (e.g. GRPO training) MUST pass a nonzero seed.
-
-        // The logits tensor `t` is the per-device LOCAL tensor, so out.logical_shape() is the
-        // local shape [B_local, 1, new_tokens, padded_V]. On a multi-device mesh this tensor is
-        // effectively replicated, and ttnn::rand with no mesh_mapper produces IDENTICAL RNG on
-        // every device (same seed + same per-core offset), giving identical Gumbel noise and thus
-        // identical argmax samples. To make each device draw DISTINCT but reproducible noise, we
-        // pass a MeshMapperConfig that Shards the batch dim on the mesh axes we want to seed
-        // uniquely. ttnn::rand then sets a per-device seed offset = (sharded linear mesh index) *
-        // num_cores, so each device gets a disjoint LFSR stream that is deterministic given `seed`.
-        //
-        // `seed_axes` carries that decision from the caller (which owns the mesh/axis names): the set
-        // of axes to seed uniquely (GRPO passes its dp/fsdp axes; tp/cp are omitted). When std::nullopt
-        // (the DEFAULT) we seed NO axis -- i.e. every device draws the SAME noise from `seed`, the
-        // original pre-per-device-seeding behavior. This is the safe default: it can never desync a
-        // replicated axis. Callers that need distinct per-device noise (e.g. GRPO, to avoid duplicate
-        // completions across data-parallel devices) MUST opt in by passing the sharded axes in
-        // seed_axes; leaving it unset reproduces identical noise on all devices.
-        //
-
-        const auto mesh_shape = ttml::autograd::ctx().get_mesh_shape();
-        const auto local_shape = out.logical_shape();
-
-        // An axis is seeded uniquely iff the caller listed it in seed_axes AND it is non-trivial
-        // (size > 1). With seed_axes == nullopt (default) NO axis is seeded => identical noise on every
-        // device. Track the count and the product of seeded axis sizes (the batch-dim shard factor).
-        auto should_seed_axis = [&](size_t i) -> bool {
-            if (mesh_shape[i] <= 1U || !seed_axes.has_value()) {
-                return false;
-            }
-            return std::find(seed_axes->begin(), seed_axes->end(), static_cast<uint32_t>(i)) != seed_axes->end();
-        };
-
-        uint32_t shard_product = 1U;
-        size_t num_shard_axes = 0;
-        for (size_t i = 0; i < mesh_shape.dims(); ++i) {
-            if (should_seed_axis(i)) {
-                shard_product *= mesh_shape[i];
-                ++num_shard_axes;
-            }
-        }
-
-        // Warn when running on a multi-device mesh without any seeded axis: every device will draw
-        // IDENTICAL noise. That is correct for a replicated (e.g. tp) mesh but is almost certainly a
-        // bug for data-parallel (dp / fsdp) sampling, where it makes every device emit the same sample
-        // (e.g. duplicate GRPO completions). Callers that intend distinct per-device noise must pass
-        // the sharded axes in seed_axes.
-        if (num_shard_axes == 0 && mesh_shape.mesh_size() > 1U) {
-            log_debug(
-                tt::LogOp,
-                "ttnn_fixed::sample: multi-device mesh {} but no seed_axes selected -> every device "
-                "draws identical noise (identical samples). Pass seed_axes with the data-parallel "
-                "(dp/fsdp) axes if you need distinct per-device sampling.",
-                mesh_shape);
-        }
-
-        ttnn::Tensor rand;
-        if (num_shard_axes > 0) {
-            // compute_shard_shape() inside ttnn::rand DIVIDES shape[shard_dim] by EACH sharded mesh
-            // axis size (cumulatively) and TT_FATALs if it is not divisible. To keep the PER-DEVICE
-            // rand shape exactly equal to the local logits shape (required for the elementwise
-            // ttnn::add below), we pass a GLOBAL shape whose tensor batch dim (dim 0) is the local
-            // batch multiplied by the PRODUCT of all seeded axis sizes. After division it returns to
-            // the local size, so divisibility always holds even when B_local == 1.
-            constexpr int kShardTensorDim = 0;  // batch dim carries the (fictional) shard factor
-
-            ttnn::Shape::Container global_dims(local_shape.view().begin(), local_shape.view().end());
-            global_dims[kShardTensorDim] *= shard_product;
-            const ttnn::Shape global_shape(std::move(global_dims));
-
-            // placements size must match mesh dims: Shard the batch dim on each seeded axis, Replicate
-            // the rest (size-1 axes and any replicated axis the caller excluded, e.g. tp).
-            distributed::MeshMapperConfig mapper;
-            mapper.placements.reserve(mesh_shape.dims());
-            for (size_t i = 0; i < mesh_shape.dims(); ++i) {
-                if (should_seed_axis(i)) {
-                    mapper.placements.push_back(distributed::MeshMapperConfig::Shard{kShardTensorDim});
-                } else {
-                    mapper.placements.push_back(distributed::MeshMapperConfig::Replicate{});
-                }
-            }
-
-            rand = ttnn::rand(
-                /* size */ global_shape,
-                /* device */ *device,
-                /* dtype */ ttnn::DataType::FLOAT32,
-                /* layout */ ttnn::Layout::TILE,
-                /* memory_config */ ttnn::types::DRAM_MEMORY_CONFIG,
-                /* from */ gumbel_uniform_lower_bound,
-                /* to */ gumbel_uniform_upper_bound,
-                /* seed */ seed,
-                /* mesh_mapper */ mapper);
-        } else {
-            // Single-device (or all-unit) mesh: no data-parallel axis, distinct per-device noise is
-            // not needed. Draw directly on the local shape with no mapper.
-            rand = ttnn::rand(
-                /* size */ local_shape,
-                /* device */ *device,
-                /* dtype */ ttnn::DataType::FLOAT32,
-                /* layout */ ttnn::Layout::TILE,
-                /* memory_config */ ttnn::types::DRAM_MEMORY_CONFIG,
-                /* from */ gumbel_uniform_lower_bound,
-                /* to */ gumbel_uniform_upper_bound,
-                /* seed */ seed);
-        }
-
-        // Gumbel sampling trick: -log(-log(U)), where U ~ Uniform(0, 1)
-        // See: https://en.wikipedia.org/wiki/Gumbel_distribution#Random_variate_generation
-        //
-        // Run the four steps as ONE fused SFPU chain, in place on `rand`. Spelled as nested ttnn
-        // calls, each step allocates its own tensor and, since they are all temporaries of a single
-        // full-expression, none of them can be freed until the statement ends -- five live
-        // [B, 1, tokens, padded_V] FP32 tensors at peak, which OOMs on long prefills.
-        //
-        // 0.0F matches ttnn::log's default fast_and_approximate_mode=false.
-        const std::vector<EltwiseUnary> gumbel_chain{
-            EltwiseUnary{ttnn::operations::unary::UnaryOpType::LOG, 0.0F},
-            EltwiseUnary{ttnn::operations::unary::UnaryOpType::NEG},
-            EltwiseUnary{ttnn::operations::unary::UnaryOpType::LOG, 0.0F},
-            EltwiseUnary{ttnn::operations::unary::UnaryOpType::NEG},
-        };
-        rand =
-            ttnn::unary_chain(rand, gumbel_chain, /* memory_config */ std::nullopt, /* optional_output_tensor */ rand);
-
-        if (rand.dtype() != out.dtype()) {
-            rand = ttnn::typecast(rand, out.dtype());
-        }
-        if (rand.layout() != out.layout()) {
-            rand = ttnn::to_layout(rand, out.layout());
-        }
-
-        // logits / temperature + noise, as a single in-place add onto the noise buffer: the
-        // scaling rides along as an activation on the logits operand, so the scaled logits are
-        // never materialized and the sum reuses the noise allocation.
-        const EltwiseUnary scale_logits{ttnn::operations::unary::UnaryOpType::MUL_UNARY_SFPU, 1.0F / temperature};
-        const ttsl::Span<const EltwiseUnary> rhs_activations(&scale_logits, 1);
-        out = ttnn::add_(rand, out, /* post_activations */ {}, /* lhs_activations */ {}, rhs_activations);
-        out_is_owned = true;
-    }
-
-    if (logits_padding_mask.has_value()) {
-        // subtract a large number from the logits where the padding mask is set
-        if (out_is_owned) {
-            out = ttnn::subtract_(out, logits_padding_mask.value());
-        } else {
-            out = ttnn::subtract(out, logits_padding_mask.value());
-            out_is_owned = true;
-        }
-    }
-
-    // Untilize needs a second full-size tensor, so release the tiled one as soon as the
-    // row-major copy exists rather than holding both across argmax.
-    auto out_row_major = ttnn::untilize(out);
-    if (out_is_owned) {
-        out.deallocate();
-    }
-    return ttnn::argmax(out_row_major, 3, true);
+    // `seed_axes` lists the mesh axes whose devices hold DISTINCT data and must therefore draw
+    // DISTINCT noise -- the data-parallel axes (dp / fsdp). Axes left out are treated as replicated
+    // (tp) and draw IDENTICAL noise, which is what keeps a replica group agreeing on the token it
+    // shares. std::nullopt (the default) seeds no axis, so every device draws the same noise.
+    // Callers that need per-device sampling (e.g. GRPO, to avoid duplicate completions across data-
+    // parallel ranks) MUST pass their sharded axes explicitly.
+    return ttml::metal::gumbel_sample(
+        t, temperature, seed, seed_axes.value_or(std::vector<uint32_t>{}), logits_padding_mask);
 }
 
 ttnn::Tensor to_l1_interleaved(const ttnn::Tensor& t) {
