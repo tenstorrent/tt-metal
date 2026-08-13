@@ -277,6 +277,14 @@ Final Watcher/no-ETH evidence after rebuilding and installing the active runtime
 Full repair-loop evidence and commands are in
 `triage/LINEAR_PREFILL_STRESS_AUTOFIX.md`.
 
+### Local checkpoint
+
+Stage-owned implementation, tests, review reports, and compact evidence were
+committed locally at `a1d71ffae91` on branch
+`mvasiljevic/fmf/qwen-qwen3-6-27b`. No push was performed. Large ignored raw
+Tracy/runtime logs remain repo-local beside the committed tables and summaries;
+unrelated pre-existing untracked paths were not added.
+
 ### Review remediation: recurrent movement, real tables, and stress
 
 The linear recurrent cache is already a persistent device tensor and is updated
