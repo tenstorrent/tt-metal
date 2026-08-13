@@ -648,6 +648,80 @@ class TestImportGraphUnit:
 
         conn.close()
 
+    def test_raising_operation_is_recorded_with_its_error(self, tmp_path):
+        """Issue #28836: an operation with no function_end is still imported, with its exception."""
+        mock_graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1]},
+            {
+                "counter": 1,
+                "node_type": "tensor",
+                "params": {"tensor_id": "7", "shape": "[1, 1, 6400, 256]", "device_id": "0", "address": "1024"},
+                "connections": [2],
+            },
+            {
+                "counter": 2,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.conv2d"},
+                "connections": [],
+                "input_tensors": [1],
+            },
+            {"counter": 3, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+        python_io = [
+            {
+                "name": "ttnn.conv2d",
+                "arguments": {"in_channels": "256"},
+                "input_tensor_ids": [7],
+                "error": {"type": "RuntimeError", "message": "clash with L1 buffers"},
+            }
+        ]
+
+        report = _make_report(mock_graph, python_io=python_io)
+        conn, cursor = _import_to_db(report, tmp_path)
+
+        cursor.execute("SELECT operation_id, name FROM operations")
+        operations = cursor.fetchall()
+        assert len(operations) == 1, f"the raising operation must be recorded, got {operations}"
+        operation_id, name = operations[0]
+        assert name == "ttnn.conv2d"
+
+        cursor.execute("SELECT operation_id, operation_name, error_type, error_message FROM errors")
+        assert cursor.fetchall() == [(operation_id, "ttnn.conv2d", "RuntimeError", "clash with L1 buffers")]
+
+        cursor.execute("SELECT value FROM operation_arguments WHERE operation_id = ?", (operation_id,))
+        assert cursor.fetchall() == [("256",)]
+        cursor.execute("SELECT tensor_id FROM input_tensors WHERE operation_id = ?", (operation_id,))
+        assert cursor.fetchall() == [(7,)]
+
+        conn.close()
+
+    def test_incomplete_operation_without_error_record_still_imported(self, tmp_path):
+        """Without a recorded exception the reason stays generic, but the operation is still listed."""
+        mock_graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1]},
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.matmul"},
+                "connections": [],
+                "input_tensors": [],
+            },
+            {"counter": 2, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+
+        report = _make_report(mock_graph)
+        conn, cursor = _import_to_db(report, tmp_path)
+
+        cursor.execute("SELECT name FROM operations")
+        assert cursor.fetchall() == [("ttnn.matmul",)]
+
+        cursor.execute("SELECT error_type, error_message FROM errors")
+        error_type, error_message = cursor.fetchone()
+        assert error_type == "incomplete_operation"
+        assert "never completed" in error_message
+
+        conn.close()
+
     def test_operation_arguments_imported(self, tmp_path):
         """Test that operation arguments are imported from function_start."""
         mock_graph = [
