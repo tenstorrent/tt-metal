@@ -1078,15 +1078,9 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactoryCrossCoreDataExchange
     // footprint matches what the cross-core exchange has always allocated, and can be dropped once
     // that is confirmed to be safe.
     // -----------------------------------------------------------------------
-    // exchange/barrier are SET-labeled, which trips AUTO's racing-SET check; forced EXTERNAL
-    // is the documented escape and matches what AUTO resolves on Quasar today. Gen1 stays
-    // AUTO (the check is Gen2-only).
-    const SemaphoreScope sync_scope =
-        tensor_args.input_tensor.device()->arch() == tt::ARCH::QUASAR ? SemaphoreScope::EXTERNAL : SemaphoreScope::AUTO;
-    spec.semaphores.push_back(
-        SemaphoreSpec{.unique_id = SEM_EXCHANGE, .target_nodes = core_range, .scope = sync_scope});
+    spec.semaphores.push_back(SemaphoreSpec{.unique_id = SEM_EXCHANGE, .target_nodes = core_range});
     spec.semaphores.push_back(SemaphoreSpec{.unique_id = SEM_UNUSED, .target_nodes = core_range});
-    spec.semaphores.push_back(SemaphoreSpec{.unique_id = SEM_BARRIER, .target_nodes = core_range, .scope = sync_scope});
+    spec.semaphores.push_back(SemaphoreSpec{.unique_id = SEM_BARRIER, .target_nodes = core_range});
 
     // -----------------------------------------------------------------------
     // Tensor parameters
@@ -1308,14 +1302,8 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactoryCrossCoreDataExchange
         .dfb_bindings = std::move(reader_dfb_bindings),
         .semaphore_bindings =
             {
-                SemaphoreBinding{
-                    .semaphore_spec_name = SEM_EXCHANGE,
-                    .accessor_name = "exchange",
-                    .access_type = SemaphoreAccessType::SET},
-                SemaphoreBinding{
-                    .semaphore_spec_name = SEM_BARRIER,
-                    .accessor_name = "barrier",
-                    .access_type = SemaphoreAccessType::SET},
+                SemaphoreBinding{.semaphore_spec_name = SEM_EXCHANGE, .accessor_name = "exchange"},
+                SemaphoreBinding{.semaphore_spec_name = SEM_BARRIER, .accessor_name = "barrier"},
             },
         .tensor_bindings =
             {

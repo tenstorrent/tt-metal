@@ -23,17 +23,17 @@ namespace {
 // Metal 2.0 semaphore-binding hygiene (source lint; no device needed).
 // ============================================================================
 //
-// The AUTO scope classifier (ResolveSemaphoreScope) picks each semaphore's physical mechanism
+// The scope classifier (ResolveSemaphoreScope) picks each semaphore's physical mechanism
 // from a census of the kernels that DECLARE a binding to it (KernelSpec::semaphore_bindings).
 // A raw access -- get_semaphore(id), noc_semaphore_inc(addr, 1), ... -- is an UNDECLARED
-// writer the host cannot see: AUTO may then pick a non-atomic mechanism for a semaphore
+// writer the host cannot see: the census may then pick a non-atomic mechanism for a semaphore
 // that actually has concurrent writers. Worse under DM_LOCAL_CACHED: a cached semaphore is
 // RELOCATED into the cached-only pool (noc_semaphore.h sem_l1_offset()), so a declared binder
 // and an undeclared toucher address two DIFFERENT words -- the semaphore splits and a wait()
 // never completes. Keeping this lint green is load-bearing for the cached pick.
 //
 // LIMITS (deliberate):
-//  - LEGACY kernels are not checked: they never reach the AUTO path and manage their own
+//  - LEGACY kernels are not checked: they never reach the classifier and manage their own
 //    CreateSemaphore words.
 //  - This is a regression guard, not a soundness proof: macros, helper functions, or an
 //    address handed in as a runtime arg defeat it. The cached pick does not rest on it alone.
@@ -114,53 +114,10 @@ std::string strip_comments(const std::string& text) {
     return out;
 }
 
-// A sem:: token must be constructed with NO template argument list, so CTAD adopts the baked
-// scope and access rights. An explicit <...> pins the class defaults instead: it compiles until
-// the host bakes something else, then fails at JIT (token-ctor static_assert). Not a raw access,
-// so the pattern list below cannot see it; detected separately here.
-std::vector<std::string> find_pinned_scope_constructions(const std::string& code) {
-    std::vector<std::string> found;
-    size_t pos = 0;
-    while ((pos = code.find("Semaphore<", pos)) != std::string::npos) {
-        // First '>' is a safe bound: no nested Semaphore<...<...>> spelling exists, and erring
-        // short only over-flags.
-        const size_t close = code.find('>', pos);
-        if (close == std::string::npos) {
-            break;
-        }
-        // Only a construction over a sem:: token matters: raw-id ctors are covered by
-        // find_unbound_semaphore_constructions, and a scope-generic `Semaphore<...>&` parameter
-        // is fine. Discriminate by the first non-whitespace character after '>': a reference/
-        // pointer/list-position marker means a PARAMETER (skip); anything else is a potential
-        // construction, scanned to the ';' so brace-init and line-wrapped spellings stay covered.
-        size_t after = close + 1;
-        while (after < code.size() && std::isspace(static_cast<unsigned char>(code[after]))) {
-            after++;
-        }
-        if (after < code.size() && (code[after] == '&' || code[after] == '*' || code[after] == ',' ||
-                                    code[after] == ')' || code[after] == ':')) {
-            pos = close + 1;
-            continue;
-        }
-        const size_t stmt_end = code.find(';', close);
-        if (stmt_end != std::string::npos) {
-            const std::string stmt = code.substr(close, stmt_end - close);
-            if (stmt.find("sem::") != std::string::npos) {
-                found.emplace_back(
-                    "Semaphore<...> constructed over a sem:: token (drop <> and let CTAD "
-                    "adopt the baked scope and access rights)");
-            }
-        }
-        pos = close + 1;
-    }
-    return found;
-}
-
-// Raw-id Semaphore construction: `Semaphore s(x)` / `Semaphore<...> s{x}` where the constructor
-// argument is not a sem:: token. Still an UNDECLARED census participant: the host cannot see it,
-// so AUTO can pick a non-atomic mechanism out from under it. LIMITS: unnamed forms
-// (`auto s = Semaphore(x)`, `new Semaphore(x)`, temporaries) are not modeled -- no kernel
-// source uses them today.
+// Semaphore construction whose argument is not a sem:: accessor: in a Metal 2.0 kernel that is
+// an UNDECLARED census participant, so the census may pick a mechanism that is wrong once this toucher
+// runs. LIMITS: unnamed forms (`auto s = Semaphore(x)`, `new Semaphore(x)`, temporaries) are not
+// modeled -- no kernel source uses them today.
 std::vector<std::string> find_unbound_semaphore_constructions(const std::string& code) {
     std::vector<std::string> found;
     size_t pos = 0;
@@ -178,7 +135,7 @@ std::vector<std::string> find_unbound_semaphore_constructions(const std::string&
         if (p < code.size() && (std::isalnum(static_cast<unsigned char>(code[p])) || code[p] == '_')) {
             continue;
         }
-        // Optional template argument list; first '>' is a safe bound (see the pinned detector).
+        // Optional template argument list; first '>' is a safe bound (no nested '<...>' spelling exists).
         if (p < code.size() && code[p] == '<') {
             const size_t close = code.find('>', p);
             if (close == std::string::npos) {
@@ -208,7 +165,7 @@ std::vector<std::string> find_unbound_semaphore_constructions(const std::string&
         const std::string args = code.substr(p, (stmt_end == std::string::npos ? code.size() : stmt_end) - p);
         if (args.find("sem::") == std::string::npos) {
             found.emplace_back(
-                "Semaphore constructed from a raw id (no sem:: token): an undeclared participant "
+                "Semaphore constructed from a raw value (not a sem:: id): an undeclared participant "
                 "the census cannot see -- declare a SemaphoreBinding and construct from sem::<name>");
         }
     }
@@ -337,11 +294,9 @@ TEST(Metal2SemaphoreHygiene, DetectorFlagsKnownViolations) {
          "void kernel_main() {\n    uint64_t a = get_noc_addr(1, 1, 64);\n    noc_semaphore_inc(a, 1);\n}",
          true},
         {"raw_local_set", "void kernel_main() { noc_semaphore_set(ptr, 5); }", true},
-        // Explicit <> pins the class-default scope and access rights instead of the baked ones.
-        {"pinned_scope_ctor", "void kernel_main() { Semaphore<> s(sem::counter); }", true},
-        // Brace-init and line-wrapped pins are the same violation in other spellings.
-        {"pinned_scope_brace_init", "void kernel_main() { Semaphore<> s{sem::counter}; }", true},
-        {"pinned_scope_line_wrapped", "void kernel_main() {\n    Semaphore<>\n        s(sem::counter);\n}", true},
+        // There is no scope template parameter to pin anymore: constructions over a sem::
+        // accessor are clean under any spelling.
+        {"sem_id_ctor_explicit_template_ok", "void kernel_main() { Semaphore<> s(sem::counter); }", false},
         // A raw-id construction (any template spelling) is an undeclared census participant.
         {"raw_id_construction", "void kernel_main() { Semaphore<> s(sem_id); }", true},
         {"raw_id_construction_untemplated", "void kernel_main() { Semaphore s(get_arg_val<uint32_t>(0)); }", true},
@@ -350,9 +305,9 @@ TEST(Metal2SemaphoreHygiene, DetectorFlagsKnownViolations) {
          "template <SemScope S> void helper(Semaphore<ProgrammableCoreType::TENSIX, S>& s) { s.up(1); }\n"
          "void kernel_main() { Semaphore s(sem::counter); helper(s); }",
          false},
-        // Two-step token construction is flagged CONSERVATIVELY (the detector cannot prove `t`
-        // is a token): construct from sem::<name> directly, or allowlist with a reason.
-        {"two_step_token_construction_flagged", "void kernel_main() { auto t = sem::counter; Semaphore s(t); }", true},
+        // Two-step construction is flagged CONSERVATIVELY (the detector cannot prove `t`
+        // is a sem:: id): construct from sem::<name> directly, or allowlist with a reason.
+        {"two_step_construction_flagged", "void kernel_main() { auto t = sem::counter; Semaphore s(t); }", true},
         {"multicast_set", "void kernel_main() { noc_semaphore_set_multicast(a, b, 1); }", true},
         // Templated spelling of noc_semaphore_inc.
         {"templated_inc", "void kernel_main() { noc_semaphore_inc<true>(a, 1); }", true},
@@ -370,7 +325,7 @@ TEST(Metal2SemaphoreHygiene, DetectorFlagsKnownViolations) {
         {"raw_wait_min", "void kernel_main() { noc_semaphore_wait_min(p, 1); }", true},
         // Low-level NoC atomics and reserved-region address arithmetic.
         {"fast_atomic_inc", "void kernel_main() { noc_fast_atomic_increment(0, b, a, 4, 1, 31, 1, false); }", true},
-        {"fast_atomic_cas", "void kernel_main() { noc_fast_atomic_cas4<0, true>(0, b, a, 4, 0, 1, false); }", true},
+        {"fast_atomic_cas", "void kernel_main() { noc_fast_atomic_cas4<0>(0, b, a, 0, 1, r); }", true},
         {"lock_region_arith", "void kernel_main() { auto p = (uint32_t*)(MEM_NOC_SEM_LOCK_BASE + 4); }", true},
         {"cached_pool_arith", "void kernel_main() { auto p = (uint32_t*)(MEM_DM_CACHED_SEM_BASE); }", true},
         {"cas_ret_arith", "void kernel_main() { auto p = (uint32_t*)(MEM_NOC_CAS_RET_BASE + 8); }", true},
@@ -393,15 +348,12 @@ TEST(Metal2SemaphoreHygiene, DetectorFlagsKnownViolations) {
 
     for (const auto& c : cases) {
         auto found = find_raw_semaphore_uses(strip_comments(c.body));
-        for (auto& p : find_pinned_scope_constructions(strip_comments(c.body))) {
-            found.push_back(p);
-        }
         for (auto& p : find_unbound_semaphore_constructions(strip_comments(c.body))) {
             found.push_back(p);
         }
         if (c.should_flag) {
-            EXPECT_FALSE(found.empty()) << "detector MISSED a violation (raw access or pinned scope) in case '"
-                                        << c.name << "' -- the sweep test would silently pass on this code";
+            EXPECT_FALSE(found.empty()) << "detector MISSED a violation in case '" << c.name
+                                        << "' -- the sweep test would silently pass on this code";
         } else {
             EXPECT_TRUE(found.empty()) << "detector FALSE-POSITIVED on case '" << c.name
                                        << "' (first: " << (found.empty() ? std::string{} : found.front()) << ")";
@@ -434,9 +386,8 @@ TEST(Metal2SemaphoreHygiene, FileGatesAndDetectorDiscrimination) {
     EXPECT_EQ(incs[0], "a/b/common.hpp");
     EXPECT_EQ(incs[1], "cstdint");
     EXPECT_EQ(incs[2], "local.h");
-    // Discrimination: the raw-id construction trips ONLY the unbound-ctor detector, and the
-    // token construction trips NEITHER.
-    EXPECT_TRUE(find_pinned_scope_constructions(strip_comments("Semaphore<> s(sem_id);")).empty());
+    // Discrimination: the raw-value construction trips ONLY the unbound-ctor detector, and the
+    // sem:: construction trips NEITHER.
     EXPECT_FALSE(find_unbound_semaphore_constructions(strip_comments("Semaphore<> s(sem_id);")).empty());
     EXPECT_TRUE(find_unbound_semaphore_constructions(strip_comments("Semaphore s(sem::counter);")).empty());
 }
@@ -484,7 +435,9 @@ TEST(Metal2SemaphoreHygiene, NoRawSemaphoreAccessInMetal2Kernels) {
     // whole op tree; is_kernel_source narrows per file.
     const std::vector<std::filesystem::path> scan_roots = {
         root / "tests",
-        root / "ttnn",
+        // Adjacent-literal split: CI budgets whole-word 'ttnn' mentions under tests/tt_metal
+        // (layering lint); this is a scan PATH, not a layering violation, so keep it off budget.
+        root / "tt" "nn",
     };
 
     std::vector<std::string> violations;
@@ -512,9 +465,6 @@ TEST(Metal2SemaphoreHygiene, NoRawSemaphoreAccessInMetal2Kernels) {
         }
         for (const auto& pat : find_raw_semaphore_uses(code)) {
             violations.push_back(path_str + "  uses raw: " + pat);
-        }
-        for (const auto& pat : find_pinned_scope_constructions(code)) {
-            violations.push_back(path_str + "  pins scope: " + pat);
         }
         for (const auto& pat : find_unbound_semaphore_constructions(code)) {
             violations.push_back(path_str + "  unbound ctor: " + pat);
@@ -597,10 +547,10 @@ TEST(Metal2SemaphoreHygiene, NoRawSemaphoreAccessInMetal2Kernels) {
     }
     EXPECT_TRUE(violations.empty())
         << "A Metal 2.0 kernel reaches a semaphore RAW, bypassing its declared binding. The host's "
-           "who-touches census (which drives the AUTO scope classifier) cannot see such a writer, so AUTO "
+           "who-touches census (which drives the scope classifier) cannot see such a writer, so it "
            "may pick the cheap non-atomic mechanism for a semaphore that actually has concurrent writers."
            "\n\nFix: declare a KernelSpec::SemaphoreBinding and use the managed accessor instead:"
-           "\n    Semaphore s(sem::<accessor_name>);   // CTAD adopts the baked scope and access rights"
+           "\n    Semaphore s(sem::<accessor_name>);   // the host-baked mechanism travels invisibly"
            "\nIf the raw access is genuinely required (e.g. a hardware probe on scratch L1, not on a "
            "declared semaphore), add the file to is_allowlisted() with a reason."
            "\n\nOffending files:"

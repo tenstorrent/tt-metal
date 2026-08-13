@@ -13,10 +13,10 @@
 
 namespace tt::tt_metal {
 
-// NOTE: the DM_LOCAL_CACHED pool has one slot per id (MEM_DM_CACHED_SEM_BASE + id * L1_ALIGNMENT).
-// NUM_SEMAPHORES is not visible to device code; the device enforces the bound per USED id
-// (noc_semaphore.h). When changing NUM_SEMAPHORES, keep MEM_DM_CACHED_SEM_SIZE and
-// MEM_NOC_SEM_LOCK_SIZE >= NUM_SEMAPHORES * L1_ALIGNMENT in quasar/dev_mem_map.h.
+// NUM_SEMAPHORES sizes the emitted per-kernel scope tables (emit_sem_scope_table) and the
+// per-id device regions: when changing it, keep MEM_NOC_SEM_LOCK_SIZE >= NUM_SEMAPHORES *
+// L1_ALIGNMENT and MEM_DM_CACHED_SEM_SIZE >= NUM_SEMAPHORES * MEM_DM_CACHED_SEM_ROW in
+// quasar/dev_mem_map.h.
 constexpr std::uint32_t NUM_SEMAPHORES = 16;
 
 class Semaphore {

@@ -97,7 +97,6 @@ thread_local uintptr_t g_dfb_config_base_addr __attribute__((used));
 overlay::RemapperAPI g_remapper_configurator __attribute__((used));
 volatile TxnDFBDescriptor g_txn_dfb_descriptor[32] __attribute__((used));
 volatile KernelBarrier g_kernel_barrier[NUM_KERNEL_BARRIERS] __attribute__((used));
-volatile KernelBarrier g_cached_sem_init_barrier __attribute__((used));
 
 extern "C" uint32_t _start1() {
     configure_csr();
@@ -109,12 +108,6 @@ extern "C" uint32_t _start1() {
         do_crt1(__ldm_data_start);
         // Must precede the ready flag below, which releases the other pushers.
         WATCHER_RING_BUFFER_INIT();
-        // Same sweep as dm.cc: NoC-CAS lock words must start unlocked on every image that
-        // compiles the lock protocol. Unreachable today (Metal 2.0 kernels never land on
-        // dispatch cores).
-        for (uint32_t w = 0; w < (MEM_NOC_CAS_RET_SIZE + MEM_NOC_SEM_LOCK_SIZE) / 4; w++) {
-            reinterpret_cast<volatile uint32_t*>(MEM_L1_UNCACHED_BASE + MEM_NOC_CAS_RET_BASE)[w] = 0;
-        }
         (*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[hartid] = SHARED_GLOBALS_READY_GO;
     }
     extern uint32_t __ldm_tdata_init[];

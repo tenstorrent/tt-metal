@@ -12,7 +12,7 @@
 //                        (noc_semaphore_inc with incr = -1, wrap=31 => modular sub).
 //   PROBE_DECR_AMO     : atomic decrement via a raw NOC_AT_INS_RISCV_AMO (AMOADD, -1). Quasar-only.
 //   PROBE_CAS          : 4-bit compare-and-swap via a raw NOC_AT_INS_CAS. Quasar-only.
-//   PROBE_CAS_RET      : noc_fast_atomic_cas4 with program_ret_addr=true -- the response
+//   PROBE_CAS_RET      : noc_fast_atomic_cas4 return-value path -- the response
 //                        must return the PRE-OP word on success AND failure (Quasar-only).
 
 #include "api/dataflow/dataflow_api.h"
@@ -101,7 +101,7 @@ void kernel_main() {
 
 #elif defined(PROBE_CAS_RET)
 #if defined(ARCH_QUASAR)
-    // CAS return value (program_ret_addr=true): the response writes the PRE-OP word to the slot
+    // CAS return value: the response writes the PRE-OP word to the slot
     // programmed into this hart's sticky R_SRC_ADDR -- on success AND on failure. Single writer;
     // each CAS gets a private slot pre-set to a sentinel, then polled. report[0]/report[2] are
     // read IMMEDIATELY after the atomic barrier (no poll) to probe whether the barrier also
@@ -122,16 +122,8 @@ void kernel_main() {
 
         // 1. Successful CAS (5 -> 9) returns the pre-op 5.
         *uncached(slot_a) = SENTINEL;
-        noc_fast_atomic_cas4<DM_DEDICATED_NOC, true /*program_ret_addr*/>(
-            noc_index,
-            0 /*cmd_buf unused*/,
-            self_noc_addr,
-            NOC_UNICAST_WRITE_VC,
-            5 /*cmp*/,
-            9 /*swap*/,
-            false /*linked*/,
-            false /*posted*/,
-            slot_a);
+        noc_fast_atomic_cas4<DM_DEDICATED_NOC>(
+            noc_index, self_noc_addr, NOC_UNICAST_WRITE_VC, 5 /*cmp*/, 9 /*swap*/, slot_a);
         noc_async_atomic_barrier();
         report[0] = *uncached(slot_a);  // immediate, no poll
         while (*uncached(slot_a) == SENTINEL) {
@@ -140,8 +132,7 @@ void kernel_main() {
 
         // 2. FAILED CAS (cmp=5 but word is 9) also returns the pre-op word.
         *uncached(slot_b) = SENTINEL;
-        noc_fast_atomic_cas4<DM_DEDICATED_NOC, true>(
-            noc_index, 0, self_noc_addr, NOC_UNICAST_WRITE_VC, 5, 2, false, false, slot_b);
+        noc_fast_atomic_cas4<DM_DEDICATED_NOC>(noc_index, self_noc_addr, NOC_UNICAST_WRITE_VC, 5, 2, slot_b);
         noc_async_atomic_barrier();
         report[2] = *uncached(slot_b);  // immediate, no poll
         while (*uncached(slot_b) == SENTINEL) {
@@ -154,8 +145,7 @@ void kernel_main() {
         // 4. Upper-28 rule: success requires word[31:4]==0, so word2=0x15 must FAIL the
         //    CAS even though word2[3:0] == cmp4 == 5 -- and still return the pre-op word.
         *uncached(slot_c) = SENTINEL;
-        noc_fast_atomic_cas4<DM_DEDICATED_NOC, true>(
-            noc_index, 0, get_noc_addr(word2_addr), NOC_UNICAST_WRITE_VC, 5, 9, false, false, slot_c);
+        noc_fast_atomic_cas4<DM_DEDICATED_NOC>(noc_index, get_noc_addr(word2_addr), NOC_UNICAST_WRITE_VC, 5, 9, slot_c);
         noc_async_atomic_barrier();
         while (*uncached(slot_c) == SENTINEL) {
         }
