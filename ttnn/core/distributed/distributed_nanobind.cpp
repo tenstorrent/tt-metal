@@ -543,14 +543,24 @@ void py_module(nb::module_& mod) {
             )doc")
         .def(
             "read_core_l1",
-            [](MeshDevice* device, const CoreCoord& logical_core, uint32_t address, uint32_t size) {
+            [](MeshDevice* device,
+               const CoreCoord& logical_core,
+               uint32_t address,
+               uint32_t size,
+               const std::optional<MeshCoordinate>& coord) {
                 std::vector<uint32_t> data;
-                tt::tt_metal::detail::ReadFromDeviceL1(device->get_devices().at(0), logical_core, address, size, data);
+                tt::tt_metal::detail::ReadFromDeviceL1(
+                    coord.has_value() ? device->get_device(*coord) : device->get_devices().at(0),
+                    logical_core,
+                    address,
+                    size,
+                    data);
                 return data;
             },
             nb::arg("logical_core"),
             nb::arg("address"),
             nb::arg("size"),
+            nb::arg("coord") = nb::none(),
             R"doc(
                 Read raw L1 words from one core.
 
@@ -569,8 +579,9 @@ void py_module(nb::module_& mod) {
             )doc")
         .def(
             "read_kernel_config",
-            [](MeshDevice* device, const CoreCoord& logical_core) {
-                auto cfg = tt::tt_metal::detail::ReadKernelConfig(device->get_devices().at(0), logical_core);
+            [](MeshDevice* device, const CoreCoord& logical_core, const std::optional<MeshCoordinate>& coord) {
+                auto cfg = tt::tt_metal::detail::ReadKernelConfig(
+                    coord.has_value() ? device->get_device(*coord) : device->get_devices().at(0), logical_core);
                 std::map<std::string, std::vector<uint32_t>> out;
                 out["kernel_config_base"] = cfg.kernel_config_base;
                 out["kernel_text_offset"] = cfg.kernel_text_offset;
@@ -588,6 +599,7 @@ void py_module(nb::module_& mod) {
                 return out;
             },
             nb::arg("logical_core"),
+            nb::arg("coord") = nb::none(),
             R"doc(
                 Read back the kernel config a core is running, field by field.
 
