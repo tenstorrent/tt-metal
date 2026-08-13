@@ -27,6 +27,8 @@ from models.demos.gemma4.tt.dram_sharded import (
     interleaved_prefill_config,
     matmul_rows,
     prefill_linear_above_cutoff,
+    prefill_lofi_ckc,
+    prefill_matmul_lofi_enabled,
     should_prefill_long_2d,
 )
 
@@ -191,9 +193,12 @@ def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config
     if decode and weights.qkv_decode_config is not None and matmul_rows(hidden_states) <= ttnn.TILE_SIZE:
         program_config, compute_kernel_config = weights.qkv_decode_config
     else:
+        m = matmul_rows(hidden_states)
         program_config, tuned_out_memcfg, compute_kernel_config = interleaved_prefill_config(
-            matmul_rows(hidden_states), int(hidden_states.shape[-1]), int(weights.wqkv.shape[-1])
+            m, int(hidden_states.shape[-1]), int(weights.wqkv.shape[-1])
         )
+        if program_config is None and compute_kernel_config is None and prefill_matmul_lofi_enabled(m):
+            compute_kernel_config = prefill_lofi_ckc()
     act, act_l1 = hoist_prefill_matmul_in0_if_needed(hidden_states, program_config)
     out = ttnn.linear(
         act,

@@ -60,6 +60,15 @@ _SHAPES = (
 )
 
 
+def _lofi():
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+
+
 def _hifi2():
     return ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -195,6 +204,11 @@ def test_prefill_matmul_2048_isolate(label, k, n, mesh_device, reset_seeds):
         return _linear(x, w)
 
     arms.append(("auto", auto, None, False))
+
+    def auto_lofi():
+        return _linear(x, w, ckc=_lofi())
+
+    arms.append(("auto_lofi", auto_lofi, None, False))
 
     if _M % cutoff == 0:
         pc_cut = prefill_progcfg(cutoff, k, n)
