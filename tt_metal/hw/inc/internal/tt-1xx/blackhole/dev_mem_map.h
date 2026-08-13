@@ -334,7 +334,7 @@
 // mailboxes_t is unconditional: every debug/profiling feature that lives in the mailbox reserves its space
 // whether or not it is enabled at runtime, so this number must cover the watcher, DPRINT and the kernel
 // profiler simultaneously.
-#define MEM_DRISC_MAILBOX_SIZE 4416
+#define MEM_DRISC_MAILBOX_SIZE 4432
 #define MEM_DRISC_MAILBOX_END (MEM_DRISC_MAILBOX_BASE + MEM_DRISC_MAILBOX_SIZE)
 #define MEM_DRISC_L1_INLINE_BASE MEM_DRISC_MAILBOX_END
 #define MEM_DRISC_L1_INLINE_END (MEM_DRISC_L1_INLINE_BASE + (MEM_L1_INLINE_SIZE_PER_NOC * 2) * 2)
