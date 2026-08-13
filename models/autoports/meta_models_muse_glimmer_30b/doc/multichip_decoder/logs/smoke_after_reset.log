@@ -1,0 +1,88 @@
+2026-08-12 22:07:15.109 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-12 22:07:19.130 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-12 22:07:19.130 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-12 22:07:19.130 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-12 22:07:19.130 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-12 22:07:19.142 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-12 22:07:19.143 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-12 22:07:19.220 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-12 22:07:19.220 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-12 22:07:19.220 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-12 22:07:19.220 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-12 22:07:19.222 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-12 22:07:19.399 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-12 22:07:19.521 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-12 22:07:19.521 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-12 22:07:19.521 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-12 22:07:19.521 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-12 22:07:19.521 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-12 22:07:19.560 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 22:07:19.561 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 22:07:19.561 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 22:07:19.562 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 22:07:19.562 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 22:07:19.563 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 22:07:19.563 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 22:07:19.564 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 22:07:19.564 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-12 22:07:19.592 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:550)
+2026-08-12 22:07:19.593 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:550)
+2026-08-12 22:07:19.594 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:550)
+2026-08-12 22:07:19.595 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:550)
+2026-08-12 22:07:19.595 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-12 22:07:19.595 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-12 22:07:23.985 | warning  |              Op | Fabric packet size 8192 B is suboptimal for transporting 1088 B pages. Configure 4352 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 22:07:23.985 | warning  |              Op | Fabric packet size 8192 B is suboptimal for transporting 1088 B pages. Configure 4352 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 22:07:23.985 | warning  |              Op | Fabric packet size 8192 B is suboptimal for transporting 1088 B pages. Configure 4352 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 22:07:23.985 | warning  |              Op | Fabric packet size 8192 B is suboptimal for transporting 1088 B pages. Configure 4352 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 22:07:24.233 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+MESH MeshShape([1, 4]) devices=4 grid=11-10 dram_grid=8-1
+PLAN tp=4 local_heads=8 local_kv=1 kv_replicated=True local_qkv_width=1280 local_intermediate=5120
+WEIGHT wqkv       per-device shape=(1, 1, 6656, 1280) dtype=DataType.BFLOAT8_B
+WEIGHT attn_gate  per-device shape=(1, 1, 6656, 1024) dtype=DataType.BFLOAT8_B
+WEIGHT o_proj     per-device shape=(1, 1, 1024, 6656) dtype=DataType.BFLOAT8_B
+WEIGHT mlp_gate   per-device shape=(1, 1, 6656, 5120) dtype=DataType.BFLOAT4_B
+WEIGHT mlp_down   per-device shape=(1, 1, 5120, 6656) dtype=DataType.BFLOAT4_B
+WEIGHT k_cache    per-device shape=(256, 1, 64, 128) dtype=DataType.BFLOAT8_B
+PREFILL[sliding] seq_len=2049 0.9935946577738217 -> PASS
+PREFILL replica device=1 bit-identical=True
+PREFILL replica device=2 bit-identical=True
+PREFILL replica device=3 bit-identical=True
+DECODE[sliding] pos=2049 0.9923626796510854 -> PASS
+nanobind: leaked 3 instances!
+ - leaked instance 0x7baed1370618 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x7baf253b0f48 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x7baf253b1128 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+nanobind: leaked 24 types!
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.multi_device.MeshMapperConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - ... skipped remainder
+nanobind: leaked 282 functions!
+ - leaked function "to_json"
+ - leaked function "from_json"
+ - leaked function "to_json"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "reshape"
+ - leaked function "__eq__"
+ - leaked function "__getitem__"
+ - leaked function "clear_loaded_sub_device_manager"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-12 22:07:25.264 | info     |    BuildKernels | JIT cache stats: 286/286 hits (100.0%) [286 cached, 105 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-12 22:07:25.264 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-12 22:07:25.278 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-12 22:07:25.278 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-12 22:07:25.826 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-12 22:07:25.826 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-12 22:07:25.826 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

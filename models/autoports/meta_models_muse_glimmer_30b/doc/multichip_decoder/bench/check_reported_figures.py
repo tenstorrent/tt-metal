@@ -40,7 +40,10 @@ TOLERANCE = 0.005  # 0.5 % on measured quantities, exact on byte counts
 
 
 class Failures(list):
+    labels: list[str] = []
+
     def check(self, label: str, reported: float, derived: float, *, exact: bool = False) -> None:
+        self.labels.append(label)
         if exact:
             ok = reported == derived
         else:
@@ -180,8 +183,10 @@ def cited_figure_violations(doc: pathlib.Path) -> list[str]:
     rather than merely being true on the day.
     """
     root = doc.parent if doc.parent.name == "multichip_decoder" else ROOT
+    bars = set(pcc_populations()[1])
     scripts = script_to_logs()
     violations = []
+    verified_by: list[tuple[str, str, str]] = []
     suppressed = 0
     # Numbered list items are separate claims with separate citations even
     # though no blank line separates them, so they are separate blocks.
@@ -192,6 +197,14 @@ def cited_figure_violations(doc: pathlib.Path) -> list[str]:
         # markers suppressing nothing but themselves.  At line start only:
         # §15.1 describes the marker in prose, inside backticks, and that is not
         # a use of it.
+        # Like the superseded marker, a delegation on its own line has to reach
+        # the block it labels.
+        verified = re.search(r"^<!-- verified-by:\s*(.+?)-->", block, re.MULTILINE) or (
+            index and re.search(r"^<!-- verified-by:\s*(.+?)-->", blocks[index - 1], re.MULTILINE)
+        )
+        if verified:
+            verified_by.append((doc.name, verified.group(1).strip(), " ".join(block.split())[:60]))
+            continue
         marker_here = re.search(r"^<!-- superseded", block, re.MULTILINE)
         marker_above = index and re.search(r"^<!-- superseded", blocks[index - 1], re.MULTILINE)
         if marker_here or marker_above:
@@ -204,11 +217,17 @@ def cited_figure_violations(doc: pathlib.Path) -> list[str]:
                 )
             suppressed += 1
             continue
-        # A block's citation is usually in the sentence that introduces it, one
-        # block up -- for tables *and* for prose.  Round 6 showed the
-        # table-only version still let a live, log-backed paragraph through.
-        scope = blocks[index - 1] + "\n" + block if index else block
-        cited = set(re.findall(r"`+(logs/[\w./-]+)`+", scope))
+        # A block's citation is usually in the sentence that introduces it, but
+        # not always the block immediately above: a table can be introduced,
+        # then commented on, then printed.  Round 7 found ~25 figure-bearing
+        # blocks reaching an empty haystack because inheritance was one block
+        # deep.  Walk back to the start of the section instead.
+        scope = block
+        for previous in reversed(blocks[:index]):
+            scope = previous + "\n" + scope
+            if re.match(r"\s*#{1,6} ", previous):
+                break
+        cited = set(re.findall(r"`+((?:\.\./[\w-]+/)?logs/[\w./-]+)`+", scope))
         # A block may cite the probe instead of the log it wrote, or a Tracy CSV.
         for script in re.findall(r"`+(bench/\w+\.py)`+", scope):
             cited.update(scripts.get(script, ()))
@@ -221,7 +240,13 @@ def cited_figure_violations(doc: pathlib.Path) -> list[str]:
         for value in sorted(set(re.findall(r"\d+\.\d{2,}", block))):
             if len(value.split(".")[1]) < 3 and float(value) < 5:
                 continue
-            if value in haystack:
+            # A PCC *bar* is a threshold the tests define, not a measurement; the
+            # population check verifies the bars themselves.
+            if value in bars:
+                continue
+            # Boundaries, not substring: "9.11" occurs inside "19.11", which
+            # silently accepted a planted defect during the round-7 fix.
+            if re.search(rf"(?<![\d.]){re.escape(value)}(?![\d])", haystack):
                 continue
             # A doc may quote a rounding of a full-precision log value on
             # purpose -- PCC prints 17 digits and the tables show 6.
@@ -253,7 +278,7 @@ def cited_figure_violations(doc: pathlib.Path) -> list[str]:
             violations.append(f"{doc.name}: {value} in none of {', '.join(cited)} -- {head}...")
     if suppressed:
         print(f"   ({doc.name}: {suppressed} block(s) marked superseded and skipped)")
-    return violations
+    return violations, verified_by
 
 
 def doc_anchors(text: str) -> set[str]:
@@ -501,13 +526,58 @@ def main() -> int:
         if len(quoted) == len(counts):
             failures.check(f"{doc_name}: PCC populations sum to the total", sum(quoted), total)
 
+    # ---- integer counts, which the figure check skips by design --------------
+    # Structural integers (52 layers, 6656 columns) would drown that check, so
+    # the counts that have actually gone stale get their own derivation: the
+    # watcher artifact's size and dump count (round 5's "50 dumps", round 6's
+    # 28,788 lines) and the two suites' pass counts.
+    import gzip
+
+    watcher = gzip.open(ROOT / "watcher/watcher.log.gz", "rt", errors="ignore").read()
+    watcher_facts = {
+        "watcher log lines": watcher.count("\n"),
+        "watcher dumps": len(re.findall(r"Dump #\d+ completed", watcher)),
+    }
+    for doc_name, path in (("README", README), ("work log", WORK_LOG)):
+        text = path.read_text().replace(",", "")
+        for label, derived in watcher_facts.items():
+            pattern = r"(\d+) log lines" if "lines" in label else r"(\d+) dumps"
+            quoted = {int(v) for v in re.findall(pattern, text)}
+            if quoted:
+                failures.check(f"{doc_name}: {label}", sorted(quoted)[0], derived, exact=True)
+    # Every bolded "**N passed**" must be one of the runs that actually happened.
+    ran = {
+        int(re.findall(r"(\d+) passed", (ROOT / log).read_text(errors="ignore"))[-1])
+        for log in ("logs/full_test_run.log", "logs/vs_single_chip_run.log", "logs/watcher_run.log")
+    }
+    for doc_name, path in (("README", README), ("work log", WORK_LOG)):
+        quoted = {int(v) for v in re.findall(r"\*\*(\d+) passed\*\*", path.read_text())}
+        failures.check(f"{doc_name}: quoted pass counts that ran", len(quoted - ran), 0, exact=True)
+        if quoted - ran:
+            print(f"   {doc_name} quotes {sorted(quoted - ran)}; the committed runs are {sorted(ran)}")
+
     # ---- every figure a doc attributes to a log is in that log ---------------
     # The module's own docstring tables cite logs too, and round 5 found a stale
     # figure in one of them that nothing was checking.
-    violations = cited_figure_violations(README) + cited_figure_violations(WORK_LOG) + cited_figure_violations(SOURCE)
+    violations, delegated = [], []
+    for document in (README, WORK_LOG, SOURCE):
+        found, claimed = cited_figure_violations(document)
+        violations += found
+        delegated += claimed
     failures.check("docs: quoted figures found in the cited artifact", len(violations), 0, exact=True)
     for violation in violations:
         print(f"   {violation}")
+
+    # A block may delegate to a named check that re-derives its figures (a mean
+    # over a CSV is not a substring of it).  The delegation is only honoured if
+    # that check actually ran and passed -- otherwise it is a mute.
+    ran = {label for label in failures.labels}
+    for doc_name, label, head in dict.fromkeys(delegated):  # a marker registers on its own block and the next
+        matched = [name for name in ran if name.startswith(label)]
+        ok = bool(matched) and not any(name in failures for name in matched)
+        failures.check(f"{doc_name}: verified-by '{label}' ran and passed", int(ok), 1, exact=True)
+        if not ok:
+            print(f"   no passing check named '{label}' for -- {head}...")
 
     print()
     if failures:

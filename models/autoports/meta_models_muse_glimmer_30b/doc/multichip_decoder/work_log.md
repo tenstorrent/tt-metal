@@ -164,9 +164,10 @@ against the fractured contract by evidence collected later:
 2. ~~**The extra dispatches cost more than the saved work.**~~ **Withdrawn** —
    the arithmetic here mixed a floor-inclusive collective cost with a
    floor-cancelling norm difference. §14.1 replaces it with a floor-calibrated,
-   path-vs-path measurement: 8.11 μs for the shipped full-width norm against
-   14.90 μs for the distributed one it would force, i.e. +13.57 μs per decode
-   step. The rejection stands; this reasoning for it does not.
+   path-vs-path measurement (`logs/fractured_decode_probe.log`): 8.11 μs for the
+   shipped full-width norm against 14.90 μs for the distributed one it would
+   force, i.e. +13.57 μs per decode step. The rejection stands; this reasoning
+   for it does not.
 
 The gather-heads family is a real trade and is rejected on a measured
 whole-layer basis, not on bytes: `o_proj`'s parallelism is a single load-time
@@ -362,12 +363,12 @@ page 1088 B) and this layer reduces decode in BF16 and prefill in BFP8:
 
 | op / payload | 4352 B | 8192 B |
 | --- | --- | --- |
-| decode, BF16: RS + AG | 35.80 μs | **34.82** |
-| prefill, BF16: all-reduce | 2197.8 | **1928.3** |
-| prefill, BFP8 (shipped): all-reduce | **1563.7** | 1581.1 |
+| decode, BF16: RS + AG | 19.03 + 16.77 = 35.80 μs | 19.23 + 15.59 = 34.82 μs |
+| prefill, BF16: all-reduce | 2197.80 | **1928.31** |
+| prefill, BFP8 (shipped): all-reduce | **1563.71** | 1581.06 |
 
-8192 ships (1.96 μs per token per layer of decode against 0.0042 μs per prefill
-token), and the warning now fires on the prefill collectives recommending 4352 --
+8192 ships (1.96 μs per token per layer of decode, against 34.7 μs spread over a
+whole 8192-token prefill chunk), and the warning now fires on the prefill collectives recommending 4352 --
 disclosed rather than silenced. 15232, the hardware maximum, adds nothing.
 
 **The fractured-residual rejection was right for the wrong reason.** The first
@@ -384,9 +385,8 @@ included the ~3-10 μs replay floor, and it then differenced two of them against
 third undifferenced one — which §14.1 shows is not a valid comparison. It also
 priced only one term of the distributed norm, on DRAM-interleaved inputs. The
 probe now calibrates the floor and prices the whole path on the sharded layout.
-Current numbers, from the committed log:
-
-<!-- superseded: single-point traces, floor not calibrated, distributed norm priced on the wrong layout; see 14.1 and README "the decode regime" for the current measurement -->
+Current numbers, from `logs/fractured_decode_probe.log` (the superseded capture is
+not reproduced here; §14.1 records what was wrong with it):
 
 | term | replicated | fractured |
 | --- | --- | --- |
@@ -684,8 +684,8 @@ regenerate it. `build_multichip` in the suite now reads
       models/autoports/meta_models_muse_glimmer_30b/tests/test_multichip_decoder.py \
       -k real_weights -q
 
-Re-running it that way reproduced the number the rejection rests on to every
-printed digit -- 16 passed, worst real-weight PCC **0.9950028290443281** on
+Re-running it that way (`logs/full_test_run.log` for the BF16 comparison)
+reproduced the number the rejection rests on to every printed digit -- 16 passed, worst real-weight PCC **0.9950028290443281** on
 `decode[sliding] step=6 pos=3006`, against 0.995105 for the shipped BF16 payload.
 The env var is test-only plumbing; it is not read by `multichip_decoder.py` and
 changes no default.
@@ -931,6 +931,13 @@ shipped layer does (`DEFAULT_DECODE_CCL_RS_WORKERS` at 32 rows,
 `DEFAULT_PREFILL_CCL_RS_WORKERS` at 8192), and prints it in its header line so a
 log says which it used. Re-run, the confound is visible and large:
 
+The `rs_w1` column is the round-3 capture. Its log was overwritten by the re-run
+that produced the `rs_w4` column — the probe writes one file — so those four
+values are not reproducible from the committed artifacts and are kept only to show
+the size of the confound:
+
+<!-- superseded: the rs_w1 capture's log was overwritten by the rs_w4 re-run of the same probe; only the shipped column is reproducible -->
+
 | candidate | 8192 rows, `rs_w1` (round 3) | 8192 rows, `rs_w4` (shipped) |
 | --- | --- | --- |
 | `replicated` | 9002.41 μs | **8242.22 μs** (−8.4 %) |
@@ -1050,8 +1057,13 @@ blank lines, so each was its own block containing no figures — the marker
 suppressed *itself* and the table it was meant to label was skipped for the
 unrelated reason of citing nothing. The printed "3 blocks marked superseded" was
 counting comment lines. A marker now suppresses the block that follows it as well
-as its own, so the count means what §16 said it meant, and the §7.4 marker no
-longer sits in front of the live, correct table.
+as its own, so the count means what §16 said it meant.
+
+(This paragraph originally also claimed the §7.4 marker had been moved off the
+live table. It had not — round 7 planted `14.90 → 14.99` there and the gate
+stayed green, because the marker was now *correctly* muting the block it sat in
+front of, which happened to be the current table rather than a historical one.
+§17.5 records what was actually done.)
 
 The sum rule from round 5 was too loose by a wide margin. Round 6 measured it:
 accepting any value that is the sum or difference of *any two* numbers in the
@@ -1115,3 +1127,53 @@ kinds" (1.10 % `sliding`, 1.21 % `full`), and `FABRIC_PACKET_PAYLOAD_BYTES`'s
 prose now says explicitly that *its* 1.1 % is the prefill-collective row, not the
 reducer margin. The two-layer-chain figure quoted as "0.972" throughout is now
 the value the summary actually contains, 0.971975 (prefill; decode is 0.967946).
+
+
+### 17.5 What round 7 found, and the gate's fourth iteration
+
+Round 7 returned no P1. Three P2s, all evidence integrity, and one of them was
+§17.1 above recording a fix that had not been made — the exact failure this review
+loop exists to catch, and the second time this stage has written down a
+correction it did not apply. Both times a subagent found it by planting the defect
+rather than by reading the prose.
+
+- **The §7.4 marker.** Removed, not moved: §7.4 no longer carries a historical
+  table, so the marker had nothing to label and was muting the live one. The
+  table's citation now sits in the sentence that introduces it, and altering
+  either of its two per-op figures is caught.
+- **The teardown count.** Round 6 raised it from two to three in two documents and
+  left `README.md`'s "cleared it both times" and
+  `context_contract.json`'s "has twice timed out" behind. Both fixed; the contract
+  now also names the two artifacts that carry the third occurrence end to end.
+- **The recovery smoke was prose-only.** §17.3 quoted `prefill 0.99359, decode
+  0.99236` from a run whose log was never committed. `logs/smoke_after_reset.log`
+  is now committed and cited, and the figures are quoted at full precision.
+
+Round 7 also measured the gate again and found roughly 25 figure-bearing blocks
+reaching an empty haystack, because citation inheritance was one block deep. It is
+now section-deep: a block inherits every citation back to the nearest heading.
+That surfaced 24 more blocks, each of which was then either cited properly, given
+its addends written out (the decode packet row now shows the two collectives it
+sums), reworded to drop an unbackable derived constant, or — for the one capture whose log a later re-run overwrote — marked
+superseded with that as the stated reason.
+
+Two structural weaknesses came out of the same pass:
+
+- **substring matching.** `value in haystack` accepted a planted figure because
+  a longer number in the log contained it as a substring. Matching is now bounded
+  on both sides. This is why the first plant of the §7.4 table appeared to catch
+  only one of its two changes.
+- **means are not substrings.** The DRAM table quotes per-role means over a CSV,
+  which correctly appear nowhere in it. Rather than mute the block, it now carries
+  `<!-- verified-by: dram table -->`, and the gate asserts that a check by that
+  name **ran and passed** — a delegation that is itself checked. Planting a
+  delegation to a check that does not exist fails.
+
+Integers finally got a check as well, for the two classes that have actually gone
+stale: the watcher artifact's line and dump counts (re-derived from
+`watcher/watcher.log.gz`), and every bolded `**N passed**` in either document,
+which must be one of the pass counts the committed runs actually produced.
+
+The four planted-defect tests now run clean: the round-7 live table, the round-6
+prose evasion, the round-6 population row, and a delegation naming a check that
+never ran.

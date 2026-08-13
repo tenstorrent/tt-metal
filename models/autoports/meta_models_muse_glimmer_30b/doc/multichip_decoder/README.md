@@ -451,9 +451,12 @@ is about.
 result as the single-chip stage — the BFP8 rows are at the bandwidth limit, the
 BFP4 rows are unpack-bound:
 
-Each row is the **mean over the 8 replays** in the `sliding` capture (one row per
-op instance; `bench/check_reported_figures.py` re-derives all ten numbers from the
-CSV):
+Each row is the **mean over the 8 replays** in the `sliding` capture
+(`tracy/sliding/decode_2048_perf_report.csv`, one row per op instance). A mean is
+not a substring of the CSV, so the figure gate delegates this table to the check
+that re-derives it:
+
+<!-- verified-by: dram table -->
 
 | row | dtype | DRAM | of peak | verdict |
 | --- | --- | --- | --- | --- |
@@ -584,8 +587,10 @@ not say so. What is known about it, from three occurrences:
   are involved, so it is not the 1x1-after-1x4 interaction that
   `test_multichip_vs_single_chip.py` documents;
 * it does **not** self-recover: every time, the *next* process to open the mesh
-  failed at startup with the same signature, and `tt-smi -r` cleared it both
-  times (work log §9.2). The reset is bounded and no second reset was needed;
+  failed at startup with the same signature, and one `tt-smi -r` cleared it every
+  time (work log §9.2, §17.3). The reset is bounded and no second reset was ever
+  needed; the third occurrence has the whole chain on record, ending in a passing
+  `logs/smoke_after_reset.log`;
 * it has only ever been seen on the **watcher** path. The same 31 node ids run
   inside the 100-test acceptance suite with no such line, and neither the A/B, the
   eight Tracy captures, nor the comparison module has produced one.
@@ -810,14 +815,17 @@ residual layout that is a first-class decision rather than a leftover.
    heads and the mesh has 4 devices. This is the model's GQA ratio, not a mesh
    limit, and the sequence-split alternative is recorded above.
 5. **Prefill is not traced**, so it keeps a host gap: 18.21 ms device against
-   19.14 ms end-to-end at 8192 tokens (4.9 %). Inherited; tracing prefill belongs
-   to the stage that owns the generator loop.
+   19.14 ms end-to-end (`logs/layer_ab_final.log`) at 8192 tokens (4.9 %).
+   Inherited; tracing prefill belongs to the stage that owns the generator loop.
+<!-- verified-by: device: sliding/prefill_8192 -->
 6. **The real-weight PCC margin is inherited and thin.** This stage adds no
    measurable loss of its own — multichip-vs-single-chip PCC is asserted at 0.999
-   — and its own worst real-weight check, 0.995105, is marginally *better* than
-   the single-chip stage's 0.995079. But 1.05e-4 of headroom against a 0.995 bar
-   is what rules out the BFP8 decode collective payload, which measures 0.9950028
-   on the same surface.
+   — and its own worst real-weight check, 0.995105
+   (`logs/full_test_run.log`), is marginally *better* than the single-chip
+   stage's 0.995079 (`../optimized_decoder/logs/full_test_run.log`). But 1.05e-4
+   of headroom against a 0.995 bar is what rules
+   out the BFP8 decode collective payload, which measures 0.9950028 on the same
+   surface (`logs/real_weight_decode_bfp8_experiment.log`).
 7. **A mesh holds 24 distinct CCL programs at a time** (6 KB of `L1_SMALL`, 256 B
    per program, released only by `clear_program_cache()`). A stacked model needs
    two per layer kind for decode and one per prefill chunk size, so it cannot
