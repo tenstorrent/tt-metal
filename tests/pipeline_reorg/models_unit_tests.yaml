@@ -928,15 +928,20 @@
     wh_n150:
       timeout: 10  # fits models unit_tier1 wh_n150 budget (110 min); tune with real runtime
       tier: 1
-    wh_galaxy_perf:
-      timeout: 20  # WH Galaxy: [1] + (4,8); job wall ~8 min measured
-      tier: 1
     bh_p150:
       timeout: 8  # BH single-card [1]; ~7 min job (pytest + fixed runner overhead)
       tier: 1
-    bh_galaxy:
-      timeout: 20  # BH Galaxy: [1] + (4,8)
-      tier: 1
+    # Galaxy (4,8) SKUs are temporarily disabled. The 32-chip ring fabric fails to
+    # initialize on a marginal ethernet link (Device 24 handshake timeout) — an
+    # infra/hardware issue in fabric bring-up, before any sampling code runs, not a
+    # test fault. The (4,8) test cases stay in the suite (they auto-skip on the
+    # single-card runners above). Re-enable once galaxy link health is confirmed. See #38316.
+    # wh_galaxy_perf:
+    #   timeout: 20  # WH Galaxy: [1] + (4,8); job wall ~8 min measured
+    #   tier: 1
+    # bh_galaxy:
+    #   timeout: 20  # BH Galaxy: [1] + (4,8)
+    #   tier: 1
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
