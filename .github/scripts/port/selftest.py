@@ -854,6 +854,35 @@ if _flag:
         )
 
 # --------------------------------------------------------------------------------------------
+# Category derivation. `untilize` exists twice in the operations tree -- `data_movement/untilize` and
+# `experimental/quasar/untilize`, identical down to the filenames -- so globbing for the op's name
+# matched two directories and stopped the first resumed run before it began. The manifest's
+# `native_entry` is the tiebreaker, and these cases are run against the real shell the workflow uses,
+# because the first attempt at the sed chain returned `untilize` as the namespace and looked plausible.
+
+_resolve = next(
+    s for s in _frontmatter["steps"] if s["name"].startswith("Resolve the op")
+)
+_derive = _re.search(r"(rest=\$\{entry#ttnn\.\}.*?esac)", _resolve["run"], _re.S).group(1)
+
+for _entry, _want in [
+    ("ttnn.untilize", ""),
+    ("ttnn.pad", ""),
+    ("ttnn.experimental.quasar.untilize", "experimental/quasar"),
+    ("ttnn.experimental.gather", "experimental"),
+]:
+    _got = subprocess.run(
+        ["bash", "-c", f'entry="{_entry}"\n{_derive}\nprintf "%s" "$namespace"'],
+        capture_output=True,
+        text=True,
+    ).stdout
+    check(
+        f"{_entry} yields namespace {_want!r}",
+        _got == _want,
+        f"got {_got!r}",
+    )
+
+# --------------------------------------------------------------------------------------------
 # The agent job runs in-cluster now, and CIv2 sends loopback through the restricted proxy. gh-aw polls
 # its own mcp-scripts server over `localhost:3000` to decide it is ready, so without the exemption the
 # job dies before the agent exists -- and the error it dies with blames the server, which was fine.
